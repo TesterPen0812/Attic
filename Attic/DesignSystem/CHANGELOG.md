@@ -5,6 +5,18 @@ Every later change is recorded here: what changed, why, and who asked.
 
 ## Phase 1
 
+### Actions-menu Return (GPT-6.1, round 13)
+
+- `AtticPopUpMenu` owns Return during native tracking, including key events
+  dispatched to the underlying window. One routing function serves its local
+  monitor and `performKeyEquivalent`, activates the actual highlighted item
+  through AppKit, and consumes the activating press through key-up. Return on
+  a submenu uses native Right-arrow navigation. No delay or page-level key
+  suppression is used; ordinary Return still edits the row after cancellation.
+- Removed `AtticMenuTarget`'s last-highlight redirect: item dispatch runs the
+  chosen item's command, including pointer selections. Shortcut hints remain
+  native. Requested by the owner to fix Return choosing Edit Title.
+
 Phase 1 (Shell, Tasks and Settings) was built in three streams and integrated
 on `redesign/phase-1`. Every change below is additive: no token, colour, radius
 or type style changed.

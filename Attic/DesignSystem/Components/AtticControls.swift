@@ -1170,27 +1170,13 @@ private struct AtticMenuBadge: ViewModifier {
 /// menu, shown for reference: inside the open menu those keys belong to the
 /// menu (↓ highlights, Return activates the highlighted item), never to the
 /// item whose hint they are.
-@MainActor
-enum AtticMenuKeyTrace {
-    static func record(_ point: String) {
-        #if DEBUG
-        guard ProcessInfo.processInfo.environment["ATTIC_UI_TESTING"] == "1"
-            || ProcessInfo.processInfo.environment["TEST_RUNNER_ATTIC_KEY_WINDOW_TESTS"] == "1" else { return }
-        let event = NSApp.currentEvent
-        let keyCode = event.flatMap { [.keyDown, .keyUp, .flagsChanged].contains($0.type) ? $0.keyCode : nil }
-        NSLog("ATTIC_MENU_KEY %@ type=%ld key=%ld time=%.6f mode=%@", point,
-              event?.type.rawValue ?? 0, Int(keyCode ?? 0), event?.timestamp ?? 0,
-              RunLoop.current.currentMode?.rawValue ?? "nil")
-        #endif
-    }
-}
-
+/// Return belongs to a tracking menu, including events dispatched through
+/// NSApplication to its underlying key window. Keep native navigation and
+/// shortcut hints, and consume the activating press through its release.
 final class AtticPopUpMenu: NSMenu, NSMenuDelegate {
-    /// The item last highlighted (↓, ↑ or the pointer). Real menu tracking
-    /// matches a bare Return against Edit Title's "\r" hint before it looks
-    /// at the highlighted item (CI run 3 recording), so a bare-key match is
-    /// redirected to this item (`AtticMenuTarget.runCommand`).
-    private(set) weak var lastHighlighted: NSMenuItem?
+    private var isTracking = false
+    private var keyMonitor: Any?
+    private var claimedReturn: (code: UInt16, timestamp: TimeInterval)?
 
     override init(title: String) {
         super.init(title: title)
@@ -1202,17 +1188,74 @@ final class AtticPopUpMenu: NSMenu, NSMenuDelegate {
         delegate = self
     }
 
-    func menu(_ menu: NSMenu, willHighlight item: NSMenuItem?) {
-        MainActor.assumeIsolated { AtticMenuKeyTrace.record("highlight \(item?.title ?? "nil")") }
-        if let item { lastHighlighted = item }
+    func menuWillOpen(_ menu: NSMenu) {
+        isTracking = true
+        // The root owns input for its whole open submenu chain.
+        guard (supermenu as? AtticPopUpMenu)?.isTracking != true, keyMonitor == nil else { return }
+        keyMonitor = NSEvent.addLocalMonitorForEvents(matching: [.keyDown, .keyUp]) { event in
+            MainActor.assumeIsolated { self.takeReturn(event) ? nil : event }
+        }
     }
 
-    func menuWillOpen(_ menu: NSMenu) { MainActor.assumeIsolated { AtticMenuKeyTrace.record("willOpen") } }
-    func menuDidClose(_ menu: NSMenu) { MainActor.assumeIsolated { AtticMenuKeyTrace.record("didClose") } }
+    func menuDidClose(_ menu: NSMenu) {
+        isTracking = false
+        if claimedReturn == nil { stopMonitoring() }
+    }
+
+    private func stopMonitoring() {
+        if let keyMonitor { NSEvent.removeMonitor(keyMonitor) }
+        keyMonitor = nil
+        claimedReturn = nil
+    }
+
+    /// One owner for Return, whether AppKit asks for a menu equivalent or
+    /// sends the event through the window's local event monitors.
+    private func takeReturn(_ event: NSEvent) -> Bool {
+        if event.type == .keyUp, event.keyCode == claimedReturn?.code {
+            claimedReturn = nil
+            if !isTracking { stopMonitoring() }
+            return true
+        }
+        guard event.type == .keyDown else { return false }
+        if !isTracking {
+            if let claimedReturn, event.keyCode == claimedReturn.code,
+               event.isARepeat || event.timestamp == claimedReturn.timestamp { return true }
+            // A lost release cannot suppress a later, fresh key press.
+            stopMonitoring()
+            return false
+        }
+        guard event.keyCode == 36 || event.keyCode == 76,
+              event.modifierFlags.intersection([.command, .control, .option, .shift]).isEmpty else { return false }
+        claimedReturn = (event.keyCode, event.timestamp)
+        var selectedMenu: NSMenu = self
+        while let child = selectedMenu.highlightedItem?.submenu, child.highlightedItem != nil {
+            selectedMenu = child
+        }
+        guard let item = selectedMenu.highlightedItem, item.isEnabled else { return true }
+        if item.submenu != nil {
+            // Opening a highlighted submenu is native Right-arrow navigation.
+            // Queue it to the tracker instead of sending Return to the page.
+            for type in [NSEvent.EventType.keyDown, .keyUp] {
+                if let right = NSEvent.keyEvent(with: type, location: event.locationInWindow, modifierFlags: [],
+                                                timestamp: event.timestamp, windowNumber: event.windowNumber,
+                                                context: nil, characters: "\u{F703}", charactersIgnoringModifiers: "\u{F703}",
+                                                isARepeat: false, keyCode: 124) {
+                    NSApp.postEvent(right, atStart: false)
+                }
+            }
+        } else if item.action != nil {
+            let index = selectedMenu.index(of: item)
+            cancelTrackingWithoutAnimation()
+            selectedMenu.performActionForItem(at: index)
+        }
+        return true
+    }
 
     override func performKeyEquivalent(with event: NSEvent) -> Bool {
-        MainActor.assumeIsolated { AtticMenuKeyTrace.record("performKeyEquivalent \(event.keyCode)") }
-        guard event.modifierFlags.intersection([.command, .control, .option]).isEmpty == false else { return false }
+        if MainActor.assumeIsolated({ takeReturn(event) }) { return true }
+        // Bare keys are list shortcuts shown for reference. Modified menu
+        // equivalents still run their own item, independently of highlight.
+        guard !event.modifierFlags.intersection([.command, .control, .option]).isEmpty else { return false }
         return super.performKeyEquivalent(with: event)
     }
 }
@@ -1304,9 +1347,7 @@ enum AtticNativeMenu {
         let location = point ?? CGPoint(x: 0, y: view.isFlipped ? view.bounds.maxY + 4 : -4)
         DispatchQueue.main.async {
             guard view.window != nil else { return }
-            AtticMenuKeyTrace.record("popUp enter")
             menu.popUp(positioning: nil, at: location, in: view)
-            AtticMenuKeyTrace.record("popUp return")
         }
     }
 }
@@ -1324,16 +1365,6 @@ final class AtticMenuTarget: NSObject {
     /// Not `perform(_:)`: that is NSObject's `performSelector:`, which the
     /// selector resolved to, so a chosen item ran nothing (round 10, CI run 2).
     @objc func runCommand(_ item: NSMenuItem) {
-        AtticMenuKeyTrace.record("runCommand \(item.title)")
-        // A bare key (Return, Space, Delete) pressed in the open menu belongs
-        // to the menu: it runs the highlighted item, not the item whose hint
-        // the key is. The hints stay for display; the match is redirected.
-        if let menu = item.menu as? AtticPopUpMenu, !item.keyEquivalent.isEmpty,
-           item.keyEquivalentModifierMask.intersection([.command, .control, .option]).isEmpty,
-           let highlighted = menu.lastHighlighted, highlighted !== item {
-            (highlighted.representedObject as? Box)?.action()
-            return
-        }
         (item.representedObject as? Box)?.action()
     }
 }

@@ -74,33 +74,43 @@ final class TasksRound13Tests: XCTestCase {
     /// a timer in the common modes (menu tracking is not the default mode),
     /// with an Esc at the end so a menu that ignores them cannot hang the run.
     private func schedule(_ keys: [(characters: String, keyCode: UInt16)], in hosted: Hosted, from start: TimeInterval = 0.8,
-                          step: TimeInterval = 0.25) {
+                          step: TimeInterval = 0.25, dispatchReturnToWindow: Bool = false) -> [Timer] {
         func post(_ characters: String, _ keyCode: UInt16) {
             for type in [NSEvent.EventType.keyDown, .keyUp] {
                 let event = NSEvent.keyEvent(with: type, location: .zero, modifierFlags: [], timestamp: ProcessInfo.processInfo.systemUptime,
                                              windowNumber: hosted.window.windowNumber, context: nil, characters: characters,
                                              charactersIgnoringModifiers: characters, isARepeat: false, keyCode: keyCode)!
-                NSApp.postEvent(event, atStart: false)
+                if dispatchReturnToWindow, keyCode == 36 {
+                    NSApp.sendEvent(event)
+                } else {
+                    NSApp.postEvent(event, atStart: false)
+                }
             }
         }
         var when = start
+        var timers: [Timer] = []
         for key in keys {
             let timer = Timer(timeInterval: when, repeats: false) { _ in MainActor.assumeIsolated { post(key.characters, key.keyCode) } }
             RunLoop.main.add(timer, forMode: .common)
+            timers.append(timer)
             when += step
         }
         let escape = Timer(timeInterval: when + 2.5, repeats: false) { _ in MainActor.assumeIsolated { post("\u{1B}", 53) } }
         RunLoop.main.add(escape, forMode: .common)
+        timers.append(escape)
+        return timers
     }
 
     /// The row selected and focused, ⇧⌘I pressed for real (a native menu
     /// pops up), `keys` typed into the menu, and the run spun until it closed.
-    private func openActionsMenu(_ hosted: Hosted, on title: String, keys: [(characters: String, keyCode: UInt16)]) throws -> UUID {
+    private func openActionsMenu(_ hosted: Hosted, on title: String, keys: [(characters: String, keyCode: UInt16)],
+                                 dispatchReturnToWindow: Bool = false) throws -> UUID {
         let model = hosted.model
         let row = try XCTUnwrap(model.rows(for: .now).first { $0.model.title == title }?.id)
         try hosted.clickRow(row, tab: .now)
         XCTAssertEqual(model.selection, [row])
-        schedule(keys, in: hosted)
+        let timers = schedule(keys, in: hosted, dispatchReturnToWindow: dispatchReturnToWindow)
+        defer { timers.forEach { $0.invalidate() } }
         hosted.press("i", keyCode: 34, modifiers: [.command, .shift])
         hosted.spin(1.5)
         return row
@@ -124,31 +134,49 @@ final class TasksRound13Tests: XCTestCase {
         XCTAssertNil(hosted.model.editingTitleID, "and did not edit the parent's title")
     }
 
-    /// Window-server input, as used by computer-use and XCTest, rather than
-    /// NSApp.postEvent's preassigned window. The real menu receives eight
-    /// Down presses followed by Return down/up while the page remains focused.
-    func testCoreGraphicsReturnInTheActionsMenuOpensTheHighlightedSubtaskEditor() throws {
+    /// Return dispatched to the key window while NSMenu is in its nested
+    /// tracking loop. Queued events alone go straight to the native tracker
+    /// and missed the page/responder delivery seen with synthesized input.
+    func testReturnDeliveredToTheWindowDuringMenuTrackingRunsTheHighlightedItem() throws {
+        let hosted = try Hosted(height: 520)
+        defer { hosted.close() }
+        let down: (characters: String, keyCode: UInt16) = ("\u{F701}", 125)
+        let row = try openActionsMenu(hosted, on: "Call the plumber",
+                                     keys: Array(repeating: down, count: 8) + [("\r", 36)],
+                                     dispatchReturnToWindow: true)
+        XCTAssertEqual(hosted.model.newSubtaskParentID, row, "the highlighted Add Subtask owns Return")
+        XCTAssertNil(hosted.model.editingTitleID, "the key never edits the parent")
+    }
+
+    func testReturnOpensAHighlightedSubmenuAndRunsItsHighlightedCommand() throws {
+        let hosted = try Hosted(height: 520)
+        defer { hosted.close() }
+        let down: (characters: String, keyCode: UInt16) = ("\u{F701}", 125)
+        let row = try openActionsMenu(hosted, on: "Call the plumber",
+                                     keys: Array(repeating: down, count: 4) + [("\r", 36), down, ("\r", 36)],
+                                     dispatchReturnToWindow: true)
+        XCTAssertNotNil(hosted.model.dueDay(of: row), "Return opens Date, then runs its highlighted quick day")
+        XCTAssertNil(hosted.model.editingTitleID)
+    }
+
+    func testReturnWithoutAnActionsMenuStillEditsTheSelectedTitle() throws {
         let hosted = try Hosted(height: 520)
         defer { hosted.close() }
         let row = try XCTUnwrap(hosted.model.rows(for: .now).first { $0.model.title == "Call the plumber" }?.id)
         try hosted.clickRow(row, tab: .now)
-        let codes: [CGKeyCode] = Array(repeating: 125, count: 8) + [36]
-        var timers: [Timer] = []
-        defer { timers.forEach { $0.invalidate() } }
-        for (index, code) in (codes + [53]).enumerated() {
-            let delay = 0.8 + Double(index) * 0.25 + (code == 53 ? 2.5 : 0)
-            let timer = Timer(timeInterval: delay, repeats: false) { _ in
-                for down in [true, false] {
-                    CGEvent(keyboardEventSource: nil, virtualKey: code, keyDown: down)?.postToPid(getpid())
-                }
-            }
-            timers.append(timer)
-            RunLoop.main.add(timer, forMode: .common)
-        }
-        hosted.press("i", keyCode: 34, modifiers: [.command, .shift])
-        hosted.spin(1.5)
-        XCTAssertEqual(hosted.model.newSubtaskParentID, row)
+        hosted.press("\r", keyCode: 36)
+        XCTAssertEqual(hosted.model.editingTitleID, row)
+        XCTAssertNil(hosted.model.newSubtaskParentID)
+    }
+
+    func testReturnAfterCancellingAnActionsMenuStillEditsTheSelectedTitle() throws {
+        let hosted = try Hosted(height: 520)
+        defer { hosted.close() }
+        let row = try openActionsMenu(hosted, on: "Call the plumber", keys: [("\u{1B}", 53)])
         XCTAssertNil(hosted.model.editingTitleID)
+        hosted.press("\r", keyCode: 36)
+        XCTAssertEqual(hosted.model.editingTitleID, row)
+        XCTAssertNil(hosted.model.newSubtaskParentID)
     }
 
     /// A pop-up menu shows a bare key's shortcut (Return beside Edit Title)
@@ -170,28 +198,19 @@ final class TasksRound13Tests: XCTestCase {
         XCTAssertEqual(ran, ["later"], "⌘B still runs Later")
     }
 
-    /// Real menu tracking answers Return with Edit Title's "\r" hint ahead
-    /// of the highlighted item (CI run 3); the match is redirected to the
-    /// highlighted item, and a click on an item still runs that item.
-    func testABareKeyMatchRunsTheHighlightedItemInstead() throws {
+    /// Dispatch always runs the chosen item's action. Keyboard ownership
+    /// is resolved before dispatch, without redirecting pointer actions.
+    func testChoosingAMenuItemRunsThatItemsCommand() throws {
         var ran: [String] = []
         let menu = AtticNativeMenu.make([
             AtticMenuCommand(verbatim: "Edit Title", shortcut: AtticTaskShortcut.editTitle) { ran.append("edit") },
             AtticMenuCommand(verbatim: "Add Subtask") { ran.append("subtask") },
             AtticMenuCommand(verbatim: "Later", shortcut: AtticTaskShortcut.later) { ran.append("later") }
         ])
-        let edit = try XCTUnwrap(menu.items.first)
-        let subtask = menu.items[1]
-        let later = menu.items[2]
-        menu.delegate?.menu?(menu, willHighlight: subtask)
-        AtticMenuTarget.shared.runCommand(edit)
-        XCTAssertEqual(ran, ["subtask"], "Return (matched to Edit Title) ran the highlighted Add Subtask")
-        menu.delegate?.menu?(menu, willHighlight: edit)
-        AtticMenuTarget.shared.runCommand(edit)
-        XCTAssertEqual(ran, ["subtask", "edit"], "a highlighted Edit Title runs itself")
-        menu.delegate?.menu?(menu, willHighlight: subtask)
-        AtticMenuTarget.shared.runCommand(later)
-        XCTAssertEqual(ran.last, "later", "a ⌘ shortcut runs its own item whatever is highlighted")
+        menu.performActionForItem(at: 1)
+        menu.performActionForItem(at: 0)
+        menu.performActionForItem(at: 2)
+        XCTAssertEqual(ran, ["subtask", "edit", "later"])
     }
 
     // MARK: - Bug 1: ⌘Z after a task-menu change

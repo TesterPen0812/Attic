@@ -272,7 +272,6 @@ private struct AtticTaskFocusModifier: ViewModifier {
             .focusEffectDisabled()
             .onChange(of: focused) { _, now in isFocused = now }
             .onKeyPress(phases: .down) { press in
-                AtticMenuKeyTrace.record("rowKey \(press.characters.debugDescription)")
                 guard enabled, !AtticTextInput.hasKeyboard, let command = AtticTaskKeys.command(
                     key: press.key, characters: press.characters, modifiers: press.modifiers, listCommands: listCommands
                 ), AtticTaskKeys.offers(command, actions) else { return .ignored }
@@ -334,7 +333,6 @@ private struct AtticListTaskFocusModifier: ViewModifier {
             .focused(focus.binding, equals: focus.id)
             .focusEffectDisabled()
             .onKeyPress(phases: .down) { press in
-                AtticMenuKeyTrace.record("listRowKey \(press.characters.debugDescription)")
                 guard enabled, focus.isActive(), answersKeys, !AtticTextInput.hasKeyboard, let command = AtticTaskKeys.command(
                     key: press.key, characters: press.characters, modifiers: press.modifiers, listCommands: listCommands
                 ), AtticTaskKeys.offers(command, actions) else { return .ignored }
