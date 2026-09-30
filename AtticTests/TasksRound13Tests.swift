@@ -210,4 +210,73 @@ final class TasksRound13Tests: XCTestCase {
         XCTAssertEqual(priority(of: row.id, hosted), .high, "⇧⌘Z redid the menu change")
         XCTAssertEqual(model.addBar.text, "a")
     }
+
+    // MARK: - Item 4: Full-animation reorder does not overlap rows
+
+    /// How much ink each pixel line of the two rows' band holds, so the
+    /// lines between the titles can be told from the titles themselves.
+    private func inkProfile(_ hosted: Hosted, top: CGFloat, bottom: CGFloat) throws -> [Int] {
+        let content = try XCTUnwrap(hosted.window.contentView)
+        let rep = try XCTUnwrap(content.bitmapImageRepForCachingDisplay(in: content.bounds))
+        content.cacheDisplay(in: content.bounds, to: rep)
+        let scale = CGFloat(rep.pixelsWide) / content.bounds.width
+        let x0 = Int(40 * scale), x1 = Int((content.bounds.width - 40) * scale)
+        return (Int(top * scale)..<Int(bottom * scale)).map { y in
+            guard let base = rep.colorAt(x: x0, y: y)?.usingColorSpace(.sRGB) else { return 0 }
+            return stride(from: x0, to: x1, by: 2).reduce(0) { count, x in
+                guard let c = rep.colorAt(x: x, y: y)?.usingColorSpace(.sRGB) else { return count }
+                let d = max(abs(c.redComponent - base.redComponent), abs(c.greenComponent - base.greenComponent),
+                            abs(c.blueComponent - base.blueComponent))
+                return count + (d > 0.12 ? 1 : 0)
+            }
+        }
+    }
+
+    /// Move a row down with ⌘↓ under Full animation and look at the picture
+    /// every frame or so while it settles: the two rows' band must never
+    /// hold ink between the lines the titles sit on before and after (two
+    /// rows sliding through each other put titles and circles there).
+    func testAFullAnimationReorderNeverPutsInkBetweenTheRowsLines() throws {
+        let hosted = try Hosted(height: 520)
+        defer { hosted.close() }
+        hosted.spin(1)
+        let model = hosted.model
+        let rows = model.rows(for: .now)
+        // Two neighbours in one group (started and not started stay apart).
+        let at = try XCTUnwrap(rows.indices.dropLast().first { rows[$0].status == rows[$0 + 1].status && rows[$0].status != .done })
+        let pair = [rows[at], rows[at + 1]]
+        let first = try XCTUnwrap(hosted.pointer.frames[TasksRowID(tab: .now, id: pair[0].id)])
+        let second = try XCTUnwrap(hosted.pointer.frames[TasksRowID(tab: .now, id: pair[1].id)])
+        let top = min(first.minY, second.minY), bottom = max(first.maxY, second.maxY)
+        try hosted.clickRow(pair[0].id, tab: .now)
+        hosted.spin(0.6)
+        let before = try inkProfile(hosted, top: top, bottom: bottom)
+        hosted.press("\u{F701}", keyCode: 125, modifiers: .command)
+        hosted.spin(1)
+        XCTAssertEqual(model.rows(for: .now).map(\.id)[at], pair[1].id, "the row moved down one place")
+        let after = try inkProfile(hosted, top: top, bottom: bottom)
+        // Put it back and sample the return trip frame by frame.
+        for type in [NSEvent.EventType.keyDown, .keyUp] {
+            NSApp.postEvent(NSEvent.keyEvent(with: type, location: .zero, modifierFlags: .command,
+                                             timestamp: ProcessInfo.processInfo.systemUptime, windowNumber: hosted.window.windowNumber,
+                                             context: nil, characters: "\u{F700}", charactersIgnoringModifiers: "\u{F700}",
+                                             isARepeat: false, keyCode: 126)!, atStart: false)
+            Hosted.pumpEvents()
+        }
+        XCTAssertEqual(model.rows(for: .now).map(\.id)[at], pair[0].id)
+        var worst = 0
+        var samples = 0
+        let end = Date().addingTimeInterval(0.6)
+        while Date() < end {
+            let now = try inkProfile(hosted, top: top, bottom: bottom)
+            var gap = 0
+            for (line, ink) in now.enumerated() where before[line] == 0 && after[line] == 0 { gap += ink }
+            worst = max(worst, gap)
+            samples += 1
+            hosted.spin(0.016)
+        }
+        XCTAssertGreaterThan(samples, 3)
+        let text = before.reduce(0, +)
+        XCTAssertLessThan(Double(worst), Double(text) * 0.06, "ink between the titles' lines while rows reorder: \(worst) of \(text)")
+    }
 }

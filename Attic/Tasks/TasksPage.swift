@@ -40,6 +40,9 @@ struct TasksPage: View {
     @State private var composerPickerOpen = false
     /// "Started tasks stay together" (review 10), while it shows.
     @State private var boundaryHint = false
+    /// The rows a keyboard or menu reorder just exchanged, held invisible
+    /// for a moment so they dissolve into their new places (round 13).
+    @State private var reorderFade: Set<UUID> = []
     @State private var boundaryHintTask: Task<Void, Never>?
     /// A Done row the keyboard moved to, to bring into view.
     @State private var doneReveal: TasksPageModel.ScrollRequest?
@@ -756,6 +759,7 @@ struct TasksPage: View {
                     ForEach(sections.open) { row in
                         cell(row, tab: tab, group: groups[row.status] ?? [], drawn: drawn)
                             .id(row.id)
+                            .opacity(reorderFade.contains(row.id) ? 0 : 1)
                             // A row added or leaving drops into or rises
                             // out of its place (round 9).
                             .transition(AtticMotionPreset.settle.transition(reduceMotion: design.reduceMotion, edge: .top))
@@ -796,7 +800,7 @@ struct TasksPage: View {
                         }
                     }
                 }
-                .animation(travel, value: rows.map(\.id))
+                .animation(reorderFade.isEmpty ? travel : nil, value: rows.map(\.id))
                 // The list's place is kept while its page is not built.
                 .background(TasksScrollKeeper(model: model, tab: tab, proxies: listProxies, drawn: drawn).accessibilityHidden(true))
                 // The clearance past the add bar's zone is room at the end
@@ -1484,7 +1488,28 @@ struct TasksPage: View {
         if atGroupEdge(id, step: step) {
             showBoundaryHint()
         } else {
-            model.report(model.moveBy(id, offset: step), on: id) { model.moveBy(id, offset: step) }
+            reorderWithoutCrossing {
+                model.report(model.moveBy(id, offset: step), on: id) { model.moveBy(id, offset: step) }
+            }
+        }
+    }
+
+    /// Full animation: two rows that exchange places by sliding past each
+    /// other cross while translucent, and their titles and circles collide
+    /// (round 13, review 61). The rows take their new places at once and
+    /// the two that moved dissolve in there; nothing travels through
+    /// another row. Reduced motion already changes places at once.
+    private func reorderWithoutCrossing(_ change: () -> Void) {
+        guard !design.reduceMotion else { change(); return }
+        let before = model.rows(for: model.tab).map(\.id)
+        // The list's placement animation is off while `reorderFade` holds
+        // rows, and both change in this one update.
+        change()
+        let after = model.rows(for: model.tab).map(\.id)
+        reorderFade = Set(after.indices.filter { before.indices.contains($0) && before[$0] != after[$0] }.map { after[$0] })
+        guard !reorderFade.isEmpty else { return }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.04) {
+            withAnimation(.easeOut(duration: 0.16)) { reorderFade = [] }
         }
     }
 

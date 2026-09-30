@@ -1279,13 +1279,11 @@ final class TasksPageModel: ObservableObject {
         guard let index = group.firstIndex(where: { $0.id == id }) else { return .failed(.taskGone) }
         let destination = index + offset
         guard group.indices.contains(destination) else { return .applied }
-        var outcome = CommandOutcome.applied
-        // Reduce Motion: the row is simply in its new place (no travel).
-        let reduceMotion = AtticMotionPreference.reducesMotion
-        withAnimation(reduceMotion ? nil : AtticMotionPreset.settle.animation(reduceMotion: false)) {
-            outcome = library.moveTask(id, toIndex: destination)
-        }
-        return outcome
+        // How the rows take their places is the page's to decide (its list
+        // animates a reorder, or dissolves the two rows that exchanged
+        // places, `TasksPage.reorderWithoutCrossing`): a transaction opened
+        // here would override that choice.
+        return library.moveTask(id, toIndex: destination)
     }
 
     /// A drag reorder: the row lands at `index` within its group.
