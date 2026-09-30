@@ -1,3 +1,5 @@
+import AppKit
+import SwiftUI
 import XCTest
 @testable import Attic
 
@@ -257,5 +259,50 @@ final class NoteFormatTests: XCTestCase {
         XCTAssertEqual(decoded.blocks, fragment.blocks)
         XCTAssertThrowsError(try NoteContentCodec.encode(fragment))
         XCTAssertFalse(NoteContentCodec.decode(data).isEditable)
+    }
+}
+
+/// Command metadata and routing without a window or application host.
+@MainActor
+final class NotesShortcutMetadataTests: XCTestCase {
+    func testOwnerShortcutsAreSharedByEveryFormatMenuAndHaveNoNotesCollisions() {
+        let engine = NoteEditorEngine(noteID: UUID(), document: NoteDocument(blocks: [.text("Title"), .text("Body")]))
+        let router = NoteCommandRouter(engine: engine)
+        for surface: NoteCommandSurface in [.noteMenu, .contextMenu, .menuBar, .formatPopover, .selectionBar] {
+            let menu = router.formatMenuCommands(from: surface)
+            let expected: [(String, KeyEquivalent, EventModifiers)] = [
+                ("Quote", "4", [.command, .option]), ("Mono", "5", [.command, .option]),
+                ("Checklist", "9", [.command, .shift])
+            ]
+            for (title, key, modifiers) in expected {
+                XCTAssertEqual(menu.first { $0.title == title }?.shortcut, KeyboardShortcut(key, modifiers: modifiers))
+            }
+            for title in ["Highlight", "Code"] { XCTAssertNil(menu.first { $0.title == title }?.shortcut) }
+        }
+        let labels = NoteCommandCatalog.allCommands.compactMap(NoteCommandCatalog.shortcutLabel)
+        XCTAssertEqual(labels.count, Set(labels).count, "each Notes chord routes to one command")
+        XCTAssertEqual(NoteCommandCatalog.shortcutLabel(.paragraph(.quote)), "⌥⌘4")
+        XCTAssertEqual(NoteCommandCatalog.shortcutLabel(.paragraph(.mono)), "⌥⌘5")
+    }
+
+    func testOptionCommandDigitsUseTheLayoutTranslationLikeShiftCommandLists() throws {
+        let cases: [(String, UInt16, NoteFormatCommand)] = [
+            ("¢", 21, .paragraph(.quote)), ("∞", 23, .paragraph(.mono))
+        ]
+        for (characters, keyCode, command) in cases {
+            let event = try XCTUnwrap(NSEvent.keyEvent(with: .keyDown, location: .zero,
+                modifierFlags: [.command, .option], timestamp: 0, windowNumber: 0, context: nil,
+                characters: characters, charactersIgnoringModifiers: characters, isARepeat: false, keyCode: keyCode))
+            // Removing modifiers asks AppKit's current layout for the base key.
+            let plain = event.characters(byApplyingModifiers: [])
+            if plain == "4" || plain == "5" { XCTAssertEqual(NoteCommandCatalog.command(for: event), command) }
+            else { XCTAssertNil(NoteCommandCatalog.command(for: event), "a layout without that digit must not bind a physical key") }
+        }
+        for modifiers: NSEvent.ModifierFlags in [.command, [.command, .option, .shift], [.command, .control]] {
+            let event = try XCTUnwrap(NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: modifiers,
+                timestamp: 0, windowNumber: 0, context: nil, characters: "4", charactersIgnoringModifiers: "4",
+                isARepeat: false, keyCode: 21))
+            XCTAssertNil(NoteCommandCatalog.command(for: event))
+        }
     }
 }

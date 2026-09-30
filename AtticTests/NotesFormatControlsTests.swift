@@ -156,8 +156,8 @@ final class NotesFormatControlsTests: XCTestCase {
         XCTAssertEqual(find("Checklist", in: menu)?.shortcut, KeyboardShortcut("9", modifiers: [.command, .shift]))
         XCTAssertEqual(find("Check or Uncheck", in: menu)?.shortcut, KeyboardShortcut(.return, modifiers: .command))
         XCTAssertEqual(find("Move Line Up", in: menu)?.shortcut, KeyboardShortcut(.upArrow, modifiers: [.command, .option]))
-        XCTAssertNil(find("Quote", in: menu)?.shortcut, "⌥⌘Q is Quit and Keep Windows: left unbound")
-        XCTAssertNil(find("Mono", in: menu)?.shortcut, "⌥⌘M is Minimize All: left unbound")
+        XCTAssertEqual(find("Quote", in: menu)?.shortcut, KeyboardShortcut("4", modifiers: [.command, .option]))
+        XCTAssertEqual(find("Mono", in: menu)?.shortcut, KeyboardShortcut("5", modifiers: [.command, .option]))
     }
 
     func testTheMenuBarNeverAnswersKeysAndIsDimmedWithoutANote() {

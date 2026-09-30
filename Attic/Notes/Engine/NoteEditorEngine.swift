@@ -2091,6 +2091,8 @@ enum NoteFormatCommand: Hashable {
         case .paragraph(.bullet): "⇧⌘7"
         case .paragraph(.number): "⇧⌘8"
         case .paragraph(.checklist): "⇧⌘9"
+        case .paragraph(.quote): "⌥⌘4"
+        case .paragraph(.mono): "⌥⌘5"
         case .indent: "⌘]"
         case .outdent: "⌘["
         case .toggleChecklist: "⌘Return"

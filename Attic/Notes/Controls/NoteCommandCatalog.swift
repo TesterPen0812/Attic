@@ -118,7 +118,7 @@ enum NoteCommandCatalog {
 
     /// Chords macOS reserves in every app (⌥⌘Q Quit and Keep Windows,
     /// ⌥⌘M Minimize All): never bound or shown, whatever the engine says
-    /// (Astra A11; Quote and Mono stay unbound pending the owner).
+    /// (Astra A11). Quote and Mono use the owner's ⌥⌘4/5 instead.
     static let reservedChords: Set<String> = ["⌥⌘Q", "⌥⌘M"]
 
     /// The keyboard shortcut of each command, read from the engine's own
