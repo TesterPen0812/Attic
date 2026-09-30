@@ -386,6 +386,43 @@ struct AtticSwitchRow: View {
     }
 }
 
+/// A label and a system segmented control on one grouped row (the Motion
+/// Lab's feel: Calm, Lively, Playful). Like the slider row, the control is
+/// the system's own.
+struct AtticSegmentedRow<Choice: Hashable>: View {
+    let title: String
+    let choices: [(value: Choice, title: String)]
+    @Binding var selection: Choice
+    var identifier: String?
+
+    @State private var probeID = UUID()
+
+    var body: some View {
+        HStack {
+            AtticText(verbatim: title, style: .rowSingle, ink: .body)
+            Spacer(minLength: AtticSettingsMetrics.rowTrailingMinGap)
+            Picker(title, selection: $selection) {
+                ForEach(choices, id: \.value) { choice in
+                    Text(choice.title).tag(choice.value)
+                }
+            }
+            .pickerStyle(.segmented)
+            .controlSize(.small)
+            .labelsHidden()
+            .fixedSize()
+            .atticIdentifier(identifier)
+        }
+        .padding(.leading, AtticLayout.groupedRowTextInset)
+        .padding(.trailing, AtticSettingsMetrics.switchTrailing)
+        .frame(height: AtticLayout.groupedRowSingle)
+        .atticControlProbe(
+            "Grouped row (single)", id: probeID,
+            expectedSize: CGSize(width: 0, height: AtticLayout.groupedRowSingle),
+            radius: 0, expectedRadius: 0
+        )
+    }
+}
+
 /// A capture-only drawing of the small system switch (AppKit switches do
 /// not render in `ImageRenderer`). Live UI always uses the real switch.
 private struct AtticSwitchDrawing: View {

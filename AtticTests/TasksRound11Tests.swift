@@ -107,9 +107,15 @@ final class TasksRound11Tests: XCTestCase {
         XCTAssertFalse(clock.isRunning, "stopped when the motion said it was done")
     }
 
-    /// Navigation never bounces; small things that appear bounce lightly;
-    /// everything lands in about a quarter of a second (spec § Motion).
+    /// Round 11's crisp motion is the Motion Lab's Calm: navigation never
+    /// bounces, small things that appear bounce lightly, everything lands
+    /// in about a quarter of a second (spec § Motion). Every feel lands
+    /// within about a third of a second, and navigation bounces no more
+    /// than round 9's.
     func testMotionIsCrisp() {
+        let saved = AtticMotionTuning.current
+        defer { AtticMotionTuning.current = saved }
+        AtticMotionTuning.current = .calm
         for preset in AtticMotionPreset.allCases {
             XCTAssertLessThanOrEqual(preset.duration, 0.28, "\(preset) lingers")
         }
@@ -117,6 +123,15 @@ final class TasksRound11Tests: XCTestCase {
             XCTAssertEqual(preset.bounce, 0, "\(preset) is navigation")
         }
         XCTAssertLessThanOrEqual(AtticMotionPreset.popover.bounce, 0.15)
+        for feel in AtticMotionFeel.allCases {
+            AtticMotionTuning.current = feel.tuning
+            for preset in AtticMotionPreset.allCases {
+                XCTAssertLessThanOrEqual(preset.duration, 0.35, "\(feel) \(preset) lingers")
+            }
+            for preset in [AtticMotionPreset.slide, .expand, .doneSlide, .pageSwitch] {
+                XCTAssertLessThanOrEqual(preset.bounce, 0.2, "\(feel) \(preset) is navigation")
+            }
+        }
     }
 
     /// The fade under the tabs: nothing scrolled under them shows.

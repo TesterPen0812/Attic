@@ -64,6 +64,12 @@ struct GeneralSettingsView: View {
                 .help(String(localized: "Reduced fades or changes at once instead of moving"))
             }
 
+            // The Motion Lab: preview builds only (never the release
+            // identity), to feel the motion live and pick it.
+            if settings.motionLabAvailable {
+                MotionLabSettingsGroup(settings: settings)
+            }
+
             // Round 10 (the capability audit): the global quick capture
             // shortcut can be recorded, reset, turned off, and tried again
             // after a refusal.

@@ -49,6 +49,8 @@ final class TasksRowBuildCostTests: XCTestCase {
     }
 
     func testMeasuresTheColdBuildOfAScreenOfRows() {
+        let feel = MotionFeelUnderTest.apply()
+        defer { MotionFeelUnderTest.restore() }
         let models = Self.models()
         let actions = Self.actions()
         let empty = coldBuild { Color.clear }
@@ -94,7 +96,7 @@ final class TasksRowBuildCostTests: XCTestCase {
         }
         let report = String(format: "empty=%.1fms rows=+%.1fms +menu=+%.1fms +geometry=+%.1fms +drop=+%.1fms +gesture=+%.1fms lazy-scroll=+%.1fms",
                             empty, plain - empty, menu - plain, geometry - plain, drop - plain, gesture - plain, lazy - empty)
-        print("ATTIC_ROW_BUILD 16 rows: " + report)
+        print("ATTIC_ROW_BUILD 16 rows (feel=\(feel)): " + report)
         XCTAssertGreaterThan(plain, 0)
     }
 }

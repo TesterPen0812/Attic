@@ -1931,7 +1931,7 @@ struct AtticTaskCard: View {
                 .padding(.leading, m.expandedLeading)
                 .padding(.trailing, m.expandedTrailing)
                 .padding(.bottom, m.expandedBottom)
-                .transition(.opacity)
+                .transition(AtticMotionPreset.expand.transition(reduceMotion: design.reduceMotion, edge: nil, anchor: .top))
             }
         }
         .background {

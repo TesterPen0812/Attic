@@ -448,7 +448,8 @@ struct TasksPage: View {
                             .accessibilityIdentifier("tasks-done-search-button")
                             .padding(.trailing, max(0, AtticLayout.rowHighlightInset + AtticTaskRowMetrics.dateInset
                                 - (AtticControlSize.smallMinWidth - AtticSmallControlMetrics.iconSize) / 2))
-                            .transition(.opacity)
+                            // It pops in where it sits (a fade in Calm).
+                            .transition(AtticMotionPreset.popover.transition(reduceMotion: design.reduceMotion, edge: nil))
                     }
                 }
                 .frame(height: AtticLayout.pageTabsHeight)
@@ -462,7 +463,8 @@ struct TasksPage: View {
         // keyboard go with it).
         .animation(searchShown ? AtticMotionPreset.popover.animation(reduceMotion: design.reduceMotion)
                                : AtticMotionPreset.popover.exit(reduceMotion: design.reduceMotion), value: searchShown)
-        .animation(AtticMotionPreset.popover.animation(reduceMotion: design.reduceMotion), value: model.tab == .done)
+        .animation(AtticMotionPreset.popover.animation(reduceMotion: design.reduceMotion, showing: model.tab == .done),
+                   value: model.tab == .done)
         .onChange(of: searchShown) { _, _ in PerformanceSignposts.watchFrames("SearchMotion", seconds: 0.35) }
     }
 
@@ -760,6 +762,8 @@ struct TasksPage: View {
                         cell(row, tab: tab, group: groups[row.status] ?? [], drawn: drawn)
                             .id(row.id)
                             .opacity(reorderFade.contains(row.id) ? 0.001 : 1)
+                            // A moved row pops back in with the feel (1, none, in Calm).
+                            .scaleEffect(reorderFade.contains(row.id) ? AtticMotionPreset.settle.hiddenScale(reduceMotion: design.reduceMotion) : 1)
                             // A row added or leaving drops into or rises
                             // out of its place (round 9).
                             .transition(AtticMotionPreset.settle.transition(reduceMotion: design.reduceMotion, edge: .top))
@@ -935,7 +939,8 @@ struct TasksPage: View {
                 })
                 .padding(.leading, AtticLayout.textX - AtticPopoverMetrics.padding - AtticPopoverMetrics.rowPadding)
                 .padding(.bottom, AtticSpacing.s8)
-                .transition(AtticMotionPreset.popover.transition(reduceMotion: design.reduceMotion))
+                // Raised from its row: it grows from the row's corner.
+                .transition(AtticMotionPreset.popover.transition(reduceMotion: design.reduceMotion, anchor: .topLeading))
                 .onExitCommand { model.doneDetailID = nil }
             }
             if model.failedSave == .title(id) {
@@ -971,7 +976,8 @@ struct TasksPage: View {
                                             placeholder: String(localized: "Add subtask…"))
                         : nil
                 )
-                .transition(.opacity)
+                // It opens from under its row (a fade in Calm).
+                .transition(AtticMotionPreset.expand.transition(reduceMotion: design.reduceMotion, edge: nil, anchor: .top))
                 if model.subtaskRenameFailed, let renaming = model.renamingSubtaskID,
                    row.subtasks.contains(where: { $0.id == renaming }) {
                     AtticErrorLine(message: String(localized: "Not saved"), onRetry: { _ = model.commitSubtaskRename() })
@@ -993,10 +999,10 @@ struct TasksPage: View {
     }
 
     /// The quick look opens and closes with the expansion motion (review
-    /// 21); Reduce Motion shows it at once.
+    /// 21, the Motion Lab: `expand`); Reduce Motion shows it at once.
     private func toggleExpanded(_ id: UUID) {
         PerformanceSignposts.watchFrames("QuickLookMotion", seconds: 0.35)
-        withAnimation(design.reduceMotion ? nil : AtticMotionPreset.settle.animation(reduceMotion: false)) {
+        withAnimation(design.reduceMotion ? nil : AtticMotionPreset.expand.animation(reduceMotion: false)) {
             model.toggleExpanded(id)
         }
     }
@@ -1515,7 +1521,14 @@ struct TasksPage: View {
         // run 2's recording of a menu Move Down).
         let fade = $reorderFade
         let timer = Timer(timeInterval: 0.04, repeats: false) { _ in
-            MainActor.assumeIsolated { withAnimation(.easeOut(duration: 0.16)) { fade.wrappedValue = [] } }
+            MainActor.assumeIsolated {
+                // The feel's spring when things spring in; otherwise (Calm,
+                // Reduced) the short fade it always was.
+                let pops = !AtticMotionPreference.reducesMotion && AtticMotionTuning.current.appear == .spring
+                withAnimation(pops ? AtticMotionPreset.settle.animation(reduceMotion: false) : .easeOut(duration: 0.16)) {
+                    fade.wrappedValue = []
+                }
+            }
         }
         RunLoop.main.add(timer, forMode: .common)
     }
@@ -1872,7 +1885,7 @@ struct TasksPage: View {
         boundaryHintTask = Task { @MainActor in
             try? await Task.sleep(for: .seconds(2))
             guard !Task.isCancelled else { return }
-            withAnimation(AtticMotionPreset.popover.animation(reduceMotion: design.reduceMotion)) { boundaryHint = false }
+            withAnimation(AtticMotionPreset.popover.leaveAnimation(reduceMotion: design.reduceMotion)) { boundaryHint = false }
         }
     }
 
@@ -1940,8 +1953,10 @@ struct TasksPage: View {
         }
         .padding(.horizontal, max(AtticSpacing.panelMargin, layout.chromeInsets.leading))
         .padding(.bottom, bottomInset)
-        .animation(AtticMotionPreset.popover.animation(reduceMotion: design.reduceMotion), value: model.selection.count > 1)
-        .animation(AtticMotionPreset.popover.animation(reduceMotion: design.reduceMotion), value: model.pasteOffer)
+        .animation(AtticMotionPreset.popover.animation(reduceMotion: design.reduceMotion, showing: model.selection.count > 1),
+                   value: model.selection.count > 1)
+        .animation(AtticMotionPreset.popover.animation(reduceMotion: design.reduceMotion, showing: model.pasteOffer != nil),
+                   value: model.pasteOffer)
         .onChange(of: model.selection.count > 1) { _, _ in PerformanceSignposts.watchFrames("SelectionBarMotion", seconds: 0.35) }
     }
 
@@ -2211,6 +2226,9 @@ private struct TasksAddBar: View {
                 .opacity(stripShown ? 1 : 0)
                 // It rises into place with the bar's spring (round 9).
                 .offset(y: stripShown || design.reduceMotion ? 0 : AtticMotionPreset.popover.rise)
+                // And pops from the bar's corner in the spring style.
+                .scaleEffect(stripShown ? 1 : AtticMotionPreset.popover.hiddenScale(reduceMotion: design.reduceMotion),
+                             anchor: .bottomLeading)
                 .allowsHitTesting(stripShown)
                 .accessibilityHidden(!stripShown)
                 .padding(.bottom, stripShown ? 0 : -AtticPickerMetrics.stripToBar)
@@ -2265,13 +2283,13 @@ private struct TasksAddBar: View {
                     text.highlighted = 0
                 }
                 .padding(.leading, AtticAddBarMetrics.iconSlot + AtticAddBarMetrics.gap - AtticPopoverMetrics.padding - AtticPopoverMetrics.rowPadding)
-                .transition(.opacity)
+                .transition(AtticMotionPreset.popover.transition(reduceMotion: design.reduceMotion, edge: nil, anchor: .bottomLeading))
                 // Its own height above the composer's top (rows are 28 tall).
                 .offset(y: -(CGFloat(suggestion.count) * AtticControlSize.smallHeight + AtticPopoverMetrics.padding * 2
                     + AtticPickerMetrics.stripToBar))
             }
         }
-        .animation(AtticMotionPreset.popover.animation(reduceMotion: design.reduceMotion), value: stripShown)
+        .animation(AtticMotionPreset.popover.animation(reduceMotion: design.reduceMotion, showing: stripShown), value: stripShown)
         .onChange(of: stripShown) { _, _ in PerformanceSignposts.watchFrames("StripMotion", seconds: 0.35) }
         .onChange(of: datePresented || tagsPresented || priorityPresented) { _, open in
             pickerOpen = open

@@ -28,7 +28,10 @@ final class TasksFrameCostTests: XCTestCase {
     func testMeasuresWhatEachInteractionCostsTheMainThread() throws {
         let host = try FrameCostHost()
         hosted = host
-        var report: [String] = []
+        // The Motion Lab: the feel measured (ATTIC_MOTION_FEEL, else the default).
+        let feel = MotionFeelUnderTest.apply()
+        defer { MotionFeelUnderTest.restore() }
+        var report: [String] = ["feel=\(feel)"]
         // Profiling seam: one scenario, repeated (ATTIC_FRAME_COST_LOOP).
         if let loop = ProcessInfo.processInfo.environment["ATTIC_FRAME_COST_LOOP"] {
             let ids = host.model.rows(for: .now).prefix(6).map(\.id)

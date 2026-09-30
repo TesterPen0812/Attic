@@ -30,6 +30,10 @@ struct AtticDesignContext: Hashable, Sendable {
     /// What raised controls are made of. The text on them is tuned against
     /// both materials, so this changes no colour token.
     var controls: AtticControlMaterial = .liquidGlass
+    /// The motion's feel (the Motion Lab). The presets read
+    /// `AtticMotionTuning.current`; it is here so that a new feel redraws
+    /// every view at once and applies with no relaunch.
+    var motion: AtticMotionTuning = AtticMotionFeel.recommended.tuning
 
     /// Reduce Transparency makes glass and blur solid.
     var effectiveSurface: AtticPanelSurfaceTreatment.Kind {
@@ -128,7 +132,8 @@ extension View {
         tintLength: Double = PanelTintLength.defaultValue,
         hapticsEnabled: Bool = true,
         animations: AtticAnimationLevel = .full,
-        controls: AtticControlMaterial = .liquidGlass
+        controls: AtticControlMaterial = .liquidGlass,
+        motion: AtticMotionTuning = .current
     ) -> some View {
         modifier(AtticSystemDesignModifier(
             controls: controls,
@@ -137,7 +142,8 @@ extension View {
             tint: tint,
             tintLength: tintLength,
             hapticsEnabled: hapticsEnabled,
-            animations: animations
+            animations: animations,
+            motion: motion
         ))
     }
 }
@@ -150,6 +156,7 @@ private struct AtticSystemDesignModifier: ViewModifier {
     let tintLength: Double
     let hapticsEnabled: Bool
     let animations: AtticAnimationLevel
+    let motion: AtticMotionTuning
 
     @Environment(\.colorScheme) private var colorScheme
     @Environment(\.colorSchemeContrast) private var contrast
@@ -169,7 +176,8 @@ private struct AtticSystemDesignModifier: ViewModifier {
             reduceMotion: reduceMotion || animations == .reduced,
             differentiateWithoutColor: differentiateWithoutColor,
             hapticsEnabled: hapticsEnabled,
-            controls: controls
+            controls: controls,
+            motion: motion
         ))
     }
 }

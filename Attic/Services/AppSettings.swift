@@ -108,6 +108,8 @@ final class AppSettings: ObservableObject {
         static let pinnedSubtaskWindowFrame = "pinnedSubtaskWindowFrame"
         static let hapticsEnabled = "hapticsEnabled"
         static let animations = "animations"
+        static let motionLabFeel = "motionLabFeel"
+        static let motionLabTuning = "motionLabTuning"
         static let quickCaptureEnabled = "quickCaptureEnabled"
         static let quickCaptureKeyCode = "quickCaptureKeyCode"
         static let quickCaptureModifiers = "quickCaptureModifiers"
@@ -185,6 +187,30 @@ final class AppSettings: ObservableObject {
             defaults.set(animations.rawValue, forKey: Key.animations)
             AtticMotionPreference.level = animations
         }
+    }
+
+    /// The Motion Lab (preview builds only, owner 2026-09-30): the feel
+    /// chosen, and the values in use (the feel's, or the lab's edits).
+    /// Outside the lab both are the recommended feel, and nothing stored
+    /// is read or written, so the release identity never changes feel.
+    @Published private(set) var motionFeel: AtticMotionFeel
+
+    @Published var motionTuning: AtticMotionTuning {
+        didSet {
+            AtticMotionTuning.current = motionTuning
+            guard motionLabAvailable, let data = try? JSONEncoder().encode(motionTuning) else { return }
+            defaults.set(data, forKey: Key.motionLabTuning)
+        }
+    }
+
+    let motionLabAvailable: Bool
+
+    /// Chooses a feel in the Motion Lab: its values replace any edits.
+    func chooseMotionFeel(_ feel: AtticMotionFeel) {
+        guard motionLabAvailable else { return }
+        motionFeel = feel
+        defaults.set(feel.rawValue, forKey: Key.motionLabFeel)
+        motionTuning = feel.tuning
     }
 
     @Published var panelCornerSize: Double {
@@ -280,8 +306,9 @@ final class AppSettings: ObservableObject {
 
     private let defaults: UserDefaults
 
-    init(defaults: UserDefaults = .standard) {
+    init(defaults: UserDefaults = .standard, motionLabAvailable: Bool = AtticMotionLab.isAvailable) {
         self.defaults = defaults
+        self.motionLabAvailable = motionLabAvailable
         cloudSyncStartupErrorMessage = nil
         corner = ScreenCorner(rawValue: defaults.string(forKey: Key.corner) ?? "") ?? .topRight
         let storedDelay = defaults.object(forKey: Key.revealDelay) as? Double
@@ -347,6 +374,13 @@ final class AppSettings: ObservableObject {
         let storedAnimations = AtticAnimationLevel(rawValue: defaults.string(forKey: Key.animations) ?? "") ?? .full
         animations = storedAnimations
         AtticMotionPreference.level = storedAnimations
+        let storedFeel = motionLabAvailable ? AtticMotionFeel(rawValue: defaults.string(forKey: Key.motionLabFeel) ?? "") : nil
+        motionFeel = storedFeel ?? .recommended
+        let storedTuning = motionLabAvailable
+            ? defaults.data(forKey: Key.motionLabTuning).flatMap { try? JSONDecoder().decode(AtticMotionTuning.self, from: $0) }
+            : nil
+        motionTuning = storedTuning ?? (storedFeel ?? .recommended).tuning
+        AtticMotionTuning.current = motionTuning
         panelCornerSize = Self.clamp(
             defaults.object(forKey: Key.panelCornerSize) as? Double ?? PanelCornerSize.defaultValue,
             to: PanelCornerSize.min...PanelCornerSize.max,
