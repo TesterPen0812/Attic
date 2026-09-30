@@ -110,6 +110,7 @@ final class AppSettings: ObservableObject {
         static let animations = "animations"
         static let motionLabFeel = "motionLabFeel"
         static let motionLabTuning = "motionLabTuning"
+        static let motionLabEdges = "motionLabEdges"
         static let quickCaptureEnabled = "quickCaptureEnabled"
         static let quickCaptureKeyCode = "quickCaptureKeyCode"
         static let quickCaptureModifiers = "quickCaptureModifiers"
@@ -200,6 +201,16 @@ final class AppSettings: ObservableObject {
             AtticMotionTuning.current = motionTuning
             guard motionLabAvailable, let data = try? JSONEncoder().encode(motionTuning) else { return }
             defaults.set(data, forKey: Key.motionLabTuning)
+        }
+    }
+
+    /// The Motion Lab's "Edges": how scrolled content meets the tabs, the
+    /// add bar and Notes' chrome. Outside the lab it is the recommended
+    /// style, and nothing stored is read or written.
+    @Published var edgeStyle: AtticEdgeStyle {
+        didSet {
+            guard motionLabAvailable else { return }
+            defaults.set(edgeStyle.rawValue, forKey: Key.motionLabEdges)
         }
     }
 
@@ -382,6 +393,8 @@ final class AppSettings: ObservableObject {
         let tuning = storedTuning ?? (storedFeel ?? .recommended).tuning
         motionTuning = tuning
         AtticMotionTuning.current = tuning
+        edgeStyle = (motionLabAvailable ? AtticEdgeStyle(rawValue: defaults.string(forKey: Key.motionLabEdges) ?? "") : nil)
+            ?? .recommended
         panelCornerSize = Self.clamp(
             defaults.object(forKey: Key.panelCornerSize) as? Double ?? PanelCornerSize.defaultValue,
             to: PanelCornerSize.min...PanelCornerSize.max,

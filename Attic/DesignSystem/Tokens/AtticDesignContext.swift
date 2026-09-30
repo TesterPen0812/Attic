@@ -34,6 +34,16 @@ struct AtticDesignContext: Hashable, Sendable {
     /// `AtticMotionTuning.current`; it is here so that a new feel redraws
     /// every view at once and applies with no relaunch.
     var motion: AtticMotionTuning = AtticMotionFeel.recommended.tuning
+    /// How scrolled content meets persistent chrome (the Motion Lab's
+    /// "Edges"). Read it through `effectiveEdges`.
+    var edges: AtticEdgeStyle = .recommended
+
+    /// Reduce Transparency makes the band solid: nothing under the controls.
+    /// So does Increase Contrast, as the saved-notes drawer's underlay
+    /// always did (`TaskScrollMaskLayout.underChromeOpacity`).
+    var effectiveEdges: AtticEdgeStyle {
+        edges.resolved(reduceTransparency: reduceTransparency || increaseContrast)
+    }
 
     /// Reduce Transparency makes glass and blur solid.
     var effectiveSurface: AtticPanelSurfaceTreatment.Kind {
@@ -133,7 +143,8 @@ extension View {
         hapticsEnabled: Bool = true,
         animations: AtticAnimationLevel = .full,
         controls: AtticControlMaterial = .liquidGlass,
-        motion: AtticMotionTuning = .current
+        motion: AtticMotionTuning = .current,
+        edges: AtticEdgeStyle = .recommended
     ) -> some View {
         modifier(AtticSystemDesignModifier(
             controls: controls,
@@ -143,7 +154,8 @@ extension View {
             tintLength: tintLength,
             hapticsEnabled: hapticsEnabled,
             animations: animations,
-            motion: motion
+            motion: motion,
+            edges: edges
         ))
     }
 }
@@ -157,6 +169,7 @@ private struct AtticSystemDesignModifier: ViewModifier {
     let hapticsEnabled: Bool
     let animations: AtticAnimationLevel
     let motion: AtticMotionTuning
+    let edges: AtticEdgeStyle
 
     @Environment(\.colorScheme) private var colorScheme
     @Environment(\.colorSchemeContrast) private var contrast
@@ -177,7 +190,8 @@ private struct AtticSystemDesignModifier: ViewModifier {
             differentiateWithoutColor: differentiateWithoutColor,
             hapticsEnabled: hapticsEnabled,
             controls: controls,
-            motion: motion
+            motion: motion,
+            edges: edges
         ))
     }
 }

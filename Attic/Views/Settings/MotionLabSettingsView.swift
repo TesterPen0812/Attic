@@ -21,7 +21,7 @@ struct MotionLabSettingsGroup: View {
     var body: some View {
         SettingsGroup(
             title: "Motion Lab",
-            footnote: "Preview builds only. Each change applies at once: open the panel and try it. Reduced animations and Reduce Motion ignore the feel.",
+            footnote: "Preview builds only. Each change applies at once: open the panel and try it. Reduced animations and Reduce Motion ignore the feel. Edges: how rows meet the tabs, the add bar and Notes' header and buttons; Reduce Transparency and Increase Contrast always cut cleanly.",
             identifier: "settings-motion-lab"
         ) {
             AtticSegmentedRow(
@@ -29,6 +29,13 @@ struct MotionLabSettingsGroup: View {
                 choices: AtticMotionFeel.allCases.map { ($0, $0.title) },
                 selection: Binding(get: { settings.motionFeel }, set: { settings.chooseMotionFeel($0) }),
                 identifier: "setting-motion-feel"
+            )
+            AtticGroupDivider()
+            AtticPopUpRow(
+                label: "Edges",
+                choices: AtticEdgeStyle.allCases.map { ($0, $0 == .recommended ? "\($0.title) (recommended)" : $0.title) },
+                selection: $settings.edgeStyle,
+                identifier: "setting-motion-edges"
             )
             AtticGroupDivider()
             AtticPopUpRow(
@@ -128,7 +135,8 @@ struct MotionLabSettingsGroup: View {
     private func copy() {
         let pasteboard = NSPasteboard.general
         pasteboard.clearContents()
-        pasteboard.setString(settings.motionTuning.copyText(feel: settings.motionFeel), forType: .string)
+        pasteboard.setString(settings.motionTuning.copyText(feel: settings.motionFeel)
+            + "\nEdges: \(settings.edgeStyle.title) (AtticEdgeStyle.\(settings.edgeStyle.rawValue))", forType: .string)
         copied = true
         Task { @MainActor in
             try? await Task.sleep(for: .seconds(2))

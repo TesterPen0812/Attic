@@ -88,7 +88,8 @@ struct SettingsView: View {
             tintLength: settings.panelTintLength,
             hapticsEnabled: settings.hapticsEnabled,
             animations: settings.animations,
-            motion: settings.motionTuning
+            motion: settings.motionTuning,
+            edges: settings.edgeStyle
         )
         .atticWindowAppearance(SettingsAppearance.mode(for: settings.appearance))
         .environment(\.atticPanelUsesSystemAccent, settings.panelTheme.usesSystemAccent)

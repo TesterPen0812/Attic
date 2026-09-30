@@ -18,7 +18,8 @@ struct NotesPageHost: View {
             } else if uiState.isComposerPresented {
                 NoteComposerView(noteDraft: noteDraft, uiState: uiState,
                                  topContentInset: layout.contentInsets.top + 64,
-                                 bottomContentInset: layout.contentInsets.bottom)
+                                 bottomContentInset: layout.contentInsets.bottom,
+                                 headerTop: layout.chromeInsets.top, headerBottom: layout.headerBottom)
                     .padding(.horizontal, horizontalInset)
             } else {
                 NotesPanelContent(
@@ -26,7 +27,9 @@ struct NotesPageHost: View {
                     noteDraft: noteDraft,
                     uiState: uiState,
                     topContentInset: layout.contentInsets.top + 64,
-                    bottomContentInset: layout.contentInsets.bottom
+                    bottomContentInset: layout.contentInsets.bottom,
+                    headerTop: layout.chromeInsets.top,
+                    headerBottom: layout.headerBottom
                 )
             }
         }

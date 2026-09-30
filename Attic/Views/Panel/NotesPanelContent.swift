@@ -34,7 +34,11 @@ struct NotesPanelContent: View {
     @ObservedObject var uiState: PanelUIState
     var topContentInset: CGFloat = 0
     var bottomContentInset: CGFloat = 0
+    /// The shell's header, from the page's top (0: no edge mask).
+    var headerTop: CGFloat = 0
+    var headerBottom: CGFloat = 0
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.atticDesign) private var design
 
     var body: some View {
         if uiState.isComposerPresented {
@@ -82,6 +86,8 @@ struct NotesPanelContent: View {
                             uiState: uiState,
                             note: note
                         )
+                        .atticEdgeBlur(design.effectiveEdges.blurs && headerBottom > 0, in: PanelPageLayout.coordinateSpace,
+                                       top: headerBand, bottom: AtticEdgeBand(labelFar: 0, labelNear: 0, controls: 0, rest: 0))
                     }
                 }
                 .padding(.horizontal, AtticStyle.horizontalPadding - 4)
@@ -89,8 +95,14 @@ struct NotesPanelContent: View {
                 .padding(.bottom, bottomContentInset + 18)
             }
             .scrollIndicators(.never)
+            // Rows scroll under the header in the Motion Lab's "Edges".
+            .mask { if headerBottom > 0 { AtticEdgeMask(top: headerBand) } else { Color.black } }
             .animation(reduceMotion ? nil : AtticMotion.spring, value: notes.map(\.id))
         }
+    }
+
+    private var headerBand: AtticEdgeBand {
+        NotesEdgeLayout.header(headerTop: headerTop, headerBottom: headerBottom, rest: topContentInset + 2)
     }
 
     private func beginNew() {
@@ -144,6 +156,9 @@ struct NoteComposerView: View {
     @ObservedObject var uiState: PanelUIState
     let topContentInset: CGFloat
     let bottomContentInset: CGFloat
+    /// The shell's header, from the page's top (0: no edge mask).
+    let headerTop: CGFloat
+    let headerBottom: CGFloat
 
     /// The title participates in SwiftUI's focus system, while the wrapped
     /// NSTextView owns body focus through AppKit's responder chain. Treating
@@ -164,12 +179,15 @@ struct NoteComposerView: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     init(noteDraft: NoteDraftController, uiState: PanelUIState,
-         topContentInset: CGFloat = 0, bottomContentInset: CGFloat = 0) {
+         topContentInset: CGFloat = 0, bottomContentInset: CGFloat = 0,
+         headerTop: CGFloat = 0, headerBottom: CGFloat = 0) {
         self.noteDraft = noteDraft
         _noteStore = ObservedObject(wrappedValue: noteDraft.noteStore)
         self.uiState = uiState
         self.topContentInset = topContentInset
         self.bottomContentInset = bottomContentInset
+        self.headerTop = headerTop
+        self.headerBottom = headerBottom
     }
 
     var body: some View {
@@ -304,6 +322,18 @@ struct NoteComposerView: View {
                 }
             )
             .frame(maxWidth: .infinity, maxHeight: .infinity)
+            // The text runs under the header and the buttons in the Motion
+            // Lab's "Edges" (one mask over the editor; its text view draws
+            // as before and takes the same clicks).
+            .mask {
+                if headerBottom > 0 {
+                    AtticEdgeMask(top: NotesEdgeLayout.header(headerTop: headerTop, headerBottom: headerBottom, rest: topContentInset),
+                                  bottom: NotesEdgeLayout.composer(bottomInset: bottomContentInset,
+                                                                   controlHeight: AtticStyle.composerControlHeight))
+                } else {
+                    Color.black
+                }
+            }
             .padding(.horizontal, 4)
 
             bottomComposer
@@ -721,8 +751,6 @@ private struct SavedNotesDrawer: View {
     let onNew: () -> Void
     let onClose: () -> Void
 
-    @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
-    @Environment(\.colorSchemeContrast) private var colorSchemeContrast
 
     var body: some View {
         GeometryReader { proxy in
@@ -746,7 +774,8 @@ private struct SavedNotesDrawer: View {
                     }
                 }
                 .scrollIndicators(.never)
-                .mask(chromeMask(height: proxy.size.height))
+                // The Motion Lab's "Edges" under the drawer's buttons.
+                .mask(AtticEdgeMask(top: SavedNotesDrawerLayout.edgeBand, bottom: SavedNotesDrawerLayout.edgeBand))
                 // The mask only dims: without these the bottom button still
                 // shared its footprint with whatever row had scrolled under
                 // it, and a press in the fade landed on a row the user could
@@ -775,24 +804,6 @@ private struct SavedNotesDrawer: View {
         .accessibilityElement(children: .contain)
         .accessibilityLabel("Saved notes")
         .accessibilityIdentifier("saved-notes-drawer")
-    }
-
-    /// Rows keep a faint impression under the drawer's buttons and are fully
-    /// readable between them, so the bottom button can never sit on top of
-    /// legible preview text and the last row no longer hard-clips.
-    private func chromeMask(height: CGFloat) -> some View {
-        let stops = SavedNotesDrawerLayout.stops(height: height)
-        return LinearGradient(
-            stops: TaskScrollMaskLayout.gradientStops(
-                stops,
-                underChromeOpacity: TaskScrollMaskLayout.underChromeOpacity(
-                    reduceTransparency: reduceTransparency,
-                    increasedContrast: colorSchemeContrast == .increased
-                )
-            ),
-            startPoint: .top,
-            endPoint: .bottom
-        )
     }
 
     private func drawerButton(_ title: String, symbol: String, id: String, action: @escaping () -> Void) -> some View {

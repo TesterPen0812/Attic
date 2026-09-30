@@ -678,6 +678,34 @@ enum SavedNotesDrawerLayout {
     /// The drawer's empty state sits below the top fade so it is never
     /// rendered half-faded by the mask that exists for scrolling rows.
     static var emptyStateTopInset: CGFloat { shieldHeight }
+
+    /// The drawer's bands for the Motion Lab's "Edges": its round buttons
+    /// (a 32 pt circle in a 36 pt frame, 14 pt in from each edge), with rows
+    /// resting past the shield.
+    static var edgeBand: AtticEdgeBand {
+        let inset = (buttonDiameter - 32) / 2
+        return AtticEdgeBand(labelFar: buttonEdgePadding + inset, labelNear: buttonFootprint - inset,
+                             controls: buttonFootprint, rest: rowRestingInset)
+    }
+}
+
+/// Where Notes' scrolling content meets its persistent chrome (the Motion
+/// Lab's "Edges"): the shell's header over the top, the composer's round
+/// buttons over the bottom. Distances in from each edge of the page.
+enum NotesEdgeLayout {
+    /// The header's controls, from `headerTop` to `headerBottom`; content
+    /// rests at `rest`.
+    static func header(headerTop: CGFloat, headerBottom: CGFloat, rest: CGFloat) -> AtticEdgeBand {
+        AtticEdgeBand(labelFar: headerTop, labelNear: headerBottom, controls: headerBottom, rest: max(rest, headerBottom))
+    }
+
+    /// The composer's buttons: 34 pt circles in 40 pt frames, `bottomInset`
+    /// above the page's bottom; the editor's text rests where its bottom
+    /// inset ends (`controlHeight` and 14 pt above that).
+    static func composer(bottomInset: CGFloat, controlHeight: CGFloat) -> AtticEdgeBand {
+        AtticEdgeBand(labelFar: bottomInset + 3, labelNear: bottomInset + 37,
+                      controls: bottomInset + 40, rest: bottomInset + controlHeight + 14)
+    }
 }
 
 /// Hover and keyboard focus feedback for the panel's quick-entry submit.
