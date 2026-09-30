@@ -2209,6 +2209,8 @@ extension NoteSlice3bTests {
 private final class PendingWriteJournal: NoteDraftJournaling {
     let base: NoteDraftJournal
     private(set) var retirementRequests: [UUID] = []
+    var afterRetirement: (() -> Void)?
+    var failRetirement = false
     var blockWrites = false
     var failNextWrite = false
     var failRead = false
@@ -2236,7 +2238,9 @@ private final class PendingWriteJournal: NoteDraftJournaling {
     }
     func retireDurably(noteID: UUID, claim: NoteRecoveryClaim?, saved: NoteRecoverySavedState?) async throws {
         retirementRequests.append(noteID)
+        if failRetirement { throw CocoaError(.fileWriteNoPermission) }
         try await base.retireDurably(noteID: noteID, claim: claim, saved: saved)
+        afterRetirement?()
     }
     func discardOwnedDurably(noteID: UUID, claim: NoteRecoveryClaim) async throws {
         try await base.discardOwnedDurably(noteID: noteID, claim: claim)
@@ -2847,6 +2851,46 @@ extension NoteSlice3bTests {
 
 @MainActor
 extension NoteSlice3bTests {
+    func testDurableDeleteReportsItsOwnOutcomeWhenUnrelatedQueuedRecoveryFails() async throws {
+        for failure in ["unrelated", "retirement", "delete save"] {
+            let root = FileManager.default.temporaryDirectory.appendingPathComponent("R3-\(UUID())")
+            defer { try? FileManager.default.removeItem(at: root) }
+            let journal = PendingWriteJournal(directory: root), gate = PersistenceGate()
+            let store = try makeTestNoteStore(persist: { try gate.save($0) }, attachmentFileStore: makeTestAttachmentFileStore())
+            let id = UUID(), other = UUID(), document = NoteDocument(blocks: [.text("Delete me")])
+            guard case .success = store.createDocumentNote(id: id, document: document),
+                  case .success = store.createDocumentNote(id: other, document: NoteDocument(blocks: [.text("Keep me")])) else { return XCTFail() }
+            let controller = NotesPageController(store: store, journal: journal, saveDelay: .seconds(60))
+            await XCTAssertTrueAsync(await controller.openDurably(noteID: other))
+            let inactive = try XCTUnwrap(controller.active)
+            XCTAssertTrue(inactive.engine.performEdit(NSRange(location: 0, length: 0), with: NSAttributedString(string: "Draft "), name: "Typing"))
+            // An actual checkpoint forces Delete through its async retirement.
+            _ = try journal.base.write(.init(noteID: id, isPersisted: true,
+                baseRevisionID: store.note(withID: id)?.revisionID, content: try NoteContentCodec.encode(document),
+                selectionLocation: 0, selectionLength: 0, staged: [], savedAt: Date()), staged: [])
+            switch failure {
+            case "unrelated":
+                journal.afterRetirement = {
+                    journal.afterRetirement = nil
+                    gate.shouldFail = true; journal.failNextWrite = true
+                    XCTAssertFalse(controller.preserve(inactive))
+                    gate.shouldFail = false
+                }
+            case "retirement": journal.failRetirement = true
+            default: gate.shouldFail = true
+            }
+            let deleted = await controller.deleteNoteDurably(noteID: id)
+            XCTAssertEqual(deleted, failure == "unrelated", "report this delete's actual outcome")
+            XCTAssertEqual(store.note(withID: id) == nil, deleted)
+            XCTAssertNotNil(store.note(withID: other), "unrelated note is never deleted")
+            if failure == "unrelated" {
+                XCTAssertTrue(inactive.notice?.contains("Recovery could not be saved") == true, "the unrelated failure remains visible")
+            }
+            gate.shouldFail = false
+            await controller.waitForRecoveryWork()
+        }
+    }
+
     func testSlowSuccessfulUndoDoesNotInviteRetryAndPendingWarningDrains() async throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent("SlowSuccess-\(UUID())")
         defer { try? FileManager.default.removeItem(at: root) }

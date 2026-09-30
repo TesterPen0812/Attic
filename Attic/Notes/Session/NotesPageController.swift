@@ -301,22 +301,25 @@ final class NotesPageController: ObservableObject {
         return await performAfterRecovery { keepAsNewNote(stored: stored) }
     }
     func deleteNoteDurably(noteID: UUID) async -> Bool {
-        await performAfterRecovery { deleteNote(noteID: noteID) }
+        // removeNote proves this note's retirement and store save itself.
+        // A different session's failed checkpoint cannot change that outcome.
+        await performAfterRecovery(reportCompletedAction: true) { deleteNote(noteID: noteID) }
     }
 
-    private func performAfterRecovery(requireDrainedRecovery: Bool = false, _ operation: () -> Bool) async -> Bool {
+    private func performAfterRecovery(requireDrainedRecovery: Bool = false, reportCompletedAction: Bool = false,
+                                      _ operation: () -> Bool) async -> Bool {
         guard await awaitRecoveryForUser() else { return false }
         let failures = recoveryFailureCount
         let first = operation()
         let pending = recoveryWork != nil
         let firstWait = await awaitRecoveryForUser(completedAction: first && !requireDrainedRecovery)
         guard firstWait else { return first && !requireDrainedRecovery }
-        guard recoveryFailureCount == failures else { return false }
+        guard reportCompletedAction || recoveryFailureCount == failures else { return false }
         guard !first, pending else { return first }
         let second = operation()
         let secondWait = await awaitRecoveryForUser(completedAction: second && !requireDrainedRecovery)
         guard secondWait else { return second && !requireDrainedRecovery }
-        return second && recoveryFailureCount == failures
+        return second && (reportCompletedAction || recoveryFailureCount == failures)
     }
 
     /// Waiting never cancels the serialized write or releases its live owners.
