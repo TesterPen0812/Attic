@@ -145,7 +145,7 @@ jobs:
             -destination 'platform=macOS' -derivedDataPath "$baseline_root/.build/dd-hosted" \
             -resultBundlePath "$RUNNER_TEMP/AtticReturnBaselineHosted.xcresult" \
             CODE_SIGNING_ALLOWED=NO \
-            -only-testing:AtticTests/TasksRound13Tests/testReturnDeliveredToTheWindowDuringMenuTrackingRunsTheHighlightedItem \
+            -only-testing:AtticTests/TasksRound13Tests/testCoreGraphicsBackedReturnInTheActionsMenuRunsTheHighlightedItem \
             test
 
       - name: Capture the baseline actions-menu Return UI trace

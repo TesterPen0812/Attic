@@ -74,17 +74,20 @@ final class TasksRound13Tests: XCTestCase {
     /// a timer in the common modes (menu tracking is not the default mode),
     /// with an Esc at the end so a menu that ignores them cannot hang the run.
     private func schedule(_ keys: [(characters: String, keyCode: UInt16)], in hosted: Hosted, from start: TimeInterval = 0.8,
-                          step: TimeInterval = 0.25, dispatchReturnToWindow: Bool = false) -> [Timer] {
+                          step: TimeInterval = 0.25, coreGraphicsReturn: Bool = false) -> [Timer] {
         func post(_ characters: String, _ keyCode: UInt16) {
             for type in [NSEvent.EventType.keyDown, .keyUp] {
-                let event = NSEvent.keyEvent(with: type, location: .zero, modifierFlags: [], timestamp: ProcessInfo.processInfo.systemUptime,
-                                             windowNumber: hosted.window.windowNumber, context: nil, characters: characters,
-                                             charactersIgnoringModifiers: characters, isARepeat: false, keyCode: keyCode)!
-                if dispatchReturnToWindow, keyCode == 36 {
-                    NSApp.sendEvent(event)
+                let event: NSEvent
+                if coreGraphicsReturn, keyCode == 36 {
+                    let cg = CGEvent(keyboardEventSource: nil, virtualKey: keyCode, keyDown: type == .keyDown)!
+                    cg.timestamp = UInt64(ProcessInfo.processInfo.systemUptime * 1_000_000_000)
+                    event = NSEvent(cgEvent: cg)!
                 } else {
-                    NSApp.postEvent(event, atStart: false)
+                    event = NSEvent.keyEvent(with: type, location: .zero, modifierFlags: [], timestamp: ProcessInfo.processInfo.systemUptime,
+                                            windowNumber: hosted.window.windowNumber, context: nil, characters: characters,
+                                            charactersIgnoringModifiers: characters, isARepeat: false, keyCode: keyCode)!
                 }
+                NSApp.postEvent(event, atStart: false)
             }
         }
         var when = start
@@ -104,12 +107,12 @@ final class TasksRound13Tests: XCTestCase {
     /// The row selected and focused, ⇧⌘I pressed for real (a native menu
     /// pops up), `keys` typed into the menu, and the run spun until it closed.
     private func openActionsMenu(_ hosted: Hosted, on title: String, keys: [(characters: String, keyCode: UInt16)],
-                                 dispatchReturnToWindow: Bool = false) throws -> UUID {
+                                 coreGraphicsReturn: Bool = false) throws -> UUID {
         let model = hosted.model
         let row = try XCTUnwrap(model.rows(for: .now).first { $0.model.title == title }?.id)
         try hosted.clickRow(row, tab: .now)
         XCTAssertEqual(model.selection, [row])
-        let timers = schedule(keys, in: hosted, dispatchReturnToWindow: dispatchReturnToWindow)
+        let timers = schedule(keys, in: hosted, coreGraphicsReturn: coreGraphicsReturn)
         defer { timers.forEach { $0.invalidate() } }
         hosted.press("i", keyCode: 34, modifiers: [.command, .shift])
         hosted.spin(1.5)
@@ -134,16 +137,16 @@ final class TasksRound13Tests: XCTestCase {
         XCTAssertNil(hosted.model.editingTitleID, "and did not edit the parent's title")
     }
 
-    /// Return dispatched to the key window while NSMenu is in its nested
-    /// tracking loop. Queued events alone go straight to the native tracker
-    /// and missed the page/responder delivery seen with synthesized input.
-    func testReturnDeliveredToTheWindowDuringMenuTrackingRunsTheHighlightedItem() throws {
+    /// A CoreGraphics-backed Return down/up pair goes through the native
+    /// menu tracker, including its internal key-equivalent lookup. No direct
+    /// responder dispatch or permission-dependent CGEvent posting is used.
+    func testCoreGraphicsBackedReturnInTheActionsMenuRunsTheHighlightedItem() throws {
         let hosted = try Hosted(height: 520)
         defer { hosted.close() }
         let down: (characters: String, keyCode: UInt16) = ("\u{F701}", 125)
         let row = try openActionsMenu(hosted, on: "Call the plumber",
                                      keys: Array(repeating: down, count: 8) + [("\r", 36)],
-                                     dispatchReturnToWindow: true)
+                                     coreGraphicsReturn: true)
         XCTAssertEqual(hosted.model.newSubtaskParentID, row, "the highlighted Add Subtask owns Return")
         XCTAssertNil(hosted.model.editingTitleID, "the key never edits the parent")
     }
@@ -154,7 +157,7 @@ final class TasksRound13Tests: XCTestCase {
         let down: (characters: String, keyCode: UInt16) = ("\u{F701}", 125)
         let row = try openActionsMenu(hosted, on: "Call the plumber",
                                      keys: Array(repeating: down, count: 4) + [("\r", 36), down, ("\r", 36)],
-                                     dispatchReturnToWindow: true)
+                                     coreGraphicsReturn: true)
         XCTAssertNotNil(hosted.model.dueDay(of: row), "Return opens Date, then runs its highlighted quick day")
         XCTAssertNil(hosted.model.editingTitleID)
     }
@@ -187,7 +190,8 @@ final class TasksRound13Tests: XCTestCase {
             AtticMenuCommand(verbatim: "Edit Title", shortcut: AtticTaskShortcut.editTitle) { ran.append("edit") },
             AtticMenuCommand(verbatim: "Later", shortcut: AtticTaskShortcut.later) { ran.append("later") }
         ])
-        XCTAssertEqual(menu.items.first?.keyEquivalent, "\r", "the hint is shown")
+        XCTAssertEqual(menu.items.first?.keyEquivalent, "", "Return is not registered with the native tracker")
+        XCTAssertEqual(menu.items.first?.badge?.stringValue, "↩", "the list's Return shortcut remains discoverable")
         func key(_ characters: String, _ keyCode: UInt16, _ flags: NSEvent.ModifierFlags) -> NSEvent {
             NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: flags, timestamp: 0, windowNumber: 0, context: nil,
                              characters: characters, charactersIgnoringModifiers: characters, isARepeat: false, keyCode: keyCode)!
@@ -196,6 +200,17 @@ final class TasksRound13Tests: XCTestCase {
         XCTAssertEqual(ran, [], "Return does not run Edit Title")
         XCTAssertTrue(menu.performKeyEquivalent(with: key("b", 11, .command)))
         XCTAssertEqual(ran, ["later"], "⌘B still runs Later")
+    }
+
+    func testAllBareMenuShortcutsAreHintsAndKeepExistingDetails() {
+        let menu = AtticNativeMenu.make([
+            AtticMenuCommand(verbatim: "Complete", shortcut: AtticTaskShortcut.complete) {},
+            AtticMenuCommand(verbatim: "Start Working", shortcut: AtticTaskShortcut.working) {},
+            AtticMenuCommand(verbatim: "Delete", shortcut: AtticTaskShortcut.delete) {},
+            AtticMenuCommand(verbatim: "Edit Title", shortcut: AtticTaskShortcut.editTitle, detail: "Tue") {}
+        ])
+        XCTAssertEqual(menu.items.map(\.keyEquivalent), ["", "", "", ""])
+        XCTAssertEqual(menu.items.map { $0.badge?.stringValue }, ["Space", "⇧Space", "⌫", "Tue · ↩"])
     }
 
     /// Dispatch always runs the chosen item's action. Keyboard ownership

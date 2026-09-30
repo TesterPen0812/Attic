@@ -964,6 +964,39 @@ struct AtticMenuCommand: Identifiable {
         return command
     }
 
+    /// Bare keys belong to the list, and are reference hints in a menu.
+    /// NSMenu's tracking loop matches key equivalents internally, bypassing
+    /// performKeyEquivalent and local event monitors. Return must therefore
+    /// never be registered as Edit Title's native menu equivalent.
+    var menuShortcut: KeyboardShortcut? {
+        guard let shortcut, !shortcut.modifiers.intersection([.command, .control, .option]).isEmpty else { return nil }
+        return shortcut
+    }
+
+    var menuBadge: String? {
+        let hint = menuShortcut == nil ? shortcut.map(Self.shortcutHint) : nil
+        let parts = [detail, hint].compactMap { $0 }
+        return parts.isEmpty ? nil : parts.joined(separator: " · ")
+    }
+
+    private static func shortcutHint(_ shortcut: KeyboardShortcut) -> String {
+        let key: String
+        switch shortcut.key {
+        case .return: key = "↩"
+        case .space: key = String(localized: "Space")
+        case .delete: key = "⌫"
+        case .deleteForward: key = "⌦"
+        case .upArrow: key = "↑"
+        case .downArrow: key = "↓"
+        case .leftArrow: key = "←"
+        case .rightArrow: key = "→"
+        case .escape: key = "⎋"
+        case .tab: key = "⇥"
+        default: key = String(shortcut.key.character).uppercased()
+        }
+        return (shortcut.modifiers.contains(.shift) ? "⇧" : "") + key
+    }
+
     /// A section's heading: starts a section, titled.
     static func header(_ title: String) -> AtticMenuCommand {
         var command = AtticMenuCommand(verbatim: title, startsSection: true) {}
@@ -1121,8 +1154,8 @@ struct AtticMenuItems: View {
             // A toggle draws the native tick.
             Toggle(isOn: Binding(get: { state == .on }, set: { _ in command.action() })) { label(command) }
                 .disabled(command.isDisabled)
-                .modifier(AtticMenuShortcut(shortcut: command.shortcut))
-                .modifier(AtticMenuBadge(detail: command.detail))
+                .modifier(AtticMenuShortcut(shortcut: command.menuShortcut))
+                .modifier(AtticMenuBadge(detail: command.menuBadge))
         } else {
             Button(role: command.isDestructive ? .destructive : nil, action: command.action) {
                 if command.state == .mixed {
@@ -1133,8 +1166,8 @@ struct AtticMenuItems: View {
                 }
             }
             .disabled(command.isDisabled)
-            .modifier(AtticMenuShortcut(shortcut: command.shortcut))
-            .modifier(AtticMenuBadge(detail: command.detail))
+            .modifier(AtticMenuShortcut(shortcut: command.menuShortcut))
+            .modifier(AtticMenuBadge(detail: command.menuBadge))
         }
     }
 
@@ -1164,102 +1197,6 @@ private struct AtticMenuBadge: ViewModifier {
     }
 }
 
-/// A pop-up menu that shows every command's shortcut but answers only the
-/// shortcuts that carry ⌘, ⌃ or ⌥ (round 13). A bare key (Return for Edit
-/// Title, Space for Complete, Delete) is a shortcut of the list behind the
-/// menu, shown for reference: inside the open menu those keys belong to the
-/// menu (↓ highlights, Return activates the highlighted item), never to the
-/// item whose hint they are.
-/// Return belongs to a tracking menu, including events dispatched through
-/// NSApplication to its underlying key window. Keep native navigation and
-/// shortcut hints, and consume the activating press through its release.
-final class AtticPopUpMenu: NSMenu, NSMenuDelegate {
-    private var isTracking = false
-    private var keyMonitor: Any?
-    private var claimedReturn: (code: UInt16, timestamp: TimeInterval)?
-
-    override init(title: String) {
-        super.init(title: title)
-        delegate = self
-    }
-
-    required init(coder: NSCoder) {
-        super.init(coder: coder)
-        delegate = self
-    }
-
-    func menuWillOpen(_ menu: NSMenu) {
-        isTracking = true
-        // The root owns input for its whole open submenu chain.
-        guard (supermenu as? AtticPopUpMenu)?.isTracking != true, keyMonitor == nil else { return }
-        keyMonitor = NSEvent.addLocalMonitorForEvents(matching: [.keyDown, .keyUp]) { event in
-            MainActor.assumeIsolated { self.takeReturn(event) ? nil : event }
-        }
-    }
-
-    func menuDidClose(_ menu: NSMenu) {
-        isTracking = false
-        if claimedReturn == nil { stopMonitoring() }
-    }
-
-    private func stopMonitoring() {
-        if let keyMonitor { NSEvent.removeMonitor(keyMonitor) }
-        keyMonitor = nil
-        claimedReturn = nil
-    }
-
-    /// One owner for Return, whether AppKit asks for a menu equivalent or
-    /// sends the event through the window's local event monitors.
-    private func takeReturn(_ event: NSEvent) -> Bool {
-        if event.type == .keyUp, event.keyCode == claimedReturn?.code {
-            claimedReturn = nil
-            if !isTracking { stopMonitoring() }
-            return true
-        }
-        guard event.type == .keyDown else { return false }
-        if !isTracking {
-            if let claimedReturn, event.keyCode == claimedReturn.code,
-               event.isARepeat || event.timestamp == claimedReturn.timestamp { return true }
-            // A lost release cannot suppress a later, fresh key press.
-            stopMonitoring()
-            return false
-        }
-        guard event.keyCode == 36 || event.keyCode == 76,
-              event.modifierFlags.intersection([.command, .control, .option, .shift]).isEmpty else { return false }
-        claimedReturn = (event.keyCode, event.timestamp)
-        var selectedMenu: NSMenu = self
-        while let child = selectedMenu.highlightedItem?.submenu, child.highlightedItem != nil {
-            selectedMenu = child
-        }
-        guard let item = selectedMenu.highlightedItem, item.isEnabled else { return true }
-        if item.submenu != nil {
-            // Opening a highlighted submenu is native Right-arrow navigation.
-            // Queue it to the tracker instead of sending Return to the page.
-            for type in [NSEvent.EventType.keyDown, .keyUp] {
-                if let right = NSEvent.keyEvent(with: type, location: event.locationInWindow, modifierFlags: [],
-                                                timestamp: event.timestamp, windowNumber: event.windowNumber,
-                                                context: nil, characters: "\u{F703}", charactersIgnoringModifiers: "\u{F703}",
-                                                isARepeat: false, keyCode: 124) {
-                    NSApp.postEvent(right, atStart: false)
-                }
-            }
-        } else if item.action != nil {
-            let index = selectedMenu.index(of: item)
-            cancelTrackingWithoutAnimation()
-            selectedMenu.performActionForItem(at: index)
-        }
-        return true
-    }
-
-    override func performKeyEquivalent(with event: NSEvent) -> Bool {
-        if MainActor.assumeIsolated({ takeReturn(event) }) { return true }
-        // Bare keys are list shortcuts shown for reference. Modified menu
-        // equivalents still run their own item, independently of highlight.
-        guard !event.modifierFlags.intersection([.command, .control, .option]).isEmpty else { return false }
-        return super.performKeyEquivalent(with: event)
-    }
-}
-
 /// The same commands as an `NSMenu` (round 10): what a row's actions
 /// button, ⇧⌘I and the selection bar open, anchored to a view. Native in
 /// every way (keyboard, type-to-select, VoiceOver), with each command's
@@ -1268,7 +1205,7 @@ final class AtticPopUpMenu: NSMenu, NSMenuDelegate {
 enum AtticNativeMenu {
     /// The menu for `commands`.
     static func make(_ commands: [AtticMenuCommand], title: String = "") -> NSMenu {
-        let menu = AtticPopUpMenu(title: title)
+        let menu = NSMenu(title: title)
         menu.autoenablesItems = false
         var first = true
         for command in commands {
@@ -1287,6 +1224,7 @@ enum AtticNativeMenu {
 
     private static func item(_ command: AtticMenuCommand) -> NSMenuItem {
         let item = NSMenuItem(title: command.title, action: nil, keyEquivalent: "")
+        item.keyEquivalentModifierMask = []
         if let systemImage = command.systemImage, command.state != .mixed {
             item.image = NSImage(systemSymbolName: systemImage, accessibilityDescription: nil)
         }
@@ -1303,11 +1241,11 @@ enum AtticNativeMenu {
         case .off?, nil: item.state = .off
         }
         item.isEnabled = !command.isDisabled
-        if let shortcut = command.shortcut, let key = keyEquivalent(shortcut.key) {
+        if let shortcut = command.menuShortcut, let key = keyEquivalent(shortcut.key) {
             item.keyEquivalent = key
             item.keyEquivalentModifierMask = modifiers(shortcut.modifiers)
         }
-        if let detail = command.detail { item.badge = NSMenuItemBadge(string: detail) }
+        if let detail = command.menuBadge { item.badge = NSMenuItemBadge(string: detail) }
         return item
     }
 
