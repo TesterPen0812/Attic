@@ -279,4 +279,34 @@ final class TasksRound13Tests: XCTestCase {
         let text = before.reduce(0, +)
         XCTAssertLessThan(Double(worst), Double(text) * 0.06, "ink between the titles' lines while rows reorder: \(worst) of \(text)")
     }
+
+    // MARK: - Item 5: no edge ghosts
+
+    /// A row scrolled past the tabs or toward the add bar is cut at the
+    /// fixed band, not left half-faded in a long ramp (the review's "faint
+    /// title fragments"): the partly-transparent stretch of the list's mask
+    /// is no longer than the edge softening, at either edge, for every
+    /// bottom stack, and the resting rows keep full opacity.
+    func testTheListsMaskCutsRowsCleanlyAtTheFixedBands() {
+        for stack in [CGFloat(36), 60, 96, 136] {
+            let height: CGFloat = 520
+            let stops = TasksViewport.maskStops(height: height, tabsTop: 80, listTop: 110, bottomStack: stack)
+            func opacity(_ y: CGFloat) -> Double {
+                let x = y / height
+                for (a, b) in zip(stops, stops.dropFirst()) where x <= b.location {
+                    let t = Double((x - a.location) / max(b.location - a.location, 0.000001))
+                    return a.opacity + (b.opacity - a.opacity) * min(max(t, 0), 1)
+                }
+                return stops.last?.opacity ?? 1
+            }
+            let partial = stride(from: CGFloat(0), through: height, by: 0.5).filter { (0.02...0.98).contains(opacity($0)) }
+            let top = partial.filter { $0 < height / 2 }, bottom = partial.filter { $0 >= height / 2 }
+            XCTAssertLessThanOrEqual((top.last ?? 0) - (top.first ?? 0), TasksViewport.softEdge + 0.5, "top ramp, stack \(stack)")
+            XCTAssertLessThanOrEqual((bottom.last ?? 0) - (bottom.first ?? 0), TasksViewport.softEdge + 0.5, "bottom ramp, stack \(stack)")
+            XCTAssertEqual(opacity(110), 1, accuracy: 0.001, "the resting row is whole")
+            XCTAssertEqual(opacity(height - stack - 18), 1, accuracy: 0.001, "and so is the row above the bar")
+            XCTAssertEqual(opacity(height - stack), 0, accuracy: 0.001, "nothing under the bar")
+            XCTAssertEqual(opacity(100), 0, accuracy: 0.05, "nothing just under the tabs' band")
+        }
+    }
 }

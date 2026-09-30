@@ -3021,6 +3021,9 @@ enum TasksViewport {
         1 - AtticEdgeBlur.veil(at: depth) / AtticEdgeBlur.maximumVeil
     }
 
+    /// The length of the softened edge where a row meets a fixed band.
+    static let softEdge: CGFloat = 6
+
     /// The fade by position in the viewport: nothing over the header or
     /// under the tabs (so they stay readable over scrolled text), fully
     /// there from the first row's resting place down to the
@@ -3028,20 +3031,22 @@ enum TasksViewport {
     static func maskStops(height: CGFloat, tabsTop: CGFloat, listTop: CGFloat, bottomStack: CGFloat) -> [(location: CGFloat, opacity: Double)] {
         guard height > 0 else { return [(0, 1), (1, 1)] }
         let tabsBottom = tabsTop + AtticLayout.pageTabsHeight
-        // The fade starts in the 16 pt the list keeps from the bar and
-        // ends at the bar's top: nothing shows under the add bar, the
-        // strip or a selection bar (round 12: the round-11 fade left 22 %
-        // to 6 % of every row there, still readable through glass).
-        let fadeStart = max(height - bottomStack - AtticLayout.contentToAddBar * 1.75, listTop)
-        let barTop = max(height - bottomStack, fadeStart)
+        // Round 13 (the hands-on review: faint title fragments hung just
+        // under the tabs and just above the add bar): a row scrolled past
+        // an edge is cut cleanly at the fixed band, with only a short
+        // softening inside the list's own viewport (`softEdge`, the edge
+        // veil's eased ramp). The round-12 ramps were 10 and 28 pt long and
+        // left half-faded rows readable in them.
+        let barTop = max(height - bottomStack, listTop)
+        let fadeStart = max(barTop - softEdge, listTop)
         // Round 11 (the owner: rows scrolled under "Now Later Done" stayed
         // readable and clashed with the labels): nothing shows under the
         // tabs at all. Round 12: the rows come back along the edge veil's
         // own eased ramp (`AtticEdgeBlur.veilStops`, taken to full so it
-        // ends in nothing rather than at its 65 % of a surface veil), from
-        // a little under the tabs to their resting place.
+        // ends in nothing rather than at its 65 % of a surface veil), now
+        // only in the last `softEdge` before their resting place.
         let gap = max(0, listTop - tabsBottom)
-        let clear = tabsBottom + gap * 0.25
+        let clear = max(tabsBottom + gap * 0.25, listTop - softEdge)
         var points: [(CGFloat, Double)] = [(0, 0), (clear, 0)]
         // Rising ramp, depth 1 at `clear` and 0 at the list's top.
         for stop in AtticEdgeBlur.veilStops.reversed() where stop.location < 1 {
