@@ -464,3 +464,38 @@ final class TasksPageMemoryTests: XCTestCase {
         XCTAssertTrue(memory.viewOptions.isEmpty)
     }
 }
+
+/// L1–L4 (the owner's look decisions of 2026-09-30): the tab underline,
+/// the keyboard row's 1 pt line, the flat corner buttons, and Dark Glass
+/// and Frosted's one-step-firmer circles and icons.
+@MainActor
+final class TasksLookDecisionTests: XCTestCase {
+    private func tokens(_ mode: AtticDesignContext.Mode, _ surface: PanelSurfaceStyle, ic: Bool = false) -> AtticColorTokens {
+        var context = AtticDesignContext(mode: mode)
+        context.surface = surface
+        context.increaseContrast = ic
+        return context.tokens
+    }
+
+    func testL4StepsOnlyDarkGlassAndFrosted() {
+        for surface in [PanelSurfaceStyle.glass, .frosted] {
+            let dark = tokens(.dark, surface)
+            XCTAssertEqual(dark.openRing().alpha, 0.46, accuracy: 0.001, "\(surface)")
+            // The icons already render at #B2B2B2 (tuned to 3 : 1), lighter
+            // than the approved #A8A8A8 step: they stay as they are.
+            XCTAssertGreaterThanOrEqual(dark.ink(.icon).contrast(on: dark.panel.base),
+                                        AtticRGBA(0xA8A8A8).contrast(on: dark.panel.base), "\(surface)")
+            XCTAssertEqual(dark.ink(.chevron), dark.ink(.icon), "\(surface)")
+        }
+        let solid = tokens(.dark, .solid)
+        XCTAssertEqual(solid.openRing().alpha, 0.28, accuracy: 0.001, "Dark Solid unchanged")
+        let light = tokens(.light, .glass)
+        XCTAssertEqual(light.openRing().alpha, 0.30, accuracy: 0.001, "Light unchanged")
+    }
+
+    func testL1ToL3Metrics() {
+        XCTAssertEqual(AtticPageTabsMetrics.underlineHeight, 2)
+        XCTAssertEqual(AtticRingMetrics.rowLineWidth, 1)
+        XCTAssertEqual(AtticFlatSurfaceMetrics.hairline, 1)
+    }
+}

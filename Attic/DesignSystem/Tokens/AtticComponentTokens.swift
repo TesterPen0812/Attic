@@ -25,6 +25,10 @@ enum AtticRingMetrics {
     static let gap: CGFloat = 2
     /// How far the ring's outer edge sits outside the shape.
     static var outset: CGFloat { width + gap }
+    /// L2 (option A, owner 2026-09-30): a task row the keyboard is on
+    /// draws one 1 pt line on its highlight's own edge (no gap), over the
+    /// lighter hover fill, in place of the 2 pt ring 2 pt outside.
+    static let rowLineWidth: CGFloat = 1
     /// The drop-target outline, drawn inside the selection shape.
     static let dropOutlineWidth: CGFloat = 1.5
 }
@@ -143,6 +147,11 @@ enum AtticTaskRowMetrics {
 }
 
 /// Quiet text actions inside content ("Add subtask", "Open page").
+/// L3's flat corner buttons (`AtticFlatSurface`).
+enum AtticFlatSurfaceMetrics {
+    static let hairline: CGFloat = 1
+}
+
 /// The menu button's dot (follow-up part 2, item 6: View Options while a
 /// filter hides tasks).
 enum AtticMenuButtonMetrics {
@@ -244,6 +253,11 @@ enum AtticPageTabsMetrics {
     static let focusRadius: CGFloat = 6
     static let focusOutset: CGFloat = 4
     static let hitOutset: CGFloat = 6
+    /// L1 (option B, owner 2026-09-30): a 2 pt line in the heading ink
+    /// under the active label, as wide as its text, its top 1 pt below the
+    /// labels' 16 pt line.
+    static let underlineHeight: CGFloat = 2
+    static let underlineGap: CGFloat = 1
 }
 
 /// The row's priority mark ("!!" High, "!" Medium) after the title.

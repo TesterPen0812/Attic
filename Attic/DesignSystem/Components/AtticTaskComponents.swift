@@ -860,7 +860,8 @@ enum AtticPageArrows {
 /// Direction A's page tabs under the header ("Now · Later · Done"), in
 /// place of a page title and the page pill. Phase 0's qualities
 /// (2026-09-26): quiet text labels, no chips: 11.5 pt medium, the selected
-/// page semibold in the strong ink (owner, 2026-09-27), the others in the
+/// page semibold in the strong ink (owner, 2026-09-27) with a 2 pt
+/// underline in the same ink (L1, option B, 2026-09-30), the others in the
 /// secondary grey, a hovered one in the task text's ink. Each label keeps
 /// its semibold width, so nothing shifts when the selection moves.
 ///
@@ -888,6 +889,7 @@ struct AtticPageTabs<Page: Hashable>: View {
     @Environment(\.atticKeyboardFocusVisible) private var keyboardFocusVisible
     @FocusState private var focused: Bool
     @State private var hoveredPage: Page?
+    @Namespace private var underline
 
     var body: some View {
         let m = AtticPageTabsMetrics.self
@@ -923,6 +925,19 @@ struct AtticPageTabs<Page: Hashable>: View {
                 }
                 .buttonStyle(.plain)
                 .focusable(false)
+                // L1: the active page's underline, which travels to the
+                // next label as the tab changes (a swipe's live tab too).
+                .overlay(alignment: .bottom) {
+                    if isSelected {
+                        Rectangle()
+                            .fill(design.tokens.color(.heading))
+                            .frame(height: m.underlineHeight)
+                            .matchedGeometryEffect(id: "underline", in: underline)
+                            .offset(y: m.underlineHeight + m.underlineGap)
+                            .allowsHitTesting(false)
+                            .accessibilityHidden(true)
+                    }
+                }
                 .onHover { inside in
                     if inside { hoveredPage = item.page } else if hoveredPage == item.page { hoveredPage = nil }
                 }
@@ -931,6 +946,8 @@ struct AtticPageTabs<Page: Hashable>: View {
                 .accessibilityAddTraits(isSelected ? [.isSelected, .isButton] : .isButton)
             }
         }
+        // Reduced animations: the underline moves at once.
+        .animation(design.reduceMotion ? nil : AtticMotionPreset.slide.animation(reduceMotion: false), value: selected)
         .focusable(capture == nil)
         .focused($focused)
         .focusEffectDisabled()
@@ -1114,6 +1131,9 @@ struct AtticTaskRow: View {
         let pitch = twoLine ? AtticLayout.detailRowPitch : AtticLayout.rowPitch
         let fill: AtticRGBA? = if state == .pressed {
             tokens.pressed
+        } else if isSelected, showsFocusRing {
+            // L2: the keyboard's row takes the lighter fill under its line.
+            tokens.hover
         } else if isSelected {
             tokens.selected
         } else if state == .hover {
@@ -1218,9 +1238,9 @@ struct AtticTaskRow: View {
         .padding(.top, m.pitchTopInset)
         .overlay(alignment: .top) {
             if showsFocusRing {
-                Color.clear
+                // L2: one 1 pt line on the highlight's own edge.
+                AtticFocusRing(cornerRadius: AtticRadius.highlight, gap: 0, width: AtticRingMetrics.rowLineWidth)
                     .frame(height: highlightHeight)
-                    .atticFocusRing(true, cornerRadius: AtticRadius.highlight)
                     .padding(.horizontal, AtticLayout.rowHighlightInset)
                     .padding(.top, m.pitchTopInset)
             }

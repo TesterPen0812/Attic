@@ -19,6 +19,34 @@ or type style changed.
   are ⌥⌘0–3; `AtticTaskShortcut.matches` also reads the number row's key
   codes, so a layout whose ⌥ changes a digit still matches. Why: the owner
   could not tell Low from none.
+- **Find and View Options** (item 6, option A): **new `AtticViewLine`** (the
+  quiet "Due or overdue · by due date · Show All" line an active filter
+  shows); `AtticMenuButton` gains an optional anchor `holder` (⌥⌘V opens
+  the same menu under the button), a 5 pt accent dot (`showsDot`,
+  **new `AtticMenuButtonMetrics`**) and a VoiceOver `value`. Find reuses
+  `AtticTabsSearchField` on every page.
+- **L1, the active tab** (option B): `AtticPageTabs` draws a 2 pt line in the
+  heading ink under the active label (`AtticPageTabsMetrics.underlineHeight`,
+  `underlineGap`), moving with the slide preset, at once under Reduced
+  animations. The inactive labels' colour is unchanged.
+- **L2, the keyboard's row** (option A): a task row the keyboard is on draws
+  one 1 pt line on its highlight's own edge (`AtticFocusRing` with gap 0,
+  `AtticRingMetrics.rowLineWidth`) over the lighter hover fill, instead of
+  the 2 pt ring 2 pt outside. Other controls keep the ring.
+- **L3, the corner buttons** (option A): **new `AtticFlatSurface`**
+  (`atticFlatSurface`, `AtticFlatSurfaceMetrics.hairline`): the recessed
+  fill and one 1 pt hairline in the selected-chip ink, no rim, sheen, shadow
+  or glass. `AtticRaisedButton(flat:)` and `AtticPageButton(flat:)` use it
+  (shut, the current page's glyph sits on it with no inner chip; a pinned
+  pin takes the chip fill whole). The keyboard ring stays.
+- **L4, Dark Glass and Frosted +1 step**: `openRing()` at rest 0.36 → 0.46.
+  Light, Dark Solid and Increase Contrast are unchanged. The icons and
+  chevrons were not changed: the ladder's #8E8E8E is tuned to the 3 : 1
+  icon floor before use, and every Dark context already renders #B2B2B2,
+  lighter than the approved #A8A8A8 (measured over every palette, surface
+  and Tint).
+- Requested by the owner (decisions of 2026-09-30, "all recommended" and
+  L1–L4).
 
 ### Actions-menu Return (GPT-6.1, round 13)
 

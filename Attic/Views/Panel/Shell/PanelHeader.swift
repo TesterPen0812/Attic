@@ -30,6 +30,8 @@ struct PanelHeader: View {
                     isSelected: isPinned,
                     glyphOffsetY: AtticRaisedButtonMetrics.pinGlyphOffsetY,
                     emphasisedGlyph: true,
+                    // L3: one flat fill and one hairline.
+                    flat: true,
                     action: onTogglePin
                 )
                 .keyboardShortcut("p", modifiers: [.command, .shift])
@@ -51,7 +53,8 @@ struct PanelHeader: View {
                 AtticPageButton(
                     items: PanelPage.switchItems,
                     selection: Binding(get: { page }, set: onSelectPage),
-                    onApproach: onApproachPageSwitch
+                    onApproach: onApproachPageSwitch,
+                    flat: true
                 )
                 .accessibilityIdentifier("panel-section-picker")
             }

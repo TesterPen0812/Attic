@@ -20,15 +20,20 @@ extension EnvironmentValues {
 /// animate; interactive glass adds the system's own press response).
 struct AtticRaisedButtonStyle: ButtonStyle {
     var cornerRadius: CGFloat
+    /// L3: the flat corner surface instead of the raised material.
+    var flat = false
+    var isSelected = false
 
     func makeBody(configuration: Configuration) -> some View {
-        AtticRaisedButtonBody(configuration: configuration, cornerRadius: cornerRadius)
+        AtticRaisedButtonBody(configuration: configuration, cornerRadius: cornerRadius, flat: flat, isSelected: isSelected)
     }
 }
 
 private struct AtticRaisedButtonBody: View {
     let configuration: ButtonStyleConfiguration
     let cornerRadius: CGFloat
+    var flat = false
+    var isSelected = false
 
     @Environment(\.isEnabled) private var isEnabled
     @Environment(\.isFocused) private var isFocused
@@ -41,9 +46,17 @@ private struct AtticRaisedButtonBody: View {
             isPressed: configuration.isPressed, isFocused: isFocused
         ).state
         let shape = RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
-        configuration.label
-            .environment(\.atticControlState, state)
-            .atticRaisedMaterial(cornerRadius: cornerRadius, state: state, interactive: state != .disabled)
+        Group {
+            if flat {
+                configuration.label
+                    .environment(\.atticControlState, state)
+                    .atticFlatSurface(cornerRadius: cornerRadius, state: state, isSelected: isSelected)
+            } else {
+                configuration.label
+                    .environment(\.atticControlState, state)
+                    .atticRaisedMaterial(cornerRadius: cornerRadius, state: state, interactive: state != .disabled)
+            }
+        }
             .atticFocusRing(state == .focused, cornerRadius: cornerRadius)
             .contentShape(shape)
             .onHover { hovered = $0 }
@@ -70,13 +83,18 @@ struct AtticRaisedButton: View {
     /// The header's glyphs (Phase 0's qualities): the strong ink at regular
     /// weight, level with the page button's current page.
     var emphasisedGlyph = false
+    /// L3: the header's flat corner surface (one fill, one hairline, no
+    /// inner chip); a selected toggle takes the selected chip's fill whole.
+    var flat = false
     let action: () -> Void
 
     @State private var probeID = UUID()
 
     /// Icon only. `label` is what VoiceOver and the tooltip say.
     init(systemName: String, label: String.LocalizationValue, size: CGSize = AtticControlSize.panelButton, help: String? = nil,
-         isSelected: Bool = false, glyphOffsetY: CGFloat = 0, emphasisedGlyph: Bool = false, action: @escaping () -> Void) {
+         isSelected: Bool = false, glyphOffsetY: CGFloat = 0, emphasisedGlyph: Bool = false, flat: Bool = false,
+         action: @escaping () -> Void) {
+        self.flat = flat
         self.systemName = systemName
         self.title = nil
         self.accessibilityLabel = String(localized: label)
@@ -107,12 +125,12 @@ struct AtticRaisedButton: View {
                 .padding(.horizontal, title == nil ? 0 : AtticRaisedButtonMetrics.labelPadding)
                 .frame(width: title == nil ? size.width : nil, height: size.height)
                 .background {
-                    if isSelected {
+                    if isSelected, !flat {
                         AtticSelectedChip(outerHeight: size.height)
                     }
                 }
         }
-        .buttonStyle(AtticRaisedButtonStyle(cornerRadius: radius))
+        .buttonStyle(AtticRaisedButtonStyle(cornerRadius: radius, flat: flat, isSelected: isSelected))
         .focusEffectDisabled()
         .help(help ?? accessibilityLabel)
         .accessibilityLabel(accessibilityLabel)
@@ -209,6 +227,9 @@ struct AtticPageButton<Page: Hashable>: View {
     var pinnedOpen: Bool?
     /// The pointer arrived: the caller can build the other pages early.
     var onApproach: () -> Void = {}
+    /// L3: the flat corner surface; the current page's glyph sits on it
+    /// with no inner chip (open, the chip still marks it among the others).
+    var flat = false
 
     @Environment(\.atticDesign) private var design
     @Environment(\.atticCapture) private var capture
@@ -241,7 +262,9 @@ struct AtticPageButton<Page: Hashable>: View {
                     ZStack {
                         let shape = RoundedRectangle(cornerRadius: chipRadius, style: .continuous)
                         let accent = design.tokens.pageChipAccent
-                        if isSelected, let accent {
+                        if isSelected, flat, !open {
+                            // L3: shut, the glyph sits on the flat surface.
+                        } else if isSelected, let accent {
                             // Phase 0's Light palettes: the current page in the accent.
                             shape.fill(accent.fill.color)
                             shape.inset(by: M.accentStrokeWidth / 2).stroke(accent.stroke.color, lineWidth: M.accentStrokeWidth)
@@ -278,7 +301,7 @@ struct AtticPageButton<Page: Hashable>: View {
         }
         .padding(M.inset)
         .frame(height: size)
-        .atticRaisedMaterial(cornerRadius: radius, interactive: false)
+        .modifier(AtticPageButtonSurface(flat: flat, cornerRadius: radius, hovered: hovering))
         .atticFocusRing(capture == nil && focused && keyboardFocusVisible, cornerRadius: radius)
         .contentShape(RoundedRectangle(cornerRadius: radius, style: .continuous))
         .onHover { inside in
@@ -313,6 +336,21 @@ struct AtticPageButton<Page: Hashable>: View {
     static func width(open: Bool, count: Int) -> CGFloat {
         let segments = open ? CGFloat(count) : 1
         return M.inset * 2 + segments * M.segment + (open ? CGFloat(max(count - 1, 0)) * M.gap : 0)
+    }
+}
+
+/// The page button's surface: the raised material, or L3's flat one.
+private struct AtticPageButtonSurface: ViewModifier {
+    let flat: Bool
+    let cornerRadius: CGFloat
+    let hovered: Bool
+
+    func body(content: Content) -> some View {
+        if flat {
+            content.atticFlatSurface(cornerRadius: cornerRadius)
+        } else {
+            content.atticRaisedMaterial(cornerRadius: cornerRadius, interactive: false)
+        }
     }
 }
 
