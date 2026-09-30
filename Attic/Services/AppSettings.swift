@@ -379,8 +379,9 @@ final class AppSettings: ObservableObject {
         let storedTuning = motionLabAvailable
             ? defaults.data(forKey: Key.motionLabTuning).flatMap { try? JSONDecoder().decode(AtticMotionTuning.self, from: $0) }
             : nil
-        motionTuning = storedTuning ?? (storedFeel ?? .recommended).tuning
-        AtticMotionTuning.current = motionTuning
+        let tuning = storedTuning ?? (storedFeel ?? .recommended).tuning
+        motionTuning = tuning
+        AtticMotionTuning.current = tuning
         panelCornerSize = Self.clamp(
             defaults.object(forKey: Key.panelCornerSize) as? Double ?? PanelCornerSize.defaultValue,
             to: PanelCornerSize.min...PanelCornerSize.max,
