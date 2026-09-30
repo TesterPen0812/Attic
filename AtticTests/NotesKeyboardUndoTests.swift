@@ -190,9 +190,8 @@ final class NotesKeyboardUndoTests: XCTestCase {
     }
 
     /// The bug itself: a delete toast on screen while the caret is in the
-    /// note. The toast's button must not answer ⌘Z; the same press with a
-    /// toast that does claim the key (Tasks') is taken by the view hierarchy,
-    /// which shows this harness can see the difference.
+    /// note. The toast's button must not answer ⌘Z (B2), nor, since the
+    /// Phase 1 merge, does any other toast's.
     func testAToastThatDoesNotClaimTheKeyLeavesCommandZToTheText() throws {
         let (harness, ids) = try makeHarness(titles: ["Alpha"])
         let textView = try openAndFocus(ids[0], in: harness)
@@ -206,13 +205,15 @@ final class NotesKeyboardUndoTests: XCTestCase {
         XCTAssertEqual(fired, 0, "the toast's action did not run")
         XCTAssertFalse(editorText(harness).contains("more"))
 
-        // Control: Tasks' toast keeps ⌘Z, and takes it before the text.
+        // Since Phase 1 no toast's button takes ⌘Z (Tasks' ⌘Z reaches the
+        // page's history through the window): even a toast that says it
+        // answers ⌘Z leaves the key to the text under the caret.
         textView.insertText(" again", replacementRange: textView.selectedRange())
         harness.toasts.show("Task deleted") { fired += 1 }
         spin()
-        XCTAssertEqual(try press("z", keyCode: 6, .command, in: harness), .viewKeyEquivalent)
-        XCTAssertEqual(fired, 1)
-        XCTAssertTrue(editorText(harness).contains("again"), "so the text kept its typing")
+        XCTAssertEqual(try press("z", keyCode: 6, .command, in: harness), .firstResponder)
+        XCTAssertEqual(fired, 0, "no toast's action ran on ⌘Z")
+        XCTAssertFalse(editorText(harness).contains("again"), "the text's own typing was undone")
     }
 
     // MARK: Search-field Undo while a delete toast is visible
