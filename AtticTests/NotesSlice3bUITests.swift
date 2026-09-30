@@ -501,6 +501,49 @@ final class NotesSlice3bUITests: XCTestCase {
         XCTAssertNil(none, "OK only dismisses")
     }
 
+    /// The delete toast's Undo maps the library's real outcomes: its own
+    /// step restores; a step already taken by ⌘Z is done; a step another
+    /// action buried, with the note still deleted, cannot be retried.
+    func testTheDeleteToastsUndoMapsTheLibrarysOutcomes() async throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent("S3BToast-\(UUID())")
+        defer { try? FileManager.default.removeItem(at: directory) }
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        let store = try makeTestNoteStore(attachmentFileStore: makeTestAttachmentFileStore())
+        let first = UUID(), second = UUID()
+        for id in [first, second] {
+            guard case .success = store.createDocumentNote(id: id, document: NoteDocument(blocks: [.text("Note")])) else {
+                return XCTFail("the note was not created")
+            }
+        }
+        let controller = NotesPageController(store: store, journal: NoteDraftJournal(directory: directory),
+                                             saveDelay: .seconds(60))
+        await controller.startAndWait()
+
+        // The toast's own step: restored.
+        await XCTAssertTrueAsync(await controller.deleteNoteDurably(noteID: first))
+        var step = try XCTUnwrap(controller.libraryUndoStepID)
+        var outcome = await NotesEditorPage.undoDelete(noteID: first, step: step, controller: controller, store: store)
+        XCTAssertEqual(outcome, .applied)
+        XCTAssertNotNil(store.note(withID: first))
+
+        // ⌘Z took the step first: the toast's Undo is already done.
+        await XCTAssertTrueAsync(await controller.deleteNoteDurably(noteID: first))
+        step = try XCTUnwrap(controller.libraryUndoStepID)
+        await XCTAssertTrueAsync(await controller.undoLibraryDurably())
+        outcome = await NotesEditorPage.undoDelete(noteID: first, step: step, controller: controller, store: store)
+        XCTAssertEqual(outcome, .applied)
+
+        // Another delete buried the step and the note is still deleted:
+        // said once, without Retry.
+        await XCTAssertTrueAsync(await controller.deleteNoteDurably(noteID: first))
+        step = try XCTUnwrap(controller.libraryUndoStepID)
+        await XCTAssertTrueAsync(await controller.deleteNoteDurably(noteID: second))
+        outcome = await NotesEditorPage.undoDelete(noteID: first, step: step, controller: controller, store: store)
+        guard case let .failed(failure) = outcome else { return XCTFail("a buried step cannot be applied") }
+        XCTAssertFalse(failure.canRetry, "retrying cannot help")
+        XCTAssertNil(store.note(withID: first), "nothing was restored out of order")
+    }
+
     func testFocusAndVoiceOverHoldTheNotesToast() {
         let toasts = PanelToastCenter()
         toasts.holdDuration = 0.05
