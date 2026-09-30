@@ -1677,6 +1677,18 @@ final class TaskStore: ObservableObject {
         return save(owner: owner)
     }
 
+    /// The ids of the subtasks a delete of the main task `parentID` would take
+    /// along with it right now: every subtask with a copy that is not in
+    /// Recently Deleted, the Done log included, whichever copy is shown. This
+    /// is the same reading `deletionFamily` makes, for callers that must know
+    /// the family before they delete.
+    func liveSubtaskIDs(of parentID: UUID) throws -> Set<UUID> {
+        let linked = try context.fetch(FetchDescriptor<TaskItem>(
+            predicate: #Predicate { $0.parentID == parentID && $0.deletedAt == nil }
+        ))
+        return Set(linked.map(\.id))
+    }
+
     /// The rows one delete of `task` hides: every replica of the task and,
     /// for a main task, of its subtasks. The same family rules as before
     /// refuse an ambiguous or nested family instead of hiding a peer's task;

@@ -498,4 +498,132 @@ final class RecentlyDeletedSelectionTests: XCTestCase {
         XCTAssertFalse(RecentlyDeletedSettingsView.showsListFocusRing(listFocused: false, keyboardDriving: true, hasRows: true))
         XCTAssertFalse(RecentlyDeletedSettingsView.showsListFocusRing(listFocused: true, keyboardDriving: true, hasRows: false))
     }
+
+    // MARK: - Fix round 2: a parent's delete and the subtasks the step tracks
+
+    /// Fails the saves it is told to, in order, and lets the rest through.
+    private final class SaveScript {
+        /// `false` fails that save; an empty list lets every save through.
+        var results: [Bool] = []
+
+        func save(_ context: ModelContext) throws {
+            if !results.isEmpty, !results.removeFirst() { throw PersistenceGate.Failure() }
+            try context.save()
+        }
+    }
+
+    private struct FamilyFixture {
+        let fixture: Fixture
+        let script: SaveScript
+        let parent: AtticItemRef
+        let child: AtticItemRef
+    }
+
+    /// A main task and its subtask, deleted separately (the subtask first),
+    /// then restored together as one Restore Selected step.
+    private func makeRestoredFamily() throws -> FamilyFixture {
+        let clock = MutableNow(Date(timeIntervalSince1970: 1_000_000))
+        let container = try PersistenceController.makeContainer(inMemory: true)
+        let script = SaveScript()
+        let tasks = TaskStore(container: container, now: { clock.value }, persist: { try script.save($0) })
+        let notes = NoteStore(container: container, now: { clock.value }, attachmentFileStore: makeTestAttachmentFileStore())
+        let canvases = CanvasStore(container: container, now: { clock.value })
+        let library = AtticLibrary(tasks: tasks, notes: notes, canvases: canvases)
+        let fixture = Fixture(clock: clock, container: container, tasks: tasks, notes: notes, canvases: canvases, library: library)
+        let parent = try XCTUnwrap(tasks.create(title: "Parent"))
+        let child = try XCTUnwrap(tasks.create(title: "Child", parentID: parent.id))
+        let parentRef = AtticItemRef(.task, parent.id)
+        let childRef = AtticItemRef(.task, child.id)
+        clock.value += 1
+        XCTAssertTrue(library.delete(childRef))
+        clock.value += 1
+        XCTAssertTrue(library.delete(parentRef))
+        XCTAssertEqual(library.restoreRecentlyDeleted(items: [childRef, parentRef], attachments: []).restored, 2)
+        XCTAssertNotNil(tasks.task(withID: child.id))
+        XCTAssertNotNil(tasks.task(withID: parent.id))
+        return FamilyFixture(fixture: fixture, script: script, parent: parentRef, child: childRef)
+    }
+
+    /// The recheck's reproducer. Undo sends the subtask back, then its main
+    /// task's save fails. The person restores the subtask on its own. The
+    /// retry must not delete the main task, because that would take the
+    /// subtask along and reverse the person's restore.
+    func testUndoRetryDoesNotDeleteAParentPastASubtaskRestoredInTheMeantime() throws {
+        let family = try makeRestoredFamily()
+        let library = family.fixture.library
+
+        family.script.results = [true, false]
+        XCTAssertEqual(library.undo.undoStep(in: .library), .failed, "the main task did not go back")
+        XCTAssertEqual(library.state(of: family.child), .deleted, "the subtask did")
+        XCTAssertEqual(library.state(of: family.parent), .live)
+
+        family.script.results = []
+        XCTAssertTrue(library.restore(family.child, in: .tasks), "the person restores the subtask")
+        XCTAssertEqual(library.state(of: family.child), .live)
+
+        _ = library.undo.undoStep(in: .library)
+        XCTAssertEqual(library.state(of: family.child), .live, "the retry left what the person restored")
+        XCTAssertEqual(library.state(of: family.parent), .live, "and kept its main task with it")
+    }
+
+    /// The same after a partial Redo: the subtask did not come back with the
+    /// step, the person restored it, and Redo let go of it. Undo then reaches
+    /// the main task alone and must not take that subtask with it.
+    func testUndoDoesNotDeleteAParentPastASubtaskThatRedoLetGoOf() throws {
+        let family = try makeRestoredFamily()
+        let library = family.fixture.library
+        XCTAssertEqual(library.undo.undoStep(in: .library), .applied)
+        XCTAssertEqual(library.state(of: family.child), .deleted)
+        XCTAssertEqual(library.state(of: family.parent), .deleted)
+
+        // Redo's batch save fails; then the main task comes back on its own
+        // and the subtask's save fails.
+        family.script.results = [false, true, false]
+        XCTAssertEqual(library.undo.redoStep(in: .library), .failed)
+        XCTAssertEqual(library.state(of: family.parent), .live, "the main task came back")
+        XCTAssertEqual(library.state(of: family.child), .deleted, "the subtask did not")
+
+        family.script.results = []
+        XCTAssertTrue(library.restore(family.child, in: .tasks), "the person restores the subtask")
+        XCTAssertEqual(library.undo.redoStep(in: .library), .applied, "the retry lets go of the subtask")
+
+        XCTAssertEqual(library.undo.undoStep(in: .library), .obsolete, "nothing is left that the step may send back")
+        XCTAssertEqual(library.state(of: family.child), .live)
+        XCTAssertEqual(library.state(of: family.parent), .live)
+    }
+
+    /// A subtask that would not go back keeps its main task from going back
+    /// in the same pass; the retry sends both.
+    func testUndoDoesNotDeleteAParentPastASubtaskThatFailedInTheSamePass() throws {
+        let family = try makeRestoredFamily()
+        let library = family.fixture.library
+
+        family.script.results = [false]
+        XCTAssertEqual(library.undo.undoStep(in: .library), .failed)
+        XCTAssertEqual(library.state(of: family.child), .live, "the subtask stayed")
+        XCTAssertEqual(library.state(of: family.parent), .live, "so its main task stayed with it")
+        XCTAssertTrue(library.undo.canUndo(in: .library), "the step stays for a retry")
+
+        family.script.results = []
+        XCTAssertEqual(library.undo.undoStep(in: .library), .applied)
+        XCTAssertEqual(library.state(of: family.child), .deleted)
+        XCTAssertEqual(library.state(of: family.parent), .deleted)
+    }
+
+    /// The same removed file listed twice comes back once, without a failure
+    /// for the second copy of it.
+    func testRestoreRecentlyDeletedIgnoresRepeatedAttachments() throws {
+        let fixture = try makeFixture()
+        let task = try XCTUnwrap(fixture.tasks.create(title: "Trip"))
+        let reference = TaskImageReference(id: UUID(), filename: "map.png", digest: "abc", contentTypeIdentifier: "public.png", byteCount: 3)
+        task.imageReferencesData = try JSONEncoder().encode([reference])
+        XCTAssertTrue(fixture.tasks.removeAttachment(reference.id, from: task.id))
+        let summary = try XCTUnwrap(fixture.library.recentlyDeletedAttachments().first)
+
+        let report = fixture.library.restoreRecentlyDeleted(items: [], attachments: [summary, summary])
+        XCTAssertEqual(report.restored, 1)
+        XCTAssertTrue(report.failures.isEmpty, "\(report.failures)")
+        XCTAssertEqual(fixture.tasks.task(withID: task.id)?.attachments.map(\.id), [reference.id])
+        XCTAssertEqual(fixture.library.undo.undoName(in: .library), "Restore Item")
+    }
 }

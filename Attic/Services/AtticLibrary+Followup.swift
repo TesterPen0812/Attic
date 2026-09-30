@@ -162,12 +162,38 @@ extension AtticLibrary {
             let rhsChild = rhs.kind == .task && tasks.listedTask(withID: rhs.id)?.parentID != nil
             return lhsChild && !rhsChild
         }
+        var failed = Set<AtticItemRef>()
         for ref in pending {
+            // Deleting a main task takes its subtasks with it, whatever the
+            // step tracked. Look at the family it would take right now.
+            if ref.kind == .task, let listed = tasks.listedTask(withID: ref.id), listed.parentID == nil {
+                guard let family = try? tasks.liveSubtaskIDs(of: ref.id) else {
+                    outcomes.append(.failed)
+                    failed.insert(ref)
+                    continue
+                }
+                let members = family.map { AtticItemRef(.task, $0) }
+                // A subtask this step already sent back (or let go of) that is
+                // live again was restored by someone else: the delete would
+                // undo that. The step no longer reaches the main task.
+                if members.contains(where: { progress.itemPhase[$0] == .sentBack || progress.itemPhase[$0] == .dropped }) {
+                    progress.itemPhase[ref] = .dropped
+                    outcomes.append(.obsolete)
+                    continue
+                }
+                // A subtask that would not go back stays where it is, so the
+                // main task stays with it; the retry takes both.
+                if members.contains(where: failed.contains) {
+                    outcomes.append(.failed)
+                    failed.insert(ref)
+                    continue
+                }
+            }
             let outcome = deleteOutcome(ref)
             switch outcome {
             case .applied: progress.itemPhase[ref] = .sentBack
             case .obsolete: progress.itemPhase[ref] = .dropped
-            case .failed: break
+            case .failed: failed.insert(ref)
             }
             outcomes.append(outcome)
         }
