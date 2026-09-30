@@ -309,4 +309,25 @@ final class TasksRound13Tests: XCTestCase {
             XCTAssertEqual(opacity(100), 0, accuracy: 0.05, "nothing just under the tabs' band")
         }
     }
+
+    // MARK: - Item 6: the new-subtask field says what it is
+
+    private func textFields(in view: NSView) -> [NSTextField] {
+        (view as? NSTextField).map { [$0] } ?? [] + view.subviews.flatMap { textFields(in: $0) }
+    }
+
+    func testTheNewSubtaskFieldShowsAddSubtaskAsItsPlaceholder() throws {
+        let hosted = try Hosted(height: 520)
+        defer { hosted.close() }
+        let ship = try XCTUnwrap(hosted.model.rows(for: .now).first { $0.model.title == "Ship appearance PR" })
+        hosted.model.beginAddingSubtask(to: ship.id)
+        hosted.spin(1)
+        let content = try XCTUnwrap(hosted.window.contentView)
+        let prompts = textFields(in: content).compactMap { $0.placeholderString ?? ($0.placeholderAttributedString?.string) }
+        XCTAssertTrue(prompts.contains("Add subtask…"), "an empty new-subtask line reads Add subtask… (found \(prompts))")
+        hosted.model.newSubtaskTitle = "Pack"
+        hosted.spin(0.4)
+        let typed = textFields(in: content).filter { $0.stringValue == "Pack" }
+        XCTAssertFalse(typed.isEmpty, "the typed text replaces the prompt")
+    }
 }

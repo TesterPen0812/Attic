@@ -967,7 +967,8 @@ struct TasksPage: View {
                     newSubtask: model.newSubtaskParentID == id && active
                         ? AtticTitleEditing(text: $model.newSubtaskTitle, commit: { model.commitNewSubtask() },
                                             cancel: { model.cancelEditing() },
-                                            accessibilityLabel: String(localized: "New subtask of \(row.model.title)"))
+                                            accessibilityLabel: String(localized: "New subtask of \(row.model.title)"),
+                                            placeholder: String(localized: "Add subtask…"))
                         : nil
                 )
                 .transition(.opacity)
