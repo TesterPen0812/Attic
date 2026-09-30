@@ -566,11 +566,11 @@ enum AtticNoteObjectMetrics {
     /// The two lines' centres in the 54 pt card.
     static let cardFirstLine: CGFloat = 18
     static let cardSecondLine: CGFloat = 36
-    /// The actions drawn on a failed object: quiet chips 18 tall, 7 in,
+    /// The actions drawn on a failed object: quiet chips 18 tall, 6 in,
     /// 4 apart, 8 after the message. Only those that fit are drawn; every
     /// one is also in the object's menu and its VoiceOver actions.
     static let chipHeight: CGFloat = 18
-    static let chipPadding: CGFloat = 7
+    static let chipPadding: CGFloat = 6
     static let chipGap: CGFloat = 4
     static let messageGap: CGFloat = 8
     /// A failed image's face: the glyph (14) over the message, the chips

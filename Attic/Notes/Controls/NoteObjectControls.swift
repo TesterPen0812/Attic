@@ -27,6 +27,13 @@ final class NoteObjectControls: NSObject, NoteObjectInteraction {
     /// Diagnostic: how many times the ring moved (never on a keystroke that
     /// leaves no object selected).
     private(set) var ringUpdateCount = 0
+    /// Diagnostics for tests: what shows over the text now.
+    var isRingShown: Bool { !selectionView.isHidden && selectionView.alphaValue > 0 }
+    var isResizeCornerShown: Bool { isRingShown && selectionView.isResizable }
+    var ringFrame: NSRect { selectionView.frame }
+    var isDropLineShown: Bool { !dropView.isHidden && dropView.alphaValue > 0 }
+    var dropLineFrame: NSRect { dropView.frame }
+    var currentDropBoundary: Int? { dropBoundary }
 
     init(engine: NoteEditorEngine, textView: NoteEditorTextView) {
         self.engine = engine
@@ -337,6 +344,7 @@ final class NoteObjectSelectionView: NSView {
     var onResize: ((CGFloat, Bool) -> Void)?
     private let handle = NoteResizeHandleView()
     private(set) var isResizing = false
+    var isResizable: Bool { !handle.isHidden }
     private var objectWidth: CGFloat = 0
 
     override init(frame: NSRect) {
