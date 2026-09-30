@@ -546,6 +546,40 @@ final class TasksFollowupSubtaskMoveTests: XCTestCase {
         }
     }
 
+    /// A copy that differs from the shown one (here only in its order) is
+    /// stale, and a re-spacing that reaches the subtask writes its order
+    /// without treating it as agreeing: it does not take the new time.
+    func testRespacingDoesNotGiveAStaleCopyTheNewTime() throws {
+        let top = try make("Top")
+        let trip = try make("Trip")
+        let next = try make("Next")
+        let id = UUID()
+        let context = ModelContext(store.container)
+        // Both are older than the move's own time.
+        let staleTime = Date(timeIntervalSinceNow: -7_200)
+        let newest = TaskItem(id: id, title: "Book", status: .todo, createdAt: staleTime, updatedAt: Date(timeIntervalSinceNow: -3_600), parentID: trip.id)
+        let stale = TaskItem(id: id, title: "Book", status: .todo, createdAt: staleTime, updatedAt: staleTime, parentID: trip.id)
+        newest.manualOrder = 5
+        stale.manualOrder = 6
+        context.insert(newest)
+        context.insert(stale)
+        for (task, order) in [(top, Int64(9_000)), (trip, 501), (next, 500)] {
+            let taskID = task.id
+            for row in try context.fetch(FetchDescriptor<TaskItem>(predicate: #Predicate { $0.id == taskID })) { row.manualOrder = order }
+        }
+        try context.save()
+        store.refresh()
+
+        XCTAssertTrue(library.moveSubtask(id, toTask: nil).isApplied)
+        XCTAssertEqual(store.orderedTasks(for: .todo).filter { $0.parentID == nil }.map(\.title),
+                       ["Top", "Trip", "Book", "Next"], "the gap was used up, so the group was re-spaced")
+        let copies = try rows(id)
+        XCTAssertEqual(copies.count, 2)
+        XCTAssertEqual(Set(copies.map(\.manualOrder)).count, 1, "both copies hold the placement")
+        XCTAssertEqual(copies.filter { $0.updatedAt > Date(timeIntervalSinceNow: -60) }.count, 1, "only the shown copy takes the new time")
+        XCTAssertTrue(copies.contains { $0.updatedAt == staleTime }, "the stale copy keeps its own time")
+    }
+
     // MARK: - Fix round 2: replay checks every copy
 
     /// Redo checks the destination as it is now: after Undo, a finished older

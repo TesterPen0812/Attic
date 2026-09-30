@@ -2862,6 +2862,12 @@ final class TaskStore: ObservableObject {
             guard Set(replicas.map(\.parentID)).count == 1 else {
                 throw TaskEditRefusal("This subtask’s copies disagree about where it belongs. Refresh and try again.")
             }
+            // Which copies agree with the shown one is decided here, before
+            // anything is written: a re-spacing below rewrites this subtask's
+            // order on every copy, which would make a stale copy look like it
+            // agreed.
+            let shown = TaskContentSnapshot(task)
+            let agreeing = Set(replicas.filter { $0 === task || TaskContentSnapshot($0) == shown }.map(\.persistentModelID))
             var status = task.status
             var order: Int64?
             if let newParentID {
@@ -2914,8 +2920,6 @@ final class TaskStore: ObservableObject {
             // of the replicas, so reading `task.status` inside the loop would
             // change its answer for the copies after it.
             let changesStatus = status != task.status
-            let shown = TaskContentSnapshot(task)
-            let agreeing = Set(replicas.filter { $0 === task || TaskContentSnapshot($0) == shown }.map(\.persistentModelID))
             // Parent and placement only: a copy's own state (completion,
             // title, tags…) is never written by a move, and a field that
             // already holds its value is left alone.
