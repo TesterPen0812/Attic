@@ -662,11 +662,14 @@ final class AtticLibrary {
 
     // MARK: - Private
 
-    private func performDelete(_ ref: AtticItemRef) -> Bool {
+    /// `includingDoneLog`: also reach a task the daily cleanup moved to the
+    /// Done log, which the undo of a restore has to send back.
+    private func performDelete(_ ref: AtticItemRef, includingDoneLog: Bool = false) -> Bool {
         switch ref.kind {
         case .task:
-            guard tasks.task(withID: ref.id) != nil else { return fail("No task exists with id \(ref.id.uuidString).") }
-            return tasks.delete(taskIDs: [ref.id]) || fail(tasks.lastErrorMessage)
+            let listed = includingDoneLog ? tasks.listedTask(withID: ref.id) : tasks.task(withID: ref.id)
+            guard listed != nil else { return fail("No task exists with id \(ref.id.uuidString).") }
+            return tasks.delete(taskIDs: [ref.id], includingDoneLog: includingDoneLog) || fail(tasks.lastErrorMessage)
         case .note:
             guard let notes, let note = notes.note(withID: ref.id) else {
                 return fail("No note exists with id \(ref.id.uuidString).")
@@ -693,13 +696,15 @@ final class AtticLibrary {
         }
     }
 
-    /// Undo/redo of a delete: moving an item that is no longer shown (gone,
-    /// already in Recently Deleted, or a task the daily cleanup moved to the
-    /// Done log) can never apply again.
+    /// Undo/redo of a delete, and the undo of a restore: moving an item that
+    /// is no longer listed (gone or already in Recently Deleted) can never
+    /// apply again. A task in the Done log is listed: a restored archived
+    /// task goes back to Recently Deleted from there, without a history step
+    /// of its own.
     func deleteOutcome(_ ref: AtticItemRef) -> UndoOutcome {
-        if performDelete(ref) { return .applied }
+        if performDelete(ref, includingDoneLog: true) { return .applied }
         let shown: Bool = switch ref.kind {
-        case .task: tasks.task(withID: ref.id) != nil
+        case .task: tasks.listedTask(withID: ref.id) != nil
         case .note: notes?.note(withID: ref.id) != nil
         case .canvas: canvases?.canvases.contains(where: { $0.id == ref.id }) == true
         }

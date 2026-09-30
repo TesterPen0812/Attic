@@ -99,8 +99,8 @@ extension AtticLibrary {
                     // take a separately restored subtask along with it.
                     var outcomes = restoredAttachments.map { self.removeAttachmentOutcome($0) }
                     let ordered = restoredItems.sorted { lhs, rhs in
-                        let lhsChild = lhs.kind == .task && self.tasks.task(withID: lhs.id)?.parentID != nil
-                        let rhsChild = rhs.kind == .task && self.tasks.task(withID: rhs.id)?.parentID != nil
+                        let lhsChild = lhs.kind == .task && self.tasks.listedTask(withID: lhs.id)?.parentID != nil
+                        let rhsChild = rhs.kind == .task && self.tasks.listedTask(withID: rhs.id)?.parentID != nil
                         return lhsChild && !rhsChild
                     }
                     outcomes += ordered.map { self.deleteOutcome($0) }

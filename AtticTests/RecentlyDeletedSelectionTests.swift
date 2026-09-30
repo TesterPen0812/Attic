@@ -288,4 +288,85 @@ final class RecentlyDeletedSelectionTests: XCTestCase {
         XCTAssertTrue(fixture.library.undo.undo(in: .library))
         XCTAssertTrue(ids.allSatisfy { fixture.tasks.task(withID: $0) == nil }, "one Undo")
     }
+
+    // MARK: - Fix round: Undo of Restore Selected reaches the Done log (finding 4)
+
+    /// A task the daily cleanup moved to the Done log, deleted, and restored
+    /// comes back to the log (not the list); Undo sends it back to Recently
+    /// Deleted with the ordinary task restored beside it.
+    func testRestoreSelectedUndoSendsArchivedTasksBackToo() throws {
+        let fixture = try makeFixture()
+        let archived = try archivedTask("Archived", in: fixture)
+        XCTAssertTrue(fixture.library.deleteListedTasks([archived]).isApplied)
+        let ordinary = try deleteTasks(["Ordinary"], in: fixture)
+        let model = model(fixture)
+        model.selectAll()
+
+        model.restoreSelected()
+        XCTAssertNil(model.message, model.message?.text ?? "")
+        XCTAssertNotNil(fixture.tasks.listedTask(withID: archived), "back in the Done log")
+        XCTAssertNil(fixture.tasks.task(withID: archived))
+        XCTAssertNotNil(fixture.tasks.task(withID: ordinary[0]))
+
+        model.undo()
+        XCTAssertNil(fixture.tasks.listedTask(withID: archived), "one Undo sends the archived task back too")
+        XCTAssertNil(fixture.tasks.task(withID: ordinary[0]))
+        XCTAssertEqual(fixture.library.state(of: AtticItemRef(.task, archived)), .deleted)
+        XCTAssertEqual(fixture.library.state(of: AtticItemRef(.task, ordinary[0])), .deleted)
+        XCTAssertEqual(Set(model.entries.map(\.title)), ["Archived", "Ordinary"])
+
+        XCTAssertTrue(fixture.library.undo.redo(in: .library))
+        XCTAssertNotNil(fixture.tasks.listedTask(withID: archived), "Redo restores it to the log again")
+        XCTAssertNotNil(fixture.tasks.task(withID: ordinary[0]))
+    }
+
+    /// An archived main task and its separately deleted archived subtask come
+    /// back together, and Undo sends them back as two entries again, subtask
+    /// first so the main task's delete does not take it along.
+    func testRestoreSelectedUndoKeepsArchivedFamiliesApart() throws {
+        let fixture = try makeFixture()
+        let parent = try XCTUnwrap(fixture.tasks.create(title: "Parent"))
+        let child = try XCTUnwrap(fixture.tasks.create(title: "Child", parentID: parent.id))
+        XCTAssertTrue(fixture.tasks.markDone(child))
+        XCTAssertTrue(fixture.tasks.markDone(parent))
+        fixture.clock.value += 1
+        XCTAssertEqual(fixture.tasks.moveCompletedToDoneLog(before: fixture.clock.value + 10), 2)
+        XCTAssertTrue(fixture.library.deleteListedTasks([child.id]).isApplied)
+        fixture.clock.value += 1
+        XCTAssertTrue(fixture.library.deleteListedTasks([parent.id]).isApplied)
+        let model = model(fixture)
+        XCTAssertEqual(Set(model.entries.map(\.title)), ["Parent", "Child"])
+        model.selectAll()
+
+        model.restoreSelected()
+        XCTAssertNil(model.message, model.message?.text ?? "")
+        XCTAssertNotNil(fixture.tasks.listedTask(withID: parent.id))
+        XCTAssertNotNil(fixture.tasks.listedTask(withID: child.id))
+
+        model.undo()
+        XCTAssertNil(fixture.tasks.listedTask(withID: parent.id))
+        XCTAssertNil(fixture.tasks.listedTask(withID: child.id))
+        XCTAssertEqual(Set(model.entries.map(\.title)), ["Parent", "Child"], "two entries again")
+    }
+
+    /// Restoring one archived task on its own undoes the same way.
+    func testRestoreUndoOfASingleArchivedTaskSendsItBack() throws {
+        let fixture = try makeFixture()
+        let archived = try archivedTask("Archived", in: fixture)
+        XCTAssertTrue(fixture.library.deleteListedTasks([archived]).isApplied)
+        XCTAssertTrue(fixture.library.restore(AtticItemRef(.task, archived)))
+        XCTAssertNotNil(fixture.tasks.listedTask(withID: archived))
+        XCTAssertTrue(fixture.library.undo.undo(in: .library))
+        XCTAssertNil(fixture.tasks.listedTask(withID: archived))
+        XCTAssertEqual(fixture.library.state(of: AtticItemRef(.task, archived)), .deleted)
+    }
+
+    private func archivedTask(_ title: String, in fixture: Fixture) throws -> UUID {
+        let task = try XCTUnwrap(fixture.tasks.create(title: title))
+        XCTAssertTrue(fixture.tasks.markDone(task))
+        fixture.clock.value += 1
+        XCTAssertEqual(fixture.tasks.moveCompletedToDoneLog(before: fixture.clock.value + 10), 1)
+        XCTAssertNil(fixture.tasks.task(withID: task.id))
+        return task.id
+    }
 }
