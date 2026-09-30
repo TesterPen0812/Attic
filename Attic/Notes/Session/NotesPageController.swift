@@ -202,6 +202,9 @@ final class NotesPageController: ObservableObject {
     private var recoveryWork: Task<Void, Never>?
     private var recoveryLoading = false
     private var recoveryFailureCount = 0
+    /// A verified retirement stays valid only until this note writes or adopts
+    /// another checkpoint. Unrelated damaged entries do not invalidate it.
+    private var retiredNoteIDs = Set<UUID>()
     private var checkpointKeys: [UUID: NoteDraftJournalEntry] = [:]
     private var verifiedCheckpointKeys: [UUID: NoteDraftJournalEntry] = [:]
 
@@ -689,6 +692,7 @@ final class NotesPageController: ObservableObject {
         cache[session.noteID] = nil
         session.engine.detachView()
         let rebuilt = self.session(for: note)
+        if session.recoveryClaim != nil { retiredNoteIDs.remove(session.noteID) }
         rebuilt?.recoveryClaim = session.recoveryClaim
         return rebuilt
     }
@@ -940,6 +944,7 @@ final class NotesPageController: ObservableObject {
             session.state = .onlyInMemory(String(localized: "There is no recovery copy for this note."))
             return false
         }
+        retiredNoteIDs.remove(session.noteID)
         if journal.requiresAsyncIO {
             do {
                 let document = checkpointDocument(for: session)
@@ -958,6 +963,7 @@ final class NotesPageController: ObservableObject {
                     guard let self, session.noteID == noteID else { return }
                     if self.checkpointKeys[session.id] == key && session.recoveryClaim != nil { return }
                     do {
+                        self.retiredNoteIDs.remove(noteID)
                         let claim = try await journal.writeDurably(entry, staged: bytes, replacing: session.recoveryClaim)
                         guard session.noteID == noteID else { return }
                         session.recoveryClaim = claim
@@ -1170,6 +1176,7 @@ final class NotesPageController: ObservableObject {
         // The old checkpoint belongs to the old ID; the new note has none.
         let oldClaim = session.recoveryClaim
         session.recoveryClaim = nil
+        retiredNoteIDs.remove(newID)
         session.adopt(noteID: newID)
         session.replaceEngine(makeEngine(noteID: newID, document: replacement, readOnly: false, tags: tags))
         session.baseTags = tags
@@ -1225,6 +1232,7 @@ final class NotesPageController: ObservableObject {
         guard let journal else { return true }
         guard session?.isImporting != true else { return false }
         if journal.requiresAsyncIO {
+            if recoveryWork == nil, retiredNoteIDs.contains(noteID) { return true }
             if recoveryWork == nil, let entries = try? journal.recoveryEntries(),
                !entries.contains(where: { entry in
                    switch entry {
@@ -1240,6 +1248,7 @@ final class NotesPageController: ObservableObject {
                     let saved = document.map { NoteRecoverySavedState(document: $0,
                         tags: self.store.note(withID: noteID)?.tags ?? [], attachments: attachments) }
                     try await journal.retireDurably(noteID: noteID, claim: session?.recoveryClaim, saved: saved)
+                    self.retiredNoteIDs.insert(noteID)
                     session?.recoveryClaim = nil
                     if session?.notice == "Saved, but an old recovery copy could not be cleared." { session?.notice = nil }
                     if let session {
@@ -1493,6 +1502,7 @@ final class NotesPageController: ObservableObject {
             // Unchanged tags stay the stored ones' business (nothing is written
             // over them), yet the draft keeps them, even if its note is gone.
             session.baseTags = entry.changedTags == nil ? (entry.tags ?? storedTags) : storedTags
+            retiredNoteIDs.remove(entry.noteID)
             session.recoveryClaim = claim
             wire(session)
             session.selection = NSRange(location: entry.selectionLocation, length: entry.selectionLength)
@@ -1814,6 +1824,7 @@ final class NotesPageController: ObservableObject {
                 guard let self, session.importBatch?.id == batchID else { return }
                 do {
                     if NoteSessionPolicy.hasPendingWork(session.state), let entry {
+                        self.retiredNoteIDs.remove(session.noteID)
                         session.recoveryClaim = try await journal.cancelPendingDurably(entry, staged: bytes, replacing: session.recoveryClaim)
                         self.checkpointKeys[session.id] = nil
                     } else if let claim = session.recoveryClaim {

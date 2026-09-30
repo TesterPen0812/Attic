@@ -2160,6 +2160,7 @@ extension NoteSlice3bTests {
 @MainActor
 private final class PendingWriteJournal: NoteDraftJournaling {
     let base: NoteDraftJournal
+    private(set) var retirementRequests: [UUID] = []
     var blockWrites = false
     var failNextWrite = false
     var failRead = false
@@ -2186,6 +2187,7 @@ private final class PendingWriteJournal: NoteDraftJournaling {
         return try await base.writeDurably(entry, staged: staged, replacing: claim)
     }
     func retireDurably(noteID: UUID, claim: NoteRecoveryClaim?, saved: NoteRecoverySavedState?) async throws {
+        retirementRequests.append(noteID)
         try await base.retireDurably(noteID: noteID, claim: claim, saved: saved)
     }
     func discardOwnedDurably(noteID: UUID, claim: NoteRecoveryClaim) async throws {
@@ -2544,5 +2546,77 @@ extension NoteSlice3bTests {
         XCTAssertFalse(try journal.base.entries().isEmpty)
         gate.shouldFail = false
         await XCTAssertTrueAsync(await controller.prepareToLeaveDurably(.quit))
+    }
+}
+
+// MARK: Fix round 6: per-note checkpoint retirement
+
+@MainActor
+extension NoteSlice3bTests {
+    func testReviewerUnrelatedDamagedCheckpointDoesNotBlockDeletion() async throws {
+        for damagedName in ["\(UUID().uuidString).json", "unknown.json"] {
+            let root = FileManager.default.temporaryDirectory.appendingPathComponent("N1-\(UUID())")
+            defer { try? FileManager.default.removeItem(at: root) }
+            try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+            try Data("damaged".utf8).write(to: root.appendingPathComponent(damagedName))
+            let journal = NoteDraftJournal(directory: root)
+            let store = try makeTestNoteStore(attachmentFileStore: makeTestAttachmentFileStore())
+            let note = try XCTUnwrap(store.create(title: "Delete me", body: "Saved"))
+            let controller = NotesPageController(store: store, journal: journal, saveDelay: .seconds(60))
+            await controller.startAndWait()
+            await XCTAssertTrueAsync(await controller.deleteNoteDurably(noteID: note.id), damagedName)
+            XCTAssertNil(store.note(withID: note.id))
+            await XCTAssertTrueAsync(await controller.undoLibraryDurably())
+            await XCTAssertTrueAsync(await controller.redoLibraryDurably(), damagedName)
+            XCTAssertNil(store.note(withID: note.id))
+            XCTAssertTrue(FileManager.default.fileExists(atPath: root.appendingPathComponent(damagedName).path))
+        }
+    }
+
+    func testDamagedCheckpointForDeletedNoteRefusesWithExplanation() async throws {
+        for unreadable in [false, true] {
+            let root = FileManager.default.temporaryDirectory.appendingPathComponent("N1Own-\(UUID())")
+            defer { try? FileManager.default.removeItem(at: root) }
+            let store = try makeTestNoteStore(attachmentFileStore: makeTestAttachmentFileStore())
+            let note = try XCTUnwrap(store.create(title: "Keep me", body: "Saved"))
+            let file = root.appendingPathComponent("\(note.id.uuidString).json")
+            try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+            if unreadable { try FileManager.default.createDirectory(at: file, withIntermediateDirectories: true) }
+            else { try Data("damaged".utf8).write(to: file) }
+            let controller = NotesPageController(store: store, journal: NoteDraftJournal(directory: root), saveDelay: .seconds(60))
+            await controller.startAndWait()
+            await XCTAssertFalseAsync(await controller.deleteNoteDurably(noteID: note.id))
+            XCTAssertNotNil(store.note(withID: note.id))
+            XCTAssertTrue(controller.active?.notice?.contains("could not be handed off safely") == true)
+            XCTAssertTrue(FileManager.default.fileExists(atPath: file.path))
+        }
+    }
+
+    func testRetirementProofExpiresWhenSameNoteWritesAnotherCheckpoint() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("N1Rewrite-\(UUID())")
+        defer { try? FileManager.default.removeItem(at: root) }
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        try Data("damaged".utf8).write(to: root.appendingPathComponent("unknown.json"))
+        let journal = PendingWriteJournal(directory: root), gate = PersistenceGate()
+        let store = try makeTestNoteStore(persist: { try gate.save($0) }, attachmentFileStore: makeTestAttachmentFileStore())
+        let id = UUID()
+        guard case .success = store.createDocumentNote(id: id, document: NoteDocument(blocks: [.text("Saved")])) else { return XCTFail() }
+        let controller = NotesPageController(store: store, journal: journal, saveDelay: .seconds(60))
+        await controller.startAndWait()
+        await XCTAssertTrueAsync(await controller.deleteNoteDurably(noteID: id))
+        XCTAssertEqual(journal.retirementRequests.filter { $0 == id }.count, 1)
+        await XCTAssertTrueAsync(await controller.undoLibraryDurably())
+        XCTAssertTrue(controller.open(noteID: id))
+        let session = try XCTUnwrap(controller.active)
+        XCTAssertTrue(session.engine.performEdit(NSRange(location: 0, length: 0), with: NSAttributedString(string: "Draft "), name: "Typing"))
+        gate.shouldFail = true
+        await XCTAssertTrueAsync(await controller.preserveDurably(session))
+        XCTAssertTrue(try journal.base.entries().contains { $0.0.noteID == id })
+        gate.shouldFail = false
+        XCTAssertTrue(controller.save(session))
+        await controller.waitForRecoveryWork()
+        XCTAssertEqual(journal.retirementRequests.filter { $0 == id }.count, 2, "new checkpoint needs its own retirement")
+        XCTAssertFalse(try journal.base.entries().contains { $0.0.noteID == id })
+        await XCTAssertTrueAsync(await controller.deleteNoteDurably(noteID: id))
     }
 }
