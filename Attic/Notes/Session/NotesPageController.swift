@@ -360,6 +360,9 @@ final class NotesPageController: ObservableObject {
             }
             return bases
         }
+        // Retention is used by Settings before the Notes page is presented.
+        // Warm recovery ownership once at startup without activating a page.
+        if journal?.requiresAsyncIO == true { recoverAtLaunch() }
     }
 
     func refreshRecoveryWarningsAfterResolution() async {

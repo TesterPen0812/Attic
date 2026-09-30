@@ -2130,3 +2130,22 @@ extension NoteSlice3bTests {
         XCTAssertEqual(restarted.active?.engine.document().title, "Keep typed text while cancelling")
     }
 }
+
+@MainActor
+extension NoteSlice3bTests {
+    func testRecoveryInventoryIsReadyForRecentlyDeletedBeforeNotesPageIsOpened() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("RetentionStartup-\(UUID())")
+        defer { try? FileManager.default.removeItem(at: root) }
+        let store = try makeTestNoteStore(attachmentFileStore: makeTestAttachmentFileStore())
+        let note = try XCTUnwrap(store.create(title: "Meeting notes", body: "Agenda"))
+        let id = note.id
+        XCTAssertTrue(store.delete(note))
+        let controller = NotesPageController(store: store, journal: NoteDraftJournal(directory: root))
+        await controller.waitForRecoveryWork()
+        XCTAssertNil(controller.active, "startup ownership initialization must not present Notes")
+        XCTAssertTrue(try store.recoveryReferencedAttachmentIDs().isEmpty)
+        XCTAssertTrue(try store.recoveryProtectedRevisionIDs().isEmpty)
+        XCTAssertEqual(store.purgeDeleted(before: .distantFuture), [id],
+            "an ordinary known-safe deleted note can be emptied without opening Notes first")
+    }
+}

@@ -381,18 +381,20 @@ struct NotesEditorPage: View {
     // MARK: Delete and its Undo
 
     private func delete(_ id: UUID) {
-        guard controller.deleteNote(noteID: id) else { return }
-        guard let toasts, let step = controller.libraryUndoStepID else { return }
-        // The toast is one way to Undo; the library's history is the other
-        // (⌘Z, the menus), and it outlives the toast.
-        // Its button answers the pointer and VoiceOver, never ⌘Z: the key
-        // follows the focused text, then the library (NotesLibraryView).
-        let toast = toasts.show(String(localized: "Note deleted"), answersUndoKey: false) { [controller] in
-            guard controller.libraryUndoStepID == step else { return }
-            controller.undoLibrary()
+        Task { @MainActor in
+            guard await controller.deleteNoteDurably(noteID: id) else { return }
+            guard let toasts, let step = controller.libraryUndoStepID else { return }
+            // The toast is one way to Undo; the library's history is the other
+            // (⌘Z, the menus), and it outlives the toast.
+            // Its button answers the pointer and VoiceOver, never ⌘Z: the key
+            // follows the focused text, then the library (NotesLibraryView).
+            let toast = toasts.show(String(localized: "Note deleted"), answersUndoKey: false) { [controller] in
+                guard controller.libraryUndoStepID == step else { return }
+                controller.undoLibrary()
+            }
+            postedToastID = toast.id
+            postedToastStep = step
         }
-        postedToastID = toast.id
-        postedToastStep = step
     }
 
     private func dismissOwnToast() {
