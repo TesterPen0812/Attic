@@ -259,7 +259,7 @@ final class NotesPageController: ObservableObject {
             guard await preserveAllDurably() else { return false }
         }
         let wasVisible = isPageVisible
-        let result = await performAfterRecovery { prepareToLeave(reason) }
+        let result = await performAfterRecovery(requireDrainedRecovery: reason == .quit) { prepareToLeave(reason) }
         // Queued hide/switch preservation may optimistically mark the page
         // hidden. A durable refusal must keep its original agent disposition.
         if !result { isPageVisible = wasVisible }
@@ -277,7 +277,7 @@ final class NotesPageController: ObservableObject {
             // Live sessions own the bytes used by synchronous copy/paste and
             // Undo; store-cache eviction cannot turn objects into plain text.
             let engine = session.engine, document = engine.checkpointDocument()
-            let bytes = await performBoundedUserIO { [self] in
+            let bytes = await performBoundedUserIO(completedAction: true) { [self] in
                 var verified: [UUID: StagedNoteAttachment] = [:]
                 for id in document.attachmentIDs {
                     if let item = await store.verifiedAttachmentBytes(id) { verified[id] = item }
@@ -304,53 +304,72 @@ final class NotesPageController: ObservableObject {
         await performAfterRecovery { deleteNote(noteID: noteID) }
     }
 
-    private func performAfterRecovery(_ operation: () -> Bool) async -> Bool {
+    private func performAfterRecovery(requireDrainedRecovery: Bool = false, _ operation: () -> Bool) async -> Bool {
         guard await awaitRecoveryForUser() else { return false }
         let failures = recoveryFailureCount
         let first = operation()
         let pending = recoveryWork != nil
-        guard await awaitRecoveryForUser() else { return false }
+        let firstWait = await awaitRecoveryForUser(completedAction: first && !requireDrainedRecovery)
+        guard firstWait else { return first && !requireDrainedRecovery }
         guard recoveryFailureCount == failures else { return false }
         guard !first, pending else { return first }
         let second = operation()
-        guard await awaitRecoveryForUser() else { return false }
-        return second
+        let secondWait = await awaitRecoveryForUser(completedAction: second && !requireDrainedRecovery)
+        guard secondWait else { return second && !requireDrainedRecovery }
+        return second && recoveryFailureCount == failures
     }
 
     /// Waiting never cancels the serialized write or releases its live owners.
     /// A slow disk returns control with guidance; the same action can be retried.
     var recoveryResponseTimeout: Duration = .seconds(2)
-    private func awaitRecoveryForUser() async -> Bool {
+    private func awaitRecoveryForUser(completedAction: Bool = false) async -> Bool {
         let clock = ContinuousClock(), deadline = ContinuousClock.now + recoveryResponseTimeout
         while recoveryWork != nil {
             guard clock.now < deadline, !Task.isCancelled else {
-                reportRecoveryRetentionWarning("Recovery data is still being saved. Try again when saving finishes.")
+                reportRecoveryRetentionWarning(completedAction
+                    ? "Recovery data is still being saved."
+                    : "Recovery data is still being saved. Try again when saving finishes.")
                 return false
             }
             try? await Task.sleep(for: .milliseconds(10))
         }
-        recoveryWarnings.removeAll { $0 == "Recovery data is still being saved. Try again when saving finishes." }
-        if active?.notice == "Recovery data is still being saved. Try again when saving finishes." { active?.notice = nil }
+        clearPendingRecoveryWarnings()
         return true
+    }
+
+    private func clearPendingRecoveryWarnings() {
+        let messages: Set<String> = ["Recovery data is still being saved.",
+            "Recovery data is still being saved. Try again when saving finishes."]
+        recoveryWarnings.removeAll { messages.contains($0) }
+        for session in cache.values where session.notice.map(messages.contains) == true { session.notice = nil }
     }
 
     /// Attachment reads are cancellable, unlike an in-flight checkpoint write.
     /// A bounded response must also cover hydration and Keep as New's copy.
-    private func performBoundedUserIO<T: Sendable>(_ action: @escaping @MainActor () async -> T) async -> T? {
+    private func performBoundedUserIO<T: Sendable>(completedAction: Bool = false, _ action: @escaping @MainActor () async -> T) async -> T? {
         var result: T?
         var finished = false
-        let task = Task { @MainActor in result = await action(); finished = true }
+        let message = completedAction ? "Attachment data is still being read."
+            : "Attachment data is still being read. Try again when loading finishes."
+        func clearWarning() {
+            recoveryWarnings.removeAll { $0 == message }
+            for session in cache.values where session.notice == message { session.notice = nil }
+        }
+        let task = Task { @MainActor in
+            result = await action()
+            finished = true
+            clearWarning()
+        }
         let deadline = ContinuousClock.now + recoveryResponseTimeout
         while !finished {
             guard ContinuousClock.now < deadline, !Task.isCancelled else {
                 task.cancel()
-                reportRecoveryRetentionWarning("Attachment data is still being read. Try again when loading finishes.")
+                reportRecoveryRetentionWarning(message)
                 return nil
             }
             try? await Task.sleep(for: .milliseconds(10))
         }
-        recoveryWarnings.removeAll { $0 == "Attachment data is still being read. Try again when loading finishes." }
-        if active?.notice == "Attachment data is still being read. Try again when loading finishes." { active?.notice = nil }
+        clearWarning()
         return result
     }
 
@@ -361,7 +380,10 @@ final class NotesPageController: ObservableObject {
         recoveryWork = Task { @MainActor [weak self] in
             await prior?.value
             await action()
-            if self?.recoveryWorkToken == token { self?.recoveryWork = nil }
+            if self?.recoveryWorkToken == token {
+                self?.recoveryWork = nil
+                self?.clearPendingRecoveryWarnings()
+            }
         }
     }
     private var recoveryWorkToken: UUID?
@@ -2377,7 +2399,12 @@ extension NotesPageController {
     var libraryUndoStepID: UUID? { undoRoute.undoStepID(in: .notesLibrary) }
 
     @discardableResult
-    func undoLibraryDurably() async -> Bool { await performAfterRecovery { undoLibrary() } }
+    func undoLibraryDurably(expectedStepID: UUID? = nil) async -> Bool {
+        await performAfterRecovery {
+            guard expectedStepID == nil || libraryUndoStepID == expectedStepID else { return false }
+            return undoLibrary()
+        }
+    }
     func redoLibraryDurably() async -> Bool { await performAfterRecovery { redoLibrary() } }
 
     @discardableResult

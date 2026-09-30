@@ -2723,3 +2723,144 @@ extension NoteSlice3bTests {
         }
     }
 }
+
+// MARK: Fix round 6: completed actions and bound Undo
+
+@MainActor
+extension NoteSlice3bTests {
+    func testSlowSuccessfulUndoDoesNotInviteRetryAndPendingWarningDrains() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("SlowSuccess-\(UUID())")
+        defer { try? FileManager.default.removeItem(at: root) }
+        let journal = PendingWriteJournal(directory: root)
+        var savesBeforeFailure: Int?
+        let store = try makeTestNoteStore(persist: { context in
+            if let remaining = savesBeforeFailure {
+                if remaining == 0 { throw CocoaError(.fileWriteOutOfSpace) }
+                savesBeforeFailure = remaining - 1
+            }
+            try context.save()
+        }, attachmentFileStore: makeTestAttachmentFileStore())
+        let first = UUID(), second = UUID()
+        for id in [first, second] {
+            guard case .success = store.createDocumentNote(id: id, document: NoteDocument(blocks: [.text("Saved")])) else { return XCTFail() }
+        }
+        let controller = NotesPageController(store: store, journal: journal, saveDelay: .seconds(60))
+        controller.recoveryResponseTimeout = .milliseconds(60)
+        await XCTAssertTrueAsync(await controller.openDurably(noteID: first))
+        await XCTAssertTrueAsync(await controller.deleteNoteDurably(noteID: first))
+        await XCTAssertTrueAsync(await controller.openDurably(noteID: second))
+        let session = try XCTUnwrap(controller.active)
+        XCTAssertTrue(session.engine.performEdit(NSRange(location: 0, length: 0), with: NSAttributedString(string: "Draft "), name: "Typing"))
+        // Restore commits, then its reopen must checkpoint the current draft.
+        savesBeforeFailure = 1; journal.blockWrites = true
+        await XCTAssertTrueAsync(await controller.undoLibraryDurably(), "the restore happened despite slow preservation")
+        XCTAssertNotNil(store.note(withID: first))
+        XCTAssertFalse(controller.recoveryWarnings.contains { $0.contains("Try again") })
+        XCTAssertFalse(session.notice?.contains("Try again") == true)
+        savesBeforeFailure = nil; journal.release()
+        await controller.waitForRecoveryWork()
+        XCTAssertFalse(controller.recoveryWarnings.contains { $0.contains("still being saved") })
+        XCTAssertFalse(session.notice?.contains("still being saved") == true)
+    }
+
+    func testDeleteToastUndoRechecksItsStepAfterSuspendedWait() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("ToastStep-\(UUID())")
+        defer { try? FileManager.default.removeItem(at: root) }
+        let journal = PendingWriteJournal(directory: root), gate = PersistenceGate()
+        let store = try makeTestNoteStore(persist: { try gate.save($0) }, attachmentFileStore: makeTestAttachmentFileStore())
+        let note = try XCTUnwrap(store.create(title: "Deleted", body: "Saved"))
+        let controller = NotesPageController(store: store, journal: journal, saveDelay: .seconds(60))
+        await controller.startAndWait()
+        await XCTAssertTrueAsync(await controller.deleteNoteDurably(noteID: note.id))
+        let step = try XCTUnwrap(controller.libraryUndoStepID), session = try XCTUnwrap(controller.active)
+        XCTAssertTrue(session.engine.performEdit(NSRange(location: 0, length: 0), with: NSAttributedString(string: "Draft"), name: "Typing"))
+        gate.shouldFail = true; journal.blockWrites = true
+        XCTAssertFalse(controller.preserve(session))
+        try await waitFor { journal.writeStarted }
+        var result: Bool?
+        let undo = Task { @MainActor in result = await controller.undoLibraryDurably(expectedStepID: step) }
+        try await Task.sleep(for: .milliseconds(30))
+        XCTAssertNil(result)
+        gate.shouldFail = false
+        let newer = try XCTUnwrap(store.create(title: "Newer", body: "Saved"))
+        XCTAssertTrue(controller.setPinned(true, noteID: newer.id))
+        let top = controller.libraryUndoStepID
+        XCTAssertNotEqual(top, step)
+        journal.release()
+        await undo.value
+        XCTAssertEqual(result, false)
+        XCTAssertEqual(controller.libraryUndoStepID, top)
+        XCTAssertNil(store.note(withID: note.id))
+        XCTAssertTrue(try XCTUnwrap(store.note(withID: newer.id)).isPinned)
+    }
+
+    func testSavingWarningClearsWhenAnotherSessionsWriteFinishes() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("WarningDrain-\(UUID())")
+        defer { try? FileManager.default.removeItem(at: root) }
+        let journal = PendingWriteJournal(directory: root), gate = PersistenceGate()
+        let store = try makeTestNoteStore(persist: { try gate.save($0) }, attachmentFileStore: makeTestAttachmentFileStore())
+        let ids = [UUID(), UUID()]
+        for id in ids {
+            guard case .success = store.createDocumentNote(id: id, document: NoteDocument(blocks: [.text("Saved")])) else { return XCTFail() }
+        }
+        let controller = NotesPageController(store: store, journal: journal, saveDelay: .seconds(60))
+        controller.recoveryResponseTimeout = .milliseconds(60)
+        await XCTAssertTrueAsync(await controller.openDurably(noteID: ids[0]))
+        let inactive = try XCTUnwrap(controller.active)
+        await XCTAssertTrueAsync(await controller.openDurably(noteID: ids[1]))
+        let active = try XCTUnwrap(controller.active)
+        XCTAssertTrue(inactive.engine.performEdit(NSRange(location: 0, length: 0), with: NSAttributedString(string: "Draft "), name: "Typing"))
+        gate.shouldFail = true; journal.blockWrites = true
+        XCTAssertFalse(controller.preserve(inactive))
+        try await waitFor { journal.writeStarted }
+        await XCTAssertFalseAsync(await controller.deleteNoteDurably(noteID: ids[1]))
+        XCTAssertTrue(active.notice?.contains("still being saved") == true)
+        journal.release()
+        await controller.waitForRecoveryWork()
+        XCTAssertFalse(controller.recoveryWarnings.contains { $0.contains("still being saved") })
+        XCTAssertFalse(active.notice?.contains("still being saved") == true)
+        gate.shouldFail = false
+    }
+
+    func testSuccessfulOpenWithSlowHydrationDoesNotInviteRetry() async throws {
+        let store = try makeTestNoteStore(attachmentFileStore: makeTestAttachmentFileStore()), item = stagedSized("slow.pdf", bytes: 12_345), id = UUID()
+        let document = NoteDocument(blocks: [.text("Open"), .file(attachmentID: item.id, filename: item.filename,
+            contentTypeIdentifier: item.contentTypeIdentifier, byteCount: item.byteCount)])
+        guard case .success = store.createDocumentNote(id: id, document: document, staged: [item]) else { return XCTFail() }
+        await store.waitForAttachmentReconciliation()
+        store.clearVerifiedAttachmentCache()
+        let controller = NotesPageController(store: store, journal: nil, saveDelay: .seconds(60))
+        controller.recoveryResponseTimeout = .milliseconds(60)
+        let barrier = AllPayloadReadBarrier()
+        defer { barrier.resume(); NotePayloadDigest.observe(nil) }
+        NotePayloadDigest.observe { barrier.observe(main: $0, bytes: $1) }
+        let open = Task { @MainActor in await controller.openDurably(noteID: id) }
+        try await waitFor { barrier.started }
+        await XCTAssertTrueAsync(await open.value)
+        XCTAssertEqual(controller.active?.noteID, id)
+        XCTAssertTrue(controller.recoveryWarnings.contains("Attachment data is still being read."))
+        XCTAssertFalse(controller.recoveryWarnings.contains { $0.contains("Try again") })
+        barrier.resume()
+        try await waitFor { !controller.recoveryWarnings.contains("Attachment data is still being read.") }
+        XCTAssertFalse(controller.active?.notice?.contains("still being read") == true)
+    }
+}
+
+/// Hydration and availability may verify the same family concurrently. Hold
+/// every matching reader so neither can warm the other's cache prematurely.
+private final class AllPayloadReadBarrier: @unchecked Sendable {
+    private let condition = NSCondition()
+    private var entered = false
+    private var released = false
+    var started: Bool { condition.lock(); defer { condition.unlock() }; return entered }
+    func observe(main: Bool, bytes: Int) {
+        guard !main, bytes == 12_345 else { return }
+        condition.lock(); defer { condition.unlock() }
+        entered = true
+        let deadline = Date().addingTimeInterval(5)
+        while !released { if !condition.wait(until: deadline) { break } }
+    }
+    func resume() {
+        condition.lock(); released = true; condition.broadcast(); condition.unlock()
+    }
+}

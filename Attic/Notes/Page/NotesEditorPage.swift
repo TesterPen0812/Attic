@@ -389,8 +389,7 @@ struct NotesEditorPage: View {
             // Its button answers the pointer and VoiceOver, never ⌘Z: the key
             // follows the focused text, then the library (NotesLibraryView).
             let toast = toasts.show(String(localized: "Note deleted"), answersUndoKey: false) { [controller] in
-                guard controller.libraryUndoStepID == step else { return }
-                Task { @MainActor in _ = await controller.undoLibraryDurably() }
+                Task { @MainActor in _ = await controller.undoLibraryDurably(expectedStepID: step) }
             }
             postedToastID = toast.id
             postedToastStep = step
