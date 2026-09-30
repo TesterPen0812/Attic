@@ -73,6 +73,7 @@ enum NotePhysicalFamilyRetention {
 
 /// Immutable ownership input: no live models cross to the decoding worker.
 struct NoteDocumentRetentionSnapshot: Sendable {
+    enum Owner: Sendable { case note, version, proposal }
     struct Version: Sendable {
         let format: Int
         let content: Data?
@@ -81,6 +82,29 @@ struct NoteDocumentRetentionSnapshot: Sendable {
     let notes: [Data?]
     let versions: [Version]
     let proposals: [Data?]
+
+    /// The context and its models stay on the calling executor. File retention
+    /// calls this on a detached worker with a fresh context; synchronous store
+    /// collectors can still include pending changes in their own context.
+    static func read(in context: ModelContext, excludingNoteID excluded: UUID? = nil,
+                     observeRead: (@Sendable (Owner) -> Void)? = nil) throws -> Self {
+        let notes = try context.fetch(FetchDescriptor<NoteItem>(predicate: #Predicate { $0.contentFormat >= 1 }))
+            .filter { $0.id != excluded }.map { note in
+                observeRead?(.note)
+                return note.content
+            }
+        let versions = try context.fetch(FetchDescriptor<NoteVersion>())
+            .filter { $0.noteID != excluded }.map { version in
+                observeRead?(.version)
+                return Version(format: version.contentFormat, content: version.content, attachmentIDsRaw: version.attachmentIDsRaw)
+            }
+        let proposals = try context.fetch(FetchDescriptor<NotePendingEdit>())
+            .filter { $0.noteID != excluded }.map { proposal in
+                observeRead?(.proposal)
+                return proposal.proposedContent
+            }
+        return Self(notes: notes, versions: versions, proposals: proposals)
+    }
 
     func attachmentIDs(observeDecode: (@Sendable () -> Void)? = nil) throws -> Set<UUID> {
         func decodedIDs(_ data: Data?) throws -> [UUID] {
@@ -1199,19 +1223,11 @@ extension NoteStore {
         return ids
     }
 
-    /// Capture current, including uncommitted, ownership on the context's actor.
-    /// File retention decodes these values off-main and rechecks the store before
-    /// accepting them. Synchronous collectors use exactly the same rules.
+    /// Synchronous collectors include uncommitted ownership on their actor.
+    /// The asynchronous file provider reads through a fresh worker context and
+    /// keeps everything while this context has any uncommitted changes.
     func documentRetentionSnapshot(excludingNoteID excluded: UUID? = nil) throws -> NoteDocumentRetentionSnapshot {
-        let notes = try modelContext.fetch(FetchDescriptor<NoteItem>(predicate: #Predicate { $0.contentFormat >= 1 }))
-            .filter { $0.id != excluded }.map(\.content)
-        let versions = try modelContext.fetch(FetchDescriptor<NoteVersion>())
-            .filter { $0.noteID != excluded }.map {
-                NoteDocumentRetentionSnapshot.Version(format: $0.contentFormat, content: $0.content, attachmentIDsRaw: $0.attachmentIDsRaw)
-            }
-        let proposals = try modelContext.fetch(FetchDescriptor<NotePendingEdit>())
-            .filter { $0.noteID != excluded }.map(\.proposedContent)
-        return NoteDocumentRetentionSnapshot(notes: notes, versions: versions, proposals: proposals)
+        try NoteDocumentRetentionSnapshot.read(in: modelContext, excludingNoteID: excluded)
     }
 
     /// Stages the removal of purged notes' versions and pending edits.

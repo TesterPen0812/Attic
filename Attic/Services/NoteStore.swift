@@ -401,22 +401,29 @@ final class NoteStore: ObservableObject {
 #if os(macOS)
     /// Test observer for the actual retention-provider decoding worker.
     var retentionDecodeObserver: (@Sendable () -> Void)?
+    var retentionContentReadObserver: (@Sendable (NoteDocumentRetentionSnapshot.Owner) -> Void)?
 
     private func retainedAttachmentIDsForFiles() async -> Set<UUID>? {
         do {
             while !Task.isCancelled {
+                // A worker context sees durable rows only. Pending ownership
+                // must keep all bytes, without faulting external blobs on main.
+                guard !context.hasChanges else { return nil }
                 let generation = revision
-                let snapshot = try documentRetentionSnapshot()
-                let rows = Set(try context.fetch(FetchDescriptor<NoteAttachment>()).map(\.id))
-                let observer = retentionDecodeObserver
+                let container = self.container
+                let observer = retentionDecodeObserver, readObserver = retentionContentReadObserver
                 var ids = try await Task.detached(priority: .utility) {
-                    try snapshot.attachmentIDs(observeDecode: observer)
+                    let workerContext = ModelContext(container)
+                    let snapshot = try NoteDocumentRetentionSnapshot.read(in: workerContext, observeRead: readObserver)
+                    var ids = try snapshot.attachmentIDs(observeDecode: observer)
+                    ids.formUnion(try workerContext.fetch(FetchDescriptor<NoteAttachment>()).map(\.id))
+                    return ids
                 }.value
                 // Retry this requested sweep with fresh ownership if a save
                 // crossed the worker. Never authorize destruction from stale
                 // results or leave cleanup waiting for another unrelated event.
+                guard !Task.isCancelled, !context.hasChanges else { return nil }
                 guard revision == generation else { continue }
-                ids.formUnion(rows)
                 ids.formUnion(try recoveryReferencedAttachmentIDs())
                 return ids
             }

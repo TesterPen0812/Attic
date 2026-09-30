@@ -3035,9 +3035,14 @@ extension NoteSlice3bTests {
     }
 
     func testRetentionProviderDecodesEveryDocumentOwnerOffMain() async throws {
-        let files = makeTestAttachmentFileStore(), store = try makeTestNoteStore(attachmentFileStore: files), item = staged(), id = UUID()
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("RetentionExternal-\(UUID())")
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let files = makeTestAttachmentFileStore(rootURL: root.appendingPathComponent("files"))
+        let container = try PersistenceController.makeContainer(cloudSyncEnabled: false, storeDirectory: root)
+        let store = NoteStore(container: container, attachmentFileStore: files), item = staged(), id = UUID()
         await store.waitForAttachmentReconciliation()
-        let document = NoteDocument(blocks: [.text("Owner"), .file(attachmentID: item.id, filename: item.filename,
+        let document = NoteDocument(blocks: [.text("Owner"), .text(String(repeating: "Large external document. ", count: 16_384)), .file(attachmentID: item.id, filename: item.filename,
             contentTypeIdentifier: item.contentTypeIdentifier, byteCount: item.byteCount)])
         let data = try NoteContentCodec.encode(document)
         let note = NoteItem(id: id, title: "Owner", body: "", createdAt: Date(), updatedAt: Date())
@@ -3047,16 +3052,78 @@ extension NoteSlice3bTests {
             contentFormat: 1, title: "Owner", body: "", attachmentIDs: [], sourceRevisionID: nil))
         store.modelContext.insert(NotePendingEdit(noteID: id, baseRevisionToken: "base", proposedContent: data, agentName: "Agent", createdAt: Date()))
         XCTAssertTrue(store.commitStagedChanges())
+        store.refresh()
+        await store.waitForAttachmentReconciliation()
         let reference = AttachmentFileReference(id: item.id, digest: item.digest, filename: item.filename, payload: item.data)
         let materialized = try await files.ensureMaterialized(reference)
         let url = try XCTUnwrap(materialized)
         let recorder = PayloadThreadRecorder()
+        let reads = PayloadThreadRecorder()
         store.retentionDecodeObserver = { recorder.record(Thread.isMainThread, 1) }
+        store.retentionContentReadObserver = { owner in
+            let index = switch owner { case .note: 1; case .version: 2; case .proposal: 3 }
+            reads.record(Thread.isMainThread, index)
+        }
+        defer { store.retentionDecodeObserver = nil; store.retentionContentReadObserver = nil }
         try await files.removeMaterializations([reference])
         XCTAssertEqual(recorder.snapshot.count, 3, "note, version without cached IDs, and proposal")
         XCTAssertFalse(recorder.snapshot.contains { $0.0 })
+        XCTAssertEqual(Set(reads.snapshot.map { $0.1 }), [1, 2, 3], "all external-storage owner kinds were read")
+        XCTAssertFalse(reads.snapshot.contains { $0.0 }, "external contents are faulted off main as well as decoded")
         XCTAssertTrue(FileManager.default.fileExists(atPath: url.path))
         store.retentionDecodeObserver = nil
+    }
+
+    func testRetentionKeepsUncommittedOwnershipBeforeAndDuringWorkerReads() async throws {
+        for duringWorker in [false, true] {
+            let files = makeTestAttachmentFileStore(), store = try makeTestNoteStore(attachmentFileStore: files), item = staged(), id = UUID()
+            guard case .success = store.createDocumentNote(id: id, document: NoteDocument(blocks: [.text("Initial")])) else { return XCTFail() }
+            await store.waitForAttachmentReconciliation()
+            let reference = AttachmentFileReference(id: item.id, digest: item.digest, filename: item.filename, payload: item.data)
+            let url = try XCTUnwrap(try await files.ensureMaterialized(reference))
+            let document = NoteDocument(blocks: [.text("Pending owner"), .file(attachmentID: item.id, filename: item.filename,
+                contentTypeIdentifier: item.contentTypeIdentifier, byteCount: item.byteCount)])
+            func stageOwner() throws {
+                store.modelContext.insert(NotePendingEdit(noteID: id, baseRevisionToken: "base",
+                    proposedContent: try NoteContentCodec.encode(document), agentName: "Agent", createdAt: Date()))
+            }
+            let barrier = LocateReadBarrier()
+            defer { barrier.resume(); store.retentionContentReadObserver = nil }
+            let removal: Task<Void, Error>
+            if duringWorker {
+                store.retentionContentReadObserver = { _ in barrier.observe(main: Thread.isMainThread, bytes: 12_345) }
+                removal = Task { try await files.removeMaterializations([reference]) }
+                try await waitFor { barrier.started }
+                try stageOwner()
+                barrier.resume()
+            } else {
+                try stageOwner()
+                removal = Task { try await files.removeMaterializations([reference]) }
+            }
+            try await removal.value
+            XCTAssertTrue(FileManager.default.fileExists(atPath: url.path), "a durable-only worker must never overlook pending ownership")
+            store.retentionContentReadObserver = nil
+            store.modelContext.rollback()
+            try await files.removeMaterializations([reference])
+            XCTAssertFalse(FileManager.default.fileExists(atPath: url.path), "cleanup resumes once the unknown transaction is gone")
+        }
+    }
+
+    func testRetentionRechecksLiveRecoveryOwnersAfterOffMainReads() async throws {
+        let files = makeTestAttachmentFileStore(), store = try makeTestNoteStore(attachmentFileStore: files), item = staged(), id = UUID()
+        guard case .success = store.createDocumentNote(id: id, document: NoteDocument(blocks: [.text("Initial")])) else { return XCTFail() }
+        await store.waitForAttachmentReconciliation()
+        let reference = AttachmentFileReference(id: item.id, digest: item.digest, filename: item.filename, payload: item.data)
+        let url = try XCTUnwrap(try await files.ensureMaterialized(reference))
+        let barrier = LocateReadBarrier()
+        defer { barrier.resume(); store.retentionContentReadObserver = nil }
+        store.retentionContentReadObserver = { _ in barrier.observe(main: Thread.isMainThread, bytes: 12_345) }
+        let removal = Task { try await files.removeMaterializations([reference]) }
+        try await waitFor { barrier.started }
+        store.recoveryReferencedAttachmentIDs = { [item.id] }
+        barrier.resume()
+        try await removal.value
+        XCTAssertTrue(FileManager.default.fileExists(atPath: url.path), "a checkpoint created during the read still owns its bytes")
     }
 
     func testRetentionRefusesDestructionWhenStoreChangesDuringDecoding() async throws {
