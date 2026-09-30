@@ -134,3 +134,275 @@ final class TasksFollowup2Tests: XCTestCase {
         XCTAssertNil(hosted.model.doneDetailID, "⌘Return again closes them")
     }
 }
+
+/// Item 6 (option A): Find and View Options on Now and Later. The view's
+/// rules on the model (filters, sorts, each page its own, the manual order
+/// kept, reorders among what is shown), and the keys and menus on a hosted
+/// page.
+@MainActor
+final class TasksViewOptionsTests: XCTestCase {
+    private let clock = MutableNow(Date(timeIntervalSince1970: 1_790_000_000))
+    private var store: TaskStore!
+    private var model: TasksPageModel!
+    private var today: DueDay { DueDay(date: clock.value, calendar: .autoupdatingCurrent) }
+
+    override func setUp() async throws {
+        let clock = clock
+        store = try makeTestStore(now: { clock.value })
+        model = TasksPageModel(library: AtticLibrary(tasks: store), services: TasksPageServices(now: { clock.value }))
+    }
+
+    override func tearDown() {
+        model = nil
+        store = nil
+    }
+
+    private func day(_ offset: Int) -> DueDay {
+        DueDay(date: clock.value.addingTimeInterval(TimeInterval(offset) * 86_400), calendar: .autoupdatingCurrent)
+    }
+
+    @discardableResult
+    private func make(_ title: String, _ priority: TaskPriority = .none, due: Int? = nil,
+                      status: TaskStatus = .todo) throws -> TaskItem {
+        let task = try XCTUnwrap(store.create(title: title, priority: priority, status: status))
+        if let due { XCTAssertTrue(model.library.updateTask(task.id, dueDay: .some(day(due))).isApplied) }
+        return task
+    }
+
+    private func titles(_ tab: TasksTab = .now) -> [String] {
+        model.rows(for: tab).map(\.model.title)
+    }
+
+    /// Five tasks on Now (the mockup's): the filters show what they say,
+    /// Now's view leaves Later alone, and the store's order never changes.
+    func testFiltersAndSortsAreViewsOnly() throws {
+        // New tasks go to the top: made last to first.
+        try make("E high", .high)
+        try make("D low next week", .low, due: 6)
+        try make("C tomorrow", .high, due: 1)
+        try make("B overdue", .medium, due: -2)
+        try make("A plain")
+        try make("Later one", status: .backlog)
+        let manual = titles()
+        XCTAssertEqual(manual, ["A plain", "B overdue", "C tomorrow", "D low next week", "E high"])
+        var view = TasksViewOptions()
+        view.show = .dueOrOverdue
+        model.setViewOptions(view, for: .now)
+        XCTAssertEqual(titles(), ["B overdue", "C tomorrow", "D low next week"])
+        view.show = .overdueOnly
+        model.setViewOptions(view, for: .now)
+        XCTAssertEqual(titles(), ["B overdue"])
+        view = TasksViewOptions(priority: .mediumAndHigh)
+        model.setViewOptions(view, for: .now)
+        XCTAssertEqual(titles(), ["B overdue", "C tomorrow", "E high"])
+        view.priority = .highOnly
+        model.setViewOptions(view, for: .now)
+        XCTAssertEqual(titles(), ["C tomorrow", "E high"])
+        XCTAssertTrue(model.viewOptions(for: .now).filters)
+        XCTAssertEqual(titles(.backlog), ["Later one"], "Later keeps its own view")
+        XCTAssertTrue(model.viewOptions(for: .backlog).isDefault)
+
+        model.setViewOptions(TasksViewOptions(sort: .dueDate), for: .now)
+        XCTAssertEqual(titles(), ["B overdue", "C tomorrow", "D low next week", "A plain", "E high"],
+                       "earliest first, undated after, ties in manual order")
+        model.setViewOptions(TasksViewOptions(sort: .priority), for: .now)
+        XCTAssertEqual(titles(), ["C tomorrow", "E high", "B overdue", "D low next week", "A plain"])
+        XCTAssertFalse(model.reorders(on: .now), "a sorted list does not reorder")
+        model.setViewOptions(TasksViewOptions(), for: .now)
+        XCTAssertEqual(titles(), manual, "Manual Order shows the order as it was")
+        XCTAssertTrue(model.reorders(on: .now))
+    }
+
+    /// Sorting keeps the states apart: started tasks stay on top.
+    func testSortingKeepsStartedTasksOnTop() throws {
+        try make("Todo soon", due: 1)
+        let started = try make("Started late", due: 9)
+        XCTAssertTrue(model.library.updateTask(started.id, status: .inProgress).isApplied)
+        model.setViewOptions(TasksViewOptions(sort: .dueDate), for: .now)
+        XCTAssertEqual(titles(), ["Started late", "Todo soon"])
+    }
+
+    /// Now's "Completed today" is never filtered; rows the view hides leave
+    /// the selection; Show All drops the filters and keeps the order.
+    func testFiltersLeaveCompletedTodayAndPruneTheSelection() throws {
+        let plain = try make("Plain")
+        let dated = try make("Dated", due: 2)
+        let done = try make("Finished")
+        XCTAssertTrue(model.complete(done.id).isApplied)
+        model.releaseHold(done.id)
+        model.selectCopies([plain.id, dated.id])
+        model.setViewOptions(TasksViewOptions(show: .dueOrOverdue, sort: .priority), for: .now)
+        XCTAssertEqual(model.sections(for: .now).open.map(\.id), [dated.id])
+        XCTAssertEqual(model.sections(for: .now).done.map(\.id), [done.id], "Completed today stays whole")
+        XCTAssertEqual(model.selection, [dated.id], "a hidden row leaves the selection")
+        model.showAll(on: .now)
+        XCTAssertEqual(model.viewOptions(for: .now), TasksViewOptions(sort: .priority), "Show All keeps the order")
+    }
+
+    /// Find on Now: the open tasks whose title matches, marked, with the
+    /// count; finished ones are Done's to find. Each page its own query.
+    func testFindOnNowFiltersAndCounts() throws {
+        try make("Book dentist")
+        try make("Call the plumber")
+        try make("Book flights", status: .backlog)
+        let done = try make("Book club")
+        XCTAssertTrue(model.complete(done.id).isApplied)
+        model.releaseHold(done.id)
+        model.setSearchQuery("book", for: .now)
+        XCTAssertEqual(titles(), ["Book dentist"])
+        XCTAssertEqual(model.rows(for: .now).first?.model.titleMatch, "book", "the match is marked")
+        XCTAssertTrue(model.sections(for: .now).done.isEmpty, "finished tasks are Done's to find")
+        XCTAssertEqual(model.listSearchCount(for: .now)?.matches, 1)
+        XCTAssertEqual(model.listSearchCount(for: .now)?.total, 2)
+        XCTAssertEqual(titles(.backlog), ["Book flights"], "Later's list is not searched")
+        XCTAssertEqual(model.searchQuery(for: .backlog), "")
+        XCTAssertTrue(model.narrows(.now))
+        XCTAssertEqual(model.searchPlaceholder(for: .now), "Search Now")
+        XCTAssertEqual(model.searchPlaceholder(for: .backlog), "Search Later")
+    }
+
+    /// In Manual Order with a filter, a move goes one place among the rows
+    /// shown; the hidden ones keep their places.
+    func testAReorderInAFilteredViewMovesAmongTheShownRows() throws {
+        let third = try make("Third", .high)
+        try make("Hidden")
+        let first = try make("First", .high)
+        model.setViewOptions(TasksViewOptions(priority: .highOnly), for: .now)
+        let shown = model.rows(for: .now).map(\.id)
+        XCTAssertEqual(shown, [first.id, third.id])
+        XCTAssertTrue(model.moveVisible(third.id, toShownIndex: 0, in: shown).isApplied)
+        model.setViewOptions(TasksViewOptions(), for: .now)
+        XCTAssertEqual(titles(), ["Third", "First", "Hidden"], "Third went above First; Hidden stays below them")
+        model.setViewOptions(TasksViewOptions(priority: .highOnly), for: .now)
+        let again = model.rows(for: .now).map(\.id)
+        XCTAssertTrue(model.moveVisible(third.id, toShownIndex: 1, in: again).isApplied)
+        model.setViewOptions(TasksViewOptions(), for: .now)
+        XCTAssertEqual(titles(), ["First", "Third", "Hidden"])
+    }
+
+    /// An agent's `show` of a task the view or Find hides: the filters and
+    /// the query give way, the order stays.
+    func testShowRevealsATaskTheViewHides() throws {
+        try make("Dated", due: 1)
+        let plain = try make("Plain")
+        model.setViewOptions(TasksViewOptions(show: .dueOrOverdue, sort: .dueDate), for: .now)
+        model.setSearchQuery("dat", for: .now)
+        XCTAssertEqual(model.show(plain.id), .shown)
+        XCTAssertEqual(model.searchQuery(for: .now), "")
+        XCTAssertEqual(model.viewOptions(for: .now), TasksViewOptions(sort: .dueDate))
+        XCTAssertTrue(model.rows(for: .now).contains { $0.id == plain.id })
+    }
+
+    /// A page kept built redraws when its own view changes, not another's.
+    func testTheKeptPagesTokenFollowsItsOwnView() throws {
+        try make("One")
+        let later = model.pageToken(.backlog)
+        let now = model.pageToken(.now)
+        model.setViewOptions(TasksViewOptions(sort: .priority), for: .now)
+        XCTAssertEqual(model.pageToken(.backlog), later)
+        XCTAssertNotEqual(model.pageToken(.now), now)
+        model.setSearchQuery("o", for: .backlog)
+        XCTAssertNotEqual(model.pageToken(.backlog), later)
+    }
+
+    /// The summary and VoiceOver value say what is shown.
+    func testTheViewSaysWhatItShows() {
+        XCTAssertEqual(TasksViewOptions(show: .dueOrOverdue, sort: .dueDate).summary, "Due or overdue · by due date")
+        XCTAssertEqual(TasksViewOptions().spokenValue, "All tasks, manual order")
+        XCTAssertEqual(TasksViewOptions(priority: .highOnly).summary, "High priority only")
+        XCTAssertFalse(TasksViewOptions(sort: .priority).filters, "a sort hides nothing: no dot")
+    }
+
+    // MARK: - On the page
+
+    /// The hosted window has the keyboard (a key's route checks it).
+    private func makeKey(_ hosted: Hosted) {
+        let deadline = Date().addingTimeInterval(2)
+        while !hosted.window.isKeyWindow, Date() < deadline {
+            NSApp.activate()
+            hosted.window.makeKeyAndOrderFront(nil)
+            hosted.spin(0.1)
+        }
+        XCTAssertTrue(hosted.window.isKeyWindow, "the test window is key")
+    }
+
+    /// The View Options menu: Show, the priority filter, Sort by, Reset
+    /// View, the current choices ticked; a choice changes only that page.
+    func testTheViewOptionsMenu() throws {
+        let hosted = try Hosted(height: 520)
+        defer { hosted.close() }
+        let commands = hosted.page.viewCommands(for: .now)
+        XCTAssertEqual(commands.map(\.title), ["Show", "All Tasks", "Due or Overdue", "Overdue Only",
+                                               "Any Priority", "Medium and High", "High Only",
+                                               "Sort by", "Manual Order", "Due Date", "Priority", "Reset View"])
+        XCTAssertEqual(commands.filter { $0.state == .on }.map(\.title), ["All Tasks", "Any Priority", "Manual Order"])
+        XCTAssertEqual(commands.last?.isDisabled, true, "nothing to reset")
+        commands.first { $0.title == "Due Date" }?.action()
+        XCTAssertEqual(hosted.model.viewOptions(for: .now).sort, .dueDate)
+        XCTAssertTrue(hosted.model.viewOptions(for: .backlog).isDefault)
+        let again = hosted.page.viewCommands(for: .now)
+        XCTAssertEqual(again.filter { $0.state == .on }.map(\.title), ["All Tasks", "Any Priority", "Due Date"])
+        again.last?.action()
+        XCTAssertTrue(hosted.model.viewOptions(for: .now).isDefault, "Reset View")
+    }
+
+    /// ⌥⌘V is View Options' on Now and Later, never Done's; ⌘F is Find's
+    /// on every page.
+    func testTheKeysBelongToTheRightPages() throws {
+        let hosted = try Hosted(height: 520)
+        defer { hosted.close() }
+        func event(_ characters: String, _ code: UInt16, _ modifiers: NSEvent.ModifierFlags) -> NSEvent {
+            NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: modifiers, timestamp: 0,
+                             windowNumber: hosted.window.windowNumber, context: nil, characters: characters,
+                             charactersIgnoringModifiers: characters, isARepeat: false, keyCode: code)!
+        }
+        makeKey(hosted)
+        let v = event("v", 9, [.command, .option])
+        XCTAssertTrue(TasksPage.answersViewOptions(event: v, pageShown: true, tab: .now, pageWindow: hosted.window, popoverOpen: false))
+        XCTAssertTrue(TasksPage.answersViewOptions(event: v, pageShown: true, tab: .backlog, pageWindow: hosted.window, popoverOpen: false))
+        XCTAssertFalse(TasksPage.answersViewOptions(event: v, pageShown: true, tab: .done, pageWindow: hosted.window, popoverOpen: false))
+        XCTAssertFalse(TasksPage.answersViewOptions(event: v, pageShown: false, tab: .now, pageWindow: hosted.window, popoverOpen: false))
+        XCTAssertFalse(TasksPage.answersViewOptions(event: event("v", 9, .command), pageShown: true, tab: .now,
+                                                    pageWindow: hosted.window, popoverOpen: false), "⌘V is Paste")
+        let f = event("f", 3, .command)
+        for tab in TasksTab.allCases {
+            XCTAssertTrue(TasksPage.answersFind(event: f, pageShown: true, tab: tab, pageWindow: hosted.window, popoverOpen: false))
+        }
+    }
+
+    /// ⌘F on Now, typing, the match shown with the count; ↓ gives the
+    /// keyboard to the first match; Esc there ends the search.
+    func testFindOnNowWithTheKeys() throws {
+        let hosted = try Hosted(height: 520)
+        defer { hosted.close() }
+        makeKey(hosted)
+        hosted.press("f", keyCode: 3, modifiers: .command)
+        XCTAssertTrue(hosted.searchHasKeyboard, "⌘F opens Now's Find")
+        hosted.press("b", keyCode: 11)
+        hosted.press("o", keyCode: 31)
+        XCTAssertEqual(hosted.model.searchQuery(for: .now), "bo")
+        XCTAssertEqual(hosted.model.rows(for: .now).map(\.model.title), ["Book dentist"])
+        hosted.press("\u{F701}", keyCode: 125)
+        XCTAssertFalse(hosted.searchHasKeyboard, "↓ leaves the field")
+        XCTAssertEqual(hosted.model.selection.count, 1, "the first match is the keyboard's")
+        hosted.press("\u{1B}", keyCode: 53)
+        XCTAssertEqual(hosted.model.searchQuery(for: .now), "", "Esc ends the search")
+    }
+
+    /// A sorted view: ⌘↑ moves nothing (the hint says why), the menu's
+    /// Move Up is off, VoiceOver has no Move up.
+    func testASortedViewDoesNotReorder() throws {
+        let hosted = try Hosted(height: 520)
+        defer { hosted.close() }
+        hosted.model.setViewOptions(TasksViewOptions(sort: .priority), for: .now)
+        let row = try XCTUnwrap(hosted.model.rows(for: .now).first { $0.model.title == "Call the plumber" })
+        let before = hosted.store.snapshot(for: .tasks).sections.flatMap(\.tasks).map(\.id)
+        hosted.model.selectOnly(row.id)
+        makeKey(hosted)
+        hosted.press("\u{F700}", keyCode: 126, modifiers: .command)
+        XCTAssertEqual(hosted.store.snapshot(for: .tasks).sections.flatMap(\.tasks).map(\.id), before, "nothing moved")
+        let more = try XCTUnwrap(hosted.page.taskCommands(row.id, tab: .now).first { $0.title == "More" })
+        XCTAssertEqual(more.children.first { $0.title == "Move Up" }?.isDisabled, true)
+        XCTAssertNil(hosted.page.actions(for: row.id, in: .now).moveUp)
+    }
+}

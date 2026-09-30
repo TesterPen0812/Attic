@@ -170,6 +170,31 @@ struct AtticEmptyLine: View {
     }
 }
 
+/// A list view that hides tasks says so (follow-up part 2, item 6): a quiet
+/// line at the top of the list ("Due or overdue · by due date") with the way
+/// back ("Show All") at its end. One row's pitch, its text on the tab labels'
+/// line; VoiceOver reads the summary, then the button.
+struct AtticViewLine: View {
+    let summary: String
+    let actionTitle: String
+    let action: () -> Void
+
+    var body: some View {
+        HStack(spacing: AtticSpacing.s8) {
+            AtticText(verbatim: summary, style: .rowMeta, ink: .helper, truncates: true)
+                .help(summary)
+                .layoutPriority(-1)
+            Spacer(minLength: 0)
+            AtticQuietAction(systemName: nil, title: actionTitle, emphasised: true, action: action)
+                .padding(.trailing, AtticLayout.rowHighlightInset + AtticTaskRowMetrics.dateInset - AtticQuietActionMetrics.horizontalPadding)
+        }
+        .frame(height: AtticLayout.rowPitch)
+        .padding(.leading, AtticLayout.pageTabsX)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .accessibilityElement(children: .contain)
+    }
+}
+
 /// A problem is never hidden: "Not saved · Retry" in the warning colour,
 /// shown in place of the quiet state, with the next step as a button.
 struct AtticErrorLine: View {

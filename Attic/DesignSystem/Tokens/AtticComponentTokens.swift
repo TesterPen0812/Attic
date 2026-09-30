@@ -143,6 +143,13 @@ enum AtticTaskRowMetrics {
 }
 
 /// Quiet text actions inside content ("Add subtask", "Open page").
+/// The menu button's dot (follow-up part 2, item 6: View Options while a
+/// filter hides tasks).
+enum AtticMenuButtonMetrics {
+    static let dotSize: CGFloat = 5
+    static let dotInset: CGFloat = 6
+}
+
 enum AtticQuietActionMetrics {
     static let height: CGFloat = 24
     static let horizontalPadding: CGFloat = 6

@@ -99,10 +99,12 @@ final class TasksRound6Tests: XCTestCase {
         hosted.press("f", keyCode: 3, modifiers: .command)
         XCTAssertTrue(hosted.searchHasKeyboard, "⌘F again after Esc: \(String(describing: hosted.window.firstResponder))")
         hosted.press("\u{1B}", keyCode: 53)
-        // Not on Now: ⌘F there is the menu's.
+        // On Now too since follow-up part 2 (item 6): Now's own Find.
         hosted.go(to: .now)
         hosted.press("f", keyCode: 3, modifiers: .command)
-        XCTAssertFalse(hosted.searchHasKeyboard, "⌘F is Done's")
+        XCTAssertTrue(hosted.searchHasKeyboard, "⌘F is Now's Find")
+        XCTAssertNotNil(hosted.window.contentView.flatMap { AtticTabsSearchField.searchField(in: $0, placeholder: "Search Now") })
+        hosted.press("\u{1B}", keyCode: 53)
     }
 
     /// A click on Done's magnifier, with the add bar holding the keyboard:

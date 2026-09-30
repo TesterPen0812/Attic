@@ -1348,16 +1348,44 @@ struct AtticMenuButton: View {
     let systemName: String
     let label: String.LocalizationValue
     let commands: () -> [AtticMenuCommand]
+    /// The anchor, when a key opens the same menu (follow-up part 2: ⌥⌘V
+    /// opens View Options under its button).
+    var holder: AtticMenuAnchor.Holder? = nil
+    /// A small accent dot at the glyph's top trailing corner: the menu's
+    /// choices hide something (an active filter).
+    var showsDot = false
+    /// What VoiceOver reads as the button's value (the current choice).
+    var value: String? = nil
 
-    @State private var anchor = AtticMenuAnchor.Holder()
+    @State private var ownAnchor = AtticMenuAnchor.Holder()
 
     var body: some View {
+        let anchor = holder ?? ownAnchor
         AtticSmallButton(systemName: systemName, label: label) {
             guard let view = anchor.view else { return }
             AtticNativeMenu.popUp(commands(), in: view)
         }
+        .overlay(alignment: .topTrailing) {
+            if showsDot { AtticMenuButtonDot().allowsHitTesting(false) }
+        }
         .background(AtticMenuAnchor(holder: anchor).accessibilityHidden(true))
         .accessibilityHint(String(localized: "Opens a menu"))
+        .accessibilityValue(value ?? "")
+    }
+}
+
+/// The menu button's dot: 5 pt in the accent, 6 pt in from the control's
+/// top trailing corner, on the glyph's corner.
+private struct AtticMenuButtonDot: View {
+    @Environment(\.atticDesign) private var design
+
+    var body: some View {
+        Circle()
+            .fill(design.tokens.color(.accent))
+            .frame(width: AtticMenuButtonMetrics.dotSize, height: AtticMenuButtonMetrics.dotSize)
+            .padding(.top, AtticMenuButtonMetrics.dotInset)
+            .padding(.trailing, AtticMenuButtonMetrics.dotInset)
+            .accessibilityHidden(true)
     }
 }
 

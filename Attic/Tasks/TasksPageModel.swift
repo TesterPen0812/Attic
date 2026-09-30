@@ -157,7 +157,10 @@ final class TasksPageModel: ObservableObject {
     var store: TaskStore { library.tasks }
     var services: TasksPageServices
 
-    @Published var tab: TasksTab = .now
+    @Published var tab: TasksTab = .now {
+        // Remembered across relaunch (L7), where the page has a memory.
+        didSet { if tab != oldValue { memory?.savePage(tab) } }
+    }
     @Published private(set) var selection: Set<UUID> = []
     /// The row a Shift-extension grows from (readable for the tests).
     private(set) var selectionAnchor: UUID?
@@ -244,6 +247,14 @@ final class TasksPageModel: ObservableObject {
     }
     @Published var pasteOffer: TaskPasteOffer?
     @Published var doneSearch = ""
+    /// Now's and Later's Find, per page (follow-up part 2, item 6; Done's
+    /// is `doneSearch`). Read through `searchQuery(for:)`.
+    @Published var listSearch: [TasksTab: String] = [:]
+    /// Now's and Later's View Options, per page (item 6); a page with the
+    /// default view has none. Read through `viewOptions(for:)`.
+    @Published var viewOptionsByTab: [TasksTab: TasksViewOptions] = [:]
+    /// Where the page and the views are remembered across relaunch (L7).
+    var memory: TasksPageMemory?
     /// Loaded pages of the Done log (lazily, a page at a time).
     @Published private(set) var doneLogTasks: [TaskItem] = []
     @Published private(set) var doneLogHasMore = false
@@ -267,10 +278,12 @@ final class TasksPageModel: ObservableObject {
 
     static let doneLogPageSize = 80
 
-    init(library: AtticLibrary, services: TasksPageServices = TasksPageServices(), toasts: PanelToastCenter? = nil) {
+    init(library: AtticLibrary, services: TasksPageServices = TasksPageServices(), toasts: PanelToastCenter? = nil,
+         memory: TasksPageMemory? = nil) {
         self.library = library
         self.services = services
         self.toasts = toasts ?? PanelToastCenter()
+        self.memory = memory
         parser = TaskTextParser(calendar: services.calendar(), locale: services.locale, now: services.now)
         // A task that left the list (deleted, cleaned up) leaves the
         // selection and the quick look too.
@@ -286,13 +299,18 @@ final class TasksPageModel: ObservableObject {
         library.undo.$revision
             .sink { [weak self] _ in DispatchQueue.main.async { self?.dismissToastIfSuperseded() } }
             .store(in: &cancellables)
+        // The page and the views it was left with (L7).
+        if let memory {
+            tab = memory.page ?? .now
+            viewOptionsByTab = memory.viewOptions
+        }
     }
 
     // MARK: - Lists
 
     private var today: DueDay { DueDay(date: services.now(), calendar: services.calendar()) }
 
-    func rowModel(for task: TaskItem) -> TasksListRow {
+    func rowModel(for task: TaskItem, match: String? = nil) -> TasksListRow {
         let subtasks: [TaskItem]
         if store.parent(of: task) != nil {
             subtasks = []
@@ -303,10 +321,13 @@ final class TasksPageModel: ObservableObject {
             subtasks = doneLogChildren[task.id] ?? []
         }
         let open = expanded.contains(task.id)
+        var model = TaskRowPresentation.row(for: task, subtasks: subtasks, today: today,
+                                            calendar: services.calendar(), locale: services.locale)
+        // Find's matches are marked in the title (item 6, as on Done).
+        if let match, !match.isEmpty { model.titleMatch = match }
         return TasksListRow(
             id: task.id,
-            model: TaskRowPresentation.row(for: task, subtasks: subtasks, today: today,
-                                           calendar: services.calendar(), locale: services.locale),
+            model: model,
             status: task.status,
             subtasks: open ? quickLookSubtasks(of: task.id, subtasks).map { AtticSubtaskModel(id: $0.id, title: $0.title, isDone: $0.status == .done) } : []
         )
@@ -319,6 +340,8 @@ final class TasksPageModel: ObservableObject {
         let expanded: Set<UUID>
         let completedExpanded: Bool
         let today: DueDay
+        let view: TasksViewOptions
+        let search: String
     }
 
     /// What a page kept built but not drawn shows (round 11): while it is
@@ -333,6 +356,8 @@ final class TasksPageModel: ObservableObject {
         let today: DueDay
         let doneLog: [UUID]
         let search: String
+        /// Now's and Later's view (item 6).
+        let view: TasksViewOptions
         /// Whether this page is the one that answers the user (the tab
         /// shown, on screen): it gains and loses editors, focus and popovers
         /// with it (round 12).
@@ -342,8 +367,8 @@ final class TasksPageModel: ObservableObject {
     func pageToken(_ tab: TasksTab) -> PageToken {
         PageToken(tab: tab, revision: store.revision, held: held.filter { $0.value.tab == tab }, expanded: expanded,
                   completedExpanded: tab == .now && completedTodayExpanded, today: today,
-                  doneLog: tab == .done ? doneLogTasks.map(\.id) : [], search: tab == .done ? doneSearch : "",
-                  owner: self.tab == tab && isPageShown)
+                  doneLog: tab == .done ? doneLogTasks.map(\.id) : [], search: searchQuery(for: tab),
+                  view: viewOptions(for: tab), owner: self.tab == tab && isPageShown)
     }
 
     /// Rows are rebuilt only when something they show changed: SwiftUI asks
@@ -366,7 +391,8 @@ final class TasksPageModel: ObservableObject {
 
     private func cached(_ tab: TasksTab) -> (key: RowsKey, sections: TasksSections, rows: [TasksListRow]) {
         let key = RowsKey(tab: tab, revision: store.revision, held: held.filter { $0.value.tab == tab }, expanded: expanded,
-                          completedExpanded: tab == .now && completedTodayExpanded, today: today)
+                          completedExpanded: tab == .now && completedTodayExpanded, today: today,
+                          view: viewOptions(for: tab), search: tab == .done ? "" : trimmedQuery(for: tab))
         if let cached = rowsCache[tab], cached.key == key { return cached }
         let all = buildRows(for: tab)
         var sections = TasksSections()
@@ -381,7 +407,25 @@ final class TasksPageModel: ObservableObject {
 
     private func buildRows(for tab: TasksTab) -> [TasksListRow] {
         let scope: TaskScope = tab == .backlog ? .backlog : .tasks
-        var tasks = store.snapshot(for: scope).sections.flatMap(\.tasks)
+        // The view (item 6): each state's tasks filtered and ordered, the
+        // states in their order. Find shows the open tasks whose title
+        // matches (the finished ones are Done's to find). Work done only
+        // when the rows are rebuilt (the cache's key holds the view).
+        let view = viewOptions(for: tab)
+        let query = trimmedQuery(for: tab)
+        let day = today
+        var tasks: [TaskItem]
+        if view.isDefault, query.isEmpty {
+            tasks = store.snapshot(for: scope).sections.flatMap(\.tasks)
+        } else {
+            tasks = store.snapshot(for: scope).sections.flatMap { section -> [TaskItem] in
+                if !query.isEmpty {
+                    guard section.status != .done else { return [] }
+                    return view.sorted(section.tasks.filter { $0.title.localizedStandardContains(query) })
+                }
+                return view.sorted(section.tasks.filter { view.includes($0, today: day) })
+            }
+        }
         let holding = held.filter { $0.value.tab == tab }.sorted { $0.value.index < $1.value.index }
         if !holding.isEmpty {
             // A task finished on Later has left the backlog list: the held
@@ -392,7 +436,7 @@ final class TasksPageModel: ObservableObject {
                 tasks.insert(task, at: min(held[task.id]?.index ?? 0, tasks.count))
             }
         }
-        return tasks.map(rowModel(for:))
+        return tasks.map { rowModel(for: $0, match: query.isEmpty ? nil : query) }
     }
 
     /// The library's tags, most used first, read once per store change
@@ -588,9 +632,10 @@ final class TasksPageModel: ObservableObject {
 
     // MARK: - Tabs
 
-    /// Tasks always opens on Now (spec § The shell), except when it was
-    /// opened to search or to show a task: then it stays where that put it
-    /// until the panel hides.
+    /// Tasks opens on Now (spec § The shell), except when it was opened to
+    /// search or to show a task: then it stays where that put it until the
+    /// panel hides. With a memory (the app's panel, L7) it opens on the page
+    /// last used, after a relaunch too.
     ///
     /// Unsaved work is never dropped: a title or new subtask that was
     /// changed, or whose save failed, keeps its text and "Not saved ·
@@ -605,7 +650,7 @@ final class TasksPageModel: ObservableObject {
         }
         if hasUnsavedEdit { return }
         // Assign only what changes: every assignment redraws the page.
-        let target = revealTab ?? .now
+        let target = revealTab ?? (memory != nil ? tab : .now)
         pagerSwipe.cancel()
         if tab != target { tab = target }
         if revealTab == nil, !selection.isEmpty { selection = [] }
@@ -890,6 +935,12 @@ final class TasksPageModel: ObservableObject {
             }
         } else if parent != nil {
             expanded.insert(task.id)
+        }
+        // A view or a Find that hides the task gives way (item 6): its
+        // filters and query go, its order stays.
+        if target != .done, !rows(for: target).contains(where: { $0.id == task.id }) {
+            setSearchQuery("", for: target)
+            showAll(on: target)
         }
         reveal(task.id)
         return .shown
@@ -1503,6 +1554,10 @@ final class TasksPageModel: ObservableObject {
         addedRequest = ScrollRequest(id: task.id)
         // Added from Done, the task goes to Now, out of sight: say where.
         if tab == .done, !openingPage { showToast(String(localized: "Added to Now")) }
+        // Added where the view or a Find hides it (item 6): say so.
+        else if !openingPage, narrows(tab), !rows(for: tab).contains(where: { $0.id == task.id }) {
+            showToast(String(localized: "Added · hidden by this view"))
+        }
         return task.id
     }
 
