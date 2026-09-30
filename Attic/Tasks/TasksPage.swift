@@ -40,16 +40,9 @@ struct TasksPage: View {
     @State private var composerPickerOpen = false
     /// "Started tasks stay together" (review 10), while it shows.
     @State private var boundaryHint = false
-    /// The rows a keyboard or menu reorder just exchanged dissolve into
-    /// their new places (round 13): each carries the serial of the last
-    /// reorder that moved it, and a change of it plays the dissolve. A
-    /// serial needs no timer to clear, so a row can never be left hidden
-    /// (CI run 2: a menu Move Down left both rows invisible).
-    @State private var reorderSerials: [UUID: Int] = [:]
-    @State private var reorderSerial = 0
-    /// When the last reorder took its places, so the list's own travel
-    /// stays off for that one update and comes back by itself.
-    @State private var reorderStamp = Date.distantPast
+    /// The rows a keyboard or menu reorder just exchanged, held invisible
+    /// for a moment so they dissolve into their new places (round 13).
+    @State private var reorderFade: Set<UUID> = []
     @State private var boundaryHintTask: Task<Void, Never>?
     /// A Done row the keyboard moved to, to bring into view.
     @State private var doneReveal: TasksPageModel.ScrollRequest?
@@ -766,7 +759,7 @@ struct TasksPage: View {
                     ForEach(sections.open) { row in
                         cell(row, tab: tab, group: groups[row.status] ?? [], drawn: drawn)
                             .id(row.id)
-                            .modifier(ReorderDissolve(serial: reorderSerials[row.id] ?? 0))
+                            .opacity(reorderFade.contains(row.id) ? 0.001 : 1)
                             // A row added or leaving drops into or rises
                             // out of its place (round 9).
                             .transition(AtticMotionPreset.settle.transition(reduceMotion: design.reduceMotion, edge: .top))
@@ -807,7 +800,7 @@ struct TasksPage: View {
                         }
                     }
                 }
-                .animation(Date().timeIntervalSince(reorderStamp) < 0.5 ? nil : travel, value: rows.map(\.id))
+                .animation(reorderFade.isEmpty ? travel : nil, value: rows.map(\.id))
                 // The list's place is kept while its page is not built.
                 .background(TasksScrollKeeper(model: model, tab: tab, proxies: listProxies, drawn: drawn).accessibilityHidden(true))
                 // The clearance past the add bar's zone is room at the end
@@ -1510,15 +1503,21 @@ struct TasksPage: View {
     private func reorderWithoutCrossing(_ change: () -> Void) {
         guard !design.reduceMotion else { change(); return }
         let before = model.rows(for: model.tab).map(\.id)
-        // The list's travel is off for this update, and the moved rows'
-        // serials change in it.
-        reorderStamp = Date()
+        // The list's placement animation is off while `reorderFade` holds
+        // rows, and both change in this one update.
         change()
         let after = model.rows(for: model.tab).map(\.id)
-        let moved = after.indices.filter { before.indices.contains($0) && before[$0] != after[$0] }.map { after[$0] }
-        guard !moved.isEmpty else { return }
-        reorderSerial += 1
-        for id in moved { reorderSerials[id] = reorderSerial }
+        reorderFade = Set(after.indices.filter { before.indices.contains($0) && before[$0] != after[$0] }.map { after[$0] })
+        guard !reorderFade.isEmpty else { return }
+        // A run-loop timer in the common modes, not a dispatch block: the
+        // menu runs its command while it is still tracking, and a block
+        // queued from there waited, leaving both rows hidden for good (CI
+        // run 2's recording of a menu Move Down).
+        let fade = $reorderFade
+        let timer = Timer(timeInterval: 0.04, repeats: false) { _ in
+            MainActor.assumeIsolated { withAnimation(.easeOut(duration: 0.16)) { fade.wrappedValue = [] } }
+        }
+        RunLoop.main.add(timer, forMode: .common)
     }
 
     /// ⇧⌘I, the actions button and VoiceOver's "Show actions": the task's
@@ -3095,26 +3094,5 @@ final class TasksListProxies {
 
     private struct WeakScrollView {
         weak var view: NSScrollView?
-    }
-}
-
-/// A row that just took a new place in a reorder: hidden at once and then
-/// faded in where it is, so nothing slides through another row. The value
-/// at rest is full opacity, so a missed frame leaves the row visible. It
-/// never reaches zero, which keeps the row in the accessibility tree for
-/// VoiceOver while it fades.
-private struct ReorderDissolve: ViewModifier {
-    let serial: Int
-
-    func body(content: Content) -> some View {
-        content.keyframeAnimator(initialValue: 1.0, trigger: serial) { view, opacity in
-            view.opacity(opacity)
-        } keyframes: { _ in
-            KeyframeTrack {
-                MoveKeyframe(0.001)
-                LinearKeyframe(0.001, duration: 0.04)
-                CubicKeyframe(1.0, duration: 0.16)
-            }
-        }
     }
 }

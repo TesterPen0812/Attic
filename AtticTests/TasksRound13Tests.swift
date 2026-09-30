@@ -143,6 +143,30 @@ final class TasksRound13Tests: XCTestCase {
         XCTAssertEqual(ran, ["later"], "⌘B still runs Later")
     }
 
+    /// Real menu tracking answers Return with Edit Title's "\r" hint ahead
+    /// of the highlighted item (CI run 3); the match is redirected to the
+    /// highlighted item, and a click on an item still runs that item.
+    func testABareKeyMatchRunsTheHighlightedItemInstead() throws {
+        var ran: [String] = []
+        let menu = AtticNativeMenu.make([
+            AtticMenuCommand(verbatim: "Edit Title", shortcut: AtticTaskShortcut.editTitle) { ran.append("edit") },
+            AtticMenuCommand(verbatim: "Add Subtask") { ran.append("subtask") },
+            AtticMenuCommand(verbatim: "Later", shortcut: AtticTaskShortcut.later) { ran.append("later") }
+        ])
+        let edit = try XCTUnwrap(menu.items.first)
+        let subtask = menu.items[1]
+        let later = menu.items[2]
+        menu.delegate?.menu?(menu, willHighlight: subtask)
+        AtticMenuTarget.shared.runCommand(edit)
+        XCTAssertEqual(ran, ["subtask"], "Return (matched to Edit Title) ran the highlighted Add Subtask")
+        menu.delegate?.menu?(menu, willHighlight: edit)
+        AtticMenuTarget.shared.runCommand(edit)
+        XCTAssertEqual(ran, ["subtask", "edit"], "a highlighted Edit Title runs itself")
+        menu.delegate?.menu?(menu, willHighlight: subtask)
+        AtticMenuTarget.shared.runCommand(later)
+        XCTAssertEqual(ran.last, "later", "a ⌘ shortcut runs its own item whatever is highlighted")
+    }
+
     // MARK: - Bug 1: ⌘Z after a task-menu change
 
     private func priority(of id: UUID, _ hosted: Hosted) -> TaskPriority? {

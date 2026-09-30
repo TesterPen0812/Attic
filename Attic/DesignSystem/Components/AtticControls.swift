@@ -1170,7 +1170,27 @@ private struct AtticMenuBadge: ViewModifier {
 /// menu, shown for reference: inside the open menu those keys belong to the
 /// menu (↓ highlights, Return activates the highlighted item), never to the
 /// item whose hint they are.
-final class AtticPopUpMenu: NSMenu {
+final class AtticPopUpMenu: NSMenu, NSMenuDelegate {
+    /// The item last highlighted (↓, ↑ or the pointer). Real menu tracking
+    /// matches a bare Return against Edit Title's "\r" hint before it looks
+    /// at the highlighted item (CI run 3 recording), so a bare-key match is
+    /// redirected to this item (`AtticMenuTarget.runCommand`).
+    private(set) weak var lastHighlighted: NSMenuItem?
+
+    override init(title: String) {
+        super.init(title: title)
+        delegate = self
+    }
+
+    required init(coder: NSCoder) {
+        super.init(coder: coder)
+        delegate = self
+    }
+
+    func menu(_ menu: NSMenu, willHighlight item: NSMenuItem?) {
+        if let item { lastHighlighted = item }
+    }
+
     override func performKeyEquivalent(with event: NSEvent) -> Bool {
         guard event.modifierFlags.intersection([.command, .control, .option]).isEmpty == false else { return false }
         return super.performKeyEquivalent(with: event)
@@ -1282,6 +1302,15 @@ final class AtticMenuTarget: NSObject {
     /// Not `perform(_:)`: that is NSObject's `performSelector:`, which the
     /// selector resolved to, so a chosen item ran nothing (round 10, CI run 2).
     @objc func runCommand(_ item: NSMenuItem) {
+        // A bare key (Return, Space, Delete) pressed in the open menu belongs
+        // to the menu: it runs the highlighted item, not the item whose hint
+        // the key is. The hints stay for display; the match is redirected.
+        if let menu = item.menu as? AtticPopUpMenu, !item.keyEquivalent.isEmpty,
+           item.keyEquivalentModifierMask.intersection([.command, .control, .option]).isEmpty,
+           let highlighted = menu.lastHighlighted, highlighted !== item {
+            (highlighted.representedObject as? Box)?.action()
+            return
+        }
         (item.representedObject as? Box)?.action()
     }
 }
