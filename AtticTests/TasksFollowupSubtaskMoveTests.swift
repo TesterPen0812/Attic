@@ -400,4 +400,40 @@ final class TasksFollowupSubtaskMoveTests: XCTestCase {
         try assertCopiesKeepTheirOwnState(id, finishedAt: finishedAt, parent: later.id)
         XCTAssertNil(library.undo.undoName(in: .tasks), "no step was recorded")
     }
+
+    // MARK: - Fix round: destinations and the replay state (finding 2)
+
+    /// A destination with a newer unfinished copy and an older finished one
+    /// is not an unfinished main task on every copy: the move is refused.
+    func testMoveRefusesADestinationWithAFinishedCopy() throws {
+        let trip = try make("Trip")
+        let book = try make("Book flights", parent: trip.id)
+        let destination = UUID()
+        let context = ModelContext(store.container)
+        context.insert(TaskItem(id: destination, title: "Party", status: .todo, createdAt: base, updatedAt: base.addingTimeInterval(60), manualOrder: 5_000))
+        context.insert(TaskItem(id: destination, title: "Party", status: .done, createdAt: base, updatedAt: base, completedAt: base, manualOrder: 5_000))
+        try context.save()
+        store.refresh()
+
+        XCTAssertFalse(library.moveSubtask(book.id, toTask: destination).isApplied)
+        XCTAssertEqual(store.task(withID: book.id)?.parentID, trip.id, "nothing moved")
+        XCTAssertNil(library.undo.undoName(in: .tasks))
+    }
+
+    /// Undo checks the child as it is now: a finished subtask was moved to B,
+    /// its old main task A was finished and the subtask reopened through
+    /// another history. Undo would leave an open subtask under a finished
+    /// task, so it refuses and changes nothing.
+    func testUndoRefusesToPutAReopenedSubtaskUnderAFinishedTask() throws {
+        let trip = try make("Trip")
+        let book = try make("Book flights", .done, parent: trip.id)
+        let party = try make("Party")
+        XCTAssertTrue(library.moveSubtask(book.id, toTask: party.id).isApplied)
+        XCTAssertTrue(library.updateTask(trip.id, status: .done, in: .library).isApplied)
+        XCTAssertTrue(library.updateTask(book.id, status: .todo, in: .library).isApplied)
+
+        XCTAssertFalse(library.undo(in: .tasks).isApplied)
+        XCTAssertEqual(store.task(withID: book.id)?.parentID, party.id, "still under the open task")
+        XCTAssertEqual(store.task(withID: book.id)?.status, .todo)
+    }
 }

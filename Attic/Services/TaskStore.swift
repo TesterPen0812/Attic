@@ -1103,24 +1103,26 @@ final class TaskStore: ObservableObject {
         // Standalone Task, or either side of Move to Task…) applies only
         // while that main task can still hold it: live, a main task, not
         // finished while the subtask is open, and the task itself has no
-        // subtasks of its own (one level). Checked before anything is
-        // written, so a refusal leaves the context untouched.
-        let doneRawForParents = TaskStatus.done.rawValue
+        // subtasks of its own (one level). "Open" is decided on the state
+        // each copy will have once the step has run: a copy whose
+        // completion the step does not move keeps its own. Checked before
+        // anything is written, so a refusal leaves the context untouched.
+        let doneRaw = TaskStatus.done.rawValue
         for state in target {
             guard let from = expectedByID[state.id], from.parentID != state.parentID,
-                  let newParentID = state.parentID, winners[state.id]?.parentID == from.parentID else { continue }
-            guard try canHoldSubtask(state.id, under: newParentID, isOpen: state.statusRaw != doneRawForParents) else {
+                  let newParentID = state.parentID, let winner = winners[state.id],
+                  winner.parentID == from.parentID, let replicas = groups[state.id] else { continue }
+            let was = Self.completionKey(from), becomes = Self.completionKey(state)
+            let winnerHoldsWas = Self.completionKey(winner) == was
+            let staysOpen = replicas.filter { $0.parentID == from.parentID }.contains { replica in
+                let moves = was != becomes && winnerHoldsWas && Self.completionKey(replica) == was
+                return (moves ? state.statusRaw : replica.statusRaw) != doneRaw
+            }
+            guard try canHoldSubtask(state.id, under: newParentID, isOpen: staysOpen) else {
                 return .obsolete("Its main task is no longer available, so this step can’t be undone.")
             }
         }
 
-        struct Completion: Equatable {
-            let statusRaw: String
-            let completedAt: Date?
-            let fromRaw: String?
-            let fromOrder: Int64?
-        }
-        let doneRaw = TaskStatus.done.rawValue
         let timestamp = now()
         var wroteAny = false
         var conflicted = false
@@ -1151,9 +1153,7 @@ final class TaskStore: ObservableObject {
             }
             field({ $0.title }, from.title, state.title) { $0.title = state.title }
             field({ $0.priorityRaw }, from.priorityRaw, state.priorityRaw) { $0.priorityRaw = state.priorityRaw }
-            field({ Completion(statusRaw: $0.statusRaw, completedAt: $0.completedAt, fromRaw: $0.completedFromRaw, fromOrder: $0.completedFromOrder) },
-                  Completion(statusRaw: from.statusRaw, completedAt: from.completedAt, fromRaw: from.completedFromRaw, fromOrder: from.completedFromOrder),
-                  Completion(statusRaw: state.statusRaw, completedAt: state.completedAt, fromRaw: state.completedFromRaw, fromOrder: state.completedFromOrder)) {
+            field({ Self.completionKey($0) }, Self.completionKey(from), Self.completionKey(state)) {
                 $0.statusRaw = state.statusRaw
                 $0.completedAt = state.completedAt
                 $0.completedFromRaw = state.completedFromRaw
