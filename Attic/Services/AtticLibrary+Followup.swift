@@ -20,13 +20,21 @@ extension AtticLibrary {
         undo.perform(in: history) {
             guard let task = tasks.task(withID: id), let oldParentID = task.parentID else { return nil }
             let scope = Array(Set(tasks.reparentScope(of: id, to: newParentID) + [id]))
-            let before = scope.compactMap(tasks.editableState(of:))
+            let scopeBefore = scope.compactMap(tasks.editableState(of:))
             guard tasks.reparentSubtask(id, to: newParentID) else { return nil }
             succeeded = true
-            let after = scope.compactMap(tasks.editableState(of:))
+            let scopeAfter = scope.compactMap(tasks.editableState(of:))
             let families = [oldParentID] + (newParentID.map { [$0] } ?? [])
             for family in families { subtaskOrderChanges.send(family) }
-            guard before != after else { return nil }
+            // The step keeps only what the move changed: a sibling it left
+            // alone (and that may be deleted afterwards) does not belong to
+            // it, while one a re-spacing moved does.
+            let beforeByID = Dictionary(scopeBefore.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
+            let afterByID = Dictionary(scopeAfter.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
+            let changed = Set(beforeByID.keys).union(afterByID.keys).filter { beforeByID[$0] != afterByID[$0] }
+            guard !changed.isEmpty else { return nil }
+            let before = scopeBefore.filter { changed.contains($0.id) }
+            let after = scopeAfter.filter { changed.contains($0.id) }
             return UndoStep(
                 name: newParentID == nil ? "Make Standalone Task" : "Move to Task",
                 undoOutcome: { [weak self] in

@@ -436,4 +436,31 @@ final class TasksFollowupSubtaskMoveTests: XCTestCase {
         XCTAssertEqual(store.task(withID: book.id)?.parentID, party.id, "still under the open task")
         XCTAssertEqual(store.task(withID: book.id)?.status, .todo)
     }
+
+    // MARK: - Fix round: unchanged siblings (finding 3)
+
+    /// The step keeps only what the move changed. A sibling in the new family
+    /// that was not touched and is deleted afterwards (the family panel
+    /// deletes through the store) does not make Undo obsolete.
+    func testADeletedUntouchedSiblingDoesNotMakeTheMoveNonUndoable() throws {
+        let trip = try make("Trip")
+        let book = try make("Book flights", parent: trip.id)
+        let party = try make("Party")
+        let invite = try make("Invite friends", parent: party.id)
+        let context = ModelContext(store.container)
+        let inviteID = invite.id
+        for row in try context.fetch(FetchDescriptor<TaskItem>(predicate: #Predicate { $0.id == inviteID })) { row.manualOrder = 50_000 }
+        try context.save()
+        store.refresh()
+        let before = try XCTUnwrap(store.editableState(of: invite.id))
+
+        XCTAssertTrue(library.moveSubtask(book.id, toTask: party.id).isApplied)
+        XCTAssertEqual(store.editableState(of: invite.id), before, "the sibling was not touched")
+        XCTAssertTrue(store.delete(taskIDs: [invite.id]))
+
+        XCTAssertTrue(library.undo(in: .tasks).isApplied, "the sibling's deletion does not matter")
+        XCTAssertEqual(store.task(withID: book.id)?.parentID, trip.id)
+        XCTAssertTrue(library.redo(in: .tasks).isApplied)
+        XCTAssertEqual(store.task(withID: book.id)?.parentID, party.id)
+    }
 }
