@@ -82,8 +82,7 @@ extension AtticLibrary {
                 name: ids.count == 1 ? "Delete Task" : "Delete \(ids.count) Tasks",
                 undoOutcome: { [weak self] in
                     guard let self else { return .obsolete }
-                    if self.tasks.restoreDeleted(taskIDs: ids) { return .applied }
-                    return ids.allSatisfy { self.state(of: AtticItemRef(.task, $0)) == .deleted } ? .failed : .obsolete
+                    return self.restoreFamiliesFromHistory(ids, owning: owned)
                 },
                 redoOutcome: { [weak self] in
                     guard let self else { return .obsolete }

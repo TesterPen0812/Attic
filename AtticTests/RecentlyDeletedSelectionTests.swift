@@ -949,6 +949,143 @@ final class RecentlyDeletedSelectionTests: XCTestCase {
         }
     }
 
+    // MARK: - Fix round 5: every history closure restores through the guard
+
+    /// The recheck's 5-step reproducer. Delete C, then P (Tasks). Restore P
+    /// through Recently Deleted (the step owns P and its other subtask, not
+    /// C) and Undo that restore. In Tasks, Undo P's Delete, then C's Delete:
+    /// all live. Delete P again: its new record now holds C. Redo the
+    /// Restore: it would bring C back too, and C's delete was not its own.
+    func testRedoOfASingleRestoreDoesNotRestoreAChildDeletedByAnotherStep() throws {
+        let family = try makeOwnershipFixture()
+        let library = family.fixture.library
+        deleteChildThenParent(family)
+        XCTAssertTrue(library.restore(family.parent, in: .library))
+        XCTAssertEqual(library.undo.undoStep(in: .library), .applied)
+        XCTAssertEqual(library.undo.undoStep(in: .tasks), .applied, "P's Delete")
+        XCTAssertEqual(library.undo.undoStep(in: .tasks), .applied, "C's Delete")
+        XCTAssertEqual([family.parent, family.child, family.sibling].map { library.state(of: $0) }, [.live, .live, .live])
+        XCTAssertTrue(library.delete(family.parent))
+        XCTAssertEqual([family.parent, family.child, family.sibling].map { library.state(of: $0) }, [.deleted, .deleted, .deleted])
+
+        XCTAssertEqual(library.undo.redoStep(in: .library), .obsolete, "the restore no longer reaches this delete")
+        XCTAssertEqual([family.parent, family.child, family.sibling].map { library.state(of: $0) }, [.deleted, .deleted, .deleted],
+                       "nothing was restored")
+    }
+
+    /// The same sequence through Restore Selected (one step, several items).
+    /// The note in the step still comes back; the main task is let go of.
+    func testRedoOfARestoreSelectedDoesNotRestoreAChildDeletedByAnotherStep() throws {
+        let family = try makeOwnershipFixture()
+        let library = family.fixture.library
+        deleteChildThenParent(family)
+        XCTAssertTrue(library.delete(family.note))
+        XCTAssertEqual(library.restoreRecentlyDeleted(items: [family.parent, family.note], attachments: []).restored, 2)
+        XCTAssertEqual(library.undo.undoStep(in: .library), .applied)
+        XCTAssertEqual(library.state(of: family.note), .deleted)
+        XCTAssertEqual(library.undo.undoStep(in: .tasks), .applied)
+        XCTAssertEqual(library.undo.undoStep(in: .tasks), .applied)
+        XCTAssertTrue(library.delete(family.parent))
+
+        XCTAssertEqual(library.undo.redoStep(in: .library), .applied, "the note comes back")
+        XCTAssertEqual(library.state(of: family.note), .live)
+        XCTAssertEqual([family.parent, family.child, family.sibling].map { library.state(of: $0) }, [.deleted, .deleted, .deleted])
+        XCTAssertEqual(library.undo.undoStep(in: .library), .applied, "Undo still reaches what did come back")
+        XCTAssertEqual(library.state(of: family.note), .deleted)
+    }
+
+    /// A Restore Selected of the main task alone: nothing is left for Redo.
+    func testRedoOfARestoreSelectedOfOneTaskIsObsoleteWhenItsRecordGrew() throws {
+        let family = try makeOwnershipFixture()
+        let library = family.fixture.library
+        deleteChildThenParent(family)
+        XCTAssertEqual(library.restoreRecentlyDeleted(items: [family.parent], attachments: []).restored, 1)
+        XCTAssertEqual(library.undo.undoStep(in: .library), .applied)
+        XCTAssertEqual(library.undo.undoStep(in: .tasks), .applied)
+        XCTAssertEqual(library.undo.undoStep(in: .tasks), .applied)
+        XCTAssertTrue(library.delete(family.parent))
+
+        XCTAssertEqual(library.undo.redoStep(in: .library), .obsolete)
+        XCTAssertEqual([family.parent, family.child, family.sibling].map { library.state(of: $0) }, [.deleted, .deleted, .deleted])
+    }
+
+    /// The delete side of the same hole: Undo of P's Delete in Tasks, after P
+    /// was restored and deleted again by another history with C in its record.
+    func testUndoOfADeleteDoesNotRestoreAChildDeletedByAnotherStep() throws {
+        let family = try makeOwnershipFixture()
+        let library = family.fixture.library
+        deleteChildThenParent(family)
+        XCTAssertTrue(library.restore(family.parent, in: .library))
+        XCTAssertTrue(library.restore(family.child, in: .library))
+        XCTAssertTrue(library.delete(family.parent, in: .library))
+
+        XCTAssertEqual(library.undo.undoStep(in: .tasks), .obsolete, "P's Delete no longer reaches this record")
+        XCTAssertEqual([family.parent, family.child, family.sibling].map { library.state(of: $0) }, [.deleted, .deleted, .deleted])
+    }
+
+    /// Delete Tasks, Add Tasks and Duplicate reach their Undo and Redo
+    /// restores through the same check; an ordinary family goes back and
+    /// forth whole, more than once.
+    func testOrdinaryFamilyCyclesRestoreWholeThroughEveryPath() throws {
+        let family = try makeOwnershipFixture()
+        let library = family.fixture.library
+        let refs = [family.parent, family.child, family.sibling]
+
+        // delete(ref) / restore(ref): Tasks Undo restores, Library Redo/Undo cycle.
+        XCTAssertTrue(library.delete(family.parent))
+        for _ in 0..<2 {
+            XCTAssertEqual(library.undo.undoStep(in: .tasks), .applied)
+            XCTAssertEqual(refs.map { library.state(of: $0) }, [.live, .live, .live])
+            XCTAssertEqual(library.undo.redoStep(in: .tasks), .applied)
+            XCTAssertEqual(refs.map { library.state(of: $0) }, [.deleted, .deleted, .deleted])
+        }
+        XCTAssertTrue(library.restore(family.parent, in: .library))
+        for _ in 0..<2 {
+            XCTAssertEqual(library.undo.undoStep(in: .library), .applied)
+            XCTAssertEqual(refs.map { library.state(of: $0) }, [.deleted, .deleted, .deleted])
+            XCTAssertEqual(library.undo.redoStep(in: .library), .applied)
+            XCTAssertEqual(refs.map { library.state(of: $0) }, [.live, .live, .live])
+        }
+
+        // deleteTasks: Undo restores through the guard, Redo deletes.
+        XCTAssertTrue(library.deleteTasks([family.parent.id]).isApplied)
+        for _ in 0..<2 {
+            XCTAssertEqual(library.undo.undoStep(in: .tasks), .applied)
+            XCTAssertEqual(refs.map { library.state(of: $0) }, [.live, .live, .live])
+            XCTAssertEqual(library.undo.redoStep(in: .tasks), .applied)
+            XCTAssertEqual(refs.map { library.state(of: $0) }, [.deleted, .deleted, .deleted])
+        }
+        XCTAssertEqual(library.undo.undoStep(in: .tasks), .applied)
+
+        // createTasks with a subtask: Undo deletes the pair, Redo restores it.
+        let parentDraft = TaskDraft(title: "New")
+        let created = try XCTUnwrap(library.createTasks([parentDraft])?.first)
+        let createdChild = try XCTUnwrap(library.createTasks([TaskDraft(title: "New child", parentID: created.id)])?.first)
+        let pair = [AtticItemRef(.task, created.id), AtticItemRef(.task, createdChild.id)]
+        XCTAssertEqual(library.undo.undoStep(in: .tasks), .applied)
+        XCTAssertEqual(library.undo.undoStep(in: .tasks), .applied)
+        XCTAssertEqual(pair.map { library.state(of: $0) }, [.deleted, .deleted])
+        XCTAssertEqual(library.undo.redoStep(in: .tasks), .applied)
+        XCTAssertEqual(library.undo.redoStep(in: .tasks), .applied)
+        XCTAssertEqual(pair.map { library.state(of: $0) }, [.live, .live])
+    }
+
+    /// Restore Selected of a family Undoes and Redoes whole, more than once,
+    /// with a subtask that was deleted on its own left where it is.
+    func testOrdinaryBulkRestoreCycleMovesTheWholeFamily() throws {
+        let family = try makeOwnershipFixture()
+        let library = family.fixture.library
+        deleteChildThenParent(family)
+        XCTAssertEqual(library.restoreRecentlyDeleted(items: [family.parent], attachments: []).restored, 1)
+        for _ in 0..<2 {
+            XCTAssertEqual(library.undo.undoStep(in: .library), .applied)
+            XCTAssertEqual([family.parent, family.sibling].map { library.state(of: $0) }, [.deleted, .deleted])
+            XCTAssertEqual(library.undo.redoStep(in: .library), .applied)
+            XCTAssertEqual([family.parent, family.sibling].map { library.state(of: $0) }, [.live, .live])
+            XCTAssertEqual(library.state(of: family.child), .deleted, "C stays where it was deleted")
+        }
+    }
+
     /// A tripwire for the guard itself. Every Undo or Redo closure in the
     /// app deletes task families through `deleteFamiliesFromHistory` (or
     /// `deleteOutcome`, which needs the step's ownership). This reads the
@@ -956,17 +1093,37 @@ final class RecentlyDeletedSelectionTests: XCTestCase {
     /// `undoOutcome:` / `redoOutcome:` label, or outside the functions that
     /// implement the guard or run a command's first delete.
     func testNoHistoryClosureDeletesAFamilyOutsideTheGuard() throws {
+        let scan = try scanHistoryClosures(
+            pattern: #"\.delete\(taskIDs:|\btasks\.delete\(|deleteFamiliesNow\(|performDelete\("#,
+            allowed: ["deleteFamiliesFromHistory", "deleteOutcome", "deleteFamiliesNow", "performDelete"]
+        )
+        XCTAssertTrue(scan.violations.isEmpty, "family deletes in a history closure: \(scan.violations)")
+        XCTAssertGreaterThanOrEqual(scan.firstRunCalls, 3, "the scan still sees the commands' first deletes")
+    }
+
+    /// The mirror image: a history closure restores task families only through
+    /// the guarded restores, which read the deletion records before anything
+    /// comes back. `restoreAgain` runs the same check per task, then restores.
+    func testNoHistoryClosureRestoresAFamilyOutsideTheGuard() throws {
+        let scan = try scanHistoryClosures(
+            pattern: #"\btasks\.restoreDeleted\(|performRestore\(|performRestoreAll\("#,
+            allowed: ["restoreFamiliesFromHistory", "restoreOutcome", "restoreAgain", "performRestore", "performRestoreAll"]
+        )
+        XCTAssertTrue(scan.violations.isEmpty, "family restores in a history closure: \(scan.violations)")
+        XCTAssertGreaterThanOrEqual(scan.firstRunCalls, 2, "the scan still sees the commands' first restores")
+    }
+
+    /// Every match of `pattern` in `Attic/` (outside `TaskStore*`), split into
+    /// calls inside a history closure (Undo/Redo) that are not in an allowed
+    /// function, and first-run calls from commands.
+    private func scanHistoryClosures(pattern: String, allowed: Set<String>) throws -> (violations: [String], firstRunCalls: Int) {
         let root = URL(fileURLWithPath: #filePath)
             .deletingLastPathComponent().deletingLastPathComponent().appendingPathComponent("Attic")
         let files = try XCTUnwrap(FileManager.default.enumerator(at: root, includingPropertiesForKeys: nil))
             .compactMap { $0 as? URL }
             .filter { $0.pathExtension == "swift" && !$0.lastPathComponent.hasPrefix("TaskStore") }
         XCTAssertGreaterThan(files.count, 50, "the sources were found")
-        let rawDelete = try NSRegularExpression(
-            pattern: #"\.delete\(taskIDs:|\btasks\.delete\(|deleteFamiliesNow\(|performDelete\("#
-        )
-        // Functions that are the guard, or the first run of a command.
-        let allowed: Set<String> = ["deleteFamiliesFromHistory", "deleteOutcome", "deleteFamiliesNow", "performDelete"]
+        let raw = try NSRegularExpression(pattern: pattern)
         let historyMarkers = ["undoOutcome:", "redoOutcome:", "undo:", "redo:"]
         var violations: [String] = []
         var firstRunCalls = 0
@@ -984,7 +1141,7 @@ final class RecentlyDeletedSelectionTests: XCTestCase {
                 if trimmed.contains("UndoStep(") { inHistory = false }
                 if historyMarkers.contains(where: { trimmed.contains($0) }) { inHistory = true }
                 let range = NSRange(line.startIndex..., in: line)
-                guard rawDelete.firstMatch(in: line, range: range) != nil, !trimmed.hasPrefix("//"),
+                guard raw.firstMatch(in: line, range: range) != nil, !trimmed.hasPrefix("//"),
                       !trimmed.hasPrefix("///") else { continue }
                 if allowed.contains(function) { continue }
                 if inHistory {
@@ -994,7 +1151,6 @@ final class RecentlyDeletedSelectionTests: XCTestCase {
                 }
             }
         }
-        XCTAssertTrue(violations.isEmpty, "family deletes in a history closure: \(violations)")
-        XCTAssertGreaterThanOrEqual(firstRunCalls, 3, "the scan still sees the commands' first deletes")
+        return (violations, firstRunCalls)
     }
 }

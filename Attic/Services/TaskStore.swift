@@ -1695,10 +1695,16 @@ final class TaskStore: ObservableObject {
     /// record, or after a delete wrote it, so an undo step can remember what
     /// it owns. A root with no record is left out.
     func recordedDeletionMembers(ofRoots ids: [UUID]) -> [UUID: Set<UUID>] {
+        (try? deletionRecords(ofRoots: ids)) ?? [:]
+    }
+
+    /// The same read, but an unreadable store throws instead of looking like
+    /// "no record": a history restore must tell the two apart.
+    func deletionRecords(ofRoots ids: [UUID]) throws -> [UUID: Set<UUID>] {
         guard !ids.isEmpty else { return [:] }
-        guard let rows = try? context.fetch(FetchDescriptor<TaskItem>(
+        let rows = try context.fetch(FetchDescriptor<TaskItem>(
             predicate: #Predicate { ids.contains($0.id) && $0.deletedAt != nil }
-        )) else { return [:] }
+        ))
         var result: [UUID: Set<UUID>] = [:]
         for row in rows where row.deletionRootID == row.id {
             result[row.id, default: [row.id]].formUnion(row.deletionMembers)

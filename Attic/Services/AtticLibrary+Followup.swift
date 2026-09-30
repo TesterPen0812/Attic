@@ -224,10 +224,30 @@ extension AtticLibrary {
     /// failure is reported, the step stays on the Redo list, and the next
     /// Undo targets only the parts that did come back.
     private func restoreAgain(_ progress: BulkRestoreProgress) -> UndoOutcome {
-        let items = progress.items.filter { progress.itemPhase[$0] == .sentBack }
+        let sentBack = progress.items.filter { progress.itemPhase[$0] == .sentBack }
         let attachments = progress.attachments.filter { progress.attachmentPhase[$0.attachmentID] == .sentBack }
-        let (again, againAttachments, _, againOwned) = performRestoreAll(items: items, attachments: attachments)
+        // Nothing comes back that this step does not own. A task's deletion
+        // record now may hold tasks another history deleted since (Tasks and
+        // Recently Deleted undo separately): restoring it would undo that, so
+        // the step lets go of it. An unreadable record stays for a retry.
+        // Each task is judged alone; the ones that pass still come back.
+        let tracked = Set(progress.items.filter { $0.kind == .task }.map(\.id))
         var outcomes: [UndoOutcome] = []
+        var items: [AtticItemRef] = []
+        for ref in sentBack {
+            guard ref.kind == .task else { items.append(ref); continue }
+            let reach = (progress.owned[ref.id] ?? [ref.id]).union(tracked)
+            switch restoreClearance(of: [ref.id], owning: reach) {
+            case .success:
+                items.append(ref)
+            case .failure(.obsolete):
+                progress.itemPhase[ref] = .dropped
+                outcomes.append(.obsolete)
+            case .failure:
+                outcomes.append(.failed)
+            }
+        }
+        let (again, againAttachments, _, againOwned) = performRestoreAll(items: items, attachments: attachments)
         for ref in items {
             if again.contains(ref) {
                 progress.itemPhase[ref] = .restored

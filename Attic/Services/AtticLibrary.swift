@@ -276,8 +276,7 @@ final class AtticLibrary {
                 name: "Delete \(ids.count) Tasks",
                 undoOutcome: { [weak self] in
                     guard let self else { return .obsolete }
-                    if self.tasks.restoreDeleted(taskIDs: ids) { return .applied }
-                    return ids.allSatisfy { self.state(of: AtticItemRef(.task, $0)) == .deleted } ? .failed : .obsolete
+                    return self.restoreFamiliesFromHistory(ids, owning: owned)
                 },
                 redoOutcome: { [weak self] in
                     guard let self else { return .obsolete }
@@ -426,7 +425,7 @@ final class AtticLibrary {
             let owned = FamilyOwnership(ownedMembers(of: ref))
             return UndoStep(
                 name: "Delete \(Self.noun(for: ref.kind))",
-                undoOutcome: { [weak self] in self?.restoreOutcome(ref) ?? .obsolete },
+                undoOutcome: { [weak self] in self?.restoreOutcome(ref, owning: owned) ?? .obsolete },
                 redoOutcome: { [weak self] in
                     guard let self else { return .obsolete }
                     return self.deleteOutcome(ref, owning: owned)
@@ -448,10 +447,7 @@ final class AtticLibrary {
                 undoOutcome: { [weak self] in self?.deleteOutcome(ref, owning: owned) ?? .obsolete },
                 redoOutcome: { [weak self] in
                     guard let self else { return .obsolete }
-                    let members = self.ownedMembers(of: ref)
-                    let outcome = self.restoreOutcome(ref)
-                    if outcome == .applied { owned.members = members }
-                    return outcome
+                    return self.restoreOutcome(ref, owning: owned)
                 }
             )
         }
@@ -834,11 +830,35 @@ final class AtticLibrary {
         return listed ? .failed : .obsolete
     }
 
-    /// Redo of a step that made or deleted task families: restores them and
-    /// takes the ownership from the deletion record read before the restore
-    /// clears it.
+    /// What restoring these tasks would bring back, when that is all the step
+    /// owns: the members of each one's current deletion record, read before
+    /// the restore clears it. The other case is the outcome that stops the
+    /// step: `.obsolete` when a record holds a task outside `owned` (another
+    /// step deleted it, and restoring would undo that), `.failed` when the
+    /// records cannot be read. A smaller record is fine: a subtask deleted on
+    /// its own stays apart.
+    func restoreClearance(of ids: [UUID], owning owned: Set<UUID>) -> Result<Set<UUID>, UndoOutcome> {
+        let records: [UUID: Set<UUID>]
+        do { records = try tasks.deletionRecords(ofRoots: ids) } catch { return .failure(.failed) }
+        var members = Set(ids)
+        for id in ids {
+            guard let record = records[id] else { continue }
+            if !record.isSubset(of: owned) { return .failure(.obsolete) }
+            members.formUnion(record)
+        }
+        return .success(members)
+    }
+
+    /// The one way an Undo or Redo closure restores task families from
+    /// Recently Deleted (for several tasks at once). It refuses when a
+    /// deletion record holds a task the step does not own, and replaces the
+    /// ownership only once the restore is saved.
     func restoreFamiliesFromHistory(_ ids: [UUID], owning owned: FamilyOwnership) -> UndoOutcome {
-        let members = recordedMembers(of: ids)
+        let members: Set<UUID>
+        switch restoreClearance(of: ids, owning: owned.members) {
+        case .failure(let stop): return stop
+        case .success(let read): members = read
+        }
         if tasks.restoreDeleted(taskIDs: ids) {
             owned.members = members
             return .applied
@@ -848,8 +868,20 @@ final class AtticLibrary {
 
     /// Undo/redo of a restore: only an item still in Recently Deleted can be
     /// restored; a refusal of one that is (a replica conflict) is kept.
-    private func restoreOutcome(_ ref: AtticItemRef) -> UndoOutcome {
-        if performRestore(ref) { return .applied }
+    /// The single-item counterpart of `restoreFamiliesFromHistory`, for any
+    /// kind of item (notes and canvases own no family).
+    func restoreOutcome(_ ref: AtticItemRef, owning owned: FamilyOwnership) -> UndoOutcome {
+        var members: Set<UUID>?
+        if ref.kind == .task {
+            switch restoreClearance(of: [ref.id], owning: owned.members) {
+            case .failure(let stop): return stop
+            case .success(let read): members = read
+            }
+        }
+        if performRestore(ref) {
+            if let members { owned.members = members }
+            return .applied
+        }
         return state(of: ref) == .deleted ? .failed : .obsolete
     }
 
