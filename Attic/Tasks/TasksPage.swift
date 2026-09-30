@@ -40,6 +40,9 @@ struct TasksPage: View {
     @State private var composerPickerOpen = false
     /// "Started tasks stay together" (review 10), while it shows.
     @State private var boundaryHint = false
+    /// The rows a keyboard or menu reorder just exchanged, held invisible
+    /// for a moment so they dissolve into their new places (round 13).
+    @State private var reorderFade: Set<UUID> = []
     @State private var boundaryHintTask: Task<Void, Never>?
     /// A Done row the keyboard moved to, to bring into view.
     @State private var doneReveal: TasksPageModel.ScrollRequest?
@@ -756,6 +759,7 @@ struct TasksPage: View {
                     ForEach(sections.open) { row in
                         cell(row, tab: tab, group: groups[row.status] ?? [], drawn: drawn)
                             .id(row.id)
+                            .opacity(reorderFade.contains(row.id) ? 0.001 : 1)
                             // A row added or leaving drops into or rises
                             // out of its place (round 9).
                             .transition(AtticMotionPreset.settle.transition(reduceMotion: design.reduceMotion, edge: .top))
@@ -796,7 +800,7 @@ struct TasksPage: View {
                         }
                     }
                 }
-                .animation(travel, value: rows.map(\.id))
+                .animation(reorderFade.isEmpty ? travel : nil, value: rows.map(\.id))
                 // The list's place is kept while its page is not built.
                 .background(TasksScrollKeeper(model: model, tab: tab, proxies: listProxies, drawn: drawn).accessibilityHidden(true))
                 // The clearance past the add bar's zone is room at the end
@@ -963,7 +967,8 @@ struct TasksPage: View {
                     newSubtask: model.newSubtaskParentID == id && active
                         ? AtticTitleEditing(text: $model.newSubtaskTitle, commit: { model.commitNewSubtask() },
                                             cancel: { model.cancelEditing() },
-                                            accessibilityLabel: String(localized: "New subtask of \(row.model.title)"))
+                                            accessibilityLabel: String(localized: "New subtask of \(row.model.title)"),
+                                            placeholder: String(localized: "Add subtask…"))
                         : nil,
                     popover: movePopover(parentID: id, open: live.metaPopover)
                 )
@@ -1014,6 +1019,7 @@ struct TasksPage: View {
                     model.titleEdit.dismiss(range)
                 },
                 edited: { range, replacement in
+                    model.noteTextEdit()
                     model.titleHistory.willEdit(model.titleEdit, selection: model.titleEditCurrentSelection, range: range, replacement: replacement)
                     model.titleEdit.edited(range, replacement: replacement)
                 },
@@ -1022,8 +1028,8 @@ struct TasksPage: View {
                     var shown = model.titleEdit
                     if shown.markShown(parser: model.parser, caret: caret) { model.titleEdit = shown }
                 },
-                undoDraft: { model.undoTitleEdit() },
-                redoDraft: { model.redoTitleEdit() },
+                undoDraft: { model.taskChangeOwnsUndo ? nil : model.undoTitleEdit() },
+                redoDraft: { model.taskChangeOwnsRedo ? nil : model.redoTitleEdit() },
                 selectionMoved: { model.titleEditSelection = $0 },
                 undoFallback: { model.undo() },
                 redoFallback: { model.redo() }
@@ -1519,8 +1525,35 @@ struct TasksPage: View {
         if atGroupEdge(id, step: step) {
             showBoundaryHint()
         } else {
-            model.report(model.moveBy(id, offset: step), on: id) { model.moveBy(id, offset: step) }
+            reorderWithoutCrossing {
+                model.report(model.moveBy(id, offset: step), on: id) { model.moveBy(id, offset: step) }
+            }
         }
+    }
+
+    /// Full animation: two rows that exchange places by sliding past each
+    /// other cross while translucent, and their titles and circles collide
+    /// (round 13, review 61). The rows take their new places at once and
+    /// the two that moved dissolve in there; nothing travels through
+    /// another row. Reduced motion already changes places at once.
+    private func reorderWithoutCrossing(_ change: () -> Void) {
+        guard !design.reduceMotion else { change(); return }
+        let before = model.rows(for: model.tab).map(\.id)
+        // The list's placement animation is off while `reorderFade` holds
+        // rows, and both change in this one update.
+        change()
+        let after = model.rows(for: model.tab).map(\.id)
+        reorderFade = Set(after.indices.filter { before.indices.contains($0) && before[$0] != after[$0] }.map { after[$0] })
+        guard !reorderFade.isEmpty else { return }
+        // A run-loop timer in the common modes, not a dispatch block: the
+        // menu runs its command while it is still tracking, and a block
+        // queued from there waited, leaving both rows hidden for good (CI
+        // run 2's recording of a menu Move Down).
+        let fade = $reorderFade
+        let timer = Timer(timeInterval: 0.04, repeats: false) { _ in
+            MainActor.assumeIsolated { withAnimation(.easeOut(duration: 0.16)) { fade.wrappedValue = [] } }
+        }
+        RunLoop.main.add(timer, forMode: .common)
     }
 
     /// ⇧⌘I, the actions button and VoiceOver's "Show actions": the task's
@@ -1632,6 +1665,17 @@ struct TasksPage: View {
         return nil
     }
 
+    /// The quick-look subtask that has the keyboard, with its parent row and
+    /// its commands: the one answer to "does a subtask own this key", read
+    /// from the focus the subtask line itself reports (Tab, a click).
+    private func subtaskKeyboardOwner(visible: [UUID]) -> (parent: UUID, commands: [AtticMenuCommand])? {
+        guard let focused = model.focusedSubtaskID else { return nil }
+        let live = Set(visible)
+        guard let row = model.rows(for: model.tab).first(where: { live.contains($0.id) && $0.subtasks.contains { $0.id == focused } }),
+              let subtask = row.subtasks.first(where: { $0.id == focused }) else { return nil }
+        return (row.id, subtaskCommands(subtask, of: row.id, in: row.subtasks))
+    }
+
     /// The list's keys (spec § Keyboard map, Tasks row): ↑ ↓ move, ⇧↑ ⇧↓
     /// extend, ⌘↑ ⌘↓ reorder, Return edits the title, → and ← open and close
     /// the quick look, Esc closes it or clears a selection, ⌘A selects all,
@@ -1671,7 +1715,17 @@ struct TasksPage: View {
         // The focused row, or the one selected row when the keyboard is
         // elsewhere in the page (a click on a row in a panel that was not
         // key yet can leave focus on the page's first control).
-        let current = keyboardRow(visible: visible)
+        var current = keyboardRow(visible: visible)
+        // A subtask that has the keyboard (Tab, a click) owns its keys, ahead
+        // of its parent's: SwiftUI hands a key to this page's handler before
+        // the focused subtask's own, so ⌘↑ ⌘↓ and Return would otherwise move
+        // and rename the parent (round 13). Any other key acts from the
+        // parent, as ↑ ↓ and Esc always did.
+        if let owner = subtaskKeyboardOwner(visible: visible) {
+            if AtticMenuCommand.performSubtaskKey(key: press.key, characters: press.characters,
+                                                  modifiers: press.modifiers, in: owner.commands) == .handled { return .handled }
+            current = owner.parent
+        }
         switch press.key {
         case .downArrow, .upArrow:
             let step = press.key == .downArrow ? 1 : -1
@@ -2219,11 +2273,14 @@ private struct TasksAddBar: View {
                             if model.pasteOffer != nil { model.dismissPasteOffer(); return true }
                             return leave()
                         },
-                        edited: { range, replacement in model.addBarEdited(range, replacement: replacement) },
+                        edited: { range, replacement in
+                            model.noteTextEdit()
+                            model.addBarEdited(range, replacement: replacement)
+                        },
                         caretMoved: { caret in model.addBarCaretMoved(caret) },
                         suggestionKey: { key in suggestionKey(key) },
-                        undoDraft: { text.undoDraft() },
-                        redoDraft: { text.redoDraft() },
+                        undoDraft: { model.taskChangeOwnsUndo ? nil : text.undoDraft() },
+                        redoDraft: { model.taskChangeOwnsRedo ? nil : text.redoDraft() },
                         selectionMoved: { text.selection = $0 },
                         // Spec § Undo: typing first, then the page (the
                         // task just added, round 5's CI).
@@ -3009,6 +3066,9 @@ enum TasksViewport {
         1 - AtticEdgeBlur.veil(at: depth) / AtticEdgeBlur.maximumVeil
     }
 
+    /// The length of the softened edge where a row meets a fixed band.
+    static let softEdge: CGFloat = 6
+
     /// The fade by position in the viewport: nothing over the header or
     /// under the tabs (so they stay readable over scrolled text), fully
     /// there from the first row's resting place down to the
@@ -3016,20 +3076,22 @@ enum TasksViewport {
     static func maskStops(height: CGFloat, tabsTop: CGFloat, listTop: CGFloat, bottomStack: CGFloat) -> [(location: CGFloat, opacity: Double)] {
         guard height > 0 else { return [(0, 1), (1, 1)] }
         let tabsBottom = tabsTop + AtticLayout.pageTabsHeight
-        // The fade starts in the 16 pt the list keeps from the bar and
-        // ends at the bar's top: nothing shows under the add bar, the
-        // strip or a selection bar (round 12: the round-11 fade left 22 %
-        // to 6 % of every row there, still readable through glass).
-        let fadeStart = max(height - bottomStack - AtticLayout.contentToAddBar * 1.75, listTop)
-        let barTop = max(height - bottomStack, fadeStart)
+        // Round 13 (the hands-on review: faint title fragments hung just
+        // under the tabs and just above the add bar): a row scrolled past
+        // an edge is cut cleanly at the fixed band, with only a short
+        // softening inside the list's own viewport (`softEdge`, the edge
+        // veil's eased ramp). The round-12 ramps were 10 and 28 pt long and
+        // left half-faded rows readable in them.
+        let barTop = max(height - bottomStack, listTop)
+        let fadeStart = max(barTop - softEdge, listTop)
         // Round 11 (the owner: rows scrolled under "Now Later Done" stayed
         // readable and clashed with the labels): nothing shows under the
         // tabs at all. Round 12: the rows come back along the edge veil's
         // own eased ramp (`AtticEdgeBlur.veilStops`, taken to full so it
-        // ends in nothing rather than at its 65 % of a surface veil), from
-        // a little under the tabs to their resting place.
+        // ends in nothing rather than at its 65 % of a surface veil), now
+        // only in the last `softEdge` before their resting place.
         let gap = max(0, listTop - tabsBottom)
-        let clear = tabsBottom + gap * 0.25
+        let clear = max(tabsBottom + gap * 0.25, listTop - softEdge)
         var points: [(CGFloat, Double)] = [(0, 0), (clear, 0)]
         // Rising ramp, depth 1 at `clear` and 0 at the list's top.
         for stop in AtticEdgeBlur.veilStops.reversed() where stop.location < 1 {

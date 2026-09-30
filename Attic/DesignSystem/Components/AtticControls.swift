@@ -964,6 +964,39 @@ struct AtticMenuCommand: Identifiable {
         return command
     }
 
+    /// Bare keys belong to the list, and are reference hints in a menu.
+    /// NSMenu's tracking loop matches key equivalents internally, bypassing
+    /// performKeyEquivalent and local event monitors. Return must therefore
+    /// never be registered as Edit Title's native menu equivalent.
+    var menuShortcut: KeyboardShortcut? {
+        guard let shortcut, !shortcut.modifiers.intersection([.command, .control, .option]).isEmpty else { return nil }
+        return shortcut
+    }
+
+    var menuBadge: String? {
+        let hint = menuShortcut == nil ? shortcut.map(Self.shortcutHint) : nil
+        let parts = [detail, hint].compactMap { $0 }
+        return parts.isEmpty ? nil : parts.joined(separator: " · ")
+    }
+
+    private static func shortcutHint(_ shortcut: KeyboardShortcut) -> String {
+        let key: String
+        switch shortcut.key {
+        case .return: key = "↩"
+        case .space: key = String(localized: "Space")
+        case .delete: key = "⌫"
+        case .deleteForward: key = "⌦"
+        case .upArrow: key = "↑"
+        case .downArrow: key = "↓"
+        case .leftArrow: key = "←"
+        case .rightArrow: key = "→"
+        case .escape: key = "⎋"
+        case .tab: key = "⇥"
+        default: key = String(shortcut.key.character).uppercased()
+        }
+        return (shortcut.modifiers.contains(.shift) ? "⇧" : "") + key
+    }
+
     /// A section's heading: starts a section, titled.
     static func header(_ title: String) -> AtticMenuCommand {
         var command = AtticMenuCommand(verbatim: title, startsSection: true) {}
@@ -1128,8 +1161,8 @@ struct AtticMenuItems: View {
             // A toggle draws the native tick.
             Toggle(isOn: Binding(get: { state == .on }, set: { _ in command.action() })) { label(command) }
                 .disabled(command.isDisabled)
-                .modifier(AtticMenuShortcut(shortcut: command.shortcut))
-                .modifier(AtticMenuBadge(detail: command.detail))
+                .modifier(AtticMenuShortcut(shortcut: command.menuShortcut))
+                .modifier(AtticMenuBadge(detail: command.menuBadge))
         } else {
             Button(role: command.isDestructive ? .destructive : nil, action: command.action) {
                 if command.state == .mixed {
@@ -1140,8 +1173,8 @@ struct AtticMenuItems: View {
                 }
             }
             .disabled(command.isDisabled)
-            .modifier(AtticMenuShortcut(shortcut: command.shortcut))
-            .modifier(AtticMenuBadge(detail: command.detail))
+            .modifier(AtticMenuShortcut(shortcut: command.menuShortcut))
+            .modifier(AtticMenuBadge(detail: command.menuBadge))
         }
     }
 
@@ -1198,6 +1231,7 @@ enum AtticNativeMenu {
 
     private static func item(_ command: AtticMenuCommand) -> NSMenuItem {
         let item = NSMenuItem(title: command.title, action: nil, keyEquivalent: "")
+        item.keyEquivalentModifierMask = []
         if let systemImage = command.systemImage, command.state != .mixed {
             item.image = NSImage(systemSymbolName: systemImage, accessibilityDescription: nil)
         }
@@ -1214,11 +1248,11 @@ enum AtticNativeMenu {
         case .off?, nil: item.state = .off
         }
         item.isEnabled = !command.isDisabled
-        if let shortcut = command.shortcut, let key = keyEquivalent(shortcut.key) {
+        if let shortcut = command.menuShortcut, let key = keyEquivalent(shortcut.key) {
             item.keyEquivalent = key
             item.keyEquivalentModifierMask = modifiers(shortcut.modifiers)
         }
-        if let detail = command.detail { item.badge = NSMenuItemBadge(string: detail) }
+        if let detail = command.menuBadge { item.badge = NSMenuItemBadge(string: detail) }
         return item
     }
 
@@ -1382,6 +1416,9 @@ struct AtticPopoverRow: View {
     var detail: String?
     /// The list's keyboard selection is on this row.
     var isHighlighted = false
+    /// Keeps the icon column when this row has no icon, so a list of rows
+    /// where only one is ticked stays aligned.
+    var reservesIconSlot = false
     let action: () -> Void
 
     @Environment(\.atticDesign) private var design
@@ -1390,11 +1427,13 @@ struct AtticPopoverRow: View {
     @State private var hovered = false
     @State private var probeID = UUID()
 
-    init(systemName: String?, title: String, detail: String? = nil, isHighlighted: Bool = false, action: @escaping () -> Void) {
+    init(systemName: String?, title: String, detail: String? = nil, isHighlighted: Bool = false,
+         reservesIconSlot: Bool = false, action: @escaping () -> Void) {
         self.systemName = systemName
         self.title = title
         self.detail = detail
         self.isHighlighted = isHighlighted
+        self.reservesIconSlot = reservesIconSlot
         self.action = action
     }
 
@@ -1415,6 +1454,8 @@ struct AtticPopoverRow: View {
                 if let systemName {
                     AtticIcon(systemName: systemName, size: m.rowIconSize, ink: state == .disabled ? .disabledIcon : .icon)
                         .frame(width: m.rowIconSlot)
+                } else if reservesIconSlot {
+                    Color.clear.frame(width: m.rowIconSlot, height: 1).accessibilityHidden(true)
                 }
                 AtticText(verbatim: title, style: .menuRow, ink: state == .disabled ? .disabledText : .body, truncates: true)
                 Spacer(minLength: m.trailingMinGap)

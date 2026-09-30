@@ -356,6 +356,9 @@ struct AtticTitleEditing {
     var tokens: Tokens? = nil
     /// VoiceOver's name for the field ("Title", "New subtask of …").
     var accessibilityLabel = String(localized: "Title")
+    /// Shown in the empty plain field ("Add subtask…" on the new-subtask
+    /// line, round 13); nil shows nothing, as a title editor never empties.
+    var placeholder: String? = nil
 
     struct Tokens {
         var chips: [AtticTokenChip]
@@ -417,7 +420,8 @@ struct AtticRowTitleEditor: View {
             .onChange(of: tokenFocused) { _, now in lost(now) { tokenFocused = true } }
             .onChange(of: editing.text.wrappedValue) { _, _ in finished = false }
         } else {
-            TextField("", text: editing.text)
+            TextField("", text: editing.text,
+                      prompt: editing.placeholder.map { Text($0).foregroundStyle(design.tokens.color(.placeholder)) })
                 .textFieldStyle(.plain)
                 .font(AtticTextStyle.rowTitle.font)
                 .foregroundStyle(design.tokens.color(.heading))

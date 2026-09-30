@@ -43,6 +43,12 @@ final class AtticUITests: XCTestCase {
     /// the right side of the default 1024pt CI display. Move Settings into the
     /// clear work area before interacting with controls that otherwise exist
     /// but are correctly reported as not hittable behind that panel.
+    /// An entry of an open Settings pop-up row's list (Attic's own pop-over,
+    /// round 13; its entries are buttons labelled with the choice).
+    private func popUpChoice(_ title: String) -> XCUIElement {
+        app.descendants(matching: .any).matching(NSPredicate(format: "label == %@", title)).firstMatch
+    }
+
     private func openSettings(section identifier: String) -> XCUIElement {
         app.typeKey(",", modifierFlags: .command)
         let settings = app.windows["Attic Settings"]
@@ -425,7 +431,7 @@ final class AtticUITests: XCTestCase {
         func choose(_ title: String, in popUp: XCUIElement) {
             reveal(popUp)
             popUp.click()
-            let item = app.menuItems[title]
+            let item = popUpChoice(title)
             XCTAssertTrue(item.waitForExistence(timeout: 3), "the pop-up offers \(title)")
             item.click()
             waitFor("\(popUp.label) shows \(title)") { (popUp.value as? String) == title }
@@ -543,14 +549,14 @@ final class AtticUITests: XCTestCase {
             reveal(surface)
             surface.click()
             waitFor("Every surface stays available in \(scheme)") {
-                ["Solid", "Glass", "Frosted"].allSatisfy { self.app.menuItems[$0].exists }
+                ["Solid", "Glass", "Frosted"].allSatisfy { self.popUpChoice($0).exists }
             }
             app.typeKey(.escape, modifierFlags: [])
         }
         for style in ["Frosted", "Solid", "Glass"] {
             reveal(surface)
             surface.click()
-            let item = app.menuItems[style]
+            let item = popUpChoice(style)
             XCTAssertTrue(item.waitForExistence(timeout: 3))
             item.click()
             waitFor("Surface selection must settle on \(style)") { (surface.value as? String) == style }

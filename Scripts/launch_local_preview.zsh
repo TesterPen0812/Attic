@@ -5,6 +5,7 @@ set -euo pipefail
 readonly script_dir=${0:A:h}
 readonly repository_root=${script_dir:h}
 readonly ui_lock_path=/tmp/attic-exclusive-ui.lock
+readonly xcodebuild_command=${ATTIC_XCODEBUILD_COMMAND:-/usr/bin/xcodebuild}
 
 usage() {
     /bin/cat <<'USAGE'
@@ -12,6 +13,7 @@ Usage: Scripts/launch_local_preview.zsh [options]
 
 Builds and optionally launches a signed ATTIC_LOCAL_ONLY macOS preview without
 touching the official bundle, store, /Applications, or an unrelated process.
+Set ATTIC_XCODEBUILD_COMMAND to a locking wrapper when builds must be serialized.
 
 Options:
   --display-name NAME          Finder/menu display name.
@@ -351,7 +353,7 @@ fi
 if $dry_run; then
     print_resolved_configuration
     print -n -- "build_command="
-    printf '%q ' /usr/bin/xcodebuild "${build_arguments[@]}" build
+    printf '%q ' "$xcodebuild_command" "${build_arguments[@]}" build
     print
     if [[ -n "$appearance" ]]; then
         print -- "appearance_command=explicit isolated defaults update for $bundle_id ($appearance)"
@@ -364,7 +366,7 @@ fi
 /bin/cp "$repository_root/Attic/Info.plist" "$preview_info_plist"
 /usr/bin/plutil -replace CFBundleDisplayName -string "$display_name" "$preview_info_plist"
 
-/usr/bin/xcodebuild "${build_arguments[@]}" build
+"$xcodebuild_command" "${build_arguments[@]}" build
 [[ -d "$built_app" && -x "$built_executable" ]] || fail "expected build product is missing: $built_app"
 actual_display_name=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleDisplayName' "$built_app/Contents/Info.plist")
 actual_bundle_id=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$built_app/Contents/Info.plist")

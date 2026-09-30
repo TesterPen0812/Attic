@@ -502,7 +502,8 @@ final class TasksRound10Tests: XCTestCase {
         XCTAssertTrue(menu.items[0].isSectionHeader)
         XCTAssertEqual(menu.items[0].title, "2 Tasks")
         let complete = menu.items[1]
-        XCTAssertEqual(complete.keyEquivalent, " ")
+        XCTAssertEqual(complete.keyEquivalent, "")
+        XCTAssertEqual(complete.badge?.stringValue, "Space")
         XCTAssertEqual(complete.keyEquivalentModifierMask, [])
         let tags = menu.items[2]
         XCTAssertEqual(tags.submenu?.items.map(\.state), [.mixed, .on])

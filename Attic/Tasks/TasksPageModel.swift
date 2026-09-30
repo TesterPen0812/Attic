@@ -1279,13 +1279,11 @@ final class TasksPageModel: ObservableObject {
         guard let index = group.firstIndex(where: { $0.id == id }) else { return .failed(.taskGone) }
         let destination = index + offset
         guard group.indices.contains(destination) else { return .applied }
-        var outcome = CommandOutcome.applied
-        // Reduce Motion: the row is simply in its new place (no travel).
-        let reduceMotion = AtticMotionPreference.reducesMotion
-        withAnimation(reduceMotion ? nil : AtticMotionPreset.settle.animation(reduceMotion: false)) {
-            outcome = library.moveTask(id, toIndex: destination)
-        }
-        return outcome
+        // How the rows take their places is the page's to decide (its list
+        // animates a reorder, or dissolves the two rows that exchanged
+        // places, `TasksPage.reorderWithoutCrossing`): a transaction opened
+        // here would override that choice.
+        return library.moveTask(id, toIndex: destination)
     }
 
     /// A drag reorder: the row lands at `index` within its group.
@@ -1559,13 +1557,50 @@ final class TasksPageModel: ObservableObject {
     @discardableResult
     func undo() -> CommandOutcome {
         let outcome = library.undo(in: .tasks)
-        if outcome.isApplied { dismissToast() }
+        if outcome.isApplied {
+            dismissToast()
+            // The step is undone: the next ⌘Z is the field's typing again,
+            // and ⇧⌘Z brings the step back.
+            stepAtLastTextEdit = library.undo.undoStepID(in: .tasks)
+            taskRedoIsNext = true
+        }
         return outcome
     }
 
     @discardableResult
     func redo() -> CommandOutcome {
-        library.redo(in: .tasks)
+        let outcome = library.redo(in: .tasks)
+        if outcome.isApplied { stepAtLastTextEdit = library.undo.undoStepID(in: .tasks) }
+        return outcome
+    }
+
+    // MARK: Who owns ⌘Z while a field has the keyboard (round 13)
+
+    /// The newest Tasks step when the user last edited a draft (the add bar
+    /// or a title editor). A step recorded after that is a change made
+    /// elsewhere since (a row menu, a click) and is what ⌘Z reverses first,
+    /// though a draft is still on screen (round 13, review 61: ⌘Z after a
+    /// task-menu change edited the composer). Typing again gives ⌘Z back to
+    /// the field.
+    private var stepAtLastTextEdit: UUID?
+    private var taskRedoIsNext = false
+
+    /// A draft was edited: text Undo is the field's until a task change
+    /// happens after this.
+    func noteTextEdit() {
+        stepAtLastTextEdit = library.undo.undoStepID(in: .tasks)
+        taskRedoIsNext = false
+    }
+
+    /// A task change is newer than the draft's last edit: ⌘Z belongs to it.
+    var taskChangeOwnsUndo: Bool {
+        guard let top = library.undo.undoStepID(in: .tasks) else { return false }
+        return top != stepAtLastTextEdit
+    }
+
+    /// The step a claimed ⌘Z just undid is waiting for ⇧⌘Z.
+    var taskChangeOwnsRedo: Bool {
+        taskRedoIsNext && library.undo.canRedo(in: .tasks)
     }
 
     /// Posts "… · Undo" to the shell's toast host (6 s, held while the

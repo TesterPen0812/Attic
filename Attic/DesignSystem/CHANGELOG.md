@@ -9,6 +9,20 @@ Phase 1 (Shell, Tasks and Settings) was built in three streams and integrated
 on `redesign/phase-1`. Every change below is additive: no token, colour, radius
 or type style changed.
 
+### Actions-menu Return (GPT-6.1, round 13)
+
+- Bare-key list shortcuts (Return, Space, Shift-Space and Delete) are native
+  menu badge hints. Only shortcuts with Command, Control or Option become
+  active menu equivalents. `AtticMenuCommand.menuShortcut` / `menuBadge` share
+  this policy between `NSMenu` and SwiftUI menu items, including lazy menus.
+- The CI trace showed NSMenu's internal tracker changing the highlight to
+  Edit Title on Return, then running that action after close. The public
+  equivalent override and local event monitors were bypassed. Removed the
+  popup subclass and last-highlight redirect; standard AppKit tracking now
+  owns Return. Ordinary list shortcuts retain their existing key handlers.
+- Requested by the owner to fix Return choosing Edit Title instead of the
+  highlighted actions-menu item. No task mutation or persistence changes.
+
 ### Shell (redesign/p1-shell)
 
 - **`AtticPageSwitch.Item` gains `keyEquivalent` and `accessibilityIdentifier`**
