@@ -5,6 +5,10 @@ Every later change is recorded here: what changed, why, and who asked.
 
 ## Phase 1
 
+Phase 1 (Shell, Tasks and Settings) was built in three streams and integrated
+on `redesign/phase-1`. Every change below is additive: no token, colour, radius
+or type style changed.
+
 ### Actions-menu Return (GPT-6.1, round 13)
 
 - Bare-key list shortcuts (Return, Space, Shift-Space and Delete) are native
