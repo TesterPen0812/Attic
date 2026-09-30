@@ -480,4 +480,22 @@ final class RecentlyDeletedSelectionTests: XCTestCase {
         XCTAssertEqual(report.restored, 1)
         XCTAssertTrue(report.failures.isEmpty, "\(report.failures)")
     }
+
+    // MARK: - Fix round: keyboard focus on the list
+
+    /// Tab reaching the list draws its ring before any arrow key; a click,
+    /// an empty list or another focus draws none.
+    @MainActor
+    func testTheListShowsAFocusRingWhenTabReachesIt() {
+        let tracker = AtticKeyboardFocusTracker()
+        XCTAssertFalse(tracker.isKeyboardDriving)
+        let ring = { RecentlyDeletedSettingsView.showsListFocusRing(listFocused: true, keyboardDriving: tracker.isKeyboardDriving, hasRows: true) }
+        XCTAssertFalse(ring(), "a click gave it the keyboard: no ring")
+        tracker.observe(.keyDown, keyCode: 48)
+        XCTAssertTrue(ring(), "Tab reached it: the ring shows before the first arrow")
+        tracker.observe(.leftMouseDown, keyCode: nil)
+        XCTAssertFalse(ring(), "a click hides it again")
+        XCTAssertFalse(RecentlyDeletedSettingsView.showsListFocusRing(listFocused: false, keyboardDriving: true, hasRows: true))
+        XCTAssertFalse(RecentlyDeletedSettingsView.showsListFocusRing(listFocused: true, keyboardDriving: true, hasRows: false))
+    }
 }

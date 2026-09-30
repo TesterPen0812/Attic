@@ -16,6 +16,9 @@ struct RecentlyDeletedSettingsView: View {
     /// The list has the keyboard: ↑ ↓ move the selection (not the
     /// sidebar's, and not the search field's caret).
     @FocusState private var listFocused: Bool
+    /// Follows whether the keyboard is driving, so the list shows a ring
+    /// when Tab reaches it and none after a click.
+    @StateObject private var keyboard = AtticKeyboardFocusTracker()
     @Environment(\.appearsActive) private var appearsActive
 
     init(library: AtticLibrary?) {
@@ -39,6 +42,7 @@ struct RecentlyDeletedSettingsView: View {
         // opens behind another app (Attic has no Dock icon to activate).
         .onAppear { if appearsActive { model.start() } else { model.reload() } }
         .onDisappear { model.stop() }
+        .atticKeyboardFocusTracking(keyboard)
         .onChange(of: appearsActive) { _, active in
             if active { model.start() } else { model.stop() }
         }
@@ -104,16 +108,27 @@ struct RecentlyDeletedSettingsView: View {
         }
         // One keyboard stop for the list (Tab reaches it; a click on a row
         // gives it the keyboard): ↑ ↓ move the selection, ⇧↑ ⇧↓ grow it.
-        // The selection fill shows where it is, so no ring is drawn.
+        // Tab shows a ring around the list at once, before any arrow moves
+        // the selection; a click shows none (the selection fill is enough).
         .focusable(!sections.isEmpty)
         .focused($listFocused)
         .focusEffectDisabled()
+        .atticFocusRing(
+            Self.showsListFocusRing(listFocused: listFocused, keyboardDriving: keyboard.isKeyboardDriving, hasRows: !sections.isEmpty),
+            cornerRadius: AtticRadius.groupCard
+        )
         .onKeyPress(keys: [.upArrow, .downArrow], phases: .down) { press in
             model.moveCursor(by: press.key == .upArrow ? -1 : 1, extending: press.modifiers.contains(.shift))
             return .handled
         }
         .accessibilityElement(children: .contain)
         .accessibilityLabel(String(localized: "Deleted items"))
+    }
+
+    /// The list shows its focus ring while it has the keyboard and the
+    /// keyboard is what got it there.
+    static func showsListFocusRing(listFocused: Bool, keyboardDriving: Bool, hasRows: Bool) -> Bool {
+        hasRows && listFocused && keyboardDriving
     }
 
     private func row(_ entry: RecentlyDeletedEntry) -> some View {
