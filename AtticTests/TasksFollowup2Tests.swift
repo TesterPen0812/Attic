@@ -406,3 +406,61 @@ final class TasksViewOptionsTests: XCTestCase {
         XCTAssertNil(hosted.page.actions(for: row.id, in: .now).moveUp)
     }
 }
+
+/// L7: the Tasks page remembers its page and each page's view across
+/// relaunch (a new model over the same defaults), and a reveal opens on
+/// the page last used.
+@MainActor
+final class TasksPageMemoryTests: XCTestCase {
+    private var defaults: UserDefaults!
+    private var suite = ""
+
+    override func setUp() {
+        suite = "com.taha.Attic.tests.tasks-memory.\(UUID().uuidString)"
+        defaults = UserDefaults(suiteName: suite)
+    }
+
+    override func tearDown() {
+        defaults.removePersistentDomain(forName: suite)
+        defaults = nil
+    }
+
+    func testThePageAndViewsSurviveARelaunch() throws {
+        let store = try makeTestStore()
+        let memory = TasksPageMemory(defaults: defaults)
+        let first = TasksPageModel(library: AtticLibrary(tasks: store), memory: memory)
+        XCTAssertEqual(first.tab, .now, "a first launch opens on Now")
+        first.select(tab: .backlog)
+        first.setViewOptions(TasksViewOptions(show: .dueOrOverdue, sort: .dueDate), for: .now)
+
+        let relaunched = TasksPageModel(library: AtticLibrary(tasks: store), memory: TasksPageMemory(defaults: defaults))
+        XCTAssertEqual(relaunched.tab, .backlog, "relaunched on Later")
+        XCTAssertEqual(relaunched.viewOptions(for: .now), TasksViewOptions(show: .dueOrOverdue, sort: .dueDate))
+        XCTAssertTrue(relaunched.viewOptions(for: .backlog).isDefault)
+        relaunched.resetForReveal()
+        XCTAssertEqual(relaunched.tab, .backlog, "a reveal opens on the page last used")
+
+        relaunched.setViewOptions(TasksViewOptions(), for: .now)
+        XCTAssertNil(defaults.data(forKey: "AtticTasksPanel.views"), "the default view stores nothing")
+    }
+
+    /// Search opens Done for that reveal; the next reveal is where the
+    /// person left it, and without a memory it is Now as before.
+    func testWithoutAMemoryARevealOpensOnNow() throws {
+        let store = try makeTestStore()
+        let model = TasksPageModel(library: AtticLibrary(tasks: store))
+        model.select(tab: .backlog)
+        model.pageDidHide()
+        model.resetForReveal()
+        XCTAssertEqual(model.tab, .now)
+    }
+
+    /// Nonsense in the defaults is ignored.
+    func testUnreadableMemoryIsIgnored() {
+        defaults.set(42, forKey: "AtticTasksPanel.page")
+        defaults.set(Data("x".utf8), forKey: "AtticTasksPanel.views")
+        let memory = TasksPageMemory(defaults: defaults)
+        XCTAssertNil(memory.page)
+        XCTAssertTrue(memory.viewOptions.isEmpty)
+    }
+}

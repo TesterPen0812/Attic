@@ -524,6 +524,12 @@ final class AppCoordinator: ObservableObject {
             recoveryURL: runtime.noteRecoveryURL
         )
         let uiState = PanelUIState()
+        // The Tasks page's page and views across relaunch (L7), in the
+        // identity's own defaults; a UI test starts from none.
+        let tasksMemory = runtime.isUnitTestHost ? nil : TasksPageMemory(defaults: runtime.makeSettingsDefaults())
+        if isUITesting, let tasksMemory {
+            TasksPageMemory.removedKeys.forEach { tasksMemory.defaults.removeObject(forKey: $0) }
+        }
         let loginItemService = LoginItemService()
         // Local-only disables cloud services, not authenticated loopback MCP.
         // Each bundle identity owns its credential; previews never reuse Daily's.
@@ -563,7 +569,8 @@ final class AppCoordinator: ObservableObject {
             canvasSession: canvasSession,
             noteDraft: noteDraft,
             settings: settings,
-            uiState: uiState
+            uiState: uiState,
+            tasksMemory: tasksMemory
         )
 
         self.settings = settings

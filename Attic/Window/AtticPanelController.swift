@@ -199,7 +199,8 @@ final class AtticPanelController: NSObject, NSWindowDelegate {
         canvasSession: CanvasSession,
         noteDraft: NoteDraftController,
         settings: AppSettings,
-        uiState: PanelUIState
+        uiState: PanelUIState,
+        tasksMemory: TasksPageMemory? = nil
     ) {
         self.store = store
         self.noteStore = noteStore
@@ -237,7 +238,9 @@ final class AtticPanelController: NSObject, NSWindowDelegate {
                 uiState: uiState,
                 settings: settings,
                 subtaskPanels: subtaskPanels,
-                toasts: toasts
+                toasts: toasts,
+                // The Tasks page remembers its page and views (L7).
+                tasksPageState: TasksPageState(memory: tasksMemory)
             ),
             panelCornerRadius: settings.panelCornerSize,
             dockedCorner: settings.corner,
