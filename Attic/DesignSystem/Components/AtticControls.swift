@@ -1177,8 +1177,9 @@ enum AtticMenuKeyTrace {
         guard ProcessInfo.processInfo.environment["ATTIC_UI_TESTING"] == "1"
             || ProcessInfo.processInfo.environment["TEST_RUNNER_ATTIC_KEY_WINDOW_TESTS"] == "1" else { return }
         let event = NSApp.currentEvent
+        let keyCode = event.flatMap { [.keyDown, .keyUp, .flagsChanged].contains($0.type) ? $0.keyCode : nil }
         NSLog("ATTIC_MENU_KEY %@ type=%ld key=%ld time=%.6f mode=%@", point,
-              event?.type.rawValue ?? 0, Int(event?.keyCode ?? 0), event?.timestamp ?? 0,
+              event?.type.rawValue ?? 0, Int(keyCode ?? 0), event?.timestamp ?? 0,
               RunLoop.current.currentMode?.rawValue ?? "nil")
         #endif
     }
