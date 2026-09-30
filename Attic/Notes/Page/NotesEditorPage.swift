@@ -661,9 +661,13 @@ private struct NoteStatusSlot: View {
         .popover(isPresented: $showingDetails, arrowEdge: .top) {
             AtticStatusDetails(items: items)
         }
-        // Damaged recovery is found when the controller reports it (at
-        // launch, after a resolution): never polled.
-        .task(id: controller.recoveryWarnings) { await damaged.refresh() }
+        // Damaged recovery is looked for only when the controller reports a
+        // recovery problem (at launch, after a resolution): never polled,
+        // and no journal read while all is well.
+        .task(id: controller.recoveryWarnings) {
+            guard !controller.recoveryWarnings.isEmpty || !damaged.entries.isEmpty else { return }
+            await damaged.refresh()
+        }
         .sheet(isPresented: $showingProposal) {
             if let comparison = session.isConflict
                 ? controller.conflictComparison(for: session) : controller.proposalComparison(for: session) {

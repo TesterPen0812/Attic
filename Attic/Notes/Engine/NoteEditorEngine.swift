@@ -1724,7 +1724,10 @@ final class NoteObjectAccessibilityElement: NSAccessibilityElement {
                 (String(localized: "Retry"), .retry),
                 (String(localized: "Retry Preview"), .retryPreview),
                 (String(localized: "Locate"), .locate),
-                (String(localized: "Delete"), .delete)
+                // The word drawn on the object and in its menu: Remove for
+                // a failure, Delete Image or Delete File otherwise.
+                (state == .ready ? (object is NoteImageAttachment ? String(localized: "Delete Image")
+                    : String(localized: "Delete File")) : String(localized: "Remove"), .delete)
             ]
             setAccessibilityCustomActions(actions.compactMap { title, command in
                 guard engine.validate(command, object: object, state: state).enabled else { return nil }

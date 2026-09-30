@@ -347,6 +347,72 @@ final class NotesSlice3bUITests: XCTestCase {
         XCTAssertTrue(exit.entries.isEmpty, "the exit is gone once resolved")
     }
 
+    // MARK: Performance: one frame per keystroke with many objects
+
+    /// 50 files and images among 400 lines: typing with the object controls
+    /// against typing without them. Recorded (no invented target); the
+    /// controls must do no ring or face work on a keystroke.
+    func testObjectControlsAddNoWorkPerKeystrokeWithFiftyObjects() throws {
+        var blocks: [NoteBlock] = [.text("Objects")]
+        var staged: [StagedNoteAttachment] = []
+        let png = try pngStaged()
+        for index in 0..<400 {
+            blocks.append(.text("Line \(index) with some ordinary words to wrap a little in a narrow panel."))
+            if index % 8 == 4 {
+                if staged.count % 2 == 0 {
+                    let item = self.staged("file-\(index).pdf")
+                    staged.append(item)
+                    blocks.append(.file(attachmentID: item.id, filename: item.filename,
+                                        contentTypeIdentifier: item.contentTypeIdentifier, byteCount: item.byteCount))
+                } else {
+                    let item = StagedNoteAttachment(id: UUID(), filename: "photo-\(index).png",
+                        contentTypeIdentifier: png.contentTypeIdentifier, byteCount: png.byteCount, digest: png.digest, data: png.data)
+                    staged.append(item)
+                    blocks.append(.image(attachmentID: item.id, widthFraction: 0.5, pixelWidth: 400, pixelHeight: 200))
+                }
+            }
+        }
+        XCTAssertEqual(staged.count, 50)
+        func ms(_ body: () -> Void) -> Double {
+            let start = DispatchTime.now().uptimeNanoseconds
+            body()
+            return Double(DispatchTime.now().uptimeNanoseconds - start) / 1_000_000
+        }
+        func typing(_ engine: NoteEditorEngine, _ textView: NoteEditorTextView) -> [Double] {
+            let middle = (textView.string as NSString).range(of: "Line 201 ").location
+            textView.setSelectedRange(NSRange(location: middle, length: 0))
+            textView.scrollRangeToVisible(textView.selectedRange())
+            textView.displayIfNeeded()
+            spin(0.3)
+            return "the quick brown fox jumps over the lazy dog again and again!".map { character in
+                ms {
+                    textView.insertText(String(character), replacementRange: NSRange(location: NSNotFound, length: 0))
+                    textView.textLayoutManager?.textViewportLayoutController.layoutViewport()
+                    textView.displayIfNeeded()
+                    RunLoop.main.run(until: Date())
+                }
+            }
+        }
+        func median(_ values: [Double]) -> Double { values.sorted()[values.count / 2] }
+        func p95(_ values: [Double]) -> Double { let s = values.sorted(); return s[Int(Double(s.count - 1) * 0.95)] }
+        func run(withControls: Bool) -> ([Double], Int) {
+            let engine = NoteEditorEngine(noteID: UUID(), document: NoteDocument(blocks: blocks), stagedAttachments: staged)
+            let (_, textView, controls) = hosted(engine)
+            if !withControls { controls.invalidate() }
+            let before = controls.ringUpdateCount
+            let times = typing(engine, textView)
+            let ringWork = controls.ringUpdateCount - before
+            controls.invalidate()
+            return (times, ringWork)
+        }
+        _ = run(withControls: false)
+        let (with, ringWork) = run(withControls: true)
+        let (without, _) = run(withControls: false)
+        XCTAssertEqual(ringWork, 0, "typing moves no ring")
+        print(String(format: "NOTE-OBJECT-PERF 50 objects: keystroke median %.2f ms p95 %.2f ms with object controls; %.2f / %.2f ms without",
+                     median(with), p95(with), median(without), p95(without)))
+    }
+
     // MARK: Print
 
     func testFilePrintInTheMenuBarGoesToTheNoteAndReplacesTheViewPrint() {

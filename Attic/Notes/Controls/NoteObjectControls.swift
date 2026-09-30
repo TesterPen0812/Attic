@@ -73,6 +73,7 @@ final class NoteObjectControls: NSObject, NoteObjectInteraction {
     /// The accent follows the look (a change of palette, not a keystroke).
     func applyLook() {
         let accent = engine.objectDesign.tokens.focusRing.nsColor
+        guard accent != selectionView.color else { return }
         selectionView.color = accent
         dropView.color = accent
     }
@@ -130,7 +131,9 @@ final class NoteObjectControls: NSObject, NoteObjectInteraction {
         }
         ringUpdateCount += 1
         let resizable = object is NoteImageAttachment && engine.validate(.size(1), objectID: object.objectID).enabled
-        selectionView.show(objectRect: rect, resizable: resizable, in: textView)
+        selectionView.show(objectRect: rect, resizable: resizable,
+                           cornerRadius: object is NoteFileAttachment ? AtticNoteObjectMetrics.cardRadius : AtticRadius.image,
+                           in: textView)
         if selectionView.isHidden || selectionView.alphaValue < 1 { fade(selectionView, in: true) }
     }
 
@@ -370,8 +373,11 @@ final class NoteObjectSelectionView: NSView {
         return handle.frame.contains(local) ? handle : nil
     }
 
-    func show(objectRect: CGRect, resizable: Bool, in view: NSView) {
+    private var cornerRadius: CGFloat = AtticRadius.image
+
+    func show(objectRect: CGRect, resizable: Bool, cornerRadius: CGFloat, in view: NSView) {
         objectWidth = objectRect.width
+        self.cornerRadius = cornerRadius
         handle.isHidden = !resizable
         place(objectRect)
     }
@@ -393,8 +399,8 @@ final class NoteObjectSelectionView: NSView {
         let m = AtticNoteObjectMetrics.self
         let room = m.resizeHitTarget / 2
         let ring = bounds.insetBy(dx: room + m.ringWidth / 2, dy: room + m.ringWidth / 2)
-        let path = NSBezierPath(roundedRect: ring, xRadius: AtticRadius.image + m.ringOutset,
-                                yRadius: AtticRadius.image + m.ringOutset)
+        let path = NSBezierPath(roundedRect: ring, xRadius: cornerRadius + m.ringOutset,
+                                yRadius: cornerRadius + m.ringOutset)
         path.lineWidth = m.ringWidth
         color.setStroke()
         path.stroke()
