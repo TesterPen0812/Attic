@@ -135,11 +135,20 @@ final class PanelShellTests: XCTestCase {
             advertisedNewTaskShortcut: KeyboardShortcut("t", modifiers: [.command, .option]),
             showPanel: {}, newTask: {}, newNote: {}, search: {}, openSettings: {}, quit: {}
         )
-        XCTAssertEqual(commands.map(\.title), ["Show Attic", "New task", "New note", "Search", "Settings…", "Quit Attic"])
+        XCTAssertEqual(commands.map(\.title), ["Show Attic", "New task", "New note", "Search Done Tasks…", "Open", "Settings…", "Quit Attic"])
         XCTAssertEqual(commands[1].shortcut, KeyboardShortcut("t", modifiers: [.command, .option]))
-        XCTAssertEqual(commands[4].shortcut, KeyboardShortcut(",", modifiers: .command))
-        XCTAssertEqual(commands[5].shortcut, KeyboardShortcut("q", modifiers: .command))
-        XCTAssertEqual(commands.map(\.startsSection), [false, true, false, false, true, true])
+        // Round 10: New note and Search show their keys; Open lists the
+        // pages and Pin with theirs.
+        XCTAssertEqual(commands[2].shortcut, KeyboardShortcut("n", modifiers: [.command, .shift]))
+        XCTAssertEqual(commands[3].shortcut, KeyboardShortcut("f", modifiers: [.command, .shift]))
+        XCTAssertEqual(commands[4].children.map(\.title), ["Tasks", "Notes", "Canvas", "Pin Panel"])
+        XCTAssertEqual(commands[4].children.map(\.shortcut), [
+            KeyboardShortcut("1", modifiers: .command), KeyboardShortcut("2", modifiers: .command),
+            KeyboardShortcut("3", modifiers: .command), KeyboardShortcut("p", modifiers: [.command, .shift])
+        ])
+        XCTAssertEqual(commands[5].shortcut, KeyboardShortcut(",", modifiers: .command))
+        XCTAssertEqual(commands[6].shortcut, KeyboardShortcut("q", modifiers: .command))
+        XCTAssertEqual(commands.map(\.startsSection), [false, true, false, false, true, true, true])
     }
 
     func testMenuBarMenuDoesNotAdvertiseARefusedGlobalShortcut() {

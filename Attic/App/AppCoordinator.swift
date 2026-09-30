@@ -306,8 +306,17 @@ final class AppCoordinator: ObservableObject {
     /// during `start()`, which can land after a menu has already been built.
     @Published private(set) var globalShortcutRegistration: GlobalHotKeyRegistration = .notRegistered
 
+    /// Whether the panel is pinned, mirrored for the menu bar's Open ▸ Pin
+    /// Panel tick (the menu observes nothing else of the shell).
+    @Published private(set) var isPanelPinned = false
+    private var pinObservation: AnyCancellable?
+
     /// The combination that shortcut claims, for the menu that advertises it.
     var globalShortcutCombination: GlobalHotKeyCombination { newTaskHotKey.combination }
+
+    /// The hot key itself, for Settings' recorder (it releases the claim
+    /// while a new combination is typed).
+    var quickCaptureHotKey: GlobalHotKey { newTaskHotKey }
 
     let settings: AppSettings
     let store: TaskStore
@@ -365,6 +374,7 @@ final class AppCoordinator: ObservableObject {
     private var menuTrackingState = PanelMenuTrackingState()
     private var agentAccessObservation: AnyCancellable?
     private var globalShortcutObservation: AnyCancellable?
+    private var quickCaptureObservation: AnyCancellable?
     private var appearanceObservation: AnyCancellable?
     private var hasStarted = false
     private let newTaskHotKey: GlobalHotKey
@@ -482,8 +492,13 @@ final class AppCoordinator: ObservableObject {
         #if DEBUG
         // Capture seam: the in-memory UI-test store holds the design mockup's
         // tasks (`TasksPagePreview.seedDemo`), never anything of the owner's.
-        if inMemoryStore, isUITesting, environment["ATTIC_UI_TEST_SEED"] == "demo" {
-            try? TasksPagePreview.seedDemo(in: container)
+        if inMemoryStore, isUITesting, environment["ATTIC_UI_TEST_SEED"] == "demo" || environment["ATTIC_UI_TEST_SEED"] == "long" {
+            try? TasksPagePreview.seedDemo(in: container, long: environment["ATTIC_UI_TEST_SEED"] == "long")
+        }
+        // The spec's sizes (round 11, on-screen measurement): 500 open, 500
+        // in Later, 5,000 in the Done log.
+        if inMemoryStore, isUITesting, environment["ATTIC_UI_TEST_SEED"] == "scale" {
+            try? TasksPagePreview.seedScale(in: container)
         }
         // Everything finished today: the caught-up Now page.
         if inMemoryStore, isUITesting, environment["ATTIC_UI_TEST_SEED"] == "caughtup" {
@@ -536,7 +551,8 @@ final class AppCoordinator: ObservableObject {
         }
         // Built before the window so Settings observes the same hot key it
         // reports on; its action is bound once `self` exists.
-        let newTaskHotKey = GlobalHotKey()
+        // The combination Settings chose (round 10: the recorder).
+        let newTaskHotKey = GlobalHotKey(combination: settings.quickCaptureShortcut)
         let settingsWindowController = SettingsWindowController(
             settings: settings,
             loginItemService: loginItemService,
@@ -591,6 +607,9 @@ final class AppCoordinator: ObservableObject {
         )
         newTaskHotKey.action = { [weak self] in self?.showNewTask() }
         shellTools.presenter = agentPresenter
+        pinObservation = uiState.$isPanelPinned
+            .removeDuplicates()
+            .sink { [weak self] pinned in self?.isPanelPinned = pinned }
         globalShortcutObservation = newTaskHotKey.$registration
             .sink { [weak self] registration in
                 self?.globalShortcutRegistration = registration
@@ -686,7 +705,7 @@ final class AppCoordinator: ObservableObject {
                     // five sampled phases stay exactly as Baselines A and B.
                     let extra = ProcessInfo.processInfo.environment["ATTIC_PERF_EXTRA"] == "1"
                     let phases = ["hidden_idle", "tasks_open", "canvas_open", "after_hide", "hidden_idle_final"]
-                        + (extra ? ["warm_open", "switches_done", "typing_done", "tasks_hidden", "tasks_warm_open"] : [])
+                        + (extra ? ["warm_open", "switches_done", "typing_done", "tasks_hidden", "tasks_warm_open", "scroll_done"] : [])
                     source.setEventHandler { [weak self] in
                         guard let self, self.performancePhaseIndex < phases.count else { return }
                         write(phases[self.performancePhaseIndex] + "_end")
@@ -726,6 +745,15 @@ final class AppCoordinator: ObservableObject {
                                 PerformanceSignposts.timingLabel = "warmTasks"
                                 self.hoverMonitor.revealForPerformanceProbe(section: .tasks)
                                 later(1) { PerformanceSignposts.timingLabel = nil; write("tasks_warm_open") }
+                            }
+                        case 10:
+                            // Round 3: scrolling the 500-task Now list, one
+                            // 40 pt step at a time, each drawn before the next.
+                            later(1) {
+                                for duration in self.panelController.scrollForPerformanceProbe(steps: 120, step: 40) {
+                                    PerformanceSignposts.recordProbeTiming("ListScrollStep", milliseconds: duration)
+                                }
+                                write("scroll_done")
                             }
                         case 1:
                             self.hoverMonitor.revealForPerformanceProbe(section: .tasks)
@@ -793,7 +821,16 @@ final class AppCoordinator: ObservableObject {
         }
 
         noteDraft.pages.recoverAtLaunch()
-        newTaskHotKey.register()
+        if settings.quickCaptureEnabled { newTaskHotKey.register() }
+        // Settings › General › Quick Capture (round 10): a new combination
+        // or the switch releases the old claim and makes the new one.
+        quickCaptureObservation = settings.$quickCaptureShortcut
+            .combineLatest(settings.$quickCaptureEnabled)
+            .dropFirst()
+            .removeDuplicates { $0.0 == $1.0 && $0.1 == $1.1 }
+            .sink { [weak self] combination, enabled in
+                self?.newTaskHotKey.apply(combination, enabled: enabled)
+            }
         hoverMonitor.start()
         if !isRunningTests {
             // Once per launch, on the persistent store only (tests and UI
@@ -872,6 +909,19 @@ final class AppCoordinator: ObservableObject {
 
     func showNewTask() {
         hoverMonitor.revealProgrammatically(openComposer: true, section: .tasks)
+    }
+
+    /// The menu bar's Open ▸ Tasks, Notes, Canvas (round 10): the panel on
+    /// that page.
+    func showPage(_ page: PanelPage) {
+        hoverMonitor.revealProgrammatically(section: page.section)
+    }
+
+    /// The menu bar's Open ▸ Pin Panel: pinning shows the panel too (a
+    /// pinned panel is one that stays open).
+    func setPinned(_ pinned: Bool) {
+        if uiState.isPanelPinned != pinned { uiState.isPanelPinned = pinned }
+        if pinned { showPanel() }
     }
 
     func showNewNote() {

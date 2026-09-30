@@ -22,8 +22,8 @@ struct PanelNoticeStack: View {
     var body: some View {
         VStack(spacing: AtticSpacing.s8) {
             if let toast = toasts.current {
-                AtticUndoToast(message: toast.message, actionTitle: toast.actionTitle,
-                               answersUndoKey: toast.answersUndoKey) {
+                AtticUndoToast(message: toast.message, actionTitle: toast.actionTitle, isFailure: toast.isFailure,
+                               onHold: { reason, held in toasts.hold(reason, held) }) {
                     toasts.performAction()
                 }
                 .onHover { toasts.holdOpen($0) }

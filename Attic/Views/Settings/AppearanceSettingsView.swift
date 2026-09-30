@@ -51,7 +51,9 @@ struct AppearanceSettingsView: View {
     /// Palette tiles keep their size and wrap, 12 pt apart.
 
     var body: some View {
-        SettingsPage(section: .appearance) {
+        // Compact (Astra 26, kept by the owner in round 6): 24 pt under the
+        // header, and Surface and tint before Palette.
+        SettingsPage(section: .appearance, compact: true) {
             AtticAppearancePreview(accessibilityLabel: previewDescription) {
                 SettingsPanelMiniature(cornerSize: CGFloat(PanelGeometryCornerSize.sanitised(settings.panelCornerSize)))
             }
@@ -80,50 +82,8 @@ struct AppearanceSettingsView: View {
             .accessibilityIdentifier("setting-appearance")
             .padding(.bottom, AtticSpacing.settingsBetweenSections)
 
-            SettingsTileSection(title: String(localized: "Palette")) {
-                // Not lazy: seven tiles, and every one must stay in the
-                // accessibility tree when the page scrolls it out of view.
-                AtticTileFlow(spacing: AtticPaletteTileMetrics.spacing) {
-                    ForEach(AtticPanelTheme.allCases) { theme in
-                        AtticPaletteTile(
-                            palette: theme,
-                            isSelected: settings.panelTheme == theme,
-                            identifier: theme.accessibilityIdentifier
-                        ) {
-                            settings.panelTheme = theme
-                        }
-                        .help(theme.detail)
-                    }
-                }
-                // The tiles' selection ring sits 4 pt outside them.
-                .padding(.horizontal, AtticRingMetrics.outset)
-                .accessibilityElement(children: .contain)
-                .accessibilityLabel(String(localized: "Palette"))
-                .accessibilityIdentifier(AppearanceSettingsPresentation.themeChooserAccessibilityIdentifier)
-            }
-
-            SettingsGroup(
-                title: String(localized: "Surface and tint"),
-                footnote: AppearanceSettingsPresentation.surfaceFootnote(
-                    reduceTransparency: reduceTransparency, treatment: treatment
-                )
-            ) {
-                AtticPopUpRow(
-                    label: String(localized: "Surface"),
-                    choices: PanelSurfaceStyle.allCases.map { ($0, $0.title) },
-                    selection: $settings.panelSurfaceStyle,
-                    identifier: "setting-panel-surface"
-                )
-                .help(settings.panelSurfaceStyle.detail)
-                AtticGroupDivider()
-                AtticPopUpRow(
-                    label: String(localized: "Tint"),
-                    choices: PanelTintLevel.allCases.map { ($0, $0.title) },
-                    selection: $settings.panelTint,
-                    identifier: "setting-panel-tint"
-                )
-                .help(settings.panelTint.detail(neutral: settings.panelTheme.usesNeutralTint))
-            }
+            surfaceSection
+            paletteSection
 
             SettingsGroup(
                 title: String(localized: "Advanced"),
@@ -139,6 +99,55 @@ struct AppearanceSettingsView: View {
                 )
                 .disabled(settings.panelTint == .off)
             }
+        }
+    }
+
+    private var paletteSection: some View {
+        SettingsTileSection(title: String(localized: "Palette")) {
+            // Not lazy: seven tiles, and every one must stay in the
+            // accessibility tree when the page scrolls it out of view.
+            AtticTileFlow(spacing: AtticPaletteTileMetrics.spacing) {
+                ForEach(AtticPanelTheme.allCases) { theme in
+                    AtticPaletteTile(
+                        palette: theme,
+                        isSelected: settings.panelTheme == theme,
+                        identifier: theme.accessibilityIdentifier
+                    ) {
+                        settings.panelTheme = theme
+                    }
+                    .help(theme.detail)
+                }
+            }
+            // The tiles' selection ring sits 4 pt outside them.
+            .padding(.horizontal, AtticRingMetrics.outset)
+            .accessibilityElement(children: .contain)
+            .accessibilityLabel(String(localized: "Palette"))
+            .accessibilityIdentifier(AppearanceSettingsPresentation.themeChooserAccessibilityIdentifier)
+        }
+    }
+
+    private var surfaceSection: some View {
+        SettingsGroup(
+            title: String(localized: "Surface and tint"),
+            footnote: AppearanceSettingsPresentation.surfaceFootnote(
+                reduceTransparency: reduceTransparency, treatment: treatment
+            )
+        ) {
+            AtticPopUpRow(
+                label: String(localized: "Surface"),
+                choices: PanelSurfaceStyle.allCases.map { ($0, $0.title) },
+                selection: $settings.panelSurfaceStyle,
+                identifier: "setting-panel-surface"
+            )
+            .help(settings.panelSurfaceStyle.detail)
+            AtticGroupDivider()
+            AtticPopUpRow(
+                label: String(localized: "Tint"),
+                choices: PanelTintLevel.allCases.map { ($0, $0.title) },
+                selection: $settings.panelTint,
+                identifier: "setting-panel-tint"
+            )
+            .help(settings.panelTint.detail(neutral: settings.panelTheme.usesNeutralTint))
         }
     }
 

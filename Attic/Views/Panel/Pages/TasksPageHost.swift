@@ -40,6 +40,7 @@ struct TasksPageHost: View {
     var isCurrent = true
 
     @State private var addBarFocused = false
+    @State private var editHold = PanelEditHold()
     /// The shell's one toast host: the page's Undo toasts show there.
     @Environment(\.atticPanelToasts) private var toasts
 
@@ -52,14 +53,27 @@ struct TasksPageHost: View {
             addBarFocused: $addBarFocused,
             chrome: TasksPageChrome(
                 bottomControlsHeight: { chromeInteractionState.bottomControlsHeight = $0 },
-                typingLock: { uiState.setInteractionLock(.quickEntryFocus, isActive: $0) }
+                typingLock: { uiState.setInteractionLock(.quickEntryFocus, isActive: $0) },
+                editLock: { [editHold] editing in
+                    editHold.apply = { uiState.setInteractionLock(.taskEditing, isActive: $0) }
+                    editHold.set(editing)
+                }
             )
         )
         .equatable()
-        // Kept built behind another page, it is opened again when it shows.
+        // Edit mode holds the panel only for the page being shown (round
+        // 5): an editor left open behind Notes never keeps Notes up.
+        .onChange(of: isCurrent) { _, current in
+            editHold.setSuspended(!current)
+            model.isPageShown = current
+        }
+        .onDisappear { editHold.setSuspended(true) }
+        // Kept built behind another page, it shows again where it was left
+        // (its tab, its selection): only a reveal of the panel starts it on
+        // Now (`revealCount`, below).
         .onChange(of: isCurrent) { _, current in
             guard current else { return }
-            model.resetForReveal()
+            model.pageDidReturn()
             chromeInteractionState.bottomControlsHeight = TasksPage.footerZone
             syncDraftLock(model)
         }
@@ -67,7 +81,10 @@ struct TasksPageHost: View {
         // composer lock) until it is added or cleared; it is kept either way.
         .onReceive(model.addBarState.$text.map { !$0.text.isEmpty }.removeDuplicates()) { hasDraft in
             guard isCurrent else { return }
-            uiState.setInteractionLock(.taskComposer, isActive: hasDraft)
+            // On the next turn (round 4): the shell's published lock redraws
+            // what observes the shell, and the first keystroke's frame is
+            // the add bar's alone. A turn late changes nothing for hiding.
+            DispatchQueue.main.async { uiState.setInteractionLock(.taskComposer, isActive: hasDraft) }
         }
         .onAppear {
             // Task pages arrive in Phase 3; until then "Open page" opens the
@@ -78,7 +95,11 @@ struct TasksPageHost: View {
                 // the row's quick look (Done log tasks open in the page).
                 subtaskPanels.openFilesPanel(for: id)
             }
-            if primaryInputFocus.wrappedValue || uiState.isComposerPresented { addBarFocused = true }
+            editHold.setSuspended(!isCurrent)
+            if model.isPageShown != isCurrent { model.isPageShown = isCurrent }
+            // Only the page shown takes the shell's focus (a page built
+            // behind Notes, or prepared on approach, never takes it).
+            if isCurrent, primaryInputFocus.wrappedValue || uiState.isComposerPresented { addBarFocused = true }
             handleSearchRequest(model, request: uiState.searchRequest)
             showItemIfNeeded(model, uiState.shownItem)
             syncDraftLock(model)
@@ -92,6 +113,11 @@ struct TasksPageHost: View {
                     model.openForCapture(tab)
                 }
                 if environment["ATTIC_UI_TEST_COMPLETED_OPEN"] == "1" { model.completedTodayExpanded = true }
+                // The first row with subtasks, its quick look open.
+                if environment["ATTIC_UI_TEST_EXPAND_FIRST"] == "1",
+                   let row = model.rows(for: model.tab).first(where: { $0.model.subtasks != nil }) {
+                    model.setExpanded(row.id, true)
+                }
             }
             #endif
         }
@@ -100,13 +126,26 @@ struct TasksPageHost: View {
         // Tasks alone: they arrive while Tasks is already showing, too.
         // Search (the menu-bar item): the Done page's search, focused.
         .onReceive(uiState.$searchRequest) { request in handleSearchRequest(model, request: request) }
+        // Reveal and hide come from the panel controller (Astra 7); a
+        // covered or off-Space window is still open and keeps its place.
+        .onReceive(uiState.$revealCount.dropFirst()) { _ in model.resetForReveal() }
+        .onReceive(uiState.$hideCount.dropFirst()) { _ in model.pageDidHide() }
         // An agent's `show` of a task: its tab, the row selected in view.
         .onReceive(uiState.$shownItem) { item in showItemIfNeeded(model, item) }
+        // A deferred `show` runs once the edit that blocked it has ended.
+        .onReceive(model.editorsIdle) { _ in
+            DispatchQueue.main.async { showItemIfNeeded(model, uiState.shownItem) }
+        }
         // Quick capture (the global shortcut) and the shell's own focus
         // requests put the insertion point in the add bar.
-        .onChange(of: primaryInputFocus.wrappedValue) { _, focused in if focused { addBarFocused = true } }
-        .onChange(of: uiState.isComposerPresented) { _, presented in if presented { addBarFocused = true } }
-        .onChange(of: addBarFocused) { _, focused in if !focused, uiState.isComposerPresented { uiState.endAdding() } }
+        // Only while this page is the one shown: the shell's composer is
+        // also Notes' New Note, which a Tasks page kept behind must neither
+        // take nor end (round 5's CI: New Note closed at once).
+        .onChange(of: primaryInputFocus.wrappedValue) { _, focused in if focused, isCurrent { addBarFocused = true } }
+        .onChange(of: uiState.isComposerPresented) { _, presented in if presented, isCurrent { addBarFocused = true } }
+        .onChange(of: addBarFocused) { _, focused in
+            if !focused, isCurrent, uiState.isComposerPresented { uiState.endAdding() }
+        }
     }
 
     private func syncDraftLock(_ model: TasksPageModel) {
@@ -124,8 +163,12 @@ struct TasksPageHost: View {
 
     private func showItemIfNeeded(_ model: TasksPageModel, _ item: AtticItemRef?) {
         guard let ref = item, ref.kind == .task else { return }
+        // Acknowledged only once handled (round 4): a request an unsaved
+        // edit blocks stays, and is tried again when the edit ends. One
+        // whose Done log page could not be read is held by the page, which
+        // finishes it once the page loads (round 5, F3).
+        guard model.show(ref.id) != .blocked else { return }
         // Cleared after this change is delivered, not inside it.
         DispatchQueue.main.async { if uiState.shownItem == ref { uiState.showItem(nil) } }
-        model.show(ref.id)
     }
 }

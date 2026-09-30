@@ -190,6 +190,17 @@ final class PanelUIState: ObservableObject {
     /// once, whether or not the page is built yet.
     @Published private(set) var searchRequest: UInt64 = 0
 
+    /// The panel's explicit lifecycle (Astra 7), marked by the panel
+    /// controller: each reveal (ordered front from hidden) and each hide
+    /// (ordered out). Pages reset on these ("Tasks opens on Now"), never on
+    /// window occlusion: a pinned panel covered by another window, or on
+    /// another Space, is still open and keeps its place.
+    @Published private(set) var revealCount: UInt64 = 0
+    @Published private(set) var hideCount: UInt64 = 0
+
+    func panelDidReveal() { revealCount &+= 1 }
+    func panelDidHide() { hideCount &+= 1 }
+
     func requestSearch() {
         searchRequest &+= 1
     }
@@ -333,5 +344,73 @@ final class PanelUIState: ObservableObject {
         guard let draggedTaskID else { return nil }
         self.draggedTaskID = nil
         return releasedOutsidePanel ? draggedTaskID : nil
+    }
+}
+
+/// Edit mode's hold on the panel (round 5, the owner's item 2): while an
+/// editor, a picker or a popover is open the panel does not auto-hide,
+/// whatever the pointer does. When the last one closes, the hold lasts a
+/// short grace more, so a pointer already outside does not collapse the
+/// panel the instant a picker closes; then the normal hover rules resume.
+/// One lock for all of them: the shell's editing lock (`.taskEditing`).
+@MainActor
+final class PanelEditHold {
+    static let defaultGrace: Duration = .milliseconds(600)
+
+    let grace: Duration
+    /// Sets the shell's lock; called only when the hold changes.
+    var apply: (Bool) -> Void
+
+    private(set) var isHeld = false
+    private var release: Task<Void, Never>?
+    /// What the page last said is open, kept while suspended.
+    private var wantsHold = false
+    /// The page is kept built behind another page (or has gone): its open
+    /// editor never holds the panel for that page (round 5).
+    private(set) var isSuspended = false
+
+    init(grace: Duration = PanelEditHold.defaultGrace, apply: @escaping (Bool) -> Void = { _ in }) {
+        self.grace = grace
+        self.apply = apply
+    }
+
+    /// Whether anything that is edit mode is open now.
+    func set(_ editing: Bool) {
+        wantsHold = editing
+        guard !isSuspended else { return }
+        if editing {
+            release?.cancel()
+            release = nil
+            guard !isHeld else { return }
+            isHeld = true
+            apply(true)
+        } else {
+            guard isHeld, release == nil else { return }
+            release = Task { [weak self, grace] in
+                try? await Task.sleep(for: grace)
+                guard !Task.isCancelled, let self else { return }
+                self.release = nil
+                self.isHeld = false
+                self.apply(false)
+            }
+        }
+    }
+
+    /// The page stopped (true) or started again (false) being the one
+    /// shown: a suspended page's editor holds nothing, and on its return
+    /// whatever is still open holds the panel again.
+    func setSuspended(_ suspended: Bool) {
+        guard suspended != isSuspended else { return }
+        isSuspended = suspended
+        if suspended { end() } else if wantsHold { set(true) }
+    }
+
+    /// The panel hid or the page went away: no grace is owed.
+    func end() {
+        release?.cancel()
+        release = nil
+        guard isHeld else { return }
+        isHeld = false
+        apply(false)
     }
 }

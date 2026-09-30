@@ -11,6 +11,8 @@ import SwiftUI
 /// the page's sections, which scroll and blur out at the bottom.
 struct SettingsPage<Content: View>: View {
     let section: SettingsSection
+    /// 24 pt under the header instead of 52 (Compact Appearance).
+    var compact = false
     @ViewBuilder let content: Content
 
     @EnvironmentObject private var navigation: SettingsNavigation
@@ -18,7 +20,7 @@ struct SettingsPage<Content: View>: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             SettingsHeader(title: section.title)
-            AtticSettingsScrollPage(identifier: section.pageIdentifier) {
+            AtticSettingsScrollPage(identifier: section.pageIdentifier, compact: compact) {
                 content
             }
         }

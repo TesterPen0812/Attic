@@ -32,6 +32,8 @@ enum AtticSpacing {
     static let panelMargin: CGFloat = 12
     /// Settings: below the page header (spec: 52) and between sections (34).
     static let settingsBelowHeader: CGFloat = 52
+    /// Appearance, compact (Astra 26, kept by the owner in round 6).
+    static let settingsBelowHeaderCompact: CGFloat = 24
     static let settingsBetweenSections: CGFloat = 34
     /// Settings content card inset from the sidebar and window edges.
     static let settingsCardInset: CGFloat = 8
@@ -335,47 +337,76 @@ enum AtticTextStyle: String, CaseIterable, Sendable {
 /// (spec § Motion). A SwiftUI spring retargets from its current value and
 /// velocity when it is interrupted, so each one reverses from where it is.
 /// Only position and opacity animate; `reduceMotion` swaps in the fallback.
+///
+/// Round 9 (owner item 26): motion is springy and alive by default. The
+/// things that appear (the strip, pickers, the selection bar, the Done
+/// search, a toast) and the rows that move (added, completed, reordered)
+/// settle with a visible bounce; pages never overshoot (owner item 25), so
+/// the slide stays a firm spring and a swipe's release carries the
+/// fingers' speed instead (`release`). Round 11 keeps them alive but
+/// crisp: about a quarter of a second each, no bounce on navigation, a
+/// light one only on small things that appear. Settings › General › Animations
+/// (`AtticAnimationLevel.reduced`) and macOS Reduce Motion both set
+/// `design.reduceMotion`, which swaps every preset for its fallback.
 enum AtticMotionPreset: String, CaseIterable, Sendable {
     /// Switch page: 180 ms crossfade. Reduce Motion: instant.
     case pageSwitch
-    /// Now, Backlog and Done; note and All notes: 250 ms slide. RM: crossfade.
+    /// Now, Backlog and Done; note and All notes: a firm slide. RM: crossfade.
     case slide
     /// Task done: the wedge sweeps to a full disc, then the check draws
-    /// (200 ms each, springs, so they reverse smoothly). RM: fade.
+    /// (springs, so they reverse smoothly). RM: fade.
     case complete
-    /// The done row slides to the done group after about a second (250 ms).
+    /// The done row slides to the done group after about a second.
     case doneSlide
-    /// Card or quick-look expand: 220 ms. RM: instant.
+    /// Card or quick-look expand. RM: instant.
     case expand
-    /// Menus, selection bar, pop-overs: 120 ms fade and 4 pt rise. RM: fade.
+    /// Menus, selection bar, pop-overs, the strip, the Done search: a fade
+    /// and a short rise that lands with a bounce. RM: fade.
     case popover
-    /// Undo toast: slides up in 200 ms. RM: fade.
+    /// Undo toast: slides up. RM: fade.
     case toast
-    /// A dropped item settles into place.
+    /// A dropped item settles into place; rows added, moved or completed.
     case settle
     /// A failed drop animates back to where it came from.
     case failReturn
     /// Hover and press feedback.
     case hover
 
-    /// Duration of the spring's main motion, in seconds (spec values).
+    /// Duration of the spring's main motion, in seconds. Round 9 lengthened
+    /// the springy ones so their bounce could be seen; round 11 (the owner:
+    /// "everything feels laggy, especially the animations") brings them back
+    /// to the spec's timings (§ Motion: under about 300 ms), so each lands
+    /// in about a quarter of a second.
     var duration: Double {
         switch self {
         case .pageSwitch: 0.18
         case .slide: 0.25
-        case .complete: 0.20
+        case .complete: 0.22
         case .doneSlide: 0.25
         case .expand: 0.22
-        case .popover: 0.12
-        case .toast: 0.20
-        case .settle: 0.22
-        case .failReturn: 0.30
+        case .popover: 0.22
+        case .toast: 0.24
+        case .settle: 0.24
+        case .failReturn: 0.28
         case .hover: 0.10
         }
     }
 
-    /// No bounce on everyday actions (spec: calm).
-    var bounce: Double { 0 }
+    /// How much the spring bounces (SwiftUI's `bounce`: 0 is critically
+    /// damped, 0.3 is `.bouncy`). Round 11: navigation never bounces (the
+    /// slide, a card opening, the done row's slide); only small things
+    /// that appear land with a light bounce (the strip, pickers, the
+    /// selection bar, the Done search, the toast), and rows settle with a
+    /// hint of one. A crossfade and hover never do.
+    var bounce: Double {
+        switch self {
+        case .pageSwitch, .hover, .slide, .expand, .doneSlide: 0
+        case .popover, .complete: 0.15
+        case .toast: 0.12
+        case .failReturn: 0.1
+        case .settle: 0.08
+        }
+    }
 
     enum ReducedMotion: Equatable { case instant, fade }
 
@@ -386,8 +417,16 @@ enum AtticMotionPreset: String, CaseIterable, Sendable {
         }
     }
 
-    /// Rise distance for fade-and-rise presets.
-    var rise: CGFloat { self == .popover ? 4 : self == .toast ? 12 : 0 }
+    /// Rise distance for fade-and-rise presets (a row added or removed
+    /// rises into or out of its place by `settle`'s).
+    var rise: CGFloat {
+        switch self {
+        case .popover: 6
+        case .toast: 12
+        case .settle: 6
+        default: 0
+        }
+    }
 
     /// The animation to use, or nil for an instant change.
     func animation(reduceMotion: Bool) -> Animation? {
@@ -411,18 +450,60 @@ enum AtticMotionPreset: String, CaseIterable, Sendable {
 
     static let springyBounce: Double = 0.24
 
+    /// Leaving is quick: a short fade-out with no bounce (a search field
+    /// that ends must let the keyboard go at once, not linger while a
+    /// spring settles). Reduce Motion: the same fade, or instant for the
+    /// instant presets.
+    func exit(reduceMotion: Bool) -> Animation? {
+        if reduceMotion, reducedMotion == .instant { return nil }
+        return .easeOut(duration: min(duration, 0.12))
+    }
+
     /// The insertion/removal transition: opacity plus, unless Reduce Motion
-    /// is on, a short move. Never scale or blur.
+    /// is on, a short move (from below for `.bottom`, above for `.top`, the
+    /// side for `.leading` and `.trailing`). Never scale or blur.
     func transition(reduceMotion: Bool, edge: Edge = .bottom) -> AnyTransition {
         if reduceMotion || rise == 0 { return .opacity }
-        let dy: CGFloat = edge == .bottom ? rise : -rise
-        return .opacity.combined(with: .offset(y: dy))
+        switch edge {
+        case .bottom: return .opacity.combined(with: .offset(y: rise))
+        case .top: return .opacity.combined(with: .offset(y: -rise))
+        case .leading: return .opacity.combined(with: .offset(x: -rise * 2))
+        case .trailing: return .opacity.combined(with: .offset(x: rise * 2))
+        }
     }
 
     /// How long the finished state holds before `doneSlide` (spec: about 1 s).
     static let doneHold: Double = 1.0
     /// How long the Undo toast stays (spec: 6 s).
     static let toastHold: Double = 6.0
+}
+
+/// Settings › General › Animations (owner item 26): Full, the springs
+/// above, or Reduced, every preset's Reduce Motion fallback (crossfades or
+/// instant changes, no travel), as macOS Reduce Motion gives.
+enum AtticAnimationLevel: String, CaseIterable, Sendable {
+    case full
+    case reduced
+
+    var title: String {
+        switch self {
+        case .full: String(localized: "Full")
+        case .reduced: String(localized: "Reduced")
+        }
+    }
+}
+
+/// The Animations choice for code that runs outside a view (a model's
+/// `withAnimation`, the panel's AppKit motion) and so cannot read
+/// `design.reduceMotion`. `AppSettings` keeps `level` current.
+@MainActor
+enum AtticMotionPreference {
+    static var level: AtticAnimationLevel = .full
+
+    /// Reduced in Settings, or Reduce Motion on in macOS.
+    static var reducesMotion: Bool {
+        level == .reduced || NSWorkspace.shared.accessibilityDisplayShouldReduceMotion
+    }
 }
 
 // MARK: - Touch

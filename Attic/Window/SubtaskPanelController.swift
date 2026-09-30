@@ -436,7 +436,7 @@ final class SubtaskPanelController: NSObject, ObservableObject {
     func showPanelView(_ view: FamilyPanelView, for familyID: UUID) {
         guard lifecycle.transientFamilyID == familyID || lifecycle.pinnedFamilyIDs.contains(familyID),
               panelViews.view(for: familyID) != view else { return }
-        let animation: Animation? = NSWorkspace.shared.accessibilityDisplayShouldReduceMotion
+        let animation: Animation? = AtticMotionPreference.reducesMotion
             ? .easeInOut(duration: 0.15)
             : .easeInOut(duration: SubtaskPanelLayout.viewSwitchDuration)
         withAnimation(animation) {
@@ -1005,7 +1005,7 @@ final class SubtaskPanelController: NSObject, ObservableObject {
             && abs(frame.minX - current.minX) < 0.5
             && abs(frame.width - current.width) < 0.5
         guard surface.isVisible, holdsTopAndWidth,
-              !NSWorkspace.shared.accessibilityDisplayShouldReduceMotion else {
+              !AtticMotionPreference.reducesMotion else {
             stopFrameAnimation(surface, at: frame)
             return
         }

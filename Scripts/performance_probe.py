@@ -127,7 +127,7 @@ def sample_phase(helper, pid, phase, seconds, run_dir):
     }
 
 
-EXTRA_PHASES = ("warm_open", "switches_done", "typing_done", "tasks_hidden", "tasks_warm_open")
+EXTRA_PHASES = ("warm_open", "switches_done", "typing_done", "tasks_hidden", "tasks_warm_open", "scroll_done")
 
 
 def launch(app, root, token, logs, seed=False, done=False, extra=False, corner=None):

@@ -266,7 +266,7 @@ struct NotesLibraryView: View {
                     status(groups)
                     ForEach(groups) { group in
                         AtticNoteGroupHeading(title: group.title)
-                            .modifier(AtticScrollEdgeFade(space: Self.space, top: TasksPage.listTopFade, bottom: AtticEdgeBlur.panelBottom))
+                            .modifier(AtticScrollEdgeFade(space: Self.space, top: AtticNoteMetrics.listTopFade, bottom: AtticEdgeBlur.panelBottom))
                         ForEach(group.rows) { row in
                             AtticNoteRow(model: row, isSelected: row.id == selected && model.highlightedID == nil,
                                          isHighlighted: row.id == model.highlightedID,
@@ -279,7 +279,7 @@ struct NotesLibraryView: View {
                                 .transition(design.reduceMotion ? .opacity
                                     : .opacity.combined(with: .move(edge: .leading)))
                                 .accessibilityIdentifier("notes-library-row")
-                                .modifier(AtticScrollEdgeFade(space: Self.space, top: TasksPage.listTopFade, bottom: AtticEdgeBlur.panelBottom))
+                                .modifier(AtticScrollEdgeFade(space: Self.space, top: AtticNoteMetrics.listTopFade, bottom: AtticEdgeBlur.panelBottom))
                         }
                     }
                 }

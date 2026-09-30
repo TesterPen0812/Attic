@@ -162,11 +162,22 @@ final class AtticUITests: XCTestCase {
             XCTFail("Settings scroll anchor must be visible and finite")
             return .pinned
         }
-        anchor.coordinate(withNormalizedOffset: .zero)
+        let point = anchor.coordinate(withNormalizedOffset: .zero)
             .withOffset(CGVector(dx: pageFrame.minX + 8 - anchorFrame.minX,
                                  dy: (top + bottom) / 2 - anchorFrame.minY))
-            .scroll(byDeltaX: 0, deltaY: delta)
-        guard let after = settledFrame(of: element, differingFrom: before) else { return .pinned }
+        // A wheel gesture can be lost: the pointer arrives from the sidebar
+        // (its own scroll view) with the gesture, and the page does not move
+        // at all even though it has room (CI runs 36303234568 and
+        // 36305447077: the page never moved, so the reveal took it for a
+        // page at its end). Rest the pointer on the page first, and only
+        // call the page pinned when a second gesture moves nothing either.
+        var settled: CGRect?
+        for _ in 0..<2 where settled == nil {
+            point.hover()
+            point.scroll(byDeltaX: 0, deltaY: delta)
+            settled = settledFrame(of: element, differingFrom: before)
+        }
+        guard let after = settled else { return .pinned }
         let travelled = before.minY - after.minY
         let outcome = Self.outcome(for: towardsTop ? travelled : -travelled)
         if outcome == .backwards {
@@ -582,6 +593,46 @@ final class AtticUITests: XCTestCase {
         )
         XCTAssertEqual(XCTWaiter.wait(for: [expectation], timeout: 3), .completed, "Haptics toggles")
         haptics.click()
+    }
+
+    /// Round 10: the quick capture shortcut is recorded, refused when it
+    /// would take a key other apps use, reset, and turned off and on.
+    func testTheQuickCaptureShortcutIsRecordedResetAndTurnedOff() throws {
+        func waitFor(_ message: @autoclosure () -> String, _ condition: @escaping () -> Bool) {
+            let expectation = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in condition() }, object: nil)
+            XCTAssertEqual(XCTWaiter.wait(for: [expectation], timeout: 3), .completed, message())
+        }
+        let settings = openSettings(section: "settings-nav-general")
+        let page = settings.descendants(matching: .any)["settings-page-general"]
+        let recorder = settings.descendants(matching: .any)["setting-quick-capture-shortcut"]
+        XCTAssertTrue(recorder.waitForExistence(timeout: 3))
+        revealSettingsControl(recorder, in: settings, page: page)
+        XCTAssertEqual(recorder.value as? String, "Control Option Space", "the default, read by name")
+        let reset = settings.descendants(matching: .any)["setting-quick-capture-shortcut-reset"]
+        XCTAssertFalse(reset.isEnabled, "nothing to reset")
+
+        recorder.click()
+        waitFor("It records") { (self.recorder(in: settings).value as? String)?.hasPrefix("Recording") == true }
+        settings.typeKey("k", modifierFlags: .command)
+        XCTAssertTrue(settings.descendants(matching: .any)["setting-quick-capture-shortcut-problem"].waitForExistence(timeout: 3),
+                      "⌘K alone is refused, with the reason")
+        settings.typeKey("k", modifierFlags: [.control, .option])
+        waitFor("⌃⌥K is recorded") { (self.recorder(in: settings).value as? String) == "Control Option K" }
+        XCTAssertTrue(reset.isEnabled)
+
+        reset.click()
+        waitFor("Reset goes back to ⌃⌥Space") { (self.recorder(in: settings).value as? String) == "Control Option Space" }
+
+        let toggle = settings.descendants(matching: .any)["setting-quick-capture"]
+        revealSettingsControl(toggle, in: settings, page: page)
+        toggle.click()
+        waitFor("Off: the recorder rests") { !self.recorder(in: settings).isEnabled }
+        toggle.click()
+        waitFor("On again") { self.recorder(in: settings).isEnabled }
+    }
+
+    private func recorder(in settings: XCUIElement) -> XCUIElement {
+        settings.descendants(matching: .any)["setting-quick-capture-shortcut"]
     }
 
     /// Recently Deleted lists what was deleted (a task with its subtask, a

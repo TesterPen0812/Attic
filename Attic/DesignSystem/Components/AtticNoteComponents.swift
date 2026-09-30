@@ -247,7 +247,7 @@ struct AtticNoteRow: View {
     /// VoiceOver's named actions: every enabled command except Open (the
     /// row's own action) and submenus.
     static func spokenActions(_ commands: [AtticMenuCommand]) -> [AtticMenuCommand] {
-        commands.filter { !$0.isDisabled && $0.submenu.isEmpty && $0.identifier != "notes-row-open" }
+        commands.filter { !$0.isDisabled && $0.children.isEmpty && $0.identifier != "notes-row-open" }
     }
 
     var body: some View {
@@ -600,7 +600,7 @@ struct AtticNoteLibraryLine: View {
         let tokens = design.tokens
         let height = AtticControlSize.smallHeight
         return HStack(spacing: 0) {
-            AtticIcon(systemName: "magnifyingglass", size: AtticListSearchFieldMetrics.iconSize,
+            AtticIcon(systemName: "magnifyingglass", size: AtticTabsSearchMetrics.iconSize,
                       weight: AtticIconWeight.outline, ink: .helper)
                 .frame(width: AtticControlSize.statusCircle)
                 .padding(.leading, AtticNoteMetrics.searchIconX - AtticLayout.rowHighlightInset)

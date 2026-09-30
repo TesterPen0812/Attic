@@ -22,6 +22,8 @@ Options:
                          (default: .build/appearance).
   --derived-data PATH    Build root (default: .build/dd).
   --skip-build           Reuse an existing build-for-testing.
+  --shard I/N            Check every N-th combination from I (0-based);
+                         shard 0 also writes the contact sheets.
   --help                 Show this help.
 
 Environment:
@@ -39,12 +41,14 @@ USAGE
 output=$repository_root/.build/appearance
 derived_data=$repository_root/.build/dd
 skip_build=false
+shard=0/1
 extra=()
 while (( $# > 0 )); do
     case $1 in
         --output) output=${2:A}; shift 2 ;;
         --derived-data) derived_data=${2:A}; shift 2 ;;
         --skip-build) skip_build=true; shift ;;
+        --shard) shard=$2; shift 2 ;;
         --help) usage; exit 0 ;;
         --) shift; extra=("$@"); break ;;
         *) print -u2 "Unknown option: $1"; usage >&2; exit 64 ;;
@@ -68,7 +72,7 @@ log=$(mktemp -t attic-appearance)
 trap 'rm -f "$log"' EXIT
 # TEST_RUNNER_ variables reach the test host without the prefix.
 set +e
-TEST_RUNNER_ATTIC_APPEARANCE_FULL=1 "$xcodebuild_command" test-without-building "${common[@]}" \
+TEST_RUNNER_ATTIC_APPEARANCE_FULL=1 TEST_RUNNER_ATTIC_APPEARANCE_SHARD=$shard "$xcodebuild_command" test-without-building "${common[@]}" \
     -only-testing:AtticTests/AtticAppearanceMatrixTests "${extra[@]}" 2>&1 | tee "$log"
 result=${pipestatus[1]}
 set -e
@@ -78,7 +82,8 @@ set -e
 source_dir=$(/usr/bin/sed -n 's/^ATTIC_APPEARANCE_OUTPUT=//p' "$log" | /usr/bin/tail -n 1)
 if [[ -n $source_dir && -d $source_dir ]]; then
     /bin/mkdir -p "$output"
-    /bin/cp "$source_dir"/*.png "$source_dir"/appearance-check.txt "$output"/
+    /bin/cp "$source_dir"/appearance-check.txt "$output"/
+    /bin/cp "$source_dir"/*.png "$output"/ 2>/dev/null || true
     print "Appearance matrix output: $output"
 else
     print -u2 "The appearance matrix wrote no output (see the log above)."

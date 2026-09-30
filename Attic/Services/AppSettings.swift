@@ -107,6 +107,29 @@ final class AppSettings: ObservableObject {
         static let panelHeight = "panelHeight"
         static let pinnedSubtaskWindowFrame = "pinnedSubtaskWindowFrame"
         static let hapticsEnabled = "hapticsEnabled"
+        static let animations = "animations"
+        static let quickCaptureEnabled = "quickCaptureEnabled"
+        static let quickCaptureKeyCode = "quickCaptureKeyCode"
+        static let quickCaptureModifiers = "quickCaptureModifiers"
+    }
+
+    /// The global quick capture shortcut is claimed (round 10: Settings ›
+    /// General › Quick Capture). On by default.
+    @Published var quickCaptureEnabled: Bool {
+        didSet { defaults.set(quickCaptureEnabled, forKey: Key.quickCaptureEnabled) }
+    }
+
+    /// Its combination: ⌃⌥Space unless the person recorded another.
+    @Published var quickCaptureShortcut: GlobalHotKeyCombination {
+        didSet {
+            if quickCaptureShortcut == .newTask {
+                defaults.removeObject(forKey: Key.quickCaptureKeyCode)
+                defaults.removeObject(forKey: Key.quickCaptureModifiers)
+            } else {
+                defaults.set(Int(quickCaptureShortcut.keyCode), forKey: Key.quickCaptureKeyCode)
+                defaults.set(Int(quickCaptureShortcut.modifiers), forKey: Key.quickCaptureModifiers)
+            }
+        }
     }
 
     @Published var corner: ScreenCorner {
@@ -152,6 +175,16 @@ final class AppSettings: ObservableObject {
     /// snaps into place (spec § Touch and sound). On by default.
     @Published var hapticsEnabled: Bool {
         didSet { defaults.set(hapticsEnabled, forKey: Key.hapticsEnabled) }
+    }
+
+    /// Full springs or Reduced motion (round 9, owner item 26). Reduced,
+    /// like macOS Reduce Motion, turns every movement into a crossfade or
+    /// an instant change. Full by default.
+    @Published var animations: AtticAnimationLevel {
+        didSet {
+            defaults.set(animations.rawValue, forKey: Key.animations)
+            AtticMotionPreference.level = animations
+        }
     }
 
     @Published var panelCornerSize: Double {
@@ -302,6 +335,18 @@ final class AppSettings: ObservableObject {
         }
         isAgentAccessEnabled = (defaults.object(forKey: Key.isAgentAccessEnabled) as? Bool) ?? false
         hapticsEnabled = (defaults.object(forKey: Key.hapticsEnabled) as? Bool) ?? true
+        quickCaptureEnabled = (defaults.object(forKey: Key.quickCaptureEnabled) as? Bool) ?? true
+        if let code = defaults.object(forKey: Key.quickCaptureKeyCode) as? Int,
+           let mask = defaults.object(forKey: Key.quickCaptureModifiers) as? Int, code >= 0, mask >= 0 {
+            let stored = GlobalHotKeyCombination(keyCode: UInt32(code), modifiers: UInt32(mask))
+            // A stored value Attic can't claim safely falls back to the default.
+            quickCaptureShortcut = stored.recordingProblem == nil ? stored : .newTask
+        } else {
+            quickCaptureShortcut = .newTask
+        }
+        let storedAnimations = AtticAnimationLevel(rawValue: defaults.string(forKey: Key.animations) ?? "") ?? .full
+        animations = storedAnimations
+        AtticMotionPreference.level = storedAnimations
         panelCornerSize = Self.clamp(
             defaults.object(forKey: Key.panelCornerSize) as? Double ?? PanelCornerSize.defaultValue,
             to: PanelCornerSize.min...PanelCornerSize.max,

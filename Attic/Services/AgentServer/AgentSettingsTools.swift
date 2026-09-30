@@ -84,6 +84,14 @@ final class AgentSettingsTools {
             "haptics": [
                 "type": "boolean",
                 "description": "A light haptic tick when a task is completed or a dragged item snaps into place."
+            ],
+            "animations": [
+                "type": "string", "enum": AtticAnimationLevel.allCases.map(\.rawValue),
+                "description": "Full (springy motion) or reduced (crossfades and instant changes, as with the Mac's Reduce Motion)."
+            ],
+            "quick_capture": [
+                "type": "boolean",
+                "description": "Whether the global quick capture shortcut (quick_capture_shortcut, read only; the person records it in Settings) opens Attic on Tasks from any app."
             ]
         ]
     }
@@ -92,7 +100,7 @@ final class AgentSettingsTools {
         [
             "name": "get_settings",
             "title": "Get Attic Settings",
-            "description": "Read Attic's settings: appearance (mode, palette, surface, tint), panel (reveal corner, delays, corner size, width) and behaviour (haptics; launch at login, read only). Agent Access is not included.",
+            "description": "Read Attic's settings: appearance (mode, palette, surface, tint), panel (reveal corner, delays, corner size, width) and behaviour (haptics, animations, quick capture; launch at login and the quick capture shortcut, read only). Agent Access is not included.",
             "annotations": [
                 "readOnlyHint": true,
                 "destructiveHint": false,
@@ -142,6 +150,8 @@ final class AgentSettingsTools {
     func snapshot() -> [String: Any] {
         var result = values()
         if let launchAtLogin { result["launch_at_login"] = launchAtLogin() }
+        // Read only: the person records it with the keyboard in Settings.
+        result["quick_capture_shortcut"] = settings.quickCaptureShortcut.displayName ?? ""
         return result
     }
 
@@ -158,7 +168,9 @@ final class AgentSettingsTools {
             "hide_delay": settings.hideDelay,
             "corner_size": settings.panelCornerSize,
             "panel_width": settings.panelContentSize,
-            "haptics": settings.hapticsEnabled
+            "haptics": settings.hapticsEnabled,
+            "animations": settings.animations.rawValue,
+            "quick_capture": settings.quickCaptureEnabled
         ]
     }
 
@@ -230,6 +242,8 @@ final class AgentSettingsTools {
         case "tint": return try choice(arguments, key, PanelTintLevel.self)!
         case "reveal_corner": return try choice(arguments, key, ScreenCorner.self)!
         case "haptics": return try flag(arguments, key)!
+        case "animations": return try choice(arguments, key, AtticAnimationLevel.self)!
+        case "quick_capture": return try flag(arguments, key)!
         default: return try number(arguments, key)!
         }
     }
@@ -250,6 +264,8 @@ final class AgentSettingsTools {
             case "corner_size": settings.panelCornerSize = try double(value)
             case "panel_width": settings.panelContentSize = try double(value)
             case "haptics": settings.hapticsEnabled = try typed(value, Bool.self)
+            case "animations": settings.animations = try typed(value, AtticAnimationLevel.self)
+            case "quick_capture": settings.quickCaptureEnabled = try typed(value, Bool.self)
             default: throw AgentToolError.invalidArguments("Unknown setting: \(key).")
             }
         }

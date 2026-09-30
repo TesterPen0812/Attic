@@ -54,12 +54,19 @@ final class AtticDesignSystemTests: XCTestCase {
         XCTAssertEqual(m.circleCentreY(twoLine: true), 15)
     }
 
-    func testMotionPresetsAreCalmSpringsWithReduceMotionFallbacks() {
+    /// Round 9 (owner item 26): springy by default, pages firm (never a
+    /// visible overshoot), crossfades and hover never bounce; every preset
+    /// keeps its Reduce Motion fallback.
+    func testMotionPresetsAreLivelySpringsWithReduceMotionFallbacks() {
         for preset in AtticMotionPreset.allCases {
-            XCTAssertLessThanOrEqual(preset.duration, 0.3, "\(preset) is longer than the calm budget")
-            XCTAssertEqual(preset.bounce, 0, "\(preset) bounces")
+            XCTAssertLessThanOrEqual(preset.duration, 0.35, "\(preset) drags")
+            XCTAssertLessThanOrEqual(preset.bounce, 0.3, "\(preset) wobbles")
             XCTAssertNotNil(preset.animation(reduceMotion: false))
         }
+        XCTAssertGreaterThan(AtticMotionPreset.popover.bounce, 0, "things that appear land with a bounce")
+        XCTAssertGreaterThan(AtticMotionPreset.settle.bounce, 0, "rows settle with a bounce")
+        XCTAssertLessThanOrEqual(AtticMotionPreset.slide.bounce, 0.15, "pages bounce no more than snappy")
+        XCTAssertEqual(AtticMotionPreset.pageSwitch.bounce, 0)
         XCTAssertNil(AtticMotionPreset.pageSwitch.animation(reduceMotion: true), "Page switch is instant under Reduce Motion")
         XCTAssertNil(AtticMotionPreset.expand.animation(reduceMotion: true), "Card expand is instant under Reduce Motion")
         XCTAssertNotNil(AtticMotionPreset.slide.animation(reduceMotion: true), "Slides crossfade under Reduce Motion")
@@ -309,27 +316,38 @@ final class AtticDesignSystemTests: XCTestCase {
         }
     }
 
-    /// Owner, 2026-09-26: Glass and Frosted are Phase 0's surfaces exactly
-    /// (its foundation colour and opacity, Tint, Frosted wash, bright
-    /// native material under Original's shade, and hairline edge), in
-    /// both modes; Reduce Transparency still makes the surface Solid.
-    func testGlassAndFrostedArePhase0s() {
+    /// Phase 0's surface treatment for a context's colours.
+    static func phase0Treatment(_ context: AtticDesignContext) -> AtticPanelSurfaceTreatment {
+        context.palette.surfaceTreatment(
+            appearance: context.mode == .dark ? .dark : .light, contrast: context.increaseContrast ? .increased : .standard,
+            surface: PanelSurfaceStyle(context.effectiveSurface), tint: context.tint,
+            tintLength: AtticDesignContext.quantisedTintLength(context.tintLength), reduceTransparency: false
+        )
+    }
+
+    /// Owner, 2026-09-26: Glass and Frosted are Phase 0's surfaces (its
+    /// foundation colour, Tint, Frosted wash, bright native material under
+    /// Original's shade, and edge), in both modes, plus the two changes the
+    /// owner kept in round 6: Readable Glass's backing (only the foundation
+    /// opacity grows) and the defined dark edge (Dark only). Reduce
+    /// Transparency still makes the surface Solid.
+    func testGlassAndFrostedArePhase0sPlusTheReadableBacking() {
         for context in AtticAppearanceCheck.allContexts() where context.effectiveSurface != .solid {
-            let appearance: AtticPanelThemeAppearance = context.mode == .dark ? .dark : .light
-            let treatment = context.palette.surfaceTreatment(
-                appearance: appearance, contrast: context.increaseContrast ? .increased : .standard,
-                surface: PanelSurfaceStyle(context.effectiveSurface), tint: context.tint,
-                tintLength: AtticDesignContext.quantisedTintLength(context.tintLength), reduceTransparency: false
-            )
+            let treatment = Self.phase0Treatment(context)
+            let phase0 = AtticSurfaceModel.phase0(treatment, increaseContrast: context.increaseContrast)
             let panel = context.tokens.panel
-            XCTAssertEqual(panel, AtticSurfaceModel.phase0(treatment, increaseContrast: context.increaseContrast), context.caption)
+            XCTAssertEqual(panel, phase0.readable(primary: AtticRGBA(treatment.palette.primaryForeground),
+                                                  secondary: AtticRGBA(treatment.palette.secondaryForeground)).definedDarkEdge(),
+                           context.caption)
+            XCTAssertEqual(panel.withFoundation(phase0.foundationOpacity), phase0.definedDarkEdge(),
+                           "only the backing and the dark edge differ from Phase 0: \(context.caption)")
         }
         XCTAssertEqual(AtticDesignContext(mode: .light, surface: .glass, reduceTransparency: true).tokens.panel.kind, .solid)
         // Phase 0's Original coverage (far more see-through than PR #5's 67 / 80 / 66 / 82).
         let measured = [
             AtticDesignContext(mode: .light, surface: .glass), AtticDesignContext(mode: .light, surface: .frosted),
             AtticDesignContext(mode: .dark, surface: .glass), AtticDesignContext(mode: .dark, surface: .frosted)
-        ].map { Int(($0.tokens.panel.foundationOpacity * 100).rounded()) }
+        ].map { Int((AtticSurfaceModel.phase0(Self.phase0Treatment($0), increaseContrast: false).foundationOpacity * 100).rounded()) }
         XCTAssertEqual(measured, [1, 16, 10, 32])
         // Text on them is Phase 0's (owner, 2026-09-26): its primary and
         // secondary greys, placeholder included, every palette, both modes.
@@ -433,6 +451,34 @@ final class AtticDesignSystemTests: XCTestCase {
         XCTAssertEqual(AtticRadius.nested(outer: AtticRadius.control(height: AtticControlSize.addBarHeight), gap: AtticControlSize.sendInset), 11)
     }
 
+    /// Astra 19: one definition of what a row can do. VoiceOver offers
+    /// exactly the commands the row has (a Done log row: complete or
+    /// un-complete, Restore to Now, its details; no working, moving or
+    /// deleting), live rows add Edit title, and a key for a command the row
+    /// lacks does nothing.
+    func testTaskActionsOfferOnlyWhatTheRowCanDo() {
+        var fired: [String] = []
+        let live = AtticTaskActions(
+            toggleDone: { fired.append("done") }, toggleWorking: { fired.append("working") },
+            openPage: { fired.append("open") }, moveToBacklog: { fired.append("later") }, delete: { fired.append("delete") },
+            editTitle: { fired.append("edit") }, names: .init(openPage: "Open files")
+        )
+        XCTAssertEqual(live.accessibilityActions(for: .todo).map(\.name),
+                       ["Complete", "Start working", "Open files", "Edit title", "Move to Later", "Delete"])
+        let archived = AtticTaskActions(
+            toggleDone: { fired.append("done") }, openPage: { fired.append("details") },
+            restoreToNow: { fired.append("restore") }, names: .init(openPage: "Show details")
+        )
+        XCTAssertEqual(archived.accessibilityActions(for: .done).map(\.name), ["Mark as not done", "Restore to Now", "Show details"])
+        for command in [AtticTaskKeys.Command.toggleWorking, .moveToBacklog, .delete, .editTitle] {
+            AtticTaskKeys.perform(command, archived)
+        }
+        XCTAssertEqual(fired, [], "keys for commands a Done log row lacks do nothing")
+        AtticTaskKeys.perform(.openPage, archived)
+        AtticTaskKeys.perform(.toggleDone, archived)
+        XCTAssertEqual(fired, ["details", "done"])
+    }
+
     func testTaskKeysMapToDistinctCommands() {
         func command(_ key: KeyEquivalent, _ characters: String, _ modifiers: EventModifiers, list: Bool = true) -> AtticTaskKeys.Command? {
             AtticTaskKeys.command(key: key, characters: characters, modifiers: modifiers, listCommands: list)
@@ -516,12 +562,14 @@ final class AtticDesignSystemTests: XCTestCase {
         XCTAssertEqual(report.contrastPairsChecked, report.eligibleProbes, "Every eligible probe's background was measured")
         // Glyphs too faint to find over Phase 0's Glass and Frosted are
         // reported as unmeasured failures, which the named exception covers.
-        let unmeasuredInException = report.failures.filter { $0.key.kind == .unmeasured }
-            .flatMap(\.value).filter(Phase0TranslucentException.covers(caption:)).count
+        let unmeasured = report.failures.filter { $0.key.kind == .unmeasured }
+        let unmeasuredInException = unmeasured.flatMap { _, combinations in
+            combinations.filter { Phase0TranslucentException.covers(caption: $0) }
+        }.count
         XCTAssertEqual(report.glyphsMeasured + unmeasuredInException, report.eligibleGlyphs, "Every eligible probe's glyph was measured")
         XCTAssertEqual(report.eligibleGlyphs, report.eligibleProbes, "At 2× every eligible probe is a glyph check")
         XCTAssertGreaterThanOrEqual(report.geometryMeasured, 15)
-        XCTAssertTrue(Phase0TranslucentException.remaining(report.failures).isEmpty, report.summary)
+        XCTAssertTrue(OpenRingException.remaining(Phase0TranslucentException.remaining(report.failures)).isEmpty, report.summary)
     }
 
     /// Renders `view` in capture mode at 2× on a flat panel background and
@@ -764,6 +812,35 @@ enum Phase0TranslucentException {
             let rest = combinations.filter { !covers(caption: $0) }
             return rest.isEmpty ? nil : rest
         }
+    }
+}
+
+/// The third named contrast exception (owner fix 1, 2026-09-27; the owner
+/// decides): an open task's ring (to do, and Later's dashed ring) is the
+/// primary ink at low opacity, the owner's reference grey (v15 card B,
+/// about 1.6 : 1 on white), below the 3 : 1 icon floor on purpose, so the
+/// title carries the row. Only that ring, and never under Increase
+/// Contrast, where it is the primary ink and keeps 3 : 1. Hover and
+/// keyboard focus step it up; a disabled ring keeps the disabled icon's
+/// 3 : 1; the subtask checkbox, the working ring and the done check keep
+/// the rule.
+enum OpenRingException {
+    static let name = "Owner fix 1: the quiet open task ring"
+
+    static func covers(_ failure: AtticAppearanceCheck.Failure) -> Bool {
+        // Only a ring measured below the icon floor (round 4): a ring that
+        // is missing or cannot be measured still fails.
+        failure.detail.hasPrefix(AtticStatusCircle.openRingProbeName)
+            && (failure.kind == .contrast || failure.kind == .glyphContrast)
+    }
+
+    static func remaining(_ failures: [AtticAppearanceCheck.Failure: [String]]) -> [AtticAppearanceCheck.Failure: [String]] {
+        var rest = failures
+        for (failure, combinations) in failures where covers(failure) {
+            let kept = combinations.filter { $0.contains("Increase contrast") }
+            rest[failure] = kept.isEmpty ? nil : kept
+        }
+        return rest
     }
 }
 

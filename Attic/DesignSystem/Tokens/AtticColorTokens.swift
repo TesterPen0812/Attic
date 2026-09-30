@@ -282,12 +282,48 @@ struct AtticColorTokens: Equatable, Sendable {
     /// The Craft-style control face (opaque).
     var controlFace: AtticRGBA { raised.face.over(controlBase) }
 
+    /// A search match in a title (the Done search, owner item 17): the
+    /// find highlight's soft yellow behind the matched letters, which take
+    /// the primary ink on it (heading reads at more than 7 : 1 on it in
+    /// Light and 4.5 : 1 in Dark). Increase Contrast makes it firmer.
+    var findHighlight: AtticRGBA {
+        let ic = context.increaseContrast
+        return context.mode == .dark
+            ? AtticRGBA(0xFFD60A).withAlpha(ic ? 0.42 : 0.30)
+            : AtticRGBA(0xFFDD33).withAlpha(ic ? 0.70 : 0.48)
+    }
+
     /// Every face a control's label can sit on over `surface`: the Craft
     /// style's, and the worst Liquid Glass leaves on that surface.
     func controlFaces(over surface: AtticRGBA) -> [AtticRGBA] {
         [controlFace, glassFace.over(surface)]
     }
     func color(_ ink: AtticInk) -> Color { self.ink(ink).color }
+
+    /// An open task's ring (to do, and Later's dashed ring), owner fix 1
+    /// (2026-09-27, card B of v15): the primary ink at low opacity, so it
+    /// follows the surface it sits on and the title carries the row. Light
+    /// Solid is the owner's reference (≈ #CDCDCE on white, 1.6 : 1); Dark
+    /// and the see-through surfaces keep a clearly visible ring (the
+    /// conservative default for the cases the owner left open); hovered or
+    /// keyboard-focused it steps up to a firm ring. Below the 3 : 1 icon
+    /// floor on purpose: a named exception in the appearance test
+    /// (`OpenRingException`), never a loosened rule. Increase Contrast
+    /// draws the primary ink (well past 3 : 1).
+    func openRing(emphasised: Bool = false) -> AtticRGBA {
+        let heading = ink(.heading)
+        guard !context.increaseContrast else { return heading }
+        let dark = context.mode == .dark
+        let translucent = context.surface != .solid
+        let alpha: Double = if emphasised {
+            dark ? 0.62 : 0.55
+        } else if dark {
+            translucent ? 0.36 : 0.28
+        } else {
+            translucent ? 0.30 : 0.22
+        }
+        return heading.withAlpha(alpha)
+    }
 
     var focusRing: AtticRGBA { ink(.accent) }
     var tagFill: AtticRGBA { ink(.accent).withAlpha(context.mode == .dark ? 0.16 : 0.10) }
@@ -583,6 +619,9 @@ struct AtticColorTokens: Equatable, Sendable {
         // keep the design system's own.
         let panel = usesPhase0Surface
             ? AtticSurfaceModel.phase0(phase0Treatment, increaseContrast: ic)
+                .readable(primary: AtticRGBA(phase0Treatment.palette.primaryForeground),
+                          secondary: AtticRGBA(phase0Treatment.palette.secondaryForeground))
+                .definedDarkEdge()
             : AtticSurfaceModel.solve(
                 base: panelBase, kind: key.surface, appearance: appearance,
                 palette: key.palette, themePalette: themePalette,
@@ -633,6 +672,39 @@ struct AtticColorTokens: Equatable, Sendable {
             let p0 = phase0Treatment.palette
             inks[.accent] = AtticRGBA(p0.accent)
             inks[.accentText] = AtticRGBA(p0.accent)
+        }
+        // Glass and Frosted: every secondary text role reads as Phase 0's
+        // secondary grey, a step below the primary (owner item 7, Astra 11).
+        // Before, only helper and placeholder took it, so tags, the quietest
+        // grey and the colours of meaning kept greys tuned for Solid, which
+        // fade to about 1.5 : 1 on Dark Glass over a light desktop.
+        if phase0Translucent {
+            let p0 = phase0Treatment.palette
+            let secondary = AtticRGBA(p0.secondaryForeground)
+            let p0Base = AtticRGBA(p0.opaqueSurface)
+            inks[.muted] = secondary
+            // Tags: Original's grey is the secondary grey; a palette keeps its
+            // hue at the secondary grey's lightness (Dark). The Light
+            // palettes keep Phase 0's accent exactly (above).
+            if key.palette == .original {
+                inks[.accentText] = secondary
+            } else if dark {
+                inks[.accentText] = accentBase.tuned(toContrast: secondary.contrast(on: p0Base), against: [p0Base], lighten: true)
+            }
+            // The colours of meaning (overdue, the High mark, warnings) keep
+            // their floors on the surface as drawn over a mid-grey desktop.
+            // Over black and white desktops they stay inside the named
+            // translucency exception: a red that kept 4.5 : 1 there would
+            // be almost white or black and stop meaning "overdue".
+            let surfaces = [AtticSurfaceModel.contentTop, 1].map { panel.composite(.midGrey, at: $0) }
+            // High's orange "!!" would have to go almost white to reach the
+            // 4.5 : 1 Increase Contrast asks of it here, and stop reading as
+            // orange: under Increase Contrast it stays in the exception.
+            for ink in [AtticInk.dueText, .priorityMark, .warningText] where !(ink == .priorityMark && ic) {
+                let floor = AtticSurfaceModel.floor(for: ink, kind: key.surface, increaseContrast: ic)
+                inks[ink] = inks[ink]!.tuned(toContrast: floor * (floor > 3 ? textTarget / 4.5 : secondaryTarget / 3),
+                                             against: surfaces, lighten: dark)
+            }
         }
         // The surface tuning can bring the priority greys together (each
         // stops at the floor): keep Low and Medium a step beyond None.
@@ -697,7 +769,31 @@ struct AtticColorTokens: Equatable, Sendable {
     /// a bright 1 pt rim, about +64 at the top, +37 on the sides and +56 at
     /// the bottom, with no dark outer edge. Increase Contrast keeps the
     /// fill and strengthens the edge.
+    ///
+    /// Quiet inactive controls (Astra 27, kept by the owner in round 6):
+    /// one even edge at the side's strength, with no inner rim and no
+    /// shadow below, so an out-of-focus control is never heavier than a
+    /// focused one. The face, the sheen and the selected chip (the pinned
+    /// pin) are the recipe's; Increase Contrast keeps its stronger edge.
     private static func recipes(dark: Bool, ic: Bool, base: AtticRGBA) -> (rest: AtticRaisedRecipe, hover: AtticRaisedRecipe, pressed: AtticRaisedRecipe, disabled: AtticRaisedRecipe) {
+        let recipes = drawnRecipes(dark: dark, ic: ic, base: base)
+        guard !ic else { return recipes }
+        func quieted(_ recipe: AtticRaisedRecipe) -> AtticRaisedRecipe {
+            var recipe = recipe
+            recipe.edgeTop = recipe.edgeMiddle
+            recipe.edgeBottom = recipe.edgeMiddle
+            recipe.innerRimTop = .clear
+            recipe.innerRimMiddle = .clear
+            recipe.innerRimBottom = .clear
+            recipe.shadow = .clear
+            return recipe
+        }
+        return (quieted(recipes.rest), quieted(recipes.hover), quieted(recipes.pressed), quieted(recipes.disabled))
+    }
+
+    /// The drawn faces and edges before quieting (Increase Contrast keeps
+    /// them whole).
+    private static func drawnRecipes(dark: Bool, ic: Bool, base: AtticRGBA) -> (rest: AtticRaisedRecipe, hover: AtticRaisedRecipe, pressed: AtticRaisedRecipe, disabled: AtticRaisedRecipe) {
         if dark {
             func recipe(fill: Double, top: Double, middle: Double, bottom: Double) -> AtticRaisedRecipe {
                 AtticRaisedRecipe(

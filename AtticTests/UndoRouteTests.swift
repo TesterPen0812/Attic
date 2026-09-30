@@ -121,10 +121,10 @@ final class UndoRouteTests: XCTestCase {
         let task = try XCTUnwrap(library.createTasks([TaskDraft(title: "Draft", priority: .low)])?.first)
         let due = DueDay(year: 2026, month: 10, day: 1)
 
-        XCTAssertTrue(library.updateTask(task.id, title: "Final", priority: .high, tags: ["a"], dueDay: .some(due)))
+        XCTAssertTrue(library.updateTask(task.id, title: "Final", priority: .high, tags: ["a"], dueDay: .some(due)).isApplied)
         XCTAssertEqual(library.undo.undoName(in: .tasks), "Edit Task")
         clock.value = Date(timeIntervalSince1970: 2_000)
-        XCTAssertTrue(library.updateTask(task.id, status: .done))
+        XCTAssertTrue(library.updateTask(task.id, status: .done).isApplied)
         XCTAssertEqual(library.undo.undoName(in: .tasks), "Change Task State")
         XCTAssertEqual(task.completedAt, Date(timeIntervalSince1970: 2_000))
 
@@ -147,7 +147,7 @@ final class UndoRouteTests: XCTestCase {
     func testANoOpEditSucceedsWithoutAStep() throws {
         let library = try makeLibrary()
         let task = try XCTUnwrap(library.tasks.create(title: "Same"))
-        XCTAssertTrue(library.updateTask(task.id, title: "Same"))
+        XCTAssertTrue(library.updateTask(task.id, title: "Same").isApplied)
         XCTAssertFalse(library.undo.canUndo(in: .tasks))
     }
 
@@ -155,7 +155,7 @@ final class UndoRouteTests: XCTestCase {
         let library = try makeLibrary()
         let created = try XCTUnwrap(library.tasks.commit([TaskDraft(title: "A"), TaskDraft(title: "B"), TaskDraft(title: "C")]))
         XCTAssertEqual(library.tasks.orderedTasks(for: .todo).map(\.title), ["A", "B", "C"])
-        XCTAssertTrue(library.moveTask(created[2].id, relativeTo: created[0].id))
+        XCTAssertTrue(library.moveTask(created[2].id, relativeTo: created[0].id).isApplied)
         XCTAssertEqual(library.tasks.orderedTasks(for: .todo).map(\.title), ["C", "A", "B"])
         XCTAssertTrue(library.undo.undo(in: .tasks))
         XCTAssertEqual(library.tasks.orderedTasks(for: .todo).map(\.title), ["A", "B", "C"])
@@ -209,7 +209,7 @@ final class UndoRouteTests: XCTestCase {
         let task = try XCTUnwrap(library.tasks.create(title: "Task"))
         gate.shouldFail = true
         XCTAssertNil(library.createTasks([TaskDraft(title: "Fails")]))
-        XCTAssertFalse(library.updateTask(task.id, title: "Fails"))
+        XCTAssertFalse(library.updateTask(task.id, title: "Fails").isApplied)
         XCTAssertFalse(library.delete(AtticItemRef(.task, task.id)))
         XCTAssertFalse(library.setTags(["x"], on: AtticItemRef(.task, task.id)))
         XCTAssertFalse(library.undo.canUndo(in: .tasks))

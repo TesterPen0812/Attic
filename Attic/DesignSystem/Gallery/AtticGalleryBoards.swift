@@ -211,15 +211,29 @@ private struct BoardHeading: View {
 // MARK: - Sample data
 
 enum AtticGallerySamples {
-    /// "Call mom fri #family !!": the date, the tag and the priority as chips.
+    /// "Call mom fri #family !!": the date (with its calendar), the tag and
+    /// High's mark as recognised pieces.
     @MainActor
     static var chipTokens: AtticAddBar.Tokens {
         AtticAddBar.Tokens(
-            chips: [NSRange(location: 9, length: 3), NSRange(location: 13, length: 7), NSRange(location: 21, length: 2)],
+            chips: [AtticTokenChip(range: NSRange(location: 9, length: 3), kind: .date),
+                    AtticTokenChip(range: NSRange(location: 13, length: 7)),
+                    AtticTokenChip(range: NSRange(location: 21, length: 2), kind: .high)],
             isFocused: .constant(false),
             actions: AtticTokenFieldActions(submit: { _ in }, dismissChip: { _ in }, multilinePaste: { _ in false },
-                                            escape: { false }, undoFallback: {}, redoFallback: {},
+                                            escape: { false },
                                             edited: { _, _ in }, caretMoved: { _ in })
+        )
+    }
+
+    /// The composer strip with these values (nil: the button's name).
+    @MainActor
+    static func strip(date: AtticStripValue?, tags: AtticStripValue?, priority: AtticStripValue?) -> some View {
+        AtticComposerStrip(
+            datePresented: .constant(false), tagsPresented: .constant(false), priorityPresented: .constant(false),
+            date: date, tags: tags, priority: priority,
+            onClearDate: {}, onClearTags: {}, onClearPriority: {},
+            datePicker: { EmptyView() }, tagPicker: { EmptyView() }, priorityPicker: { EmptyView() }
         )
     }
 
@@ -559,13 +573,25 @@ private struct AddBarBoard: View {
             AtticSpecimen("Later page", fullWidth: true) {
                 AtticAddBar(placeholder: "Add to later", text: .constant(""), onSubmit: demo.record("Add")).padding(.horizontal, 12)
             }
-            AtticSpecimen("Recognised pieces become chips (Phase 1)", fullWidth: true) {
+            AtticSpecimen("Recognised pieces turn secondary; a date gets its calendar", fullWidth: true) {
                 AtticAddBar(placeholder: "Add a task", text: .constant("Call mom fri #family !!"),
                             tokens: AtticGallerySamples.chipTokens, onSubmit: demo.record("Add"))
                     .padding(.horizontal, 12)
             }
-            AtticSpecimen("Done page: the bar still adds; its search sits at the top of the list", fullWidth: true) {
-                AtticListSearchField(placeholder: "Search done tasks", text: .constant(""))
+            AtticSpecimen("The strip over the bar: Date · Tag · Priority", fullWidth: true) {
+                AtticGallerySamples.strip(date: nil, tags: nil, priority: nil)
+                    .padding(.horizontal, 12)
+            }
+            AtticSpecimen("The strip shows what the task will get, with a clear ×", fullWidth: true) {
+                AtticGallerySamples.strip(
+                    date: AtticStripValue(text: "Tomorrow", spoken: "Tomorrow"),
+                    tags: AtticStripValue(text: "#home +1", spoken: "home and 1 more"),
+                    priority: AtticStripValue(text: "!!", ink: .priorityMark, style: .priorityMark, spoken: "High")
+                )
+                .padding(.horizontal, 12)
+            }
+            AtticSpecimen("Done page: the bar still adds; its search takes the tabs' line", fullWidth: true) {
+                AtticTabsSearchField(placeholder: "Search done tasks", text: .constant("invoice"), onEscape: {})
                     .padding(.horizontal, 12)
             }
             AtticSpecimen("Keyboard focus", fullWidth: true) {

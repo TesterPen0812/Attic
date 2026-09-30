@@ -356,6 +356,134 @@ The look ported, not the code: the design system's surface model now carries Pha
   the drawn recipe is for Solid (and Reduce Transparency) only.
 - **VoiceOver:** a Later task's state reads "later"; a row being edited exposes its title field.
 
+### Phase 1 round 5 (2026-09-27)
+
+- **One highlight per list** (`AtticChoiceRow.onHover`, `AtticListHighlight`): in the date, tag,
+  priority and suggestion lists the list owns its one highlight and the pointer moves it, as in a
+  native menu; a hovered row and a keyboard row are never lit together. A row sliding under a
+  resting pointer as the keyboard scrolls is not a pointer move. In the date picker the pointer on
+  a day moves the keyboard cursor there (within the month shown), and on a quick day's row it
+  takes the highlight from the cursor.
+- **Highlight gap** (`AtticPickerMetrics.highlightGap`, 2 pt): a choice row's fill (and its focus
+  ring) is inset 1 pt top and bottom, so two lit rows never merge into one block. Rows stay 28 pt
+  and answer the pointer across their full height.
+- **`atticPopover`**: Attic's pop-overs note their window with `AtticTextInput`, so no row or page
+  command answers a key while a pop-over has the keyboard (the date picker's Backspace or Space
+  never reaches the row's Delete or Complete).
+
+### Phase 1 round 6 (owner decisions, 2026-09-27)
+
+- **Typed pieces, option H** (`AtticTokenChip`, `AtticTokenField`, `AtticChipText`; owner item
+  15): no pill. A recognised piece is drawn in the secondary ink (the add bar's placeholder grey,
+  tuned on the bar's faces; a title being edited uses the row's helper grey), `!!` in High's orange
+  (`priorityMark`), and a date gets its calendar icon before it, drawn by the layout manager as
+  decoration (never a character). The icon fades in over 0.18 s while its room (kerning on the
+  character before the date) opens, so the words after it move gently; Reduce Motion shows it at
+  once. Measured on the bar's faces over every Solid combination: the grey ≥ 3.12 : 1 (4.68 : 1
+  with Increase Contrast), the orange ≥ 3.25 : 1 (5.52 : 1); Glass and Frosted stay inside Phase
+  0's named translucency exception. Removed: the chip pill (`chipOutset`, `chipFill`).
+- **The review switches are the design** (owner item 20): `AtticReviewVariants`, the design
+  context's `variants`, the colour key's switch fields and Settings › Compare are gone. Readable
+  Glass (`AtticSurfaceModel.readable(primary:secondary:)`), the quiet drawn controls
+  (`AtticColorTokens.recipes`), the defined dark edge (`AtticSurfaceModel.definedDarkEdge()`), the
+  compact Appearance page and the explicit command names are always on.
+- **Priority menus** (owner item 19): `TaskPriority.choices(keeping:)` offers No Priority, Medium
+  and High; Low only while a task has it.
+- **Strip values** (`AtticComposerStrip`, `AtticStripValue`; owner item 18, v19): a button with a
+  value shows it on a filled pill (the recessed fill; the pressed fill while its picker is open)
+  with a clear × (14 pt, glyph 8, 7 pt either side); empty, the small button's face as before.
+  `!!` in High's orange, `!` in the helper grey. The Tag button opens the tag list. VoiceOver:
+  the button's name, its value, and a Clear action. The strip's buttons are 4 pt apart
+  (`stripSpacing`, was 2) so two pills never touch. The gallery shows the strip empty and set.
+- **Done search on the tabs line** (`AtticTabsSearchField`, `AtticTabsSearchMetrics`; owner item
+  17, card B of v22): replaces `AtticListSearchField` (removed with its metrics). A recessed 28 pt
+  pill across the list's width, the magnifier on the circles' line, the text on the titles' line,
+  a quiet "Esc" at the end. Programmatic focus puts the insertion point after the text.
+- **Find highlight** (`AtticColorTokens.findHighlight`, `AtticText.highlights`,
+  `AtticTaskRowModel.titleMatch`): a search match in a title sits on a soft yellow (Light 48 %,
+  Dark 30 %; Increase Contrast 70 % / 42 %), its letters in the primary ink.
+
+### Phase 1 round 9: motion (owner items 24–26, 2026-09-28)
+
+- **Springy presets** (`AtticMotionPreset`): `bounce` is now per preset (was 0 everywhere).
+  Things that appear land with a bounce: `popover` 0.3 (0.26 s, rise 6, was 0.12 s and 4),
+  `toast` and `settle` 0.25 (`settle` gains a 6 pt rise for rows added or removed), `expand` and
+  `doneSlide` 0.2, `failReturn` 0.15. Pages stay firm: `slide` 0.15, `.snappy`'s bounce (about
+  2 pt on a 360 pt page), 0.32 s; `pageSwitch` (a crossfade) and `hover` never bounce. Durations
+  are at most 0.35 s. Reduce Motion fallbacks are unchanged.
+- **Pages settle on the slide's duration, critically damped.** The Tasks pager steps its own
+  spring (`TasksPagerSpring`: 2π / `slide.duration`, no bounce, starting at the fingers' speed and
+  capped so it never passes the page). SwiftUI animations of a page's offset moved what SwiftUI
+  draws but not the lists' AppKit scroll views, so the pager does not use them for travel.
+- **`AtticMotionPreset.exit(reduceMotion:)`**: leaving is a short fade-out with no bounce (the
+  Done search's field lets the keyboard go at once).
+- **`transition(reduceMotion:edge:)`** takes `.leading` and `.trailing` too (a sideways move of
+  twice the rise): the Done search comes in from the magnifier's end as the tabs leave.
+- **Settings › General › Animations** (`AtticAnimationLevel`: Full, Reduced): the design
+  context's `reduceMotion` is on for Reduced as for macOS Reduce Motion
+  (`atticDesignFromSystem(animations:)`), so every component and page following
+  `design.reduceMotion` (the Notes branch too) needs nothing more. Code outside a view reads
+  `AtticMotionPreference.reducesMotion` (the choice or the Mac's setting).
+
+### Phase 1 round 10: full control (the capability audit, owner-approved, 2026-09-28)
+
+The owner's principle: a calm look, never a cut capability. Every change is
+additive; no token, colour, radius or type style changed.
+
+- **`AtticMenuCommand` gains submenus, states, details and headings**
+  (`children`, `state`, `detail`, `isHeader`, `.submenu`, `.header`), and
+  finds the command for a key (`command(for:in:)`, `command(key:…)`). One
+  list now draws a SwiftUI menu (`AtticMenuItems`: sections, headings, ticks,
+  dashes, badges, submenus) and an `NSMenu` (**new `AtticNativeMenu`**) that a
+  key or a button opens under an anchor (**new `AtticMenuAnchor`**). Why: one
+  command definition drives the right-click menu, the actions button, ⇧⌘I, the
+  keys and VoiceOver.
+- **New `AtticMenuButton`**: a small button that opens a native menu from its
+  own action. The selection bar's State and Priority use it (the SwiftUI
+  `Menu` with a click-through label never took the click under XCUITest).
+- **`AtticSelectionBar`**: an action may open a pop-over picker (Date, and the
+  full tag picker with search and creation) instead of a menu; its menus are
+  read when they open; VoiceOver reads a summary of what the selection shares
+  or not. Same look.
+- **New `AtticTaskShortcut`**: every task command's key in one place (⌘C,
+  ⌘D and ⇧⌘I added; checked against the spec's key map). `AtticTaskKeys`
+  answers ⌘C, ⌘D and ⇧⌘I, and only when the task offers the command.
+- **`AtticTaskActions`** gains Move Up/Down, Add Subtask, Copy, Duplicate,
+  Change Priority and Show Actions, each a VoiceOver action when offered.
+- **`AtticTaskRow`** gains `onActions`: **new `AtticRowActionsButton`** ("…",
+  the icon ink, the date's hover pill, 22 × 18, `AtticRowActionsMetrics`) on
+  the title line only while the pointer or the keyboard is on the row; the
+  date steps aside for it. Nothing shows at rest.
+- **`AtticSubtaskRow` / `AtticQuickLook`**: a subtask may take `commands`
+  (a keyboard stop with the commands' keys, its right-click menu and its
+  VoiceOver actions, one list) and be renamed in place (`renaming`). The
+  checkbox and the line look the same; a keyboard-driven focus ring shows.
+- **New `AtticShortcutRecorderRow`** (Settings): the title, a raised key cap
+  with the combination (Type a Shortcut while recording), and Reset; the
+  refusal's reason in the warning ink under it.
+- **`AtticTabsSearchField`** gives the keyboard to its own AppKit field from a
+  probe beside it (**new `AtticFieldClaimProbe`**) the moment it is in the
+  window: the ⌘F-after-Esc flake gave it to the field still fading out.
+
+### Phase 1 round 11: performance and feel (owner: "everything feels laggy", 2026-09-28)
+
+- **Motion presets back to the spec's timings** (§ Motion: under about 300 ms,
+  no bounce on everyday actions), keeping round 9's life where it belongs:
+  `slide` 0.25 s, bounce 0 (was 0.32, 0.15); `expand` 0.22, 0 (0.30, 0.2);
+  `doneSlide` 0.25, 0 (0.34, 0.2); `popover` 0.22, 0.15 (0.26, 0.3); `toast`
+  0.24, 0.12 (0.32, 0.25); `settle` 0.24, 0.08 (0.30, 0.25); `complete` 0.22,
+  0.15 (0.26, 0.3); `failReturn` 0.28, 0.1 (0.34, 0.15). Navigation never
+  bounces; only small things that appear land with a light bounce.
+- **`AtticPageTabs` changes its selection plainly**: the page that shows the
+  selection moves itself. Wrapping it in the slide's animation animated a tab
+  click twice (the Tasks pager's own spring as well) and faded the page in.
+- **`AtticMenuItems(building:)`**: commands built only when the menu is built.
+  A row's `.contextMenu` otherwise worked out every command of every row, a
+  fetch of every tag included, each time the list redrew (1.4–3.7 s for a tab
+  click's first frame with the spec's 500 open and 5,000 done tasks).
+- **`AtticTaskRowModel` is `Equatable`** (the subtask counts compared by hand),
+  so a list can skip redrawing a row whose model did not change.
+- No token, colour, radius or type style changed.
 ### Phase 2 slice 3a — Notes format controls (2026-09-29)
 
 - **New components** (`AtticNoteFormatComponents.swift`): `AtticFormatToggle` (a flat 28 pt

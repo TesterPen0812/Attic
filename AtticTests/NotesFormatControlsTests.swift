@@ -96,7 +96,7 @@ final class NotesFormatControlsTests: XCTestCase {
     private func find(_ title: String, in commands: [AtticMenuCommand]) -> AtticMenuCommand? {
         for command in commands {
             if command.title == title { return command }
-            if let found = find(title, in: command.submenu) { return found }
+            if let found = find(title, in: command.children) { return found }
         }
         return nil
     }
@@ -146,12 +146,12 @@ final class NotesFormatControlsTests: XCTestCase {
         controls.router.run(.paragraph(.bullet), from: .shortcut)
         let menu = controls.router.menuCommands(from: .noteMenu)
         XCTAssertEqual(menu.map(\.title), ["Insert", "Format"])
-        XCTAssertEqual(menu[0].submenu.map(\.title), ["Image or File…", "Date…", "Divider"])
-        let format = menu[1].submenu
+        XCTAssertEqual(menu[0].children.map(\.title), ["Image or File…", "Date…", "Divider"])
+        let format = menu[1].children
         for command in NoteCommandCatalog.formatSections.flatMap({ $0 }) {
             XCTAssertNotNil(format.first { $0.title == NoteCommandCatalog.menuTitle(command) }, "Format lists \(command)")
         }
-        XCTAssertEqual(find("Bulleted List", in: menu)?.isChecked, true, "the current list is checked")
+        XCTAssertEqual(find("Bulleted List", in: menu)?.state, .on, "the current list is checked")
         XCTAssertEqual(find("Bold", in: menu)?.shortcut, KeyboardShortcut("b", modifiers: .command))
         XCTAssertEqual(find("Checklist", in: menu)?.shortcut, KeyboardShortcut("9", modifiers: [.command, .shift]))
         XCTAssertEqual(find("Check or Uncheck", in: menu)?.shortcut, KeyboardShortcut(.return, modifiers: .command))

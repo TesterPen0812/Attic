@@ -191,7 +191,7 @@ final class AgentTaskTools {
         [
             "name": "delete_task",
             "title": "Delete Attic Task",
-            "description": "Move a task AND all its subtasks to Recently Deleted, where they can be restored for 30 days (restore_item). Deleting a subtask leaves the parent intact. Prefer update_task with status done for finished work.",
+            "description": "Move a task AND all its subtasks to Recently Deleted, where they can be restored for 30 days (restore_item). A task in the Done log can be deleted too; restoring it puts it back in the log. Deleting a subtask leaves the parent intact. Prefer update_task with status done for finished work.",
             "annotations": [
                 "readOnlyHint": false,
                 "destructiveHint": true,
@@ -204,6 +204,28 @@ final class AgentTaskTools {
                     "id": [
                         "type": "string",
                         "description": "Task id returned by list_tasks or create_task."
+                    ]
+                ],
+                "required": ["id"],
+                "additionalProperties": false
+            ]
+        ],
+        [
+            "name": "duplicate_task",
+            "title": "Duplicate Attic Task",
+            "description": "Make an unfinished copy of a main task, as the person's Duplicate (⌘D) does: the same title, priority, tags and due date, and a copy of every subtask (unfinished, new ids); files stay with the original. A copy of a Later task stays in Later, any other goes to Now as to do, right below the original when it can. Works on Done log tasks too. One undoable step. Returns the copy.",
+            "annotations": [
+                "readOnlyHint": false,
+                "destructiveHint": false,
+                "idempotentHint": false,
+                "openWorldHint": false
+            ],
+            "inputSchema": [
+                "type": "object",
+                "properties": [
+                    "id": [
+                        "type": "string",
+                        "description": "Main task id returned by list_tasks or create_task."
                     ]
                 ],
                 "required": ["id"],
@@ -462,6 +484,7 @@ final class AgentTaskTools {
         case "create_task": try createTask(arguments)
         case "update_task": try updateTask(arguments)
         case "delete_task": try deleteTask(arguments)
+        case "duplicate_task": try duplicateTask(arguments)
         case "list_notes": try listNotes(arguments)
         case "create_note": try createNote(arguments)
         case "update_note": try updateNote(arguments)
@@ -636,10 +659,27 @@ final class AgentTaskTools {
     }
 
     private func deleteTask(_ arguments: [String: Any]) throws -> String {
-        let task = try findTask(arguments)
+        let task = try findTask(arguments, includingDoneLog: true)
         let id = task.id.uuidString
-        try performLibrary { library.delete(AtticItemRef(.task, task.id)) }
+        if store.task(withID: task.id) == nil {
+            // In the Done log (round 10): with its family, back to the log
+            // on restore.
+            try perform { library.deleteListedTasks([task.id]) }
+        } else {
+            try performLibrary { library.delete(AtticItemRef(.task, task.id)) }
+        }
         return try encode(["deleted": id])
+    }
+
+    private func duplicateTask(_ arguments: [String: Any]) throws -> String {
+        let task = try findTask(arguments, includingDoneLog: true)
+        guard task.parentID == nil || store.listedTask(withID: task.parentID!) == nil else {
+            throw AgentToolError.invalidArguments("Only a main task can be duplicated.")
+        }
+        guard let copy = library.duplicateTasks([task.id])?.first else {
+            throw AgentToolError.storeFailure(library.lastFailure?.message ?? store.lastErrorMessage ?? "Unknown error.")
+        }
+        return try encode(["task": serialize(copy)])
     }
 
     private func findTask(_ arguments: [String: Any], includingDoneLog: Bool = false) throws -> TaskItem {
@@ -686,6 +726,14 @@ final class AgentTaskTools {
     private func perform(_ change: () throws -> Bool) throws {
         guard try change() else {
             throw AgentToolError.storeFailure(store.lastErrorMessage ?? "Unknown error.")
+        }
+    }
+
+    /// A library command: its own failure message, whichever family owns
+    /// the store's notice.
+    private func perform(_ change: () throws -> CommandOutcome) throws {
+        if let failure = try change().failure {
+            throw AgentToolError.storeFailure(failure.message)
         }
     }
 

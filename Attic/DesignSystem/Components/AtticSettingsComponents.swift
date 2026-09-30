@@ -672,6 +672,9 @@ struct AtticAppearancePreview<Panel: View>: View {
         let shape = RoundedRectangle(cornerRadius: AtticRadius.groupCard, style: .continuous)
         ZStack(alignment: .top) {
             AtticStandInWallpaper(dark: design.mode == .dark)
+            // The miniature panel runs past the card's bottom: it fades out
+            // over the last 36 pt (CU review, visual 3), so the card never
+            // ends in a hard crop through a row.
             panel
                 .scaleEffect(scale, anchor: .top)
                 .frame(width: AtticLayout.panelSize.width * scale, height: AtticLayout.panelSize.height * scale, alignment: .top)
@@ -682,6 +685,14 @@ struct AtticAppearancePreview<Panel: View>: View {
                 .padding(.top, AtticSettingsMetrics.previewTop)
                 .environment(\.atticProbesDisabled, true)
                 .allowsHitTesting(false)
+                .frame(height: height, alignment: .top)
+                .mask {
+                    VStack(spacing: 0) {
+                        Color.black
+                        LinearGradient(colors: [.black, .black.opacity(0)], startPoint: .top, endPoint: .bottom)
+                            .frame(height: AtticSettingsMetrics.previewBottomFade)
+                    }
+                }
         }
         .frame(maxWidth: .infinity)
         .frame(height: height, alignment: .top)

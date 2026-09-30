@@ -88,7 +88,7 @@ final class UndoInterleavingTests: XCTestCase {
         let library = try makeLibrary()
         let task = try XCTUnwrap(library.tasks.create(title: "Draft"))
         XCTAssertTrue(library.setTags(["t"], on: AtticItemRef(.task, task.id)))
-        XCTAssertTrue(library.updateTask(task.id, title: "Final"))
+        XCTAssertTrue(library.updateTask(task.id, title: "Final").isApplied)
         // Since the edit: a tag rename in the library history, and a
         // priority change made outside the route.
         XCTAssertTrue(library.renameTag("t", to: "u"))
@@ -110,7 +110,7 @@ final class UndoInterleavingTests: XCTestCase {
     func testUndoingAMoveRestoresOnlyTheOrder() throws {
         let library = try makeLibrary()
         let created = try XCTUnwrap(library.tasks.commit([TaskDraft(title: "A"), TaskDraft(title: "B"), TaskDraft(title: "C")]))
-        XCTAssertTrue(library.moveTask(created[2].id, relativeTo: created[0].id))
+        XCTAssertTrue(library.moveTask(created[2].id, relativeTo: created[0].id).isApplied)
         XCTAssertTrue(library.tasks.rename(created[1], to: "B renamed"), "renamed outside the route")
         XCTAssertTrue(library.undo.undo(in: .tasks))
         XCTAssertEqual(library.tasks.orderedTasks(for: .todo).map(\.title), ["A", "B renamed", "C"],
@@ -121,8 +121,8 @@ final class UndoInterleavingTests: XCTestCase {
         let library = try makeLibrary()
         let task = try XCTUnwrap(library.tasks.create(title: "Draft"))
         let due = try XCTUnwrap(DueDay(year: 2026, month: 10, day: 1))
-        XCTAssertTrue(library.updateTask(task.id, dueDay: .some(due)))
-        XCTAssertTrue(library.updateTask(task.id, title: "Final"))
+        XCTAssertTrue(library.updateTask(task.id, dueDay: .some(due)).isApplied)
+        XCTAssertTrue(library.updateTask(task.id, title: "Final").isApplied)
         XCTAssertTrue(library.tasks.rename(task, to: "Other"), "changed outside the route")
         XCTAssertEqual(library.undo.undoCount(in: .tasks), 2)
 
@@ -138,8 +138,8 @@ final class UndoInterleavingTests: XCTestCase {
         let library = try makeLibrary()
         let first = try XCTUnwrap(library.tasks.create(title: "First"))
         let second = try XCTUnwrap(library.tasks.create(title: "Second"))
-        XCTAssertTrue(library.updateTask(first.id, title: "First edited"))
-        XCTAssertTrue(library.updateTask(second.id, title: "Second edited"))
+        XCTAssertTrue(library.updateTask(first.id, title: "First edited").isApplied)
+        XCTAssertTrue(library.updateTask(second.id, title: "Second edited").isApplied)
         XCTAssertTrue(library.tasks.delete(second), "deleted outside the route")
 
         XCTAssertFalse(library.undo.undo(in: .tasks))
@@ -187,7 +187,7 @@ final class UndoInterleavingTests: XCTestCase {
     func testAnEditUndoLeavesADivergentReplicasOwnValueAlone() throws {
         let library = try makeLibrary()
         let task = try XCTUnwrap(library.tasks.create(title: "Draft"))
-        XCTAssertTrue(library.updateTask(task.id, title: "Final"))
+        XCTAssertTrue(library.updateTask(task.id, title: "Final").isApplied)
         let shown = try XCTUnwrap(library.tasks.task(withID: task.id))
         try insertDivergentCopy(of: shown, title: "Renamed elsewhere", tags: [], in: library)
 
@@ -201,7 +201,7 @@ final class UndoInterleavingTests: XCTestCase {
     func testAMoveUndoLeavesADivergentReplicasOwnOrderAlone() throws {
         let library = try makeLibrary()
         let created = try XCTUnwrap(library.tasks.commit([TaskDraft(title: "A"), TaskDraft(title: "B"), TaskDraft(title: "C")]))
-        XCTAssertTrue(library.moveTask(created[2].id, relativeTo: created[0].id))
+        XCTAssertTrue(library.moveTask(created[2].id, relativeTo: created[0].id).isApplied)
         let shown = try XCTUnwrap(library.tasks.task(withID: created[2].id))
         let movedOrder = shown.manualOrder
         let context = ModelContext(library.tasks.container)
@@ -231,7 +231,7 @@ final class UndoInterleavingTests: XCTestCase {
         let earlier = try XCTUnwrap(library.createTasks([TaskDraft(title: "Earlier")])?.first)
         let task = try XCTUnwrap(library.createTasks([TaskDraft(title: "Finish")])?.first)
         let completedAt = clock.value
-        XCTAssertTrue(library.updateTask(task.id, status: .done))
+        XCTAssertTrue(library.updateTask(task.id, status: .done).isApplied)
         clock.value += 2 * day
         XCTAssertEqual(cleanup(library, at: clock.value), 1)
         XCTAssertNil(library.tasks.task(withID: task.id))
@@ -266,8 +266,8 @@ final class UndoInterleavingTests: XCTestCase {
         let child = try XCTUnwrap(library.tasks.create(title: "Child", parentID: parent.id))
         let sibling = try XCTUnwrap(library.tasks.create(title: "Sibling", parentID: parent.id))
         XCTAssertTrue(library.tasks.markDone(sibling))
-        XCTAssertTrue(library.updateTask(child.id, status: .done))
-        XCTAssertTrue(library.updateTask(parent.id, status: .done))
+        XCTAssertTrue(library.updateTask(child.id, status: .done).isApplied)
+        XCTAssertTrue(library.updateTask(parent.id, status: .done).isApplied)
         clock.value += 2 * day
         XCTAssertEqual(cleanup(library, at: clock.value), 3)
         XCTAssertTrue(library.tasks.tasks.isEmpty)
@@ -286,7 +286,7 @@ final class UndoInterleavingTests: XCTestCase {
         let clock = MutableNow(Date(timeIntervalSince1970: 1_790_000_000))
         let library = try makeLibrary(clock: clock)
         let task = try XCTUnwrap(library.tasks.create(title: "Draft"))
-        XCTAssertTrue(library.updateTask(task.id, title: "Final"))
+        XCTAssertTrue(library.updateTask(task.id, title: "Final").isApplied)
         XCTAssertTrue(library.tasks.markDone(task), "completed outside the route")
         clock.value += 2 * day
         XCTAssertEqual(cleanup(library, at: clock.value), 1)

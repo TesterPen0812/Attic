@@ -1,3 +1,4 @@
+import AppKit
 import SwiftUI
 
 // Phase 1 additions for the rebuilt Settings pages (logged in
@@ -62,6 +63,9 @@ enum AtticSettingsRowMetrics {
 /// last content scrolls clear of the bottom zone.
 struct AtticSettingsScrollPage<Content: View>: View {
     var identifier: String?
+    /// The gap under the header: 52 pt (spec), or 24 on a compact page
+    /// (Appearance, Astra 26: the preview and its choices start closer).
+    var compact = false
     @ViewBuilder let content: Content
 
     @Environment(\.atticCapture) private var capture
@@ -85,7 +89,7 @@ struct AtticSettingsScrollPage<Content: View>: View {
         VStack(alignment: .leading, spacing: 0) {
             content
         }
-        .padding(.top, AtticSettingsPageMetrics.contentTop)
+        .padding(.top, compact ? AtticSettingsPageMetrics.compactContentTop : AtticSettingsPageMetrics.contentTop)
         .padding(.horizontal, AtticSpacing.settingsGroupInset)
         .padding(.bottom, AtticEdgeBlur.settingsBottom)
         .frame(maxWidth: .infinity, alignment: .leading)
@@ -96,6 +100,8 @@ enum AtticSettingsPageMetrics {
     /// Below the header: 52 pt from the back button's bottom (spec), less
     /// the 12 pt the header keeps under the button.
     static let contentTop: CGFloat = AtticSpacing.settingsBelowHeader - AtticSpacing.s12
+    /// The same on a compact page: 24 pt from the back button's bottom.
+    static let compactContentTop: CGFloat = AtticSpacing.settingsBelowHeaderCompact - AtticSpacing.s12
     /// The short ease under the header, so scrolled content never meets a
     /// hard line.
     static let topFade: CGFloat = AtticSpacing.s12
@@ -391,5 +397,110 @@ struct AtticGroupEmptyRow: View {
         AtticText(verbatim: text, style: .settingsHint, ink: .helper)
             .padding(.horizontal, AtticLayout.groupedRowTextInset)
             .frame(maxWidth: .infinity, minHeight: AtticLayout.groupedRowSingle, alignment: .leading)
+    }
+}
+
+/// A shortcut recorder row (round 10: Settings › General › Quick Capture):
+/// the title, a raised key cap showing the combination, and Reset. A click
+/// on the cap (or Space or Return while it has the keyboard) starts
+/// recording: the next key pressed with a modifier becomes the shortcut,
+/// Esc cancels, and leaving the window cancels. What is accepted is the
+/// caller's decision (`record` returns why not, shown under the row).
+/// VoiceOver reads the combination by name and whether it is recording.
+struct AtticShortcutRecorderRow: View {
+    let title: String
+    /// The combination as menus write it ("⌃⌥Space").
+    let value: String
+    /// The same, spoken ("Control Option Space").
+    let spokenValue: String
+    var isDefault = true
+    var identifier: String?
+    /// Recording started or ended (the caller releases its claim meanwhile).
+    var recordingChanged: (Bool) -> Void = { _ in }
+    /// A key pressed while recording: nil accepts it, else why not.
+    let record: (NSEvent) -> String?
+    let reset: () -> Void
+
+    @Environment(\.isEnabled) private var isEnabled
+    @State private var recording = false
+    @State private var problem: String?
+    @State private var monitor: Any?
+    @State private var probeID = UUID()
+
+    var body: some View {
+        let m = AtticSettingsRowMetrics.self
+        VStack(alignment: .leading, spacing: 0) {
+            HStack(spacing: AtticSettingsMetrics.rowTrailingMinGap) {
+                AtticText(verbatim: title, style: .rowSingle, ink: isEnabled ? .body : .disabledText)
+                Spacer(minLength: AtticSettingsMetrics.rowTrailingMinGap)
+                AtticRaisedButton(systemName: recording ? "keyboard" : nil,
+                                  title: recording ? "Type a Shortcut" : "\(value)",
+                                  height: m.actionHeight) {
+                    recording ? stop() : start()
+                }
+                .fixedSize()
+                .help(recording ? String(localized: "Press the new shortcut, or Esc to cancel") : String(localized: "Record a new shortcut"))
+                .accessibilityLabel(title)
+                .accessibilityValue(recording ? String(localized: "Recording. Press the new shortcut, or Escape to cancel.") : spokenValue)
+                .accessibilityHint(String(localized: "Records a new shortcut"))
+                .atticIdentifier(identifier)
+                AtticRaisedButton(systemName: nil, title: "Reset", height: m.actionHeight, action: {
+                    stop()
+                    problem = nil
+                    reset()
+                })
+                .fixedSize()
+                .disabled(isDefault)
+                .help(String(localized: "Back to the default shortcut"))
+                .atticIdentifier(identifier.map { $0 + "-reset" })
+            }
+            .frame(height: AtticLayout.groupedRowSingle)
+            if let problem {
+                AtticText(verbatim: problem, style: .groupValue, ink: .warningText)
+                    .padding(.bottom, AtticSpacing.s8)
+                    .atticIdentifier(identifier.map { $0 + "-problem" })
+            }
+        }
+        .padding(.leading, AtticLayout.groupedRowTextInset)
+        .padding(.trailing, m.actionTrailing)
+        .accessibilityElement(children: .contain)
+        .onDisappear { stop() }
+        .onChange(of: isEnabled) { _, enabled in if !enabled { stop() } }
+        .onReceive(NotificationCenter.default.publisher(for: NSWindow.didResignKeyNotification)) { _ in stop() }
+        .atticControlProbe("Grouped row (single)", id: probeID,
+                           expectedSize: nil, radius: 0, expectedRadius: 0)
+    }
+
+    private func start() {
+        guard !recording else { return }
+        problem = nil
+        recording = true
+        recordingChanged(true)
+        AccessibilityNotification.Announcement(String(localized: "Recording. Press the new shortcut.")).post()
+        monitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { event in
+            MainActor.assumeIsolated {
+                guard recording else { return event }
+                if event.keyCode == 53, event.modifierFlags.intersection([.command, .control, .option, .shift]).isEmpty {
+                    stop()
+                    return nil
+                }
+                if let reason = record(event) {
+                    problem = reason
+                    AccessibilityNotification.Announcement(reason).post()
+                } else {
+                    problem = nil
+                    stop()
+                }
+                return nil
+            }
+        }
+    }
+
+    private func stop() {
+        if let monitor { NSEvent.removeMonitor(monitor) }
+        monitor = nil
+        guard recording else { return }
+        recording = false
+        recordingChanged(false)
     }
 }

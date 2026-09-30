@@ -458,6 +458,8 @@ final class AtticPanelController: NSObject, NSWindowDelegate {
         resamplePointerPassthrough()
         animateShow(to: finalFrame)
         PerformanceSignposts.panelOrderedFront()
+        // A reveal: the panel was hidden and is now on screen.
+        uiState.panelDidReveal()
         return true
     }
 
@@ -523,6 +525,7 @@ final class AtticPanelController: NSObject, NSWindowDelegate {
                 guard let self, self.visibilityTransition.ownsCompletion(generation) else { return }
                 self.panel.orderOut(nil)
                 self.performanceVisibilityChanges += 1
+                self.uiState.panelDidHide()
                 self.panel.alphaValue = 1
                 self.stopPointerPassthroughMonitoring()
                 self.subtaskPanels.mainPanelDidHide()
@@ -575,6 +578,16 @@ final class AtticPanelController: NSObject, NSWindowDelegate {
         panel.onUnhandledEscape = { [weak self] in
             guard let self, self.panel.isVisible else { return }
             self.requestInteractiveHide()
+        }
+        // ⌘Z with the keyboard nowhere in a page (after clicking the pin,
+        // say): the Tasks history, the one the Undo toast names.
+        panel.onUnhandledUndo = { [weak self] redo in
+            guard let self, self.uiState.selectedSection.isTaskBased, let library = self.store.commandLibrary else { return }
+            _ = redo ? library.redo(in: .tasks) : library.undo(in: .tasks)
+        }
+        panel.canPerformUnhandledUndo = { [weak self] redo in
+            guard let self, self.uiState.selectedSection.isTaskBased, let library = self.store.commandLibrary else { return false }
+            return redo ? library.undo.canRedo(in: .tasks) : library.undo.canUndo(in: .tasks)
         }
         panel.onDirectContentInteraction = { [weak self] in
             guard let self, self.isShowing || self.isInteractiveDismissal else { return }
@@ -964,7 +977,7 @@ final class AtticPanelController: NSObject, NSWindowDelegate {
         contentContainer?.setCollapseProgress(
             interactiveSwipeStartProgress + (1 - interactiveSwipeStartProgress) * progress,
             corner: currentCorner,
-            reduceMotion: NSWorkspace.shared.accessibilityDisplayShouldReduceMotion
+            reduceMotion: AtticMotionPreference.reducesMotion
         )
     }
 
@@ -1043,7 +1056,7 @@ final class AtticPanelController: NSObject, NSWindowDelegate {
         let generation = visibilityTransition.generation
         isPanelMotionActive = true
         contentContainer?.allowsContentInteraction = false
-        let reduceMotion = NSWorkspace.shared.accessibilityDisplayShouldReduceMotion
+        let reduceMotion = AtticMotionPreference.reducesMotion
         let currentScale = contentContainer?.presentationTransform.m11 ?? 1
         let targetScale = 1 - collapseProgress * (1 - PanelCollapseGeometry.collapsedScale)
         let remaining = min(1, abs(currentScale - targetScale) / (1 - PanelCollapseGeometry.collapsedScale))
@@ -1384,6 +1397,42 @@ final class AtticPanelController: NSObject, NSWindowDelegate {
         field.selectAll(nil)
         field.insertText("", replacementRange: field.selectedRange())
         return durations
+    }
+
+    /// Performance seam (probe only): scrolls the tallest visible vertical
+    /// list down `steps` times by `step` points, drawing each step before
+    /// the next, and returns each step's time in milliseconds.
+    func scrollForPerformanceProbe(steps: Int, step: CGFloat) -> [Double] {
+        guard panel.isVisible, let scrollView = Self.tallestScrollView(in: panel.contentView) else { return [] }
+        let clip = scrollView.contentView
+        var durations: [Double] = []
+        for _ in 0..<steps {
+            let start = DispatchTime.now().uptimeNanoseconds
+            var origin = clip.bounds.origin
+            let maxY = max(0, (scrollView.documentView?.frame.height ?? 0) - clip.bounds.height)
+            origin.y = min(origin.y + step, maxY)
+            clip.scroll(to: origin)
+            scrollView.reflectScrolledClipView(clip)
+            panel.contentView?.layoutSubtreeIfNeeded()
+            panel.displayIfNeeded()
+            CATransaction.flush()
+            durations.append(Double(DispatchTime.now().uptimeNanoseconds - start) / 1_000_000)
+        }
+        return durations
+    }
+
+    private static func tallestScrollView(in view: NSView?) -> NSScrollView? {
+        guard let view, !view.isHiddenOrHasHiddenAncestor else { return nil }
+        var best: NSScrollView?
+        if let scroll = view as? NSScrollView, scroll.hasVerticalScroller || (scroll.documentView?.frame.height ?? 0) > scroll.frame.height,
+           scroll.visibleRect.width > 0 {
+            best = scroll
+        }
+        for subview in view.subviews {
+            if let found = tallestScrollView(in: subview),
+               (found.documentView?.frame.height ?? 0) > (best?.documentView?.frame.height ?? 0) { best = found }
+        }
+        return best
     }
 
     private static func firstTokenField(in view: NSView?) -> AtticTokenTextView? {

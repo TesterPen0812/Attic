@@ -66,6 +66,35 @@ enum TasksPagePreview {
     }
 
     /// Capture seam: nothing open, six tasks finished today.
+    /// The spec's seeded sizes (round 11's performance measures): 500 open
+    /// tasks (some in progress), 500 in Later and 5,000 in the Done log,
+    /// with dates, tags and priorities on some, as real lists have.
+    static func seedScale(in container: ModelContainer) throws {
+        let context = ModelContext(container)
+        let calendar = Calendar.autoupdatingCurrent
+        let now = Date()
+        var order: Int64 = 10_000_000
+        let priorities: [TaskPriority] = [.none, .none, .medium, .none, .high]
+        func insert(_ index: Int, _ title: String, _ status: TaskStatus, logged: Bool = false, completed: Date? = nil) {
+            order -= 1_024
+            let item = TaskItem(title: title, status: status, priority: priorities[index % priorities.count], createdAt: now,
+                                completedAt: completed, manualOrder: order, parentID: nil)
+            if index % 3 == 0, let date = calendar.date(byAdding: .day, value: index % 9 - 2, to: now) {
+                item.dueDay = DueDay(date: date, calendar: calendar)
+            }
+            if index % 4 == 0 { item.tags = Array(["home", "work", "errands"].prefix(index % 3 + 1)) }
+            item.listOrderVersion = TaskItem.currentListOrderVersion
+            if logged { item.doneLoggedAt = now }
+            context.insert(item)
+        }
+        for index in 0..<500 { insert(index, "Open task number \(index) with a title", index % 25 == 0 ? .inProgress : .todo) }
+        for index in 0..<500 { insert(index, "Later task number \(index)", .backlog) }
+        for index in 0..<5_000 {
+            insert(index, "Finished task \(index)", .done, logged: true, completed: now.addingTimeInterval(-Double(index + 1) * 3_600))
+        }
+        try context.save()
+    }
+
     static func seedCaughtUp(in container: ModelContainer) throws {
         let context = ModelContext(container)
         let now = Date()
@@ -81,7 +110,7 @@ enum TasksPagePreview {
     }
 
     /// The v9 mockup's tasks, plus a backlog and a few days of the Done log.
-    static func seedDemo(in container: ModelContainer) throws {
+    static func seedDemo(in container: ModelContainer, long: Bool = false) throws {
         let context = ModelContext(container)
         let calendar = Calendar.autoupdatingCurrent
         let now = Date()
@@ -121,6 +150,14 @@ enum TasksPagePreview {
         for (offset, title) in [(1, "Send invoice"), (1, "Water the plants"), (2, "Call the bank"), (6, "Pay rent"), (40, "Renew passport")] {
             let completed = calendar.date(byAdding: .day, value: -offset, to: now) ?? now
             _ = task(title, .done, completed: completed, logged: true)
+        }
+        if long {
+            // Round 3's stress rows (captures only): a long details line and
+            // enough rows to scroll under the tabs and header.
+            let busy = task("Prepare the quarterly planning review for the whole design team", .todo, .medium, due: day(9),
+                            tags: ["planning-and-strategy", "design-team", "quarterly"])
+            for index in 1...12 { _ = task("Checklist item \(index)", index % 3 == 0 ? .done : .todo, parent: busy.id, completed: index % 3 == 0 ? now : nil) }
+            for index in 1...14 { _ = task("Errand number \(index)", .todo, index % 5 == 0 ? .medium : .none, due: index % 4 == 0 ? day(index) : nil) }
         }
         try context.save()
     }

@@ -119,12 +119,15 @@ extension View {
     /// Derives the context from the system (Light or Dark, Increase Contrast,
     /// Reduce Transparency, Reduce Motion, Differentiate Without Colour) plus
     /// the three customisation layers. Phase 1 feeds these from AppSettings.
+    /// `animations` is Settings › General › Animations: Reduced sets
+    /// `reduceMotion` as macOS Reduce Motion does (round 9, owner item 26).
     func atticDesignFromSystem(
         palette: AtticPanelTheme = .original,
         surface: PanelSurfaceStyle = .solid,
         tint: PanelTintLevel = .off,
         tintLength: Double = PanelTintLength.defaultValue,
         hapticsEnabled: Bool = true,
+        animations: AtticAnimationLevel = .full,
         controls: AtticControlMaterial = .liquidGlass
     ) -> some View {
         modifier(AtticSystemDesignModifier(
@@ -133,7 +136,8 @@ extension View {
             surface: surface,
             tint: tint,
             tintLength: tintLength,
-            hapticsEnabled: hapticsEnabled
+            hapticsEnabled: hapticsEnabled,
+            animations: animations
         ))
     }
 }
@@ -145,6 +149,7 @@ private struct AtticSystemDesignModifier: ViewModifier {
     let tint: PanelTintLevel
     let tintLength: Double
     let hapticsEnabled: Bool
+    let animations: AtticAnimationLevel
 
     @Environment(\.colorScheme) private var colorScheme
     @Environment(\.colorSchemeContrast) private var contrast
@@ -161,7 +166,7 @@ private struct AtticSystemDesignModifier: ViewModifier {
             tintLength: tintLength,
             increaseContrast: contrast == .increased,
             reduceTransparency: reduceTransparency,
-            reduceMotion: reduceMotion,
+            reduceMotion: reduceMotion || animations == .reduced,
             differentiateWithoutColor: differentiateWithoutColor,
             hapticsEnabled: hapticsEnabled,
             controls: controls

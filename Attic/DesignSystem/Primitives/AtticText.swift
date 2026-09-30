@@ -13,6 +13,9 @@ struct AtticText: View {
     /// User content (a task title) may truncate with an ellipsis; interface
     /// copy never may, and the appearance check fails it if it does.
     var truncates = false
+    /// Search matches in user content: the find highlight behind them,
+    /// the letters in the primary ink (the Done search, owner item 17).
+    var highlights: [Range<String.Index>] = []
 
     @Environment(\.atticDesign) private var design
     @Environment(\.atticCapture) private var capture
@@ -27,17 +30,28 @@ struct AtticText: View {
     }
 
     /// User content (task titles, tags) that must not be localised.
-    init(verbatim string: String, style: AtticTextStyle, ink: AtticInk, strikethrough: Bool = false, truncates: Bool = false, allowsOverlap: Bool = false) {
+    init(verbatim string: String, style: AtticTextStyle, ink: AtticInk, strikethrough: Bool = false, truncates: Bool = false,
+         allowsOverlap: Bool = false, highlights: [Range<String.Index>] = []) {
         self.string = string
         self.style = style
         self.ink = ink
         self.strikethrough = strikethrough
         self.truncates = truncates
         self.allowsOverlap = allowsOverlap
+        self.highlights = highlights
     }
 
     private var text: Text {
-        Text(verbatim: string).font(style.font)
+        guard !highlights.isEmpty else { return Text(verbatim: string).font(style.font) }
+        var attributed = AttributedString(string)
+        let tokens = design.tokens
+        for range in highlights {
+            guard let lower = AttributedString.Index(range.lowerBound, within: attributed),
+                  let upper = AttributedString.Index(range.upperBound, within: attributed) else { continue }
+            attributed[lower..<upper].backgroundColor = tokens.findHighlight.color
+            attributed[lower..<upper].foregroundColor = tokens.ink(.heading).color
+        }
+        return Text(attributed).font(style.font)
     }
 
     var body: some View {

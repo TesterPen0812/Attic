@@ -1,3 +1,4 @@
+import Combine
 import Foundation
 import SwiftData
 
@@ -30,6 +31,14 @@ final class AtticLibrary {
     let undo: UndoRoute
     private let container: ModelContainer
     private(set) var lastErrorMessage: String?
+    /// The last task command that changed nothing, and why (Astra 6). Also
+    /// set by `createTasks`, which returns the tasks instead of an outcome.
+    private(set) var lastFailure: CommandFailure?
+    /// A main task's subtasks were reordered on purpose (moved, or a move
+    /// undone or redone, from any history that reaches this library): the
+    /// id is the main task's. A page holding the quick look's order lets go
+    /// of it, so the open list shows the new order (round 10b).
+    let subtaskOrderChanges = PassthroughSubject<UUID, Never>()
 
     init(
         tasks: TaskStore,
@@ -113,6 +122,8 @@ final class AtticLibrary {
     @discardableResult
     func createTasks(_ drafts: [TaskDraft], in history: UndoHistoryID = .tasks) -> [TaskItem]? {
         var created: [TaskItem]?
+        let serial = tasks.errorSerial
+        defer { if created == nil { _ = taskOutcome(false, since: serial, ids: []) } }
         undo.perform(in: history) {
             guard let tasks = self.tasks.commit(drafts), !tasks.isEmpty else { return nil }
             created = tasks
@@ -147,8 +158,9 @@ final class AtticLibrary {
         dueDay: DueDay?? = nil,
         allowingUnfinishedSubtasks: Bool = false,
         in history: UndoHistoryID = .tasks
-    ) -> Bool {
+    ) -> CommandOutcome {
         var succeeded = false
+        let serial = tasks.errorSerial
         undo.perform(in: history) {
             guard let task = tasks.task(withID: id), let before = tasks.editableState(of: id),
                   tasks.update(
@@ -166,23 +178,24 @@ final class AtticLibrary {
             let name = status != nil && status?.rawValue != before.statusRaw ? "Change Task State" : "Edit Task"
             return editStep(name, before: [before], after: [after])
         }
-        return succeeded
+        return taskOutcome(succeeded, since: serial, ids: [id])
     }
 
     /// A reorder within a group (⌘↑ ⌘↓, or a drop onto a row) as one step.
     @discardableResult
-    func moveTask(_ id: UUID, relativeTo targetID: UUID, in history: UndoHistoryID = .tasks) -> Bool {
+    func moveTask(_ id: UUID, relativeTo targetID: UUID, in history: UndoHistoryID = .tasks) -> CommandOutcome {
         orderStep(id, in: history) { tasks.reorder(taskID: id, relativeTo: targetID) }
     }
 
     /// A drag reorder to a place in the task's group as one step.
     @discardableResult
-    func moveTask(_ id: UUID, toIndex index: Int, in history: UndoHistoryID = .tasks) -> Bool {
+    func moveTask(_ id: UUID, toIndex index: Int, in history: UndoHistoryID = .tasks) -> CommandOutcome {
         orderStep(id, in: history) { tasks.move(taskID: id, toIndex: index) }
     }
 
-    private func orderStep(_ id: UUID, in history: UndoHistoryID, _ move: () -> Bool) -> Bool {
+    private func orderStep(_ id: UUID, in history: UndoHistoryID, _ move: () -> Bool) -> CommandOutcome {
         var succeeded = false
+        let serial = tasks.errorSerial
         undo.perform(in: history) {
             guard let task = tasks.task(withID: id) else { return nil }
             let group = tasks.orderGroup(of: task).map(\.id)
@@ -193,13 +206,14 @@ final class AtticLibrary {
             guard before != after else { return nil }
             return editStep("Move Task", before: before, after: after)
         }
-        return succeeded
+        return taskOutcome(succeeded, since: serial, ids: [id])
     }
 
     /// Completes a task with its unfinished subtasks as one step.
     @discardableResult
-    func completeTask(_ id: UUID, in history: UndoHistoryID = .tasks) -> Bool {
+    func completeTask(_ id: UUID, in history: UndoHistoryID = .tasks) -> CommandOutcome {
         var succeeded = false
+        let serial = tasks.errorSerial
         undo.perform(in: history) {
             guard let task = tasks.task(withID: id) else { return nil }
             let family = [id] + (tasks.parent(of: task) == nil ? tasks.subtasks(of: id).map(\.id) : [])
@@ -210,7 +224,7 @@ final class AtticLibrary {
             guard before != after else { return nil }
             return editStep("Complete Task", before: before, after: after)
         }
-        return succeeded
+        return taskOutcome(succeeded, since: serial, ids: [id])
     }
 
     /// The same edit applied to several tasks as one step (the selection
@@ -222,10 +236,12 @@ final class AtticLibrary {
         status: TaskStatus? = nil,
         addingTag: String? = nil,
         in history: UndoHistoryID = .tasks
-    ) -> Bool {
+    ) -> CommandOutcome {
+        let requested = ids
         let ids = ids.filter { tasks.task(withID: $0) != nil }
-        guard !ids.isEmpty else { return false }
+        guard !ids.isEmpty else { return taskOutcome(false, since: tasks.errorSerial, ids: requested) }
         var succeeded = false
+        let serial = tasks.errorSerial
         undo.perform(in: history) {
             // Completing a main task takes its open subtasks along, as the
             // circle does; their states are part of the step.
@@ -242,17 +258,19 @@ final class AtticLibrary {
             let name = status != nil ? "Change Task State" : "Edit Tasks"
             return editStep(name, before: before, after: after)
         }
-        return succeeded
+        return taskOutcome(succeeded, since: serial, ids: ids)
     }
 
     /// Moves several tasks to Recently Deleted as one step (the selection
     /// bar, Delete on a multi-selection). Undo brings them all back.
     @discardableResult
-    func deleteTasks(_ ids: [UUID], in history: UndoHistoryID = .tasks) -> Bool {
+    func deleteTasks(_ ids: [UUID], in history: UndoHistoryID = .tasks) -> CommandOutcome {
+        let serial = tasks.errorSerial
         guard ids.count > 1 else {
-            return ids.first.map { delete(AtticItemRef(.task, $0), in: history) } ?? false
+            let deleted = ids.first.map { delete(AtticItemRef(.task, $0), in: history) } ?? false
+            return taskOutcome(deleted, since: serial, ids: ids)
         }
-        return undo.perform(in: history) {
+        let deleted = undo.perform(in: history) {
             guard tasks.delete(taskIDs: ids) else { return nil }
             return UndoStep(
                 name: "Delete \(ids.count) Tasks",
@@ -268,34 +286,133 @@ final class AtticLibrary {
                 }
             )
         }
+        return taskOutcome(deleted, since: serial, ids: ids)
     }
 
     /// Brings a finished task back to Now as to do, as one step; undo puts
-    /// it back where it was (the done group, or the Done log).
+    /// it back where it was (the done group, or the Done log), in one save
+    /// over its replicas and family (`TaskStore.undoRestoreToNow`, Astra 4).
     @discardableResult
-    func restoreToNow(_ id: UUID, in history: UndoHistoryID = .tasks) -> Bool {
+    func restoreToNow(_ id: UUID, in history: UndoHistoryID = .tasks) -> CommandOutcome {
+        restoreToNow([id], in: history)
+    }
+
+    /// Restore to Now for one or several finished tasks as one step and one
+    /// save (round 4): undo puts every one back where it was (today's done
+    /// group, or the Done log with its family) in one save; redo restores
+    /// them all again.
+    @discardableResult
+    func restoreToNow(_ ids: [UUID], in history: UndoHistoryID = .tasks) -> CommandOutcome {
         var succeeded = false
+        let serial = tasks.errorSerial
         undo.perform(in: history) {
-            guard let before = tasks.listedEditableState(of: id) else { return nil }
-            let loggedAt = tasks.listedTask(withID: id)?.doneLoggedAt
-            guard tasks.restoreToNow(taskID: id), let after = tasks.editableState(of: id) else { return nil }
+            let before = ids.compactMap(tasks.listedEditableState(of:))
+            guard before.count == ids.count else { return nil }
+            var logging: [UUID: Date] = [:]
+            for id in ids { if let loggedAt = tasks.listedTask(withID: id)?.doneLoggedAt { logging[id] = loggedAt } }
+            guard tasks.restoreToNow(taskIDs: ids) else { return nil }
+            let after = ids.compactMap(tasks.editableState(of:))
             succeeded = true
-            let tasks = self.tasks
+            let store = self.tasks
             return UndoStep(
-                name: "Restore Task",
+                name: ids.count == 1 ? "Restore Task" : "Restore \(ids.count) Tasks",
                 undoOutcome: {
-                    let outcome = tasks.applyEditableTransition(from: [after], to: [before])
-                    guard outcome == .applied, let loggedAt else { return outcome }
-                    _ = tasks.returnToDoneLog(taskID: id, loggedAt: loggedAt)
-                    return .applied
+                    store.undoReturnFromDoneLog(from: after, to: before, logging: logging)
                 },
                 redoOutcome: {
-                    guard tasks.listedTask(withID: id) != nil else { return .obsolete }
-                    return tasks.restoreToNow(taskID: id) ? .applied : .failed
+                    guard ids.allSatisfy({ store.listedTask(withID: $0) != nil }) else { return .obsolete }
+                    return store.restoreToNow(taskIDs: ids) ? .applied : .failed
                 }
             )
         }
-        return succeeded
+        return taskOutcome(succeeded, since: serial, ids: ids)
+    }
+
+    /// Reopens finished tasks (the circle, Space, "Mark as Not Done"),
+    /// each back to the state and place it was finished from, with the
+    /// subtasks finished along with it (`TaskStore.reopen`, Astra 20), as
+    /// one step and one save whatever the undo history holds. Undo finishes
+    /// them again, and puts Done log tasks back in the log, in one save.
+    @discardableResult
+    func reopenTasks(_ ids: [UUID], in history: UndoHistoryID = .tasks) -> CommandOutcome {
+        var succeeded = false
+        let serial = tasks.errorSerial
+        undo.perform(in: history) {
+            let before = ids.flatMap(tasks.listedFamilyStates(of:))
+            guard !before.isEmpty, before.count >= ids.count else { return nil }
+            let logged = ids.compactMap { id in tasks.listedTask(withID: id).flatMap { $0.doneLoggedAt.map { (id, $0) } } }
+            guard tasks.reopen(taskIDs: ids) else { return nil }
+            succeeded = true
+            let after = before.map(\.id).compactMap(tasks.listedEditableState(of:))
+            guard before != after else { return nil }
+            let store = self.tasks
+            let name = ids.count == 1 ? "Reopen Task" : "Reopen \(ids.count) Tasks"
+            guard !logged.isEmpty else { return editStep(name, before: before, after: after) }
+            return UndoStep(
+                name: name,
+                undoOutcome: {
+                    // Finished again and back in the log, families and all,
+                    // in one save.
+                    store.undoReturnFromDoneLog(from: after, to: before, logging: Dictionary(logged, uniquingKeysWith: { first, _ in first }))
+                },
+                redoOutcome: {
+                    store.reopen(taskIDs: ids) ? .applied : (ids.allSatisfy { store.listedTask(withID: $0) != nil } ? .failed : .obsolete)
+                }
+            )
+        }
+        return taskOutcome(succeeded, since: serial, ids: ids)
+    }
+
+    // MARK: - Undo and redo, with outcomes
+
+    /// Undoes the history's last step and says what happened (the toast's
+    /// Undo, ⌘Z): `.failed` keeps the step to try again; a step that can
+    /// never apply again is dropped and reported as not retryable.
+    @discardableResult
+    func undo(in history: UndoHistoryID) -> CommandOutcome {
+        let serial = tasks.errorSerial
+        return historyOutcome(undo.undoStep(in: history), since: serial, verb: String(localized: "undo"))
+    }
+
+    @discardableResult
+    func redo(in history: UndoHistoryID) -> CommandOutcome {
+        let serial = tasks.errorSerial
+        return historyOutcome(undo.redoStep(in: history), since: serial, verb: String(localized: "redo"))
+    }
+
+    private func historyOutcome(_ outcome: UndoOutcome?, since serial: UInt64, verb: String) -> CommandOutcome {
+        let reported = tasks.errorSerial != serial ? tasks.lastErrorMessage : nil
+        switch outcome {
+        case .applied?:
+            return .applied
+        case nil:
+            return recordFailure(CommandFailure(String(localized: "Nothing to \(verb)."), canRetry: false))
+        case .obsolete?:
+            return recordFailure(CommandFailure(reported ?? String(localized: "This change can no longer be undone."), canRetry: false))
+        case .failed?:
+            return recordFailure(CommandFailure(reported ?? String(localized: "Couldn’t \(verb). Try again."), canRetry: true))
+        }
+    }
+
+    /// A task command's outcome. A failure carries the store's own message
+    /// when this command reported one (whatever family owns the notice),
+    /// and is not retryable when a task it names is gone from the lists or
+    /// the store refused the edit (a rule, not a save).
+    func taskOutcome(_ succeeded: Bool, since serial: UInt64, ids: [UUID]) -> CommandOutcome {
+        if succeeded { return .applied }
+        if ids.contains(where: { tasks.listedTask(withID: $0) == nil }) {
+            return recordFailure(.taskGone)
+        }
+        if tasks.errorSerial != serial, let message = tasks.lastErrorMessage {
+            return recordFailure(CommandFailure(message, canRetry: tasks.lastErrorIsRetryable))
+        }
+        return recordFailure(CommandFailure(String(localized: "Couldn’t save the change. Try again.")))
+    }
+
+    private func recordFailure(_ failure: CommandFailure) -> CommandOutcome {
+        lastFailure = failure
+        lastErrorMessage = failure.message
+        return .failed(failure)
     }
 
     // MARK: - Delete and restore

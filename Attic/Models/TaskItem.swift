@@ -50,6 +50,16 @@ final class TaskItem {
     /// longer splits. `TaskStore` migrates version-0 rows once, keeping the
     /// order each list showed (see `TaskStore.migrateListOrderIfNeeded`).
     var listOrderVersion: Int = 0
+    /// Where a finished task was finished from (Astra 20): the state it had
+    /// (`TaskStatus` raw value) and its place in that state's group. Written
+    /// in the same save that finishes it and cleared in the save that
+    /// reopens it, so "click the circle again: back to what it was" survives
+    /// relaunches and never depends on the undo history. A subtask finished
+    /// along with its main task records its own origin and the same
+    /// `completedAt`, which is how reopening the main task knows which
+    /// subtasks to reopen with it. Nil on everything else.
+    var completedFromRaw: String? = nil
+    var completedFromOrder: Int64? = nil
 
     /// The ordering every row written by this version uses.
     static let currentListOrderVersion = 1

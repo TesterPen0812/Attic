@@ -130,8 +130,14 @@ enum AtticTaskRowMetrics {
     static let trailingMinGap: CGFloat = 12
     /// Small icons in the details line (window, paperclip).
     static let detailsIconSize: CGFloat = 10
-    static let detailsIconGap: CGFloat = 3
-    static let attachmentIconGap: CGFloat = 2
+    /// Owner fix 2 (2026-09-27): an icon 5 pt before its label (the
+    /// paperclip's too), items 14 pt apart with no " · " between them.
+    static let detailsIconGap: CGFloat = 5
+    static let detailsItemSpacing: CGFloat = 14
+    /// The hover pill behind a clickable date or tags (owner fix 5 C):
+    /// 18 tall, reaching 5 pt past the text on each side.
+    static let metaPillHeight: CGFloat = 18
+    static let metaPillOutset: CGFloat = 5
     /// The date at the right end sits this far inside the highlight.
     static let dateInset: CGFloat = 8
 }
@@ -241,15 +247,24 @@ enum AtticPriorityMarkMetrics {
 /// The subtask count on a row's details line: a checklist glyph and
 /// "1/3", with a hover fill that reads as a control.
 enum AtticSubtaskChecklistMetrics {
-    /// Visual A: a 10 pt glyph in a 12 pt slot, 3 pt before the count.
+    /// A 10 pt glyph in a 12 pt slot, 4 pt before the count: 5 pt from
+    /// the glyph's edge, like every details icon (owner fix 2).
     static let iconSize: CGFloat = 10
     static let iconSlot: CGFloat = 12
-    static let iconGap: CGFloat = 3
+    static let iconGap: CGFloat = 4
     static let horizontalPadding: CGFloat = 4
     static let height: CGFloat = 18
 }
 
 /// "Completed today · N ›": the Now list's done section toggle.
+/// A task row's actions button (round 10).
+enum AtticRowActionsMetrics {
+    static let width: CGFloat = 22
+    static let iconSize: CGFloat = 12
+    /// After the date (or the title when there is none).
+    static let gap: CGFloat = 4
+}
+
 enum AtticCompletedLineMetrics {
     static let height: CGFloat = 24
     /// Visual A: 12 below the last open row, its text on the title line.
@@ -260,11 +275,12 @@ enum AtticCompletedLineMetrics {
     static let horizontalPadding: CGFloat = 6
 }
 
-/// The Done page's search row (`AtticListSearchField`): one row tall, no box.
-enum AtticListSearchFieldMetrics {
-    /// The magnifier (13 pt) on the circles' line; the clear button's glyph.
+/// The Done page's search on the tabs line (`AtticTabsSearchField`).
+enum AtticTabsSearchMetrics {
+    /// The magnifier (13 pt) on the circles' line.
     static let iconSize: CGFloat = 13
-    static let clearSize: CGFloat = 12
+    /// The "Esc" hint's padding inside the field's end.
+    static let hintPadding: CGFloat = 10
 }
 
 /// Title menus and Attic's own pop-overs (radius 20).
@@ -389,6 +405,8 @@ enum AtticSettingsMetrics {
     static let previewHeight: CGFloat = 156
     static let previewScale: CGFloat = 0.62
     static let previewTop: CGFloat = 18
+    /// The miniature fades out over the preview card's last 36 pt.
+    static let previewBottomFade: CGFloat = 36
     static let previewShadow = AtticShadowSpec(radius: 8, y: 3)
     static let previewShadowAlphaLight: Double = 0.14
     static let previewShadowAlphaDark: Double = 0.35
@@ -481,6 +499,9 @@ enum AtticNoteMetrics {
     /// The "Esc" hint at the end of the search field.
     static let searchHintPadding: CGFloat = 10
     static let searchTextX: CGFloat = 36
+    /// The list's top edge fade (the Tasks lists' 16 pt before Phase 1
+    /// round 12 moved them to a veil).
+    static let listTopFade: CGFloat = 16
     static let rowTextX: CGFloat = 16
     /// The ⋯ at the end of a row's title line (in the time's place).
     static let rowActionsGlyphSize: CGFloat = 14
@@ -528,4 +549,45 @@ enum AtticNoteFormatMetrics {
     static let cardGap: CGFloat = 6
     /// Room around a floating control for its shadow.
     static let shadowRoom: CGFloat = 12
+}
+
+/// The pickers of owner fix 5 (v17): the date picker, the tag list, the
+/// composer strip and the suggestions over the add bar. The date grid is
+/// v17-lib's: 28 pt columns, 26 pt rows, a 24 pt day disc, today ringed.
+enum AtticPickerMetrics {
+    static let rowGap: CGFloat = 8
+    /// Between two lit rows' fills (round 5, the owner saw two adjacent tag
+    /// rows lit as one block): each fill is inset half of it top and bottom.
+    static let highlightGap: CGFloat = 2
+    static let checkSize: CGFloat = 10
+    static let checkSlot: CGFloat = 12
+    static let dividerGap: CGFloat = 4
+    static let dateWidth: CGFloat = 212
+    static let tagWidth: CGFloat = 200
+    static let tagListMaxHeight: CGFloat = 196
+    static let suggestionWidth: CGFloat = 220
+    static let monthHeaderHeight: CGFloat = 26
+    static let monthButton: CGFloat = 20
+    static let chevronSize: CGFloat = 10
+    static let weekdayHeight: CGFloat = 18
+    static let dayCell: CGFloat = 28
+    static let dayRow: CGFloat = 26
+    static let dayDisc: CGFloat = 24
+    static let todayRing: CGFloat = 1.2
+    static let gridInset: CGFloat = 4
+    static let gridBottom: CGFloat = 2
+    /// The strip's buttons 4 apart (v19, so two filled pills never touch),
+    /// 8 above the bar.
+    static let stripSpacing: CGFloat = 4
+    /// The room a squeezed value keeps for its first characters and "…"
+    /// (a tag's "#laun…", a date's "Wed …"); round 12.
+    static let stripTagPrefix: CGFloat = 34
+    static let stripDatePrefix: CGFloat = 42
+    static let stripToBar: CGFloat = 8
+    /// A set strip button (v19): its value, 7 pt, the clear × (14 pt, its
+    /// glyph 8), then 7 pt to the pill's end.
+    static let stripClearGap: CGFloat = 7
+    static let stripClearSize: CGFloat = 14
+    static let stripClearGlyph: CGFloat = 8
+    static let stripValueTrailing: CGFloat = 7
 }

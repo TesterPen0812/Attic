@@ -128,7 +128,8 @@ final class TasksPageModelTests: XCTestCase {
         XCTAssertEqual(model.emptyMessage[.now], "Add your first task")
         XCTAssertEqual(model.emptyMessage[.backlog], "Nothing for later")
         _ = try XCTUnwrap(add("Idea", tab: .backlog))
-        XCTAssertEqual(model.emptyMessage[.now], "Nothing active. Choose from Later.")
+        XCTAssertEqual(model.emptyMessage[.now], "Nothing active")
+        XCTAssertTrue(model.offersLater, "with \"Choose from Later\" under it")
         let done = try XCTUnwrap(add("Water plants"))
         model.complete(done)
         XCTAssertEqual(model.emptyMessage[.now], "You’re caught up")
@@ -411,7 +412,7 @@ final class TasksPageModelTests: XCTestCase {
     /// quick look.
     func testShowingATaskSelectsItOnItsTab() throws {
         let parked = try XCTUnwrap(add("Parked", tab: .backlog))
-        XCTAssertTrue(model.show(parked))
+        XCTAssertEqual(model.show(parked), .shown)
         XCTAssertEqual(model.tab, .backlog)
         XCTAssertEqual(model.selection, [parked])
         XCTAssertEqual(model.scrollRequest?.id, parked)
@@ -421,21 +422,10 @@ final class TasksPageModelTests: XCTestCase {
 
         let parent = try XCTUnwrap(add("Plan"))
         let child = try XCTUnwrap(store.create(title: "Step", parentID: parent)?.id)
-        XCTAssertTrue(model.show(child))
+        XCTAssertEqual(model.show(child), .shown)
         XCTAssertEqual(model.tab, .now)
         XCTAssertEqual(model.selection, [parent])
         XCTAssertTrue(model.expanded.contains(parent))
-        XCTAssertFalse(model.show(UUID()))
-    }
-
-    /// Only a swipe moves the page: the pager's reports while it is idle (a
-    /// reveal laying out) or animating to the selected page never select
-    /// a neighbour, so the panel opens on Now.
-    func testOnlyASwipeLetsThePagerChangeThePage() {
-        XCTAssertTrue(TasksPage.swipeMovesPage(.tracking))
-        XCTAssertTrue(TasksPage.swipeMovesPage(.interacting))
-        XCTAssertTrue(TasksPage.swipeMovesPage(.decelerating))
-        XCTAssertFalse(TasksPage.swipeMovesPage(.idle))
-        XCTAssertFalse(TasksPage.swipeMovesPage(.animating))
+        XCTAssertEqual(model.show(UUID()), .missing)
     }
 }
