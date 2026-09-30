@@ -665,7 +665,12 @@ extension NoteStore {
         // budget as a stored file. Use its recorded size; older images with
         // no size reserve the per-file ceiling rather than counting as zero.
         let missingSizes = missing.map { id in
-            (baseBlocks[id] ?? []).map { $0.1.byteCount ?? AttachmentLimits.maxBytesPerAttachment }.max()
+            (baseBlocks[id] ?? []).map { pair in
+                let block = pair.1
+                let recorded: Int64? = if case let .int(size)? = block.extras["expectedByteCount"] { size } else { nil }
+                if block.byteCount == nil && recorded == nil { return AttachmentLimits.maxBytesPerAttachment }
+                return max(block.byteCount ?? 0, recorded ?? 0)
+            }.max()
                 ?? AttachmentLimits.maxBytesPerAttachment
         }
         let total = visible.map(\.byteCount) + new.map(\.byteCount) + missingSizes
@@ -675,7 +680,7 @@ extension NoteStore {
         }
         guard shown.count <= AttachmentLimits.maxAttachmentsPerNote || (noIncrease && shown.count <= baseIDs.count),
               missing.isSubset(of: baseIDs), unchangedMissing,
-              missingSizes.allSatisfy({ $0 > 0 && ($0 <= AttachmentLimits.maxBytesPerAttachment || noIncrease) }),
+              missingSizes.allSatisfy({ noIncrease || ($0 > 0 && $0 <= AttachmentLimits.maxBytesPerAttachment) }),
               visible.allSatisfy({ $0.byteCount > 0 && ($0.byteCount <= AttachmentLimits.maxBytesPerAttachment
                   || (noIncrease && baseIDs.contains($0.id))) }),
               totalBytes <= AttachmentLimits.maxBytesPerNote || noIncrease else {
