@@ -369,4 +369,86 @@ final class RecentlyDeletedSelectionTests: XCTestCase {
         XCTAssertNil(fixture.tasks.task(withID: task.id))
         return task.id
     }
+
+    // MARK: - Fix round: partial failures inside one bulk step (finding 5)
+
+    private struct GatedFixture {
+        let fixture: Fixture
+        let gate: PersistenceGate
+        let taskID: UUID
+        let noteID: UUID
+    }
+
+    /// A deleted task and a deleted note, where the note store's saves can
+    /// be made to fail.
+    private func makeGatedFixture() throws -> GatedFixture {
+        let clock = MutableNow(Date(timeIntervalSince1970: 1_000_000))
+        let container = try PersistenceController.makeContainer(inMemory: true)
+        let gate = PersistenceGate()
+        let tasks = TaskStore(container: container, now: { clock.value })
+        let notes = NoteStore(container: container, now: { clock.value }, persist: { try gate.save($0) }, attachmentFileStore: makeTestAttachmentFileStore())
+        let canvases = CanvasStore(container: container, now: { clock.value })
+        let library = AtticLibrary(tasks: tasks, notes: notes, canvases: canvases)
+        let fixture = Fixture(clock: clock, container: container, tasks: tasks, notes: notes, canvases: canvases, library: library)
+        let taskID = try deleteTasks(["Plan"], in: fixture)[0]
+        let note = try XCTUnwrap(notes.create(title: "Notes"))
+        XCTAssertTrue(library.delete(AtticItemRef(.note, note.id)))
+        return GatedFixture(fixture: fixture, gate: gate, taskID: taskID, noteID: note.id)
+    }
+
+    /// Redo that brings back only part of the step reports the failure and
+    /// stays on the Redo list; the retry restores just what is still deleted.
+    func testRedoAfterAPartialFailureFailsAndRetriesOnlyTheRest() throws {
+        let gated = try makeGatedFixture()
+        let fixture = gated.fixture
+        let taskRef = AtticItemRef(.task, gated.taskID)
+        let noteRef = AtticItemRef(.note, gated.noteID)
+        let report = fixture.library.restoreRecentlyDeleted(items: [taskRef, noteRef], attachments: [])
+        XCTAssertEqual(report.restored, 2)
+        XCTAssertTrue(fixture.library.undo.undo(in: .library))
+        XCTAssertEqual(fixture.library.state(of: taskRef), .deleted)
+        XCTAssertEqual(fixture.library.state(of: noteRef), .deleted)
+
+        gated.gate.shouldFail = true
+        XCTAssertEqual(fixture.library.undo.redoStep(in: .library), .failed, "part of it did not come back")
+        XCTAssertNotNil(fixture.tasks.task(withID: gated.taskID), "the task did")
+        XCTAssertEqual(fixture.library.state(of: noteRef), .deleted, "the note did not")
+        XCTAssertNotNil(fixture.library.lastErrorMessage, "the failure is reported")
+        XCTAssertTrue(fixture.library.undo.canRedo(in: .library), "the step stays for a retry")
+
+        gated.gate.shouldFail = false
+        XCTAssertEqual(fixture.library.undo.redoStep(in: .library), .applied)
+        XCTAssertNotNil(fixture.tasks.task(withID: gated.taskID))
+        XCTAssertEqual(fixture.library.state(of: noteRef), .live)
+        XCTAssertFalse(fixture.library.undo.canRedo(in: .library))
+
+        XCTAssertTrue(fixture.library.undo.undo(in: .library), "Undo sends both back again")
+        XCTAssertEqual(fixture.library.state(of: taskRef), .deleted)
+        XCTAssertEqual(fixture.library.state(of: noteRef), .deleted)
+    }
+
+    /// Undo that sends back only part of the step fails and keeps the step;
+    /// the retry touches only what it has not sent back yet, so an item the
+    /// person restored in the meantime stays restored.
+    func testUndoAfterAPartialFailureRetriesOnlyTheRest() throws {
+        let gated = try makeGatedFixture()
+        let fixture = gated.fixture
+        let taskRef = AtticItemRef(.task, gated.taskID)
+        let noteRef = AtticItemRef(.note, gated.noteID)
+        XCTAssertEqual(fixture.library.restoreRecentlyDeleted(items: [taskRef, noteRef], attachments: []).restored, 2)
+
+        gated.gate.shouldFail = true
+        XCTAssertEqual(fixture.library.undo.undoStep(in: .library), .failed)
+        XCTAssertEqual(fixture.library.state(of: taskRef), .deleted, "the task went back")
+        XCTAssertEqual(fixture.library.state(of: noteRef), .live, "the note did not")
+        XCTAssertNotNil(fixture.library.lastErrorMessage)
+        XCTAssertTrue(fixture.library.undo.canUndo(in: .library), "the step stays for a retry")
+
+        // The person brings the task back by itself before retrying.
+        XCTAssertTrue(fixture.library.restore(AtticItemRef(.task, gated.taskID), in: .tasks))
+        gated.gate.shouldFail = false
+        XCTAssertEqual(fixture.library.undo.undoStep(in: .library), .applied)
+        XCTAssertEqual(fixture.library.state(of: noteRef), .deleted, "the retry sent the note back")
+        XCTAssertNotNil(fixture.tasks.task(withID: gated.taskID), "and left the task the person restored")
+    }
 }

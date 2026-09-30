@@ -90,34 +90,127 @@ extension AtticLibrary {
             report.failures = failures
             guard report.restored > 0 else { return nil }
             let count = report.restored
+            let progress = BulkRestoreProgress(items: restoredItems, attachments: restoredAttachments)
             return UndoStep(
                 name: count == 1 ? "Restore Item" : "Restore \(count) Items",
                 undoOutcome: { [weak self] in
                     guard let self else { return .obsolete }
-                    // Files first, then subtasks restored on their own, then
-                    // everything else: a main task's delete would otherwise
-                    // take a separately restored subtask along with it.
-                    var outcomes = restoredAttachments.map { self.removeAttachmentOutcome($0) }
-                    let ordered = restoredItems.sorted { lhs, rhs in
-                        let lhsChild = lhs.kind == .task && self.tasks.listedTask(withID: lhs.id)?.parentID != nil
-                        let rhsChild = rhs.kind == .task && self.tasks.listedTask(withID: rhs.id)?.parentID != nil
-                        return lhsChild && !rhsChild
-                    }
-                    outcomes += ordered.map { self.deleteOutcome($0) }
-                    return Self.combined(outcomes)
+                    return self.sendBack(progress)
                 },
                 redoOutcome: { [weak self] in
                     guard let self else { return .obsolete }
-                    let (again, againAttachments, _) = self.performRestoreAll(items: restoredItems, attachments: restoredAttachments)
-                    if !again.isEmpty || !againAttachments.isEmpty { return .applied }
-                    let removed = Set(self.recentlyDeletedAttachments().map(\.attachmentID))
-                    let stillDeleted = restoredItems.contains { self.state(of: $0) == .deleted }
-                        || restoredAttachments.contains { removed.contains($0.attachmentID) }
-                    return stillDeleted ? .failed : .obsolete
+                    return self.restoreAgain(progress)
                 }
             )
         }
         return report
+    }
+
+    /// Where each part of a Restore Selected step stands. Undo and Redo work
+    /// on the parts that have not been through them yet, so a retry after a
+    /// partial failure never repeats (or reverses) what already applied.
+    private final class BulkRestoreProgress {
+        enum Phase {
+            /// Restored, as when the step ran (or as Redo left it).
+            case restored
+            /// Sent back to Recently Deleted by Undo.
+            case sentBack
+            /// Gone or changed by something else: the step no longer reaches it.
+            case dropped
+        }
+
+        let items: [AtticItemRef]
+        let attachments: [DeletedAttachmentSummary]
+        var itemPhase: [AtticItemRef: Phase]
+        var attachmentPhase: [UUID: Phase]
+
+        init(items: [AtticItemRef], attachments: [DeletedAttachmentSummary]) {
+            self.items = items
+            self.attachments = attachments
+            itemPhase = Dictionary(items.map { ($0, .restored) }, uniquingKeysWith: { first, _ in first })
+            attachmentPhase = Dictionary(attachments.map { ($0.attachmentID, .restored) }, uniquingKeysWith: { first, _ in first })
+        }
+
+        func anyPart(_ phase: Phase) -> Bool {
+            itemPhase.values.contains(phase) || attachmentPhase.values.contains(phase)
+        }
+    }
+
+    /// Undo: sends the parts still restored back to Recently Deleted, files
+    /// first, then subtasks restored on their own, then everything else (a
+    /// main task's delete would otherwise take a separately restored subtask
+    /// along with it). `.failed` while a part could not go back, and the step
+    /// stays for a retry that touches only those.
+    private func sendBack(_ progress: BulkRestoreProgress) -> UndoOutcome {
+        var outcomes: [UndoOutcome] = []
+        for attachment in progress.attachments where progress.attachmentPhase[attachment.attachmentID] == .restored {
+            let outcome = removeAttachmentOutcome(attachment)
+            switch outcome {
+            case .applied: progress.attachmentPhase[attachment.attachmentID] = .sentBack
+            case .obsolete: progress.attachmentPhase[attachment.attachmentID] = .dropped
+            case .failed: break
+            }
+            outcomes.append(outcome)
+        }
+        let pending = progress.items.filter { progress.itemPhase[$0] == .restored }.sorted { lhs, rhs in
+            let lhsChild = lhs.kind == .task && tasks.listedTask(withID: lhs.id)?.parentID != nil
+            let rhsChild = rhs.kind == .task && tasks.listedTask(withID: rhs.id)?.parentID != nil
+            return lhsChild && !rhsChild
+        }
+        for ref in pending {
+            let outcome = deleteOutcome(ref)
+            switch outcome {
+            case .applied: progress.itemPhase[ref] = .sentBack
+            case .obsolete: progress.itemPhase[ref] = .dropped
+            case .failed: break
+            }
+            outcomes.append(outcome)
+        }
+        return settled(outcomes, progress: progress, reached: .sentBack)
+    }
+
+    /// Redo: restores the parts that Undo sent back and that are still in
+    /// Recently Deleted. `.failed` while one of them could not come back; the
+    /// failure is reported, the step stays on the Redo list, and the next
+    /// Undo targets only the parts that did come back.
+    private func restoreAgain(_ progress: BulkRestoreProgress) -> UndoOutcome {
+        let items = progress.items.filter { progress.itemPhase[$0] == .sentBack }
+        let attachments = progress.attachments.filter { progress.attachmentPhase[$0.attachmentID] == .sentBack }
+        let (again, againAttachments, _) = performRestoreAll(items: items, attachments: attachments)
+        var outcomes: [UndoOutcome] = []
+        for ref in items {
+            if again.contains(ref) {
+                progress.itemPhase[ref] = .restored
+                outcomes.append(.applied)
+            } else if state(of: ref) == .deleted {
+                outcomes.append(.failed)
+            } else {
+                progress.itemPhase[ref] = .dropped
+                outcomes.append(.obsolete)
+            }
+        }
+        let stillDeleted = Set(recentlyDeletedAttachments().map(\.attachmentID))
+        for attachment in attachments {
+            if againAttachments.contains(where: { $0.attachmentID == attachment.attachmentID }) {
+                progress.attachmentPhase[attachment.attachmentID] = .restored
+                outcomes.append(.applied)
+            } else if stillDeleted.contains(attachment.attachmentID) {
+                outcomes.append(.failed)
+            } else {
+                progress.attachmentPhase[attachment.attachmentID] = .dropped
+                outcomes.append(.obsolete)
+            }
+        }
+        return settled(outcomes, progress: progress, reached: .restored)
+    }
+
+    /// The outcome of one Undo or Redo pass: failed while a part failed;
+    /// otherwise applied when the pass, or an earlier retry of it, moved
+    /// anything; obsolete when nothing is left for it to reach.
+    private func settled(_ outcomes: [UndoOutcome], progress: BulkRestoreProgress, reached phase: BulkRestoreProgress.Phase) -> UndoOutcome {
+        if outcomes.contains(.failed) { return .failed }
+        if outcomes.contains(.applied) || progress.anyPart(phase) { return .applied }
+        return .obsolete
     }
 
     /// One outcome for a step made of several: applied when any part
