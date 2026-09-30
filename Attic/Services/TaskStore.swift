@@ -2898,6 +2898,10 @@ final class TaskStore: ObservableObject {
                 }
             }
             wrote = true
+            // Decided once, before any copy is written: the shown copy is one
+            // of the replicas, so reading `task.status` inside the loop would
+            // change its answer for the copies after it.
+            let changesStatus = status != task.status
             let shown = TaskContentSnapshot(task)
             let agreeing = Set(replicas.filter { $0 === task || TaskContentSnapshot($0) == shown }.map(\.persistentModelID))
             // Parent and placement only: a copy's own state (completion,
@@ -2905,7 +2909,7 @@ final class TaskStore: ObservableObject {
             // already holds its value is left alone.
             for replica in replicas {
                 if replica.parentID != newParentID { replica.parentID = newParentID }
-                if status != task.status, replica.status != status { replica.status = status }
+                if changesStatus, replica.status != status { replica.status = status }
                 if replica.manualOrder != order { replica.manualOrder = order }
                 if replica.listOrderVersion != TaskItem.currentListOrderVersion {
                     replica.listOrderVersion = TaskItem.currentListOrderVersion

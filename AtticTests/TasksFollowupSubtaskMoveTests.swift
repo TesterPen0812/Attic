@@ -494,4 +494,55 @@ final class TasksFollowupSubtaskMoveTests: XCTestCase {
         XCTAssertEqual(store.orderedTasks(for: .todo).filter { $0.parentID == nil }.map(\.title),
                        ["Top", "Trip", "Book flights", "Next"])
     }
+
+    // MARK: - Fix round 2: a promotion that changes the state, on agreeing copies
+
+    /// Two agreeing open copies of a subtask; `newestFirst` decides whether
+    /// the shown (newest) one is fetched before or after the other.
+    private func insertAgreeingSubtask(under parent: UUID, newestFirst: Bool) throws -> UUID {
+        let id = UUID()
+        func copy(updatedAt: Date) -> TaskItem {
+            let item = TaskItem(id: id, title: "Book", status: .todo, createdAt: base, updatedAt: updatedAt, parentID: parent)
+            item.completedFromRaw = TaskStatus.inProgress.rawValue
+            item.completedFromOrder = 7
+            return item
+        }
+        let newest = copy(updatedAt: base.addingTimeInterval(60))
+        let oldest = copy(updatedAt: base)
+        let context = ModelContext(store.container)
+        for item in newestFirst ? [newest, oldest] : [oldest, newest] { context.insert(item) }
+        try context.save()
+        store.refresh()
+        return id
+    }
+
+    private func assertEveryCopy(_ id: UUID, parent: UUID?, status: TaskStatus, file: StaticString = #filePath, line: UInt = #line) throws {
+        let copies = try rows(id)
+        XCTAssertEqual(copies.count, 2, file: file, line: line)
+        for copy in copies {
+            XCTAssertEqual(copy.parentID, parent, "every copy's parent", file: file, line: line)
+            XCTAssertEqual(copy.status, status, "every copy's state", file: file, line: line)
+            XCTAssertNil(copy.completedAt, file: file, line: line)
+            XCTAssertEqual(copy.completedFromRaw, TaskStatus.inProgress.rawValue, "completion origin is left alone", file: file, line: line)
+            XCTAssertEqual(copy.completedFromOrder, 7, file: file, line: line)
+        }
+    }
+
+    /// An open subtask of a Later task stays in Later when made standalone,
+    /// on every copy, whichever copy is shown first; Undo and Redo move all
+    /// of them too.
+    func testMakeStandaloneMovesEveryAgreeingCopyToLater() throws {
+        for newestFirst in [true, false] {
+            let later = try make("Later trip \(newestFirst)", .backlog)
+            let id = try insertAgreeingSubtask(under: later.id, newestFirst: newestFirst)
+            try assertEveryCopy(id, parent: later.id, status: .todo)
+
+            XCTAssertTrue(library.moveSubtask(id, toTask: nil).isApplied, "newestFirst \(newestFirst)")
+            try assertEveryCopy(id, parent: nil, status: .backlog)
+            XCTAssertTrue(library.undo(in: .tasks).isApplied)
+            try assertEveryCopy(id, parent: later.id, status: .todo)
+            XCTAssertTrue(library.redo(in: .tasks).isApplied)
+            try assertEveryCopy(id, parent: nil, status: .backlog)
+        }
+    }
 }
