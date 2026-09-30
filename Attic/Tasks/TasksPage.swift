@@ -1013,6 +1013,7 @@ struct TasksPage: View {
                     model.titleEdit.dismiss(range)
                 },
                 edited: { range, replacement in
+                    model.noteTextEdit()
                     model.titleHistory.willEdit(model.titleEdit, selection: model.titleEditCurrentSelection, range: range, replacement: replacement)
                     model.titleEdit.edited(range, replacement: replacement)
                 },
@@ -1021,8 +1022,8 @@ struct TasksPage: View {
                     var shown = model.titleEdit
                     if shown.markShown(parser: model.parser, caret: caret) { model.titleEdit = shown }
                 },
-                undoDraft: { model.undoTitleEdit() },
-                redoDraft: { model.redoTitleEdit() },
+                undoDraft: { model.taskChangeOwnsUndo ? nil : model.undoTitleEdit() },
+                redoDraft: { model.taskChangeOwnsRedo ? nil : model.redoTitleEdit() },
                 selectionMoved: { model.titleEditSelection = $0 },
                 undoFallback: { model.undo() },
                 redoFallback: { model.redo() }
@@ -2204,11 +2205,14 @@ private struct TasksAddBar: View {
                             if model.pasteOffer != nil { model.dismissPasteOffer(); return true }
                             return leave()
                         },
-                        edited: { range, replacement in model.addBarEdited(range, replacement: replacement) },
+                        edited: { range, replacement in
+                            model.noteTextEdit()
+                            model.addBarEdited(range, replacement: replacement)
+                        },
                         caretMoved: { caret in model.addBarCaretMoved(caret) },
                         suggestionKey: { key in suggestionKey(key) },
-                        undoDraft: { text.undoDraft() },
-                        redoDraft: { text.redoDraft() },
+                        undoDraft: { model.taskChangeOwnsUndo ? nil : text.undoDraft() },
+                        redoDraft: { model.taskChangeOwnsRedo ? nil : text.redoDraft() },
                         selectionMoved: { text.selection = $0 },
                         // Spec § Undo: typing first, then the page (the
                         // task just added, round 5's CI).

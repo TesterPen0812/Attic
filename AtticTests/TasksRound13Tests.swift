@@ -142,4 +142,72 @@ final class TasksRound13Tests: XCTestCase {
         XCTAssertTrue(menu.performKeyEquivalent(with: key("b", 11, .command)))
         XCTAssertEqual(ran, ["later"], "⌘B still runs Later")
     }
+
+    // MARK: - Bug 1: ⌘Z after a task-menu change
+
+    private func priority(of id: UUID, _ hosted: Hosted) -> TaskPriority? {
+        hosted.store.listedTask(withID: id)?.priority
+    }
+
+    /// The composer holds a draft and the keyboard; a task's priority is
+    /// changed from its menu (the model call the menu makes). Real ⌘Z
+    /// undoes that change and keeps the draft; ⌘Z again is the draft's own
+    /// typing undo; typing after a menu change gives ⌘Z back to the field.
+    func testCommandZAfterATaskMenuChangeUndoesTheChangeAndKeepsTheDraft() throws {
+        let hosted = try Hosted(height: 520, addBarFocused: true)
+        defer { hosted.close() }
+        hosted.spin(1)
+        let model = hosted.model
+        let row = try XCTUnwrap(model.rows(for: .now).first { hosted.store.listedTask(withID: $0.id)?.priority != .high })
+        let original = try XCTUnwrap(priority(of: row.id, hosted))
+        XCTAssertTrue(hosted.window.firstResponder is AtticTokenTextView, "the composer has the keyboard")
+        hosted.press("a", keyCode: 0)
+        hosted.press("b", keyCode: 11)
+        XCTAssertEqual(model.addBar.text, "ab")
+
+        model.setPriority(.high, for: [row.id])
+        hosted.spin(0.3)
+        XCTAssertEqual(priority(of: row.id, hosted), .high)
+        XCTAssertTrue(hosted.window.firstResponder is AtticTokenTextView, "the composer still has the keyboard")
+
+        hosted.press("z", keyCode: 6, modifiers: .command)
+        XCTAssertEqual(priority(of: row.id, hosted), original, "the first ⌘Z undid the menu change")
+        XCTAssertEqual(model.addBar.text, "ab", "the draft was kept")
+
+        hosted.press("z", keyCode: 6, modifiers: .command)
+        XCTAssertNotEqual(model.addBar.text, "ab", "the next ⌘Z is the composer's typing undo")
+        XCTAssertEqual(priority(of: row.id, hosted), original)
+    }
+
+    func testTypingAfterATaskMenuChangeGivesCommandZBackToTheComposer() throws {
+        let hosted = try Hosted(height: 520, addBarFocused: true)
+        defer { hosted.close() }
+        hosted.spin(1)
+        let model = hosted.model
+        let row = try XCTUnwrap(model.rows(for: .now).first { hosted.store.listedTask(withID: $0.id)?.priority != .high })
+        hosted.press("a", keyCode: 0)
+        model.setPriority(.high, for: [row.id])
+        hosted.spin(0.3)
+        hosted.press("b", keyCode: 11)
+        XCTAssertEqual(model.addBar.text, "ab")
+        hosted.press("z", keyCode: 6, modifiers: .command)
+        XCTAssertEqual(priority(of: row.id, hosted), .high, "typing came after the change: ⌘Z is text Undo")
+        XCTAssertNotEqual(model.addBar.text, "ab")
+    }
+
+    func testRedoBringsBackATaskMenuChangeAfterAClaimedUndo() throws {
+        let hosted = try Hosted(height: 520, addBarFocused: true)
+        defer { hosted.close() }
+        hosted.spin(1)
+        let model = hosted.model
+        let row = try XCTUnwrap(model.rows(for: .now).first { hosted.store.listedTask(withID: $0.id)?.priority != .high })
+        hosted.press("a", keyCode: 0)
+        model.setPriority(.high, for: [row.id])
+        hosted.spin(0.3)
+        hosted.press("z", keyCode: 6, modifiers: .command)
+        XCTAssertNotEqual(priority(of: row.id, hosted), .high)
+        hosted.press("z", keyCode: 6, modifiers: [.command, .shift])
+        XCTAssertEqual(priority(of: row.id, hosted), .high, "⇧⌘Z redid the menu change")
+        XCTAssertEqual(model.addBar.text, "a")
+    }
 }
