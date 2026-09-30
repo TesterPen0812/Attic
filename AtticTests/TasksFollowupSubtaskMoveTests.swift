@@ -545,4 +545,55 @@ final class TasksFollowupSubtaskMoveTests: XCTestCase {
             try assertEveryCopy(id, parent: nil, status: .backlog)
         }
     }
+
+    // MARK: - Fix round 2: replay checks every copy
+
+    /// Redo checks the destination as it is now: after Undo, a finished older
+    /// copy of the destination appears next to its newer open one. The move
+    /// would put the subtask under a task that is finished on one copy, so
+    /// Redo refuses and changes nothing.
+    func testRedoRefusesADestinationThatGainedAFinishedCopy() throws {
+        let trip = try make("Trip")
+        let book = try make("Book flights", parent: trip.id)
+        let party = try make("Party")
+        XCTAssertTrue(library.moveSubtask(book.id, toTask: party.id).isApplied)
+        XCTAssertTrue(library.undo(in: .tasks).isApplied)
+
+        let context = ModelContext(store.container)
+        let earlier = party.updatedAt.addingTimeInterval(-3_600)
+        context.insert(TaskItem(id: party.id, title: "Party", status: .done, createdAt: party.createdAt, updatedAt: earlier,
+                                completedAt: earlier, manualOrder: party.manualOrder))
+        try context.save()
+        store.refresh()
+        XCTAssertEqual(store.task(withID: party.id)?.status, .todo, "the shown copy is still open")
+
+        XCTAssertFalse(library.redo(in: .tasks).isApplied)
+        XCTAssertEqual(store.task(withID: book.id)?.parentID, trip.id, "nothing moved")
+        XCTAssertTrue(try rows(book.id).allSatisfy { $0.parentID == trip.id })
+    }
+
+    /// Undo checks each copy of the subtask, not only the shown one. The
+    /// shown copy is finished and the older one is still open: putting them
+    /// back under a main task that has been finished since would leave the
+    /// open copy under a finished task, so Undo refuses and changes nothing.
+    func testUndoRefusesWhenAnOlderOpenCopyWouldLandUnderAFinishedTask() throws {
+        let trip = try make("Trip")
+        let party = try make("Party")
+        let id = UUID()
+        let context = ModelContext(store.container)
+        context.insert(TaskItem(id: id, title: "Book", status: .done, createdAt: base, updatedAt: base.addingTimeInterval(60),
+                                completedAt: base, parentID: trip.id))
+        context.insert(TaskItem(id: id, title: "Book", status: .todo, createdAt: base, updatedAt: base, parentID: trip.id))
+        try context.save()
+        store.refresh()
+
+        XCTAssertTrue(library.moveSubtask(id, toTask: party.id).isApplied)
+        XCTAssertTrue(library.updateTask(trip.id, status: .done, in: .library).isApplied)
+
+        XCTAssertFalse(library.undo(in: .tasks).isApplied)
+        let copies = try rows(id)
+        XCTAssertEqual(copies.count, 2)
+        XCTAssertTrue(copies.allSatisfy { $0.parentID == party.id }, "both copies stay under the open task")
+        XCTAssertEqual(Set(copies.map(\.statusRaw)), [TaskStatus.done.rawValue, TaskStatus.todo.rawValue], "and keep their own state")
+    }
 }
