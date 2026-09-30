@@ -1585,7 +1585,8 @@ extension NoteSlice3bTests {
             let originals = (0..<count).map { _ in NoteBlock.file(attachmentID: UUID(), filename: "lost.pdf",
                 contentTypeIdentifier: "com.adobe.pdf", byteCount: size) }
             let base = NoteDocument(blocks: [.text("Limits")] + originals)
-            try XCTUnwrap(store.note(withID: id)).content = try NoteContentCodec.encode(base)
+            let originalContent = try NoteContentCodec.encode(base)
+            try XCTUnwrap(store.note(withID: id)).content = originalContent
             XCTAssertTrue(store.commitStagedChanges())
             let loaded = try XCTUnwrap(store.loadDocument(noteID: id))
             var candidate = base
@@ -1594,7 +1595,7 @@ extension NoteSlice3bTests {
             XCTAssertNotNil(store.attachmentAdmissionFailure(noteID: id, document: candidate, staged: [added]))
             guard case .failure(.invalidDocument) = store.saveDocument(noteID: id, document: candidate,
                 baseRevisionID: loaded.revisionID, staged: [added]) else { return XCTFail("both gates enforce the limit") }
-            XCTAssertEqual(store.loadDocument(noteID: id)?.content.document, base)
+            XCTAssertEqual(store.note(withID: id)?.content, originalContent, "a refused addition preserves the exact saved bytes")
             XCTAssertTrue(try store.attachmentRows(forNoteID: id).isEmpty)
         }
     }
@@ -2891,7 +2892,7 @@ extension NoteSlice3bTests {
             let inactive = try XCTUnwrap(controller.active)
             XCTAssertTrue(inactive.engine.performEdit(NSRange(location: 0, length: 0), with: NSAttributedString(string: "Draft "), name: "Typing"))
             // An actual checkpoint forces Delete through its async retirement.
-            _ = try journal.base.write(.init(noteID: id, isPersisted: true,
+            _ = try await journal.base.writeDurably(.init(noteID: id, isPersisted: true,
                 baseRevisionID: store.note(withID: id)?.revisionID, content: try NoteContentCodec.encode(document),
                 selectionLocation: 0, selectionLength: 0, staged: [], savedAt: Date()), staged: [])
             switch failure {
@@ -2910,7 +2911,8 @@ extension NoteSlice3bTests {
             XCTAssertEqual(store.note(withID: id) == nil, deleted)
             XCTAssertNotNil(store.note(withID: other), "unrelated note is never deleted")
             if failure == "unrelated" {
-                XCTAssertTrue(inactive.notice?.contains("Recovery could not be saved") == true, "the unrelated failure remains visible")
+                guard case let .onlyInMemory(reason) = inactive.state else { return XCTFail("the unrelated failure remains visible") }
+                XCTAssertTrue(reason.contains("Recovery could not be saved"))
             }
             gate.shouldFail = false
             await controller.waitForRecoveryWork()
