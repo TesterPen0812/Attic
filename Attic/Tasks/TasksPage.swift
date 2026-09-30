@@ -1596,6 +1596,17 @@ struct TasksPage: View {
         return nil
     }
 
+    /// The quick-look subtask that has the keyboard, with its parent row and
+    /// its commands: the one answer to "does a subtask own this key", read
+    /// from the focus the subtask line itself reports (Tab, a click).
+    private func subtaskKeyboardOwner(visible: [UUID]) -> (parent: UUID, commands: [AtticMenuCommand])? {
+        guard let focused = model.focusedSubtaskID else { return nil }
+        let live = Set(visible)
+        guard let row = model.rows(for: model.tab).first(where: { live.contains($0.id) && $0.subtasks.contains { $0.id == focused } }),
+              let subtask = row.subtasks.first(where: { $0.id == focused }) else { return nil }
+        return (row.id, subtaskCommands(subtask, of: row.id, in: row.subtasks))
+    }
+
     /// The list's keys (spec § Keyboard map, Tasks row): ↑ ↓ move, ⇧↑ ⇧↓
     /// extend, ⌘↑ ⌘↓ reorder, Return edits the title, → and ← open and close
     /// the quick look, Esc closes it or clears a selection, ⌘A selects all,
@@ -1635,7 +1646,17 @@ struct TasksPage: View {
         // The focused row, or the one selected row when the keyboard is
         // elsewhere in the page (a click on a row in a panel that was not
         // key yet can leave focus on the page's first control).
-        let current = keyboardRow(visible: visible)
+        var current = keyboardRow(visible: visible)
+        // A subtask that has the keyboard (Tab, a click) owns its keys, ahead
+        // of its parent's: SwiftUI hands a key to this page's handler before
+        // the focused subtask's own, so ⌘↑ ⌘↓ and Return would otherwise move
+        // and rename the parent (round 13). Any other key acts from the
+        // parent, as ↑ ↓ and Esc always did.
+        if let owner = subtaskKeyboardOwner(visible: visible) {
+            if AtticMenuCommand.performSubtaskKey(key: press.key, characters: press.characters,
+                                                  modifiers: press.modifiers, in: owner.commands) == .handled { return .handled }
+            current = owner.parent
+        }
         switch press.key {
         case .downArrow, .upArrow:
             let step = press.key == .downArrow ? 1 : -1
