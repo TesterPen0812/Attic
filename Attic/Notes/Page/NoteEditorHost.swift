@@ -20,8 +20,12 @@ final class NotesPageChrome: ObservableObject {
     /// opened it (its keyboard ring shows at once).
     @Published var isFormatPopoverOpen = false
     var formatPopoverByKeyboard = false
-    /// The open panel for Insert › Image or File… or the `/` row (one image).
-    enum FileRequest: Equatable { case insert, slash }
+    /// The open panel for Insert › Image or File…, the `/` row (one file),
+    /// or a failed object's Retry and Locate… (one file, for that object).
+    enum FileRequest: Equatable {
+        case insert, slash
+        case retry(UUID), locate(UUID)
+    }
     @Published var fileRequest: FileRequest?
 
     /// The note menu's commands for the note on screen (built by the page).
@@ -29,6 +33,8 @@ final class NotesPageChrome: ObservableObject {
     fileprivate weak var accessories: NoteTitleAccessories?
     /// The format controls over the note on screen (bar, `/`, cards).
     fileprivate(set) weak var controls: NoteFormatControls?
+    /// The images and files of the note on screen (ring, drop, menus).
+    fileprivate(set) weak var objectControls: NoteObjectControls?
 
     func openFormatPopover(keyboard: Bool) {
         formatPopoverByKeyboard = keyboard
@@ -401,6 +407,7 @@ struct NoteEditorRepresentable: NSViewRepresentable {
         var engine: NoteEditorEngine?
         var accessories: NoteTitleAccessories?
         var controls: NoteFormatControls?
+        var objects: NoteObjectControls?
     }
 
     func makeCoordinator() -> Coordinator { Coordinator() }
@@ -433,6 +440,15 @@ struct NoteEditorRepresentable: NSViewRepresentable {
         controls.requestFile = { [weak chrome] fromSlash in chrome?.fileRequest = fromSlash ? .slash : .insert }
         context.coordinator.controls = controls
         chrome.controls = controls
+        let objects = NoteObjectControls(engine: engine, textView: textView)
+        objects.requestSource = { [weak chrome] request in
+            switch request {
+            case let .retry(id): chrome?.fileRequest = .retry(id)
+            case let .locate(id): chrome?.fileRequest = .locate(id)
+            }
+        }
+        context.coordinator.objects = objects
+        chrome.objectControls = objects
         #if DEBUG
         NoteFormatCaptureScene.runIfRequested(controls: controls, chrome: chrome, textView: textView)
         #endif
@@ -465,6 +481,7 @@ struct NoteEditorRepresentable: NSViewRepresentable {
         context.coordinator.accessories?.design = design
         context.coordinator.accessories?.headerBottom = headerBottom
         context.coordinator.controls?.update(design: design)
+        context.coordinator.objects?.applyLook()
     }
 
     static func dismantleNSView(_ scrollView: NSScrollView, coordinator: Coordinator) {
@@ -472,6 +489,8 @@ struct NoteEditorRepresentable: NSViewRepresentable {
         coordinator.accessories = nil
         coordinator.controls?.invalidate()
         coordinator.controls = nil
+        coordinator.objects?.invalidate()
+        coordinator.objects = nil
         if coordinator.engine?.scrollView === scrollView { coordinator.engine?.detachView() }
     }
 }

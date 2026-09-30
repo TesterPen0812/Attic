@@ -218,7 +218,7 @@ final class NoteFileAttachment: NoteObjectAttachment {
     }
 
     override var isBlockObject: Bool { true }
-    static let cardHeight: CGFloat = 54
+    static let cardHeight: CGFloat = AtticNoteObjectMetrics.cardHeight
 
     override func attachmentBounds(for attributes: [NSAttributedString.Key: Any], location: any NSTextLocation,
                                    textContainer: NSTextContainer?, proposedLineFragment: CGRect,
@@ -276,6 +276,14 @@ final class NoteObjectRenderer {
     private var checkboxes: [Bool: NSImage] = [:]
     private var chips: [String: NSImage] = [:]
     private var scale: CGFloat
+    /// What a file card or a failed image draws (the engine's state and
+    /// command validation), and the column the card spans.
+    var faceProvider: ((NoteObjectAttachment) -> AtticNoteObjectFace?)?
+    var columnWidth: () -> CGFloat = { 300 }
+
+    /// The look objects are drawn in (the selection ring and drop line use
+    /// its accent).
+    var currentDesign: AtticDesignContext { design }
 
     init(design: AtticDesignContext, scale: CGFloat = 2) {
         self.design = design
@@ -320,9 +328,24 @@ final class NoteObjectRenderer {
             ?? NSImage(size: size)
     }
 
-    func fileCard(name: String, detail: String) -> NSImage {
-        render(NoteFileCardPreview(name: name, detail: detail).frame(width: 300, height: NoteFileAttachment.cardHeight))
-            ?? NSImage(size: CGSize(width: 300, height: NoteFileAttachment.cardHeight))
+    /// The card's width: the column, at most 300 (the card's bounds).
+    var fileCardWidth: CGFloat { min(300, max(40, columnWidth())) }
+
+    func fileCard(_ face: AtticNoteObjectFace) -> NSImage {
+        let width = fileCardWidth
+        return render(AtticNoteFileCard(face: face, width: width))
+            ?? NSImage(size: CGSize(width: width, height: NoteFileAttachment.cardHeight))
+    }
+
+    /// An image that cannot be shown, in its reserved size.
+    func imageFailure(size: CGSize, face: AtticNoteObjectFace) -> NSImage {
+        render(AtticNoteImageFailure(face: face, size: size)) ?? NSImage(size: size)
+    }
+
+    /// The carry card for files dragged over a note.
+    func carryCard(name: String, systemImage: String, more: Int) -> NSImage {
+        render(AtticNoteCarryCard(name: name, systemImage: systemImage, more: more))
+            ?? NSImage(size: CGSize(width: AtticNoteObjectMetrics.carryWidth, height: AtticNoteObjectMetrics.carryHeight))
     }
 
     private func render<Content: View>(_ view: Content) -> NSImage? {
@@ -349,10 +372,9 @@ final class NoteObjectRenderer {
                 .frame(height: 1).frame(height: NoteTextStyle.bodyLineHeight))
         case let file as NoteFileAttachment:
             let size = ByteCountFormatter.string(fromByteCount: file.byteCount, countStyle: .file)
-            let detail = file.importFailure.map { "Import failed: \($0)" }
-                ?? (file.originalMissing ? String(localized: "Original missing")
-                    : file.previewUnavailable ? String(localized: "Preview unavailable") : size)
-            file.renderedImage = fileCard(name: file.filename, detail: detail)
+            let face = faceProvider?(file) ?? AtticNoteObjectFace(kind: .file, name: file.filename, detail: size,
+                systemImage: AtticNoteObjectFace.systemImage(forContentType: file.contentTypeIdentifier))
+            file.renderedImage = fileCard(face)
         default:
             break
         }
@@ -368,30 +390,6 @@ private struct NoteObjectPlaceholder: View {
         AtticText(verbatim: text, style: .chipLabel, ink: .helper)
             .frame(maxWidth: .infinity, maxHeight: .infinity)
             .background(RoundedRectangle(cornerRadius: radius, style: .continuous).fill(design.tokens.tagFill.color))
-    }
-}
-
-private struct NoteFileCardPreview: View {
-    let name: String
-    let detail: String
-    @Environment(\.atticDesign) private var design
-
-    var body: some View {
-        HStack(spacing: 10) {
-            Image(systemName: "doc")
-                .foregroundStyle(design.tokens.ink(.helper).color)
-                .frame(width: 24)
-            VStack(alignment: .leading, spacing: 2) {
-                AtticText(verbatim: name, style: .chipLabel, ink: .body)
-                    .lineLimit(1)
-                AtticText(verbatim: detail, style: .chipLabel, ink: .helper)
-                    .lineLimit(1)
-            }
-            Spacer(minLength: 0)
-        }
-        .padding(.horizontal, 12)
-        .background(RoundedRectangle(cornerRadius: AtticRadius.control(height: NoteFileAttachment.cardHeight),
-                                     style: .continuous).fill(design.tokens.tagFill.color))
     }
 }
 

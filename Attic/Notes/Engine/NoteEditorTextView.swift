@@ -235,10 +235,49 @@ final class NoteEditorTextView: NSTextView, NSAccessibilityCustomRotorItemSearch
         guard let engine else { return }
         Task { _ = await engine.printNote() }
     }
+
+    /// File › Print… (⌘P in the menu bar) prints the note as the engine
+    /// lays it out for paper, never this view's own drawing.
+    override func printView(_ sender: Any?) {
+        guard engine != nil else { return super.printView(sender) }
+        printNote(sender)
+    }
     override func paste(_ sender: Any?) { asUserEdit { super.paste(sender) } }
     override func pasteAsPlainText(_ sender: Any?) { asUserEdit { super.pasteAsPlainText(sender) } }
 
+    // MARK: Files dragged in (the page's object controls)
+
+    /// The drop line, the carry card and the drop's block boundary belong
+    /// to the object controls; everything else is the text view's own.
+    weak var objectInteraction: NoteObjectInteraction?
+
+    override func draggingEntered(_ sender: any NSDraggingInfo) -> NSDragOperation {
+        if let operation = objectInteraction?.fileDragUpdated(sender, entered: true) { return operation }
+        return super.draggingEntered(sender)
+    }
+
+    override func draggingUpdated(_ sender: any NSDraggingInfo) -> NSDragOperation {
+        if let operation = objectInteraction?.fileDragUpdated(sender, entered: false) { return operation }
+        return super.draggingUpdated(sender)
+    }
+
+    override func draggingExited(_ sender: (any NSDraggingInfo)?) {
+        objectInteraction?.fileDragEnded()
+        super.draggingExited(sender)
+    }
+
+    override func draggingEnded(_ sender: any NSDraggingInfo) {
+        objectInteraction?.fileDragEnded()
+        super.draggingEnded(sender)
+    }
+
+    override func prepareForDragOperation(_ sender: any NSDraggingInfo) -> Bool {
+        if objectInteraction?.isFileDrag(sender) == true { return true }
+        return super.prepareForDragOperation(sender)
+    }
+
     override func performDragOperation(_ sender: any NSDraggingInfo) -> Bool {
+        if let handled = objectInteraction?.performFileDrop(sender) { return handled }
         let isSelfMove = (sender.draggingSource as AnyObject?) === self
             && sender.draggingSourceOperationMask.contains(.move)
         engine?.isPerformingSelfMove = isSelfMove
@@ -336,6 +375,9 @@ final class NoteEditorTextView: NSTextView, NSAccessibilityCustomRotorItemSearch
                 return
             }
         }
+        // An image or a file: a click selects it, or runs the action drawn
+        // under the pointer (the page's object controls).
+        if objectInteraction?.handleMouseDown(event) == true { return }
         guard isEditable else { return super.mouseDown(with: event) }
         if let location = checkboxLocation(at: point) {
             engine.toggleCheckbox(atLineOf: location)
@@ -373,6 +415,8 @@ final class NoteEditorTextView: NSTextView, NSAccessibilityCustomRotorItemSearch
     var contextMenuProvider: ((NSMenu, NSEvent) -> Void)?
 
     override func menu(for event: NSEvent) -> NSMenu? {
+        // An image's or a file's own menu, read-only notes included.
+        if let objectMenu = objectInteraction?.objectMenu(for: event) { return objectMenu }
         let menu = super.menu(for: event) ?? NSMenu()
         guard engine != nil, isEditable else { return menu }
         if let contextMenuProvider {
@@ -513,4 +557,19 @@ final class NoteUndoManagerShim: UndoManager {
     override func redo() {
         MainActor.assumeIsolated { _ = history?.redo() }
     }
+}
+
+/// What the page's object controls answer for the note's text view: object
+/// clicks and menus, and files dragged in from elsewhere. nil or false
+/// leaves the event to the text view.
+@MainActor
+protocol NoteObjectInteraction: AnyObject {
+    func handleMouseDown(_ event: NSEvent) -> Bool
+    func objectMenu(for event: NSEvent) -> NSMenu?
+    func isFileDrag(_ info: any NSDraggingInfo) -> Bool
+    /// The operation for a drag of files from elsewhere, or nil when it is
+    /// not one (text, or a move within the note).
+    func fileDragUpdated(_ info: any NSDraggingInfo, entered: Bool) -> NSDragOperation?
+    func fileDragEnded()
+    func performFileDrop(_ info: any NSDraggingInfo) -> Bool?
 }

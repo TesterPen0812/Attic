@@ -29,6 +29,7 @@ struct NotesEditorPage: View {
     @Environment(\.atticPanelToasts) private var toasts
     @StateObject private var chrome = NotesPageChrome()
     @StateObject private var library: NotesLibraryModel
+    @StateObject private var damagedRecovery: NoteDamagedRecoveryExit
     @State private var searchFocused = false
     @State private var postedToastID: UUID?
     /// The history step the delete toast undoes: the toast answers only
@@ -45,6 +46,9 @@ struct NotesEditorPage: View {
         self.layout = layout
         self.exitToOldPage = exitToOldPage
         let store = noteStore
+        _damagedRecovery = StateObject(wrappedValue: NoteDamagedRecoveryExit(perform: { [controller] command in
+            await controller.perform(command)
+        }))
         _library = StateObject(wrappedValue: NotesLibraryModel(search: librarySearch ?? { query in
             try await store.searchNoteIDs(matching: query)
         }))
@@ -139,7 +143,7 @@ struct NotesEditorPage: View {
         }
         .fileImporter(isPresented: Binding(get: { chrome.fileRequest != nil },
                                            set: { if !$0 { chrome.fileRequest = nil } }),
-                      allowedContentTypes: [.image], allowsMultipleSelection: chrome.fileRequest != .slash) { result in
+                      allowedContentTypes: [.item], allowsMultipleSelection: chrome.fileRequest == .insert) { result in
             finishFileRequest(result)
         } onCancellation: {
             finishFileRequest(nil)
@@ -239,7 +243,7 @@ struct NotesEditorPage: View {
                 .accessibilitySortPriority(1)
                 Spacer(minLength: AtticSpacing.s12)
                 if !controller.isLibraryPresented, let session = controller.active {
-                    NoteStatusSlot(controller: controller, store: noteStore, session: session)
+                    NoteStatusSlot(controller: controller, store: noteStore, session: session, damaged: damagedRecovery)
                         .accessibilitySortPriority(2)
                         .transition(.opacity)
                 }
@@ -284,7 +288,13 @@ struct NotesEditorPage: View {
         case .slash:
             if let url = urls.first { controller.importSlashImage(url) } else { controller.active?.engine.cancelSlashFile() }
         case .insert, nil:
-            if !urls.isEmpty { controller.importImages(urls) }
+            if !urls.isEmpty { controller.importFiles(urls) }
+        case let .retry(id):
+            // The chosen file replaces the failed one, checked against the
+            // note's limits before it is read and again when it is added.
+            if let url = urls.first { Task { _ = await controller.retryFailedFile(id, with: url) } }
+        case let .locate(id):
+            if let url = urls.first { chrome.objectControls?.locate(id, at: url) }
         }
     }
 
@@ -388,12 +398,32 @@ struct NotesEditorPage: View {
             // (⌘Z, the menus), and it outlives the toast.
             // Its button answers the pointer and VoiceOver, never ⌘Z: the key
             // follows the focused text, then the library (NotesLibraryView).
-            let toast = toasts.show(String(localized: "Note deleted"), answersUndoKey: false) { [controller] in
-                Task { @MainActor in _ = await controller.undoLibraryDurably(expectedStepID: step) }
-            }
+            // Outcome-aware (control audit 16): the toast stays until the
+            // restore is known; a failure says why and offers Retry while
+            // retrying can help. Focus and VoiceOver hold it (the shared
+            // AtticUndoToast), and it never claims ⌘Z (B2).
+            let toast = toasts.show(String(localized: "Note deleted"), answersUndoKey: false,
+                                    performingAsync: { [controller, noteStore] in
+                await Self.undoDelete(noteID: id, step: step, controller: controller, store: noteStore)
+            })
             postedToastID = toast.id
             postedToastStep = step
         }
+    }
+
+    /// The delete toast's Undo: the library's own step, and only while it
+    /// is still the next Undo. A step already taken (⌘Z, the menu) is done;
+    /// one that can never apply says so without Retry; anything else
+    /// (a store refusal, a recovery write still going) can be retried.
+    static func undoDelete(noteID: UUID, step: UUID, controller: NotesPageController,
+                           store: NoteStore) async -> CommandOutcome {
+        if await controller.undoLibraryDurably(expectedStepID: step) { return .applied }
+        if controller.libraryUndoStepID != step {
+            if store.note(withID: noteID) != nil { return .applied }
+            return .failed(CommandFailure(String(localized: "This note can no longer be restored here. It is in Recently Deleted."),
+                                          canRetry: false))
+        }
+        return .failed(CommandFailure(String(localized: "The note could not be restored.")))
     }
 
     private func dismissOwnToast() {
@@ -414,6 +444,14 @@ struct NotesEditorPage: View {
         let engine = session.engine
         let editable = !session.isReadOnly
         var commands: [AtticMenuCommand] = []
+        // A selected image or file: its own commands first (Image ▸ or
+        // File ▸), the same list as its right-click menu.
+        if let objects = chrome.objectControls,
+           let submenu = NoteObjectMenu.selectedObjectSubmenu(engine: engine,
+                run: { [weak objects] id, command in objects?.run(command, objectID: id) },
+                chooseApplication: { [weak objects] id in objects?.chooseApplication(for: id) }) {
+            commands.append(submenu)
+        }
         if editable {
             // Insert ▸ and Format ▸: the same command list as the selection
             // bar, Aa, the right-click menu and the menu bar.
@@ -432,6 +470,10 @@ struct NotesEditorPage: View {
         commands.append(AtticMenuCommand("Copy as Markdown", shortcut: KeyboardShortcut("c", modifiers: [.command, .option, .shift]),
                                          startsSection: true, identifier: "notes-menu-copy-markdown") {
             controller.copyMarkdown(noteID: id)
+        })
+        commands.append(AtticMenuCommand("Print…", shortcut: KeyboardShortcut("p", modifiers: .command),
+                                         identifier: "notes-menu-print") {
+            Task { _ = await engine.printNote() }
         })
         if editable {
             commands.append(AtticMenuCommand("Duplicate", shortcut: KeyboardShortcut("d", modifiers: .command),
@@ -583,12 +625,24 @@ private struct NoteStatusSlot: View {
     @ObservedObject var controller: NotesPageController
     @ObservedObject var store: NoteStore
     @ObservedObject var session: NoteSession
+    @ObservedObject var damaged: NoteDamagedRecoveryExit
     @State private var showingDetails = false
     @State private var showingProposal = false
     @Environment(\.atticDesign) private var design
 
+    /// Every state, most urgent first: the controller's, with a damaged
+    /// recovery's exit after the save states (it needs a decision) and
+    /// its sentence taken out of the page's notice.
+    private var items: [AtticStatusItem] {
+        var list = controller.statusItems(for: session).compactMap(item)
+        let exits = damaged.entries.map(damagedItem)
+        let firstQuieter = list.firstIndex { !["onlyInMemory", "notSaved", "conflict"].contains($0.id) } ?? list.count
+        list.insert(contentsOf: exits, at: firstQuieter)
+        return list
+    }
+
     var body: some View {
-        let items = controller.statusItems(for: session).map(item)
+        let items = items
         // A change of state springs in; typing never changes this key.
         let key = items.map(\.id).joined(separator: ",")
         ZStack {
@@ -607,6 +661,9 @@ private struct NoteStatusSlot: View {
         .popover(isPresented: $showingDetails, arrowEdge: .top) {
             AtticStatusDetails(items: items)
         }
+        // Damaged recovery is found when the controller reports it (at
+        // launch, after a resolution): never polled.
+        .task(id: controller.recoveryWarnings) { await damaged.refresh() }
         .sheet(isPresented: $showingProposal) {
             if let comparison = session.isConflict
                 ? controller.conflictComparison(for: session) : controller.proposalComparison(for: session) {
@@ -629,6 +686,31 @@ private struct NoteStatusSlot: View {
         }
     }
 
+    /// Recovery data is damaged (fix round 4): Save Recovery Copy, then
+    /// Discard Damaged Recovery…, which asks first and passes the token the
+    /// details gave. An entry with unreadable items offers no Discard.
+    private func damagedItem(_ details: NoteDamagedRecoveryDetails) -> AtticStatusItem {
+        let close = { (action: @escaping () async -> Void) in { showingDetails = false; Task { await action() } } }
+        var actions: [AtticStatusItem.Action] = [
+            .init(title: String(localized: "Save Recovery Copy…"), identifier: "notes-damaged-save",
+                  handler: close {
+                      switch await damaged.saveCopy(details) {
+                      case let .saved(url): session.notice = String(localized: "Recovery copy saved as “\(url.lastPathComponent)”.")
+                      case let .refused(message): session.notice = message
+                      default: break
+                      }
+                  })
+        ]
+        if details.confirmation.canDiscard {
+            actions.append(.init(title: String(localized: "Discard Damaged Recovery…"), identifier: "notes-damaged-discard",
+                                 handler: close {
+                                     if case let .refused(message) = await damaged.discard(details) { session.notice = message }
+                                 }))
+        }
+        return AtticStatusItem(id: "damaged-\(details.confirmation.checkpointFilename)", systemName: "exclamationmark.circle",
+                               title: details.title, explanation: details.explanation, tone: .warning, actions: actions)
+    }
+
     /// The same command as ⇧⌘S and the note's menu: one identifier, one
     /// controller method.
     private func saveRecoveryCopyAction(_ details: (@escaping () -> Void) -> () -> Void) -> AtticStatusItem.Action {
@@ -636,7 +718,7 @@ private struct NoteStatusSlot: View {
               handler: details { Task { await controller.saveRecoveryCopy(of: session) } })
     }
 
-    private func item(_ status: NoteStatusItem) -> AtticStatusItem {
+    private func item(_ status: NoteStatusItem) -> AtticStatusItem? {
         let details = { (action: @escaping () -> Void) in { showingDetails = false; action() } }
         switch status {
         case .onlyInMemory:
@@ -671,16 +753,24 @@ private struct NoteStatusSlot: View {
                                              handler: details { showingProposal = true })
                                    ])
         case .importing:
-            return AtticStatusItem(id: "importing", systemName: nil, title: status.label,
-                                   explanation: status.explanation, actions: [
+            let progress = session.importProgress
+            return AtticStatusItem(id: "importing", systemName: nil, title: NoteStatusPresentation.importLabel(progress),
+                                   explanation: NoteStatusPresentation.importExplanation(progress), actions: [
                                        .init(title: String(localized: "Cancel Batch"), identifier: "notes-cancel-import",
                                              handler: details(controller.cancelActiveImport))
                                    ])
         case .readOnly:
             return AtticStatusItem(id: "readOnly", systemName: "lock", title: status.label,
                                    explanation: status.explanation, tone: .quiet)
-        case .notice:
-            return AtticStatusItem(id: "notice", systemName: "info.circle", title: status.label, tone: .normal, actions: [
+        case let .notice(message):
+            // Damaged recovery has its own items; its sentence leaves the notice.
+            guard let message = NoteStatusPresentation.notice(message,
+                    removingDamaged: damaged.entries.map(\.confirmation.checkpointFilename)) else { return nil }
+            if NoteStatusPresentation.isProgress(message) {
+                // Pending guidance: progress, quietly, clearing itself.
+                return AtticStatusItem(id: "pending", systemName: nil, title: message, tone: .quiet)
+            }
+            return AtticStatusItem(id: "notice", systemName: "info.circle", title: message, tone: .normal, actions: [
                 .init(title: String(localized: "Dismiss"), identifier: "notes-notice-dismiss",
                       handler: details { session.notice = nil })
             ])

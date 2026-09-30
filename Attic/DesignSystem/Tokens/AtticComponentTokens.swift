@@ -551,6 +551,48 @@ enum AtticNoteFormatMetrics {
     static let shadowRoom: CGFloat = 12
 }
 
+/// Notes' images and files (Phase 2 slice 3b, UX plan § 3.5, p2-13): the
+/// file card, a failure drawn on its object with its actions, the selected
+/// object's ring and resize corner, the drop line and the carry card.
+enum AtticNoteObjectMetrics {
+    /// The card: a content card (radius 10), 12 in, a 22 pt type glyph and
+    /// two 12 pt lines: the name, then the size or the failure.
+    static let cardHeight: CGFloat = 54
+    static let cardRadius: CGFloat = AtticRadius.contentCard
+    static let cardPadding: CGFloat = 12
+    static let cardIcon: CGFloat = 20
+    static let cardIconSlot: CGFloat = 22
+    static let cardIconGap: CGFloat = 10
+    /// The two lines' centres in the 54 pt card.
+    static let cardFirstLine: CGFloat = 18
+    static let cardSecondLine: CGFloat = 36
+    /// The actions drawn on a failed object: quiet chips 18 tall, 7 in,
+    /// 4 apart, 8 after the message. Only those that fit are drawn; every
+    /// one is also in the object's menu and its VoiceOver actions.
+    static let chipHeight: CGFloat = 18
+    static let chipPadding: CGFloat = 7
+    static let chipGap: CGFloat = 4
+    static let messageGap: CGFloat = 8
+    /// A failed image's face: the glyph (14) over the message, the chips
+    /// under it, 6 apart; one row when the reserved space is under 64 tall.
+    static let failureGlyph: CGFloat = 14
+    static let failureRowGap: CGFloat = 6
+    static let failureStackMinHeight: CGFloat = 64
+    /// The selected object: a 2 pt ring 2 outside it, and a resize corner
+    /// (a 10 pt disc on the ring's bottom-trailing corner, 20 pt to grab).
+    static let ringWidth: CGFloat = 2
+    static let ringOutset: CGFloat = 2
+    static let resizeHandle: CGFloat = 10
+    static let resizeHitTarget: CGFloat = 20
+    /// The drop line: 2 pt, with a 6 pt disc at its leading end, across
+    /// the column.
+    static let dropLineWidth: CGFloat = 2
+    static let dropLineCap: CGFloat = 6
+    /// The carry card: the file card's look at 220 × 44, "+N" for more.
+    static let carryWidth: CGFloat = 220
+    static let carryHeight: CGFloat = 44
+}
+
 /// The pickers of owner fix 5 (v17): the date picker, the tag list, the
 /// composer strip and the suggestions over the add bar. The date grid is
 /// v17-lib's: 28 pt columns, 26 pt rows, a 24 pt day disc, today ringed.

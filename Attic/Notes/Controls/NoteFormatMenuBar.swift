@@ -10,12 +10,15 @@ import AppKit
 final class NoteFormatMenuBar: NSObject, NSMenuDelegate {
     static let insertIdentifier = NSUserInterfaceItemIdentifier("notes-menubar-insert")
     static let formatIdentifier = NSUserInterfaceItemIdentifier("notes-menubar-format")
+    static let printIdentifier = NSUserInterfaceItemIdentifier("notes-menubar-print")
     private static let shared = NoteFormatMenuBar()
 
     /// Adds Insert and Format after Edit once (again if the app's menu was
     /// rebuilt without them).
     static func install(in menu: NSMenu? = nil) {
-        guard let mainMenu = menu ?? NSApp?.mainMenu, mainMenu.items.first(where: { $0.identifier == formatIdentifier }) == nil else { return }
+        guard let mainMenu = menu ?? NSApp?.mainMenu else { return }
+        installPrint(in: mainMenu)
+        guard mainMenu.items.first(where: { $0.identifier == formatIdentifier }) == nil else { return }
         let insertMenu = NSMenu(title: String(localized: "Insert"))
         let formatMenu = NSMenu(title: String(localized: "Format"))
         insertMenu.delegate = shared
@@ -30,6 +33,27 @@ final class NoteFormatMenuBar: NSObject, NSMenuDelegate {
         let index = min((edit ?? max(0, mainMenu.items.count - 2)) + 1, mainMenu.items.count)
         mainMenu.insertItem(insert, at: index)
         mainMenu.insertItem(format, at: index + 1)
+    }
+
+    /// File › Print… (⌘P): sent to the note's text view, the only responder
+    /// that answers `printNote(_:)`, so it is dimmed anywhere else and never
+    /// prints another page's view. Added once, when the menu has a File menu.
+    static func installPrint(in mainMenu: NSMenu) {
+        guard let file = mainMenu.items.first(where: { $0.submenu?.title == "File" || $0.title == "File" })?.submenu,
+              !file.items.contains(where: { $0.identifier == printIdentifier }) else { return }
+        let item = NSMenuItem(title: String(localized: "Print…"),
+                              action: #selector(NoteEditorTextView.printNote(_:)), keyEquivalent: "p")
+        item.keyEquivalentModifierMask = .command
+        item.identifier = printIdentifier
+        if let index = file.items.firstIndex(where: { $0.action == #selector(NSView.printView(_:)) }) {
+            // The system's own Print… would print the view that has the
+            // keyboard: the note's takes its place.
+            file.removeItem(at: index)
+            file.insertItem(item, at: index)
+        } else {
+            file.addItem(.separator())
+            file.addItem(item)
+        }
     }
 
     /// The rows for `controls` (dimmed when no note has the keyboard).

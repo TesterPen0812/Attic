@@ -226,6 +226,8 @@ final class NoteEditorEngine: NSObject, NSTextViewDelegate, NSTextStorageDelegat
         textStorage = contentStorage.textStorage ?? NSTextStorage()
         history = NoteUndoHistory(storage: textStorage)
         super.init()
+        renderer.faceProvider = { [weak self] object in self?.objectFace(for: object) }
+        renderer.columnWidth = { [weak self] in self?.objectColumnWidth ?? 300 }
         textStorage.setAttributedString(NoteTextCodec.attributedString(from: document, style: style))
         textStorage.delegate = self
         renderObjects(in: NSRange(location: 0, length: textStorage.length))
@@ -647,10 +649,9 @@ final class NoteEditorEngine: NSObject, NSTextViewDelegate, NSTextStorageDelegat
             image.failureMessage = staged[image.attachmentID] != nil
                 || imageProvider?.hasAttachmentBytes(image.attachmentID) == true
                     ? String(localized: "Preview unavailable") : String(localized: "Original missing")
-            image.renderedImage = renderer.placeholder(
-                size: image.displaySize(columnWidth: textView?.textContainer?.size.width ?? 320),
-                text: String(localized: "Image unavailable")
-            )
+            let size = image.displaySize(columnWidth: textView?.textContainer?.size.width ?? 320)
+            image.renderedImage = objectFace(for: image).map { renderer.imageFailure(size: size, face: $0) }
+                ?? renderer.placeholder(size: size, text: String(localized: "Image unavailable"))
         }
         guard let range = range(of: image) else { return }
         // A size learnt from the file is stored with the next real save;
@@ -973,6 +974,30 @@ final class NoteEditorEngine: NSObject, NSTextViewDelegate, NSTextStorageDelegat
                                    selection: NSRange(location: at + insertion.length, length: 0))
         if !inserted { for item in items { if let id = item.staged?.id { staged[id] = nil } } }
         return inserted
+    }
+
+    /// The look objects are drawn in.
+    var objectDesign: AtticDesignContext { renderer.currentDesign }
+
+    /// Draws every file card and failed image again: the column's width
+    /// changed (a card spans it), or an object's state did (a Locate that
+    /// found the original). Never on a keystroke.
+    func refreshObjectFaces() {
+        var changed: [NSRange] = []
+        textStorage.enumerateAttribute(.attachment, in: NSRange(location: 0, length: textStorage.length)) { value, range, _ in
+            if let file = value as? NoteFileAttachment {
+                if let id = file.attachmentID {
+                    file.originalMissing = staged[id] == nil && imageProvider?.hasAttachmentBytes(id) != true
+                }
+                renderer.apply(to: file, today: today)
+                changed.append(range)
+            } else if let image = value as? NoteImageAttachment, image.isMissing, let face = objectFace(for: image) {
+                let size = image.displaySize(columnWidth: textView?.textContainer?.size.width ?? 320)
+                image.renderedImage = renderer.imageFailure(size: size, face: face)
+                changed.append(range)
+            }
+        }
+        changed.forEach(invalidateLayout)
     }
 
     func invalidateAttachmentPresentation(_ id: UUID) {
