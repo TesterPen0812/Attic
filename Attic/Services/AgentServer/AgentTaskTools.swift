@@ -257,7 +257,7 @@ final class AgentTaskTools {
         [
             "name": "update_note",
             "title": "Update Attic Note",
-            "description": "Replace an Attic note's title, body, or both. Pass the `revision` that list_notes returned as `base_revision`: the write fails if the note changed since, or doesn't exist. A title or body must remain non-empty. In a note stored in the new format, keep checklist (`- [ ] …`), image (`![image](attic://image/…)`) and date (`[date:YYYY-MM-DD]`) lines you want to keep exactly as returned. If the person has the note open, the change waits (status \"pending\") and applies when they leave it unchanged; the note's previous text is kept as a version.",
+            "description": "Replace an Attic note's title, body, or both. Pass the `revision` that list_notes returned as `base_revision`: the write fails if the note changed since, or doesn't exist. A title or body must remain non-empty. In a note stored in the new format, keep checklist (`- [ ] …`), image (`![image](attic://image/…)`), file (`[file: name](attic://file/…)`) and date (`[date:YYYY-MM-DD]`) lines exactly as returned. Removing or changing an object token is rejected; text edits preserve objects. If the person has the note open, the change waits (status \"pending\") and applies when they leave it unchanged; the note's previous text is kept as a version.",
             "annotations": [
                 "readOnlyHint": false,
                 "destructiveHint": false,
@@ -848,6 +848,24 @@ final class AgentTaskTools {
             switch NoteContentCodec.decode(data) {
             case let .editable(document):
                 payload["body"] = NoteTextExport.agentBody(document)
+                let rows = Dictionary((noteStore?.attachments(for: note.id) ?? []).map { ($0.id, $0) },
+                    uniquingKeysWith: { first, _ in first })
+                payload["images"] = document.blocks.filter { $0.kind == .image }.map { block -> [String: Any] in
+                    let row = block.attachmentID.flatMap { rows[$0] }
+                    let availability: Any = block.attachmentID.flatMap { noteStore?.knownAttachmentAvailability($0) }
+                        .map { $0 as Any } ?? NSNull()
+                    return ["placement_id": block.id?.uuidString ?? "", "name": row?.originalFilename ?? "image",
+                            "attachment_id": block.attachmentID?.uuidString ?? "", "bytes_available": availability]
+                }
+                payload["files"] = document.blocks.filter { $0.kind == .file }.map { block -> [String: Any] in
+                    let row = block.attachmentID.flatMap { rows[$0] }
+                    let availability: Any = block.attachmentID.flatMap { noteStore?.knownAttachmentAvailability($0) }
+                        .map { $0 as Any } ?? NSNull()
+                    return ["placement_id": block.id?.uuidString ?? "", "name": block.filename ?? "file",
+                            "content_type": block.contentTypeIdentifier ?? "public.data",
+                            "byte_count": block.byteCount ?? 0, "attachment_id": block.attachmentID?.uuidString ?? "",
+                            "bytes_available": availability, "import_failure": block.importFailure ?? ""]
+                }
             case .readOnly:
                 payload["read_only"] = true
             }

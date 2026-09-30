@@ -262,13 +262,16 @@ struct NoteRowSummary: Equatable {
         var images = 0
         var files = 0
         if note.usesDocumentFormat {
-            images = lines.filter { $0 == "[Image]" }.count
+            images = note.imageCount
+            files = note.fileCount
         } else {
             for attachment in attachments {
                 if attachment.isImage { images += 1 } else { files += 1 }
             }
         }
-        let firstFile = attachments.sorted { $0.sortIndex < $1.sortIndex }.first?.originalFilename
+        let firstFile = note.usesDocumentFormat ? (note.firstFileName
+            ?? attachments.sorted { $0.sortIndex < $1.sortIndex }.first?.originalFilename)
+            : attachments.sorted { $0.sortIndex < $1.sortIndex }.first?.originalFilename
         self.init(title: note.title, bodyLines: lines, images: images, files: files, firstFile: firstFile)
     }
 
@@ -276,8 +279,10 @@ struct NoteRowSummary: Equatable {
     init(document: NoteDocument, filename: (UUID) -> String?) {
         let lines = document.blocks.dropFirst().map(NoteTextExport.plainLine)
         let images = document.blocks.filter { $0.kind == .image }.count
-        let firstFile = document.blocks.first { $0.kind == .image }?.attachmentID.flatMap(filename)
-        self.init(title: document.title, bodyLines: lines, images: images, files: 0, firstFile: firstFile)
+        let files = document.blocks.filter { $0.kind == .file }.count
+        let firstFile = document.blocks.first { $0.kind == .file }?.filename
+            ?? document.blocks.first { $0.kind == .image }?.attachmentID.flatMap(filename)
+        self.init(title: document.title, bodyLines: lines, images: images, files: files, firstFile: firstFile)
     }
 
     private init(title: String, bodyLines: [String], images: Int, files: Int, firstFile: String?) {
@@ -290,7 +295,8 @@ struct NoteRowSummary: Equatable {
         var previewLength = 0
         for line in bodyLines {
             let trimmed = line.trimmingCharacters(in: .whitespaces)
-            if trimmed.isEmpty || trimmed == "[Image]" || trimmed == "[Unsupported content]" { continue }
+            if trimmed.isEmpty || trimmed == "[Image]" || trimmed.hasPrefix("[File: ")
+                || trimmed == "[Unsupported content]" { continue }
             let isChecklist = trimmed.hasPrefix("[ ] ") || trimmed.hasPrefix("[x] ")
             if isChecklist {
                 total += 1

@@ -46,6 +46,30 @@ actor AttachmentFileStore {
     let rootURL: URL
     private let fileManager: FileManager
 
+    private final class RetentionRegistry: @unchecked Sendable {
+        let lock = NSLock()
+        var providers: [UUID: @Sendable () async -> Set<UUID>?] = [:]
+        func snapshot() -> [@Sendable () async -> Set<UUID>?] {
+            lock.lock(); defer { lock.unlock() }; return Array(providers.values)
+        }
+    }
+    private nonisolated let retention = RetentionRegistry()
+
+    /// Registration is synchronous and thread-safe so the destructive
+    /// primitive cannot race the store's initialization task.
+    nonisolated func registerByteOwners(_ owner: UUID, provider: @escaping @Sendable () async -> Set<UUID>?) {
+        retention.lock.lock(); retention.providers[owner] = provider; retention.lock.unlock()
+    }
+
+    private func removeUnownedDirectory(_ directory: URL) async throws -> Bool {
+        guard let id = UUID(uuidString: directory.deletingLastPathComponent().lastPathComponent) else { return false }
+        for provider in retention.snapshot() {
+            guard let ids = await provider(), !ids.contains(id) else { return false }
+        }
+        if fileManager.fileExists(atPath: directory.path) { try fileManager.removeItem(at: directory) }
+        return true
+    }
+
     init(rootURL: URL? = nil, fileManager: FileManager = .default) {
         self.fileManager = fileManager
         self.rootURL = (rootURL ?? Self.defaultRootURL(fileManager: fileManager))
@@ -180,12 +204,10 @@ actor AttachmentFileStore {
         return url
     }
 
-    func removeMaterializations(_ references: [AttachmentFileReference]) throws {
+    func removeMaterializations(_ references: [AttachmentFileReference]) async throws {
         for reference in references {
             let directory = try validatedDirectory(for: reference)
-            if fileManager.fileExists(atPath: directory.path) {
-                try fileManager.removeItem(at: directory)
-            }
+            guard try await removeUnownedDirectory(directory) else { continue }
             let idDirectory = directory.deletingLastPathComponent()
             if fileManager.fileExists(atPath: idDirectory.path),
                (try? fileManager.contentsOfDirectory(atPath: idDirectory.path))?.isEmpty == true {
@@ -199,7 +221,7 @@ actor AttachmentFileStore {
     /// than eagerly loading and hashing every attachment on the main actor.
     func reconcileMetadata(
         _ references: [AttachmentFileReference]
-    ) throws -> AttachmentReconciliationReport {
+    ) async throws -> AttachmentReconciliationReport {
         try Task.checkCancellation()
         try prepare()
         var expected = Set<String>()
@@ -222,7 +244,7 @@ actor AttachmentFileStore {
         }
 
         try Task.checkCancellation()
-        try cleanOrphans(expected: expected)
+        try await cleanOrphans(expected: expected)
         return AttachmentReconciliationReport(
             needsMaterialization: needsMaterialization,
             failures: failures
@@ -252,8 +274,8 @@ actor AttachmentFileStore {
     /// Compatibility entry point used by focused storage tests and callers
     /// that already have payloads. New refresh paths should call the two-phase
     /// metadata and repair APIs directly.
-    func reconcile(_ references: [AttachmentFileReference]) throws {
-        let report = try reconcileMetadata(references)
+    func reconcile(_ references: [AttachmentFileReference]) async throws {
+        let report = try await reconcileMetadata(references)
         let neededKeys = Set(report.needsMaterialization.map {
             "\($0.id.uuidString)/\($0.digest.lowercased())"
         })
@@ -291,7 +313,7 @@ actor AttachmentFileStore {
         keeping referencedIDs: Set<UUID>,
         modifiedBefore cutoff: Date,
         limit: Int
-    ) -> Int {
+    ) async -> Int {
         let keys: [URLResourceKey] = [
             .isDirectoryKey, .isSymbolicLinkKey, .creationDateKey, .contentModificationDateKey
         ]
@@ -328,7 +350,7 @@ actor AttachmentFileStore {
                     at: digestDirectory, includingPropertiesForKeys: keys, options: []
                 )) ?? []
                 guard contents.allSatisfy(isOld),
-                      (try? fileManager.removeItem(at: digestDirectory)) != nil else { continue }
+                      (try? await removeUnownedDirectory(digestDirectory)) == true else { continue }
                 removed += 1
             }
             if idDirectoryIsOld, (try? fileManager.contentsOfDirectory(atPath: idDirectory.path))?.isEmpty == true {
@@ -359,7 +381,7 @@ actor AttachmentFileStore {
         return url
     }
 
-    private func cleanOrphans(expected: Set<String>) throws {
+    private func cleanOrphans(expected: Set<String>) async throws {
         let now = Date()
         for child in try fileManager.contentsOfDirectory(
             at: rootURL,
@@ -371,14 +393,14 @@ actor AttachmentFileStore {
                 continue
             }
             guard (try? child.resourceValues(forKeys: [.isDirectoryKey]).isDirectory) == true else {
-                try? fileManager.removeItem(at: child)
+                // Unknown entries are not proof of orphan ownership.
                 continue
             }
             for digestDirectory in try fileManager.contentsOfDirectory(at: child, includingPropertiesForKeys: nil) {
                 guard !Self.isSymbolicLink(digestDirectory, fileManager: fileManager) else { continue }
                 let key = "\(child.lastPathComponent)/\(digestDirectory.lastPathComponent.lowercased())"
                 guard !expected.contains(key) else { continue }
-                try? fileManager.removeItem(at: digestDirectory)
+                _ = try? await removeUnownedDirectory(digestDirectory)
             }
             if (try? fileManager.contentsOfDirectory(atPath: child.path))?.isEmpty == true {
                 try? fileManager.removeItem(at: child)

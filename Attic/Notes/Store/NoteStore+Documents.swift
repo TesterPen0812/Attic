@@ -1,5 +1,110 @@
 import Foundation
+import CryptoKit
 import SwiftData
+
+/// One payload digest entry point, with a thread probe for production-path
+/// regressions. Observers are opt-in and protected independently of actors.
+enum NotePayloadDigest {
+    private final class Probe: @unchecked Sendable {
+        let lock = NSLock()
+        var observer: (@Sendable (Bool, Int) -> Void)?
+    }
+    private static let probe = Probe()
+    static func observe(_ observer: (@Sendable (Bool, Int) -> Void)?) {
+        probe.lock.lock(); probe.observer = observer; probe.lock.unlock()
+    }
+    static func sha256(_ data: Data) -> String {
+        probe.lock.lock(); let observer = probe.observer; probe.lock.unlock()
+        observer?(Thread.isMainThread, data.count)
+        return SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined()
+    }
+}
+
+/// Destructive decisions use complete physical UUID families, including
+/// divergent replicas. Any protected or unknown member keeps every member.
+enum NotePhysicalFamilyRetention {
+    enum Decision: Equatable { case eligible, protected, unknown }
+
+    static func mayDelete<Row>(_ family: [Row], decision: (Row) throws -> Decision) rethrows -> Bool {
+        guard !family.isEmpty else { return false }
+        for row in family {
+            guard try decision(row) == .eligible else { return false }
+        }
+        return true
+    }
+    @MainActor
+    static func versionEligible(_ family: [NoteVersion], noteIDs: Set<UUID>,
+                                proposalBases: Set<UUID>, recoveryBases: Set<UUID>) -> Bool {
+        guard let first = family.first else { return false }
+        return mayDelete(family) { row in
+            guard noteIDs.contains(row.noteID), row.noteID == first.noteID, row.reason != nil,
+                  row.reasonRaw == first.reasonRaw, row.createdAt == first.createdAt,
+                  row.content == first.content, row.contentFormat == first.contentFormat,
+                  row.title == first.title, row.body == first.body,
+                  row.attachmentIDsRaw == first.attachmentIDsRaw,
+                  row.sourceRevisionID == first.sourceRevisionID,
+                  (row.contentFormat == 0 && row.content == nil)
+                    || (row.contentFormat == NoteDocument.currentFormat
+                        && row.content.map { NoteContentCodec.decode($0).isEditable } == true),
+                  row.attachmentIDsRaw.split(separator: " ").allSatisfy({ UUID(uuidString: String($0)) != nil })
+            else { return .unknown }
+            if proposalBases.contains(row.id) || row.sourceRevisionID.map(recoveryBases.contains) == true {
+                return .protected
+            }
+            return .eligible
+        }
+    }
+
+    @MainActor
+    static func proposalEligible(_ family: [NotePendingEdit], noteIDs: Set<UUID>) -> Bool {
+        guard let first = family.first else { return false }
+        return mayDelete(family) { row in
+            guard noteIDs.contains(row.noteID), row.noteID == first.noteID,
+                  row.baseRevisionToken == first.baseRevisionToken, row.baseVersionID == first.baseVersionID,
+                  row.proposedContent == first.proposedContent, row.agentName == first.agentName,
+                  row.createdAt == first.createdAt, row.needsReview == first.needsReview,
+                  row.proposedContent.map({ NoteContentCodec.decode($0).isEditable }) == true
+            else { return .unknown }
+            return .eligible
+        }
+    }
+
+}
+
+/// Immutable ownership input: no live models cross to the decoding worker.
+struct NoteDocumentRetentionSnapshot: Sendable {
+    struct Version: Sendable {
+        let format: Int
+        let content: Data?
+        let attachmentIDsRaw: String
+    }
+    let notes: [Data?]
+    let versions: [Version]
+    let proposals: [Data?]
+
+    func attachmentIDs(observeDecode: (@Sendable () -> Void)? = nil) throws -> Set<UUID> {
+        func decodedIDs(_ data: Data?) throws -> [UUID] {
+            observeDecode?()
+            guard let data, case let .editable(document) = NoteContentCodec.decode(data) else {
+                throw NoteDocumentStoreError.readOnly
+            }
+            return document.attachmentIDs
+        }
+        var ids = Set<UUID>()
+        for content in notes { ids.formUnion(try decodedIDs(content)) }
+        for version in versions {
+            let raw = version.attachmentIDsRaw.split(separator: " ")
+            let cached = raw.compactMap { UUID(uuidString: String($0)) }
+            guard cached.count == raw.count else { throw NoteDocumentStoreError.readOnly }
+            ids.formUnion(cached)
+            if version.format == 0, version.content == nil { continue }
+            guard version.format == NoteDocument.currentFormat else { throw NoteDocumentStoreError.readOnly }
+            ids.formUnion(try decodedIDs(version.content))
+        }
+        for content in proposals { ids.formUnion(try decodedIDs(content)) }
+        return ids
+    }
+}
 
 /// An image imported by the editor but not yet saved. Its bytes stay with
 /// the editor session (and its draft journal) until the document that
@@ -12,6 +117,27 @@ struct StagedNoteAttachment: Equatable, Sendable {
     let byteCount: Int64
     let digest: String
     let data: Data
+    /// Computed once where bytes enter the engine (production loaders and
+    /// stored-byte verification run off-main). Immutable copies retain proof.
+    private let verifiedDigest: String
+    var payloadIsVerified: Bool { byteCount == Int64(data.count) && digest == verifiedDigest }
+
+    init(id: UUID, filename: String, contentTypeIdentifier: String, byteCount: Int64, digest: String, data: Data) {
+        self.id = id; self.filename = filename; self.contentTypeIdentifier = contentTypeIdentifier
+        self.byteCount = byteCount; self.digest = digest; self.data = data
+        verifiedDigest = data.isEmpty ? "" : NotePayloadDigest.sha256(data)
+    }
+
+    private init(id: UUID, copying original: StagedNoteAttachment) {
+        self.id = id; filename = original.filename; contentTypeIdentifier = original.contentTypeIdentifier
+        byteCount = original.byteCount; digest = original.digest; data = original.data
+        verifiedDigest = original.verifiedDigest
+    }
+    func copying(id: UUID) -> StagedNoteAttachment { .init(id: id, copying: self) }
+    var identityExtras: [String: NoteJSON] {
+        ["contentDigest": .string(digest), "expectedByteCount": .int(byteCount),
+         "expectedContentType": .string(contentTypeIdentifier), "expectedFilename": .string(filename)]
+    }
 }
 
 /// Immutable projection prepared away from the main actor for autosave.
@@ -20,12 +146,18 @@ struct PreparedNoteDocument: Sendable {
     let title: String
     let body: String
     let plainText: String
+    let imageCount: Int
+    let fileCount: Int
+    let firstFileName: String?
 
     init(_ document: NoteDocument) throws {
         content = try NoteContentCodec.encode(document)
         title = NoteStore.normalizedTitle(document.title)
         body = NoteTextExport.plainBody(document)
         plainText = NoteTextExport.plainText(document)
+        imageCount = document.blocks.filter { $0.kind == .image }.count
+        fileCount = document.blocks.filter { $0.kind == .file }.count
+        firstFileName = document.blocks.first { $0.kind == .file }?.filename
     }
 }
 
@@ -104,6 +236,41 @@ private struct NotePreservationState: Hashable {
 /// a document and the version that preserves what it replaced commit (or
 /// fail) as one transaction.
 extension NoteStore {
+    /// Recently Deleted acts on a document placement, not only its row.
+    /// saveDocument commits placement, version, derived columns and row
+    /// visibility across the replica family in one transaction.
+    func removeDocumentAttachment(_ id: UUID, noteID: UUID) -> Bool {
+        guard let loaded = loadDocument(noteID: noteID), var document = loaded.content.document,
+              document.attachmentIDs.contains(id) else { return false }
+        document.blocks.removeAll { $0.attachmentID == id && ($0.kind == .image || $0.kind == .file) }
+        switch saveDocument(noteID: noteID, document: document, baseRevisionID: loaded.revisionID) {
+        case .success: return true
+        case let .failure(error): setAttachmentError(error.localizedDescription); return false
+        }
+    }
+
+    func restoreDocumentAttachment(_ row: NoteAttachment) -> Bool {
+        let noteID = row.noteID
+        guard let loaded = loadDocument(noteID: noteID), var document = loaded.content.document else { return false }
+        if !document.attachmentIDs.contains(row.id) {
+            let past = versions(noteID: noteID).compactMap { version -> (NoteDocument, Int)? in
+                guard let data = version.content, let historical = NoteContentCodec.decode(data).document,
+                      let index = historical.blocks.firstIndex(where: { $0.attachmentID == row.id }) else { return nil }
+                return (historical, index)
+            }.first
+            let block = past.map { $0.0.blocks[$0.1] } ?? (row.isImage
+                ? .image(attachmentID: row.id)
+                : .file(attachmentID: row.id, filename: row.originalFilename,
+                        contentTypeIdentifier: row.contentTypeIdentifier, byteCount: row.byteCount))
+            let index = min(max(1, past?.1 ?? document.blocks.count), document.blocks.count)
+            document.blocks.insert(block, at: index)
+        }
+        switch saveDocument(noteID: noteID, document: document, baseRevisionID: loaded.revisionID) {
+        case .success: return true
+        case let .failure(error): setAttachmentError(error.localizedDescription); return false
+        }
+    }
+
     /// Every writer uses this before touching a physical replica. Format 0
     /// has no document bytes; format 1 must be fully understood. A future or
     /// damaged row makes the entire logical note read-only.
@@ -251,13 +418,24 @@ extension NoteStore {
             return .failure(.staleRevision(expected: NoteItem.initialRevisionToken,
                                            current: canonical(existing)?.revisionToken ?? NoteItem.initialRevisionToken))
         }
+        let projection: PreparedNoteDocument
+        let attachmentPlan: NoteAttachmentAdmission.Plan
+        do {
+            guard document.isWritableByThisBuild else { throw NoteDocumentStoreError.readOnly }
+            projection = try prepared ?? PreparedNoteDocument(document)
+            attachmentPlan = try attachmentStagePlan(staged, referencedBy: document, noteID: id)
+        } catch let error as NoteDocumentStoreError {
+            return .failure(error)
+        } catch {
+            return .failure(.encodingFailed(error.localizedDescription))
+        }
         let timestamp = currentDate
         let note = NoteItem(id: id, createdAt: timestamp, updatedAt: timestamp)
         let revisionID: UUID
         do {
-            revisionID = try stage(document, on: [note], timestamp: timestamp, revision: 0, prepared: prepared,
+            revisionID = try stage(document, on: [note], timestamp: timestamp, revision: 0, prepared: projection,
                                    tags: tags.map(AtticTag.encode))
-            try stageAttachments(staged, referencedBy: document, noteID: id, context: context, timestamp: timestamp)
+            stageAttachments(attachmentPlan, noteID: id, context: context, timestamp: timestamp)
         } catch let error as NoteDocumentStoreError {
             context.rollback()
             return .failure(error)
@@ -271,6 +449,7 @@ extension NoteStore {
         }
         present(note)
         refreshAfterDocumentSave(insertedAttachments: !staged.isEmpty)
+        for item in attachmentPlan.new + attachmentPlan.repairs.map({ $0.1 }) { cacheVerifiedAttachment(item) }
         return .success((id, revisionID))
     }
 
@@ -322,19 +501,40 @@ extension NoteStore {
             documentSaveCommitted?(baseRevisionID, presentedRevisionID)
             return .success(presentedRevisionID)
         }
+        // Reject an invalid batch before touching any presented replica or
+        // displaced version. SwiftData rollback need not restore the same
+        // in-memory object graph on every supported macOS version.
+        let projection: PreparedNoteDocument
+        let attachmentPlan: NoteAttachmentAdmission.Plan
+        do {
+            guard document.isWritableByThisBuild else { throw NoteDocumentStoreError.readOnly }
+            projection = try prepared ?? PreparedNoteDocument(document)
+            let base = main.content.flatMap { NoteContentCodec.decode($0).document }
+            attachmentPlan = try attachmentStagePlan(staged, referencedBy: document, noteID: noteID,
+                previouslyReferencedBy: base)
+        } catch let error as NoteDocumentStoreError {
+            return .failure(error)
+        } catch {
+            return .failure(.encodingFailed(error.localizedDescription))
+        }
         let timestamp = currentDate
         let context = modelContext
+        let priorIDs = Set((NoteContentCodec.decode(main.content ?? Data()).document)?.attachmentIDs ?? [])
+        let removedIDs = priorIDs.subtracting(document.attachmentIDs)
         stageDisplacedReplicas(replicas, reason: .replacedByDraft, timestamp: timestamp,
-                               excludingUnchangedBase: baseRevisionID)
+                               excludingUnchangedBase: removedIDs.isEmpty ? baseRevisionID : nil)
         do {
             let revisionID = try stage(document, on: replicas, timestamp: timestamp,
-                                       revision: replicas.map(\.revision).max() ?? 0, prepared: prepared,
+                                       revision: replicas.map(\.revision).max() ?? 0, prepared: projection,
                                        tags: encodedTags)
-            try stageAttachments(staged, referencedBy: document, noteID: noteID, context: context, timestamp: timestamp)
+            stageAttachments(attachmentPlan, noteID: noteID, context: context, timestamp: timestamp)
+            let visibilityChanged = try stageAttachmentVisibility(referencedBy: document, noteID: noteID,
+                timestamp: timestamp)
             guard commitStagedChanges() else {
                 return .failure(.saveFailed(lastErrorMessage ?? "The note could not be saved."))
             }
-            refreshAfterDocumentSave(insertedAttachments: !staged.isEmpty)
+            refreshAfterDocumentSave(insertedAttachments: !staged.isEmpty || visibilityChanged)
+            for item in attachmentPlan.new + attachmentPlan.repairs.map({ $0.1 }) { cacheVerifiedAttachment(item) }
             documentSaveCommitted?(baseRevisionID, presentedRevisionID)
             return .success(revisionID)
         } catch let error as NoteDocumentStoreError {
@@ -362,6 +562,9 @@ extension NoteStore {
             replica.title = projection.title
             replica.body = projection.body
             replica.plainText = projection.plainText
+            replica.imageCount = projection.imageCount
+            replica.fileCount = projection.fileCount
+            replica.firstFileName = projection.firstFileName
             replica.revision = revision &+ 1
             replica.revisionID = revisionID
             replica.updatedAt = timestamp
@@ -379,28 +582,110 @@ extension NoteStore {
         return revisionID
     }
 
-    /// Inserts rows for the staged images the document shows and that have
-    /// no row yet. Staged images the document no longer shows (an undone
-    /// paste) are simply not inserted.
-    private func stageAttachments(
-        _ staged: [StagedNoteAttachment],
-        referencedBy document: NoteDocument,
-        noteID: UUID,
-        context: ModelContext,
-        timestamp: Date
-    ) throws {
-        guard !staged.isEmpty else { return }
+    /// One admission component used by both pre-edit gates and the final
+    /// transaction. The candidate is the complete proposed document, so a
+    /// copied missing placement cannot pass a reduced ID-only check.
+    private enum NoteAttachmentAdmission {
+        struct Plan {
+            let new: [StagedNoteAttachment]
+            let nextSortIndex: Int64
+            let repairs: [(NoteAttachment, StagedNoteAttachment)]
+        }
+
+        static func evaluate(_ staged: [StagedNoteAttachment], referencedBy document: NoteDocument,
+                             previouslyReferencedBy base: NoteDocument?, rows: [NoteAttachment],
+                             metadataOnlyIDs: Set<UUID>) throws -> Plan {
         let shown = Set(document.attachmentIDs)
         guard staged.filter({ shown.contains($0.id) }).allSatisfy({
             $0.byteCount > 0 && $0.byteCount <= AttachmentLimits.maxBytesPerAttachment
-                && $0.byteCount == Int64($0.data.count) && !$0.digest.isEmpty
+                && $0.filename.utf8.count <= AttachmentLimits.maxFilenameUTF8Bytes
+                && (metadataOnlyIDs.contains($0.id) || $0.payloadIsVerified)
         }) else {
             throw NoteDocumentStoreError.invalidDocument("An image has no complete payload.")
         }
-        let existing = Set((try? attachmentRows(forNoteID: noteID))?.map(\.id) ?? [])
-        let highest = (try? attachmentRows(forNoteID: noteID))?.map(\.sortIndex).max() ?? -1
-        var nextIndex = highest &+ 1
-        for item in staged where shown.contains(item.id) && !existing.contains(item.id) {
+        // Divergent replicas of an existing file never block a save; its
+        // largest replica counts toward the limits.
+        let existing = Set(rows.map(\.id))
+        let visible = Dictionary(rows.filter { shown.contains($0.id) }.map { ($0.id, $0) },
+            uniquingKeysWith: { first, other in other.byteCount > first.byteCount ? other : first }).values
+        let new = staged.filter { shown.contains($0.id) && !existing.contains($0.id) }
+        var repairs: [(NoteAttachment, StagedNoteAttachment)] = []
+        for item in staged where shown.contains(item.id) && existing.contains(item.id) && !metadataOnlyIDs.contains(item.id) {
+            let family = rows.filter { $0.id == item.id }
+            guard family.allSatisfy({ $0.byteCount == item.byteCount && $0.contentDigest == item.digest
+                && $0.contentTypeIdentifier == item.contentTypeIdentifier
+                && ($0.payload == nil || $0.payload == item.data) }) else {
+                throw NoteDocumentStoreError.invalidDocument("Stored attachment bytes disagree with recovery. Recovery is being kept.")
+            }
+            repairs += family.filter { $0.payload == nil }.map { ($0, item) }
+        }
+        let baseIDs = Set(base?.attachmentIDs ?? [])
+        let addedIDs = shown.subtracting(baseIDs)
+        let missing = shown.subtracting(existing).subtracting(new.map(\.id))
+        let baseBlocks = Dictionary(grouping: (base?.blocks ?? []).compactMap { block -> (UUID, NoteBlock)? in
+            guard let id = block.attachmentID, block.kind == .image || block.kind == .file else { return nil }
+            return (id, block)
+        }, by: { $0.0 })
+        let unchangedMissing = document.blocks.filter { $0.attachmentID.map(missing.contains) == true }.allSatisfy { block in
+            guard let id = block.attachmentID, let originals = baseBlocks[id] else { return false }
+            return originals.contains { pair in
+                let original = pair.1
+                return block.id == original.id && block.kind == original.kind && block.filename == original.filename
+                    && block.contentTypeIdentifier == original.contentTypeIdentifier
+                    && block.byteCount == original.byteCount
+                    && block.pixelWidth == original.pixelWidth && block.pixelHeight == original.pixelHeight
+            }
+        }
+        let noIncrease = addedIDs.isEmpty
+        let total = visible.map(\.byteCount) + new.map(\.byteCount)
+        let totalBytes = total.reduce(Int64.zero) { partial, size in
+            let (sum, overflow) = partial.addingReportingOverflow(size)
+            return overflow ? Int64.max : sum
+        }
+        guard shown.count <= AttachmentLimits.maxAttachmentsPerNote || (noIncrease && shown.count <= baseIDs.count),
+              missing.isSubset(of: baseIDs), unchangedMissing,
+              missing.isEmpty || noIncrease,
+              visible.allSatisfy({ $0.byteCount > 0 && ($0.byteCount <= AttachmentLimits.maxBytesPerAttachment
+                  || (noIncrease && baseIDs.contains($0.id))) }),
+              totalBytes <= AttachmentLimits.maxBytesPerNote || noIncrease else {
+            throw NoteDocumentStoreError.invalidDocument("This batch exceeds the note's attachment limits.")
+        }
+        return Plan(new: new, nextSortIndex: (rows.map(\.sortIndex).max() ?? -1) &+ 1, repairs: repairs)
+        }
+    }
+
+    /// Staged images the document no longer shows (an undone paste) are
+    /// ignored. A metadata-only source may be preflighted before its read;
+    /// the complete payload is checked again before editor insertion/save.
+    private func attachmentStagePlan(
+        _ staged: [StagedNoteAttachment], referencedBy document: NoteDocument,
+        noteID: UUID, previouslyReferencedBy base: NoteDocument? = nil,
+        metadataOnlyIDs: Set<UUID> = []
+    ) throws -> NoteAttachmentAdmission.Plan {
+        try NoteAttachmentAdmission.evaluate(staged, referencedBy: document,
+            previouslyReferencedBy: base, rows: attachmentRows(forNoteID: noteID),
+            metadataOnlyIDs: metadataOnlyIDs)
+    }
+
+    /// Pre-edit controller entry point: exactly the same rule as final save.
+    func attachmentAdmissionFailure(noteID: UUID, document: NoteDocument,
+                                    staged: [StagedNoteAttachment], metadataOnlyIDs: Set<UUID> = []) -> String? {
+        do {
+            let base = note(withID: noteID)?.content.flatMap { NoteContentCodec.decode($0).document }
+            _ = try attachmentStagePlan(staged, referencedBy: document, noteID: noteID,
+                                        previouslyReferencedBy: base, metadataOnlyIDs: metadataOnlyIDs)
+            return nil
+        } catch {
+            return error.localizedDescription
+        }
+    }
+
+    /// Inserts validated rows; note, rows and versions still save together.
+    private func stageAttachments(_ plan: NoteAttachmentAdmission.Plan, noteID: UUID,
+                                  context: ModelContext, timestamp: Date) {
+        for (row, item) in plan.repairs { row.payload = item.data }
+        var nextIndex = plan.nextSortIndex
+        for item in plan.new {
             let row = NoteAttachment(
                 id: item.id,
                 noteID: noteID,
@@ -415,6 +700,30 @@ extension NoteStore {
             nextIndex &+= 1
             context.insert(row)
         }
+    }
+
+    /// The document, deletion timestamp and displaced version commit in the
+    /// same SwiftData save. Undo can restore the same row by referencing it
+    /// again; purge waits for versions, drafts and proposals to release it.
+    @discardableResult
+    private func stageAttachmentVisibility(referencedBy document: NoteDocument, noteID: UUID,
+                                           timestamp: Date) throws -> Bool {
+        let shown = Set(document.attachmentIDs)
+        var changed = false
+        for row in try attachmentRows(forNoteID: noteID) {
+            if shown.contains(row.id) {
+                if row.deletedAt != nil {
+                    changed = true
+                    row.updatedAt = timestamp
+                }
+                row.deletedAt = nil
+            } else if row.deletedAt == nil {
+                row.deletedAt = timestamp
+                row.updatedAt = timestamp
+                changed = true
+            }
+        }
+        return changed
     }
 
     private func refreshAfterDocumentSave(insertedAttachments: Bool) {
@@ -448,16 +757,37 @@ extension NoteStore {
     /// remain until their owner is gone. Safety versions taken at exactly the
     /// same instant are kept together so divergent replicas are not collapsed.
     func thinVersions(noteID: UUID) {
-        let all = versions(noteID: noteID)
-        let targetID = noteID
-        let physical = (try? modelContext.fetch(FetchDescriptor<NoteVersion>(
-            predicate: #Predicate { $0.noteID == targetID }
-        ))) ?? []
+        let physical: [NoteVersion]
+        let protectedIDs: Set<UUID>
+        let recoveryBases: Set<UUID>
+        do {
+            // Discover UUIDs on this note, then fetch their complete physical
+            // families. A divergent replica can belong to another note.
+            let targetID = noteID
+            let target = try modelContext.fetch(FetchDescriptor<NoteVersion>(
+                predicate: #Predicate { $0.noteID == targetID }))
+            let familyIDs = Array(Set(target.map(\.id)))
+            guard !familyIDs.isEmpty else { return }
+            physical = try modelContext.fetch(FetchDescriptor<NoteVersion>(
+                predicate: #Predicate { familyIDs.contains($0.id) }))
+            let proposals: [NotePendingEdit]
+            if let override = pendingEditRetentionRowsOverride {
+                proposals = try override(noteID)
+            } else {
+                proposals = try modelContext.fetch(FetchDescriptor<NotePendingEdit>())
+            }
+            protectedIDs = Set(proposals.compactMap(\.baseVersionID))
+            recoveryBases = try recoveryProtectedRevisionIDs()
+        } catch {
+            // Unknown proposal, version or recovery ownership keeps history.
+            return
+        }
         let copies = Dictionary(grouping: physical, by: \.id)
-        let protectedIDs = Set(pendingEdits(noteID: noteID).compactMap(\.baseVersionID))
-        // If any recovery entry is unreadable, its base is unknown. Keep the
-        // whole history until the entry can be inspected safely.
-        guard let recoveryBases = try? recoveryProtectedRevisionIDs() else { return }
+        let all = copies.values.filter { family in
+            family.contains { $0.noteID == noteID }
+        }.compactMap { family in family.max { $0.createdAt < $1.createdAt } }.sorted { lhs, rhs in
+            lhs.createdAt != rhs.createdAt ? lhs.createdAt > rhs.createdAt : lhs.id.uuidString > rhs.id.uuidString
+        }
         let day: TimeInterval = 86_400
         let hour: TimeInterval = 3_600
         let now = currentDate
@@ -465,9 +795,10 @@ extension NoteStore {
         var keptTimes = Set<Date>()
         var removed = false
         for version in all {
-            if protectedIDs.contains(version.id) || version.sourceRevisionID.map(recoveryBases.contains) == true
-                || version.reason == nil {
-                keptTimes.insert(version.createdAt)
+            let family = copies[version.id] ?? []
+            guard NotePhysicalFamilyRetention.versionEligible(family, noteIDs: [noteID],
+                proposalBases: protectedIDs, recoveryBases: recoveryBases) else {
+                keptTimes.formUnion(family.map(\.createdAt))
                 continue
             }
             let age = max(0, now.timeIntervalSince(version.createdAt))
@@ -479,14 +810,14 @@ extension NoteStore {
             } else if age < 30 * day {
                 bucket = Int64(version.createdAt.timeIntervalSince1970 / day) - 1_000_000_000
             } else {
-                copies[version.id]?.forEach(modelContext.delete)
+                family.forEach(modelContext.delete)
                 removed = true
                 continue
             }
             if buckets.insert(bucket).inserted {
                 keptTimes.insert(version.createdAt)
             } else {
-                copies[version.id]?.forEach(modelContext.delete)
+                family.forEach(modelContext.delete)
                 removed = true
             }
         }
@@ -539,6 +870,9 @@ extension NoteStore {
             replica.title = derived.title
             replica.body = derived.body
             replica.plainText = derived.plainText
+            replica.imageCount = derived.imageCount
+            replica.fileCount = derived.fileCount
+            replica.firstFileName = derived.firstFileName
             replica.revision = revision
             replica.revisionID = revisionID
             replica.updatedAt = timestamp
@@ -550,9 +884,17 @@ extension NoteStore {
                 replica.taskID = preflight.canonical.taskID
             }
         }
+        if let data = version.content, let restored = NoteContentCodec.decode(data).document {
+            do { try stageAttachmentVisibility(referencedBy: restored, noteID: noteID, timestamp: timestamp) }
+            catch {
+                context.rollback()
+                return .failure(.saveFailed(error.localizedDescription))
+            }
+        }
         guard commitStagedChanges() else {
             return .failure(.saveFailed(lastErrorMessage ?? "The version could not be restored."))
         }
+        refreshAfterDocumentSave(insertedAttachments: true)
         return .success(revisionID.uuidString)
     }
 
@@ -600,12 +942,15 @@ extension NoteStore {
     }
 
     static func derivedColumns(content: Data?, format: Int, title: String, body: String)
-        -> (title: String, body: String, plainText: String) {
+        -> (title: String, body: String, plainText: String, imageCount: Int, fileCount: Int, firstFileName: String?) {
         guard format >= 1, let content else {
-            return (title, body, legacyPlainText(title: title, body: body))
+            return (title, body, legacyPlainText(title: title, body: body), 0, 0, nil)
         }
-        guard let document = NoteContentCodec.decode(content).document else { return (title, body, title) }
-        return (normalizedTitle(document.title), NoteTextExport.plainBody(document), NoteTextExport.plainText(document))
+        guard let document = NoteContentCodec.decode(content).document else { return (title, body, title, 0, 0, nil) }
+        return (normalizedTitle(document.title), NoteTextExport.plainBody(document), NoteTextExport.plainText(document),
+                document.blocks.filter { $0.kind == .image }.count,
+                document.blocks.filter { $0.kind == .file }.count,
+                document.blocks.first { $0.kind == .file }?.filename)
     }
 
     // MARK: Agent edits (requirement 5)
@@ -710,7 +1055,8 @@ extension NoteStore {
             guard let preflight = try? noteMutationPreflight(noteID, format: .editable) else { break }
             let replicas = preflight.replicas
             let current = preflight.canonical
-            let editRows = pendingEditRows(edit.id)
+            guard let editRows = try? pendingEditRows(edit.id),
+                  NotePhysicalFamilyRetention.proposalEligible(editRows, noteIDs: [noteID]) else { continue }
             guard current.revisionToken == edit.baseRevisionToken,
                   let data = edit.proposedContent,
                   case let .editable(document) = NoteContentCodec.decode(data),
@@ -737,11 +1083,11 @@ extension NoteStore {
         return applied
     }
 
-    private func pendingEditRows(_ id: UUID) -> [NotePendingEdit] {
+    private func pendingEditRows(_ id: UUID) throws -> [NotePendingEdit] {
         let targetID = id
-        return (try? modelContext.fetch(FetchDescriptor<NotePendingEdit>(
+        return try modelContext.fetch(FetchDescriptor<NotePendingEdit>(
             predicate: #Predicate { $0.id == targetID }
-        ))) ?? []
+        ))
     }
 
     // MARK: Migration gate (requirement 2)
@@ -767,6 +1113,8 @@ extension NoteStore {
             if let seen = byID[row.id] {
                 guard seen.inlineOffset == row.inlineOffset, seen.sortIndex == row.sortIndex,
                       seen.createdAt == row.createdAt, seen.isImage == row.isImage,
+                      seen.originalFilename == row.originalFilename,
+                      seen.contentTypeIdentifier == row.contentTypeIdentifier,
                       seen.byteCount == row.byteCount, seen.contentDigest == row.contentDigest,
                       seen.payload == row.payload else { return .failure(.replicasDisagree) }
             } else {
@@ -779,7 +1127,9 @@ extension NoteStore {
             body: current.body,
             attachments: LegacyNoteMigration.displayOrder(byID.values.map {
                 .init(id: $0.id, inlineOffset: $0.inlineOffset, sortIndex: $0.sortIndex,
-                      createdAt: $0.createdAt, isImage: $0.isImage, payload: $0.payload)
+                      createdAt: $0.createdAt, isImage: $0.isImage,
+                      filename: $0.originalFilename, contentTypeIdentifier: $0.contentTypeIdentifier,
+                      byteCount: $0.byteCount, payload: $0.payload)
             }),
             revisionToken: current.revisionToken
         ))
@@ -812,6 +1162,9 @@ extension NoteStore {
             replica.content = data
             replica.contentFormat = plan.document.format
             replica.plainText = NoteTextExport.plainText(plan.document)
+            replica.imageCount = plan.document.blocks.filter { $0.kind == .image }.count
+            replica.fileCount = plan.document.blocks.filter { $0.kind == .file }.count
+            replica.firstFileName = plan.document.blocks.first { $0.kind == .file }?.filename
             replica.revision = revision
             replica.revisionID = revisionID
             if replica !== preflight.canonical {
@@ -830,46 +1183,49 @@ extension NoteStore {
     // MARK: Retention
 
     /// Every attachment row a note in the new format shows, a kept version
-    /// shows, or a pending agent edit would show. A note whose content this
-    /// build can't read keeps all of its rows. Throws on a failed read, so
-    /// callers keep everything rather than guess.
+    /// shows, or a pending agent edit would show. Unreadable ownership or
+    /// a failed read makes the inventory unknown, so callers retain all
+    /// bytes rather than treating existing rows as a complete inventory.
     func documentReferencedAttachmentIDs(excludingNoteID excluded: UUID? = nil) throws -> Set<UUID> {
         var ids = try recoveryReferencedAttachmentIDs()
-        let notes = try modelContext.fetch(FetchDescriptor<NoteItem>(
-            predicate: #Predicate { $0.contentFormat >= 1 }
-        ))
-        for note in notes {
-            if note.id == excluded { continue }
-            if let data = note.content, case let .editable(document) = NoteContentCodec.decode(data) {
-                ids.formUnion(document.attachmentIDs)
-            } else {
-                ids.formUnion(try attachmentRows(forNoteID: note.id).map(\.id))
-            }
-        }
-        for version in try modelContext.fetch(FetchDescriptor<NoteVersion>()) {
-            if version.noteID == excluded { continue }
-            ids.formUnion(version.attachmentIDs)
-        }
-        for edit in try modelContext.fetch(FetchDescriptor<NotePendingEdit>()) {
-            if edit.noteID == excluded { continue }
-            guard let data = edit.proposedContent else { continue }
-            if case let .editable(document) = NoteContentCodec.decode(data) {
-                ids.formUnion(document.attachmentIDs)
-            } else {
-                ids.formUnion(try attachmentRows(forNoteID: edit.noteID).map(\.id))
-            }
-        }
+        ids.formUnion(try documentRetentionSnapshot(excludingNoteID: excluded).attachmentIDs())
         return ids
+    }
+
+    /// Capture current, including uncommitted, ownership on the context's actor.
+    /// File retention decodes these values off-main and rechecks the store before
+    /// accepting them. Synchronous collectors use exactly the same rules.
+    func documentRetentionSnapshot(excludingNoteID excluded: UUID? = nil) throws -> NoteDocumentRetentionSnapshot {
+        let notes = try modelContext.fetch(FetchDescriptor<NoteItem>(predicate: #Predicate { $0.contentFormat >= 1 }))
+            .filter { $0.id != excluded }.map(\.content)
+        let versions = try modelContext.fetch(FetchDescriptor<NoteVersion>())
+            .filter { $0.noteID != excluded }.map {
+                NoteDocumentRetentionSnapshot.Version(format: $0.contentFormat, content: $0.content, attachmentIDsRaw: $0.attachmentIDsRaw)
+            }
+        let proposals = try modelContext.fetch(FetchDescriptor<NotePendingEdit>())
+            .filter { $0.noteID != excluded }.map(\.proposedContent)
+        return NoteDocumentRetentionSnapshot(notes: notes, versions: versions, proposals: proposals)
     }
 
     /// Stages the removal of purged notes' versions and pending edits.
     func stageRemovalOfHistory(forNoteIDs noteIDs: Set<UUID>) throws {
-        let ids = Array(noteIDs)
-        try modelContext.fetch(FetchDescriptor<NoteVersion>(
-            predicate: #Predicate { ids.contains($0.noteID) }
-        )).forEach(modelContext.delete)
-        try modelContext.fetch(FetchDescriptor<NotePendingEdit>(
-            predicate: #Predicate { ids.contains($0.noteID) }
-        )).forEach(modelContext.delete)
+        let versions = try modelContext.fetch(FetchDescriptor<NoteVersion>())
+        let proposals = try modelContext.fetch(FetchDescriptor<NotePendingEdit>())
+        let recoveryBases = try recoveryProtectedRevisionIDs()
+        // Proposals outside the same removal transaction keep their bases.
+        let externalBases = Set(proposals.filter { !noteIDs.contains($0.noteID) }.compactMap(\.baseVersionID))
+        let versionFamilies = Dictionary(grouping: versions, by: \.id).values.filter {
+            $0.contains { noteIDs.contains($0.noteID) }
+        }
+        let proposalFamilies = Dictionary(grouping: proposals, by: \.id).values.filter {
+            $0.contains { noteIDs.contains($0.noteID) }
+        }
+        guard versionFamilies.allSatisfy({ NotePhysicalFamilyRetention.versionEligible($0,
+                noteIDs: noteIDs, proposalBases: externalBases, recoveryBases: recoveryBases) }),
+              proposalFamilies.allSatisfy({ NotePhysicalFamilyRetention.proposalEligible($0, noteIDs: noteIDs) }) else {
+            throw NoteDocumentStoreError.invalidDocument("Protected, divergent or unreadable history keeps this deleted note safe.")
+        }
+        versionFamilies.forEach { $0.forEach(modelContext.delete) }
+        proposalFamilies.forEach { $0.forEach(modelContext.delete) }
     }
 }

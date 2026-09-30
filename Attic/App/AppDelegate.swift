@@ -43,7 +43,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     func applicationShouldTerminate(
         _ sender: NSApplication
     ) -> NSApplication.TerminateReply {
-        AppCoordinator.shared.prepareForTermination() ? .terminateNow : .terminateCancel
+        Task { @MainActor in
+            let ready = await AppCoordinator.shared.prepareForTerminationDurably()
+            sender.reply(toApplicationShouldTerminate: ready)
+        }
+        return .terminateLater
     }
 
     func applicationWillTerminate(_ notification: Notification) {

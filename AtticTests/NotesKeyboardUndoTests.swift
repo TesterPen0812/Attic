@@ -115,6 +115,9 @@ final class NotesKeyboardUndoTests: XCTestCase {
         // without dispatching further, and their effects are asserted.)
         let before = libraryFingerprint(harness)
         NSApp.sendEvent(event)
+        // The monitor now dispatches durable Undo/Redo asynchronously. Observe
+        // its completion before inferring that the key fell through to AppKit.
+        spin(0.15)
         defer { spin(0.15) }
         if toTheLibrary || libraryFingerprint(harness) != before { return .monitor }
         guard flags.contains(.command) else { return .nobody }
@@ -272,9 +275,11 @@ final class NotesKeyboardUndoTests: XCTestCase {
         // And through the menu command, Redo then Undo again.
         commands = NotesEditorPage.historyCommands(for: harness.controller)
         XCTAssertTrue(NotesLibraryView.run(NotesLibraryView.redoIdentifier, in: commands))
+        spin() // Durable menu commands complete asynchronously.
         XCTAssertNil(harness.store.note(withID: only), "Redo deleted it again")
         commands = NotesEditorPage.historyCommands(for: harness.controller)
         XCTAssertTrue(NotesLibraryView.run(NotesLibraryView.undoIdentifier, in: commands))
+        spin()
         XCTAssertNotNil(harness.store.note(withID: only), "Undo from the menu command restored it")
     }
 }

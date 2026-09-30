@@ -46,6 +46,9 @@ enum NoteMarkdownExport {
                 numbered.removeAll()
                 let name = block.attachmentID.flatMap(filename) ?? String(localized: "image")
                 lines.append(("[image: \(name)]", false))
+            case .file:
+                numbered.removeAll()
+                lines.append(("[file: \(block.filename ?? "file")]", false))
             case .divider:
                 numbered.removeAll()
                 lines.append(("---", false))

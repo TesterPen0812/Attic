@@ -50,6 +50,15 @@ final class NoteEditorTextView: NSTextView, NSAccessibilityCustomRotorItemSearch
     }
 
     override func keyDown(with event: NSEvent) {
+        if let engine, selectedRange().length == 1,
+           let object = engine.object(at: selectedRange().location),
+           object is NoteImageAttachment || object is NoteFileAttachment {
+            let flags = event.modifierFlags.intersection([.command, .option, .shift, .control])
+            if flags.isEmpty, event.charactersIgnoringModifiers == " " {
+                Task { await engine.perform(.quickLook, objectID: object.objectID) }
+                return
+            }
+        }
         if engine?.handleShortcut(event) == true { return }
         let flags = event.modifierFlags.intersection([.command, .option, .shift, .control])
         if flags == [.command, .option, .shift], event.charactersIgnoringModifiers?.lowercased() == "v" {
@@ -153,6 +162,12 @@ final class NoteEditorTextView: NSTextView, NSAccessibilityCustomRotorItemSearch
     }
 
     override func deleteBackward(_ sender: Any?) {
+        if let engine, selectedRange().length == 1,
+           let object = engine.object(at: selectedRange().location),
+           object is NoteImageAttachment || object is NoteFileAttachment {
+            Task { await engine.perform(.delete, objectID: object.objectID) }
+            return
+        }
         if engine?.handleDeleteBackward() == true { return }
         asUserEdit { super.deleteBackward(sender) }
     }
@@ -197,7 +212,29 @@ final class NoteEditorTextView: NSTextView, NSAccessibilityCustomRotorItemSearch
     }
 
     override func cut(_ sender: Any?) { asUserEdit { super.cut(sender) } }
-    override func delete(_ sender: Any?) { asUserEdit { super.delete(sender) } }
+    override func delete(_ sender: Any?) {
+        if let engine, selectedRange().length == 1,
+           let object = engine.object(at: selectedRange().location),
+           object is NoteImageAttachment || object is NoteFileAttachment {
+            Task { await engine.perform(.delete, objectID: object.objectID) }
+            return
+        }
+        asUserEdit { super.delete(sender) }
+    }
+    override func copy(_ sender: Any?) {
+        if let engine, selectedRange().length == 1,
+           let object = engine.object(at: selectedRange().location),
+           object is NoteImageAttachment || object is NoteFileAttachment {
+            let command: NoteObjectCommand = object is NoteImageAttachment ? .copyImage : .copyFile
+            Task { await engine.perform(command, objectID: object.objectID) }
+            return
+        }
+        super.copy(sender)
+    }
+    @objc func printNote(_ sender: Any?) {
+        guard let engine else { return }
+        Task { _ = await engine.printNote() }
+    }
     override func paste(_ sender: Any?) { asUserEdit { super.paste(sender) } }
     override func pasteAsPlainText(_ sender: Any?) { asUserEdit { super.pasteAsPlainText(sender) } }
 
@@ -225,7 +262,7 @@ final class NoteEditorTextView: NSTextView, NSAccessibilityCustomRotorItemSearch
     }
 
     override var readablePasteboardTypes: [NSPasteboard.PasteboardType] {
-        [NoteEditorEngine.fragmentType, .rtf, .html, .string]
+        [NoteEditorEngine.fragmentType, .fileURL, .png, .tiff, .rtf, .html, .string]
     }
 
     override func readSelection(from pboard: NSPasteboard, type: NSPasteboard.PasteboardType) -> Bool {
@@ -234,6 +271,16 @@ final class NoteEditorTextView: NSTextView, NSAccessibilityCustomRotorItemSearch
         guard target.location != NSNotFound else { return false }
         if type == NoteEditorEngine.fragmentType, let data = pboard.data(forType: type) {
             return engine.paste(fragmentData: data, at: target)
+        }
+        if type == .fileURL,
+           let urls = pboard.readObjects(forClasses: [NSURL.self],
+                options: [.urlReadingFileURLsOnly: true]) as? [URL], !urls.isEmpty {
+            engine.onFileBatchRequest?(urls, pboard.string(forType: .string) ?? "", target)
+            return engine.onFileBatchRequest != nil
+        }
+        if (type == .png || type == .tiff), let data = pboard.data(forType: type) {
+            engine.onRawImageBatchRequest?(data, type == .png ? "png" : "tiff", target)
+            return engine.onRawImageBatchRequest != nil
         }
         if (type == .rtf || type == .html), let data = pboard.data(forType: type) {
             return engine.pasteRichText(data, type: type, at: target)
@@ -277,8 +324,19 @@ final class NoteEditorTextView: NSTextView, NSAccessibilityCustomRotorItemSearch
     // MARK: Checkbox clicks
 
     override func mouseDown(with event: NSEvent) {
-        guard let engine, isEditable else { return super.mouseDown(with: event) }
+        guard let engine else { return super.mouseDown(with: event) }
         let point = convert(event.locationInWindow, from: nil)
+        if event.clickCount == 2 {
+            let index = characterIndexForInsertion(at: point)
+            for location in [index, max(0, index - 1)] {
+                guard let object = engine.object(at: location),
+                      object is NoteImageAttachment || object is NoteFileAttachment else { continue }
+                setSelectedRange(NSRange(location: location, length: 1))
+                Task { await engine.perform(.quickLook, objectID: object.objectID) }
+                return
+            }
+        }
+        guard isEditable else { return super.mouseDown(with: event) }
         if let location = checkboxLocation(at: point) {
             engine.toggleCheckbox(atLineOf: location)
             return

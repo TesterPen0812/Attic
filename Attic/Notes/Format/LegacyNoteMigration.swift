@@ -9,6 +9,9 @@ struct LegacyNoteSnapshot: Equatable, Sendable {
         let sortIndex: Int64
         let createdAt: Date
         let isImage: Bool
+        var filename: String = ""
+        var contentTypeIdentifier: String = "public.data"
+        var byteCount: Int64 = 0
         /// Actual payload, not only the stored digest (which may be stale).
         var payload: Data? = nil
     }
@@ -41,7 +44,7 @@ enum LegacyMigrationRefusal: Error, Equatable, Sendable, CustomStringConvertible
         case .duplicateAttachmentIDs: "Two attachments share an id, so which is which can't be kept."
         case .titleHasLineBreak: "The title has a line break."
         case .bodyContainsObjectCharacter: "The text contains an object-replacement character (U+FFFC)."
-        case let .fileAttachment(id): "Attachment \(id.uuidString) is a file; files join the new editor in a later slice."
+        case let .fileAttachment(id): "Attachment \(id.uuidString) is a file without the metadata needed for a safe migration."
         case .replicasDisagree: "Copies of this note disagree."
         case let .projectionMismatch(detail): "The converted note would not show the same thing: \(detail)."
         case let .roundTripMismatch(detail): "The text system did not give the note back unchanged: \(detail)."
@@ -82,8 +85,10 @@ enum LegacyNoteMigration {
     static func plan(_ snapshot: LegacyNoteSnapshot) -> Result<Plan, LegacyMigrationRefusal> {
         let ids = snapshot.attachments.map(\.id)
         guard Set(ids).count == ids.count else { return .failure(.duplicateAttachmentIDs) }
+        if let file = snapshot.attachments.first(where: { !$0.isImage && $0.filename.isEmpty }) {
+            return .failure(.fileAttachment(file.id))
+        }
         guard !snapshot.title.contains(where: \.isNewline) else { return .failure(.titleHasLineBreak) }
-        if let file = snapshot.attachments.first(where: { !$0.isImage }) { return .failure(.fileAttachment(file.id)) }
         guard !snapshot.body.contains(NoteDocument.objectCharacter),
               !snapshot.title.contains(NoteDocument.objectCharacter) else {
             return .failure(.bodyContainsObjectCharacter)
@@ -112,16 +117,21 @@ enum LegacyNoteMigration {
         let lines = body.isEmpty ? [] : body.components(separatedBy: "\n")
         for (index, line) in lines.enumerated() {
             for attachment in inline[index] ?? [] {
-                blocks.append(.image(id: attachment.id, attachmentID: attachment.id))
+                blocks.append(attachment.isImage ? .image(id: attachment.id, attachmentID: attachment.id)
+                    : .file(id: attachment.id, attachmentID: attachment.id, filename: attachment.filename,
+                            contentTypeIdentifier: attachment.contentTypeIdentifier, byteCount: attachment.byteCount))
             }
             blocks.append(.text(line))
         }
         for attachment in tray {
-            blocks.append(.image(id: attachment.id, attachmentID: attachment.id))
+            blocks.append(attachment.isImage ? .image(id: attachment.id, attachmentID: attachment.id)
+                : .file(id: attachment.id, attachmentID: attachment.id, filename: attachment.filename,
+                        contentTypeIdentifier: attachment.contentTypeIdentifier, byteCount: attachment.byteCount))
         }
         return .success(Plan(
             snapshot: snapshot,
-            document: NoteDocument(blocks: blocks),
+            document: NoteDocument(blocks: blocks,
+                requires: blocks.contains(where: { $0.kind == .file }) ? ["file-v1"] : []),
             normalizedBody: body,
             normalizedLineBreaks: breaks,
             snappedAnchors: snapped
@@ -159,8 +169,14 @@ enum LegacyNoteMigration {
                 for id in pending { placement[id] = lines.count }
                 pending.removeAll()
                 lines.append(block.text)
-            case .image:
+            case .image, .file:
                 guard let id = block.attachmentID else { return "an image without an attachment" }
+                if block.kind == .file {
+                    guard let source = plan.snapshot.attachments.first(where: { $0.id == id }),
+                          block.filename == source.filename,
+                          block.contentTypeIdentifier == source.contentTypeIdentifier,
+                          block.byteCount == source.byteCount else { return "file metadata" }
+                }
                 pending.append(id)
                 order.append(id)
             case .checklist, .divider, .opaque:

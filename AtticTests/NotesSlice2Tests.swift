@@ -43,7 +43,7 @@ final class NotesSlice2EngineTests: XCTestCase {
 
     // MARK: Title hashtags
 
-    func testSpaceAfterAHashtagInTheTitleTakesTheTagAsOneUndoStep() {
+    func testSpaceAfterAHashtagInTheTitleTakesTheTagAsOneUndoStep() async {
         let (engine, textView) = makeEngine(NoteDocument(blocks: [.text("Pricing")]))
         var tagChanges = 0
         engine.onTagsChange = { tagChanges += 1 }
@@ -70,7 +70,7 @@ final class NotesSlice2EngineTests: XCTestCase {
         XCTAssertTrue(engine.history.redo(), "redo of the typed space")
     }
 
-    func testRedoOfTheShorthandAddsTheTagAgain() {
+    func testRedoOfTheShorthandAddsTheTagAgain() async {
         let (engine, textView) = makeEngine(NoteDocument(blocks: [.text("Trip")]))
         caretAtEnd(of: engine, textView)
         type(" #kyoto ", textView)
@@ -81,14 +81,14 @@ final class NotesSlice2EngineTests: XCTestCase {
         XCTAssertEqual(engine.document().title, "Trip ")
     }
 
-    func testReturnAfterAHashtagTakesTheTagThenStartsTheBody() {
+    func testReturnAfterAHashtagTakesTheTagThenStartsTheBody() async {
         let (engine, textView) = makeEngine(NoteDocument.blank)
         type("Groceries #home\nMilk", textView)
         XCTAssertEqual(engine.tags, ["home"])
         XCTAssertEqual(engine.document().blocks.map(\.text), ["Groceries ", "Milk"])
     }
 
-    func testEscapeKeepsTheHashtagAsTextUntilItsHashIsTypedAgain() {
+    func testEscapeKeepsTheHashtagAsTextUntilItsHashIsTypedAgain() async {
         let (engine, textView) = makeEngine(NoteDocument(blocks: [.text("Issue")]))
         caretAtEnd(of: engine, textView)
         type(" #design", textView)
@@ -101,13 +101,13 @@ final class NotesSlice2EngineTests: XCTestCase {
         XCTAssertEqual(engine.tags, ["ux"])
     }
 
-    func testEscapeWithNoHashtagPassesOn() {
+    func testEscapeWithNoHashtagPassesOn() async {
         let (engine, textView) = makeEngine(NoteDocument(blocks: [.text("Plain")]))
         caretAtEnd(of: engine, textView)
         XCTAssertFalse(engine.keepTitleHashtagLiteral())
     }
 
-    func testHashtagsInTheBodyNumbersAndPastesStayText() {
+    func testHashtagsInTheBodyNumbersAndPastesStayText() async {
         let (engine, textView) = makeEngine(NoteDocument(blocks: [.text("Title"), .text("Body")]))
         caretAtEnd(of: engine, textView)
         type(" #launch ", textView)
@@ -120,14 +120,14 @@ final class NotesSlice2EngineTests: XCTestCase {
         XCTAssertTrue(engine.document().title.contains("#pasted"))
     }
 
-    func testAHashtagInsideAWordStaysText() {
+    func testAHashtagInsideAWordStaysText() async {
         let (engine, textView) = makeEngine(NoteDocument(blocks: [.text("C")]))
         caretAtEnd(of: engine, textView)
         type("#sharp ", textView)
         XCTAssertEqual(engine.tags, [])
     }
 
-    func testNoConversionWhileComposing() {
+    func testNoConversionWhileComposing() async {
         let (engine, textView) = makeEngine(NoteDocument(blocks: [.text("Kanji #tag")]))
         caretAtEnd(of: engine, textView)
         textView.setMarkedText("か", selectedRange: NSRange(location: 1, length: 0),
@@ -138,7 +138,7 @@ final class NotesSlice2EngineTests: XCTestCase {
 
     // MARK: Title boundaries
 
-    func testBackspaceAtTheBodyStartJoinsTheTextIntoTheTitleAsOneStep() {
+    func testBackspaceAtTheBodyStartJoinsTheTextIntoTheTitleAsOneStep() async {
         let (engine, textView) = makeEngine(NoteDocument(blocks: [.text("Pricing"), .text("page")]))
         textView.setSelectedRange(NSRange(location: 8, length: 0))
         textView.deleteBackward(nil)
@@ -149,7 +149,7 @@ final class NotesSlice2EngineTests: XCTestCase {
         XCTAssertEqual(engine.document().blocks.map(\.text), ["Pricing", "page"])
     }
 
-    func testBackspaceBeforeAnImageUnderTheTitleSelectsTheImage() {
+    func testBackspaceBeforeAnImageUnderTheTitleSelectsTheImage() async {
         let image = NoteBlock.image(attachmentID: UUID(), pixelWidth: 10, pixelHeight: 10)
         let (engine, textView) = makeEngine(NoteDocument(blocks: [.text("Title"), image, .text("")]))
         textView.setSelectedRange(NSRange(location: 6, length: 0))
@@ -158,7 +158,7 @@ final class NotesSlice2EngineTests: XCTestCase {
         XCTAssertEqual(engine.document().blocks.count, 3)
     }
 
-    func testBackspaceBeforeAnImageRemovesAnEmptyLineAbove() {
+    func testBackspaceBeforeAnImageRemovesAnEmptyLineAbove() async {
         let image = NoteBlock.image(attachmentID: UUID(), pixelWidth: 10, pixelHeight: 10)
         let (engine, textView) = makeEngine(NoteDocument(blocks: [.text("Title"), .text("Text"), .text(""), image]))
         let imageLocation = engine.textStorage.length - 1
@@ -167,7 +167,7 @@ final class NotesSlice2EngineTests: XCTestCase {
         XCTAssertEqual(engine.document().blocks.map(\.kind), [.text, .text, .image], "the empty line goes")
     }
 
-    func testForwardDeleteAtTheTitleEndRemovesTheCheckboxFirst() {
+    func testForwardDeleteAtTheTitleEndRemovesTheCheckboxFirst() async {
         let (engine, textView) = makeEngine(NoteDocument(blocks: [.text("Title"), .checklist("Milk")]))
         textView.setSelectedRange(NSRange(location: 5, length: 0))
         textView.deleteForward(nil)
@@ -175,7 +175,7 @@ final class NotesSlice2EngineTests: XCTestCase {
         XCTAssertEqual(engine.document().blocks.map(\.text), ["Title", "Milk"])
     }
 
-    func testReturnAtTheTitleEndStepsIntoAnEmptyFirstLine() {
+    func testReturnAtTheTitleEndStepsIntoAnEmptyFirstLine() async {
         let (engine, textView) = makeEngine(NoteDocument(blocks: [.text("Title"), .text(""), .text("Body")]))
         textView.setSelectedRange(NSRange(location: 5, length: 0))
         textView.insertNewline(nil)
@@ -188,7 +188,7 @@ final class NotesSlice2EngineTests: XCTestCase {
         XCTAssertEqual(engine.document().blocks.count, 4, "a first line with text gets a new line above it")
     }
 
-    func testTitleLinesKeepClearOfTheMenuAndReserveTheTagLine() {
+    func testTitleLinesKeepClearOfTheMenuAndReserveTheTagLine() async {
         let (engine, _) = makeEngine(NoteDocument(blocks: [.text("A title"), .text("Body")]))
         engine.setTitleReserves(tagLine: 15, trailing: 32)
         let style = engine.textStorage.attribute(.paragraphStyle, at: 0, effectiveRange: nil) as? NSParagraphStyle
@@ -200,7 +200,7 @@ final class NotesSlice2EngineTests: XCTestCase {
         XCTAssertEqual(style?.lineSpacing ?? 0, NoteTextStyle.lineSpacing(for: engine.style.titleFont, lineHeight: 22), accuracy: 0.01)
     }
 
-    func testNoteTextIsRounded() {
+    func testNoteTextIsRounded() async {
         XCTAssertTrue(AtticTextStyle.noteTitle.spec.rounded)
         XCTAssertTrue(AtticTextStyle.noteBody.spec.rounded)
     }
@@ -261,16 +261,16 @@ final class NotesSlice2ControllerTests: XCTestCase {
 
     // MARK: Tags
 
-    func testTagsAreSavedWithTheTextAndATagOnlyChangeKeepsTheRevision() throws {
+    func testTagsAreSavedWithTheTextAndATagOnlyChangeKeepsTheRevision() async throws {
         let id = try create([.text("Pricing")])
         let controller = makeController()
-        XCTAssertTrue(controller.open(noteID: id))
+        await XCTAssertTrueAsync(await controller.openDurably(noteID: id))
         let session = try XCTUnwrap(controller.active)
         let revision = try XCTUnwrap(store.note(withID: id)?.revisionID)
         let updated = try XCTUnwrap(store.note(withID: id)?.updatedAt)
         session.engine.setTags(["launch"])
         XCTAssertEqual(session.state, .dirty, "a tag change is an edit")
-        XCTAssertTrue(controller.preserveAll())
+        await XCTAssertTrueAsync(await controller.preserveAllDurably())
         XCTAssertEqual(store.note(withID: id)?.tags, ["launch"])
         XCTAssertEqual(store.note(withID: id)?.revisionID, revision, "tags alone keep the revision")
         XCTAssertEqual(store.note(withID: id)?.updatedAt, updated, "and the note's place in the list")
@@ -278,25 +278,25 @@ final class NotesSlice2ControllerTests: XCTestCase {
         // Text and a tag in one save.
         type(" page", into: session)
         session.engine.setTags(["launch", "pricing"])
-        XCTAssertTrue(controller.preserveAll())
+        await XCTAssertTrueAsync(await controller.preserveAllDurably())
         XCTAssertEqual(store.note(withID: id)?.tags, ["launch", "pricing"])
         XCTAssertEqual(store.note(withID: id)?.title, "Pricing page")
     }
 
-    func testANewNoteWithOnlyATagIsKept() throws {
+    func testANewNoteWithOnlyATagIsKept() async throws {
         let controller = makeController()
-        controller.start()
+        await controller.startAndWait()
         let session = try XCTUnwrap(controller.active)
         session.engine.setTags(["idea"])
         XCTAssertFalse(session.isUntouchedDraft)
-        XCTAssertTrue(controller.preserveAll())
+        await XCTAssertTrueAsync(await controller.preserveAllDurably())
         XCTAssertEqual(store.notes.first?.tags, ["idea"])
     }
 
-    func testTagsSetElsewhereReachACleanNoteWhenItIsShown() throws {
+    func testTagsSetElsewhereReachACleanNoteWhenItIsShown() async throws {
         let id = try create([.text("Pricing")])
         let controller = makeController()
-        XCTAssertTrue(controller.open(noteID: id))
+        await XCTAssertTrueAsync(await controller.openDurably(noteID: id))
         let session = try XCTUnwrap(controller.active)
         XCTAssertTrue(store.setTags(["agent"], for: try XCTUnwrap(store.note(withID: id))))
         controller.present()
@@ -304,39 +304,39 @@ final class NotesSlice2ControllerTests: XCTestCase {
         XCTAssertEqual(session.state, .clean, "a refresh is not an edit")
     }
 
-    func testAFailedSaveKeepsTheTagInTheRecoveryCopyAndRecoveryRestoresIt() throws {
+    func testAFailedSaveKeepsTheTagInTheRecoveryCopyAndRecoveryRestoresIt() async throws {
         let id = try create([.text("Pricing")])
         let controller = makeController()
-        XCTAssertTrue(controller.open(noteID: id))
+        await XCTAssertTrueAsync(await controller.openDurably(noteID: id))
         let session = try XCTUnwrap(controller.active)
         session.engine.setTags(["launch"])
         gate.shouldFail = true
-        XCTAssertTrue(controller.preserve(session))
+        await XCTAssertTrueAsync(await controller.preserveDurably(session))
         if case .notSaved = session.state {} else { XCTFail("expected Not saved") }
-        let entry = try XCTUnwrap(try NoteDraftJournal(directory: directory).entries().first?.0)
+        let entry = try await XCTUnwrapAsync(try await NoteDraftJournal(directory: directory).entriesDurably().first?.0)
         XCTAssertEqual(entry.tags, ["launch"])
         gate.shouldFail = false
         let relaunched = makeController()
-        relaunched.recoverAtLaunch()
-        relaunched.start()
+        await relaunched.recoverAtLaunchAndWait()
+        await relaunched.startAndWait()
         XCTAssertEqual(relaunched.active?.noteID, id)
         XCTAssertEqual(store.note(withID: id)?.tags, ["launch"], "the recovered tag is saved")
     }
 
     // MARK: Opening
 
-    func testNotesReopensTheLastNoteWithItsCaretAndNewNoteIsFresh() throws {
+    func testNotesReopensTheLastNoteWithItsCaretAndNewNoteIsFresh() async throws {
         let id = try create([.text("Pricing"), .text("Lead with the free tier.")])
         let first = makeController()
-        XCTAssertTrue(first.open(noteID: id))
+        await XCTAssertTrueAsync(await first.openDurably(noteID: id))
         let session = try XCTUnwrap(first.active)
         let (scroll, textView) = session.engine.makeView()
         scroll.frame = NSRect(x: 0, y: 0, width: 320, height: 400)
         textView.setSelectedRange(NSRange(location: 12, length: 3))
-        XCTAssertTrue(first.prepareToLeave(.hide))
+        await XCTAssertTrueAsync(await first.prepareToLeaveDurably(.hide))
 
         let second = makeController()
-        second.start()
+        await second.startAndWait()
         XCTAssertEqual(second.active?.noteID, id, "Notes resumes the last note viewed")
         XCTAssertEqual(second.active?.selection, NSRange(location: 12, length: 3))
         XCTAssertTrue(second.requestNewNote())
@@ -344,39 +344,39 @@ final class NotesSlice2ControllerTests: XCTestCase {
         XCTAssertEqual(second.librarySelectionID, id, "All notes from a new draft selects the last note visited")
     }
 
-    func testNewNoteFromTheMenuBarBeforeThePageStartsGivesAFreshDraft() throws {
+    func testNewNoteFromTheMenuBarBeforeThePageStartsGivesAFreshDraft() async throws {
         let id = try create([.text("Pricing")])
         defaults.set(id.uuidString, forKey: "notes.lastViewedNote.v2")
         let controller = makeController()
         XCTAssertTrue(controller.requestNewNote())
-        controller.start()
+        await controller.startAndWait()
         XCTAssertFalse(controller.active?.isPersisted ?? true)
     }
 
-    func testARecoveredDraftOpensBeforeANewNoteRequest() throws {
+    func testARecoveredDraftOpensBeforeANewNoteRequest() async throws {
         let id = try create([.text("Pricing")])
         let first = makeController()
-        XCTAssertTrue(first.open(noteID: id))
+        await XCTAssertTrueAsync(await first.openDurably(noteID: id))
         let session = try XCTUnwrap(first.active)
         type(" unsaved", into: session)
         gate.shouldFail = true
-        XCTAssertTrue(first.preserve(session))
+        await XCTAssertTrueAsync(await first.preserveDurably(session))
         gate.shouldFail = false
         let second = makeController()
-        second.recoverAtLaunch()
+        await second.recoverAtLaunchAndWait()
         XCTAssertTrue(second.requestNewNote())
-        second.start()
+        await second.startAndWait()
         XCTAssertEqual(second.active?.noteID, id, "recovery comes first")
     }
 
-    func testAnEmptiedNoteIsKeptAsUntitled() throws {
+    func testAnEmptiedNoteIsKeptAsUntitled() async throws {
         let id = try create([.text("Temporary"), .text("text")])
         let controller = makeController()
-        XCTAssertTrue(controller.open(noteID: id))
+        await XCTAssertTrueAsync(await controller.openDurably(noteID: id))
         let session = try XCTUnwrap(controller.active)
         session.engine.performEdit(NSRange(location: 0, length: session.engine.textStorage.length),
                                    with: NSAttributedString(), name: "Delete")
-        XCTAssertTrue(controller.newNote())
+        await XCTAssertTrueAsync(await controller.newNoteDurably())
         XCTAssertNotNil(store.note(withID: id), "clearing a note keeps it")
         let summary = NoteRowSummary(note: try XCTUnwrap(store.note(withID: id)), attachments: [])
         XCTAssertEqual(summary.title, "Untitled note")
@@ -384,15 +384,15 @@ final class NotesSlice2ControllerTests: XCTestCase {
 
     // MARK: Delete and Undo
 
-    func testDeletingTheNoteOnScreenSavesItFirstThenShowsAllNotesAndRestoreBringsItBack() throws {
+    func testDeletingTheNoteOnScreenSavesItFirstThenShowsAllNotesAndRestoreBringsItBack() async throws {
         let id = try create([.text("Pricing")], tags: ["launch"])
         let controller = makeController()
-        controller.start()
-        XCTAssertTrue(controller.open(noteID: id))
+        await controller.startAndWait()
+        await XCTAssertTrueAsync(await controller.openDurably(noteID: id))
         let session = try XCTUnwrap(controller.active)
         type(" latest", into: session)
         XCTAssertEqual(session.state, .dirty)
-        XCTAssertTrue(controller.deleteNote(noteID: id))
+        await XCTAssertTrueAsync(await controller.deleteNoteDurably(noteID: id))
         XCTAssertNil(controller.active)
         XCTAssertTrue(controller.isLibraryPresented, "deleting the open note shows All notes")
         XCTAssertNil(store.note(withID: id))
@@ -406,41 +406,41 @@ final class NotesSlice2ControllerTests: XCTestCase {
         XCTAssertEqual(controller.active?.state, .clean)
     }
 
-    func testDeleteIsRefusedInAConflictAndWhenTheLatestTextCannotBeSaved() throws {
+    func testDeleteIsRefusedInAConflictAndWhenTheLatestTextCannotBeSaved() async throws {
         let id = try create([.text("Pricing")])
         let controller = makeController()
-        XCTAssertTrue(controller.open(noteID: id))
+        await XCTAssertTrueAsync(await controller.openDurably(noteID: id))
         let session = try XCTUnwrap(controller.active)
         type(" draft", into: session)
         gate.shouldFail = true
-        XCTAssertFalse(controller.deleteNote(noteID: id))
+        await XCTAssertFalseAsync(await controller.deleteNoteDurably(noteID: id))
         XCTAssertNotNil(store.note(withID: id), "a note whose text can't be saved is not deleted")
         XCTAssertNotNil(session.notice)
         gate.shouldFail = false
         let note = try XCTUnwrap(store.note(withID: id))
         _ = store.agentWrite(noteID: id, baseRevisionToken: note.revisionToken,
                              document: NoteDocument(blocks: [.text("Elsewhere")]), agentName: "Test", disposition: .direct)
-        _ = controller.preserve(session)
+        _ = await controller.preserveDurably(session)
         XCTAssertTrue(session.isConflict)
-        XCTAssertFalse(controller.deleteNote(noteID: id), "a conflict keeps its text until Keep as new note")
+        await XCTAssertFalseAsync(await controller.deleteNoteDurably(noteID: id), "a conflict keeps its text until Keep as new note")
         XCTAssertNotNil(store.note(withID: id))
     }
 
-    func testDeletingAnUnsavedDraftSavesItThenDeletesIt() throws {
+    func testDeletingAnUnsavedDraftSavesItThenDeletesIt() async throws {
         let controller = makeController()
-        controller.start()
+        await controller.startAndWait()
         let session = try XCTUnwrap(controller.active)
         type("Draft text", into: session)
         let id = session.noteID
-        XCTAssertTrue(controller.deleteNote(noteID: id))
+        await XCTAssertTrueAsync(await controller.deleteNoteDurably(noteID: id))
         XCTAssertTrue(store.recentlyDeletedNotes().contains { $0.ref.id == id })
     }
 
-    func testDismissingAllNotesAfterADeleteOpensTheLastNoteOrANewDraft() throws {
+    func testDismissingAllNotesAfterADeleteOpensTheLastNoteOrANewDraft() async throws {
         let controller = makeController()
         let id = try create([.text("Only")])
-        XCTAssertTrue(controller.open(noteID: id))
-        XCTAssertTrue(controller.deleteNote(noteID: id))
+        await XCTAssertTrueAsync(await controller.openDurably(noteID: id))
+        await XCTAssertTrueAsync(await controller.deleteNoteDurably(noteID: id))
         controller.dismissLibrary()
         XCTAssertNotNil(controller.active)
         XCTAssertFalse(controller.active?.isPersisted ?? true)
@@ -448,14 +448,14 @@ final class NotesSlice2ControllerTests: XCTestCase {
 
     // MARK: Duplicate, pin, Markdown
 
-    func testDuplicateCopiesTextTagsAndImagesAndOpensTheCopy() throws {
+    func testDuplicateCopiesTextTagsAndImagesAndOpensTheCopy() async throws {
         let image = try realImage()
         let blockID = UUID()
         guard case let .success((id, _)) = store.createDocumentNote(id: UUID(), document: NoteDocument(blocks: [
             .text("Pricing"), .checklist("Milk"), .image(id: blockID, attachmentID: image.id, pixelWidth: 2, pixelHeight: 2)
         ]), staged: [image], tags: ["launch"]) else { return XCTFail("fixture") }
         let controller = makeController()
-        XCTAssertTrue(controller.open(noteID: id))
+        await XCTAssertTrueAsync(await controller.openDurably(noteID: id))
         XCTAssertTrue(controller.duplicateNote(noteID: id))
         let copy = try XCTUnwrap(controller.active)
         XCTAssertNotEqual(copy.noteID, id)
@@ -468,7 +468,7 @@ final class NotesSlice2ControllerTests: XCTestCase {
         XCTAssertEqual(try store.attachmentRows(forNoteID: id).count, 1, "the original keeps its image")
     }
 
-    func testPinningIsMetadata() throws {
+    func testPinningIsMetadata() async throws {
         let id = try create([.text("Pricing")])
         let controller = makeController()
         let note = try XCTUnwrap(store.note(withID: id))
@@ -482,7 +482,7 @@ final class NotesSlice2ControllerTests: XCTestCase {
         XCTAssertFalse(store.note(withID: id)?.isPinned ?? true)
     }
 
-    func testCopyAsMarkdownIsTextOnly() throws {
+    func testCopyAsMarkdownIsTextOnly() async throws {
         var dated = NoteBlock.text("Launch is \u{FFFC}.")
         dated.inlines = [NoteInline(id: UUID(), kind: .date(NoteDay(year: 2026, month: 10, day: 1)!))]
         let attachmentID = UUID()
@@ -512,7 +512,7 @@ final class NotesSlice2ControllerTests: XCTestCase {
         """)
     }
 
-    func testDeletePolicyTable() {
+    func testDeletePolicyTable() async {
         let states: [NoteSession.State] = [.untouched, .clean, .dirty, .notSaved("x"), .onlyInMemory("x"),
                                            .conflict(.changed), .conflict(.deleted), .readOnly]
         for state in states {
@@ -553,7 +553,7 @@ final class NotesLibraryModelTests: XCTestCase {
         return NotesLibraryModel(search: search, now: { [unowned self] in self.now }, calendar: calendar)
     }
 
-    func testRowsFallIntoPinnedTodayThisWeekAndEarlier() throws {
+    func testRowsFallIntoPinnedTodayThisWeekAndEarlier() async throws {
         _ = try create("Today", daysAgo: 0)
         _ = try create("Monday", daysAgo: 2)
         _ = try create("Long ago", daysAgo: 40)
@@ -564,7 +564,7 @@ final class NotesLibraryModelTests: XCTestCase {
         XCTAssertEqual(groups.map { $0.rows.map(\.title) }, [["Pinned"], ["Today"], ["Monday"], ["Long ago"]])
     }
 
-    func testRowsSummariseChecklistsImagesAndFileOnlyNotes() throws {
+    func testRowsSummariseChecklistsImagesAndFileOnlyNotes() async throws {
         _ = try create("Groceries", [.checklist("Oat milk", checked: true), .checklist("Lemons"), .checklist("Rice")], daysAgo: 0)
         let groups = model().groups(store: store, drafts: [])
         let row = try XCTUnwrap(groups.first?.rows.first)
@@ -612,7 +612,7 @@ final class NotesLibraryModelTests: XCTestCase {
         XCTAssertEqual(found, [title, body])
     }
 
-    func testTimesReadAsTimeWeekdayOrDay() {
+    func testTimesReadAsTimeWeekdayOrDay() async {
         var calendar = Calendar(identifier: .gregorian)
         calendar.timeZone = TimeZone(identifier: "UTC")!
         let today = NotesLibraryModel.time(now.addingTimeInterval(-60), now: now, calendar: calendar)
@@ -622,7 +622,7 @@ final class NotesLibraryModelTests: XCTestCase {
         XCTAssertLessThanOrEqual(week.count, 4, week)
     }
 
-    func testKeyboardHighlightMovesThroughTheRows() throws {
+    func testKeyboardHighlightMovesThroughTheRows() async throws {
         let a = try create("A", daysAgo: 0)
         let b = try create("B", daysAgo: 1)
         let library = model()
@@ -691,7 +691,7 @@ final class NotesSlice2MigrationTests: XCTestCase {
         return try XCTUnwrap(store.loadDocument(noteID: id)?.content.document)
     }
 
-    func testAnAttachmentOnlyNoteMigratesAndOpensInTheNewPageTitledByItsFile() throws {
+    func testAnAttachmentOnlyNoteMigratesAndOpensInTheNewPageTitledByItsFile() async throws {
         let data = try png()
         let id = try legacyNote(title: "", body: "", attachments: [
             (name: "receipt.png", offset: nil, sort: 0, payload: data),
@@ -709,7 +709,7 @@ final class NotesSlice2MigrationTests: XCTestCase {
 
         let controller = NotesPageController(store: store, journal: NoteDraftJournal(directory: directory),
                                              saveDelay: .seconds(60))
-        XCTAssertTrue(controller.open(noteID: id))
+        await XCTAssertTrueAsync(await controller.openDurably(noteID: id))
         let session = try XCTUnwrap(controller.active)
         XCTAssertNil(controller.legacyNoteID, "a migrated note opens in the new editor")
         XCTAssertEqual(session.engine.objectIDs().count, 2)
@@ -719,7 +719,7 @@ final class NotesSlice2MigrationTests: XCTestCase {
         XCTAssertEqual(after.preview, "2 images")
     }
 
-    func testNilAndEndAnchorsTiesAndATextNoteMigrate() throws {
+    func testNilAndEndAnchorsTiesAndATextNoteMigrate() async throws {
         let data = try png()
         let id = try legacyNote(title: "Trip", body: "Tickets\nHotel", attachments: [
             (name: "a.png", offset: 99, sort: 2, payload: data),
@@ -732,11 +732,11 @@ final class NotesSlice2MigrationTests: XCTestCase {
                        ["Trip", "Tickets", "img", "img", "Hotel", "img", "img"])
         let controller = NotesPageController(store: store, journal: NoteDraftJournal(directory: directory),
                                              saveDelay: .seconds(60))
-        XCTAssertTrue(controller.open(noteID: id))
+        await XCTAssertTrueAsync(await controller.openDurably(noteID: id))
         XCTAssertEqual(controller.markdown(noteID: id)?.hasPrefix("# Trip\n\nTickets"), true)
     }
 
-    func testAMissingPayloadKeepsItsPlaceAndItsRow() throws {
+    func testAMissingPayloadKeepsItsPlaceAndItsRow() async throws {
         let id = try legacyNote(title: "Scan", body: "Page", attachments: [
             (name: "lost.png", offset: nil, sort: 0, payload: nil)
         ])
@@ -745,21 +745,26 @@ final class NotesSlice2MigrationTests: XCTestCase {
         XCTAssertEqual(try store.attachmentRows(forNoteID: id).count, 1)
     }
 
-    func testAFileAttachmentKeepsTheNoteInTheOldEditor() throws {
+    func testAFileAttachmentMigratesToAFileBlock() async throws {
         let note = NoteItem(id: UUID(), title: "Contract", body: "See file")
         store.modelContext.insert(note)
+        let bytes = Data([1, 2, 3])
+        let digest = SHA256.hash(data: bytes).map { String(format: "%02x", $0) }.joined()
         let row = NoteAttachment(id: UUID(), noteID: note.id, originalFilename: "contract.pdf",
                                  contentTypeIdentifier: "com.adobe.pdf", byteCount: 3, sortIndex: 0,
-                                 contentDigest: "x", payload: Data([1, 2, 3]))
+                                 contentDigest: digest, payload: bytes)
         store.modelContext.insert(row)
         try store.modelContext.save()
         try store.reloadPresentation()
         guard case let .success(snapshot) = store.legacySnapshot(noteID: note.id) else { return XCTFail("snapshot") }
-        guard case .failure(.fileAttachment) = LegacyNoteMigration.plan(snapshot) else { return XCTFail("refused") }
+        guard case .success = LegacyNoteMigration.plan(snapshot) else { return XCTFail("file migration plan") }
+        let migrated = try migrate(note.id)
+        XCTAssertEqual(migrated.blocks.last?.kind, .file)
         let controller = NotesPageController(store: store, journal: NoteDraftJournal(directory: directory),
                                              saveDelay: .seconds(60))
-        XCTAssertTrue(controller.open(noteID: note.id))
-        XCTAssertEqual(controller.legacyNoteID, note.id, "the old editor keeps a note the gate refused")
+        await XCTAssertTrueAsync(await controller.openDurably(noteID: note.id))
+        XCTAssertNil(controller.legacyNoteID)
+        XCTAssertEqual(controller.active?.engine.document().blocks.last?.kind, .file)
         let summary = NoteRowSummary(note: try XCTUnwrap(store.note(withID: note.id)), attachments: store.attachments(for: note.id))
         XCTAssertEqual(summary.files, 1)
     }
@@ -767,7 +772,7 @@ final class NotesSlice2MigrationTests: XCTestCase {
 
 @MainActor
 final class NotesTagSuggestionTests: XCTestCase {
-    func testSuggestionsPreferPrefixesThenCountsAndOfferANewTag() {
+    func testSuggestionsPreferPrefixesThenCountsAndOfferANewTag() async {
         let counts = ["pricing": 6, "print-shop": 1, "sprint": 3, "launch": 4]
         let list = AtticTagSuggestion.make(typed: "pri", counts: counts, excluding: [])
         XCTAssertEqual(list.map(\.name), ["pricing", "print-shop", "sprint", "pri"])
@@ -779,7 +784,7 @@ final class NotesTagSuggestionTests: XCTestCase {
         XCTAssertTrue(AtticTagSuggestion.make(typed: "", counts: counts, excluding: []).isEmpty)
     }
 
-    func testTakingASuggestionUsesItsNameAsOneStep() {
+    func testTakingASuggestionUsesItsNameAsOneStep() async {
         let engine = NoteEditorEngine(noteID: UUID(), document: NoteDocument(blocks: [.text("Pricing")]))
         let (scroll, textView) = engine.makeView()
         scroll.frame = NSRect(x: 0, y: 0, width: 320, height: 400)
@@ -799,7 +804,7 @@ final class NotesTagSuggestionTests: XCTestCase {
 
 @MainActor
 final class AtticNativeMenuTests: XCTestCase {
-    func testItemsRunTheirCommandsAndShowSectionsChecksAndSubmenus() throws {
+    func testItemsRunTheirCommandsAndShowSectionsChecksAndSubmenus() async throws {
         var ran: [String] = []
         let commands = [
             AtticMenuCommand("Insert", submenu: [AtticMenuCommand("Image…") { ran.append("image") }]),

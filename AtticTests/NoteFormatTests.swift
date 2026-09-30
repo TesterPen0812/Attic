@@ -124,17 +124,19 @@ final class NoteFormatTests: XCTestCase {
 
     func testAgentTextKeepsObjectsItKeptAndRefusesUnknownImages() throws {
         let base = sampleDocument()
-        let body = "Ship on [date:2026-10-01].\n- [ ] Buy cake\nNew line [date:2026-12-25]\n![image](attic://image/\(imageID.uuidString))\n![image](attic://image/\(imageID.uuidString))"
+        let body = "Ship on [date:2026-10-01].\n- [ ] Buy cake\n![image](attic://image/\(imageID.uuidString))\n"
         let edited = try NoteAgentTextParser.document(title: "Launch notes", body: body, base: base)
         XCTAssertEqual(edited.blocks[0], base.blocks[0])
         XCTAssertEqual(edited.blocks[1], base.blocks[1], "an unchanged line keeps its date id")
         XCTAssertEqual(edited.blocks[2].id, checklistID, "unticked by the agent, same item")
         XCTAssertFalse(edited.blocks[2].checked)
-        XCTAssertEqual(edited.blocks[3].inlines.count, 1)
-        XCTAssertEqual(edited.blocks[4].id, imageID)
-        XCTAssertEqual(edited.blocks[5].attachmentID, attachmentID)
-        XCTAssertNotEqual(edited.blocks[5].id, imageID, "a second copy is a new placement")
+        XCTAssertEqual(edited.blocks[3].id, imageID)
+        XCTAssertEqual(edited.blocks[3].attachmentID, attachmentID)
         XCTAssertEqual(Set(edited.objectIDs).count, edited.objectIDs.count, "ids stay unique")
+
+        let duplicated = "Ship on [date:2026-10-01].\n- [ ] Buy cake\n![image](attic://image/\(imageID.uuidString))\n![image](attic://image/\(imageID.uuidString))"
+        XCTAssertThrowsError(try NoteAgentTextParser.document(title: "Launch notes", body: duplicated, base: base),
+            "the A1 guard forbids adding an object through a text replacement")
 
         XCTAssertThrowsError(try NoteAgentTextParser.document(
             title: "T", body: "![image](attic://image/\(UUID().uuidString))", base: base))

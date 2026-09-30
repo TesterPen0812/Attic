@@ -40,6 +40,10 @@ final class NoteItem {
     var contentFormat: Int = 0
     /// Derived search and agent text (title, then one line per block).
     var plainText: String = ""
+    /// Revision-matched library facts, written with document bytes on every replica.
+    var imageCount: Int = 0
+    var fileCount: Int = 0
+    var firstFileName: String? = nil
     /// This note is that task's page (phase 3); nil for ordinary notes.
     var taskID: UUID? = nil
     /// +1 per content save (ordering).

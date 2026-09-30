@@ -841,6 +841,16 @@ final class AppCoordinator: ObservableObject {
         hasStarted = false
     }
 
+    func prepareForTerminationDurably() async -> Bool {
+        guard await noteDraft.prepareToLeaveDurably(.quit) else {
+            hoverMonitor.revealProgrammatically(section: .notes)
+            return false
+        }
+        canvasSession.cancelActiveInteraction()
+        canvasSession.flushViewState()
+        return true
+    }
+
     func prepareForTermination() -> Bool {
         let canTerminate = AppTerminationPreparation.prepare(
             flushNoteDraft: { noteDraft.prepareToLeave(.quit) },

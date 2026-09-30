@@ -113,10 +113,10 @@ final class NotesSlice2FixRoundTests: XCTestCase {
 
     // MARK: M2 — Duplicate goes through the gates first
 
-    func testDuplicateIsRefusedWhileComposingAndCreatesNothing() throws {
+    func testDuplicateIsRefusedWhileComposingAndCreatesNothing() async throws {
         let id = try create([.text("Source"), .text("Body")])
         let controller = makeController()
-        XCTAssertTrue(controller.open(noteID: id))
+        await XCTAssertTrueAsync(await controller.openDurably(noteID: id))
         let session = try XCTUnwrap(controller.active)
         let textView = attach(session)
         textView.setSelectedRange(NSRange(location: session.engine.textStorage.length, length: 0))
@@ -130,13 +130,13 @@ final class NotesSlice2FixRoundTests: XCTestCase {
         textView.unmarkText()
     }
 
-    func testDuplicateIsRefusedDuringWritingToolsAndWhileImagesLoad() throws {
+    func testDuplicateIsRefusedDuringWritingToolsAndWhileImagesLoad() async throws {
         let id = try create([.text("Source")])
         let controller = makeController(imageLoader: { _ in
             try? await Task.sleep(for: .seconds(30))
             return nil
         })
-        XCTAssertTrue(controller.open(noteID: id))
+        await XCTAssertTrueAsync(await controller.openDurably(noteID: id))
         let session = try XCTUnwrap(controller.active)
         _ = attach(session)
         let before = store.notes.count
@@ -152,12 +152,12 @@ final class NotesSlice2FixRoundTests: XCTestCase {
         controller.cancelActiveImport()
     }
 
-    func testDuplicateIsRefusedWhenTheNoteOnScreenCannotBeLeftAndCreatesNothing() throws {
+    func testDuplicateIsRefusedWhenTheNoteOnScreenCannotBeLeftAndCreatesNothing() async throws {
         let source = try create([.text("Source")])
         let failing = RefusingJournal(directory: directory)
         failing.failWrites = true
         let controller = makeController(journal: failing)
-        controller.start()
+        await controller.startAndWait()
         let draft = try XCTUnwrap(controller.active)
         type("Unsaved", into: draft)
         gate.shouldFail = true
@@ -168,10 +168,10 @@ final class NotesSlice2FixRoundTests: XCTestCase {
         XCTAssertTrue(controller.active === draft)
     }
 
-    func testASuccessfulDuplicateCreatesAndOpensExactlyOneCompleteCopy() throws {
+    func testASuccessfulDuplicateCreatesAndOpensExactlyOneCompleteCopy() async throws {
         let id = try create([.text("Source"), .text("Body")], tags: ["launch"])
         let controller = makeController()
-        XCTAssertTrue(controller.open(noteID: id))
+        await XCTAssertTrueAsync(await controller.openDurably(noteID: id))
         let session = try XCTUnwrap(controller.active)
         type(" latest", into: session)
         let before = store.notes.count
@@ -189,47 +189,47 @@ final class NotesSlice2FixRoundTests: XCTestCase {
 
     // MARK: M3 — recovery keeps unchanged tags
 
-    func testRecoveryKeepsUnchangedTagsWhenTheNoteWasDeletedElsewhere() throws {
+    func testRecoveryKeepsUnchangedTagsWhenTheNoteWasDeletedElsewhere() async throws {
         let id = try create([.text("Trip")], tags: ["kyoto", "travel"])
         let first = makeController()
-        XCTAssertTrue(first.open(noteID: id))
+        await XCTAssertTrueAsync(await first.openDurably(noteID: id))
         let session = try XCTUnwrap(first.active)
         type(" plans", into: session)
         XCTAssertTrue(store.delete(try XCTUnwrap(store.note(withID: id))), "deleted elsewhere")
-        XCTAssertTrue(first.preserve(session))
+        await XCTAssertTrueAsync(await first.preserveDurably(session))
         XCTAssertEqual(session.state, .conflict(.deleted))
-        let entry = try XCTUnwrap(try NoteDraftJournal(directory: directory).entries().first?.0)
+        let entry = try await XCTUnwrapAsync(try await NoteDraftJournal(directory: directory).entriesDurably().first?.0)
         XCTAssertEqual(entry.tags, ["kyoto", "travel"], "the full tag set is kept")
         XCTAssertEqual(entry.tagsChanged, false, "and not marked as a change")
 
         let relaunched = makeController()
-        relaunched.recoverAtLaunch()
-        relaunched.start()
+        await relaunched.recoverAtLaunchAndWait()
+        await relaunched.startAndWait()
         let recovered = try XCTUnwrap(relaunched.active)
         XCTAssertEqual(recovered.state, .conflict(.deleted))
         XCTAssertEqual(recovered.engine.tags, ["kyoto", "travel"])
-        XCTAssertTrue(relaunched.keepAsNewNote())
+        await XCTAssertTrueAsync(await relaunched.keepAsNewNoteDurably())
         let kept = try XCTUnwrap(relaunched.active)
         XCTAssertEqual(store.note(withID: kept.noteID)?.tags, ["kyoto", "travel"], "Keep as new note keeps the tags")
     }
 
-    func testRecoveryDoesNotWriteUnchangedTagsOverTagsSetMeanwhile() throws {
+    func testRecoveryDoesNotWriteUnchangedTagsOverTagsSetMeanwhile() async throws {
         let id = try create([.text("Trip")], tags: ["old"])
         let first = makeController()
-        XCTAssertTrue(first.open(noteID: id))
+        await XCTAssertTrueAsync(await first.openDurably(noteID: id))
         let session = try XCTUnwrap(first.active)
         type(" plans", into: session)
         gate.shouldFail = true
-        XCTAssertTrue(first.preserve(session))
+        await XCTAssertTrueAsync(await first.preserveDurably(session))
         gate.shouldFail = false
         XCTAssertTrue(store.setTags(["new"], for: try XCTUnwrap(store.note(withID: id))), "an agent retags it")
         let relaunched = makeController()
-        relaunched.recoverAtLaunch()
+        await relaunched.recoverAtLaunchAndWait()
         XCTAssertEqual(store.note(withID: id)?.tags, ["new"], "unchanged draft tags never overwrite live ones")
         XCTAssertEqual(store.loadDocument(noteID: id)?.content.document?.title, "Trip plans")
     }
 
-    func testAnOlderRecoveryFileStillReadsItsTagsAsAChange() throws {
+    func testAnOlderRecoveryFileStillReadsItsTagsAsAChange() async throws {
         let entry = NoteDraftJournalEntry(noteID: UUID(), isPersisted: true, baseRevisionID: nil, content: Data(),
                                           selectionLocation: 0, selectionLength: 0, staged: [], savedAt: Date(),
                                           tags: ["a"], tagsChanged: nil)
@@ -242,40 +242,44 @@ final class NotesSlice2FixRoundTests: XCTestCase {
 
     // MARK: M4 — deletion with a recovery copy that can't be removed
 
-    func testDeleteRetiresAnUnremovableRecoveryCopySoItNeverComesBackAsAConflict() throws {
+    func testDeleteRetiresAnUnremovableRecoveryCopySoItNeverComesBackAsAConflict() async throws {
         let id = try create([.text("Doomed")])
         let journal = RefusingJournal(directory: directory)
         let controller = makeController(journal: journal)
-        XCTAssertTrue(controller.open(noteID: id))
+        await XCTAssertTrueAsync(await controller.openDurably(noteID: id))
         let session = try XCTUnwrap(controller.active)
         type(" draft", into: session)
         gate.shouldFail = true
-        XCTAssertTrue(controller.preserve(session), "a recovery copy exists")
+        await XCTAssertTrueAsync(await controller.preserveDurably(session), "a recovery copy exists")
         gate.shouldFail = false
         journal.failRemovals = true
-        XCTAssertTrue(controller.deleteNote(noteID: id))
+        await XCTAssertTrueAsync(await controller.deleteNoteDurably(noteID: id))
         XCTAssertNil(store.note(withID: id))
 
         let relaunched = makeController(journal: NoteDraftJournal(directory: directory))
-        relaunched.recoverAtLaunch()
-        relaunched.start()
+        await relaunched.recoverAtLaunchAndWait()
+        await relaunched.startAndWait()
         XCTAssertTrue(relaunched.failedDrafts.isEmpty, "never 'Deleted elsewhere'")
         XCTAssertNotEqual(relaunched.active?.noteID, id)
-        XCTAssertTrue(try NoteDraftJournal(directory: directory).entries().isEmpty, "the copy is retired")
+        await XCTAssertTrueAsync(try await NoteDraftJournal(directory: directory).entriesDurably().isEmpty, "the copy is retired")
         XCTAssertTrue(store.recentlyDeletedNotes().contains { $0.ref.id == id }, "the text is in Recently Deleted")
         XCTAssertEqual(try store.replicasIncludingDeleted(of: id).first?.content.flatMap { NoteContentCodec.decode($0).document }?.title,
                        "Doomed draft")
     }
 
-    func testDeleteIsRefusedWhenARecoveryCopyCanBeNeitherRemovedNorReplaced() throws {
+    func testDeleteIsRefusedWhenARecoveryCopyCanBeNeitherRemovedNorReplaced() async throws {
         let id = try create([.text("Kept")])
         let journal = RefusingJournal(directory: directory)
         let controller = makeController(journal: journal)
-        XCTAssertTrue(controller.open(noteID: id))
+        await XCTAssertTrueAsync(await controller.openDurably(noteID: id))
         let session = try XCTUnwrap(controller.active)
+        // A real checkpoint is required: absent recovery needs no retirement.
+        try await journal.base.writeDurably(NoteDraftJournalEntry(noteID: id, isPersisted: true,
+            baseRevisionID: session.baseRevisionID, content: try NoteContentCodec.encode(session.engine.document()),
+            selectionLocation: 0, selectionLength: 0, staged: [], savedAt: Date()), staged: [])
         journal.failRemovals = true
         journal.failWrites = true
-        XCTAssertFalse(controller.deleteNote(noteID: id))
+        await XCTAssertFalseAsync(await controller.deleteNoteDurably(noteID: id))
         XCTAssertNotNil(store.note(withID: id), "nothing deleted")
         XCTAssertTrue(controller.active === session, "the note stays on screen")
         XCTAssertNotNil(session.notice, "and says why")
@@ -287,15 +291,15 @@ final class NotesSlice2FixRoundTests: XCTestCase {
     /// elsewhere, checkpoints, optionally rewrites the recovery file in the
     /// older JSON format, relaunches and keeps the draft as a new note.
     private func tagOnlyChangeSurvivesExternalDelete(from original: [String], to changed: [String],
-                                                     olderFormat: Bool) throws {
+                                                     olderFormat: Bool) async throws {
         let id = try create([.text("Trip"), .text("Body")], tags: original)
         let first = makeController()
-        XCTAssertTrue(first.open(noteID: id))
+        await XCTAssertTrueAsync(await first.openDurably(noteID: id))
         let session = try XCTUnwrap(first.active)
         session.engine.setTags(changed)
         XCTAssertEqual(session.state, .dirty)
         XCTAssertTrue(store.delete(try XCTUnwrap(store.note(withID: id))), "deleted elsewhere")
-        XCTAssertTrue(first.preserve(session))
+        await XCTAssertTrueAsync(await first.preserveDurably(session))
         XCTAssertEqual(session.state, .conflict(.deleted))
         let file = directory.appendingPathComponent("\(id.uuidString).json")
         if olderFormat {
@@ -303,18 +307,18 @@ final class NotesSlice2FixRoundTests: XCTestCase {
             var json = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(contentsOf: file)) as? [String: Any])
             XCTAssertNotNil(json.removeValue(forKey: "tagsChanged"))
             try JSONSerialization.data(withJSONObject: json).write(to: file)
-            let decoded = try XCTUnwrap(try NoteDraftJournal(directory: directory).entries().first?.0)
+            let decoded = try await XCTUnwrapAsync(try await NoteDraftJournal(directory: directory).entriesDurably().first?.0)
             XCTAssertNil(decoded.tagsChanged, "decoded from the older format")
             XCTAssertEqual(decoded.changedTags, AtticTag.normalizedSet(changed))
         }
         let relaunched = makeController()
-        relaunched.recoverAtLaunch()
-        relaunched.start()
+        await relaunched.recoverAtLaunchAndWait()
+        await relaunched.startAndWait()
         let recovered = try XCTUnwrap(relaunched.active, "the draft is recovered, not dropped")
         XCTAssertEqual(recovered.noteID, id)
         XCTAssertEqual(recovered.state, .conflict(.deleted))
         XCTAssertEqual(recovered.engine.tags, AtticTag.normalizedSet(changed))
-        XCTAssertTrue(relaunched.keepAsNewNote())
+        await XCTAssertTrueAsync(await relaunched.keepAsNewNoteDurably())
         let kept = try XCTUnwrap(relaunched.active)
         XCTAssertNotEqual(kept.noteID, id)
         XCTAssertEqual(store.note(withID: kept.noteID)?.tags ?? [], AtticTag.normalizedSet(changed),
@@ -322,20 +326,20 @@ final class NotesSlice2FixRoundTests: XCTestCase {
         XCTAssertEqual(store.loadDocument(noteID: kept.noteID)?.content.document?.title, "Trip")
     }
 
-    func testAnAddedTagSurvivesAnExternalDeleteAndRelaunch() throws {
-        try tagOnlyChangeSurvivesExternalDelete(from: ["travel"], to: ["travel", "kyoto"], olderFormat: false)
+    func testAnAddedTagSurvivesAnExternalDeleteAndRelaunch() async throws {
+        try await tagOnlyChangeSurvivesExternalDelete(from: ["travel"], to: ["travel", "kyoto"], olderFormat: false)
     }
 
-    func testARemovedTagSurvivesAnExternalDeleteAndRelaunch() throws {
-        try tagOnlyChangeSurvivesExternalDelete(from: ["travel", "kyoto"], to: ["travel"], olderFormat: false)
+    func testARemovedTagSurvivesAnExternalDeleteAndRelaunch() async throws {
+        try await tagOnlyChangeSurvivesExternalDelete(from: ["travel", "kyoto"], to: ["travel"], olderFormat: false)
     }
 
-    func testAnAddedTagInAnOlderRecoveryFileSurvivesAnExternalDelete() throws {
-        try tagOnlyChangeSurvivesExternalDelete(from: ["travel"], to: ["travel", "kyoto"], olderFormat: true)
+    func testAnAddedTagInAnOlderRecoveryFileSurvivesAnExternalDelete() async throws {
+        try await tagOnlyChangeSurvivesExternalDelete(from: ["travel"], to: ["travel", "kyoto"], olderFormat: true)
     }
 
-    func testARemovedTagInAnOlderRecoveryFileSurvivesAnExternalDelete() throws {
-        try tagOnlyChangeSurvivesExternalDelete(from: ["travel", "kyoto"], to: [], olderFormat: true)
+    func testARemovedTagInAnOlderRecoveryFileSurvivesAnExternalDelete() async throws {
+        try await tagOnlyChangeSurvivesExternalDelete(from: ["travel", "kyoto"], to: [], olderFormat: true)
     }
 
     func testAHighlightedFailedDraftStaysHighlightedWhileItStillMatches() async throws {
@@ -357,7 +361,7 @@ final class NotesSlice2FixRoundTests: XCTestCase {
 
     // MARK: Should fix
 
-    func testReturnInTheTagEditorActsOnlyOnWhatWasTyped() {
+    func testReturnInTheTagEditorActsOnlyOnWhatWasTyped() async {
         let tags = [AtticNoteTagList.Tag(name: "launch-october", count: 3, isOn: true),
                     AtticNoteTagList.Tag(name: "launch", count: 5, isOn: false)]
         XCTAssertEqual(AtticNoteTagList.submitAction(query: "launch", tags: tags, create: nil), .toggle("launch"),
@@ -367,7 +371,7 @@ final class NotesSlice2FixRoundTests: XCTestCase {
         XCTAssertEqual(AtticNoteTagList.submitAction(query: "#Kyoto", tags: [], create: "kyoto"), .create("kyoto"))
     }
 
-    func testUndoKeepsAnAlreadyOwnedHashtagLiteral() throws {
+    func testUndoKeepsAnAlreadyOwnedHashtagLiteral() async throws {
         let engine = NoteEditorEngine(noteID: UUID(), document: NoteDocument(blocks: [.text("Plan")]), tags: ["launch"])
         let session = NoteSessionStub(engine: engine)
         let textView = attach(session)
@@ -388,7 +392,7 @@ final class NotesSlice2FixRoundTests: XCTestCase {
         XCTAssertEqual(engine.tags, ["launch"])
     }
 
-    func testEscFromTheNoteHidesThePanelOnlyWhenNothingElseTakesIt() throws {
+    func testEscFromTheNoteHidesThePanelOnlyWhenNothingElseTakesIt() async throws {
         let engine = NoteEditorEngine(noteID: UUID(), document: NoteDocument(blocks: [.text("Title"), .text("Body")]))
         let textView = attach(NoteSessionStub(engine: engine))
         var hides = 0
@@ -431,11 +435,11 @@ final class NotesSlice2FixRoundTests: XCTestCase {
         // A never-saved draft whose store save failed, found by text far down.
         let journal = NoteDraftJournal(directory: directory)
         let controller = makeController(journal: journal)
-        controller.start()
+        await controller.startAndWait()
         let draft = try XCTUnwrap(controller.active)
         type("Draft\n" + long + "\nhidden kyoto detail", into: draft)
         gate.shouldFail = true
-        XCTAssertTrue(controller.preserve(draft))
+        await XCTAssertTrueAsync(await controller.preserveDurably(draft))
         gate.shouldFail = false
         XCTAssertEqual(controller.failedDrafts.count, 1)
         let library = NotesLibraryModel(search: { _ in [] })
@@ -471,17 +475,27 @@ private extension NotesSlice2FixRoundTests {
 private final class RefusingJournal: NoteDraftJournaling {
     struct Failure: Error {}
     let base: NoteDraftJournal
+    private let fileManager = UnlinkFailingFileManager()
     var failWrites = false
-    var failRemovals = false
-    init(directory: URL) { base = NoteDraftJournal(directory: directory) }
-    func write(_ entry: NoteDraftJournalEntry, staged: [StagedNoteAttachment]) throws {
+    /// Checkpoint unlinks fail, so the journal falls back to a retired
+    /// marker; with `failWrites` too, retirement fails outright.
+    var failRemovals: Bool {
+        get { fileManager.failCheckpointRemovals }
+        set { fileManager.failCheckpointRemovals = newValue }
+    }
+    init(directory: URL) { base = NoteDraftJournal(directory: directory, fileManagerFactory: { [fileManager] in fileManager }) }
+    func writeDurably(_ entry: NoteDraftJournalEntry, staged: [StagedNoteAttachment],
+               replacing claim: NoteRecoveryClaim?) async throws -> NoteRecoveryClaim {
         if failWrites { throw Failure() }
-        try base.write(entry, staged: staged)
+        return try await base.writeDurably(entry, staged: staged, replacing: claim)
     }
-    func remove(noteID: UUID) throws {
-        if failRemovals { throw Failure() }
-        try base.remove(noteID: noteID)
+    func retireDurably(noteID: UUID, claim: NoteRecoveryClaim?, saved: NoteRecoverySavedState?) async throws {
+        if failRemovals && failWrites { throw Failure() }
+        try await base.retireDurably(noteID: noteID, claim: claim, saved: saved)
     }
-    func entries() throws -> [(NoteDraftJournalEntry, [StagedNoteAttachment])] { try base.entries() }
     func recoveryEntries() throws -> [NoteDraftRecoveryEntry] { try base.recoveryEntries() }
+
+    var requiresAsyncIO: Bool { true }
+    func readRecoveryEntries() async throws -> [NoteDraftRecoveryEntry] { try await base.readRecoveryEntries() }
+    func discardOwnedDurably(noteID: UUID, claim: NoteRecoveryClaim) async throws { try await base.discardOwnedDurably(noteID: noteID, claim: claim) }
 }

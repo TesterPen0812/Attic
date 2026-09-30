@@ -44,7 +44,7 @@ final class NotesAuditTests: XCTestCase {
 
     // MARK: 13. The library's commands and keys
 
-    func testTheLibraryRowKeysAreExplicitAndTheEditorChordsStayTheirOwn() {
+    func testTheLibraryRowKeysAreExplicitAndTheEditorChordsStayTheirOwn() async {
         func action(_ code: UInt16, _ modifiers: EventModifiers, field: Bool = false, composing: Bool = false) -> NotesLibraryView.KeyAction {
             NotesLibraryView.keyAction(keyCode: code, modifiers: modifiers, characters: nil, composing: composing, fieldFocused: field)
         }
@@ -63,7 +63,7 @@ final class NotesAuditTests: XCTestCase {
         XCTAssertEqual(action(2, .command, field: true, composing: true), .passThrough)
     }
 
-    func testTheLibraryCommandTargetIsTheHighlightedRowElseTheSelectedOneAndNeverAHiddenRow() throws {
+    func testTheLibraryCommandTargetIsTheHighlightedRowElseTheSelectedOneAndNeverAHiddenRow() async throws {
         let a = try create([.text("Alpha")])
         let b = try create([.text("Beta")])
         let library = NotesLibraryModel(search: { _ in [] })
@@ -84,7 +84,7 @@ final class NotesAuditTests: XCTestCase {
         XCTAssertNil(library.commandTarget(in: [], selected: a))
     }
 
-    func testARunningCommandIsFoundByIdentifierAndADisabledOneIsSwallowed() {
+    func testARunningCommandIsFoundByIdentifierAndADisabledOneIsSwallowed() async {
         var ran: [String] = []
         let commands = [
             AtticMenuCommand("Copy as Markdown", identifier: "notes-row-copy-markdown") { ran.append("copy") },
@@ -96,7 +96,7 @@ final class NotesAuditTests: XCTestCase {
         XCTAssertEqual(ran, ["copy"], "the disabled Duplicate never ran")
     }
 
-    func testVoiceOverGetsTheEnabledNamedActionsWithoutOpenOrSubmenus() {
+    func testVoiceOverGetsTheEnabledNamedActionsWithoutOpenOrSubmenus() async {
         let commands = [
             AtticMenuCommand("Open", identifier: "notes-row-open") {},
             AtticMenuCommand("Pin to Top", startsSection: true, identifier: "notes-row-pin") {},
@@ -108,7 +108,7 @@ final class NotesAuditTests: XCTestCase {
         XCTAssertEqual(AtticNoteRow.spokenActions(commands).map(\.title), ["Pin to Top", "Copy as Markdown", "Delete Note"])
     }
 
-    func testTheNativeMenuForTheRowCarriesTheSameCommandsIdentifiersAndShortcuts() {
+    func testTheNativeMenuForTheRowCarriesTheSameCommandsIdentifiersAndShortcuts() async {
         let commands = [
             AtticMenuCommand("Open", identifier: "notes-row-open") {},
             AtticMenuCommand("Duplicate", shortcut: KeyboardShortcut("d", modifiers: .command), startsSection: true,
@@ -126,25 +126,25 @@ final class NotesAuditTests: XCTestCase {
 
     private func liveIDs() -> Set<UUID> { Set(store.notes.map(\.id)) }
 
-    func testDeleteUndoAndRedoWorkWithNoToastAtAll() throws {
+    func testDeleteUndoAndRedoWorkWithNoToastAtAll() async throws {
         let controller = makeController()
         let id = try create([.text("Alpha")])
         XCTAssertFalse(controller.canUndoLibrary)
-        XCTAssertTrue(controller.deleteNote(noteID: id))
+        await XCTAssertTrueAsync(await controller.deleteNoteDurably(noteID: id))
         XCTAssertNil(store.note(withID: id))
         XCTAssertEqual(controller.libraryUndoName, "Delete Note")
         // The toast is only a shortcut to this step: the history holds it.
-        XCTAssertTrue(controller.undoLibrary())
+        await XCTAssertTrueAsync(await controller.undoLibraryDurably())
         XCTAssertNotNil(store.note(withID: id), "Undo brings the note back")
         XCTAssertNil(controller.libraryUndoName)
         XCTAssertEqual(controller.libraryRedoName, "Delete Note")
-        XCTAssertTrue(controller.redoLibrary())
+        await XCTAssertTrueAsync(await controller.redoLibraryDurably())
         XCTAssertNil(store.note(withID: id), "Redo deletes it again")
-        XCTAssertTrue(controller.undoLibrary())
+        await XCTAssertTrueAsync(await controller.undoLibraryDurably())
         XCTAssertNotNil(store.note(withID: id))
     }
 
-    func testEachActionIsOneStepInOrderAndUndoWalksBackThroughThem() throws {
+    func testEachActionIsOneStepInOrderAndUndoWalksBackThroughThem() async throws {
         let controller = makeController()
         let a = try create([.text("Alpha")])
         let b = try create([.text("Beta")])
@@ -153,28 +153,28 @@ final class NotesAuditTests: XCTestCase {
         let copies = liveIDs().subtracting([a, b])
         XCTAssertEqual(copies.count, 1)
         XCTAssertTrue(controller.showLibrary())
-        XCTAssertTrue(controller.deleteNote(noteID: b))
+        await XCTAssertTrueAsync(await controller.deleteNoteDurably(noteID: b))
         XCTAssertEqual(controller.libraryUndoName, "Delete Note")
 
-        XCTAssertTrue(controller.undoLibrary())
+        await XCTAssertTrueAsync(await controller.undoLibraryDurably())
         XCTAssertNotNil(store.note(withID: b))
         XCTAssertEqual(controller.libraryUndoName, "Duplicate Note")
-        XCTAssertTrue(controller.undoLibrary())
+        await XCTAssertTrueAsync(await controller.undoLibraryDurably())
         XCTAssertTrue(liveIDs().isDisjoint(with: copies), "the copy is gone")
         XCTAssertEqual(controller.libraryUndoName, "Pin Note")
-        XCTAssertTrue(controller.undoLibrary())
+        await XCTAssertTrueAsync(await controller.undoLibraryDurably())
         XCTAssertEqual(store.note(withID: a)?.isPinned, false)
         XCTAssertFalse(controller.canUndoLibrary)
 
-        XCTAssertTrue(controller.redoLibrary())
+        await XCTAssertTrueAsync(await controller.redoLibraryDurably())
         XCTAssertEqual(store.note(withID: a)?.isPinned, true)
-        XCTAssertTrue(controller.redoLibrary())
+        await XCTAssertTrueAsync(await controller.redoLibraryDurably())
         XCTAssertEqual(liveIDs().subtracting([a, b]), copies, "Redo restores the same copy")
-        XCTAssertTrue(controller.redoLibrary())
+        await XCTAssertTrueAsync(await controller.redoLibraryDurably())
         XCTAssertNil(store.note(withID: b))
     }
 
-    func testPinningWithoutAChangeAndANewActionAfterUndoShapeTheHistory() throws {
+    func testPinningWithoutAChangeAndANewActionAfterUndoShapeTheHistory() async throws {
         let controller = makeController()
         let a = try create([.text("Alpha")])
         XCTAssertTrue(controller.setPinned(false, noteID: a), "already unpinned")
@@ -192,7 +192,7 @@ final class NotesAuditTests: XCTestCase {
     /// B1: pinning is decided across the whole UUID family. The presentation
     /// representative agreeing with the request must not hide a replica that
     /// disagrees, in the initial pin or in Undo and Redo.
-    func testPinHistoryFollowsEveryReplicaNotTheRepresentative() throws {
+    func testPinHistoryFollowsEveryReplicaNotTheRepresentative() async throws {
         let controller = makeController()
         let a = try create([.text("Alpha")])
         XCTAssertTrue(store.setPinned(true, noteID: a))
@@ -218,7 +218,7 @@ final class NotesAuditTests: XCTestCase {
         try store.modelContext.save()
         XCTAssertFalse(representative.isPinned)
         XCTAssertTrue(sibling.isPinned)
-        XCTAssertTrue(controller.undoLibrary())
+        await XCTAssertTrueAsync(await controller.undoLibraryDurably())
         XCTAssertEqual(try replicas().map(\.isPinned), [false, false], "Undo unpins every replica")
 
         // Redo with the representative agreeing and the sibling not.
@@ -226,56 +226,56 @@ final class NotesAuditTests: XCTestCase {
         try store.modelContext.save()
         XCTAssertTrue(representative.isPinned)
         XCTAssertFalse(sibling.isPinned)
-        XCTAssertTrue(controller.redoLibrary())
+        await XCTAssertTrueAsync(await controller.redoLibraryDurably())
         XCTAssertEqual(try replicas().map(\.isPinned), [true, true], "Redo pins every replica")
 
         // Every replica already agrees: nothing changes and no step is added.
-        XCTAssertTrue(controller.undoLibrary())
+        await XCTAssertTrueAsync(await controller.undoLibraryDurably())
         XCTAssertEqual(try replicas().map(\.isPinned), [false, false])
         XCTAssertTrue(controller.setPinned(false, noteID: a), "all replicas already unpinned")
         XCTAssertNil(controller.libraryUndoName, "a no-op is not a step")
     }
 
-    func testUndoOfDeleteReopensTheNoteOnlyWhenItWasOnScreen() throws {
+    func testUndoOfDeleteReopensTheNoteOnlyWhenItWasOnScreen() async throws {
         let controller = makeController()
         let a = try create([.text("Alpha")])
         let b = try create([.text("Beta")])
-        XCTAssertTrue(controller.open(noteID: a))
+        await XCTAssertTrueAsync(await controller.openDurably(noteID: a))
         controller.isLibraryPresented = false
-        XCTAssertTrue(controller.deleteNote(noteID: a))
+        await XCTAssertTrueAsync(await controller.deleteNoteDurably(noteID: a))
         XCTAssertTrue(controller.isLibraryPresented, "deleting the open note shows All notes")
-        XCTAssertTrue(controller.undoLibrary())
+        await XCTAssertTrueAsync(await controller.undoLibraryDurably())
         XCTAssertEqual(controller.active?.noteID, a)
         XCTAssertFalse(controller.isLibraryPresented, "the note on screen comes back on screen")
         // A note deleted from the library comes back into the library.
         XCTAssertTrue(controller.showLibrary())
-        XCTAssertTrue(controller.deleteNote(noteID: b))
-        XCTAssertTrue(controller.undoLibrary())
+        await XCTAssertTrueAsync(await controller.deleteNoteDurably(noteID: b))
+        await XCTAssertTrueAsync(await controller.undoLibraryDurably())
         XCTAssertTrue(controller.isLibraryPresented)
         XCTAssertNotNil(store.note(withID: b))
     }
 
-    func testAStepThatCanNeverApplyIsDroppedAndOneThatFailedIsKept() throws {
+    func testAStepThatCanNeverApplyIsDroppedAndOneThatFailedIsKept() async throws {
         let controller = makeController()
         let a = try create([.text("Alpha")])
-        XCTAssertTrue(controller.deleteNote(noteID: a))
+        await XCTAssertTrueAsync(await controller.deleteNoteDurably(noteID: a))
         // Restored somewhere else (Settings' Recently Deleted): the step is stale.
         XCTAssertTrue(store.restoreDeleted(noteID: a))
         XCTAssertFalse(controller.undoLibrary(), "nothing to undo any more")
         XCTAssertFalse(controller.canUndoLibrary, "an obsolete step is dropped")
 
         let b = try create([.text("Beta")])
-        XCTAssertTrue(controller.deleteNote(noteID: b))
+        await XCTAssertTrueAsync(await controller.deleteNoteDurably(noteID: b))
         gate.shouldFail = true
         XCTAssertFalse(controller.undoLibrary(), "the store refused the restore")
         XCTAssertTrue(controller.canUndoLibrary, "a failed step stays, so a retry can work")
         XCTAssertNil(store.note(withID: b))
         gate.shouldFail = false
-        XCTAssertTrue(controller.undoLibrary())
+        await XCTAssertTrueAsync(await controller.undoLibraryDurably())
         XCTAssertNotNil(store.note(withID: b))
     }
 
-    func testAPinStepFindsTheNoteGoneOrAlreadyInTheStateItWants() throws {
+    func testAPinStepFindsTheNoteGoneOrAlreadyInTheStateItWants() async throws {
         let controller = makeController()
         let a = try create([.text("Alpha")])
         controller.setPinned(true, noteID: a)
@@ -289,7 +289,7 @@ final class NotesAuditTests: XCTestCase {
         XCTAssertFalse(controller.canUndoLibrary, "so the step is dropped")
     }
 
-    func testTheHistoryFollowsTheAppRouteAndAnnouncesEveryChange() throws {
+    func testTheHistoryFollowsTheAppRouteAndAnnouncesEveryChange() async throws {
         let controller = makeController()
         let route = UndoRoute()
         controller.attachUndoRoute(route)
@@ -304,7 +304,7 @@ final class NotesAuditTests: XCTestCase {
         XCTAssertGreaterThan(controller.undoRevision, recorded)
     }
 
-    func testTheUndoKeysBelongToTheLibraryUnlessTheSearchFieldHasTextToUndo() {
+    func testTheUndoKeysBelongToTheLibraryUnlessTheSearchFieldHasTextToUndo() async {
         func action(_ modifiers: EventModifiers, field: Bool = false, canUndo: Bool = false, canRedo: Bool = false) -> NotesLibraryView.KeyAction {
             NotesLibraryView.keyAction(keyCode: 6, modifiers: modifiers, characters: nil, composing: false, fieldFocused: field,
                                        fieldCanUndo: canUndo, fieldCanRedo: canRedo)
@@ -320,7 +320,7 @@ final class NotesAuditTests: XCTestCase {
                                                   fieldFocused: true), .passThrough, "a composing input method keeps every key")
     }
 
-    func testLibraryStepsLiveInTheirOwnHistoryApartFromNotesAndTasks() throws {
+    func testLibraryStepsLiveInTheirOwnHistoryApartFromNotesAndTasks() async throws {
         let route = UndoRoute()
         let controller = makeController()
         controller.attachUndoRoute(route)
@@ -338,9 +338,10 @@ final class NotesAuditTests: XCTestCase {
 
     private final class DeadJournal: NoteDraftJournaling {
         struct Failure: Error {}
-        func write(_ entry: NoteDraftJournalEntry, staged: [StagedNoteAttachment]) throws { throw Failure() }
-        func remove(noteID: UUID) throws {}
-        func entries() throws -> [(NoteDraftJournalEntry, [StagedNoteAttachment])] { [] }
+        func write(_ entry: NoteDraftJournalEntry, staged: [StagedNoteAttachment],
+                   replacing claim: NoteRecoveryClaim?) throws -> NoteRecoveryClaim { throw Failure() }
+        func retire(noteID: UUID, claim: NoteRecoveryClaim?, saved: () -> NoteRecoverySavedState?) throws {}
+        func recoveryEntries() throws -> [NoteDraftRecoveryEntry] { [] }
     }
 
     private func pixel(_ name: String = "pixel.png") throws -> StagedNoteAttachment {
@@ -357,16 +358,16 @@ final class NotesAuditTests: XCTestCase {
 
     /// A note that is only in memory: typed text and an image, the store
     /// refusing the save and the recovery journal dead.
-    private func onlyInMemoryNote(image: StagedNoteAttachment? = nil) throws -> (NotesPageController, NoteSession) {
+    private func onlyInMemoryNote(image: StagedNoteAttachment? = nil) async throws -> (NotesPageController, NoteSession) {
         let controller = NotesPageController(store: store, journal: DeadJournal(), defaults: defaults,
                                              saveDelay: .seconds(60), pauseVersionDelay: .seconds(600))
-        controller.start()
+        await controller.startAndWait()
         let session = try XCTUnwrap(controller.active)
         let engine = session.engine
         engine.performEdit(NSRange(location: 0, length: 0), with: NSAttributedString(string: "Groceries"), name: "Typing")
         if let image { XCTAssertTrue(engine.insertImage(image, pixelSize: CGSize(width: 2, height: 2))) }
         gate.shouldFail = true
-        XCTAssertFalse(controller.newNote(), "both saves fail, so the note cannot be left")
+        await XCTAssertFalseAsync(await controller.newNoteDurably(), "both saves fail, so the note cannot be left")
         guard case .onlyInMemory = session.state else { throw NSError(domain: "state", code: 1) }
         return (controller, session)
     }
@@ -378,7 +379,7 @@ final class NotesAuditTests: XCTestCase {
 
     func testARecoveryCopyKeepsTheStructureTheTextAndTheImagesInAReopenableFolder() async throws {
         let image = try pixel()
-        let (controller, session) = try onlyInMemoryNote(image: image)
+        let (controller, session) = try await onlyInMemoryNote(image: image)
         let expected = session.engine.document()
         let target = try scratchURL("Groceries recovery copy")
         var suggested: String?
@@ -426,7 +427,7 @@ final class NotesAuditTests: XCTestCase {
     /// (its structure, its objects and its images), never that rewrite.
     func testARecoveryCopyDuringARefusedWritingToolsRewriteKeepsTheStartingNote() async throws {
         let image = try pixel()
-        let (controller, session) = try onlyInMemoryNote(image: image)
+        let (controller, session) = try await onlyInMemoryNote(image: image)
         let engine = session.engine
         _ = engine.makeView()
         let expected = engine.document()
@@ -471,7 +472,7 @@ final class NotesAuditTests: XCTestCase {
     }
 
     func testCancellingTheSavePanelWritesNothingAndSaysNothing() async throws {
-        let (controller, session) = try onlyInMemoryNote()
+        let (controller, session) = try await onlyInMemoryNote()
         let target = try scratchURL("never")
         var asked = 0
         controller.recoveryCopyDestination = { _ in asked += 1; return nil }
@@ -483,7 +484,7 @@ final class NotesAuditTests: XCTestCase {
     }
 
     func testAFailedWriteIsSaidLeavesNothingBehindAndKeepsTheNote() async throws {
-        let (controller, session) = try onlyInMemoryNote(image: try pixel())
+        let (controller, session) = try await onlyInMemoryNote(image: try pixel())
         // A folder cannot be made inside a file.
         let blocker = try scratchURL("blocker")
         try Data("x".utf8).write(to: blocker)
@@ -506,7 +507,7 @@ final class NotesAuditTests: XCTestCase {
     }
 
     func testChoosingAnExistingFolderReplacesItWholeAfterTheNewOneIsComplete() async throws {
-        let (controller, _) = try onlyInMemoryNote()
+        let (controller, _) = try await onlyInMemoryNote()
         let target = try scratchURL("copy")
         try FileManager.default.createDirectory(at: target, withIntermediateDirectories: true)
         try Data("old".utf8).write(to: target.appendingPathComponent("stale.txt"))
@@ -602,7 +603,7 @@ final class NotesAuditTests: XCTestCase {
         return Set(names.filter { $0.hasPrefix("AtticRecovery-") })
     }
 
-    func testARecoveryCopyThatCannotBeStagedOnTheDestinationVolumeFailsAndPublishesNothing() throws {
+    func testARecoveryCopyThatCannotBeStagedOnTheDestinationVolumeFailsAndPublishesNothing() async throws {
         let (_, home) = try makeFolders()
         let target = home.appendingPathComponent("copy")
         try existingCopy(at: target)
@@ -625,7 +626,7 @@ final class NotesAuditTests: XCTestCase {
         XCTAssertFalse(FileManager.default.fileExists(atPath: fresh.path))
     }
 
-    func testARecoveryCopyDestinedForAnotherVolumeIsNeverBuiltThereAndIsPublishedFromASibling() throws {
+    func testARecoveryCopyDestinedForAnotherVolumeIsNeverBuiltThereAndIsPublishedFromASibling() async throws {
         let (elsewhere, home) = try makeFolders()
         let target = home.appendingPathComponent("copy")
         try existingCopy(at: target)
@@ -644,7 +645,7 @@ final class NotesAuditTests: XCTestCase {
         XCTAssertEqual(try names(in: home), ["copy"], "the sibling scratch folder is gone too")
     }
 
-    func testARecoveryCopyWhoseOnlyScratchSpaceIsAnotherVolumeFailsAndKeepsTheDestination() throws {
+    func testARecoveryCopyWhoseOnlyScratchSpaceIsAnotherVolumeFailsAndKeepsTheDestination() async throws {
         let (elsewhere, home) = try makeFolders()
         let target = home.appendingPathComponent("copy")
         try existingCopy(at: target)
@@ -678,7 +679,7 @@ final class NotesAuditTests: XCTestCase {
         XCTAssertEqual(try names(in: home), ["copy"])
     }
 
-    func testAFailedPublicationKeepsTheExistingFolderAndLeavesNoScratchBehind() throws {
+    func testAFailedPublicationKeepsTheExistingFolderAndLeavesNoScratchBehind() async throws {
         let (_, home) = try makeFolders()
         let target = home.appendingPathComponent("copy")
         try existingCopy(at: target)
@@ -697,9 +698,9 @@ final class NotesAuditTests: XCTestCase {
         XCTAssertEqual(try names(in: home), ["copy"])
     }
 
-    func testARecoveryCopyIsOfferedOnlyWhileTheTextIsHeldOnlyHere() throws {
+    func testARecoveryCopyIsOfferedOnlyWhileTheTextIsHeldOnlyHere() async throws {
         let controller = makeController()
-        controller.start()
+        await controller.startAndWait()
         let session = try XCTUnwrap(controller.active)
         XCTAssertFalse(controller.canSaveRecoveryCopy(session), "an untouched draft")
         XCTAssertFalse(controller.canSaveRecoveryCopy(nil))
@@ -707,12 +708,12 @@ final class NotesAuditTests: XCTestCase {
         XCTAssertFalse(controller.canSaveRecoveryCopy(controller.active), "typed but the save is still pending")
         // The store refuses but the recovery journal works: Not saved.
         gate.shouldFail = true
-        XCTAssertTrue(controller.newNote(), "the recovery journal holds it, so the person may leave")
+        await XCTAssertTrueAsync(await controller.newNoteDurably(), "the recovery journal holds it, so the person may leave")
         guard case .notSaved = session.state else { return XCTFail("expected Not saved, got \(session.state)") }
         XCTAssertTrue(controller.canSaveRecoveryCopy(session), "Not saved is offered too")
     }
 
-    func testTheFolderNamesAreSafeAndUnique() {
+    func testTheFolderNamesAreSafeAndUnique() async {
         XCTAssertEqual(NoteRecoveryCopy.suggestedName(title: ""), "Untitled note recovery copy")
         XCTAssertEqual(NoteRecoveryCopy.suggestedName(title: "a/b: c"), "a-b- c recovery copy")
         var used = Set<String>()
@@ -722,7 +723,7 @@ final class NotesAuditTests: XCTestCase {
         XCTAssertEqual(NoteRecoveryCopy.uniqueName("", among: &used), "attachment")
     }
 
-    func testImagesThatCouldNotBeReadAreListedNotSilentlyDropped() throws {
+    func testImagesThatCouldNotBeReadAreListedNotSilentlyDropped() async throws {
         let target = try scratchURL("partial")
         let missing = UUID()
         let snapshot = NoteRecoverySnapshot(noteID: UUID(), title: "T", content: Data("{}".utf8), markdown: "# T", tags: ["a"],

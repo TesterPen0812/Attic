@@ -174,10 +174,10 @@ struct NotesLibraryView: View {
         case .undo:
             // The library's own history; with nothing to undo the key goes on.
             guard controller.canUndoLibrary else { return false }
-            controller.undoLibrary()
+            Task { @MainActor in _ = await controller.undoLibraryDurably() }
         case .redo:
             guard controller.canRedoLibrary else { return false }
-            controller.redoLibrary()
+            Task { @MainActor in _ = await controller.redoLibraryDurably() }
         case .startSearch:
             beginSearch(replaying: event)
         }

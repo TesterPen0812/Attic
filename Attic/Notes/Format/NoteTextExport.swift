@@ -28,6 +28,7 @@ enum NoteTextExport {
             return String(repeating: "  ", count: block.indent ?? 0) + prefix + block.displayText
         case .checklist: return String(repeating: "  ", count: block.indent ?? 0) + (block.checked ? "[x] " : "[ ] ") + block.displayText
         case .image: return "[Image]"
+        case .file: return "[File: \(block.filename ?? "file")]"
         case .divider: return "---"
         case .opaque: return "[Unsupported content]"
         }
@@ -58,6 +59,7 @@ enum NoteTextExport {
             return plainLine(plain)
         case .checklist: return (block.checked ? "- [x] " : "- [ ] ") + agentInlineText(block)
         case .image: return "![image](attic://image/\(block.id?.uuidString ?? ""))"
+        case .file: return "[file: \(block.filename ?? "file")](attic://file/\(block.id?.uuidString ?? ""))"
         case .divider: return "---"
         case .opaque: return "[unsupported content](attic://block/\(index))"
         }
@@ -84,15 +86,18 @@ enum NoteTextExport {
 
 enum NoteAgentTextError: LocalizedError, Equatable {
     case unknownImage(String)
+    case unknownFile(String)
     case unknownBlock(String)
     case lossyFormatting
 
     var errorDescription: String? {
         switch self {
         case let .unknownImage(reference):
-            "The image \(reference) is not in this note. Keep image lines exactly as get_note returned them, or remove them."
+            "The image \(reference) is not in this note. Keep image lines exactly as get_note returned them."
+        case let .unknownFile(reference):
+            "The file \(reference) is not in this note. Keep file lines exactly as get_note returned them."
         case let .unknownBlock(reference):
-            "The block \(reference) is not in this note. Keep unsupported-content lines exactly as returned, or remove them."
+            "The block \(reference) is not in this note. Keep unsupported-content lines exactly as returned."
         case .lossyFormatting:
             "This note contains paragraph structure or inline marks that the agent text format cannot safely preserve during this edit. Keep styled blocks unchanged, change only plain text or checklist checked states, or edit the note in Attic."
         }
@@ -108,7 +113,20 @@ enum NoteAgentTextSafety {
             $0.style != nil || $0.level != nil || $0.indent != nil || !$0.marks.isEmpty
                 || $0.kind == .divider
         }
-        guard rich else { return }
+        if !rich {
+            // Plain text may gain or lose paragraphs around file and image
+            // placements. The complete placement objects must remain once
+            // each, in order, with the same stored attachment identities.
+            let attachments: (NoteDocument) -> [NoteBlock] = { document in
+                document.blocks.filter { $0.kind == .file || $0.kind == .image }
+            }
+            guard attachments(base) == attachments(proposed) else { throw NoteAgentTextError.lossyFormatting }
+            let dates: (NoteDocument) -> [NoteInline] = { document in
+                document.blocks.flatMap(\.inlines)
+            }
+            guard dates(base) == dates(proposed) else { throw NoteAgentTextError.lossyFormatting }
+            return
+        }
         guard base.blocks.count == proposed.blocks.count else { throw NoteAgentTextError.lossyFormatting }
         for (old, new) in zip(base.blocks, proposed.blocks) {
             var checkedCopy = old
@@ -146,7 +164,7 @@ enum NoteAgentTextParser {
         }
 
         let lines = body.isEmpty ? [] : body.components(separatedBy: "\n")
-        for (lineNumber, rawLine) in lines.enumerated() {
+        for rawLine in lines {
             let line = rawLine.hasSuffix("\r") ? String(rawLine.dropLast()) : rawLine
             // 1. An unchanged line keeps its block exactly.
             if let match = baseLines.first(where: { !used.contains($0.0) && $0.0 > 0 && $0.2 == line }) {
@@ -162,6 +180,16 @@ enum NoteAgentTextParser {
                 var block = match.1
                 // A second copy of the same image is a new placement of the
                 // same attachment: IDs stay unique within the note.
+                if used.contains(match.0) { block.id = UUID() }
+                blocks.append(block)
+                used.insert(match.0)
+                continue
+            }
+            if let reference = reference(in: line, scheme: "attic://file/") {
+                guard let match = baseLines.first(where: {
+                    $0.1.kind == .file && $0.1.id?.uuidString.lowercased() == reference.lowercased()
+                }) else { throw NoteAgentTextError.unknownFile(reference) }
+                var block = match.1
                 if used.contains(match.0) { block.id = UUID() }
                 blocks.append(block)
                 used.insert(match.0)

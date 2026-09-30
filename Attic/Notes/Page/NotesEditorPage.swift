@@ -310,6 +310,11 @@ struct NotesEditorPage: View {
             Button("") { if let id = currentNoteID { controller.copyMarkdown(noteID: id) } }
                 .keyboardShortcut("c", modifiers: [.command, .option, .shift])
                 .disabled(!showsEditor)
+            Button("") {
+                if let engine = controller.active?.engine { Task { _ = await engine.printNote() } }
+            }
+            .keyboardShortcut("p", modifiers: .command)
+            .disabled(!showsEditor)
             Button("") { Task { await controller.saveRecoveryCopy() } }
                 .keyboardShortcut(Self.saveRecoveryCopyShortcut)
                 .disabled(!showsEditor || !controller.canSaveRecoveryCopy(controller.active))
@@ -376,18 +381,19 @@ struct NotesEditorPage: View {
     // MARK: Delete and its Undo
 
     private func delete(_ id: UUID) {
-        guard controller.deleteNote(noteID: id) else { return }
-        guard let toasts, let step = controller.libraryUndoStepID else { return }
-        // The toast is one way to Undo; the library's history is the other
-        // (⌘Z, the menus), and it outlives the toast.
-        // Its button answers the pointer and VoiceOver, never ⌘Z: the key
-        // follows the focused text, then the library (NotesLibraryView).
-        let toast = toasts.show(String(localized: "Note deleted"), answersUndoKey: false) { [controller] in
-            guard controller.libraryUndoStepID == step else { return }
-            controller.undoLibrary()
+        Task { @MainActor in
+            guard await controller.deleteNoteDurably(noteID: id) else { return }
+            guard let toasts, let step = controller.libraryUndoStepID else { return }
+            // The toast is one way to Undo; the library's history is the other
+            // (⌘Z, the menus), and it outlives the toast.
+            // Its button answers the pointer and VoiceOver, never ⌘Z: the key
+            // follows the focused text, then the library (NotesLibraryView).
+            let toast = toasts.show(String(localized: "Note deleted"), answersUndoKey: false) { [controller] in
+                Task { @MainActor in _ = await controller.undoLibraryDurably(expectedStepID: step) }
+            }
+            postedToastID = toast.id
+            postedToastStep = step
         }
-        postedToastID = toast.id
-        postedToastStep = step
     }
 
     private func dismissOwnToast() {
@@ -483,11 +489,11 @@ struct NotesEditorPage: View {
             AtticMenuCommand("\(historyTitle(String(localized: "Undo"), step: controller.libraryUndoName))",
                              shortcut: KeyboardShortcut("z", modifiers: .command),
                              isDisabled: !controller.canUndoLibrary, startsSection: true,
-                             identifier: NotesLibraryView.undoIdentifier) { controller.undoLibrary() },
+                             identifier: NotesLibraryView.undoIdentifier) { Task { @MainActor in _ = await controller.undoLibraryDurably() } },
             AtticMenuCommand("\(historyTitle(String(localized: "Redo"), step: controller.libraryRedoName))",
                              shortcut: KeyboardShortcut("z", modifiers: [.command, .shift]),
                              isDisabled: !controller.canRedoLibrary,
-                             identifier: NotesLibraryView.redoIdentifier) { controller.redoLibrary() }
+                             identifier: NotesLibraryView.redoIdentifier) { Task { @MainActor in _ = await controller.redoLibraryDurably() } }
         ]
     }
 
@@ -654,7 +660,7 @@ private struct NoteStatusSlot: View {
             return AtticStatusItem(id: "conflict", systemName: "exclamationmark.circle", title: status.label,
                                    explanation: status.explanation, tone: .warning, actions: [
                                        .init(title: String(localized: "Keep as new note"), identifier: "notes-keep-as-new",
-                                             handler: details { _ = controller.keepAsNewNote() }),
+                                             handler: details { Task { @MainActor in _ = await controller.keepAsNewNoteDurably() } }),
                                        .init(title: String(localized: "Review"), identifier: "notes-review-conflict",
                                              handler: details { showingProposal = true })
                                    ])

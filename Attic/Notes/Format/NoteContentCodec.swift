@@ -115,6 +115,13 @@ enum NoteContentCodec {
     }
 
     private static func validForEncoding(_ block: NoteBlock) -> Bool {
+        if block.kind == .file {
+            guard block.id != nil, block.filename?.isEmpty == false,
+                  block.contentTypeIdentifier?.isEmpty == false,
+                  let bytes = block.byteCount, bytes >= 0,
+                  (block.attachmentID != nil) != (block.importFailure != nil),
+                  block.importFailure == nil || block.importFailure?.isEmpty == false else { return false }
+        }
         guard block.level == nil || (block.style == "heading" && block.level! > 0),
               block.indent == nil || ((0...2).contains(block.indent!) &&
                   (block.kind == .checklist || ["bullet", "number", "quote"].contains(block.style ?? ""))) else { return false }
@@ -143,6 +150,8 @@ enum NoteContentCodec {
             block = decodeTextual(object, kind: .checklist, known: ["kind", "text", "id", "checked", "indent", "marks", "inline"])
         case "image":
             block = decodeImage(object)
+        case "file":
+            block = decodeFile(object)
         case "divider":
             guard let id = object["id"]?.stringValue.flatMap(UUID.init(uuidString:)) else { break }
             block = .divider(id: id)
@@ -257,6 +266,28 @@ enum NoteContentCodec {
         return block
     }
 
+    private static func decodeFile(_ object: [String: NoteJSON]) -> NoteBlock? {
+        guard let id = object["id"]?.stringValue.flatMap(UUID.init(uuidString:)),
+              let name = object["name"]?.stringValue, !name.isEmpty,
+              let type = object["contentType"]?.stringValue, !type.isEmpty,
+              let byteCount = object["byteCount"]?.intValue, byteCount >= 0 else { return nil }
+        let attachmentID: UUID?
+        if let raw = object["attachmentID"] {
+            guard let parsed = raw.stringValue.flatMap(UUID.init(uuidString:)) else { return nil }
+            attachmentID = parsed
+        } else { attachmentID = nil }
+        let failure = object["importFailure"]?.stringValue
+        guard (attachmentID != nil) != (failure != nil),
+              object["importFailure"] == nil || failure?.isEmpty == false else { return nil }
+        var block = NoteBlock.file(id: id, attachmentID: attachmentID, filename: name,
+                                   contentTypeIdentifier: type, byteCount: Int64(byteCount),
+                                   importFailure: failure)
+        block.extras = object.filter {
+            !["kind", "id", "attachmentID", "name", "contentType", "byteCount", "importFailure"].contains($0.key)
+        }
+        return block
+    }
+
     /// Inline objects must sit, in order, exactly on the text's U+FFFC
     /// characters (UTF-16 offsets), one each.
     private static func decodeInlines(_ values: [NoteJSON], in text: String) -> [NoteInline]? {
@@ -327,6 +358,16 @@ enum NoteContentCodec {
             object["widthFraction"] = block.widthFraction.map(NoteJSON.double)
             object["pixelWidth"] = block.pixelWidth.map { .int(Int64($0)) }
             object["pixelHeight"] = block.pixelHeight.map { .int(Int64($0)) }
+            return .object(object)
+        case .file:
+            var object = block.extras
+            object["kind"] = .string("file")
+            object["id"] = block.id.map { .string($0.uuidString) }
+            object["attachmentID"] = block.attachmentID.map { .string($0.uuidString) }
+            object["name"] = block.filename.map(NoteJSON.string)
+            object["contentType"] = block.contentTypeIdentifier.map(NoteJSON.string)
+            object["byteCount"] = block.byteCount.map(NoteJSON.int)
+            object["importFailure"] = block.importFailure.map(NoteJSON.string)
             return .object(object)
         }
     }
