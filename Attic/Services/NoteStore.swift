@@ -1571,14 +1571,14 @@ final class NoteStore: ObservableObject {
         }
     }
 
-    private func reloadModels() throws {
+    private func reloadModels(preservingAttachmentProofs: Bool = false) throws {
         // A long-lived ModelContext can return cached model instances after
         // CloudKit updates the underlying store. Refresh through a new context
         // so remote values replace the old objects instead of being written
         // back to CloudKit by the next local save.
         let refreshedContext = try makeFreshContext()
         let presentation = try presentationSnapshot(in: refreshedContext)
-        installPresentation(presentation, using: refreshedContext)
+        installPresentation(presentation, using: refreshedContext, preservingAttachmentProofs: preservingAttachmentProofs)
     }
 
     private func registerSuccessfulLocalSave() {
@@ -1603,10 +1603,11 @@ final class NoteStore: ObservableObject {
 
     private func installPresentation(
         _ presentation: NotePresentationSnapshot,
-        using sourceContext: ModelContext
+        using sourceContext: ModelContext,
+        preservingAttachmentProofs: Bool = false
     ) {
         context = sourceContext
-        clearVerifiedAttachmentCache()
+        if !preservingAttachmentProofs { clearVerifiedAttachmentCache() }
         documentReplicaCapabilityCache.removeAll()
         let uniqueNotes = visibleUniqueNotes(from: presentation.notes)
         notes = uniqueNotes.filter { $0.deletedAt == nil }
@@ -1643,14 +1644,18 @@ final class NoteStore: ObservableObject {
         }
 
         do {
-            try reloadModels()
+            // This successful local transaction already invalidated every
+            // attachment family it touched. Unrelated proofs remain valid
+            // across the fresh presentation context. Rollback/external reloads
+            // continue to invalidate the whole context generation.
+            try reloadModels(preservingAttachmentProofs: true)
             lastErrorMessage = nil
             return .persisted
         } catch {
             // Persistence has already succeeded. Adopt the committed
             // transaction and its precomputed presentation instead of
             // reporting total failure or leaving the old arrays visible.
-            installPresentation(fallbackPresentation, using: transactionContext)
+            installPresentation(fallbackPresentation, using: transactionContext, preservingAttachmentProofs: true)
             let message = "Attachments were saved and the saved version is shown, but a fresh reload failed: \(error.localizedDescription)"
             lastErrorMessage = message
             return .persistedButRefreshFailed(message)
@@ -1661,9 +1666,10 @@ final class NoteStore: ObservableObject {
         try sourceContext.fetch(FetchDescriptor<NoteItem>())
     }
 
-    private func installPresentation(_ fetchedNotes: [NoteItem], using sourceContext: ModelContext) {
+    private func installPresentation(_ fetchedNotes: [NoteItem], using sourceContext: ModelContext,
+                                     preservingAttachmentProofs: Bool = false) {
         context = sourceContext
-        clearVerifiedAttachmentCache()
+        if !preservingAttachmentProofs { clearVerifiedAttachmentCache() }
         documentReplicaCapabilityCache.removeAll()
         notes = visibleUniqueNotes(from: fetchedNotes).filter { $0.deletedAt == nil }
         revision &+= 1

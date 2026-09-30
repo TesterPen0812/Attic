@@ -2673,6 +2673,77 @@ extension NoteSlice3bTests {
 
 @MainActor
 extension NoteSlice3bTests {
+    func testProbe6SyncOpenCopyAfterPresentationReload() async throws {
+        for (launchPresented, duplicate) in [(false, false), (false, true), (true, false), (true, true)] {
+            let store = try makeTestNoteStore(attachmentFileStore: makeTestAttachmentFileStore())
+            let source = UUID(), dest = UUID(), item = staged()
+            let document = NoteDocument(blocks: [.text("Source"), .file(attachmentID: item.id,
+                filename: item.filename, contentTypeIdentifier: item.contentTypeIdentifier, byteCount: item.byteCount)])
+            guard case .success = store.createDocumentNote(id: source, document: document, staged: [item]),
+                  case .success = store.createDocumentNote(id: dest, document: NoteDocument(blocks: [.text("Destination")])) else { return XCTFail() }
+            let importOwner = try XCTUnwrap(store.create(title: "Panel import"))
+            let suite = "R1-\(UUID())", defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+            let root = FileManager.default.temporaryDirectory.appendingPathComponent("R1-\(UUID())")
+            try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+            defer { defaults.removePersistentDomain(forName: suite); try? FileManager.default.removeItem(at: root) }
+            let url = root.appendingPathComponent("import.txt")
+            try Data("New file".utf8).write(to: url)
+            defaults.set(source.uuidString, forKey: "notes.lastViewedNote.v2")
+            let controller = NotesPageController(store: store, journal: nil, defaults: defaults, saveDelay: .seconds(60))
+            if launchPresented { controller.start() } else { XCTAssertTrue(controller.open(noteID: source)) }
+            let session = try XCTUnwrap(controller.active)
+            await XCTAssertEqualAsync(await store.verifiedAttachmentBytes(item.id), item)
+            let fragment = try NoteContentCodec.encode(session.engine.fragment(for: NSRange(location: 0,
+                length: session.engine.textStorage.length)), context: .fragment)
+            XCTAssertTrue(controller.open(noteID: dest))
+            let destination = try XCTUnwrap(controller.active)
+            XCTAssertTrue(destination.engine.performEdit(NSRange(location: 0, length: 0), with: NSAttributedString(string: "Edited "), name: "Typing"))
+            XCTAssertTrue(controller.save(destination))
+            let outcome = await store.importAttachments(.init(editorSession: .init(noteID: importOwner.id, generation: 1),
+                origin: .note(importOwner.id), urls: [url]))
+            guard case .imported = outcome else { return XCTFail("fixture import: \(outcome)") }
+            XCTAssertNotNil(store.cachedVerifiedAttachmentBytes(item.id), "successful local reload preserves unrelated proof")
+            if duplicate {
+                XCTAssertTrue(controller.open(noteID: source))
+                XCTAssertTrue(controller.duplicateNote(noteID: source))
+                let copy = try XCTUnwrap(controller.active)
+                let copiedID = try XCTUnwrap(copy.engine.document().attachmentIDs.first)
+                XCTAssertNotEqual(copiedID, item.id)
+                await XCTAssertEqualAsync(await store.verifiedAttachmentBytes(copiedID)?.data, item.data)
+            } else {
+                XCTAssertTrue(destination.engine.paste(fragmentData: fragment, at: NSRange(location: destination.engine.textStorage.length, length: 0)))
+                XCTAssertEqual(destination.engine.document().attachmentIDs.count, 1)
+                XCTAssertNil(destination.notice)
+            }
+        }
+    }
+
+    func testLocateReloadPreservesOtherProofsButRollbackAndExternalRefreshClearThem() async throws {
+        let gate = PersistenceGate()
+        let store = try makeTestNoteStore(persist: { try gate.save($0) }, attachmentFileStore: makeTestAttachmentFileStore())
+        let id = UUID(), items = [staged("keep.pdf"), staged("locate.pdf")]
+        let document = NoteDocument(blocks: [.text("Files")] + items.map {
+            .file(attachmentID: $0.id, filename: $0.filename, contentTypeIdentifier: $0.contentTypeIdentifier, byteCount: $0.byteCount)
+        })
+        guard case .success = store.createDocumentNote(id: id, document: document, staged: items) else { return XCTFail() }
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("R1Locate-\(UUID())")
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let url = root.appendingPathComponent(items[1].filename)
+        try items[1].data.write(to: url)
+        for item in items { await XCTAssertNotNilAsync(await store.verifiedAttachmentBytes(item.id)) }
+        await XCTAssertTrueAsync(await store.locateAttachment(try XCTUnwrap(store.attachmentFamily(items[1].id).first), at: url))
+        XCTAssertNotNil(store.cachedVerifiedAttachmentBytes(items[0].id))
+        XCTAssertNil(store.cachedVerifiedAttachmentBytes(items[1].id), "Locate's payload write invalidates its own family")
+        gate.shouldFail = true
+        await XCTAssertFalseAsync(await store.locateAttachment(try XCTUnwrap(store.attachmentFamily(items[1].id).first), at: url))
+        XCTAssertNil(store.cachedVerifiedAttachmentBytes(items[0].id), "rollback keeps the full invalidation")
+        gate.shouldFail = false
+        await XCTAssertNotNilAsync(await store.verifiedAttachmentBytes(items[0].id))
+        store.refresh()
+        XCTAssertNil(store.cachedVerifiedAttachmentBytes(items[0].id), "external refresh keeps the full invalidation")
+    }
+
     func testReviewerSyncOpenCopyAfterUnrelatedSave() async throws {
         for (launchPresented, duplicate) in [(false, false), (false, true), (true, false), (true, true)] {
             let store = try makeTestNoteStore(attachmentFileStore: makeTestAttachmentFileStore())
