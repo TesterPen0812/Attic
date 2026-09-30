@@ -421,7 +421,13 @@ final class TasksPageUITests: XCTestCase {
 
     // MARK: - Round 3: date, tags and priority without the shorthand
 
-    private func menuItem(_ title: String) -> XCUIElement { app.menuItems[title] }
+    /// AppKit appends a native badge to the accessibility title with ", ".
+    /// Keep the command boundary so Delete cannot match Delete 3 Tasks.
+    private func menuItems(_ title: String) -> XCUIElementQuery {
+        app.menuItems.matching(NSPredicate(format: "title == %@ OR title BEGINSWITH %@", title, title + ", "))
+    }
+
+    private func menuItem(_ title: String) -> XCUIElement { menuItems(title).firstMatch }
 
     /// The strip over the add bar (owner fix 5 A2; round 6, item 18): it
     /// shows with a draft; each button shows what the task will get, picked
@@ -555,8 +561,8 @@ final class TasksPageUITests: XCTestCase {
     /// A menu item on screen with this title: an open pop-up or context
     /// menu's, never the menu bar's own (those have no size until opened).
     private func openItem(_ title: String) -> XCUIElement {
-        let items = app.menuItems.matching(NSPredicate(format: "title == %@", title)).allElementsBoundByIndex
-        return items.first { $0.frame.width > 0 && $0.frame.height > 0 } ?? app.menuItems[title]
+        let items = menuItems(title).allElementsBoundByIndex
+        return items.first { $0.frame.width > 0 && $0.frame.height > 0 } ?? menuItem(title)
     }
 
     /// Waits until the row stops moving (a page's slide has ended).

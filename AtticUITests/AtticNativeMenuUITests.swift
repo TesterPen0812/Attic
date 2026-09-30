@@ -40,7 +40,7 @@ final class AtticNativeMenuUITests: XCTestCase {
     /// Clicks a menu control and waits for one of its items, retrying once
     /// after bringing the lab to the front.
     private func open(_ control: XCUIElement, expecting item: String) -> XCUIElement {
-        let menuItem = app.menuItems[item]
+        let menuItem = menuItem(item)
         for attempt in 0..<2 {
             if attempt > 0 { bringLabToFront() }
             XCTAssertTrue(control.waitForExistence(timeout: 5))
@@ -49,6 +49,11 @@ final class AtticNativeMenuUITests: XCTestCase {
             app.typeKey(XCUIKeyboardKey.escape, modifierFlags: [])
         }
         return menuItem
+    }
+
+    /// Native badge text follows the command title, separated by ", ".
+    private func menuItem(_ title: String) -> XCUIElement {
+        app.menuItems.matching(NSPredicate(format: "title == %@ OR title BEGINSWITH %@", title, title + ", ")).firstMatch
     }
 
     override func tearDownWithError() throws {
@@ -66,7 +71,7 @@ final class AtticNativeMenuUITests: XCTestCase {
         XCTAssertEqual(title.elementType, .menuButton, "The title is a menu button for VoiceOver")
         let duplicate = open(title, expecting: "Duplicate")
         XCTAssertTrue(duplicate.exists, "The title menu opens a native menu with its commands")
-        XCTAssertTrue(app.menuItems["Delete"].exists)
+        XCTAssertTrue(menuItem("Delete").exists)
         duplicate.click()
         let changed = NSPredicate { _, _ in self.state().hasPrefix("Duplicate") }
         wait(for: [XCTNSPredicateExpectation(predicate: changed, object: nil)], timeout: 5)
