@@ -2969,6 +2969,27 @@ extension NoteSlice3bTests {
 
 @MainActor
 extension NoteSlice3bTests {
+    func testRetentionRetriesAfterUnrelatedSaveAndFinishesTheRequestedCleanup() async throws {
+        let files = makeTestAttachmentFileStore(), store = try makeTestNoteStore(attachmentFileStore: files), item = staged(), id = UUID()
+        guard case .success = store.createDocumentNote(id: id, document: NoteDocument(blocks: [.text("Owner")])) else { return XCTFail() }
+        await store.waitForAttachmentReconciliation()
+        let reference = AttachmentFileReference(id: item.id, digest: item.digest, filename: item.filename, payload: item.data)
+        let url = try XCTUnwrap(try await files.ensureMaterialized(reference))
+        let barrier = LocateReadBarrier(), recorder = PayloadThreadRecorder()
+        defer { barrier.resume(); store.retentionDecodeObserver = nil }
+        store.retentionDecodeObserver = {
+            recorder.record(Thread.isMainThread, 1)
+            barrier.observe(main: Thread.isMainThread, bytes: 12_345)
+        }
+        let removal = Task { try await files.removeMaterializations([reference]) }
+        try await waitFor { barrier.started }
+        XCTAssertNotNil(store.create(title: "Unrelated save"))
+        barrier.resume()
+        try await removal.value
+        XCTAssertGreaterThanOrEqual(recorder.snapshot.count, 2, "the stale pass was retried")
+        XCTAssertFalse(FileManager.default.fileExists(atPath: url.path), "cleanup completes without a second sweep request")
+    }
+
     func testRetentionProviderDecodesEveryDocumentOwnerOffMain() async throws {
         let files = makeTestAttachmentFileStore(), store = try makeTestNoteStore(attachmentFileStore: files), item = staged(), id = UUID()
         await store.waitForAttachmentReconciliation()

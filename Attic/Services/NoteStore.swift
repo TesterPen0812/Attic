@@ -404,20 +404,23 @@ final class NoteStore: ObservableObject {
 
     private func retainedAttachmentIDsForFiles() async -> Set<UUID>? {
         do {
-            let generation = revision
-            let snapshot = try documentRetentionSnapshot()
-            let rows = Set(try context.fetch(FetchDescriptor<NoteAttachment>()).map(\.id))
-            let observer = retentionDecodeObserver
-            var ids = try await Task.detached(priority: .utility) {
-                try snapshot.attachmentIDs(observeDecode: observer)
-            }.value
-            // This inventory spans the store, so any concurrent store mutation
-            // makes destruction unsafe. Live editor/recovery owners are reread
-            // after the suspension, including edits that did not save a model.
-            guard revision == generation else { return nil }
-            ids.formUnion(rows)
-            ids.formUnion(try recoveryReferencedAttachmentIDs())
-            return ids
+            while !Task.isCancelled {
+                let generation = revision
+                let snapshot = try documentRetentionSnapshot()
+                let rows = Set(try context.fetch(FetchDescriptor<NoteAttachment>()).map(\.id))
+                let observer = retentionDecodeObserver
+                var ids = try await Task.detached(priority: .utility) {
+                    try snapshot.attachmentIDs(observeDecode: observer)
+                }.value
+                // Retry this requested sweep with fresh ownership if a save
+                // crossed the worker. Never authorize destruction from stale
+                // results or leave cleanup waiting for another unrelated event.
+                guard revision == generation else { continue }
+                ids.formUnion(rows)
+                ids.formUnion(try recoveryReferencedAttachmentIDs())
+                return ids
+            }
+            return nil
         } catch { return nil }
     }
 #endif
