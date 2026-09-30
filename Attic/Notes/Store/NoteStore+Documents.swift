@@ -71,6 +71,41 @@ enum NotePhysicalFamilyRetention {
 
 }
 
+/// Immutable ownership input: no live models cross to the decoding worker.
+struct NoteDocumentRetentionSnapshot: Sendable {
+    struct Version: Sendable {
+        let format: Int
+        let content: Data?
+        let attachmentIDsRaw: String
+    }
+    let notes: [Data?]
+    let versions: [Version]
+    let proposals: [Data?]
+
+    func attachmentIDs(observeDecode: (@Sendable () -> Void)? = nil) throws -> Set<UUID> {
+        func decodedIDs(_ data: Data?) throws -> [UUID] {
+            observeDecode?()
+            guard let data, case let .editable(document) = NoteContentCodec.decode(data) else {
+                throw NoteDocumentStoreError.readOnly
+            }
+            return document.attachmentIDs
+        }
+        var ids = Set<UUID>()
+        for content in notes { ids.formUnion(try decodedIDs(content)) }
+        for version in versions {
+            let raw = version.attachmentIDsRaw.split(separator: " ")
+            let cached = raw.compactMap { UUID(uuidString: String($0)) }
+            guard cached.count == raw.count else { throw NoteDocumentStoreError.readOnly }
+            ids.formUnion(cached)
+            if version.format == 0, version.content == nil { continue }
+            guard version.format == NoteDocument.currentFormat else { throw NoteDocumentStoreError.readOnly }
+            ids.formUnion(try decodedIDs(version.content))
+        }
+        for content in proposals { ids.formUnion(try decodedIDs(content)) }
+        return ids
+    }
+}
+
 /// An image imported by the editor but not yet saved. Its bytes stay with
 /// the editor session (and its draft journal) until the document that
 /// shows it is saved: the attachment row is inserted in the same save as
@@ -1153,42 +1188,23 @@ extension NoteStore {
     /// bytes rather than treating existing rows as a complete inventory.
     func documentReferencedAttachmentIDs(excludingNoteID excluded: UUID? = nil) throws -> Set<UUID> {
         var ids = try recoveryReferencedAttachmentIDs()
-        let notes = try modelContext.fetch(FetchDescriptor<NoteItem>(
-            predicate: #Predicate { $0.contentFormat >= 1 }
-        ))
-        for note in notes {
-            if note.id == excluded { continue }
-            if let data = note.content, case let .editable(document) = NoteContentCodec.decode(data) {
-                ids.formUnion(document.attachmentIDs)
-            } else {
-                // Unknown document bytes may name a materialization even
-                // when its row is absent. No row list proves completeness.
-                throw NoteDocumentStoreError.readOnly
-            }
-        }
-        for version in try modelContext.fetch(FetchDescriptor<NoteVersion>()) {
-            if version.noteID == excluded { continue }
-            ids.formUnion(version.attachmentIDs)
-            guard version.attachmentIDsRaw.split(separator: " ").allSatisfy({ UUID(uuidString: String($0)) != nil }) else {
-                throw NoteDocumentStoreError.readOnly
-            }
-            if version.contentFormat == 0, version.content == nil { continue }
-            guard version.contentFormat == NoteDocument.currentFormat,
-                  let data = version.content, case let .editable(document) = NoteContentCodec.decode(data) else {
-                throw NoteDocumentStoreError.readOnly
-            }
-            // Both fields can own bytes; a cached raw list is not proof that
-            // the actual historical document names no other attachment.
-            ids.formUnion(document.attachmentIDs)
-        }
-        for edit in try modelContext.fetch(FetchDescriptor<NotePendingEdit>()) {
-            if edit.noteID == excluded { continue }
-            guard let data = edit.proposedContent, case let .editable(document) = NoteContentCodec.decode(data) else {
-                throw NoteDocumentStoreError.readOnly
-            }
-            ids.formUnion(document.attachmentIDs)
-        }
+        ids.formUnion(try documentRetentionSnapshot(excludingNoteID: excluded).attachmentIDs())
         return ids
+    }
+
+    /// Capture current, including uncommitted, ownership on the context's actor.
+    /// File retention decodes these values off-main and rechecks the store before
+    /// accepting them. Synchronous collectors use exactly the same rules.
+    func documentRetentionSnapshot(excludingNoteID excluded: UUID? = nil) throws -> NoteDocumentRetentionSnapshot {
+        let notes = try modelContext.fetch(FetchDescriptor<NoteItem>(predicate: #Predicate { $0.contentFormat >= 1 }))
+            .filter { $0.id != excluded }.map(\.content)
+        let versions = try modelContext.fetch(FetchDescriptor<NoteVersion>())
+            .filter { $0.noteID != excluded }.map {
+                NoteDocumentRetentionSnapshot.Version(format: $0.contentFormat, content: $0.content, attachmentIDsRaw: $0.attachmentIDsRaw)
+            }
+        let proposals = try modelContext.fetch(FetchDescriptor<NotePendingEdit>())
+            .filter { $0.noteID != excluded }.map(\.proposedContent)
+        return NoteDocumentRetentionSnapshot(notes: notes, versions: versions, proposals: proposals)
     }
 
     /// Stages the removal of purged notes' versions and pending edits.

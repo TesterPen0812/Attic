@@ -2846,6 +2846,61 @@ extension NoteSlice3bTests {
     }
 }
 
+// MARK: Fix round 6: retention decoding
+
+@MainActor
+extension NoteSlice3bTests {
+    func testRetentionProviderDecodesEveryDocumentOwnerOffMain() async throws {
+        let files = makeTestAttachmentFileStore(), store = try makeTestNoteStore(attachmentFileStore: files), item = staged(), id = UUID()
+        await store.waitForAttachmentReconciliation()
+        let document = NoteDocument(blocks: [.text("Owner"), .file(attachmentID: item.id, filename: item.filename,
+            contentTypeIdentifier: item.contentTypeIdentifier, byteCount: item.byteCount)])
+        let data = try NoteContentCodec.encode(document)
+        let note = NoteItem(id: id, title: "Owner", body: "", createdAt: Date(), updatedAt: Date())
+        note.contentFormat = 1; note.content = data
+        store.modelContext.insert(note)
+        store.modelContext.insert(NoteVersion(noteID: id, createdAt: Date(), reason: .leave, content: data,
+            contentFormat: 1, title: "Owner", body: "", attachmentIDs: [], sourceRevisionID: nil))
+        store.modelContext.insert(NotePendingEdit(noteID: id, baseRevisionToken: "base", proposedContent: data, agentName: "Agent", createdAt: Date()))
+        XCTAssertTrue(store.commitStagedChanges())
+        let reference = AttachmentFileReference(id: item.id, digest: item.digest, filename: item.filename, payload: item.data)
+        let materialized = try await files.ensureMaterialized(reference)
+        let url = try XCTUnwrap(materialized)
+        let recorder = PayloadThreadRecorder()
+        store.retentionDecodeObserver = { recorder.record(Thread.isMainThread, 1) }
+        try await files.removeMaterializations([reference])
+        XCTAssertEqual(recorder.snapshot.count, 3, "note, version without cached IDs, and proposal")
+        XCTAssertFalse(recorder.snapshot.contains { $0.0 })
+        XCTAssertTrue(FileManager.default.fileExists(atPath: url.path))
+        store.retentionDecodeObserver = nil
+    }
+
+    func testRetentionRefusesDestructionWhenStoreChangesDuringDecoding() async throws {
+        let files = makeTestAttachmentFileStore(), store = try makeTestNoteStore(attachmentFileStore: files), item = staged(), id = UUID()
+        guard case .success = store.createDocumentNote(id: id, document: NoteDocument(blocks: [.text("Initial")])) else { return XCTFail() }
+        await store.waitForAttachmentReconciliation()
+        let reference = AttachmentFileReference(id: item.id, digest: item.digest, filename: item.filename, payload: item.data)
+        let materialized = try await files.ensureMaterialized(reference), url = try XCTUnwrap(materialized)
+        let barrier = LocateReadBarrier()
+        defer { barrier.resume(); store.retentionDecodeObserver = nil }
+        store.retentionDecodeObserver = { barrier.observe(main: Thread.isMainThread, bytes: 12_345) }
+        let removal = Task { try await files.removeMaterializations([reference]) }
+        try await waitFor { barrier.started }
+        let document = NoteDocument(blocks: [.text("New owner"), .file(attachmentID: item.id, filename: item.filename,
+            contentTypeIdentifier: item.contentTypeIdentifier, byteCount: item.byteCount)])
+        store.modelContext.insert(NoteVersion(noteID: id, createdAt: Date(), reason: .leave,
+            content: try NoteContentCodec.encode(document), contentFormat: 1, title: "New owner", body: "",
+            attachmentIDs: [], sourceRevisionID: nil))
+        XCTAssertTrue(store.commitStagedChanges())
+        barrier.resume()
+        try await removal.value
+        XCTAssertTrue(FileManager.default.fileExists(atPath: url.path), "stale aggregate inventory cannot authorize removal")
+        store.retentionDecodeObserver = nil
+        try await files.removeMaterializations([reference])
+        XCTAssertTrue(FileManager.default.fileExists(atPath: url.path), "the newly saved version owns these bytes")
+    }
+}
+
 /// Hydration and availability may verify the same family concurrently. Hold
 /// every matching reader so neither can warm the other's cache prematurely.
 private final class AllPayloadReadBarrier: @unchecked Sendable {

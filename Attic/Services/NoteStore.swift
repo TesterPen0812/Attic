@@ -390,19 +390,37 @@ final class NoteStore: ObservableObject {
 #if os(macOS)
         resolvedAttachmentFileStore.registerByteOwners(UUID()) { [weak self] in
             guard let owner = self else { return nil }
-            return await MainActor.run {
-                do {
-                    var ids = try owner.documentReferencedAttachmentIDs()
-                    ids.formUnion(try owner.context.fetch(FetchDescriptor<NoteAttachment>()).map(\.id))
-                    return ids
-                } catch { return nil }
-            }
+            return await owner.retainedAttachmentIDsForFiles()
         }
 #endif
         refresh()
         observeRemoteChanges()
         observeCloudKitEvents()
     }
+
+#if os(macOS)
+    /// Test observer for the actual retention-provider decoding worker.
+    var retentionDecodeObserver: (@Sendable () -> Void)?
+
+    private func retainedAttachmentIDsForFiles() async -> Set<UUID>? {
+        do {
+            let generation = revision
+            let snapshot = try documentRetentionSnapshot()
+            let rows = Set(try context.fetch(FetchDescriptor<NoteAttachment>()).map(\.id))
+            let observer = retentionDecodeObserver
+            var ids = try await Task.detached(priority: .utility) {
+                try snapshot.attachmentIDs(observeDecode: observer)
+            }.value
+            // This inventory spans the store, so any concurrent store mutation
+            // makes destruction unsafe. Live editor/recovery owners are reread
+            // after the suspension, including edits that did not save a model.
+            guard revision == generation else { return nil }
+            ids.formUnion(rows)
+            ids.formUnion(try recoveryReferencedAttachmentIDs())
+            return ids
+        } catch { return nil }
+    }
+#endif
 
     @discardableResult
     func create(id: UUID = UUID(), title: String = "", body: String = "") -> NoteItem? {
