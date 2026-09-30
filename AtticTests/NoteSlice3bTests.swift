@@ -1918,7 +1918,7 @@ extension NoteSlice3bTests {
         print("A7 real import+journal: \(elapsed)s; typing median \(sorted[50])ms p95 \(sorted[95])ms max \(sorted.last!)ms; \(hashes.count) off-main large hashes")
         // Include byte retrieval, print preparation and another durable save in
         // the same thread invariant without presenting system UI.
-        store.verifiedAttachmentPayloads.removeAll()
+        store.clearVerifiedAttachmentCache()
         for id in engine.document().attachmentIDs {
             let bytes = await store.verifiedAttachmentBytes(id)
             XCTAssertNotNil(bytes, "stored byte retrieval uses the background verifier")

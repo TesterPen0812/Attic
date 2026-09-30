@@ -414,6 +414,7 @@ extension NoteStore {
         }
         present(note)
         refreshAfterDocumentSave(insertedAttachments: !staged.isEmpty)
+        for item in attachmentPlan.new + attachmentPlan.repairs.map({ $0.1 }) { cacheVerifiedAttachment(item) }
         return .success((id, revisionID))
     }
 
@@ -498,6 +499,7 @@ extension NoteStore {
                 return .failure(.saveFailed(lastErrorMessage ?? "The note could not be saved."))
             }
             refreshAfterDocumentSave(insertedAttachments: !staged.isEmpty || visibilityChanged)
+            for item in attachmentPlan.new + attachmentPlan.repairs.map({ $0.1 }) { cacheVerifiedAttachment(item) }
             documentSaveCommitted?(baseRevisionID, presentedRevisionID)
             return .success(revisionID)
         } catch let error as NoteDocumentStoreError {
@@ -646,7 +648,6 @@ extension NoteStore {
     /// Inserts validated rows; note, rows and versions still save together.
     private func stageAttachments(_ plan: NoteAttachmentAdmission.Plan, noteID: UUID,
                                   context: ModelContext, timestamp: Date) {
-        for item in plan.new + plan.repairs.map({ $0.1 }) { verifiedAttachmentPayloads[item.id] = item }
         for (row, item) in plan.repairs { row.payload = item.data }
         var nextIndex = plan.nextSortIndex
         for item in plan.new {

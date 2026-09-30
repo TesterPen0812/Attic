@@ -212,50 +212,82 @@ final class NoteStore: ObservableObject {
         return nil
     }
 
-    var verifiedAttachmentPayloads: [UUID: StagedNoteAttachment] = [:]
+    private(set) var verifiedAttachmentPayloads: [UUID: StagedNoteAttachment] = [:]
+    private var verifiedPayloadGenerations: [UUID: UInt64] = [:]
+    private var verifiedPayloadRecency: [UUID] = []
+    static let verifiedPayloadCacheByteLimit = 32 * 1_024 * 1_024
+    static let verifiedPayloadCacheCountLimit = 64
+    var verifiedPayloadCacheBytes: Int { verifiedAttachmentPayloads.values.reduce(0) { $0 + $1.data.count } }
 
-    /// Cached immutable verification; never hashes in synchronous admission or
-    /// presentation. Physical metadata and bytes must still match the proof.
+    func clearVerifiedAttachmentCache() {
+        verifiedAttachmentPayloads.removeAll()
+        verifiedPayloadGenerations.removeAll()
+        verifiedPayloadRecency.removeAll()
+    }
+
+    func cacheVerifiedAttachment(_ item: StagedNoteAttachment) {
+        guard item.payloadIsVerified else { return }
+        verifiedAttachmentPayloads[item.id] = item
+        verifiedPayloadGenerations[item.id] = revision
+        verifiedPayloadRecency.removeAll { $0 == item.id }
+        verifiedPayloadRecency.append(item.id)
+        while verifiedPayloadCacheBytes > Self.verifiedPayloadCacheByteLimit
+            || verifiedAttachmentPayloads.count > Self.verifiedPayloadCacheCountLimit {
+            let id = verifiedPayloadRecency.removeFirst()
+            verifiedAttachmentPayloads[id] = nil
+            verifiedPayloadGenerations[id] = nil
+        }
+    }
+
+    /// A proof is generation-bound. This path reads metadata only: external
+    /// payload faults and comparisons belong to the background verifier.
     func cachedVerifiedAttachmentBytes(_ id: UUID) -> StagedNoteAttachment? {
-        guard let proof = verifiedAttachmentPayloads[id], proof.payloadIsVerified else { return nil }
+        guard verifiedPayloadGenerations[id] == revision,
+              let proof = verifiedAttachmentPayloads[id], proof.payloadIsVerified else { return nil }
         let family = attachmentFamily(id)
         guard let first = family.first, family.allSatisfy({ $0.noteID == first.noteID
             && $0.contentDigest == proof.digest && $0.byteCount == proof.byteCount
-            && $0.contentTypeIdentifier == proof.contentTypeIdentifier
-            && ($0.payload == nil || $0.payload == proof.data) }),
-              family.contains(where: { $0.payload != nil }) else { return nil }
+            && $0.contentTypeIdentifier == proof.contentTypeIdentifier }) else { return nil }
+        verifiedPayloadRecency.removeAll { $0 == id }; verifiedPayloadRecency.append(id)
         return proof
     }
 
-    func verifiedAttachmentBytes(_ id: UUID) async -> StagedNoteAttachment? {
+    func verifiedAttachmentBytes(_ id: UUID, allowMaterialized: Bool = true) async -> StagedNoteAttachment? {
         if let cached = cachedVerifiedAttachmentBytes(id) { return cached }
         let family = attachmentFamily(id)
         guard let first = family.first,
               family.allSatisfy({ $0.noteID == first.noteID && $0.contentDigest == first.contentDigest
                   && $0.byteCount == first.byteCount && $0.contentTypeIdentifier == first.contentTypeIdentifier }) else { return nil }
-        let revisionAtRead = revision
+        let revisionAtRead = revision, owner = first.noteID
         let digest = first.contentDigest, count = first.byteCount, name = first.originalFilename, type = first.contentTypeIdentifier
-        let payloads = family.compactMap(\.payload)
-        let data: Data?
-        if let payload = payloads.first {
-            data = await Task.detached(priority: .utility) {
-                guard payloads.allSatisfy({ $0 == payload }) else { return Optional<Data>.none }
-                return payload
-            }.value
-        } else if let url = await materializedURL(for: first, allowRetained: true) {
-            data = try? await Task.detached { try Data(contentsOf: url) }.value
-        } else { data = nil }
-        guard let data else { return nil }
-        let proof = await Task.detached(priority: .utility) {
-            StagedNoteAttachment(id: id, filename: name, contentTypeIdentifier: type,
+        let container = self.container, files = attachmentFileStore
+        let reference = AttachmentFileReference(first, includePayload: false)
+        let verified = await Task.detached(priority: .utility) { () -> (StagedNoteAttachment, Bool)? in
+            // Never transfer live models or fault their external payloads on main.
+            let context = ModelContext(container)
+            guard let rows = try? context.fetch(FetchDescriptor<NoteAttachment>(predicate: #Predicate { $0.id == id })),
+                  !rows.isEmpty, rows.allSatisfy({ $0.noteID == owner && $0.contentDigest == digest
+                    && $0.byteCount == count && $0.contentTypeIdentifier == type }) else { return nil }
+            let payloads = rows.compactMap(\.payload)
+            let data: Data?
+            if let payload = payloads.first {
+                guard payloads.allSatisfy({ $0 == payload }) else { return nil }
+                data = payload
+            } else if allowMaterialized, let url = try? await files.verifiedMaterializedURL(for: reference) {
+                data = try? Data(contentsOf: url)
+            } else { data = nil }
+            guard let data else { return nil }
+            let item = StagedNoteAttachment(id: id, filename: name, contentTypeIdentifier: type,
                 byteCount: count, digest: digest, data: data)
+            return item.payloadIsVerified ? (item, !payloads.isEmpty) : nil
         }.value
         let currentFamily = attachmentFamily(id)
-        guard proof.payloadIsVerified, revision == revisionAtRead, !currentFamily.isEmpty,
-              currentFamily.allSatisfy({ $0.noteID == first.noteID && $0.contentDigest == digest
-                && $0.byteCount == count && $0.contentTypeIdentifier == type
-                && ($0.payload == nil || $0.payload == proof.data) }) else { return nil }
-        verifiedAttachmentPayloads[id] = proof
+        guard let (proof, storedPayload) = verified, revision == revisionAtRead, !currentFamily.isEmpty,
+              currentFamily.allSatisfy({ $0.noteID == owner && $0.contentDigest == digest
+                && $0.byteCount == count && $0.contentTypeIdentifier == type }) else { return nil }
+        // A materialized fallback is readable, but cannot prove a handoff
+        // into the saved document's rows for synchronous retirement.
+        if storedPayload { cacheVerifiedAttachment(proof) }
         verifiedByteAvailability[id] = (revision, digest, true)
         return proof
     }
@@ -1148,14 +1180,13 @@ final class NoteStore: ObservableObject {
             ) {
                 url = existing
             } else {
-                guard let current = attachmentFamily(metadata.id).first(where: {
-                    $0.contentDigest == metadata.digest && $0.payload != nil
-                }) else {
+                guard let bytes = await verifiedAttachmentBytes(metadata.id), bytes.digest == metadata.digest else {
                     reportAttachmentFailure(metadata.id,
                         message: "The original file is missing. Locate it to restore this attachment.")
                     return nil
                 }
-                let reference = AttachmentFileReference(current)
+                let reference = AttachmentFileReference(id: bytes.id, digest: bytes.digest, filename: bytes.filename,
+                    byteCount: bytes.byteCount, payload: bytes.data)
                 guard let repaired = try await attachmentFileStore.ensureMaterialized(reference) else {
                     reportAttachmentFailure(metadata.id, message: "The original file is missing. Locate it to restore this attachment.")
                     return nil
