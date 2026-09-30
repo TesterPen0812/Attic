@@ -331,4 +331,73 @@ final class TasksFollowupSubtaskMoveTests: XCTestCase {
                              "a main task is not moved by this tool")
         XCTAssertTrue(tools.definitions.contains { $0["name"] as? String == "move_subtask" })
     }
+
+    // MARK: - Fix round: divergent replicas (finding 1)
+
+    private let base = Date(timeIntervalSince1970: 1_800_000_000)
+
+    /// Two physical copies of one subtask: the newer (shown) is open, the
+    /// older is finished and carries its completion.
+    private func insertDivergentSubtask(under parent: UUID, parentOfOlder: UUID? = nil) throws -> (id: UUID, finishedAt: Date) {
+        let id = UUID()
+        let finishedAt = base.addingTimeInterval(-3_600)
+        let context = ModelContext(store.container)
+        context.insert(TaskItem(id: id, title: "Book", status: .todo, createdAt: base, updatedAt: base.addingTimeInterval(60), parentID: parent))
+        context.insert(TaskItem(id: id, title: "Book", status: .done, createdAt: base, updatedAt: base, completedAt: finishedAt, parentID: parentOfOlder ?? parent))
+        try context.save()
+        store.refresh()
+        return (id, finishedAt)
+    }
+
+    private func assertCopiesKeepTheirOwnState(_ id: UUID, finishedAt: Date, parent: UUID?, file: StaticString = #filePath, line: UInt = #line) throws {
+        let copies = try rows(id)
+        XCTAssertEqual(copies.count, 2, file: file, line: line)
+        XCTAssertEqual(copies.map(\.parentID), [parent, parent], "every copy is under the same task", file: file, line: line)
+        let open = try XCTUnwrap(copies.first { $0.statusRaw == TaskStatus.todo.rawValue }, "the open copy stays open", file: file, line: line)
+        let finished = try XCTUnwrap(copies.first { $0.statusRaw == TaskStatus.done.rawValue }, "the finished copy stays finished", file: file, line: line)
+        XCTAssertNil(open.completedAt, file: file, line: line)
+        XCTAssertEqual(finished.completedAt, finishedAt, "and keeps when it was finished", file: file, line: line)
+    }
+
+    /// A move writes the parent and the placement, nothing else: the older
+    /// finished copy stays finished (with its completion time) through the
+    /// move, Undo and Redo.
+    func testMovingASubtaskLeavesADivergentCopysCompletionAlone() throws {
+        let trip = try make("Trip")
+        let party = try make("Party")
+        let (id, finishedAt) = try insertDivergentSubtask(under: trip.id)
+
+        XCTAssertTrue(library.moveSubtask(id, toTask: party.id).isApplied)
+        try assertCopiesKeepTheirOwnState(id, finishedAt: finishedAt, parent: party.id)
+        XCTAssertTrue(library.undo(in: .tasks).isApplied)
+        try assertCopiesKeepTheirOwnState(id, finishedAt: finishedAt, parent: trip.id)
+        XCTAssertTrue(library.redo(in: .tasks).isApplied)
+        try assertCopiesKeepTheirOwnState(id, finishedAt: finishedAt, parent: party.id)
+    }
+
+    /// A promotion that keeps the subtask's state writes placement only, so a
+    /// divergent copy keeps its own completion through Undo and Redo too.
+    func testMakingStandaloneLeavesADivergentCopysCompletionAlone() throws {
+        let trip = try make("Trip")
+        let (id, finishedAt) = try insertDivergentSubtask(under: trip.id)
+
+        XCTAssertTrue(library.moveSubtask(id, toTask: nil).isApplied)
+        try assertCopiesKeepTheirOwnState(id, finishedAt: finishedAt, parent: nil)
+        XCTAssertTrue(library.undo(in: .tasks).isApplied)
+        try assertCopiesKeepTheirOwnState(id, finishedAt: finishedAt, parent: trip.id)
+        XCTAssertTrue(library.redo(in: .tasks).isApplied)
+        try assertCopiesKeepTheirOwnState(id, finishedAt: finishedAt, parent: nil)
+    }
+
+    /// An open subtask of a Later task stays in Later when it becomes a task
+    /// of its own: that changes its state, so copies that disagree about
+    /// their completion refuse it before anything is written.
+    func testPromotionThatChangesStateRefusesCopiesWithDifferentCompletion() throws {
+        let later = try make("Later trip", .backlog)
+        let (id, finishedAt) = try insertDivergentSubtask(under: later.id)
+
+        XCTAssertFalse(library.moveSubtask(id, toTask: nil).isApplied)
+        try assertCopiesKeepTheirOwnState(id, finishedAt: finishedAt, parent: later.id)
+        XCTAssertNil(library.undo.undoName(in: .tasks), "no step was recorded")
+    }
 }

@@ -2853,8 +2853,9 @@ final class TaskStore: ObservableObject {
             var status = task.status
             var order: Int64?
             if let newParentID {
-                guard try canHoldSubtask(id, under: newParentID, isOpen: task.status != .done),
-                      self.task(withID: newParentID)?.status != .done else {
+                // The destination must be an unfinished main task on every
+                // copy, whatever state the subtask is in.
+                guard try canHoldSubtask(id, under: newParentID, isOpen: true) else {
                     throw TaskEditRefusal("A subtask can only move to an unfinished main task.")
                 }
                 let group = subtasks(of: newParentID).filter { ($0.status == .done) == (task.status == .done) }
@@ -2867,6 +2868,16 @@ final class TaskStore: ObservableObject {
                 }
             } else {
                 status = Self.standaloneStatus(of: task, parent: oldParent)
+                // A promotion that changes the state (an open subtask of a
+                // Later task stays in Later) writes it on every copy, so the
+                // copies must agree about it first. One that keeps the state
+                // writes placement only.
+                if status != task.status {
+                    let shownCompletion = Self.completionKey(task)
+                    guard replicas.allSatisfy({ Self.completionKey($0) == shownCompletion }) else {
+                        throw TaskEditRefusal("This subtask’s copies disagree about whether it is finished. Refresh and try again.")
+                    }
+                }
                 let group = orderedTasks(for: status).filter { $0.parentID == nil || parent(of: $0) == nil }
                 if oldParent.status == status, let index = group.firstIndex(where: { $0.id == oldParentID }) {
                     var placed = group
@@ -2881,11 +2892,16 @@ final class TaskStore: ObservableObject {
             wrote = true
             let shown = TaskContentSnapshot(task)
             let agreeing = Set(replicas.filter { $0 === task || TaskContentSnapshot($0) == shown }.map(\.persistentModelID))
+            // Parent and placement only: a copy's own state (completion,
+            // title, tags…) is never written by a move, and a field that
+            // already holds its value is left alone.
             for replica in replicas {
-                replica.parentID = newParentID
-                if replica.status != status { replica.status = status }
-                replica.manualOrder = order
-                replica.listOrderVersion = TaskItem.currentListOrderVersion
+                if replica.parentID != newParentID { replica.parentID = newParentID }
+                if status != task.status, replica.status != status { replica.status = status }
+                if replica.manualOrder != order { replica.manualOrder = order }
+                if replica.listOrderVersion != TaskItem.currentListOrderVersion {
+                    replica.listOrderVersion = TaskItem.currentListOrderVersion
+                }
                 if agreeing.contains(replica.persistentModelID) { replica.updatedAt = timestamp }
             }
         } catch {
@@ -2897,16 +2913,35 @@ final class TaskStore: ObservableObject {
         return save(owner: owner)
     }
 
+    /// A task's state of completion, as one comparable value.
+    private struct CompletionKey: Equatable {
+        let statusRaw: String
+        let completedAt: Date?
+        let fromRaw: String?
+        let fromOrder: Int64?
+    }
+
+    private static func completionKey(_ task: TaskItem) -> CompletionKey {
+        CompletionKey(statusRaw: task.statusRaw, completedAt: task.completedAt,
+                      fromRaw: task.completedFromRaw, fromOrder: task.completedFromOrder)
+    }
+
+    private static func completionKey(_ state: TaskEditableState) -> CompletionKey {
+        CompletionKey(statusRaw: state.statusRaw, completedAt: state.completedAt,
+                      fromRaw: state.completedFromRaw, fromOrder: state.completedFromOrder)
+    }
+
     /// Whether `parentID` can hold `childID` as a subtask: a different task,
     /// live on every copy (not in Recently Deleted or the Done log), a main
-    /// task, not finished while the subtask is open; and the child has no
-    /// subtasks of its own, so the hierarchy stays one level deep.
+    /// task, unfinished on every copy while the subtask is open; and the
+    /// child has no subtasks of its own, so the hierarchy stays one level
+    /// deep.
     private func canHoldSubtask(_ childID: UUID, under parentID: UUID, isOpen: Bool) throws -> Bool {
         guard parentID != childID, let shownParent = task(withID: parentID), shownParent.parentID == nil else { return false }
         let doneRaw = TaskStatus.done.rawValue
         let parents = try context.fetch(FetchDescriptor<TaskItem>(predicate: #Predicate { $0.id == parentID }))
         guard !parents.isEmpty, parents.allSatisfy({ $0.parentID == nil && $0.deletedAt == nil && $0.doneLoggedAt == nil }),
-              !isOpen || shownParent.statusRaw != doneRaw else { return false }
+              !isOpen || parents.allSatisfy({ $0.statusRaw != doneRaw }) else { return false }
         var children = FetchDescriptor<TaskItem>(predicate: #Predicate { $0.parentID == childID && $0.deletedAt == nil })
         children.fetchLimit = 1
         return try context.fetch(children).isEmpty
