@@ -186,26 +186,55 @@ final class NoteStore: ObservableObject {
     var documentSaveCommitted: ((UUID?, UUID?) -> Void)?
     /// Recovery checkpoints can reference image rows after the note itself
     /// disappears. A failed read must stop purging rather than guess.
-    private var verifiedByteAvailability: [UUID: (UInt64, String, Bool)] = [:]
+    private struct AttachmentProofKey: Equatable {
+        let contextGeneration: UInt64
+        let familyGeneration: UInt64
+        let owner: UUID
+        let digest: String
+        let byteCount: Int64
+        let type: String
+    }
+    private var attachmentProofContextGeneration: UInt64 = 0
+    private var attachmentFamilyGenerations: [UUID: UInt64] = [:]
+    private var verifiedByteAvailability: [UUID: (AttachmentProofKey, Bool)] = [:]
     private var verifyingByteAvailability = Set<UUID>()
+
+    private func attachmentProofKey(_ id: UUID) -> AttachmentProofKey? {
+        let family = attachmentFamily(id)
+        guard let first = family.first, family.allSatisfy({ $0.noteID == first.noteID
+            && $0.contentDigest == first.contentDigest && $0.byteCount == first.byteCount
+            && $0.contentTypeIdentifier == first.contentTypeIdentifier }) else { return nil }
+        return AttachmentProofKey(contextGeneration: attachmentProofContextGeneration,
+            familyGeneration: attachmentFamilyGenerations[id, default: 0], owner: first.noteID,
+            digest: first.contentDigest, byteCount: first.byteCount, type: first.contentTypeIdentifier)
+    }
+
+    /// Invalidate only physical attachment families touched by this transaction,
+    /// including payload-only repairs whose metadata and digest did not change.
+    private func invalidateAttachmentProofs(in transaction: ModelContext) {
+        let changed = transaction.insertedModelsArray + transaction.changedModelsArray + transaction.deletedModelsArray
+        for id in Set(changed.compactMap { ($0 as? NoteAttachment)?.id }) {
+            attachmentFamilyGenerations[id, default: 0] &+= 1
+            verifiedAttachmentPayloads[id] = nil
+            verifiedPayloadGenerations[id] = nil
+            verifiedByteAvailability[id] = nil
+            verifiedPayloadRecency.removeAll { $0 == id }
+        }
+    }
 
     /// nil means verification is pending, rather than pretending that payload
     /// presence proves intact bytes. Agent responses expose that uncertainty.
     func knownAttachmentAvailability(_ id: UUID) -> Bool? {
-        let family = attachmentFamily(id)
-        guard let first = family.first else { return false }
-        guard family.allSatisfy({ $0.noteID == first.noteID && $0.contentDigest == first.contentDigest
-            && $0.byteCount == first.byteCount }) else { return false }
+        guard let key = attachmentProofKey(id) else { return false }
         if cachedVerifiedAttachmentBytes(id) != nil { return true }
-        if let known = verifiedByteAvailability[id], known.0 == revision, known.1 == first.contentDigest { return known.2 }
+        if let known = verifiedByteAvailability[id], known.0 == key { return known.1 }
         if verifyingByteAvailability.insert(id).inserted {
-            let generation = revision, digest = first.contentDigest
             Task { @MainActor [weak self] in
                 guard let self else { return }
                 let available = await self.verifiedAttachmentBytes(id) != nil
                 self.verifyingByteAvailability.remove(id)
-                if self.revision == generation, self.attachmentFamily(id).first?.contentDigest == digest {
-                    self.verifiedByteAvailability[id] = (generation, digest, available)
+                if self.attachmentProofKey(id) == key {
+                    self.verifiedByteAvailability[id] = (key, available)
                 }
             }
         }
@@ -213,13 +242,16 @@ final class NoteStore: ObservableObject {
     }
 
     private(set) var verifiedAttachmentPayloads: [UUID: StagedNoteAttachment] = [:]
-    private var verifiedPayloadGenerations: [UUID: UInt64] = [:]
+    private var verifiedPayloadGenerations: [UUID: AttachmentProofKey] = [:]
     private var verifiedPayloadRecency: [UUID] = []
     static let verifiedPayloadCacheByteLimit = 32 * 1_024 * 1_024
     static let verifiedPayloadCacheCountLimit = 64
     var verifiedPayloadCacheBytes: Int { verifiedAttachmentPayloads.values.reduce(0) { $0 + $1.data.count } }
 
     func clearVerifiedAttachmentCache() {
+        attachmentProofContextGeneration &+= 1
+        attachmentFamilyGenerations.removeAll()
+        verifiedByteAvailability.removeAll()
         verifiedAttachmentPayloads.removeAll()
         verifiedPayloadGenerations.removeAll()
         verifiedPayloadRecency.removeAll()
@@ -228,7 +260,7 @@ final class NoteStore: ObservableObject {
     func cacheVerifiedAttachment(_ item: StagedNoteAttachment) {
         guard item.payloadIsVerified else { return }
         verifiedAttachmentPayloads[item.id] = item
-        verifiedPayloadGenerations[item.id] = revision
+        verifiedPayloadGenerations[item.id] = attachmentProofKey(item.id)
         verifiedPayloadRecency.removeAll { $0 == item.id }
         verifiedPayloadRecency.append(item.id)
         while verifiedPayloadCacheBytes > Self.verifiedPayloadCacheByteLimit
@@ -239,10 +271,10 @@ final class NoteStore: ObservableObject {
         }
     }
 
-    /// A proof is generation-bound. This path reads metadata only: external
+    /// A proof belongs to its attachment family and installed context. This path reads metadata only: external
     /// payload faults and comparisons belong to the background verifier.
     func cachedVerifiedAttachmentBytes(_ id: UUID) -> StagedNoteAttachment? {
-        guard verifiedPayloadGenerations[id] == revision,
+        guard let key = attachmentProofKey(id), verifiedPayloadGenerations[id] == key,
               let proof = verifiedAttachmentPayloads[id], proof.payloadIsVerified else { return nil }
         let family = attachmentFamily(id)
         guard let first = family.first, family.allSatisfy({ $0.noteID == first.noteID
@@ -258,7 +290,8 @@ final class NoteStore: ObservableObject {
         guard let first = family.first,
               family.allSatisfy({ $0.noteID == first.noteID && $0.contentDigest == first.contentDigest
                   && $0.byteCount == first.byteCount && $0.contentTypeIdentifier == first.contentTypeIdentifier }) else { return nil }
-        let revisionAtRead = revision, owner = first.noteID
+        guard let keyAtRead = attachmentProofKey(id) else { return nil }
+        let owner = first.noteID
         let digest = first.contentDigest, count = first.byteCount, name = first.originalFilename, type = first.contentTypeIdentifier
         let container = self.container, files = attachmentFileStore
         let reference = AttachmentFileReference(first, includePayload: false)
@@ -282,13 +315,13 @@ final class NoteStore: ObservableObject {
             return item.payloadIsVerified ? (item, !payloads.isEmpty) : nil
         }.value
         let currentFamily = attachmentFamily(id)
-        guard let (proof, storedPayload) = verified, revision == revisionAtRead, !currentFamily.isEmpty,
+        guard let (proof, storedPayload) = verified, attachmentProofKey(id) == keyAtRead, !currentFamily.isEmpty,
               currentFamily.allSatisfy({ $0.noteID == owner && $0.contentDigest == digest
                 && $0.byteCount == count && $0.contentTypeIdentifier == type }) else { return nil }
         // A materialized fallback is readable, but cannot prove a handoff
         // into the saved document's rows for synchronous retirement.
         if storedPayload { cacheVerifiedAttachment(proof) }
-        verifiedByteAvailability[id] = (revision, digest, true)
+        verifiedByteAvailability[id] = (keyAtRead, true)
         return proof
     }
 
@@ -1498,6 +1531,7 @@ final class NoteStore: ObservableObject {
     @discardableResult
     private func save() -> Bool {
         do {
+            invalidateAttachmentProofs(in: context)
             #if os(macOS)
             try PerformanceSignposts.storeSave { try persist(context) }
             #else
@@ -1554,6 +1588,7 @@ final class NoteStore: ObservableObject {
         using sourceContext: ModelContext
     ) {
         context = sourceContext
+        clearVerifiedAttachmentCache()
         documentReplicaCapabilityCache.removeAll()
         let uniqueNotes = visibleUniqueNotes(from: presentation.notes)
         notes = uniqueNotes.filter { $0.deletedAt == nil }
@@ -1574,6 +1609,7 @@ final class NoteStore: ObservableObject {
         fallbackPresentation: NotePresentationSnapshot
     ) -> NotePersistenceRefreshOutcome {
         do {
+            invalidateAttachmentProofs(in: transactionContext)
             try persist(transactionContext)
             registerSuccessfulLocalSave()
         } catch {
@@ -1609,6 +1645,7 @@ final class NoteStore: ObservableObject {
 
     private func installPresentation(_ fetchedNotes: [NoteItem], using sourceContext: ModelContext) {
         context = sourceContext
+        clearVerifiedAttachmentCache()
         documentReplicaCapabilityCache.removeAll()
         notes = visibleUniqueNotes(from: fetchedNotes).filter { $0.deletedAt == nil }
         revision &+= 1

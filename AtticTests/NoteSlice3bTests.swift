@@ -2620,3 +2620,106 @@ extension NoteSlice3bTests {
         await XCTAssertTrueAsync(await controller.deleteNoteDurably(noteID: id))
     }
 }
+
+// MARK: Fix round 6: attachment-family proofs
+
+@MainActor
+extension NoteSlice3bTests {
+    func testReviewerSyncOpenCopyAfterUnrelatedSave() async throws {
+        for (launchPresented, duplicate) in [(false, false), (false, true), (true, false), (true, true)] {
+            let store = try makeTestNoteStore(attachmentFileStore: makeTestAttachmentFileStore())
+            let source = UUID(), dest = UUID(), item = staged()
+            let document = NoteDocument(blocks: [.text("Source"), .file(attachmentID: item.id,
+                filename: item.filename, contentTypeIdentifier: item.contentTypeIdentifier, byteCount: item.byteCount)])
+            guard case .success = store.createDocumentNote(id: source, document: document, staged: [item]),
+                  case .success = store.createDocumentNote(id: dest, document: NoteDocument(blocks: [.text("Destination")])) else { return XCTFail() }
+            let suite = "N2-\(UUID())", defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+            defer { defaults.removePersistentDomain(forName: suite) }
+            defaults.set(source.uuidString, forKey: "notes.lastViewedNote.v2")
+            let controller = NotesPageController(store: store, journal: nil, defaults: defaults, saveDelay: .seconds(60))
+            if launchPresented { controller.start() } else { XCTAssertTrue(controller.open(noteID: source)) }
+            let session = try XCTUnwrap(controller.active)
+            XCTAssertEqual(session.noteID, source)
+            await XCTAssertEqualAsync(await store.verifiedAttachmentBytes(item.id), item)
+            let fragment = try NoteContentCodec.encode(session.engine.fragment(for: NSRange(location: 0,
+                length: session.engine.textStorage.length)), context: .fragment)
+            XCTAssertTrue(controller.open(noteID: dest))
+            let destination = try XCTUnwrap(controller.active)
+            XCTAssertTrue(destination.engine.performEdit(NSRange(location: 0, length: 0), with: NSAttributedString(string: "Edited "), name: "Typing"))
+            XCTAssertTrue(controller.save(destination))
+            XCTAssertNotNil(store.cachedVerifiedAttachmentBytes(item.id), "unrelated prose save preserves the family's proof")
+            if duplicate {
+                XCTAssertTrue(controller.open(noteID: source))
+                XCTAssertTrue(controller.duplicateNote(noteID: source))
+                let copy = try XCTUnwrap(controller.active)
+                let copiedID = try XCTUnwrap(copy.engine.document().attachmentIDs.first)
+                XCTAssertNotEqual(copiedID, item.id)
+                await XCTAssertEqualAsync(await store.verifiedAttachmentBytes(copiedID)?.data, item.data)
+            } else {
+                XCTAssertTrue(destination.engine.paste(fragmentData: fragment, at: NSRange(location: destination.engine.textStorage.length, length: 0)))
+                XCTAssertEqual(destination.engine.document().attachmentIDs.count, 1)
+            }
+        }
+    }
+
+    func testAttachmentProofInvalidatesOnlyTouchedFamilyAndFreshPresentation() async throws {
+        let store = try makeTestNoteStore(attachmentFileStore: makeTestAttachmentFileStore())
+        let items = [staged(), staged()], id = UUID()
+        let document = NoteDocument(blocks: [.text("Files")] + items.map {
+            .file(attachmentID: $0.id, filename: $0.filename, contentTypeIdentifier: $0.contentTypeIdentifier, byteCount: $0.byteCount)
+        })
+        guard case .success = store.createDocumentNote(id: id, document: document, staged: items) else { return XCTFail() }
+        for item in items { await XCTAssertNotNilAsync(await store.verifiedAttachmentBytes(item.id)) }
+        let row = try XCTUnwrap(store.attachmentFamily(items[0].id).first)
+        // Payload-only corruption deliberately keeps the old digest metadata.
+        row.payload = Data("bad".utf8)
+        XCTAssertTrue(store.commitStagedChanges())
+        XCTAssertNil(store.cachedVerifiedAttachmentBytes(items[0].id))
+        XCTAssertNotNil(store.cachedVerifiedAttachmentBytes(items[1].id), "another family in the same note retains its proof")
+        await XCTAssertNilAsync(await store.verifiedAttachmentBytes(items[0].id))
+        row.payload = nil
+        XCTAssertTrue(store.commitStagedChanges())
+        guard case .success = store.saveDocument(noteID: id, document: document,
+            baseRevisionID: store.loadDocument(noteID: id)?.revisionID, staged: [items[0]]) else { return XCTFail() }
+        await XCTAssertEqualAsync(await store.verifiedAttachmentBytes(items[0].id), items[0])
+        store.refresh()
+        XCTAssertNil(store.cachedVerifiedAttachmentBytes(items[0].id), "fresh presentation requires new proof")
+        await XCTAssertEqualAsync(await store.verifiedAttachmentBytes(items[0].id), items[0])
+        await store.waitForAttachmentReconciliation()
+        for replica in store.attachmentFamily(items[0].id) { store.modelContext.delete(replica) }
+        XCTAssertTrue(store.commitStagedChanges())
+        XCTAssertNil(store.cachedVerifiedAttachmentBytes(items[0].id))
+        await XCTAssertNilAsync(await store.verifiedAttachmentBytes(items[0].id))
+        store.refresh()
+        await store.waitForAttachmentReconciliation()
+    }
+
+    func testAttachmentVerifierAcceptsUnrelatedSaveAndRejectsFamilyOrContextChange() async throws {
+        enum Change: CaseIterable { case unrelated, payload, freshContext }
+        for change in Change.allCases {
+            let store = try makeTestNoteStore(attachmentFileStore: makeTestAttachmentFileStore()), item = stagedSized("proof.pdf", bytes: 12_345), id = UUID()
+            let document = NoteDocument(blocks: [.text("Proof"), .file(attachmentID: item.id, filename: item.filename,
+                contentTypeIdentifier: item.contentTypeIdentifier, byteCount: item.byteCount)])
+            guard case .success = store.createDocumentNote(id: id, document: document, staged: [item]) else { return XCTFail() }
+            await store.waitForAttachmentReconciliation()
+            store.clearVerifiedAttachmentCache()
+            let barrier = LocateReadBarrier()
+            defer { barrier.resume(); NotePayloadDigest.observe(nil) }
+            NotePayloadDigest.observe { barrier.observe(main: $0, bytes: $1) }
+            let verification = Task { @MainActor in await store.verifiedAttachmentBytes(item.id) }
+            try await waitFor { barrier.started }
+            switch change {
+            case .unrelated: XCTAssertNotNil(store.create(title: "Other", body: "Saved"))
+            case .payload:
+                try XCTUnwrap(store.attachmentFamily(item.id).first).payload = Data("bad".utf8)
+                XCTAssertTrue(store.commitStagedChanges())
+            case .freshContext: store.refresh()
+            }
+            barrier.resume()
+            let result = await verification.value
+            if change == .unrelated { XCTAssertEqual(result, item) }
+            else { XCTAssertNil(result) }
+            await store.waitForAttachmentReconciliation()
+        }
+    }
+}
