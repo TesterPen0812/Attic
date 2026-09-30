@@ -56,7 +56,19 @@ final class TasksRound13UITests: XCTestCase {
         beforeReturn.name = "menu before Return"
         beforeReturn.lifetime = .keepAlways
         add(beforeReturn)
+        let beforeTree = XCTAttachment(string: app.debugDescription)
+        beforeTree.name = "accessibility before Return"
+        beforeTree.lifetime = .keepAlways
+        add(beforeTree)
         app.typeKey(.return, modifierFlags: [])
+        let afterReturn = XCTAttachment(screenshot: app.screenshot())
+        afterReturn.name = "menu after Return"
+        afterReturn.lifetime = .keepAlways
+        add(afterReturn)
+        let afterTree = XCTAttachment(string: app.debugDescription)
+        afterTree.name = "accessibility after Return"
+        afterTree.lifetime = .keepAlways
+        add(afterTree)
         func editors(_ label: String) -> XCUIElementQuery {
             app.descendants(matching: .any).matching(NSPredicate(format: "label == %@", label))
         }

@@ -124,6 +124,33 @@ final class TasksRound13Tests: XCTestCase {
         XCTAssertNil(hosted.model.editingTitleID, "and did not edit the parent's title")
     }
 
+    /// Window-server input, as used by computer-use and XCTest, rather than
+    /// NSApp.postEvent's preassigned window. The real menu receives eight
+    /// Down presses followed by Return down/up while the page remains focused.
+    func testCoreGraphicsReturnInTheActionsMenuOpensTheHighlightedSubtaskEditor() throws {
+        let hosted = try Hosted(height: 520)
+        defer { hosted.close() }
+        let row = try XCTUnwrap(hosted.model.rows(for: .now).first { $0.model.title == "Call the plumber" }?.id)
+        try hosted.clickRow(row, tab: .now)
+        let codes: [CGKeyCode] = Array(repeating: 125, count: 8) + [36]
+        var timers: [Timer] = []
+        defer { timers.forEach { $0.invalidate() } }
+        for (index, code) in (codes + [53]).enumerated() {
+            let delay = 0.8 + Double(index) * 0.25 + (code == 53 ? 2.5 : 0)
+            let timer = Timer(timeInterval: delay, repeats: false) { _ in
+                for down in [true, false] {
+                    CGEvent(keyboardEventSource: nil, virtualKey: code, keyDown: down)?.postToPid(getpid())
+                }
+            }
+            timers.append(timer)
+            RunLoop.main.add(timer, forMode: .common)
+        }
+        hosted.press("i", keyCode: 34, modifiers: [.command, .shift])
+        hosted.spin(1.5)
+        XCTAssertEqual(hosted.model.newSubtaskParentID, row)
+        XCTAssertNil(hosted.model.editingTitleID)
+    }
+
     /// A pop-up menu shows a bare key's shortcut (Return beside Edit Title)
     /// but never answers it as a key equivalent; ⌘ shortcuts still work.
     func testPopUpMenusShowBareShortcutsButAnswerOnlyModifiedOnes() {

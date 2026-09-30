@@ -202,7 +202,8 @@ struct TasksPage: View {
         #endif
         if findMonitor == nil {
             findMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { event in
-                findPressed(event) || searchEscapePressed(event) || editorEscapePressed(event) || pageEscapePressed(event)
+                AtticMenuKeyTrace.record("page monitor \(event.keyCode)")
+                return findPressed(event) || searchEscapePressed(event) || editorEscapePressed(event) || pageEscapePressed(event)
                     || undoPressed(event) || taskShortcutPressed(event) ? nil : event
             }
         }
@@ -1326,6 +1327,7 @@ struct TasksPage: View {
         if single {
             list.append(AtticMenuCommand(verbatim: String(localized: "Edit Title"), shortcut: AtticTaskShortcut.editTitle,
                                          startsSection: true) {
+                AtticMenuKeyTrace.record("Edit Title command")
                 guard !AtticTextInput.ownsCurrentKey else { return }
                 let id = menuRowID(key)
                 model.selectOnly(id)
@@ -1646,6 +1648,7 @@ struct TasksPage: View {
     /// ⌘Z and ⇧⌘Z undo and redo. Space, ⇧Space, ⌘B, Delete and ⌘Return are
     /// the row's own (`AtticTaskKeys`).
     private func pageKey(_ press: KeyPress) -> KeyPress.Result {
+        AtticMenuKeyTrace.record("pageKey \(press.characters.debugDescription)")
         // A field that is typing keeps every key, ⌘Z included (round 5:
         // the owner's Backspace in the tag picker deleted the task).
         guard !AtticTextInput.hasKeyboard else { return .ignored }

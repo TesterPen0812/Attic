@@ -1170,6 +1170,20 @@ private struct AtticMenuBadge: ViewModifier {
 /// menu, shown for reference: inside the open menu those keys belong to the
 /// menu (↓ highlights, Return activates the highlighted item), never to the
 /// item whose hint they are.
+@MainActor
+enum AtticMenuKeyTrace {
+    static func record(_ point: String) {
+        #if DEBUG
+        guard ProcessInfo.processInfo.environment["ATTIC_UI_TESTING"] == "1"
+            || ProcessInfo.processInfo.environment["TEST_RUNNER_ATTIC_KEY_WINDOW_TESTS"] == "1" else { return }
+        let event = NSApp.currentEvent
+        NSLog("ATTIC_MENU_KEY %@ type=%ld key=%ld time=%.6f mode=%@", point,
+              event?.type.rawValue ?? 0, Int(event?.keyCode ?? 0), event?.timestamp ?? 0,
+              RunLoop.current.currentMode?.rawValue ?? "nil")
+        #endif
+    }
+}
+
 final class AtticPopUpMenu: NSMenu, NSMenuDelegate {
     /// The item last highlighted (↓, ↑ or the pointer). Real menu tracking
     /// matches a bare Return against Edit Title's "\r" hint before it looks
@@ -1188,10 +1202,15 @@ final class AtticPopUpMenu: NSMenu, NSMenuDelegate {
     }
 
     func menu(_ menu: NSMenu, willHighlight item: NSMenuItem?) {
+        MainActor.assumeIsolated { AtticMenuKeyTrace.record("highlight \(item?.title ?? "nil")") }
         if let item { lastHighlighted = item }
     }
 
+    func menuWillOpen(_ menu: NSMenu) { MainActor.assumeIsolated { AtticMenuKeyTrace.record("willOpen") } }
+    func menuDidClose(_ menu: NSMenu) { MainActor.assumeIsolated { AtticMenuKeyTrace.record("didClose") } }
+
     override func performKeyEquivalent(with event: NSEvent) -> Bool {
+        MainActor.assumeIsolated { AtticMenuKeyTrace.record("performKeyEquivalent \(event.keyCode)") }
         guard event.modifierFlags.intersection([.command, .control, .option]).isEmpty == false else { return false }
         return super.performKeyEquivalent(with: event)
     }
@@ -1284,7 +1303,9 @@ enum AtticNativeMenu {
         let location = point ?? CGPoint(x: 0, y: view.isFlipped ? view.bounds.maxY + 4 : -4)
         DispatchQueue.main.async {
             guard view.window != nil else { return }
+            AtticMenuKeyTrace.record("popUp enter")
             menu.popUp(positioning: nil, at: location, in: view)
+            AtticMenuKeyTrace.record("popUp return")
         }
     }
 }
@@ -1302,6 +1323,7 @@ final class AtticMenuTarget: NSObject {
     /// Not `perform(_:)`: that is NSObject's `performSelector:`, which the
     /// selector resolved to, so a chosen item ran nothing (round 10, CI run 2).
     @objc func runCommand(_ item: NSMenuItem) {
+        AtticMenuKeyTrace.record("runCommand \(item.title)")
         // A bare key (Return, Space, Delete) pressed in the open menu belongs
         // to the menu: it runs the highlighted item, not the item whose hint
         // the key is. The hints stay for display; the match is redirected.
