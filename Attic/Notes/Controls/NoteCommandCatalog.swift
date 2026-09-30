@@ -132,9 +132,9 @@ enum NoteCommandCatalog {
 
     /// "⌃⌥⇧⌘" then one key: a character, "Return", "↑" or "↓".
     static func parseShortcut(_ label: String) -> KeyboardShortcut? {
-        var modifiers: EventModifiers = []
+        var modifiers: SwiftUI.EventModifiers = []
         var rest = Substring(label)
-        let symbols: [(Character, EventModifiers)] = [("⌃", .control), ("⌥", .option), ("⇧", .shift), ("⌘", .command)]
+        let symbols: [(Character, SwiftUI.EventModifiers)] = [("⌃", .control), ("⌥", .option), ("⇧", .shift), ("⌘", .command)]
         while let first = rest.first, let match = symbols.first(where: { $0.0 == first }) {
             modifiers.insert(match.1)
             rest = rest.dropFirst()
@@ -214,7 +214,7 @@ enum NoteCommandCatalog {
         }
     }
 
-    static func modifierFlags(_ modifiers: EventModifiers) -> NSEvent.ModifierFlags {
+    static func modifierFlags(_ modifiers: SwiftUI.EventModifiers) -> NSEvent.ModifierFlags {
         var flags: NSEvent.ModifierFlags = []
         if modifiers.contains(.command) { flags.insert(.command) }
         if modifiers.contains(.shift) { flags.insert(.shift) }
