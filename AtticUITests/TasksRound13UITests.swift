@@ -45,7 +45,17 @@ final class TasksRound13UITests: XCTestCase {
         select("Book dentist")
         app.typeKey("i", modifierFlags: [.command, .shift])
         XCTAssertTrue(app.menuItems["Add Subtask"].waitForExistence(timeout: 3), "the actions menu opens")
-        for _ in 0..<8 { app.typeKey(.downArrow, modifierFlags: []) }
+        // A person's pace: the menu highlights as each ↓ lands, and Return
+        // goes to the item that has the highlight (CI run 2 fired every key
+        // in 0.6 s and Return ran Edit Title).
+        for _ in 0..<8 {
+            app.typeKey(.downArrow, modifierFlags: [])
+            RunLoop.current.run(until: Date().addingTimeInterval(0.25))
+        }
+        let beforeReturn = XCTAttachment(screenshot: app.screenshot())
+        beforeReturn.name = "menu before Return"
+        beforeReturn.lifetime = .keepAlways
+        add(beforeReturn)
         app.typeKey(.return, modifierFlags: [])
         func editors(_ label: String) -> XCUIElementQuery {
             app.descendants(matching: .any).matching(NSPredicate(format: "label == %@", label))
