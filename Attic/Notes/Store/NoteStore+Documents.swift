@@ -637,14 +637,21 @@ extension NoteStore {
             }
         }
         let noIncrease = addedIDs.isEmpty
-        let total = visible.map(\.byteCount) + new.map(\.byteCount)
+        // A missing original keeps its placement and counts toward the same
+        // budget as a stored file. Use its recorded size; older images with
+        // no size reserve the per-file ceiling rather than counting as zero.
+        let missingSizes = missing.map { id in
+            (baseBlocks[id] ?? []).map { $0.1.byteCount ?? AttachmentLimits.maxBytesPerAttachment }.max()
+                ?? AttachmentLimits.maxBytesPerAttachment
+        }
+        let total = visible.map(\.byteCount) + new.map(\.byteCount) + missingSizes
         let totalBytes = total.reduce(Int64.zero) { partial, size in
             let (sum, overflow) = partial.addingReportingOverflow(size)
             return overflow ? Int64.max : sum
         }
         guard shown.count <= AttachmentLimits.maxAttachmentsPerNote || (noIncrease && shown.count <= baseIDs.count),
               missing.isSubset(of: baseIDs), unchangedMissing,
-              missing.isEmpty || noIncrease,
+              missingSizes.allSatisfy({ $0 > 0 && ($0 <= AttachmentLimits.maxBytesPerAttachment || noIncrease) }),
               visible.allSatisfy({ $0.byteCount > 0 && ($0.byteCount <= AttachmentLimits.maxBytesPerAttachment
                   || (noIncrease && baseIDs.contains($0.id))) }),
               totalBytes <= AttachmentLimits.maxBytesPerNote || noIncrease else {

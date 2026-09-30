@@ -1347,9 +1347,7 @@ final class NoteSlice3bTests: XCTestCase {
             ("invented reference", { var d = $0; d.blocks.append(.file(attachmentID: UUID(), filename: "x.pdf",
                 contentTypeIdentifier: "com.adobe.pdf", byteCount: 3)); return d }, [], false),
             ("incomplete payload", { var d = $0; d.blocks.append(block(damaged)); return d }, [damaged], false),
-            // While an original is missing its size is unknown, so no new
-            // file is admitted; both gates say so.
-            ("new file beside a missing original", { var d = $0; d.blocks.append(block(added)); return d }, [added], false),
+            ("new file beside a missing original", { var d = $0; d.blocks.append(block(added)); return d }, [added], true),
             ("formatted text", { var d = $0; d.blocks.append(.text("quoted", style: "quote")); return d }, [], true),
             ("removing the unknown objects", { var d = $0; d.blocks.removeAll { [missing.id, split.id].contains($0.attachmentID) }
                 return d }, [], true),
@@ -1549,6 +1547,56 @@ final class NoteSlice3bTests: XCTestCase {
         await XCTAssertEqualAsync(try await NoteDraftJournal(directory: directory).entriesDurably().compactMap {
             NoteContentCodec.decode($0.0.content).document.map(NoteTextExport.plainText)
         }, texts, "a different saved note does not retire it")
+    }
+}
+
+@MainActor
+extension NoteSlice3bTests {
+    func testMissingOriginalAcceptsNewFileWithoutChangingItsMissingState() async throws {
+        let store = try makeTestNoteStore(attachmentFileStore: makeTestAttachmentFileStore())
+        let missing = staged("missing.pdf"), added = staged("new.pdf"), id = UUID()
+        let original = NoteBlock.file(attachmentID: missing.id, filename: missing.filename,
+            contentTypeIdentifier: missing.contentTypeIdentifier, byteCount: missing.byteCount)
+        guard case .success = store.createDocumentNote(id: id,
+            document: NoteDocument(blocks: [.text("Files"), original]), staged: [missing]) else { return XCTFail() }
+        for row in try store.attachmentRows(forNoteID: id) { store.modelContext.delete(row) }
+        XCTAssertTrue(store.commitStagedChanges())
+        store.refresh()
+        let controller = NotesPageController(store: store, journal: nil, saveDelay: .seconds(60))
+        XCTAssertTrue(controller.open(noteID: id))
+        let session = try XCTUnwrap(controller.active), objectID = try XCTUnwrap(original.id)
+        XCTAssertEqual(session.engine.objectState(objectID), .originalMissing)
+        session.engine.beginImageImport()
+        XCTAssertTrue(session.engine.insertImportedObjects([.init(staged: added, pixelSize: nil)]), "pre-edit gate admits verified new bytes")
+        XCTAssertTrue(controller.save(session), "the same admission rule permits final save")
+        XCTAssertTrue(session.engine.document().blocks.contains(original))
+        XCTAssertEqual(session.engine.objectState(objectID), .originalMissing)
+        XCTAssertTrue(try store.attachmentFamily(missing.id).isEmpty, "adding a file does not invent a repair")
+        await XCTAssertEqualAsync(await store.verifiedAttachmentBytes(added.id), added)
+    }
+
+    func testMissingOriginalsStillCountTowardFileCountAndByteLimits() async throws {
+        let store = try makeTestNoteStore(attachmentFileStore: makeTestAttachmentFileStore())
+        let added = staged(), id = UUID()
+        guard case .success = store.createDocumentNote(id: id, document: NoteDocument(blocks: [.text("Limits")])) else { return XCTFail() }
+        for (count, size) in [(20, Int64(1)), (7, AttachmentLimits.maxBytesPerAttachment)] {
+            // Imported damaged documents can have placements without rows.
+            // They must keep their budgets when admitting an additional file.
+            let originals = (0..<count).map { _ in NoteBlock.file(attachmentID: UUID(), filename: "lost.pdf",
+                contentTypeIdentifier: "com.adobe.pdf", byteCount: size) }
+            let base = NoteDocument(blocks: [.text("Limits")] + originals)
+            try XCTUnwrap(store.note(withID: id)).content = try NoteContentCodec.encode(base)
+            XCTAssertTrue(store.commitStagedChanges())
+            let loaded = try XCTUnwrap(store.loadDocument(noteID: id))
+            var candidate = base
+            candidate.blocks.append(.file(attachmentID: added.id, filename: added.filename,
+                contentTypeIdentifier: added.contentTypeIdentifier, byteCount: added.byteCount))
+            XCTAssertNotNil(store.attachmentAdmissionFailure(noteID: id, document: candidate, staged: [added]))
+            guard case .failure(.invalidDocument) = store.saveDocument(noteID: id, document: candidate,
+                baseRevisionID: loaded.revisionID, staged: [added]) else { return XCTFail("both gates enforce the limit") }
+            XCTAssertEqual(store.loadDocument(noteID: id)?.content.document, base)
+            XCTAssertTrue(try store.attachmentRows(forNoteID: id).isEmpty)
+        }
     }
 }
 
