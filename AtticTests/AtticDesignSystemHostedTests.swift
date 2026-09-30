@@ -240,10 +240,11 @@ final class AtticDesignSystemHostedTests: XCTestCase {
         let (window, hosting) = host(rows.padding(.vertical, 8), size: CGSize(width: 320, height: 80), context: context, key: true)
         XCTAssertTrue(window.isKeyWindow, "Keyboard focus needs a key window")
 
-        /// Whether row `index` shows the ring (read 3 pt outside its highlight).
+        /// Whether row `index` shows the keyboard's line (L2: 1 pt on its
+        /// highlight's own edge).
         func ringShown(_ index: Int) throws -> Bool {
             let (bitmap, scale) = try snapshot(hosting)
-            let x = AtticLayout.rowHighlightInset - AtticRingMetrics.gap - AtticRingMetrics.width / 2
+            let x = AtticLayout.rowHighlightInset + AtticRingMetrics.rowLineWidth / 2
             let y = 8 + CGFloat(index) * AtticLayout.rowPitch + 1 + AtticLayout.rowHighlightHeight / 2
             let pixel = try XCTUnwrap(bitmap.colour(atX: x, y: y, scale: scale))
             return pixel.themeColor.contrastRatio(with: context.tokens.ink(.accent).themeColor) < 1.25

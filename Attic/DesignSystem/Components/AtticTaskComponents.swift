@@ -1238,11 +1238,14 @@ struct AtticTaskRow: View {
         .padding(.top, m.pitchTopInset)
         .overlay(alignment: .top) {
             if showsFocusRing {
-                // L2: one 1 pt line on the highlight's own edge.
-                AtticFocusRing(cornerRadius: AtticRadius.highlight, gap: 0, width: AtticRingMetrics.rowLineWidth)
-                    .frame(height: highlightHeight)
-                    .padding(.horizontal, AtticLayout.rowHighlightInset)
-                    .padding(.top, m.pitchTopInset)
+                // L2: one 1 pt line on the highlight's own edge (the ring
+                // draws outside the shape it is given: a shape one line
+                // width inside puts the line exactly on the edge).
+                let line = AtticRingMetrics.rowLineWidth
+                AtticFocusRing(cornerRadius: AtticRadius.highlight - line, gap: 0, width: line)
+                    .frame(height: highlightHeight - line * 2)
+                    .padding(.horizontal, AtticLayout.rowHighlightInset + line)
+                    .padding(.top, m.pitchTopInset + line)
             }
         }
         .contentShape(Rectangle())

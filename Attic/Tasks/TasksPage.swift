@@ -69,6 +69,9 @@ struct TasksPage: View {
     /// The page's Find field (Done's search, Now's and Later's Find) has
     /// the keyboard.
     @State private var searchFocused = false
+    /// The page the search field was opened on: moving to another page
+    /// lets it go (each page keeps its own query).
+    @State private var searchTab: TasksTab = .done
     /// The View Options button's AppKit view: ⌥⌘V opens its menu there.
     @State private var viewOptionsAnchor = AtticMenuAnchor.Holder()
     /// A person's swipe between the pages (round 9: the page owns the
@@ -320,8 +323,9 @@ struct TasksPage: View {
         .onChange(of: model.tab) { _, _ in
             cancelTransientState()
             // Each page keeps its own query; the field lets the keyboard go
-            // with the page it searched.
-            if searchFocused { searchFocused = false }
+            // with the page it searched (read when the change lands: a
+            // search opened on the new page meanwhile keeps it).
+            if searchFocused, searchTab != model.tab { searchFocused = false }
             // The last page's row keeps no claim on the keyboard.
             focusedRow = nil
             // A tab, a key, ⌘1–3, `show` or Search: the page goes straight
@@ -577,6 +581,7 @@ struct TasksPage: View {
         // No row stays lit behind the search (round 5, the owner's item 16).
         focusedRow = nil
         model.clearSelection()
+        searchTab = model.tab
         searchFocused = true
     }
 
@@ -1869,10 +1874,11 @@ struct TasksPage: View {
         // subtask, the add bar and Done's search.
         guard model.editingTitleID == nil, model.newSubtaskParentID == nil, model.renamingSubtaskID == nil,
               !addBarFocused, !searchFocused else { return .ignored }
-        // Typing on a page starts its search there (owner item 17; every
-        // page since item 6): the letter is the query's first, the field
-        // takes the tabs' line.
-        if model.isPageShown, modifiers.isEmpty || modifiers == .shift, Self.startsSearch(press.characters) {
+        // Typing on the Done page starts a search there (owner item 17):
+        // the letter is the query's first, the field takes the tabs' line.
+        // Now and Later open Find with ⌘F or the magnifier only (item 6):
+        // their letters may be a draft reaching the add bar a moment late.
+        if model.tab == .done, model.isPageShown, modifiers.isEmpty || modifiers == .shift, Self.startsSearch(press.characters) {
             model.setSearchQuery(press.characters, for: model.tab)
             beginSearch()
             return .handled
