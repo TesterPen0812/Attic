@@ -856,4 +856,145 @@ final class RecentlyDeletedSelectionTests: XCTestCase {
             XCTAssertEqual(refs.map { library.state(of: $0) }, [.live, .live])
         }
     }
+
+    // MARK: - Fix round 4: every history closure deletes through the guard
+
+    /// The recheck's Duplicate reproducer. Duplicate a task without
+    /// subtasks (P), add C under P, Undo Add C, restore C through Recently
+    /// Deleted, Undo Duplicate: it must not take C.
+    func testUndoOfDuplicateKeepsAChildRestoredThroughAnotherHistory() throws {
+        let fixture = try makeFixture()
+        let library = fixture.library
+        let source = try XCTUnwrap(fixture.tasks.create(title: "Source"))
+        let copy = try XCTUnwrap(library.duplicateTasks([source.id])?.first)
+        let child = try XCTUnwrap(library.createTasks([TaskDraft(title: "Child", parentID: copy.id)])?.first)
+        let copyRef = AtticItemRef(.task, copy.id)
+        let childRef = AtticItemRef(.task, child.id)
+        XCTAssertEqual(library.undo.undoStep(in: .tasks), .applied, "Add Child")
+        XCTAssertTrue(library.restore(childRef, in: .library))
+
+        XCTAssertEqual(library.undo.undoStep(in: .tasks), .obsolete, "Duplicate no longer reaches the copy")
+        XCTAssertEqual(library.state(of: copyRef), .live)
+        XCTAssertEqual(library.state(of: childRef), .live, "C's restore was not undone")
+        XCTAssertEqual(library.state(of: AtticItemRef(.task, source.id)), .live)
+    }
+
+    /// A duplicate that carries copied subtasks still undoes whole: the copies
+    /// are the step's own.
+    func testOrdinaryDuplicateWithSubtasksUndoRedoMovesTheWholeFamily() throws {
+        let fixture = try makeFixture()
+        let library = fixture.library
+        let source = try XCTUnwrap(fixture.tasks.create(title: "Source"))
+        _ = try XCTUnwrap(fixture.tasks.create(title: "One", parentID: source.id))
+        _ = try XCTUnwrap(fixture.tasks.create(title: "Two", parentID: source.id))
+        let copy = try XCTUnwrap(library.duplicateTasks([source.id])?.first)
+        let copyChildren = try fixture.tasks.subtasks(of: copy.id).map(\.id)
+        XCTAssertEqual(copyChildren.count, 2)
+        let refs = ([copy.id] + copyChildren).map { AtticItemRef(.task, $0) }
+        for _ in 0..<2 {
+            XCTAssertEqual(library.undo.undoStep(in: .tasks), .applied)
+            XCTAssertEqual(refs.map { library.state(of: $0) }, [.deleted, .deleted, .deleted])
+            XCTAssertEqual(library.undo.redoStep(in: .tasks), .applied)
+            XCTAssertEqual(refs.map { library.state(of: $0) }, [.live, .live, .live])
+        }
+        XCTAssertEqual(library.state(of: AtticItemRef(.task, source.id)), .live)
+    }
+
+    /// The recheck's Done-delete reproducer. P and C are in the Done log;
+    /// delete C, then P. Undo P's Delete (C stays deleted), restore C through
+    /// Recently Deleted, Redo P's Delete: it must not take C.
+    func testRedoOfADoneDeleteKeepsAChildRestoredThroughAnotherHistory() throws {
+        let fixture = try makeFixture()
+        let library = fixture.library
+        let parent = try XCTUnwrap(fixture.tasks.create(title: "Parent"))
+        let child = try XCTUnwrap(fixture.tasks.create(title: "Child", parentID: parent.id))
+        XCTAssertTrue(fixture.tasks.markDone(child))
+        XCTAssertTrue(fixture.tasks.markDone(parent))
+        fixture.clock.value += 1
+        XCTAssertEqual(fixture.tasks.moveCompletedToDoneLog(before: fixture.clock.value + 10), 2)
+        XCTAssertTrue(library.deleteListedTasks([child.id]).isApplied)
+        fixture.clock.value += 1
+        XCTAssertTrue(library.deleteListedTasks([parent.id]).isApplied)
+        fixture.clock.value += 1
+
+        XCTAssertEqual(library.undo.undoStep(in: .tasks), .applied, "P's Delete")
+        XCTAssertNotNil(fixture.tasks.listedTask(withID: parent.id))
+        XCTAssertNil(fixture.tasks.listedTask(withID: child.id), "C was deleted on its own")
+        XCTAssertTrue(library.restore(AtticItemRef(.task, child.id), in: .library))
+        XCTAssertNotNil(fixture.tasks.listedTask(withID: child.id))
+
+        XCTAssertEqual(library.undo.redoStep(in: .tasks), .obsolete, "the Delete no longer reaches P")
+        XCTAssertNotNil(fixture.tasks.listedTask(withID: parent.id))
+        XCTAssertNotNil(fixture.tasks.listedTask(withID: child.id), "C's restore was not undone")
+    }
+
+    /// Ordinary Done delete of an archived family: Undo, Redo, Undo.
+    func testOrdinaryDoneDeleteUndoRedoMovesTheWholeArchivedFamily() throws {
+        let fixture = try makeFixture()
+        let library = fixture.library
+        let parent = try XCTUnwrap(fixture.tasks.create(title: "Parent"))
+        let child = try XCTUnwrap(fixture.tasks.create(title: "Child", parentID: parent.id))
+        XCTAssertTrue(fixture.tasks.markDone(child))
+        XCTAssertTrue(fixture.tasks.markDone(parent))
+        fixture.clock.value += 1
+        XCTAssertEqual(fixture.tasks.moveCompletedToDoneLog(before: fixture.clock.value + 10), 2)
+        XCTAssertTrue(library.deleteListedTasks([parent.id]).isApplied)
+        for _ in 0..<2 {
+            XCTAssertEqual(library.undo.undoStep(in: .tasks), .applied)
+            XCTAssertNotNil(fixture.tasks.listedTask(withID: parent.id))
+            XCTAssertNotNil(fixture.tasks.listedTask(withID: child.id))
+            XCTAssertEqual(library.undo.redoStep(in: .tasks), .applied)
+            XCTAssertNil(fixture.tasks.listedTask(withID: parent.id))
+            XCTAssertNil(fixture.tasks.listedTask(withID: child.id))
+        }
+    }
+
+    /// A tripwire for the guard itself. Every Undo or Redo closure in the
+    /// app deletes task families through `deleteFamiliesFromHistory` (or
+    /// `deleteOutcome`, which needs the step's ownership). This reads the
+    /// sources and fails when a raw family delete appears after an
+    /// `undoOutcome:` / `redoOutcome:` label, or outside the functions that
+    /// implement the guard or run a command's first delete.
+    func testNoHistoryClosureDeletesAFamilyOutsideTheGuard() throws {
+        let root = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent().deletingLastPathComponent().appendingPathComponent("Attic")
+        let files = try XCTUnwrap(FileManager.default.enumerator(at: root, includingPropertiesForKeys: nil))
+            .compactMap { $0 as? URL }
+            .filter { $0.pathExtension == "swift" && !$0.lastPathComponent.hasPrefix("TaskStore") }
+        XCTAssertGreaterThan(files.count, 50, "the sources were found")
+        let rawDelete = try NSRegularExpression(
+            pattern: #"\.delete\(taskIDs:|\btasks\.delete\(|deleteFamiliesNow\(|performDelete\("#
+        )
+        // Functions that are the guard, or the first run of a command.
+        let allowed: Set<String> = ["deleteFamiliesFromHistory", "deleteOutcome", "deleteFamiliesNow", "performDelete"]
+        let historyMarkers = ["undoOutcome:", "redoOutcome:", "undo:", "redo:"]
+        var violations: [String] = []
+        var firstRunCalls = 0
+        for file in files {
+            let lines = try String(contentsOf: file, encoding: .utf8).components(separatedBy: "\n")
+            var function = ""
+            var inHistory = false
+            for (index, line) in lines.enumerated() {
+                let trimmed = line.trimmingCharacters(in: .whitespaces)
+                if let range = trimmed.range(of: #"func \w+"#, options: .regularExpression) {
+                    function = String(trimmed[range].dropFirst(5))
+                    inHistory = false
+                    if trimmed.hasPrefix("func ") || trimmed.contains(" func ") { continue }
+                }
+                if trimmed.contains("UndoStep(") { inHistory = false }
+                if historyMarkers.contains(where: { trimmed.contains($0) }) { inHistory = true }
+                let range = NSRange(line.startIndex..., in: line)
+                guard rawDelete.firstMatch(in: line, range: range) != nil, !trimmed.hasPrefix("//"),
+                      !trimmed.hasPrefix("///") else { continue }
+                if allowed.contains(function) { continue }
+                if inHistory {
+                    violations.append("\(file.lastPathComponent):\(index + 1) in \(function): \(trimmed)")
+                } else {
+                    firstRunCalls += 1
+                }
+            }
+        }
+        XCTAssertTrue(violations.isEmpty, "family deletes in a history closure: \(violations)")
+        XCTAssertGreaterThanOrEqual(firstRunCalls, 3, "the scan still sees the commands' first deletes")
+    }
 }

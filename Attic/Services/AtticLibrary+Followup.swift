@@ -169,7 +169,11 @@ extension AtticLibrary {
             return lhsChild && !rhsChild
         }
         var failed = Set<AtticItemRef>()
+        let tracked = progress.items.filter { $0.kind == .task }.map(\.id)
         for ref in pending {
+            // What this step may take: what its restore brought back for the
+            // task, plus the tasks it tracks itself.
+            let reach = FamilyOwnership((progress.owned[ref.id] ?? [ref.id]).union(tracked))
             // Deleting a main task takes its subtasks with it, whatever the
             // step tracked. Look at the family it would take right now.
             if ref.kind == .task, let listed = tasks.listedTask(withID: ref.id), listed.parentID == nil {
@@ -182,9 +186,7 @@ extension AtticLibrary {
                 // track came back through another history (Recently Deleted and
                 // Tasks undo separately). Deleting the main task would undo
                 // that, so the step no longer reaches it and the family stays.
-                let reach = (progress.owned[ref.id] ?? [ref.id])
-                    .union(progress.items.filter { $0.kind == .task }.map(\.id))
-                if !family.isSubset(of: reach) {
+                if !family.isSubset(of: reach.members) {
                     progress.itemPhase[ref] = .dropped
                     outcomes.append(.obsolete)
                     continue
@@ -206,7 +208,7 @@ extension AtticLibrary {
                     continue
                 }
             }
-            let outcome = deleteOutcome(ref)
+            let outcome = deleteOutcome(ref, owning: reach)
             switch outcome {
             case .applied: progress.itemPhase[ref] = .sentBack
             case .obsolete: progress.itemPhase[ref] = .dropped
