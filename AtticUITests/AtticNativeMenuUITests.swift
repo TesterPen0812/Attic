@@ -1,6 +1,6 @@
 import XCTest
 
-/// The title menu and the pop-up row open the system's own menus with
+/// The title menu opens the system's own menu and the pop-up row its own list, with
 /// their items, in the running app as a person uses it (activated, a key
 /// window): the design system's menu lab (`--attic-gallery-menus`, preview
 /// builds only). The unit-test host can never be the active app, so this is
@@ -72,13 +72,17 @@ final class AtticNativeMenuUITests: XCTestCase {
         wait(for: [XCTNSPredicateExpectation(predicate: changed, object: nil)], timeout: 5)
     }
 
-    func testThePopUpRowOpensTheSystemMenuWithItsChoices() throws {
+    /// A pop-up row opens Attic's own opaque list (round 13), not a system
+    /// menu: one button for VoiceOver, its choices as labelled entries.
+    func testThePopUpRowOpensItsListWithItsChoices() throws {
         let row = app.descendants(matching: .any)["menu-lab-popup"]
         XCTAssertEqual(app.descendants(matching: .any).matching(identifier: "menu-lab-popup").count, 1, "The row is one element for VoiceOver")
-        XCTAssertEqual(row.elementType, .menuButton)
-        let glass = open(row, expecting: "Glass")
-        XCTAssertTrue(glass.exists, "The pop-up row opens a native menu with its choices")
-        XCTAssertTrue(app.menuItems["Solid"].exists)
+        XCTAssertEqual(row.elementType, .button)
+        XCTAssertTrue(row.waitForExistence(timeout: 5))
+        row.click()
+        let glass = app.descendants(matching: .any).matching(NSPredicate(format: "label == %@", "Glass")).firstMatch
+        XCTAssertTrue(glass.waitForExistence(timeout: 5), "The pop-up row opens a list with its choices")
+        XCTAssertTrue(app.descendants(matching: .any).matching(NSPredicate(format: "label == %@", "Solid")).firstMatch.exists)
         glass.click()
         let changed = NSPredicate { _, _ in self.state().hasSuffix("glass") }
         wait(for: [XCTNSPredicateExpectation(predicate: changed, object: nil)], timeout: 5)

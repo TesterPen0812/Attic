@@ -47,9 +47,11 @@ final class TasksRound13UITests: XCTestCase {
         XCTAssertTrue(app.menuItems["Add Subtask"].waitForExistence(timeout: 3), "the actions menu opens")
         for _ in 0..<8 { app.typeKey(.downArrow, modifierFlags: []) }
         app.typeKey(.return, modifierFlags: [])
-        let newSubtask = app.textFields["New subtask of Book dentist"]
-        waitFor(newSubtask.exists, "Add Subtask ran")
-        XCTAssertFalse(app.textFields["Title"].exists, "and the title editor did not open")
+        func editors(_ label: String) -> XCUIElementQuery {
+            app.descendants(matching: .any).matching(NSPredicate(format: "label == %@", label))
+        }
+        waitFor(editors("New subtask of Book dentist").count > 0, "Add Subtask ran")
+        XCTAssertEqual(editors("Title").count, 0, "and the title editor did not open")
     }
 
     /// Settings ▸ General ▸ Animations opens Attic's own pop-over list (an

@@ -590,7 +590,8 @@ final class TasksPageUITests: XCTestCase {
         XCTAssertLessThan(row("Email beta testers").frame.minY, row("Book dentist").frame.minY, "above Book dentist at first")
         openItem("Move Down").click()
         waitFor(!menuItem("Move Down").exists, "the menu closes")
-        waitFor(row("Email beta testers").frame.minY > row("Book dentist").frame.minY, "Move Down moved it one place down")
+        waitFor(row("Email beta testers").exists && row("Email beta testers").frame.minY > row("Book dentist").frame.minY,
+                "Move Down moved it one place down")
         select("Email beta testers")
         app.typeKey("i", modifierFlags: [.command, .shift])
         XCTAssertTrue(menuItem("Duplicate").waitForExistence(timeout: 3))
