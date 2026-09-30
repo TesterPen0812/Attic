@@ -13,11 +13,6 @@ on:
         required: false
         default: false
         type: boolean
-      return_baseline_ref:
-        description: Optional ancestor SHA for an actions-menu Return comparison before the candidate checks
-        required: false
-        default: ""
-        type: string
 
 permissions:
   contents: read
@@ -121,58 +116,6 @@ jobs:
             CODE_SIGNING_ALLOWED=NO \
             SWIFT_STRICT_CONCURRENCY=complete \
             clean build
-
-      - name: Reproduce actions-menu Return on the baseline with the candidate hosted fixture
-        if: ${{ github.event_name == 'workflow_dispatch' && inputs.return_baseline_ref != '' }}
-        continue-on-error: true
-        timeout-minutes: 8
-        env:
-          RETURN_BASELINE_REF: ${{ inputs.return_baseline_ref }}
-          TEST_RUNNER_ATTIC_KEY_WINDOW_TESTS: "1"
-          # XCTest strips one TEST_RUNNER_ prefix from app environment keys.
-          TEST_RUNNER_TEST_RUNNER_ATTIC_KEY_WINDOW_TESTS: "1"
-        run: |
-          baseline_sha=$(git rev-parse --verify "${RETURN_BASELINE_REF}^{commit}")
-          git merge-base --is-ancestor "$baseline_sha" HEAD
-          baseline_root="$RUNNER_TEMP/AtticReturnBaseline"
-          git worktree add --detach "$baseline_root" "$baseline_sha"
-          # Apply only the new regression fixture, leaving baseline app code intact.
-          cp AtticTests/TasksRound13Tests.swift "$baseline_root/AtticTests/TasksRound13Tests.swift"
-          echo "Return baseline app SHA: $baseline_sha; fixture SHA: $GITHUB_SHA"
-          cd "$baseline_root"
-          xcodebuild \
-            -project Attic.xcodeproj -scheme Attic -configuration Local \
-            -destination 'platform=macOS' -derivedDataPath "$baseline_root/.build/dd-hosted" \
-            -resultBundlePath "$RUNNER_TEMP/AtticReturnBaselineHosted.xcresult" \
-            CODE_SIGNING_ALLOWED=NO \
-            -only-testing:AtticTests/TasksRound13Tests/testCoreGraphicsBackedReturnInTheActionsMenuRunsTheHighlightedItem \
-            test
-
-      - name: Capture the baseline actions-menu Return UI trace
-        if: ${{ !cancelled() && github.event_name == 'workflow_dispatch' && inputs.return_baseline_ref != '' }}
-        continue-on-error: true
-        timeout-minutes: 8
-        run: |
-          baseline_root="$RUNNER_TEMP/AtticReturnBaseline"
-          cd "$baseline_root"
-          xcodebuild \
-            -project Attic.xcodeproj -scheme AtticUI -configuration Local \
-            -destination 'platform=macOS' -derivedDataPath "$baseline_root/.build/dd-ui" \
-            -resultBundlePath "$RUNNER_TEMP/AtticReturnBaselineUI.xcresult" \
-            CODE_SIGNING_ALLOWED=NO \
-            -only-testing:AtticUITests/TasksRound13UITests/testReturnInTheActionsMenuRunsTheHighlightedItem \
-            test
-
-      - name: Upload baseline Return comparison results
-        if: ${{ always() && github.event_name == 'workflow_dispatch' && inputs.return_baseline_ref != '' }}
-        uses: actions/upload-artifact@v4
-        with:
-          name: macos-return-baseline-results-${{ github.sha }}
-          path: |
-            ${{ runner.temp }}/AtticReturnBaselineHosted.xcresult
-            ${{ runner.temp }}/AtticReturnBaselineUI.xcresult
-          if-no-files-found: error
-          retention-days: 7
 
       - name: Run macOS unit tests
         id: unit_tests
