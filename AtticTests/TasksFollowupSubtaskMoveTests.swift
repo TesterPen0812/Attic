@@ -463,4 +463,35 @@ final class TasksFollowupSubtaskMoveTests: XCTestCase {
         XCTAssertTrue(library.redo(in: .tasks).isApplied)
         XCTAssertEqual(store.task(withID: book.id)?.parentID, party.id)
     }
+
+    // MARK: - Fix round: standalone placement when the order gap is used up
+
+    /// Made standalone, a subtask goes right below its old main task even when
+    /// no order is left between that task and the next one: the group is
+    /// re-spaced around the insertion point instead of sending the new task
+    /// to the top.
+    func testMakeStandaloneRespacesAroundTheInsertionPointWhenTheGapIsUsedUp() throws {
+        let top = try make("Top")
+        let trip = try make("Trip")
+        let next = try make("Next")
+        let book = try make("Book flights", parent: trip.id)
+        let context = ModelContext(store.container)
+        for (task, order) in [(top, Int64(9_000)), (trip, 501), (next, 500)] {
+            let id = task.id
+            for row in try context.fetch(FetchDescriptor<TaskItem>(predicate: #Predicate { $0.id == id })) { row.manualOrder = order }
+        }
+        try context.save()
+        store.refresh()
+        XCTAssertEqual(store.orderedTasks(for: .todo).filter { $0.parentID == nil }.map(\.title), ["Top", "Trip", "Next"])
+
+        XCTAssertTrue(library.moveSubtask(book.id, toTask: nil).isApplied)
+        XCTAssertEqual(store.orderedTasks(for: .todo).filter { $0.parentID == nil }.map(\.title),
+                       ["Top", "Trip", "Book flights", "Next"], "right below its old main task")
+        XCTAssertTrue(library.undo(in: .tasks).isApplied)
+        XCTAssertEqual(store.orderedTasks(for: .todo).filter { $0.parentID == nil }.map(\.title), ["Top", "Trip", "Next"])
+        XCTAssertEqual(store.task(withID: book.id)?.parentID, trip.id)
+        XCTAssertTrue(library.redo(in: .tasks).isApplied)
+        XCTAssertEqual(store.orderedTasks(for: .todo).filter { $0.parentID == nil }.map(\.title),
+                       ["Top", "Trip", "Book flights", "Next"])
+    }
 }

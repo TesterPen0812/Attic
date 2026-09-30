@@ -2883,6 +2883,14 @@ final class TaskStore: ObservableObject {
                     var placed = group
                     placed.insert(task, at: index + 1)
                     order = sparseManualOrder(at: index + 1, in: placed)
+                    if order == nil {
+                        // The gap below the old main task is used up: re-space
+                        // the group around the insertion point rather than
+                        // dropping the task at the top of it.
+                        wrote = true
+                        try assignSpacedManualOrders(to: placed, updatedAt: timestamp)
+                        order = Int64(placed.count - (index + 1)) * Self.manualOrderStride
+                    }
                 }
                 if order == nil {
                     wrote = true
@@ -3448,8 +3456,8 @@ final class TaskStore: ObservableObject {
     }
 
     /// Re-spaces a group's orders in its current display order. Every
-    /// replica takes its row's order; only copies that agreed with the
-    /// shown one take the new time.
+    /// replica takes its row's order, and is written only if that changes it;
+    /// only copies that agreed with the shown one take the new time.
     private func assignSpacedManualOrders(
         to orderedGroup: [TaskItem],
         updatedAt: Date
@@ -3460,9 +3468,14 @@ final class TaskStore: ObservableObject {
             let shown = TaskContentSnapshot(item)
             for replica in groups[item.id] ?? [] {
                 let agrees = replica === item || TaskContentSnapshot(replica) == shown
-                replica.manualOrder = order
-                replica.listOrderVersion = TaskItem.currentListOrderVersion
-                if agrees { replica.updatedAt = updatedAt }
+                var changed = false
+                if replica.manualOrder != order { replica.manualOrder = order; changed = true }
+                if replica.listOrderVersion != TaskItem.currentListOrderVersion {
+                    replica.listOrderVersion = TaskItem.currentListOrderVersion
+                    changed = true
+                }
+                // A copy that already holds its order is not written at all.
+                if changed, agrees { replica.updatedAt = updatedAt }
             }
         }
     }
