@@ -1,4 +1,5 @@
 import AppKit
+import Carbon
 import SwiftUI
 
 /// Where a formatting or insertion command came from. Every surface runs
@@ -164,7 +165,7 @@ enum NoteCommandCatalog {
         guard event.type == .keyDown else { return nil }
         let flags = event.modifierFlags.intersection([.command, .option, .shift, .control])
         guard flags.contains(.command) else { return nil }
-        let plain = (event.characters(byApplyingModifiers: []) ?? "").lowercased()
+        let plain = (unshiftedKey(for: event) ?? event.characters(byApplyingModifiers: []) ?? "").lowercased()
         let ignoring = (event.charactersIgnoringModifiers ?? "").lowercased()
         for command in allCommands {
             guard let shortcut = keyboardShortcut(command), modifierFlags(shortcut.modifiers) == flags else { continue }
@@ -178,6 +179,39 @@ enum NoteCommandCatalog {
             }
         }
         return nil
+    }
+
+    /// Translate the physical event through the active keyboard layout with
+    /// no modifiers. Shift and Option digits yield punctuation in NSEvent.characters.
+    private static func unshiftedKey(for event: NSEvent) -> String? {
+        guard let source = TISCopyCurrentKeyboardLayoutInputSource()?.takeRetainedValue(),
+              let property = TISGetInputSourceProperty(source, kTISPropertyUnicodeKeyLayoutData) else {
+            return fallbackDigit(for: event.keyCode)
+        }
+        let data = unsafeBitCast(property, to: CFData.self)
+        guard let bytes = CFDataGetBytePtr(data) else { return fallbackDigit(for: event.keyCode) }
+        let layout = UnsafeRawPointer(bytes).assumingMemoryBound(to: UCKeyboardLayout.self)
+        var dead: UInt32 = 0
+        var chars = [UniChar](repeating: 0, count: 4)
+        var count = 0
+        let status = UCKeyTranslate(layout, event.keyCode, UInt16(kUCKeyActionDown), 0,
+                                    UInt32(LMGetKbdType()), OptionBits(kUCKeyTranslateNoDeadKeysBit),
+                                    &dead, chars.count, &count, &chars)
+        guard status == noErr, count > 0 else { return fallbackDigit(for: event.keyCode) }
+        return String(utf16CodeUnits: chars, count: count).lowercased()
+    }
+
+    private static func fallbackDigit(for keyCode: UInt16) -> String? {
+        // Only used when the OS exposes no layout data (for example in a
+        // headless test host); the normal path translates the active layout.
+        switch keyCode {
+        case 21: "4"
+        case 23: "5"
+        case 26: "7"
+        case 28: "8"
+        case 25: "9"
+        default: nil
+        }
     }
 
     static func modifierFlags(_ modifiers: EventModifiers) -> NSEvent.ModifierFlags {

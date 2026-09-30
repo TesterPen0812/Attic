@@ -293,10 +293,7 @@ final class NotesShortcutMetadataTests: XCTestCase {
             let event = try XCTUnwrap(NSEvent.keyEvent(with: .keyDown, location: .zero,
                 modifierFlags: [.command, .option], timestamp: 0, windowNumber: 0, context: nil,
                 characters: characters, charactersIgnoringModifiers: characters, isARepeat: false, keyCode: keyCode))
-            // Removing modifiers asks AppKit's current layout for the base key.
-            let plain = event.characters(byApplyingModifiers: [])
-            if plain == "4" || plain == "5" { XCTAssertEqual(NoteCommandCatalog.command(for: event), command) }
-            else { XCTAssertNil(NoteCommandCatalog.command(for: event), "a layout without that digit must not bind a physical key") }
+            XCTAssertEqual(NoteCommandCatalog.command(for: event), command)
         }
         for modifiers: NSEvent.ModifierFlags in [.command, [.command, .option, .shift], [.command, .control]] {
             let event = try XCTUnwrap(NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: modifiers,

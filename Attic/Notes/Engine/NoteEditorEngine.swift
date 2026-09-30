@@ -1,5 +1,4 @@
 import AppKit
-import Carbon
 
 /// Where the editor gets image bytes that are already stored.
 @MainActor
@@ -2788,62 +2787,8 @@ extension NoteEditorEngine {
     /// their chance; All notes retains ⇧⌘L.
     func handleShortcut(_ event: NSEvent) -> Bool {
         guard !isReadOnly, activity == .idle, textView?.hasMarkedText() != true else { return false }
-        let flags = event.modifierFlags.intersection([.command, .option, .shift, .control])
-        let key = Self.unshiftedKey(for: event) ?? event.charactersIgnoringModifiers?.lowercased() ?? ""
-        var command: NoteFormatCommand?
-        switch (flags, key) {
-        case ([.command], "b"): command = .mark(.bold)
-        case ([.command], "i"): command = .mark(.italic)
-        case ([.command], "u"): command = .mark(.underline)
-        case ([.command, .shift], "x"): command = .mark(.strikethrough)
-        case ([.command, .shift], "k"): command = .mark(.link)
-        case ([.command, .option], "0"): command = .paragraph(.body)
-        case ([.command, .option], "1"): command = .paragraph(.heading(1))
-        case ([.command, .option], "2"): command = .paragraph(.heading(2))
-        case ([.command, .option], "3"): command = .paragraph(.heading(3))
-        case ([.command, .shift], "7"): command = .paragraph(.bullet)
-        case ([.command, .shift], "8"): command = .paragraph(.number)
-        case ([.command, .shift], "9"): command = .paragraph(.checklist)
-        case ([.command], "]"): command = .indent
-        case ([.command], "["): command = .outdent
-        default: break
-        }
-        if flags == [.command], event.keyCode == 36 { command = .toggleChecklist }
-        if flags == [.command, .option], event.keyCode == 126 { command = .moveUp }
-        if flags == [.command, .option], event.keyCode == 125 { command = .moveDown }
-        guard let command else { return false }
+        guard let command = NoteCommandCatalog.command(for: event) else { return false }
         return perform(command)
-    }
-
-    /// Translate the physical event through the active keyboard layout with
-    /// no modifiers. Shifted 7/8/9 yield punctuation in NSEvent.characters.
-    private static func unshiftedKey(for event: NSEvent) -> String? {
-        guard let source = TISCopyCurrentKeyboardLayoutInputSource()?.takeRetainedValue(),
-              let property = TISGetInputSourceProperty(source, kTISPropertyUnicodeKeyLayoutData) else {
-            return fallbackDigit(for: event.keyCode)
-        }
-        let data = unsafeBitCast(property, to: CFData.self)
-        guard let bytes = CFDataGetBytePtr(data) else { return fallbackDigit(for: event.keyCode) }
-        let layout = UnsafeRawPointer(bytes).assumingMemoryBound(to: UCKeyboardLayout.self)
-        var dead: UInt32 = 0
-        var chars = [UniChar](repeating: 0, count: 4)
-        var count = 0
-        let status = UCKeyTranslate(layout, event.keyCode, UInt16(kUCKeyActionDown), 0,
-                                    UInt32(LMGetKbdType()), OptionBits(kUCKeyTranslateNoDeadKeysBit),
-                                    &dead, chars.count, &count, &chars)
-        guard status == noErr, count > 0 else { return fallbackDigit(for: event.keyCode) }
-        return String(utf16CodeUnits: chars, count: count).lowercased()
-    }
-
-    private static func fallbackDigit(for keyCode: UInt16) -> String? {
-        // Only used when the OS exposes no layout data (for example in a
-        // headless test host); the normal path translates the active layout.
-        switch keyCode {
-        case 26: "7"
-        case 28: "8"
-        case 25: "9"
-        default: nil
-        }
     }
 }
 

@@ -1028,8 +1028,20 @@ final class NoteEditorEngineTests: XCTestCase {
             XCTAssertTrue(engine.handleShortcut(event))
             XCTAssertEqual(engine.paragraphStyle(at: 2), style)
         }
-        XCTAssertNil(NoteFormatCommand.paragraph(.quote).shortcut)
-        XCTAssertNil(NoteFormatCommand.paragraph(.mono).shortcut)
+        XCTAssertEqual(NoteFormatCommand.paragraph(.quote).shortcut, "⌥⌘4")
+        XCTAssertEqual(NoteFormatCommand.paragraph(.mono).shortcut, "⌥⌘5")
+        for (code, key, modified, style) in [(UInt16(21), "4", "¢", NoteParagraphStyle.quote),
+                                            (UInt16(23), "5", "∞", .mono)] {
+            let (engine, view) = makeEngine(NoteDocument(blocks: [.text("T"), .text("Body"), .text("Untouched")]))
+            view.setSelectedRange(NSRange(location: 2, length: 0))
+            let event = NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: [.command, .option],
+                                        timestamp: 0, windowNumber: 0, context: nil,
+                                        characters: modified, charactersIgnoringModifiers: key,
+                                        isARepeat: false, keyCode: code)!
+            XCTAssertTrue(engine.handleShortcut(event))
+            XCTAssertEqual(engine.paragraphStyle(at: 2), style)
+            XCTAssertNil(engine.document().blocks[2].style)
+        }
         let (engine, view) = makeEngine(NoteDocument(blocks: [.text("T"), .text("Body")]))
         view.setSelectedRange(NSRange(location: 2, length: 0))
         for (key, code) in [("q", UInt16(12)), ("m", UInt16(46))] {
