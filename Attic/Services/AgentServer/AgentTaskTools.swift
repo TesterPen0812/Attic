@@ -991,7 +991,9 @@ final class AgentTaskTools {
         guard let raw = arguments["items"] as? [[String: Any]], !raw.isEmpty else {
             throw AgentToolError.invalidArguments("items must be a non-empty array of {kind, id}.")
         }
-        let refs = try raw.map { try itemRef(from: $0, field: "Each item") }
+        // The same (kind, id) listed twice is one item.
+        var seen = Set<AtticItemRef>()
+        let refs = try raw.map { try itemRef(from: $0, field: "Each item") }.filter { seen.insert($0).inserted }
         if let missing = refs.first(where: { library.state(of: $0) != .deleted }) {
             throw AgentToolError.invalidArguments("No \(missing.kind.rawValue) with id \(missing.id.uuidString) is in Recently Deleted. Nothing was restored.")
         }

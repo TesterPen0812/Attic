@@ -451,4 +451,33 @@ final class RecentlyDeletedSelectionTests: XCTestCase {
         XCTAssertEqual(fixture.library.state(of: noteRef), .deleted, "the retry sent the note back")
         XCTAssertNotNil(fixture.tasks.task(withID: gated.taskID), "and left the task the person restored")
     }
+    // MARK: - Fix round: repeated items
+
+    /// The same item listed twice is restored once and is not a failure.
+    func testRestoreItemsIgnoresRepeatedItems() throws {
+        let fixture = try makeFixture()
+        let note = try XCTUnwrap(fixture.notes.create(title: "Notes"))
+        XCTAssertTrue(fixture.library.delete(AtticItemRef(.note, note.id)))
+        let taskIDs = try deleteTasks(["A"], in: fixture)
+        let noteItem: [String: Any] = ["kind": "note", "id": note.id.uuidString]
+        let taskItem: [String: Any] = ["kind": "task", "id": taskIDs[0].uuidString]
+        let tools = AgentTaskTools(store: fixture.tasks, library: fixture.library)
+
+        let reply = try tools.call(name: "restore_items", arguments: ["items": [noteItem, taskItem, noteItem, taskItem]])
+        XCTAssertFalse(reply.contains("\"reason\""), reply)
+        XCTAssertNotNil(fixture.notes.note(withID: note.id))
+        XCTAssertNotNil(fixture.tasks.task(withID: taskIDs[0]))
+        XCTAssertEqual(fixture.library.undo.undoName(in: .library), "Restore 2 Items")
+    }
+
+    /// The library ignores repeats too, whoever calls it.
+    func testRestoreRecentlyDeletedIgnoresRepeatedItems() throws {
+        let fixture = try makeFixture()
+        let note = try XCTUnwrap(fixture.notes.create(title: "Notes"))
+        XCTAssertTrue(fixture.library.delete(AtticItemRef(.note, note.id)))
+        let ref = AtticItemRef(.note, note.id)
+        let report = fixture.library.restoreRecentlyDeleted(items: [ref, ref], attachments: [])
+        XCTAssertEqual(report.restored, 1)
+        XCTAssertTrue(report.failures.isEmpty, "\(report.failures)")
+    }
 }

@@ -84,6 +84,11 @@ extension AtticLibrary {
         in history: UndoHistoryID = .library
     ) -> RestoreReport {
         var report = RestoreReport()
+        // Repeats of one entry restore it once (and do not fail the second time).
+        var seenItems = Set<AtticItemRef>()
+        var seenAttachments = Set<UUID>()
+        let items = items.filter { seenItems.insert($0).inserted }
+        let attachments = attachments.filter { seenAttachments.insert($0.attachmentID).inserted }
         undo.perform(in: history) {
             let (restoredItems, restoredAttachments, failures) = performRestoreAll(items: items, attachments: attachments)
             report.restored = restoredItems.count + restoredAttachments.count
