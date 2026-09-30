@@ -626,4 +626,234 @@ final class RecentlyDeletedSelectionTests: XCTestCase {
         XCTAssertEqual(fixture.tasks.task(withID: task.id)?.attachments.map(\.id), [reference.id])
         XCTAssertEqual(fixture.library.undo.undoName(in: .library), "Restore Item")
     }
+
+    // MARK: - Fix round 3: a family delete only takes what its step owns
+
+    /// A main task with two subtasks and a note, nothing deleted yet.
+    private struct OwnershipFixture {
+        let fixture: Fixture
+        let parent: AtticItemRef
+        let child: AtticItemRef
+        let sibling: AtticItemRef
+        let note: AtticItemRef
+    }
+
+    private func makeOwnershipFixture() throws -> OwnershipFixture {
+        let fixture = try makeFixture()
+        let parent = try XCTUnwrap(fixture.tasks.create(title: "Parent"))
+        let child = try XCTUnwrap(fixture.tasks.create(title: "Child", parentID: parent.id))
+        let sibling = try XCTUnwrap(fixture.tasks.create(title: "Sibling", parentID: parent.id))
+        let note = try XCTUnwrap(fixture.notes.create(title: "Note"))
+        return OwnershipFixture(
+            fixture: fixture,
+            parent: AtticItemRef(.task, parent.id),
+            child: AtticItemRef(.task, child.id),
+            sibling: AtticItemRef(.task, sibling.id),
+            note: AtticItemRef(.note, note.id)
+        )
+    }
+
+    /// Deletes the subtask, then its main task (with the other subtask), each
+    /// as its own step in Tasks.
+    private func deleteChildThenParent(_ family: OwnershipFixture) {
+        let library = family.fixture.library
+        XCTAssertTrue(library.delete(family.child))
+        family.fixture.clock.value += 1
+        XCTAssertTrue(library.delete(family.parent))
+        family.fixture.clock.value += 1
+    }
+
+    /// The recheck's single-item reproducer. Delete C, then P (Tasks).
+    /// Restore only P through Recently Deleted. Undo in Tasks twice (P's
+    /// Delete is obsolete, C's Delete brings C back). Undo P's Restore: it
+    /// must not delete P and so C, whose restore it never made.
+    func testUndoOfASingleRestoreKeepsAChildRestoredThroughAnotherHistory() throws {
+        let family = try makeOwnershipFixture()
+        let library = family.fixture.library
+        deleteChildThenParent(family)
+        XCTAssertTrue(library.restore(family.parent, in: .library))
+        XCTAssertEqual(library.state(of: family.child), .deleted, "the child was deleted on its own")
+
+        XCTAssertEqual(library.undo.undoStep(in: .tasks), .obsolete, "P is live already")
+        XCTAssertEqual(library.undo.undoStep(in: .tasks), .applied, "C comes back")
+        XCTAssertEqual(library.state(of: family.child), .live)
+
+        XCTAssertEqual(library.undo.undoStep(in: .library), .obsolete, "the restore no longer reaches P")
+        XCTAssertEqual(library.state(of: family.parent), .live)
+        XCTAssertEqual(library.state(of: family.child), .live, "C's restore was not undone")
+        XCTAssertEqual(library.state(of: family.sibling), .live)
+    }
+
+    /// The bulk variant: P is restored together with an unrelated note, so C
+    /// is not tracked by the step at all.
+    func testUndoOfABulkRestoreKeepsAChildItDidNotTrack() throws {
+        let family = try makeOwnershipFixture()
+        let library = family.fixture.library
+        deleteChildThenParent(family)
+        XCTAssertTrue(library.delete(family.note))
+        XCTAssertEqual(library.restoreRecentlyDeleted(items: [family.parent, family.note], attachments: []).restored, 2)
+
+        XCTAssertEqual(library.undo.undoStep(in: .tasks), .obsolete)
+        XCTAssertEqual(library.undo.undoStep(in: .tasks), .applied)
+        XCTAssertEqual(library.state(of: family.child), .live)
+
+        XCTAssertEqual(library.undo.undoStep(in: .library), .applied, "the note still goes back")
+        XCTAssertEqual(library.state(of: family.note), .deleted)
+        XCTAssertEqual(library.state(of: family.parent), .live, "P stays")
+        XCTAssertEqual(library.state(of: family.child), .live, "and so does C")
+        XCTAssertEqual(library.state(of: family.sibling), .live)
+    }
+
+    /// Ordinary single restore: Undo takes the whole family back, Redo brings
+    /// it again, and Undo still takes the whole family (the ownership carries
+    /// through Redo).
+    func testOrdinarySingleRestoreUndoRedoUndoMovesTheWholeFamily() throws {
+        let family = try makeOwnershipFixture()
+        let library = family.fixture.library
+        XCTAssertTrue(library.delete(family.parent))
+        XCTAssertTrue(library.restore(family.parent, in: .library))
+        let refs = [family.parent, family.child, family.sibling]
+        for _ in 0..<2 {
+            XCTAssertEqual(library.undo.undoStep(in: .library), .applied)
+            XCTAssertEqual(refs.map { library.state(of: $0) }, [.deleted, .deleted, .deleted])
+            XCTAssertEqual(library.undo.redoStep(in: .library), .applied)
+            XCTAssertEqual(refs.map { library.state(of: $0) }, [.live, .live, .live])
+        }
+    }
+
+    /// Ordinary bulk restore, through Undo, Redo and Undo again.
+    func testOrdinaryBulkRestoreUndoRedoUndoMovesTheWholeFamily() throws {
+        let family = try makeOwnershipFixture()
+        let library = family.fixture.library
+        XCTAssertTrue(library.delete(family.parent))
+        XCTAssertTrue(library.delete(family.note))
+        XCTAssertEqual(library.restoreRecentlyDeleted(items: [family.parent, family.note], attachments: []).restored, 2)
+        let refs = [family.parent, family.child, family.sibling, family.note]
+        for _ in 0..<2 {
+            XCTAssertEqual(library.undo.undoStep(in: .library), .applied)
+            XCTAssertEqual(refs.map { library.state(of: $0) }, [.deleted, .deleted, .deleted, .deleted])
+            XCTAssertEqual(library.undo.redoStep(in: .library), .applied)
+            XCTAssertEqual(refs.map { library.state(of: $0) }, [.live, .live, .live, .live])
+        }
+    }
+
+    /// Redo of a bulk restore owns what that restore brought back this time,
+    /// not what the first one did. A subtask deleted on its own before the
+    /// Undo is not part of the Redo, so restoring it through another history
+    /// afterwards is not something a later Undo may reverse.
+    func testRedoOfABulkRestoreOwnsWhatItRestoredThisTime() throws {
+        let family = try makeOwnershipFixture()
+        let library = family.fixture.library
+        XCTAssertTrue(library.delete(family.parent))
+        XCTAssertTrue(library.delete(family.note))
+        XCTAssertEqual(library.restoreRecentlyDeleted(items: [family.parent, family.note], attachments: []).restored, 2)
+        XCTAssertTrue(library.delete(family.child), "the subtask goes on its own")
+        XCTAssertEqual(library.undo.undoStep(in: .library), .applied)
+        XCTAssertEqual(library.undo.redoStep(in: .library), .applied)
+        XCTAssertEqual(library.state(of: family.child), .deleted, "Redo did not bring it back")
+        XCTAssertTrue(library.restore(family.child, in: .tasks))
+
+        XCTAssertEqual(library.undo.undoStep(in: .library), .applied, "the note goes back")
+        XCTAssertEqual(library.state(of: family.note), .deleted)
+        XCTAssertEqual(library.state(of: family.parent), .live)
+        XCTAssertEqual(library.state(of: family.child), .live)
+        XCTAssertEqual(library.state(of: family.sibling), .live)
+    }
+
+    /// Redo of a Delete takes the family it took, and no more: a subtask
+    /// restored through Recently Deleted while the Delete was undone stays.
+    func testRedoOfADeleteKeepsAChildRestoredThroughAnotherHistory() throws {
+        let family = try makeOwnershipFixture()
+        let library = family.fixture.library
+        deleteChildThenParent(family)
+        XCTAssertEqual(library.undo.undoStep(in: .tasks), .applied, "P comes back; C was deleted on its own")
+        XCTAssertEqual(library.state(of: family.child), .deleted)
+        XCTAssertTrue(library.restore(family.child, in: .library))
+
+        XCTAssertEqual(library.undo.redoStep(in: .tasks), .obsolete, "Redo no longer reaches P")
+        XCTAssertEqual(library.state(of: family.parent), .live)
+        XCTAssertEqual(library.state(of: family.child), .live)
+        XCTAssertEqual(library.state(of: family.sibling), .live)
+    }
+
+    /// Ordinary Delete: Undo, Redo, Undo, Redo each move the whole family.
+    func testOrdinaryDeleteUndoRedoMovesTheWholeFamily() throws {
+        let family = try makeOwnershipFixture()
+        let library = family.fixture.library
+        XCTAssertTrue(library.delete(family.parent))
+        let refs = [family.parent, family.child, family.sibling]
+        for _ in 0..<2 {
+            XCTAssertEqual(library.undo.undoStep(in: .tasks), .applied)
+            XCTAssertEqual(refs.map { library.state(of: $0) }, [.live, .live, .live])
+            XCTAssertEqual(library.undo.redoStep(in: .tasks), .applied)
+            XCTAssertEqual(refs.map { library.state(of: $0) }, [.deleted, .deleted, .deleted])
+        }
+    }
+
+    /// Redo of a multi-selection Delete keeps a subtask restored meanwhile.
+    func testRedoOfABulkDeleteKeepsAChildRestoredThroughAnotherHistory() throws {
+        let family = try makeOwnershipFixture()
+        let library = family.fixture.library
+        let other = try XCTUnwrap(family.fixture.tasks.create(title: "Other"))
+        XCTAssertTrue(library.delete(family.child))
+        family.fixture.clock.value += 1
+        XCTAssertTrue(library.deleteTasks([family.parent.id, other.id]).isApplied)
+        XCTAssertEqual(library.undo.undoStep(in: .tasks), .applied)
+        XCTAssertTrue(library.restore(family.child, in: .library))
+
+        XCTAssertEqual(library.undo.redoStep(in: .tasks), .obsolete)
+        XCTAssertEqual(library.state(of: family.parent), .live)
+        XCTAssertEqual(library.state(of: family.child), .live)
+        XCTAssertEqual(library.state(of: AtticItemRef(.task, other.id)), .live)
+    }
+
+    /// Ordinary multi-selection Delete, through Undo and Redo.
+    func testOrdinaryBulkDeleteUndoRedoMovesEveryFamily() throws {
+        let family = try makeOwnershipFixture()
+        let library = family.fixture.library
+        let other = try XCTUnwrap(family.fixture.tasks.create(title: "Other"))
+        let otherRef = AtticItemRef(.task, other.id)
+        XCTAssertTrue(library.deleteTasks([family.parent.id, other.id]).isApplied)
+        let refs = [family.parent, family.child, family.sibling, otherRef]
+        for _ in 0..<2 {
+            XCTAssertEqual(library.undo.undoStep(in: .tasks), .applied)
+            XCTAssertEqual(refs.map { library.state(of: $0) }, [.live, .live, .live, .live])
+            XCTAssertEqual(library.undo.redoStep(in: .tasks), .applied)
+            XCTAssertEqual(refs.map { library.state(of: $0) }, [.deleted, .deleted, .deleted, .deleted])
+        }
+    }
+
+    /// Undo of Add Task keeps a subtask that came back under it through
+    /// Recently Deleted after its own Add was undone.
+    func testUndoOfAddTaskKeepsAChildRestoredThroughAnotherHistory() throws {
+        let fixture = try makeFixture()
+        let library = fixture.library
+        let parent = try XCTUnwrap(library.createTasks([TaskDraft(title: "Parent")])?.first)
+        let child = try XCTUnwrap(library.createTasks([TaskDraft(title: "Child", parentID: parent.id)])?.first)
+        let parentRef = AtticItemRef(.task, parent.id)
+        let childRef = AtticItemRef(.task, child.id)
+        XCTAssertEqual(library.undo.undoStep(in: .tasks), .applied, "Add Child")
+        XCTAssertTrue(library.restore(childRef, in: .library))
+
+        XCTAssertEqual(library.undo.undoStep(in: .tasks), .obsolete, "Add Parent no longer reaches P")
+        XCTAssertEqual(library.state(of: parentRef), .live)
+        XCTAssertEqual(library.state(of: childRef), .live)
+    }
+
+    /// Ordinary Add Task with a subtask: Undo, Redo, Undo in order.
+    func testOrdinaryAddTaskUndoRedoMovesTheWholeFamily() throws {
+        let fixture = try makeFixture()
+        let library = fixture.library
+        let parent = try XCTUnwrap(library.createTasks([TaskDraft(title: "Parent")])?.first)
+        let child = try XCTUnwrap(library.createTasks([TaskDraft(title: "Child", parentID: parent.id)])?.first)
+        let refs = [AtticItemRef(.task, parent.id), AtticItemRef(.task, child.id)]
+        for _ in 0..<2 {
+            XCTAssertEqual(library.undo.undoStep(in: .tasks), .applied)
+            XCTAssertEqual(library.undo.undoStep(in: .tasks), .applied)
+            XCTAssertEqual(refs.map { library.state(of: $0) }, [.deleted, .deleted])
+            XCTAssertEqual(library.undo.redoStep(in: .tasks), .applied)
+            XCTAssertEqual(library.undo.redoStep(in: .tasks), .applied)
+            XCTAssertEqual(refs.map { library.state(of: $0) }, [.live, .live])
+        }
+    }
 }

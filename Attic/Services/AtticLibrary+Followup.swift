@@ -90,12 +90,12 @@ extension AtticLibrary {
         let items = items.filter { seenItems.insert($0).inserted }
         let attachments = attachments.filter { seenAttachments.insert($0.attachmentID).inserted }
         undo.perform(in: history) {
-            let (restoredItems, restoredAttachments, failures) = performRestoreAll(items: items, attachments: attachments)
+            let (restoredItems, restoredAttachments, failures, owned) = performRestoreAll(items: items, attachments: attachments)
             report.restored = restoredItems.count + restoredAttachments.count
             report.failures = failures
             guard report.restored > 0 else { return nil }
             let count = report.restored
-            let progress = BulkRestoreProgress(items: restoredItems, attachments: restoredAttachments)
+            let progress = BulkRestoreProgress(items: restoredItems, attachments: restoredAttachments, owned: owned)
             return UndoStep(
                 name: count == 1 ? "Restore Item" : "Restore \(count) Items",
                 undoOutcome: { [weak self] in
@@ -128,10 +128,16 @@ extension AtticLibrary {
         let attachments: [DeletedAttachmentSummary]
         var itemPhase: [AtticItemRef: Phase]
         var attachmentPhase: [UUID: Phase]
+        /// For each restored main task, the tasks its restore brought back,
+        /// read before the restore cleared its deletion record (and read
+        /// again each time Redo restores it). Undo deletes a main task only
+        /// while every live subtask is one of these or one this step tracks.
+        var owned: [UUID: Set<UUID>]
 
-        init(items: [AtticItemRef], attachments: [DeletedAttachmentSummary]) {
+        init(items: [AtticItemRef], attachments: [DeletedAttachmentSummary], owned: [UUID: Set<UUID>]) {
             self.items = items
             self.attachments = attachments
+            self.owned = owned
             itemPhase = Dictionary(items.map { ($0, .restored) }, uniquingKeysWith: { first, _ in first })
             attachmentPhase = Dictionary(attachments.map { ($0.attachmentID, .restored) }, uniquingKeysWith: { first, _ in first })
         }
@@ -172,6 +178,17 @@ extension AtticLibrary {
                     failed.insert(ref)
                     continue
                 }
+                // A live subtask this restore did not bring back and does not
+                // track came back through another history (Recently Deleted and
+                // Tasks undo separately). Deleting the main task would undo
+                // that, so the step no longer reaches it and the family stays.
+                let reach = (progress.owned[ref.id] ?? [ref.id])
+                    .union(progress.items.filter { $0.kind == .task }.map(\.id))
+                if !family.isSubset(of: reach) {
+                    progress.itemPhase[ref] = .dropped
+                    outcomes.append(.obsolete)
+                    continue
+                }
                 let members = family.map { AtticItemRef(.task, $0) }
                 // A subtask this step already sent back (or let go of) that is
                 // live again was restored by someone else: the delete would
@@ -207,11 +224,12 @@ extension AtticLibrary {
     private func restoreAgain(_ progress: BulkRestoreProgress) -> UndoOutcome {
         let items = progress.items.filter { progress.itemPhase[$0] == .sentBack }
         let attachments = progress.attachments.filter { progress.attachmentPhase[$0.attachmentID] == .sentBack }
-        let (again, againAttachments, _) = performRestoreAll(items: items, attachments: attachments)
+        let (again, againAttachments, _, againOwned) = performRestoreAll(items: items, attachments: attachments)
         var outcomes: [UndoOutcome] = []
         for ref in items {
             if again.contains(ref) {
                 progress.itemPhase[ref] = .restored
+                if let members = againOwned[ref.id] { progress.owned[ref.id] = members }
                 outcomes.append(.applied)
             } else if state(of: ref) == .deleted {
                 outcomes.append(.failed)
@@ -256,10 +274,17 @@ extension AtticLibrary {
     private func performRestoreAll(
         items: [AtticItemRef],
         attachments: [DeletedAttachmentSummary]
-    ) -> (items: [AtticItemRef], attachments: [DeletedAttachmentSummary], failures: [RestoreReport.Failure]) {
+    ) -> (
+        items: [AtticItemRef],
+        attachments: [DeletedAttachmentSummary],
+        failures: [RestoreReport.Failure],
+        owned: [UUID: Set<UUID>]
+    ) {
         var restored: [AtticItemRef] = []
         var failures: [RestoreReport.Failure] = []
         let taskRefs = items.filter { $0.kind == .task }
+        // What each delete covers, read before a restore clears the record.
+        let recorded = tasks.recordedDeletionMembers(ofRoots: taskRefs.map(\.id))
         if taskRefs.count > 1, tasks.restoreDeleted(taskIDs: taskRefs.map(\.id)) {
             restored += taskRefs
         } else {
@@ -297,6 +322,9 @@ extension AtticLibrary {
                 failures.append(.init(item: nil, attachmentID: attachment.attachmentID, message: lastErrorMessage ?? "Unknown error."))
             }
         }
-        return (restored, restoredAttachments, failures)
+        let owned = Dictionary(restored.filter { $0.kind == .task }.map {
+            ($0.id, recorded[$0.id] ?? [$0.id])
+        }, uniquingKeysWith: { first, _ in first })
+        return (restored, restoredAttachments, failures, owned)
     }
 }

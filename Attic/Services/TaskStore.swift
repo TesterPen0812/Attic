@@ -1689,6 +1689,23 @@ final class TaskStore: ObservableObject {
         return Set(linked.map(\.id))
     }
 
+    /// The tasks each delete recorded, for the deletes rooted at `ids` that are
+    /// in Recently Deleted right now (the root and every subtask that went
+    /// with it, whichever replica says so). Read before a restore clears the
+    /// record, or after a delete wrote it, so an undo step can remember what
+    /// it owns. A root with no record is left out.
+    func recordedDeletionMembers(ofRoots ids: [UUID]) -> [UUID: Set<UUID>] {
+        guard !ids.isEmpty else { return [:] }
+        guard let rows = try? context.fetch(FetchDescriptor<TaskItem>(
+            predicate: #Predicate { ids.contains($0.id) && $0.deletedAt != nil }
+        )) else { return [:] }
+        var result: [UUID: Set<UUID>] = [:]
+        for row in rows where row.deletionRootID == row.id {
+            result[row.id, default: [row.id]].formUnion(row.deletionMembers)
+        }
+        return result
+    }
+
     /// The rows one delete of `task` hides: every replica of the task and,
     /// for a main task, of its subtasks. The same family rules as before
     /// refuse an ambiguous or nested family instead of hiding a peer's task;

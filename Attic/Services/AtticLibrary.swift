@@ -132,6 +132,13 @@ final class AtticLibrary {
                 name: ids.count == 1 ? "Add Task" : "Add \(ids.count) Tasks",
                 undoOutcome: { [weak self] in
                     guard let self else { return .obsolete }
+                    // A subtask someone else brought back under one of these
+                    // tasks is not this step's to delete.
+                    switch self.familyCheck(of: ids, owned: Set(ids)) {
+                    case .reads: return .failed
+                    case .foreign: return .obsolete
+                    case .owned: break
+                    }
                     if self.tasks.delete(taskIDs: ids) { return .applied }
                     // Tasks that left the list since (deleted, or moved to the
                     // Done log) can't be taken back by this step any more.
@@ -272,6 +279,8 @@ final class AtticLibrary {
         }
         let deleted = undo.perform(in: history) {
             guard tasks.delete(taskIDs: ids) else { return nil }
+            // What this delete took, to keep Redo from taking more.
+            let owned = FamilyOwnership(recordedMembers(of: ids))
             return UndoStep(
                 name: "Delete \(ids.count) Tasks",
                 undoOutcome: { [weak self] in
@@ -281,7 +290,15 @@ final class AtticLibrary {
                 },
                 redoOutcome: { [weak self] in
                     guard let self else { return .obsolete }
-                    if self.tasks.delete(taskIDs: ids) { return .applied }
+                    switch self.familyCheck(of: ids, owned: owned.members) {
+                    case .reads: return .failed
+                    case .foreign: return .obsolete
+                    case .owned: break
+                    }
+                    if self.tasks.delete(taskIDs: ids) {
+                        owned.members = self.recordedMembers(of: ids)
+                        return .applied
+                    }
                     return ids.allSatisfy { self.tasks.task(withID: $0) != nil } ? .failed : .obsolete
                 }
             )
@@ -423,10 +440,17 @@ final class AtticLibrary {
     func delete(_ ref: AtticItemRef, in history: UndoHistoryID? = nil) -> Bool {
         undo.perform(in: history ?? Self.defaultHistory(for: ref)) {
             guard performDelete(ref) else { return nil }
+            // What this delete took, to keep Redo from taking more.
+            let owned = FamilyOwnership(ownedMembers(of: ref))
             return UndoStep(
                 name: "Delete \(Self.noun(for: ref.kind))",
                 undoOutcome: { [weak self] in self?.restoreOutcome(ref) ?? .obsolete },
-                redoOutcome: { [weak self] in self?.deleteOutcome(ref) ?? .obsolete }
+                redoOutcome: { [weak self] in
+                    guard let self else { return .obsolete }
+                    let outcome = self.deleteOutcome(ref, owning: owned.members)
+                    if outcome == .applied { owned.members = self.ownedMembers(of: ref) }
+                    return outcome
+                }
             )
         }
     }
@@ -436,11 +460,19 @@ final class AtticLibrary {
     @discardableResult
     func restore(_ ref: AtticItemRef, in history: UndoHistoryID = .library) -> Bool {
         undo.perform(in: history) {
+            // Read before the restore clears the record of what came back.
+            let owned = FamilyOwnership(ownedMembers(of: ref))
             guard performRestore(ref) else { return nil }
             return UndoStep(
                 name: "Restore \(Self.noun(for: ref.kind))",
-                undoOutcome: { [weak self] in self?.deleteOutcome(ref) ?? .obsolete },
-                redoOutcome: { [weak self] in self?.restoreOutcome(ref) ?? .obsolete }
+                undoOutcome: { [weak self] in self?.deleteOutcome(ref, owning: owned.members) ?? .obsolete },
+                redoOutcome: { [weak self] in
+                    guard let self else { return .obsolete }
+                    let members = self.ownedMembers(of: ref)
+                    let outcome = self.restoreOutcome(ref)
+                    if outcome == .applied { owned.members = members }
+                    return outcome
+                }
             )
         }
     }
@@ -701,7 +733,20 @@ final class AtticLibrary {
     /// apply again. A task in the Done log is listed: a restored archived
     /// task goes back to Recently Deleted from there, without a history step
     /// of its own.
-    func deleteOutcome(_ ref: AtticItemRef) -> UndoOutcome {
+    ///
+    /// `owning`: the tasks the step that is being undone or redone brought
+    /// back or took away. Deleting a main task takes every live subtask with
+    /// it, so a live subtask outside that set was put there by some other
+    /// step (Tasks and Recently Deleted keep separate histories); the step
+    /// no longer reaches the task and the family stays.
+    func deleteOutcome(_ ref: AtticItemRef, owning: Set<UUID>? = nil) -> UndoOutcome {
+        if let owning, ref.kind == .task {
+            switch familyCheck(of: [ref.id], owned: owning) {
+            case .reads: return .failed
+            case .foreign: return .obsolete
+            case .owned: break
+            }
+        }
         if performDelete(ref, includingDoneLog: true) { return .applied }
         let shown: Bool = switch ref.kind {
         case .task: tasks.listedTask(withID: ref.id) != nil
@@ -709,6 +754,53 @@ final class AtticLibrary {
         case .canvas: canvases?.canvases.contains(where: { $0.id == ref.id }) == true
         }
         return shown ? .failed : .obsolete
+    }
+
+    /// What one restore or delete step owns: the tasks that came back with
+    /// (or went with) the task it was made for, read from the deletion
+    /// record. Undo and Redo check a family delete against this instead of
+    /// the family as it is right now.
+    final class FamilyOwnership {
+        var members: Set<UUID>
+        init(_ members: Set<UUID>) { self.members = members }
+    }
+
+    enum FamilyCheck {
+        /// Every live subtask the delete would take belongs to the step.
+        case owned
+        /// One does not: someone else restored or created it.
+        case foreign
+        /// The family could not be read.
+        case reads
+    }
+
+    /// The tasks the deletion record for `ref` covers (itself included), or
+    /// empty for a note or canvas. Only `restore` and `delete` call it, while
+    /// the record exists.
+    func ownedMembers(of ref: AtticItemRef) -> Set<UUID> {
+        ownedMembers(of: [ref.id], kind: ref.kind)
+    }
+
+    func recordedMembers(of ids: [UUID]) -> Set<UUID> {
+        ownedMembers(of: ids, kind: .task)
+    }
+
+    private func ownedMembers(of ids: [UUID], kind: AtticItemKind) -> Set<UUID> {
+        guard kind == .task else { return [] }
+        let byRoot = tasks.recordedDeletionMembers(ofRoots: ids)
+        return ids.reduce(into: Set(ids)) { $0.formUnion(byRoot[$1] ?? []) }
+    }
+
+    /// Whether deleting these tasks would take only tasks in `owned`: the
+    /// live subtasks (every replica, the Done log included) of each main
+    /// task among them, read now.
+    func familyCheck(of ids: [UUID], owned: Set<UUID>) -> FamilyCheck {
+        for id in ids {
+            guard let listed = tasks.listedTask(withID: id), listed.parentID == nil else { continue }
+            guard let family = try? tasks.liveSubtaskIDs(of: id) else { return .reads }
+            if !family.isSubset(of: owned) { return .foreign }
+        }
+        return .owned
     }
 
     /// Undo/redo of a restore: only an item still in Recently Deleted can be
