@@ -85,8 +85,8 @@ final class TasksRound13UITests: XCTestCase {
         XCTAssertTrue(settings.waitForExistence(timeout: 5), "Settings opens")
         let popUp = settings.descendants(matching: .any).matching(identifier: "setting-animations").firstMatch
         XCTAssertTrue(popUp.waitForExistence(timeout: 5), "the Animations pop-up is on the General page")
-        let original = (popUp.value as? String) ?? "Full"
-        let other = original == "Reduced" ? "Full" : "Reduced"
+        let original = (popUp.value as? String) ?? "Lively"
+        let other = original == "Subtle" ? "Reduced" : "Subtle"
         popUp.click()
         let choice = app.descendants(matching: .any).matching(NSPredicate(format: "label == %@", other)).firstMatch
         XCTAssertTrue(choice.waitForExistence(timeout: 3), "the list offers \(other)")

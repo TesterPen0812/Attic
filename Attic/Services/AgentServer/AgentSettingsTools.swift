@@ -87,7 +87,7 @@ final class AgentSettingsTools {
             ],
             "animations": [
                 "type": "string", "enum": AtticAnimationLevel.allCases.map(\.rawValue),
-                "description": "Full (springy motion) or reduced (crossfades and instant changes, as with the Mac's Reduce Motion)."
+                "description": "lively (the default springy motion), subtle (the same springs, quieter) or reduced (crossfades and instant changes; macOS Reduce Motion forces reduced)."
             ],
             "quick_capture": [
                 "type": "boolean",

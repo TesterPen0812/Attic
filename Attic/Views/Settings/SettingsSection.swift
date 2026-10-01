@@ -155,6 +155,6 @@ enum SettingsVisibility {
     static func behaviourFootnote(systemReducesMotion: Bool) -> String {
         systemReducesMotion
             ? String(localized: "Haptics: a light tap on the trackpad when you complete a task or drop something into place. Reduce Motion is on in System Settings, so animations are reduced.")
-            : String(localized: "Haptics: a light tap on the trackpad when you complete a task or drop something into place. Reduced animations fade instead of moving.")
+            : String(localized: "Haptics: a light tap on the trackpad when you complete a task or drop something into place. Lively springs things in and away, Subtle does the same more quietly, and Reduced fades instead of moving.")
     }
 }

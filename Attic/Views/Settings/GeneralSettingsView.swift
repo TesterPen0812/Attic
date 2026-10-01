@@ -53,15 +53,16 @@ struct GeneralSettingsView: View {
                 )
                 .help(String(localized: "A light tap on the trackpad when you complete a task or drop something into place"))
                 AtticGroupDivider()
-                // Round 9 (owner item 26): springy motion, or reduced to
-                // crossfades and instant changes.
+                // Lively (the default) or Subtle springs, or Reduced to
+                // crossfades and instant changes (round 9, owner item 26;
+                // Lively and Subtle: the Motion Lab's finish).
                 AtticPopUpRow(
                     label: String(localized: "Animations"),
                     choices: AtticAnimationLevel.allCases.map { ($0, $0.title) },
                     selection: $settings.animations,
                     identifier: "setting-animations"
                 )
-                .help(String(localized: "Reduced fades or changes at once instead of moving"))
+                .help(String(localized: "Lively springs things in and away. Subtle does the same more quietly. Reduced fades or changes at once instead of moving."))
             }
 
             // The Motion Lab: preview builds only (never the release

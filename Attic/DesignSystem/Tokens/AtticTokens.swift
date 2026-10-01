@@ -658,13 +658,17 @@ struct AtticMotionTuning: Hashable, Codable, Sendable {
     }
 }
 
-/// The three feels the owner chooses between in the Motion Lab. Each is
-/// only data (`tuning`).
+/// The feels the Motion Lab offers. Each is only data (`tuning`). The user
+/// setting (`AtticAnimationLevel`) offers two of them, Lively and Subtle.
 enum AtticMotionFeel: String, CaseIterable, Codable, Sendable {
     /// Round 11: crisp, no bounce on navigation, a light one on small
     /// things that appear; things fade in and out.
     case calm
-    /// Recommended: navigation lands in about the same time as Calm's
+    /// The quiet spring feel (Settings › General › Animations › Subtle):
+    /// Calm's timings with a small bounce, springing in and tucking away
+    /// from close to full size. No plain fades.
+    case subtle
+    /// The default (Settings › General › Animations › Lively): navigation lands in about the same time as Calm's
     /// with a hint of bounce; things that appear spring in from about
     /// 0.92 of their size, from where they come from, and tuck away
     /// quickly. No plain fades.
@@ -672,12 +676,14 @@ enum AtticMotionFeel: String, CaseIterable, Codable, Sendable {
     /// Round 9's springs, with a bigger pop and tuck.
     case playful
 
+    /// What every build starts with.
     static let recommended: AtticMotionFeel = .lively
 
     /// The Motion Lab's words (a preview-only tool: not localized).
     var title: String {
         switch self {
         case .calm: "Calm"
+        case .subtle: "Subtle"
         case .lively: "Lively"
         case .playful: "Playful"
         }
@@ -686,6 +692,7 @@ enum AtticMotionFeel: String, CaseIterable, Codable, Sendable {
     var tuning: AtticMotionTuning {
         switch self {
         case .calm: .calm
+        case .subtle: .subtle
         case .lively: .lively
         case .playful: .playful
         }
@@ -701,6 +708,18 @@ extension AtticMotionTuning {
         complete: .init(response: 0.22, bounce: 0.15), settle: .init(response: 0.24, bounce: 0.08),
         failReturn: .init(response: 0.28, bounce: 0.1),
         appearScale: 1, leaveResponse: 0.12, leaveScale: 1, appear: .fade, leave: .fade
+    )
+
+    /// Calm's timings with a small bounce (navigation 0.04, things that
+    /// appear about 0.10), springing in from 0.96 of their size and tucking
+    /// away to 0.98 in 0.12 s. Quieter than Lively, but never a plain fade.
+    static let subtle = AtticMotionTuning(
+        slide: .init(response: 0.25, bounce: 0.04), expand: .init(response: 0.22, bounce: 0.04),
+        doneSlide: .init(response: 0.25, bounce: 0.04),
+        popover: .init(response: 0.22, bounce: 0.10), toast: .init(response: 0.24, bounce: 0.10),
+        complete: .init(response: 0.22, bounce: 0.10), settle: .init(response: 0.24, bounce: 0.08),
+        failReturn: .init(response: 0.28, bounce: 0.08),
+        appearScale: 0.96, leaveResponse: 0.12, leaveScale: 0.98, appear: .spring, leave: .spring
     )
 
     /// Navigation about 0.3 s with bounce 0.12, things that appear about
@@ -748,18 +767,38 @@ enum AtticMotionLab {
                                          arguments: ProcessInfo.processInfo.arguments)
 }
 
-/// Settings › General › Animations (owner item 26): Full, the springs
-/// above, or Reduced, every preset's Reduce Motion fallback (crossfades or
-/// instant changes, no travel), as macOS Reduce Motion gives.
+/// Settings › General › Animations: Lively (the default), Subtle, or
+/// Reduced, every preset's Reduce Motion fallback (crossfades or instant
+/// changes, no travel), as macOS Reduce Motion gives. macOS Reduce Motion
+/// forces Reduced whatever is chosen.
 enum AtticAnimationLevel: String, CaseIterable, Sendable {
-    case full
+    case lively
+    case subtle
     case reduced
 
     var title: String {
         switch self {
-        case .full: String(localized: "Full")
+        case .lively: String(localized: "Lively")
+        case .subtle: String(localized: "Subtle")
         case .reduced: String(localized: "Reduced")
         }
+    }
+
+    /// The spring values this level uses. Reduced never reads them (every
+    /// preset takes its fallback), so it carries Subtle's.
+    var feel: AtticMotionFeel {
+        switch self {
+        case .lively: .lively
+        case .subtle, .reduced: .subtle
+        }
+    }
+
+    /// The level stored by an earlier build: "full" (the springs) is now
+    /// Lively, and "reduced" is still Reduced. Anything else is the default.
+    static func migrated(from stored: String?) -> AtticAnimationLevel {
+        guard let stored else { return .lively }
+        if stored == "full" { return .lively }
+        return AtticAnimationLevel(rawValue: stored) ?? .lively
     }
 }
 
@@ -768,7 +807,7 @@ enum AtticAnimationLevel: String, CaseIterable, Sendable {
 /// `design.reduceMotion`. `AppSettings` keeps `level` current.
 @MainActor
 enum AtticMotionPreference {
-    static var level: AtticAnimationLevel = .full
+    static var level: AtticAnimationLevel = .lively
 
     /// Reduced in Settings, or Reduce Motion on in macOS.
     static var reducesMotion: Bool {

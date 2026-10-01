@@ -390,7 +390,7 @@ final class SettingsPhase1Tests: XCTestCase {
             "corner_size": 28, "panel_width": 360, "haptics": false, "animations": "reduced"
         ]))
         XCTAssertEqual(settings.animations, .reduced)
-        settings.animations = .full
+        settings.animations = .lively
         XCTAssertEqual(settings.appearance, .dark)
         XCTAssertEqual(settings.panelTheme, .seaGlass)
         XCTAssertEqual(settings.panelSurfaceStyle, .frosted)

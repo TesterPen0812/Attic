@@ -375,16 +375,20 @@ final class TasksRound9Tests: XCTestCase {
         let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
         defer {
             defaults.removePersistentDomain(forName: suite)
-            AtticMotionPreference.level = .full
+            AtticMotionPreference.level = .lively
+            AtticMotionTuning.current = AtticMotionFeel.recommended.tuning
         }
-        let settings = AppSettings(defaults: defaults)
-        XCTAssertEqual(settings.animations, .full, "Full by default")
+        let settings = AppSettings(defaults: defaults, motionLabAvailable: false)
+        XCTAssertEqual(settings.animations, .lively, "Lively by default")
         settings.animations = .reduced
-        XCTAssertEqual(AppSettings(defaults: defaults).animations, .reduced, "remembered")
+        XCTAssertEqual(AppSettings(defaults: defaults, motionLabAvailable: false).animations, .reduced, "remembered")
         XCTAssertTrue(AtticMotionPreference.reducesMotion, "code outside views reads it")
-        settings.animations = .full
-        XCTAssertEqual(AtticMotionPreference.level, .full)
-        XCTAssertEqual(AtticAnimationLevel.allCases.map(\.title), ["Full", "Reduced"])
+        settings.animations = .subtle
+        XCTAssertEqual(AppSettings(defaults: defaults, motionLabAvailable: false).animations, .subtle, "remembered")
+        XCTAssertFalse(AtticMotionPreference.level == .reduced)
+        settings.animations = .lively
+        XCTAssertEqual(AtticMotionPreference.level, .lively)
+        XCTAssertEqual(AtticAnimationLevel.allCases.map(\.title), ["Lively", "Subtle", "Reduced"])
         XCTAssertNotEqual(SettingsVisibility.behaviourFootnote(systemReducesMotion: true),
                           SettingsVisibility.behaviourFootnote(systemReducesMotion: false),
                           "the footnote says when the Mac's Reduce Motion wins")
@@ -403,7 +407,7 @@ final class TasksRound9Tests: XCTestCase {
                 return Color.clear
             }
         }
-        for (level, expected) in [(AtticAnimationLevel.full, false), (.reduced, true)] {
+        for (level, expected) in [(AtticAnimationLevel.lively, false), (.subtle, false), (.reduced, true)] {
             probe.reduceMotion = nil
             let host = NSHostingView(rootView: Reader(probe: probe).atticDesignFromSystem(animations: level))
             host.frame = CGRect(x: 0, y: 0, width: 10, height: 10)

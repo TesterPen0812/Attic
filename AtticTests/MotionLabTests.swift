@@ -3,8 +3,8 @@ import SwiftUI
 import XCTest
 @testable import Attic
 
-/// The feel measured by the cost tests: `ATTIC_MOTION_FEEL` (calm, lively,
-/// playful; `TEST_RUNNER_ATTIC_MOTION_FEEL` through xcodebuild), else the
+/// The feel measured by the cost tests: `ATTIC_MOTION_FEEL` (calm, subtle,
+/// lively, playful; `TEST_RUNNER_ATTIC_MOTION_FEEL` through xcodebuild), else the
 /// default feel.
 enum MotionFeelUnderTest {
     nonisolated(unsafe) private static var saved: AtticMotionTuning?
@@ -110,6 +110,168 @@ final class MotionLabTests: XCTestCase {
             let lively = Self.arrival(preset.spring(in: .lively))
             XCTAssertLessThanOrEqual(lively, calm + 0.012, "\(preset): \(lively) against \(calm)")
         }
+    }
+
+    /// Subtle: Calm's timings with a small bounce (navigation about 0.04,
+    /// appear about 0.10), still springing in and tucking away (no plain
+    /// fades), quieter than Lively.
+    func testSubtleIsCalmsTimingsWithASmallBounce() {
+        let subtle = AtticMotionTuning.subtle
+        let calm = AtticMotionTuning.calm
+        let lively = AtticMotionTuning.lively
+        for spring in [subtle.slide, subtle.expand, subtle.doneSlide] {
+            XCTAssertEqual(spring.bounce, 0.04, accuracy: 0.001)
+        }
+        for spring in [subtle.popover, subtle.toast, subtle.complete] {
+            XCTAssertEqual(spring.bounce, 0.10, accuracy: 0.001)
+        }
+        XCTAssertEqual(subtle.slide.response, calm.slide.response)
+        XCTAssertEqual(subtle.popover.response, calm.popover.response)
+        XCTAssertEqual(subtle.appear, .spring)
+        XCTAssertEqual(subtle.leave, .spring)
+        XCTAssertFalse(subtle.popsNativePopovers)
+        XCTAssertGreaterThan(subtle.appearScale, lively.appearScale, "a smaller pop")
+        XCTAssertGreaterThan(subtle.leaveScale, lively.leaveScale, "a smaller tuck")
+        XCTAssertLessThan(subtle.leaveResponse, lively.leaveResponse, "and a quicker one")
+        for preset in feelPresets {
+            XCTAssertLessThanOrEqual(preset.spring(in: .subtle).bounce, preset.spring(in: .lively).bounce, "\(preset)")
+            XCTAssertLessThanOrEqual(preset.spring(in: .subtle).response, preset.spring(in: .lively).response, "\(preset)")
+        }
+        // No plain fades: in Full mode a popover is an animation with a hidden scale.
+        XCTAssertLessThan(AtticMotionPreset.popover.hiddenScale(reduceMotion: false), 1)
+    }
+
+    /// Like Lively, each Subtle spring reaches 95 % of its way within a
+    /// frame and a half of Calm's.
+    func testSubtleArrivesAsSoonAsCalm() {
+        for preset in feelPresets {
+            let calm = Self.arrival(preset.spring(in: .calm))
+            let subtle = Self.arrival(preset.spring(in: .subtle))
+            XCTAssertLessThanOrEqual(subtle, calm + 0.012, "\(preset): \(subtle) against \(calm)")
+        }
+    }
+
+    // MARK: - Animations: Lively, Subtle, Reduced
+
+    private func makeSettings(lab: Bool = false, _ prepare: (UserDefaults) -> Void = { _ in }) throws -> (AppSettings, UserDefaults, () -> Void) {
+        let suite = "MotionFinalizeTests-\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        prepare(defaults)
+        let settings = AppSettings(defaults: defaults, motionLabAvailable: lab)
+        return (settings, defaults, {
+            defaults.removePersistentDomain(forName: suite)
+            AtticMotionPreference.level = .lively
+        })
+    }
+
+    func testLivelyIsTheDefaultInEveryBuild() throws {
+        for lab in [false, true] {
+            let (settings, _, cleanUp) = try makeSettings(lab: lab)
+            defer { cleanUp() }
+            XCTAssertEqual(settings.animations, .lively)
+            XCTAssertEqual(settings.motionFeel, .lively)
+            XCTAssertEqual(settings.motionTuning, AtticMotionTuning.lively)
+            XCTAssertEqual(AtticMotionTuning.current, AtticMotionTuning.lively)
+            XCTAssertEqual(AtticMotionPreference.level, .lively)
+        }
+        XCTAssertEqual(AtticAnimationLevel.allCases, [.lively, .subtle, .reduced])
+    }
+
+    func testSubtleAndReducedMapToTheirValues() throws {
+        let (settings, _, cleanUp) = try makeSettings()
+        defer { cleanUp() }
+        settings.animations = .subtle
+        XCTAssertEqual(settings.motionFeel, .subtle)
+        XCTAssertEqual(AtticMotionTuning.current, AtticMotionTuning.subtle)
+        XCTAssertEqual(AtticMotionPreset.popover.spring(in: AtticMotionTuning.current), AtticMotionTuning.subtle.popover)
+        settings.animations = .reduced
+        XCTAssertEqual(AtticMotionPreference.level, .reduced)
+        XCTAssertTrue(AtticMotionPreference.reducesMotion)
+        for preset in AtticMotionPreset.allCases {
+            XCTAssertEqual(preset.hiddenScale(reduceMotion: true), 1, "\(preset): nothing scales when reduced")
+        }
+        settings.animations = .lively
+        XCTAssertEqual(AtticMotionTuning.current, AtticMotionTuning.lively)
+        XCTAssertEqual(AtticAnimationLevel.lively.feel, .lively)
+        XCTAssertEqual(AtticAnimationLevel.subtle.feel, .subtle)
+    }
+
+    func testOldSettingsMigrate() throws {
+        let (full, fullDefaults, cleanUpFull) = try makeSettings { $0.set("full", forKey: "animations") }
+        defer { cleanUpFull() }
+        XCTAssertEqual(full.animations, .lively, "an old Full is Lively")
+        XCTAssertEqual(fullDefaults.string(forKey: "animations"), "lively", "and is stored as such")
+        XCTAssertEqual(AtticMotionTuning.current, AtticMotionTuning.lively)
+
+        let (reduced, _, cleanUpReduced) = try makeSettings { $0.set("reduced", forKey: "animations") }
+        defer { cleanUpReduced() }
+        XCTAssertEqual(reduced.animations, .reduced, "an old Reduced stays Reduced")
+
+        let (unknown, _, cleanUpUnknown) = try makeSettings { $0.set("sparkly", forKey: "animations") }
+        defer { cleanUpUnknown() }
+        XCTAssertEqual(unknown.animations, .lively)
+
+        XCTAssertEqual(AtticAnimationLevel.migrated(from: nil), .lively)
+        XCTAssertEqual(AtticAnimationLevel.migrated(from: "subtle"), .subtle)
+    }
+
+    /// macOS Reduce Motion wins whatever Animations says.
+    func testMacReduceMotionForcesReduced() {
+        final class Probe { var reduceMotion: Bool? }
+        let probe = Probe()
+        struct Reader: View {
+            let probe: Probe
+            @Environment(\.atticDesign) private var design
+            var body: some View {
+                probe.reduceMotion = design.reduceMotion
+                return Color.clear
+            }
+        }
+        for level in AtticAnimationLevel.allCases {
+            probe.reduceMotion = nil
+            let host = NSHostingView(rootView: Reader(probe: probe)
+                .atticDesignFromSystem(animations: level)
+                .environment(\.accessibilityReduceMotion, true))
+            host.frame = CGRect(x: 0, y: 0, width: 10, height: 10)
+            host.layoutSubtreeIfNeeded()
+            XCTAssertEqual(probe.reduceMotion, true, "\(level)")
+        }
+    }
+
+    /// A lab choice overrides Animations until Animations is changed; the
+    /// release identity has no lab to choose in.
+    func testTheLabChoiceAndTheAnimationsSettingAgree() throws {
+        let (settings, defaults, cleanUp) = try makeSettings(lab: true)
+        defer { cleanUp() }
+        settings.chooseMotionFeel(.subtle)
+        XCTAssertEqual(AtticMotionTuning.current, AtticMotionTuning.subtle)
+        XCTAssertEqual(settings.animations, .lively, "the setting is untouched")
+        settings.chooseMotionFeel(.playful)
+        XCTAssertEqual(AppSettings(defaults: defaults, motionLabAvailable: true).motionFeel, .playful)
+        settings.animations = .subtle
+        XCTAssertEqual(settings.motionFeel, .subtle, "changing Animations puts the feel back")
+        XCTAssertNil(defaults.object(forKey: "motionLabFeel"))
+        XCTAssertNil(defaults.object(forKey: "motionLabTuning"))
+        XCTAssertEqual(AppSettings(defaults: defaults, motionLabAvailable: true).motionFeel, .subtle)
+    }
+
+    /// The release identity never writes lab keys, even when Animations changes.
+    func testTheReleaseIdentityWritesNoLabKeys() throws {
+        let (settings, defaults, cleanUp) = try makeSettings(lab: false)
+        defer { cleanUp() }
+        settings.animations = .subtle
+        settings.animations = .lively
+        XCTAssertNil(defaults.object(forKey: "motionLabFeel"))
+        XCTAssertNil(defaults.object(forKey: "motionLabTuning"))
+    }
+
+    /// Edges is gone: nothing stored, nothing copied.
+    func testEdgesIsGone() throws {
+        let (settings, defaults, cleanUp) = try makeSettings(lab: true)
+        defer { cleanUp() }
+        settings.chooseMotionFeel(.lively)
+        XCTAssertNil(defaults.object(forKey: "motionLabEdges"))
+        XCTAssertFalse(settings.motionTuning.copyText(feel: .lively).contains("Edges"))
     }
 
     // MARK: - Reduced motion ignores the feel
@@ -329,7 +491,7 @@ final class MotionLabTests: XCTestCase {
             lines.append("\(feel.rawValue): " + parts.joined(separator: ", "))
         }
         print("ATTIC_MOTION_TIMINGS\n" + lines.joined(separator: "\n"))
-        XCTAssertEqual(lines.count, 3)
+        XCTAssertEqual(lines.count, AtticMotionFeel.allCases.count)
     }
 
     // MARK: - Helpers

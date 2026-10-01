@@ -4,7 +4,7 @@ import SwiftUI
 /// Settings › General › Motion Lab (preview builds only, owner 2026-09-30:
 /// "I'm not really a fan of fading ones, I much more prefer the
 /// bounciness, even if it's slight"). The owner feels the motion live in
-/// the panel and picks it: a feel (Calm, Lively, Playful), the Appear and
+/// the panel and picks it: a feel (Calm, Subtle, Lively, Playful), the Appear and
 /// Leave styles, and fine-tuning sliders. Every change applies at once
 /// (`AppSettings.motionTuning` is `AtticMotionTuning.current` and part of
 /// the design context), and persists in the preview's own defaults.
@@ -21,7 +21,7 @@ struct MotionLabSettingsGroup: View {
     var body: some View {
         SettingsGroup(
             title: "Motion Lab",
-            footnote: "Preview builds only. Each change applies at once: open the panel and try it. Reduced animations and Reduce Motion ignore the feel.",
+            footnote: "Preview builds only. Each change applies at once: open the panel and try it. Reduced animations and Reduce Motion ignore the feel, and changing Animations above puts the feel back to Lively or Subtle.",
             identifier: "settings-motion-lab"
         ) {
             AtticSegmentedRow(

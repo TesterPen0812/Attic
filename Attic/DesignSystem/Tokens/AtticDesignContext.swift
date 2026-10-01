@@ -131,7 +131,7 @@ extension View {
         tint: PanelTintLevel = .off,
         tintLength: Double = PanelTintLength.defaultValue,
         hapticsEnabled: Bool = true,
-        animations: AtticAnimationLevel = .full,
+        animations: AtticAnimationLevel = .lively,
         controls: AtticControlMaterial = .liquidGlass,
         motion: AtticMotionTuning = .current
     ) -> some View {
