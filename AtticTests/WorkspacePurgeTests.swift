@@ -47,6 +47,134 @@ final class WorkspacePurgeTests: XCTestCase {
     private func tasks() throws -> Int { try coordinator.freshContext().fetchCount(FetchDescriptor<TaskItem>()) }
     private func records() throws -> [TaskDeletionPreservation] { try coordinator.freshContext().fetch(FetchDescriptor<TaskDeletionPreservation>()) }
 
+    func testP3NewDeletionCapturesEveryReplicaAndDependenciesWithSoftDelete() async throws {
+        let context = coordinator.freshContext(), task = TaskItem(id: taskID, title: "Before deletion")
+        task.listOrderVersion = TaskItem.currentListOrderVersion
+        context.insert(task)
+        let note = NoteItem(id: noteID); note.taskID = taskID; context.insert(note)
+        let association = TaskNoteAssociation(taskID: taskID, noteID: noteID); context.insert(association)
+        let version = NoteVersion(noteID: noteID, createdAt: deletion, reason: .beforeRestore, content: nil, contentFormat: 0,
+            title: "Historical", body: "body", attachmentIDs: [], sourceRevisionID: note.revisionID)
+        context.insert(version); try context.save()
+        let store = TaskStore(container: coordinator.container, now: { self.deletion }, taskImageFiles: files)
+        XCTAssertTrue(store.delete(taskIDs: [taskID]))
+        let record = try XCTUnwrap(records().first), bytes = record.snapshot
+        let snapshot = try JSONDecoder().decode(WorkspacePurge.Preservation.self, from: bytes)
+        expectEqual(record.provenance, "soft deletion"); expectEqual(record.deletedAt, deletion)
+        expectEqual(snapshot.members.first?.replicas?.count, 1)
+        expectEqual(Set(snapshot.dependencies?.map(\.owner) ?? []), [
+            .init(entity: .note, id: noteID), .init(entity: .association, id: association.id), .init(entity: .version, id: version.id)])
+        expectEqual(await purge().outcome, .committed)
+        expectEqual(try XCTUnwrap(records().first).snapshot, bytes)
+        expectEqual(try tasks(), 0)
+    }
+    func testP3FailedNewDeletionSaveKeepsTasksAndCreatesNoRecord() throws {
+        let context = coordinator.freshContext(), task = TaskItem(id: taskID, title: "Kept")
+        task.listOrderVersion = TaskItem.currentListOrderVersion; context.insert(task); try context.save()
+        let store = TaskStore(container: coordinator.container, persist: { _ in throw WorkspaceFoundationError.preparationFailed }, taskImageFiles: files)
+        XCTAssertFalse(store.delete(taskIDs: [taskID])); XCTAssertTrue(try records().isEmpty)
+        XCTAssertNil(try coordinator.freshContext().fetch(FetchDescriptor<TaskItem>()).first?.deletedAt)
+    }
+    func testP3NewCaptureRecordsUnverifiedOriginalWithoutBlockingExclusiveMissingFile() async throws {
+        let ref = TaskImageReference(id: UUID(), filename: "missing.txt", digest: NotePayloadDigest.sha256(Data()),
+            contentTypeIdentifier: "public.plain-text", byteCount: 0)
+        let context = coordinator.freshContext(), task = TaskItem(id: taskID, title: "Kept title")
+        task.listOrderVersion = TaskItem.currentListOrderVersion; task.imageReferencesData = try JSONEncoder().encode([ref]); context.insert(task); try context.save()
+        let store = TaskStore(container: coordinator.container, now: { self.deletion }, taskImageFiles: files)
+        XCTAssertTrue(store.delete(taskIDs: [taskID]))
+        let bytes = try XCTUnwrap(records().first).snapshot
+        let snapshot = try JSONDecoder().decode(WorkspacePurge.Preservation.self, from: bytes)
+        expectEqual(snapshot.originals, [.init(reference: ref, wasMissing: nil)])
+        expectEqual(await purge().outcome, .committed); expectEqual(try XCTUnwrap(records().first).snapshot, bytes)
+    }
+    func testP3CoordinatedLinksRemoveAffectedCompleteFamiliesAndKeepUnrelatedLinks() async throws {
+        try seed()
+        let context = coordinator.freshContext(), links = LinkStore(container: coordinator.container)
+        let target = NoteItem(id: UUID()); context.insert(target); try context.save()
+        let affected = try XCTUnwrap(links.link(.init(.task, taskID), to: .init(.note, target.id), kind: .reference))
+        let unrelated = ItemLink(source: .init(.note, target.id), target: .init(.note, UUID()), kind: .reference)
+        context.insert(unrelated); try context.save()
+        expectEqual(await purge().outcome, .committed)
+        let survivors = try coordinator.freshContext().fetch(FetchDescriptor<ItemLink>())
+        expectEqual(Set(survivors.map(\.id)), [unrelated.id]); XCTAssertFalse(survivors.contains { $0.id == affected.id })
+    }
+    func testP3DivergentAffectedLinkFamilyRetainsEveryTaskAndRecord() async throws {
+        try seed()
+        let context = coordinator.freshContext(), link = ItemLink(source: .init(.task, taskID), target: .init(.note, UUID()), kind: .reference)
+        context.insert(link)
+        let replica = ItemLink(id: link.id, source: .init(.task, taskID), target: .init(.note, UUID()), kind: .reference)
+        context.insert(replica); try context.save()
+        expectEqual(await purge().outcome, .conflict); expectEqual(try tasks(), 1); XCTAssertTrue(try records().isEmpty)
+        expectEqual(try coordinator.freshContext().fetchCount(FetchDescriptor<ItemLink>()), 2)
+    }
+
+    func testP4LegacyActiveMaterializationAndDeletedRestoreKeepFormatBodyAndPreservationTitle() async throws {
+        try seed()
+        let context = coordinator.freshContext(), activeID = UUID()
+        let active = NoteItem(id: activeID, title: "Old active", body: "line 1\nline 2")
+        active.taskID = taskID; context.insert(active)
+        let deleted = NoteItem(id: noteID, title: "Old deleted", body: "deleted body")
+        deleted.taskID = taskID; deleted.deletedAt = deletion; context.insert(deleted); try context.save()
+        expectEqual(await purge().outcome, .committed)
+        let rows = try coordinator.freshContext().fetch(FetchDescriptor<NoteItem>())
+        let materialized = try XCTUnwrap(rows.first { $0.id == activeID })
+        expectEqual(materialized.title, "Current task"); expectEqual(materialized.body, "line 1\nline 2")
+        expectEqual(materialized.contentFormat, 0); XCTAssertNil(materialized.content); XCTAssertNil(materialized.taskID)
+        expectEqual(try note().title, "Old deleted")
+        let store = NoteStore(container: coordinator.container)
+        XCTAssertTrue(store.restoreDeleted(noteID: noteID))
+        expectEqual(try note().title, "Current task"); expectEqual(try note().body, "deleted body")
+        expectEqual(try note().contentFormat, 0); XCTAssertNil(try note().content); XCTAssertNil(try note().taskID)
+    }
+    func testP4LegacyVersionRestoreDerivesPreservationTitleAndKeepsHistoricalBody() async throws {
+        try seed(note: true); expectEqual(await purge().outcome, .committed)
+        let context = coordinator.freshContext(), version = NoteVersion(noteID: noteID, createdAt: deletion, reason: .beforeRestore,
+            content: nil, contentFormat: 0, title: "Historical title", body: "Historical body", attachmentIDs: [], sourceRevisionID: nil)
+        context.insert(version); try context.save()
+        let store = NoteStore(container: coordinator.container)
+        if case let .failure(error) = store.restoreVersion(version.id, noteID: noteID) { XCTFail("\(error)") }
+        expectEqual(try note().title, "Current task"); expectEqual(try note().body, "Historical body")
+        expectEqual(try note().contentFormat, 0); XCTAssertNil(try note().content); XCTAssertNil(try note().taskID)
+        expectEqual(try tasks(), 0)
+    }
+    func testP3PreservationReferencesKeepDeletedNoteAndVersionRowsIndependentOfTaskLifetime() async throws {
+        let context = coordinator.freshContext(), task = TaskItem(id: taskID, title: "Task")
+        task.listOrderVersion = TaskItem.currentListOrderVersion; context.insert(task)
+        let row = NoteItem(id: noteID, title: "Legacy", body: "body"); row.taskID = taskID; context.insert(row)
+        let version = NoteVersion(noteID: noteID, createdAt: deletion, reason: .beforeRestore,
+            content: nil, contentFormat: 0, title: "Old", body: "old", attachmentIDs: [], sourceRevisionID: nil)
+        context.insert(version); try context.save()
+        let store = TaskStore(container: coordinator.container, now: { self.deletion }, taskImageFiles: files)
+        XCTAssertTrue(store.delete(taskIDs: [taskID])); expectEqual(await purge().outcome, .committed)
+        let notes = NoteStore(container: coordinator.container)
+        XCTAssertTrue(notes.delete(try XCTUnwrap(notes.notes.first { $0.id == noteID })))
+        expectEqual(notes.purgeDeleted(before: .distantFuture), [])
+        notes.thinVersions(noteID: noteID)
+        XCTAssertTrue(try coordinator.freshContext().fetch(FetchDescriptor<NoteVersion>()).contains { $0.id == version.id })
+        expectEqual(try coordinator.freshContext().fetchCount(FetchDescriptor<NoteItem>()), 1)
+    }
+
+    func testP4SharedWriterTombstoneBlocksTaskAndAssociationResurrectionAndOldTaskNoteContent() async throws {
+        try seed(note: true)
+        let before = try document()
+        expectEqual(await purge().outcome, .committed)
+        let record = try XCTUnwrap(records().first), taskOwner = WorkspaceOwner(entity: .task, id: taskID)
+        expectEqual(coordinator.plainSave(tokens: try coordinator.capture([taskOwner]), writes: [taskOwner], stage: { context in
+            context.insert(TaskItem(id: self.taskID, title: "Resurrected"))
+        }), .notCommitted)
+        let associationID = UUID(), owner = WorkspaceOwner(entity: .association, id: associationID)
+        expectEqual(coordinator.plainSave(tokens: try coordinator.capture([owner]), writes: [owner], stage: { context in
+            context.insert(TaskNoteAssociation(id: associationID, taskID: self.taskID, noteID: self.noteID))
+        }), .notCommitted)
+        let noteOwner = WorkspaceOwner(entity: .note, id: noteID), bytes = try NoteContentCodec.encode(before)
+        expectEqual(coordinator.plainSave(tokens: try coordinator.capture([noteOwner]), writes: [noteOwner], stage: { context in
+            let row = try XCTUnwrap(context.fetch(FetchDescriptor<NoteItem>()).first)
+            row.content = bytes
+        }), .notCommitted)
+        expectEqual(try tasks(), 0); XCTAssertNil(try note().taskID)
+        XCTAssertFalse(try document().requires.contains("taskNote")); expectEqual(try XCTUnwrap(records().first).snapshot, record.snapshot)
+    }
+
     func testP3IntactLegacyFamilyCapturesImmutableMetadataInSameSaveAsPurge() async throws {
         try seed(); let result = await purge()
         expectEqual(result.outcome, .committed); expectEqual(result.removedIDs, [taskID!]); expectEqual(try tasks(), 0)

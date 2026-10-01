@@ -1738,6 +1738,13 @@ final class TaskStore: ObservableObject {
                 deletedIDs.insert(replica.id)
             }
         }
+        do {
+            for (root, rows) in staged {
+                try WorkspacePurge.stageDeletionCapture(rootID: root, rows: rows, deletedAt: timestamp, in: context)
+            }
+        } catch {
+            context.rollback(); refresh(); report(error.localizedDescription, owner: owner); return false
+        }
         tasks.removeAll { deletedIDs.contains($0.id) }
         return save(owner: owner)
     }

@@ -717,6 +717,12 @@ final class NoteStore: ObservableObject {
                 throw NoteReplicaMutationError.notRecentlyDeleted(noteID)
             }
             for replica in replicas {
+                if replica.contentFormat == 0, replica.content == nil {
+                    if let title = try WorkspaceRestoreNormalization.detachedTitle(noteID: noteID, in: context) {
+                        Self.stageLegacyTitle(title, on: replica, timestamp: currentDate)
+                    }
+                    continue
+                }
                 guard let bytes = replica.content, case let .editable(document) = NoteContentCodec.decode(bytes) else {
                     if context.container.schema.entities.contains(where: { $0.name == "TaskNoteAssociation" }),
                        try context.fetch(FetchDescriptor<TaskNoteAssociation>()).contains(where: { $0.noteID == noteID && $0.detachedPreservationID != nil }) {
@@ -785,7 +791,9 @@ final class NoteStore: ObservableObject {
                 predicate: #Predicate { $0.deletedAt != nil }
             ))
             let expiredIDs = Set(deleted.filter { ($0.deletedAt ?? .distantFuture) < cutoff }.map(\.id))
+            let preserved = try WorkspacePurge.preservationOwners(in: context)
             for id in expiredIDs {
+                guard !preserved.contains(.init(entity: .note, id: id)) else { continue }
                 let replicas = try storedNotesIncludingDeleted(matching: id)
                 guard let first = replicas.first, first.deletedAt.map({ $0 < cutoff }) == true else { continue }
                 if let confirmed, confirmed[id] != first.deletedAt { continue }

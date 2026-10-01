@@ -156,6 +156,7 @@ final class WorkspaceOperationCoordinator {
             }
             WorkspaceCrashHook.reach("K3-validation")
             try stage(context)
+            try validateTombstones(context)
             try validateLegacyAdmission(context, before: envelope.tokens)
             guard let admission = ownership.tryAcquire(try Self.admissionIDs(context.insertedModelsArray + context.changedModelsArray),
                 kind: .admission, excluding: collection?.lease(for: ownership)) else { return .conflict }
@@ -213,6 +214,7 @@ final class WorkspaceOperationCoordinator {
             let physicalIDs = Dictionary(uniqueKeysWithValues: previous.map { ($0.owner, Set($0.replicas.map(\.physicalID))) })
             let before = try states(writes, in: context, physical: true, baselineIDs: physicalIDs)
             try stage(context)
+            try validateTombstones(context)
             try validateLegacyAdmission(context, before: previous)
             try validatePreservedOpaqueContent(context, before: previous)
             guard let admission = ownership.tryAcquire(try Self.admissionIDs(context.insertedModelsArray + context.changedModelsArray), kind: .admission) else { return .conflict }
@@ -516,6 +518,34 @@ final class WorkspaceOperationCoordinator {
 }
 
 extension WorkspaceOperationCoordinator {
+    /// Permanent deletion is an irreversible boundary for every writer,
+    /// including compatibility store wrappers and old replay payloads.
+    private func validateTombstones(_ context: ModelContext) throws {
+        guard context.container.schema.entities.contains(where: { $0.name == "TaskDeletionPreservation" }) else { return }
+        let records = try context.fetch(FetchDescriptor<TaskDeletionPreservation>()).filter { $0.purgedAt != nil }
+        guard !records.isEmpty else { return }
+        var removed = Set<UUID>()
+        for record in records {
+            let snapshot = try JSONDecoder().decode(WorkspacePurge.Preservation.self, from: record.snapshot)
+            removed.formUnion(snapshot.members.map(\.id))
+        }
+        let changes = context.insertedModelsArray + context.changedModelsArray
+        for row in changes {
+            if let task = row as? TaskItem, removed.contains(task.id) { throw WorkspaceFoundationError.protectedOwner }
+            if let association = row as? TaskNoteAssociation,
+               association.detachedAt == nil, removed.contains(association.taskID) { throw WorkspaceFoundationError.protectedOwner }
+            if let note = row as? NoteItem {
+                if note.taskID.map(removed.contains) == true { throw WorkspaceFoundationError.protectedOwner }
+                if note.content.flatMap({ NoteContentCodec.decode($0).document })?.requires.contains("taskNote") == true {
+                    let detached = try context.fetch(FetchDescriptor<TaskNoteAssociation>()).contains {
+                        $0.noteID == note.id && $0.detachedPreservationID != nil
+                    }
+                    guard !detached else { throw WorkspaceFoundationError.protectedOwner }
+                }
+            }
+        }
+    }
+
     private func validateLegacyAdmission(_ context: ModelContext, before: [WorkspaceModelToken]) throws {
         for task in (context.insertedModelsArray + context.changedModelsArray).compactMap({ $0 as? TaskItem }) {
             let next = try WorkspacePurge.legacyReferences(task)
@@ -547,6 +577,10 @@ extension WorkspaceOperationCoordinator {
             if let task = row as? TaskItem {
                 if let data = task.imageReferencesData { ids.formUnion(try JSONDecoder().decode([TaskImageReference].self, from: data).map(\.id)) }
                 if let data = task.removedAttachmentsData { ids.formUnion(try JSONDecoder().decode([RemovedTaskAttachment].self, from: data).map { $0.reference.id }) }
+            } else if let link = row as? ItemLink {
+                ids.formUnion([link.sourceID, link.targetID])
+            } else if let association = row as? TaskNoteAssociation {
+                ids.formUnion([association.taskID, association.noteID])
             } else if let note = row as? NoteItem {
                 if let data = note.content { ids.formUnion(NoteContentCodec.decode(data).document?.attachmentIDs ?? []) }
             } else if let attachment = row as? NoteAttachment { ids.insert(attachment.noteID) }

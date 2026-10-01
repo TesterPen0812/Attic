@@ -5,6 +5,22 @@ import SwiftData
 /// compatibility head comes from today's task or its immutable preservation.
 @MainActor
 enum WorkspaceRestoreNormalization {
+    /// Format-0 columns have no document capability marker. Detached identity
+    /// still derives its title from preservation without migrating the body.
+    static func detachedTitle(noteID: UUID, in context: ModelContext) throws -> String? {
+        guard context.container.schema.entities.contains(where: { $0.name == "TaskNoteAssociation" }) else { return nil }
+        let associations = try context.fetch(FetchDescriptor<TaskNoteAssociation>(predicate: #Predicate { $0.noteID == noteID }))
+        let detached = associations.filter { $0.detachedPreservationID != nil }
+        guard !detached.isEmpty else { return nil }
+        let ids = Set(detached.compactMap(\.detachedPreservationID)), taskIDs = Set(detached.map(\.taskID))
+        guard ids.count == 1, taskIDs.count == 1, associations.allSatisfy({ $0.detachedAt != nil && $0.detachedPreservationID == ids.first }),
+              let id = ids.first, let taskID = taskIDs.first else { throw WorkspaceFoundationError.conflict }
+        let records = try context.fetch(FetchDescriptor<TaskDeletionPreservation>(predicate: #Predicate { $0.id == id }))
+        guard let record = records.first, records.allSatisfy({ $0.snapshot == record.snapshot && $0.rootID == record.rootID && $0.purgedAt != nil }) else { throw WorkspaceFoundationError.unknown }
+        guard try context.fetch(FetchDescriptor<TaskItem>(predicate: #Predicate { $0.id == taskID })).isEmpty else { throw WorkspaceFoundationError.conflict }
+        return try JSONDecoder().decode(WorkspacePurge.Preservation.self, from: record.snapshot).title(for: taskID)
+    }
+
     static func document(_ document: NoteDocument, noteID: UUID, in context: ModelContext) throws -> NoteDocument {
         let schema = Set(context.container.schema.entities.map(\.name))
         let notes = try context.fetch(FetchDescriptor<NoteItem>(predicate: #Predicate { $0.id == noteID }))

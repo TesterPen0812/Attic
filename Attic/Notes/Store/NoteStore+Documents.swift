@@ -823,7 +823,8 @@ extension NoteStore {
             } else {
                 proposals = try modelContext.fetch(FetchDescriptor<NotePendingEdit>())
             }
-            protectedIDs = Set(proposals.compactMap(\.baseVersionID))
+            protectedIDs = Set(proposals.compactMap(\.baseVersionID)).union(
+                try WorkspacePurge.preservationOwners(in: modelContext).filter { $0.entity == .version }.map(\.id))
             recoveryBases = try recoveryProtectedRevisionIDs()
         } catch {
             // Unknown proposal, version or recovery ownership keeps history.
@@ -905,7 +906,12 @@ extension NoteStore {
             return .failure(.readOnly)
         }
         let restoredContent: Data?
+        var restoredTitle = version.title
         do {
+            if version.contentFormat == 0, version.content == nil,
+               let title = try WorkspaceRestoreNormalization.detachedTitle(noteID: noteID, in: modelContext) {
+                restoredTitle = title
+            }
             if let bytes = version.content, case let .editable(document) = NoteContentCodec.decode(bytes) {
                 let normalized = try WorkspaceRestoreNormalization.document(document, noteID: noteID, in: modelContext)
                 restoredContent = normalized == document ? bytes : try NoteContentCodec.encode(normalized)
@@ -918,7 +924,7 @@ extension NoteStore {
         let revisionID = UUID()
         let revision = (replicas.map(\.revision).max() ?? 0) &+ 1
         let derived = Self.derivedColumns(content: restoredContent, format: version.contentFormat,
-                                          title: version.title, body: version.body)
+                                          title: restoredTitle, body: version.body)
         for replica in replicas {
             replica.content = version.contentFormat >= 1 ? restoredContent : nil
             replica.contentFormat = version.contentFormat
@@ -1261,8 +1267,11 @@ extension NoteStore {
         let versions = try modelContext.fetch(FetchDescriptor<NoteVersion>())
         let proposals = try modelContext.fetch(FetchDescriptor<NotePendingEdit>())
         let recoveryBases = try recoveryProtectedRevisionIDs()
+        let preservation = try WorkspacePurge.preservationOwners(in: modelContext)
+        guard preservation.isDisjoint(with: Set(noteIDs.map { .init(entity: .note, id: $0) })) else { throw WorkspaceFoundationError.protectedOwner }
         // Proposals outside the same removal transaction keep their bases.
         let externalBases = Set(proposals.filter { !noteIDs.contains($0.noteID) }.compactMap(\.baseVersionID))
+            .union(preservation.filter { $0.entity == .version }.map(\.id))
         let versionFamilies = Dictionary(grouping: versions, by: \.id).values.filter {
             $0.contains { noteIDs.contains($0.noteID) }
         }
@@ -1318,5 +1327,18 @@ extension NoteStore {
             if row.deletedAt != deleted { row.deletedAt = deleted; row.updatedAt = timestamp }
         }
         WorkspaceCrashHook.reach("K3-note")
+    }
+}
+
+
+extension NoteStore {
+    /// Changes only legacy compatibility columns; the body, anchors and format
+    /// remain byte-for-byte legacy. No implicit migration is performed.
+    static func stageLegacyTitle(_ title: String, on row: NoteItem, timestamp: Date) {
+        row.title = title
+        row.plainText = legacyPlainText(title: title, body: row.body)
+        row.updatedAt = timestamp
+        row.revision &+= 1
+        row.revisionID = UUID()
     }
 }

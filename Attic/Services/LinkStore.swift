@@ -142,6 +142,10 @@ final class LinkStore {
     /// save therefore leaves both for the next cleanup, and no link outlives
     /// the item it points at. Returns how many link ids it staged.
     func stagePurge(touching items: Set<AtticItemRef>, in context: ModelContext) throws -> Int {
+        try Self.stagePurge(touching: items, in: context)
+    }
+
+    static func stagePurge(touching items: Set<AtticItemRef>, in context: ModelContext) throws -> Int {
         guard !items.isEmpty else { return 0 }
         let ids = Array(Set(items.map(\.id)))
         let candidates = try context.fetch(FetchDescriptor<ItemLink>(predicate: #Predicate {
