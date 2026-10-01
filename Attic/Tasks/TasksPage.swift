@@ -219,7 +219,7 @@ struct TasksPage: View {
             // The pager reads scroll events itself (round 9): a
             // horizontal swipe over the lists is its own, every other
             // scroll goes on to the list (or the panel) untouched.
-            scrollMonitor = NSEvent.addLocalMonitorForEvents(matching: .scrollWheel) { [model, pointer, swipe, bottomStack] event in
+            scrollMonitor = NSEvent.addLocalMonitorForEvents(matching: .scrollWheel) { [model, pointer, swipe, bottomStack, listProxies] event in
                 // Gated before any state is read (round 10): a page that
                 // is not shown, or not in this event's visible window,
                 // takes nothing, not even a gesture it owned before.
@@ -227,7 +227,10 @@ struct TasksPage: View {
                       event.window === window else { return event }
                 let allowed = Self.pagerTakes(event, pointer: pointer, band: swipe.band,
                                               stackHeight: bottomStack.height, pageShown: model.isPageShown)
-                return model.pagerScrolled(TasksPagerSwipe.Sample(event), allowed: allowed) ? nil : event
+                let sample = TasksPagerSwipe.Sample(event)
+                let consumed = model.pagerScrolled(sample, allowed: allowed)
+                listProxies.apply(TasksScrollerRule.change(phase: sample.phase, momentum: sample.momentum, axis: swipe.axis))
+                return consumed ? nil : event
             }
         }
         if rightClickMonitor == nil {
@@ -3311,5 +3314,74 @@ final class TasksListProxies {
 
     private struct WeakScrollView {
         weak var view: NSScrollView?
+    }
+
+    // MARK: Scrollers (owner, 2026-10-01)
+
+    /// The lists' scrollers are hidden while a page swipe may be under
+    /// way, and come back for vertical scrolling.
+    private(set) var scrollersHidden = false
+    private var showWork: DispatchWorkItem?
+
+    func apply(_ change: TasksScrollerRule.Change) {
+        switch change {
+        case .keep:
+            return
+        case .hide:
+            showWork?.cancel()
+            setScrollersHidden(true)
+        case .show:
+            showWork?.cancel()
+            setScrollersHidden(false)
+        case .showLater:
+            guard scrollersHidden else { return }
+            showWork?.cancel()
+            let work = DispatchWorkItem { [weak self] in
+                MainActor.assumeIsolated { self?.setScrollersHidden(false) }
+            }
+            showWork = work
+            DispatchQueue.main.asyncAfter(deadline: .now() + TasksScrollerRule.showDelay, execute: work)
+        }
+    }
+
+    private func setScrollersHidden(_ hidden: Bool) {
+        scrollersHidden = hidden
+        for scroll in scrollViews.values {
+            TasksScrollKeeper.styleScrollers(of: scroll, hidden: hidden)
+        }
+    }
+}
+
+/// When the lists' scrollers show (owner, 2026-10-01: a thick, permanent
+/// scroller, and a tall thumb during page swipes): thin overlay scrollers
+/// whatever the system's "Show scroll bars" setting, shown by AppKit only
+/// while a list scrolls, and hidden from the moment two fingers touch until
+/// the gesture turns out vertical, so a page swipe never shows one.
+enum TasksScrollerRule {
+    enum Change: Equatable { case keep, hide, show, showLater }
+
+    /// After a gesture that was not a vertical scroll ends, how long before
+    /// the scrollers may show again (any flash AppKit began while they were
+    /// hidden has faded by then).
+    static let showDelay: TimeInterval = 1.0
+
+    static func change(phase: TasksPagerSwipe.Sample.Phase, momentum: Bool,
+                       axis: TasksPagerSwipe.Axis?) -> Change {
+        if momentum { return .keep }
+        switch phase {
+        case .mayBegin:
+            return .hide
+        case .began, .changed:
+            switch axis {
+            case .vertical?, .foreign?: return .show
+            case .undecided?, .horizontal?, .turned?, .cancelled?: return .hide
+            case nil: return .keep
+            }
+        case .ended, .cancelled:
+            return axis == .vertical ? .keep : .showLater
+        case .none:
+            // A mouse wheel: an ordinary vertical scroll.
+            return .show
+        }
     }
 }

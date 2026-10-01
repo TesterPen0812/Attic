@@ -56,6 +56,18 @@ struct TasksScrollKeeper: NSViewRepresentable {
         view.stopObserving()
     }
 
+    /// Thin overlay scrollers whatever the system's "Show scroll bars"
+    /// setting (owner, 2026-10-01): AppKit shows them only while the list
+    /// scrolls. `hidden` while a page swipe may be under way.
+    @MainActor
+    static func styleScrollers(of scroll: NSScrollView, hidden: Bool) {
+        if scroll.scrollerStyle != .overlay { scroll.scrollerStyle = .overlay }
+        if scroll.hasHorizontalScroller { scroll.hasHorizontalScroller = false }
+        guard let scroller = scroll.verticalScroller else { return }
+        if scroller.controlSize != .small { scroller.controlSize = .small }
+        if scroller.isHidden != hidden { scroller.isHidden = hidden }
+    }
+
     final class KeeperView: NSView {
         weak var model: TasksPageModel?
         var tab: TasksTab = .now
@@ -86,9 +98,35 @@ struct TasksScrollKeeper: NSViewRepresentable {
             applyDrawn()
             proxies?.scrollViews[tab] = scroll
             observe(scroll.contentView)
+            // After `observe`, which starts from a clean slate.
+            keepOverlayScrollers(scroll)
             restoring = true
             // Once the list has laid out its rows (the next turn).
             DispatchQueue.main.async { [weak self] in self?.restore() }
+        }
+
+        private var styleObserver: NSObjectProtocol?
+
+        /// Overlay scrollers now, when the system sets them back (AppKit
+        /// restyles every scroll view when the "Show scroll bars" setting
+        /// changes), and as the list scrolls (`record`).
+        private func keepOverlayScrollers(_ scroll: NSScrollView) {
+            TasksScrollKeeper.styleScrollers(of: scroll, hidden: proxies?.scrollersHidden ?? false)
+            if styleObserver == nil {
+                styleObserver = NotificationCenter.default.addObserver(
+                    forName: NSScroller.preferredScrollerStyleDidChangeNotification, object: nil, queue: .main
+                ) { [weak self] _ in
+                    // After AppKit's own restyling, which it may defer.
+                    for delay in [0.0, 0.25] {
+                        DispatchQueue.main.asyncAfter(deadline: .now() + delay) {
+                            MainActor.assumeIsolated {
+                                guard let self, let scroll = self.enclosingScrollView else { return }
+                                TasksScrollKeeper.styleScrollers(of: scroll, hidden: self.proxies?.scrollersHidden ?? false)
+                            }
+                        }
+                    }
+                }
+            }
         }
 
         private func observe(_ clip: NSClipView) {
@@ -107,9 +145,14 @@ struct TasksScrollKeeper: NSViewRepresentable {
             if let observer { NotificationCenter.default.removeObserver(observer) }
             observer = nil
             observedClip = nil
+            if let styleObserver { NotificationCenter.default.removeObserver(styleObserver) }
+            styleObserver = nil
         }
 
         private func record() {
+            if let scroll = enclosingScrollView, scroll.scrollerStyle != .overlay {
+                TasksScrollKeeper.styleScrollers(of: scroll, hidden: proxies?.scrollersHidden ?? false)
+            }
             guard !restoring, let clip = observedClip, let model else { return }
             model.scrollOffsets[tab] = clip.bounds.origin.y
         }

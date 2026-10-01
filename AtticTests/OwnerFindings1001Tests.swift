@@ -58,3 +58,56 @@ final class OwnerFindings1001Tests: XCTestCase {
         }
     }
 }
+
+// MARK: - 3. Thin overlay scrollers, hidden during page swipes
+
+@MainActor
+final class OwnerFindingsScrollerTests: XCTestCase {
+    func testTwoFingersHideTheScrollersUntilTheGestureIsVertical() {
+        typealias Rule = TasksScrollerRule
+        XCTAssertEqual(Rule.change(phase: .mayBegin, momentum: false, axis: nil), .hide, "fingers down: nothing yet")
+        XCTAssertEqual(Rule.change(phase: .began, momentum: false, axis: .undecided), .hide)
+        XCTAssertEqual(Rule.change(phase: .changed, momentum: false, axis: .horizontal), .hide, "a page swipe")
+        XCTAssertEqual(Rule.change(phase: .changed, momentum: false, axis: .turned), .hide)
+        XCTAssertEqual(Rule.change(phase: .changed, momentum: false, axis: .vertical), .show, "a vertical scroll")
+        XCTAssertEqual(Rule.change(phase: .changed, momentum: false, axis: .foreign), .show, "not over the pager")
+        XCTAssertEqual(Rule.change(phase: .ended, momentum: false, axis: .horizontal), .showLater, "after the swipe's flash")
+        XCTAssertEqual(Rule.change(phase: .ended, momentum: false, axis: .vertical), .keep)
+        XCTAssertEqual(Rule.change(phase: .changed, momentum: true, axis: .horizontal), .keep, "momentum changes nothing")
+        XCTAssertEqual(Rule.change(phase: .none, momentum: false, axis: nil), .show, "a mouse wheel scrolls vertically")
+    }
+
+    /// The lists keep thin overlay scrollers whatever the system setting,
+    /// even when AppKit (a setting change) or SwiftUI sets them back.
+    func testTheListsKeepThinOverlayScrollers() throws {
+        let hosted = try Hosted(height: 520, long: true)
+        defer { hosted.close() }
+        hosted.spin(1)
+        let content = try XCTUnwrap(hosted.window.contentView)
+        let lists = hosted.lists(in: content).filter { $0.verticalScroller != nil && $0.frame.height > 200 }
+        XCTAssertFalse(lists.isEmpty)
+        for list in lists {
+            XCTAssertEqual(list.scrollerStyle, .overlay)
+            XCTAssertEqual(list.verticalScroller?.controlSize, .small, "thin")
+            list.scrollerStyle = .legacy
+            NotificationCenter.default.post(name: NSScroller.preferredScrollerStyleDidChangeNotification, object: nil)
+            hosted.spin(0.5)
+            XCTAssertEqual(list.scrollerStyle, .overlay, "set back when the system setting changes")
+            list.scrollerStyle = .legacy
+            list.contentView.scroll(to: CGPoint(x: 0, y: 40))
+            list.reflectScrolledClipView(list.contentView)
+            hosted.spin(0.2)
+            XCTAssertEqual(list.scrollerStyle, .overlay, "and as the list scrolls")
+        }
+        let proxies = TasksListProxies()
+        let list = try XCTUnwrap(lists.first)
+        proxies.scrollViews = [.now: list]
+        proxies.apply(.hide)
+        XCTAssertEqual(list.verticalScroller?.isHidden, true, "hidden during a swipe")
+        proxies.apply(.show)
+        XCTAssertEqual(list.verticalScroller?.isHidden, false, "back for vertical scrolling")
+        let note = NoteDocumentScrollView()
+        note.scrollerStyle = .legacy
+        XCTAssertEqual(note.scrollerStyle, .overlay, "the note editor too")
+    }
+}
