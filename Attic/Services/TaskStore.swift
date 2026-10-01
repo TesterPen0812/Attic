@@ -445,6 +445,9 @@ final class TaskStore: ObservableObject {
         init(_ row: TaskItem) { self.row = row }
     }
     private var presentedTasks: [ObjectIdentifier: PresentedTask] = [:]
+    #if ATTIC_OPERATION_CRASH_TESTS
+    var onSaveTiming: ((String, Duration) -> Void)?
+    #endif
 #if os(macOS)
     private static let cloudSyncActivityTimeout: Duration = .seconds(120)
 #endif
@@ -543,9 +546,21 @@ final class TaskStore: ObservableObject {
         }
     }
 
-    /// O(1) lookup of a visible task by application identity.
+    /// Indexed lookup of a visible task. After an isolated commit, bind an
+    /// unchanged presentation row to the current staging context on demand.
     func task(withID id: UUID) -> TaskItem? {
-        guard let row = familyIndex.byID[id] else { return nil }
+        guard var row = familyIndex.byID[id] else { return nil }
+        if row.modelContext !== context {
+            do {
+                guard let current = Self.canonicalReplicas(from: try storedTasks(matching: id)).first,
+                      current.deletedAt == nil, current.doneLoggedAt == nil else { return nil }
+                if let index = tasks.firstIndex(where: { $0.id == id }) {
+                    tasks[index] = current
+                    revision &+= 1
+                }
+                row = current
+            } catch { report(error, owner: id); return nil }
+        }
         presentedTasks[ObjectIdentifier(row)] = PresentedTask(row)
         return row
     }
@@ -3012,13 +3027,23 @@ final class TaskStore: ObservableObject {
     @discardableResult
     private func save(owner: UUID? = nil) -> Bool {
         do {
+            #if ATTIC_OPERATION_CRASH_TESTS
+            let writeStart = ContinuousClock.now
+            #endif
             #if os(macOS)
             try PerformanceSignposts.storeSave { try Self.persistStoreContext(context, using: persist, history: commandLibrary != nil) }
             #else
             try Self.persistStoreContext(context, using: persist, history: commandLibrary != nil)
             #endif
+            #if ATTIC_OPERATION_CRASH_TESTS
+            onSaveTiming?("writer", writeStart.duration(to: .now))
+            let presentationStart = ContinuousClock.now
+            #endif
             do { try reloadTasks(confirmedSource: context); errorNotice = nil }
             catch { report("Saved, but presentation is still updating: \(error.localizedDescription)", owner: owner) }
+            #if ATTIC_OPERATION_CRASH_TESTS
+            onSaveTiming?("presentation", presentationStart.duration(to: .now))
+            #endif
             revision &+= 1
             #if !ATTIC_LOCAL_ONLY
             cloudSyncProtection.noteLocalSave()
@@ -3050,11 +3075,38 @@ final class TaskStore: ObservableObject {
         #else
         refreshedContext = Self.makeStoreContext(container)
         #endif
-        let fetched = try refreshedContext.fetch(FetchDescriptor<TaskItem>())
+        let plainTaskIDs: Set<UUID>?
+        #if os(macOS)
+        plainTaskIDs = try confirmedSource.flatMap { try WorkspaceLegacyBridge.confirmedPlainTaskWrites(in: $0) }
+        #else
+        plainTaskIDs = nil
+        #endif
+        let canonical: [UUID: TaskItem]
+        let visible: [TaskItem]
+        if let changedIDs = plainTaskIDs {
+            // An isolated tick/rename changes only these logical families.
+            // Re-read every physical replica of them in the fresh context;
+            // keep confirmed, unrelated presentation rows rather than
+            // refetching the complete table for each single-row command.
+            let ids = Array(changedIDs)
+            let changed = Self.canonicalReplicas(from: try refreshedContext.fetch(FetchDescriptor<TaskItem>(
+                predicate: #Predicate { ids.contains($0.id) }
+            )))
+            canonical = Dictionary(uniqueKeysWithValues: changed.map { ($0.id, $0) })
+            visible = tasks.compactMap { row in
+                guard changedIDs.contains(row.id) else { return row }
+                guard let saved = canonical[row.id], saved.deletedAt == nil, saved.doneLoggedAt == nil else { return nil }
+                return saved
+            }
+        } else {
+            let fetched = try refreshedContext.fetch(FetchDescriptor<TaskItem>())
+            let unique = Self.canonicalReplicas(from: fetched)
+            canonical = Dictionary(uniqueKeysWithValues: unique.map { ($0.id, $0) })
+            visible = unique.filter { $0.deletedAt == nil && $0.doneLoggedAt == nil }
+        }
         // Views and callers may still hold a row from the last presentation.
         // Update those detached presentation objects from the proven saved
         // family; never use them as the next transaction context.
-        let canonical = Dictionary(uniqueKeysWithValues: Self.canonicalReplicas(from: fetched).map { ($0.id, $0) })
         presentedTasks = presentedTasks.filter { $0.value.row != nil }
         for held in presentedTasks.values {
             guard let row = held.row, let saved = canonical[row.id] else { continue }
@@ -3067,9 +3119,7 @@ final class TaskStore: ObservableObject {
         // Deduplicate first, then hide: the replica presentation would show
         // decides whether the logical task is in Recently Deleted or the Done
         // log, exactly as it decides every other field.
-        tasks = visibleUniqueTasks(from: fetched).filter {
-            $0.deletedAt == nil && $0.doneLoggedAt == nil
-        }
+        tasks = visible
         revision &+= 1
     }
 

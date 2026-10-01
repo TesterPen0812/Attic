@@ -15,6 +15,7 @@ enum WorkspaceLegacyBridge {
         var baseline: [WorkspaceOwner: WorkspaceModelToken]
         var scopeIndex: WorkspaceScopeIndex
         let includeCanvas: Bool
+        var plainTaskWrites: Set<UUID>?
         var saveObserver: NSObjectProtocol?
         init(_ coordinator: WorkspaceOperationCoordinator, _ baseline: [WorkspaceOwner: WorkspaceModelToken], includeCanvas: Bool,
              scopeIndex: WorkspaceScopeIndex) {
@@ -87,6 +88,10 @@ enum WorkspaceLegacyBridge {
     static func capturedToken(_ owner: WorkspaceOwner, in source: ModelContext) throws -> WorkspaceModelToken {
         guard let state = objc_getAssociatedObject(source, &contextKey) as? ContextState else { throw WorkspaceFoundationError.unknown }
         return state.baseline[owner] ?? WorkspaceModelToken(owner: owner, replicas: [])
+    }
+    static func confirmedPlainTaskWrites(in source: ModelContext) throws -> Set<UUID>? {
+        guard let state = objc_getAssociatedObject(source, &contextKey) as? ContextState else { throw WorkspaceFoundationError.unknown }
+        return state.plainTaskWrites
     }
     static func persist(_ source: ModelContext, using writer: @escaping (ModelContext) throws -> Void,
                         sourceName: String, history: Bool = true) throws {
@@ -198,6 +203,7 @@ enum WorkspaceLegacyBridge {
         let updates = Dictionary(uniqueKeysWithValues: writes.map { ($0, confirmed[$0] ?? WorkspaceModelToken(owner: $0, replicas: [])) })
         state.scopeIndex = try state.scopeIndex.replacing(updates)
         state.baseline.merge(updates) { _, saved in saved }
+        state.plainTaskWrites = plain && writes.allSatisfy({ $0.entity == .task }) ? Set(writes.map(\.id)) : nil
     }
     static func persistSharedChanges(_ source: ModelContext, using writer: @escaping (ModelContext) throws -> Void) throws {
         if (source.insertedModelsArray + source.changedModelsArray + source.deletedModelsArray).contains(where: { $0 is ItemLink || $0 is TaskItem || $0 is NoteItem }) {

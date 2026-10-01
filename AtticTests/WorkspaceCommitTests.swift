@@ -160,6 +160,24 @@ final class WorkspaceCommitTests: XCTestCase {
         XCTAssertTrue(store.update(row, title: "Renamed"), store.lastErrorMessage ?? "No failure reason")
         XCTAssertEqual(Set(try coordinator.freshContext().fetch(FetchDescriptor<NoteItem>()).filter { $0.id == row.id }.map(\.title)), ["Renamed"])
     }
+    func testC5IsolatedTaskSaveRefreshesOnlyItsFamilyAndRebindsUnchangedRowsForLaterStaging() throws {
+        let store = TaskStore(container: container)
+        let edited = try XCTUnwrap(store.create(title: "Edited"))
+        let other = try XCTUnwrap(store.create(title: "Other"))
+        let unchanged = try XCTUnwrap(store.tasks.first { $0.id == other.id })
+        XCTAssertTrue(store.rename(edited, to: "Renamed"))
+        XCTAssertTrue(store.tasks.first { $0.id == other.id } === unchanged,
+                      "isolated plain saves must not refetch unrelated presentation rows")
+        let rebound = try XCTUnwrap(store.task(withID: other.id))
+        XCTAssertFalse(rebound === unchanged)
+        rebound.tagsRaw = "fixture"
+        XCTAssertTrue(store.rename(rebound, to: "Other renamed"), store.lastErrorMessage ?? "No failure reason")
+        let fresh = coordinator.freshContext()
+        let rows = try fresh.fetch(FetchDescriptor<TaskItem>())
+        XCTAssertEqual(rows.first { $0.id == other.id }?.tagsRaw, "fixture")
+        XCTAssertEqual(rows.first { $0.id == edited.id }?.title, "Renamed")
+        XCTAssertEqual(rows.filter { $0.id == other.id }.count, 1)
+    }
     func testC1RealConversionCommitsTextChildVersionAttachmentAssociationAndReceiptTogether() async throws {
         let (outcome, id) = try await conversion()
         XCTAssertEqual(outcome, .committed)

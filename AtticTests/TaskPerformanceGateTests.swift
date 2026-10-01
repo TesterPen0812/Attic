@@ -70,6 +70,13 @@ final class TaskPerformanceGateTests: XCTestCase {
         let children = store.tasks.filter { $0.parentID != nil }
         var index = 0
         var toggle = 0.0, snapshot = 0.0, lookup = 0.0
+        #if ATTIC_OPERATION_CRASH_TESTS
+        var phases: [String: Double] = [:]
+        store.onSaveTiming = { phase, duration in
+            let d = duration.components
+            phases[phase, default: 0] += Double(d.seconds) * 1_000 + Double(d.attoseconds) / 1e15
+        }
+        #endif
         func ms(_ body: () -> Void) -> Double {
             let start = ContinuousClock.now
             body()
@@ -84,6 +91,11 @@ final class TaskPerformanceGateTests: XCTestCase {
             lookup += ms { _ = store.subtasks(of: child.parentID!) }
         }
         print("PERFGATE toggle=\(toggle / 7) snapshot=\(snapshot / 7) lookup=\(lookup / 7)")
+        #if ATTIC_OPERATION_CRASH_TESTS
+        let writer = (phases["writer"] ?? 0) / 7
+        let presentation = (phases["presentation"] ?? 0) / 7
+        print("PERFGATE writer=\(writer) presentation=\(presentation)")
+        #endif
         XCTAssertLessThan(median, 120, "a single toggle must not rescan or refetch the whole store (median \(median) ms)")
     }
 
