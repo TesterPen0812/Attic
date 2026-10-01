@@ -28,13 +28,16 @@ final class WorkspaceHistory {
     struct ReplayPlan {
         let envelope: WorkspaceOperationEnvelope
         let text: (NoteUndoHistory, NoteUndoHistory.PreparedReplay)?
+        let textDocument: (noteID: UUID, content: Data)?
         let stage: (ModelContext) throws -> Void
         let publication: WorkspaceOperationCoordinator.Publication
         init(envelope: WorkspaceOperationEnvelope,
              text: (NoteUndoHistory, NoteUndoHistory.PreparedReplay)? = nil,
+             textDocument: (noteID: UUID, content: Data)? = nil,
              stage: @escaping (ModelContext) throws -> Void,
              publication: WorkspaceOperationCoordinator.Publication = .init()) {
-            self.envelope = envelope; self.text = text; self.stage = stage; self.publication = publication
+            self.envelope = envelope; self.text = text; self.textDocument = textDocument
+            self.stage = stage; self.publication = publication
         }
     }
 
@@ -132,6 +135,11 @@ final class WorkspaceHistory {
                 plan = try prepare(redo, effect)
                 guard plan.envelope.replayOf == operationID,
                       plan.envelope.historyEffect == (try WorkspaceModelFields.encode(effect)) else { return .failed }
+                if plan.text != nil {
+                    guard let document = plan.textDocument,
+                          plan.envelope.afterDocuments[document.noteID] == document.content,
+                          plan.envelope.writes.contains(.init(entity: .note, id: document.noteID)) else { return .failed }
+                }
             } catch { return .failed }
             let install: @MainActor (UUID) throws -> Void = { _ in
                 if let (adapter, text) = plan.text, !adapter.installReplay(text) { throw WorkspaceFoundationError.conflict }
@@ -139,7 +147,18 @@ final class WorkspaceHistory {
             let publication = WorkspaceOperationCoordinator.Publication(steps: [{ _ in try commitCursor() }, install] + plan.publication.steps)
             let outcome = await coordinator.execute(plan.envelope, sessionValid: {
                 plan.text.map { $0.0.canInstallReplay($0.1) } ?? true
-            }, stage: plan.stage, publication: publication)
+            }, stage: { context in
+                try plan.stage(context)
+                // A mixed inverse cannot commit only its task half. Verify the
+                // complete prepared document on every physical note before save.
+                if let document = plan.textDocument {
+                    let id = document.noteID
+                    let rows = try context.fetch(FetchDescriptor<NoteItem>(predicate: #Predicate { $0.id == id }))
+                    guard !rows.isEmpty, rows.allSatisfy({ $0.content == document.content }) else {
+                        throw WorkspaceFoundationError.conflict
+                    }
+                }
+            }, publication: publication)
             switch outcome {
             case .committed: return .applied
             case .publicationPending, .unknown:
