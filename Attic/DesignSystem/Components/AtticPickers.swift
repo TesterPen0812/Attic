@@ -615,13 +615,14 @@ private struct AtticStripButton: View {
                 .accessibilityLabel(clearLabel)
                 .accessibilityIdentifier(identifier + "-clear")
                 .padding(.trailing, AtticPickerMetrics.stripValueTrailing)
+                .transition(AtticMotionPreset.popover.transition(reduceMotion: design.reduceMotion, edge: nil))
             }
         }
         .frame(height: height)
         .background(shape.fill(fill.color))
         .contentShape(shape)
         .onHover { hovered = $0 }
-        .animation(AtticMotionPreset.popover.animation(reduceMotion: design.reduceMotion), value: value)
+        .animation(AtticMotionPreset.popover.animation(reduceMotion: design.reduceMotion, showing: value != nil), value: value)
     }
 }
 
@@ -685,21 +686,100 @@ extension View {
     func atticPopover<Content: View>(isPresented: Binding<Bool>, arrowEdge: Edge,
                                      @ViewBuilder content: @escaping () -> Content) -> some View {
         popover(isPresented: isPresented, arrowEdge: arrowEdge) {
-            content().background(AtticPopoverWindowMarker())
+            content().background(AtticPopoverWindowMarker(arrowEdge: arrowEdge))
         }
     }
 }
 
 /// Notes the pop-over's window with `AtticTextInput`, so no row or page
-/// command answers a key while that window has the keyboard.
+/// command answers a key while that window has the keyboard; and, when the
+/// feel asks for it, springs the pop-over in from its arrow
+/// (`AtticPopoverPop`).
 struct AtticPopoverWindowMarker: NSViewRepresentable {
+    var arrowEdge: Edge = .top
+
     final class Marker: NSView {
+        var arrowEdge: Edge = .top
+
         override func viewDidMoveToWindow() {
             super.viewDidMoveToWindow()
-            if let window { AtticTextInput.notePopover(window) }
+            guard let window else { return }
+            AtticTextInput.notePopover(window)
+            AtticPopoverPop.play(in: window, arrowEdge: arrowEdge)
         }
     }
 
-    func makeNSView(context: Context) -> Marker { Marker(frame: .zero) }
-    func updateNSView(_ view: Marker, context: Context) {}
+    func makeNSView(context: Context) -> Marker {
+        let marker = Marker(frame: .zero)
+        marker.arrowEdge = arrowEdge
+        return marker
+    }
+
+    func updateNSView(_ view: Marker, context: Context) { view.arrowEdge = arrowEdge }
+}
+
+/// The native pop-over's spring-in (the Motion Lab's experimental "native
+/// pop-overs" switch, off in every feel): the system still fades the
+/// pop-over in; this adds the feel's appear spring as a scale-up from the
+/// feel's appear scale, anchored at the arrow (where the button is), on
+/// the pop-over window's frame view. It is a Core Animation animation of
+/// the layer's transform only (drawn by the render server, nothing laid
+/// out), added once as the pop-over opens and gone when it ends; the
+/// model transform is never changed. Leaving stays the system's.
+@MainActor
+enum AtticPopoverPop {
+    static let key = "atticPopoverPop"
+
+    static func play(in window: NSWindow, arrowEdge: Edge) {
+        let tuning = AtticMotionTuning.current
+        guard tuning.popsNativePopovers, tuning.appear == .spring, !AtticMotionPreference.reducesMotion,
+              let view = window.contentView?.superview ?? window.contentView,
+              let layer = view.layer, CATransform3DIsIdentity(layer.transform) else { return }
+        let bounds = layer.bounds
+        guard bounds.width > 1, bounds.height > 1 else { return }
+        let anchor = anchor(frame: window.frame, bounds: bounds, mouse: NSEvent.mouseLocation,
+                            arrowEdge: arrowEdge, flipped: view.isFlipped)
+        let spring = AtticMotionPreset.popover.spring(in: tuning)
+        let animation = CASpringAnimation(perceptualDuration: spring.response, bounce: spring.bounce)
+        animation.keyPath = "transform"
+        animation.fromValue = NSValue(caTransform3D: transform(scale: CGFloat(tuning.appearScale), about: anchor, in: layer))
+        animation.toValue = NSValue(caTransform3D: CATransform3DIdentity)
+        animation.duration = animation.settlingDuration
+        layer.add(animation, forKey: key)
+    }
+
+    /// A scale about `point` (the layer's own coordinates).
+    static func transform(scale: CGFloat, about point: CGPoint, in layer: CALayer) -> CATransform3D {
+        // A layer's transform acts about its anchor point.
+        let x = point.x - layer.bounds.minX - layer.anchorPoint.x * layer.bounds.width
+        let y = point.y - layer.bounds.minY - layer.anchorPoint.y * layer.bounds.height
+        var transform = CATransform3DMakeTranslation(x, y, 0)
+        transform = CATransform3DScale(transform, scale, scale, 1)
+        return CATransform3DTranslate(transform, -x, -y, 0)
+    }
+
+    /// Where the arrow is: the edge that faces the button (from the
+    /// pointer, which clicked it, when it is by the pop-over; else from
+    /// `arrowEdge`, the button's edge the pop-over hangs from), at the
+    /// pointer's x or the middle.
+    static func anchor(frame: CGRect, bounds: CGRect, mouse: CGPoint, arrowEdge: Edge, flipped: Bool) -> CGPoint {
+        var fromTop = arrowEdge == .bottom
+        var x = bounds.midX
+        switch arrowEdge {
+        case .leading: return CGPoint(x: bounds.maxX, y: bounds.midY)
+        case .trailing: return CGPoint(x: bounds.minX, y: bounds.midY)
+        case .top, .bottom: break
+        }
+        if frame.width > 0, mouse.x >= frame.minX - 24, mouse.x <= frame.maxX + 24 {
+            if mouse.y >= frame.maxY - 8, mouse.y <= frame.maxY + 120 {
+                fromTop = true
+            } else if mouse.y <= frame.minY + 8, mouse.y >= frame.minY - 120 {
+                fromTop = false
+            }
+            x = bounds.minX + min(max(mouse.x - frame.minX, 16), max(bounds.width - 16, 16))
+        }
+        let top = flipped ? bounds.minY : bounds.maxY
+        let bottom = flipped ? bounds.maxY : bounds.minY
+        return CGPoint(x: x, y: fromTop ? top : bottom)
+    }
 }

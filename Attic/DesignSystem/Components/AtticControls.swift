@@ -444,6 +444,7 @@ struct AtticAddBar: View {
                     sendButton(radius: radius)
                         .opacity(shown ? 1 : 0)
                         .offset(y: shown || design.reduceMotion ? 0 : AtticMotionPreset.popover.rise)
+                        .scaleEffect(shown ? 1 : AtticMotionPreset.popover.hiddenScale(reduceMotion: design.reduceMotion))
                         .allowsHitTesting(shown)
                         .disabled(!shown)
                         .accessibilityHidden(!shown)
@@ -458,7 +459,7 @@ struct AtticAddBar: View {
         .atticRaisedMaterial(cornerRadius: radius, state: state == .hover ? .rest : state, interactive: false)
         .atticFocusRing(state == .focused, cornerRadius: radius)
         .onHover { hovered = $0 }
-        .animation(AtticMotionPreset.popover.animation(reduceMotion: design.reduceMotion), value: hasText)
+        .animation(AtticMotionPreset.popover.animation(reduceMotion: design.reduceMotion, showing: hasText), value: hasText)
         .atticControlProbe("Add bar", id: probeID, expectedSize: nil, radius: radius, expectedRadius: 15)
     }
 

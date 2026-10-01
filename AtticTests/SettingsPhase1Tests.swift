@@ -378,7 +378,7 @@ final class SettingsPhase1Tests: XCTestCase {
         XCTAssertEqual(result["quick_capture_shortcut"] as? String, "⌃⌥Space", "reported, read only")
         XCTAssertEqual(result["corner_size"] as? Double, 52)
         XCTAssertEqual(result["haptics"] as? Bool, true)
-        XCTAssertEqual(result["animations"] as? String, "full")
+        XCTAssertEqual(result["animations"] as? String, "lively")
         XCTAssertEqual(result["launch_at_login"] as? Bool, true, "reported, read only")
         XCTAssertThrowsError(try tools.call(name: "get_settings", arguments: ["palette": "amethyst"]))
     }
@@ -392,7 +392,7 @@ final class SettingsPhase1Tests: XCTestCase {
             "corner_size": 28, "panel_width": 360, "haptics": false, "animations": "reduced"
         ]))
         XCTAssertEqual(settings.animations, .reduced)
-        settings.animations = .full
+        settings.animations = .lively
         XCTAssertEqual(settings.appearance, .dark)
         XCTAssertEqual(settings.panelTheme, .seaGlass)
         XCTAssertEqual(settings.panelSurfaceStyle, .frosted)

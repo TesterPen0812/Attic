@@ -61,7 +61,9 @@ struct SettingsView: View {
             AtticContentCard {
                 page
                     .id(navigation.selection)
-                    .transition(.opacity)
+                    // A crossfade in every feel (pages never scale).
+                    .transition(AtticMotionPreset.pageSwitch.transition(
+                        reduceMotion: reduceMotion || settings.animations == .reduced, edge: nil, anchor: .top))
             }
             // 8 pt from the window's edges; the sidebar rows' own 8 pt inset
             // makes the gap to the sidebar.
@@ -85,7 +87,8 @@ struct SettingsView: View {
             tint: settings.panelTint,
             tintLength: settings.panelTintLength,
             hapticsEnabled: settings.hapticsEnabled,
-            animations: settings.animations
+            animations: settings.animations,
+            motion: settings.motionTuning
         )
         .atticWindowAppearance(SettingsAppearance.mode(for: settings.appearance))
         .environment(\.atticPanelUsesSystemAccent, settings.panelTheme.usesSystemAccent)

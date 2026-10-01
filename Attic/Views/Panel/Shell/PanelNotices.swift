@@ -8,8 +8,9 @@ struct PanelNoticeContent: Equatable {
 }
 
 /// The Undo toast and the error notice, stacked above the page's bottom
-/// controls. The toast slides up (200 ms) and fades out; under Reduce Motion
-/// both only fade. The notice sits nearest the page: a problem is never
+/// controls. The toast springs up and tucks away (the feel's appear and
+/// leave styles; Calm slides up and fades out); under Reduce Motion both
+/// only fade. The notice sits nearest the page: a problem is never
 /// hidden by a toast.
 struct PanelNoticeStack: View {
     @ObservedObject var toasts: PanelToastCenter
@@ -42,7 +43,9 @@ struct PanelNoticeStack: View {
                 .transition(AtticMotionPreset.popover.transition(reduceMotion: design.reduceMotion))
             }
         }
-        .animation(AtticMotionPreset.toast.animation(reduceMotion: design.reduceMotion), value: toasts.current)
-        .animation(AtticMotionPreset.popover.animation(reduceMotion: design.reduceMotion), value: notice)
+        // They spring in and tuck away with the feel (the Motion Lab).
+        .animation(AtticMotionPreset.toast.animation(reduceMotion: design.reduceMotion, showing: toasts.current != nil),
+                   value: toasts.current)
+        .animation(AtticMotionPreset.popover.animation(reduceMotion: design.reduceMotion, showing: notice != nil), value: notice)
     }
 }

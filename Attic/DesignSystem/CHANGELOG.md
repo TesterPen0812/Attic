@@ -474,3 +474,63 @@ additive; no token, colour, radius or type style changed.
 - **`AtticActionRow.secondary`** (new `AtticRowAction`): a second small raised
   button before the first (Recently Deleted's selection row).
 - No token, colour, radius or type style changed.
+
+### Motion Lab: feels (owner, 2026-09-30: "I much more prefer the bounciness, even if it's slight")
+
+- **`AtticMotionTuning`** holds every motion value: the navigation springs
+  (`slide`, also the Tasks pager's settle; `expand`; `doneSlide`), the springs
+  of things that appear (`popover`, `toast`, `complete`, `settle`,
+  `failReturn`), the appear scale, the leave tuck (response, scale) and two
+  styles, Appear and Leave (`AtticMotionStyle`: spring or fade). Every preset
+  reads `AtticMotionTuning.current`; `pageSwitch` (a crossfade) and `hover`
+  are the same in every feel. The design context carries the tuning
+  (`motion`), so a change redraws everything at once.
+- **`AtticMotionFeel`**, three feels as data: **Calm** is round 11 exactly,
+  with its fades; **Lively** (the default): navigation 0.30 s / 0.12 (expand
+  0.26), things that appear 0.26–0.28 s / 0.22 (settle 0.27 / 0.16) from 0.92
+  of their size, leaving in a 0.14 s tuck to 0.96, each spring reaching 95 %
+  of its way within a frame of Calm's; **Playful** is round 9's springs,
+  popping from 0.88 and tucking to 0.94.
+- **Presets**: `animation(reduceMotion:showing:)`, `leaveAnimation`, and
+  `hiddenScale` (for things shown in place: the strip, the send button); the
+  spring leave style also drives `exit`. `transition(reduceMotion:edge:anchor:)`
+  adds, in the spring styles, a scale from the anchor (the edge a thing comes
+  from, or an explicit one) weighted per preset (`scaleWeight`: all of it for
+  pop-overs and the toast, 0.5 for the quick look, 0.4 for rows, none for
+  pages, which hold AppKit scroll views a SwiftUI scale does not carry). A nil
+  edge is a scale and fade with no rise.
+- **Reduce Motion and Settings › Animations › Reduced ignore the feel**: the
+  fallbacks use Calm's timings, and nothing scales.
+- **`TasksPagerSpring`** takes the feel's bounce: a settle may pass its page by
+  at most a fiftieth of a page (the damping and a flick's speed are capped),
+  never toward a second page; Calm stays critically damped.
+- **`atticPopover`**: an experimental spring-in from the arrow for native
+  pop-overs (`AtticPopoverPop`, a Core Animation transform on the pop-over
+  window's frame view), off in every feel; the lab has a switch for it.
+- **New `AtticSegmentedRow`** (Settings): a label and the system segmented
+  control, for the lab's feel.
+- **`AtticMotionLab`**: the Settings › General › Motion Lab group shows only
+  in `com.taha.Attic.preview.*` builds (or another non-release identity with
+  `--attic-motion-lab`), never under `com.taha.Attic`; outside it no stored
+  feel is read.
+- No token, colour, radius or type style changed.
+
+### Motion Lab: finish (owner, 2026-10-01: lively by default, reducible by the user)
+
+- **Settings › General › Animations** is now **Lively** (the default),
+  **Subtle** or **Reduced** (`AtticAnimationLevel`: `lively`, `subtle`,
+  `reduced`). Lively is the Lively feel in every build. Subtle is the
+  `AtticMotionFeel.subtle` tuning: Calm's timings (navigation 0.25 s, things
+  that appear 0.22-0.24 s) with a small bounce (navigation 0.04, things that
+  appear 0.10, settle and fail-return 0.08), springing in from 0.96 and
+  tucking to 0.98 in 0.12 s; no plain fades. Reduced is the Reduce Motion
+  fallback. macOS Reduce Motion forces Reduced whatever is chosen
+  (`design.reduceMotion` is unchanged).
+- A stored "full" becomes Lively (and is rewritten as `lively`); a stored
+  "reduced" stays Reduced (`AtticAnimationLevel.migrated(from:)`).
+- The Motion Lab stays preview-only, and its Feel row gains Subtle. A lab
+  choice overrides Animations until Animations is changed, which puts the
+  feel back to Lively or Subtle.
+- **Edges is removed** (`4fc0f34` reverted): the lists and Notes are back to
+  round 13's clean cut at the tabs' band and the bottom stack. A floating
+  controls design replaces that behaviour later.
