@@ -700,23 +700,33 @@ final class TaskStore: ObservableObject {
     @discardableResult
     func commit(_ drafts: [TaskDraft]) -> [TaskItem]? {
         guard !drafts.isEmpty else { return [] }
-        let titles = drafts.map { Self.normalized($0.title) }
-        guard titles.allSatisfy({ !$0.isEmpty }) else { return nil }
-
-        let timestamp = now()
-        // Resolved before the first failure can be reported: a composer error
-        // belongs to the family panel that asked for the subtask.
+        guard drafts.allSatisfy({ !Self.normalized($0.title).isEmpty }) else { return nil }
         let parentIDs = Set(drafts.map(\.parentID))
         let owner = parentIDs.count == 1 ? familyOwner(forParentID: parentIDs.first ?? nil) : nil
-        var created: [TaskItem?] = Array(repeating: nil, count: drafts.count)
         do {
+            let created = try stageCreation(drafts, ids: drafts.map { _ in UUID() }, timestamp: now())
+            guard save(owner: owner) else { return nil }
+            return created
+        } catch {
+            context.rollback()
+            try? reloadTasks()
+            report(error.localizedDescription, owner: owner)
+            return nil
+        }
+    }
+
+    private func stageCreation(_ drafts: [TaskDraft], ids: [UUID], timestamp: Date) throws -> [TaskItem] {
+        guard ids.count == drafts.count else { throw TaskEditRefusal("Task identity count does not match the draft count.") }
+        let titles = drafts.map { Self.normalized($0.title) }
+        guard titles.allSatisfy({ !$0.isEmpty }) else { throw TaskEditRefusal("A task needs a title.") }
+        let parentIDs = Set(drafts.map(\.parentID))
+        var created: [TaskItem?] = Array(repeating: nil, count: drafts.count)
             for parentID in parentIDs.compactMap({ $0 }) {
                 let parents = try storedTasks(matching: parentID)
                 guard task(withID: parentID) != nil,
                       parents.allSatisfy({ $0.parentID == nil && $0.status != .done
                           && $0.deletedAt == nil && $0.doneLoggedAt == nil }) else {
-                    report("Subtasks need an unfinished main task. Reopen the main task first.", owner: owner)
-                    return nil
+                    throw TaskEditRefusal("Subtasks need an unfinished main task. Reopen the main task first.")
                 }
             }
             // Inserted last-first: each new task is placed above the ones
@@ -732,6 +742,7 @@ final class TaskStore: ObservableObject {
                     updatedAt: timestamp
                 ) ?? (drafts.count > 1 ? Self.manualOrderStride : nil)
                 let task = TaskItem(
+                    id: ids[index],
                     title: titles[index],
                     status: draft.status,
                     priority: draft.priority,
@@ -753,17 +764,52 @@ final class TaskStore: ObservableObject {
                 tasks.append(task)
                 created[index] = task
             }
-        } catch {
-            if created.contains(where: { $0 != nil }) {
-                context.rollback()
-                try? reloadTasks()
-            }
-            report(error.localizedDescription, owner: owner)
-            return nil
-        }
-        guard save(owner: owner) else { return nil }
         return created.compactMap { $0 }
     }
+
+    #if os(macOS)
+    /// A staging-only adapter invokes the same guarded family machinery on a
+    /// supplied context. It has no observers and cannot persist or publish.
+    private init(staging context: ModelContext, timestamp: Date) throws {
+        self.container = context.container
+        self.context = context
+        self.now = { timestamp }
+        self.persist = { _ in throw WorkspaceFoundationError.conflict }
+        self.taskImageFiles = .shared
+        self.tasks = try context.fetch(FetchDescriptor<TaskItem>()).filter { $0.deletedAt == nil }
+    }
+
+    static func stageCreation(in context: ModelContext, drafts: [TaskDraft], ids: [UUID], timestamp: Date) throws -> [TaskItem] {
+        let adapter = try TaskStore(staging: context, timestamp: timestamp)
+        let rows = try adapter.stageCreation(drafts, ids: ids, timestamp: timestamp)
+        WorkspaceCrashHook.reach("K3-task")
+        return rows
+    }
+
+    static func stageUpdate(in context: ModelContext, taskID: UUID, title: String? = nil,
+                            status: TaskStatus? = nil, tags: [String]? = nil, timestamp: Date) throws {
+        let adapter = try TaskStore(staging: context, timestamp: timestamp)
+        guard let task = adapter.task(withID: taskID) else { throw WorkspaceFoundationError.conflict }
+        _ = try adapter.stageUpdate(task, title: title, status: status, tags: tags, at: timestamp)
+        WorkspaceCrashHook.reach("K3-task")
+    }
+
+    static func stageTransition(in context: ModelContext, from expected: [TaskEditableState],
+                                to target: [TaskEditableState], timestamp: Date) throws {
+        let adapter = try TaskStore(staging: context, timestamp: timestamp)
+        for state in expected {
+            let id = state.id
+            let replicas = try context.fetch(FetchDescriptor<TaskItem>(predicate: #Predicate { $0.id == id }))
+            guard !replicas.isEmpty, replicas.allSatisfy({ TaskEditableState($0) == state }) else {
+                throw WorkspaceFoundationError.conflict
+            }
+        }
+        if case .obsolete = try adapter.stageEditableTransition(from: expected, to: target) {
+            throw WorkspaceFoundationError.conflict
+        }
+    }
+
+    #endif
 
     @discardableResult
     func rename(_ task: TaskItem, to title: String) -> Bool {

@@ -35,7 +35,10 @@ enum PersistenceController {
             ItemLink.self,
             // Phase 2: note versions and agents' pending note edits.
             NoteVersion.self,
-            NotePendingEdit.self
+            NotePendingEdit.self,
+            OperationReceipt.self,
+            TaskNoteAssociation.self,
+            TaskDeletionPreservation.self
         ]
         #else
         [

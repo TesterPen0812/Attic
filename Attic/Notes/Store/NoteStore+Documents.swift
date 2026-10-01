@@ -459,7 +459,7 @@ extension NoteStore {
         do {
             revisionID = try stage(document, on: [note], timestamp: timestamp, revision: 0, prepared: projection,
                                    tags: tags.map(AtticTag.encode))
-            stageAttachments(attachmentPlan, noteID: id, context: context, timestamp: timestamp)
+            Self.stageAttachments(attachmentPlan, noteID: id, context: context, timestamp: timestamp)
         } catch let error as NoteDocumentStoreError {
             context.rollback()
             return .failure(error)
@@ -551,7 +551,7 @@ extension NoteStore {
             let revisionID = try stage(document, on: replicas, timestamp: timestamp,
                                        revision: replicas.map(\.revision).max() ?? 0, prepared: projection,
                                        tags: encodedTags)
-            stageAttachments(attachmentPlan, noteID: noteID, context: context, timestamp: timestamp)
+            Self.stageAttachments(attachmentPlan, noteID: noteID, context: context, timestamp: timestamp)
             let visibilityChanged = try stageAttachmentVisibility(referencedBy: document, noteID: noteID,
                 timestamp: timestamp)
             guard commitStagedChanges() else {
@@ -579,10 +579,20 @@ extension NoteStore {
         do { projection = try prepared ?? PreparedNoteDocument(document) }
         catch { throw NoteDocumentStoreError.encodingFailed(error.localizedDescription) }
         let revisionID = UUID()
-        let canonical = canonical(replicas)
+        Self.stageDocumentContent(projection, format: document.format, on: replicas,
+                                  timestamp: timestamp, revision: revision, revisionID: revisionID, tags: tags)
+        for replica in replicas {
+            documentReplicaCapabilityCache[ObjectIdentifier(replica)] = (revisionID, projection.content, true)
+        }
+        return revisionID
+    }
+
+    static func stageDocumentContent(_ projection: PreparedNoteDocument, format: Int,
+                                     on replicas: [NoteItem], timestamp: Date, revision: Int64,
+                                     revisionID: UUID, tags: String? = nil) {
         for replica in replicas {
             replica.content = projection.content
-            replica.contentFormat = document.format
+            replica.contentFormat = format
             replica.title = projection.title
             replica.body = projection.body
             replica.plainText = projection.plainText
@@ -592,18 +602,9 @@ extension NoteStore {
             replica.revision = revision &+ 1
             replica.revisionID = revisionID
             replica.updatedAt = timestamp
-            replica.deletedAt = nil
-            replica.deletedAttachmentIDsRaw = nil
-            documentReplicaCapabilityCache[ObjectIdentifier(replica)] = (revisionID, projection.content, true)
-            if let canonical, canonical !== replica {
-                replica.createdAt = canonical.createdAt
-                replica.tagsRaw = canonical.tagsRaw
-                replica.taskID = canonical.taskID
-                replica.pinnedAt = canonical.pinnedAt
-            }
+            // Untouched metadata belongs to each physical replica.
             if let tags { replica.tagsRaw = tags }
         }
-        return revisionID
     }
 
     /// One admission component used by both pre-edit gates and the final
@@ -717,7 +718,7 @@ extension NoteStore {
     }
 
     /// Inserts validated rows; note, rows and versions still save together.
-    private func stageAttachments(_ plan: NoteAttachmentAdmission.Plan, noteID: UUID,
+    private static func stageAttachments(_ plan: NoteAttachmentAdmission.Plan, noteID: UUID,
                                   context: ModelContext, timestamp: Date) {
         for (row, item) in plan.repairs { row.payload = item.data }
         var nextIndex = plan.nextSortIndex
@@ -1255,5 +1256,47 @@ extension NoteStore {
         }
         versionFamilies.forEach { $0.forEach(modelContext.delete) }
         proposalFamilies.forEach { $0.forEach(modelContext.delete) }
+    }
+}
+
+
+extension NoteStore {
+    /// Fresh-context staging uses the same admission, preservation and derived
+    /// column primitives. It performs no save, cache mutation or presentation.
+    static func stageDocument(in context: ModelContext, noteID: UUID, document: NoteDocument,
+                              prepared: PreparedNoteDocument, revisionID: UUID,
+                              versionIDs: [PersistentIdentifier: UUID],
+                              staged: [StagedNoteAttachment] = [], tags: [String]? = nil,
+                              timestamp: Date) throws {
+        guard document.isWritableByThisBuild else { throw NoteDocumentStoreError.readOnly }
+        let replicas = try context.fetch(FetchDescriptor<NoteItem>(predicate: #Predicate { $0.id == noteID }))
+        guard !replicas.isEmpty, replicas.allSatisfy({ row in
+            row.deletedAt == nil && row.contentFormat == 1 && row.content.map { NoteContentCodec.decode($0).isEditable } == true
+        }) else { throw NoteDocumentStoreError.readOnly }
+        let attachments = try context.fetch(FetchDescriptor<NoteAttachment>(predicate: #Predicate { $0.noteID == noteID }))
+        let base = replicas[0].content.flatMap { NoteContentCodec.decode($0).document }
+        let plan = try NoteAttachmentAdmission.evaluate(staged, referencedBy: document,
+            previouslyReferencedBy: base, rows: attachments, metadataOnlyIDs: [])
+        for replica in replicas {
+            if let versionID = versionIDs[replica.persistentModelID] {
+                guard let content = replica.content, case let .editable(old) = NoteContentCodec.decode(content) else {
+                    throw NoteDocumentStoreError.readOnly
+                }
+                context.insert(NoteVersion(id: versionID, noteID: noteID, createdAt: timestamp,
+                    reason: .replacedByDraft, content: content, contentFormat: replica.contentFormat,
+                    title: replica.title, body: replica.body, attachmentIDs: old.attachmentIDs,
+                    sourceRevisionID: replica.revisionID))
+            }
+        }
+        stageDocumentContent(prepared, format: document.format, on: replicas, timestamp: timestamp,
+                             revision: replicas.map(\.revision).max() ?? 0, revisionID: revisionID,
+                             tags: tags.map(AtticTag.encode))
+        stageAttachments(plan, noteID: noteID, context: context, timestamp: timestamp)
+        let shown = Set(document.attachmentIDs)
+        for row in attachments {
+            let deleted = shown.contains(row.id) ? nil : (row.deletedAt ?? timestamp)
+            if row.deletedAt != deleted { row.deletedAt = deleted; row.updatedAt = timestamp }
+        }
+        WorkspaceCrashHook.reach("K3-note")
     }
 }

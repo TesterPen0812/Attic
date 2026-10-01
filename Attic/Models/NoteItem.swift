@@ -6,6 +6,8 @@ final class NoteItem {
     // CloudKit can't enforce SwiftData uniqueness. UUID generation plus the
     // NoteStore refresh deduplication keep the app-level identity stable.
     var id: UUID = UUID()
+    /// Both endpoints bump when association or task lifecycle changes.
+    var associationGeneration: Int64 = 0
     var title: String = ""
     var body: String = ""
     var createdAt: Date = Date()

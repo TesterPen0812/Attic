@@ -6,6 +6,8 @@ final class TaskItem {
     // CloudKit can't enforce SwiftData uniqueness. UUID generation plus the
     // TaskStore refresh deduplication keep the app-level identity stable.
     var id: UUID = UUID()
+    /// Both endpoints bump when association or task lifecycle changes.
+    var associationGeneration: Int64 = 0
     var title: String = ""
     var statusRaw: String = TaskStatus.todo.rawValue
     var priorityRaw: String = TaskPriority.none.rawValue

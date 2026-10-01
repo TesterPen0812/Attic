@@ -34,7 +34,8 @@ final class SchemaMigrationTests: XCTestCase {
             let entities = Dictionary(uniqueKeysWithValues: container.schema.entities.map { ($0.name, $0) })
             XCTAssertEqual(Set(entities.keys), [
                 "TaskItem", "NoteItem", "NoteAttachment", "CanvasBoardItem", "CanvasStrokeItem",
-                "CanvasImageItem", "CanvasSemanticObjectItem", "ItemLink", "NoteVersion", "NotePendingEdit"
+                "CanvasImageItem", "CanvasSemanticObjectItem", "ItemLink", "NoteVersion", "NotePendingEdit",
+                "OperationReceipt", "TaskNoteAssociation", "TaskDeletionPreservation"
             ])
             let taskAttributes = Set(entities["TaskItem"]?.attributes.map(\.name) ?? [])
             XCTAssertTrue(taskAttributes.isSuperset(of: [

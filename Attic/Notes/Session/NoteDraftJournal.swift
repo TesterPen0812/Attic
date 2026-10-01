@@ -1,4 +1,5 @@
 import Foundation
+import Darwin
 import CryptoKit
 
 /// What survives a failed save or a crash for one note's draft: its
@@ -64,7 +65,7 @@ struct NoteDraftJournalEntry: Codable, Equatable, Sendable {
 /// Names the exact checkpoint a session wrote or adopted: the SHA-256 of
 /// its file bytes. A claim authorizes replacement or explicit cancellation;
 /// retirement additionally requires a verified durable byte handoff.
-struct NoteRecoveryClaim: Equatable, Sendable {
+struct NoteRecoveryClaim: Codable, Equatable, Sendable {
     fileprivate let digest: String
 }
 
@@ -625,4 +626,106 @@ final class NoteDraftJournal: NoteDraftJournaling {
         cached = try await io.recoveryEntries()
         return archive
     }
+}
+
+// MARK: Phase 3 operation ownership (same IO actor as checkpoint mutations)
+
+private extension NoteDraftJournalIO {
+    var operationsDirectory: URL { directory.appendingPathComponent("operations", isDirectory: true) }
+    func operationDirectory(_ id: UUID) -> URL {
+        operationsDirectory.appendingPathComponent(id.uuidString, isDirectory: true)
+    }
+
+    func prepareOperation(_ envelope: WorkspaceOperationEnvelope) throws -> WorkspaceOperationClaim {
+        let bytes = try WorkspaceModelFields.encode(envelope)
+        let claim = WorkspaceOperationClaim(id: envelope.id, digest: Self.digest(bytes))
+        let root = operationDirectory(envelope.id)
+        let record = root.appendingPathComponent("envelope.json")
+        try fileManager.createDirectory(at: root, withIntermediateDirectories: true)
+        if fileManager.fileExists(atPath: record.path) {
+            guard try Data(contentsOf: record) == bytes else { throw WorkspaceFoundationError.invalidIdentity }
+            return claim
+        }
+        // The operation's own pre-copy does not replace a foreign checkpoint.
+        if let pre = envelope.preDraft {
+            try journalWriteSynced(WorkspaceModelFields.encode(pre), to: root.appendingPathComponent("pre-draft.json"))
+        }
+        for payload in envelope.payloads {
+            guard !payload.bytes.isEmpty, Self.digest(payload.bytes) == payload.digest else {
+                throw WorkspaceFoundationError.damagedEnvelope
+            }
+            let path = root.appendingPathComponent(payload.id.uuidString)
+            try payload.bytes.write(to: path)
+            WorkspaceCrashHook.reach("K0")
+            try journalSync(path)
+        }
+        WorkspaceCrashHook.reach("K1")
+        try journalWriteSynced(bytes, to: record)
+        try journalSync(root)
+        try journalSync(operationsDirectory)
+        try journalSync(directory)
+        WorkspaceCrashHook.reach("K2")
+        return claim
+    }
+
+    func operationEnvelopes() throws -> [(WorkspaceOperationEnvelope, WorkspaceOperationClaim)] {
+        guard fileManager.fileExists(atPath: operationsDirectory.path) else { return [] }
+        return try fileManager.contentsOfDirectory(at: operationsDirectory, includingPropertiesForKeys: nil)
+            .sorted { $0.lastPathComponent < $1.lastPathComponent }.map { root in
+                guard let id = UUID(uuidString: root.lastPathComponent) else { throw WorkspaceFoundationError.damagedEnvelope }
+                let data = try Data(contentsOf: root.appendingPathComponent("envelope.json"))
+                var envelope = try JSONDecoder().decode(WorkspaceOperationEnvelope.self, from: data)
+                guard envelope.id == id else { throw WorkspaceFoundationError.damagedEnvelope }
+                for index in envelope.payloads.indices {
+                    let payload = envelope.payloads[index]
+                    let stored = try Data(contentsOf: root.appendingPathComponent(payload.id.uuidString))
+                    guard Int64(stored.count) == payload.byteCount, Self.digest(stored) == payload.digest else {
+                        throw WorkspaceFoundationError.damagedEnvelope
+                    }
+                    envelope.payloads[index].bytes = stored
+                }
+                return (envelope, WorkspaceOperationClaim(id: id, digest: Self.digest(data)))
+            }
+    }
+
+    func releaseOperation(_ claim: WorkspaceOperationClaim) throws {
+        let root = operationDirectory(claim.id)
+        guard fileManager.fileExists(atPath: root.path) else { return }
+        let bytes = try Data(contentsOf: root.appendingPathComponent("envelope.json"))
+        guard Self.digest(bytes) == claim.digest else { throw WorkspaceFoundationError.invalidIdentity }
+        // Durable rename first. A crash leaves a bounded released directory;
+        // recovery must never interpret it as retryable absent-receipt intent.
+        let released = directory.appendingPathComponent("released-\(claim.id.uuidString)", isDirectory: true)
+        try fileManager.moveItem(at: root, to: released)
+        try journalSync(operationsDirectory)
+        try journalSync(directory)
+        try fileManager.removeItem(at: released)
+        try journalSync(directory)
+    }
+}
+
+extension NoteDraftJournal {
+    func prepareOperation(_ envelope: WorkspaceOperationEnvelope) async throws -> WorkspaceOperationClaim {
+        try await io.prepareOperation(envelope)
+    }
+    func operationEnvelopes() async throws -> [(WorkspaceOperationEnvelope, WorkspaceOperationClaim)] {
+        try await io.operationEnvelopes()
+    }
+    func releaseOperation(_ claim: WorkspaceOperationClaim) async throws {
+        try await io.releaseOperation(claim)
+    }
+}
+
+/// fsync the file and each directory transition before acknowledging ownership.
+/// A power-loss guarantee is deliberately outside the crash-test claim.
+private func journalSync(_ url: URL) throws {
+    let fd = open(url.path, O_RDONLY | O_CLOEXEC)
+    guard fd >= 0 else { throw POSIXError(.init(rawValue: errno) ?? .EIO) }
+    defer { close(fd) }
+    guard fsync(fd) == 0 else { throw POSIXError(.init(rawValue: errno) ?? .EIO) }
+}
+private func journalWriteSynced(_ bytes: Data, to url: URL) throws {
+    try bytes.write(to: url, options: .atomic)
+    try journalSync(url)
+    try journalSync(url.deletingLastPathComponent())
 }
