@@ -114,6 +114,28 @@ final class WorkspacePurgeTests: XCTestCase {
         expectEqual(await purge().outcome, .conflict); expectEqual(try tasks(), 1); XCTAssertNotNil(try note().taskID)
         XCTAssertTrue(try records().isEmpty)
     }
+    func testP1SurvivingNoteOrAssociationRowOwnerRetainsWholeFamilyUntilTransfer() async throws {
+        try seed(note: true)
+        let context = coordinator.freshContext(), associationID = UUID()
+        context.insert(TaskNoteAssociation(id: associationID, taskID: taskID, noteID: noteID)); try context.save()
+        for owner in [WorkspaceOwner(entity: .note, id: noteID), .init(entity: .association, id: associationID)] {
+            ownership = .init(generation: 1, rows: [owner])
+            expectEqual(await purge().outcome, .conflict); expectEqual(try tasks(), 1)
+            XCTAssertNotNil(try note().taskID); XCTAssertTrue(try records().isEmpty)
+        }
+        ownership = .init(generation: 2)
+        expectEqual(await purge().outcome, .committed); expectEqual(try tasks(), 0)
+    }
+    func testP2ClosedOwnNoteProposalRetainsFamilyEvenWithoutAnOpenSession() async throws {
+        try seed(note: true)
+        let context = coordinator.freshContext(), proposal = NotePendingEdit(noteID: noteID,
+            baseRevisionToken: "base", proposedContent: try XCTUnwrap(note().content), agentName: "External", createdAt: Date())
+        context.insert(proposal); try context.save()
+        expectEqual(await purge().outcome, .conflict); expectEqual(try tasks(), 1)
+        XCTAssertNotNil(try note().taskID); XCTAssertTrue(try records().isEmpty)
+        context.delete(proposal); try context.save()
+        expectEqual(await purge().outcome, .committed); expectEqual(try tasks(), 0)
+    }
     func testP4DeletedOwnNoteDetachesWithoutChangingBytesAndNormalizesOnlyOnRestore() async throws {
         try seed(note: true, deletedNote: true); let old = try note().content
         expectEqual(await purge().outcome, .committed); expectEqual(try note().content, old); XCTAssertNil(try note().taskID)

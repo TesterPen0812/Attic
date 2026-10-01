@@ -99,6 +99,12 @@ enum WorkspacePurge {
             guard ownIDs == Set(notes.map(\.id)), notes.allSatisfy({ $0.taskID.map(ids.contains) == true }) else { return refused() }
             guard notes.allSatisfy({ $0.associationGeneration < Int64.max }) else { return refused() }
             let associations = allAssociations.filter { ownIDs.contains($0.noteID) || ids.contains($0.taskID) }
+            // These owners have not explicitly transferred their replay/base
+            // rights to ordinary-note content. Retain the family rather than
+            // treating a known surviving row owner as permission to detach it.
+            let detachedOwners = Set(ownIDs.map { WorkspaceOwner(entity: .note, id: $0) })
+                .union(associations.map { .init(entity: .association, id: $0.id) })
+            guard ownership.rows.isDisjoint(with: detachedOwners) else { return refused() }
             guard associations.allSatisfy({ ids.contains($0.taskID) && ownIDs.contains($0.noteID) && $0.detachedAt == nil }) else { return refused() }
             for association in associations {
                 guard family.filter({ $0.id == association.taskID }).allSatisfy({ $0.associationGeneration == association.taskGeneration }),
@@ -130,6 +136,7 @@ enum WorkspacePurge {
                 survivingBytes.formUnion(document.attachmentIDs)
             }
             for proposal in try context.fetch(FetchDescriptor<NotePendingEdit>()) {
+                guard !ownIDs.contains(proposal.noteID) else { return refused() }
                 guard let data = proposal.proposedContent, case let .editable(document) = NoteContentCodec.decode(data) else { return refused(.unknown) }
                 survivingBytes.formUnion(document.attachmentIDs)
             }
