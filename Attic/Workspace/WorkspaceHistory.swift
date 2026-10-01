@@ -43,7 +43,7 @@ final class WorkspaceHistory {
 
     let id = UUID()
     unowned let route: UndoRoute
-    let historyID: UndoHistoryID
+    private(set) var historyID: UndoHistoryID
     private(set) var pendingReplayID: UUID?
     private var inputReserved = false
     private var queuedInput: [() -> Void] = []
@@ -73,6 +73,8 @@ final class WorkspaceHistory {
         for op in existing { capture(op, from: adapter) }
     }
     func bind(noteID: UUID) -> Bool { route.alias(.note(noteID), to: historyID) }
+    func materialize(noteID: UUID) -> Bool { route.rekey(self, to: .note(noteID)) }
+    func didRekey(to key: UndoHistoryID) { historyID = key }
     func closeGroup() { adapters.compactMap(\.value).forEach { $0.breakCoalescing() } }
 
     func capture(_ op: NoteUndoHistory.Op, from adapter: NoteUndoHistory) {

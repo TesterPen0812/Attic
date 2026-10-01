@@ -144,6 +144,20 @@ final class WorkspaceHistoryTests: XCTestCase {
         expectEqual(adapter.undoOps.map(\.restores), restored)
         expectEqual(route.undoCount(in: workspace.historyID), count); expectEqual(route.undoStepID(in: workspace.historyID), step)
     }
+    func testH1MaterializationRekeysTheSameHistoryWithoutResettingRedoOrReplayIdentity() throws {
+        type("first"); workspace.closeGroup(); type(" second")
+        let identity = workspace.id, checkpoint = adapter.checkpoint()
+        XCTAssertTrue(adapter.undo()); let step = route.steps(in: workspace.historyID, redo: true).last?.id
+        XCTAssertTrue(workspace.bind(noteID: noteID)); XCTAssertTrue(workspace.materialize(noteID: noteID))
+        expectEqual(workspace.historyID, .note(noteID)); expectEqual(workspace.id, identity)
+        XCTAssertTrue(route.workspace(for: .taskWorkspace(taskID)) === workspace)
+        XCTAssertTrue(route.workspace(for: .note(noteID)) === workspace)
+        expectEqual(route.steps(in: .taskWorkspace(taskID), redo: true).last?.id, step)
+        XCTAssertTrue(adapter.redo()); expectEqual(adapter.storage.string, "first second")
+        adapter.rewind(to: checkpoint)
+        expectEqual(route.undoCount(in: .note(noteID)), 2)
+        expectEqual(route.undoCount(in: .taskWorkspace(taskID)), 2)
+    }
     func testH2FamilyGuardRefusesWholeMixedReplay() async throws {
         type("draft"); try await recordRename(from: "Before", to: "After", mixed: true)
         let context = coordinator.freshContext(); context.insert(TaskItem(id: taskID, title: "Divergent")); try context.save()

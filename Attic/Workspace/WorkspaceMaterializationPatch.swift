@@ -16,6 +16,7 @@ struct WorkspaceMaterializationPatch {
         let old = try before.ordinarySnapshot(title: before.title)
         let new = try after.ordinarySnapshot(title: after.title)
         let oldPrepared = try PreparedNoteDocument(old), newPrepared = try PreparedNoteDocument(new)
+        guard workspace.materialize(noteID: noteID) else { throw WorkspaceFoundationError.conflict }
         workspace.recordOperation(id: operationID, name: "Task removed permanently", coordinator: coordinator,
             attachmentIDs: Set(old.attachmentIDs + new.attachmentIDs)) { redo, effect in
             let context = coordinator.freshContext(), id = noteID, root = taskID

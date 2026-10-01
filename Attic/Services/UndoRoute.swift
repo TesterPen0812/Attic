@@ -270,6 +270,25 @@ final class UndoRoute: ObservableObject {
         return true
     }
 
+    /// Move the existing task workspace to its ordinary-note identity. Keep
+    /// cursor, entries, replay rights and all old aliases; never merge histories.
+    func rekey(_ workspace: WorkspaceHistory, to key: UndoHistoryID) -> Bool {
+        let old = resolved(workspace.historyID), destination = resolved(key)
+        if old == key { return true }
+        guard workspaces[old] === workspace, !replaying.contains(old),
+              destination == old || (histories[destination] == nil && workspaces[destination] == nil),
+              histories[key] == nil, workspaces[key] == nil else { return false }
+        let reflected = aliases.keys.filter { resolved($0) == old }
+        if let value = histories.removeValue(forKey: old) { histories[key] = value }
+        workspaces.removeValue(forKey: old); workspaces[key] = workspace
+        recency = recency.map { $0 == old ? key : $0 }
+        for alias in reflected where alias != key { aliases[alias] = key }
+        aliases.removeValue(forKey: key); aliases[old] = key
+        workspace.didRekey(to: key)
+        revision &+= 1; onOwnershipChanged?()
+        return true
+    }
+
     private func resolved(_ key: UndoHistoryID) -> UndoHistoryID {
         var key = key
         var seen = Set<UndoHistoryID>()
@@ -287,9 +306,10 @@ final class UndoRoute: ObservableObject {
         return Checkpoint(key: key, undo: value.undo, redo: value.redo)
     }
     func rewind(to checkpoint: Checkpoint) {
-        guard !replaying.contains(checkpoint.key) else { return }
-        histories[checkpoint.key] = History(undo: checkpoint.undo, redo: checkpoint.redo)
-        touch(checkpoint.key)
+        let key = resolved(checkpoint.key)
+        guard !replaying.contains(key) else { return }
+        histories[key] = History(undo: checkpoint.undo, redo: checkpoint.redo)
+        touch(key)
         revision &+= 1
         onOwnershipChanged?()
     }
