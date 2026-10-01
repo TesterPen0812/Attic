@@ -144,20 +144,23 @@ struct TasksPage: View {
         ZStack(alignment: .top) {
             switch edgeStyle {
             case .systemSoft:
-                // The system's soft scroll edge (owner, 2026-10-01): the tabs
-                // line and the bottom stack are the lists' bars, so each
-                // list's scroll view gets the system's edge effect under
-                // them. The bars stay put while the pages slide beneath.
+                // The system's soft scroll edge (owner, 2026-10-01): the
+                // controls' zones are the lists' bars, so each list's scroll
+                // view gets the system's edge effect under them, from the
+                // panel's top edge to the resting row and over the add bar's
+                // zone. The bars stay put while the pages slide beneath.
                 pager
-                    .safeAreaBar(edge: .top, spacing: 0) { topBar }
-                    .safeAreaBar(edge: .bottom, spacing: 0) { bottomBar }
+                    .safeAreaBar(edge: .top, spacing: 0) { AtticScrollEdgeBar(height: listTop) }
+                    .safeAreaBar(edge: .bottom, spacing: 0) { AtticScrollEdgeBar(height: bottomMargin) }
             case .cleanCut:
-                // Round 13: the controls float over the lists, whose own
-                // mask cuts the rows at the controls' bands.
+                // Round 13: the lists' own mask cuts the rows at the
+                // controls' bands.
                 pager
-                tabsBand
-                tabs
             }
+            // The controls float over the lists in both, in the page's own
+            // layer.
+            tabsBand
+            tabs
         }
         // The neighbours are drawn only as they slide in, never past the
         // page's edge (the panel's shadow margin lies beyond it). Here, not
@@ -181,13 +184,10 @@ struct TasksPage: View {
         // The bottom stack owns its whole band (round 7, R4): a row scrolled
         // under the strip, the gaps between its buttons, a selection bar or
         // the add bar is never clicked, right-clicked or dragged through it.
-        // Under the system soft edge they are the lists' bottom bar instead.
         .overlay(alignment: .bottom) {
-            if edgeStyle == .cleanCut { TasksBottomBand(stack: bottomStack, bottomInset: bottomInset) }
+            TasksBottomBand(stack: bottomStack, bottomInset: bottomInset)
         }
-        .overlay(alignment: .bottom) {
-            if edgeStyle == .cleanCut { bottomControls }
-        }
+        .overlay(alignment: .bottom) { bottomControls }
         .coordinateSpace(Self.space)
         .atticKeyboardFocusTracking(focusTracker)
         .onKeyPress(phases: .down) { press in pageKey(press) }
@@ -850,27 +850,6 @@ struct TasksPage: View {
     /// the clean cut.
     private var bars: TasksListBars {
         edgeStyle == .systemSoft ? TasksListBars(top: listTop, bottom: bottomMargin) : TasksListBars()
-    }
-
-    /// The top bar (system soft edge): the tabs line, from the panel's top
-    /// edge down to where the first row rests, so the system's edge effect
-    /// covers the header's buttons and the tabs and ends at the resting
-    /// row. Its band owns its clicks, as in the clean cut.
-    private var topBar: some View {
-        tabs
-            .frame(height: listTop, alignment: .top)
-            .background(alignment: .top) { tabsBand }
-    }
-
-    /// The bottom bar (system soft edge): the bottom stack, in a bar of the
-    /// add bar's fixed zone (the lists' bottom margin), so the strip, a
-    /// selection bar or a paste offer coming and going never changes the
-    /// lists' insets (they rise above the bar, over the list, as before).
-    private var bottomBar: some View {
-        bottomControls
-            .fixedSize(horizontal: false, vertical: true)
-            .frame(height: bottomMargin, alignment: .bottom)
-            .background(alignment: .bottom) { TasksBottomBand(stack: bottomStack, bottomInset: bottomInset) }
     }
 
     /// The tabs' band owns its clicks (review 9): a row scrolled under it

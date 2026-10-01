@@ -548,16 +548,19 @@ additive; no token, colour, radius or type style changed.
   on every frame of a scroll or a swipe, and showed a muddy box by the tabs.
 - **New `AtticScrollEdgeStyle`** (`Primitives/AtticScrollEdges.swift`):
   the owner chose macOS 26's own scroll edge effect, soft style. The Tasks
-  page's tabs line and bottom stack are its lists' bars (`safeAreaBar`), so
-  each list's scroll view gets the system's pockets: under the tabs (from
-  the panel's top edge to the resting row, covering the header's buttons)
-  the rows are progressively blurred and faded; under the add bar's zone
-  (Liquid Glass) they fade into the background. The window server draws it;
-  Attic draws and re-renders nothing. `atticScrollEdgeEffect(_:)` sets
-  `.soft` (or hides it). Measured in the SDK and in-process: a pocket needs
-  a SwiftUI `ScrollView` under a bar that draws something (no pocket for a
-  clear bar, `safeAreaInset` or `contentMargins`); AppKit scroll views (the
-  note editor) and SwiftUI's `TextEditor` get none, and AppKit's
+  page's controls' zones (from the panel's top edge to the resting row,
+  covering the header's buttons and the tabs; the add bar's zone) are its
+  lists' bars (`safeAreaBar` with `AtticScrollEdgeBar`), so each list's
+  scroll view gets the system's pockets there: rows are progressively
+  blurred and faded toward the edge. The controls themselves still float
+  over the lists in the page's own layer (as bar content, XCUITest could
+  not hit the add bar's text view, and typing cost more). The window server
+  draws the effect; Attic re-renders nothing. `atticScrollEdgeEffect(_:)`
+  sets `.soft` (or hides it). Measured in the SDK and in-process: a pocket
+  needs a SwiftUI `ScrollView` under a bar that draws something (no pocket
+  for a clear bar, `safeAreaInset` or `contentMargins`), so
+  `AtticScrollEdgeBar` draws an imperceptible fill; AppKit scroll views
+  (the note editor) and SwiftUI's `TextEditor` get none, and AppKit's
   `NSScrollEdgeEffectStyle` exists only for title-bar and split-view
   accessories. Notes keeps round 13's behaviour.
 - **`AtticScrollEdgeLab`**: a preview's developer panel (Motion Lab,

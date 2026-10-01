@@ -5,16 +5,15 @@ import SwiftUI
 /// How a list meets the floating controls at its top and bottom edges.
 ///
 /// - **System soft edge** (the default, and the only one outside previews):
-///   macOS 26's own scroll edge effect, soft style. The controls are the
-///   list's bars (`safeAreaBar`), so SwiftUI gives its scroll view a pocket
-///   at each edge (AppKit's `NSScrollPocket`): what scrolls under a bar of
-///   bare labels is progressively blurred and faded toward the panel's edge
-///   (a variable blur), and under a bar of Liquid Glass controls it fades
-///   into the background (the glass does its own lensing). The window
-///   server draws it; Attic draws nothing of its own and re-renders nothing.
+///   macOS 26's own scroll edge effect, soft style. The controls' zones are
+///   the list's bars (`safeAreaBar`, `AtticScrollEdgeBar`), so SwiftUI gives
+///   its scroll view a pocket at each edge (AppKit's `NSScrollPocket`): what
+///   scrolls under a bar is progressively blurred and faded toward the
+///   panel's edge (a variable blur). The window server draws it; Attic
+///   re-renders nothing.
 /// - **Clean cut** (round 13, preview builds only, to compare): no bars and
 ///   no system effect; the list's own mask cuts rows cleanly at the
-///   controls' bands.
+///   controls' bands. The controls float over the list in both.
 ///
 /// What the SDK offers (Xcode 27, macOS 27 SDK): SwiftUI's
 /// `scrollEdgeEffectStyle(_:for:)` (`.automatic`, `.soft`, `.hard`),
@@ -68,6 +67,32 @@ final class AtticScrollEdgeLab: ObservableObject {
         }
         #endif
         self.style = style
+    }
+}
+
+/// A list's bar under floating controls (`safeAreaBar` content): it marks
+/// the controls' zone, so the list's scroll view gets the system's edge
+/// effect there, and the controls themselves float over the list in the
+/// page's own layer.
+///
+/// Why not the controls themselves as the bar: SwiftUI hosts a bar's
+/// content in a separate AppKit container, and there XCUITest's
+/// accessibility hit test found no hit point on the add bar's text view
+/// (CI, 2026-10-01); typing in a bar also cost about 1.5 ms more per
+/// keystroke. Why a
+/// faint fill: SwiftUI makes a bar's pocket only for a bar that draws
+/// something (measured: a clear, hidden or zero-opacity bar gets none), so
+/// the bar draws an imperceptible one. `ScrollEdgeTests` checks the pockets
+/// exist, so an SDK that stops making them fails a test, not silently.
+struct AtticScrollEdgeBar: View {
+    let height: CGFloat
+
+    var body: some View {
+        Color.black.opacity(0.001)
+            .frame(maxWidth: .infinity)
+            .frame(height: height)
+            .allowsHitTesting(false)
+            .accessibilityHidden(true)
     }
 }
 

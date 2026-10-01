@@ -186,10 +186,11 @@ final class ReviewFixes1001Tests: XCTestCase {
 final class SwipeToCloseIntegrationTests: XCTestCase {
     private var cleanup: [() -> Void] = []
 
-    override func tearDown() async throws {
+    override func tearDown() {
         cleanup.forEach { $0() }
         cleanup.removeAll()
         RunLoop.current.run(until: Date().addingTimeInterval(0.4))
+        super.tearDown()
     }
 
     private func makeController() throws -> (AtticPanelController, PanelUIState, NoteDraftController, PersistenceGate) {
