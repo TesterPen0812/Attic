@@ -2082,6 +2082,13 @@ struct TasksPage: View {
             cancelDrag()
             return
         }
+        // Out of the panel's window, the reorder becomes a drag to another
+        // app (owner-approved, 2026-10-01): a copy as text, nothing moves.
+        if let location = dragSession.location, let view = pointer.view, let window = view.window,
+           Self.leavesPanel(view.convert(location, to: nil), in: window) {
+            beginDragOut(current, at: location)
+            return
+        }
         guard let location = dragSession.location,
               let scrollView = listScrollView(at: location) else { return }
         let step = TasksDragSession.autoScrollStep(
@@ -2105,6 +2112,32 @@ struct TasksPage: View {
             start: current.startIndex, translation: total, group: current.group, heights: { rowHeight($0, in: tab) }
         )
         drag = next
+    }
+
+    /// Whether a window point is outside the panel's visible surface (its
+    /// window's frame without the transparent shadow margin).
+    static func leavesPanel(_ windowPoint: CGPoint, in window: NSWindow) -> Bool {
+        let screen = window.convertPoint(toScreen: windowPoint)
+        let surface = (window as? AtticPanel)?.visibleContentFrame ?? window.frame
+        return !surface.contains(screen)
+    }
+
+    /// The reorder left the panel: it ends where it started (nothing moves),
+    /// and the dragged tasks (the whole selection when the row is part of
+    /// it) go on as a copy, as text, Markdown and RTF.
+    private func beginDragOut(_ current: TasksDrag, at location: CGPoint) {
+        let ids = model.selection.contains(current.id) && model.selection.count > 1 ? model.orderedSelection() : [current.id]
+        let export = model.export(ids)
+        cancelDrag()
+        guard let export, let view = pointer.view else { return }
+        if let start = pointer.startDragOut {
+            start(export, location)
+            return
+        }
+        TasksDragOut.begin(export, count: ids.count, from: view, at: location) { [dragSession] in
+            // The drag ate the button's release: the next press starts afresh.
+            dragSession.end()
+        }
     }
 
     /// The list's scroll view under a page point (the page's current tab).
@@ -3123,6 +3156,8 @@ final class TasksPointer {
     /// The page's floating controls' footprints (only the softening's mask
     /// observes them).
     let softening = TasksSofteningFootprints()
+    /// Tests: receives a drag out of the panel instead of AppKit.
+    var startDragOut: ((TasksTextExport, CGPoint) -> Void)?
     /// The page's own view: a press is placed in the page from its event.
     weak var view: NSView?
 

@@ -8,21 +8,37 @@ import SwiftUI
 extension TasksPageModel {
     // MARK: - Copy and Duplicate
 
-    /// What ⌘C puts on the pasteboard: each task's title, one per line, in
-    /// list order. Plain text, so it pastes anywhere (and back into the add
-    /// bar as one task per line).
+    /// What ⌘C puts on the pasteboard as plain text: each task's title, one
+    /// per line, in list order, so it pastes anywhere (and back into the
+    /// add bar as one task per line).
     func copyText(_ ids: [UUID]) -> String? {
-        let titles = ids.compactMap { store.listedTask(withID: $0)?.title }
-        return titles.isEmpty ? nil : titles.joined(separator: "\n")
+        export(ids)?.titles
     }
 
-    /// ⌘C and Copy: the tasks' titles on the general pasteboard. Nothing
-    /// in the store changes, so there is no toast; VoiceOver hears it.
+    /// The tasks as text for other apps (`TasksTextExport`): ⌘C and a drag
+    /// out of the panel share it. Nil when none of them is listed.
+    func export(_ ids: [UUID]) -> TasksTextExport? {
+        let items = ids.compactMap { id -> TasksTextExport.Item? in
+            guard let task = store.listedTask(withID: id) else { return nil }
+            return TasksTextExport.Item(
+                title: task.title,
+                isDone: task.status == .done,
+                due: task.dueDay.map { dueText($0) },
+                tags: task.tags,
+                priority: task.priority == .none ? nil : TasksTextExport.priorityName(task.priority),
+                subtasks: store.subtasks(of: id).map { .init(title: $0.title, isDone: $0.status == .done) }
+            )
+        }
+        return items.isEmpty ? nil : TasksTextExport(items: items)
+    }
+
+    /// ⌘C and Copy: the tasks' titles on the general pasteboard as plain
+    /// text, their full text as Markdown and RTF. Nothing in the store
+    /// changes, so there is no toast; VoiceOver hears it.
     @discardableResult
     func copy(_ ids: [UUID], to pasteboard: NSPasteboard = .general) -> Bool {
-        guard let text = copyText(ids) else { return false }
-        pasteboard.clearContents()
-        pasteboard.setString(text, forType: .string)
+        guard let export = export(ids) else { return false }
+        export.write(to: pasteboard)
         AccessibilityNotification.Announcement(
             ids.count == 1 ? String(localized: "Copied") : String(localized: "Copied \(ids.count) tasks")
         ).post()
