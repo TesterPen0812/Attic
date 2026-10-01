@@ -147,8 +147,8 @@ struct NoteComposerView: View {
     /// The header's buttons (the shell's), in `AtticSoftening.space`: the
     /// note's text passing under them is softened there (owner, 2026-10-01: B).
     var headerFootprints: [AtticControlFootprint] = []
-    /// Where the bottom buttons sit (they report it).
-    @State private var controlFootprints: [AtticControlFootprint] = []
+    /// Where the bottom buttons sit (they report it; only the mask observes).
+    @StateObject private var controlFootprints = AtticControlFootprints()
 
     /// The title participates in SwiftUI's focus system, while the wrapped
     /// NSTextView owns body focus through AppKit's responder chain. Treating
@@ -315,13 +315,13 @@ struct NoteComposerView: View {
             // B: the text passing under the header's and the bottom buttons
             // keeps only part of its opacity there, feathered (no blur: the
             // editor's AppKit text cannot take SwiftUI's).
-            .mask { AtticLiveSofteningMask(footprints: controlFootprints + headerFootprints) }
+            .mask { AtticCollectedSofteningMask(footprints: controlFootprints, fixed: headerFootprints) }
 
             bottomComposer
                 .padding(.bottom, bottomContentInset)
         }
-        .onPreferenceChange(AtticControlFootprintsKey.self) { footprints in
-            MainActor.assumeIsolated { if controlFootprints != footprints { controlFootprints = footprints } }
+        .onPreferenceChange(AtticControlFootprintsKey.self) { [controlFootprints] footprints in
+            MainActor.assumeIsolated { controlFootprints.update(footprints) }
         }
     }
 

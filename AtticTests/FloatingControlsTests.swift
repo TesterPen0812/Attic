@@ -123,11 +123,13 @@ final class FloatingControlsTests: XCTestCase {
     /// Typing's strip and the transient bars never re-mask the lists (one
     /// frame per keystroke): they report no footprint.
     func testTransientControlsDoNotReMaskTheLists() throws {
-        let hosted = try Hosted(height: 520, addBarFocused: true)
+        let hosted = try Hosted(height: 520)
         defer { hosted.close() }
         hosted.spin(1)
         let before = hosted.pointer.softening.controls
-        hosted.typeQuickly("ab", keyCodes: ["a": 0, "b": 11])
+        // A draft shows the strip (set directly: typed text would leave the
+        // spell checker's correction panel up for a later test).
+        hosted.model.addBar = TaskAddBarText(text: "Buy milk")
         hosted.spin(0.5)
         XCTAssertEqual(hosted.pointer.softening.controls, before, "the strip's appearance changed no footprint")
     }

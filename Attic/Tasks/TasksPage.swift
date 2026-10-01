@@ -181,9 +181,7 @@ struct TasksPage: View {
         // for the softening's mask on the pager.
         .coordinateSpace(AtticSoftening.space)
         .onPreferenceChange(AtticControlFootprintsKey.self) { [pointer] footprints in
-            MainActor.assumeIsolated {
-                if pointer.softening.controls != footprints { pointer.softening.controls = footprints }
-            }
+            MainActor.assumeIsolated { pointer.softening.update(footprints) }
         }
         .atticKeyboardFocusTracking(focusTracker)
         .onKeyPress(phases: .down) { press in pageKey(press) }
@@ -3155,7 +3153,7 @@ final class TasksPointer {
     let liftedCard = TasksLiftedCard()
     /// The page's floating controls' footprints (only the softening's mask
     /// observes them).
-    let softening = TasksSofteningFootprints()
+    let softening = AtticControlFootprints()
     /// Tests: receives a drag out of the panel instead of AppKit.
     var startDragOut: ((TasksTextExport, CGPoint) -> Void)?
     /// The page's own view: a press is placed in the page from its event.
@@ -3426,17 +3424,10 @@ private struct TasksNoticeClearance: View {
     }
 }
 
-/// The footprints of the floating controls the page reports (the tab
-/// labels, the add bar), kept out of view state: only the mask redraws.
-/// Main thread only (it lives on the page's `TasksPointer`).
-final class TasksSofteningFootprints: ObservableObject {
-    @Published var controls: [AtticControlFootprint] = []
-}
-
 /// The pager's softening mask: the reported footprints and the fixed ones,
 /// and the tab labels' halo.
 private struct TasksSofteningMask: View {
-    @ObservedObject var footprints: TasksSofteningFootprints
+    let footprints: AtticControlFootprints
     let fixed: [AtticControlFootprint]
     /// Where the tab labels are drawn (the first label's leading edge on
     /// the tabs line).
@@ -3444,7 +3435,7 @@ private struct TasksSofteningMask: View {
 
     var body: some View {
         let m = AtticPageTabsMetrics.self
-        AtticLiveSofteningMask(footprints: footprints.controls + fixed) {
+        AtticCollectedSofteningMask(footprints: footprints, fixed: fixed) {
             AtticLabelHalo(titles: TasksTab.allCases.map(\.title), style: .pageTabSelected, spacing: m.spacing,
                            lineHeight: AtticLayout.pageTabsHeight, origin: labelsOrigin,
                            underline: (m.underlineGap, m.underlineHeight))

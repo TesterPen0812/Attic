@@ -59,6 +59,46 @@ struct AtticControlFootprint: Equatable {
     var visible: Double?
 }
 
+/// The footprints a page's floating controls report, kept out of view
+/// state: only the softening's mask observes them, so a change never
+/// re-renders the page (or an editor in it). Frames are kept to half a
+/// point and must be finite, so layout's rounding never ping-pongs an
+/// update. Main thread only.
+final class AtticControlFootprints: ObservableObject {
+    @Published private(set) var controls: [AtticControlFootprint] = []
+
+    func update(_ reported: [AtticControlFootprint]) {
+        let kept = reported.compactMap { footprint -> AtticControlFootprint? in
+            let frame = footprint.frame
+            guard frame.minX.isFinite, frame.minY.isFinite, frame.width.isFinite, frame.height.isFinite,
+                  frame.width > 0, frame.height > 0 else { return nil }
+            var rounded = footprint
+            rounded.frame = CGRect(x: (frame.minX * 2).rounded() / 2, y: (frame.minY * 2).rounded() / 2,
+                                   width: (frame.width * 2).rounded() / 2, height: (frame.height * 2).rounded() / 2)
+            return rounded
+        }
+        if kept != controls { controls = kept }
+    }
+}
+
+/// The softening mask for footprints a page collects (`AtticControlFootprints`)
+/// plus ones it knows from its layout.
+struct AtticCollectedSofteningMask<Halo: View>: View {
+    @ObservedObject var footprints: AtticControlFootprints
+    var fixed: [AtticControlFootprint] = []
+    @ViewBuilder var halo: () -> Halo
+
+    var body: some View {
+        AtticLiveSofteningMask(footprints: footprints.controls + fixed, halo: halo)
+    }
+}
+
+extension AtticCollectedSofteningMask where Halo == EmptyView {
+    init(footprints: AtticControlFootprints, fixed: [AtticControlFootprint] = []) {
+        self.init(footprints: footprints, fixed: fixed, halo: { EmptyView() })
+    }
+}
+
 struct AtticControlFootprintsKey: PreferenceKey {
     static let defaultValue: [AtticControlFootprint] = []
 
