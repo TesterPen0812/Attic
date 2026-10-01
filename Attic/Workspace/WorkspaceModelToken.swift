@@ -5,7 +5,7 @@ import SwiftData
 /// records expected absence; a failed read throws and cannot produce absence.
 struct WorkspaceOwner: Codable, Hashable, Sendable {
     enum Entity: String, Codable, Sendable {
-        case task, note, attachment, version, proposal, link, association, preservation, receipt
+        case task, note, attachment, version, proposal, link, association, preservation, receipt, board, stroke, image, semantic
     }
     let entity: Entity
     let id: UUID
@@ -22,6 +22,10 @@ struct WorkspaceModelToken: Codable, Equatable, Sendable {
     @MainActor static func read(_ owner: WorkspaceOwner, in context: ModelContext) throws -> Self {
         let id = owner.id
         switch owner.entity {
+        case .board: return try capture(owner, rows: context.fetch(FetchDescriptor<CanvasBoardItem>(predicate: #Predicate { $0.id == id })))
+        case .stroke: return try capture(owner, rows: context.fetch(FetchDescriptor<CanvasStrokeItem>(predicate: #Predicate { $0.id == id })))
+        case .image: return try capture(owner, rows: context.fetch(FetchDescriptor<CanvasImageItem>(predicate: #Predicate { $0.id == id })))
+        case .semantic: return try capture(owner, rows: context.fetch(FetchDescriptor<CanvasSemanticObjectItem>(predicate: #Predicate { $0.id == id })))
         case .task: return try capture(owner, rows: context.fetch(FetchDescriptor<TaskItem>(predicate: #Predicate { $0.id == id })))
         case .note: return try capture(owner, rows: context.fetch(FetchDescriptor<NoteItem>(predicate: #Predicate { $0.id == id })))
         case .attachment: return try capture(owner, rows: context.fetch(FetchDescriptor<NoteAttachment>(predicate: #Predicate { $0.id == id })))
@@ -64,13 +68,21 @@ enum WorkspaceModelFields {
         return fields
     }
 
-    @MainActor private static func record<M>(_ model: M, _ fields: [WorkspaceField<M>]) throws -> [String: Data] {
+    @MainActor private static func record<M: PersistentModel>(_ model: M, _ fields: [WorkspaceField<M>], applying patch: [String: Data]? = nil) throws -> [String: Data] {
+        if let patch {
+            guard Set(patch.keys).isSubset(of: Set(fields.map(\.name))) else { throw WorkspaceFoundationError.conflict }
+            for field in fields { if let value = patch[field.name] { try field.write(model, value) } }
+        }
         var values: [String: Data] = [:]
         for field in fields { values[field.name] = try field.read(model) }
         return values
     }
 
-    @MainActor private static func capture(_ model: any PersistentModel) throws -> [String: Data] {
+    @MainActor static func apply(_ values: [String: Data], to model: any PersistentModel) throws {
+        _ = try capture(model, applying: values)
+    }
+
+    @MainActor private static func capture(_ model: any PersistentModel, applying values: [String: Data]? = nil) throws -> [String: Data] {
         switch model {
         case let row as TaskItem:
             return try record(row, [
@@ -95,7 +107,7 @@ enum WorkspaceModelFields {
                 WorkspaceField("listOrderVersion", \TaskItem.listOrderVersion),
                 WorkspaceField("completedFromRaw", \TaskItem.completedFromRaw),
                 WorkspaceField("completedFromOrder", \TaskItem.completedFromOrder)
-            ])
+            ], applying: values)
         case let row as NoteItem:
             return try record(row, [
                 WorkspaceField("id", \NoteItem.id),
@@ -117,7 +129,7 @@ enum WorkspaceModelFields {
                 WorkspaceField("taskID", \NoteItem.taskID),
                 WorkspaceField("revision", \NoteItem.revision),
                 WorkspaceField("revisionID", \NoteItem.revisionID)
-            ])
+            ], applying: values)
         case let row as NoteAttachment:
             return try record(row, [
                 WorkspaceField("id", \NoteAttachment.id),
@@ -134,7 +146,7 @@ enum WorkspaceModelFields {
                 WorkspaceField("updatedAt", \NoteAttachment.updatedAt),
                 WorkspaceField("deletedAt", \NoteAttachment.deletedAt),
                 WorkspaceField("payload", \NoteAttachment.payload)
-            ])
+            ], applying: values)
         case let row as NoteVersion:
             return try record(row, [
                 WorkspaceField("id", \NoteVersion.id),
@@ -147,7 +159,7 @@ enum WorkspaceModelFields {
                 WorkspaceField("body", \NoteVersion.body),
                 WorkspaceField("attachmentIDsRaw", \NoteVersion.attachmentIDsRaw),
                 WorkspaceField("sourceRevisionID", \NoteVersion.sourceRevisionID)
-            ])
+            ], applying: values)
         case let row as NotePendingEdit:
             return try record(row, [
                 WorkspaceField("id", \NotePendingEdit.id),
@@ -158,7 +170,7 @@ enum WorkspaceModelFields {
                 WorkspaceField("agentName", \NotePendingEdit.agentName),
                 WorkspaceField("createdAt", \NotePendingEdit.createdAt),
                 WorkspaceField("needsReview", \NotePendingEdit.needsReview)
-            ])
+            ], applying: values)
         case let row as ItemLink:
             return try record(row, [
                 WorkspaceField("id", \ItemLink.id),
@@ -170,7 +182,7 @@ enum WorkspaceModelFields {
                 WorkspaceField("createdAt", \ItemLink.createdAt),
                 WorkspaceField("updatedAt", \ItemLink.updatedAt),
                 WorkspaceField("deletedAt", \ItemLink.deletedAt)
-            ])
+            ], applying: values)
         case let row as OperationReceipt:
             return try record(row, [
                 WorkspaceField("id", \OperationReceipt.id),
@@ -184,7 +196,7 @@ enum WorkspaceModelFields {
                 WorkspaceField("handoffProof", \OperationReceipt.handoffProof),
                 WorkspaceField("envelopeReleased", \OperationReceipt.envelopeReleased),
                 WorkspaceField("createdAt", \OperationReceipt.createdAt)
-            ])
+            ], applying: values)
         case let row as TaskNoteAssociation:
             return try record(row, [
                 WorkspaceField("id", \TaskNoteAssociation.id),
@@ -194,7 +206,7 @@ enum WorkspaceModelFields {
                 WorkspaceField("noteGeneration", \TaskNoteAssociation.noteGeneration),
                 WorkspaceField("detachedPreservationID", \TaskNoteAssociation.detachedPreservationID),
                 WorkspaceField("detachedAt", \TaskNoteAssociation.detachedAt)
-            ])
+            ], applying: values)
         case let row as TaskDeletionPreservation:
             return try record(row, [
                 WorkspaceField("id", \TaskDeletionPreservation.id),
@@ -204,17 +216,91 @@ enum WorkspaceModelFields {
                 WorkspaceField("provenance", \TaskDeletionPreservation.provenance),
                 WorkspaceField("snapshot", \TaskDeletionPreservation.snapshot),
                 WorkspaceField("purgedAt", \TaskDeletionPreservation.purgedAt)
-            ])
+            ], applying: values)
+        case let row as CanvasBoardItem:
+            return try record(row, [
+                WorkspaceField("id", \CanvasBoardItem.id),
+                WorkspaceField("name", \CanvasBoardItem.name),
+                WorkspaceField("sortIndex", \CanvasBoardItem.sortIndex),
+                WorkspaceField("formatVersion", \CanvasBoardItem.formatVersion),
+                WorkspaceField("clearGeneration", \CanvasBoardItem.clearGeneration),
+                WorkspaceField("mutationVersion", \CanvasBoardItem.mutationVersion),
+                WorkspaceField("tombstoned", \CanvasBoardItem.tombstoned),
+                WorkspaceField("createdAt", \CanvasBoardItem.createdAt),
+                WorkspaceField("updatedAt", \CanvasBoardItem.updatedAt),
+                WorkspaceField("deletedAt", \CanvasBoardItem.deletedAt),
+                WorkspaceField("tagsRaw", \CanvasBoardItem.tagsRaw),
+                WorkspaceField("purgedAt", \CanvasBoardItem.purgedAt),
+                WorkspaceField("recentlyDeletedAt", \CanvasBoardItem.recentlyDeletedAt),
+                WorkspaceField("deletedContentCount", \CanvasBoardItem.deletedContentCount)
+            ], applying: values)
+        case let row as CanvasStrokeItem:
+            return try record(row, [
+                WorkspaceField("id", \CanvasStrokeItem.id),
+                WorkspaceField("canvasID", \CanvasStrokeItem.canvasID),
+                WorkspaceField("payloadVersion", \CanvasStrokeItem.payloadVersion),
+                WorkspaceField("payload", \CanvasStrokeItem.payload),
+                WorkspaceField("boardGeneration", \CanvasStrokeItem.boardGeneration),
+                WorkspaceField("mutationVersion", \CanvasStrokeItem.mutationVersion),
+                WorkspaceField("tombstoned", \CanvasStrokeItem.tombstoned),
+                WorkspaceField("createdAt", \CanvasStrokeItem.createdAt),
+                WorkspaceField("updatedAt", \CanvasStrokeItem.updatedAt),
+                WorkspaceField("deletedAt", \CanvasStrokeItem.deletedAt)
+            ], applying: values)
+        case let row as CanvasImageItem:
+            return try record(row, [
+                WorkspaceField("id", \CanvasImageItem.id),
+                WorkspaceField("canvasID", \CanvasImageItem.canvasID),
+                WorkspaceField("encodedData", \CanvasImageItem.encodedData),
+                WorkspaceField("encodedByteCount", \CanvasImageItem.encodedByteCount),
+                WorkspaceField("contentDigest", \CanvasImageItem.contentDigest),
+                WorkspaceField("contentType", \CanvasImageItem.contentType),
+                WorkspaceField("pixelWidth", \CanvasImageItem.pixelWidth),
+                WorkspaceField("pixelHeight", \CanvasImageItem.pixelHeight),
+                WorkspaceField("centerX", \CanvasImageItem.centerX),
+                WorkspaceField("centerY", \CanvasImageItem.centerY),
+                WorkspaceField("width", \CanvasImageItem.width),
+                WorkspaceField("height", \CanvasImageItem.height),
+                WorkspaceField("zIndex", \CanvasImageItem.zIndex),
+                WorkspaceField("boardGeneration", \CanvasImageItem.boardGeneration),
+                WorkspaceField("mutationVersion", \CanvasImageItem.mutationVersion),
+                WorkspaceField("tombstoned", \CanvasImageItem.tombstoned),
+                WorkspaceField("createdAt", \CanvasImageItem.createdAt),
+                WorkspaceField("updatedAt", \CanvasImageItem.updatedAt),
+                WorkspaceField("deletedAt", \CanvasImageItem.deletedAt)
+            ], applying: values)
+        case let row as CanvasSemanticObjectItem:
+            return try record(row, [
+                WorkspaceField("id", \CanvasSemanticObjectItem.id),
+                WorkspaceField("canvasID", \CanvasSemanticObjectItem.canvasID),
+                WorkspaceField("kind", \CanvasSemanticObjectItem.kind),
+                WorkspaceField("payloadVersion", \CanvasSemanticObjectItem.payloadVersion),
+                WorkspaceField("payload", \CanvasSemanticObjectItem.payload),
+                WorkspaceField("centerX", \CanvasSemanticObjectItem.centerX),
+                WorkspaceField("centerY", \CanvasSemanticObjectItem.centerY),
+                WorkspaceField("width", \CanvasSemanticObjectItem.width),
+                WorkspaceField("height", \CanvasSemanticObjectItem.height),
+                WorkspaceField("rotation", \CanvasSemanticObjectItem.rotation),
+                WorkspaceField("zIndex", \CanvasSemanticObjectItem.zIndex),
+                WorkspaceField("boardGeneration", \CanvasSemanticObjectItem.boardGeneration),
+                WorkspaceField("mutationVersion", \CanvasSemanticObjectItem.mutationVersion),
+                WorkspaceField("tombstoned", \CanvasSemanticObjectItem.tombstoned),
+                WorkspaceField("createdAt", \CanvasSemanticObjectItem.createdAt),
+                WorkspaceField("updatedAt", \CanvasSemanticObjectItem.updatedAt),
+                WorkspaceField("deletedAt", \CanvasSemanticObjectItem.deletedAt)
+            ], applying: values)
         default: throw WorkspaceFoundationError.unsupportedField(String(describing: type(of: model)))
         }
     }
 }
 
-@MainActor private struct WorkspaceField<M> {
+@MainActor private struct WorkspaceField<M: PersistentModel> {
     let name: String
     let read: (M) throws -> Data
-    init<Value: Encodable>(_ name: String, _ keyPath: KeyPath<M, Value>) {
+    let write: (M, Data) throws -> Void
+    init<Value: Codable>(_ name: String, _ keyPath: ReferenceWritableKeyPath<M, Value>) {
         self.name = name
         read = { try WorkspaceModelFields.encode($0[keyPath: keyPath]) }
+        write = { model, data in model[keyPath: keyPath] = try JSONDecoder().decode(Value.self, from: data) }
     }
 }

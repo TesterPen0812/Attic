@@ -255,6 +255,11 @@ struct AppRuntimeEnvironment {
     /// together: an in-memory gallery store never meets the real files.
     @MainActor
     func makeItemStores(container: ModelContainer, performanceRoot: URL? = nil) -> (tasks: TaskStore, notes: NoteStore) {
+        if let recovery = noteRecoveryURL {
+            WorkspaceLegacyBridge.configureJournalDirectory(
+                recovery.deletingLastPathComponent().appendingPathComponent("NoteDrafts"), for: container
+            )
+        }
         let tasks = TaskStore(
             container: container,
             taskImageFiles: performanceRoot.map {

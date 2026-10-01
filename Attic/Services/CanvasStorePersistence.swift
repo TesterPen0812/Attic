@@ -57,9 +57,9 @@ extension CanvasStore {
 
         do {
             #if os(macOS)
-            try PerformanceSignposts.storeSave { try persist(context) }
+            try PerformanceSignposts.storeSave { try Self.persistSharedStoreContext(context, using: persist) }
             #else
-            try persist(context)
+            try Self.persistSharedStoreContext(context, using: persist)
             #endif
             if CanvasCloudInfrastructurePolicy.isEnabled {
                 cloudSyncProtection.noteLocalSave()
@@ -479,7 +479,7 @@ extension CanvasStore {
                 changed = true
             }
             guard changed else { return }
-            try persist(context)
+            try Self.persistSharedStoreContext(context, using: persist)
         } catch {
             context.rollback()
         }
@@ -621,4 +621,22 @@ extension CanvasStore {
         return hidden
     }
 
+}
+
+
+extension CanvasStore {
+    static func makeStoreContext(_ container: ModelContainer) -> ModelContext {
+        #if os(macOS)
+        return WorkspaceLegacyBridge.context(for: container)
+        #else
+        let context = ModelContext(container); context.autosaveEnabled = false; return context
+        #endif
+    }
+    static func persistSharedStoreContext(_ context: ModelContext, using writer: @escaping (ModelContext) throws -> Void) throws {
+        #if os(macOS)
+        try WorkspaceLegacyBridge.persistSharedChanges(context, using: writer)
+        #else
+        try writer(context)
+        #endif
+    }
 }

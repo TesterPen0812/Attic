@@ -43,6 +43,7 @@ enum TagServiceError: LocalizedError {
 @MainActor
 final class TagService {
     private let container: ModelContainer
+    private var writerCoordinator: WorkspaceOperationCoordinator?
     private let persist: (ModelContext) throws -> Void
     /// Replaces the item stores' contexts after a successful change.
     var afterChange: () -> Void
@@ -55,6 +56,7 @@ final class TagService {
     ) {
         self.container = container
         self.persist = persist
+        self.writerCoordinator = try? WorkspaceLegacyBridge.coordinator(for: container)
         self.afterChange = afterChange
     }
 
@@ -131,7 +133,7 @@ final class TagService {
     @discardableResult
     func revert(_ snapshot: TagChangeSnapshot) -> Bool {
         guard !snapshot.isEmpty else { return true }
-        let context = ModelContext(container)
+        let context = WorkspaceLegacyBridge.context(for: container)
         var changed = false
         func reverted(_ raw: String, _ change: TagChangeSnapshot.Change) -> String? {
             let tags = Set(AtticTag.decode(raw)).subtracting(change.added).union(change.removed)
@@ -160,7 +162,7 @@ final class TagService {
     /// Applies `transform` to every row's tag set; nil leaves a row alone.
     /// Returns what it removed and added on each row it changed.
     private func rewrite(_ transform: (Set<String>) -> Set<String>?) -> TagChangeSnapshot? {
-        let context = ModelContext(container)
+        let context = WorkspaceLegacyBridge.context(for: container)
         var previous: [PersistentIdentifier: TagChangeSnapshot.Change] = [:]
         func apply(_ raw: String, _ identifier: PersistentIdentifier) -> String? {
             let before = Set(AtticTag.decode(raw))
@@ -196,7 +198,7 @@ final class TagService {
     /// live and tag filters, so an older tagged copy never answers for a
     /// newer one that has no tags or is deleted.
     private func liveTags() throws -> [AtticItemRef: Set<String>] {
-        let context = ModelContext(container)
+        let context = WorkspaceLegacyBridge.context(for: container)
         var result: [AtticItemRef: Set<String>] = [:]
         func record(_ ref: AtticItemRef, _ raw: String) {
             let tags = Set(AtticTag.decode(raw))
@@ -241,7 +243,7 @@ final class TagService {
 
     private func save(_ context: ModelContext) -> Bool {
         do {
-            try persist(context)
+            try WorkspaceLegacyBridge.persist(context, using: persist, sourceName: "TagService")
             lastErrorMessage = nil
         } catch {
             context.rollback()

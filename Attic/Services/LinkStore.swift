@@ -48,6 +48,7 @@ enum LinkStoreError: LocalizedError {
 final class LinkStore {
     private let container: ModelContainer
     private let now: () -> Date
+    private var writerCoordinator: WorkspaceOperationCoordinator?
     private let persist: (ModelContext) throws -> Void
     /// Answers whether an item exists and is live; supplied by the library,
     /// which knows every item store.
@@ -65,6 +66,7 @@ final class LinkStore {
         self.container = container
         self.now = now
         self.persist = persist
+        self.writerCoordinator = try? WorkspaceLegacyBridge.coordinator(for: container)
         self.endpointState = endpointState
     }
 
@@ -76,7 +78,7 @@ final class LinkStore {
         for endpoint in [source, target] where endpointState(endpoint) != .live {
             return fail(LinkStoreError.unavailableEndpoint(endpoint))
         }
-        let context = ModelContext(container)
+        let context = WorkspaceLegacyBridge.context(for: container)
         let link = ItemLink(source: source, target: target, kind: kind, createdAt: now())
         context.insert(link)
         guard save(context) else { return nil }
@@ -123,7 +125,7 @@ final class LinkStore {
     @discardableResult
     func purgeLinks(touching items: Set<AtticItemRef>) -> Int {
         guard !items.isEmpty else { return 0 }
-        let context = ModelContext(container)
+        let context = WorkspaceLegacyBridge.context(for: container)
         do {
             let removed = try stagePurge(touching: items, in: context)
             guard removed > 0 else { return 0 }
@@ -171,7 +173,7 @@ final class LinkStore {
     /// of the link is identical (same ends, kind and removal).
     @discardableResult
     func purgeRemovedLinks(before cutoff: Date) -> Int {
-        let context = ModelContext(container)
+        let context = WorkspaceLegacyBridge.context(for: container)
         do {
             let removedRows = try context.fetch(FetchDescriptor<ItemLink>(predicate: #Predicate {
                 $0.deletedAt != nil
@@ -225,7 +227,7 @@ final class LinkStore {
     // MARK: - Private
 
     private func setDeleted(_ deleted: Bool, linkID: UUID) -> Bool {
-        let context = ModelContext(container)
+        let context = WorkspaceLegacyBridge.context(for: container)
         do {
             let replicas = try context.fetch(FetchDescriptor<ItemLink>(predicate: #Predicate { $0.id == linkID }))
             guard !replicas.isEmpty else { throw LinkStoreError.missingLink(linkID) }
@@ -255,7 +257,7 @@ final class LinkStore {
         includingUnavailable: Bool
     ) -> [ItemLinkRecord] {
         do {
-            let context = ModelContext(container)
+            let context = WorkspaceLegacyBridge.context(for: container)
             let ids = Array(Set(try context.fetch(candidates).map(\.id)))
             guard !ids.isEmpty else { return [] }
             let rows = try context.fetch(FetchDescriptor<ItemLink>(predicate: #Predicate { ids.contains($0.id) }))
@@ -296,7 +298,7 @@ final class LinkStore {
 
     private func save(_ context: ModelContext) -> Bool {
         do {
-            try persist(context)
+            try WorkspaceLegacyBridge.persist(context, using: persist, sourceName: "LinkStore")
             lastErrorMessage = nil
             revision &+= 1
             return true

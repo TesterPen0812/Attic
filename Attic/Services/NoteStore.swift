@@ -383,10 +383,17 @@ final class NoteStore: ObservableObject {
         self.attachmentFileStore = resolvedAttachmentFileStore
         self.attachmentImporter = attachmentImporter ?? resolvedAttachmentFileStore
 #endif
-        context = ModelContext(container)
+        context = Self.makeStoreContext(container)
         self.now = now
         self.persist = persist
-        self.makeFreshContext = makeFreshContext ?? { ModelContext(container) }
+        let contextFactory = makeFreshContext ?? { ModelContext(container) }
+        self.makeFreshContext = {
+            let fresh = try contextFactory()
+            #if os(macOS)
+            try WorkspaceLegacyBridge.registerContext(fresh)
+            #endif
+            return fresh
+        }
 #if os(macOS)
         resolvedAttachmentFileStore.registerByteOwners(UUID()) { [weak self] in
             guard let owner = self else { return nil }
@@ -1561,11 +1568,16 @@ final class NoteStore: ObservableObject {
         do {
             invalidateAttachmentProofs(in: context)
             #if os(macOS)
-            try PerformanceSignposts.storeSave { try persist(context) }
+            try PerformanceSignposts.storeSave { try Self.persistStoreContext(context, using: persist) }
             #else
-            try persist(context)
+            try Self.persistStoreContext(context, using: persist)
             #endif
-            lastErrorMessage = nil
+            do {
+                try reloadModels(preservingAttachmentProofs: true)
+                lastErrorMessage = nil
+            } catch {
+                lastErrorMessage = "Saved, but presentation is still updating: \(error.localizedDescription)"
+            }
             registerSuccessfulLocalSave()
             return true
         } catch {
@@ -1639,7 +1651,7 @@ final class NoteStore: ObservableObject {
     ) -> NotePersistenceRefreshOutcome {
         do {
             invalidateAttachmentProofs(in: transactionContext)
-            try persist(transactionContext)
+            try Self.persistStoreContext(transactionContext, using: persist)
             registerSuccessfulLocalSave()
         } catch {
             let saveError = error.localizedDescription
@@ -2148,5 +2160,23 @@ final class NoteStore: ObservableObject {
             note.revisionID?.uuidString ?? "",
             String(reflecting: note.persistentModelID)
         ].joined(separator: "\u{1F}")
+    }
+}
+
+
+extension NoteStore {
+    private static func makeStoreContext(_ container: ModelContainer) -> ModelContext {
+        #if os(macOS)
+        return WorkspaceLegacyBridge.context(for: container)
+        #else
+        let context = ModelContext(container); context.autosaveEnabled = false; return context
+        #endif
+    }
+    private static func persistStoreContext(_ context: ModelContext, using writer: @escaping (ModelContext) throws -> Void) throws {
+        #if os(macOS)
+        try WorkspaceLegacyBridge.persist(context, using: writer, sourceName: "NoteStore", history: false)
+        #else
+        try writer(context)
+        #endif
     }
 }

@@ -451,7 +451,7 @@ final class TaskStore: ObservableObject {
         taskImageFiles: TaskImageFiles = .shared
     ) {
         self.container = container
-        context = ModelContext(container)
+        context = Self.makeStoreContext(container)
         self.now = now
         self.persist = persist
         self.taskImageFiles = taskImageFiles
@@ -529,7 +529,7 @@ final class TaskStore: ObservableObject {
                 row.listOrderVersion = TaskItem.currentListOrderVersion
                 marked += 1
             }
-            try persist(context)
+            try Self.persistStoreContext(context, using: persist, history: commandLibrary != nil)
             return marked
         } catch {
             context.rollback()
@@ -775,7 +775,8 @@ final class TaskStore: ObservableObject {
         self.context = context
         self.now = { timestamp }
         self.persist = { _ in throw WorkspaceFoundationError.conflict }
-        self.taskImageFiles = .shared
+        self.taskImageFiles = TaskImageFiles(rootURL: FileManager.default.temporaryDirectory
+            .appendingPathComponent("AtticWorkspaceStaging-\(UUID().uuidString)"))
         self.tasks = try context.fetch(FetchDescriptor<TaskItem>()).filter { $0.deletedAt == nil }
     }
 
@@ -1766,7 +1767,7 @@ final class TaskStore: ObservableObject {
         let deleted: [TaskItem]
         let rootWinners: [UUID: TaskItem]
         do {
-            let freshContext = ModelContext(container)
+            let freshContext = Self.makeStoreContext(container)
             deleted = try freshContext.fetch(FetchDescriptor<TaskItem>(
                 predicate: #Predicate { $0.deletedAt != nil }
             ))
@@ -3001,11 +3002,12 @@ final class TaskStore: ObservableObject {
     private func save(owner: UUID? = nil) -> Bool {
         do {
             #if os(macOS)
-            try PerformanceSignposts.storeSave { try persist(context) }
+            try PerformanceSignposts.storeSave { try Self.persistStoreContext(context, using: persist, history: commandLibrary != nil) }
             #else
-            try persist(context)
+            try Self.persistStoreContext(context, using: persist, history: commandLibrary != nil)
             #endif
-            errorNotice = nil
+            do { try reloadTasks(); errorNotice = nil }
+            catch { report("Saved, but presentation is still updating: \(error.localizedDescription)", owner: owner) }
             revision &+= 1
             #if !ATTIC_LOCAL_ONLY
             cloudSyncProtection.noteLocalSave()
@@ -3030,7 +3032,7 @@ final class TaskStore: ObservableObject {
         // CloudKit updates the underlying store. Refresh through a new context
         // so remote values replace the old objects instead of being written
         // back to CloudKit by the next local save.
-        let refreshedContext = ModelContext(container)
+        let refreshedContext = Self.makeStoreContext(container)
         let fetched = try refreshedContext.fetch(FetchDescriptor<TaskItem>())
         context = refreshedContext
         // Deduplicate first, then hide: the replica presentation would show
@@ -3389,5 +3391,23 @@ final class TaskStore: ObservableObject {
         parts.append(task.dueDayRaw ?? "")
         parts.append(String(reflecting: task.persistentModelID))
         return parts.joined(separator: "\u{1F}")
+    }
+}
+
+
+extension TaskStore {
+    private static func makeStoreContext(_ container: ModelContainer) -> ModelContext {
+        #if os(macOS)
+        return WorkspaceLegacyBridge.context(for: container)
+        #else
+        let context = ModelContext(container); context.autosaveEnabled = false; return context
+        #endif
+    }
+    private static func persistStoreContext(_ context: ModelContext, using writer: @escaping (ModelContext) throws -> Void, history: Bool) throws {
+        #if os(macOS)
+        try WorkspaceLegacyBridge.persist(context, using: writer, sourceName: "TaskStore", history: history)
+        #else
+        try writer(context)
+        #endif
     }
 }

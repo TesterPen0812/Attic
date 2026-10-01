@@ -56,7 +56,7 @@ final class WorkspaceCommitTests: XCTestCase {
             WorkspaceOwner(entity: .task, id: childID), .init(entity: .version, id: versionID),
             .init(entity: .association, id: associationID), .init(entity: .attachment, id: attachmentID)
         ])
-        let envelope = coordinator.newEnvelope(intent: "Make Subtask", reads: try coordinator.capture(owners),
+        let envelope = try coordinator.newEnvelope(intent: "Make Subtask", reads: try coordinator.capture(owners),
             writes: owners, afterDocuments: [id: projection.content], staged: [staged])
         let versionIDs = [note.persistentModelID: versionID]
         let result = await coordinator.execute(envelope, stage: { commit in
@@ -120,7 +120,7 @@ final class WorkspaceCommitTests: XCTestCase {
             try TaskStore.stageUpdate(in: context, taskID: self.taskID, title: "Fresh", timestamp: Date())
         })
         XCTAssertEqual(rename, .committed)
-        let stale = coordinator.newEnvelope(intent: "stale rename", reads: tokens,
+        let stale = try coordinator.newEnvelope(intent: "stale rename", reads: tokens,
             writes: [.init(entity: .task, id: taskID)])
         let outcome = await coordinator.execute(stale, stage: { context in
             try TaskStore.stageUpdate(in: context, taskID: self.taskID, title: warm.title + " stale", timestamp: Date())

@@ -196,11 +196,17 @@ final class NoteDraftController: ObservableObject {
         self.sessionDefaults = sessionDefaults
         self.recoveryFile = recoveryURL.map(NoteDraftRecoveryFile.init(url:))
         self.recoveryMayExist = recoveryURL != nil
+        let journal: NoteDraftJournal? = recoveryURL.map {
+            let replacement = NoteDraftJournal(directory: $0.deletingLastPathComponent().appendingPathComponent("NoteDrafts", isDirectory: true))
+            if let gate = try? WorkspaceLegacyBridge.coordinator(for: noteStore.container) {
+                try? gate.adoptJournal(replacement)
+                return gate.journal
+            }
+            return replacement
+        }
         self.pages = NotesPageController(
             store: noteStore,
-            journal: recoveryURL.map {
-                NoteDraftJournal(directory: $0.deletingLastPathComponent().appendingPathComponent("NoteDrafts", isDirectory: true))
-            },
+            journal: journal,
             defaults: sessionDefaults
         )
         pages.leaveLegacyNote = { [weak self] reason in

@@ -27,6 +27,7 @@ struct WorkspaceOperationEnvelope: Codable, Equatable, Sendable {
     let id: UUID
     let intent: String
     let tokens: [WorkspaceModelToken]
+    let scopes: [WorkspaceScopeToken]
     let writes: Set<WorkspaceOwner>
     let inverseGuards: [WorkspaceModelToken]
     let preDraft: NoteDraftJournalEntry?

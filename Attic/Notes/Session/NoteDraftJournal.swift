@@ -250,7 +250,16 @@ extension NoteDraftJournaling {
 /// One file per note (`<id>.json`) plus staged attachment bytes
 /// (`staged/<id>`), written atomically. All disk I/O and verification live
 /// on this serialized actor; the main-actor facade exposes cached inventory.
+private final class NoteOperationRecoveryBarrier: @unchecked Sendable {
+    private let lock = NSLock()
+    private var blocked = false
+    var isBlocked: Bool { lock.lock(); defer { lock.unlock() }; return blocked }
+    func setBlocked(_ value: Bool) { lock.lock(); blocked = value; lock.unlock() }
+}
+
 private actor NoteDraftJournalIO {
+    nonisolated let operationBarrier = NoteOperationRecoveryBarrier()
+    private var operationReconciled = false
     let directory: URL
     private let fileManagerFactory: @Sendable () -> FileManager
     private lazy var fileManager = fileManagerFactory()
@@ -273,7 +282,6 @@ private actor NoteDraftJournalIO {
     }
 
     private func ownership(of file: URL) -> NoteRecoveryOwnership {
-        guard fileManager.fileExists(atPath: file.path) else { return .absent }
         do {
             let data = try Data(contentsOf: file)
             let decoder = JSONDecoder()
@@ -310,6 +318,7 @@ private actor NoteDraftJournalIO {
             }
             return .valid(entry, staged, claim)
         } catch {
+            if journalFileIsMissing(error) { return .absent }
             return .damaged("Recovery copy \(file.lastPathComponent) is incomplete or unreadable: \(error.localizedDescription)")
         }
     }
@@ -397,8 +406,9 @@ private actor NoteDraftJournalIO {
                 throw error
             }
             object["retired"] = true
-            try JSONSerialization.data(withJSONObject: object).write(to: file, options: .atomic)
+            try journalWriteSynced(JSONSerialization.data(withJSONObject: object), to: file)
         }
+        try journalSync(directory)
         removeUnreferencedStagedFiles()
     }
 
@@ -509,9 +519,19 @@ private actor NoteDraftJournalIO {
         return archive
     }
 
-    func recoveryEntries(collectRetired: Bool = true) throws -> [NoteDraftRecoveryEntry] {
-        guard fileManager.fileExists(atPath: directory.path) else { return [] }
-        let files = try fileManager.contentsOfDirectory(at: directory, includingPropertiesForKeys: nil)
+    func recoveryEntries(collectRetired: Bool = true, offering: Bool = true) throws -> [NoteDraftRecoveryEntry] {
+        if offering && !operationReconciled {
+            do {
+                let pending = try fileManager.contentsOfDirectory(at: operationsDirectory, includingPropertiesForKeys: nil)
+                if !pending.isEmpty { operationBarrier.setBlocked(true) }
+                else { operationReconciled = true }
+            } catch { if !journalFileIsMissing(error) { throw error } }
+        }
+        if offering && operationBarrier.isBlocked { throw WorkspaceFoundationError.unknown }
+        let inventory: [URL]
+        do { inventory = try fileManager.contentsOfDirectory(at: directory, includingPropertiesForKeys: nil) }
+        catch { if journalFileIsMissing(error) { return [] }; throw error }
+        let files = inventory
             .filter { $0.pathExtension == "json" }.sorted { $0.lastPathComponent < $1.lastPathComponent }
         let results: [NoteDraftRecoveryEntry] = files.compactMap { file in
             switch ownership(of: file) {
@@ -519,7 +539,7 @@ private actor NoteDraftJournalIO {
                 return .valid(entry, staged, claim)
             case let .damaged(message): return .damaged(message)
             case .retired:
-                if collectRetired { try? fileManager.removeItem(at: file) }
+                if collectRetired && !operationBarrier.isBlocked { try? fileManager.removeItem(at: file) }
                 return nil
             case .absent: return nil
             }
@@ -531,7 +551,7 @@ private actor NoteDraftJournalIO {
             case let (.damaged(left), .damaged(right)): left < right
             }
         }
-        removeUnreferencedStagedFiles()
+        if !operationBarrier.isBlocked && collectRetired { removeUnreferencedStagedFiles() }
         return results
     }
 
@@ -540,6 +560,7 @@ private actor NoteDraftJournalIO {
     /// Never collect when any journal file is unreadable: its bytes may still
     /// be the only recovery copy.
     private func removeUnreferencedStagedFiles() {
+        guard !operationBarrier.isBlocked else { return }
         guard let journals = try? fileManager.contentsOfDirectory(at: directory, includingPropertiesForKeys: nil)
             .filter({ $0.pathExtension == "json" }),
               let files = try? fileManager.contentsOfDirectory(at: stagedDirectory, includingPropertiesForKeys: nil)
@@ -563,7 +584,7 @@ private actor NoteDraftJournalIO {
 @MainActor
 final class NoteDraftJournal: NoteDraftJournaling {
     let directory: URL
-    private let io: NoteDraftJournalIO
+    nonisolated private let io: NoteDraftJournalIO
     private var cached: [NoteDraftRecoveryEntry]?
     var liveReferencedIDs: () throws -> Set<UUID> = { [] }
     var requiresAsyncIO: Bool { true }
@@ -587,6 +608,7 @@ final class NoteDraftJournal: NoteDraftJournaling {
         throw NoteDraftJournalError.asynchronousIORequired
     }
     func recoveryEntries() throws -> [NoteDraftRecoveryEntry] {
+        guard !io.operationBarrier.isBlocked else { throw WorkspaceFoundationError.unknown }
         guard let cached else { throw NoteDraftJournalError.asynchronousIORequired }
         return cached
     }
@@ -599,31 +621,31 @@ final class NoteDraftJournal: NoteDraftJournaling {
     func writeDurably(_ entry: NoteDraftJournalEntry, staged: [StagedNoteAttachment], replacing: NoteRecoveryClaim? = nil) async throws -> NoteRecoveryClaim {
         try await io.retain(liveReferencedIDs())
         let claim = try await io.write(entry, staged: staged, replacing: replacing)
-        cached = try await io.recoveryEntries()
+        cached = try await io.recoveryEntries(collectRetired: false, offering: false)
         return claim
     }
     func cancelPendingDurably(_ entry: NoteDraftJournalEntry, staged: [StagedNoteAttachment], replacing claim: NoteRecoveryClaim?) async throws -> NoteRecoveryClaim {
         try await io.retain(liveReferencedIDs())
         let updated = try await io.write(entry, staged: staged, replacing: claim, cancellingPending: true)
-        cached = try await io.recoveryEntries()
+        cached = try await io.recoveryEntries(collectRetired: false, offering: false)
         return updated
     }
     func retireDurably(noteID: UUID, claim: NoteRecoveryClaim?, saved: NoteRecoverySavedState?) async throws {
         try await io.retain(liveReferencedIDs())
         try await io.retire(noteID: noteID, claim: claim, saved: saved)
-        cached = try await io.recoveryEntries(collectRetired: false)
+        cached = try await io.recoveryEntries(collectRetired: false, offering: false)
     }
     func discardOwnedDurably(noteID: UUID, claim: NoteRecoveryClaim) async throws {
         try await io.retain(liveReferencedIDs())
         try await io.discardOwned(noteID: noteID, claim: claim)
-        cached = try await io.recoveryEntries()
+        cached = try await io.recoveryEntries(collectRetired: false, offering: false)
     }
     func listDamagedDurably() async throws -> [NoteDamagedRecoveryDetails] { try await io.listDamaged() }
     func damagedDetailsDurably(noteID: UUID) async throws -> NoteDamagedRecoveryDetails { try await io.damagedDetails(noteID: noteID) }
     func archiveDamagedDurably(_ confirmation: NoteDamagedRecoveryConfirmation, to destination: URL?, resolving: Bool) async throws -> URL {
         try await io.retain(liveReferencedIDs())
         let archive = try await io.archiveDamaged(confirmation, to: destination, resolving: resolving)
-        cached = try await io.recoveryEntries()
+        cached = try await io.recoveryEntries(collectRetired: false, offering: false)
         return archive
     }
 }
@@ -640,6 +662,8 @@ private extension NoteDraftJournalIO {
         let bytes = try WorkspaceModelFields.encode(envelope)
         let claim = WorkspaceOperationClaim(id: envelope.id, digest: Self.digest(bytes))
         let root = operationDirectory(envelope.id)
+        operationBarrier.setBlocked(true)
+        operationReconciled = false
         let record = root.appendingPathComponent("envelope.json")
         try fileManager.createDirectory(at: root, withIntermediateDirectories: true)
         if fileManager.fileExists(atPath: record.path) {
@@ -650,6 +674,12 @@ private extension NoteDraftJournalIO {
         if let pre = envelope.preDraft {
             try journalWriteSynced(WorkspaceModelFields.encode(pre), to: root.appendingPathComponent("pre-draft.json"))
         }
+        // A synced immutable intent inventory precedes payload preparation.
+        // Death before the final envelope rename can therefore be classified
+        // as absent-receipt recovery without guessing which owners existed.
+        try journalWriteSynced(bytes, to: root.appendingPathComponent("intent.json"))
+        try journalSync(operationsDirectory)
+        try journalSync(directory)
         for payload in envelope.payloads {
             guard !payload.bytes.isEmpty, Self.digest(payload.bytes) == payload.digest else {
                 throw WorkspaceFoundationError.damagedEnvelope
@@ -669,16 +699,29 @@ private extension NoteDraftJournalIO {
     }
 
     func operationEnvelopes() throws -> [(WorkspaceOperationEnvelope, WorkspaceOperationClaim)] {
-        guard fileManager.fileExists(atPath: operationsDirectory.path) else { return [] }
-        return try fileManager.contentsOfDirectory(at: operationsDirectory, includingPropertiesForKeys: nil)
+        let roots: [URL]
+        do { roots = try fileManager.contentsOfDirectory(at: operationsDirectory, includingPropertiesForKeys: nil) }
+        catch { if journalFileIsMissing(error) { return [] }; throw error }
+        if !roots.isEmpty { operationBarrier.setBlocked(true) }
+        return try roots
             .sorted { $0.lastPathComponent < $1.lastPathComponent }.map { root in
                 guard let id = UUID(uuidString: root.lastPathComponent) else { throw WorkspaceFoundationError.damagedEnvelope }
-                let data = try Data(contentsOf: root.appendingPathComponent("envelope.json"))
+                let data: Data
+                do { data = try Data(contentsOf: root.appendingPathComponent("envelope.json")) }
+                catch {
+                    guard journalFileIsMissing(error) else { throw error }
+                    data = try Data(contentsOf: root.appendingPathComponent("intent.json"))
+                }
                 var envelope = try JSONDecoder().decode(WorkspaceOperationEnvelope.self, from: data)
                 guard envelope.id == id else { throw WorkspaceFoundationError.damagedEnvelope }
                 for index in envelope.payloads.indices {
                     let payload = envelope.payloads[index]
-                    let stored = try Data(contentsOf: root.appendingPathComponent(payload.id.uuidString))
+                    let stored: Data
+                    do { stored = try Data(contentsOf: root.appendingPathComponent(payload.id.uuidString)) }
+                    catch {
+                        guard journalFileIsMissing(error) else { throw error }
+                        stored = try Data(contentsOf: stagedDirectory.appendingPathComponent(payload.id.uuidString))
+                    }
                     guard Int64(stored.count) == payload.byteCount, Self.digest(stored) == payload.digest else {
                         throw WorkspaceFoundationError.damagedEnvelope
                     }
@@ -701,10 +744,19 @@ private extension NoteDraftJournalIO {
         try journalSync(directory)
         try fileManager.removeItem(at: released)
         try journalSync(directory)
+        if try fileManager.contentsOfDirectory(at: operationsDirectory, includingPropertiesForKeys: nil).isEmpty {
+            operationBarrier.setBlocked(false)
+        }
+    }
+    func finishOperationReconciliation() { operationReconciled = true; operationBarrier.setBlocked(false) }
+    func inventoryCheckpoints() throws -> [NoteDraftRecoveryEntry] {
+        try recoveryEntries(collectRetired: false, offering: false)
     }
 }
 
 extension NoteDraftJournal {
+    func inventoryCheckpoints() async throws -> [NoteDraftRecoveryEntry] { try await io.inventoryCheckpoints() }
+    func finishOperationReconciliation() async { await io.finishOperationReconciliation() }
     func prepareOperation(_ envelope: WorkspaceOperationEnvelope) async throws -> WorkspaceOperationClaim {
         try await io.prepareOperation(envelope)
     }
@@ -728,4 +780,47 @@ private func journalWriteSynced(_ bytes: Data, to url: URL) throws {
     try bytes.write(to: url, options: .atomic)
     try journalSync(url)
     try journalSync(url.deletingLastPathComponent())
+}
+
+
+private final class NoteJournalSynchronousResult<T>: @unchecked Sendable {
+    let semaphore = DispatchSemaphore(value: 0)
+    let lock = NSLock()
+    var result: Result<T, Error>?
+    func finish(_ value: Result<T, Error>) {
+        lock.lock(); result = value; lock.unlock(); semaphore.signal()
+    }
+}
+
+extension NoteDraftJournal {
+    nonisolated func prepareOperationSynchronously(_ envelope: WorkspaceOperationEnvelope) throws -> WorkspaceOperationClaim {
+        let io = self.io
+        return try Self.waitForIO { try await io.prepareOperation(envelope) }
+    }
+    nonisolated func operationEnvelopesSynchronously() throws -> [(WorkspaceOperationEnvelope, WorkspaceOperationClaim)] {
+        let io = self.io
+        return try Self.waitForIO { try await io.operationEnvelopes() }
+    }
+    nonisolated func releaseOperationSynchronously(_ claim: WorkspaceOperationClaim) throws {
+        let io = self.io
+        let _: Bool = try Self.waitForIO { try await io.releaseOperation(claim); return true }
+    }
+    nonisolated private static func waitForIO<T: Sendable>(_ work: @escaping @Sendable () async throws -> T) throws -> T {
+        let box = NoteJournalSynchronousResult<T>()
+        Task.detached {
+            let result: Result<T, Error>
+            do { result = .success(try await work()) } catch { result = .failure(error) }
+            box.finish(result)
+        }
+        box.semaphore.wait()
+        box.lock.lock(); defer { box.lock.unlock() }
+        guard let result = box.result else { throw WorkspaceFoundationError.unknown }
+        return try result.get()
+    }
+}
+
+private func journalFileIsMissing(_ error: Error) -> Bool {
+    let error = error as NSError
+    return (error.domain == NSCocoaErrorDomain && [NSFileNoSuchFileError, NSFileReadNoSuchFileError].contains(error.code))
+        || (error.domain == NSPOSIXErrorDomain && error.code == Int(ENOENT))
 }

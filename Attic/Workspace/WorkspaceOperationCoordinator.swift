@@ -19,7 +19,7 @@ final class WorkspaceOperationCoordinator {
     }
 
     let container: ModelContainer
-    let journal: NoteDraftJournal
+    private(set) var journal: NoteDraftJournal
     private let writerLease: WorkspaceWriterLease?
     private var allocatedIDs: Set<UUID> = []
     private var pending: [UUID: (WorkspaceOperationEnvelope, WorkspaceOperationClaim, Publication)] = [:]
@@ -27,6 +27,13 @@ final class WorkspaceOperationCoordinator {
     private var heldOwners: Set<WorkspaceOwner> = []
     private var plainUnknown: ([State], [State], Set<WorkspaceOwner>)?
     private(set) var startupReconciled = false
+    struct RecoveryCopy {
+        let operationID: UUID
+        let draft: NoteDraftJournalEntry
+        let claim: WorkspaceOperationClaim
+        let payloads: [WorkspaceOperationEnvelope.Payload]
+    }
+    private(set) var preOperationRecoveryCopies: [RecoveryCopy] = []
     var historyReferences: () throws -> Set<UUID> = { [] }
     var recoveryReferences: () throws -> Set<UUID> = { [] }
     var save: (ModelContext) throws -> Void = { try $0.save() }
@@ -39,8 +46,16 @@ final class WorkspaceOperationCoordinator {
         let disk = container.configurations.first { !$0.isStoredInMemoryOnly }
         if let disk {
             try FileManager.default.createDirectory(at: disk.url.deletingLastPathComponent(), withIntermediateDirectories: true)
-            writerLease = try WorkspaceWriterLease(storeURL: disk.url)
+            writerLease = try WorkspaceWriterLease.attached(to: container) ?? WorkspaceWriterLease.acquire(storeURL: disk.url)
         } else { writerLease = nil }
+        WorkspaceLegacyBridge.register(self)
+    }
+
+    func adoptJournal(_ replacement: NoteDraftJournal) throws {
+        guard pending.isEmpty, try journal.operationEnvelopesSynchronously().isEmpty else {
+            throw WorkspaceFoundationError.unknown
+        }
+        journal = replacement
     }
 
     func freshContext() -> ModelContext {
@@ -51,13 +66,15 @@ final class WorkspaceOperationCoordinator {
         return try sorted(owners).map { try WorkspaceModelToken.read($0, in: context) }
     }
     func newEnvelope(intent: String, reads: [WorkspaceModelToken], writes: Set<WorkspaceOwner>,
-                     inverseGuards: [WorkspaceModelToken]? = nil,
+                     inverseGuards: [WorkspaceModelToken]? = nil, scopes suppliedScopes: [WorkspaceScopeToken]? = nil,
                      preDraft: NoteDraftJournalEntry? = nil, afterDocuments: [UUID: Data] = [:],
                      selection: NSRange = NSRange(location: 0, length: 0), draftGeneration: UInt64 = 0,
                      checkpointClaim: NoteRecoveryClaim? = nil, staged: [StagedNoteAttachment] = [],
-                     historyEffect: Data? = nil, replayOf: UUID? = nil, compensationOf: UUID? = nil) -> WorkspaceOperationEnvelope {
+                     historyEffect: Data? = nil, replayOf: UUID? = nil, compensationOf: UUID? = nil) throws -> WorkspaceOperationEnvelope {
+        let context = freshContext()
+        let scopes = try suppliedScopes ?? WorkspaceScopeToken.scopes(for: reads).map { try WorkspaceScopeToken.read($0, in: context) }
         let id = UUID(); allocatedIDs.insert(id)
-        return WorkspaceOperationEnvelope(id: id, intent: intent, tokens: reads, writes: writes,
+        return WorkspaceOperationEnvelope(id: id, intent: intent, tokens: reads, scopes: scopes, writes: writes,
             inverseGuards: inverseGuards ?? reads, preDraft: preDraft, afterDocuments: afterDocuments,
             selection: [selection.location, selection.length], draftGeneration: draftGeneration,
             checkpointClaim: checkpointClaim, payloads: staged.map(WorkspaceOperationEnvelope.Payload.init),
@@ -79,12 +96,22 @@ final class WorkspaceOperationCoordinator {
         // Concurrent preparation may have completed another writer; revalidate
         // its complete envelope here, never against warm presentation objects.
         guard affected.isDisjoint(with: heldOwners), sessionValid() else { return .conflict }
+        let result = commitPrepared(envelope, claim: claim, stage: stage, publication: publication)
+        return result == .publicationPending ? await retryPublication(envelope.id) : result
+    }
+
+    private func commitPrepared(_ envelope: WorkspaceOperationEnvelope, claim: WorkspaceOperationClaim,
+                                stage: (ModelContext) throws -> Void, publication: Publication) -> Outcome {
+        let affected = Set(envelope.tokens.map(\.owner)).union(envelope.writes)
         let context = freshContext()
         do {
             for token in envelope.tokens + envelope.inverseGuards {
                 guard try WorkspaceModelToken.read(token.owner, in: context) == token else {
                     return .conflict
                 }
+            }
+            for scope in envelope.scopes {
+                guard try WorkspaceScopeToken.read(scope.scope, in: context) == scope else { return .conflict }
             }
             WorkspaceCrashHook.reach("K3-validation")
             try stage(context)
@@ -117,14 +144,14 @@ final class WorkspaceOperationCoordinator {
         WorkspaceCrashHook.reach("K5")
         heldOwners.formUnion(affected)
         pending[envelope.id] = (envelope, claim, publication)
-        return await retryPublication(envelope.id)
+        return .publicationPending
     }
 
     /// Ordinary existing-owner writes have no envelope, receipt, fsync or IO.
     /// The staged before/after fingerprints reconcile even a save-then-throw.
     /// Promotion is required whenever any new owner/undurable payload/history
     /// obligation is introduced; the staged write set enforces those limits.
-    func plainSave(tokens: [WorkspaceModelToken], writes: Set<WorkspaceOwner>,
+    func plainSave(tokens: [WorkspaceModelToken], scopes: [WorkspaceScopeToken] = [], writes: Set<WorkspaceOwner>,
                    stage: (ModelContext) throws -> Void) -> Outcome {
         let affected = Set(tokens.map(\.owner)).union(writes)
         guard affected.isDisjoint(with: heldOwners), plainUnknown == nil else { return .unknown }
@@ -133,13 +160,16 @@ final class WorkspaceOperationCoordinator {
             for token in tokens {
                 guard try WorkspaceModelToken.read(token.owner, in: context) == token else { return .conflict }
             }
-            let before = try states(writes, in: context)
+            for scope in scopes {
+                guard try WorkspaceScopeToken.read(scope.scope, in: context) == scope else { return .conflict }
+            }
+            let before = try states(writes, in: context, physical: true)
             try stage(context)
             try validateWriteSet(context, declared: writes)
             guard context.insertedModelsArray.isEmpty, context.deletedModelsArray.isEmpty else {
                 return .conflict
             }
-            let after = try states(writes, in: context)
+            let after = try states(writes, in: context, physical: true)
             do { try save(context); return .committed }
             catch {
                 plainUnknown = (before, after, affected)
@@ -152,7 +182,7 @@ final class WorkspaceOperationCoordinator {
         guard let (before, after, affected) = plainUnknown else { return .conflict }
         do {
             try beforeReconciliationRead?()
-            let current = try states(Set(before.map(\.owner)), in: freshContext())
+            let current = try states(Set(before.map(\.owner)), in: freshContext(), physical: true)
             let outcome: Outcome
             if current == after { outcome = .committed }
             else if current == before { outcome = .notCommitted }
@@ -220,6 +250,11 @@ final class WorkspaceOperationCoordinator {
     /// recoverable pre-draft, an agreeing receipt is publication/handoff work.
     func reconcileStartup() async throws {
         startupReconciled = false
+        preOperationRecoveryCopies.removeAll()
+        let checkpoints = try await journal.inventoryCheckpoints()
+        guard !checkpoints.contains(where: { if case .damaged = $0 { return true }; return false }) else {
+            throw WorkspaceFoundationError.unknown
+        }
         let envelopes = try await journal.operationEnvelopes()
         for (envelope, claim) in envelopes {
             switch receiptTruth(envelope.id, digest: claim.digest) {
@@ -227,7 +262,11 @@ final class WorkspaceOperationCoordinator {
                 pending[envelope.id] = (envelope, claim, Publication())
                 heldOwners.formUnion(Set(envelope.tokens.map(\.owner)).union(envelope.writes))
                 guard await retryPublication(envelope.id) == .committed else { throw WorkspaceFoundationError.unknown }
-            case .notCommitted: break // Keep the pre-copy, never rerun intent.
+            case .notCommitted:
+                if let pre = envelope.preDraft {
+                    preOperationRecoveryCopies.append(RecoveryCopy(operationID: envelope.id,
+                        draft: pre, claim: claim, payloads: envelope.payloads))
+                } // Keep both foreign and operation copies; never rerun intent.
             default: throw WorkspaceFoundationError.unknown
             }
         }
@@ -245,6 +284,7 @@ final class WorkspaceOperationCoordinator {
                 try bookkeeping(id) { $0.envelopeReleased = true }
             }
         }
+        await journal.finishOperationReconciliation()
         startupReconciled = true
     }
 
@@ -257,20 +297,20 @@ final class WorkspaceOperationCoordinator {
         let context = freshContext()
         let families = Dictionary(grouping: try context.fetch(FetchDescriptor<OperationReceipt>()), by: \.id)
         var removed = 0
+        var removedIDs = Set<UUID>()
         for id in families.keys.sorted(by: { $0.uuidString < $1.uuidString }) where removed < limit {
             let rows = families[id]!
             guard !referenced.contains(id), !envelopes.contains(id), try agreeing(rows),
                   rows.allSatisfy({ $0.publicationComplete && $0.handoffProof != nil && $0.envelopeReleased }) else { continue }
             guard NotePhysicalFamilyRetention.mayDelete(rows, decision: { _ in .eligible }) else { continue }
-            rows.forEach(context.delete); removed += 1
+            rows.forEach(context.delete); removed += 1; removedIDs.insert(id)
         }
         if removed > 0 {
             do { try save(context) }
             catch {
                 let fresh = freshContext()
                 let survivors = try fresh.fetch(FetchDescriptor<OperationReceipt>())
-                let deleted = Set(context.deletedModelsArray.compactMap { ($0 as? OperationReceipt)?.id })
-                guard survivors.allSatisfy({ !deleted.contains($0.id) }) else { throw error }
+                guard survivors.allSatisfy({ !removedIDs.contains($0.id) }) else { throw error }
             }
         }
         return removed
@@ -307,11 +347,12 @@ final class WorkspaceOperationCoordinator {
     private func sorted(_ owners: Set<WorkspaceOwner>) -> [WorkspaceOwner] {
         owners.sorted { ($0.entity.rawValue, $0.id.uuidString) < ($1.entity.rawValue, $1.id.uuidString) }
     }
-    private func states(_ owners: Set<WorkspaceOwner>, in context: ModelContext) throws -> [State] {
+    private func states(_ owners: Set<WorkspaceOwner>, in context: ModelContext, physical: Bool = false) throws -> [State] {
         try sorted(owners).map { owner in
             let token = try WorkspaceModelToken.read(owner, in: context)
             return State(owner: owner, replicas: try token.replicas.map {
-                NotePayloadDigest.sha256(try WorkspaceModelFields.encode($0.fields))
+                let digest = NotePayloadDigest.sha256(try WorkspaceModelFields.encode($0.fields))
+                return physical ? NotePayloadDigest.sha256(try WorkspaceModelFields.encode($0.physicalID)) + ":" + digest : digest
             }.sorted())
         }
     }
@@ -322,6 +363,10 @@ final class WorkspaceOperationCoordinator {
     }
     static func owner(_ row: any PersistentModel) -> WorkspaceOwner? {
         switch row {
+        case let r as CanvasBoardItem: WorkspaceOwner(entity: .board, id: r.id)
+        case let r as CanvasStrokeItem: WorkspaceOwner(entity: .stroke, id: r.id)
+        case let r as CanvasImageItem: WorkspaceOwner(entity: .image, id: r.id)
+        case let r as CanvasSemanticObjectItem: WorkspaceOwner(entity: .semantic, id: r.id)
         case let r as TaskItem: WorkspaceOwner(entity: .task, id: r.id)
         case let r as NoteItem: WorkspaceOwner(entity: .note, id: r.id)
         case let r as NoteAttachment: WorkspaceOwner(entity: .attachment, id: r.id)
@@ -332,6 +377,47 @@ final class WorkspaceOperationCoordinator {
         case let r as TaskDeletionPreservation: WorkspaceOwner(entity: .preservation, id: r.id)
         case let r as OperationReceipt: WorkspaceOwner(entity: .receipt, id: r.id)
         default: nil
+        }
+    }
+}
+
+
+extension WorkspaceOperationCoordinator {
+    /// Compatibility bridge for the existing synchronous command APIs. The
+    /// shared IO actor receives immutable values, and the exact same prepared
+    /// commit primitive performs the unsuspended fresh-context mutation.
+    func commitCompatibility(tokens: [WorkspaceModelToken], scopes: [WorkspaceScopeToken], writes: Set<WorkspaceOwner>,
+                             intent: String, plain: Bool, writer: @escaping (ModelContext) throws -> Void,
+                             stage: (ModelContext) throws -> Void) throws {
+        let previous = save; save = writer; defer { save = previous }
+        if plain {
+            guard plainSave(tokens: tokens, scopes: scopes, writes: writes, stage: stage) == .committed else {
+                throw WorkspaceFoundationError.unknown
+            }
+            return
+        }
+        let envelope = try newEnvelope(intent: intent, reads: tokens, writes: writes, scopes: scopes)
+        allocatedIDs.remove(envelope.id)
+        let affected = Set(tokens.map(\.owner)).union(writes)
+        guard affected.isDisjoint(with: heldOwners) else { throw WorkspaceFoundationError.unknown }
+        let claim = try journal.prepareOperationSynchronously(envelope)
+        let result = commitPrepared(envelope, claim: claim, stage: stage, publication: Publication())
+        guard result == .publicationPending else { throw WorkspaceFoundationError.unknown }
+        do {
+            let context = freshContext()
+            let id = envelope.id
+            let receipts = try context.fetch(FetchDescriptor<OperationReceipt>(predicate: #Predicate { $0.id == id }))
+            guard try agreeing(receipts), let receipt = receipts.first else { throw WorkspaceFoundationError.unknown }
+            let expected = try JSONDecoder().decode([State].self, from: receipt.resultingTokens)
+            guard try states(writes, in: context) == expected else { throw WorkspaceFoundationError.unknown }
+            let proof = try WorkspaceModelFields.encode(expected)
+            try bookkeeping(id) { $0.publicationComplete = true; $0.handoffProof = proof }
+            try journal.releaseOperationSynchronously(claim)
+            try bookkeeping(id) { $0.envelopeReleased = true }
+            pending[id] = nil; heldOwners.subtract(affected)
+        } catch {
+            // The mutation committed. Retain its publication identity for
+            // reconciliation; a cleanup failure is never "failed, unchanged".
         }
     }
 }

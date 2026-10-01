@@ -110,10 +110,14 @@ enum PersistenceController {
         if !inMemory && cloudSyncEnabled {
             try createPreCloudKitBackupIfNeeded(for: configuration)
         }
-        return try ModelContainer(
-            for: Schema(appModelTypes),
-            configurations: configuration
-        )
+        #if os(macOS)
+        let lease = configuration.isStoredInMemoryOnly ? nil : try WorkspaceWriterLease.acquire(storeURL: configuration.url)
+        #endif
+        let container = try ModelContainer(for: Schema(appModelTypes), configurations: configuration)
+        #if os(macOS)
+        if let lease { WorkspaceWriterLease.attach(lease, to: container) }
+        #endif
+        return container
     }
 
     /// A durable, CloudKit-free store used only by controlled UI tests that
@@ -148,10 +152,14 @@ enum PersistenceController {
             url: storeURL,
             cloudKitDatabase: .none
         )
-        return try ModelContainer(
-            for: Schema(appModelTypes),
-            configurations: configuration
-        )
+        #if os(macOS)
+        let lease = configuration.isStoredInMemoryOnly ? nil : try WorkspaceWriterLease.acquire(storeURL: configuration.url)
+        #endif
+        let container = try ModelContainer(for: Schema(appModelTypes), configurations: configuration)
+        #if os(macOS)
+        if let lease { WorkspaceWriterLease.attach(lease, to: container) }
+        #endif
+        return container
     }
 
     #if DEBUG
