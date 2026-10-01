@@ -15,7 +15,7 @@ final class SubtaskTests: XCTestCase {
         let url = directory.appendingPathComponent("legacy.store")
         let id = UUID()
         try seedLegacyStore(at: url, id: id)
-        let container = try ModelContainer(for: TaskItem.self, configurations: ModelConfiguration(url: url, cloudKitDatabase: .none))
+        let container = try ModelContainer(for: Schema(PersistenceController.appModelTypes), configurations: ModelConfiguration(url: url, cloudKitDatabase: .none))
         let store = TaskStore(container: container)
         let task = try XCTUnwrap(store.tasks.first)
         XCTAssertEqual(task.id, id)

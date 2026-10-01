@@ -12,6 +12,7 @@ enum WorkspaceCrashFixture {
     static let versionID = UUID(uuidString: "D92AC3EB-5A34-48CE-9882-7F0712F47434")!
     static let fileID = UUID(uuidString: "D92AC3EB-5A34-48CE-9882-7F0712F47435")!
     static let associationID = UUID(uuidString: "D92AC3EB-5A34-48CE-9882-7F0712F47436")!
+    static let filePlacementID = UUID(uuidString: "D92AC3EB-5A34-48CE-9882-7F0712F47437")!
     static let bytes = Data("crash fixture original attachment".utf8)
     static var staged: StagedNoteAttachment {
         .init(id: fileID, filename: "fixture.txt", contentTypeIdentifier: "public.plain-text",
@@ -19,7 +20,7 @@ enum WorkspaceCrashFixture {
     }
     static var original: NoteDocument {
         var doc = NoteDocument(blocks: [.text("Parent"), .text("Make child"),
-            .file(attachmentID: fileID, filename: "fixture.txt", contentTypeIdentifier: "public.plain-text", byteCount: Int64(bytes.count))])
+            .file(id: filePlacementID, attachmentID: fileID, filename: "fixture.txt", contentTypeIdentifier: "public.plain-text", byteCount: Int64(bytes.count))])
         doc.requires.append("taskNote"); doc.refreshRequiredCapabilities(); return doc
     }
     static var candidate: NoteDocument {
