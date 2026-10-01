@@ -16,7 +16,7 @@ concurrency:
 jobs:
   foundation:
     runs-on: macos-26
-    timeout-minutes: 60
+    timeout-minutes: 90
     env:
       DEVELOPER_DIR: /Applications/Xcode_26.6.app/Contents/Developer
       BUNDLE_FROZEN: "true"
@@ -32,17 +32,10 @@ jobs:
           sudo cp Scripts/xcodebuild-locked.sh /Users/taha/Developer/attic-redesign-assets/xcodebuild-locked.sh
           sudo chmod +x /Users/taha/Developer/attic-redesign-assets/xcodebuild-locked.sh
           bundle exec ruby Scripts/verify_project_generation.rb
-      - name: Run the signed sandboxed hosted unit suite
-        env:
-          HARNESS_ONLY: ${{ inputs.harness_only || false }}
-          TEST_RUNNER_ATTIC_KEY_WINDOW_TESTS: "1"
+      - name: Build and sign the isolated hosted test products
         shell: /bin/zsh {0}
         run: |
           F=(CODE_SIGNING_ALLOWED=YES CODE_SIGNING_REQUIRED=YES CODE_SIGN_STYLE=Manual CODE_SIGN_IDENTITY=- DEVELOPMENT_TEAM=)
-          T=(-only-testing:AtticTests)
-          if [[ "$HARNESS_ONLY" == true ]]; then
-            T=(-only-testing:AtticTests/OperationCrashHarnessTests)
-          fi
           /Users/taha/Developer/attic-redesign-assets/xcodebuild-locked.sh \
             -project Attic.xcodeproj -scheme Attic -configuration Local \
             -destination 'platform=macOS' -derivedDataPath .build/dd \
@@ -51,6 +44,30 @@ jobs:
             ATTIC_MACOS_UNIT_HOST_BUNDLE_IDENTIFIER=com.taha.Attic.p3.crashhost \
             "${F[@]}" build-for-testing
           Scripts/sign_crash_harness.zsh .build/dd/Build/Products/Local/AtticP3CrashHost.app
+      - name: Run C1-C5 and minimum taskNote format before the full suite
+        env:
+          TEST_RUNNER_ATTIC_KEY_WINDOW_TESTS: "1"
+        shell: /bin/zsh {0}
+        run: |
+          F=(CODE_SIGNING_ALLOWED=YES CODE_SIGNING_REQUIRED=YES CODE_SIGN_STYLE=Manual CODE_SIGN_IDENTITY=- DEVELOPMENT_TEAM=)
+          /Users/taha/Developer/attic-redesign-assets/xcodebuild-locked.sh \
+            -project Attic.xcodeproj -scheme Attic -configuration Local \
+            -destination 'platform=macOS' -derivedDataPath .build/dd \
+            -resultBundlePath .build/commit-gate.xcresult \
+            ATTIC_MACOS_UNIT_HOST_PRODUCT_NAME=AtticP3CrashHost \
+            ATTIC_MACOS_UNIT_HOST_EXECUTABLE_NAME=AtticP3CrashHost \
+            ATTIC_MACOS_UNIT_HOST_BUNDLE_IDENTIFIER=com.taha.Attic.p3.crashhost \
+            -parallel-testing-enabled NO -test-timeouts-enabled YES \
+            -default-test-execution-time-allowance 120 -maximum-test-execution-time-allowance 360 \
+            "${F[@]}" -only-testing:AtticTests/OperationCrashHarnessTests \
+            -only-testing:AtticTests/WorkspaceCommitTests -only-testing:AtticTests/NoteFormatTests test-without-building
+      - name: Run the full hosted unit suite alone
+        if: ${{ !cancelled() && !inputs.harness_only }}
+        env:
+          TEST_RUNNER_ATTIC_KEY_WINDOW_TESTS: "1"
+        shell: /bin/zsh {0}
+        run: |
+          F=(CODE_SIGNING_ALLOWED=YES CODE_SIGNING_REQUIRED=YES CODE_SIGN_STYLE=Manual CODE_SIGN_IDENTITY=- DEVELOPMENT_TEAM=)
           /Users/taha/Developer/attic-redesign-assets/xcodebuild-locked.sh \
             -project Attic.xcodeproj -scheme Attic -configuration Local \
             -destination 'platform=macOS' -derivedDataPath .build/dd \
@@ -58,14 +75,16 @@ jobs:
             ATTIC_MACOS_UNIT_HOST_PRODUCT_NAME=AtticP3CrashHost \
             ATTIC_MACOS_UNIT_HOST_EXECUTABLE_NAME=AtticP3CrashHost \
             ATTIC_MACOS_UNIT_HOST_BUNDLE_IDENTIFIER=com.taha.Attic.p3.crashhost \
-            -parallel-testing-enabled NO "${F[@]}" "${T[@]}" test-without-building
+            -parallel-testing-enabled NO -test-timeouts-enabled YES \
+            -default-test-execution-time-allowance 120 -maximum-test-execution-time-allowance 360 \
+            "${F[@]}" -only-testing:AtticTests test-without-building
       - name: Inspect host and helper signature contracts
         if: always()
         run: |
           host=.build/dd/Build/Products/Local/AtticP3CrashHost.app
           python3 Scripts/verify_crash_harness_signature.py "$host"
       - name: Strict local-only build
-        if: ${{ !inputs.harness_only }}
+        if: ${{ !cancelled() && !inputs.harness_only }}
         shell: /bin/zsh {0}
         run: |
           F=(CODE_SIGNING_ALLOWED=YES CODE_SIGNING_REQUIRED=YES CODE_SIGN_STYLE=Manual CODE_SIGN_IDENTITY=- DEVELOPMENT_TEAM=)
@@ -78,12 +97,16 @@ jobs:
       - name: Summarize tests
         if: always()
         run: |
-          if [ -d .build/foundation.xcresult ]; then
-            xcrun xcresulttool get test-results summary --path .build/foundation.xcresult --format json
-          fi
+          for result in .build/commit-gate.xcresult .build/foundation.xcresult; do
+            if [ -d "$result" ]; then
+              xcrun xcresulttool get test-results summary --path "$result" --format json
+            fi
+          done
       - uses: actions/upload-artifact@v4
         if: always()
         with:
           name: phase3-foundation-${{ github.sha }}
-          path: .build/foundation.xcresult
+          path: |
+            .build/commit-gate.xcresult
+            .build/foundation.xcresult
           retention-days: 3
