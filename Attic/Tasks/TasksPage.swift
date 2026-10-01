@@ -442,6 +442,7 @@ struct TasksPage: View {
                                                    set: { model.setSearchQuery($0, for: model.tab) }),
                                      isFocused: $searchFocused, onEscape: endSearch)
                     .accessibilityIdentifier(model.tab == .done ? "tasks-done-search" : "tasks-find")
+                    .atticControlBackdrop(cornerRadius: AtticControlSize.smallHeight / 2)
                     .id(model.tab)
                     // Centred on the tabs' line.
                     .padding(.top, tabsTop - (AtticControlSize.smallHeight - AtticLayout.pageTabsHeight) / 2)
@@ -458,12 +459,17 @@ struct TasksPage: View {
                         selection: Binding(get: { model.tab }, set: { model.select(tab: $0) })
                     )
                     .accessibilityIdentifier("tasks-page-tabs")
+                    // B (owner, 2026-10-01): bare labels with a soft halo,
+                    // the rows softened behind them only.
+                    .atticLabelHalo()
+                    .atticControlBackdrop(cornerRadius: TasksFloatingControls.tabsCorner, outset: TasksFloatingControls.tabsOutset)
                     .padding(.leading, AtticLayout.pageTabsX)
                     Spacer(minLength: 0)
                     // Find (⌘F) on every page: Done's magnifier.
                     AtticSmallButton(systemName: "magnifyingglass",
                                      label: model.tab == .done ? "Search done tasks (⌘F)" : "Find (⌘F)", action: beginSearch)
                         .accessibilityIdentifier(model.tab == .done ? "tasks-done-search-button" : "tasks-find-button")
+                        .atticControlBackdrop(cornerRadius: AtticControlSize.smallHeight / 2)
                         .padding(.trailing, model.tab == .done ? lineEndInset : 0)
                     if model.tab != .done {
                         // View Options (⌥⌘V): a second quiet icon, its dot
@@ -473,6 +479,7 @@ struct TasksPage: View {
                                         commands: { viewCommands(for: model.tab) }, holder: viewOptionsAnchor,
                                         showsDot: view.filters, value: view.spokenValue)
                             .accessibilityIdentifier("tasks-view-options")
+                            .atticControlBackdrop(cornerRadius: AtticControlSize.smallHeight / 2)
                             .padding(.trailing, lineEndInset)
                             // It pops in where it sits (a fade in Calm).
                             .transition(AtticMotionPreset.popover.transition(reduceMotion: design.reduceMotion, edge: nil))
@@ -1001,11 +1008,11 @@ struct TasksPage: View {
         }
     }
 
-    /// The viewport's fade (owner fix 8, review 9): by position in the
-    /// viewport, not per row, so an open quick look fades line by line as
-    /// it passes under the tabs and header, or under the add bar.
+    /// The viewport's fade, by position in the viewport, not per row (owner
+    /// fix 8, review 9): since B (2026-10-01) only toward the panel's edges,
+    /// past the controls; under the controls the rows stay clearly visible.
     private var viewportMask: some View {
-        TasksViewportMask(stack: bottomStack, tabsTop: tabsTop, listTop: listTop, bottomInset: bottomInset)
+        TasksViewportMask(tabsTop: tabsTop, bottomInset: bottomInset)
     }
 
     // MARK: - Row
@@ -2139,9 +2146,11 @@ struct TasksPage: View {
         VStack(alignment: .leading, spacing: AtticSpacing.s8) {
             if model.failedSave == .paste {
                 AtticErrorLine(message: String(localized: "Not saved"), onRetry: { model.retryPaste() })
+                    .atticControlBackdrop(cornerRadius: TasksFloatingControls.tabsCorner, outset: TasksFloatingControls.tabsOutset)
             }
             if boundaryHint {
                 TasksBoundaryHint(text: boundaryHintText)
+                    .atticControlBackdrop(cornerRadius: TasksFloatingControls.tabsCorner, outset: TasksFloatingControls.tabsOutset)
                     .transition(AtticMotionPreset.popover.transition(reduceMotion: design.reduceMotion))
             }
             // A paste offer owns the area over the bar while it asks; the
@@ -2184,6 +2193,7 @@ struct TasksPage: View {
                     added: { _ in })
     }
 
+
     /// Esc in the add bar with nothing of its own to
     /// close: the keyboard leaves the field. The next Esc reaches the panel,
     /// which hides (spec § Keyboard map).
@@ -2207,6 +2217,7 @@ struct TasksPage: View {
         .padding(AtticControlSize.capsuleInset)
         .frame(height: height)
         .atticRaisedMaterial(cornerRadius: AtticRadius.control(height: height), interactive: false)
+        .atticControlBackdrop(cornerRadius: AtticRadius.control(height: height))
     }
 
     private var selectionBar: some View {
@@ -2260,6 +2271,7 @@ struct TasksPage: View {
                 : .init(systemName: "tray.and.arrow.down", label: "Move \(count) tasks to Later", handler: { run { model.moveToBacklog(ids) } }),
             .init(systemName: "trash", label: "Delete \(count) tasks", handler: { deleteAndMoveFocus(ids) })
         ], summary: selectionSummary(ids))
+        .atticControlBackdrop(cornerRadius: AtticRadius.control(height: AtticControlSize.smallHeight + AtticControlSize.capsuleInset * 2))
     }
 
     /// The selection bar's Date or Tags picker, while open (round 10).
@@ -2432,6 +2444,7 @@ private struct TasksAddBar: View {
                         })
                     }
                 )
+                .atticControlBackdrop(cornerRadius: AtticControlSize.smallHeight / 2)
                 // The first icon on the circles' line (x 36), as the bar's plus.
                 .padding(.leading, AtticAddBarMetrics.iconSlot / 2 - AtticSmallControlMetrics.labelPadding - AtticSmallControlMetrics.iconSize / 2)
                 // Built with the bar and shown by a frame and an opacity, as
@@ -2488,6 +2501,8 @@ private struct TasksAddBar: View {
                 ),
                 onSubmit: { submit(openingPage: false) }
             )
+            // B: rows pass under the bar, softened behind it only.
+            .atticControlBackdrop(cornerRadius: AtticControlSize.addBarHeight / 2)
         }
         // Over the strip and the bar, never pushing them (review 14).
         .overlay(alignment: .topLeading) {
@@ -3118,41 +3133,20 @@ struct TasksMetaPopover: Equatable {
 /// The bottom stack's measured height (see `TasksPage.bottomStack`).
 @MainActor
 final class TasksBottomStackHeight: ObservableObject {
-    @Published var height: CGFloat = AtticControlSize.addBarHeight {
-        didSet { scheduleMask() }
-    }
-    /// What the viewport's fade uses: the height a moment later. Changing
-    /// the lists' mask re-renders their layers (about 12 ms with 500 rows),
-    /// so it follows the strip after the keystroke's frame, while the strip
-    /// is still fading in, never inside it (round 4: the first keystroke).
-    @Published private(set) var maskHeight: CGFloat = AtticControlSize.addBarHeight
-    private var pending: DispatchWorkItem?
-
-    private func scheduleMask() {
-        pending?.cancel()
-        let work = DispatchWorkItem { [weak self] in
-            MainActor.assumeIsolated {
-                guard let self, self.maskHeight != self.height else { return }
-                self.maskHeight = self.height
-            }
-        }
-        pending = work
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.12, execute: work)
-    }
+    @Published var height: CGFloat = AtticControlSize.addBarHeight
 }
 
-/// The viewport's fade, redrawn by itself when the bottom stack changes.
+/// The viewport's fade (B: only toward the panel's edges). It no longer
+/// follows the bottom stack, so the strip coming and going never re-renders
+/// the lists' mask.
 private struct TasksViewportMask: View {
-    @ObservedObject var stack: TasksBottomStackHeight
     let tabsTop: CGFloat
-    let listTop: CGFloat
     let bottomInset: CGFloat
 
     var body: some View {
         GeometryReader { proxy in
             LinearGradient(
-                stops: TasksViewport.maskStops(height: proxy.size.height, tabsTop: tabsTop, listTop: listTop,
-                                                bottomStack: stack.maskHeight + bottomInset)
+                stops: TasksViewport.maskStops(height: proxy.size.height, tabsTop: tabsTop, bottomInset: bottomInset)
                     .map { Gradient.Stop(color: .black.opacity($0.opacity), location: $0.location) },
                 startPoint: .top, endPoint: .bottom
             )
@@ -3200,6 +3194,14 @@ private struct TasksNoticeClearance: View {
                         value: footerZone + max(0, stack.height - AtticControlSize.addBarHeight))
             .accessibilityHidden(true)
     }
+}
+
+/// The Tasks page's floating controls (owner, 2026-10-01: B with softening):
+/// the softening's footprint around the bare tab labels and quiet lines.
+enum TasksFloatingControls {
+    /// Around the labels' 16 pt line (and the active one's underline).
+    static let tabsOutset: CGFloat = 5
+    static let tabsCorner: CGFloat = 6
 }
 
 /// The list viewport's geometry (owner fix 8, review 9), pure so the
@@ -3259,51 +3261,29 @@ enum TasksViewport {
         return .bottom(min(max((visible - room - height) / (visible - height), 0), 1))
     }
 
-    /// A row's opacity at `depth` (0 open, 1 fully under) into an edge zone:
-    /// the edge veil's eased ramp scaled so its 65 % maximum is all of it.
-    static func edgeOpacity(atDepth depth: Double) -> Double {
-        1 - AtticEdgeBlur.veil(at: depth) / AtticEdgeBlur.maximumVeil
-    }
-
-    /// The length of the softened edge where a row meets a fixed band.
-    static let softEdge: CGFloat = 6
-
-    /// The fade by position in the viewport: nothing over the header or
-    /// under the tabs (so they stay readable over scrolled text), fully
-    /// there from the first row's resting place down to the
-    /// bottom zone, and receding under the bottom stack.
-    static func maskStops(height: CGFloat, tabsTop: CGFloat, listTop: CGFloat, bottomStack: CGFloat) -> [(location: CGFloat, opacity: Double)] {
+    /// The fade by position in the viewport (owner, 2026-10-01: B, the
+    /// controls float): rows run the panel's full height and pass clearly
+    /// under the tabs, the add bar and the header's buttons (softened only
+    /// behind each control, `AtticControlBackdrop`); past the controls,
+    /// toward the panel's edge, they recede to `AtticEdgeBlur.edgeVisible`
+    /// at the very edge. Above the tabs' line at the top, below the bottom
+    /// controls at the bottom, along a smooth ramp; fully there in between.
+    static func maskStops(height: CGFloat, tabsTop: CGFloat, bottomInset: CGFloat) -> [(location: CGFloat, opacity: Double)] {
         guard height > 0 else { return [(0, 1), (1, 1)] }
-        let tabsBottom = tabsTop + AtticLayout.pageTabsHeight
-        // Round 13 (the hands-on review: faint title fragments hung just
-        // under the tabs and just above the add bar): a row scrolled past
-        // an edge is cut cleanly at the fixed band, with only a short
-        // softening inside the list's own viewport (`softEdge`, the edge
-        // veil's eased ramp). The round-12 ramps were 10 and 28 pt long and
-        // left half-faded rows readable in them.
-        let barTop = max(height - bottomStack, listTop)
-        let fadeStart = max(barTop - softEdge, listTop)
-        // Round 11 (the owner: rows scrolled under "Now Later Done" stayed
-        // readable and clashed with the labels): nothing shows under the
-        // tabs at all. Round 12: the rows come back along the edge veil's
-        // own eased ramp (`AtticEdgeBlur.veilStops`, taken to full so it
-        // ends in nothing rather than at its 65 % of a surface veil), now
-        // only in the last `softEdge` before their resting place.
-        let gap = max(0, listTop - tabsBottom)
-        let clear = max(tabsBottom + gap * 0.25, listTop - softEdge)
-        var points: [(CGFloat, Double)] = [(0, 0), (clear, 0)]
-        // Rising ramp, depth 1 at `clear` and 0 at the list's top.
-        for stop in AtticEdgeBlur.veilStops.reversed() where stop.location < 1 {
-            points.append((listTop - (listTop - clear) * CGFloat(stop.location), edgeOpacity(atDepth: stop.location)))
+        let edge = AtticEdgeBlur.edgeVisible
+        let samples = 6
+        func eased(_ t: Double) -> Double { t * t * (3 - 2 * t) }
+        var points: [(CGFloat, Double)] = []
+        let top = min(max(tabsTop, 0), height / 2)
+        for step in 0...samples {
+            let t = Double(step) / Double(samples)
+            points.append((top * CGFloat(t), edge + (1 - edge) * eased(t)))
         }
-        points.append((listTop, 1))
-        points.append((fadeStart, 1))
-        // Falling ramp, depth 0 at `fadeStart` and 1 at the bar's top.
-        for stop in AtticEdgeBlur.veilStops where stop.location > 0 && stop.location < 1 {
-            points.append((fadeStart + (barTop - fadeStart) * CGFloat(stop.location), edgeOpacity(atDepth: stop.location)))
+        let bottom = min(max(bottomInset, 0), height / 2)
+        for step in 0...samples {
+            let t = Double(step) / Double(samples)
+            points.append((height - bottom + bottom * CGFloat(t), 1 - (1 - edge) * eased(t)))
         }
-        points.append((barTop, 0))
-        points.append((height, 0))
         var result: [(location: CGFloat, opacity: Double)] = []
         var last: CGFloat = -1
         for (y, opacity) in points {

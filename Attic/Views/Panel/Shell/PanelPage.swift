@@ -73,6 +73,8 @@ enum PanelHeaderLayout {
     /// The header's controls are one row, 36 tall.
     static let height = AtticControlSize.headerControl
     static let pinSize = AtticControlSize.panelButton
+    /// The buttons' continuous corner (the controls' corner rule).
+    static let controlCorner = AtticRadius.control(height: height)
 
     /// The page button's width when open (the region its controls may
     /// take; shut it is the pin's width).

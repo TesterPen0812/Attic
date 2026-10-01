@@ -696,3 +696,286 @@ struct AtticEdgeVeil: View {
         .accessibilityHidden(true)
     }
 }
+
+// MARK: - Softening behind a floating control
+
+/// Content that scrolls under a floating control (the page tabs, the add
+/// bar, the header's buttons, Notes' buttons) is softened behind the
+/// control only (owner, 2026-10-01, B with softening): a soft blur and a
+/// slight dim, shaped to the control and feathered so no box edge shows.
+/// Everywhere else the content stays clearly visible as it passes.
+///
+/// The edge blur's second form. `AtticScrollEdgeFade` softens each item
+/// by where it is, which can only soften a whole row; here the softening
+/// must follow a control's footprint across part of a row, and also over
+/// the note editor's AppKit text, which SwiftUI effects cannot reach. So
+/// it is a backdrop: a layer under the control whose Core Image background
+/// filter blurs what is drawn beneath it, under a veil of the surface,
+/// within a feathered mask. The system's soft scroll edge was evaluated
+/// first: it softens a whole band at the scroll view's edge (the cut the
+/// owner turned down), draws nothing under bars of Liquid Glass controls,
+/// and AppKit offers it only to title-bar and split-view accessories.
+///
+/// Strength is `AtticEdgeBlur.softening` (one value for the blur and the
+/// dim). Reduce Transparency draws a solid backing of the surface instead.
+/// It takes no clicks and VoiceOver never reads it. Captures (which cannot
+/// draw a backdrop) show its veil only.
+struct AtticControlBackdrop: View {
+    /// The control's corner radius (its capsule's half height, or its
+    /// continuous corner).
+    var cornerRadius: CGFloat
+
+    @Environment(\.atticDesign) private var design
+    @Environment(\.atticCapture) private var capture
+
+    var body: some View {
+        let feather = AtticEdgeBlur.softeningFeather
+        GeometryReader { proxy in
+            let location = Self.location(frame: proxy.frame(in: PanelPageLayout.coordinateSpace),
+                                         panelHeight: proxy.bounds(of: PanelPageLayout.coordinateSpace)?.height)
+            let configuration = Self.configuration(design: design, cornerRadius: cornerRadius, location: location)
+            if capture != nil {
+                // The veil alone, feathered as live.
+                RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+                    .fill(configuration.veil.color)
+                    .padding(feather)
+                    .blur(radius: feather / 2)
+            } else {
+                AtticControlBackdropRepresentable(configuration: configuration)
+            }
+        }
+        .padding(-feather)
+        .allowsHitTesting(false)
+        .accessibilityHidden(true)
+    }
+
+    /// Where the control sits down the panel (0 top, 1 bottom), for the
+    /// Tint's colour there.
+    static func location(frame: CGRect, panelHeight: CGFloat?) -> Double {
+        guard let panelHeight, panelHeight > 0, panelHeight.isFinite else { return 0 }
+        return Double(min(max(frame.midY / panelHeight, 0), 1))
+    }
+
+    /// What the backdrop draws for this design and place.
+    static func configuration(design: AtticDesignContext, cornerRadius: CGFloat, location: Double,
+                              strength: Double = AtticEdgeBlur.softening) -> AtticControlBackdropView.Configuration {
+        let surface = Self.surface(design: design, location: location)
+        if design.reduceTransparency {
+            // A solid backing of the surface: nothing shows through.
+            return .init(blur: 0, veil: surface.withAlpha(1), cornerRadius: cornerRadius,
+                         feather: AtticEdgeBlur.softeningFeather)
+        }
+        // The dim: a veil of the surface's own base colour over the
+        // blurred content, at full strength on every surface. On Solid it
+        // matches the surface, so over empty space it shows nothing. On
+        // Glass and Frosted the labels' contrast has almost no margin (2 to
+        // 4 % above their floors over a black or white desktop), so a veil
+        // only as strong as the foundation (the edge veil's rule) let them
+        // fall up to a quarter below it as text passed; at full strength
+        // they keep their floors, at the cost of a faint feathered tone
+        // behind each control over a very dark or bright desktop.
+        let dim = 1 - AtticEdgeBlur.softeningVisible(strength: strength)
+        return .init(blur: AtticEdgeBlur.softeningBlur(strength: strength), veil: surface.withAlpha(dim),
+                     cornerRadius: cornerRadius, feather: AtticEdgeBlur.softeningFeather)
+    }
+}
+
+extension AtticControlBackdrop {
+    /// The panel's own colour at `location` down it (its base under the
+    /// Tint there): the veil's and the labels' halo's colour.
+    static func surface(design: AtticDesignContext, location: Double) -> AtticRGBA {
+        let model = design.tokens.panel
+        return model.washColor.withAlpha(model.tintOpacity(at: location)).over(model.base)
+    }
+}
+
+extension View {
+    /// Softens content that scrolls under this floating control (see
+    /// `AtticControlBackdrop`). `outset` grows the control's footprint
+    /// (bare labels, whose frame is only their text).
+    func atticControlBackdrop(cornerRadius: CGFloat, outset: CGFloat = 0, enabled: Bool = true) -> some View {
+        background {
+            if enabled {
+                AtticControlBackdrop(cornerRadius: cornerRadius + outset)
+                    .padding(-outset)
+            }
+        }
+    }
+
+    /// A soft halo of the surface around bare labels that float over
+    /// content (B): their letters stay crisp over whatever passes beneath.
+    func atticLabelHalo(_ enabled: Bool = true) -> some View {
+        modifier(AtticLabelHalo(enabled: enabled))
+    }
+}
+
+private struct AtticLabelHalo: ViewModifier {
+    let enabled: Bool
+    @Environment(\.atticDesign) private var design
+
+    func body(content: Content) -> some View {
+        if enabled {
+            let colour = AtticControlBackdrop.surface(design: design, location: 0).withAlpha(AtticEdgeBlur.haloOpacity).color
+            content
+                .compositingGroup()
+                .shadow(color: colour, radius: AtticEdgeBlur.haloRadius)
+        } else {
+            content
+        }
+    }
+}
+
+private struct AtticControlBackdropRepresentable: NSViewRepresentable {
+    let configuration: AtticControlBackdropView.Configuration
+
+    func makeNSView(context: Context) -> AtticControlBackdropView {
+        let view = AtticControlBackdropView()
+        view.configuration = configuration
+        return view
+    }
+
+    func updateNSView(_ view: AtticControlBackdropView, context: Context) {
+        if view.configuration != configuration { view.configuration = configuration }
+    }
+}
+
+/// The backdrop's layer: a Gaussian background filter over what is drawn
+/// beneath it, the veil as its background colour, and a feathered mask of
+/// the control's shape (`feather` points of fall-off outside it, the view
+/// being that much larger than the control on every side). The mask is a
+/// nine-part image, so a control changing size (the page button opening)
+/// never redraws it.
+final class AtticControlBackdropView: NSView {
+    struct Configuration: Equatable {
+        var blur: CGFloat
+        var veil: AtticRGBA
+        var cornerRadius: CGFloat
+        var feather: CGFloat
+    }
+
+    var configuration: Configuration? {
+        didSet { if configuration != oldValue { apply() } }
+    }
+
+    private let maskLayer = CALayer()
+    private var maskKey: MaskKey?
+
+    override init(frame: NSRect) {
+        super.init(frame: frame)
+        wantsLayer = true
+        layerUsesCoreImageFilters = true
+        layerContentsRedrawPolicy = .never
+        maskLayer.contentsGravity = .resize
+    }
+
+    required init?(coder: NSCoder) { nil }
+
+    override var isFlipped: Bool { true }
+    override var isOpaque: Bool { false }
+    override var wantsUpdateLayer: Bool { true }
+    override func updateLayer() {}
+    override func hitTest(_ point: NSPoint) -> NSView? { nil }
+    override func isAccessibilityElement() -> Bool { false }
+    override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
+
+    override func layout() {
+        super.layout()
+        updateMask()
+    }
+
+    override func viewDidChangeBackingProperties() {
+        super.viewDidChangeBackingProperties()
+        updateMask()
+    }
+
+    /// The layer's background filters (the blur), for tests.
+    var blurRadius: CGFloat {
+        (layer?.backgroundFilters?.first as? CIFilter)?.value(forKey: kCIInputRadiusKey) as? CGFloat ?? 0
+    }
+
+    private func apply() {
+        guard let layer, let configuration else { return }
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        if configuration.blur > 0, let blur = CIFilter(name: "CIGaussianBlur") {
+            blur.setValue(configuration.blur, forKey: kCIInputRadiusKey)
+            layer.backgroundFilters = [blur]
+        } else {
+            layer.backgroundFilters = nil
+        }
+        layer.backgroundColor = configuration.veil.nsColor.cgColor
+        layer.mask = maskLayer
+        CATransaction.commit()
+        updateMask()
+    }
+
+    private struct MaskKey: Equatable {
+        var radius: CGFloat
+        var feather: CGFloat
+        var scale: CGFloat
+    }
+
+    private func updateMask() {
+        guard let configuration else { return }
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        maskLayer.frame = bounds
+        let scale = window?.backingScaleFactor ?? NSScreen.main?.backingScaleFactor ?? 2
+        // A capsule's corner is its half height (never more).
+        let inner = bounds.insetBy(dx: configuration.feather, dy: configuration.feather)
+        let radius = max(0, min(configuration.cornerRadius, inner.height / 2, inner.width / 2)).rounded()
+        let key = MaskKey(radius: radius, feather: configuration.feather, scale: scale)
+        if key != maskKey, let image = Self.maskImage(radius: radius, feather: configuration.feather, scale: scale) {
+            maskKey = key
+            maskLayer.contents = image.image
+            maskLayer.contentsScale = scale
+            maskLayer.contentsCenter = image.centre
+        }
+        CATransaction.commit()
+    }
+
+    /// The feathered shape as a nine-part image: corners of `radius` with
+    /// `feather` of smooth fall-off outside, around a one-point middle that
+    /// stretches. Opaque inside the shape.
+    static func maskImage(radius: CGFloat, feather: CGFloat, scale: CGFloat) -> (image: CGImage, centre: CGRect)? {
+        let side = (radius + feather) * 2 + 1
+        let pixels = Int((side * scale).rounded(.up))
+        guard pixels > 0, let context = CGContext(data: nil, width: pixels, height: pixels, bitsPerComponent: 8,
+                                                  bytesPerRow: pixels * 4, space: CGColorSpaceCreateDeviceRGB(),
+                                                  bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue),
+              let data = context.data?.assumingMemoryBound(to: UInt8.self) else { return nil }
+        let size = CGFloat(pixels) / scale
+        for row in 0..<pixels {
+            for column in 0..<pixels {
+                let point = CGPoint(x: (CGFloat(column) + 0.5) / scale, y: (CGFloat(row) + 0.5) / scale)
+                let alpha = Self.alpha(at: point, size: CGSize(width: size, height: size), radius: radius, feather: feather)
+                let value = UInt8((alpha * 255).rounded())
+                let index = (row * pixels + column) * 4
+                data[index] = value
+                data[index + 1] = value
+                data[index + 2] = value
+                data[index + 3] = value
+            }
+        }
+        guard let image = context.makeImage() else { return nil }
+        let edge = (radius + feather) / side
+        return (image, CGRect(x: edge, y: edge, width: 1 / side, height: 1 / side))
+    }
+
+    /// The mask's opacity at `point` in a view of `size`: 1 inside the
+    /// rounded shape inset by `feather`, falling smoothly to 0 at `feather`
+    /// outside it.
+    static func alpha(at point: CGPoint, size: CGSize, radius: CGFloat, feather: CGFloat) -> CGFloat {
+        let inner = CGRect(origin: .zero, size: size).insetBy(dx: feather, dy: feather)
+        guard inner.width > 0, inner.height > 0 else { return 0 }
+        // Distance outside a rounded rectangle.
+        let r = min(radius, inner.width / 2, inner.height / 2)
+        let dx = max(abs(point.x - inner.midX) - (inner.width / 2 - r), 0)
+        let dy = max(abs(point.y - inner.midY) - (inner.height / 2 - r), 0)
+        let outside = max(0, (dx * dx + dy * dy).squareRoot() - r)
+        guard feather > 0 else { return outside > 0 ? 0 : 1 }
+        let t = min(outside / feather, 1)
+        // Smoothstep down: no visible start or end line.
+        return 1 - t * t * (3 - 2 * t)
+    }
+}

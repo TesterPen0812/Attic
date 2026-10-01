@@ -424,6 +424,9 @@ struct NoteComposerView: View {
                 .atticClearGlassForegroundReadability()
                 .frame(width: 34, height: 34)
                 .atticGlassControl(in: Circle(), interactive: true)
+                // B (owner, 2026-10-01): the note's text passing under the
+                // button is softened behind it only.
+                .atticControlBackdrop(cornerRadius: 17)
                 .frame(width: 40, height: 40)
                 .contentShape(Circle())
         }

@@ -34,6 +34,9 @@ struct PanelHeader: View {
                     flat: true,
                     action: onTogglePin
                 )
+                // B (owner, 2026-10-01): content passing under the header's
+                // buttons is softened behind them only.
+                .atticControlBackdrop(cornerRadius: PanelHeaderLayout.controlCorner)
                 .keyboardShortcut("p", modifiers: [.command, .shift])
                 .accessibilityIdentifier("panel-pin-button")
                 // The menu bar menu's New note and Search Done Tasks keys,
@@ -56,6 +59,7 @@ struct PanelHeader: View {
                     onApproach: onApproachPageSwitch,
                     flat: true
                 )
+                .atticControlBackdrop(cornerRadius: PanelHeaderLayout.controlCorner)
                 .accessibilityIdentifier("panel-section-picker")
             }
         }
