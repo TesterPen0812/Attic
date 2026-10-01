@@ -358,11 +358,8 @@ final class TaskAttachmentDropTests: XCTestCase {
     func testGalleryCardCopiesIntoAnotherTaskButNeverIntoItsOwnOwner() async throws {
         let (store, container, files) = try makeStore()
         let trip = try XCTUnwrap(store.create(title: "Trip"))
-        let packID = try XCTUnwrap(store.create(title: "Pack", parentID: trip.id)).id
+        let pack = try XCTUnwrap(store.create(title: "Pack", parentID: trip.id))
         let other = try XCTUnwrap(store.create(title: "Other"))
-        // Successful commits replace the staging context. Seed legacy
-        // metadata on the currently presented physical row.
-        let pack = try XCTUnwrap(store.task(withID: packID))
         let photo = try pngFile()
         _ = await store.attachStagedFiles(to: trip.id) { TaskAttachmentStaging(urls: [photo]) }
         let source = try XCTUnwrap(store.tasks.first { $0.id == trip.id }?.attachments.first)
@@ -454,8 +451,10 @@ final class TaskAttachmentDropTests: XCTestCase {
     func testALegacySubtaskCardResolvesToItsParentAndAmbiguityRefuses() throws {
         let (store, _, _) = try makeStore()
         let trip = try XCTUnwrap(store.create(title: "Trip"))
-        let pack = try XCTUnwrap(store.create(title: "Pack", parentID: trip.id))
+        let packID = try XCTUnwrap(store.create(title: "Pack", parentID: trip.id)).id
         let other = try XCTUnwrap(store.create(title: "Other"))
+        // Seed the current presentation after the last creation commit.
+        let pack = try XCTUnwrap(store.task(withID: packID))
         let legacy = TaskImageReference(id: UUID(), filename: "Old.png", digest: String(repeating: "a", count: 64),
                                         contentTypeIdentifier: UTType.png.identifier, byteCount: 1)
         pack.imageReferencesData = try JSONEncoder().encode([legacy])
