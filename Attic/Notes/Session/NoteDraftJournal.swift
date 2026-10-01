@@ -282,8 +282,15 @@ private actor NoteDraftJournalIO {
     }
 
     private func ownership(of file: URL) -> NoteRecoveryOwnership {
+        let data: Data
+        do { data = try Data(contentsOf: file) }
+        catch {
+            // Only an absent checkpoint proves absent ownership. A missing
+            // staged original inside a readable checkpoint is damaged recovery.
+            if journalFileIsMissing(error) { return .absent }
+            return .damaged("Recovery copy \(file.lastPathComponent) is unreadable: \(error.localizedDescription)")
+        }
         do {
-            let data = try Data(contentsOf: file)
             let decoder = JSONDecoder()
             decoder.dateDecodingStrategy = .iso8601
             let entry = try decoder.decode(NoteDraftJournalEntry.self, from: data)
@@ -318,7 +325,6 @@ private actor NoteDraftJournalIO {
             }
             return .valid(entry, staged, claim)
         } catch {
-            if journalFileIsMissing(error) { return .absent }
             return .damaged("Recovery copy \(file.lastPathComponent) is incomplete or unreadable: \(error.localizedDescription)")
         }
     }
