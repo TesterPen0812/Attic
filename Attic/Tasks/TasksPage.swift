@@ -221,15 +221,32 @@ struct TasksPage: View {
         // keystroke (round 4).
         DispatchQueue.main.async { model.warmUpShorthand() }
         #if DEBUG
-        // Capture seam (`ATTIC_UI_TEST_META=date|tags`): a row's date or
-        // tag list opens by itself for hands-off captures.
-        if let kind = ProcessInfo.processInfo.environment["ATTIC_UI_TEST_META"] {
-            DispatchQueue.main.asyncAfter(deadline: .now() + 2.5) {
+        // Capture seam (`ATTIC_UI_TEST_META=date|tags`, optionally
+        // `@<seconds>`, 2.5 by default): a row's date or tag list opens by
+        // itself for hands-off captures and the on-screen performance gate,
+        // which also closes it after `ATTIC_UI_TEST_META_CLOSE` seconds.
+        let environment = ProcessInfo.processInfo.environment
+        if let seam = environment["ATTIC_UI_TEST_META"] {
+            let parts = seam.split(separator: "@", maxSplits: 1).map(String.init)
+            let kind = parts.first ?? seam
+            let delay = parts.count > 1 ? Double(parts[1]) ?? 2.5 : 2.5
+            let close = environment["ATTIC_UI_TEST_META_CLOSE"].flatMap(Double.init)
+            DispatchQueue.main.asyncAfter(deadline: .now() + delay) {
                 let rows = model.rows(for: model.tab)
                 if kind == "date", let row = rows.first(where: { $0.model.due != nil && $0.model.state != .inProgress }) {
+                    PerformanceSignposts.noteInput("picker-open date")
                     openMeta(.date, on: row.id)
                 } else if kind == "tags", let row = rows.first(where: { !$0.model.tags.isEmpty }) {
+                    PerformanceSignposts.noteInput("picker-open tags")
                     openMeta(.tags, on: row.id)
+                } else {
+                    return
+                }
+                if let close {
+                    DispatchQueue.main.asyncAfter(deadline: .now() + close) {
+                        PerformanceSignposts.noteInput("picker-close")
+                        metaPopover = nil
+                    }
                 }
             }
         }
@@ -253,6 +270,7 @@ struct TasksPage: View {
                       event.window === window else { return event }
                 let allowed = Self.pagerTakes(event, pointer: pointer, band: swipe.band,
                                               stackHeight: bottomStack.height, pageShown: model.isPageShown)
+                if event.phase == .began { PerformanceSignposts.noteInput("scroll-began") }
                 let sample = TasksPagerSwipe.Sample(event)
                 let consumed = model.pagerScrolled(sample, allowed: allowed)
                 listProxies.apply(TasksScrollerRule.change(phase: sample.phase, momentum: sample.momentum, axis: swipe.axis))
