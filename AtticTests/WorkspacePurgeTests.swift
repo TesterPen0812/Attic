@@ -404,6 +404,59 @@ final class WorkspacePurgeTests: XCTestCase {
         let admission = try await gate.admit([id]); XCTAssertNil(gate.tryAcquire([id], kind: .collection))
         admission.release(); XCTAssertNotNil(gate.tryAcquire([id], kind: .collection))
     }
+    func testP5ExistingPayloadlessAttachmentSoftRemovalCrossesByteLeaseButNotFamilyLease() throws {
+        let context = coordinator.freshContext(), attachmentID = UUID()
+        context.insert(NoteItem(id: noteID, body: "Legacy body"))
+        context.insert(NoteAttachment(id: attachmentID, noteID: noteID, originalFilename: "only.txt", byteCount: 4,
+            sortIndex: 0, contentDigest: NotePayloadDigest.sha256(Data("only".utf8)), payload: nil))
+        try context.save()
+        let store = NoteStore(container: coordinator.container, attachmentFileStore: files.files)
+        let byteLease = try XCTUnwrap(coordinator.ownership.tryAcquire([attachmentID], kind: .collection))
+        let row = try XCTUnwrap(store.attachments(for: noteID).first)
+        XCTAssertTrue(store.removeAttachment(row), store.lastErrorMessage ?? "soft removal refused")
+        byteLease.release()
+        let familyLease = try XCTUnwrap(coordinator.ownership.tryAcquire([noteID], kind: .collection))
+        XCTAssertFalse(store.restoreAttachment(attachmentID), "the row phase freezes every affected family owner")
+        familyLease.release()
+        XCTAssertTrue(store.restoreAttachment(attachmentID), store.lastErrorMessage ?? "restore refused")
+        let rows = try coordinator.freshContext().fetch(FetchDescriptor<NoteAttachment>())
+        XCTAssertEqual(rows.count, 1); XCTAssertNil(rows.first?.payload); XCTAssertNil(rows.first?.deletedAt)
+        XCTAssertEqual(rows.first?.contentDigest, NotePayloadDigest.sha256(Data("only".utf8)))
+    }
+    func testP5LegacyVersionReferencesAndMalformedReferenceMetadataAreAdmittedConservatively() throws {
+        let fileID = UUID()
+        let version = NoteVersion(noteID: noteID, createdAt: Date(), reason: .leave, content: nil, contentFormat: 0,
+            title: "Legacy", body: "body", attachmentIDs: [fileID], sourceRevisionID: nil)
+        let known = try coordinator.admissionIDs([version])
+        XCTAssertTrue(known.contains(fileID)); XCTAssertFalse(known.contains(coordinator.ownership.unknownID))
+        let bytes = try XCTUnwrap(coordinator.ownership.tryAcquire([fileID], kind: .collection))
+        XCTAssertNil(coordinator.ownership.tryAcquire(known, kind: .admission)); bytes.release()
+        version.attachmentIDsRaw += " unreadable-owner"
+        let unknown = try coordinator.admissionIDs([version])
+        XCTAssertTrue(unknown.contains(fileID)); XCTAssertTrue(unknown.contains(coordinator.ownership.unknownID))
+        let unrelated = try XCTUnwrap(coordinator.ownership.tryAcquire([UUID()], kind: .collection))
+        XCTAssertNil(coordinator.ownership.tryAcquire(unknown, kind: .admission)); unrelated.release()
+    }
+
+    func testP5UnknownContentAdmissionOverlapsEveryCollectionAndCannotBecomeEmptyOwnership() throws {
+        let context = coordinator.freshContext(), row = NoteItem(id: noteID, title: "Opaque")
+        row.content = Data("unsupported bytes".utf8); row.contentFormat = 9
+        context.insert(row); try context.save()
+        let owner = WorkspaceOwner(entity: .note, id: noteID), tokens = try coordinator.capture([owner])
+        let unrelatedFile = UUID()
+        let collection = try XCTUnwrap(coordinator.ownership.tryAcquire([unrelatedFile], kind: .collection))
+        let mutation: (ModelContext) throws -> Void = { context in
+            let id = self.noteID!
+            try XCTUnwrap(context.fetch(FetchDescriptor<NoteItem>(predicate: #Predicate { $0.id == id })).first).title = "Compatible rename"
+        }
+        expectEqual(coordinator.plainSave(tokens: tokens, writes: [owner], stage: mutation), .conflict)
+        expectEqual(try coordinator.capture([owner]), tokens)
+        collection.release()
+        expectEqual(coordinator.plainSave(tokens: tokens, writes: [owner], stage: mutation), .committed)
+        expectEqual(try note().content, Data("unsupported bytes".utf8))
+        expectEqual(try note().contentFormat, 9)
+    }
+
     func testP5NewWriterDomainDuringPreparationInvalidatesFamilyLeaseBeforeRowSave() async throws {
         try seed(note: true)
         coordinator.afterPreparation = { self.files.files.registerWriter(WorkspaceOwnershipGate()) }

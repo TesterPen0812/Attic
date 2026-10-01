@@ -99,7 +99,7 @@ enum WorkspaceLegacyBridge {
             throw WorkspaceFoundationError.unknown
         }
         let changes = source.insertedModelsArray + source.changedModelsArray + source.deletedModelsArray
-        guard let admission = state.coordinator.ownership.tryAcquire(try state.coordinator.admissionIDs(changes), kind: .admission) else {
+        guard let admission = state.coordinator.ownership.tryAcquire(try state.coordinator.admissionIDs(changes, before: Array(state.baseline.values)), kind: .admission) else {
             throw WorkspaceFoundationError.pendingPublication
         }
         defer { admission.release() }
@@ -159,7 +159,10 @@ enum WorkspaceLegacyBridge {
                 guard let field = replica.fields["content"] else { throw WorkspaceFoundationError.unknown }
                 return try JSONDecoder().decode(Data?.self, from: field)
             }
-            if Set(contents).count == 1 { documents[owner.id] = contents.first }
+            // Metadata changes can span legacy/document replicas without
+            // rewriting their distinct bodies. An after-document promise is
+            // valid only when every physical row carries that exact candidate.
+            if contents.count == next.replicas.count, Set(contents).count == 1 { documents[owner.id] = contents.first }
         }
         var preDraft: NoteDraftJournalEntry?
         if !plain, documents.count == 1, let (id, document) = documents.first {

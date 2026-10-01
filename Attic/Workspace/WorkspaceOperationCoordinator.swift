@@ -183,7 +183,7 @@ final class WorkspaceOperationCoordinator {
             }
             try validateTombstones(context, before: envelope.tokens)
             try validateLegacyAdmission(context, before: envelope.tokens)
-            guard let admission = ownership.tryAcquire(try admissionIDs(context.insertedModelsArray + context.changedModelsArray),
+            guard let admission = ownership.tryAcquire(try admissionIDs(context.insertedModelsArray + context.changedModelsArray, before: envelope.tokens),
                 kind: .admission, excluding: collection?.lease(for: ownership)) else { return .conflict }
             defer { admission.release() }
             try validatePreservedOpaqueContent(context, before: envelope.tokens)
@@ -242,7 +242,7 @@ final class WorkspaceOperationCoordinator {
             try validateTombstones(context, before: previous)
             try validateLegacyAdmission(context, before: previous)
             try validatePreservedOpaqueContent(context, before: previous)
-            guard let admission = ownership.tryAcquire(try admissionIDs(context.insertedModelsArray + context.changedModelsArray), kind: .admission) else { return .conflict }
+            guard let admission = ownership.tryAcquire(try admissionIDs(context.insertedModelsArray + context.changedModelsArray, before: previous), kind: .admission) else { return .conflict }
             defer { admission.release() }
             try validateWriteSet(context, declared: writes)
             let next = try sorted(writes).map { try WorkspaceModelToken.read($0, in: context) }
@@ -602,8 +602,23 @@ extension WorkspaceOperationCoordinator {
             .union(envelope.afterDocuments.keys)
             .union(envelope.afterDocuments.values.flatMap { documentAdmissionIDs($0) })
     }
-    func admissionIDs(_ rows: [any PersistentModel]) throws -> Set<UUID> {
+    func admissionIDs(_ rows: [any PersistentModel], before: [WorkspaceModelToken] = []) throws -> Set<UUID> {
         var ids = Set(rows.compactMap { Self.owner($0)?.id })
+        // Existing attachment lifecycle/anchor changes neither add a byte
+        // root nor release the retained physical row. They can cross a file
+        // collection lease: providers retain both shown and removed rows.
+        // Keep the note owner admission, so an affected-family purge still
+        // freezes them. New replicas or changed identity/payload stay admitted.
+        let neutral = Set(["updatedAt", "deletedAt", "sortIndex", "inlineOffset", "inlineLength"])
+        for (id, attachments) in Dictionary(grouping: rows.compactMap { $0 as? NoteAttachment }, by: \.id) {
+            let token = before.first { $0.owner == WorkspaceOwner(entity: .attachment, id: id) }
+            let unchanged = try attachments.allSatisfy { row in
+                guard let original = token?.replicas.first(where: { $0.physicalID == row.persistentModelID }) else { return false }
+                let current = try WorkspaceModelFields.read(row)
+                return current.filter { !neutral.contains($0.key) } == original.fields.filter { !neutral.contains($0.key) }
+            }
+            if unchanged { ids.remove(id) }
+        }
         for row in rows {
             if let task = row as? TaskItem {
                 if let data = task.imageReferencesData { ids.formUnion(try JSONDecoder().decode([TaskImageReference].self, from: data).map(\.id)) }
@@ -617,6 +632,10 @@ extension WorkspaceOperationCoordinator {
             } else if let attachment = row as? NoteAttachment { ids.insert(attachment.noteID) }
             else if let version = row as? NoteVersion {
                 ids.insert(version.noteID)
+                let raw = version.attachmentIDsRaw.split(separator: " ")
+                let references = raw.compactMap { UUID(uuidString: String($0)) }
+                ids.formUnion(references)
+                if references.count != raw.count { ids.insert(ownership.unknownID) }
                 if let data = version.content { ids.formUnion(documentAdmissionIDs(data)) }
             } else if let proposal = row as? NotePendingEdit {
                 ids.insert(proposal.noteID)

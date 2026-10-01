@@ -98,6 +98,40 @@ final class WorkspaceCommitTests: XCTestCase {
             XCTAssertEqual(try context.fetchCount(FetchDescriptor<OperationReceipt>()), 0)
         }
     }
+    func testC1MetadataOnlyWritePreservesDifferentPhysicalDocumentFormats() throws {
+        let context = coordinator.freshContext(), legacy = NoteItem(id: noteID, title: "Legacy", body: "Unchanged legacy body")
+        context.insert(legacy); try context.save()
+        let owner = WorkspaceOwner(entity: .note, id: noteID), before = try coordinator.capture([owner])
+        let store = NoteStore(container: container)
+        XCTAssertTrue(store.setPinned(true, noteID: noteID), store.lastErrorMessage ?? "pin refused")
+        let after = try coordinator.capture([owner])
+        XCTAssertEqual(after.first?.replicas.count, 2)
+        for original in try XCTUnwrap(before.first).replicas {
+            let current = try XCTUnwrap(after.first?.replicas.first { $0.physicalID == original.physicalID })
+            XCTAssertEqual(current.fields["content"], original.fields["content"])
+            XCTAssertEqual(current.fields["contentFormat"], original.fields["contentFormat"])
+            XCTAssertEqual(current.fields["title"], original.fields["title"])
+            XCTAssertEqual(current.fields["body"], original.fields["body"])
+        }
+        let id = noteID!
+        XCTAssertTrue(try coordinator.freshContext().fetch(FetchDescriptor<NoteItem>(predicate: #Predicate { $0.id == id })).allSatisfy(\.isPinned))
+    }
+
+    func testC1DeclaredAfterDocumentCannotCommitOnlyTheModelHalf() async throws {
+        let before = try coordinator.capture(baseOwners)
+        var candidate = original!
+        candidate.blocks.remove(at: 1)
+        let prepared = try PreparedNoteDocument(candidate)
+        let envelope = try coordinator.newEnvelope(intent: "Incomplete forward conversion", reads: before, writes: baseOwners,
+            afterDocuments: [noteID: prepared.content])
+        let outcome = await coordinator.execute(envelope, stage: { context in
+            try TaskStore.stageUpdate(in: context, taskID: self.taskID, title: "Must roll back", timestamp: Date())
+        })
+        XCTAssertEqual(outcome, .notCommitted)
+        XCTAssertEqual(try coordinator.capture(baseOwners), before)
+        XCTAssertEqual(try coordinator.freshContext().fetchCount(FetchDescriptor<OperationReceipt>()), 0)
+    }
+
     func testC5CompatibilityBatchHasOneDomainSaveAndSeparateReceiptOnlyBookkeeping() throws {
         let gate = PersistenceGate()
         let store = TaskStore(container: container, persist: gate.save)
