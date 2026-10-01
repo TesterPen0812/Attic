@@ -173,7 +173,7 @@ private struct AtticSystemDesignModifier: ViewModifier {
             tintLength: tintLength,
             increaseContrast: contrast == .increased,
             reduceTransparency: reduceTransparency,
-            reduceMotion: reduceMotion || animations == .reduced,
+            reduceMotion: animations.reducesMotion(systemReduceMotion: reduceMotion),
             differentiateWithoutColor: differentiateWithoutColor,
             hapticsEnabled: hapticsEnabled,
             controls: controls,

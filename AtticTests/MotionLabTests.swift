@@ -215,26 +215,12 @@ final class MotionLabTests: XCTestCase {
         XCTAssertEqual(AtticAnimationLevel.migrated(from: "subtle"), .subtle)
     }
 
-    /// macOS Reduce Motion wins whatever Animations says.
+    /// macOS Reduce Motion wins whatever Animations says (the design
+    /// context and the code outside views both use this one rule).
     func testMacReduceMotionForcesReduced() {
-        final class Probe { var reduceMotion: Bool? }
-        let probe = Probe()
-        struct Reader: View {
-            let probe: Probe
-            @Environment(\.atticDesign) private var design
-            var body: some View {
-                probe.reduceMotion = design.reduceMotion
-                return Color.clear
-            }
-        }
         for level in AtticAnimationLevel.allCases {
-            probe.reduceMotion = nil
-            let host = NSHostingView(rootView: Reader(probe: probe)
-                .atticDesignFromSystem(animations: level)
-                .environment(\.accessibilityReduceMotion, true))
-            host.frame = CGRect(x: 0, y: 0, width: 10, height: 10)
-            host.layoutSubtreeIfNeeded()
-            XCTAssertEqual(probe.reduceMotion, true, "\(level)")
+            XCTAssertTrue(level.reducesMotion(systemReduceMotion: true), "\(level)")
+            XCTAssertEqual(level.reducesMotion(systemReduceMotion: false), level == .reduced, "\(level)")
         }
     }
 

@@ -793,6 +793,12 @@ enum AtticAnimationLevel: String, CaseIterable, Sendable {
         }
     }
 
+    /// Whether motion is reduced: this level is Reduced, or macOS Reduce
+    /// Motion is on, which forces Reduced whatever is chosen.
+    func reducesMotion(systemReduceMotion: Bool) -> Bool {
+        systemReduceMotion || self == .reduced
+    }
+
     /// The level stored by an earlier build: "full" (the springs) is now
     /// Lively, and "reduced" is still Reduced. Anything else is the default.
     static func migrated(from stored: String?) -> AtticAnimationLevel {
@@ -811,7 +817,7 @@ enum AtticMotionPreference {
 
     /// Reduced in Settings, or Reduce Motion on in macOS.
     static var reducesMotion: Bool {
-        level == .reduced || NSWorkspace.shared.accessibilityDisplayShouldReduceMotion
+        level.reducesMotion(systemReduceMotion: NSWorkspace.shared.accessibilityDisplayShouldReduceMotion)
     }
 }
 
