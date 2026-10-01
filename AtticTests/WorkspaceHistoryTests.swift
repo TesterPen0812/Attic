@@ -14,6 +14,7 @@ final class WorkspaceHistoryTests: XCTestCase {
 
     override func setUp() async throws {
         root = FileManager.default.temporaryDirectory.appendingPathComponent("AtticHistory-\(UUID())")
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
         let container = try PersistenceController.makeContainer(cloudSyncEnabled: false, storeDirectory: root)
         coordinator = try WorkspaceOperationCoordinator(container: container, journal: NoteDraftJournal(directory: root.appendingPathComponent("Journal")))
         taskID = UUID()
@@ -120,7 +121,9 @@ final class WorkspaceHistoryTests: XCTestCase {
         expectNil(await workspace.replay(redo: false)); XCTAssertFalse(adapter.undo())
         fail = false; expectTrue(await workspace.retryPublication(using: coordinator))
         expectEqual(route.undoCount(in: workspace.historyID), count)
-        expectEqual(saves, saved + 2, "retry saves receipt bookkeeping only")
+        expectEqual(saves, saved + 3, "retry saves publication, handoff and release bookkeeping only")
+        let receiptID = try XCTUnwrap(coordinator.freshContext().fetch(FetchDescriptor<OperationReceipt>()).first(where: { $0.replayOf != nil }))
+        XCTAssertTrue(receiptID.publicationComplete); XCTAssertTrue(receiptID.envelopeReleased); XCTAssertNotNil(receiptID.handoffProof)
         expectEqual(publications, 2)
     }
     func testH1ReservedInputIsDeliveredExactlyOnceAfterCommitAndAfterAbort() async throws {
