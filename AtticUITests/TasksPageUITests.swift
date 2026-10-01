@@ -966,6 +966,19 @@ final class TasksPageUITests: XCTestCase {
 
     private func waitForPage(_ page: String, _ message: String, file: StaticString = #filePath, line: UInt = #line) {
         waitFor(tab(page).isSelected && isOnScreen(landmark(page)), message, file: file, line: line)
+        if !(tab(page).isSelected && isOnScreen(landmark(page))) {
+            // Part 2 CI: a Done → Later click twice left Done shown. Keep
+            // the tabs' frames, the window's and the app's state for the
+            // next look.
+            let state = XCTAttachment(string: """
+                app state: \(app.state.rawValue); window: \(window.exists ? "\(window.frame)" : "gone")
+                \(["now", "backlog", "done"].map { "\($0): \(tab($0).frame) selected=\(tab($0).isSelected)" }.joined(separator: "\n"))
+                \(window.debugDescription)
+                """)
+            state.name = "tabs-on-failure"
+            state.lifetime = .keepAlways
+            add(state)
+        }
         for other in ["now", "backlog", "done"] where other != page {
             XCTAssertFalse(isOnScreen(landmark(other)), "\(message): \(other) is not shown", file: file, line: line)
         }
@@ -977,10 +990,13 @@ final class TasksPageUITests: XCTestCase {
         let pages = ["now", "backlog", "done"]
         for from in pages {
             for to in pages where to != from {
+                // The frames clicked, kept for a failure (part 2 CI).
+                let start = "\(tab(from).frame) in \(window.frame)"
                 tab(from).click()
-                waitForPage(from, "on \(from)")
+                waitForPage(from, "on \(from) (clicked \(start))")
+                let target = "\(tab(to).frame) in \(window.frame)"
                 tab(to).click()
-                waitForPage(to, "a click on \(to) from \(from) lands on \(to)")
+                waitForPage(to, "a click on \(to) from \(from) lands on \(to) (clicked \(target))")
             }
         }
     }
