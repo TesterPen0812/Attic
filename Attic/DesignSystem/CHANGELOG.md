@@ -534,3 +534,42 @@ additive; no token, colour, radius or type style changed.
 - **Edges is removed** (`4fc0f34` reverted): the lists and Notes are back to
   round 13's clean cut at the tabs' band and the bottom stack. A floating
   controls design replaces that behaviour later.
+
+### Floating controls: B with softening (owner, 2026-10-01)
+
+- **New `AtticControlBackdrop`** (`atticControlBackdrop(cornerRadius:outset:)`),
+  the edge blur's second form: content passing under a floating control is
+  softened behind that control only, a soft blur and a slight dim, in a
+  feathered mask of the control's shape. It is a layer under the control
+  with a Core Image background blur (what is drawn beneath it, SwiftUI or
+  AppKit text alike) under a veil of the surface's own colour; the mask is
+  a nine-part image (corners plus `softeningFeather` of smooth fall-off),
+  so a control changing size never redraws it. It takes no clicks and
+  VoiceOver never reads it; captures draw its veil only. Reduce
+  Transparency draws a solid backing of the surface instead.
+  The system's soft scroll edge was evaluated first and not used: it
+  softens a whole band at the scroll view's edge (the cut the owner turned
+  down), draws nothing under Liquid Glass bars, and AppKit's
+  `NSScrollEdgeEffectStyle` (26.1) applies only to title-bar and split-view
+  accessories. A per-item shader would need the Metal toolchain and cannot
+  reach AppKit text.
+- **`AtticEdgeBlur`** gains the one value to tune, `softening` (0.85), which
+  sets the blur (`softeningBlur`, 6 pt at full strength: about 5.1 pt) and
+  the dim (`softeningVisible`, 50 % visible at full strength: about 57 %);
+  `softeningFeather` 10 pt; `edgeVisible` 0.35 (content past the controls
+  at the panel's very edge); the labels' halo (`haloRadius` 2,
+  `haloOpacity` 0.9); and the contrast model's `blurredTextCoverage` 0.30
+  (measured: 13 pt semibold blurred by the softening).
+- The veil is the surface's base colour at full strength on every surface:
+  on Glass and Frosted the labels' contrast has 2 to 4 % of margin, and a
+  veil only as strong as the foundation let them fall up to a quarter below
+  their floors as text passed. With it they keep their floors in Light and
+  Dark, Solid, Glass and Frosted, over every desktop.
+- **New `atticLabelHalo()`**: a soft shadow of the surface around bare
+  labels floating over content (the Tasks tabs).
+- **`AtticReorderLiftModifier`**: the lifted card is opaque, in the panel's
+  own colour (`fill(design:)`), no longer the pop-over fill.
+- **`AtticTaskRow`**: hover is a tint only; the actions button is the
+  keyboard's row's only (`showsActionsButton(forced:keyboardFocused:)`), so
+  nothing moves as the pointer passes.
+- No token, colour, radius or type style changed.

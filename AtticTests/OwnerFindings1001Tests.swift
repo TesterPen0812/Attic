@@ -1,4 +1,5 @@
 import AppKit
+import SwiftData
 import SwiftUI
 import XCTest
 @testable import Attic
@@ -188,5 +189,75 @@ final class OwnerFindingsReorderTests: XCTestCase {
         XCTAssertNil(hosted.pointer.liftedCard.lift, "the card goes once it has landed")
         let order = hosted.model.rows(for: .now).filter { $0.status == .todo }.map(\.id)
         XCTAssertNotEqual(order.first, first.id, "the row moved down")
+    }
+}
+
+// MARK: - 5. Demo data, in preview builds only
+
+@MainActor
+final class OwnerFindingsDemoDataTests: XCTestCase {
+    func testDemoDataNeverLoadsOutsideAPreviewIdentity() throws {
+        XCTAssertFalse(AtticDemoData.isAllowed(bundleIdentifier: "com.taha.Attic"), "never the release identity")
+        XCTAssertFalse(AtticDemoData.isAllowed(bundleIdentifier: nil))
+        XCTAssertFalse(AtticDemoData.isAllowed(bundleIdentifier: "com.taha.Attic.preview."))
+        XCTAssertFalse(AtticDemoData.isAllowed(bundleIdentifier: "com.taha.Attic.dira"))
+        XCTAssertFalse(AtticDemoData.isAllowed(bundleIdentifier: "com.emanueledipietro.Attic"))
+        XCTAssertTrue(AtticDemoData.isAllowed(bundleIdentifier: "com.taha.Attic.preview.main"))
+
+        let container = try PersistenceController.makeContainer(inMemory: true, cloudSyncEnabled: false)
+        XCTAssertEqual(try AtticDemoData.seed(into: container, bundleIdentifier: "com.taha.Attic"), 0)
+        XCTAssertTrue(AtticDemoData.storeIsEmpty(container), "nothing was written under the release identity")
+    }
+
+    func testThePreviewDemoIsRealisticAndLoadsOnce() throws {
+        let container = try PersistenceController.makeContainer(inMemory: true, cloudSyncEnabled: false)
+        let now = Date()
+        let calendar = Calendar.autoupdatingCurrent
+        let added = try AtticDemoData.seed(into: container, bundleIdentifier: "com.taha.Attic.preview.main", now: now)
+        XCTAssertGreaterThan(added, 30)
+        XCTAssertEqual(try AtticDemoData.seed(into: container, bundleIdentifier: "com.taha.Attic.preview.main", now: now), 0,
+                       "loading again adds nothing twice")
+        let context = ModelContext(container)
+        let tasks = try context.fetch(FetchDescriptor<TaskItem>())
+        let top = tasks.filter { $0.parentID == nil }
+        let today = DueDay(date: now, calendar: calendar)
+        XCTAssertTrue(top.contains { $0.status == .inProgress }, "a task in progress")
+        XCTAssertTrue(top.contains { $0.status == .backlog }, "Later")
+        XCTAssertTrue(top.contains { ($0.dueDay.map { $0 < today }) == true && $0.status != .done }, "overdue")
+        XCTAssertTrue(top.contains { $0.dueDay == today }, "today")
+        XCTAssertTrue(top.contains { ($0.dueDay.map { $0 > today }) == true }, "future")
+        for priority in [TaskPriority.low, .medium, .high] {
+            XCTAssertTrue(top.contains { $0.priority == priority }, "\(priority)")
+        }
+        XCTAssertTrue(top.contains { !$0.tags.isEmpty }, "tags")
+        XCTAssertTrue(tasks.contains { $0.parentID != nil }, "subtasks")
+        let doneDays = Set(top.filter { $0.doneLoggedAt != nil }.compactMap { $0.completedAt.map { calendar.startOfDay(for: $0) } })
+        XCTAssertGreaterThanOrEqual(doneDays.count, 3, "a few Done days")
+        XCTAssertTrue(tasks.allSatisfy { AtticDemoData.isDemo($0.id) })
+        let notes = try context.fetch(FetchDescriptor<NoteItem>())
+        XCTAssertGreaterThanOrEqual(notes.count, 3)
+        XCTAssertTrue(notes.contains { $0.body.contains("- [ ]") && $0.body.contains("**") }, "formatting and a checklist")
+    }
+
+    func testTheDemoNoteGetsAnImageAndAFile() async throws {
+        let container = try PersistenceController.makeContainer(inMemory: true, cloudSyncEnabled: false)
+        try AtticDemoData.seed(into: container, bundleIdentifier: "com.taha.Attic.preview.main")
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("AtticDemoTest-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let notes = NoteStore(container: container, attachmentFileStore: AttachmentFileStore(rootURL: root))
+        await AtticDemoData.attachFiles(to: notes, bundleIdentifier: "com.taha.Attic.preview.main")
+        let names = notes.attachments(for: AtticDemoData.attachmentsNoteID).map(\.originalFilename).sorted()
+        XCTAssertEqual(names, ["Palette.png", "Type specimen.txt"])
+        await AtticDemoData.attachFiles(to: notes, bundleIdentifier: "com.taha.Attic.preview.main")
+        XCTAssertEqual(notes.attachments(for: AtticDemoData.attachmentsNoteID).count, 2, "never twice")
+    }
+
+    func testOnlyAPreviewBuildsMenuOffersLoadDemoData() {
+        func titles(_ load: (() -> Void)?) -> [String] {
+            MenuBarCommands.commands(advertisedNewTaskShortcut: nil, showPanel: {}, newTask: {}, newNote: {}, search: {},
+                                     openSettings: {}, quit: {}, loadDemoData: load).map(\.title)
+        }
+        XCTAssertFalse(titles(nil).contains("Load Demo Data"))
+        XCTAssertTrue(titles({}).contains("Load Demo Data"))
     }
 }
