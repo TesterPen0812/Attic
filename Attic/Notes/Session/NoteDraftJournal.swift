@@ -560,6 +560,16 @@ private actor NoteDraftJournalIO {
     /// Never collect when any journal file is unreadable: its bytes may still
     /// be the only recovery copy.
     private func removeUnreferencedStagedFiles() {
+        if !operationReconciled {
+            do {
+                let operations = try fileManager.contentsOfDirectory(at: operationsDirectory, includingPropertiesForKeys: nil)
+                if !operations.isEmpty { operationBarrier.setBlocked(true) }
+                else { operationReconciled = true }
+            } catch {
+                if journalFileIsMissing(error) { operationReconciled = true }
+                else { operationBarrier.setBlocked(true) }
+            }
+        }
         guard !operationBarrier.isBlocked else { return }
         guard let journals = try? fileManager.contentsOfDirectory(at: directory, includingPropertiesForKeys: nil)
             .filter({ $0.pathExtension == "json" }),

@@ -514,7 +514,8 @@ final class NoteStore: ObservableObject {
         let displaced = replicas.filter {
             preservationReason == .beforeAgentEdit || NoteReplicaSnapshot($0) != visibleSnapshot
         }
-        stageDisplacedReplicas(displaced, reason: preservationReason, timestamp: timestamp)
+        do { try stageDisplacedReplicas(displaced, reason: preservationReason, timestamp: timestamp) }
+        catch { lastErrorMessage = error.localizedDescription; return false }
         if bodyChanged {
             do {
                 let attachments = try storedAttachments(forNoteID: note.id)

@@ -334,7 +334,15 @@ extension NoteStore {
     /// rows with the same revision token but different bytes or legacy text.
     @discardableResult
     func stageDisplacedReplicas(_ replicas: [NoteItem], reason: NoteVersionReason, timestamp: Date,
-                                excludingUnchangedBase baseRevisionID: UUID? = nil) -> Int {
+                                excludingUnchangedBase baseRevisionID: UUID? = nil) throws -> Int {
+        // Fetch the complete legacy/opaque attachment inventory before any
+        // version is staged. A failed read is unknown, never an empty owner.
+        var fallbackIDs: [UUID: [UUID]] = [:]
+        for replica in replicas where !replica.usesDocumentFormat || replica.content.flatMap({ NoteContentCodec.decode($0).document }) == nil {
+            let id = replica.id
+            fallbackIDs[id] = try modelContext.fetch(FetchDescriptor<NoteAttachment>(predicate: #Predicate { $0.noteID == id }))
+                .filter { $0.deletedAt == nil }.map(\.id)
+        }
         var seen = Set<NotePreservationState>()
         var inserted = 0
         let baseReplicas = replicas.filter { baseRevisionID != nil && $0.revisionID == baseRevisionID }
@@ -344,7 +352,7 @@ extension NoteStore {
             if baseRevisionID != nil, replica.revisionID == baseRevisionID,
                commonBaseState == NotePreservationState(replica) { continue }
             if let latest = latestVersion(noteID: replica.id), isSameState(latest, replica) { continue }
-            stageVersion(of: replica, reason: reason, timestamp: timestamp, context: modelContext)
+            stageVersion(of: replica, reason: reason, timestamp: timestamp, context: modelContext, fallbackAttachmentIDs: fallbackIDs[replica.id] ?? [])
             inserted += 1
         }
         return inserted
@@ -545,9 +553,9 @@ extension NoteStore {
         let context = modelContext
         let priorIDs = Set((NoteContentCodec.decode(main.content ?? Data()).document)?.attachmentIDs ?? [])
         let removedIDs = priorIDs.subtracting(document.attachmentIDs)
-        stageDisplacedReplicas(replicas, reason: .replacedByDraft, timestamp: timestamp,
-                               excludingUnchangedBase: removedIDs.isEmpty ? baseRevisionID : nil)
         do {
+            try stageDisplacedReplicas(replicas, reason: .replacedByDraft, timestamp: timestamp,
+                                      excludingUnchangedBase: removedIDs.isEmpty ? baseRevisionID : nil)
             let revisionID = try stage(document, on: replicas, timestamp: timestamp,
                                        revision: replicas.map(\.revision).max() ?? 0, prepared: projection,
                                        tags: encodedTags)
@@ -782,7 +790,9 @@ extension NoteStore {
     @discardableResult
     func recordVersion(noteID: UUID, reason: NoteVersionReason) -> Bool {
         guard let preflight = try? noteMutationPreflight(noteID, format: .editable) else { return false }
-        let inserted = stageDisplacedReplicas(preflight.replicas, reason: reason, timestamp: currentDate)
+        let inserted: Int
+        do { inserted = try stageDisplacedReplicas(preflight.replicas, reason: reason, timestamp: currentDate) }
+        catch { recordError(error.localizedDescription); return false }
         if inserted == 0 { return true }
         guard commitStagedChanges() else { return false }
         thinVersions(noteID: noteID)
@@ -896,7 +906,8 @@ extension NoteStore {
         }
         let timestamp = currentDate
         let context = modelContext
-        stageDisplacedReplicas(replicas, reason: .beforeRestore, timestamp: timestamp)
+        do { try stageDisplacedReplicas(replicas, reason: .beforeRestore, timestamp: timestamp) }
+        catch { return .failure(.saveFailed(error.localizedDescription)) }
         let revisionID = UUID()
         let revision = (replicas.map(\.revision).max() ?? 0) &+ 1
         let derived = Self.derivedColumns(content: version.content, format: version.contentFormat,
@@ -935,15 +946,14 @@ extension NoteStore {
         return .success(revisionID.uuidString)
     }
 
-    func stageVersion(of replica: NoteItem, reason: NoteVersionReason, timestamp: Date, context: ModelContext) {
+    func stageVersion(of replica: NoteItem, reason: NoteVersionReason, timestamp: Date, context: ModelContext, fallbackAttachmentIDs: [UUID]) {
         let attachmentIDs: [UUID]
         if replica.usesDocumentFormat, let data = replica.content,
            case let .editable(document) = NoteContentCodec.decode(data) {
             attachmentIDs = document.attachmentIDs
         } else {
             // Legacy, newer or unreadable content: keep every row the note has.
-            attachmentIDs = ((try? attachmentRows(forNoteID: replica.id)) ?? [])
-                .filter { $0.deletedAt == nil }.map(\.id)
+            attachmentIDs = fallbackAttachmentIDs
         }
         context.insert(NoteVersion(
             noteID: replica.id,
@@ -1028,11 +1038,14 @@ extension NoteStore {
         let timestamp = currentDate
         if disposition == .proposal {
             // The proposal and the exact base it compared with commit together.
+            let baseAttachmentIDs: [UUID]
+            do { baseAttachmentIDs = try attachmentRows(forNoteID: noteID).map(\.id) }
+            catch { return .failure(.saveFailed(error.localizedDescription)) }
             let baseVersionID = UUID()
             modelContext.insert(NoteVersion(id: baseVersionID, noteID: noteID, createdAt: timestamp,
                                             reason: .beforeAgentEdit, content: current.content,
                                             contentFormat: current.contentFormat, title: current.title, body: current.body,
-                                            attachmentIDs: (try? attachmentRows(forNoteID: noteID).map(\.id)) ?? [],
+                                            attachmentIDs: baseAttachmentIDs,
                                             sourceRevisionID: current.revisionID))
             let edit = NotePendingEdit(noteID: noteID, baseRevisionToken: baseRevisionToken,
                                        proposedContent: data, agentName: agentName, createdAt: timestamp,
@@ -1043,8 +1056,8 @@ extension NoteStore {
             }
             return .success(.pending(editID: edit.id))
         }
-        stageDisplacedReplicas(replicas, reason: .beforeAgentEdit, timestamp: timestamp)
         do {
+            try stageDisplacedReplicas(replicas, reason: .beforeAgentEdit, timestamp: timestamp)
             let revisionID = try stage(document, on: replicas, timestamp: timestamp,
                                        revision: replicas.map(\.revision).max() ?? 0)
             guard commitStagedChanges() else {
@@ -1107,8 +1120,8 @@ extension NoteStore {
                 continue
             }
             let timestamp = currentDate
-            stageDisplacedReplicas(replicas, reason: .beforeAgentEdit, timestamp: timestamp)
             do {
+                try stageDisplacedReplicas(replicas, reason: .beforeAgentEdit, timestamp: timestamp)
                 try stage(document, on: replicas, timestamp: timestamp, revision: replicas.map(\.revision).max() ?? 0)
             } catch {
                 modelContext.rollback()
@@ -1192,7 +1205,8 @@ extension NoteStore {
         }
         let replicas = preflight.replicas
         let timestamp = currentDate
-        stageDisplacedReplicas(replicas, reason: .beforeMigration, timestamp: timestamp)
+        do { try stageDisplacedReplicas(replicas, reason: .beforeMigration, timestamp: timestamp) }
+        catch { return .failure(.saveFailed(error.localizedDescription)) }
         let revisionID = UUID()
         let revision = (replicas.map(\.revision).max() ?? 0) &+ 1
         for replica in replicas {
