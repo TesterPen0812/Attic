@@ -485,8 +485,9 @@ final class NoteUndoHistory {
 
     /// A committed command can retain its text patch without recording an
     /// independent text entry. The workspace records the whole operation once.
-    func commandPayload(before: NSAttributedString, after: NSAttributedString, name: String) -> Op {
-        Op(range: NSRange(location: 0, length: after.length), current: after, other: before,
+    func commandPayload(before: NSAttributedString, name: String) -> Op {
+        let after = NSAttributedString(attributedString: storage)
+        return Op(range: NSRange(location: 0, length: after.length), current: after, other: before,
            name: name, group: nextOwnGroup())
     }
 

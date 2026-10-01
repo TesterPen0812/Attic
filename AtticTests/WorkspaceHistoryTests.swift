@@ -48,8 +48,9 @@ final class WorkspaceHistoryTests: XCTestCase {
         if mixed {
             let before = NSAttributedString(attributedString: adapter.storage)
             let after = NSAttributedString(string: before.string + " transformed")
-            let op = adapter.commandPayload(before: before, after: after, name: "Rename with text patch")
             adapter.performUnrecorded { adapter.storage.setAttributedString(after) }
+            let op = adapter.commandPayload(before: before, name: "Rename with text patch")
+            XCTAssertNotNil(adapter.prepareReplay([op]), "payload captures NSTextStorage’s installed attributes")
             group = WorkspaceHistory.TextGroup(adapter: adapter, payload: op)
         } else { group = nil }
         workspace.recordOperation(id: envelope.id, name: mixed ? "Rename with text patch" : "Rename", coordinator: coordinator, textGroup: group) { [self] redo, effect in
