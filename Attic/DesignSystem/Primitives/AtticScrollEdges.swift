@@ -40,29 +40,41 @@ enum AtticScrollEdgeStyle: String, CaseIterable, Sendable {
     }
 }
 
-/// The scroll edge style, live. Only a preview identity
-/// (`AtticMotionLab.isAvailable`, the check the Motion Lab and the demo data
-/// use) can leave the system soft edge: its developer panel (Settings ›
-/// General › Motion Lab) switches it, kept in the preview's own defaults, and
-/// UI tests can force one with `ATTIC_UI_TEST_SCROLL_EDGES` (`soft` or
-/// `clean`). The official identity and every other one always resolve to the
-/// system soft edge, whatever the environment or the defaults say, and keep
-/// nothing.
+/// The scroll edge style, live. Only a strict preview identity can leave the
+/// system soft edge (`isPreviewIdentity`: `com.taha.Attic.preview.` and a
+/// name, with no `--attic-motion-lab` way in, unlike the Motion Lab's own
+/// broader policy): its developer panel (Settings › General › Motion Lab)
+/// shows the switch, the choice is kept in the preview's own defaults, and UI
+/// tests can force one with `ATTIC_UI_TEST_SCROLL_EDGES` (`soft` or `clean`).
+/// The official identity and every other one always resolve to the system soft
+/// edge, whatever the environment, the defaults or the launch arguments say,
+/// show no switch and keep nothing.
 @MainActor
 final class AtticScrollEdgeLab: ObservableObject {
     static let shared = AtticScrollEdgeLab(defaults: .standard,
                                            environment: ProcessInfo.processInfo.environment,
-                                           isPreview: AtticMotionLab.isAvailable)
+                                           isPreview: isPreviewIdentity(Bundle.main.bundleIdentifier))
+
+    /// `com.taha.Attic.preview.` plus a non-empty name: the only identities
+    /// that may leave the system soft edge.
+    nonisolated static func isPreviewIdentity(_ bundleIdentifier: String?) -> Bool {
+        guard let bundleIdentifier else { return false }
+        let prefix = AtticMotionLab.previewPrefix
+        return bundleIdentifier.hasPrefix(prefix) && bundleIdentifier.count > prefix.count
+    }
 
     @Published var style: AtticScrollEdgeStyle {
         didSet { defaults?.set(style.rawValue, forKey: Self.styleKey) }
     }
 
+    /// Whether the developer panel offers the choice (a strict preview).
+    let offersChoice: Bool
     /// The preview's own defaults; nil outside a preview, where nothing is kept.
     private let defaults: UserDefaults?
     static let styleKey = "AtticScrollEdgeStyle"
 
     init(defaults: UserDefaults, environment: [String: String] = [:], isPreview: Bool) {
+        offersChoice = isPreview
         self.defaults = isPreview ? defaults : nil
         var style = AtticScrollEdgeStyle.systemSoft
         if isPreview {
@@ -84,15 +96,23 @@ final class AtticScrollEdgeLab: ObservableObject {
 /// effect there, and the controls themselves float over the list in the
 /// page's own layer.
 ///
-/// Why not the controls themselves as the bar: SwiftUI hosts a bar's
-/// content in a separate AppKit container, and there XCUITest's
-/// accessibility hit test found no hit point on the add bar's text view
-/// (CI, 2026-10-01); typing in a bar also cost about 1.5 ms more per
-/// keystroke. Why a
-/// faint fill: SwiftUI makes a bar's pocket only for a bar that draws
+/// Where the bars go, and what did not work (CI, 2026-10-01). Making the
+/// controls themselves the bar did not work: SwiftUI hosts a bar's content in
+/// a separate AppKit container, XCUITest found no hit point on the add bar's
+/// text view, and typing cost about 1.5 ms more per keystroke. Marker bars on
+/// the pager, with the controls floating over it, did not work either: the
+/// same hit point was still missing. What works is a marker bar on each list
+/// (`tasksListEdges`), the controls floating over the pager as before; the
+/// add bar has a hit point and every UI test passes (CI run 36910820304). The
+/// exact obstruction at the pager's level is an inference, not established.
+///
+/// Why a faint fill: SwiftUI makes a bar's pocket only for a bar that draws
 /// something (measured: a clear, hidden or zero-opacity bar gets none), so
-/// the bar draws an imperceptible one. `ScrollEdgeTests` checks the pockets
-/// exist, so an SDK that stops making them fails a test, not silently.
+/// the bar draws an imperceptible one, opacity 0.001. That rests on
+/// undocumented SwiftUI behaviour, a compatibility risk: `ScrollEdgeTests`
+/// checks that the pockets exist (their structure), not how they look, so an
+/// SDK that stops treating the fill as content fails that test only if the
+/// pockets vanish, and a change in appearance needs the on-screen captures.
 struct AtticScrollEdgeBar: View {
     let height: CGFloat
 

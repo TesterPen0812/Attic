@@ -52,37 +52,46 @@ final class ScrollEdgeTests: XCTestCase {
     }
 
     /// The official identity and every other non-preview one: the system
-    /// soft edge, whatever the environment or the stored choice says, and
-    /// nothing is kept. `isPreview` is what `AtticMotionLab` decides for an
-    /// identity, so each identity goes through that check here.
+    /// soft edge, whatever the environment or the stored choice says, no
+    /// switch, and nothing is kept. The strict predicate ignores the launch
+    /// arguments (`--attic-motion-lab` widens the Motion Lab, not this), so
+    /// each identity is paired with and without it.
     func testNoNonPreviewIdentityLeavesTheSystemSoftEdge() throws {
-        let identities: [(String?, [String])] = [
-            ("com.taha.Attic", []),
-            ("com.taha.Attic", [AtticMotionLab.argument]),
-            ("com.taha.Attic.UnitTestHost", []),
-            ("com.taha.Attic.perf.ui", []),
-            ("com.taha.Attic.preview.", []),
-            (nil, [AtticMotionLab.argument]),
+        let identities: [String?] = [
+            "com.taha.Attic", "com.taha.Attic.UnitTestHost", "com.taha.Attic.perf.ui",
+            "com.taha.Attic.previewish", "com.taha.Attic.preview.", "com.taha.AtticUITests", "", nil,
         ]
-        for (identity, arguments) in identities {
-            let isPreview = AtticMotionLab.isAvailable(bundleIdentifier: identity, arguments: arguments)
-            XCTAssertFalse(isPreview, "\(identity ?? "nil") \(arguments) is not a preview")
-            let (defaults, cleanup) = try scratchDefaults()
-            defer { cleanup() }
-            // The environment says clean.
-            let forced = AtticScrollEdgeLab(defaults: defaults, environment: ["ATTIC_UI_TEST_SCROLL_EDGES": "clean"], isPreview: isPreview)
-            XCTAssertEqual(forced.style, .systemSoft, "\(identity ?? "nil"): the environment cannot choose Clean cut")
-            // The defaults say clean.
-            defaults.set(AtticScrollEdgeStyle.cleanCut.rawValue, forKey: AtticScrollEdgeLab.styleKey)
-            XCTAssertEqual(AtticScrollEdgeLab(defaults: defaults, isPreview: isPreview).style, .systemSoft,
-                           "\(identity ?? "nil"): a stored Clean cut is ignored")
-            // A choice made in code is not kept.
-            defaults.removeObject(forKey: AtticScrollEdgeLab.styleKey)
-            AtticScrollEdgeLab(defaults: defaults, isPreview: isPreview).style = .cleanCut
-            XCTAssertNil(defaults.string(forKey: AtticScrollEdgeLab.styleKey), "\(identity ?? "nil"): nothing is kept")
+        for identity in identities {
+            for arguments in [[String](), [AtticMotionLab.argument]] {
+                let name = "\(identity ?? "nil") \(arguments)"
+                let isPreview = AtticScrollEdgeLab.isPreviewIdentity(identity)
+                XCTAssertFalse(isPreview, "\(name) is not a preview")
+                let (defaults, cleanup) = try scratchDefaults()
+                defer { cleanup() }
+                // The environment says clean.
+                let forced = AtticScrollEdgeLab(defaults: defaults, environment: ["ATTIC_UI_TEST_SCROLL_EDGES": "clean"], isPreview: isPreview)
+                XCTAssertEqual(forced.style, .systemSoft, "\(name): the environment cannot choose Clean cut")
+                XCTAssertFalse(forced.offersChoice, "\(name): no switch")
+                // The defaults say clean.
+                defaults.set(AtticScrollEdgeStyle.cleanCut.rawValue, forKey: AtticScrollEdgeLab.styleKey)
+                XCTAssertEqual(AtticScrollEdgeLab(defaults: defaults, isPreview: isPreview).style, .systemSoft,
+                               "\(name): a stored Clean cut is ignored")
+                // A choice made in code is not kept.
+                defaults.removeObject(forKey: AtticScrollEdgeLab.styleKey)
+                AtticScrollEdgeLab(defaults: defaults, isPreview: isPreview).style = .cleanCut
+                XCTAssertNil(defaults.string(forKey: AtticScrollEdgeLab.styleKey), "\(name): nothing is kept")
+            }
         }
+        // The Motion Lab's own policy is wider, and is left as it is: this is
+        // the gap the strict predicate closes.
+        XCTAssertTrue(AtticMotionLab.isAvailable(bundleIdentifier: "com.taha.Attic.perf.ui", arguments: [AtticMotionLab.argument]))
+        XCTAssertTrue(AtticMotionLab.isAvailable(bundleIdentifier: "com.taha.Attic.preview.", arguments: [AtticMotionLab.argument]))
         // A preview identity is the one that may.
-        XCTAssertTrue(AtticMotionLab.isAvailable(bundleIdentifier: "com.taha.Attic.preview.main", arguments: []))
+        XCTAssertTrue(AtticScrollEdgeLab.isPreviewIdentity("com.taha.Attic.preview.main"))
+        let (defaults, cleanup) = try scratchDefaults()
+        defer { cleanup() }
+        let preview = AtticScrollEdgeLab(defaults: defaults, isPreview: true)
+        XCTAssertTrue(preview.offersChoice)
     }
 
     // MARK: - The system soft edge on the Tasks lists

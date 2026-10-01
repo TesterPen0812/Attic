@@ -48,13 +48,17 @@ struct MotionLabSettingsGroup: View {
                 identifier: "setting-motion-leave"
             )
             AtticGroupDivider()
-            AtticSegmentedRow(
-                title: "Scroll edges",
-                choices: AtticScrollEdgeStyle.allCases.map { ($0, $0.title) },
-                selection: $scrollEdges.style,
-                identifier: "setting-scroll-edges"
-            )
-            AtticGroupDivider()
+            // A strict preview only: the Motion Lab's broader policy (a
+            // launch argument) does not show it.
+            if scrollEdges.offersChoice {
+                AtticSegmentedRow(
+                    title: "Scroll edges",
+                    choices: AtticScrollEdgeStyle.allCases.map { ($0, $0.title) },
+                    selection: $scrollEdges.style,
+                    identifier: "setting-scroll-edges"
+                )
+                AtticGroupDivider()
+            }
             AtticSwitchRow(
                 title: "Native pop-overs spring in (experimental)",
                 isOn: $settings.motionTuning.popsNativePopovers,
