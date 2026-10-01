@@ -60,7 +60,8 @@ jobs:
             -parallel-testing-enabled NO -test-timeouts-enabled YES \
             -default-test-execution-time-allowance 120 -maximum-test-execution-time-allowance 360 \
             "${F[@]}" -only-testing:AtticTests/OperationCrashHarnessTests \
-            -only-testing:AtticTests/WorkspaceCommitTests -only-testing:AtticTests/NoteFormatTests test-without-building
+            -only-testing:AtticTests/WorkspaceCommitTests -only-testing:AtticTests/NoteFormatTests \
+            -only-testing:AtticTests/WorkspaceHistoryTests -only-testing:AtticTests/WorkspaceTextReplayTests test-without-building
       - name: Run the full hosted unit suite alone
         if: ${{ !cancelled() && !inputs.harness_only }}
         env:
