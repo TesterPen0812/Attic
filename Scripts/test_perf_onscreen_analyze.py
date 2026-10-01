@@ -160,6 +160,27 @@ class AnalyzerTests(unittest.TestCase):
         self.assertEqual(dict(analyzer.metrics(none))["app CPU %"], None)
         self.assertTrue(none["valid"], none["problems"])
 
+    def test_an_earlier_invocations_files_cannot_complete_an_aborted_one(self):
+        # The gate gives each invocation its own new directory under --out
+        # (<out>/<time>-<pid>) and the analyzer reads only the one it is given.
+        # An earlier, successful three-round comparison sits in the parent;
+        # this invocation (two rounds requested) aborted at candidate-1.
+        self.write_pairs(rounds=3)
+        child = self.dir / "20261002-101500-4242"
+        child.mkdir()
+        write_run(child, "baseline-1")
+        write_run(child, "candidate-1", drive_exit=4, abort="ABORT: another window covers the panel",
+                  marks=("scroll_start",))
+        code, text = report(child, rounds=2)
+        self.assertEqual(code, 1, text)
+        self.assertIn("INCOMPLETE", text)
+        self.assertNotIn("candidate-2", text)
+        self.assertNotIn("baseline-3", text)
+        # Reading the parent as one directory would have said COMPLETE from
+        # the old rounds: the reason the gate never does.
+        code, _ = report(self.dir, rounds=2)
+        self.assertEqual(code, 0)
+
     def test_the_command_exits_nonzero_for_an_incomplete_comparison(self):
         self.write_pairs(candidate_overrides={1: dict(drive_exit=4)})
         done = subprocess.run([sys.executable, str(SCRIPT), str(self.dir), "baseline", "candidate", "--rounds", "2"],

@@ -9,13 +9,24 @@
 #   --baseline <app>     the last accepted build (an optimized preview .app)
 #   --candidate <app>    the build under test
 #   --rounds <n>         interleaved rounds, baseline then candidate (2: A B A B)
-#   --out <dir>          where the runs and the table go (default .build/perf-onscreen/<time>)
+#   --out <dir>          the parent of the runs (default .build/perf-onscreen). Each
+#                        invocation makes its own new child, <out>/<time>-<pid>,
+#                        and the table reads only that: files of an earlier
+#                        invocation can never count for this one, and none is
+#                        ever deleted
+#   --baseline-env KEY=VALUE, --candidate-env KEY=VALUE
+#                        an extra environment variable for that side's app, so
+#                        one build can be A/B-ed against itself (for instance
+#                        --candidate-env ATTIC_UI_TEST_SCROLL_EDGES=clean).
+#                        Repeatable. Only ATTIC_UI_TEST_* keys, and not the
+#                        ones the gate sets itself (_SEED, _META, _META_CLOSE)
 #   --swipe-sign <1|-1>  which horizontal sign is "next page" (1 by default)
 #   --post <hid|pid>     events through the HID tap (as a trackpad, default) or
 #                        to the app's process only
 #   --max-seconds <n>    hard deadline for the whole gate, setup and the
 #                        driver's compilation included (default 170): a
-#                        watchdog stops everything and quits the preview
+#                        watchdog started first stops everything, and the preview
+#                        is quit within a bounded 8 s
 #   --quit-running       quit an instance of a build that is already running
 #                        (otherwise the gate stops and touches nothing)
 #   --dry-run            resolve the two bundle identifiers and print the run
@@ -43,67 +54,70 @@
 # any other run is shown as a diagnostic and kept out of the means and deltas.
 # No Instruments template is used.
 set -u
-setopt pipefail
+setopt pipefail extendedglob
 
 readonly root=${0:A:h:h}
-baseline="" candidate="" rounds=2 out="" sign=1 post=hid max_seconds=170 quit_running=0 dry_run=0
 readonly started=$SECONDS
+baseline="" candidate="" rounds=2 out="" sign=1 post=hid max_seconds=170 quit_running=0 dry_run=0
+baseline_env=() candidate_env=()   # "--env" "KEY=VALUE" pairs, ready for `open`
+gate_keys=(ATTIC_UI_TEST_SEED ATTIC_UI_TEST_META ATTIC_UI_TEST_META_CLOSE)
+
+# An extra environment variable for one side: ATTIC_UI_TEST_* only, none of
+# the gate's own, a single line.
+extra_env() { # extra_env <baseline|candidate> <KEY=VALUE>
+    local pair=$2 key=${2%%=*}
+    [[ $pair == *=* && $key == ATTIC_UI_TEST_[A-Z0-9_]## && $pair != *$'\n'* ]] \
+        || { print -u2 -- "--$1-env takes KEY=VALUE with an ATTIC_UI_TEST_* key, not '$pair'"; exit 2 }
+    (( ${gate_keys[(Ie)$key]} )) && { print -u2 -- "--$1-env: $key is set by the gate itself"; exit 2 }
+    if [[ $1 == baseline ]]; then baseline_env+=(--env "$pair"); else candidate_env+=(--env "$pair"); fi
+}
+
 while (( $# > 0 )); do
     case $1 in
-        --baseline) baseline=${2:A}; shift 2 ;;
-        --candidate) candidate=${2:A}; shift 2 ;;
-        --rounds) rounds=$2; shift 2 ;;
-        --out) out=${2:A}; shift 2 ;;
-        --swipe-sign) sign=$2; shift 2 ;;
-        --post) post=$2; shift 2 ;;
-        --max-seconds) max_seconds=$2; shift 2 ;;
-        --quit-running) quit_running=1; shift ;;
-        --dry-run) dry_run=1; shift ;;
-        -h|--help) sed -n '2,44p' $0; exit 0 ;;
+        -h|--help) sed -n '2,55p' $0; exit 0 ;;
+        --quit-running) quit_running=1; shift; continue ;;
+        --dry-run) dry_run=1; shift; continue ;;
+        --baseline|--candidate|--rounds|--out|--swipe-sign|--post|--max-seconds|--baseline-env|--candidate-env)
+            (( $# >= 2 )) || { print -u2 -- "$1 needs a value"; exit 2 } ;;
         *) print -u2 "unknown option $1"; exit 2 ;;
     esac
+    case $1 in
+        --baseline) baseline=${2:A} ;;
+        --candidate) candidate=${2:A} ;;
+        --rounds) rounds=$2 ;;
+        --out) out=${2:A} ;;
+        --swipe-sign) sign=$2 ;;
+        --post) post=$2 ;;
+        --max-seconds) max_seconds=$2 ;;
+        --baseline-env) extra_env baseline "$2" ;;
+        --candidate-env) extra_env candidate "$2" ;;
+    esac
+    shift 2
 done
-[[ -d $baseline && -d $candidate ]] || { print -u2 "usage: $0 --baseline <app> --candidate <app> [--rounds n]"; exit 2 }
-[[ $post == hid || $post == pid ]] || { print -u2 "--post is hid or pid"; exit 2 }
-[[ $rounds == <1-> && $max_seconds == <1-> ]] || { print -u2 "--rounds and --max-seconds are positive integers"; exit 2 }
-[[ -n $out ]] || out=$root/.build/perf-onscreen/$(date +%Y%m%d-%H%M%S)
 
-bundle_id() { /usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$1/Contents/Info.plist" }
-readonly base_id=$(bundle_id $baseline) cand_id=$(bundle_id $candidate)
-for id in $base_id $cand_id; do
-    [[ $id == com.taha.Attic.preview.?* ]] || { print -u2 "only preview identities (com.taha.Attic.preview.*), not '$id'"; exit 2 }
-done
-
-# The two builds by name, so a path or an identifier is never split on
-# whitespace: every use below quotes its element.
-typeset -A app_of=(baseline "$baseline" candidate "$candidate")
-typeset -A id_of=(baseline "$base_id" candidate "$cand_id")
-
-if (( dry_run )); then
-    print "Baseline:  $baseline ($base_id)\nCandidate: $candidate ($cand_id)\nOut:       $out\nPlan (label, app, bundle identifier; tab-separated):"
-    for (( n = 1; n <= rounds; n++ )); do
-        for who in baseline candidate; do
-            print -r -- "$who-$n"$'\t'"${app_of[$who]}"$'\t'"${id_of[$who]}"
-        done
-    done
-    exit 0
-fi
-mkdir -p $out
-
-readonly drive=$out/perf_onscreen_drive
-driver_pid="" watchdog_pid="" current_id=""
+readonly drive_name=perf_onscreen_drive
+drive="" driver_pid="" watchdog_pid="" current_id=""
 samplers=() children=()
 
 # Everything the gate started, stopped in this order: the driver first (no
 # synthetic input outlives the gate), then the samplers and any other child,
-# then the preview, quit by its bundle identifier. Runs on every exit.
+# then the preview, quit by its bundle identifier within a bounded 8 s (what
+# is started here inherits the ignored signals, so it is stopped with KILL).
+# Runs on every exit.
 cleanup() {
     trap '' INT TERM USR1
     [[ -n $driver_pid ]] && kill $driver_pid 2>/dev/null
     (( ${#samplers} )) && kill $samplers 2>/dev/null
     (( ${#children} )) && kill $children 2>/dev/null
     [[ -n $watchdog_pid ]] && kill $watchdog_pid 2>/dev/null
-    [[ -n $current_id && -x $drive ]] && $drive quit $current_id >/dev/null 2>&1
+    if [[ -n $current_id && -x $drive ]]; then
+        $drive quit $current_id >/dev/null 2>&1 &
+        local quitter=$!
+        ( sleep 8; kill -KILL $quitter 2>/dev/null ) >/dev/null 2>&1 &
+        local timer=$!
+        wait $quitter 2>/dev/null
+        kill -KILL $timer 2>/dev/null
+    fi
     return 0
 }
 trap cleanup EXIT
@@ -111,8 +125,8 @@ trap 'exit 130' INT
 trap 'exit 143' TERM
 trap 'print -u2 "hard deadline ($max_seconds s) reached: stopped, the preview quit"; exit 124' USR1
 
-# The hard deadline covers everything from the start of the gate, the
-# driver's compilation included, and does not wait for a foreground command.
+# The hard deadline, started before any slow step: it covers everything from
+# the start of the gate, the driver's compilation included.
 (
     trap - EXIT INT TERM USR1
     while (( SECONDS < started + max_seconds )); do sleep 1; done
@@ -120,8 +134,9 @@ trap 'print -u2 "hard deadline ($max_seconds s) reached: stopped, the preview qu
 ) &
 watchdog_pid=$!
 
-# zsh runs a trap only when a foreground command ends: run what can take
-# time in the background and wait for it, so a signal is handled at once.
+# zsh runs a trap only when a foreground command ends, so no step that can
+# block runs in the foreground: each is a tracked child the gate waits for, and
+# a signal (the deadline's included) is handled at once and cancels it.
 wait_for() {
     "$@" &
     local child=$!
@@ -132,38 +147,89 @@ wait_for() {
     return $status_of_child
 }
 nap() { wait_for sleep $1 }
+# capture <variable> <command...>: the command's output, from a tracked child.
+capture() {
+    local variable=$1 file=$(mktemp "${TMPDIR:-/tmp}/perf_onscreen.XXXXXX"); shift
+    wait_for "$@" > $file 2>/dev/null
+    local status_of_command=$?
+    typeset -g $variable="$(<$file)"
+    rm -f $file
+    return $status_of_command
+}
+
+[[ -d $baseline && -d $candidate ]] || { print -u2 "usage: $0 --baseline <app> --candidate <app> [--rounds n]"; exit 2 }
+[[ $post == hid || $post == pid ]] || { print -u2 "--post is hid or pid"; exit 2 }
+[[ $rounds == <1-> && $max_seconds == <1-> ]] || { print -u2 "--rounds and --max-seconds are positive integers"; exit 2 }
+[[ -n $out ]] || out=$root/.build/perf-onscreen
+
+bundle_id() { /usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$1/Contents/Info.plist" }
+capture base_id bundle_id $baseline
+capture cand_id bundle_id $candidate
+for id in $base_id $cand_id; do
+    [[ $id == com.taha.Attic.preview.?* ]] || { print -u2 "only preview identities (com.taha.Attic.preview.*), not '$id'"; exit 2 }
+done
+
+# The two builds by name, so a path or an identifier is never split on
+# whitespace: every use below quotes its element.
+typeset -A app_of=(baseline "$baseline" candidate "$candidate")
+typeset -A id_of=(baseline "$base_id" candidate "$cand_id")
+# This invocation's own, new directory: nothing of an earlier invocation is
+# ever read by it, and nothing is ever deleted.
+readonly run_dir=$out/$(date +%Y%m%d-%H%M%S)-$$
+
+if (( dry_run )); then
+    print "Baseline:  $baseline ($base_id)\nCandidate: $candidate ($cand_id)\nRuns in:   $run_dir\nPlan (label, app, bundle identifier, extra environment; tab-separated):"
+    for (( n = 1; n <= rounds; n++ )); do
+        for who in baseline candidate; do
+            env_name=${who}_env
+            extra=("${(@P)env_name}")
+            print -r -- "$who-$n"$'\t'"${app_of[$who]}"$'\t'"${id_of[$who]}"$'\t'"${(j: :)${(@)extra:#--env}}"
+        done
+    done
+    exit 0
+fi
+mkdir -p $out && mkdir $run_dir || { print -u2 "could not make a new run directory $run_dir"; exit 2 }
+readonly drive=$run_dir/$drive_name
 
 # The driver, built for this run.
 wait_for swiftc -O -o $drive $root/Scripts/perf_onscreen_drive.swift || { print -u2 "could not build the driver"; exit 2 }
 
 for id in $base_id $cand_id; do
-    if $drive pid $id >/dev/null 2>&1; then
-        if (( quit_running )); then $drive quit $id >/dev/null
+    if wait_for $drive pid $id >/dev/null 2>&1; then
+        if (( quit_running )); then wait_for $drive quit $id >/dev/null
         else print -u2 "$id is running: quit it first (or pass --quit-running)"; exit 2; fi
     fi
 done
 
 # A locked screen takes no synthetic input and idles the GPU: the table would
 # be empty but look like a pass.
-screen_locked() { ioreg -n Root -d1 -a 2>/dev/null | grep -A1 CGSSessionScreenIsLocked | grep -q '<true/>' }
+screen_locked() {
+    local info
+    capture info ioreg -n Root -d1 -a
+    [[ $info == *CGSSessionScreenIsLocked'</key>'[[:space:]]#'<true/>'* ]]
+}
 if screen_locked; then print -u2 "the screen is locked: run the gate at an unlocked, idle Mac"; exit 3; fi
 
 # One run: launch, settle, drive, sample, quit. Returns the driver's status
 # (0 only for a complete drive), or 1 when it never got that far.
 run() {
-    local label=$1 app=$2 id=$3
-    local file=$out/$label
+    local label=$1 app=$2 id=$3 who=${1%-*}
+    local file=$run_dir/$label
+    local env_name=${who}_env
+    local -a extra=("${(@P)env_name}")
     current_id=$id
     # The picker opens after the drive (about 18 s after it starts), and
     # closes 1.5 s later.
-    open -n --env ATTIC_UI_TESTING=1 --env ATTIC_UI_TEST_SEED=long --env ATTIC_FRAME_MONITOR=1 \
-        --env ATTIC_UI_TEST_META=date@27 --env ATTIC_UI_TEST_META_CLOSE=1.5 \
+    wait_for open -n --env ATTIC_UI_TESTING=1 --env ATTIC_UI_TEST_SEED=long --env ATTIC_FRAME_MONITOR=1 \
+        --env ATTIC_UI_TEST_META=date@27 --env ATTIC_UI_TEST_META_CLOSE=1.5 "${extra[@]}" \
         --stdout $file.frames --stderr /dev/null "$app"
     local pid=""
-    for _ in {1..40}; do pid=$($drive pid $id 2>/dev/null) && break; nap 0.25; done
+    for _ in {1..40}; do capture pid $drive pid $id && break; nap 0.25; done
     [[ -n $pid && $pid != NONE ]] || { print "$label: did not launch"; return 1 }
     nap 4
-    local ws=$(pgrep -x WindowServer | head -1)
+    local ws
+    capture ws pgrep -x WindowServer
+    ws=${ws%%$'\n'*}
     [[ -n $ws ]] || { print "$label: no WindowServer process"; return 1 }
     # Both processes in one top (it takes -pid twice): a process that is
     # not in a sample is a missing value for the analyzer, never a zero.
@@ -189,9 +255,11 @@ run() {
     kill $top_job $gpu_job 2>/dev/null; wait $top_job $gpu_job 2>/dev/null
     samplers=()
     print "ws=$ws app=$pid drive_exit=$drive_status" >> $file.drive
-    $drive quit $id >/dev/null
+    wait_for $drive quit $id >/dev/null
     current_id=""
-    print "$label: $(grep -E '^(DONE|ABORT|NO_)' $file.drive | head -1) (drive exit $drive_status)"
+    local outcome
+    capture outcome grep -E '^(DONE|ABORT|NO_)' $file.drive
+    print "$label: ${outcome%%$'\n'*} (drive exit $drive_status)"
     nap 1
     return $drive_status
 }
@@ -206,6 +274,8 @@ for (( n = 1; n <= rounds; n++ )); do
     done
 done
 
-print "\nBaseline:  $baseline ($base_id)\nCandidate: $candidate ($cand_id)\nRuns:      $out ($(( SECONDS - started )) s)"
-python3 $root/Scripts/perf_onscreen_analyze.py $out baseline candidate --rounds $rounds | tee $out/table.md
-exit ${pipestatus[1]}
+print "\nBaseline:  $baseline ($base_id)${baseline_env:+ with ${(j: :)${(@)baseline_env:#--env}}}\nCandidate: $candidate ($cand_id)${candidate_env:+ with ${(j: :)${(@)candidate_env:#--env}}}\nRuns:      $run_dir ($(( SECONDS - started )) s)"
+wait_for python3 $root/Scripts/perf_onscreen_analyze.py $run_dir baseline candidate --rounds $rounds > $run_dir/table.md
+analysis=$?
+cat $run_dir/table.md
+exit $analysis

@@ -37,13 +37,25 @@ check "a dry run exits 0" is $? 0
 rows=("${(@f)$(print -r -- $plan | grep -E '^(baseline|candidate)-')}")
 check "four runs are planned, A B A B" is "${#rows}" 4
 want=(
-    "baseline-1"$'\t'"$dir/Attic Base A.app"$'\t'"com.taha.Attic.preview.base"
-    "candidate-1"$'\t'"$dir/Attic Cand B.app"$'\t'"com.taha.Attic.preview.cand"
-    "baseline-2"$'\t'"$dir/Attic Base A.app"$'\t'"com.taha.Attic.preview.base"
-    "candidate-2"$'\t'"$dir/Attic Cand B.app"$'\t'"com.taha.Attic.preview.cand"
+    "baseline-1"$'\t'"$dir/Attic Base A.app"$'\t'"com.taha.Attic.preview.base"$'\t'
+    "candidate-1"$'\t'"$dir/Attic Cand B.app"$'\t'"com.taha.Attic.preview.cand"$'\t'
+    "baseline-2"$'\t'"$dir/Attic Base A.app"$'\t'"com.taha.Attic.preview.base"$'\t'
+    "candidate-2"$'\t'"$dir/Attic Cand B.app"$'\t'"com.taha.Attic.preview.cand"$'\t'
 )
 for i in 1 2 3 4; do check "plan row $i is not split on spaces" is "${rows[$i]}" "${want[$i]}"; done
 check "a dry run creates and compiles nothing" test ! -e "$tmp/out"
+check "the plan names a new run directory under --out" test -n "$(print -r -- $plan | grep -E "^Runs in:   $tmp/out/[0-9]{8}-[0-9]{6}-[0-9]+\$")"
+
+# 1b. Extra environment for one side: quoted whole, ATTIC_UI_TEST_* only.
+plan=$("$gate" --baseline "$dir/Attic Base A.app" --candidate "$dir/Attic Cand B.app" --rounds 1 --out "$tmp/out" --dry-run \
+    --candidate-env "ATTIC_UI_TEST_SCROLL_EDGES=clean" --candidate-env "ATTIC_UI_TEST_NOTE=two words; \$HOME" --baseline-env ATTIC_UI_TEST_X=1 2>&1)
+check "extra environment is accepted" is $? 0
+check "the candidate row carries its variables, whole" test -n "$(print -r -- $plan | grep -F $'candidate-1\t'"$dir/Attic Cand B.app"$'\tcom.taha.Attic.preview.cand\tATTIC_UI_TEST_SCROLL_EDGES=clean ATTIC_UI_TEST_NOTE=two words; $HOME')"
+check "the baseline row carries only its own" test -n "$(print -r -- $plan | grep -F $'baseline-1\t'"$dir/Attic Base A.app"$'\tcom.taha.Attic.preview.base\tATTIC_UI_TEST_X=1')"
+for bad in "ATTIC_FRAME_MONITOR=1" "HOME=/tmp" "ATTIC_UI_TESTING=1" "ATTIC_UI_TEST_SEED=short" "ATTIC_UI_TEST_META=tags" "ATTIC_UI_TEST_META_CLOSE=2" "ATTIC_UI_TEST_x=1" "ATTIC_UI_TEST_=1" "ATTIC_UI_TEST_A" "ATTIC_UI_TEST_A=1"$'\n'"B=2"; do
+    "$gate" --baseline "$dir/Attic Base A.app" --candidate "$dir/Attic Cand B.app" --dry-run --candidate-env "$bad" >/dev/null 2>&1
+    check "environment '${bad//$'\n'/\\n}' is refused (exit 2)" is $? 2
+done
 
 # 2. Only preview identities.
 fake_app "$dir/Official.app" com.taha.Attic
@@ -98,6 +110,25 @@ gate_run --max-seconds 2 >/dev/null 2>&1; code=$?
 check "the hard deadline stops the gate with 124 (it covers the compilation)" is $code 124
 check "the deadline stops it at once, not after the compiler" test $(( SECONDS - start )) -lt 12
 check "the deadline leaves no compiler behind" test -z "$(pgrep -f 'sleep 31.7')"
+
+# 5. The deadline also stops a step that blocks in what used to be the
+# foreground: here the driver's `pid` query (the stand-in driver sleeps).
+printf '#!/bin/sh\nout=\nwhile [ $# -gt 0 ]; do [ "$1" = -o ] && out=$2; shift; done\nprintf "#!/bin/sh\\nexec sleep 31.9\\n" > "$out"; chmod +x "$out"\n' > "$tmp/bin/swiftc"
+pkill -f "sleep 31.9" 2>/dev/null
+start=$SECONDS
+gate_run --max-seconds 2 >/dev/null 2>&1; code=$?
+check "a blocked driver query is cut by the deadline (124)" is $code 124
+check "within seconds, not the query's 32" test $(( SECONDS - start )) -lt 8
+check "and leaves no query behind" test -z "$(pgrep -f 'sleep 31.9')"
+
+# 6. Each invocation has its own new directory; nothing existing is touched.
+mkdir -p "$tmp/sig/20200101-000000-1"; print old > "$tmp/sig/20200101-000000-1/baseline-1.drive"
+before=$(ls "$tmp/sig" | wc -l)
+gate_run --max-seconds 2 >/dev/null 2>&1
+gate_run --max-seconds 2 >/dev/null 2>&1
+check "two invocations made two new directories" is $(( $(ls "$tmp/sig" | wc -l) - before )) 2
+check "an existing run directory is left as it was" is "$(cat "$tmp/sig/20200101-000000-1/baseline-1.drive")" old
+check "and nothing of this invocation lands in --out itself" test -z "$(ls "$tmp/sig" | grep -v -E '^[0-9]{8}-[0-9]{6}-[0-9]+$')"
 
 print
 if (( failures )); then print "$failures check(s) failed"; exit 1; fi
