@@ -2350,6 +2350,20 @@ final class TaskStore: ObservableObject {
             .sorted { ($0.completedAt ?? $0.createdAt) < ($1.completedAt ?? $1.createdAt) }
     }
 
+    /// A listed task's subtasks: a shown family's from the lists, a
+    /// Done-log family's from the log. A Done-log family that cannot be
+    /// read is reported and throws, so an export never goes out without
+    /// its subtasks.
+    func readListedSubtasks(of parentID: UUID) throws -> [TaskItem] {
+        if task(withID: parentID) != nil { return subtasks(of: parentID) }
+        do {
+            return try readDoneLogSubtasks(of: parentID)
+        } catch {
+            report(error.localizedDescription, owner: nil)
+            throw error
+        }
+    }
+
     /// Both reads of a Done-log family go through here, so tests can make
     /// either fail (`doneFamilyReadsToSkipBeforeFailing`).
     private func readDoneFamily(_ descriptor: FetchDescriptor<TaskItem>) throws -> [TaskItem] {

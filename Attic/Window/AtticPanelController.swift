@@ -154,6 +154,8 @@ enum PanelHideRequestResult: Equatable {
 final class AtticPanelController: NSObject, NSWindowDelegate {
     private let panel: AtticPanel
     var isVisibleForPerformanceProbe: Bool { panel.isVisible }
+    /// Tests: the panel's window, to send it a swipe as the system does.
+    var panelForTesting: AtticPanel { panel }
     private(set) var performanceVisibilityChanges = 0
     private let hostingView: AtticPanelHostingView
     private let store: TaskStore

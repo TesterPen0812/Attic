@@ -27,6 +27,7 @@ enum TasksDragOut {
         Source.current = source
         let session = view.beginDraggingSession(with: [item], event: event, source: source)
         session.animatesToStartingPositionsOnCancelOrFail = true
+        source.session = session
     }
 
     /// A quiet label of what is being dragged.
@@ -47,10 +48,14 @@ enum TasksDragOut {
         }
     }
 
-    private final class Source: NSObject, NSDraggingSource {
+    /// The session's source (internal for the integration tests, which
+    /// end a real session as Esc does).
+    final class Source: NSObject, NSDraggingSource {
         /// Held for the session's life.
         static var current: Source?
         let ended: () -> Void
+        /// The live session.
+        weak var session: NSDraggingSession?
 
         init(ended: @escaping () -> Void) {
             self.ended = ended
@@ -62,8 +67,11 @@ enum TasksDragOut {
         }
 
         func draggingSession(_ session: NSDraggingSession, endedAt screenPoint: NSPoint, operation: NSDragOperation) {
-            ended()
+            // Once: a cancelled session (Esc, or no destination) ends here
+            // too, with no operation; nothing in Attic changes either way.
+            guard Source.current === self else { return }
             Source.current = nil
+            ended()
         }
     }
 }

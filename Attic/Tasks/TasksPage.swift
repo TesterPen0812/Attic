@@ -487,6 +487,16 @@ struct TasksPage: View {
     /// after it; while searching, the search field takes the line.
     private var tabs: some View {
         ZStack(alignment: .topLeading) {
+            // ⌥⌘V's anchor where View Options sits, mounted whatever the
+            // line shows: Find takes the line, and the button and its own
+            // anchor with it (GPT-6.1's review: the key did nothing then).
+            AtticMenuAnchor(holder: viewOptionsAnchor)
+                .frame(width: AtticControlSize.smallMinWidth, height: AtticControlSize.smallHeight)
+                .padding(.trailing, lineEndInset)
+                .frame(maxWidth: .infinity, alignment: .trailing)
+                .padding(.top, tabsTop + (AtticLayout.pageTabsHeight - AtticControlSize.smallHeight) / 2)
+                .allowsHitTesting(false)
+                .accessibilityHidden(true)
             if searchShown {
                 AtticTabsSearchField(placeholder: model.searchPlaceholder(for: model.tab),
                                      text: Binding(get: { model.searchQuery(for: model.tab) },
@@ -521,7 +531,7 @@ struct TasksPage: View {
                         // while a filter hides tasks.
                         let view = model.viewOptions(for: model.tab)
                         AtticMenuButton(systemName: "line.3.horizontal.decrease", label: "View Options (⌥⌘V)",
-                                        commands: { viewCommands(for: model.tab) }, holder: viewOptionsAnchor,
+                                        commands: { viewCommands(for: model.tab) },
                                         showsDot: view.filters, value: view.spokenValue)
                             .accessibilityIdentifier("tasks-view-options")
                             .padding(.trailing, lineEndInset)
@@ -601,6 +611,10 @@ struct TasksPage: View {
     private func openViewOptions() {
         guard model.tab != .done, let anchor = viewOptionsAnchor.view, anchor.window != nil else { return }
         swipe.cancel()
+        if let open = pointer.openViewOptions {
+            open(anchor)
+            return
+        }
         AtticNativeMenu.popUp(viewCommands(for: model.tab), in: anchor)
     }
 
@@ -1096,11 +1110,17 @@ struct TasksPage: View {
         // Read when the cell draws (the closures below run in the cell's
         // own body), never captured when the list built it.
         let expanded = { model.expanded.contains(id) && row.status != .done }
+        // Every row drags, out of the panel as a copy (owner-approved,
+        // 2026-10-01); only Now's and Later's manual order reorders. A
+        // sorted view (item 6) and Done have no place to drag to: there the
+        // row's drag group is the row alone, so nothing moves aside, the
+        // release lands it back and commits nothing, and leaving the panel
+        // hands it off (GPT-6.1's review).
+        let reorders = Self.reorders(tab: tab, manual: model.reorders(on: tab))
         TasksReorderCell(
             model: model, updates: drawn ? model.cellUpdates : TasksCellUpdates.quiet, focus: $focusedRow,
-            id: id, tab: tab, group: group, drag: $drag, metaPopover: $metaPopover, fileDropRow: $fileDropRow,
-            // A sorted view has no place to drag to (item 6).
-            enabled: tab != .done && model.editingTitleID != id && model.reorders(on: tab),
+            id: id, tab: tab, group: reorders ? group : [id], drag: $drag, metaPopover: $metaPopover, fileDropRow: $fileDropRow,
+            enabled: model.editingTitleID != id,
             session: dragSession,
             allowsStart: { [pointer, dragSession] point in
                 // Not the circle column (before the row reports its
@@ -1118,7 +1138,7 @@ struct TasksPage: View {
             },
             onMove: { [pointer] translation in pointer.liftedCard.follow(translation) },
             onEnd: finishDrag,
-            onPushPastGroup: { showBoundaryHint() }
+            onPushPastGroup: { if reorders { showBoundaryHint() } }
         ) { live in
             let isSelected = model.selection.contains(id)
             let run = selectionRun(for: id, in: tab)
@@ -2119,6 +2139,12 @@ struct TasksPage: View {
         drag = next
     }
 
+    /// Whether a row's drag reorders (Now's and Later's manual order) or
+    /// only carries it out of the panel (a sorted view, Done).
+    nonisolated static func reorders(tab: TasksTab, manual: Bool) -> Bool {
+        tab != .done && manual
+    }
+
     /// Whether a window point is outside the panel's visible surface (its
     /// window's frame without the transparent shadow margin).
     static func leavesPanel(_ windowPoint: CGPoint, in window: NSWindow) -> Bool {
@@ -2176,7 +2202,9 @@ struct TasksPage: View {
     /// The lifted card: the row as it is, never interactive.
     @ViewBuilder
     private func liftedCardRow(_ lift: TasksLiftedCard.Lift) -> some View {
-        if let row = model.rows(for: lift.tab).first(where: { $0.id == lift.id }) {
+        // Done's rows are its log's (a drag out of Done lifts one too).
+        let rows = lift.tab == .done ? model.doneDays().flatMap(\.rows) : model.rows(for: lift.tab)
+        if let row = rows.first(where: { $0.id == lift.id }) {
             AtticTaskRow(model: row.model, isSelected: model.selection.contains(lift.id),
                          selectionRun: .single, actions: actions(for: lift.id, in: lift.tab), onToggleExpanded: {})
         }
@@ -3158,6 +3186,8 @@ final class TasksPointer {
     let liftedCard = TasksLiftedCard()
     /// Tests: receives a drag out of the panel instead of AppKit.
     var startDragOut: ((TasksTextExport, CGPoint) -> Void)?
+    /// Tests: receives ⌥⌘V's anchor instead of the native menu.
+    var openViewOptions: ((NSView) -> Void)?
     /// The page's own view: a press is placed in the page from its event.
     weak var view: NSView?
 

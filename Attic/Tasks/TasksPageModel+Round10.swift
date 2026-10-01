@@ -18,16 +18,22 @@ extension TasksPageModel {
     /// The tasks as text for other apps (`TasksTextExport`): ⌘C and a drag
     /// out of the panel share it. Nil when none of them is listed.
     func export(_ ids: [UUID]) -> TasksTextExport? {
-        let items = ids.compactMap { id -> TasksTextExport.Item? in
-            guard let task = store.listedTask(withID: id) else { return nil }
-            return TasksTextExport.Item(
+        var items: [TasksTextExport.Item] = []
+        for id in ids {
+            guard let task = store.listedTask(withID: id) else { continue }
+            // A live family's subtasks, or a Done-log family's (they left
+            // with it); one that cannot be read stops the whole export, so
+            // no copy or drag goes out without its subtasks (GPT-6.1's
+            // review). The store reports the failure.
+            guard let subtasks = try? store.readListedSubtasks(of: id) else { return nil }
+            items.append(TasksTextExport.Item(
                 title: task.title,
                 isDone: task.status == .done,
                 due: task.dueDay.map { dueText($0) },
                 tags: task.tags,
                 priority: task.priority == .none ? nil : TasksTextExport.priorityName(task.priority),
-                subtasks: store.subtasks(of: id).map { .init(title: $0.title, isDone: $0.status == .done) }
-            )
+                subtasks: subtasks.map { .init(title: $0.title, isDone: $0.status == .done) }
+            ))
         }
         return items.isEmpty ? nil : TasksTextExport(items: items)
     }
