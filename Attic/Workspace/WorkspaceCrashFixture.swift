@@ -20,7 +20,7 @@ enum WorkspaceCrashFixture {
     static var original: NoteDocument {
         var doc = NoteDocument(blocks: [.text("Parent"), .text("Make child"),
             .file(attachmentID: fileID, filename: "fixture.txt", contentTypeIdentifier: "public.plain-text", byteCount: Int64(bytes.count))])
-        doc.refreshRequiredCapabilities(); return doc
+        doc.requires.append("taskNote"); doc.refreshRequiredCapabilities(); return doc
     }
     static var candidate: NoteDocument {
         var doc = original; doc.blocks.remove(at: 1); return doc
@@ -35,7 +35,7 @@ enum WorkspaceCrashFixture {
         let note = NoteItem(id: noteID); note.taskID = taskID
         // The imported file is deliberately only in the checkpoint until the
         // conversion save. A pre-save death must never lose its original.
-        let stored = NoteDocument(blocks: [.text("Parent"), .text("Make child")])
+        let stored = try NoteDocument(blocks: [.text("Parent"), .text("Make child")]).taskSnapshot(title: "Parent")
         NoteStore.stageDocumentContent(try PreparedNoteDocument(stored), format: 1, on: [note], timestamp: Date(), revision: 0, revisionID: UUID())
         context.insert(note); try context.save()
         let draft = NoteDraftJournalEntry(noteID: noteID, isPersisted: true, baseRevisionID: note.revisionID,

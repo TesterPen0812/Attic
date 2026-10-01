@@ -6,6 +6,28 @@ import XCTest
 /// `attic.note/1`: stable ids, capability checks, read-only future formats
 /// kept as their original bytes, opaque unknown blocks (requirement 1).
 final class NoteFormatTests: XCTestCase {
+    func testTaskSnapshotAndOrdinaryNormalizationPreserveBodyIDsFilesMarksAndOtherCapabilities() throws {
+        let id = UUID()
+        var body = NoteBlock.text("Rich body")
+        body.id = id
+        body.marks = [.init(.bold, offset: 0, length: 4)]
+        let file = NoteBlock.file(attachmentID: UUID(), filename: "original.txt", contentTypeIdentifier: "public.plain-text", byteCount: 12)
+        var document = NoteDocument(blocks: [.text("Old title"), body, file], requires: ["text", "inline-marks-v1", "file-v1"],
+            extras: ["futureDisplayHint": .string("keep")])
+        let originalBody = document.blocks.dropFirst()
+        document = try document.taskSnapshot(title: "Current task title")
+        XCTAssertTrue(document.requires.contains("taskNote"))
+        XCTAssertEqual(document.title, "Current task title")
+        let ordinary = try document.ordinarySnapshot(title: "Preserved title")
+        XCTAssertFalse(ordinary.requires.contains("taskNote"))
+        XCTAssertEqual(ordinary.requires, ["text", "inline-marks-v1", "file-v1"])
+        XCTAssertEqual(Array(ordinary.blocks.dropFirst()), Array(originalBody))
+        XCTAssertEqual(ordinary.extras, document.extras)
+        XCTAssertEqual(NoteContentCodec.decode(try NoteContentCodec.encode(document)).document, document)
+        var unknown = document; unknown.requires.append("unknown-semantics")
+        XCTAssertThrowsError(try unknown.ordinarySnapshot(title: "Must refuse"))
+        XCTAssertThrowsError(try unknown.taskSnapshot(title: "Must refuse"))
+    }
     private let dateID = UUID()
     private let checklistID = UUID()
     private let imageID = UUID()

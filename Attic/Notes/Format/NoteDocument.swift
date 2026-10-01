@@ -43,7 +43,7 @@ struct NoteDocument: Equatable, Sendable {
     static let currentFormat = 1
     /// What this build can edit. A document requiring anything else opens
     /// read-only.
-    static let editableCapabilities: Set<String> = ["text", "checklist", "image", "date", "structure-v1", "inline-marks-v1", "file-v1"]
+    static let editableCapabilities: Set<String> = ["text", "checklist", "image", "date", "structure-v1", "inline-marks-v1", "file-v1", "taskNote"]
     /// U+FFFC, the character an inline object occupies in a block's text.
     static let objectCharacter: Character = "\u{FFFC}"
     static let objectUnit: unichar = 0xFFFC
@@ -306,5 +306,30 @@ struct NoteDay: Hashable, Comparable, Sendable {
 
     static func < (lhs: NoteDay, rhs: NoteDay) -> Bool {
         (lhs.year, lhs.month, lhs.day) < (rhs.year, rhs.month, rhs.day)
+    }
+}
+
+/// Headless format primitives. They are invoked only by an explicit workspace
+/// operation; finding an old taskID never silently converts a document.
+extension NoteDocument {
+    func taskSnapshot(title: String) throws -> NoteDocument {
+        var candidate = try replacingCompatibilityTitle(title)
+        if !candidate.requires.contains("taskNote") { candidate.requires.append("taskNote") }
+        return candidate
+    }
+    func ordinarySnapshot(title: String) throws -> NoteDocument {
+        var candidate = try replacingCompatibilityTitle(title)
+        candidate.requires.removeAll { $0 == "taskNote" }
+        return candidate
+    }
+    private func replacingCompatibilityTitle(_ title: String) throws -> NoteDocument {
+        guard isWritableByThisBuild, let old = blocks.first, old.kind == .text else {
+            throw NoteDocumentStoreError.readOnly
+        }
+        var candidate = self
+        var head = NoteBlock.text(title)
+        head.id = old.id; head.extras = old.extras
+        candidate.blocks[0] = head
+        return candidate
     }
 }
