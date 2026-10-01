@@ -561,6 +561,9 @@ additive; no token, colour, radius or type style changed.
     line (`atticSoftenedByControls`, `AtticSofteningBand`; up to
     `softeningMaximumBlur` 6 pt × strength, about 5 pt, by depth in the
     line), the scroll edge fade's per-item effect as an equatable modifier.
+    The Tasks page blurs at the tabs' and the add bar's lines, which span
+    most of its width; a row passing between the header's corner buttons
+    stays sharp and is only dimmed behind them.
     AppKit text (the legacy note editor) takes the dim only.
   - **Reduce Transparency** hides the content behind a control completely:
     the real surface is the solid backing.

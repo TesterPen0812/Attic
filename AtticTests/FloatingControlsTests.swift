@@ -34,9 +34,10 @@ final class FloatingControlsTests: XCTestCase {
         let layout = PanelPageLayout(cornerSize: 52, panelSize: CGSize(width: AtticLayout.panelSize.width, height: 520))
         let tabsTop = layout.headerBottom + AtticLayout.pageTabsTop
         let bands = TasksPage.softeningBands(layout: layout, tabsTop: tabsTop, bottomInset: 12)
-        XCTAssertEqual(bands.count, 3, "the header's buttons, the tabs, the add bar")
-        XCTAssertEqual(bands[2].bottom, 508)
-        XCTAssertEqual(bands[2].bottom - bands[2].top, AtticControlSize.addBarHeight)
+        XCTAssertEqual(bands.count, 2, "the tabs and the add bar (a row between the header's buttons stays sharp)")
+        XCTAssertEqual(bands[0].top, tabsTop - TasksFloatingControls.tabsOutset)
+        XCTAssertEqual(bands[1].bottom, 508)
+        XCTAssertEqual(bands[1].bottom - bands[1].top, AtticControlSize.addBarHeight)
     }
 
     func testReduceTransparencyIsASolidBackingOfTheRealSurface() {

@@ -533,8 +533,12 @@ struct TasksPage: View {
         Self.fixedFootprints(layout: layout, tabsTop: tabsTop, cornerInset: cornerInset, lineEndInset: lineEndInset)
     }
 
-    /// The floating controls' lines across the page: the header's buttons,
-    /// the tabs (with their labels' outset) and the add bar.
+    /// The floating controls' lines across the page that rows are blurred
+    /// in: the tabs (with their labels' outset) and the add bar, which span
+    /// most of the page's width. The header's two buttons sit at its
+    /// corners: a row passing between them stays sharp (CI's on-screen
+    /// captures: blurring the header's line blurred the whole row), and only
+    /// the dim softens it behind the buttons themselves.
     private var softeningBands: [AtticSofteningBand] {
         Self.softeningBands(layout: layout, tabsTop: tabsTop, bottomInset: bottomInset)
     }
@@ -543,7 +547,6 @@ struct TasksPage: View {
         let outset = TasksFloatingControls.tabsOutset
         let bottom = layout.panelSize.height - bottomInset
         return [
-            AtticSofteningBand(top: layout.chromeInsets.top, bottom: layout.chromeInsets.top + PanelHeaderLayout.height),
             AtticSofteningBand(top: tabsTop - outset, bottom: tabsTop + AtticLayout.pageTabsHeight + outset),
             AtticSofteningBand(top: bottom - AtticControlSize.addBarHeight, bottom: bottom)
         ]
