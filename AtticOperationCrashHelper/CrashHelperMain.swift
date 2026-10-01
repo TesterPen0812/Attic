@@ -11,13 +11,18 @@ import SwiftData
 @MainActor
 func runFixture() async throws {
     guard CommandLine.arguments.count == 3,
-          ["launch-probe", "seed-conversion", "convert", "writer-probe"].contains(CommandLine.arguments[1]) else { _exit(64) }
+          ["launch-probe", "seed-conversion", "convert", "writer-probe", "seed-purge", "purge"].contains(CommandLine.arguments[1]) else { _exit(64) }
     let root = URL(fileURLWithPath: CommandLine.arguments[2], isDirectory: true)
         .resolvingSymlinksInPath()
     let temporary = FileManager.default.temporaryDirectory.resolvingSymlinksInPath()
     guard root.path.hasPrefix(temporary.path + "/"),
           root.lastPathComponent.hasPrefix("AtticOperationCrash-") else { _exit(65) }
     switch CommandLine.arguments[1] {
+    case "seed-purge":
+        try await WorkspaceCrashFixture.seedPurge(root); _exit(73)
+    case "purge":
+        guard try await WorkspaceCrashFixture.purge(root) == .committed else { _exit(75) }
+        _exit(73)
     case "seed-conversion":
         try await WorkspaceCrashFixture.seed(root); _exit(73)
     case "convert":

@@ -61,7 +61,35 @@ jobs:
             -default-test-execution-time-allowance 120 -maximum-test-execution-time-allowance 360 \
             "${F[@]}" -only-testing:AtticTests/OperationCrashHarnessTests \
             -only-testing:AtticTests/WorkspaceCommitTests -only-testing:AtticTests/NoteFormatTests \
-            -only-testing:AtticTests/WorkspaceHistoryTests -only-testing:AtticTests/WorkspaceTextReplayTests test-without-building
+            -skip-testing:AtticTests/OperationCrashHarnessTests/testK8CoordinatedPurgeCrashesLeaveOnlyRecoverableExclusiveFileSurplus test-without-building
+      - name: Run workspace history before purge
+        shell: /bin/zsh {0}
+        run: |
+          F=(CODE_SIGNING_ALLOWED=YES CODE_SIGNING_REQUIRED=YES CODE_SIGN_STYLE=Manual CODE_SIGN_IDENTITY=- DEVELOPMENT_TEAM=)
+          /Users/taha/Developer/attic-redesign-assets/xcodebuild-locked.sh \
+            -project Attic.xcodeproj -scheme Attic -configuration Local \
+            -destination 'platform=macOS' -derivedDataPath .build/dd \
+            -resultBundlePath .build/history-gate.xcresult \
+            ATTIC_MACOS_UNIT_HOST_PRODUCT_NAME=AtticP3CrashHost \
+            ATTIC_MACOS_UNIT_HOST_EXECUTABLE_NAME=AtticP3CrashHost \
+            ATTIC_MACOS_UNIT_HOST_BUNDLE_IDENTIFIER=com.taha.Attic.p3.crashhost \
+            -parallel-testing-enabled NO -test-timeouts-enabled YES \
+            -default-test-execution-time-allowance 120 -maximum-test-execution-time-allowance 360 \
+            "${F[@]}" -only-testing:AtticTests/WorkspaceHistoryTests -only-testing:AtticTests/WorkspaceTextReplayTests test-without-building
+      - name: Run coordinated purge restore and K8
+        shell: /bin/zsh {0}
+        run: |
+          F=(CODE_SIGNING_ALLOWED=YES CODE_SIGNING_REQUIRED=YES CODE_SIGN_STYLE=Manual CODE_SIGN_IDENTITY=- DEVELOPMENT_TEAM=)
+          /Users/taha/Developer/attic-redesign-assets/xcodebuild-locked.sh \
+            -project Attic.xcodeproj -scheme Attic -configuration Local \
+            -destination 'platform=macOS' -derivedDataPath .build/dd \
+            -resultBundlePath .build/purge-gate.xcresult \
+            ATTIC_MACOS_UNIT_HOST_PRODUCT_NAME=AtticP3CrashHost \
+            ATTIC_MACOS_UNIT_HOST_EXECUTABLE_NAME=AtticP3CrashHost \
+            ATTIC_MACOS_UNIT_HOST_BUNDLE_IDENTIFIER=com.taha.Attic.p3.crashhost \
+            -parallel-testing-enabled NO -test-timeouts-enabled YES \
+            -default-test-execution-time-allowance 120 -maximum-test-execution-time-allowance 360 \
+            "${F[@]}" -only-testing:AtticTests/WorkspacePurgeTests -only-testing:AtticTests/OperationCrashHarnessTests/testK8CoordinatedPurgeCrashesLeaveOnlyRecoverableExclusiveFileSurplus test-without-building
       - name: Run the full hosted unit suite alone
         if: ${{ !cancelled() && !inputs.harness_only }}
         env:
@@ -98,7 +126,7 @@ jobs:
       - name: Summarize tests
         if: always()
         run: |
-          for result in .build/commit-gate.xcresult .build/foundation.xcresult; do
+          for result in .build/commit-gate.xcresult .build/history-gate.xcresult .build/purge-gate.xcresult .build/foundation.xcresult; do
             if [ -d "$result" ]; then
               xcrun xcresulttool get test-results summary --path "$result" --format json
             fi
@@ -109,5 +137,7 @@ jobs:
           name: phase3-foundation-${{ github.sha }}
           path: |
             .build/commit-gate.xcresult
+            .build/history-gate.xcresult
+            .build/purge-gate.xcresult
             .build/foundation.xcresult
           retention-days: 3

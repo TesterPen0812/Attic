@@ -26,6 +26,43 @@ enum WorkspaceCrashFixture {
     static var candidate: NoteDocument {
         var doc = original; doc.blocks.remove(at: 1); return doc
     }
+    static func purgeFiles(_ root: URL) throws -> [TaskImageReference] {
+        try JSONDecoder().decode([TaskImageReference].self, from: Data(contentsOf: root.appendingPathComponent("purge-files.json")))
+    }
+    static func seedPurge(_ root: URL) async throws {
+        let files = TaskImageFiles(rootURL: root.appendingPathComponent("TaskFiles"))
+        var inputs: [URL] = []
+        for index in 0..<2 {
+            let input = root.appendingPathComponent("original-\(index).txt")
+            try bytes.write(to: input); inputs.append(input)
+        }
+        let references = try await files.importAttachments(inputs, existing: [])
+        try JSONEncoder().encode(references).write(to: root.appendingPathComponent("purge-files.json"))
+        let container = try PersistenceController.makeContainer(cloudSyncEnabled: false, storeDirectory: root)
+        let context = ModelContext(container); context.autosaveEnabled = false
+        let deletion = Date(timeIntervalSince1970: 100), members = [taskID.uuidString, childID.uuidString].sorted().joined(separator: " ")
+        for (index, id) in [taskID, childID].enumerated() {
+            let row = TaskItem(id: id, title: index == 0 ? "Parent" : "Child", parentID: index == 0 ? nil : taskID)
+            row.deletedAt = deletion; row.deletionRootID = taskID; row.deletionMembersRaw = members
+            row.imageReferencesData = try JSONEncoder().encode([references[index]])
+            context.insert(row)
+        }
+        let note = NoteItem(id: noteID); note.taskID = taskID
+        let document = try NoteDocument(blocks: [.text("Old title"), .text("Retain body")]).taskSnapshot(title: "Old title")
+        NoteStore.stageDocumentContent(try PreparedNoteDocument(document), format: 1, on: [note], timestamp: deletion, revision: 0, revisionID: UUID())
+        context.insert(note); try context.save()
+    }
+    static func purge(_ root: URL) async throws -> WorkspaceOperationCoordinator.Outcome {
+        let container = try PersistenceController.makeContainer(cloudSyncEnabled: false, storeDirectory: root)
+        let coordinator = try WorkspaceOperationCoordinator(container: container, journal: journal(root))
+        let files = TaskImageFiles(rootURL: root.appendingPathComponent("TaskFiles"))
+        let result = await WorkspacePurge.purge(rootID: taskID, before: .distantFuture,
+            coordinator: coordinator, files: files, inventory: { .init(generation: 0) })
+        guard result.outcome == .committed else { return result.outcome }
+        WorkspaceCrashHook.reach("K8-before-unlink")
+        await files.remove(try purgeFiles(root))
+        return result.outcome
+    }
     static func journal(_ root: URL) -> NoteDraftJournal {
         NoteDraftJournal(directory: root.appendingPathComponent("NoteDrafts"))
     }

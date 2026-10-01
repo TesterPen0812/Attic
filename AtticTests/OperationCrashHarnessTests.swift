@@ -88,6 +88,39 @@ final class OperationCrashHarnessTests: XCTestCase {
             }
         }
     }
+    func testK8CoordinatedPurgeCrashesLeaveOnlyRecoverableExclusiveFileSurplus() async throws {
+        let sentinel = FileManager.default.temporaryDirectory.appendingPathComponent("AtticPurgeSentinel-\(UUID())")
+        let sentinelBytes = Data("outside purge fixture".utf8); try sentinelBytes.write(to: sentinel)
+        defer { try? FileManager.default.removeItem(at: sentinel) }
+        for point in ["K8-before-unlink", "K8-cache"] {
+            let root = FileManager.default.temporaryDirectory.appendingPathComponent("AtticOperationCrash-\(UUID())")
+            try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+            defer { try? FileManager.default.removeItem(at: root) }
+            let seed = try await runChild("seed-purge", root: root); XCTAssertEqual(seed, 73)
+            let crash = try await runChild("purge", root: root, point: point); XCTAssertEqual(crash, 86)
+            let references = try WorkspaceCrashFixture.purgeFiles(root)
+            for _ in 0..<2 {
+                let container = try PersistenceController.makeContainer(cloudSyncEnabled: false, storeDirectory: root)
+                let coordinator = try WorkspaceOperationCoordinator(container: container, journal: WorkspaceCrashFixture.journal(root))
+                try await coordinator.reconcileStartup()
+                let context = coordinator.freshContext()
+                XCTAssertEqual(try context.fetchCount(FetchDescriptor<TaskItem>()), 0)
+                XCTAssertEqual(try context.fetchCount(FetchDescriptor<TaskDeletionPreservation>()), 1)
+                XCTAssertEqual(try context.fetchCount(FetchDescriptor<OperationReceipt>()), 1)
+                let note = try XCTUnwrap(context.fetch(FetchDescriptor<NoteItem>()).first)
+                XCTAssertNil(note.taskID); XCTAssertEqual(note.title, "Parent")
+                let doc = try XCTUnwrap(note.content.flatMap { NoteContentCodec.decode($0).document })
+                XCTAssertFalse(doc.requires.contains("taskNote")); XCTAssertEqual(doc.blocks[1].text, "Retain body")
+                let files = TaskImageFiles(rootURL: root.appendingPathComponent("TaskFiles"))
+                var remaining = 0
+                for reference in references { if try await files.verifiedURL(for: reference) != nil { remaining += 1 } }
+                XCTAssertEqual(remaining, point == "K8-before-unlink" ? 2 : 1)
+                XCTAssertEqual(try Data(contentsOf: sentinel), sentinelBytes)
+            }
+            let files = TaskImageFiles(rootURL: root.appendingPathComponent("TaskFiles")); await files.remove(references)
+            for reference in references { let url = try await files.verifiedURL(for: reference); XCTAssertNil(url) }
+        }
+    }
     func testC4EmbeddedChildLaunchesAndReopensExactSchemaInsideHostSandbox() async throws {
         let root = FileManager.default.temporaryDirectory
             .appendingPathComponent("AtticOperationCrash-\(UUID().uuidString)", isDirectory: true)
