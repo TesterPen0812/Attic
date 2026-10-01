@@ -35,7 +35,7 @@ final class TasksRowBuildCostTests: XCTestCase {
             RunLoop.current.run(until: Date().addingTimeInterval(0.05))
             let start = DispatchTime.now().uptimeNanoseconds
             let hosting = NSHostingView(rootView: content().frame(width: size.width, height: size.height, alignment: .top)
-                .atticDesign(EdgesUnderTest.context(AtticDesignContext(mode: .light))))
+                .atticDesign(AtticDesignContext(mode: .light)))
             window.contentView = hosting
             RunLoop.current.run(until: Date())
             hosting.layoutSubtreeIfNeeded()
@@ -89,25 +89,14 @@ final class TasksRowBuildCostTests: XCTestCase {
                 }
             }
         }
-        // The Motion Lab's "Blur and fade" puts the edge blur on each cell.
-        let bands = TasksViewport.edgeBands(tabsTop: 80, listTop: 110, bottomStack: 48)
-        let edgeBlur = coldBuild {
-            VStack(spacing: 0) {
-                ForEach(models) {
-                    AtticTaskRow(model: $0, actions: actions, onToggleExpanded: {}, onSelect: {})
-                        .atticEdgeBlur(true, in: .named("edge-blur-cost"), top: bands.top, bottom: bands.bottom)
-                }
-            }
-            .coordinateSpace(.named("edge-blur-cost"))
-        }
         let lazy = coldBuild {
             ScrollView {
                 LazyVStack(spacing: 0) { ForEach(models) { AtticTaskRow(model: $0, actions: actions, onToggleExpanded: {}, onSelect: {}) } }
             }
         }
-        let report = String(format: "empty=%.1fms rows=+%.1fms +menu=+%.1fms +geometry=+%.1fms +drop=+%.1fms +gesture=+%.1fms +edge-blur=+%.1fms lazy-scroll=+%.1fms",
-                            empty, plain - empty, menu - plain, geometry - plain, drop - plain, gesture - plain, edgeBlur - plain, lazy - empty)
-        print("ATTIC_ROW_BUILD 16 rows (feel=\(feel), edges=\(EdgesUnderTest.style.rawValue)): " + report)
+        let report = String(format: "empty=%.1fms rows=+%.1fms +menu=+%.1fms +geometry=+%.1fms +drop=+%.1fms +gesture=+%.1fms lazy-scroll=+%.1fms",
+                            empty, plain - empty, menu - plain, geometry - plain, drop - plain, gesture - plain, lazy - empty)
+        print("ATTIC_ROW_BUILD 16 rows (feel=\(feel)): " + report)
         XCTAssertGreaterThan(plain, 0)
     }
 }

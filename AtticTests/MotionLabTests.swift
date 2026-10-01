@@ -23,20 +23,6 @@ enum MotionFeelUnderTest {
     }
 }
 
-/// The Motion Lab's "Edges" under test: ATTIC_EDGES (a raw value), else
-/// the recommended style.
-enum EdgesUnderTest {
-    static var style: AtticEdgeStyle {
-        AtticEdgeStyle(rawValue: ProcessInfo.processInfo.environment["ATTIC_EDGES"] ?? "") ?? .recommended
-    }
-
-    static func context(_ context: AtticDesignContext) -> AtticDesignContext {
-        var context = context
-        context.edges = style
-        return context
-    }
-}
-
 /// The Motion Lab (owner, 2026-09-30): every preset reads the current
 /// feel; Reduced motion never does; the lab never shows under the release
 /// identity; the pager's settle bounces a little and never toward a

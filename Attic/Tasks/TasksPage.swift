@@ -655,12 +655,6 @@ struct TasksPage: View {
     /// Where the lists' first row rests: under the tabs, as before.
     private var listTop: CGFloat { TasksViewport.listTop(tabsTop: tabsTop) }
 
-    /// The bands the soft edges fade under (the edge blur's zones).
-    private var edgeBands: (top: AtticEdgeBand, bottom: AtticEdgeBand) {
-        TasksViewport.edgeBands(tabsTop: tabsTop, listTop: listTop,
-                                bottomStack: max(bottomControlsHeight, AtticControlSize.addBarHeight) + bottomInset)
-    }
-
     /// The tabs' band owns its clicks (review 9): a row scrolled under it
     /// is not clickable through it. The header above owns its own (the
     /// window drag region).
@@ -868,8 +862,7 @@ struct TasksPage: View {
     /// viewport, not per row, so an open quick look fades line by line as
     /// it passes under the tabs and header, or under the add bar.
     private var viewportMask: some View {
-        TasksViewportMask(stack: bottomStack, tabsTop: tabsTop, listTop: listTop, bottomInset: bottomInset,
-                          edges: design.effectiveEdges)
+        TasksViewportMask(stack: bottomStack, tabsTop: tabsTop, listTop: listTop, bottomInset: bottomInset)
     }
 
     // MARK: - Row
@@ -1000,11 +993,6 @@ struct TasksPage: View {
             pointer.frames[TasksRowID(tab: tab, id: id)] = frame
         }
         .onDisappear { [pointer] in pointer.frames[TasksRowID(tab: tab, id: id)] = nil }
-        // The Motion Lab's "Blur and fade": the design system's edge blur,
-        // growing from where rows rest to just behind the tabs and the
-        // bottom stack's labels (the viewport's mask does the fading). A
-        // render-time effect: it never rebuilds the row.
-        .atticEdgeBlur(design.effectiveEdges.blurs, in: Self.space, top: edgeBands.top, bottom: edgeBands.bottom)
         // Files dropped on a row: one drop destination for the page
         // (`fileDropTarget(at:)`), not one per row (round 11: a drop
         // destination on every row made a screenful of rows slower to build).
@@ -2940,14 +2928,12 @@ private struct TasksViewportMask: View {
     let tabsTop: CGFloat
     let listTop: CGFloat
     let bottomInset: CGFloat
-    /// The Motion Lab's "Edges", resolved (Reduce Transparency: a clean cut).
-    let edges: AtticEdgeStyle
 
     var body: some View {
         GeometryReader { proxy in
             LinearGradient(
                 stops: TasksViewport.maskStops(height: proxy.size.height, tabsTop: tabsTop, listTop: listTop,
-                                                bottomStack: stack.maskHeight + bottomInset, style: edges)
+                                                bottomStack: stack.maskHeight + bottomInset)
                     .map { Gradient.Stop(color: .black.opacity($0.opacity), location: $0.location) },
                 startPoint: .top, endPoint: .bottom
             )
@@ -3063,37 +3049,12 @@ enum TasksViewport {
     /// The length of the softened edge where a row meets a fixed band.
     static let softEdge: CGFloat = 6
 
-    /// Where the labels sit over the bottom stack's top: the strip's chips
-    /// and the add bar's text begin about 6 pt below it (7 and 10) and end
-    /// by 24 (21 and 26, the add bar's last 2 pt under the fade's tail).
-    static let stackLabelNear: CGFloat = 6
-    static let stackLabelFar: CGFloat = 24
-
-    /// The two bands the soft edges fade under: the tabs (the labels are the
-    /// tabs themselves; rows rest at `listTop`), and the bottom stack (rows
-    /// rest 16 pt above it), measured in from each edge of the viewport.
-    static func edgeBands(tabsTop: CGFloat, listTop: CGFloat, bottomStack: CGFloat) -> (top: AtticEdgeBand, bottom: AtticEdgeBand) {
-        let tabsBottom = tabsTop + AtticLayout.pageTabsHeight
-        let top = AtticEdgeBand(labelFar: tabsTop, labelNear: tabsBottom, controls: tabsBottom, rest: listTop)
-        let bottom = AtticEdgeBand(labelFar: max(bottomStack - stackLabelFar, 0), labelNear: max(bottomStack - stackLabelNear, 0),
-                                   controls: bottomStack, rest: bottomStack + AtticLayout.contentToAddBar)
-        return (top, bottom)
-    }
-
     /// The fade by position in the viewport: nothing over the header or
     /// under the tabs (so they stay readable over scrolled text), fully
     /// there from the first row's resting place down to the
     /// bottom zone, and receding under the bottom stack.
-    static func maskStops(height: CGFloat, tabsTop: CGFloat, listTop: CGFloat, bottomStack: CGFloat,
-                          style: AtticEdgeStyle = .cleanCut) -> [(location: CGFloat, opacity: Double)] {
+    static func maskStops(height: CGFloat, tabsTop: CGFloat, listTop: CGFloat, bottomStack: CGFloat) -> [(location: CGFloat, opacity: Double)] {
         guard height > 0 else { return [(0, 1), (1, 1)] }
-        if style != .cleanCut {
-            // The Motion Lab's soft edges (owner, 2026-09-30): rows run under
-            // the tabs and the bottom stack, fading along an eased curve to
-            // 15 % where the labels begin and to nothing behind them.
-            let bands = edgeBands(tabsTop: tabsTop, listTop: listTop, bottomStack: bottomStack)
-            return AtticEdgeBand.maskStops(height: height, top: bands.top, bottom: bands.bottom, style: style)
-        }
         let tabsBottom = tabsTop + AtticLayout.pageTabsHeight
         // Round 13 (the hands-on review: faint title fragments hung just
         // under the tabs and just above the add bar): a row scrolled past

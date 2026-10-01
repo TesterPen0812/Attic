@@ -594,25 +594,17 @@ struct AtticPanelRim: View {
 /// control material.
 struct AtticScrollEdgeFade: ViewModifier {
     var space: NamedCoordinateSpace
-    /// The zones: blurring starts `top` from the space's top edge and
-    /// `bottom` from its bottom edge, and is whole at `topOuter` and
-    /// `bottomOuter` from them (0: the edges themselves).
     var top: CGFloat = AtticEdgeBlur.panelTop
     var bottom: CGFloat = AtticEdgeBlur.panelBottom
-    var topOuter: CGFloat = 0
-    var bottomOuter: CGFloat = 0
-    /// False: blur only, where a mask over the whole viewport does the
-    /// fading (the Motion Lab's "Blur and fade" on the task lists).
-    var fades = true
 
     func body(content: Content) -> some View {
-        content.visualEffect { [space, top, bottom, topOuter, bottomOuter, fades] effect, proxy in
+        content.visualEffect { [space, top, bottom] effect, proxy in
             let frame = proxy.frame(in: space)
             let height = proxy.bounds(of: space)?.height ?? .infinity
-            let intoTop = (top - frame.midY) / max(top - topOuter, 1)
-            let intoBottom = (frame.midY - (height - bottom)) / max(bottom - bottomOuter, 1)
+            let intoTop = (top - frame.midY) / top
+            let intoBottom = (frame.midY - (height - bottom)) / bottom
             let depth = min(max(max(intoTop, intoBottom), 0), 1)
-            let veil = fades ? AtticEdgeBlur.veil(at: depth) : 0
+            let veil = AtticEdgeBlur.veil(at: depth)
             return effect
                 .blur(radius: AtticEdgeBlur.maximumBlur * depth)
                 .opacity(1 - veil)
@@ -629,44 +621,6 @@ extension View {
         } else {
             self
         }
-    }
-
-    /// Blurs this item (no fade: a viewport mask does that) as it scrolls
-    /// under a band's controls, growing from where content rests to just
-    /// behind them (the Motion Lab's "Blur and fade").
-    @ViewBuilder
-    func atticEdgeBlur(_ enabled: Bool, in space: NamedCoordinateSpace, top: AtticEdgeBand, bottom: AtticEdgeBand) -> some View {
-        if enabled {
-            modifier(AtticScrollEdgeFade(space: space, top: top.rest, bottom: bottom.rest,
-                                         topOuter: top.labelFar, bottomOuter: bottom.labelFar, fades: false))
-        } else {
-            self
-        }
-    }
-}
-
-// MARK: - Edge mask (the Motion Lab's "Edges")
-
-/// A scroll viewport's mask under persistent chrome: a top band, a bottom
-/// band or both, in the design context's edge style (Reduce Transparency:
-/// a clean cut). One static gradient over the whole viewport: nothing per
-/// row, and nothing redrawn while it scrolls. It changes no hit-testing.
-struct AtticEdgeMask: View {
-    var top: AtticEdgeBand?
-    var bottom: AtticEdgeBand?
-
-    @Environment(\.atticDesign) private var design
-
-    var body: some View {
-        GeometryReader { proxy in
-            LinearGradient(
-                stops: AtticEdgeBand.maskStops(height: proxy.size.height, top: top, bottom: bottom, style: design.effectiveEdges)
-                    .map { Gradient.Stop(color: .black.opacity($0.opacity), location: $0.location) },
-                startPoint: .top, endPoint: .bottom
-            )
-        }
-        .allowsHitTesting(false)
-        .accessibilityHidden(true)
     }
 }
 

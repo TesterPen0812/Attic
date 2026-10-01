@@ -454,24 +454,3 @@ additive; no token, colour, radius or type style changed.
   `--attic-motion-lab`), never under `com.taha.Attic`; outside it no stored
   feel is read.
 - No token, colour, radius or type style changed.
-
-### Motion Lab: edges (owner, 2026-09-30: "I thought we decided the scrolling content would be fading behind the controls and be slightly visible")
-
-- **`AtticEdgeStyle`**: how scrolled content meets persistent chrome. **Clean
-  cut** is round 13 (rows cut at the band, a 6 pt softening). **Soft fade**
-  (the default) runs rows under the band along a normalised Gaussian from
-  where they rest to just behind the controls, reaching
-  `AtticEdgeBlur.labelOpacity` (15 %) where the labels begin: flat where it
-  leaves the resting rows, so no start line, and a faint tail under the
-  labels. **Blur and fade** is the soft fade plus the edge blur.
-- **`AtticEdgeBand`** describes a band (labels' far and near edges, the
-  controls' edge, where content rests), with its ramps and a viewport's mask
-  stops. **`AtticEdgeMask`** is that mask as one static gradient. The design
-  context carries the style (`edges`); `effectiveEdges` is a clean cut under
-  Reduce Transparency or Increase Contrast (a solid band, as the saved-notes
-  drawer's underlay already did).
-- **`AtticScrollEdgeFade`** (Phase 0's edge blur) gains explicit zones
-  (`topOuter`, `bottomOuter`) and a blur-only mode (`fades: false`) for a
-  viewport that a mask already fades; `atticEdgeBlur(_:in:top:bottom:)`
-  applies it from two bands. Its defaults are unchanged.
-- No token, colour, radius or type style changed.

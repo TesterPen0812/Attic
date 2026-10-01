@@ -31,7 +31,7 @@ final class TasksFrameCostTests: XCTestCase {
         // The Motion Lab: the feel measured (ATTIC_MOTION_FEEL, else the default).
         let feel = MotionFeelUnderTest.apply()
         defer { MotionFeelUnderTest.restore() }
-        var report: [String] = ["feel=\(feel)", "edges=\(EdgesUnderTest.style.rawValue)"]
+        var report: [String] = ["feel=\(feel)"]
         // Profiling seam: one scenario, repeated (ATTIC_FRAME_COST_LOOP).
         if let loop = ProcessInfo.processInfo.environment["ATTIC_FRAME_COST_LOOP"] {
             let ids = host.model.rows(for: .now).prefix(6).map(\.id)
@@ -106,12 +106,6 @@ final class TasksFrameCostTests: XCTestCase {
         report.append("swipe-first " + Self.stats(swipeFirst))
         report.append("swipe-follow-frames " + Self.stats(swipeFrames))
         report.append("swipe-settle-frames " + Self.stats(settleFrames))
-
-        // Scrolling Now's list (the Motion Lab's "Edges": rows pass under
-        // the tabs and the add bar), 8 pt a frame down and back.
-        host.place(.now)
-        let scrolled = host.scroll(steps: 60, dy: 8)
-        report.append("scroll-frames " + Self.stats(scrolled.frames) + String(format: " travelled=%.0fpt", scrolled.travelled))
 
         // Typing in the add bar on Now (500 rows behind it).
         host.place(.now)
@@ -201,7 +195,7 @@ final class FrameCostHost {
         window = Panel(contentRect: CGRect(origin: CGPoint(x: -4_000, y: -4_000), size: size),
                        styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
         window.isReleasedWhenClosed = false
-        window.contentView = NSHostingView(rootView: page.atticDesign(EdgesUnderTest.context(AtticDesignContext(mode: .light)))
+        window.contentView = NSHostingView(rootView: page.atticDesign(AtticDesignContext(mode: .light))
             .frame(width: size.width, height: size.height))
         window.orderFront(nil)
         window.makeKey()
@@ -258,32 +252,6 @@ final class FrameCostHost {
             frames.append(frame())
         }
         return frames
-    }
-
-    /// Scrolls the shown list `steps` frames down by `dy` points, then back
-    /// up, as a trackpad does (the clip view moves; SwiftUI follows), one
-    /// frame each. Empty when no list's scroll view is found.
-    func scroll(steps: Int, dy: CGFloat) -> (frames: [Double], travelled: CGFloat) {
-        func scrollViews(in view: NSView) -> [NSScrollView] {
-            (view as? NSScrollView).map { [$0] } ?? view.subviews.flatMap(scrollViews(in:))
-        }
-        guard let root = window.contentView,
-              let list = scrollViews(in: root).filter({ !$0.isHiddenOrHasHiddenAncestor })
-                .max(by: { ($0.documentView?.frame.height ?? 0) < ($1.documentView?.frame.height ?? 0) }) else { return ([], 0) }
-        var frames: [Double] = []
-        let start = list.contentView.bounds.origin.y
-        var furthest: CGFloat = 0
-        for direction in [CGFloat(1), -1] {
-            for _ in 0..<steps {
-                frames.append(frame {
-                    let clip = list.contentView
-                    clip.scroll(to: CGPoint(x: clip.bounds.origin.x, y: clip.bounds.origin.y + dy * direction))
-                    list.reflectScrolledClipView(clip)
-                })
-                furthest = max(furthest, abs(list.contentView.bounds.origin.y - start))
-            }
-        }
-        return (frames, furthest)
     }
 
     /// Places the page on `tab` at once and lets it rest.
