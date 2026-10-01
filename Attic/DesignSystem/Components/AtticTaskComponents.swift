@@ -1081,6 +1081,13 @@ struct AtticPriorityMark: View {
 /// focusable: a focused row draws the 2 pt accent ring and answers the
 /// task keys (`AtticTaskKeys`).
 struct AtticTaskRow: View {
+    /// Whether the row shows its actions button: for the keyboard's row
+    /// (and the gallery's focused state), never for the pointer's hover,
+    /// which only tints the row.
+    nonisolated static func showsActionsButton(forced: AtticControlState?, keyboardFocused: Bool) -> Bool {
+        forced == .focused || keyboardFocused
+    }
+
     /// The row's own coordinate space, for its controls' frames.
     static let space = NamedCoordinateSpace.named("AtticTaskRow")
 
@@ -1196,9 +1203,11 @@ struct AtticTaskRow: View {
                     Spacer(minLength: m.trailingMinGap)
                     trailing(disabled: disabled)
                     if let onActions, capture == nil, !disabled, titleEditing == nil,
-                       forced == .hover || forced == .focused || hovered || showsFocusRing {
-                        // Calm at rest: only for the row the pointer or the
-                        // keyboard is on; the date steps aside for it.
+                       AtticTaskRow.showsActionsButton(forced: forced, keyboardFocused: showsFocusRing) {
+                        // Only for the row the keyboard is on (the date steps
+                        // aside for it). Hover is a soft tint only (owner,
+                        // 2026-10-01: rows "perked up" as the pointer passed);
+                        // the pointer has the row's right-click menu.
                         AtticRowActionsButton(action: onActions)
                             .padding(.leading, AtticRowActionsMetrics.gap)
                             .transition(.opacity)
@@ -1206,7 +1215,7 @@ struct AtticTaskRow: View {
                 }
                 .frame(height: m.titleLineHeight)
                 .animation(design.reduceMotion ? nil : AtticMotionPreset.hover.animation(reduceMotion: false),
-                           value: hovered || showsFocusRing)
+                           value: showsFocusRing)
                 if twoLine {
                     // The tag popover points at the tags that were clicked
                     // (round 5), not the middle of the line.

@@ -207,12 +207,26 @@ final class AtticPanel: NSPanel {
         onUnhandledEscape?()
     }
 
+    /// The presses that make an inactive panel key and still act.
+    nonisolated static func takesFirstPress(_ type: NSEvent.EventType) -> Bool {
+        type == .leftMouseDown || type == .rightMouseDown || type == .otherMouseDown
+    }
+
     override func resignKey() {
         cancelTrackpadSwipe()
         super.resignKey()
     }
 
     override func sendEvent(_ event: NSEvent) {
+        // One click both activates the panel and acts (owner, 2026-10-01):
+        // the panel becomes key before AppKit sees the press, so the press
+        // is never spent on activation, whatever view is under it (SwiftUI's
+        // own views in a list do not accept the first mouse). The panel is
+        // non-activating, so Attic stays where it is.
+        if Self.takesFirstPress(event.type), !isKeyWindow, canBecomeKey, isVisible,
+           visibleContentFrame.contains(convertPoint(toScreen: event.locationInWindow)) {
+            makeKey()
+        }
         guard event.type == .scrollWheel else {
             if [.magnify, .beginGesture, .leftMouseDown, .rightMouseDown, .otherMouseDown, .keyDown, .flagsChanged].contains(event.type) {
                 cancelTrackpadSwipe()
