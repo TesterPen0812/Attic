@@ -198,6 +198,101 @@ final class WorkspacePurgeTests: XCTestCase {
         try seed(note: true); let store = TaskStore(container: coordinator.container)
         XCTAssertTrue(store.purgeDeleted(before: .distantFuture).isEmpty); expectEqual(try tasks(), 1); XCTAssertNotNil(try note().taskID)
     }
+    func testP5LegacyImportWaitsForUnlinkThenRefusesMissingOriginal() async throws {
+        let input = root.appendingPathComponent("legacy.txt"); try Data("original".utf8).write(to: input)
+        let imported = try await files.importAttachments([input], existing: [])
+        let reference = try XCTUnwrap(imported.first)
+        let store = files.files, pause = ProviderGate()
+        store.registerByteOwners(UUID()) { await pause.pauseOnce(); return [] }
+        let collection = Task { await self.files.remove([reference]) }
+        await pause.waitUntilPaused()
+        XCTAssertNil(store.ownership.tryAcquire([reference.id], kind: .admission))
+        let reuse = Task { try await self.files.importCopies(of: [reference], existing: []) }
+        await pause.release(); await collection.value
+        do { _ = try await reuse.value; XCTFail("a collected original cannot become a new root") }
+        catch {
+            guard let failure = error as? TaskDropError, case .attachmentUnavailable = failure else { return XCTFail("unexpected error: \(error)") }
+        }
+        let url = try await files.verifiedURL(for: reference); XCTAssertNil(url)
+        let storeWithMissingOriginal = TaskStore(container: coordinator.container, taskImageFiles: files)
+        XCTAssertNil(storeWithMissingOriginal.create(title: "Stale reference", attachments: [reference]))
+    }
+    func testP5PayloadAdmissionWaitsThenRebuildsAndOwnsCandidateAcrossActors() async throws {
+        let input = root.appendingPathComponent("payload.txt"), bytes = Data("durable payload".utf8)
+        try bytes.write(to: input)
+        let imported = try await files.importAttachments([input], existing: [])
+        let reference = try XCTUnwrap(imported.first)
+        let first = files.files, second = AttachmentFileStore(rootURL: first.rootURL), pause = ProviderGate()
+        XCTAssertTrue(first.ownership === second.ownership)
+        first.registerByteOwners(UUID()) { await pause.pauseOnce(); return [] }
+        let collection = Task { await self.files.remove([reference]) }
+        await pause.waitUntilPaused()
+        let candidate = AttachmentFileReference(id: reference.id, digest: reference.digest, filename: reference.filename,
+            byteCount: reference.byteCount, payload: bytes)
+        let reuse = Task { try await second.admit(candidate) }
+        await pause.release(); await collection.value
+        let admitted = try await reuse.value
+        let (url, lease) = try XCTUnwrap(admitted)
+        expectEqual(try Data(contentsOf: url), bytes)
+        await files.remove([reference])
+        XCTAssertTrue(FileManager.default.fileExists(atPath: url.path), "candidate admission owns bytes until root publication")
+        first.registerByteOwners(UUID()) { [reference.id] }
+        lease.release(); await files.remove([reference])
+        XCTAssertTrue(FileManager.default.fileExists(atPath: url.path))
+    }
+    func testP5FamilyLeaseBlocksPlainWriterQueuesJournaledWriterAndAllowsDisjointSave() async throws {
+        try seed()
+        files.files.registerWriter(coordinator.ownership)
+        let collection = try XCTUnwrap(files.files.acquireCollection([taskID!]))
+        let owner = WorkspaceOwner(entity: .task, id: taskID)
+        let tokens = try coordinator.capture([owner])
+        let result = coordinator.plainSave(tokens: tokens, writes: [owner]) { context in
+            try XCTUnwrap(context.fetch(FetchDescriptor<TaskItem>()).first).title = "Refused"
+        }
+        expectEqual(result, .conflict)
+        let envelope = try coordinator.newEnvelope(intent: "Queued rename", reads: tokens, writes: [owner])
+        let mutation = Task { await self.coordinator.execute(envelope, stage: { context in
+            try XCTUnwrap(context.fetch(FetchDescriptor<TaskItem>()).first).title = "After lease"
+        }) }
+        await Task.yield()
+        expectEqual(try XCTUnwrap(coordinator.freshContext().fetch(FetchDescriptor<TaskItem>()).first).title, "Current task")
+        let store = TaskStore(container: coordinator.container, taskImageFiles: files)
+        XCTAssertNotNil(store.create(title: "Disjoint"))
+        collection.release()
+        expectEqual(await mutation.value, .committed)
+        let id = taskID!
+        expectEqual(try XCTUnwrap(coordinator.freshContext().fetch(FetchDescriptor<TaskItem>(predicate: #Predicate { $0.id == id })).first).title, "After lease")
+    }
+    func testP5CancelledAdmissionReleasesNoOtherOwnersAndReleasedLeaseCannotAuthorizeUnlink() async throws {
+        let gate = coordinator.ownership, id = UUID()
+        let collection = try XCTUnwrap(gate.tryAcquire([id], kind: .collection))
+        let waiting = Task { try await gate.admit([id]) }; waiting.cancel()
+        do { _ = try await waiting.value; XCTFail("cancelled admission") } catch is CancellationError { }
+        XCTAssertTrue(gate.validatesCollection(collection, ids: [id]))
+        collection.release(); XCTAssertFalse(gate.validatesCollection(collection, ids: [id]))
+        let admission = try await gate.admit([id]); XCTAssertNil(gate.tryAcquire([id], kind: .collection))
+        admission.release(); XCTAssertNotNil(gate.tryAcquire([id], kind: .collection))
+    }
+    func testP5NewWriterDomainDuringPreparationInvalidatesFamilyLeaseBeforeRowSave() async throws {
+        try seed(note: true)
+        coordinator.afterPreparation = { self.files.files.registerWriter(WorkspaceOwnershipGate()) }
+        expectEqual(await purge().outcome, .conflict)
+        expectEqual(try tasks(), 1); XCTAssertNotNil(try note().taskID); XCTAssertTrue(try records().isEmpty)
+    }
+    func testP5PendingTaskImportOwnsItsOnlyOriginalUntilBindingOrExplicitDiscard() async throws {
+        let input = root.appendingPathComponent("pending.txt"); try Data("pending original".utf8).write(to: input)
+        let refs = try await files.importAttachments([input], existing: [])
+        let reference = try XCTUnwrap(refs.first)
+        let removed = await files.removeUnreferenced(keeping: [], modifiedBefore: .distantFuture, limit: 10)
+        expectEqual(removed, 0)
+        let store = TaskStore(container: coordinator.container, taskImageFiles: files)
+        XCTAssertNotNil(store.create(title: "Bound", attachments: refs))
+        await files.remove(refs)
+        let retained = try await files.verifiedURL(for: reference); XCTAssertNotNil(retained)
+        let other = try await files.importAttachments([input], existing: [])
+        await files.remove(other)
+        let discarded = try await files.verifiedURL(for: XCTUnwrap(other.first)); XCTAssertNil(discarded)
+    }
 }
 
 private actor ProviderGate {

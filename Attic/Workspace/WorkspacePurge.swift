@@ -118,6 +118,12 @@ enum WorkspacePurge {
             // Enumerate every stored survivor, including deleted versions and
             // proposals. An opaque/malformed dependency makes reachability unknown.
             let references = try family.flatMap(legacyReferences)
+            files.files.registerWriter(coordinator.ownership)
+            let leasedIDs = ids.union(ownIDs).union(associations.map(\.id)).union(references.map(\.id))
+                .union(ownership.drafts.values.flatMap(\.attachmentIDs))
+                .union(notes.compactMap { $0.content.flatMap { NoteContentCodec.decode($0).document } }.flatMap(\.attachmentIDs))
+            guard let collection = files.files.acquireCollection(leasedIDs) else { return refused() }
+            defer { collection.release() }
             var survivingBytes = ownership.bytes
             for task in try context.fetch(FetchDescriptor<TaskItem>()) where !ids.contains(task.id) {
                 survivingBytes.formUnion(try legacyReferences(task).map(\.id))
@@ -210,8 +216,8 @@ enum WorkspacePurge {
                 staged: ownership.staged.values.flatMap { $0 })
             let outcome = await coordinator.execute(envelope, sessionValid: {
                 guard let current = try? inventory() else { return false }
-                return current.generation == ownership.generation
-            }, stage: { commit in
+                return current.generation == ownership.generation && files.files.validatesCollection(collection, ids: leasedIDs)
+            }, collection: collection, stage: { commit in
                 let records = try commit.fetch(FetchDescriptor<TaskDeletionPreservation>()).filter { $0.id == preservationID }
                 if records.isEmpty {
                     let record = TaskDeletionPreservation(id: preservationID, rootID: rootID, deletedAt: deletedAt,
@@ -246,6 +252,10 @@ enum WorkspacePurge {
                 }
                 _ = try TaskStore.stagePermanentRemoval(in: commit, rootID: rootID, before: cutoff, confirmed: confirmed)
             }, publication: publication)
+            if outcome == .committed {
+                WorkspaceCrashHook.reach("K8-before-unlink")
+                await files.remove(references, collection: collection)
+            }
             return Result(outcome: outcome, operationID: envelope.id,
                 removedIDs: outcome == .committed || outcome == .publicationPending ? ids : [], preservationID: preservationID,
                 materialization: outcome == .committed || outcome == .publicationPending ? patches : [], checkpoint: checkpoint)

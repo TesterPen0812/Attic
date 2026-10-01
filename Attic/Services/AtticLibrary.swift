@@ -57,6 +57,7 @@ final class AtticLibrary {
         tags = TagService(container: tasks.container, persist: persist)
         links.endpointState = { [weak self] ref in self?.state(of: ref) ?? .missing }
         tasks.commandLibrary = self
+        if let coordinator = try? WorkspaceLegacyBridge.coordinator(for: container) { coordinator.registerHistory(self.undo) }
         tags.afterChange = { [weak self] in self?.refreshItemStores() }
     }
 

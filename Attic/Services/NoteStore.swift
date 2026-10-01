@@ -411,6 +411,9 @@ final class NoteStore: ObservableObject {
             return fresh
         }
 #if os(macOS)
+        if let coordinator = try? WorkspaceLegacyBridge.coordinator(for: container) {
+            resolvedAttachmentFileStore.registerWriter(coordinator.ownership)
+        }
         resolvedAttachmentFileStore.registerByteOwners(UUID()) { [weak self] in
             guard let owner = self else { return nil }
             return await owner.retainedAttachmentIDsForFiles()

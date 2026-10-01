@@ -19,6 +19,11 @@ final class WorkspaceOperationCoordinator {
     }
 
     let container: ModelContainer
+    let ownership: WorkspaceOwnershipGate
+    private var legacyFiles: [UUID: WorkspaceOwnershipGate] = [:]
+    func registerLegacyFiles(_ files: AttachmentFileStore) {
+        files.registerWriter(ownership); legacyFiles[files.ownership.identity] = files.ownership
+    }
     private(set) var journal: NoteDraftJournal
     private let writerLease: WorkspaceWriterLease?
     private var allocatedIDs: Set<UUID> = []
@@ -35,9 +40,12 @@ final class WorkspaceOperationCoordinator {
     }
     private(set) var preOperationRecoveryCopies: [RecoveryCopy] = []
     private var historyOwners: [UUID: () -> Set<UUID>] = [:]
+    private var historyBytes: [UUID: () -> Set<UUID>] = [:]
     func registerHistory(_ route: UndoRoute) {
         historyOwners[route.ownershipID] = { [weak route] in route?.referencedOperationIDs ?? [] }
+        historyBytes[route.ownershipID] = { [weak route] in route?.referencedAttachmentIDs ?? [] }
     }
+    var retainedHistoryBytes: Set<UUID> { historyBytes.values.reduce(into: []) { $0.formUnion($1()) } }
     var historyReferences: () throws -> Set<UUID> = { [] }
     var recoveryReferences: () throws -> Set<UUID> = { [] }
     var save: (ModelContext) throws -> Void = { try $0.save() }
@@ -51,6 +59,7 @@ final class WorkspaceOperationCoordinator {
     init(container: ModelContainer, journal: NoteDraftJournal) throws {
         self.container = container; self.journal = journal
         let disk = container.configurations.first { !$0.isStoredInMemoryOnly }
+        ownership = disk.map { WorkspaceOwnershipGate.shared(for: "store:" + $0.url.resolvingSymlinksInPath().path) } ?? WorkspaceOwnershipGate()
         if let disk {
             try FileManager.default.createDirectory(at: disk.url.deletingLastPathComponent(), withIntermediateDirectories: true)
             writerLease = try WorkspaceWriterLease.attached(to: container) ?? WorkspaceWriterLease.acquire(storeURL: disk.url)
@@ -97,25 +106,33 @@ final class WorkspaceOperationCoordinator {
     /// below is synchronous on the main actor, with a fresh context and no await.
     func execute(_ envelope: WorkspaceOperationEnvelope,
                  sessionValid: () -> Bool = { true },
+                 collection: WorkspaceOwnershipLeases? = nil,
                  stage: (ModelContext) throws -> Void,
                  publication: Publication = Publication()) async -> Outcome {
         guard allocatedIDs.remove(envelope.id) != nil else { return .conflict }
         let affected = Set(envelope.tokens.map(\.owner)).union(envelope.writes)
+        guard !Task.isCancelled else { return .notCommitted }
         guard affected.isDisjoint(with: heldOwners), sessionValid() else { return .conflict }
+        let admission: WorkspaceOwnershipGate.Lease
+        do {
+            admission = try await ownership.admit(Self.admissionIDs(envelope), excluding: collection?.lease(for: ownership))
+        } catch { return .notCommitted }
+        defer { admission.release() }
         let claim: WorkspaceOperationClaim
         do { claim = try await journal.prepareOperation(envelope) }
         catch { return .notCommitted }
         #if ATTIC_OPERATION_CRASH_TESTS
         await afterPreparation?()
         #endif
+        guard !Task.isCancelled else { return .notCommitted }
         // Concurrent preparation may have completed another writer; revalidate
         // its complete envelope here, never against warm presentation objects.
         guard affected.isDisjoint(with: heldOwners), sessionValid() else { return .conflict }
-        let result = commitPrepared(envelope, claim: claim, stage: stage, publication: publication)
+        let result = commitPrepared(envelope, claim: claim, collection: collection, stage: stage, publication: publication)
         return result == .publicationPending ? await retryPublication(envelope.id) : result
     }
 
-    private func commitPrepared(_ envelope: WorkspaceOperationEnvelope, claim: WorkspaceOperationClaim,
+    private func commitPrepared(_ envelope: WorkspaceOperationEnvelope, claim: WorkspaceOperationClaim, collection: WorkspaceOwnershipLeases? = nil,
                                 stage: (ModelContext) throws -> Void, publication: Publication) -> Outcome {
         let affected = Set(envelope.tokens.map(\.owner)).union(envelope.writes)
         let context = freshContext()
@@ -139,6 +156,10 @@ final class WorkspaceOperationCoordinator {
             }
             WorkspaceCrashHook.reach("K3-validation")
             try stage(context)
+            try validateLegacyAdmission(context, before: envelope.tokens)
+            guard let admission = ownership.tryAcquire(try Self.admissionIDs(context.insertedModelsArray + context.changedModelsArray),
+                kind: .admission, excluding: collection?.lease(for: ownership)) else { return .conflict }
+            defer { admission.release() }
             try validatePreservedOpaqueContent(context, before: envelope.tokens)
             try validateWriteSet(context, declared: envelope.writes)
             let resulting = try states(envelope.writes, in: context)
@@ -192,7 +213,10 @@ final class WorkspaceOperationCoordinator {
             let physicalIDs = Dictionary(uniqueKeysWithValues: previous.map { ($0.owner, Set($0.replicas.map(\.physicalID))) })
             let before = try states(writes, in: context, physical: true, baselineIDs: physicalIDs)
             try stage(context)
+            try validateLegacyAdmission(context, before: previous)
             try validatePreservedOpaqueContent(context, before: previous)
+            guard let admission = ownership.tryAcquire(try Self.admissionIDs(context.insertedModelsArray + context.changedModelsArray), kind: .admission) else { return .conflict }
+            defer { admission.release() }
             try validateWriteSet(context, declared: writes)
             let next = try sorted(writes).map { try WorkspaceModelToken.read($0, in: context) }
             guard try mayUsePlainSave(before: previous, after: next, in: context) else {
@@ -488,6 +512,53 @@ final class WorkspaceOperationCoordinator {
         case let r as OperationReceipt: WorkspaceOwner(entity: .receipt, id: r.id)
         default: nil
         }
+    }
+}
+
+extension WorkspaceOperationCoordinator {
+    private func validateLegacyAdmission(_ context: ModelContext, before: [WorkspaceModelToken]) throws {
+        for task in (context.insertedModelsArray + context.changedModelsArray).compactMap({ $0 as? TaskItem }) {
+            let next = try WorkspacePurge.legacyReferences(task)
+            let old = try before.filter { $0.owner == WorkspaceOwner(entity: .task, id: task.id) }.flatMap { token in
+                try token.replicas.flatMap { replica -> [TaskImageReference] in
+                    var refs: [TaskImageReference] = []
+                    if let field = replica.fields["imageReferencesData"], let data = try JSONDecoder().decode(Data?.self, from: field) {
+                        refs += try JSONDecoder().decode([TaskImageReference].self, from: data)
+                    }
+                    if let field = replica.fields["removedAttachmentsData"], let data = try JSONDecoder().decode(Data?.self, from: field) {
+                        refs += try JSONDecoder().decode([RemovedTaskAttachment].self, from: data).map(\.reference)
+                    }
+                    return refs
+                }
+            }
+            guard next.filter({ !old.contains($0) }).allSatisfy({ ref in !legacyFiles.values.contains { $0.wasUnlinked(ref.id) } }) else {
+                throw WorkspaceFoundationError.protectedOwner
+            }
+        }
+    }
+    private static func admissionIDs(_ envelope: WorkspaceOperationEnvelope) -> Set<UUID> {
+        Set(envelope.writes.map(\.id)).union(envelope.payloads.map(\.id))
+            .union(envelope.afterDocuments.keys)
+            .union(envelope.afterDocuments.values.flatMap { NoteContentCodec.decode($0).document?.attachmentIDs ?? [] })
+    }
+    static func admissionIDs(_ rows: [any PersistentModel]) throws -> Set<UUID> {
+        var ids = Set(rows.compactMap { owner($0)?.id })
+        for row in rows {
+            if let task = row as? TaskItem {
+                if let data = task.imageReferencesData { ids.formUnion(try JSONDecoder().decode([TaskImageReference].self, from: data).map(\.id)) }
+                if let data = task.removedAttachmentsData { ids.formUnion(try JSONDecoder().decode([RemovedTaskAttachment].self, from: data).map { $0.reference.id }) }
+            } else if let note = row as? NoteItem {
+                if let data = note.content { ids.formUnion(NoteContentCodec.decode(data).document?.attachmentIDs ?? []) }
+            } else if let attachment = row as? NoteAttachment { ids.insert(attachment.noteID) }
+            else if let version = row as? NoteVersion {
+                ids.insert(version.noteID)
+                if let data = version.content { ids.formUnion(NoteContentCodec.decode(data).document?.attachmentIDs ?? []) }
+            } else if let proposal = row as? NotePendingEdit {
+                ids.insert(proposal.noteID)
+                if let data = proposal.proposedContent { ids.formUnion(NoteContentCodec.decode(data).document?.attachmentIDs ?? []) }
+            }
+        }
+        return ids
     }
 }
 

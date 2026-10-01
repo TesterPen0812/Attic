@@ -99,6 +99,10 @@ enum WorkspaceLegacyBridge {
             throw WorkspaceFoundationError.unknown
         }
         let changes = source.insertedModelsArray + source.changedModelsArray + source.deletedModelsArray
+        guard let admission = state.coordinator.ownership.tryAcquire(try WorkspaceOperationCoordinator.admissionIDs(changes), kind: .admission) else {
+            throw WorkspaceFoundationError.pendingPublication
+        }
+        defer { admission.release() }
         let writes = Set(try changes.map { row -> WorkspaceOwner in
             guard let owner = WorkspaceOperationCoordinator.owner(row) else { throw WorkspaceFoundationError.conflict }
             return owner

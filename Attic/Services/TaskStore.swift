@@ -463,6 +463,22 @@ final class TaskStore: ObservableObject {
         self.now = now
         self.persist = persist
         self.taskImageFiles = taskImageFiles
+        #if os(macOS)
+        if let coordinator = try? WorkspaceLegacyBridge.coordinator(for: container) {
+            coordinator.registerLegacyFiles(taskImageFiles.files)
+            taskImageFiles.files.registerByteOwners(coordinator.ownership.identity) { [weak self] in
+            await MainActor.run {
+                guard let self else { return nil }
+                do {
+                    let fresh = ModelContext(self.container)
+                    var ids = Set(try fresh.fetch(FetchDescriptor<TaskItem>()).flatMap { try WorkspacePurge.legacyReferences($0).map(\.id) })
+                    ids.formUnion(try WorkspaceLegacyBridge.coordinator(for: self.container).retainedHistoryBytes)
+                    return ids
+                } catch { return nil }
+            }
+            }
+        }
+        #endif
         migrateListOrderIfNeeded()
         // A failed migration stays on screen: refresh() clears notices.
         let migrationNotice = errorNotice
@@ -3061,6 +3077,8 @@ final class TaskStore: ObservableObject {
     @discardableResult
     private func save(owner: UUID? = nil) -> Bool {
         do {
+            let candidateIDs = Set(try (context.insertedModelsArray + context.changedModelsArray)
+                .compactMap { $0 as? TaskItem }.flatMap { try WorkspacePurge.legacyReferences($0).map(\.id) })
             #if ATTIC_OPERATION_CRASH_TESTS
             let writeStart = ContinuousClock.now
             #endif
@@ -3069,6 +3087,7 @@ final class TaskStore: ObservableObject {
             #else
             try Self.persistStoreContext(context, using: persist, history: commandLibrary != nil)
             #endif
+            taskImageFiles.files.finishCandidates(candidateIDs)
             #if ATTIC_OPERATION_CRASH_TESTS
             onSaveTiming?("writer", writeStart.duration(to: .now))
             let presentationStart = ContinuousClock.now
