@@ -1026,8 +1026,10 @@ final class AtticPanelContentContainer: NSView {
         if reduceMotion {
             // No travel: the pull and a swipe's close or spring-back fade
             // (a live pull dims toward `reducedMinimumOpacity`).
+            // An instant collapse (an ordinary hide under Reduced) changes
+            // nothing: only a live pull dims.
             let target: Float = fades ? (progress >= 1 ? 0 : 1)
-                : Float(PanelCollapseGeometry.reducedOpacity(progress: progress))
+                : progress >= 1 ? 1 : Float(PanelCollapseGeometry.reducedOpacity(progress: progress))
             let from = layer.presentation()?.opacity ?? layer.opacity
             CATransaction.begin()
             CATransaction.setDisableActions(true)
