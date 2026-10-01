@@ -564,9 +564,13 @@ additive; no token, colour, radius or type style changed.
   `NSScrollEdgeEffectStyle` exists only for title-bar and split-view
   accessories. Notes keeps round 13's behaviour.
 - **`AtticScrollEdgeLab`**: a preview's developer panel (Motion Lab,
-  "Scroll edges") switches between **System soft edge** (the default, and
-  always in release builds) and **Clean cut** (round 13: no bars, the
-  lists' own mask cuts rows at the controls' bands), to feel both.
+  "Scroll edges") switches between **System soft edge** (the default) and
+  **Clean cut** (round 13: no bars, the lists' own mask cuts rows at the
+  controls' bands), to feel both. Only a preview identity
+  (`AtticMotionLab.isAvailable`) can leave the system soft edge: the
+  switch, the stored choice and the `ATTIC_UI_TEST_SCROLL_EDGES` override
+  are all gated on it, and the official and every other identity always
+  resolve to the system soft edge.
 - B's edge fade (`AtticEdgeBlur.edgeVisible`) is removed: the system's
   effect fades the edges, and the clean cut is round 13's mask.
 - **`AtticReorderLiftModifier`**: the lifted card is opaque, in the panel's

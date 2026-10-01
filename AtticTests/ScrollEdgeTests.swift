@@ -24,27 +24,65 @@ final class ScrollEdgeTests: XCTestCase {
 
     // MARK: - The switch
 
-    func testTheSystemSoftEdgeIsTheDefaultAndReleaseBuildsKeepIt() {
-        XCTAssertEqual(AtticScrollEdgeLab(defaults: nil).style, .systemSoft)
-        // A release build has no lab defaults: a choice is not kept.
-        let release = AtticScrollEdgeLab(defaults: nil)
-        release.style = .cleanCut
-        XCTAssertEqual(AtticScrollEdgeLab(defaults: nil).style, .systemSoft)
-        XCTAssertFalse(AtticMotionLab.isAvailable(bundleIdentifier: "com.taha.Attic", arguments: []),
-                       "the release identity never shows the developer panel")
+    private func scratchDefaults() throws -> (UserDefaults, cleanup: () -> Void) {
+        let suite = "AtticScrollEdgeLabTest-\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        return (defaults, { defaults.removePersistentDomain(forName: suite) })
+    }
+
+    func testTheSystemSoftEdgeIsTheDefault() throws {
+        let (defaults, cleanup) = try scratchDefaults()
+        defer { cleanup() }
+        XCTAssertEqual(AtticScrollEdgeLab(defaults: defaults, isPreview: true).style, .systemSoft)
+        XCTAssertEqual(AtticScrollEdgeLab(defaults: defaults, isPreview: false).style, .systemSoft)
     }
 
     func testAPreviewKeepsItsChoiceAndUITestsCanForceOne() throws {
-        let suite = "AtticScrollEdgeLabTest-\(UUID().uuidString)"
-        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
-        defer { defaults.removePersistentDomain(forName: suite) }
-        let lab = AtticScrollEdgeLab(defaults: defaults)
+        let (defaults, cleanup) = try scratchDefaults()
+        defer { cleanup() }
+        let lab = AtticScrollEdgeLab(defaults: defaults, isPreview: true)
         XCTAssertEqual(lab.style, .systemSoft)
         lab.style = .cleanCut
-        XCTAssertEqual(AtticScrollEdgeLab(defaults: defaults).style, .cleanCut, "a preview keeps the owner's choice")
-        XCTAssertEqual(AtticScrollEdgeLab(defaults: defaults, environment: ["ATTIC_UI_TEST_SCROLL_EDGES": "soft"]).style, .systemSoft)
-        XCTAssertEqual(AtticScrollEdgeLab(defaults: nil, environment: ["ATTIC_UI_TEST_SCROLL_EDGES": "clean"]).style, .cleanCut)
+        XCTAssertEqual(AtticScrollEdgeLab(defaults: defaults, isPreview: true).style, .cleanCut, "a preview keeps the owner's choice")
+        XCTAssertEqual(AtticScrollEdgeLab(defaults: defaults, environment: ["ATTIC_UI_TEST_SCROLL_EDGES": "soft"], isPreview: true).style, .systemSoft)
+        let (fresh, freshCleanup) = try scratchDefaults()
+        defer { freshCleanup() }
+        XCTAssertEqual(AtticScrollEdgeLab(defaults: fresh, environment: ["ATTIC_UI_TEST_SCROLL_EDGES": "clean"], isPreview: true).style, .cleanCut)
         XCTAssertEqual(AtticScrollEdgeStyle.allCases.map(\.title), ["System soft edge", "Clean cut"])
+    }
+
+    /// The official identity and every other non-preview one: the system
+    /// soft edge, whatever the environment or the stored choice says, and
+    /// nothing is kept. `isPreview` is what `AtticMotionLab` decides for an
+    /// identity, so each identity goes through that check here.
+    func testNoNonPreviewIdentityLeavesTheSystemSoftEdge() throws {
+        let identities: [(String?, [String])] = [
+            ("com.taha.Attic", []),
+            ("com.taha.Attic", [AtticMotionLab.argument]),
+            ("com.taha.Attic.UnitTestHost", []),
+            ("com.taha.Attic.perf.ui", []),
+            ("com.taha.Attic.preview.", []),
+            (nil, [AtticMotionLab.argument]),
+        ]
+        for (identity, arguments) in identities {
+            let isPreview = AtticMotionLab.isAvailable(bundleIdentifier: identity, arguments: arguments)
+            XCTAssertFalse(isPreview, "\(identity ?? "nil") \(arguments) is not a preview")
+            let (defaults, cleanup) = try scratchDefaults()
+            defer { cleanup() }
+            // The environment says clean.
+            let forced = AtticScrollEdgeLab(defaults: defaults, environment: ["ATTIC_UI_TEST_SCROLL_EDGES": "clean"], isPreview: isPreview)
+            XCTAssertEqual(forced.style, .systemSoft, "\(identity ?? "nil"): the environment cannot choose Clean cut")
+            // The defaults say clean.
+            defaults.set(AtticScrollEdgeStyle.cleanCut.rawValue, forKey: AtticScrollEdgeLab.styleKey)
+            XCTAssertEqual(AtticScrollEdgeLab(defaults: defaults, isPreview: isPreview).style, .systemSoft,
+                           "\(identity ?? "nil"): a stored Clean cut is ignored")
+            // A choice made in code is not kept.
+            defaults.removeObject(forKey: AtticScrollEdgeLab.styleKey)
+            AtticScrollEdgeLab(defaults: defaults, isPreview: isPreview).style = .cleanCut
+            XCTAssertNil(defaults.string(forKey: AtticScrollEdgeLab.styleKey), "\(identity ?? "nil"): nothing is kept")
+        }
+        // A preview identity is the one that may.
+        XCTAssertTrue(AtticMotionLab.isAvailable(bundleIdentifier: "com.taha.Attic.preview.main", arguments: []))
     }
 
     // MARK: - The system soft edge on the Tasks lists
@@ -105,9 +143,9 @@ final class ScrollEdgeTests: XCTestCase {
         XCTAssertEqual(Self.pockets(in: list).count, 2)
     }
 
-    /// The tabs and the add bar still work as the lists' bars: a tab click
-    /// switches the page, and the add bar takes typing and adds.
-    func testTheBarsKeepTheirControls() throws {
+    /// The tabs still work under the lists' top bar: a tab click switches
+    /// the page. (Typing in the add bar is a UI test's: `TasksPageUITests`.)
+    func testTheTabsStillSwitchThePagesUnderTheBar() throws {
         use(.systemSoft)
         let hosted = try Hosted(height: 520)
         defer { hosted.close() }

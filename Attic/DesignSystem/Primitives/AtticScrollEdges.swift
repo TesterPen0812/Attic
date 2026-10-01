@@ -40,32 +40,41 @@ enum AtticScrollEdgeStyle: String, CaseIterable, Sendable {
     }
 }
 
-/// The scroll edge style, live: release builds always use the system soft
-/// edge; a preview's developer panel (Settings › General › Motion Lab)
-/// switches it, kept in the preview's own defaults; UI tests can set it with
-/// `ATTIC_UI_TEST_SCROLL_EDGES` (`soft` or `clean`).
+/// The scroll edge style, live. Only a preview identity
+/// (`AtticMotionLab.isAvailable`, the check the Motion Lab and the demo data
+/// use) can leave the system soft edge: its developer panel (Settings ›
+/// General › Motion Lab) switches it, kept in the preview's own defaults, and
+/// UI tests can force one with `ATTIC_UI_TEST_SCROLL_EDGES` (`soft` or
+/// `clean`). The official identity and every other one always resolve to the
+/// system soft edge, whatever the environment or the defaults say, and keep
+/// nothing.
 @MainActor
 final class AtticScrollEdgeLab: ObservableObject {
-    static let shared = AtticScrollEdgeLab(defaults: AtticMotionLab.isAvailable ? .standard : nil,
-                                           environment: ProcessInfo.processInfo.environment)
+    static let shared = AtticScrollEdgeLab(defaults: .standard,
+                                           environment: ProcessInfo.processInfo.environment,
+                                           isPreview: AtticMotionLab.isAvailable)
 
     @Published var style: AtticScrollEdgeStyle {
         didSet { defaults?.set(style.rawValue, forKey: Self.styleKey) }
     }
 
+    /// The preview's own defaults; nil outside a preview, where nothing is kept.
     private let defaults: UserDefaults?
     static let styleKey = "AtticScrollEdgeStyle"
 
-    init(defaults: UserDefaults?, environment: [String: String] = [:]) {
-        self.defaults = defaults
-        var style = (defaults?.string(forKey: Self.styleKey)).flatMap(AtticScrollEdgeStyle.init(rawValue:)) ?? .systemSoft
-        #if DEBUG
-        switch environment["ATTIC_UI_TEST_SCROLL_EDGES"] {
-        case "soft": style = .systemSoft
-        case "clean": style = .cleanCut
-        default: break
+    init(defaults: UserDefaults, environment: [String: String] = [:], isPreview: Bool) {
+        self.defaults = isPreview ? defaults : nil
+        var style = AtticScrollEdgeStyle.systemSoft
+        if isPreview {
+            style = defaults.string(forKey: Self.styleKey).flatMap(AtticScrollEdgeStyle.init(rawValue:)) ?? .systemSoft
+            #if DEBUG
+            switch environment["ATTIC_UI_TEST_SCROLL_EDGES"] {
+            case "soft": style = .systemSoft
+            case "clean": style = .cleanCut
+            default: break
+            }
+            #endif
         }
-        #endif
         self.style = style
     }
 }
