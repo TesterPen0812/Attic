@@ -25,7 +25,7 @@ final class WorkspaceOperationCoordinator {
     private var pending: [UUID: (WorkspaceOperationEnvelope, WorkspaceOperationClaim, Publication)] = [:]
     private var publicationStep: [UUID: Int] = [:]
     private var heldOwners: Set<WorkspaceOwner> = []
-    private var plainUnknown: ([State], [State], Set<WorkspaceOwner>)?
+    private var plainUnknown: ([State], [State], Set<WorkspaceOwner>, [WorkspaceOwner: Set<PersistentIdentifier>])?
     private(set) var startupReconciled = false
     struct RecoveryCopy {
         let operationID: UUID
@@ -40,6 +40,9 @@ final class WorkspaceOperationCoordinator {
     /// Read-error seam deliberately affects reconciliation, never converts it
     /// to receipt absence. Shipping callers leave this nil.
     var beforeReconciliationRead: (() throws -> Void)?
+    #if ATTIC_OPERATION_CRASH_TESTS
+    var afterPreparation: (() async -> Void)?
+    #endif
 
     init(container: ModelContainer, journal: NoteDraftJournal) throws {
         self.container = container; self.journal = journal
@@ -55,6 +58,10 @@ final class WorkspaceOperationCoordinator {
         guard pending.isEmpty, try journal.operationEnvelopesSynchronously().isEmpty else {
             throw WorkspaceFoundationError.unknown
         }
+        // A legacy recovery file can be unreadable independently of the
+        // workspace's writable operation journal. Do not move all subsequent
+        // commits into that inaccessible directory.
+        try FileManager.default.createDirectory(at: replacement.directory, withIntermediateDirectories: true)
         journal = replacement
     }
 
@@ -71,6 +78,7 @@ final class WorkspaceOperationCoordinator {
                      selection: NSRange = NSRange(location: 0, length: 0), draftGeneration: UInt64 = 0,
                      checkpointClaim: NoteRecoveryClaim? = nil, staged: [StagedNoteAttachment] = [],
                      historyEffect: Data? = nil, replayOf: UUID? = nil, compensationOf: UUID? = nil) throws -> WorkspaceOperationEnvelope {
+        guard writes.isSubset(of: Set(reads.map(\.owner))) else { throw WorkspaceFoundationError.conflict }
         let context = freshContext()
         let scopes = try suppliedScopes ?? WorkspaceScopeToken.scopes(for: reads).map { try WorkspaceScopeToken.read($0, in: context) }
         let id = UUID(); allocatedIDs.insert(id)
@@ -93,6 +101,9 @@ final class WorkspaceOperationCoordinator {
         let claim: WorkspaceOperationClaim
         do { claim = try await journal.prepareOperation(envelope) }
         catch { return .notCommitted }
+        #if ATTIC_OPERATION_CRASH_TESTS
+        await afterPreparation?()
+        #endif
         // Concurrent preparation may have completed another writer; revalidate
         // its complete envelope here, never against warm presentation objects.
         guard affected.isDisjoint(with: heldOwners), sessionValid() else { return .conflict }
@@ -115,6 +126,7 @@ final class WorkspaceOperationCoordinator {
             }
             WorkspaceCrashHook.reach("K3-validation")
             try stage(context)
+            try validatePreservedOpaqueContent(context, before: envelope.tokens)
             try validateWriteSet(context, declared: envelope.writes)
             let resulting = try states(envelope.writes, in: context)
             context.insert(OperationReceipt(id: envelope.id, envelopeDigest: claim.digest,
@@ -163,26 +175,89 @@ final class WorkspaceOperationCoordinator {
             for scope in scopes {
                 guard try WorkspaceScopeToken.read(scope.scope, in: context) == scope else { return .conflict }
             }
-            let before = try states(writes, in: context, physical: true)
+            let previous = try sorted(writes).map { try WorkspaceModelToken.read($0, in: context) }
+            let physicalIDs = Dictionary(uniqueKeysWithValues: previous.map { ($0.owner, Set($0.replicas.map(\.physicalID))) })
+            let before = try states(writes, in: context, physical: true, baselineIDs: physicalIDs)
             try stage(context)
+            try validatePreservedOpaqueContent(context, before: previous)
             try validateWriteSet(context, declared: writes)
-            guard context.insertedModelsArray.isEmpty, context.deletedModelsArray.isEmpty else {
+            let next = try sorted(writes).map { try WorkspaceModelToken.read($0, in: context) }
+            guard try mayUsePlainSave(before: previous, after: next, in: context) else {
                 return .conflict
             }
-            let after = try states(writes, in: context, physical: true)
+            let after = try states(writes, in: context, physical: true, baselineIDs: physicalIDs)
             do { try save(context); return .committed }
             catch {
-                plainUnknown = (before, after, affected)
+                plainUnknown = (before, after, affected, physicalIDs)
                 heldOwners.formUnion(affected)
                 return reconcilePlain()
             }
         } catch { return .notCommitted }
     }
+
+    /// Classification lives at the writer boundary, so a caller cannot label
+    /// a lifecycle/association/import transition as an ordinary autosave.
+    func mayUsePlainSave(before: [WorkspaceModelToken], after: [WorkspaceModelToken], in context: ModelContext) throws -> Bool {
+        let old = Dictionary(uniqueKeysWithValues: before.map { ($0.owner, $0) })
+        let roots = after.filter { $0.owner.entity == .task || $0.owner.entity == .note }
+        guard roots.count == 1, let root = roots.first,
+              let original = old[root.owner], !original.replicas.isEmpty,
+              original.replicas.map(\.physicalID) == root.replicas.map(\.physicalID) else { return false }
+        let allowed: Set<String>
+        if root.owner.entity == .task {
+            guard after.count == 1 else { return false }
+            let id = root.owner.id
+            let entities = Set(context.container.schema.entities.map(\.name))
+            if entities.contains("NoteItem"), !(try context.fetch(FetchDescriptor<NoteItem>(predicate: #Predicate { $0.taskID == id }))).isEmpty { return false }
+            if entities.contains("TaskNoteAssociation"), !(try context.fetch(FetchDescriptor<TaskNoteAssociation>(predicate: #Predicate { $0.taskID == id && $0.detachedAt == nil }))).isEmpty { return false }
+            allowed = ["title", "statusRaw", "completedAt", "completedFromRaw", "completedFromOrder", "manualOrder", "updatedAt"]
+        } else {
+            for (before, after) in zip(original.replicas, root.replicas) {
+                guard before.fields["contentFormat"] == after.fields["contentFormat"] else { return false }
+                func document(_ values: [String: Data]) throws -> NoteDocument? {
+                    guard let data = values["content"], let content = try JSONDecoder().decode(Data?.self, from: data) else { return nil }
+                    return NoteContentCodec.decode(content).document
+                }
+                let oldDocument = try document(before.fields), newDocument = try document(after.fields)
+                guard oldDocument?.requires.contains("taskNote") == newDocument?.requires.contains("taskNote") else { return false }
+            }
+            allowed = ["content", "contentFormat", "title", "body", "plainText", "imageCount", "fileCount", "firstFileName", "revision", "revisionID", "updatedAt", "tagsRaw"]
+        }
+        guard zip(original.replicas, root.replicas).allSatisfy({ a, b in
+            Set(b.fields.keys.filter { b.fields[$0] != a.fields[$0] }).isSubset(of: allowed)
+        }) else { return false }
+        let encodedNoteID = try WorkspaceModelFields.encode(root.owner.id)
+        for token in after where token.owner != root.owner {
+            guard root.owner.entity == .note,
+                  token.replicas.allSatisfy({ $0.fields["noteID"] == encodedNoteID }),
+                  let previous = old[token.owner] else { return false }
+            switch token.owner.entity {
+            case .version:
+                // Autosave may preserve displaced states, but expiry is a
+                // separate ownership-checked bookkeeping operation.
+                guard previous.replicas.isEmpty, !token.replicas.isEmpty else { return false }
+                for version in token.replicas {
+                    guard original.replicas.contains(where: { note in
+                        ["content", "contentFormat", "title", "body"].allSatisfy { version.fields[$0] == note.fields[$0] }
+                            && version.fields["sourceRevisionID"] == note.fields["revisionID"]
+                    }) else { return false }
+                }
+            case .attachment:
+                guard !previous.replicas.isEmpty, previous.replicas.map(\.physicalID) == token.replicas.map(\.physicalID),
+                      zip(previous.replicas, token.replicas).allSatisfy({ a, b in
+                          Set(b.fields.keys.filter { b.fields[$0] != a.fields[$0] })
+                              .isSubset(of: ["deletedAt", "updatedAt", "sortIndex", "inlineOffset", "displayWidth", "displayHeight"])
+                      }) else { return false }
+            default: return false
+            }
+        }
+        return true
+    }
     func reconcilePlain() -> Outcome {
-        guard let (before, after, affected) = plainUnknown else { return .conflict }
+        guard let (before, after, affected, physicalIDs) = plainUnknown else { return .conflict }
         do {
             try beforeReconciliationRead?()
-            let current = try states(Set(before.map(\.owner)), in: freshContext(), physical: true)
+            let current = try states(Set(before.map(\.owner)), in: freshContext(), physical: true, baselineIDs: physicalIDs)
             let outcome: Outcome
             if current == after { outcome = .committed }
             else if current == before { outcome = .notCommitted }
@@ -223,11 +298,11 @@ final class WorkspaceOperationCoordinator {
                 for meta in pre.staged {
                     let family = attachments.filter { $0.id == meta.id }
                     guard !family.isEmpty, family.allSatisfy({ row in
-                        row.payload.map { Int64($0.count) == meta.byteCount && NotePayloadDigest.sha256($0) == meta.digest } == true
+                        row.payload.map { Int64($0.count) == meta.byteCount && (try? journal.digestSynchronously($0)) == meta.digest } == true
                     }), let payload = family[0].payload else { return .publicationPending }
-                    bytes[meta.id] = StagedNoteAttachment(id: meta.id, filename: meta.filename,
-                        contentTypeIdentifier: meta.contentTypeIdentifier, byteCount: meta.byteCount,
-                        digest: meta.digest, data: payload)
+                    bytes[meta.id] = try journal.verifiedAttachmentSynchronously(id: meta.id, filename: meta.filename,
+                        contentType: meta.contentTypeIdentifier, byteCount: meta.byteCount,
+                        digest: meta.digest, bytes: payload)
                 }
                 try bookkeeping(id) { $0.handoffProof = proof }
                 try await journal.retireDurably(noteID: pre.noteID, claim: checkpointClaim,
@@ -347,18 +422,37 @@ final class WorkspaceOperationCoordinator {
     private func sorted(_ owners: Set<WorkspaceOwner>) -> [WorkspaceOwner] {
         owners.sorted { ($0.entity.rawValue, $0.id.uuidString) < ($1.entity.rawValue, $1.id.uuidString) }
     }
-    private func states(_ owners: Set<WorkspaceOwner>, in context: ModelContext, physical: Bool = false) throws -> [State] {
+    private func states(_ owners: Set<WorkspaceOwner>, in context: ModelContext, physical: Bool = false,
+                        baselineIDs: [WorkspaceOwner: Set<PersistentIdentifier>]? = nil) throws -> [State] {
         try sorted(owners).map { owner in
             let token = try WorkspaceModelToken.read(owner, in: context)
             return State(owner: owner, replicas: try token.replicas.map {
-                let digest = NotePayloadDigest.sha256(try WorkspaceModelFields.encode($0.fields))
-                return physical ? NotePayloadDigest.sha256(try WorkspaceModelFields.encode($0.physicalID)) + ":" + digest : digest
+                let digest = try journal.digestSynchronously(WorkspaceModelFields.encode($0.fields))
+                let physicalKey = baselineIDs?[owner]?.contains($0.physicalID) == false
+                    ? "new" : try journal.digestSynchronously(WorkspaceModelFields.encode($0.physicalID))
+                return physical ? physicalKey + ":" + digest : digest
             }.sorted())
         }
     }
     private func validateWriteSet(_ context: ModelContext, declared: Set<WorkspaceOwner>) throws {
         for row in context.insertedModelsArray + context.changedModelsArray + context.deletedModelsArray {
             guard let owner = Self.owner(row), declared.contains(owner) else { throw WorkspaceFoundationError.conflict }
+        }
+    }
+    private func validatePreservedOpaqueContent(_ context: ModelContext, before: [WorkspaceModelToken]) throws {
+        let notes = before.filter { $0.owner.entity == .note }
+        let inserted = Set(context.insertedModelsArray.map(\.persistentModelID))
+        for row in context.changedModelsArray.compactMap({ $0 as? NoteItem }) where !inserted.contains(row.persistentModelID) {
+            guard let original = notes.flatMap(\.replicas).first(where: { $0.physicalID == row.persistentModelID }),
+                  let formatData = original.fields["contentFormat"], let contentData = original.fields["content"] else {
+                throw WorkspaceFoundationError.unknown
+            }
+            let format = try JSONDecoder().decode(Int.self, from: formatData)
+            let content = try JSONDecoder().decode(Data?.self, from: contentData)
+            let supported = format == 0 && content == nil || format == NoteDocument.currentFormat && content.map { NoteContentCodec.decode($0).isEditable } == true
+            guard supported || (row.content == content && row.contentFormat == format) else {
+                throw WorkspaceFoundationError.protectedOwner
+            }
         }
     }
     static func owner(_ row: any PersistentModel) -> WorkspaceOwner? {
@@ -388,6 +482,8 @@ extension WorkspaceOperationCoordinator {
     /// commit primitive performs the unsuspended fresh-context mutation.
     func commitCompatibility(tokens: [WorkspaceModelToken], scopes: [WorkspaceScopeToken], writes: Set<WorkspaceOwner>,
                              intent: String, plain: Bool, writer: @escaping (ModelContext) throws -> Void,
+                             staged: [StagedNoteAttachment] = [], afterDocuments: [UUID: Data] = [:],
+                             preDraft: NoteDraftJournalEntry? = nil,
                              stage: (ModelContext) throws -> Void) throws {
         let previous = save; save = writer; defer { save = previous }
         if plain {
@@ -396,7 +492,8 @@ extension WorkspaceOperationCoordinator {
             }
             return
         }
-        let envelope = try newEnvelope(intent: intent, reads: tokens, writes: writes, scopes: scopes)
+        let envelope = try newEnvelope(intent: intent, reads: tokens, writes: writes, scopes: scopes,
+            preDraft: preDraft, afterDocuments: afterDocuments, staged: staged)
         allocatedIDs.remove(envelope.id)
         let affected = Set(tokens.map(\.owner)).union(writes)
         guard affected.isDisjoint(with: heldOwners) else { throw WorkspaceFoundationError.unknown }

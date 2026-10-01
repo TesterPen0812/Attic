@@ -133,7 +133,7 @@ final class TagService {
     @discardableResult
     func revert(_ snapshot: TagChangeSnapshot) -> Bool {
         guard !snapshot.isEmpty else { return true }
-        let context = WorkspaceLegacyBridge.context(for: container)
+        let context = WorkspaceLegacyBridge.context(for: container, includeCanvas: true)
         var changed = false
         func reverted(_ raw: String, _ change: TagChangeSnapshot.Change) -> String? {
             let tags = Set(AtticTag.decode(raw)).subtracting(change.added).union(change.removed)
@@ -162,7 +162,7 @@ final class TagService {
     /// Applies `transform` to every row's tag set; nil leaves a row alone.
     /// Returns what it removed and added on each row it changed.
     private func rewrite(_ transform: (Set<String>) -> Set<String>?) -> TagChangeSnapshot? {
-        let context = WorkspaceLegacyBridge.context(for: container)
+        let context = WorkspaceLegacyBridge.context(for: container, includeCanvas: true)
         var previous: [PersistentIdentifier: TagChangeSnapshot.Change] = [:]
         func apply(_ raw: String, _ identifier: PersistentIdentifier) -> String? {
             let before = Set(AtticTag.decode(raw))
@@ -198,7 +198,7 @@ final class TagService {
     /// live and tag filters, so an older tagged copy never answers for a
     /// newer one that has no tags or is deleted.
     private func liveTags() throws -> [AtticItemRef: Set<String>] {
-        let context = WorkspaceLegacyBridge.context(for: container)
+        let context = WorkspaceLegacyBridge.context(for: container, includeCanvas: true)
         var result: [AtticItemRef: Set<String>] = [:]
         func record(_ ref: AtticItemRef, _ raw: String) {
             let tags = Set(AtticTag.decode(raw))

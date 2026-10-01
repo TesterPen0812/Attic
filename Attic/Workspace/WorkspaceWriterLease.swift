@@ -13,7 +13,8 @@ final class WorkspaceWriterLease: @unchecked Sendable {
     private final class Registry: @unchecked Sendable {
         let lock = NSLock()
         var leases: [String: WeakLease] = [:]
-        var containerKey: UInt8 = 0
+        let containerKey = UnsafeMutableRawPointer.allocate(byteCount: 1, alignment: 1)
+        deinit { containerKey.deallocate() }
     }
     private static let registry = Registry()
     static func acquire(storeURL: URL) throws -> WorkspaceWriterLease {
@@ -25,10 +26,10 @@ final class WorkspaceWriterLease: @unchecked Sendable {
         return lease
     }
     static func attach(_ lease: WorkspaceWriterLease, to container: ModelContainer) {
-        objc_setAssociatedObject(container, &registry.containerKey, lease, .OBJC_ASSOCIATION_RETAIN_NONATOMIC)
+        objc_setAssociatedObject(container, registry.containerKey, lease, .OBJC_ASSOCIATION_RETAIN_NONATOMIC)
     }
     static func attached(to container: ModelContainer) -> WorkspaceWriterLease? {
-        objc_getAssociatedObject(container, &registry.containerKey) as? WorkspaceWriterLease
+        objc_getAssociatedObject(container, registry.containerKey) as? WorkspaceWriterLease
     }
     private let descriptor: Int32
     init(storeURL: URL) throws {

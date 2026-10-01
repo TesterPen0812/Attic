@@ -505,9 +505,7 @@ final class CanvasStore: ObservableObject {
         let contextFactory = makeFreshContext ?? { ModelContext(container) }
         self.makeFreshContext = {
             let fresh = try contextFactory()
-            #if os(macOS)
-            try WorkspaceLegacyBridge.registerContext(fresh)
-            #endif
+            fresh.autosaveEnabled = false
             return fresh
         }
         self.loadReplicas = loadReplicas

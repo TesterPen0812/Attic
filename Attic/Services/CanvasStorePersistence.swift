@@ -626,11 +626,7 @@ extension CanvasStore {
 
 extension CanvasStore {
     static func makeStoreContext(_ container: ModelContainer) -> ModelContext {
-        #if os(macOS)
-        return WorkspaceLegacyBridge.context(for: container)
-        #else
         let context = ModelContext(container); context.autosaveEnabled = false; return context
-        #endif
     }
     static func persistSharedStoreContext(_ context: ModelContext, using writer: @escaping (ModelContext) throws -> Void) throws {
         #if os(macOS)

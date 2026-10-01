@@ -741,6 +741,10 @@ final class NoteStore: ObservableObject {
         var references: [AttachmentFileReference] = []
 #endif
         do {
+            // Eligibility and the writer baseline must describe the same
+            // fresh physical family, including rows another context removed
+            // since the previous attempt.
+            context = try makeFreshContext()
             let deleted = try context.fetch(FetchDescriptor<NoteItem>(
                 predicate: #Predicate { $0.deletedAt != nil }
             ))
@@ -1111,10 +1115,8 @@ final class NoteStore: ObservableObject {
         guard save() else { return false }
         attachmentFailures[attachment.id] = nil
         attachmentRetryVersions[attachment.id] = nil
-        // What is shown changed without a reload; the next presentation
-        // (a restore, a refresh) must reconcile files again, not match the
-        // signature from before the removal and skip its repair.
-        reconciledAttachmentSignature = nil
+        // save() installed and reconciled the fresh committed presentation.
+        // Retain its signature so a subsequent refresh does not repeat it.
         return true
     }
 

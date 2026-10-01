@@ -290,6 +290,9 @@ extension CanvasStore {
         var purged = Set<UUID>()
         var stamped = false
         do {
+            #if os(macOS)
+            if alongside != nil { try WorkspaceLegacyBridge.registerContext(context, includeCanvas: true) }
+            #endif
             let boards = try context.fetchCanvasReplicas(FetchDescriptor<CanvasBoardItem>(
                 predicate: #Predicate { $0.tombstoned && $0.purgedAt == nil }
             ))

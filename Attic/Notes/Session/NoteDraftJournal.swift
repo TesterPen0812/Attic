@@ -663,6 +663,13 @@ final class NoteDraftJournal: NoteDraftJournaling {
 // MARK: Phase 3 operation ownership (same IO actor as checkpoint mutations)
 
 private extension NoteDraftJournalIO {
+    func digestBytes(_ bytes: Data) -> String { Self.digest(bytes) }
+    func verifyAttachment(id: UUID, filename: String, contentType: String, byteCount: Int64, digest: String, bytes: Data) throws -> StagedNoteAttachment {
+        let staged = StagedNoteAttachment(id: id, filename: filename, contentTypeIdentifier: contentType,
+            byteCount: byteCount, digest: digest, data: bytes)
+        guard staged.payloadIsVerified else { throw WorkspaceFoundationError.preparationFailed }
+        return staged
+    }
     var operationsDirectory: URL { directory.appendingPathComponent("operations", isDirectory: true) }
     func operationDirectory(_ id: UUID) -> URL {
         operationsDirectory.appendingPathComponent(id.uuidString, isDirectory: true)
@@ -765,6 +772,14 @@ private extension NoteDraftJournalIO {
 }
 
 extension NoteDraftJournal {
+    nonisolated func digestSynchronously(_ bytes: Data) throws -> String {
+        let io = self.io
+        return try Self.waitForIO { await io.digestBytes(bytes) }
+    }
+    nonisolated func verifiedAttachmentSynchronously(id: UUID, filename: String, contentType: String, byteCount: Int64, digest: String, bytes: Data) throws -> StagedNoteAttachment {
+        let io = self.io
+        return try Self.waitForIO { try await io.verifyAttachment(id: id, filename: filename, contentType: contentType, byteCount: byteCount, digest: digest, bytes: bytes) }
+    }
     func inventoryCheckpoints() async throws -> [NoteDraftRecoveryEntry] { try await io.inventoryCheckpoints() }
     func finishOperationReconciliation() async { await io.finishOperationReconciliation() }
     func prepareOperation(_ envelope: WorkspaceOperationEnvelope) async throws -> WorkspaceOperationClaim {
@@ -817,7 +832,7 @@ extension NoteDraftJournal {
     }
     nonisolated private static func waitForIO<T: Sendable>(_ work: @escaping @Sendable () async throws -> T) throws -> T {
         let box = NoteJournalSynchronousResult<T>()
-        Task.detached {
+        Task.detached(priority: .userInitiated) {
             let result: Result<T, Error>
             do { result = .success(try await work()) } catch { result = .failure(error) }
             box.finish(result)

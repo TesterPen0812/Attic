@@ -13,8 +13,9 @@ enum WorkspaceLegacyBridge {
     private final class ContextState {
         let coordinator: WorkspaceOperationCoordinator
         var baseline: [WorkspaceOwner: WorkspaceModelToken]
-        init(_ coordinator: WorkspaceOperationCoordinator, _ baseline: [WorkspaceOwner: WorkspaceModelToken]) {
-            self.coordinator = coordinator; self.baseline = baseline
+        let includeCanvas: Bool
+        init(_ coordinator: WorkspaceOperationCoordinator, _ baseline: [WorkspaceOwner: WorkspaceModelToken], includeCanvas: Bool) {
+            self.coordinator = coordinator; self.baseline = baseline; self.includeCanvas = includeCanvas
         }
     }
     private static var coordinators: [ObjectIdentifier: WeakCoordinator] = [:]
@@ -39,18 +40,18 @@ enum WorkspaceLegacyBridge {
         }
         return try WorkspaceOperationCoordinator(container: container, journal: NoteDraftJournal(directory: directory))
     }
-    static func context(for container: ModelContainer) -> ModelContext {
+    static func context(for container: ModelContainer, includeCanvas: Bool = false) -> ModelContext {
         let context = ModelContext(container); context.autosaveEnabled = false
         // A failed baseline is represented by no registration. persist then
         // refuses; it never manufactures an empty read set from the failure.
-        try? registerContext(context)
+        try? registerContext(context, includeCanvas: includeCanvas)
         return context
     }
-    static func registerContext(_ context: ModelContext) throws {
+    static func registerContext(_ context: ModelContext, includeCanvas: Bool = false) throws {
         context.autosaveEnabled = false
         let coordinator = try coordinator(for: context.container)
-        let baseline = try inventory(in: context)
-        objc_setAssociatedObject(context, &contextKey, ContextState(coordinator, baseline), .OBJC_ASSOCIATION_RETAIN_NONATOMIC)
+        let baseline = try inventory(in: context, includeCanvas: includeCanvas)
+        objc_setAssociatedObject(context, &contextKey, ContextState(coordinator, baseline, includeCanvas: includeCanvas), .OBJC_ASSOCIATION_RETAIN_NONATOMIC)
     }
     static func persist(_ source: ModelContext, using writer: @escaping (ModelContext) throws -> Void,
                         sourceName: String, history: Bool = true) throws {
@@ -82,27 +83,57 @@ enum WorkspaceLegacyBridge {
             }
         }
         let reads = before.values.sorted { ($0.owner.entity.rawValue, $0.owner.id.uuidString) < ($1.owner.entity.rawValue, $1.owner.id.uuidString) }
-        let plain = !history && writes.count == 1 && writes.allSatisfy { owner in
-            guard let old = before[owner], let new = after[owner], !old.replicas.isEmpty,
-                  old.replicas.map(\.physicalID) == new.replicas.map(\.physicalID) else { return false }
-            let allowed: Set<String>
-            switch owner.entity {
-            case .task:
-                allowed = ["title", "statusRaw", "completedAt", "completedFromRaw", "completedFromOrder", "manualOrder", "updatedAt"]
-                // An association makes a task command a workspace operation.
-                let idData = try? WorkspaceModelFields.encode(owner.id)
-                if state.baseline.contains(where: { $0.key.entity == .note && $0.value.replicas.contains { $0.fields["taskID"] == idData } }) { return false }
-            case .note:
-                allowed = ["content", "contentFormat", "title", "body", "plainText", "imageCount", "fileCount", "firstFileName", "revision", "revisionID", "updatedAt", "tagsRaw"]
-            default: return false
-            }
-            return zip(old.replicas, new.replicas).allSatisfy { old, new in
-                Set(new.fields.keys.filter { new.fields[$0] != old.fields[$0] }).isSubset(of: allowed)
-            }
-        }
+        let plain = try !history && state.coordinator.mayUsePlainSave(
+            before: writes.map { before[$0]! }, after: writes.map { after[$0]! }, in: source)
         let scopes = try WorkspaceScopeToken.scopes(for: reads).map { try WorkspaceScopeToken.fromBaseline($0, state.baseline) }
+        var staged: [StagedNoteAttachment] = []
+        for owner in writes where owner.entity == .attachment {
+            guard let next = after[owner], let previous = before[owner], !next.replicas.isEmpty else { continue }
+            let oldPayloads = Set(previous.replicas.compactMap { $0.fields["payload"] })
+            let changed = next.replicas.filter { !oldPayloads.contains($0.fields["payload"] ?? Data()) }
+            guard !changed.isEmpty else { continue }
+            let values = changed[0].fields
+            guard changed.allSatisfy({ $0.fields == values }), let payloadData = values["payload"] else {
+                throw WorkspaceFoundationError.unknown
+            }
+            guard let payload = try JSONDecoder().decode(Data?.self, from: payloadData) else {
+                throw WorkspaceFoundationError.protectedOwner
+            }
+            func field<T: Decodable>(_ key: String, _ type: T.Type) throws -> T {
+                guard let data = values[key] else { throw WorkspaceFoundationError.unknown }
+                return try JSONDecoder().decode(type, from: data)
+            }
+            let value = try state.coordinator.journal.verifiedAttachmentSynchronously(id: owner.id, filename: field("originalFilename", String.self),
+                contentType: field("contentTypeIdentifier", String.self),
+                byteCount: field("byteCount", Int64.self), digest: field("contentDigest", String.self), bytes: payload)
+            staged.append(value)
+        }
+        var documents: [UUID: Data] = [:]
+        for (owner, next) in after where owner.entity == .note {
+            let contents = try next.replicas.compactMap { replica -> Data? in
+                guard let field = replica.fields["content"] else { throw WorkspaceFoundationError.unknown }
+                return try JSONDecoder().decode(Data?.self, from: field)
+            }
+            if Set(contents).count == 1 { documents[owner.id] = contents.first }
+        }
+        var preDraft: NoteDraftJournalEntry?
+        if !plain, documents.count == 1, let (id, document) = documents.first {
+            let newNote = before[.init(entity: .note, id: id)]?.replicas.isEmpty == true
+            // For first persistence/import autosave the current candidate is
+            // the user's pre-save draft. Model commands preserve stored before
+            // content here; open mixed commands supply their session pre-copy
+            // through the asynchronous coordinator API instead.
+            let beforeContent = try before[.init(entity: .note, id: id)]?.replicas.first?.fields["content"].flatMap {
+                try JSONDecoder().decode(Data?.self, from: $0)
+            }
+            let content = !history || newNote ? document : (beforeContent ?? document)
+            preDraft = NoteDraftJournalEntry(noteID: id, isPersisted: !newNote, baseRevisionID: nil,
+                content: content, selectionLocation: 0, selectionLength: 0,
+                staged: staged.map { .init(id: $0.id, filename: $0.filename, contentTypeIdentifier: $0.contentTypeIdentifier,
+                    byteCount: $0.byteCount, digest: $0.digest) }, savedAt: Date())
+        }
         try state.coordinator.commitCompatibility(tokens: reads, scopes: scopes, writes: writes, intent: sourceName,
-            plain: plain, writer: writer, stage: { target in
+            plain: plain, writer: writer, staged: staged, afterDocuments: documents, preDraft: preDraft, stage: { target in
                 for owner in writes {
                     guard let old = before[owner], let new = after[owner] else { throw WorkspaceFoundationError.unknown }
                     let oldByID = Dictionary(uniqueKeysWithValues: old.replicas.map { ($0.physicalID, $0.fields) })
@@ -124,51 +155,55 @@ enum WorkspaceLegacyBridge {
             })
         // The source context remains presentation/staging only; stores replace
         // it with a fresh presentation after a confirmed commit.
-        state.baseline = try inventory(in: state.coordinator.freshContext())
+        state.baseline = try inventory(in: state.coordinator.freshContext(), includeCanvas: state.includeCanvas)
     }
     static func persistSharedChanges(_ source: ModelContext, using writer: @escaping (ModelContext) throws -> Void) throws {
         if (source.insertedModelsArray + source.changedModelsArray + source.deletedModelsArray).contains(where: { $0 is ItemLink || $0 is TaskItem || $0 is NoteItem }) {
             try persist(source, using: writer, sourceName: "canvas shared-owner mutation")
         } else {
             try writer(source)
-            try registerContext(source)
         }
     }
 
-    private static func inventory(in context: ModelContext) throws -> [WorkspaceOwner: WorkspaceModelToken] {
+    private static func inventory(in context: ModelContext, includeCanvas: Bool) throws -> [WorkspaceOwner: WorkspaceModelToken] {
         let schema = Set(context.container.schema.entities.map(\.name))
-        var owners = Set<WorkspaceOwner>()
+        var families: [WorkspaceOwner: [WorkspaceModelToken.Replica]] = [:]
         func include<M: PersistentModel>(_ type: M.Type, name: String) throws {
             guard schema.contains(name) else { return }
             for row in try context.fetch(FetchDescriptor<M>()) {
                 guard let owner = WorkspaceOperationCoordinator.owner(row) else { throw WorkspaceFoundationError.unknown }
-                owners.insert(owner)
+                families[owner, default: []].append(.init(physicalID: row.persistentModelID, fields: try WorkspaceModelFields.read(row)))
             }
         }
         try include(TaskItem.self, name: "TaskItem"); try include(NoteItem.self, name: "NoteItem")
         try include(NoteAttachment.self, name: "NoteAttachment"); try include(NoteVersion.self, name: "NoteVersion")
         try include(NotePendingEdit.self, name: "NotePendingEdit"); try include(ItemLink.self, name: "ItemLink")
         try include(TaskNoteAssociation.self, name: "TaskNoteAssociation"); try include(TaskDeletionPreservation.self, name: "TaskDeletionPreservation")
-        try include(OperationReceipt.self, name: "OperationReceipt"); try include(CanvasBoardItem.self, name: "CanvasBoardItem")
-        try include(CanvasStrokeItem.self, name: "CanvasStrokeItem"); try include(CanvasImageItem.self, name: "CanvasImageItem")
-        try include(CanvasSemanticObjectItem.self, name: "CanvasSemanticObjectItem")
-        return try Dictionary(uniqueKeysWithValues: owners.map { ($0, try WorkspaceModelToken.read($0, in: context)) })
+        try include(OperationReceipt.self, name: "OperationReceipt")
+        if includeCanvas {
+            try include(CanvasBoardItem.self, name: "CanvasBoardItem")
+            try include(CanvasStrokeItem.self, name: "CanvasStrokeItem"); try include(CanvasImageItem.self, name: "CanvasImageItem")
+            try include(CanvasSemanticObjectItem.self, name: "CanvasSemanticObjectItem")
+        }
+        return Dictionary(uniqueKeysWithValues: families.map { owner, rows in
+            (owner, WorkspaceModelToken(owner: owner, replicas: rows.sorted { String(describing: $0.physicalID) < String(describing: $1.physicalID) }))
+        })
     }
     private static func makeRow(_ entity: WorkspaceOwner.Entity) throws -> any PersistentModel {
         switch entity {
-        case .task: TaskItem(backingData: TaskItem.createBackingData())
-        case .note: NoteItem(backingData: NoteItem.createBackingData())
-        case .attachment: NoteAttachment(backingData: NoteAttachment.createBackingData())
-        case .version: NoteVersion(backingData: NoteVersion.createBackingData())
-        case .proposal: NotePendingEdit(backingData: NotePendingEdit.createBackingData())
-        case .link: ItemLink(backingData: ItemLink.createBackingData())
-        case .association: TaskNoteAssociation(backingData: TaskNoteAssociation.createBackingData())
-        case .preservation: TaskDeletionPreservation(backingData: TaskDeletionPreservation.createBackingData())
-        case .receipt: OperationReceipt(backingData: OperationReceipt.createBackingData())
-        case .board: CanvasBoardItem(backingData: CanvasBoardItem.createBackingData())
-        case .stroke: CanvasStrokeItem(backingData: CanvasStrokeItem.createBackingData())
-        case .image: CanvasImageItem(backingData: CanvasImageItem.createBackingData())
-        case .semantic: CanvasSemanticObjectItem(backingData: CanvasSemanticObjectItem.createBackingData())
+        case .task: TaskItem(title: "")
+        case .note: NoteItem()
+        case .attachment: NoteAttachment(noteID: UUID(), originalFilename: "", byteCount: 0, sortIndex: 0, contentDigest: "")
+        case .version: NoteVersion(noteID: UUID(), createdAt: Date(), reason: .replacedByDraft, content: nil, contentFormat: 0, title: "", body: "", attachmentIDs: [], sourceRevisionID: nil)
+        case .proposal: NotePendingEdit(noteID: UUID(), baseRevisionToken: "", proposedContent: Data(), agentName: "", createdAt: Date())
+        case .link: ItemLink(source: .init(.task, UUID()), target: .init(.note, UUID()), kind: .reference)
+        case .association: TaskNoteAssociation(taskID: UUID(), noteID: UUID())
+        case .preservation: TaskDeletionPreservation(rootID: UUID(), deletedAt: Date(), capturedAt: Date(), provenance: "", snapshot: Data())
+        case .receipt: OperationReceipt(id: UUID(), envelopeDigest: "", affectedIDs: Data(), resultingTokens: Data())
+        case .board: CanvasBoardItem()
+        case .stroke: CanvasStrokeItem()
+        case .image: CanvasImageItem()
+        case .semantic: CanvasSemanticObjectItem()
         }
     }
 }
