@@ -147,6 +147,19 @@ final class WorkspaceCommitTests: XCTestCase {
         XCTAssertEqual(Set(rows.map(\.title)), ["Confirmed", "External"])
         XCTAssertEqual(rows.count, 2)
     }
+    func testC2SuccessfulDirectFixtureSaveRefreshesTheGuardBaselineWithPermanentIDs() throws {
+        let store = NoteStore(container: container)
+        let row = try XCTUnwrap(store.create(title: "Original"))
+        let source = store.modelContext
+        source.insert(NoteItem(id: row.id, title: "Duplicate"))
+        try source.save()
+        let owner = WorkspaceOwner(entity: .note, id: row.id)
+        XCTAssertEqual(try WorkspaceLegacyBridge.capturedToken(owner, in: source),
+                       try WorkspaceModelToken.read(owner, in: coordinator.freshContext()),
+                       "successful fixture save must refresh permanent identities and every replica field")
+        XCTAssertTrue(store.update(row, title: "Renamed"), store.lastErrorMessage ?? "No failure reason")
+        XCTAssertEqual(Set(try coordinator.freshContext().fetch(FetchDescriptor<NoteItem>()).filter { $0.id == row.id }.map(\.title)), ["Renamed"])
+    }
     func testC1RealConversionCommitsTextChildVersionAttachmentAssociationAndReceiptTogether() async throws {
         let (outcome, id) = try await conversion()
         XCTAssertEqual(outcome, .committed)

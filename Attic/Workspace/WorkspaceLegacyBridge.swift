@@ -84,6 +84,10 @@ enum WorkspaceLegacyBridge {
         try registerContext(fresh, includeCanvas: state.includeCanvas, baseline: state.baseline, scopeIndex: state.scopeIndex)
         return fresh
     }
+    static func capturedToken(_ owner: WorkspaceOwner, in source: ModelContext) throws -> WorkspaceModelToken {
+        guard let state = objc_getAssociatedObject(source, &contextKey) as? ContextState else { throw WorkspaceFoundationError.unknown }
+        return state.baseline[owner] ?? WorkspaceModelToken(owner: owner, replicas: [])
+    }
     static func persist(_ source: ModelContext, using writer: @escaping (ModelContext) throws -> Void,
                         sourceName: String, history: Bool = true) throws {
         guard let state = objc_getAssociatedObject(source, &contextKey) as? ContextState else {
