@@ -134,12 +134,12 @@ final class TasksRound11Tests: XCTestCase {
         }
     }
 
-    /// B (owner, 2026-10-01) replaces round 11's rule: rows scrolled under
-    /// the tab labels stay visible (softened behind the labels only).
-    func testRowsShowUnderTheTabs() {
-        let stops = TasksViewport.maskStops(height: 520, tabsTop: 80, bottomInset: 12)
-        let underLabels = stops.filter { $0.location >= 80.0 / 520 - 0.0001 && $0.location <= 96.0 / 520 + 0.0001 }
-        XCTAssertTrue(underLabels.allSatisfy { $0.opacity == 1 }, "rows under the tab labels are there")
+    /// The fade under the tabs: nothing scrolled under them shows.
+    func testNothingShowsUnderTheTabs() {
+        let stops = TasksViewport.maskStops(height: 520, tabsTop: 80, listTop: 110, bottomStack: 60)
+        let underLabels = stops.filter { $0.location <= 96.0 / 520 + 0.0001 }
+        XCTAssertTrue(underLabels.allSatisfy { $0.opacity == 0 }, "rows under the tab labels are gone")
+        XCTAssertEqual(stops.first { $0.location >= 110.0 / 520 - 0.0001 }?.opacity, 1, "fully there from the first row's rest")
     }
 
     /// Files over the page land on the row under them, never on another.

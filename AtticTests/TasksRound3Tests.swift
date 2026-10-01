@@ -325,13 +325,13 @@ final class TasksRound3Tests: XCTestCase {
         XCTAssertEqual(TasksViewport.bottomClearance(stackHeight: 36, bottomInset: 24), 76)
         XCTAssertEqual(TasksViewport.bottomClearance(stackHeight: 36 + 8 + 28, bottomInset: 24), 112, "the strip adds its room")
         XCTAssertEqual(TasksViewport.bottomClearance(stackHeight: 0, bottomInset: 12), 64, "never less than the bar")
-        // Since B (owner, 2026-10-01) the rows pass under the tabs and the
-        // bar; only toward the panel's edges do they recede.
-        let stops = TasksViewport.maskStops(height: 520, tabsTop: 80, bottomInset: 12)
-        XCTAssertEqual(stops.first?.opacity ?? 0, AtticEdgeBlur.edgeVisible, accuracy: 0.001, "faint at the very top edge")
-        XCTAssertEqual(stops.first { $0.location >= 80.0 / 520 - 0.0001 }?.opacity, 1, "fully there from the tabs' line down")
-        XCTAssertEqual(stops.last?.opacity ?? 0, AtticEdgeBlur.edgeVisible, accuracy: 0.001, "faint at the very bottom edge")
+        let stops = TasksViewport.maskStops(height: 520, tabsTop: 80, listTop: 110, bottomStack: 60)
+        XCTAssertEqual(stops.first?.opacity, 0, "nothing shows through the header")
+        XCTAssertEqual(stops.first { $0.location >= 110.0 / 520 - 0.0001 }?.opacity, 1, "fully there from the first row's rest")
+        XCTAssertLessThan(stops.last?.opacity ?? 1, 0.5, "receding under the add bar")
         XCTAssertEqual(stops.map(\.location), stops.map(\.location).sorted(), "stops in order")
+        let underTabs = stops.filter { $0.location > 80.0 / 520 && $0.location <= 96.0 / 520 + 0.0001 }
+        XCTAssertTrue(underTabs.allSatisfy { $0.opacity == 0 }, "scrolled text is gone under the tabs (round 12 keeps the round-11 rule)")
     }
 
     // MARK: - The quiet open ring (owner fix 1, review 12)

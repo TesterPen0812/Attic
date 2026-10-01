@@ -28,6 +28,10 @@ struct TasksPage: View {
     var chrome = TasksPageChrome()
 
     @Environment(\.atticDesign) private var design
+    /// How the lists meet the floating controls (owner, 2026-10-01: the
+    /// system's soft scroll edge; a preview can switch to round 13's clean
+    /// cut to compare).
+    @ObservedObject private var scrollEdges = AtticScrollEdgeLab.shared
     @StateObject private var focusTracker = AtticKeyboardFocusTracker()
     @FocusState private var focusedRow: AtticRowFocusID?
     @State private var drag: TasksDrag?
@@ -135,14 +139,30 @@ struct TasksPage: View {
     /// The page, its overlays, its keys and its monitors.
     private var frame: some View {
         // One full-height viewport (owner fix 8, review 9): the lists run
-        // to the panel's top edge and fade under the tabs and the header,
-        // which float above them; at rest the first row sits where it
-        // always did (a top content margin, not a moved row).
+        // to the panel's top and bottom edges under the floating controls;
+        // at rest the first row sits where it always did.
         ZStack(alignment: .top) {
-            pager
-            tabsBand
-            tabs
+            switch edgeStyle {
+            case .systemSoft:
+                // The system's soft scroll edge (owner, 2026-10-01): the tabs
+                // line and the bottom stack are the lists' bars, so each
+                // list's scroll view gets the system's edge effect under
+                // them. The bars stay put while the pages slide beneath.
+                pager
+                    .safeAreaBar(edge: .top, spacing: 0) { topBar }
+                    .safeAreaBar(edge: .bottom, spacing: 0) { bottomBar }
+            case .cleanCut:
+                // Round 13: the controls float over the lists, whose own
+                // mask cuts the rows at the controls' bands.
+                pager
+                tabsBand
+                tabs
+            }
         }
+        // The neighbours are drawn only as they slide in, never past the
+        // page's edge (the panel's shadow margin lies beyond it). Here, not
+        // on the pager, so the lists still run under the bars.
+        .clipped()
 
         // A reorder's lifted card, over everything on the page.
         .overlay { TasksLiftedCardLayer(lift: pointer.liftedCard) { lift in liftedCardRow(lift) } }
@@ -161,10 +181,13 @@ struct TasksPage: View {
         // The bottom stack owns its whole band (round 7, R4): a row scrolled
         // under the strip, the gaps between its buttons, a selection bar or
         // the add bar is never clicked, right-clicked or dragged through it.
+        // Under the system soft edge they are the lists' bottom bar instead.
         .overlay(alignment: .bottom) {
-            TasksBottomBand(stack: bottomStack, bottomInset: bottomInset)
+            if edgeStyle == .cleanCut { TasksBottomBand(stack: bottomStack, bottomInset: bottomInset) }
         }
-        .overlay(alignment: .bottom) { bottomControls }
+        .overlay(alignment: .bottom) {
+            if edgeStyle == .cleanCut { bottomControls }
+        }
         .coordinateSpace(Self.space)
         .atticKeyboardFocusTracking(focusTracker)
         .onKeyPress(phases: .down) { press in pageKey(press) }
@@ -782,6 +805,36 @@ struct TasksPage: View {
     /// Where the lists' first row rests: under the tabs, as before.
     private var listTop: CGFloat { TasksViewport.listTop(tabsTop: tabsTop) }
 
+    private var edgeStyle: AtticScrollEdgeStyle { scrollEdges.style }
+
+    /// The lists' bars' heights under the system soft edge (their scroll
+    /// views' safe area; their content margins are what remains), none for
+    /// the clean cut.
+    private var bars: TasksListBars {
+        edgeStyle == .systemSoft ? TasksListBars(top: listTop, bottom: bottomMargin) : TasksListBars()
+    }
+
+    /// The top bar (system soft edge): the tabs line, from the panel's top
+    /// edge down to where the first row rests, so the system's edge effect
+    /// covers the header's buttons and the tabs and ends at the resting
+    /// row. Its band owns its clicks, as in the clean cut.
+    private var topBar: some View {
+        tabs
+            .frame(height: listTop, alignment: .top)
+            .background(alignment: .top) { tabsBand }
+    }
+
+    /// The bottom bar (system soft edge): the bottom stack, in a bar of the
+    /// add bar's fixed zone (the lists' bottom margin), so the strip, a
+    /// selection bar or a paste offer coming and going never changes the
+    /// lists' insets (they rise above the bar, over the list, as before).
+    private var bottomBar: some View {
+        bottomControls
+            .fixedSize(horizontal: false, vertical: true)
+            .frame(height: bottomMargin, alignment: .bottom)
+            .background(alignment: .bottom) { TasksBottomBand(stack: bottomStack, bottomInset: bottomInset) }
+    }
+
     /// The tabs' band owns its clicks (review 9): a row scrolled under it
     /// is not clickable through it. The header above owns its own (the
     /// window drag region).
@@ -839,9 +892,6 @@ struct TasksPage: View {
             }
             .onChange(of: width, initial: true) { _, width in swipe.width = width }
         }
-        // The neighbours are drawn only as they slide in, never past the
-        // page's edge (the panel's shadow margin lies beyond it).
-        .clipped()
     }
 
     /// A page; `drawn` false: kept built but hidden (its list's scroll
@@ -854,8 +904,8 @@ struct TasksPage: View {
             case .done:
                 TasksDonePage(model: model, updates: drawn ? model.cellUpdates : TasksCellUpdates.quiet, store: store,
                               listTop: listTop, bottomClearance: bottomClearance,
-                              bottomMargin: bottomMargin, drawn: drawn,
-                              mask: viewportMask, reveal: $doneReveal,
+                              bottomMargin: bottomMargin, bars: bars, drawn: drawn,
+                              edges: edgeStyle, mask: viewportMask, reveal: $doneReveal,
                               revealRow: { id, proxy in revealRow(id, in: .done, proxy: proxy, animation: nil) },
                               cell: { row in cell(row, tab: .done, group: [], drawn: drawn) },
                               proxies: listProxies,
@@ -964,13 +1014,12 @@ struct TasksPage: View {
                 // of the list, not margin (see `TasksViewport.bottomMargin`).
                 .padding(.bottom, bottomClearance - bottomMargin)
             }
-            .contentMargins(.top, listTop, for: .scrollContent)
-            .contentMargins(.bottom, bottomMargin, for: .scrollContent)
-            .contentMargins(.top, listTop, for: .scrollIndicators)
-            .contentMargins(.bottom, bottomClearance, for: .scrollIndicators)
+            .contentMargins(.top, listTop - bars.top, for: .scrollContent)
+            .contentMargins(.bottom, bottomMargin - bars.bottom, for: .scrollContent)
+            .contentMargins(.top, listTop - bars.top, for: .scrollIndicators)
+            .contentMargins(.bottom, bottomClearance - bars.bottom, for: .scrollIndicators)
             .scrollIndicators(.automatic)
-            .scrollEdgeEffectHidden(true, for: .all)
-            .mask { viewportMask }
+            .tasksListEdges(edgeStyle, mask: viewportMask)
             .onChange(of: focusedRow) { _, focus in
                 guard let focus, focus.page == tab.rawValue, rows.contains(where: { $0.id == focus.id }),
                       focusTracker.isKeyboardDriving else { return }
@@ -1011,11 +1060,12 @@ struct TasksPage: View {
         }
     }
 
-    /// The viewport's fade, by position in the viewport, not per row (owner
-    /// fix 8, review 9): since B (2026-10-01) only toward the panel's edges,
-    /// past the controls; under the controls the rows stay clearly visible.
+    /// Clean cut (round 13, a preview's choice): the viewport's fade, by
+    /// position in the viewport, not per row (owner fix 8, review 9), so an
+    /// open quick look is cut line by line as it passes under the tabs and
+    /// header, or under the add bar. The system soft edge uses no mask.
     private var viewportMask: some View {
-        TasksViewportMask(tabsTop: tabsTop, bottomInset: bottomInset)
+        TasksViewportMask(stack: bottomStack, tabsTop: tabsTop, listTop: listTop, bottomInset: bottomInset)
     }
 
     // MARK: - Row
@@ -3295,20 +3345,41 @@ struct TasksMetaPopover: Equatable {
 /// The bottom stack's measured height (see `TasksPage.bottomStack`).
 @MainActor
 final class TasksBottomStackHeight: ObservableObject {
-    @Published var height: CGFloat = AtticControlSize.addBarHeight
+    @Published var height: CGFloat = AtticControlSize.addBarHeight {
+        didSet { scheduleMask() }
+    }
+    /// What the viewport's fade uses: the height a moment later. Changing
+    /// the lists' mask re-renders their layers (about 12 ms with 500 rows),
+    /// so it follows the strip after the keystroke's frame, while the strip
+    /// is still fading in, never inside it (round 4: the first keystroke).
+    @Published private(set) var maskHeight: CGFloat = AtticControlSize.addBarHeight
+    private var pending: DispatchWorkItem?
+
+    private func scheduleMask() {
+        pending?.cancel()
+        let work = DispatchWorkItem { [weak self] in
+            MainActor.assumeIsolated {
+                guard let self, self.maskHeight != self.height else { return }
+                self.maskHeight = self.height
+            }
+        }
+        pending = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.12, execute: work)
+    }
 }
 
-/// The viewport's fade (B: only toward the panel's edges). It no longer
-/// follows the bottom stack, so the strip coming and going never re-renders
-/// the lists' mask.
+/// The viewport's fade, redrawn by itself when the bottom stack changes.
 private struct TasksViewportMask: View {
+    @ObservedObject var stack: TasksBottomStackHeight
     let tabsTop: CGFloat
+    let listTop: CGFloat
     let bottomInset: CGFloat
 
     var body: some View {
         GeometryReader { proxy in
             LinearGradient(
-                stops: TasksViewport.maskStops(height: proxy.size.height, tabsTop: tabsTop, bottomInset: bottomInset)
+                stops: TasksViewport.maskStops(height: proxy.size.height, tabsTop: tabsTop, listTop: listTop,
+                                                bottomStack: stack.maskHeight + bottomInset)
                     .map { Gradient.Stop(color: .black.opacity($0.opacity), location: $0.location) },
                 startPoint: .top, endPoint: .bottom
             )
@@ -3355,6 +3426,25 @@ private struct TasksNoticeClearance: View {
             .preference(key: PanelPageNoticeClearancePreferenceKey.self,
                         value: footerZone + max(0, stack.height - AtticControlSize.addBarHeight))
             .accessibilityHidden(true)
+    }
+}
+
+/// The lists' bars under the system soft edge: their heights, which the
+/// lists' scroll views take as safe area (`TasksPage.bars`).
+struct TasksListBars: Equatable {
+    var top: CGFloat = 0
+    var bottom: CGFloat = 0
+}
+
+extension View {
+    /// A list's edges: the system's soft scroll edge under the page's bars,
+    /// or round 13's clean cut by the list's own mask.
+    @ViewBuilder
+    func tasksListEdges<Mask: View>(_ style: AtticScrollEdgeStyle, mask: Mask) -> some View {
+        switch style {
+        case .systemSoft: atticScrollEdgeEffect(style)
+        case .cleanCut: atticScrollEdgeEffect(style).mask { mask }
+        }
     }
 }
 
@@ -3415,29 +3505,51 @@ enum TasksViewport {
         return .bottom(min(max((visible - room - height) / (visible - height), 0), 1))
     }
 
-    /// The fade by position in the viewport (owner, 2026-10-01: B, the
-    /// controls float): rows run the panel's full height and pass clearly
-    /// under the tabs, the add bar and the header's buttons (softened only
-    /// behind each control, `AtticControlBackdrop`); past the controls,
-    /// toward the panel's edge, they recede to `AtticEdgeBlur.edgeVisible`
-    /// at the very edge. Above the tabs' line at the top, below the bottom
-    /// controls at the bottom, along a smooth ramp; fully there in between.
-    static func maskStops(height: CGFloat, tabsTop: CGFloat, bottomInset: CGFloat) -> [(location: CGFloat, opacity: Double)] {
+    /// A row's opacity at `depth` (0 open, 1 fully under) into an edge zone:
+    /// the edge veil's eased ramp scaled so its 65 % maximum is all of it.
+    static func edgeOpacity(atDepth depth: Double) -> Double {
+        1 - AtticEdgeBlur.veil(at: depth) / AtticEdgeBlur.maximumVeil
+    }
+
+    /// The length of the softened edge where a row meets a fixed band.
+    static let softEdge: CGFloat = 6
+
+    /// The fade by position in the viewport: nothing over the header or
+    /// under the tabs (so they stay readable over scrolled text), fully
+    /// there from the first row's resting place down to the
+    /// bottom zone, and receding under the bottom stack.
+    static func maskStops(height: CGFloat, tabsTop: CGFloat, listTop: CGFloat, bottomStack: CGFloat) -> [(location: CGFloat, opacity: Double)] {
         guard height > 0 else { return [(0, 1), (1, 1)] }
-        let edge = AtticEdgeBlur.edgeVisible
-        let samples = 6
-        func eased(_ t: Double) -> Double { t * t * (3 - 2 * t) }
-        var points: [(CGFloat, Double)] = []
-        let top = min(max(tabsTop, 0), height / 2)
-        for step in 0...samples {
-            let t = Double(step) / Double(samples)
-            points.append((top * CGFloat(t), edge + (1 - edge) * eased(t)))
+        let tabsBottom = tabsTop + AtticLayout.pageTabsHeight
+        // Round 13 (the hands-on review: faint title fragments hung just
+        // under the tabs and just above the add bar): a row scrolled past
+        // an edge is cut cleanly at the fixed band, with only a short
+        // softening inside the list's own viewport (`softEdge`, the edge
+        // veil's eased ramp). The round-12 ramps were 10 and 28 pt long and
+        // left half-faded rows readable in them.
+        let barTop = max(height - bottomStack, listTop)
+        let fadeStart = max(barTop - softEdge, listTop)
+        // Round 11 (the owner: rows scrolled under "Now Later Done" stayed
+        // readable and clashed with the labels): nothing shows under the
+        // tabs at all. Round 12: the rows come back along the edge veil's
+        // own eased ramp (`AtticEdgeBlur.veilStops`, taken to full so it
+        // ends in nothing rather than at its 65 % of a surface veil), now
+        // only in the last `softEdge` before their resting place.
+        let gap = max(0, listTop - tabsBottom)
+        let clear = max(tabsBottom + gap * 0.25, listTop - softEdge)
+        var points: [(CGFloat, Double)] = [(0, 0), (clear, 0)]
+        // Rising ramp, depth 1 at `clear` and 0 at the list's top.
+        for stop in AtticEdgeBlur.veilStops.reversed() where stop.location < 1 {
+            points.append((listTop - (listTop - clear) * CGFloat(stop.location), edgeOpacity(atDepth: stop.location)))
         }
-        let bottom = min(max(bottomInset, 0), height / 2)
-        for step in 0...samples {
-            let t = Double(step) / Double(samples)
-            points.append((height - bottom + bottom * CGFloat(t), 1 - (1 - edge) * eased(t)))
+        points.append((listTop, 1))
+        points.append((fadeStart, 1))
+        // Falling ramp, depth 0 at `fadeStart` and 1 at the bar's top.
+        for stop in AtticEdgeBlur.veilStops where stop.location > 0 && stop.location < 1 {
+            points.append((fadeStart + (barTop - fadeStart) * CGFloat(stop.location), edgeOpacity(atDepth: stop.location)))
         }
+        points.append((barTop, 0))
+        points.append((height, 0))
         var result: [(location: CGFloat, opacity: Double)] = []
         var last: CGFloat = -1
         for (y, opacity) in points {

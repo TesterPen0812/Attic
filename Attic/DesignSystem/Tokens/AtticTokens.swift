@@ -209,12 +209,6 @@ enum AtticEdgeBlur {
         }
         return veilStops.last?.opacity ?? 0
     }
-
-    // MARK: Floating controls (owner, 2026-10-01: B)
-
-    /// Content toward the panel's edge, past the controls, stays this
-    /// visible at the very edge (the owner's mockup B: about 35 %).
-    static let edgeVisible: Double = 0.35
 }
 
 // MARK: - Type

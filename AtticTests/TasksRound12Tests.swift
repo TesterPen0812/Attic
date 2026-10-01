@@ -576,22 +576,34 @@ final class TasksRound12Tests: XCTestCase {
         return last.opacity
     }
 
-    /// B (owner, 2026-10-01) replaces round 12's rule: whatever the
-    /// bottom stack, rows stay whole under the tabs and the bar, and recede
-    /// only past the controls toward the panel's edges, rising and falling
-    /// smoothly (never a step).
-    func testRowsPassUnderTheTabsAndTheBottomStack() {
-        let height: CGFloat = 520
-        let stops = TasksViewport.maskStops(height: height, tabsTop: 80, bottomInset: 12)
-        XCTAssertEqual(stops.map(\.location), stops.map(\.location).sorted(), "stops in order")
-        for y in stride(from: CGFloat(80), through: height - 12, by: 1) {
-            XCTAssertEqual(maskOpacity(stops, at: y, height: height), 1, accuracy: 0.001, "whole at \(y)")
+    /// Nothing scrolled under the tabs or the bottom stack survives the
+    /// list's mask (round 11 left 18 % under the tabs' gap and 22 % to 6 %
+    /// under the bar, which text still read through glass), for the bottom
+    /// stack as it grows (a strip, a selection bar), and the rows fade
+    /// along the edge veil's ramp, nothing at the resting place.
+    func testNothingIsReadableUnderTheTabsOrTheBottomStack() {
+        for stack in [CGFloat(36), 60, 96, 136] {
+            let height: CGFloat = 520
+            let stops = TasksViewport.maskStops(height: height, tabsTop: 80, listTop: 110, bottomStack: stack)
+            XCTAssertEqual(stops.map(\.location), stops.map(\.location).sorted(), "stops in order")
+            for y in stride(from: CGFloat(0), through: 96, by: 1) {
+                XCTAssertEqual(maskOpacity(stops, at: y, height: height), 0, accuracy: 0.001, "under the tabs at \(y), stack \(stack)")
+            }
+            for y in stride(from: height - stack, through: height, by: 1) {
+                XCTAssertEqual(maskOpacity(stops, at: y, height: height), 0, accuracy: 0.001, "under the bar at \(y), stack \(stack)")
+            }
+            XCTAssertEqual(maskOpacity(stops, at: 110, height: height), 1, accuracy: 0.001, "the resting row is whole")
+            XCTAssertEqual(maskOpacity(stops, at: height - stack - 44, height: height), 1, accuracy: 0.001, "and the last rows above the fade")
+            // Eased both ways: never rising under the bar, never falling in the gap.
+            let bottom = stride(from: height - stack - 28, through: height - stack, by: 1).map { maskOpacity(stops, at: $0, height: height) }
+            XCTAssertEqual(bottom, bottom.sorted(by: >), "falls toward the bar")
+            let top = stride(from: CGFloat(96), through: 110, by: 1).map { maskOpacity(stops, at: $0, height: height) }
+            XCTAssertEqual(top, top.sorted(), "rises toward the first row")
         }
-        let top = stride(from: CGFloat(0), through: 80, by: 1).map { maskOpacity(stops, at: $0, height: height) }
-        XCTAssertEqual(top, top.sorted(), "rises from the top edge")
-        let bottom = stride(from: height - 12, through: height, by: 1).map { maskOpacity(stops, at: $0, height: height) }
-        XCTAssertEqual(bottom, bottom.sorted(by: >), "falls toward the bottom edge")
-        XCTAssertGreaterThanOrEqual(top.min() ?? 0, AtticEdgeBlur.edgeVisible - 0.001, "never fainter than the edge")
+        // The ramp is the edge veil's, scaled: half the veil, about a half.
+        XCTAssertEqual(TasksViewport.edgeOpacity(atDepth: 0), 1)
+        XCTAssertEqual(TasksViewport.edgeOpacity(atDepth: 1), 0, accuracy: 1e-9)
+        XCTAssertEqual(TasksViewport.edgeOpacity(atDepth: 0.55), 1 - 0.30 / AtticEdgeBlur.maximumVeil, accuracy: 1e-9)
     }
 
     // MARK: - Astra P2: a page kept behind another section takes no mouse
@@ -664,11 +676,28 @@ final class TasksRound12Tests: XCTestCase {
     }
 
     /// The page drawn with a long list scrolled to two places (a hosted
-    /// stand-in for the round's UI test): since B (owner, 2026-10-01) the
-    /// rows are drawn under the tabs' line and the add bar's band, so the
-    /// picture there changes with what lies beneath (round 12 asserted the
-    /// opposite).
-    func testRowsAreDrawnUnderTheTabsAndTheAddBarsBand() throws {
+    /// stand-in for the round's UI test, which no runner could make find the
+    /// panel). Clean cut (round 13, a preview's choice): what is drawn under
+    /// the tabs and the add bar's band is the same picture at both, whatever
+    /// rows lie beneath.
+    func testNoRowIsDrawnUnderTheTabsOrTheAddBarsBandWithTheCleanCut() throws {
+        let shares = try bandShares(.cleanCut)
+        XCTAssertGreaterThan(shares.moved, 0.02, "the long list scrolled between the captures (\(shares.moved))")
+        XCTAssertLessThan(shares.top, 0.004, "rows show through the tabs' line (\(shares.top))")
+        XCTAssertLessThan(shares.bottom, 0.004, "rows show through the add bar's band (\(shares.bottom))")
+    }
+
+    // The system soft edge (the default, owner 2026-10-01) is checked in
+    // `ScrollEdgeTests`: its pockets are drawn by the window server, which a
+    // capture in the process does not show.
+
+    /// How much of the list's middle, the tabs' line (to a quarter of the
+    /// gap under it) and the add bar's band differ between two scroll places.
+    private func bandShares(_ style: AtticScrollEdgeStyle) throws -> (moved: Double, top: Double, bottom: Double) {
+        let lab = AtticScrollEdgeLab.shared
+        let saved = lab.style
+        lab.style = style
+        defer { lab.style = saved }
         let height: CGFloat = 520
         let hosted = try Hosted(height: height, long: true)
         defer { hosted.close() }
@@ -710,12 +739,10 @@ final class TasksRound12Tests: XCTestCase {
         let barTop = height - bottomInset - AtticControlSize.addBarHeight
         // The list itself moved, or the bands prove nothing.
         let moved = try share(first, second, from: tabsBottom + 40, to: barTop - 40)
-        XCTAssertGreaterThan(moved, 0.02, "the long list scrolled between the captures (\(moved))")
-        // The tabs' line and the gap under it, and the add bar's band.
-        let top = try share(first, second, from: tabsTop, to: TasksViewport.listTop(tabsTop: tabsTop))
-        XCTAssertGreaterThan(top, 0.004, "rows pass under the tabs' line (\(top))")
-        let bottom = try share(first, second, from: barTop - 4, to: height)
-        XCTAssertGreaterThan(bottom, 0.004, "rows pass under the add bar's band (\(bottom))")
+        // The tabs' line, and the gap under it down to where the rows start their
+        // ramp back (a quarter of the way to the resting place).
+        let clear = tabsBottom + (TasksViewport.listTop(tabsTop: tabsTop) - tabsBottom) * 0.25 - 1
+        return (moved, try share(first, second, from: tabsTop, to: clear), try share(first, second, from: barTop - 4, to: height))
     }
 
     // MARK: - Hidden Done reads nothing

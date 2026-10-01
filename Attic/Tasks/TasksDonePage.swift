@@ -22,8 +22,14 @@ struct TasksDonePage<Cell: View, Mask: View>: View {
     /// The add bar's zone: the only bottom margin (round 6; the rest of the
     /// clearance is room at the end of the list, so rows there take clicks).
     let bottomMargin: CGFloat
+    /// The page's bars under the system soft edge (none for the clean cut):
+    /// the log's scroll view takes them as safe area.
+    var bars = TasksListBars()
     /// False while the page is kept built but not shown (round 11).
     var drawn = true
+    /// How the log meets the floating controls (`TasksPage.edgeStyle`).
+    var edges: AtticScrollEdgeStyle = .systemSoft
+    /// Round 13's clean cut (the system soft edge needs none).
     let mask: Mask
     /// A row the keyboard moved to: brought into the visible area (review 8).
     @Binding var reveal: TasksPageModel.ScrollRequest?
@@ -99,12 +105,11 @@ struct TasksDonePage<Cell: View, Mask: View>: View {
             // The log's place is kept while its page is not built (round 10).
             .background(TasksScrollKeeper(model: model, tab: .done, proxies: proxies, drawn: drawn).accessibilityHidden(true))
         }
-        .contentMargins(.top, listTop, for: .scrollContent)
-        .contentMargins(.bottom, bottomMargin, for: .scrollContent)
-        .contentMargins(.top, listTop, for: .scrollIndicators)
-        .contentMargins(.bottom, bottomClearance, for: .scrollIndicators)
-        .scrollEdgeEffectHidden(true, for: .all)
-        .mask { mask }
+        .contentMargins(.top, listTop - bars.top, for: .scrollContent)
+        .contentMargins(.bottom, bottomMargin - bars.bottom, for: .scrollContent)
+        .contentMargins(.top, listTop - bars.top, for: .scrollIndicators)
+        .contentMargins(.bottom, bottomClearance - bars.bottom, for: .scrollIndicators)
+        .tasksListEdges(edges, mask: mask)
         .coordinateSpace(Self.space)
         .onChange(of: reveal) { _, request in
             guard let request else { return }

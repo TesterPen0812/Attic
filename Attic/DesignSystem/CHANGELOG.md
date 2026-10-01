@@ -535,7 +535,7 @@ additive; no token, colour, radius or type style changed.
   round 13's clean cut at the tabs' band and the bottom stack. A floating
   controls design replaces that behaviour later.
 
-### Floating controls: B (owner, 2026-10-01)
+### Floating controls: the system soft scroll edge (owner, 2026-10-01)
 
 - **The per-control softening is removed** (owner, 2026-10-01: "the
   floating icons and controls feel terrible… it is so incredibly laggy").
@@ -546,8 +546,26 @@ additive; no token, colour, radius or type style changed.
   `haloRadius` and `softeningFeather` are gone, with the Motion Lab's
   "Softening behind controls" slider. It re-rendered the content to blur it
   on every frame of a scroll or a swipe, and showed a muddy box by the tabs.
-- **`AtticEdgeBlur.edgeVisible`** 0.35: content past the controls, toward
-  the panel's edge, at the very edge.
+- **New `AtticScrollEdgeStyle`** (`Primitives/AtticScrollEdges.swift`):
+  the owner chose macOS 26's own scroll edge effect, soft style. The Tasks
+  page's tabs line and bottom stack are its lists' bars (`safeAreaBar`), so
+  each list's scroll view gets the system's pockets: under the tabs (from
+  the panel's top edge to the resting row, covering the header's buttons)
+  the rows are progressively blurred and faded; under the add bar's zone
+  (Liquid Glass) they fade into the background. The window server draws it;
+  Attic draws and re-renders nothing. `atticScrollEdgeEffect(_:)` sets
+  `.soft` (or hides it). Measured in the SDK and in-process: a pocket needs
+  a SwiftUI `ScrollView` under a bar that draws something (no pocket for a
+  clear bar, `safeAreaInset` or `contentMargins`); AppKit scroll views (the
+  note editor) and SwiftUI's `TextEditor` get none, and AppKit's
+  `NSScrollEdgeEffectStyle` exists only for title-bar and split-view
+  accessories. Notes keeps round 13's behaviour.
+- **`AtticScrollEdgeLab`**: a preview's developer panel (Motion Lab,
+  "Scroll edges") switches between **System soft edge** (the default, and
+  always in release builds) and **Clean cut** (round 13: no bars, the
+  lists' own mask cuts rows at the controls' bands), to feel both.
+- B's edge fade (`AtticEdgeBlur.edgeVisible`) is removed: the system's
+  effect fades the edges, and the clean cut is round 13's mask.
 - **`AtticReorderLiftModifier`**: the lifted card is opaque, in the panel's
   own colour (`fill(design:)`), no longer the pop-over fill.
 - **`AtticTaskRow`**: hover is a tint only; the actions button is the

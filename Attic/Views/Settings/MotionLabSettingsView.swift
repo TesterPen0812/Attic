@@ -17,6 +17,9 @@ struct MotionLabSettingsGroup: View {
 
     @State private var showsFineTuning = false
     @State private var copied = false
+    /// How lists meet the floating controls (owner, 2026-10-01): the
+    /// system's soft scroll edge, or round 13's clean cut, to feel both.
+    @ObservedObject private var scrollEdges = AtticScrollEdgeLab.shared
 
     var body: some View {
         SettingsGroup(
@@ -43,6 +46,13 @@ struct MotionLabSettingsGroup: View {
                 choices: AtticMotionStyle.allCases.map { ($0, $0 == .spring ? "Tuck away with a quick spring" : "Fade") },
                 selection: $settings.motionTuning.leave,
                 identifier: "setting-motion-leave"
+            )
+            AtticGroupDivider()
+            AtticSegmentedRow(
+                title: "Scroll edges",
+                choices: AtticScrollEdgeStyle.allCases.map { ($0, $0.title) },
+                selection: $scrollEdges.style,
+                identifier: "setting-scroll-edges"
             )
             AtticGroupDivider()
             AtticSwitchRow(
