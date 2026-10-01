@@ -1,5 +1,6 @@
 import Foundation
 import SwiftData
+import Security
 import XCTest
 @testable import Attic
 
@@ -15,6 +16,16 @@ final class OperationCrashHarnessTests: XCTestCase {
         let executable = try XCTUnwrap(Bundle.main.executableURL)
             .deletingLastPathComponent().appendingPathComponent("AtticOperationCrashHelper")
         XCTAssertTrue(FileManager.default.isExecutableFile(atPath: executable.path))
+        // Assert the signatures at launch time too; build evidence alone must
+        // not mask any test-runner re-signing of the embedded executable.
+        var hostCode: SecCode?
+        XCTAssertEqual(SecCodeCopySelf([], &hostCode), errSecSuccess)
+        var hostStatic: SecStaticCode?
+        XCTAssertEqual(SecCodeCopyStaticCode(try XCTUnwrap(hostCode), [], &hostStatic), errSecSuccess)
+        try assertSandboxAndRuntime(try XCTUnwrap(hostStatic), helper: false)
+        var helperCode: SecStaticCode?
+        XCTAssertEqual(SecStaticCodeCreateWithPath(executable as CFURL, [], &helperCode), errSecSuccess)
+        try assertSandboxAndRuntime(try XCTUnwrap(helperCode), helper: true)
         let child = Process()
         child.executableURL = executable
         child.arguments = ["launch-probe", root.path]
@@ -44,6 +55,19 @@ final class OperationCrashHarnessTests: XCTestCase {
                 XCTAssertEqual(notes.first?.body, "durable child bytes")
                 XCTAssertEqual(notes.first?.taskID, tasks.first?.id)
             }
+        }
+    }
+    private func assertSandboxAndRuntime(_ code: SecStaticCode, helper: Bool) throws {
+        var information: CFDictionary?
+        XCTAssertEqual(SecCodeCopySigningInformation(code, SecCSFlags(rawValue: kSecCSSigningInformation), &information), errSecSuccess)
+        let info = try XCTUnwrap(information as? [String: Any])
+        let flags = try XCTUnwrap(info[kSecCodeInfoFlags as String] as? NSNumber).uint32Value
+        XCTAssertNotEqual(flags & 0x10000, 0, "hardened runtime must be active")
+        let entitlements = try XCTUnwrap(info[kSecCodeInfoEntitlementsDict as String] as? [String: Any])
+        XCTAssertEqual(entitlements["com.apple.security.app-sandbox"] as? Bool, true)
+        if helper {
+            XCTAssertEqual(Set(entitlements.keys), ["com.apple.security.app-sandbox", "com.apple.security.inherit"])
+            XCTAssertEqual(entitlements["com.apple.security.inherit"] as? Bool, true)
         }
     }
 }

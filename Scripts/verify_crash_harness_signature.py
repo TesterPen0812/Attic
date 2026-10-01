@@ -13,7 +13,7 @@ for artifact in (host, helper):
     if "runtime" not in metadata:
         raise SystemExit(f"Hardened runtime missing: {artifact}")
     entitlements = plistlib.loads(subprocess.run(
-        ["codesign", "-d", "--entitlements", "-", str(artifact)],
+        ["codesign", "-d", "--entitlements", ":-", str(artifact)],
         capture_output=True, check=True,
     ).stdout)
     if entitlements.get("com.apple.security.app-sandbox") is not True:
