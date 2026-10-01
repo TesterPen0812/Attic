@@ -1214,21 +1214,6 @@ final class AtticPanelHostingView: NSHostingView<AtticPanelView> {
         true
     }
 
-    func isChromeControlPoint(_ windowPoint: CGPoint) -> Bool {
-        let point = AtticPanelCoordinateSpace.policyPoint(
-            fromHostingPoint: convert(windowPoint, from: nil), in: bounds, isFlipped: isFlipped
-        )
-        let insets = PanelGeometry.chromeInsets(cornerSize: panelCornerRadius, panelSize: bounds.size)
-        let topControlsY = bounds.maxY - insets.top - AtticStyle.controlHitSize
-        let pinRect = CGRect(x: bounds.minX + insets.leading, y: topControlsY,
-                             width: AtticStyle.controlHitSize, height: AtticStyle.controlHitSize)
-        let modeRect = CGRect(x: bounds.maxX - insets.trailing - chromeInteractionState.modeDockWidth,
-                              y: topControlsY, width: chromeInteractionState.modeDockWidth,
-                              height: AtticStyle.controlHitSize)
-        return pinRect.contains(point) || modeRect.contains(point)
-            || point.y < bounds.minY + insets.bottom + chromeInteractionState.bottomControlsHeight
-    }
-
     override func mouseDown(with event: NSEvent) {
         let hostingPoint = convert(event.locationInWindow, from: nil)
         let policyPoint = AtticPanelCoordinateSpace.policyPoint(
