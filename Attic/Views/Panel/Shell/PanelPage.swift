@@ -73,8 +73,6 @@ enum PanelHeaderLayout {
     /// The header's controls are one row, 36 tall.
     static let height = AtticControlSize.headerControl
     static let pinSize = AtticControlSize.panelButton
-    /// The buttons' continuous corner (the controls' corner rule).
-    static let controlCorner = AtticRadius.control(height: height)
 
     /// The page button's width when open (the region its controls may
     /// take; shut it is the pin's width).
@@ -83,17 +81,5 @@ enum PanelHeaderLayout {
     /// The bottom of the header, measured from the panel's top edge.
     static func bottom(chromeInsets: EdgeInsets) -> CGFloat {
         chromeInsets.top + height
-    }
-
-    /// The header's two buttons (shut), in the panel's coordinates: content
-    /// a page scrolls under them is softened there (owner, 2026-10-01: B).
-    static func footprints(layout: PanelPageLayout) -> [AtticControlFootprint] {
-        let insets = layout.chromeInsets
-        return [
-            AtticControlFootprint(frame: CGRect(x: insets.leading, y: insets.top, width: pinSize.width, height: height),
-                                  cornerRadius: controlCorner),
-            AtticControlFootprint(frame: CGRect(x: layout.panelSize.width - insets.trailing - pinSize.width, y: insets.top,
-                                                width: pinSize.width, height: height), cornerRadius: controlCorner)
-        ]
     }
 }

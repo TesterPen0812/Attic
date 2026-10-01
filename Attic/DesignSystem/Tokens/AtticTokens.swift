@@ -210,25 +210,7 @@ enum AtticEdgeBlur {
         return veilStops.last?.opacity ?? 0
     }
 
-    // MARK: Floating controls (owner, 2026-10-01: B with softening)
-
-    /// How strongly content is softened behind a floating control: the one
-    /// value to tune (0 none, 1 the most). It sets the dim (at the core of a
-    /// control's footprint the content keeps `1 - softening ×
-    /// softeningMaximumDim` of its opacity: about 57 %) and the blur of what
-    /// passes a control's line (`softening × softeningMaximumBlur`: about
-    /// 5 pt).
-    static let softening: Double = 0.85
-    static let softeningMaximumDim: Double = 0.5
-    static let softeningMaximumBlur: CGFloat = 6
-
-    /// Bare labels' halo: the content gives way completely within this
-    /// distance of their letters (`AtticLabelHalo`).
-    static let haloRadius: CGFloat = 2.5
-
-    /// The softening's feathered edge outside the control's own shape, so
-    /// no box edge shows.
-    static let softeningFeather: CGFloat = 10
+    // MARK: Floating controls (owner, 2026-10-01: B)
 
     /// Content toward the panel's edge, past the controls, stays this
     /// visible at the very edge (the owner's mockup B: about 35 %).

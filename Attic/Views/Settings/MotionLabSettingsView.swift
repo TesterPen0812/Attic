@@ -17,9 +17,6 @@ struct MotionLabSettingsGroup: View {
 
     @State private var showsFineTuning = false
     @State private var copied = false
-    /// The floating controls' softening (owner, 2026-10-01: B): its one
-    /// value, live.
-    @ObservedObject private var softening = AtticSofteningLab.shared
 
     var body: some View {
         SettingsGroup(
@@ -47,13 +44,6 @@ struct MotionLabSettingsGroup: View {
                 selection: $settings.motionTuning.leave,
                 identifier: "setting-motion-leave"
             )
-            AtticGroupDivider()
-            AtticSliderRow(label: "Softening behind controls",
-                           valueText: String(format: "%.0f %% visible · %.1f pt blur",
-                                             AtticSoftening.visible(strength: softening.strength, reduceTransparency: false) * 100,
-                                             AtticSoftening.blur(strength: softening.strength)),
-                           value: $softening.strength, range: 0...1, step: 0.05,
-                           identifier: "setting-softening-strength")
             AtticGroupDivider()
             AtticSwitchRow(
                 title: "Native pop-overs spring in (experimental)",

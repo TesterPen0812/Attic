@@ -535,45 +535,17 @@ additive; no token, colour, radius or type style changed.
   round 13's clean cut at the tabs' band and the bottom stack. A floating
   controls design replaces that behaviour later.
 
-### Floating controls: B with softening (owner, 2026-10-01)
+### Floating controls: B (owner, 2026-10-01)
 
-- **New `AtticSoftening`** (`Primitives/AtticSoftening.swift`): content
-  scrolling under a floating control is softened behind that control only,
-  still plainly there; around and between the controls it stays fully
-  visible. One value sets it (`AtticEdgeBlur.softening`, 0.85; a preview's
-  Motion Lab tunes it live through `AtticSofteningLab`):
-  - **The dim** is the content's own opacity, lowered in a feathered mask
-    of each control's footprint (`AtticSofteningMask`; about 57 % stays
-    visible at the core, `softeningMaximumDim` 0.5, fading back in over
-    `softeningFeather` 10 pt, a nine-part smoothstep image). It needs no
-    colour, so the real surface (Solid, Glass, Frosted, any Tint) shows
-    through and no tone or box appears over empty space. Controls report
-    their footprints (`atticControlFootprint(cornerRadius:outset:dims:)`,
-    `AtticControlFootprintsKey`); transient ones (the strip, the selection
-    bar) report none, so typing never re-masks a list.
-  - **Bare labels' halo** (`AtticLabelHalo`): the content gives way
-    completely within `haloRadius` 2.5 pt of their letters (the letters
-    grown and softened, drawn into the mask), so every letter keeps the
-    real surface behind it and its contrast floor, while the content shows
-    between and around the letters. Small bare glyphs (Find, View Options)
-    take the surface as their backing (`AtticControlFootprint.visible` 0).
-  - **The blur** is the content itself blurred as it passes a control's
-    line (`atticSoftenedByControls`, `AtticSofteningBand`; up to
-    `softeningMaximumBlur` 6 pt × strength, about 5 pt, by depth in the
-    line), the scroll edge fade's per-item effect as an equatable modifier.
-    The Tasks page blurs at the tabs' and the add bar's lines, which span
-    most of its width; a row passing between the header's corner buttons
-    stays sharp and is only dimmed behind them.
-    AppKit text (the legacy note editor) takes the dim only.
-  - **Reduce Transparency** hides the content behind a control completely:
-    the real surface is the solid backing.
-- Evaluated and not used: the system's soft scroll edge (a whole band at
-  the edge, fading out: the cut the owner turned down; nothing under Liquid
-  Glass bars; AppKit's `NSScrollEdgeEffectStyle` is for title-bar and
-  split-view accessories only), and a Core Animation background filter
-  under each control (in-process it blurs what is beneath, but on CI's
-  macOS 26 window server it sampled what is behind the window: a faint hole
-  that flattened the Pin's face).
+- **The per-control softening is removed** (owner, 2026-10-01: "the
+  floating icons and controls feel terrible… it is so incredibly laggy").
+  `AtticSoftening`, `AtticSofteningLab`, `AtticControlFootprint(s)`,
+  `atticControlFootprint`, `atticSoftenedByControls`, `AtticSofteningBand`,
+  `AtticSofteningMask`, `AtticLabelHalo`, `AtticSofteningShape` and the
+  tokens `softening`, `softeningMaximumDim`, `softeningMaximumBlur`,
+  `haloRadius` and `softeningFeather` are gone, with the Motion Lab's
+  "Softening behind controls" slider. It re-rendered the content to blur it
+  on every frame of a scroll or a swipe, and showed a muddy box by the tabs.
 - **`AtticEdgeBlur.edgeVisible`** 0.35: content past the controls, toward
   the panel's edge, at the very edge.
 - **`AtticReorderLiftModifier`**: the lifted card is opaque, in the panel's
