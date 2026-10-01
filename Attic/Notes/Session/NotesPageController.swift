@@ -223,13 +223,24 @@ final class NotesPageController: ObservableObject {
     }
     func startAndWait() async { start(); await waitForRecoveryWork() }
     func preserveDurably(_ session: NoteSession) async -> Bool {
-        guard await awaitRecoveryForUser() else { return false }
-        let failures = recoveryFailureCount
-        let result = preserve(session)
-        guard await awaitRecoveryForUser() else { return false }
-        let durable = recoveryFailureCount == failures && (result || hasDurableCheckpoint(session))
-        checkpointKeys[session.id] = nil
-        return durable
+        let deadline = ContinuousClock.now + recoveryResponseTimeout
+        repeat {
+            guard await awaitRecoveryForUser() else { return false }
+            let failures = recoveryFailureCount
+            let result = preserve(session)
+            let queued = recoveryWork != nil
+            guard await awaitRecoveryForUser(), recoveryFailureCount == failures else { return false }
+            // The import producer may advance its pending-source state while
+            // a checkpoint is being written. Prove the current copy, not the
+            // previous one; if it changed, checkpoint the latest state again.
+            let durable = hasDurableCheckpoint(session)
+                || (result && !session.isImporting && !NoteSessionPolicy.hasPendingWork(session.state))
+            checkpointKeys[session.id] = nil
+            if durable { return true }
+            guard queued else { return false }
+        } while ContinuousClock.now < deadline
+        reportRecoveryRetentionWarning("Recovery data is still being saved. Try again when saving finishes.")
+        return false
     }
     func preserveAllDurably() async -> Bool {
         if let active { captureViewState(active) }

@@ -760,7 +760,10 @@ final class NoteStore: ObservableObject {
             // Eligibility and the writer baseline must describe the same
             // fresh physical family, including rows another context removed
             // since the previous attempt.
-            context = try makeFreshContext()
+            // Install the fresh context and its presentation together, even
+            // when every family is retained. A no-op purge must not leave
+            // presented notes belonging to the previous staging context.
+            try reloadModels()
             let deleted = try context.fetch(FetchDescriptor<NoteItem>(
                 predicate: #Predicate { $0.deletedAt != nil }
             ))
