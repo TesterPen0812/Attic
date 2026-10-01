@@ -70,6 +70,11 @@ for id in $base_id $cand_id; do
     fi
 done
 
+# A locked screen takes no synthetic input and idles the GPU: the table would
+# be empty but look like a pass.
+screen_locked() { ioreg -n Root -d1 -a 2>/dev/null | grep -A1 CGSSessionScreenIsLocked | grep -q '<true/>' }
+if screen_locked; then print -u2 "the screen is locked: run the gate at an unlocked, idle Mac"; exit 3; fi
+
 readonly started=$SECONDS
 current_id=""
 samplers=()
