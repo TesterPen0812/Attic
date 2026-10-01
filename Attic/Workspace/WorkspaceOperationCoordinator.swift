@@ -34,6 +34,10 @@ final class WorkspaceOperationCoordinator {
         let payloads: [WorkspaceOperationEnvelope.Payload]
     }
     private(set) var preOperationRecoveryCopies: [RecoveryCopy] = []
+    private var historyOwners: [UUID: () -> Set<UUID>] = [:]
+    func registerHistory(_ route: UndoRoute) {
+        historyOwners[route.ownershipID] = { [weak route] in route?.referencedOperationIDs ?? [] }
+    }
     var historyReferences: () throws -> Set<UUID> = { [] }
     var recoveryReferences: () throws -> Set<UUID> = { [] }
     var save: (ModelContext) throws -> Void = { try $0.save() }
@@ -375,6 +379,7 @@ final class WorkspaceOperationCoordinator {
     func prunePublishedReceipts(limit: Int = 64) throws -> Int {
         guard startupReconciled, limit > 0 else { return 0 }
         let referenced = try historyReferences().union(recoveryReferences()).union(pending.keys)
+            .union(historyOwners.values.reduce(into: Set<UUID>()) { $0.formUnion($1()) })
         let envelopes = Set(try FileManager.default.contentsOfDirectory(
             at: journal.directory.appendingPathComponent("operations"), includingPropertiesForKeys: nil
         ).compactMap { UUID(uuidString: $0.lastPathComponent) })

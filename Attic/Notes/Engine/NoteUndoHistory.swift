@@ -55,6 +55,7 @@ final class NoteUndoHistory {
 
         /// The text this step would restore (tests).
         var restores: String { other.string }
+        var captureGroup: Int { group }
     }
 
     private struct Pending {
@@ -80,8 +81,11 @@ final class NoteUndoHistory {
     var onParagraphStyleSnapshot: ((Int, ParagraphState) -> Void)?
     var onTypingMarkSnapshot: ((NoteMark.Kind, Bool) -> Void)?
 
-    private(set) var undoOps: [Op] = []
-    private(set) var redoOps: [Op] = []
+    weak var workspace: WorkspaceHistory?
+    private var localUndoOps: [Op] = []
+    private var localRedoOps: [Op] = []
+    var undoOps: [Op] { workspace?.payloads(for: self, redo: false) ?? localUndoOps }
+    var redoOps: [Op] { workspace?.payloads(for: self, redo: true) ?? localRedoOps }
     private(set) var log: [String] = []
     private(set) var isReplaying = false
     private var open: Op?
@@ -98,18 +102,21 @@ final class NoteUndoHistory {
         self.limit = limit
     }
 
-    var canUndo: Bool { !undoOps.isEmpty && (canReplay?() ?? true) }
-    var canRedo: Bool { !redoOps.isEmpty && (canReplay?() ?? true) }
-    var undoActionName: String { undoOps.last?.name ?? "" }
-    var redoActionName: String { redoOps.first?.name ?? "" }
+    var canUndo: Bool { (workspace?.canUndo ?? !undoOps.isEmpty) && (canReplay?() ?? true) }
+    var canRedo: Bool { (workspace?.canRedo ?? !redoOps.isEmpty) && (canReplay?() ?? true) }
+    var undoActionName: String { workspace?.undoName ?? undoOps.last?.name ?? "" }
+    var redoActionName: String { workspace?.redoName ?? redoOps.first?.name ?? "" }
     var isChangeInFlight: Bool { !pending.isEmpty }
     var openStep: Op? { open }
 
     /// Bytes reachable by either side of Undo/Redo remain live until the
     /// history step is discarded. This is queried for purge, never per key.
     var referencedAttachmentIDs: Set<UUID> {
+        return attachmentIDs(in: undoOps + redoOps)
+    }
+    func attachmentIDs(in payloads: [Op]) -> Set<UUID> {
         var ids = Set<UUID>()
-        for op in undoOps + redoOps {
+        for op in payloads {
             for text in [op.current, op.other] {
                 text.enumerateAttribute(.attachment, in: NSRange(location: 0, length: text.length)) { value, _, _ in
                     if let image = value as? NoteImageAttachment { ids.insert(image.attachmentID) }
@@ -121,8 +128,9 @@ final class NoteUndoHistory {
     }
 
     func reset() {
-        undoOps.removeAll()
-        redoOps.removeAll()
+        workspace?.clear()
+        localUndoOps.removeAll()
+        localRedoOps.removeAll()
         open = nil
         pending.removeAll()
         composition = nil
@@ -160,6 +168,7 @@ final class NoteUndoHistory {
                                        (kind: NoteMark.Kind, before: Bool, after: Bool)?)
         fileprivate let undo: [Saved]
         fileprivate let redo: [Saved]
+        fileprivate let workspace: UndoRoute.Checkpoint?
     }
 
     func checkpoint() -> Checkpoint {
@@ -167,7 +176,7 @@ final class NoteUndoHistory {
         func copy(_ ops: [Op]) -> [Checkpoint.Saved] {
             ops.map { ($0, $0.range, $0.current, $0.other, $0.isInert, $0.tagDelta, $0.tagPickerDelta, $0.paragraphStyleSnapshot, $0.typingMarkSnapshot) }
         }
-        return Checkpoint(undo: copy(undoOps), redo: copy(redoOps))
+        return Checkpoint(undo: copy(undoOps), redo: copy(redoOps), workspace: workspace?.checkpoint())
     }
 
     /// Puts the history back to a checkpoint taken when the text was what it
@@ -186,8 +195,9 @@ final class NoteUndoHistory {
                 return op
             }
         }
-        undoOps = restore(checkpoint.undo)
-        redoOps = restore(checkpoint.redo)
+        let undo = restore(checkpoint.undo), redo = restore(checkpoint.redo)
+        if let snapshot = checkpoint.workspace { workspace?.rewind(to: snapshot) }
+        else { localUndoOps = undo; localRedoOps = redo }
         open = nil
         pending.removeAll()
         composition = nil
@@ -208,8 +218,9 @@ final class NoteUndoHistory {
     /// redone or undone back into object loss).
     func discardSteps(since marker: Int) {
         let keep = min(max(0, marker), undoOps.count)
-        undoOps.removeSubrange(keep...)
-        redoOps.removeAll()
+        precondition(workspace == nil, "Workspace rollback requires a complete checkpoint")
+        localUndoOps.removeSubrange(keep...)
+        localRedoOps.removeAll()
         open = nil
         pending.removeAll()
         composition = nil
@@ -280,8 +291,9 @@ final class NoteUndoHistory {
                 }
                 op.range = NSRange(location: start, length: endBefore + delta - start)
             } else {
-                append(Op(range: entry.newRange, current: now, other: entry.old, name: name, group: groupID ?? nextOwnGroup()))
-                open = (pending.count == 1 && groupID == nil) ? undoOps.last : nil
+                let op = Op(range: entry.newRange, current: now, other: entry.old, name: name, group: groupID ?? nextOwnGroup())
+                append(op)
+                open = (pending.count == 1 && groupID == nil) ? op : nil
             }
         }
     }
@@ -292,9 +304,10 @@ final class NoteUndoHistory {
     }
 
     private func append(_ op: Op) {
-        undoOps.append(op)
-        redoOps.removeAll()
-        if undoOps.count > limit { undoOps.removeFirst(undoOps.count - limit) }
+        if let workspace { workspace.capture(op, from: self); return }
+        localUndoOps.append(op)
+        localRedoOps.removeAll()
+        if localUndoOps.count > limit { localUndoOps.removeFirst(localUndoOps.count - limit) }
     }
 
     /// The text view announces a composition that starts by replacing
@@ -470,6 +483,13 @@ final class NoteUndoHistory {
         }
     }
 
+    /// A committed command can retain its text patch without recording an
+    /// independent text entry. The workspace records the whole operation once.
+    func commandPayload(before: NSAttributedString, after: NSAttributedString, name: String) -> Op {
+        Op(range: NSRange(location: 0, length: after.length), current: after, other: before,
+           name: name, group: nextOwnGroup())
+    }
+
     /// The caller supplies payload order: reverse capture order for Undo,
     /// forward capture order for Redo. No storage, selection, callbacks, Op
     /// payloads or standalone cursor are changed by this method.
@@ -505,8 +525,7 @@ final class NoteUndoHistory {
     /// The workspace, not this adapter, commits the associated cursor effect.
     @discardableResult
     func installReplay(_ prepared: PreparedReplay) -> Bool {
-        guard !isChangeInFlight, composition == nil, canReplay?() ?? true,
-              prepared.original.isEqual(to: storage), prepared.swaps.allSatisfy({ $0.1.stillMatches($0.0) }) else { return false }
+        guard canInstallReplay(prepared) else { return false }
         performUnrecorded {
             storage.setAttributedString(prepared.candidate)
             for (op, before, after) in prepared.swaps {
@@ -523,36 +542,49 @@ final class NoteUndoHistory {
         return true
     }
 
+    func canInstallReplay(_ prepared: PreparedReplay) -> Bool {
+        !isChangeInFlight && composition == nil && (canReplay?() ?? true)
+            && prepared.original.isEqual(to: storage) && prepared.swaps.allSatisfy { $0.1.stillMatches($0.0) }
+    }
+
+    /// Native menus and the undo-manager shim use the same workspace route.
+    func requestReplay(redo: Bool) {
+        if let workspace { Task { _ = await workspace.replay(redo: redo) } }
+        else if redo { _ = self.redo() } else { _ = undo() }
+    }
+
     @discardableResult
     func undo() -> Bool {
+        if let workspace { return workspace.undo() }
         guard canReplay?() ?? true else { return false }
         guard let last = undoOps.last else { return false }
         open = nil
         let group = last.group
         var changed = false
         while let op = undoOps.last, op.group == group {
-            undoOps.removeLast()
+            localUndoOps.removeLast()
             let applied = flip(op)
-            if !applied && !op.isInert { undoOps.append(op); break }
+            if !applied && !op.isInert { localUndoOps.append(op); break }
             changed = applied || changed
-            redoOps.insert(op, at: 0)
+            localRedoOps.insert(op, at: 0)
         }
         return changed
     }
 
     @discardableResult
     func redo() -> Bool {
+        if let workspace { return workspace.redo() }
         guard canReplay?() ?? true else { return false }
         guard let first = redoOps.first else { return false }
         open = nil
         let group = first.group
         var changed = false
         while let op = redoOps.first, op.group == group {
-            redoOps.removeFirst()
+            localRedoOps.removeFirst()
             let applied = flip(op)
-            if !applied && !op.isInert { redoOps.insert(op, at: 0); break }
+            if !applied && !op.isInert { localRedoOps.insert(op, at: 0); break }
             changed = applied || changed
-            undoOps.append(op)
+            localUndoOps.append(op)
         }
         return changed
     }

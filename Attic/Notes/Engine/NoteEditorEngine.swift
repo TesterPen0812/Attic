@@ -211,7 +211,8 @@ final class NoteEditorEngine: NSObject, NSTextViewDelegate, NSTextStorageDelegat
     init(noteID: UUID, document: NoteDocument, readOnly: Bool = false,
          design: AtticDesignContext = .default, today: NoteDay = NoteDay(date: Date()),
          imageProvider: NoteImageProviding? = nil,
-         stagedAttachments: [StagedNoteAttachment] = [], tags: [String] = []) {
+         stagedAttachments: [StagedNoteAttachment] = [], tags: [String] = [],
+         workspace: WorkspaceHistory? = nil) {
         self.noteID = noteID
         self.tags = AtticTag.normalizedSet(tags)
         self.isReadOnly = readOnly
@@ -246,6 +247,7 @@ final class NoteEditorEngine: NSObject, NSTextViewDelegate, NSTextStorageDelegat
         }
         history.onTypingMarkSnapshot = { [weak self] kind, enabled in self?.setTypingMark(kind, enabled: enabled) }
         history.canReplay = { [weak self] in self?.activity == .idle }
+        workspace?.attach(history)
     }
 
     // MARK: Document

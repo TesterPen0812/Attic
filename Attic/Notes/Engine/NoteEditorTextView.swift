@@ -336,12 +336,12 @@ final class NoteEditorTextView: NSTextView, NSAccessibilityCustomRotorItemSearch
 
     @objc func undo(_ sender: Any?) {
         guard let engine, !hasMarkedText() else { return }
-        engine.history.undo()
+        engine.history.requestReplay(redo: false)
     }
 
     @objc func redo(_ sender: Any?) {
         guard let engine, !hasMarkedText() else { return }
-        engine.history.redo()
+        engine.history.requestReplay(redo: true)
     }
 
     override func validateUserInterfaceItem(_ item: any NSValidatedUserInterfaceItem) -> Bool {
