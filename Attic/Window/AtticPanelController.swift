@@ -171,6 +171,9 @@ final class AtticPanelController: NSObject, NSWindowDelegate {
     private var isPanelMotionActive = false
     private var isInteractiveDismissal = false
     private var interactiveSwipeStartProgress: CGFloat = 0
+    /// The next hide was asked for by a swipe: under Reduced motion it
+    /// fades out rather than vanishing at once (owner, 2026-10-01).
+    private var hideFadesWhenReduced = false
     private var needsResizeAfterShowing = false
     private var isLiveResizing = false
     private var resizePersistenceState = PanelResizePersistenceState()
@@ -465,10 +468,11 @@ final class AtticPanelController: NSObject, NSWindowDelegate {
         return true
     }
 
-    private func animateShow(to finalFrame: CGRect) {
+    private func animateShow(to finalFrame: CGRect, spring: AtticMotionSpring? = nil) {
         let generation = visibilityTransition.beginTransition()
         isShowing = true
-        animatePanel(to: finalFrame, collapseProgress: 0, duration: 0.24) { [weak self] in
+        animatePanel(to: finalFrame, collapseProgress: 0, duration: 0.24, spring: spring,
+                     reducedFade: spring != nil) { [weak self] in
             MainActor.assumeIsolated {
                 guard let self else { return }
                 guard self.visibilityTransition.completeTransition(generation) else { return }
@@ -522,10 +526,13 @@ final class AtticPanelController: NSObject, NSWindowDelegate {
         let targetFrame = PanelGeometry.panelFrame(
             in: screen.visibleFrame, size: safeFrame.size, corner: currentCorner
         )
-        animatePanel(to: targetFrame, collapseProgress: 1, duration: 0.22) { [weak self] in
+        let reducedFade = hideFadesWhenReduced
+        hideFadesWhenReduced = false
+        animatePanel(to: targetFrame, collapseProgress: 1, duration: 0.22, reducedFade: reducedFade) { [weak self] in
             MainActor.assumeIsolated {
                 guard let self, self.visibilityTransition.ownsCompletion(generation) else { return }
                 self.panel.orderOut(nil)
+                self.contentContainer?.resetReducedFade()
                 self.performanceVisibilityChanges += 1
                 self.uiState.panelDidHide()
                 self.panel.alphaValue = 1
@@ -565,9 +572,18 @@ final class AtticPanelController: NSObject, NSWindowDelegate {
         }
         panel.onTrackpadDismissRequest = { [weak self] in
             guard let self else { return }
+            // A pin set mid-swipe still wins.
+            guard !self.uiState.isPanelPinned else { self.cancelInteractiveDismissal(); return }
+            self.hideFadesWhenReduced = true
             if !self.requestInteractiveHide().isAccepted {
+                self.hideFadesWhenReduced = false
                 self.cancelInteractiveDismissal()
             }
+        }
+        // A pinned panel never closes by swipe (Notes' own swipe still works).
+        panel.canCloseBySwipe = { [weak self] in
+            guard let self else { return false }
+            return !self.uiState.isPanelPinned
         }
         panel.onTrackpadDismissProgress = { [weak self] distance in
             self?.updateInteractiveDismissal(distance: distance)
@@ -603,8 +619,10 @@ final class AtticPanelController: NSObject, NSWindowDelegate {
                 .windowMove, .windowResize, .menuTracking, .blockingSave, .canvasConfirmation,
                 .notesImport, .taskEditing
             ]
+            // Over the header and the controls too (owner, 2026-10-01):
+            // a swipe has no other job there. Controls that scroll sideways
+            // keep theirs (`contentOwnsHorizontalScrolling`).
             return self.uiState.interactionLockReasons.isDisjoint(with: blockers)
-                && !self.hostingView.isChromeControlPoint(event.locationInWindow)
         }
         hostingView.onLiveResizeBegan = { [weak self] in
             self?.beginLiveResize()
@@ -972,7 +990,8 @@ final class AtticPanelController: NSObject, NSWindowDelegate {
             ))
             uiState.setInteractionLock(.panelSwipe, isActive: true)
         }
-        let progress = PanelCollapseGeometry.progress(
+        // A pull: it follows the fingers with resistance.
+        let progress = PanelCollapseGeometry.resistedProgress(
             forSwipeDistance: distance, panelWidth: panel.visibleContentFrame.width
         )
         contentContainer?.allowsContentInteraction = false
@@ -994,7 +1013,9 @@ final class AtticPanelController: NSObject, NSWindowDelegate {
         clearInteractiveDismissal()
         stopPanelMotion()
         guard panel.isVisible else { restoreFullPresentation(); return }
-        animateShow(to: panel.visibleContentFrame)
+        // Below the threshold it springs back with the feel's navigation
+        // spring (Lively by default); under Reduced it fades back.
+        animateShow(to: panel.visibleContentFrame, spring: AtticMotionTuning.current.slide)
     }
 
     private func restoreFullPresentation() {
@@ -1053,6 +1074,8 @@ final class AtticPanelController: NSObject, NSWindowDelegate {
         to frame: CGRect,
         collapseProgress: CGFloat,
         duration: TimeInterval,
+        spring: AtticMotionSpring? = nil,
+        reducedFade: Bool = false,
         completion: @escaping () -> Void
     ) {
         let generation = visibilityTransition.generation
@@ -1062,7 +1085,10 @@ final class AtticPanelController: NSObject, NSWindowDelegate {
         let currentScale = contentContainer?.presentationTransform.m11 ?? 1
         let targetScale = 1 - collapseProgress * (1 - PanelCollapseGeometry.collapsedScale)
         let remaining = min(1, abs(currentScale - targetScale) / (1 - PanelCollapseGeometry.collapsedScale))
-        let duration = reduceMotion ? 0 : remaining > 0.001 ? max(0.08, duration * sqrt(remaining)) : duration
+        // A swipe's close or spring-back under Reduced motion fades.
+        let fades = reduceMotion && reducedFade
+        let duration = fades ? PanelCollapseGeometry.reducedFadeDuration
+            : reduceMotion ? 0 : remaining > 0.001 ? max(0.08, duration * sqrt(remaining)) : duration
         let finishes = PanelMotionCompletionBarrier { [weak self] in
             MainActor.assumeIsolated {
                 guard let self, self.visibilityTransition.ownsCompletion(generation) else { return }
@@ -1073,7 +1099,7 @@ final class AtticPanelController: NSObject, NSWindowDelegate {
         }
         contentContainer?.setCollapseProgress(
             collapseProgress, corner: currentCorner, reduceMotion: reduceMotion,
-            duration: duration, completion: {
+            duration: duration, spring: spring, fades: fades, completion: {
                 MainActor.assumeIsolated { finishes.finishPresentation() }
             }
         )

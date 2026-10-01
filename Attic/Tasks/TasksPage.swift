@@ -3592,7 +3592,7 @@ enum TasksScrollerRule {
         case .began, .changed:
             switch axis {
             case .vertical?, .foreign?: return .show
-            case .undecided?, .horizontal?, .turned?, .cancelled?: return .hide
+            case .undecided?, .horizontal?, .turned?, .cancelled?, .closing?: return .hide
             case nil: return .keep
             }
         case .ended, .cancelled:

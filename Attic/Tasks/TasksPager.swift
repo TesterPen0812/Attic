@@ -648,6 +648,8 @@ final class TasksPagerSwipe {
         var time: TimeInterval
         /// Points (a trackpad, a Magic Mouse), not lines (a wheel).
         var precise = true
+        /// Natural scrolling (the content follows the fingers).
+        var inverted = false
     }
 
     enum Motion: Equatable {
@@ -685,6 +687,9 @@ final class TasksPagerSwipe {
         /// Not the pager's (begun elsewhere, during a drag, or on another
         /// page of the shell).
         case foreign
+        /// Toward the panel's edge past the last page that way: the panel's
+        /// swipe to close takes it (owner, 2026-10-01).
+        case closing
     }
 
     /// A swipe turns the page past a quarter of a page (the brief: ~25 %).
@@ -717,6 +722,11 @@ final class TasksPagerSwipe {
     /// Called when another way chooses a page during a swipe or a burst
     /// (the page is then brought to the model's tab).
     var onCancel: (() -> Void)?
+    /// The corner the panel lives in, and whether a swipe may close it now
+    /// (not pinned): a swipe toward that edge with no page left that way is
+    /// the panel's (the shell keeps them current).
+    var closeCorner: () -> ScreenCorner? = { nil }
+    var canClose: () -> Bool = { false }
 
     private(set) var axis: Axis?
     /// The page the swipe started on.
@@ -829,6 +839,14 @@ final class TasksPagerSwipe {
                 axis = .vertical
                 return .pass
             }
+            // A fresh gesture toward the panel's edge with no page left that
+            // way: it is the panel's pull to close, never a rubber band.
+            if let corner = closeCorner(), canClose(),
+               Self.closesPanel(dx: sample.dx, dy: sample.dy, inverted: sample.inverted, shown: shown, count: count, corner: corner) {
+                axis = .closing
+                ownsMomentum = false
+                return .pass
+            }
             axis = .horizontal
             origin = shown
             // A settle still moving: the swipe takes the page from where it
@@ -844,7 +862,7 @@ final class TasksPagerSwipe {
             return move(sample)
         case .turned?, .cancelled?:
             return .consume
-        case .vertical?, .foreign?, nil:
+        case .vertical?, .foreign?, .closing?, nil:
             return .pass
         }
     }
@@ -890,10 +908,25 @@ final class TasksPagerSwipe {
         case .turned?, .cancelled?:
             ownsMomentum = true
             return .pass
-        case .undecided?, .vertical?, .foreign?, nil:
+        case .undecided?, .vertical?, .foreign?, .closing?, nil:
             ownsMomentum = false
             return .pass
         }
+    }
+
+    /// Whether a swipe that begins with (`dx`, `dy`) on page `shown` is the
+    /// panel's pull to close: the fingers move toward the edge of the screen
+    /// the panel lives on, and the page that way does not exist (the swipe
+    /// would only rubber-band).
+    nonisolated static func closesPanel(dx: CGFloat, dy: CGFloat, inverted: Bool, shown: Int, count: Int,
+                                        corner: ScreenCorner) -> Bool {
+        guard dx != 0, PanelTrackpadDismissTracker.isTowardDockedSide(
+            deltaX: dx, deltaY: dy, isDirectionInvertedFromDevice: inverted, dockedCorner: corner
+        ) else { return false }
+        // `travel -= dx`: a positive dx heads for the page before.
+        let heading = dx > 0 ? -1 : 1
+        let next = shown + heading
+        return next < 0 || next >= count
     }
 
     /// The fingers' speed at `time`, points per second toward the next
@@ -1008,7 +1041,8 @@ extension TasksPagerSwipe.Sample {
         }
         self.init(phase: phase, momentum: !event.momentumPhase.isEmpty,
                   dx: event.scrollingDeltaX, dy: event.scrollingDeltaY,
-                  time: event.timestamp, precise: event.hasPreciseScrollingDeltas)
+                  time: event.timestamp, precise: event.hasPreciseScrollingDeltas,
+                  inverted: event.isDirectionInvertedFromDevice)
     }
 }
 
