@@ -454,3 +454,23 @@ additive; no token, colour, radius or type style changed.
   `--attic-motion-lab`), never under `com.taha.Attic`; outside it no stored
   feel is read.
 - No token, colour, radius or type style changed.
+
+### Motion Lab: finish (owner, 2026-10-01: lively by default, reducible by the user)
+
+- **Settings › General › Animations** is now **Lively** (the default),
+  **Subtle** or **Reduced** (`AtticAnimationLevel`: `lively`, `subtle`,
+  `reduced`). Lively is the Lively feel in every build. Subtle is the
+  `AtticMotionFeel.subtle` tuning: Calm's timings (navigation 0.25 s, things
+  that appear 0.22-0.24 s) with a small bounce (navigation 0.04, things that
+  appear 0.10, settle and fail-return 0.08), springing in from 0.96 and
+  tucking to 0.98 in 0.12 s; no plain fades. Reduced is the Reduce Motion
+  fallback. macOS Reduce Motion forces Reduced whatever is chosen
+  (`design.reduceMotion` is unchanged).
+- A stored "full" becomes Lively (and is rewritten as `lively`); a stored
+  "reduced" stays Reduced (`AtticAnimationLevel.migrated(from:)`).
+- The Motion Lab stays preview-only, and its Feel row gains Subtle. A lab
+  choice overrides Animations until Animations is changed, which puts the
+  feel back to Lively or Subtle.
+- **Edges is removed** (`4fc0f34` reverted): the lists and Notes are back to
+  round 13's clean cut at the tabs' band and the bottom stack. A floating
+  controls design replaces that behaviour later.
