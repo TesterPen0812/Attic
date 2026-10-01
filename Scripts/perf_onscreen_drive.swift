@@ -4,7 +4,8 @@ import QuartzCore
 
 // The on-screen performance gate's driver (`Scripts/perf_onscreen.zsh`),
 // compiled by the gate. Every command targets one app by its bundle
-// identifier, never by name or path:
+// identifier, never by name or path, and refuses anything but a
+// `com.taha.Attic.preview.*` identity:
 //
 //   perf_onscreen_drive pid <bundle-id>            the running instance's pid
 //   perf_onscreen_drive drive <bundle-id> [sign] [hid|pid]
@@ -32,7 +33,13 @@ guard arguments.count >= 3 else {
 }
 let command = arguments[1]
 let bundleID = arguments[2]
-guard bundleID != "com.taha.Attic" else { fail("REFUSED: the release identity is never driven", 2) }
+// Every command (`pid`, `quit`, `drive`) acts only on a preview identity:
+// `com.taha.Attic.preview.` and a non-empty name. The official identity and
+// any other app are refused before anything is looked up, quit or driven.
+let previewPrefix = "com.taha.Attic.preview."
+guard bundleID.hasPrefix(previewPrefix), bundleID.count > previewPrefix.count else {
+    fail("REFUSED: only com.taha.Attic.preview.* identities are driven, not \"\(bundleID)\"", 2)
+}
 
 func running() -> NSRunningApplication? {
     NSRunningApplication.runningApplications(withBundleIdentifier: bundleID).first { !$0.isTerminated }
