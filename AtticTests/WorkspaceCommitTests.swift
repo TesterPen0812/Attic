@@ -122,8 +122,30 @@ final class WorkspaceCommitTests: XCTestCase {
             XCTAssertEqual(index.token(scope), try WorkspaceScopeToken.read(scope, in: context))
             XCTAssertEqual(index.token(scope).members.first?.replicas.count, 2)
         }
+        let replacementParent = UUID()
+        for row in try context.fetch(FetchDescriptor<TaskItem>()) where row.id == childID { row.parentID = replacementParent }
+        try context.save()
+        let updated = try WorkspaceModelToken.read(.init(entity: .task, id: childID), in: context)
+        let replaced = try index.replacing([updated.owner: updated])
+        for parent in [taskID!, otherParent, replacementParent] {
+            let scope = WorkspaceScope.children(parent)
+            XCTAssertEqual(replaced.token(scope), try WorkspaceScopeToken.read(scope, in: context))
+        }
         let unknown: [WorkspaceOwner: WorkspaceModelToken] = [.init(entity: .task, id: childID): .init(owner: .init(entity: .task, id: childID), replicas: [.init(physicalID: try XCTUnwrap(context.fetch(FetchDescriptor<TaskItem>()).first).persistentModelID, fields: [:])])]
         XCTAssertThrowsError(try WorkspaceScopeIndex(unknown), "missing fields are unknown, never empty membership")
+    }
+    func testC2ConfirmedPresentationBaselineStillRejectsAnExternallyInsertedPhysicalReplica() throws {
+        let store = TaskStore(container: container)
+        let row = try XCTUnwrap(store.create(title: "Original"))
+        XCTAssertTrue(store.rename(row, to: "Confirmed"))
+        let external = coordinator.freshContext()
+        external.insert(TaskItem(id: row.id, title: "External"))
+        try external.save()
+        XCTAssertFalse(store.rename(row, to: "Must refuse"), "cached presentation baseline is never commit authority")
+        let id = row.id
+        let rows = try coordinator.freshContext().fetch(FetchDescriptor<TaskItem>(predicate: #Predicate { $0.id == id }))
+        XCTAssertEqual(Set(rows.map(\.title)), ["Confirmed", "External"])
+        XCTAssertEqual(rows.count, 2)
     }
     func testC1RealConversionCommitsTextChildVersionAttachmentAssociationAndReceiptTogether() async throws {
         let (outcome, id) = try await conversion()

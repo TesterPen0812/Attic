@@ -954,7 +954,7 @@ final class TaskStore: ObservableObject {
         // (deferred replica safety, Phase 1). Only copies that agreed with
         // the shown one take the new time, so the shown copy stays shown.
         let shown = TaskContentSnapshot(task)
-        let agreeing = Set(replicas.filter { $0 === task || TaskContentSnapshot($0) == shown }
+        let agreeing = Set(replicas.filter { $0 === task || (TaskContentSnapshot($0) == shown && $0.deletedAt == task.deletedAt) }
             .map(\.persistentModelID))
         for replica in replicas {
             if titleChanged { replica.title = destinationTitle }
@@ -1837,6 +1837,9 @@ final class TaskStore: ObservableObject {
     @discardableResult
     func restoreDeleted(taskIDs: [UUID]) -> Bool {
         guard !taskIDs.isEmpty else { return false }
+        // Restore preflight consumes the current physical family, including
+        // replicas saved by another context since the previous refusal.
+        if !context.hasChanges { context = Self.makeStoreContext(container) }
         do {
             var batches: [UUID: [TaskItem]] = [:]
             for taskID in Set(taskIDs) {
@@ -1945,6 +1948,7 @@ final class TaskStore: ObservableObject {
         confirmed: [UUID: Date]? = nil,
         alongside: ((ModelContext, Set<UUID>) throws -> Void)? = nil
     ) -> Set<UUID> {
+        if !context.hasChanges { context = Self.makeStoreContext(container) }
         let rootsByID: [UUID: [TaskItem]]
         let storedByID: [UUID: [TaskItem]]
         do {
@@ -3013,7 +3017,7 @@ final class TaskStore: ObservableObject {
             #else
             try Self.persistStoreContext(context, using: persist, history: commandLibrary != nil)
             #endif
-            do { try reloadTasks(); errorNotice = nil }
+            do { try reloadTasks(confirmedSource: context); errorNotice = nil }
             catch { report("Saved, but presentation is still updating: \(error.localizedDescription)", owner: owner) }
             revision &+= 1
             #if !ATTIC_LOCAL_ONLY
@@ -3034,12 +3038,18 @@ final class TaskStore: ObservableObject {
         }
     }
 
-    private func reloadTasks() throws {
+    private func reloadTasks(confirmedSource: ModelContext? = nil) throws {
         // A long-lived ModelContext can return cached model instances after
         // CloudKit updates the underlying store. Refresh through a new context
         // so remote values replace the old objects instead of being written
         // back to CloudKit by the next local save.
-        let refreshedContext = Self.makeStoreContext(container)
+        let refreshedContext: ModelContext
+        #if os(macOS)
+        if let confirmedSource { refreshedContext = try WorkspaceLegacyBridge.presentationFollowingCommit(confirmedSource) }
+        else { refreshedContext = Self.makeStoreContext(container) }
+        #else
+        refreshedContext = Self.makeStoreContext(container)
+        #endif
         let fetched = try refreshedContext.fetch(FetchDescriptor<TaskItem>())
         // Views and callers may still hold a row from the last presentation.
         // Update those detached presentation objects from the proven saved

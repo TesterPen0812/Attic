@@ -13,10 +13,12 @@ enum WorkspaceLegacyBridge {
     private final class ContextState {
         let coordinator: WorkspaceOperationCoordinator
         var baseline: [WorkspaceOwner: WorkspaceModelToken]
+        var scopeIndex: WorkspaceScopeIndex
         let includeCanvas: Bool
         var saveObserver: NSObjectProtocol?
-        init(_ coordinator: WorkspaceOperationCoordinator, _ baseline: [WorkspaceOwner: WorkspaceModelToken], includeCanvas: Bool) {
-            self.coordinator = coordinator; self.baseline = baseline; self.includeCanvas = includeCanvas
+        init(_ coordinator: WorkspaceOperationCoordinator, _ baseline: [WorkspaceOwner: WorkspaceModelToken], includeCanvas: Bool,
+             scopeIndex: WorkspaceScopeIndex) {
+            self.coordinator = coordinator; self.baseline = baseline; self.includeCanvas = includeCanvas; self.scopeIndex = scopeIndex
         }
         deinit { if let saveObserver { NotificationCenter.default.removeObserver(saveObserver) } }
     }
@@ -53,11 +55,14 @@ enum WorkspaceLegacyBridge {
         try? registerContext(context, includeCanvas: includeCanvas)
         return context
     }
-    static func registerContext(_ context: ModelContext, includeCanvas: Bool = false) throws {
+    static func registerContext(_ context: ModelContext, includeCanvas: Bool = false,
+                                baseline: [WorkspaceOwner: WorkspaceModelToken]? = nil,
+                                scopeIndex: WorkspaceScopeIndex? = nil) throws {
         context.autosaveEnabled = false
         let coordinator = try coordinator(for: context.container)
-        let baseline = try inventory(in: context, includeCanvas: includeCanvas)
-        let state = ContextState(coordinator, baseline, includeCanvas: includeCanvas)
+        let baseline = try baseline ?? inventory(in: context, includeCanvas: includeCanvas)
+        let index = try scopeIndex ?? WorkspaceScopeIndex(baseline)
+        let state = ContextState(coordinator, baseline, includeCanvas: includeCanvas, scopeIndex: index)
         let reference = ContextReference(context)
         // Isolated fixtures can save this staging context directly. Capture
         // its actual saved baseline after success; never refresh guards while
@@ -70,6 +75,14 @@ enum WorkspaceLegacyBridge {
             }
         }
         objc_setAssociatedObject(context, &contextKey, state, .OBJC_ASSOCIATION_RETAIN_NONATOMIC)
+    }
+    /// Called only after persist confirms the declared mutation. External
+    /// refreshes use context(for:) and perform a complete new inventory.
+    static func presentationFollowingCommit(_ source: ModelContext) throws -> ModelContext {
+        guard let state = objc_getAssociatedObject(source, &contextKey) as? ContextState else { throw WorkspaceFoundationError.unknown }
+        let fresh = state.coordinator.freshContext()
+        try registerContext(fresh, includeCanvas: state.includeCanvas, baseline: state.baseline, scopeIndex: state.scopeIndex)
+        return fresh
     }
     static func persist(_ source: ModelContext, using writer: @escaping (ModelContext) throws -> Void,
                         sourceName: String, history: Bool = true) throws {
@@ -104,8 +117,7 @@ enum WorkspaceLegacyBridge {
         let reads = before.values.sorted { ($0.owner.entity.rawValue, $0.owner.id.uuidString) < ($1.owner.entity.rawValue, $1.owner.id.uuidString) }
         let plain = try !history && state.coordinator.mayUsePlainSave(
             before: writes.map { before[$0]! }, after: writes.map { after[$0]! }, in: source)
-        let scopeIndex = try WorkspaceScopeIndex(state.baseline)
-        let scopes = WorkspaceScopeToken.scopes(for: reads).map { scopeIndex.token($0) }
+        let scopes = WorkspaceScopeToken.scopes(for: reads).map { state.scopeIndex.token($0) }
         var staged: [StagedNoteAttachment] = []
         for owner in writes where owner.entity == .attachment {
             guard let next = after[owner], let previous = before[owner], !next.replicas.isEmpty else { continue }
@@ -175,7 +187,13 @@ enum WorkspaceLegacyBridge {
             })
         // The source context remains presentation/staging only; stores replace
         // it with a fresh presentation after a confirmed commit.
-        state.baseline = try inventory(in: state.coordinator.freshContext(), includeCanvas: state.includeCanvas)
+        let committed = state.coordinator.freshContext()
+        let confirmed = try writes.count > 8
+            ? inventory(in: committed, includeCanvas: true, entities: Set(writes.map(\.entity)))
+            : Dictionary(uniqueKeysWithValues: writes.map { ($0, try WorkspaceModelToken.read($0, in: committed)) })
+        let updates = Dictionary(uniqueKeysWithValues: writes.map { ($0, confirmed[$0] ?? WorkspaceModelToken(owner: $0, replicas: [])) })
+        state.scopeIndex = try state.scopeIndex.replacing(updates)
+        state.baseline.merge(updates) { _, saved in saved }
     }
     static func persistSharedChanges(_ source: ModelContext, using writer: @escaping (ModelContext) throws -> Void) throws {
         if (source.insertedModelsArray + source.changedModelsArray + source.deletedModelsArray).contains(where: { $0 is ItemLink || $0 is TaskItem || $0 is NoteItem }) {

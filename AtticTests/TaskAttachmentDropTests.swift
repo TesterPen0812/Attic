@@ -358,8 +358,11 @@ final class TaskAttachmentDropTests: XCTestCase {
     func testGalleryCardCopiesIntoAnotherTaskButNeverIntoItsOwnOwner() async throws {
         let (store, container, files) = try makeStore()
         let trip = try XCTUnwrap(store.create(title: "Trip"))
-        let pack = try XCTUnwrap(store.create(title: "Pack", parentID: trip.id))
+        let packID = try XCTUnwrap(store.create(title: "Pack", parentID: trip.id)).id
         let other = try XCTUnwrap(store.create(title: "Other"))
+        // Successful commits replace the staging context. Seed legacy
+        // metadata on the currently presented physical row.
+        let pack = try XCTUnwrap(store.task(withID: packID))
         let photo = try pngFile()
         _ = await store.attachStagedFiles(to: trip.id) { TaskAttachmentStaging(urls: [photo]) }
         let source = try XCTUnwrap(store.tasks.first { $0.id == trip.id }?.attachments.first)
