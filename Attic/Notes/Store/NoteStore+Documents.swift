@@ -173,9 +173,11 @@ struct PreparedNoteDocument: Sendable {
     let imageCount: Int
     let fileCount: Int
     let firstFileName: String?
+    let admissionIDs: Set<UUID>?
 
     init(_ document: NoteDocument) throws {
         content = try NoteContentCodec.encode(document)
+        admissionIDs = document.isWritableByThisBuild ? Set(document.attachmentIDs) : nil
         title = NoteStore.normalizedTitle(document.title)
         body = NoteTextExport.plainBody(document)
         plainText = NoteTextExport.plainText(document)
@@ -476,6 +478,7 @@ extension NoteStore {
             return .failure(.encodingFailed(error.localizedDescription))
         }
         context.insert(note)
+        try? WorkspaceLegacyBridge.coordinator(for: context.container).observePreparedDocument(projection)
         guard commitStagedChanges() else {
             return .failure(.saveFailed(lastErrorMessage ?? "The note could not be saved."))
         }
@@ -551,6 +554,7 @@ extension NoteStore {
         }
         let timestamp = currentDate
         let context = modelContext
+        try? WorkspaceLegacyBridge.coordinator(for: modelContext.container).observePreparedDocument(projection)
         let priorIDs = Set((NoteContentCodec.decode(main.content ?? Data()).document)?.attachmentIDs ?? [])
         let removedIDs = priorIDs.subtracting(document.attachmentIDs)
         do {

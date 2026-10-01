@@ -246,6 +246,36 @@ final class NoteEditorEngine: NSObject, NSTextViewDelegate, NSTextStorageDelegat
             self?.setPendingParagraphStyle(state.style, indent: state.indent, at: location)
         }
         history.onTypingMarkSnapshot = { [weak self] kind, enabled in self?.setTypingMark(kind, enabled: enabled) }
+        history.readReplayMetadata = { [weak self] in
+            guard let self else { return .init() }
+            return .init(tags: self.tags,
+                paragraphs: self.pendingParagraphStyle.map { [$0.location: $0.state] } ?? [:],
+                typingMarks: Set(NoteMark.Kind.allCases.filter { self.textView?.typingAttributes[.noteMark($0)] != nil }))
+        }
+        history.installReplayMetadata = { [weak self] metadata in
+            guard let self else { return }
+            let tagsChanged = self.tags != metadata.tags
+            self.tags = metadata.tags
+            if let paragraph = metadata.paragraphs.first {
+                self.setPendingParagraphStyle(paragraph.value.style, indent: paragraph.value.indent, at: paragraph.key, notifying: false)
+            } else {
+                self.setPendingParagraphStyle(.body, at: self.pendingParagraphStyle?.location ?? 0, notifying: false)
+            }
+            for kind in NoteMark.Kind.allCases { self.setTypingMark(kind, enabled: metadata.typingMarks.contains(kind)) }
+            if tagsChanged { self.notifyTagsChanged() }
+        }
+        history.replayDocument = { [weak self] storage, metadata in
+            guard let self, metadata.paragraphs.count <= 1 else { return nil }
+            var document = NoteTextCodec.document(from: storage, template: self.template)
+            if let paragraph = metadata.paragraphs[storage.length],
+               let last = document.blocks.indices.last, document.blocks[last].kind == .text, document.blocks[last].text.isEmpty {
+                document.blocks[last].style = paragraph.style.storageName
+                document.blocks[last].level = paragraph.style.level
+                document.blocks[last].indent = paragraph.indent > 0 ? paragraph.indent : nil
+                document.refreshRequiredCapabilities()
+            }
+            return document.isWritableByThisBuild ? document : nil
+        }
         history.canReplay = { [weak self] in self?.activity == .idle }
         workspace?.attach(history)
     }
@@ -2428,7 +2458,7 @@ extension NoteEditorEngine {
         return true
     }
 
-    private func setPendingParagraphStyle(_ value: NoteParagraphStyle, indent: Int = 0, at location: Int) {
+    private func setPendingParagraphStyle(_ value: NoteParagraphStyle, indent: Int = 0, at location: Int, notifying: Bool = true) {
         pendingParagraphStyle = value == .body ? nil : (location, .init(style: value, indent: indent))
         documentCache = nil
         var typing = style.paragraphAttributes(style: value.storageName, level: value.level, indent: indent)
@@ -2436,7 +2466,7 @@ extension NoteEditorEngine {
         if let level = value.level { typing[.noteBlockLevel] = level }
         if indent > 0 { typing[.noteBlockIndent] = indent }
         textView?.typingAttributes = typing
-        onTextChange?()
+        if notifying { onTextChange?() }
     }
 
     private func changeIndent(_ delta: Int, selection: NSRange) -> Bool {

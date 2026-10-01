@@ -3158,7 +3158,7 @@ extension NoteSlice3bTests {
         XCTAssertTrue(FileManager.default.fileExists(atPath: url.path), "a checkpoint created during the read still owns its bytes")
     }
 
-    func testRetentionRefusesDestructionWhenStoreChangesDuringDecoding() async throws {
+    func testRetentionAdmissionWaitsForDecodeThenRevalidatesBeforeNewVersionRoot() async throws {
         let files = makeTestAttachmentFileStore(), store = try makeTestNoteStore(attachmentFileStore: files), item = staged(), id = UUID()
         guard case .success = store.createDocumentNote(id: id, document: NoteDocument(blocks: [.text("Initial")])) else { return XCTFail() }
         await store.waitForAttachmentReconciliation()
@@ -3171,13 +3171,31 @@ extension NoteSlice3bTests {
         try await waitFor { barrier.started }
         let document = NoteDocument(blocks: [.text("New owner"), .file(attachmentID: item.id, filename: item.filename,
             contentTypeIdentifier: item.contentTypeIdentifier, byteCount: item.byteCount)])
-        store.modelContext.insert(NoteVersion(noteID: id, createdAt: Date(), reason: .leave,
+        let versionID = UUID()
+        store.modelContext.insert(NoteVersion(id: versionID, noteID: id, createdAt: Date(), reason: .leave,
             content: try NoteContentCodec.encode(document), contentFormat: 1, title: "New owner", body: "",
             attachmentIDs: [], sourceRevisionID: nil))
-        XCTAssertTrue(store.commitStagedChanges())
+        XCTAssertFalse(store.commitStagedChanges(), "§4 P5: a synchronous producer refuses while collection owns this UUID")
+        let coordinator = try WorkspaceLegacyBridge.coordinator(for: store.modelContext.container)
+        let publication = Task {
+            let lease = try await coordinator.ownership.admit([id, item.id, versionID])
+            defer { lease.release() }
+            let rebuilt = try await files.admit(reference)
+            let (_, bytesLease) = try XCTUnwrap(rebuilt)
+            defer { bytesLease.release() }
+            store.modelContext.insert(NoteVersion(id: versionID, noteID: id, createdAt: Date(), reason: .leave,
+                content: try NoteContentCodec.encode(document), contentFormat: 1, title: "New owner", body: "",
+                attachmentIDs: [], sourceRevisionID: nil))
+            store.modelContext.insert(NoteAttachment(id: item.id, noteID: id, originalFilename: item.filename,
+                contentTypeIdentifier: item.contentTypeIdentifier, byteCount: item.byteCount, sortIndex: 0,
+                contentDigest: item.digest, payload: item.data))
+            XCTAssertTrue(store.commitStagedChanges())
+        }
+        await Task.yield()
         barrier.resume()
         try await removal.value
-        XCTAssertTrue(FileManager.default.fileExists(atPath: url.path), "stale aggregate inventory cannot authorize removal")
+        try await publication.value
+        XCTAssertTrue(FileManager.default.fileExists(atPath: url.path), "the admitted root revalidates/rebuilds after unlink")
         store.retentionDecodeObserver = nil
         try await files.removeMaterializations([reference])
         XCTAssertTrue(FileManager.default.fileExists(atPath: url.path), "the newly saved version owns these bytes")

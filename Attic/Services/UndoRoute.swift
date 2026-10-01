@@ -46,8 +46,8 @@ struct UndoStep {
 
     /// A step whose closures only report whether the store confirmed its
     /// save; a refusal keeps the step.
-    init(name: String, undo: @escaping @MainActor () -> Bool, redo: @escaping @MainActor () -> Bool) {
-        self.id = UUID()
+    init(id: UUID = UUID(), name: String, undo: @escaping @MainActor () -> Bool, redo: @escaping @MainActor () -> Bool) {
+        self.id = id
         self.name = name
         self.undo = { undo() ? .applied : .failed }
         self.redo = { redo() ? .applied : .failed }
@@ -56,11 +56,12 @@ struct UndoStep {
     /// A step that can tell a failure worth retrying from one that can never
     /// apply again.
     init(
+        id: UUID = UUID(),
         name: String,
         undoOutcome: @escaping @MainActor () -> UndoOutcome,
         redoOutcome: @escaping @MainActor () -> UndoOutcome
     ) {
-        self.id = UUID()
+        self.id = id
         self.name = name
         self.undo = undoOutcome
         self.redo = redoOutcome

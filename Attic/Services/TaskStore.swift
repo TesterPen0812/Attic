@@ -1879,80 +1879,7 @@ final class TaskStore: ObservableObject {
         // replicas saved by another context since the previous refusal.
         if !context.hasChanges { context = Self.makeStoreContext(container) }
         do {
-            var batches: [UUID: [TaskItem]] = [:]
-            for taskID in Set(taskIDs) {
-                batches[taskID] = try context.fetch(FetchDescriptor<TaskItem>(
-                    predicate: #Predicate { $0.deletionRootID == taskID && $0.deletedAt != nil }
-                ))
-            }
-            // A subtask created with its parent in one batch was deleted with
-            // it and comes back with it.
-            let covered = Set(batches.values.flatMap { $0.map(\.id) })
-            var restoring = Set<UUID>()
-            for (rootID, batch) in batches {
-                if batch.isEmpty {
-                    guard covered.contains(rootID) else { throw TaskReplicaMutationError.notRecentlyDeleted(rootID) }
-                    continue
-                }
-                guard batch.contains(where: { $0.id == rootID }) else {
-                    throw TaskReplicaMutationError.notRecentlyDeleted(rootID)
-                }
-                let recorded = batch[0].deletionMembersRaw
-                let members = batch[0].deletionMembers
-                guard !members.isEmpty, members.contains(rootID),
-                      batch.allSatisfy({ $0.deletionMembersRaw == recorded }),
-                      members.allSatisfy({ id in batch.contains { $0.id == id } }),
-                      Set(batch.map(\.id)).isSubset(of: members) else {
-                    throw TaskReplicaMutationError.incompleteRestore(rootID)
-                }
-                let ids = Array(members)
-                let replicas = try context.fetch(FetchDescriptor<TaskItem>(
-                    predicate: #Predicate { ids.contains($0.id) }
-                ))
-                guard replicas.allSatisfy({ $0.deletedAt == nil || $0.deletionRootID == rootID }) else {
-                    throw TaskReplicaMutationError.incompleteRestore(rootID)
-                }
-                // A copy that stayed live (a late replica the delete never
-                // reached) must hold what the deleted copies hold. If it was
-                // changed, restoring would put two different versions of the
-                // task side by side and let the list pick one, so nothing is
-                // restored until the copies agree.
-                for copies in Dictionary(grouping: replicas, by: \.id).values
-                where copies.contains(where: { $0.deletedAt == nil }) {
-                    let content = TaskContentSnapshot(copies[0])
-                    guard copies.allSatisfy({ TaskContentSnapshot($0) == content }) else {
-                        throw TaskReplicaMutationError.divergentLiveCopy(rootID)
-                    }
-                }
-                restoring.formUnion(members)
-            }
-            // A root that is a subtask returns only under a live main task,
-            // or, if it was archived, under a main task still in the Done log.
-            for (rootID, batch) in batches where !batch.isEmpty {
-                guard let parentID = batch.first(where: { $0.id == rootID })?.parentID,
-                      parentID != rootID, !restoring.contains(parentID) else { continue }
-                let parentRows = try context.fetch(FetchDescriptor<TaskItem>(
-                    predicate: #Predicate { $0.id == parentID }
-                ))
-                // A parent that no longer exists at all leaves the subtask
-                // visible as a root, as for any orphaned link.
-                if !parentRows.isEmpty, task(withID: parentID) == nil {
-                    // An archived subtask (round 10b) goes back into its
-                    // parent's Done-log family with its completion and
-                    // archive fields as they were; the parent is not reopened.
-                    let archived = batch.filter { $0.id == rootID }.allSatisfy { $0.doneLoggedAt != nil }
-                    guard archived, listedTask(withID: parentID) != nil else {
-                        throw TaskReplicaMutationError.parentNotLive(rootID)
-                    }
-                }
-            }
-            for batch in batches.values {
-                for replica in batch {
-                    replica.deletedAt = nil
-                    replica.deletionRootID = nil
-                    replica.deletionMembersRaw = ""
-                }
-            }
+            try stageRestoration(taskIDs: taskIDs)
         } catch {
             context.rollback()
             report(error.localizedDescription, owner: nil)
@@ -1965,6 +1892,97 @@ final class TaskStore: ObservableObject {
             report("Restored, but the list could not be refreshed: \(error.localizedDescription)", owner: nil)
         }
         return true
+    }
+
+    private func stageRestoration(taskIDs: [UUID]) throws {
+        var batches: [UUID: [TaskItem]] = [:]
+        for taskID in Set(taskIDs) {
+            batches[taskID] = try context.fetch(FetchDescriptor<TaskItem>(
+                predicate: #Predicate { $0.deletionRootID == taskID && $0.deletedAt != nil }
+            ))
+        }
+        // A subtask created with its parent in one batch was deleted with
+        // it and comes back with it.
+        let covered = Set(batches.values.flatMap { $0.map(\.id) })
+        var restoring = Set<UUID>()
+        for (rootID, batch) in batches {
+            if batch.isEmpty {
+                guard covered.contains(rootID) else { throw TaskReplicaMutationError.notRecentlyDeleted(rootID) }
+                continue
+            }
+            guard batch.contains(where: { $0.id == rootID }) else {
+                throw TaskReplicaMutationError.notRecentlyDeleted(rootID)
+            }
+            let recorded = batch[0].deletionMembersRaw
+            let members = batch[0].deletionMembers
+            guard !members.isEmpty, members.contains(rootID),
+                  batch.allSatisfy({ $0.deletionMembersRaw == recorded }),
+                  members.allSatisfy({ id in batch.contains { $0.id == id } }),
+                  Set(batch.map(\.id)).isSubset(of: members) else {
+                throw TaskReplicaMutationError.incompleteRestore(rootID)
+            }
+            let ids = Array(members)
+            let replicas = try context.fetch(FetchDescriptor<TaskItem>(
+                predicate: #Predicate { ids.contains($0.id) }
+            ))
+            guard replicas.allSatisfy({ $0.deletedAt == nil || $0.deletionRootID == rootID }) else {
+                throw TaskReplicaMutationError.incompleteRestore(rootID)
+            }
+            // A copy that stayed live (a late replica the delete never
+            // reached) must hold what the deleted copies hold. If it was
+            // changed, restoring would put two different versions of the
+            // task side by side and let the list pick one, so nothing is
+            // restored until the copies agree.
+            for copies in Dictionary(grouping: replicas, by: \.id).values
+            where copies.contains(where: { $0.deletedAt == nil }) {
+                let content = TaskContentSnapshot(copies[0])
+                guard copies.allSatisfy({ TaskContentSnapshot($0) == content }) else {
+                    throw TaskReplicaMutationError.divergentLiveCopy(rootID)
+                }
+            }
+            restoring.formUnion(members)
+        }
+        // A root that is a subtask returns only under a live main task,
+        // or, if it was archived, under a main task still in the Done log.
+        for (rootID, batch) in batches where !batch.isEmpty {
+            guard let parentID = batch.first(where: { $0.id == rootID })?.parentID,
+                  parentID != rootID, !restoring.contains(parentID) else { continue }
+            let parentRows = try context.fetch(FetchDescriptor<TaskItem>(
+                predicate: #Predicate { $0.id == parentID }
+            ))
+            // A parent that no longer exists at all leaves the subtask
+            // visible as a root, as for any orphaned link.
+            if !parentRows.isEmpty, task(withID: parentID) == nil {
+                // An archived subtask (round 10b) goes back into its
+                // parent's Done-log family with its completion and
+                // archive fields as they were; the parent is not reopened.
+                let archived = batch.filter { $0.id == rootID }.allSatisfy { $0.doneLoggedAt != nil }
+                guard archived, listedTask(withID: parentID) != nil else {
+                    throw TaskReplicaMutationError.parentNotLive(rootID)
+                }
+            }
+        }
+        for batch in batches.values {
+            for replica in batch {
+                replica.deletedAt = nil
+                replica.deletionRootID = nil
+                replica.deletionMembersRaw = ""
+            }
+        }
+    }
+
+    static func stageRestoreDeleted(in context: ModelContext, taskIDs: [UUID], timestamp: Date) throws {
+        let adapter = try TaskStore(staging: context, timestamp: timestamp)
+        try adapter.stageRestoration(taskIDs: taskIDs)
+    }
+
+    static func stageSoftDeletion(in context: ModelContext, taskID: UUID, preservationID: UUID, timestamp: Date) throws {
+        let adapter = try TaskStore(staging: context, timestamp: timestamp)
+        guard let task = adapter.task(withID: taskID),
+              let rows = adapter.deletionFamily(of: task, owner: taskID) else { throw WorkspaceFoundationError.conflict }
+        let members = Set(rows.map(\.id)).map(\.uuidString).sorted().joined(separator: " ")
+        for row in rows { row.deletedAt = timestamp; row.deletionRootID = taskID; row.deletionMembersRaw = members }
+        try WorkspacePurge.stageDeletionCapture(id: preservationID, rootID: taskID, rows: rows, deletedAt: timestamp, in: context)
     }
 
     /// Lowest shared preflight for an immutable deletion family. Both the

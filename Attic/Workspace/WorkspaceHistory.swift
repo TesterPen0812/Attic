@@ -45,6 +45,7 @@ final class WorkspaceHistory {
     unowned let route: UndoRoute
     private(set) var historyID: UndoHistoryID
     private(set) var pendingReplayID: UUID?
+    private(set) var pendingCommandID: UUID?
     private var inputReserved = false
     private var queuedInput: [() -> Void] = []
     private final class WeakAdapter {
@@ -56,8 +57,8 @@ final class WorkspaceHistory {
     init(route: UndoRoute, historyID: UndoHistoryID) {
         self.route = route; self.historyID = historyID
     }
-    var canUndo: Bool { pendingReplayID == nil && !inputReserved && route.canUndo(in: historyID) }
-    var canRedo: Bool { pendingReplayID == nil && !inputReserved && route.canRedo(in: historyID) }
+    var canUndo: Bool { pendingReplayID == nil && pendingCommandID == nil && !inputReserved && route.canUndo(in: historyID) }
+    var canRedo: Bool { pendingReplayID == nil && pendingCommandID == nil && !inputReserved && route.canRedo(in: historyID) }
     var undoName: String { route.undoName(in: historyID) ?? "" }
     var redoName: String { route.redoName(in: historyID) ?? "" }
 
@@ -103,7 +104,8 @@ final class WorkspaceHistory {
     /// Reserve before capturing a command candidate. Input arriving while
     /// journal IO runs is delivered exactly once after installation or abort.
     func reserveInput() -> Bool {
-        guard !inputReserved, pendingReplayID == nil else { return false }
+        guard !inputReserved, pendingReplayID == nil, pendingCommandID == nil,
+              adapters.compactMap(\.value).allSatisfy(\.canPrepareWorkspaceCommand) else { return false }
         closeGroup(); inputReserved = true; return true
     }
     func submitInput(_ edit: @escaping () -> Void) {
@@ -111,7 +113,7 @@ final class WorkspaceHistory {
         else { edit() }
     }
     func releaseInput() {
-        guard pendingReplayID == nil else { return }
+        guard pendingReplayID == nil, pendingCommandID == nil else { return }
         inputReserved = false
         let input = queuedInput; queuedInput.removeAll()
         for edit in input { edit() }
@@ -120,13 +122,14 @@ final class WorkspaceHistory {
     /// Called after the forward operation has been proven committed. Replay
     /// plans use real coordinator staging and carry their cursor effect in the
     /// same receipt as the inverse rows. No editor mutation precedes that save.
-    func recordOperation(id operationID: UUID, name: String, coordinator: WorkspaceOperationCoordinator,
+    func recordOperation(id operationID: UUID, entryID: UUID = UUID(), name: String, coordinator: WorkspaceOperationCoordinator,
                          attachmentIDs: Set<UUID> = [], textGroup: TextGroup? = nil,
                          prepare: @escaping (Bool, CursorEffect) throws -> ReplayPlan) {
         closeGroup()
         coordinator.registerHistory(route)
-        var step = UndoStep(name: name, undoOutcome: { .failed }, redoOutcome: { .failed })
-        let entryID = step.id
+        guard !route.steps(in: historyID, redo: false).contains(where: { $0.operationID == operationID }),
+              !route.steps(in: historyID, redo: true).contains(where: { $0.operationID == operationID }) else { return }
+        var step = UndoStep(id: entryID, name: name, undoOutcome: { .failed }, redoOutcome: { .failed })
         step.operationID = operationID; step.attachmentIDs = attachmentIDs; step.workspacePayload = textGroup
         step.replay = { [weak self, weak coordinator] redo, commitCursor in
             guard let self, let coordinator, self.reserveInput() else { return .failed }
@@ -141,6 +144,9 @@ final class WorkspaceHistory {
                     guard let document = plan.textDocument,
                           plan.envelope.afterDocuments[document.noteID] == document.content,
                           plan.envelope.writes.contains(.init(entity: .note, id: document.noteID)) else { return .failed }
+                    if let draft = plan.text?.1.document {
+                        guard NoteContentCodec.decode(document.content).document == draft else { return .failed }
+                    }
                 }
             } catch { return .failed }
             let install: @MainActor (UUID) throws -> Void = { _ in
@@ -159,6 +165,9 @@ final class WorkspaceHistory {
                     guard !rows.isEmpty, rows.allSatisfy({ $0.content == document.content }) else {
                         throw WorkspaceFoundationError.conflict
                     }
+                    if let metadata = plan.text?.1.metadata {
+                        guard rows.allSatisfy({ $0.tags == metadata.tags }) else { throw WorkspaceFoundationError.conflict }
+                    }
                 }
             }, publication: publication)
             switch outcome {
@@ -171,10 +180,48 @@ final class WorkspaceHistory {
         }
         route.record(step, in: historyID)
     }
+    struct ForwardEffect: Codable, Equatable { let workspaceID: UUID; let entryID: UUID }
+    struct CommandPlan {
+        let entryID: UUID
+        let envelope: WorkspaceOperationEnvelope
+        let sessionValid: () -> Bool
+        let stage: (ModelContext) throws -> Void
+        let record: (UUID, UUID) -> Void
+        let publication: WorkspaceOperationCoordinator.Publication
+        init(entryID: UUID, envelope: WorkspaceOperationEnvelope, sessionValid: @escaping () -> Bool = { true },
+             stage: @escaping (ModelContext) throws -> Void, record: @escaping (UUID, UUID) -> Void,
+             publication: WorkspaceOperationCoordinator.Publication = .init()) {
+            self.entryID = entryID; self.envelope = envelope; self.sessionValid = sessionValid
+            self.stage = stage; self.record = record; self.publication = publication
+        }
+    }
+
+    /// Reserve the input sequence before the caller captures its draft. The
+    /// typed forward entry is recorded at receipt publication, before the
+    /// prepared editor/presentation handlers. Cancellation keeps the old draft.
+    func performCommand(using coordinator: WorkspaceOperationCoordinator,
+                        prepare: () async throws -> CommandPlan) async -> WorkspaceOperationCoordinator.Outcome {
+        guard !Task.isCancelled, reserveInput() else { return .conflict }
+        defer { releaseInput() }
+        let plan: CommandPlan
+        do {
+            plan = try await prepare()
+            guard plan.envelope.historyEffect == (try WorkspaceModelFields.encode(ForwardEffect(workspaceID: id, entryID: plan.entryID))) else { return .conflict }
+        } catch { return .notCommitted }
+        guard !Task.isCancelled else { return .notCommitted }
+        let publication = WorkspaceOperationCoordinator.Publication(steps: [{ operation in
+            plan.record(operation, plan.entryID)
+        }] + plan.publication.steps)
+        let outcome = await coordinator.execute(plan.envelope, sessionValid: plan.sessionValid,
+            stage: plan.stage, publication: publication)
+        if outcome == .publicationPending || outcome == .unknown { pendingCommandID = plan.envelope.id }
+        return outcome
+    }
+
     func retryPublication(using coordinator: WorkspaceOperationCoordinator) async -> Bool {
-        guard let operation = pendingReplayID else { return false }
+        guard let operation = pendingReplayID ?? pendingCommandID else { return false }
         guard await coordinator.retryPublication(operation) == .committed else { return false }
-        pendingReplayID = nil; releaseInput(); return true
+        pendingReplayID = nil; pendingCommandID = nil; releaseInput(); return true
     }
     @discardableResult func undo() -> Bool { closeGroup(); return canUndo && route.undo(in: historyID) }
     @discardableResult func redo() -> Bool { closeGroup(); return canRedo && route.redo(in: historyID) }

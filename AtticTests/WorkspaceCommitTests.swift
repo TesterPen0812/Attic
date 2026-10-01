@@ -533,6 +533,53 @@ final class WorkspaceTextReplayTests: XCTestCase {
         XCTAssertEqual(adapter.storage.string, "AbcDef")
     }
 
+    func testH2MetadataDryRunIncludesTagsParagraphAndTypingMarksAndInstallsOnlyOnce() throws {
+        let adapter = NoteUndoHistory(storage: NSTextStorage(string: "Title\n"))
+        var metadata = NoteUndoHistory.ReplayMetadata(tags: ["after", "unrelated"],
+            paragraphs: [6: .init(style: .bullet, indent: 1)], typingMarks: [.bold])
+        var publications = 0
+        adapter.readReplayMetadata = { metadata }
+        adapter.installReplayMetadata = { metadata = $0; publications += 1 }
+        adapter.beginGroup()
+        adapter.recordTagChange(before: ["before", "unrelated"], after: ["after", "unrelated"])
+        adapter.recordParagraphStyleChange(location: 6, before: .init(style: .body, indent: 0), after: .init(style: .bullet, indent: 1))
+        adapter.recordTypingMarkChange(.bold, before: false, after: true)
+        adapter.endGroup()
+        let payloads = Array(adapter.undoOps.reversed()), initial = metadata
+        let prepared = try XCTUnwrap(adapter.prepareReplay(payloads))
+        XCTAssertEqual(metadata, initial); XCTAssertEqual(publications, 0)
+        XCTAssertEqual(prepared.metadata?.tags, ["before", "unrelated"])
+        XCTAssertEqual(prepared.metadata?.paragraphs, [:]); XCTAssertEqual(prepared.metadata?.typingMarks, [])
+        XCTAssertNil(adapter.prepareReplay(payloads, preflight: { _ in false }))
+        XCTAssertEqual(metadata, initial); XCTAssertEqual(publications, 0)
+        XCTAssertTrue(adapter.installReplay(prepared)); XCTAssertEqual(metadata, try XCTUnwrap(prepared.metadata)); XCTAssertEqual(publications, 1)
+        XCTAssertFalse(adapter.installReplay(prepared)); XCTAssertEqual(publications, 1)
+        let redo = try XCTUnwrap(adapter.prepareReplay(payloads.reversed().map { $0 }))
+        XCTAssertTrue(adapter.installReplay(redo)); XCTAssertEqual(metadata, initial); XCTAssertEqual(publications, 2)
+    }
+    func testH2ChangedOrUnknownMetadataRefusesWithoutChangingPayloadsOrDraft() throws {
+        let adapter = NoteUndoHistory(storage: NSTextStorage(string: "Title"))
+        adapter.recordTagChange(before: ["old"], after: ["new"])
+        let payloads = adapter.undoOps, identity = payloads.map(ObjectIdentifier.init)
+        XCTAssertNil(adapter.prepareReplay(payloads), "unregistered metadata cannot be guessed")
+        var metadata = NoteUndoHistory.ReplayMetadata(tags: ["new"])
+        adapter.readReplayMetadata = { metadata }; adapter.installReplayMetadata = { metadata = $0 }
+        let prepared = try XCTUnwrap(adapter.prepareReplay(payloads))
+        metadata.tags = ["external"]
+        XCTAssertFalse(adapter.canInstallReplay(prepared)); XCTAssertFalse(adapter.installReplay(prepared))
+        XCTAssertNil(adapter.prepareReplay(payloads)); XCTAssertEqual(metadata.tags, ["external"])
+        XCTAssertEqual(adapter.undoOps.map(ObjectIdentifier.init), identity); XCTAssertEqual(adapter.storage.string, "Title")
+    }
+    func testH2EngineMetadataPreparationProjectsCandidateDocumentWithoutLiveChanges() throws {
+        let engine = NoteEditorEngine(noteID: UUID(), document: NoteDocument(blocks: [.text("Title"), .text("Body")]), tags: ["before"])
+        engine.setTagsFromPicker(["after"])
+        let before = engine.document(), adapter = engine.history
+        let prepared = try XCTUnwrap(adapter.prepareReplay(adapter.undoOps))
+        XCTAssertEqual(prepared.metadata?.tags, ["before"]); XCTAssertEqual(prepared.document, before)
+        XCTAssertEqual(engine.tags, ["after"]); XCTAssertEqual(engine.document(), before)
+        XCTAssertTrue(adapter.installReplay(prepared)); XCTAssertEqual(engine.tags, ["before"])
+    }
+
     func testH2AStalePayloadOrProtectedActivityRefusesTheWholePreparation() {
         let adapter = groupedAdapter()
         let payloads = Array(adapter.undoOps.reversed())

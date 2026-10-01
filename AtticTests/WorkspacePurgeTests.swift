@@ -42,7 +42,10 @@ final class WorkspacePurgeTests: XCTestCase {
     private func purge() async -> WorkspacePurge.Result {
         await WorkspacePurge.purge(rootID: taskID, before: .distantFuture, coordinator: coordinator, files: files, inventory: { self.ownership })
     }
-    private func note() throws -> NoteItem { try XCTUnwrap(coordinator.freshContext().fetch(FetchDescriptor<NoteItem>()).first) }
+    private func note() throws -> NoteItem {
+        let id = noteID!
+        return try XCTUnwrap(coordinator.freshContext().fetch(FetchDescriptor<NoteItem>(predicate: #Predicate { $0.id == id })).first)
+    }
     private func document() throws -> NoteDocument { try XCTUnwrap(try note().content.flatMap { NoteContentCodec.decode($0).document }) }
     private func tasks() throws -> Int { try coordinator.freshContext().fetchCount(FetchDescriptor<TaskItem>()) }
     private func records() throws -> [TaskDeletionPreservation] { try coordinator.freshContext().fetch(FetchDescriptor<TaskDeletionPreservation>()) }

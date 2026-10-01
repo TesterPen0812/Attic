@@ -81,6 +81,7 @@ final class NoteUndoHistory {
     var onParagraphStyleSnapshot: ((Int, ParagraphState) -> Void)?
     var onTypingMarkSnapshot: ((NoteMark.Kind, Bool) -> Void)?
 
+    var canPrepareWorkspaceCommand: Bool { !isChangeInFlight && composition == nil && (canReplay?() ?? true) }
     weak var workspace: WorkspaceHistory?
     private var localUndoOps: [Op] = []
     private var localRedoOps: [Op] = []
@@ -439,7 +440,19 @@ final class NoteUndoHistory {
     /// A workspace may own these payloads without invoking the adapter's
     /// standalone cursor. Preparation simulates the whole group; installation
     /// runs only after its model transaction (if any) is proven committed.
+    struct ReplayMetadata: Equatable {
+        var tags: [String] = []
+        var paragraphs: [Int: ParagraphState] = [:]
+        var typingMarks: Set<NoteMark.Kind> = []
+    }
+    var readReplayMetadata: (() -> ReplayMetadata)?
+    var installReplayMetadata: ((ReplayMetadata) -> Void)?
+    var replayDocument: ((NSAttributedString, ReplayMetadata) -> NoteDocument?)?
+
     struct PreparedReplay {
+        fileprivate let originalMetadata: ReplayMetadata?
+        let metadata: ReplayMetadata?
+        let document: NoteDocument?
         fileprivate let original: NSAttributedString
         let candidate: NSAttributedString
         let selection: NSRange
@@ -491,6 +504,39 @@ final class NoteUndoHistory {
            name: name, group: nextOwnGroup())
     }
 
+    struct PreparedCommand {
+        fileprivate let original: NSAttributedString
+        let candidate: NSAttributedString
+        let payload: Op
+    }
+    func prepareCommand(_ candidate: NSAttributedString, name: String) -> PreparedCommand? {
+        guard canPrepareWorkspaceCommand else { return nil }
+        let before = NSAttributedString(attributedString: storage)
+        if let textView {
+            let previous = isReplaying; isReplaying = true
+            let allowed = textView.shouldChangeText(in: NSRange(location: 0, length: before.length), replacementString: candidate.string)
+            isReplaying = previous
+            guard allowed else { return nil }
+        }
+        let after = NSAttributedString(attributedString: NSTextStorage(attributedString: candidate))
+        let payload = Op(range: NSRange(location: 0, length: after.length), current: after, other: before,
+            name: name, group: nextOwnGroup())
+        return .init(original: before, candidate: after, payload: payload)
+    }
+    func canInstallCommand(_ command: PreparedCommand) -> Bool {
+        canPrepareWorkspaceCommand && command.original.isEqual(to: storage)
+    }
+    @discardableResult func installCommand(_ command: PreparedCommand) -> Bool {
+        guard canInstallCommand(command) else { return false }
+        performUnrecorded {
+            storage.setAttributedString(command.candidate)
+            textView?.setSelectedRange(NSRange(location: command.candidate.length, length: 0))
+            textView?.didChangeText()
+            onReplay?(NSRange(location: 0, length: command.candidate.length))
+        }
+        return true
+    }
+
     /// The caller supplies payload order: reverse capture order for Undo,
     /// forward capture order for Redo. No storage, selection, callbacks, Op
     /// payloads or standalone cursor are changed by this method.
@@ -499,6 +545,8 @@ final class NoteUndoHistory {
         let original = NSAttributedString(attributedString: storage)
         let candidate = NSMutableAttributedString(attributedString: original)
         var swaps: [(Op, PayloadState, PayloadState)] = []
+        let originalMetadata = readReplayMetadata?()
+        var metadata = originalMetadata
         var selection = textView?.selectedRange() ?? NSRange(location: 0, length: 0)
         for op in payloads {
             guard !op.isInert, op.range.location >= 0, op.range.length >= 0,
@@ -508,6 +556,30 @@ final class NoteUndoHistory {
                 guard candidate.attributedSubstring(from: op.range).isEqual(to: op.current) else { return nil }
                 candidate.replaceCharacters(in: op.range, with: op.other)
                 selection = NSRange(location: NSMaxRange(after.range), length: 0)
+            }
+            if before.tag != nil || before.picker != nil || before.paragraph != nil || before.mark != nil {
+                guard var state = metadata, installReplayMetadata != nil else { return nil }
+                var tags = Set(state.tags)
+                if let delta = before.picker {
+                    guard Set(delta.removes).isSubset(of: tags), tags.isDisjoint(with: delta.adds) else { return nil }
+                    tags.subtract(delta.removes); tags.formUnion(delta.adds)
+                }
+                if let delta = before.tag, delta.changesTags {
+                    guard delta.adds ? !tags.contains(delta.tag) : tags.contains(delta.tag) else { return nil }
+                    if delta.adds { tags.insert(delta.tag) } else { tags.remove(delta.tag) }
+                }
+                state.tags = AtticTag.normalizedSet(Array(tags))
+                if let paragraph = before.paragraph {
+                    let current = state.paragraphs[paragraph.location] ?? .init(style: .body, indent: 0)
+                    guard current == paragraph.after else { return nil }
+                    if paragraph.before == .init(style: .body, indent: 0) { state.paragraphs.removeValue(forKey: paragraph.location) }
+                    else { state.paragraphs[paragraph.location] = paragraph.before }
+                }
+                if let mark = before.mark {
+                    guard state.typingMarks.contains(mark.kind) == mark.after else { return nil }
+                    if mark.before { state.typingMarks.insert(mark.kind) } else { state.typingMarks.remove(mark.kind) }
+                }
+                metadata = state
             }
             swaps.append((op, before, after))
         }
@@ -519,7 +591,10 @@ final class NoteUndoHistory {
             isReplaying = wasReplaying
             guard permitted else { return nil }
         }
-        return PreparedReplay(original: original, candidate: NSAttributedString(attributedString: candidate), selection: selection, swaps: swaps)
+        let document = metadata.flatMap { replayDocument?(candidate, $0) }
+        if replayDocument != nil, document == nil { return nil }
+        return PreparedReplay(originalMetadata: originalMetadata, metadata: metadata, document: document,
+            original: original, candidate: NSAttributedString(attributedString: candidate), selection: selection, swaps: swaps)
     }
 
     /// Idempotence is enforced by the original storage and payload snapshots.
@@ -529,8 +604,13 @@ final class NoteUndoHistory {
         guard canInstallReplay(prepared) else { return false }
         performUnrecorded {
             storage.setAttributedString(prepared.candidate)
+            if let metadata = prepared.metadata { installReplayMetadata?(metadata) }
             for (op, before, after) in prepared.swaps {
                 after.install(on: op)
+                if prepared.metadata != nil {
+                    if let delta = before.tag { onTagFlip?(delta.tag, delta.adds, false, after.range) }
+                    continue
+                }
                 if let delta = before.picker { onTagPickerDelta?(delta.adds, delta.removes) }
                 if let state = before.paragraph { onParagraphStyleSnapshot?(state.location, state.before) }
                 if let state = before.mark { onTypingMarkSnapshot?(state.kind, state.before) }
@@ -545,6 +625,7 @@ final class NoteUndoHistory {
 
     func canInstallReplay(_ prepared: PreparedReplay) -> Bool {
         !isChangeInFlight && composition == nil && (canReplay?() ?? true)
+            && prepared.originalMetadata == readReplayMetadata?()
             && prepared.original.isEqual(to: storage) && prepared.swaps.allSatisfy { $0.1.stillMatches($0.0) }
     }
 

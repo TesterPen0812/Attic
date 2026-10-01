@@ -107,6 +107,136 @@ final class WorkspaceHistoryTests: XCTestCase {
             }, publication: publish)
         }
     }
+    func testH1ForwardMakeSubtaskReservesTypingAndReplaysRealChildAndFullDraftAtomically() async throws {
+        type("earlier\nMake child")
+        let childID = UUID(), forwardEntry = UUID(), parent = taskID!, noteID = noteID!
+        var group: WorkspaceHistory.TextGroup!
+        var forwardID: UUID!
+        var delivered = 0
+        coordinator.afterPreparation = { [self] in
+            workspace.submitInput { [self] in delivered += 1; type(" queued") }
+        }
+        let outcome = await workspace.performCommand(using: coordinator) { [self] in
+            let command = try XCTUnwrap(adapter.prepareCommand(NSAttributedString(string: "earlier"), name: "Make Subtask"))
+            group = .init(adapter: adapter, payload: command.payload)
+            let context = coordinator.freshContext()
+            let rows = try context.fetch(FetchDescriptor<NoteItem>(predicate: #Predicate { $0.id == noteID }))
+            let versions = Dictionary(uniqueKeysWithValues: rows.map { ($0.persistentModelID, UUID()) })
+            let document = NoteDocument(blocks: [.text("Workspace"), .text("earlier")]), prepared = try PreparedNoteDocument(document)
+            let writes = Set<WorkspaceOwner>([.init(entity: .task, id: childID), .init(entity: .note, id: noteID)])
+                .union(versions.values.map { .init(entity: .version, id: $0) })
+            let guards = writes.union([.init(entity: .task, id: parent)])
+            let envelope = try coordinator.newEnvelope(intent: "Make Subtask", reads: coordinator.capture(guards), writes: writes,
+                afterDocuments: [noteID: prepared.content], historyEffect: WorkspaceModelFields.encode(WorkspaceHistory.ForwardEffect(workspaceID: workspace.id, entryID: forwardEntry)))
+            forwardID = envelope.id
+            return .init(entryID: forwardEntry, envelope: envelope, sessionValid: { adapter.canInstallCommand(command) }, stage: { commit in
+                _ = try TaskStore.stageCreation(in: commit, drafts: [TaskDraft(title: "Make child", parentID: parent)], ids: [childID], timestamp: Date())
+                try NoteStore.stageDocument(in: commit, noteID: noteID, document: document, prepared: prepared,
+                    revisionID: UUID(), versionIDs: versions, timestamp: Date())
+            }, record: { operation, entry in
+                workspace.recordOperation(id: operation, entryID: entry, name: "Make Subtask", coordinator: coordinator, textGroup: group) { redo, effect in
+                    let context = coordinator.freshContext()
+                    let children = try context.fetch(FetchDescriptor<TaskItem>(predicate: #Predicate { $0.id == childID }))
+                    guard !children.isEmpty, children.allSatisfy({ $0.title == "Make child" && $0.parentID == parent && (($0.deletedAt != nil) == redo) }) else { throw WorkspaceFoundationError.conflict }
+                    let text = try XCTUnwrap(adapter.prepareReplay(redo ? group.payloads : group.payloads.reversed().map { $0 }))
+                    let document = NoteDocument(blocks: [.text("Workspace")] + text.candidate.string.components(separatedBy: "\n").map { .text($0) })
+                    let prepared = try PreparedNoteDocument(document)
+                    let notes = try context.fetch(FetchDescriptor<NoteItem>(predicate: #Predicate { $0.id == noteID }))
+                    let versions = Dictionary(uniqueKeysWithValues: notes.map { ($0.persistentModelID, UUID()) }), preservation = UUID()
+                    var writes = Set<WorkspaceOwner>([.init(entity: .task, id: childID), .init(entity: .note, id: noteID)])
+                        .union(versions.values.map { .init(entity: .version, id: $0) })
+                    if !redo { writes.insert(.init(entity: .preservation, id: preservation)) }
+                    let envelope = try coordinator.newEnvelope(intent: "Replay Make Subtask", reads: coordinator.capture(writes.union([.init(entity: .task, id: parent)])), writes: writes,
+                        afterDocuments: [noteID: prepared.content], historyEffect: WorkspaceModelFields.encode(effect), replayOf: operation)
+                    return .init(envelope: envelope, text: (adapter, text), textDocument: (noteID, prepared.content), stage: { commit in
+                        if redo { try TaskStore.stageRestoreDeleted(in: commit, taskIDs: [childID], timestamp: Date()) }
+                        else { try TaskStore.stageSoftDeletion(in: commit, taskID: childID, preservationID: preservation, timestamp: Date()) }
+                        try NoteStore.stageDocument(in: commit, noteID: noteID, document: document, prepared: prepared,
+                            revisionID: UUID(), versionIDs: versions, timestamp: Date())
+                    })
+                }
+            }, publication: .init(steps: [{ _ in
+                guard adapter.installCommand(command) else { throw WorkspaceFoundationError.conflict }
+            }]))
+        }
+        expectEqual(outcome, .committed); expectEqual(delivered, 1); expectEqual(adapter.storage.string, "earlier queued")
+        expectEqual(route.undoCount(in: workspace.historyID), 3)
+        let id = forwardID!
+        let receipt = try XCTUnwrap(coordinator.freshContext().fetch(FetchDescriptor<OperationReceipt>(predicate: #Predicate { $0.id == id })).first)
+        expectEqual(receipt.historyEffect, try WorkspaceModelFields.encode(WorkspaceHistory.ForwardEffect(workspaceID: workspace.id, entryID: forwardEntry)))
+        coordinator.afterPreparation = nil
+        expectTrue(adapter.undo()); expectEqual(adapter.storage.string, "earlier")
+        expectEqual(await workspace.replay(redo: false), .applied)
+        expectEqual(adapter.storage.string, "earlier\nMake child"); expectEqual(try savedDocument().blocks.map(\.text), ["Workspace", "earlier", "Make child"])
+        let deleted = try XCTUnwrap(coordinator.freshContext().fetch(FetchDescriptor<TaskItem>(predicate: #Predicate { $0.id == childID })).first)
+        XCTAssertNotNil(deleted.deletedAt)
+        expectEqual(await workspace.replay(redo: true), .applied); expectEqual(adapter.storage.string, "earlier")
+        XCTAssertNil(try coordinator.freshContext().fetch(FetchDescriptor<TaskItem>(predicate: #Predicate { $0.id == childID })).first?.deletedAt)
+        expectEqual(try savedDocument().blocks.map(\.text), ["Workspace", "earlier"])
+    }
+
+    private func forwardRenamePlan(publication: WorkspaceOperationCoordinator.Publication = .init()) throws -> WorkspaceHistory.CommandPlan {
+        let entryID = UUID(), owner = WorkspaceOwner(entity: .task, id: taskID)
+        let envelope = try coordinator.newEnvelope(intent: "Forward rename", reads: coordinator.capture([owner]), writes: [owner],
+            historyEffect: WorkspaceModelFields.encode(WorkspaceHistory.ForwardEffect(workspaceID: workspace.id, entryID: entryID)))
+        return .init(entryID: entryID, envelope: envelope, stage: { [self] context in
+            try TaskStore.stageUpdate(in: context, taskID: taskID, title: "After", timestamp: Date())
+        }, record: { [self] operation, entry in
+            workspace.recordOperation(id: operation, entryID: entry, name: "Rename", coordinator: coordinator) { [self] redo, effect in
+                let envelope = try coordinator.newEnvelope(intent: "Replay rename", reads: coordinator.capture([owner]), writes: [owner],
+                    historyEffect: WorkspaceModelFields.encode(effect), replayOf: operation)
+                return .init(envelope: envelope, stage: { [self] context in
+                    try TaskStore.stageUpdate(in: context, taskID: taskID, title: redo ? "After" : "Before", timestamp: Date())
+                })
+            }
+        }, publication: publication)
+    }
+    func testH1ForwardFailureAndCancellationKeepDraftAndHistoryAndDeliverQueuedInputOnce() async throws {
+        type("draft"); let cursor = route.undoStepID(in: workspace.historyID)
+        var delivered = 0
+        coordinator.afterPreparation = { [self] in workspace.submitInput { [self] in delivered += 1; type(" queued") } }
+        coordinator.save = { _ in throw WorkspaceFoundationError.preparationFailed }
+        expectEqual(await workspace.performCommand(using: coordinator) { [self] in try forwardRenamePlan() }, .notCommitted)
+        expectEqual(try title(), "Before"); expectEqual(delivered, 1); expectEqual(adapter.storage.string, "draft queued")
+        XCTAssertNil(workspace.pendingCommandID)
+        XCTAssertEqual(route.undoCount(in: workspace.historyID), 2)
+        XCTAssertEqual(route.steps(in: workspace.historyID, redo: false).first?.id, cursor)
+        coordinator.afterPreparation = nil
+        let count = route.undoCount(in: workspace.historyID), text = adapter.storage.string
+        let cancelled = Task { [self] in
+            await workspace.performCommand(using: coordinator) { [self] in
+                let plan = try forwardRenamePlan()
+                withUnsafeCurrentTask { $0?.cancel() }
+                return plan
+            }
+        }
+        expectEqual(await cancelled.value, .notCommitted)
+        expectEqual(try title(), "Before"); expectEqual(adapter.storage.string, text)
+        expectEqual(route.undoCount(in: workspace.historyID), count)
+        XCTAssertTrue(workspace.canUndo)
+    }
+    func testH1ForwardPendingPublicationRetainsInputAndRecordsOneEntryBeforeRetryInstall() async throws {
+        type("draft"); var blocked = true, delivered = 0, installations = 0, saves = 0
+        coordinator.save = { context in saves += 1; try context.save() }
+        coordinator.afterPreparation = { [self] in workspace.submitInput { [self] in delivered += 1; type(" queued") } }
+        let publication = WorkspaceOperationCoordinator.Publication(steps: [{ _ in
+            if blocked { throw WorkspaceFoundationError.preparationFailed }
+            installations += 1
+        }])
+        expectEqual(await workspace.performCommand(using: coordinator) { [self] in try forwardRenamePlan(publication: publication) }, .publicationPending)
+        expectEqual(try title(), "After"); expectEqual(adapter.storage.string, "draft"); expectEqual(delivered, 0)
+        let count = route.undoCount(in: workspace.historyID), saved = saves
+        XCTAssertNotNil(workspace.pendingCommandID); XCTAssertFalse(adapter.undo())
+        blocked = false
+        expectTrue(await workspace.retryPublication(using: coordinator))
+        expectEqual(installations, 1); expectEqual(delivered, 1); expectEqual(adapter.storage.string, "draft queued")
+        expectEqual(route.undoCount(in: workspace.historyID), count + 1)
+        expectEqual(saves, saved + 3)
+        let repeated = await workspace.retryPublication(using: coordinator)
+        XCTAssertFalse(repeated)
+        expectEqual(installations, 1); expectEqual(delivered, 1)
+    }
+
     func testH1TypingAndRealModelCommandsShareOneChronologicalCursorWithoutAutosave() async throws {
         type("first"); try await recordRename(from: "Before", to: "Tick"); type(" second")
         try await recordRename(from: "Tick", to: "Child", mixed: true)

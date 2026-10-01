@@ -78,7 +78,7 @@ enum WorkspacePurge {
     /// New deletion records are immutable and share the soft-delete save.
     /// Original availability has not been checked here: nil records that fact,
     /// rather than inventing a deletion-time missing-file observation.
-    static func stageDeletionCapture(rootID: UUID, rows: [TaskItem], deletedAt: Date, in context: ModelContext) throws {
+    static func stageDeletionCapture(id: UUID = UUID(), rootID: UUID, rows: [TaskItem], deletedAt: Date, in context: ModelContext) throws {
         guard context.container.schema.entities.contains(where: { $0.name == "TaskDeletionPreservation" }) else { return }
         let members = try Dictionary(grouping: rows, by: \.id).values.map { replicas in
             let fields = try replicas.map { try WorkspaceModelFields.read($0) }
@@ -92,7 +92,7 @@ enum WorkspacePurge {
         let dependencies = try preservationDependencies(taskIDs: Set(rows.map(\.id)), in: context)
         let snapshot = Preservation(rootID: rootID, title: head.title, members: members,
             originals: refs.map { .init(reference: $0, wasMissing: nil) }, dependencies: dependencies)
-        context.insert(TaskDeletionPreservation(rootID: rootID, deletedAt: deletedAt,
+        context.insert(TaskDeletionPreservation(id: id, rootID: rootID, deletedAt: deletedAt,
             capturedAt: deletedAt, provenance: "soft deletion", snapshot: try WorkspaceModelFields.encode(snapshot)))
     }
 

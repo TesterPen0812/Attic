@@ -28,6 +28,8 @@ final class WorkspaceOwnershipGate: @unchecked Sendable {
     private var epoch: UInt64 = 0
     private var unlinked: Set<UUID> = []
     let identity = UUID()
+    /// Unknown byte reachability overlaps every collection in this domain.
+    let unknownID = UUID()
     var generation: UInt64 { lock.withLock { epoch } }
     func wasUnlinked(_ id: UUID) -> Bool { lock.withLock { unlinked.contains(id) } }
     func didUnlink(_ id: UUID) { lock.withLock { _ = unlinked.insert(id) } }
@@ -44,7 +46,8 @@ final class WorkspaceOwnershipGate: @unchecked Sendable {
         return Lease(id: id, ids: ids, gate: self)
     }
     func tryAcquire(_ ids: Set<UUID>, kind: Kind, excluding: Lease? = nil) -> Lease? {
-        lock.withLock {
+        let ids = kind == .collection ? ids.union([unknownID]) : ids
+        return lock.withLock {
             guard available(ids, kind: kind, excluding: excluding?.id) else { return nil }
             return make(ids, kind: kind)
         }

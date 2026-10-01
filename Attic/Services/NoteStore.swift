@@ -922,6 +922,8 @@ final class NoteStore: ObservableObject {
         }
         var imported: [ImportedAttachment] = []
         var transactionContext: ModelContext?
+        var admission: WorkspaceOwnershipGate.Lease?
+        defer { admission?.release() }
 
         do {
             let targetNoteID = request.origin.noteID
@@ -964,6 +966,9 @@ final class NoteStore: ObservableObject {
             guard !invalidatedAttachmentImportIDs.contains(request.id) else {
                 throw NoteReplicaMutationError.missingReplica(targetNoteID)
             }
+            let coordinator = try WorkspaceLegacyBridge.coordinator(for: container)
+            admission = try await coordinator.ownership.admit(Set(imported.map(\.id)).union([targetNoteID]))
+            try Task.checkCancellation()
             let refreshedContext = try makeFreshContext()
             transactionContext = refreshedContext
             let originWasPersisted = attachmentImportActivity?.requestID == request.id
@@ -1040,10 +1045,9 @@ final class NoteStore: ObservableObject {
                 note.updatedAt = timestamp
             }
             let presentation = try presentationSnapshot(in: refreshedContext)
-            switch persistImport(
-                in: refreshedContext,
-                fallbackPresentation: presentation
-            ) {
+            let persisted = persistImport(in: refreshedContext, fallbackPresentation: presentation)
+            admission?.release()
+            switch persisted {
             case .persisted, .persistedButRefreshFailed:
                 clearAttachmentImportActivity(requestID: request.id)
                 return .imported(noteID: targetNoteID)
@@ -1053,11 +1057,13 @@ final class NoteStore: ObservableObject {
                 return .failed(message)
             }
         } catch is CancellationError {
+            admission?.release()
             transactionContext?.rollback()
             try? await removeImportedMaterializations(imported)
             clearAttachmentImportActivity(requestID: request.id)
             return .cancelled
         } catch NoteReplicaMutationError.missingReplica {
+            admission?.release()
             transactionContext?.rollback()
             try? await removeImportedMaterializations(imported)
             let message = "The note is no longer available."
@@ -1065,6 +1071,7 @@ final class NoteStore: ObservableObject {
             lastErrorMessage = message
             return .originUnavailable
         } catch {
+            admission?.release()
             transactionContext?.rollback()
             try? await removeImportedMaterializations(imported)
             updateAttachmentImportState(

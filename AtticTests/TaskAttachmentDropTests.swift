@@ -569,6 +569,10 @@ final class TaskAttachmentDropTests: XCTestCase {
         try FileManager.default.createDirectory(at: liveDrop, withIntermediateDirectories: true)
         try backdate(oldDrop, by: 3 * day)
 
+        // §4 P5: an in-flight original-only import is an owner even when
+        // backdated. This fixture explicitly ends the abandoned candidate's
+        // ownership before simulating the next launch's orphan sweep.
+        files.files.finishCandidates([abandoned.id])
         let removed = await store.sweepUnreferencedAttachmentStorage(dropStagingRoot: dropRoot)
         XCTAssertEqual(removed, 1)
         XCTAssertFalse(FileManager.default.fileExists(atPath: privateDirectory(abandoned).path))

@@ -20,6 +20,26 @@ final class WorkspaceOperationCoordinator {
 
     let container: ModelContainer
     let ownership: WorkspaceOwnershipGate
+    private var admittedDocuments: [Data: Set<UUID>] = [:]
+    private var admissionRecency: [Data] = []
+    func observePreparedDocument(_ document: PreparedNoteDocument) {
+        guard let ids = document.admissionIDs else { return }
+        cacheAdmission(document.content, ids: ids)
+    }
+    private func cacheAdmission(_ content: Data, ids: Set<UUID>) {
+        admissionRecency.removeAll { $0 == content }; admissionRecency.append(content)
+        admittedDocuments[content] = ids
+        while admissionRecency.count > 4 || admissionRecency.reduce(0, { $0 + $1.count }) > 2_097_152 {
+            guard admissionRecency.count > 1 else { break }
+            admittedDocuments.removeValue(forKey: admissionRecency.removeFirst())
+        }
+    }
+    private func documentAdmissionIDs(_ content: Data) -> Set<UUID> {
+        if let ids = admittedDocuments[content] { return ids }
+        guard case let .editable(document) = NoteContentCodec.decode(content) else { return [ownership.unknownID] }
+        let ids = Set(document.attachmentIDs)
+        cacheAdmission(content, ids: ids); return ids
+    }
     private var legacyFiles: [UUID: WorkspaceOwnershipGate] = [:]
     func registerLegacyFiles(_ files: AttachmentFileStore) {
         files.registerWriter(ownership); legacyFiles[files.ownership.identity] = files.ownership
@@ -115,7 +135,7 @@ final class WorkspaceOperationCoordinator {
         guard affected.isDisjoint(with: heldOwners), sessionValid() else { return .conflict }
         let admission: WorkspaceOwnershipGate.Lease
         do {
-            admission = try await ownership.admit(Self.admissionIDs(envelope), excluding: collection?.lease(for: ownership))
+            admission = try await ownership.admit(admissionIDs(envelope), excluding: collection?.lease(for: ownership))
         } catch { return .notCommitted }
         defer { admission.release() }
         let claim: WorkspaceOperationClaim
@@ -156,9 +176,14 @@ final class WorkspaceOperationCoordinator {
             }
             WorkspaceCrashHook.reach("K3-validation")
             try stage(context)
-            try validateTombstones(context)
+            for (id, content) in envelope.afterDocuments {
+                guard envelope.writes.contains(.init(entity: .note, id: id)) else { throw WorkspaceFoundationError.conflict }
+                let notes = try context.fetch(FetchDescriptor<NoteItem>(predicate: #Predicate { $0.id == id }))
+                guard !notes.isEmpty, notes.allSatisfy({ $0.content == content }) else { throw WorkspaceFoundationError.conflict }
+            }
+            try validateTombstones(context, before: envelope.tokens)
             try validateLegacyAdmission(context, before: envelope.tokens)
-            guard let admission = ownership.tryAcquire(try Self.admissionIDs(context.insertedModelsArray + context.changedModelsArray),
+            guard let admission = ownership.tryAcquire(try admissionIDs(context.insertedModelsArray + context.changedModelsArray),
                 kind: .admission, excluding: collection?.lease(for: ownership)) else { return .conflict }
             defer { admission.release() }
             try validatePreservedOpaqueContent(context, before: envelope.tokens)
@@ -214,10 +239,10 @@ final class WorkspaceOperationCoordinator {
             let physicalIDs = Dictionary(uniqueKeysWithValues: previous.map { ($0.owner, Set($0.replicas.map(\.physicalID))) })
             let before = try states(writes, in: context, physical: true, baselineIDs: physicalIDs)
             try stage(context)
-            try validateTombstones(context)
+            try validateTombstones(context, before: previous)
             try validateLegacyAdmission(context, before: previous)
             try validatePreservedOpaqueContent(context, before: previous)
-            guard let admission = ownership.tryAcquire(try Self.admissionIDs(context.insertedModelsArray + context.changedModelsArray), kind: .admission) else { return .conflict }
+            guard let admission = ownership.tryAcquire(try admissionIDs(context.insertedModelsArray + context.changedModelsArray), kind: .admission) else { return .conflict }
             defer { admission.release() }
             try validateWriteSet(context, declared: writes)
             let next = try sorted(writes).map { try WorkspaceModelToken.read($0, in: context) }
@@ -520,7 +545,7 @@ final class WorkspaceOperationCoordinator {
 extension WorkspaceOperationCoordinator {
     /// Permanent deletion is an irreversible boundary for every writer,
     /// including compatibility store wrappers and old replay payloads.
-    private func validateTombstones(_ context: ModelContext) throws {
+    private func validateTombstones(_ context: ModelContext, before: [WorkspaceModelToken]) throws {
         guard context.container.schema.entities.contains(where: { $0.name == "TaskDeletionPreservation" }) else { return }
         let records = try context.fetch(FetchDescriptor<TaskDeletionPreservation>()).filter { $0.purgedAt != nil }
         guard !records.isEmpty else { return }
@@ -540,7 +565,13 @@ extension WorkspaceOperationCoordinator {
                     let detached = try context.fetch(FetchDescriptor<TaskNoteAssociation>()).contains {
                         $0.noteID == note.id && $0.detachedPreservationID != nil
                     }
-                    guard !detached else { throw WorkspaceFoundationError.protectedOwner }
+                    if detached {
+                        let original = before.filter { $0.owner == WorkspaceOwner(entity: .note, id: note.id) }
+                            .flatMap(\.replicas).first { $0.physicalID == note.persistentModelID }
+                        guard let original, let content = original.fields["content"], let format = original.fields["contentFormat"],
+                              try JSONDecoder().decode(Data?.self, from: content) == note.content,
+                              try JSONDecoder().decode(Int.self, from: format) == note.contentFormat else { throw WorkspaceFoundationError.protectedOwner }
+                    }
                 }
             }
         }
@@ -566,13 +597,13 @@ extension WorkspaceOperationCoordinator {
             }
         }
     }
-    private static func admissionIDs(_ envelope: WorkspaceOperationEnvelope) -> Set<UUID> {
+    private func admissionIDs(_ envelope: WorkspaceOperationEnvelope) -> Set<UUID> {
         Set(envelope.writes.map(\.id)).union(envelope.payloads.map(\.id))
             .union(envelope.afterDocuments.keys)
-            .union(envelope.afterDocuments.values.flatMap { NoteContentCodec.decode($0).document?.attachmentIDs ?? [] })
+            .union(envelope.afterDocuments.values.flatMap { documentAdmissionIDs($0) })
     }
-    static func admissionIDs(_ rows: [any PersistentModel]) throws -> Set<UUID> {
-        var ids = Set(rows.compactMap { owner($0)?.id })
+    func admissionIDs(_ rows: [any PersistentModel]) throws -> Set<UUID> {
+        var ids = Set(rows.compactMap { Self.owner($0)?.id })
         for row in rows {
             if let task = row as? TaskItem {
                 if let data = task.imageReferencesData { ids.formUnion(try JSONDecoder().decode([TaskImageReference].self, from: data).map(\.id)) }
@@ -582,14 +613,14 @@ extension WorkspaceOperationCoordinator {
             } else if let association = row as? TaskNoteAssociation {
                 ids.formUnion([association.taskID, association.noteID])
             } else if let note = row as? NoteItem {
-                if let data = note.content { ids.formUnion(NoteContentCodec.decode(data).document?.attachmentIDs ?? []) }
+                if let data = note.content { ids.formUnion(documentAdmissionIDs(data)) }
             } else if let attachment = row as? NoteAttachment { ids.insert(attachment.noteID) }
             else if let version = row as? NoteVersion {
                 ids.insert(version.noteID)
-                if let data = version.content { ids.formUnion(NoteContentCodec.decode(data).document?.attachmentIDs ?? []) }
+                if let data = version.content { ids.formUnion(documentAdmissionIDs(data)) }
             } else if let proposal = row as? NotePendingEdit {
                 ids.insert(proposal.noteID)
-                if let data = proposal.proposedContent { ids.formUnion(NoteContentCodec.decode(data).document?.attachmentIDs ?? []) }
+                if let data = proposal.proposedContent { ids.formUnion(documentAdmissionIDs(data)) }
             }
         }
         return ids

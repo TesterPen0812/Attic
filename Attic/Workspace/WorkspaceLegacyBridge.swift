@@ -99,7 +99,7 @@ enum WorkspaceLegacyBridge {
             throw WorkspaceFoundationError.unknown
         }
         let changes = source.insertedModelsArray + source.changedModelsArray + source.deletedModelsArray
-        guard let admission = state.coordinator.ownership.tryAcquire(try WorkspaceOperationCoordinator.admissionIDs(changes), kind: .admission) else {
+        guard let admission = state.coordinator.ownership.tryAcquire(try state.coordinator.admissionIDs(changes), kind: .admission) else {
             throw WorkspaceFoundationError.pendingPublication
         }
         defer { admission.release() }
