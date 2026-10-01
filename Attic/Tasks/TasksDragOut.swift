@@ -28,6 +28,21 @@ enum TasksDragOut {
         let session = view.beginDraggingSession(with: [item], event: event, source: source)
         session.animatesToStartingPositionsOnCancelOrFail = true
         source.session = session
+        Probe.shared.began += 1
+    }
+
+    /// UI tests: how many sessions began and ended (shown, under
+    /// `ATTIC_UI_TESTING`, by the page's `tasks-drag-out-state` element).
+    final class Probe: ObservableObject {
+        static let shared = Probe()
+        @Published var began = 0
+        @Published var ended = 0
+    }
+
+    /// What a drag of tasks offers: a copy to other apps, nothing within
+    /// Attic (a drop back on the panel does nothing).
+    nonisolated static func operations(for context: NSDraggingContext) -> NSDragOperation {
+        context == .outsideApplication ? .copy : []
     }
 
     /// A quiet label of what is being dragged.
@@ -48,8 +63,8 @@ enum TasksDragOut {
         }
     }
 
-    /// The session's source (internal for the integration tests, which
-    /// end a real session as Esc does).
+    /// The session's source (internal for the tests, which end it as Esc
+    /// does).
     final class Source: NSObject, NSDraggingSource {
         /// Held for the session's life.
         static var current: Source?
@@ -63,14 +78,20 @@ enum TasksDragOut {
 
         func draggingSession(_ session: NSDraggingSession, sourceOperationMaskFor context: NSDraggingContext) -> NSDragOperation {
             // A copy, never a move: nothing leaves Attic.
-            context == .outsideApplication ? .copy : []
+            TasksDragOut.operations(for: context)
         }
 
         func draggingSession(_ session: NSDraggingSession, endedAt screenPoint: NSPoint, operation: NSDragOperation) {
-            // Once: a cancelled session (Esc, or no destination) ends here
-            // too, with no operation; nothing in Attic changes either way.
+            finish()
+        }
+
+        /// The session ended: dropped, or cancelled (Esc, or no
+        /// destination: no operation). Once; nothing in Attic changes
+        /// either way.
+        func finish() {
             guard Source.current === self else { return }
             Source.current = nil
+            Probe.shared.ended += 1
             ended()
         }
     }

@@ -203,6 +203,12 @@ struct TasksPage: View {
         // The page's own view, so a press is placed from its event (its
         // window, its location), never from a remembered hover point.
         .background(TasksPointerProbe(pointer: pointer).accessibilityHidden(true))
+        #if DEBUG
+        // UI tests read how many drags out began and ended.
+        .overlay(alignment: .topLeading) {
+            if Self.exposesDragOutState { TasksDragOutStateProbe() }
+        }
+        #endif
     }
 
     private func pageAppeared() {
@@ -3476,6 +3482,28 @@ private struct TasksNoticeClearance: View {
             .accessibilityHidden(true)
     }
 }
+
+#if DEBUG
+extension TasksPage {
+    static let exposesDragOutState = ProcessInfo.processInfo.environment["ATTIC_UI_TESTING"] == "1"
+}
+
+/// UI tests: the drags out of the panel (began, ended), as a 1 pt text.
+private struct TasksDragOutStateProbe: View {
+    @ObservedObject private var probe = TasksDragOut.Probe.shared
+
+    var body: some View {
+        let state = "began \(probe.began) ended \(probe.ended)"
+        Text(verbatim: state)
+            .font(.system(size: 1))
+            .frame(width: 1, height: 1)
+            .opacity(0.01)
+            .allowsHitTesting(false)
+            .accessibilityIdentifier("tasks-drag-out-state")
+            .accessibilityValue(state)
+    }
+}
+#endif
 
 /// The lists' bars under the system soft edge: their heights, which the
 /// lists' scroll views take as safe area (`TasksPage.bars`).
