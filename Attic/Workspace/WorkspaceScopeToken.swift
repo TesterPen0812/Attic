@@ -4,10 +4,12 @@ import SwiftData
 /// Membership queries carry expected absence too. Tokenizing only known IDs
 /// cannot detect a new sibling or association arriving during preparation.
 enum WorkspaceScope: Codable, Hashable, Sendable {
+    case all(WorkspaceOwner.Entity)
     case children(UUID), attachments(UUID), versions(UUID), proposals(UUID)
     case taskAssociations(UUID), noteAssociations(UUID), preservations(UUID)
     var entity: WorkspaceOwner.Entity {
         switch self {
+        case let .all(entity): entity
         case .children: .task
         case .attachments: .attachment
         case .versions: .version
@@ -64,7 +66,10 @@ struct WorkspaceScopeIndex {
         return scopes
     }
     func token(_ scope: WorkspaceScope) -> WorkspaceScopeToken {
-        WorkspaceScopeToken(scope: scope, members: (membership[scope] ?? []).sorted { $0.id.uuidString < $1.id.uuidString }.map { inventory[$0]! })
+        if case let .all(entity) = scope {
+            return WorkspaceScopeToken(scope: scope, members: inventory.values.filter { $0.owner.entity == entity && !$0.replicas.isEmpty }.sorted { $0.owner.id.uuidString < $1.owner.id.uuidString })
+        }
+        return WorkspaceScopeToken(scope: scope, members: (membership[scope] ?? []).sorted { $0.id.uuidString < $1.id.uuidString }.map { inventory[$0]! })
     }
 }
 struct WorkspaceScopeToken: Codable, Equatable, Sendable {
@@ -80,6 +85,8 @@ struct WorkspaceScopeToken: Codable, Equatable, Sendable {
             }
         }
         switch scope {
+        case let .all(entity):
+            return Self(scope: scope, members: try WorkspaceLegacyBridge.inventory(in: context, includeCanvas: true, entities: [entity]).values.sorted { $0.owner.id.uuidString < $1.owner.id.uuidString })
         case let .children(id): try collect(context.fetch(FetchDescriptor<TaskItem>(predicate: #Predicate { $0.parentID == id })))
         case let .attachments(id): try collect(context.fetch(FetchDescriptor<NoteAttachment>(predicate: #Predicate { $0.noteID == id })))
         case let .versions(id): try collect(context.fetch(FetchDescriptor<NoteVersion>(predicate: #Predicate { $0.noteID == id })))
@@ -110,6 +117,8 @@ struct WorkspaceScopeToken: Codable, Equatable, Sendable {
         let field: String
         let id: UUID
         switch scope {
+        case let .all(value):
+            return Self(scope: scope, members: baseline.values.filter { $0.owner.entity == value && !$0.replicas.isEmpty }.sorted { $0.owner.id.uuidString < $1.owner.id.uuidString })
         case let .children(value): entity = .task; field = "parentID"; id = value
         case let .attachments(value): entity = .attachment; field = "noteID"; id = value
         case let .versions(value): entity = .version; field = "noteID"; id = value

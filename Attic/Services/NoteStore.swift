@@ -714,6 +714,20 @@ final class NoteStore: ObservableObject {
                 throw NoteReplicaMutationError.notRecentlyDeleted(noteID)
             }
             for replica in replicas {
+                guard let bytes = replica.content, case let .editable(document) = NoteContentCodec.decode(bytes) else {
+                    if context.container.schema.entities.contains(where: { $0.name == "TaskNoteAssociation" }),
+                       try context.fetch(FetchDescriptor<TaskNoteAssociation>()).contains(where: { $0.noteID == noteID && $0.detachedPreservationID != nil }) {
+                        throw NoteDocumentStoreError.readOnly
+                    }
+                    continue
+                }
+                let normalized = try WorkspaceRestoreNormalization.document(document, noteID: noteID, in: context)
+                if normalized != document {
+                    Self.stageDocumentContent(try PreparedNoteDocument(normalized), format: normalized.format,
+                        on: [replica], timestamp: currentDate, revision: replica.revision, revisionID: UUID())
+                }
+            }
+            for replica in replicas {
                 replica.deletedAt = nil
                 replica.deletedAttachmentIDsRaw = nil
             }

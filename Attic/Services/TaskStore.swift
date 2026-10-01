@@ -1944,6 +1944,42 @@ final class TaskStore: ObservableObject {
         return true
     }
 
+    /// Lowest shared preflight for an immutable deletion family. Both the
+    /// compatibility collector and coordinated purge stage through this guard.
+    static func guardedDeletedFamily(in context: ModelContext, rootID: UUID, before cutoff: Date,
+                                     confirmed: Date? = nil) throws -> [TaskItem]? {
+        let all = try context.fetch(FetchDescriptor<TaskItem>())
+        let batch = all.filter { $0.deletionRootID == rootID && $0.deletedAt != nil }
+        guard let first = batch.first, let deletedAt = first.deletedAt,
+              deletedAt < cutoff, confirmed == nil || confirmed == deletedAt else { return nil }
+        let members = first.deletionMembers
+        let recorded = first.deletionMembersRaw.split(separator: " ")
+        guard recorded.count == members.count, recorded.allSatisfy({ UUID(uuidString: String($0)) != nil }),
+              !members.isEmpty, members.contains(rootID), Set(batch.map(\.id)) == members,
+              batch.allSatisfy({ $0.deletedAt == deletedAt && $0.deletionMembersRaw == first.deletionMembersRaw }) else { return nil }
+        let replicas = all.filter { members.contains($0.id) }
+        for id in members {
+            let family = replicas.filter { $0.id == id }
+            guard let row = family.first, family.allSatisfy({
+                $0.deletionRootID == rootID && $0.deletedAt == deletedAt
+                    && $0.deletionMembersRaw == first.deletionMembersRaw
+                    && TaskReplicaSnapshot($0) == TaskReplicaSnapshot(row)
+                    && $0.associationGeneration == row.associationGeneration
+            }) else { return nil }
+        }
+        return replicas
+    }
+
+    static func stagePermanentRemoval(in context: ModelContext, rootID: UUID, before cutoff: Date,
+                                      confirmed: Date? = nil) throws -> Set<UUID> {
+        guard let rows = try guardedDeletedFamily(in: context, rootID: rootID, before: cutoff, confirmed: confirmed) else {
+            throw WorkspaceFoundationError.protectedOwner
+        }
+        let ids = Set(rows.map(\.id))
+        rows.forEach(context.delete)
+        return ids
+    }
+
     /// Removes for good what was deleted before `cutoff` (30 days ago, at
     /// the daily cleanup). A delete is purged only when every task it
     /// recorded is still there under the same deletion, and every replica of
@@ -2005,14 +2041,12 @@ final class TaskStore: ObservableObject {
                       $0.deletionRootID == rootID && $0.deletedAt == first.deletedAt
                           && $0.deletionMembersRaw == first.deletionMembersRaw
                   }) else { continue }
-            let agreed = ids.allSatisfy { id in
-                guard let replicas = storedByID[id], let first = replicas.first,
-                      first.deletedAt.map({ $0 < cutoff }) == true,
-                      (first.deletionRootID ?? first.id) == rootID else { return false }
-                let snapshot = TaskReplicaSnapshot(first)
-                return replicas.allSatisfy { TaskReplicaSnapshot($0) == snapshot }
-            }
-            guard agreed else { continue }
+            guard let complete = try? Self.guardedDeletedFamily(in: context, rootID: rootID, before: cutoff,
+                                                                 confirmed: confirmed?[rootID]),
+                  Set(complete.map(\.id)) == ids else { continue }
+            // Own notes/associations must go through the coordinated path.
+            // The legacy collector cannot leave an actionable purged task ID.
+            guard (try? WorkspacePurge.hasOwnNotesOrAssociations(ids, in: context)) == false else { continue }
             purgedIDs.formUnion(ids)
             removed += ids.flatMap { storedByID[$0] ?? [] }
         }

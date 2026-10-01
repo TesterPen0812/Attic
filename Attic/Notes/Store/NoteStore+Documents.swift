@@ -904,16 +904,23 @@ extension NoteStore {
                 && version.content.map { NoteContentCodec.decode($0).isEditable } == true) else {
             return .failure(.readOnly)
         }
+        let restoredContent: Data?
+        do {
+            if let bytes = version.content, case let .editable(document) = NoteContentCodec.decode(bytes) {
+                let normalized = try WorkspaceRestoreNormalization.document(document, noteID: noteID, in: modelContext)
+                restoredContent = normalized == document ? bytes : try NoteContentCodec.encode(normalized)
+            } else { restoredContent = version.content }
+        } catch { return .failure(.saveFailed(error.localizedDescription)) }
         let timestamp = currentDate
         let context = modelContext
         do { try stageDisplacedReplicas(replicas, reason: .beforeRestore, timestamp: timestamp) }
         catch { return .failure(.saveFailed(error.localizedDescription)) }
         let revisionID = UUID()
         let revision = (replicas.map(\.revision).max() ?? 0) &+ 1
-        let derived = Self.derivedColumns(content: version.content, format: version.contentFormat,
+        let derived = Self.derivedColumns(content: restoredContent, format: version.contentFormat,
                                           title: version.title, body: version.body)
         for replica in replicas {
-            replica.content = version.contentFormat >= 1 ? version.content : nil
+            replica.content = version.contentFormat >= 1 ? restoredContent : nil
             replica.contentFormat = version.contentFormat
             replica.title = derived.title
             replica.body = derived.body
@@ -929,10 +936,9 @@ extension NoteStore {
             if replica !== preflight.canonical {
                 replica.createdAt = preflight.canonical.createdAt
                 replica.tagsRaw = preflight.canonical.tagsRaw
-                replica.taskID = preflight.canonical.taskID
             }
         }
-        if let data = version.content, let restored = NoteContentCodec.decode(data).document {
+        if let data = restoredContent, let restored = NoteContentCodec.decode(data).document {
             do { try stageAttachmentVisibility(referencedBy: restored, noteID: noteID, timestamp: timestamp) }
             catch {
                 context.rollback()

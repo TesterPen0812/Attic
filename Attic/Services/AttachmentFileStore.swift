@@ -48,9 +48,10 @@ actor AttachmentFileStore {
 
     private final class RetentionRegistry: @unchecked Sendable {
         let lock = NSLock()
+        var generation: UInt64 = 0
         var providers: [UUID: @Sendable () async -> Set<UUID>?] = [:]
-        func snapshot() -> [@Sendable () async -> Set<UUID>?] {
-            lock.lock(); defer { lock.unlock() }; return Array(providers.values)
+        func snapshot() -> (UInt64, [@Sendable () async -> Set<UUID>?]) {
+            lock.lock(); defer { lock.unlock() }; return (generation, Array(providers.values))
         }
     }
     private nonisolated let retention = RetentionRegistry()
@@ -58,14 +59,24 @@ actor AttachmentFileStore {
     /// Registration is synchronous and thread-safe so the destructive
     /// primitive cannot race the store's initialization task.
     nonisolated func registerByteOwners(_ owner: UUID, provider: @escaping @Sendable () async -> Set<UUID>?) {
-        retention.lock.lock(); retention.providers[owner] = provider; retention.lock.unlock()
+        retention.lock.lock(); retention.providers[owner] = provider; retention.generation &+= 1; retention.lock.unlock()
     }
 
     private func removeUnownedDirectory(_ directory: URL) async throws -> Bool {
         guard let id = UUID(uuidString: directory.deletingLastPathComponent().lastPathComponent) else { return false }
-        for provider in retention.snapshot() {
+        let (generation, providers) = retention.snapshot()
+        for provider in providers {
             guard let ids = await provider(), !ids.contains(id) else { return false }
         }
+        return try removeDirectory(directory, registrationGeneration: generation)
+    }
+
+    /// Registration and unlink form one non-suspending boundary. A provider
+    /// registered while awaited reads run invalidates that collection attempt.
+    /// Dynamic roots inside an existing provider still require admission leases.
+    private func removeDirectory(_ directory: URL, registrationGeneration generation: UInt64) throws -> Bool {
+        retention.lock.lock(); defer { retention.lock.unlock() }
+        guard retention.generation == generation else { return false }
         if fileManager.fileExists(atPath: directory.path) { try fileManager.removeItem(at: directory) }
         return true
     }
@@ -208,6 +219,7 @@ actor AttachmentFileStore {
         for reference in references {
             let directory = try validatedDirectory(for: reference)
             guard try await removeUnownedDirectory(directory) else { continue }
+            WorkspaceCrashHook.reach("K8-cache")
             let idDirectory = directory.deletingLastPathComponent()
             if fileManager.fileExists(atPath: idDirectory.path),
                (try? fileManager.contentsOfDirectory(atPath: idDirectory.path))?.isEmpty == true {
