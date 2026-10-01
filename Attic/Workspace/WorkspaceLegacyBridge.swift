@@ -14,9 +14,15 @@ enum WorkspaceLegacyBridge {
         let coordinator: WorkspaceOperationCoordinator
         var baseline: [WorkspaceOwner: WorkspaceModelToken]
         let includeCanvas: Bool
+        var saveObserver: NSObjectProtocol?
         init(_ coordinator: WorkspaceOperationCoordinator, _ baseline: [WorkspaceOwner: WorkspaceModelToken], includeCanvas: Bool) {
             self.coordinator = coordinator; self.baseline = baseline; self.includeCanvas = includeCanvas
         }
+        deinit { if let saveObserver { NotificationCenter.default.removeObserver(saveObserver) } }
+    }
+    private final class ContextReference: @unchecked Sendable {
+        weak var value: ModelContext?
+        init(_ value: ModelContext) { self.value = value }
     }
     private static var coordinators: [ObjectIdentifier: WeakCoordinator] = [:]
     private static var contextKey: UInt8 = 0
@@ -51,7 +57,19 @@ enum WorkspaceLegacyBridge {
         context.autosaveEnabled = false
         let coordinator = try coordinator(for: context.container)
         let baseline = try inventory(in: context, includeCanvas: includeCanvas)
-        objc_setAssociatedObject(context, &contextKey, ContextState(coordinator, baseline, includeCanvas: includeCanvas), .OBJC_ASSOCIATION_RETAIN_NONATOMIC)
+        let state = ContextState(coordinator, baseline, includeCanvas: includeCanvas)
+        let reference = ContextReference(context)
+        // Isolated fixtures can save this staging context directly. Capture
+        // its actual saved baseline after success; never refresh guards while
+        // a command still has pending edits. This is a read, not a new writer.
+        state.saveObserver = NotificationCenter.default.addObserver(forName: ModelContext.didSave, object: context, queue: .main) { _ in
+            MainActor.assumeIsolated {
+                guard let saved = reference.value else { return }
+                do { try registerContext(saved, includeCanvas: includeCanvas) }
+                catch { objc_setAssociatedObject(saved, &contextKey, nil, .OBJC_ASSOCIATION_RETAIN_NONATOMIC) }
+            }
+        }
+        objc_setAssociatedObject(context, &contextKey, state, .OBJC_ASSOCIATION_RETAIN_NONATOMIC)
     }
     static func persist(_ source: ModelContext, using writer: @escaping (ModelContext) throws -> Void,
                         sourceName: String, history: Bool = true) throws {
@@ -64,11 +82,12 @@ enum WorkspaceLegacyBridge {
             return owner
         })
         if writes.isEmpty { return }
+        let bulkAfter = writes.count > 8 ? try inventory(in: source, includeCanvas: true, entities: Set(writes.map(\.entity))) : nil
         var after: [WorkspaceOwner: WorkspaceModelToken] = [:]
         var before: [WorkspaceOwner: WorkspaceModelToken] = [:]
         for owner in writes {
             before[owner] = state.baseline[owner] ?? WorkspaceModelToken(owner: owner, replicas: [])
-            after[owner] = try WorkspaceModelToken.read(owner, in: source)
+            after[owner] = try bulkAfter.map { $0[owner] ?? WorkspaceModelToken(owner: owner, replicas: []) } ?? WorkspaceModelToken.read(owner, in: source)
         }
         // Include metadata consumed at associated endpoints and parent heads.
         // Membership scopes below come from the original staging baseline.
@@ -85,7 +104,8 @@ enum WorkspaceLegacyBridge {
         let reads = before.values.sorted { ($0.owner.entity.rawValue, $0.owner.id.uuidString) < ($1.owner.entity.rawValue, $1.owner.id.uuidString) }
         let plain = try !history && state.coordinator.mayUsePlainSave(
             before: writes.map { before[$0]! }, after: writes.map { after[$0]! }, in: source)
-        let scopes = try WorkspaceScopeToken.scopes(for: reads).map { try WorkspaceScopeToken.fromBaseline($0, state.baseline) }
+        let scopeIndex = try WorkspaceScopeIndex(state.baseline)
+        let scopes = WorkspaceScopeToken.scopes(for: reads).map { scopeIndex.token($0) }
         var staged: [StagedNoteAttachment] = []
         for owner in writes where owner.entity == .attachment {
             guard let next = after[owner], let previous = before[owner], !next.replicas.isEmpty else { continue }
@@ -165,10 +185,29 @@ enum WorkspaceLegacyBridge {
         }
     }
 
-    private static func inventory(in context: ModelContext, includeCanvas: Bool) throws -> [WorkspaceOwner: WorkspaceModelToken] {
+    static func inventory(in context: ModelContext, includeCanvas: Bool, entities: Set<WorkspaceOwner.Entity>? = nil) throws -> [WorkspaceOwner: WorkspaceModelToken] {
         let schema = Set(context.container.schema.entities.map(\.name))
         var families: [WorkspaceOwner: [WorkspaceModelToken.Replica]] = [:]
         func include<M: PersistentModel>(_ type: M.Type, name: String) throws {
+            let entity: WorkspaceOwner.Entity
+            switch name {
+            case "TaskItem": entity = .task
+            case "NoteItem": entity = .note
+            case "NoteAttachment": entity = .attachment
+            case "NoteVersion": entity = .version
+            case "NotePendingEdit": entity = .proposal
+            case "ItemLink": entity = .link
+            case "TaskNoteAssociation": entity = .association
+            case "TaskDeletionPreservation": entity = .preservation
+            case "OperationReceipt": entity = .receipt
+            case "CanvasBoardItem": entity = .board
+            case "CanvasStrokeItem": entity = .stroke
+            case "CanvasImageItem": entity = .image
+            case "CanvasSemanticObjectItem": entity = .semantic
+            default: throw WorkspaceFoundationError.unsupportedField(name)
+            }
+            if let entities, !entities.contains(entity) { return }
+            if let entities, entities.contains(entity), !schema.contains(name) { throw WorkspaceFoundationError.unsupportedField(name) }
             guard schema.contains(name) else { return }
             for row in try context.fetch(FetchDescriptor<M>()) {
                 guard let owner = WorkspaceOperationCoordinator.owner(row) else { throw WorkspaceFoundationError.unknown }

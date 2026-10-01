@@ -116,13 +116,22 @@ final class WorkspaceOperationCoordinator {
         let affected = Set(envelope.tokens.map(\.owner)).union(envelope.writes)
         let context = freshContext()
         do {
+            let bulk: [WorkspaceOwner: WorkspaceModelToken]?
+            if envelope.tokens.count > 8 || envelope.scopes.count > 8 {
+                let entities = Set((envelope.tokens + envelope.inverseGuards).map { $0.owner.entity }).union(envelope.scopes.map { $0.scope.entity })
+                bulk = try WorkspaceLegacyBridge.inventory(in: context, includeCanvas: true, entities: entities)
+            } else { bulk = nil }
+            let scopeIndex = try bulk.map(WorkspaceScopeIndex.init)
             for token in envelope.tokens + envelope.inverseGuards {
-                guard try WorkspaceModelToken.read(token.owner, in: context) == token else {
+                let current = try bulk.map { $0[token.owner] ?? WorkspaceModelToken(owner: token.owner, replicas: []) }
+                    ?? WorkspaceModelToken.read(token.owner, in: context)
+                guard current == token else {
                     return .conflict
                 }
             }
             for scope in envelope.scopes {
-                guard try WorkspaceScopeToken.read(scope.scope, in: context) == scope else { return .conflict }
+                let current = try scopeIndex?.token(scope.scope) ?? WorkspaceScopeToken.read(scope.scope, in: context)
+                guard current == scope else { return .conflict }
             }
             WorkspaceCrashHook.reach("K3-validation")
             try stage(context)
@@ -424,13 +433,15 @@ final class WorkspaceOperationCoordinator {
     }
     private func states(_ owners: Set<WorkspaceOwner>, in context: ModelContext, physical: Bool = false,
                         baselineIDs: [WorkspaceOwner: Set<PersistentIdentifier>]? = nil) throws -> [State] {
-        try sorted(owners).map { owner in
-            let token = try WorkspaceModelToken.read(owner, in: context)
+        let bulk = owners.count > 8 ? try WorkspaceLegacyBridge.inventory(in: context, includeCanvas: true, entities: Set(owners.map(\.entity))) : nil
+        return try sorted(owners).map { owner in
+            let token = try bulk.map { $0[owner] ?? WorkspaceModelToken(owner: owner, replicas: []) } ?? WorkspaceModelToken.read(owner, in: context)
             return State(owner: owner, replicas: try token.replicas.map {
                 let digest = try journal.digestSynchronously(WorkspaceModelFields.encode($0.fields))
+                guard physical else { return digest }
                 let physicalKey = baselineIDs?[owner]?.contains($0.physicalID) == false
                     ? "new" : try journal.digestSynchronously(WorkspaceModelFields.encode($0.physicalID))
-                return physical ? physicalKey + ":" + digest : digest
+                return physicalKey + ":" + digest
             }.sorted())
         }
     }

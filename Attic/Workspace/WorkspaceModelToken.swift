@@ -69,9 +69,11 @@ enum WorkspaceModelFields {
     }
 
     @MainActor private static func record<M: PersistentModel>(_ model: M, _ fields: [WorkspaceField<M>], applying patch: [String: Data]? = nil) throws -> [String: Data] {
+        guard fields.count == M.schemaMetadata.count else { throw WorkspaceFoundationError.unsupportedField(String(describing: M.self)) }
         if let patch {
             guard Set(patch.keys).isSubset(of: Set(fields.map(\.name))) else { throw WorkspaceFoundationError.conflict }
             for field in fields { if let value = patch[field.name] { try field.write(model, value) } }
+            return [:] // apply() does not need to serialize every untouched field.
         }
         var values: [String: Data] = [:]
         for field in fields { values[field.name] = try field.read(model) }

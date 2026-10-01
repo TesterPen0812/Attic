@@ -98,6 +98,33 @@ final class WorkspaceCommitTests: XCTestCase {
             XCTAssertEqual(try context.fetchCount(FetchDescriptor<OperationReceipt>()), 0)
         }
     }
+    func testC5CompatibilityBatchHasOneDomainSaveAndSeparateReceiptOnlyBookkeeping() throws {
+        let gate = PersistenceGate()
+        let store = TaskStore(container: container, persist: gate.save)
+        let before = gate.saveCount, beforeBookkeeping = gate.bookkeepingSaveCount
+        let created = try XCTUnwrap(store.commit([TaskDraft(title: "One"), TaskDraft(title: "Two")]))
+        XCTAssertEqual(created.count, 2)
+        XCTAssertEqual(gate.saveCount, before + 1, "the domain rows and receipt share one transaction")
+        XCTAssertEqual(gate.bookkeepingSaveCount, beforeBookkeeping + 2)
+        XCTAssertEqual(try coordinator.freshContext().fetchCount(FetchDescriptor<TaskItem>()), 3)
+    }
+
+    func testC2IndexedMembershipMatchesFreshQueriesAndKeepsDivergentReplicasComplete() throws {
+        let childID = UUID(), otherParent = UUID()
+        let context = coordinator.freshContext()
+        context.insert(TaskItem(id: childID, title: "First", parentID: taskID))
+        context.insert(TaskItem(id: childID, title: "Divergent", parentID: otherParent))
+        try context.save()
+        let inventory = try WorkspaceLegacyBridge.inventory(in: context, includeCanvas: false)
+        let index = try WorkspaceScopeIndex(inventory)
+        for parent in [taskID!, otherParent] {
+            let scope = WorkspaceScope.children(parent)
+            XCTAssertEqual(index.token(scope), try WorkspaceScopeToken.read(scope, in: context))
+            XCTAssertEqual(index.token(scope).members.first?.replicas.count, 2)
+        }
+        let unknown: [WorkspaceOwner: WorkspaceModelToken] = [.init(entity: .task, id: childID): .init(owner: .init(entity: .task, id: childID), replicas: [.init(physicalID: try XCTUnwrap(context.fetch(FetchDescriptor<TaskItem>()).first).persistentModelID, fields: [:])])]
+        XCTAssertThrowsError(try WorkspaceScopeIndex(unknown), "missing fields are unknown, never empty membership")
+    }
     func testC1RealConversionCommitsTextChildVersionAttachmentAssociationAndReceiptTogether() async throws {
         let (outcome, id) = try await conversion()
         XCTAssertEqual(outcome, .committed)

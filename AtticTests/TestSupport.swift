@@ -57,11 +57,17 @@ final class PersistenceGate {
 
     var shouldFail = false
     private(set) var saveCount = 0
+    private(set) var bookkeepingSaveCount = 0
 
     func save(_ context: ModelContext) throws {
         if shouldFail { throw Failure() }
+        let rows = context.insertedModelsArray + context.changedModelsArray + context.deletedModelsArray
+        // The phase-3 contract separates the one model+receipt transaction
+        // from later receipt-only publication bookkeeping. Continue measuring
+        // domain atomicity, and record every successful bookkeeping save too.
+        let bookkeeping = !rows.isEmpty && rows.allSatisfy { $0 is OperationReceipt }
         try context.save()
-        saveCount += 1
+        if bookkeeping { bookkeepingSaveCount += 1 } else { saveCount += 1 }
     }
 }
 

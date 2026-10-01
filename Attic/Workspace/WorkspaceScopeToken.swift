@@ -6,6 +6,50 @@ import SwiftData
 enum WorkspaceScope: Codable, Hashable, Sendable {
     case children(UUID), attachments(UUID), versions(UUID), proposals(UUID)
     case taskAssociations(UUID), noteAssociations(UUID), preservations(UUID)
+    var entity: WorkspaceOwner.Entity {
+        switch self {
+        case .children: .task
+        case .attachments: .attachment
+        case .versions: .version
+        case .proposals: .proposal
+        case .taskAssociations, .noteAssociations: .association
+        case .preservations: .preservation
+        }
+    }
+}
+
+/// Index one complete physical inventory once. Large family commands must
+/// not issue one table scan for every task's empty association scope.
+struct WorkspaceScopeIndex {
+    private let inventory: [WorkspaceOwner: WorkspaceModelToken]
+    private var membership: [WorkspaceScope: Set<WorkspaceOwner>] = [:]
+    init(_ inventory: [WorkspaceOwner: WorkspaceModelToken]) throws {
+        self.inventory = inventory
+        for (owner, token) in inventory {
+            for replica in token.replicas {
+                func id(_ key: String) throws -> UUID? {
+                    guard let data = replica.fields[key] else { throw WorkspaceFoundationError.unknown }
+                    return try JSONDecoder().decode(UUID?.self, from: data)
+                }
+                var scopes: [WorkspaceScope] = []
+                switch owner.entity {
+                case .task: if let value = try id("parentID") { scopes = [.children(value)] }
+                case .attachment: if let value = try id("noteID") { scopes = [.attachments(value)] }
+                case .version: if let value = try id("noteID") { scopes = [.versions(value)] }
+                case .proposal: if let value = try id("noteID") { scopes = [.proposals(value)] }
+                case .association:
+                    if let value = try id("taskID") { scopes.append(.taskAssociations(value)) }
+                    if let value = try id("noteID") { scopes.append(.noteAssociations(value)) }
+                case .preservation: if let value = try id("rootID") { scopes = [.preservations(value)] }
+                default: break
+                }
+                for scope in scopes { membership[scope, default: []].insert(owner) }
+            }
+        }
+    }
+    func token(_ scope: WorkspaceScope) -> WorkspaceScopeToken {
+        WorkspaceScopeToken(scope: scope, members: (membership[scope] ?? []).sorted { $0.id.uuidString < $1.id.uuidString }.map { inventory[$0]! })
+    }
 }
 struct WorkspaceScopeToken: Codable, Equatable, Sendable {
     let scope: WorkspaceScope
