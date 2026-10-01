@@ -222,6 +222,22 @@ final class NoteStore: ObservableObject {
         }
     }
 
+    private final class SaveObservation {
+        let token: NSObjectProtocol
+        init(_ token: NSObjectProtocol) { self.token = token }
+        deinit { NotificationCenter.default.removeObserver(token) }
+    }
+    private var attachmentProofSaveObserver: SaveObservation?
+    private func observeAttachmentContextWrites(_ source: ModelContext) {
+        attachmentProofSaveObserver = nil
+        attachmentProofSaveObserver = SaveObservation(NotificationCenter.default.addObserver(forName: ModelContext.willSave, object: source, queue: .main) { [weak self] _ in
+            MainActor.assumeIsolated {
+                guard let self else { return }
+                self.invalidateAttachmentProofs(in: self.context)
+            }
+        })
+    }
+
     /// nil means verification is pending, rather than pretending that payload
     /// presence proves intact bytes. Agent responses expose that uncertainty.
     func knownAttachmentAvailability(_ id: UUID) -> Bool? {
@@ -468,7 +484,7 @@ final class NoteStore: ObservableObject {
 #if os(macOS)
         markAttachmentImportOriginPersisted(noteID: resolvedID)
 #endif
-        return note
+        return self.note(withID: resolvedID)
     }
 
     @discardableResult
@@ -1180,14 +1196,7 @@ final class NoteStore: ObservableObject {
             return false
         }
         guard save() else { return false }
-        // The reload below reconciles files in full, so a restored
-        // attachment whose file went missing is materialised again.
-        reconciledAttachmentSignature = nil
-        do {
-            try reloadModels()
-        } catch {
-            lastErrorMessage = "Restored, but the note could not be refreshed: \(error.localizedDescription)"
-        }
+        // save() already installed and reconciled the restored family.
         return true
     }
 
@@ -1632,8 +1641,9 @@ final class NoteStore: ObservableObject {
         preservingAttachmentProofs: Bool = false
     ) {
         context = sourceContext
+        observeAttachmentContextWrites(sourceContext)
         if !preservingAttachmentProofs { clearVerifiedAttachmentCache() }
-        documentReplicaCapabilityCache.removeAll()
+        rebindDocumentCapabilities(to: presentation.notes, preserving: preservingAttachmentProofs)
         let uniqueNotes = visibleUniqueNotes(from: presentation.notes)
         notes = uniqueNotes.filter { $0.deletedAt == nil }
         // A deleted note's attachments stay stored (and their files stay
@@ -1646,6 +1656,16 @@ final class NoteStore: ObservableObject {
         attachmentRetryVersions = attachmentRetryVersions.filter { availableIDs.contains($0.key) }
         revision &+= 1
         reconcileFileStorage(with: presentation.attachments)
+    }
+
+    private func rebindDocumentCapabilities(to rows: [NoteItem], preserving: Bool) {
+        guard preserving else { documentReplicaCapabilityCache.removeAll(); return }
+        let known = Array(documentReplicaCapabilityCache.values)
+        documentReplicaCapabilityCache = Dictionary(uniqueKeysWithValues: rows.compactMap { row in
+            guard let bytes = row.content,
+                  let proof = known.first(where: { $0.revisionID == row.revisionID && $0.content == bytes }) else { return nil }
+            return (ObjectIdentifier(row), proof)
+        })
     }
 
     private func persistImport(
@@ -1677,10 +1697,20 @@ final class NoteStore: ObservableObject {
             lastErrorMessage = nil
             return .persisted
         } catch {
-            // Persistence has already succeeded. Adopt the committed
-            // transaction and its precomputed presentation instead of
-            // reporting total failure or leaving the old arrays visible.
-            installPresentation(fallbackPresentation, using: transactionContext, preservingAttachmentProofs: true)
+            // Persistence has already succeeded. Read the committed rows
+            // directly instead of reporting total failure or leaving the
+            // old arrays visible when the presentation factory fails.
+            // The source staging context was never saved by the fresh writer.
+            // Its inserted objects still have temporary IDs. Present actual
+            // committed rows so a later save cannot insert their replicas.
+            do {
+                let committed = Self.makeStoreContext(container)
+                installPresentation(try presentationSnapshot(in: committed), using: committed, preservingAttachmentProofs: true)
+            } catch {
+                let message = "Attachments were saved, but their presentation is still updating: \(error.localizedDescription)"
+                lastErrorMessage = message
+                return .persistedButRefreshFailed(message)
+            }
             let message = "Attachments were saved and the saved version is shown, but a fresh reload failed: \(error.localizedDescription)"
             lastErrorMessage = message
             return .persistedButRefreshFailed(message)

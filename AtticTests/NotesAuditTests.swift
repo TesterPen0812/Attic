@@ -212,8 +212,8 @@ final class NotesAuditTests: XCTestCase {
         XCTAssertEqual(controller.libraryUndoName, "Pin Note", "the mutation is a history step")
 
         // Undo with the replicas diverged the other way round.
-        let representative = try XCTUnwrap(store.note(withID: a))
-        let sibling = try XCTUnwrap(try replicas().first { $0 !== representative })
+        var representative = try XCTUnwrap(store.note(withID: a))
+        var sibling = try XCTUnwrap(try replicas().first { $0 !== representative })
         representative.pinnedAt = nil
         try store.modelContext.save()
         XCTAssertFalse(representative.isPinned)
@@ -222,6 +222,10 @@ final class NotesAuditTests: XCTestCase {
         XCTAssertEqual(try replicas().map(\.isPinned), [false, false], "Undo unpins every replica")
 
         // Redo with the representative agreeing and the sibling not.
+        // Successful replay installs a fresh context. Inject divergence into
+        // those current physical rows, rather than obsolete presented objects.
+        representative = try XCTUnwrap(store.note(withID: a))
+        sibling = try XCTUnwrap(try replicas().first { $0 !== representative })
         representative.pinnedAt = Date()
         try store.modelContext.save()
         XCTAssertTrue(representative.isPinned)

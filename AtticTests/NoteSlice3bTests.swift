@@ -2823,12 +2823,14 @@ extension NoteSlice3bTests {
         let row = try XCTUnwrap(store.attachmentFamily(items[0].id).first)
         // Payload-only corruption deliberately keeps the old digest metadata.
         row.payload = Data("bad".utf8)
-        XCTAssertTrue(store.commitStagedChanges())
+        // Inject a damaged persisted row directly into this isolated fixture.
+        // The production commit path must refuse unverified payload admission.
+        try store.modelContext.save()
         XCTAssertNil(store.cachedVerifiedAttachmentBytes(items[0].id))
         XCTAssertNotNil(store.cachedVerifiedAttachmentBytes(items[1].id), "another family in the same note retains its proof")
         await XCTAssertNilAsync(await store.verifiedAttachmentBytes(items[0].id))
         row.payload = nil
-        XCTAssertTrue(store.commitStagedChanges())
+        try store.modelContext.save()
         guard case .success = store.saveDocument(noteID: id, document: document,
             baseRevisionID: store.loadDocument(noteID: id)?.revisionID, staged: [items[0]]) else { return XCTFail() }
         await XCTAssertEqualAsync(await store.verifiedAttachmentBytes(items[0].id), items[0])
@@ -2862,7 +2864,9 @@ extension NoteSlice3bTests {
             case .unrelated: XCTAssertNotNil(store.create(title: "Other", body: "Saved"))
             case .payload:
                 try XCTUnwrap(store.attachmentFamily(item.id).first).payload = Data("bad".utf8)
-                XCTAssertTrue(store.commitStagedChanges())
+                // Fault injection, rather than admitting corrupt bytes through
+                // the production coordinator.
+                try store.modelContext.save()
             case .freshContext: store.refresh()
             }
             barrier.resume()

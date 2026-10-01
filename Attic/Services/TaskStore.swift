@@ -440,6 +440,11 @@ final class TaskStore: ObservableObject {
         }
     }
     private static let manualOrderStride: Int64 = 1_024
+    private final class PresentedTask {
+        weak var row: TaskItem?
+        init(_ row: TaskItem) { self.row = row }
+    }
+    private var presentedTasks: [ObjectIdentifier: PresentedTask] = [:]
 #if os(macOS)
     private static let cloudSyncActivityTimeout: Duration = .seconds(120)
 #endif
@@ -540,7 +545,9 @@ final class TaskStore: ObservableObject {
 
     /// O(1) lookup of a visible task by application identity.
     func task(withID id: UUID) -> TaskItem? {
-        familyIndex.byID[id]
+        guard let row = familyIndex.byID[id] else { return nil }
+        presentedTasks[ObjectIdentifier(row)] = PresentedTask(row)
+        return row
     }
 
     private var familyIndex: FamilyIndex {
@@ -706,7 +713,7 @@ final class TaskStore: ObservableObject {
         do {
             let created = try stageCreation(drafts, ids: drafts.map { _ in UUID() }, timestamp: now())
             guard save(owner: owner) else { return nil }
-            return created
+            return created.map { task(withID: $0.id) ?? $0 }
         } catch {
             context.rollback()
             try? reloadTasks()
@@ -2739,7 +2746,7 @@ final class TaskStore: ObservableObject {
             return nil
         }
         guard save(owner: nil) else { return nil }
-        return created
+        return created.map { task(withID: $0.id) ?? $0 }
     }
 
     /// Title, priority, tags or due date on tasks wherever they are
@@ -3034,6 +3041,18 @@ final class TaskStore: ObservableObject {
         // back to CloudKit by the next local save.
         let refreshedContext = Self.makeStoreContext(container)
         let fetched = try refreshedContext.fetch(FetchDescriptor<TaskItem>())
+        // Views and callers may still hold a row from the last presentation.
+        // Update those detached presentation objects from the proven saved
+        // family; never use them as the next transaction context.
+        let canonical = Dictionary(uniqueKeysWithValues: Self.canonicalReplicas(from: fetched).map { ($0.id, $0) })
+        presentedTasks = presentedTasks.filter { $0.value.row != nil }
+        for held in presentedTasks.values {
+            guard let row = held.row, let saved = canonical[row.id] else { continue }
+            #if os(macOS)
+            let values = try WorkspaceModelFields.read(saved)
+            if try WorkspaceModelFields.read(row) != values { try WorkspaceModelFields.apply(values, to: row) }
+            #endif
+        }
         context = refreshedContext
         // Deduplicate first, then hide: the replica presentation would show
         // decides whether the logical task is in Recently Deleted or the Done
