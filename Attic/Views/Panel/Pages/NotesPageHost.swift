@@ -18,7 +18,8 @@ struct NotesPageHost: View {
             } else if uiState.isComposerPresented {
                 NoteComposerView(noteDraft: noteDraft, uiState: uiState,
                                  topContentInset: layout.contentInsets.top + 64,
-                                 bottomContentInset: layout.contentInsets.bottom)
+                                 bottomContentInset: layout.contentInsets.bottom,
+                                 headerFootprints: PanelHeaderLayout.footprints(layout: layout))
                     .padding(.horizontal, horizontalInset)
             } else {
                 NotesPanelContent(
@@ -28,7 +29,11 @@ struct NotesPageHost: View {
                     topContentInset: layout.contentInsets.top + 64,
                     bottomContentInset: layout.contentInsets.bottom
                 )
+                // B: the notes passing under the header's buttons.
+                .mask { AtticLiveSofteningMask(footprints: PanelHeaderLayout.footprints(layout: layout)) }
             }
         }
+        // The panel's own coordinates, for the softening's footprints.
+        .coordinateSpace(AtticSoftening.space)
     }
 }

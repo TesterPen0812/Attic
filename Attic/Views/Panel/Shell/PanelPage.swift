@@ -84,4 +84,16 @@ enum PanelHeaderLayout {
     static func bottom(chromeInsets: EdgeInsets) -> CGFloat {
         chromeInsets.top + height
     }
+
+    /// The header's two buttons (shut), in the panel's coordinates: content
+    /// a page scrolls under them is softened there (owner, 2026-10-01: B).
+    static func footprints(layout: PanelPageLayout) -> [AtticControlFootprint] {
+        let insets = layout.chromeInsets
+        return [
+            AtticControlFootprint(frame: CGRect(x: insets.leading, y: insets.top, width: pinSize.width, height: height),
+                                  cornerRadius: controlCorner),
+            AtticControlFootprint(frame: CGRect(x: layout.panelSize.width - insets.trailing - pinSize.width, y: insets.top,
+                                                width: pinSize.width, height: height), cornerRadius: controlCorner)
+        ]
+    }
 }

@@ -213,24 +213,18 @@ enum AtticEdgeBlur {
     // MARK: Floating controls (owner, 2026-10-01: B with softening)
 
     /// How strongly content is softened behind a floating control: the one
-    /// value to tune (0 none, 1 the most). It sets both the blur and the dim.
+    /// value to tune (0 none, 1 the most). It sets the dim (at the core of a
+    /// control's footprint the content keeps `1 - softening ×
+    /// softeningMaximumDim` of its opacity: about 57 %) and the blur of what
+    /// passes a control's line (`softening × softeningMaximumBlur`: about
+    /// 5 pt).
     static let softening: Double = 0.85
-    /// The blur behind a control at full strength (points).
+    static let softeningMaximumDim: Double = 0.5
     static let softeningMaximumBlur: CGFloat = 6
-    /// The share of the content still visible behind a control at full
-    /// strength (the dim).
-    static let softeningMinimumVisible: Double = 0.5
 
-    /// The blur behind a control (about 5 pt at the chosen strength).
-    static func softeningBlur(strength: Double = softening) -> CGFloat {
-        softeningMaximumBlur * CGFloat(min(max(strength, 0), 1))
-    }
-
-    /// The share of content still visible behind a control (about 57 % at
-    /// the chosen strength).
-    static func softeningVisible(strength: Double = softening) -> Double {
-        1 - (1 - softeningMinimumVisible) * min(max(strength, 0), 1)
-    }
+    /// Bare labels' halo: the content gives way completely within this
+    /// distance of their letters (`AtticLabelHalo`).
+    static let haloRadius: CGFloat = 2.5
 
     /// The softening's feathered edge outside the control's own shape, so
     /// no box edge shows.
@@ -239,17 +233,6 @@ enum AtticEdgeBlur {
     /// Content toward the panel's edge, past the controls, stays this
     /// visible at the very edge (the owner's mockup B: about 35 %).
     static let edgeVisible: Double = 0.35
-
-    /// The halo around bare labels floating over content (B): a shadow of
-    /// the surface, this soft and this strong.
-    static let haloRadius: CGFloat = 2
-    static let haloOpacity: Double = 0.9
-
-    /// The contrast model's densest text behind the tab labels: a line of
-    /// 13 pt semibold, blurred by the softening, covers at most this share
-    /// of the surface under it (measured: 0.30; regular 0.24). The labels'
-    /// contrast is checked against it.
-    static let blurredTextCoverage: Double = 0.3
 }
 
 // MARK: - Type

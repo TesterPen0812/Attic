@@ -28,6 +28,9 @@ struct TasksPage: View {
     var chrome = TasksPageChrome()
 
     @Environment(\.atticDesign) private var design
+    /// The floating controls' softening (its one value, tuned live in a
+    /// preview's Motion Lab).
+    @ObservedObject private var softeningLab = AtticSofteningLab.shared
     @StateObject private var focusTracker = AtticKeyboardFocusTracker()
     @FocusState private var focusedRow: AtticRowFocusID?
     @State private var drag: TasksDrag?
@@ -140,9 +143,18 @@ struct TasksPage: View {
         // always did (a top content margin, not a moved row).
         ZStack(alignment: .top) {
             pager
+                // B (owner, 2026-10-01): content passing under a floating
+                // control keeps only a little of its opacity there, feathered;
+                // on the pager, which never moves, so the dim stays on the
+                // controls while a page slides.
+                .mask {
+                    TasksSofteningMask(footprints: pointer.softening, fixed: fixedFootprints,
+                                       labelsOrigin: CGPoint(x: cornerInset + AtticLayout.pageTabsX, y: tabsTop))
+                }
             tabsBand
             tabs
         }
+
         // A reorder's lifted card, over everything on the page.
         .overlay { TasksLiftedCardLayer(lift: pointer.liftedCard) { lift in liftedCardRow(lift) } }
         // Files dropped on a row attach to its task (the "Add to page"
@@ -165,6 +177,14 @@ struct TasksPage: View {
         }
         .overlay(alignment: .bottom) { bottomControls }
         .coordinateSpace(Self.space)
+        // The floating controls' footprints (the tab labels, the add bar),
+        // for the softening's mask on the pager.
+        .coordinateSpace(AtticSoftening.space)
+        .onPreferenceChange(AtticControlFootprintsKey.self) { [pointer] footprints in
+            MainActor.assumeIsolated {
+                if pointer.softening.controls != footprints { pointer.softening.controls = footprints }
+            }
+        }
         .atticKeyboardFocusTracking(focusTracker)
         .onKeyPress(phases: .down) { press in pageKey(press) }
         .onAppear { pageAppeared() }
@@ -451,7 +471,6 @@ struct TasksPage: View {
                                                    set: { model.setSearchQuery($0, for: model.tab) }),
                                      isFocused: $searchFocused, onEscape: endSearch)
                     .accessibilityIdentifier(model.tab == .done ? "tasks-done-search" : "tasks-find")
-                    .atticControlBackdrop(cornerRadius: AtticControlSize.smallHeight / 2)
                     .id(model.tab)
                     // Centred on the tabs' line.
                     .padding(.top, tabsTop - (AtticControlSize.smallHeight - AtticLayout.pageTabsHeight) / 2)
@@ -470,15 +489,15 @@ struct TasksPage: View {
                     .accessibilityIdentifier("tasks-page-tabs")
                     // B (owner, 2026-10-01): bare labels with a soft halo,
                     // the rows softened behind them only.
-                    .atticLabelHalo()
-                    .atticControlBackdrop(cornerRadius: TasksFloatingControls.tabsCorner, outset: TasksFloatingControls.tabsOutset)
+                    .atticControlFootprint(cornerRadius: TasksFloatingControls.tabsCorner, outset: TasksFloatingControls.tabsOutset)
                     .padding(.leading, AtticLayout.pageTabsX)
                     Spacer(minLength: 0)
                     // Find (⌘F) on every page: Done's magnifier.
                     AtticSmallButton(systemName: "magnifyingglass",
                                      label: model.tab == .done ? "Search done tasks (⌘F)" : "Find (⌘F)", action: beginSearch)
                         .accessibilityIdentifier(model.tab == .done ? "tasks-done-search-button" : "tasks-find-button")
-                        .atticControlBackdrop(cornerRadius: AtticControlSize.smallHeight / 2)
+                        // Its softening is the icons' fixed footprint (`fixedFootprints`),
+                        // the same on every page, so a page switch never re-masks the lists.
                         .padding(.trailing, model.tab == .done ? lineEndInset : 0)
                     if model.tab != .done {
                         // View Options (⌥⌘V): a second quiet icon, its dot
@@ -488,7 +507,6 @@ struct TasksPage: View {
                                         commands: { viewCommands(for: model.tab) }, holder: viewOptionsAnchor,
                                         showsDot: view.filters, value: view.spokenValue)
                             .accessibilityIdentifier("tasks-view-options")
-                            .atticControlBackdrop(cornerRadius: AtticControlSize.smallHeight / 2)
                             .padding(.trailing, lineEndInset)
                             // It pops in where it sits (a fade in Calm).
                             .transition(AtticMotionPreset.popover.transition(reduceMotion: design.reduceMotion, edge: nil))
@@ -508,6 +526,42 @@ struct TasksPage: View {
         .animation(AtticMotionPreset.popover.animation(reduceMotion: design.reduceMotion, showing: model.tab == .done),
                    value: model.tab == .done)
         .onChange(of: searchShown) { _, _ in PerformanceSignposts.watchFrames("SearchMotion", seconds: 0.35) }
+    }
+
+    /// The footprints the page knows from its layout: the header's two
+    /// buttons (drawn by the shell over the page) and the tabs line's icons
+    /// (Find and View Options; the same area on every page).
+    private var fixedFootprints: [AtticControlFootprint] {
+        Self.fixedFootprints(layout: layout, tabsTop: tabsTop, cornerInset: cornerInset, lineEndInset: lineEndInset)
+    }
+
+    /// The floating controls' lines across the page: the header's buttons,
+    /// the tabs (with their labels' outset) and the add bar.
+    private var softeningBands: [AtticSofteningBand] {
+        Self.softeningBands(layout: layout, tabsTop: tabsTop, bottomInset: bottomInset)
+    }
+
+    static func softeningBands(layout: PanelPageLayout, tabsTop: CGFloat, bottomInset: CGFloat) -> [AtticSofteningBand] {
+        let outset = TasksFloatingControls.tabsOutset
+        let bottom = layout.panelSize.height - bottomInset
+        return [
+            AtticSofteningBand(top: layout.chromeInsets.top, bottom: layout.chromeInsets.top + PanelHeaderLayout.height),
+            AtticSofteningBand(top: tabsTop - outset, bottom: tabsTop + AtticLayout.pageTabsHeight + outset),
+            AtticSofteningBand(top: bottom - AtticControlSize.addBarHeight, bottom: bottom)
+        ]
+    }
+
+    static func fixedFootprints(layout: PanelPageLayout, tabsTop: CGFloat, cornerInset: CGFloat,
+                                lineEndInset: CGFloat) -> [AtticControlFootprint] {
+        let iconsWidth = AtticControlSize.smallMinWidth * 2
+        let iconsRight = layout.panelSize.width - cornerInset - lineEndInset
+        return PanelHeaderLayout.footprints(layout: layout) + [
+            // Bare glyphs: the real surface is their backing.
+            AtticControlFootprint(frame: CGRect(x: iconsRight - iconsWidth,
+                                                y: tabsTop + (AtticLayout.pageTabsHeight - AtticControlSize.smallHeight) / 2,
+                                                width: iconsWidth, height: AtticControlSize.smallHeight),
+                                  cornerRadius: AtticControlSize.smallHeight / 2, visible: 0)
+        ]
     }
 
     /// The last icon's glyph ends where the rows' dates end.
@@ -1162,6 +1216,9 @@ struct TasksPage: View {
             pointer.frames[TasksRowID(tab: tab, id: id)] = frame
         }
         .onDisappear { [pointer] in pointer.frames[TasksRowID(tab: tab, id: id)] = nil }
+        // B (owner, 2026-10-01): a row passing a floating control's line is
+        // softly blurred there (its dim is the pager's mask).
+        .atticSoftenedByControls(softeningBands, blur: AtticSoftening.blur(strength: softeningLab.strength))
         // Files dropped on a row: one drop destination for the page
         // (`fileDropTarget(at:)`), not one per row (round 11: a drop
         // destination on every row made a screenful of rows slower to build).
@@ -2194,11 +2251,9 @@ struct TasksPage: View {
         VStack(alignment: .leading, spacing: AtticSpacing.s8) {
             if model.failedSave == .paste {
                 AtticErrorLine(message: String(localized: "Not saved"), onRetry: { model.retryPaste() })
-                    .atticControlBackdrop(cornerRadius: TasksFloatingControls.tabsCorner, outset: TasksFloatingControls.tabsOutset)
             }
             if boundaryHint {
                 TasksBoundaryHint(text: boundaryHintText)
-                    .atticControlBackdrop(cornerRadius: TasksFloatingControls.tabsCorner, outset: TasksFloatingControls.tabsOutset)
                     .transition(AtticMotionPreset.popover.transition(reduceMotion: design.reduceMotion))
             }
             // A paste offer owns the area over the bar while it asks; the
@@ -2265,7 +2320,6 @@ struct TasksPage: View {
         .padding(AtticControlSize.capsuleInset)
         .frame(height: height)
         .atticRaisedMaterial(cornerRadius: AtticRadius.control(height: height), interactive: false)
-        .atticControlBackdrop(cornerRadius: AtticRadius.control(height: height))
     }
 
     private var selectionBar: some View {
@@ -2319,7 +2373,6 @@ struct TasksPage: View {
                 : .init(systemName: "tray.and.arrow.down", label: "Move \(count) tasks to Later", handler: { run { model.moveToBacklog(ids) } }),
             .init(systemName: "trash", label: "Delete \(count) tasks", handler: { deleteAndMoveFocus(ids) })
         ], summary: selectionSummary(ids))
-        .atticControlBackdrop(cornerRadius: AtticRadius.control(height: AtticControlSize.smallHeight + AtticControlSize.capsuleInset * 2))
     }
 
     /// The selection bar's Date or Tags picker, while open (round 10).
@@ -2492,7 +2545,6 @@ private struct TasksAddBar: View {
                         })
                     }
                 )
-                .atticControlBackdrop(cornerRadius: AtticControlSize.smallHeight / 2)
                 // The first icon on the circles' line (x 36), as the bar's plus.
                 .padding(.leading, AtticAddBarMetrics.iconSlot / 2 - AtticSmallControlMetrics.labelPadding - AtticSmallControlMetrics.iconSize / 2)
                 // Built with the bar and shown by a frame and an opacity, as
@@ -2550,7 +2602,7 @@ private struct TasksAddBar: View {
                 onSubmit: { submit(openingPage: false) }
             )
             // B: rows pass under the bar, softened behind it only.
-            .atticControlBackdrop(cornerRadius: AtticControlSize.addBarHeight / 2)
+            .atticControlFootprint(cornerRadius: AtticControlSize.addBarHeight / 2)
         }
         // Over the strip and the bar, never pushing them (review 14).
         .overlay(alignment: .topLeading) {
@@ -3068,6 +3120,9 @@ final class TasksPointer {
     var frames: [TasksRowID: CGRect] = [:]
     /// The card a reorder lifts, over the whole page.
     let liftedCard = TasksLiftedCard()
+    /// The page's floating controls' footprints (only the softening's mask
+    /// observes them).
+    let softening = TasksSofteningFootprints()
     /// The page's own view: a press is placed in the page from its event.
     weak var view: NSView?
 
@@ -3333,6 +3388,32 @@ private struct TasksNoticeClearance: View {
             .preference(key: PanelPageNoticeClearancePreferenceKey.self,
                         value: footerZone + max(0, stack.height - AtticControlSize.addBarHeight))
             .accessibilityHidden(true)
+    }
+}
+
+/// The footprints of the floating controls the page reports (the tab
+/// labels, the add bar), kept out of view state: only the mask redraws.
+/// Main thread only (it lives on the page's `TasksPointer`).
+final class TasksSofteningFootprints: ObservableObject {
+    @Published var controls: [AtticControlFootprint] = []
+}
+
+/// The pager's softening mask: the reported footprints and the fixed ones,
+/// and the tab labels' halo.
+private struct TasksSofteningMask: View {
+    @ObservedObject var footprints: TasksSofteningFootprints
+    let fixed: [AtticControlFootprint]
+    /// Where the tab labels are drawn (the first label's leading edge on
+    /// the tabs line).
+    let labelsOrigin: CGPoint
+
+    var body: some View {
+        let m = AtticPageTabsMetrics.self
+        AtticLiveSofteningMask(footprints: footprints.controls + fixed) {
+            AtticLabelHalo(titles: TasksTab.allCases.map(\.title), style: .pageTabSelected, spacing: m.spacing,
+                           lineHeight: AtticLayout.pageTabsHeight, origin: labelsOrigin,
+                           underline: (m.underlineGap, m.underlineHeight))
+        }
     }
 }
 

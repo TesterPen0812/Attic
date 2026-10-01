@@ -428,7 +428,8 @@ struct AtticReorderLiftModifier: ViewModifier {
 
     /// The lifted card's fill: the panel's base colour, fully opaque.
     static func fill(design: AtticDesignContext) -> AtticRGBA {
-        AtticControlBackdrop.surface(design: design, location: 0.5).withAlpha(1)
+        let model = design.tokens.panel
+        return model.washColor.withAlpha(model.tintOpacity(at: 0.5)).over(model.base).withAlpha(1)
     }
 
     @Environment(\.atticDesign) private var design

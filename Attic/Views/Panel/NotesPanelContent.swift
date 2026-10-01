@@ -144,6 +144,11 @@ struct NoteComposerView: View {
     @ObservedObject var uiState: PanelUIState
     let topContentInset: CGFloat
     let bottomContentInset: CGFloat
+    /// The header's buttons (the shell's), in `AtticSoftening.space`: the
+    /// note's text passing under them is softened there (owner, 2026-10-01: B).
+    var headerFootprints: [AtticControlFootprint] = []
+    /// Where the bottom buttons sit (they report it).
+    @State private var controlFootprints: [AtticControlFootprint] = []
 
     /// The title participates in SwiftUI's focus system, while the wrapped
     /// NSTextView owns body focus through AppKit's responder chain. Treating
@@ -164,12 +169,14 @@ struct NoteComposerView: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     init(noteDraft: NoteDraftController, uiState: PanelUIState,
-         topContentInset: CGFloat = 0, bottomContentInset: CGFloat = 0) {
+         topContentInset: CGFloat = 0, bottomContentInset: CGFloat = 0,
+         headerFootprints: [AtticControlFootprint] = []) {
         self.noteDraft = noteDraft
         _noteStore = ObservedObject(wrappedValue: noteDraft.noteStore)
         self.uiState = uiState
         self.topContentInset = topContentInset
         self.bottomContentInset = bottomContentInset
+        self.headerFootprints = headerFootprints
     }
 
     var body: some View {
@@ -305,9 +312,16 @@ struct NoteComposerView: View {
             )
             .frame(maxWidth: .infinity, maxHeight: .infinity)
             .padding(.horizontal, 4)
+            // B: the text passing under the header's and the bottom buttons
+            // keeps only part of its opacity there, feathered (no blur: the
+            // editor's AppKit text cannot take SwiftUI's).
+            .mask { AtticLiveSofteningMask(footprints: controlFootprints + headerFootprints) }
 
             bottomComposer
                 .padding(.bottom, bottomContentInset)
+        }
+        .onPreferenceChange(AtticControlFootprintsKey.self) { footprints in
+            MainActor.assumeIsolated { if controlFootprints != footprints { controlFootprints = footprints } }
         }
     }
 
@@ -432,9 +446,9 @@ struct NoteComposerView: View {
         .accessibilityLabel(title)
         .accessibilityIdentifier(identifier)
         // B (owner, 2026-10-01): the note's text passing under the button
-        // is softened behind its 34 pt circle only, outside the button's
-        // accessibility element.
-        .background { Color.clear.frame(width: 34, height: 34).atticControlBackdrop(cornerRadius: 17) }
+        // is softened behind its 34 pt circle (reported outside the button's
+        // accessibility element, so its frame stays the button's).
+        .background { Color.clear.frame(width: 34, height: 34).atticControlFootprint(cornerRadius: 17) }
     }
 
     private var libraryLabel: String {
