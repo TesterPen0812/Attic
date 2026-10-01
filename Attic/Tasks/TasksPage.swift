@@ -143,6 +143,8 @@ struct TasksPage: View {
             tabsBand
             tabs
         }
+        // A reorder's lifted card, over everything on the page.
+        .overlay { TasksLiftedCardLayer(lift: pointer.liftedCard) { lift in liftedCardRow(lift) } }
         // Files dropped on a row attach to its task (the "Add to page"
         // label shows on the row under them): one destination for the page,
         // which finds the row from the rows' frames.
@@ -337,7 +339,11 @@ struct TasksPage: View {
         }
         // What the scroll monitor reads that lives in the view.
         .onChange(of: design.reduceMotion, initial: true) { _, reduced in swipe.reduced = reduced }
-        .onChange(of: drag != nil, initial: true) { _, dragging in swipe.dragActive = dragging }
+        .onChange(of: drag != nil, initial: true) { _, dragging in
+            swipe.dragActive = dragging
+            // However the drag ended (a page change, a hide), the card goes.
+            if !dragging { pointer.liftedCard.end() }
+        }
         .onChange(of: pagerBand, initial: true) { _, band in swipe.band = band }
         // Done's rows come into view as the keyboard reaches them too.
         .onChange(of: focusedRow) { _, focus in
@@ -1042,7 +1048,13 @@ struct TasksPage: View {
                                                 rowOrigin: pointer.frames[TasksRowID(tab: tab, id: id)]?.origin)
             },
             heights: { rowHeight($0, in: tab) },
-            onBegin: { beginDragSession(in: tab) },
+            onBegin: {
+                beginDragSession(in: tab)
+                if let origin = pointer.frames[TasksRowID(tab: tab, id: id)] {
+                    pointer.liftedCard.begin(id: id, tab: tab, origin: origin)
+                }
+            },
+            onMove: { [pointer] translation in pointer.liftedCard.follow(translation) },
             onEnd: finishDrag,
             onPushPastGroup: { showBoundaryHint() }
         ) { live in
@@ -2063,28 +2075,61 @@ struct TasksPage: View {
         dragSession.timer?.invalidate()
         dragSession.timer = nil
         drag = nil
+        pointer.liftedCard.end()
     }
 
-    /// The drop: the move is one step; the lift clears whether the save
-    /// works or not.
+    /// The lifted card: the row as it is, never interactive.
+    @ViewBuilder
+    private func liftedCardRow(_ lift: TasksLiftedCard.Lift) -> some View {
+        if let row = model.rows(for: lift.tab).first(where: { $0.id == lift.id }) {
+            AtticTaskRow(model: row.model, isSelected: model.selection.contains(lift.id),
+                         selectionRun: .single, actions: actions(for: lift.id, in: lift.tab), onToggleExpanded: {})
+        }
+    }
+
+    /// The drop: the card settles into the gap the neighbours opened (the
+    /// Lively settle; at once when motion is reduced), then the move is
+    /// one step, committed with nothing animating, so the row appears
+    /// exactly where the card lies. The lift clears whether the save works
+    /// or not.
     private func finishDrag(_ finished: TasksDrag) {
-        let travel = design.reduceMotion ? nil : AtticMotionPreset.settle.animation(reduceMotion: false)
         // The keyboard comes to the moved row, so ⌘Z (and Esc) reach the
         // list right after a drop.
         setFocus(finished.id)
-        withAnimation(travel) {
-            drag = nil
-            if finished.targetIndex != finished.startIndex {
-                // A filter or Find: among the rows shown (item 6).
-                let narrowed = model.narrows(model.tab)
-                let move = {
-                    narrowed ? model.moveVisible(finished.id, toShownIndex: finished.targetIndex, in: finished.group)
-                             : model.move(finished.id, toGroupIndex: finished.targetIndex)
+        let commit = {
+            var transaction = Transaction()
+            transaction.disablesAnimations = true
+            withTransaction(transaction) {
+                drag = nil
+                pointer.liftedCard.end()
+                if finished.targetIndex != finished.startIndex {
+                    // A filter or Find: among the rows shown (item 6).
+                    let narrowed = model.narrows(model.tab)
+                    let move = {
+                        narrowed ? model.moveVisible(finished.id, toShownIndex: finished.targetIndex, in: finished.group)
+                                 : model.move(finished.id, toGroupIndex: finished.targetIndex)
+                    }
+                    let moved = model.report(move(), on: finished.id, retry: move)
+                    // The tick confirms a move that saved, never a failed one.
+                    if moved.isApplied { AtticHaptics.tick(enabled: design.hapticsEnabled) }
                 }
-                let moved = model.report(move(), on: finished.id, retry: move)
-                // The tick confirms a move that saved, never a failed one.
-                if moved.isApplied { AtticHaptics.tick(enabled: design.hapticsEnabled) }
             }
+        }
+        guard !design.reduceMotion, let lift = pointer.liftedCard.lift, lift.id == finished.id else {
+            commit()
+            return
+        }
+        var landing = finished
+        landing.scrolled = drag?.id == finished.id ? (drag?.scrolled ?? finished.scrolled) : finished.scrolled
+        landing.landing = true
+        drag = landing
+        let y = TasksLiftedCard.landing(of: landing, originY: lift.origin.minY, heights: { rowHeight($0, in: finished.tab) })
+        withAnimation(AtticMotionPreset.settle.animation(reduceMotion: false)) {
+            pointer.liftedCard.land(at: y)
+        } completion: {
+            // Only the drag that landed (a new press may have begun).
+            guard drag?.id == finished.id, drag?.landing == true else { return }
+            commit()
         }
     }
 
@@ -2634,6 +2679,91 @@ struct TasksDrag: Equatable {
     /// How far the list has scrolled under the drag (edge auto-scroll):
     /// the row keeps under the pointer and lands by where it is.
     var scrolled: CGFloat = 0
+    /// Released: the lifted card settles into the gap the neighbours
+    /// opened, and the move is committed once it is there.
+    var landing = false
+}
+
+/// The card a reorder lifts (owner, 2026-10-01: the lifted row was unsteady,
+/// sat under other rows and was see-through). It is drawn over the whole
+/// page, outside the list, so no row is ever above it and scrolling under
+/// it never moves it: it stays under the pointer while the neighbours
+/// spring aside. The row's own place in the list keeps the gesture and is
+/// invisible meanwhile. Observed only by the card itself, so following the
+/// pointer redraws the card and nothing else. Used on the main thread only
+/// (it lives on the page's `TasksPointer`).
+final class TasksLiftedCard: ObservableObject {
+    struct Lift: Equatable {
+        let id: UUID
+        let tab: TasksTab
+        /// The row's frame in the page when it was lifted.
+        let origin: CGRect
+        /// The card's top in the page.
+        var y: CGFloat
+    }
+
+    @Published private(set) var lift: Lift?
+
+    func begin(id: UUID, tab: TasksTab, origin: CGRect) {
+        lift = Lift(id: id, tab: tab, origin: origin, y: origin.minY)
+    }
+
+    /// The pointer moved `translation` from where the press began.
+    func follow(_ translation: CGFloat) {
+        guard var lift else { return }
+        let y = lift.origin.minY + translation
+        guard y != lift.y else { return }
+        lift.y = y
+        self.lift = lift
+    }
+
+    /// The card settles at `y` (the caller animates it).
+    func land(at y: CGFloat) {
+        guard var lift else { return }
+        lift.y = y
+        self.lift = lift
+    }
+
+    func end() {
+        if lift != nil { lift = nil }
+    }
+
+    /// Where the card lands: the top of the gap the neighbours opened at
+    /// `drag.targetIndex` (the rows between moved by the lifted row's
+    /// height), less what the list scrolled under the drag.
+    nonisolated static func landing(of drag: TasksDrag, originY: CGFloat, heights: (UUID) -> CGFloat) -> CGFloat {
+        var y = originY - drag.scrolled
+        if drag.targetIndex > drag.startIndex {
+            for index in (drag.startIndex + 1)...drag.targetIndex where drag.group.indices.contains(index) {
+                y += heights(drag.group[index])
+            }
+        } else if drag.targetIndex < drag.startIndex {
+            for index in drag.targetIndex..<drag.startIndex where drag.group.indices.contains(index) {
+                y -= heights(drag.group[index])
+            }
+        }
+        return y
+    }
+}
+
+/// Draws the lifted card where the pointer holds it.
+struct TasksLiftedCardLayer<Card: View>: View {
+    @ObservedObject var lift: TasksLiftedCard
+    @ViewBuilder let card: (TasksLiftedCard.Lift) -> Card
+
+    var body: some View {
+        ZStack(alignment: .topLeading) {
+            if let current = lift.lift {
+                card(current)
+                    .frame(width: current.origin.width, alignment: .topLeading)
+                    .modifier(AtticReorderLiftModifier(lifted: true))
+                    .offset(x: current.origin.minX, y: current.y)
+            }
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+        .allowsHitTesting(false)
+        .accessibilityHidden(true)
+    }
 }
 
 /// One drag's live state outside view state (round 4, Astra's final 7):
@@ -2737,6 +2867,8 @@ struct TasksReorderCell<Row: View, Below: View>: View {
     let allowsStart: (CGPoint) -> Bool
     let heights: (UUID) -> CGFloat
     let onBegin: () -> Void
+    /// The pointer moved the lifted row this far (the lifted card follows).
+    let onMove: (CGFloat) -> Void
     let onEnd: (TasksDrag) -> Void
     let onPushPastGroup: () -> Void
     @ViewBuilder let row: (TasksCellLive) -> Row
@@ -2748,6 +2880,7 @@ struct TasksReorderCell<Row: View, Below: View>: View {
 
     var body: some View {
         let lifted = drag?.id == id && translation != nil
+        let hidden = lifted || (drag?.id == id && drag?.landing == true)
         // Read here, in the cell's own body, so a new target moves the
         // neighbours at once (a list's lazy cells do not re-read the page).
         let offset = drag.map { Self.offset(of: id, in: $0, heights: heights) } ?? 0
@@ -2773,19 +2906,19 @@ struct TasksReorderCell<Row: View, Below: View>: View {
                 .simultaneousGesture(gesture, including: enabled ? .all : .subviews)
             below(live)
         }
-        .modifier(AtticReorderLiftModifier(lifted: lifted))
-        // The lifted row follows the pointer, plus whatever the list has
-        // scrolled under it.
-        .offset(y: lifted ? (translation ?? 0) + (drag?.scrolled ?? 0) : offset)
-        .zIndex(lifted ? 1 : 0)
-        .animation(lifted || design.reduceMotion ? nil : AtticMotionPreset.settle.animation(reduceMotion: false), value: offset)
+        // Lifted, the row is the card over the page (`TasksLiftedCard`):
+        // its place here keeps the gesture alive and shows nothing, until
+        // the card has landed in the gap.
+        .opacity(hidden ? 0.001 : 1)
+        .offset(y: hidden ? 0 : offset)
+        .animation(hidden || design.reduceMotion ? nil : AtticMotionPreset.settle.animation(reduceMotion: false), value: offset)
         .onChange(of: translation == nil) { _, ended in
             guard ended else { return }
             // Released, cancelled by the system or by Esc: the lift goes
-            // (a release was committed by `onEnded` already), and the next
+            // (a release is landing, committed by `onEnded`), and the next
             // press starts afresh.
             pushedPast = false
-            if drag?.id == id { drag = nil }
+            if drag?.id == id, drag?.landing != true { drag = nil }
             session.end()
         }
     }
@@ -2801,12 +2934,14 @@ struct TasksReorderCell<Row: View, Below: View>: View {
                       let start = group.firstIndex(of: id) else { return }
                 session.translation = value.translation.height
                 session.location = value.location
+                onMove(value.translation.height)
                 let scrolled = drag?.id == id ? (drag?.scrolled ?? 0) : 0
                 let moved = value.translation.height + scrolled
                 let target = Self.target(start: start, translation: moved, group: group, heights: heights)
                 if drag?.id != id {
                     drag = TasksDrag(id: id, tab: tab, group: group, startIndex: start, targetIndex: target)
                     onBegin()
+                    onMove(value.translation.height)
                 } else if drag?.targetIndex != target {
                     drag?.targetIndex = target
                 }
@@ -2931,6 +3066,8 @@ final class TasksPointer {
     /// that two pages list (Now's "Completed today" and Done) is two rows
     /// with two frames (round 12).
     var frames: [TasksRowID: CGRect] = [:]
+    /// The card a reorder lifts, over the whole page.
+    let liftedCard = TasksLiftedCard()
     /// The page's own view: a press is placed in the page from its event.
     weak var view: NSView?
 

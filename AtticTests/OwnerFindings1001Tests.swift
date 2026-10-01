@@ -111,3 +111,82 @@ final class OwnerFindingsScrollerTests: XCTestCase {
         XCTAssertEqual(note.scrollerStyle, .overlay, "the note editor too")
     }
 }
+
+// MARK: - 4. The lifted card: on top, opaque, steady
+
+@MainActor
+final class OwnerFindingsReorderTests: XCTestCase {
+    func testTheLiftedCardIsOpaqueInEveryAppearance() {
+        for mode in [AtticDesignContext.Mode.light, .dark] {
+            for surface in PanelSurfaceStyle.allCases {
+                var design = AtticDesignContext(mode: mode)
+                design.surface = surface
+                XCTAssertEqual(AtticReorderLiftModifier.fill(design: design).alpha, 1, "\(mode) \(surface)")
+            }
+        }
+    }
+
+    /// The card lands in the gap the neighbours opened, less what the list
+    /// scrolled under it.
+    func testTheCardLandsInTheGap() {
+        let ids = (0..<5).map { _ in UUID() }
+        let heights: [UUID: CGFloat] = [ids[0]: 34, ids[1]: 48, ids[2]: 34, ids[3]: 34, ids[4]: 48]
+        var drag = TasksDrag(id: ids[1], tab: .now, group: ids, startIndex: 1, targetIndex: 3)
+        XCTAssertEqual(TasksLiftedCard.landing(of: drag, originY: 100, heights: { heights[$0] ?? 0 }), 100 + 34 + 34, "down two")
+        drag.targetIndex = 0
+        XCTAssertEqual(TasksLiftedCard.landing(of: drag, originY: 100, heights: { heights[$0] ?? 0 }), 100 - 34, "up one")
+        drag.targetIndex = 1
+        drag.scrolled = 20
+        XCTAssertEqual(TasksLiftedCard.landing(of: drag, originY: 100, heights: { heights[$0] ?? 0 }), 80, "back home, scrolled")
+    }
+
+    /// A real drag: the card follows the pointer exactly (scrolling never
+    /// moves it), the row's own place shows nothing meanwhile, and on
+    /// release the move is made and the card goes.
+    func testTheCardStaysUnderThePointerAndTheMoveLands() throws {
+        let hosted = try Hosted(height: 520)
+        defer { hosted.close() }
+        hosted.spin(1)
+        let rows = hosted.model.rows(for: .now).filter { $0.status == .todo }
+        XCTAssertGreaterThanOrEqual(rows.count, 3)
+        let first = try XCTUnwrap(rows.first)
+        let frame = try XCTUnwrap(hosted.pointer.frames[TasksRowID(tab: .now, id: first.id)])
+        let start = CGPoint(x: 200, y: frame.midY)
+        let window = hosted.window
+        func post(_ type: NSEvent.EventType, y: CGFloat) {
+            let event = NSEvent.mouseEvent(with: type, location: CGPoint(x: start.x, y: hosted.height - y), modifierFlags: [],
+                                           timestamp: ProcessInfo.processInfo.systemUptime, windowNumber: window.windowNumber,
+                                           context: nil, eventNumber: 3, clickCount: 1, pressure: type == .leftMouseUp ? 0 : 1)!
+            NSApp.postEvent(event, atStart: false)
+        }
+        var seen: [(card: CGFloat, pointer: CGFloat)] = []
+        var hiddenRowSeen = false
+        let steps: [CGFloat] = [6, 20, 40, 60, 75]
+        post(.leftMouseDown, y: start.y)
+        for step in steps { post(.leftMouseDragged, y: start.y + step) }
+        // Read while the button is still down (a timer fires inside any
+        // tracking loop), then release.
+        let probe = Timer(timeInterval: 0.4, repeats: false) { _ in
+            MainActor.assumeIsolated {
+                if let lift = hosted.pointer.liftedCard.lift {
+                    seen.append((lift.y, lift.origin.minY + (steps.last ?? 0)))
+                }
+                hiddenRowSeen = hosted.model.rows(for: .now).contains { $0.id == first.id }
+                post(.leftMouseUp, y: start.y + (steps.last ?? 0))
+            }
+        }
+        RunLoop.main.add(probe, forMode: .common)
+        let deadline = Date().addingTimeInterval(3)
+        while Date() < deadline, probe.isValid || NSApp.nextEvent(matching: .any, until: Date(), inMode: .default, dequeue: false) != nil {
+            Hosted.pumpEvents(limit: 8)
+            hosted.spin(0.05)
+        }
+        hosted.spin(1)
+        let card = try XCTUnwrap(seen.first, "a card was lifted")
+        XCTAssertEqual(card.card, card.pointer, accuracy: 0.5, "the card is exactly under the pointer")
+        XCTAssertTrue(hiddenRowSeen)
+        XCTAssertNil(hosted.pointer.liftedCard.lift, "the card goes once it has landed")
+        let order = hosted.model.rows(for: .now).filter { $0.status == .todo }.map(\.id)
+        XCTAssertNotEqual(order.first, first.id, "the row moved down")
+    }
+}

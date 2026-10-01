@@ -408,7 +408,9 @@ struct AtticReorderLift<Content: View>: View {
             .background {
                 ZStack {
                     AtticOutsideShadow(shape: shape, color: tokens.dragShadow, spec: AtticShadows.reorder)
-                    shape.fill(tokens.popoverFill.color)
+                    // Opaque (owner, 2026-10-01): the panel's own colour,
+                    // so nothing shows through the card being moved.
+                    shape.fill(AtticReorderLiftModifier.fill(design: design).color)
                     shape.inset(by: AtticHairline.innerRim / 2).stroke(tokens.popoverInnerRim.color, lineWidth: AtticHairline.innerRim)
                     shape.stroke(tokens.popoverOuterRim.color, lineWidth: AtticHairline.width)
                 }
@@ -424,6 +426,11 @@ struct AtticReorderLift<Content: View>: View {
 struct AtticReorderLiftModifier: ViewModifier {
     let lifted: Bool
 
+    /// The lifted card's fill: the panel's base colour, fully opaque.
+    static func fill(design: AtticDesignContext) -> AtticRGBA {
+        AtticControlBackdrop.surface(design: design, location: 0.5).withAlpha(1)
+    }
+
     @Environment(\.atticDesign) private var design
 
     func body(content: Content) -> some View {
@@ -435,7 +442,9 @@ struct AtticReorderLiftModifier: ViewModifier {
                 if lifted {
                 ZStack {
                     AtticOutsideShadow(shape: shape, color: tokens.dragShadow, spec: AtticShadows.reorder)
-                    shape.fill(tokens.popoverFill.color)
+                    // Opaque (owner, 2026-10-01): the panel's own colour,
+                    // so nothing shows through the card being moved.
+                    shape.fill(AtticReorderLiftModifier.fill(design: design).color)
                     shape.inset(by: AtticHairline.innerRim / 2).stroke(tokens.popoverInnerRim.color, lineWidth: AtticHairline.innerRim)
                     shape.stroke(tokens.popoverOuterRim.color, lineWidth: AtticHairline.width)
                 }
