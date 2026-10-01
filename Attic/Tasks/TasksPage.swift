@@ -142,21 +142,10 @@ struct TasksPage: View {
         // to the panel's top and bottom edges under the floating controls;
         // at rest the first row sits where it always did.
         ZStack(alignment: .top) {
-            switch edgeStyle {
-            case .systemSoft:
-                // The system's soft scroll edge (owner, 2026-10-01): the
-                // controls' zones are the lists' bars, so each list's scroll
-                // view gets the system's edge effect under them, from the
-                // panel's top edge to the resting row and over the add bar's
-                // zone. The bars stay put while the pages slide beneath.
-                pager
-                    .safeAreaBar(edge: .top, spacing: 0) { AtticScrollEdgeBar(height: listTop) }
-                    .safeAreaBar(edge: .bottom, spacing: 0) { AtticScrollEdgeBar(height: bottomMargin) }
-            case .cleanCut:
-                // Round 13: the lists' own mask cuts the rows at the
-                // controls' bands.
-                pager
-            }
+            // The lists meet the controls by their own edges: the system's
+            // soft scroll edge under per-list bars (`tasksListEdges`), or
+            // round 13's clean cut by the list's mask.
+            pager
             // The controls float over the lists in both, in the page's own
             // layer.
             tabsBand
@@ -164,7 +153,7 @@ struct TasksPage: View {
         }
         // The neighbours are drawn only as they slide in, never past the
         // page's edge (the panel's shadow margin lies beyond it). Here, not
-        // on the pager, so the lists still run under the bars.
+        // on the pager, so the lists still run under the controls.
         .clipped()
 
         // A reorder's lifted card, over everything on the page.
@@ -1036,7 +1025,7 @@ struct TasksPage: View {
             .contentMargins(.top, listTop - bars.top, for: .scrollIndicators)
             .contentMargins(.bottom, bottomClearance - bars.bottom, for: .scrollIndicators)
             .scrollIndicators(.automatic)
-            .tasksListEdges(edgeStyle, mask: viewportMask)
+            .tasksListEdges(edgeStyle, bars: bars, mask: viewportMask)
             .onChange(of: focusedRow) { _, focus in
                 guard let focus, focus.page == tab.rawValue, rows.contains(where: { $0.id == focus.id }),
                       focusTracker.isKeyboardDriving else { return }
@@ -3492,13 +3481,25 @@ struct TasksListBars: Equatable {
 }
 
 extension View {
-    /// A list's edges: the system's soft scroll edge under the page's bars,
-    /// or round 13's clean cut by the list's own mask.
+    /// A list's edges: under the system soft edge, the list's own bars (the
+    /// controls' zones, so its scroll view gets the system's edge effect
+    /// there, from the panel's top edge to the resting row and over the add
+    /// bar's zone); round 13's clean cut, the list's own mask.
+    ///
+    /// The bars belong to each list, not to the pager around the pages. A
+    /// bar's content is hosted in its own AppKit container; with the bars on
+    /// the pager those containers sat at the page's root view, beside the
+    /// add bar's, and XCUITest found no hit point on the add bar (CI,
+    /// 2026-10-01). On the list they sit inside the list's own view tree.
     @ViewBuilder
-    func tasksListEdges<Mask: View>(_ style: AtticScrollEdgeStyle, mask: Mask) -> some View {
+    func tasksListEdges<Mask: View>(_ style: AtticScrollEdgeStyle, bars: TasksListBars, mask: Mask) -> some View {
         switch style {
-        case .systemSoft: atticScrollEdgeEffect(style)
-        case .cleanCut: atticScrollEdgeEffect(style).mask { mask }
+        case .systemSoft:
+            atticScrollEdgeEffect(style)
+                .safeAreaBar(edge: .top, spacing: 0) { AtticScrollEdgeBar(height: bars.top) }
+                .safeAreaBar(edge: .bottom, spacing: 0) { AtticScrollEdgeBar(height: bars.bottom) }
+        case .cleanCut:
+            atticScrollEdgeEffect(style).mask { mask }
         }
     }
 }

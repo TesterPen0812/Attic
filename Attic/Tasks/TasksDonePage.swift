@@ -109,7 +109,7 @@ struct TasksDonePage<Cell: View, Mask: View>: View {
         .contentMargins(.bottom, bottomMargin - bars.bottom, for: .scrollContent)
         .contentMargins(.top, listTop - bars.top, for: .scrollIndicators)
         .contentMargins(.bottom, bottomClearance - bars.bottom, for: .scrollIndicators)
-        .tasksListEdges(edges, mask: mask)
+        .tasksListEdges(edges, bars: bars, mask: mask)
         .coordinateSpace(Self.space)
         .onChange(of: reveal) { _, request in
             guard let request else { return }

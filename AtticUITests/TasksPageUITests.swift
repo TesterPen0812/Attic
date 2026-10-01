@@ -114,6 +114,23 @@ final class TasksPageUITests: XCTestCase {
 
     // MARK: - Add bar
 
+    /// The add bar sits in the bottom bar's zone under the system soft edge,
+    /// and a click needs a hit point on it (CI, 2026-10-01: the lists' bars,
+    /// at the pager's level, left the add bar none). Fails with the window's
+    /// accessibility hierarchy attached, to see what covers it.
+    func testTheAddBarHasAHitPointUnderTheSystemSoftEdge() throws {
+        continueAfterFailure = true
+        XCTAssertTrue(addBar.waitForExistence(timeout: 5))
+        let hittable = addBar.isHittable
+        if !hittable {
+            let attachment = XCTAttachment(string: window.debugDescription)
+            attachment.name = "window hierarchy"
+            attachment.lifetime = .keepAlways
+            add(attachment)
+        }
+        XCTAssertTrue(hittable, "the add bar has a hit point: \(addBar.frame)")
+    }
+
     func testTheAddBarUnderstandsShorthandAndKeepsFocusForTheNextTask() throws {
         XCTAssertTrue(addBar.waitForExistence(timeout: 5))
         addBar.click()
