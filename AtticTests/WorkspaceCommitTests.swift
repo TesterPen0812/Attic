@@ -1,3 +1,4 @@
+import AppKit
 import Foundation
 import SwiftData
 import XCTest
@@ -396,5 +397,71 @@ final class WorkspaceCommitTests: XCTestCase {
         XCTAssertEqual(coordinator.reconcilePlain(), .committed)
         XCTAssertEqual(try coordinator.freshContext().fetchCount(FetchDescriptor<OperationReceipt>()), 0)
         XCTAssertFalse(FileManager.default.fileExists(atPath: root.appendingPathComponent("NoteDrafts/operations").path))
+    }
+}
+
+/// The nonmutating text half of H2. This is not the complete H gate.
+@MainActor
+final class WorkspaceTextReplayTests: XCTestCase {
+    private func groupedAdapter() -> NoteUndoHistory {
+        let storage = NSTextStorage(string: "abcdef")
+        let adapter = NoteUndoHistory(storage: storage)
+        adapter.beginGroup()
+        for (location, value) in [(0, "A"), (3, "D")] {
+            let range = NSRange(location: location, length: 1)
+            adapter.willChange(ranges: [range], strings: [value])
+            storage.replaceCharacters(in: range, with: value)
+            adapter.didChange()
+        }
+        adapter.endGroup()
+        return adapter
+    }
+
+    func testH2PreparationAndNativeRefusalDoNotMutateStoragePayloadsOrCursor() throws {
+        let adapter = groupedAdapter()
+        let payloads = Array(adapter.undoOps.reversed())
+        let restores = payloads.map(\.restores)
+        let storage = NSAttributedString(attributedString: adapter.storage)
+        let cursor = adapter.undoOps.map(ObjectIdentifier.init)
+        let prepared = try XCTUnwrap(adapter.prepareReplay(payloads))
+        XCTAssertEqual(prepared.candidate.string, "abcdef")
+        XCTAssertTrue(adapter.storage.isEqual(to: storage))
+        XCTAssertEqual(payloads.map(\.restores), restores)
+        XCTAssertEqual(adapter.undoOps.map(ObjectIdentifier.init), cursor)
+        XCTAssertNil(adapter.prepareReplay(payloads, preflight: { _ in false }))
+        XCTAssertTrue(adapter.storage.isEqual(to: storage))
+        XCTAssertEqual(payloads.map(\.restores), restores)
+        XCTAssertEqual(adapter.undoOps.map(ObjectIdentifier.init), cursor)
+    }
+
+    func testH2InstallationSwapsTheWholeGroupOnceAndDoesNotOwnACursorTransition() throws {
+        let adapter = groupedAdapter()
+        let payloads = Array(adapter.undoOps.reversed())
+        let cursor = adapter.undoOps.map(ObjectIdentifier.init)
+        var publications = 0
+        adapter.onReplay = { _ in publications += 1 }
+        let prepared = try XCTUnwrap(adapter.prepareReplay(payloads))
+        XCTAssertTrue(adapter.installReplay(prepared))
+        XCTAssertEqual(adapter.storage.string, "abcdef")
+        XCTAssertEqual(adapter.undoOps.map(ObjectIdentifier.init), cursor)
+        XCTAssertEqual(publications, 1)
+        XCTAssertFalse(adapter.installReplay(prepared), "a second inverse is refused")
+        XCTAssertEqual(adapter.storage.string, "abcdef")
+        XCTAssertEqual(publications, 1)
+        let redo = try XCTUnwrap(adapter.prepareReplay(Array(payloads.reversed())))
+        XCTAssertTrue(adapter.installReplay(redo))
+        XCTAssertEqual(adapter.storage.string, "AbcDef")
+    }
+
+    func testH2AStalePayloadOrProtectedActivityRefusesTheWholePreparation() {
+        let adapter = groupedAdapter()
+        let payloads = Array(adapter.undoOps.reversed())
+        adapter.canReplay = { false }
+        XCTAssertNil(adapter.prepareReplay(payloads))
+        adapter.canReplay = { true }
+        adapter.rebase(editAt: NSRange(location: 3, length: 1), newLength: 1)
+        XCTAssertNil(adapter.prepareReplay(payloads), "overlap cannot become an inert half-inverse")
+        XCTAssertEqual(adapter.storage.string, "AbcDef")
+        XCTAssertEqual(adapter.undoOps.count, 2)
     }
 }

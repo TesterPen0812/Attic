@@ -423,6 +423,106 @@ final class NoteUndoHistory {
 
     // MARK: Undo and redo
 
+    /// A workspace may own these payloads without invoking the adapter's
+    /// standalone cursor. Preparation simulates the whole group; installation
+    /// runs only after its model transaction (if any) is proven committed.
+    struct PreparedReplay {
+        fileprivate let original: NSAttributedString
+        let candidate: NSAttributedString
+        let selection: NSRange
+        fileprivate let swaps: [(Op, PayloadState, PayloadState)]
+    }
+
+    fileprivate struct PayloadState {
+        let range: NSRange
+        let current: NSAttributedString
+        let other: NSAttributedString
+        let inert: Bool
+        let tag: (tag: String, adds: Bool, changesTags: Bool)?
+        let picker: (adds: [String], removes: [String])?
+        let paragraph: (location: Int, before: ParagraphState, after: ParagraphState)?
+        let mark: (kind: NoteMark.Kind, before: Bool, after: Bool)?
+
+        init(_ op: Op, flipped: Bool = false) {
+            range = NSRange(location: op.range.location, length: flipped ? op.other.length : op.range.length)
+            current = NSAttributedString(attributedString: flipped ? op.other : op.current)
+            other = NSAttributedString(attributedString: flipped ? op.current : op.other)
+            inert = op.isInert
+            tag = op.tagDelta.map { ($0.tag, flipped ? !$0.adds : $0.adds, $0.changesTags) }
+            picker = op.tagPickerDelta.map { flipped ? ($0.removes, $0.adds) : $0 }
+            paragraph = op.paragraphStyleSnapshot.map { flipped ? ($0.location, $0.after, $0.before) : $0 }
+            mark = op.typingMarkSnapshot.map { flipped ? ($0.kind, $0.after, $0.before) : $0 }
+        }
+
+        func stillMatches(_ op: Op) -> Bool {
+            let other = PayloadState(op)
+            return range == other.range && current.isEqual(to: other.current) && self.other.isEqual(to: other.other)
+                && inert == other.inert && tag?.tag == other.tag?.tag && tag?.adds == other.tag?.adds
+                && tag?.changesTags == other.tag?.changesTags && picker?.adds == other.picker?.adds
+                && picker?.removes == other.picker?.removes && paragraph?.location == other.paragraph?.location
+                && paragraph?.before == other.paragraph?.before && paragraph?.after == other.paragraph?.after
+                && mark?.kind == other.mark?.kind && mark?.before == other.mark?.before && mark?.after == other.mark?.after
+        }
+
+        func install(on op: Op) {
+            op.range = range; op.current = current; op.other = other; op.isInert = inert
+            op.tagDelta = tag; op.tagPickerDelta = picker; op.paragraphStyleSnapshot = paragraph; op.typingMarkSnapshot = mark
+        }
+    }
+
+    /// The caller supplies payload order: reverse capture order for Undo,
+    /// forward capture order for Redo. No storage, selection, callbacks, Op
+    /// payloads or standalone cursor are changed by this method.
+    func prepareReplay(_ payloads: [Op], preflight: ((NSAttributedString) -> Bool)? = nil) -> PreparedReplay? {
+        guard !payloads.isEmpty, !isChangeInFlight, composition == nil, canReplay?() ?? true else { return nil }
+        let original = NSAttributedString(attributedString: storage)
+        let candidate = NSMutableAttributedString(attributedString: original)
+        var swaps: [(Op, PayloadState, PayloadState)] = []
+        var selection = textView?.selectedRange() ?? NSRange(location: 0, length: 0)
+        for op in payloads {
+            guard !op.isInert, op.range.location >= 0, op.range.length >= 0,
+                  op.range.location <= candidate.length, op.range.length <= candidate.length - op.range.location else { return nil }
+            let before = PayloadState(op), after = PayloadState(op, flipped: true)
+            if op.tagPickerDelta == nil && op.paragraphStyleSnapshot == nil && op.typingMarkSnapshot == nil {
+                guard candidate.attributedSubstring(from: op.range).isEqual(to: op.current) else { return nil }
+                candidate.replaceCharacters(in: op.range, with: op.other)
+                selection = NSRange(location: NSMaxRange(after.range), length: 0)
+            }
+            swaps.append((op, before, after))
+        }
+        guard preflight?(candidate) ?? true else { return nil }
+        if let textView {
+            let wasReplaying = isReplaying
+            isReplaying = true
+            let permitted = textView.shouldChangeText(in: NSRange(location: 0, length: original.length), replacementString: candidate.string)
+            isReplaying = wasReplaying
+            guard permitted else { return nil }
+        }
+        return PreparedReplay(original: original, candidate: NSAttributedString(attributedString: candidate), selection: selection, swaps: swaps)
+    }
+
+    /// Idempotence is enforced by the original storage and payload snapshots.
+    /// The workspace, not this adapter, commits the associated cursor effect.
+    @discardableResult
+    func installReplay(_ prepared: PreparedReplay) -> Bool {
+        guard !isChangeInFlight, composition == nil, canReplay?() ?? true,
+              prepared.original.isEqual(to: storage), prepared.swaps.allSatisfy({ $0.1.stillMatches($0.0) }) else { return false }
+        performUnrecorded {
+            storage.setAttributedString(prepared.candidate)
+            for (op, before, after) in prepared.swaps {
+                after.install(on: op)
+                if let delta = before.picker { onTagPickerDelta?(delta.adds, delta.removes) }
+                if let state = before.paragraph { onParagraphStyleSnapshot?(state.location, state.before) }
+                if let state = before.mark { onTypingMarkSnapshot?(state.kind, state.before) }
+                if let delta = before.tag { onTagFlip?(delta.tag, delta.adds, delta.changesTags, after.range) }
+            }
+            textView?.setSelectedRange(prepared.selection)
+            textView?.didChangeText()
+            if let last = prepared.swaps.last { onReplay?(last.2.range) }
+        }
+        return true
+    }
+
     @discardableResult
     func undo() -> Bool {
         guard canReplay?() ?? true else { return false }
