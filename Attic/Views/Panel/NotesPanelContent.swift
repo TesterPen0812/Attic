@@ -424,9 +424,6 @@ struct NoteComposerView: View {
                 .atticClearGlassForegroundReadability()
                 .frame(width: 34, height: 34)
                 .atticGlassControl(in: Circle(), interactive: true)
-                // B (owner, 2026-10-01): the note's text passing under the
-                // button is softened behind it only.
-                .atticControlBackdrop(cornerRadius: 17)
                 .frame(width: 40, height: 40)
                 .contentShape(Circle())
         }
@@ -434,6 +431,10 @@ struct NoteComposerView: View {
         .help(title)
         .accessibilityLabel(title)
         .accessibilityIdentifier(identifier)
+        // B (owner, 2026-10-01): the note's text passing under the button
+        // is softened behind its 34 pt circle only, outside the button's
+        // accessibility element.
+        .background { Color.clear.frame(width: 34, height: 34).atticControlBackdrop(cornerRadius: 17) }
     }
 
     private var libraryLabel: String {
