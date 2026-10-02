@@ -76,6 +76,22 @@ jobs:
             ATTIC_MACOS_UNIT_HOST_BUNDLE_IDENTIFIER=com.taha.Attic.p3.crashhost \
             "${F[@]}" build-for-testing
           Scripts/sign_crash_harness.zsh .build/dd/Build/Products/Local/AtticP3CrashHost.app
+      # The paired probe needs a fresh process, just like the archived base;
+      # earlier suites must not contaminate its absolute process footprint.
+      - name: Run blocking paired PF2-PF3 assertions
+        if: ${{ !cancelled() && !inputs.harness_only }}
+        shell: /bin/zsh {0}
+        run: |
+          F=(CODE_SIGNING_ALLOWED=YES CODE_SIGNING_REQUIRED=YES CODE_SIGN_STYLE=Manual CODE_SIGN_IDENTITY=- DEVELOPMENT_TEAM= ENABLE_DEBUG_DYLIB=NO)
+          /Users/taha/Developer/attic-redesign-assets/xcodebuild-locked.sh \
+            -project Attic.xcodeproj -scheme Attic -configuration Local \
+            -destination 'platform=macOS' -derivedDataPath .build/dd \
+            -resultBundlePath .build/performance-gate.xcresult \
+            ATTIC_MACOS_UNIT_HOST_PRODUCT_NAME=AtticP3CrashHost \
+            ATTIC_MACOS_UNIT_HOST_EXECUTABLE_NAME=AtticP3CrashHost \
+            ATTIC_MACOS_UNIT_HOST_BUNDLE_IDENTIFIER=com.taha.Attic.p3.crashhost \
+            -parallel-testing-enabled NO "${F[@]}" \
+            -only-testing:AtticTests/TaskPerformanceGateTests/testPFFoundationSizeAndProductionPaths test-without-building
       - name: Run C1-C5 and minimum taskNote format before the full suite
         env:
           TEST_RUNNER_ATTIC_KEY_WINDOW_TESTS: "1"
@@ -138,7 +154,8 @@ jobs:
             ATTIC_MACOS_UNIT_HOST_BUNDLE_IDENTIFIER=com.taha.Attic.p3.crashhost \
             -parallel-testing-enabled NO -test-timeouts-enabled YES \
             -default-test-execution-time-allowance 120 -maximum-test-execution-time-allowance 360 \
-            "${F[@]}" -only-testing:AtticTests test-without-building
+            "${F[@]}" -only-testing:AtticTests \
+            -skip-testing:AtticTests/TaskPerformanceGateTests/testPFFoundationSizeAndProductionPaths test-without-building
       - name: Inspect host and helper signature contracts
         if: always()
         run: |
@@ -158,7 +175,7 @@ jobs:
       - name: Summarize tests
         if: always()
         run: |
-          for result in .build/commit-gate.xcresult .build/history-gate.xcresult .build/purge-gate.xcresult .build/foundation.xcresult; do
+          for result in .build/performance-gate.xcresult .build/commit-gate.xcresult .build/history-gate.xcresult .build/purge-gate.xcresult .build/foundation.xcresult; do
             if [ -d "$result" ]; then
               xcrun xcresulttool get test-results summary --path "$result" --format json
             fi
@@ -168,6 +185,7 @@ jobs:
         with:
           name: phase3-foundation-${{ github.sha }}
           path: |
+            .build/performance-gate.xcresult
             .build/commit-gate.xcresult
             .build/history-gate.xcresult
             .build/purge-gate.xcresult
