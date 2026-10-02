@@ -283,20 +283,47 @@ final class NotesPageControllerTests: XCTestCase {
     }
 
     func testMeasuredMainActorSaveIsIndependentOfUnrelatedStoreContents() async throws {
-        let empty = try await measureMainActorSave(label: "EMPTY")
+        let empty = try await makeSavePerformanceFixture()
+        let emptyAttachment = try await makeSavePerformanceFixture(withAttachment: true)
+        // Independent containers keep the empty fixture empty throughout pairing.
+        store = try makeTestNoteStore(persist: { [gate] in try gate!.save($0) },
+                                     attachmentFileStore: makeTestAttachmentFileStore())
         try await populatePerformanceStore()
-        let populated = try await measureMainActorSave(label: "POPULATED")
-        print("NOTE_STORE_SCALING_SAVE_RATIO=\(populated.save / empty.save)")
-        print("NOTE_STORE_SCALING_PREPARED_RATIO=\(populated.prepared / empty.prepared)")
-        assertSaveBaseline(empty)
-        assertSaveBaseline(populated)
-        // The same four baseline runs' prepared maxima were 5.980709,
-        // 6.499917, 6.568041 and 8.652083 ms. Allow their observed spread
-        // for the paired store-size comparison, including sample jitter.
-        XCTAssertLessThanOrEqual(populated.prepared - empty.prepared, 8.652083 - 5.980709,
-                                 "Unrelated notes, history and bytes must not enter an autosave")
-        XCTAssertLessThanOrEqual(populated.save - empty.save, 55.323833 - 45.781292,
-                                 "Main-actor save must stay independent of unrelated store contents")
+        let populated = try await makeSavePerformanceFixture()
+        let populatedAttachment = try await makeSavePerformanceFixture(withAttachment: true)
+        let fixtures = [empty, populated, emptyAttachment, populatedAttachment]
+        let labels = ["EMPTY", "POPULATED", "EMPTY_ATTACHMENT", "POPULATED_ATTACHMENT"]
+        var saves = Array(repeating: [Double](), count: fixtures.count)
+        var prepared = Array(repeating: [Double](), count: fixtures.count)
+        // Discard a warm-up of every fixture before alternating each pair's
+        // order. Neither runtime warm-up nor per-store warm-up can hide slope.
+        for fixture in fixtures {
+            _ = try await measureMainActorSave(fixture: fixture, samples: 1, report: false)
+        }
+        for pair in 0..<8 {
+            for index in pair.isMultiple(of: 2) ? [0, 1, 2, 3] : [1, 0, 3, 2] {
+                let sample = try await measureMainActorSave(fixture: fixtures[index], samples: 1, report: false)
+                saves[index].append(sample.save)
+                prepared[index].append(sample.prepared)
+            }
+        }
+        let medians = fixtures.indices.map { (save: saves[$0].sorted()[4], prepared: prepared[$0].sorted()[4]) }
+        for index in fixtures.indices {
+            let sample = medians[index]
+            print("NOTE_\(labels[index])_SAVE_MS_MEDIAN=\(sample.save) PREPARED_MS_MEDIAN=\(sample.prepared) SAVE_MAX=\(saves[index].max()!) PREPARED_MAX=\(prepared[index].max()!)")
+            assertSaveBaseline(sample)
+        }
+        for (small, large, label) in [(0, 1, "TEXT"), (2, 3, "ATTACHMENT")] {
+            let empty = medians[small], populated = medians[large]
+            print("NOTE_STORE_SCALING_\(label)_SAVE_DIFFERENCE_MS=\(populated.save - empty.save) PREPARED_DIFFERENCE_MS=\(populated.prepared - empty.prepared)")
+            // The same four baseline runs' prepared maxima were 5.980709,
+            // 6.499917, 6.568041 and 8.652083 ms. Keep their observed spread
+            // and the baseline save-median spread as the paired tolerances.
+            XCTAssertLessThanOrEqual(populated.prepared - empty.prepared, 8.652083 - 5.980709,
+                                     "Unrelated notes, history and bytes must not enter an autosave")
+            XCTAssertLessThanOrEqual(populated.save - empty.save, 55.323833 - 45.781292,
+                                     "Main-actor save must stay independent of unrelated store contents")
+        }
     }
 
     func testMeasuredColdOpenAndLaunchWithFiveThousandLineNote() async throws {
@@ -383,9 +410,17 @@ final class NotesPageControllerTests: XCTestCase {
         await store.waitForAttachmentReconciliation()
     }
 
-    private func measureMainActorSave(label: String? = nil) async throws -> (save: Double, prepared: Double) {
-        let document = NoteDocument(blocks: (0..<5_000).map { .text("Line \($0) with ordinary note text") })
-        guard case let .success((id, _)) = store.createDocumentNote(id: UUID(), document: document) else {
+    private typealias SavePerformanceFixture = (controller: NotesPageController, session: NoteSession)
+
+    private func makeSavePerformanceFixture(withAttachment: Bool = false) async throws -> SavePerformanceFixture {
+        var document = NoteDocument(blocks: (0..<5_000).map { .text("Line \($0) with ordinary note text") })
+        let staged = withAttachment ? [try realImage()] : []
+        if let image = staged.first {
+            // Keep the same trailing text edit as the text-only baseline;
+            // attachments exercise admission/visibility, not object editing.
+            document.blocks.insert(.image(attachmentID: image.id, pixelWidth: 2, pixelHeight: 2), at: 2_500)
+        }
+        guard case let .success((id, _)) = store.createDocumentNote(id: UUID(), document: document, staged: staged) else {
             XCTFail("large note fixture")
             throw NoteDocumentStoreError.invalidDocument("large note fixture")
         }
@@ -396,12 +431,19 @@ final class NotesPageControllerTests: XCTestCase {
         let openStart = DispatchTime.now().uptimeNanoseconds
         await XCTAssertTrueAsync(await controller.openDurably(noteID: id))
         print("NOTE_OPEN_5000_LINES_MS=\(Double(DispatchTime.now().uptimeNanoseconds - openStart) / 1_000_000)")
-        let session = try XCTUnwrap(controller.active)
+        return (controller, try XCTUnwrap(controller.active))
+    }
+
+    private func measureMainActorSave(label: String? = nil, fixture: SavePerformanceFixture? = nil,
+                                      samples: Int = 8, report: Bool = true) async throws -> (save: Double, prepared: Double) {
+        let target: SavePerformanceFixture
+        if let fixture { target = fixture } else { target = try await makeSavePerformanceFixture() }
+        let (controller, session) = target
         var milliseconds: [Double] = []
         var extractionMilliseconds: [Double] = []
         var preparedCommitMilliseconds: [Double] = []
         var combinedMilliseconds: [Double] = []
-        for _ in 0..<8 {
+        for _ in 0..<samples {
             type("x", into: session)
             let start = DispatchTime.now().uptimeNanoseconds
             XCTAssertTrue(controller.save(session))
@@ -422,15 +464,17 @@ final class NotesPageControllerTests: XCTestCase {
         let extractionSorted = extractionMilliseconds.sorted()
         let preparedSorted = preparedCommitMilliseconds.sorted()
         let combinedSorted = combinedMilliseconds.sorted()
-        print("NOTE_SAVE_5000_LINES_MS_MEDIAN=\(sorted[sorted.count / 2])")
-        print("NOTE_SAVE_5000_LINES_MS_MAX=\(sorted.last ?? 0)")
-        print("NOTE_EXTRACT_5000_LINES_MS_MEDIAN=\(extractionSorted[extractionSorted.count / 2])")
-        print("NOTE_EXTRACT_5000_LINES_MS_MAX=\(extractionSorted.last ?? 0)")
-        print("NOTE_PREPARED_COMMIT_5000_LINES_MS_MEDIAN=\(preparedSorted[preparedSorted.count / 2])")
-        print("NOTE_PREPARED_COMMIT_5000_LINES_MS_MAX=\(preparedSorted.last ?? 0)")
-        print("NOTE_EXTRACT_PREPARE_COMMIT_5000_LINES_MS_MEDIAN=\(combinedSorted[combinedSorted.count / 2])")
-        print("NOTE_EXTRACT_PREPARE_COMMIT_5000_LINES_MS_MAX=\(combinedSorted.last ?? 0)")
-        XCTAssertTrue(store.versions(noteID: id).isEmpty)
+        if report {
+            print("NOTE_SAVE_5000_LINES_MS_MEDIAN=\(sorted[sorted.count / 2])")
+            print("NOTE_SAVE_5000_LINES_MS_MAX=\(sorted.last ?? 0)")
+            print("NOTE_EXTRACT_5000_LINES_MS_MEDIAN=\(extractionSorted[extractionSorted.count / 2])")
+            print("NOTE_EXTRACT_5000_LINES_MS_MAX=\(extractionSorted.last ?? 0)")
+            print("NOTE_PREPARED_COMMIT_5000_LINES_MS_MEDIAN=\(preparedSorted[preparedSorted.count / 2])")
+            print("NOTE_PREPARED_COMMIT_5000_LINES_MS_MAX=\(preparedSorted.last ?? 0)")
+            print("NOTE_EXTRACT_PREPARE_COMMIT_5000_LINES_MS_MEDIAN=\(combinedSorted[combinedSorted.count / 2])")
+            print("NOTE_EXTRACT_PREPARE_COMMIT_5000_LINES_MS_MAX=\(combinedSorted.last ?? 0)")
+        }
+        XCTAssertTrue(controller.store.versions(noteID: session.noteID).isEmpty)
         let result = (save: sorted[sorted.count / 2], prepared: preparedSorted[preparedSorted.count / 2])
         if let label {
             print("NOTE_\(label)_SAVE_MS_MEDIAN=\(result.save) PREPARED_MS_MEDIAN=\(result.prepared)")
