@@ -1162,7 +1162,7 @@ extension NoteStore {
                   case let .editable(base) = NoteContentCodec.decode(baseData),
                   (try? NoteAgentTextSafety.validate(base: base, proposed: document)) != nil else {
                 if editRows.contains(where: { !$0.needsReview }) {
-                    editRows.forEach { $0.needsReview = true }
+                    editRows.forEach { WorkspaceLegacyBridge.captureBeforeMutation($0, in: modelContext); $0.needsReview = true }
                     _ = commitStagedChanges()
                 }
                 continue

@@ -13,15 +13,14 @@ enum WorkspaceLegacyBridge {
     private final class ContextState {
         let coordinator: WorkspaceOperationCoordinator
         var baseline: [WorkspaceOwner: WorkspaceModelToken]
-        var scopeIndex: WorkspaceScopeIndex
         var scopes: [WorkspaceScope: WorkspaceScopeToken] = [:]
         var captureFailed = false
         let includeCanvas: Bool
         var plainTaskWrites: Set<UUID>?
         var saveObserver: NSObjectProtocol?
         init(_ coordinator: WorkspaceOperationCoordinator, _ baseline: [WorkspaceOwner: WorkspaceModelToken], includeCanvas: Bool,
-             scopeIndex: WorkspaceScopeIndex) {
-            self.coordinator = coordinator; self.baseline = baseline; self.includeCanvas = includeCanvas; self.scopeIndex = scopeIndex
+             scopes: [WorkspaceScope: WorkspaceScopeToken] = [:]) {
+            self.coordinator = coordinator; self.baseline = baseline; self.includeCanvas = includeCanvas; self.scopes = scopes
         }
         deinit { if let saveObserver { NotificationCenter.default.removeObserver(saveObserver) } }
     }
@@ -59,13 +58,11 @@ enum WorkspaceLegacyBridge {
         return context
     }
     static func registerContext(_ context: ModelContext, includeCanvas: Bool = false,
-                                baseline: [WorkspaceOwner: WorkspaceModelToken]? = nil,
-                                scopeIndex: WorkspaceScopeIndex? = nil) throws {
+                                baseline: [WorkspaceOwner: WorkspaceModelToken]? = nil) throws {
         context.autosaveEnabled = false
         let coordinator = try coordinator(for: context.container)
         let baseline = baseline ?? [:]
-        let index = try scopeIndex ?? WorkspaceScopeIndex(baseline)
-        let state = ContextState(coordinator, baseline, includeCanvas: includeCanvas, scopeIndex: index)
+        let state = ContextState(coordinator, baseline, includeCanvas: includeCanvas)
         let reference = ContextReference(context)
         // Isolated fixtures can save this staging context directly. Capture
         // a fresh empty guard cache after success; never refresh guards while
@@ -84,7 +81,7 @@ enum WorkspaceLegacyBridge {
     static func presentationFollowingCommit(_ source: ModelContext) throws -> ModelContext {
         guard let state = objc_getAssociatedObject(source, &contextKey) as? ContextState else { throw WorkspaceFoundationError.unknown }
         let fresh = state.coordinator.freshContext()
-        try registerContext(fresh, includeCanvas: state.includeCanvas, baseline: state.baseline, scopeIndex: state.scopeIndex)
+        try registerContext(fresh, includeCanvas: state.includeCanvas, baseline: state.baseline)
         return fresh
     }
     static func capturedToken(_ owner: WorkspaceOwner, in source: ModelContext) throws -> WorkspaceModelToken {
@@ -219,7 +216,6 @@ enum WorkspaceLegacyBridge {
         let committed = state.coordinator.freshContext()
         let confirmed = try Dictionary(uniqueKeysWithValues: writes.map { ($0, try WorkspaceModelToken.read($0, in: committed)) })
         let updates = confirmed
-        state.scopeIndex = try state.scopeIndex.replacing(updates)
         state.baseline.merge(updates) { _, saved in saved }
         state.plainTaskWrites = plain && writes.allSatisfy({ $0.entity == .task }) ? Set(writes.map(\.id)) : nil
     }

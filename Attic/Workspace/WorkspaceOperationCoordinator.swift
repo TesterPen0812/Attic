@@ -668,10 +668,16 @@ extension WorkspaceOperationCoordinator {
                 let references = raw.compactMap { UUID(uuidString: String($0)) }
                 ids.formUnion(references)
                 if references.count != raw.count { ids.insert(ownership.unknownID) }
-                if let data = version.content { ids.formUnion(documentAdmissionIDs(data)) }
+                let old = before.first { $0.owner == Self.owner(version) }?.replicas.first { $0.physicalID == version.persistentModelID }
+                // Existing version metadata/deletion uses its declared scalar
+                // attachment roots. Only newly supplied content needs parsing.
+                if old?.fields["content"] != (try WorkspaceModelFields.fingerprint(version))["content"],
+                   let data = version.content { ids.formUnion(documentAdmissionIDs(data)) }
             } else if let proposal = row as? NotePendingEdit {
                 ids.insert(proposal.noteID)
-                if let data = proposal.proposedContent { ids.formUnion(documentAdmissionIDs(data)) }
+                let old = before.first { $0.owner == Self.owner(proposal) }?.replicas.first { $0.physicalID == proposal.persistentModelID }
+                if old?.fields["proposedContent"] != (try WorkspaceModelFields.fingerprint(proposal))["proposedContent"],
+                   let data = proposal.proposedContent { ids.formUnion(documentAdmissionIDs(data)) }
             }
         }
         return ids
