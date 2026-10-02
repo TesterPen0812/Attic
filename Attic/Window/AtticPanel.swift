@@ -38,10 +38,6 @@ final class AtticPanel: NSPanel {
         }
     }
     var canBeginTrackpadSwipe: ((NSEvent) -> Bool)?
-    /// Whether a swipe toward the edge may close the panel now (owner,
-    /// 2026-10-01: a pinned panel never closes by swipe). Notes' own swipe
-    /// to All notes is not affected.
-    var canCloseBySwipe: (() -> Bool)?
     private var trackpadDismissTracker = PanelTrackpadDismissTracker()
     private enum SwipeRoute { case hide, notes, content }
     private var swipeRoute: SwipeRoute?
@@ -314,7 +310,7 @@ final class AtticPanel: NSPanel {
             } else if swipeStartedInNotes && (towardEdge == swipeStartedInLibrary) {
                 swipeRoute = .notes
             } else {
-                swipeRoute = towardEdge && (canCloseBySwipe?() ?? true) ? .hide : .content
+                swipeRoute = towardEdge ? .hide : .content
             }
             // AppKit commonly begins with a zero-delta event. Preserve that
             // sequence boundary when the first directional sample follows it.
