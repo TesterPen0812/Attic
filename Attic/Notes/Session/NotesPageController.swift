@@ -792,6 +792,12 @@ final class NotesPageController: ObservableObject {
             guard let self, let session else { return String(localized: "The note is no longer open.") }
             return self.importAdmissionFailure(payload, in: session)
         }
+        engine.canPasteFragment = { [weak self, weak session] in
+            guard let self, let session else { return false }
+            return self.active === session && !self.isLibraryPresented && !session.isImporting
+                && self.canCommit(session)
+                && (!session.isPersisted || self.store.note(withID: session.noteID)?.revisionID == session.baseRevisionID)
+        }
         engine.onFragmentAdmission = { [weak self, weak session] proposed, copied in
             guard let self, let session else { return String(localized: "The note is no longer open.") }
             return self.attachmentAdmissionFailure(proposed: proposed, additions: copied, in: session)
@@ -2063,7 +2069,7 @@ extension NotesPageController: NoteImageProviding {
     }
 
     func verifiedBytes(forAttachment id: UUID) async -> StagedNoteAttachment? {
-        if let staged = cache.values.lazy.compactMap({ $0.engine.staged[id] }).first { return staged.payloadIsVerified ? staged : nil }
+        if let live = attachmentBytes(forAttachment: id) { return live.payloadIsVerified ? live : nil }
         return await store.verifiedAttachmentBytes(id)
     }
 

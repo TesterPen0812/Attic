@@ -3198,3 +3198,114 @@ private final class AllPayloadReadBarrier: @unchecked Sendable {
         condition.lock(); released = true; condition.broadcast(); condition.unlock()
     }
 }
+
+@MainActor
+private final class DeferredPasteBytes: NoteImageProviding {
+    let payloads: [UUID: StagedNoteAttachment]
+    init(_ payloads: [UUID: StagedNoteAttachment]) { self.payloads = payloads }
+    func fileURL(forAttachment id: UUID) async -> URL? { nil }
+    func filename(forAttachment id: UUID) -> String? { payloads[id]?.filename }
+    func imageBytes(forAttachment id: UUID) -> StagedNoteAttachment? { nil }
+    func verifiedBytes(forAttachment id: UUID) async -> StagedNoteAttachment? {
+        try? await Task.sleep(for: .milliseconds(80))
+        return payloads[id]
+    }
+}
+
+@MainActor
+extension NoteSlice3bTests {
+    func testPrivatePasteReadsAllPayloadsAfterDiskRelaunchAndCacheEvictionAsOneUndoStep() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("AtticPasteRelaunch-\(UUID())")
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let files = makeTestAttachmentFileStore(rootURL: root.appendingPathComponent("files"))
+        func openStore() throws -> NoteStore {
+            NoteStore(container: try PersistenceController.makeContainer(cloudSyncEnabled: false, storeDirectory: root),
+                      attachmentFileStore: files)
+        }
+        let item = staged(), image = try stagedImage(), sourceID = UUID(), destID = UUID()
+        let sourceDocument = NoteDocument(blocks: [.text("Source"), .text("Copied text"),
+            .file(attachmentID: item.id, filename: item.filename, contentTypeIdentifier: item.contentTypeIdentifier, byteCount: item.byteCount),
+            .image(attachmentID: image.id)])
+        let fragment: Data = try {
+            let original = try openStore()
+            guard case .success = original.createDocumentNote(id: sourceID, document: sourceDocument, staged: [item, image]),
+                  case .success = original.createDocumentNote(id: destID, document: NoteDocument(blocks: [.text("Destination"), .text("Before")])) else {
+                throw NSError(domain: "fixture", code: 1)
+            }
+            let source = NoteEditorEngine(noteID: sourceID, document: sourceDocument)
+            let board = NSPasteboard.withUniqueName()
+            XCTAssertTrue(source.writeSelection(NSRange(location: 7, length: source.textStorage.length - 7), to: board,
+                                                types: [NoteEditorEngine.fragmentType]))
+            return try XCTUnwrap(board.data(forType: NoteEditorEngine.fragmentType))
+        }()
+        let reopened = try openStore()
+        let controller = NotesPageController(store: reopened, journal: nil, saveDelay: .seconds(60))
+        await controller.startAndWait()
+        await XCTAssertTrueAsync(await controller.openDurably(noteID: destID))
+        let target = try XCTUnwrap(controller.active).engine
+        reopened.clearVerifiedAttachmentCache()
+        XCTAssertNil(controller.attachmentBytes(forAttachment: item.id))
+        let before = target.document()
+        await XCTAssertTrueAsync(await target.pasteDurably(fragmentData: fragment,
+            at: NSRange(location: target.textStorage.length, length: 0)))
+        let pasted = target.document()
+        XCTAssertTrue(NoteTextExport.plainText(pasted).contains("Copied text"))
+        XCTAssertEqual(pasted.attachmentIDs.count, 2)
+        XCTAssertEqual(target.stagedAttachments(for: pasted).map(\.data), pasted.attachmentIDs.map { target.staged[$0]!.data })
+        XCTAssertTrue(Set(pasted.attachmentIDs).isDisjoint(with: [item.id, image.id]))
+        XCTAssertTrue(target.history.undo())
+        XCTAssertEqual(target.document(), before)
+        XCTAssertFalse(target.history.canUndo, "the complete paste has one Undo step")
+        XCTAssertTrue(target.history.redo())
+        XCTAssertEqual(target.document(), pasted)
+        await XCTAssertTrueAsync(await controller.preserveAllDurably())
+        XCTAssertEqual(reopened.loadDocument(noteID: destID)?.content.document, pasted)
+    }
+
+    func testUnavailablePrivatePasteRefusesTextAndEveryObjectWithoutStagingOrUndo() async throws {
+        let item = staged(), missing = staged("missing.pdf")
+        let provider = DeferredPasteBytes([item.id: item])
+        let target = NoteEditorEngine(noteID: UUID(), document: NoteDocument(blocks: [.text("Destination"), .text("Original")]),
+                                      imageProvider: provider)
+        let fragment = NoteDocument(blocks: [.text("Some text"),
+            .file(attachmentID: item.id, filename: item.filename, contentTypeIdentifier: item.contentTypeIdentifier, byteCount: item.byteCount),
+            .file(attachmentID: missing.id, filename: missing.filename, contentTypeIdentifier: missing.contentTypeIdentifier, byteCount: missing.byteCount)])
+        let bytes = try NoteContentCodec.encode(fragment, context: .fragment), before = target.document()
+        await XCTAssertFalseAsync(await target.pasteDurably(fragmentData: bytes, at: NSRange(location: 12, length: 8)))
+        XCTAssertEqual(target.document(), before)
+        XCTAssertTrue(target.staged.isEmpty)
+        XCTAssertFalse(target.history.canUndo)
+        XCTAssertFalse(target.paste(fragmentData: bytes, at: NSRange(location: 12, length: 8)), "cache-only callers also refuse the whole fragment")
+        XCTAssertEqual(target.document(), before)
+    }
+
+    func testPrivatePasteRevalidatesSelectionAndDestinationAfterPayloadIO() async throws {
+        let item = staged()
+        let fragment = NoteDocument(blocks: [.text("Copied"),
+            .file(attachmentID: item.id, filename: item.filename, contentTypeIdentifier: item.contentTypeIdentifier, byteCount: item.byteCount)])
+        let bytes = try NoteContentCodec.encode(fragment, context: .fragment)
+        // A resolver that succeeds after suspension makes the stale-destination
+        // guard, rather than unavailable bytes, responsible for refusing.
+        let successful = DeferredPasteBytes([item.id: item])
+        for change in 0..<3 {
+            let target = NoteEditorEngine(noteID: UUID(), document: NoteDocument(blocks: [.text("Destination"), .text("Original")]),
+                                          imageProvider: successful)
+            let (_, view) = target.makeView()
+            let range = NSRange(location: target.textStorage.length, length: 0)
+            view.setSelectedRange(range)
+            let before = target.document()
+            var current = true
+            target.canPasteFragment = { current }
+            let paste = Task { await target.pasteDurably(fragmentData: bytes, at: range) }
+            try await Task.sleep(for: .milliseconds(20))
+            if change == 0 { view.setSelectedRange(NSRange(location: 0, length: 0)) }
+            if change == 1 { current = false }
+            if change == 2 { _ = target.performEdit(NSRange(location: 0, length: 0), with: NSAttributedString(string: "New "), name: "Typing") }
+            await XCTAssertFalseAsync(await paste.value)
+            if change < 2 { XCTAssertEqual(target.document(), before); XCTAssertFalse(target.history.canUndo) }
+            XCTAssertTrue(target.staged.isEmpty)
+            XCTAssertFalse(target.document().attachmentIDs.contains(item.id))
+        }
+    }
+}

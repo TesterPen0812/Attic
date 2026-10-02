@@ -128,6 +128,7 @@ final class NoteEditorEngine: NSObject, NSTextViewDelegate, NSTextStorageDelegat
     /// The controller checks the complete proposed document before a private
     /// fragment can stage bytes or make an Undo entry.
     var onFragmentAdmission: ((NoteDocument, [StagedNoteAttachment]) -> String?)?
+    var canPasteFragment: (() -> Bool)?
     private var pendingLinkTarget: NoteLinkTarget?
     private var activeSlashSession: NoteSlashSession?
     private var slashDateRequest: NoteSlashSession?
@@ -1528,7 +1529,7 @@ final class NoteEditorEngine: NSObject, NSTextViewDelegate, NSTextStorageDelegat
     /// is a new object with a new ID. An image from another note is copied
     /// into a new staged attachment for this note (committed with the text
     /// or never).
-    func preparePaste(_ fragment: NoteDocument) -> (document: NoteDocument, copied: [StagedNoteAttachment]) {
+    private func preparePaste(_ fragment: NoteDocument, resolved: [UUID: StagedNoteAttachment]? = nil) -> (document: NoteDocument, copied: [StagedNoteAttachment])? {
         let sameNote = fragment.extras["sourceNoteID"]?.stringValue.flatMap(UUID.init(uuidString:)) == noteID
         var present = Set(objectIDs())
         var result = fragment
@@ -1562,15 +1563,15 @@ final class NoteEditorEngine: NSObject, NSTextViewDelegate, NSTextStorageDelegat
                 // retained while any version or text shows it).
                 if sameNote {
                     block.id = fresh(block.id)
-                } else if var copy = imageProvider?.attachmentBytes(forAttachment: attachmentID) {
+                } else if var copy = resolved?[attachmentID] ?? imageProvider?.attachmentBytes(forAttachment: attachmentID), copy.payloadIsVerified {
                     let newID = UUID()
                     copy = copy.copying(id: newID)
                     copied.append(copy)
                     block.attachmentID = newID
                     block.id = fresh(nil)
                 } else {
-                    onNotice?(String(localized: "An attachment couldn’t be copied, so it was left out."))
-                    continue
+                    onNotice?(String(localized: "An attachment couldn’t be read. Nothing was pasted."))
+                    return nil
                 }
             case .text, .opaque:
                 break
@@ -1590,7 +1591,45 @@ final class NoteEditorEngine: NSObject, NSTextViewDelegate, NSTextStorageDelegat
     func paste(fragmentData data: Data, at selection: NSRange) -> Bool {
         guard !isReadOnly, rangeIsInStorage(selection),
               case let .editable(decoded) = NoteContentCodec.decode(data, context: .fragment) else { return false }
-        let prepared = preparePaste(decoded)
+        return insertFragment(decoded, at: selection)
+    }
+
+    /// Resolve the whole private fragment before staging bytes or creating an
+    /// Undo entry. The captured note, document, view and caret must still be
+    /// current after every payload has been verified off the main actor.
+    func pasteDurably(fragmentData data: Data, at selection: NSRange) async -> Bool {
+        guard !isReadOnly, activity == .idle, rangeIsInStorage(selection),
+              canPasteFragment?() != false,
+              case let .editable(decoded) = NoteContentCodec.decode(data, context: .fragment) else { return false }
+        let destination = noteID
+        let before = document()
+        let view = textView
+        let viewSelection = view?.selectedRange()
+        var resolved: [UUID: StagedNoteAttachment] = [:]
+        for id in Set(decoded.attachmentIDs) {
+            let payload: StagedNoteAttachment?
+            if let live = staged[id] { payload = live }
+            else { payload = await imageProvider?.verifiedBytes(forAttachment: id) }
+            guard let payload, payload.id == id, payload.payloadIsVerified else {
+                onNotice?(String(localized: "An attachment couldn’t be read. Nothing was pasted."))
+                return false
+            }
+            resolved[id] = payload
+        }
+        guard !Task.isCancelled, noteID == destination, activity == .idle,
+              textView === view, view?.selectedRange() == viewSelection,
+              canPasteFragment?() != false, document() == before,
+              rangeIsInStorage(selection) else {
+            onNotice?(String(localized: "The note or selection changed. Paste again at the new selection."))
+            return false
+        }
+        return insertFragment(decoded, at: selection, resolved: resolved)
+    }
+
+    private func insertFragment(_ decoded: NoteDocument, at selection: NSRange,
+                                resolved: [UUID: StagedNoteAttachment]? = nil) -> Bool {
+        guard !isReadOnly, activity == .idle, rangeIsInStorage(selection),
+              let prepared = preparePaste(decoded, resolved: resolved) else { return false }
         let fragment = prepared.document
         guard !fragment.blocks.isEmpty else { return false }
         let pasted = NoteTextCodec.attributedString(from: fragment, style: style, firstBlockIsTitle: false)

@@ -791,6 +791,8 @@ final class NoteEditorEngineTests: XCTestCase {
         XCTAssertEqual(fragment.blocks.first?.marks, heading.marks)
         XCTAssertEqual(fragment.blocks.first?.inlines.count, 1)
         let (target, _) = makeEngine(NoteDocument(blocks: [.text("Other"), .text("")]))
+        let provider = StubImages(bytes: [image.attachmentID!: Data([9, 9])])
+        target.imageProvider = provider
         XCTAssertTrue(target.paste(fragmentData: bytes, at: NSRange(location: 6, length: 0)))
         XCTAssertTrue(target.document().blocks.contains { $0.style == "heading" && !$0.marks.isEmpty })
         let partial = NSPasteboard.withUniqueName()
@@ -1268,6 +1270,6 @@ private final class StubImages: NoteImageProviding {
     func filename(forAttachment id: UUID) -> String? { bytes[id] == nil ? nil : "shot.png" }
     func imageBytes(forAttachment id: UUID) -> StagedNoteAttachment? {
         bytes[id].map { StagedNoteAttachment(id: id, filename: "shot.png", contentTypeIdentifier: "public.png",
-                                             byteCount: Int64($0.count), digest: "d", data: $0) }
+                                             byteCount: Int64($0.count), digest: NotePayloadDigest.sha256($0), data: $0) }
     }
 }

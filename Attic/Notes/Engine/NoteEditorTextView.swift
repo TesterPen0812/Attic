@@ -309,7 +309,14 @@ final class NoteEditorTextView: NSTextView, NSAccessibilityCustomRotorItemSearch
         let target = rangeForUserTextChange
         guard target.location != NSNotFound else { return false }
         if type == NoteEditorEngine.fragmentType, let data = pboard.data(forType: type) {
-            return engine.paste(fragmentData: data, at: target)
+            if engine.isPerformingSelfMove { return engine.paste(fragmentData: data, at: target) }
+            // The private type owns this paste even if verification refuses it:
+            // AppKit must not fall back to plain text and flatten its objects.
+            Task { @MainActor [weak self, weak engine] in
+                guard let self, let engine, self.engine === engine, self.rangeForUserTextChange == target else { return }
+                _ = await engine.pasteDurably(fragmentData: data, at: target)
+            }
+            return true
         }
         if type == .fileURL,
            let urls = pboard.readObjects(forClasses: [NSURL.self],
