@@ -3367,3 +3367,52 @@ extension NoteSlice3bTests {
         XCTAssertEqual(store.note(withID: id)?.title, "Stored")
     }
 }
+
+@MainActor
+extension NoteSlice3bTests {
+    func testJournalReleasesFormerLiveStagingOwnersAcrossRepeatedImportLifetimes() async throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent("AtticCurrentOwners-\(UUID())")
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let journal = NoteDraftJournal(directory: directory)
+        var live: Set<UUID> = []
+        journal.liveReferencedIDs = { live }
+        for _ in 0..<3 {
+            let item = staged(), id = UUID()
+            let document = NoteDocument(blocks: [.text("Draft"), .file(attachmentID: item.id, filename: item.filename,
+                contentTypeIdentifier: item.contentTypeIdentifier, byteCount: item.byteCount)])
+            let entry = NoteDraftJournalEntry(noteID: id, isPersisted: false, baseRevisionID: nil,
+                content: try NoteContentCodec.encode(document), selectionLocation: 0, selectionLength: 0,
+                staged: [.init(id: item.id, filename: item.filename, contentTypeIdentifier: item.contentTypeIdentifier,
+                               byteCount: item.byteCount, digest: item.digest)], savedAt: Date())
+            live = [item.id]
+            let claim = try await journal.writeDurably(entry, staged: [item])
+            try await journal.discardOwnedDurably(noteID: id, claim: claim)
+            let path = directory.appendingPathComponent("staged/\(item.id.uuidString)")
+            XCTAssertTrue(FileManager.default.fileExists(atPath: path.path), "live Undo/import/session ownership retains staging")
+            live = []
+            _ = try await journal.readRecoveryEntries()
+            XCTAssertFalse(FileManager.default.fileExists(atPath: path.path), "released owners do not accumulate for the process lifetime")
+        }
+    }
+
+    func testUnknownJournalOrLiveOwnershipStillPreventsStagingCollection() async throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent("AtticUnknownOwners-\(UUID())")
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let journal = NoteDraftJournal(directory: directory), item = staged(), id = UUID()
+        journal.liveReferencedIDs = { [item.id] }
+        let entry = NoteDraftJournalEntry(noteID: id, isPersisted: false, baseRevisionID: nil,
+            content: try NoteContentCodec.encode(NoteDocument(blocks: [.text("Draft")])), selectionLocation: 0, selectionLength: 0,
+            staged: [.init(id: item.id, filename: item.filename, contentTypeIdentifier: item.contentTypeIdentifier,
+                           byteCount: item.byteCount, digest: item.digest)], savedAt: Date())
+        let claim = try await journal.writeDurably(entry, staged: [item])
+        try await journal.discardOwnedDurably(noteID: id, claim: claim)
+        let file = directory.appendingPathComponent("staged/\(item.id.uuidString)")
+        try Data("unreadable".utf8).write(to: directory.appendingPathComponent("unknown.json"))
+        journal.liveReferencedIDs = { [] }
+        _ = try await journal.readRecoveryEntries()
+        XCTAssertEqual(try Data(contentsOf: file), item.data, "unknown journal ownership remains conservative")
+        journal.liveReferencedIDs = { throw NSError(domain: "unreadable live owners", code: 1) }
+        do { _ = try await journal.readRecoveryEntries(); XCTFail("unknown owner snapshot must refuse collection") } catch {}
+        XCTAssertEqual(try Data(contentsOf: file), item.data)
+    }
+}
