@@ -132,6 +132,20 @@ final class WorkspaceCommitTests: XCTestCase {
         XCTAssertEqual(try coordinator.freshContext().fetchCount(FetchDescriptor<OperationReceipt>()), 0)
     }
 
+    func testC5FailedIdenticalPlainSaveDoesNotAcknowledgeCommitOrHoldRetry() throws {
+        let owner = WorkspaceOwner(entity: .task, id: taskID)
+        let before = try coordinator.capture([owner])
+        var attempts = 0
+        coordinator.save = { _ in attempts += 1; throw PersistenceGate.Failure() }
+        XCTAssertEqual(coordinator.plainSave(tokens: before, writes: [owner], stage: { _ in }), .notCommitted)
+        XCTAssertEqual(attempts, 1, "An explicit idempotent repair still crosses the save gate")
+        XCTAssertEqual(try coordinator.capture([owner]), before)
+        coordinator.save = { try $0.save() }
+        XCTAssertEqual(coordinator.plainSave(tokens: before, writes: [owner], stage: { _ in }), .committed,
+                       "A failed identical save does not leave an ambiguous-owner hold")
+        XCTAssertEqual(try coordinator.freshContext().fetchCount(FetchDescriptor<OperationReceipt>()), 0)
+    }
+
     func testC5TasksBatchHasOnePlainDomainSaveAndNoBookkeeping() throws {
         let gate = PersistenceGate()
         let store = TaskStore(container: container, persist: gate.save)

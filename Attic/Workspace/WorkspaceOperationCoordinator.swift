@@ -274,6 +274,11 @@ final class WorkspaceOperationCoordinator {
             }
             do { try save(context); return .committed }
             catch {
+                // An idempotent repair can stage the same bytes twice. If
+                // its save throws, identical before/after states cannot prove
+                // success. Propagate failure so Locate takes its rollback and
+                // proof-invalidation path; there is no changed state to hold.
+                if previous == next { return .notCommitted }
                 // These immutable compact guards already describe both sides.
                 // Hash/encode reconciliation proofs only for an ambiguous save,
                 // not every successful tick or prepared note commit.
