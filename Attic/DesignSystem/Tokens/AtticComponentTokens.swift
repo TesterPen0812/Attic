@@ -25,6 +25,10 @@ enum AtticRingMetrics {
     static let gap: CGFloat = 2
     /// How far the ring's outer edge sits outside the shape.
     static var outset: CGFloat { width + gap }
+    /// L2 (option A, owner 2026-09-30): a task row the keyboard is on
+    /// draws one 1 pt line on its highlight's own edge (no gap), over the
+    /// lighter hover fill, in place of the 2 pt ring 2 pt outside.
+    static let rowLineWidth: CGFloat = 1
     /// The drop-target outline, drawn inside the selection shape.
     static let dropOutlineWidth: CGFloat = 1.5
 }
@@ -143,6 +147,18 @@ enum AtticTaskRowMetrics {
 }
 
 /// Quiet text actions inside content ("Add subtask", "Open page").
+/// L3's flat corner buttons (`AtticFlatSurface`).
+enum AtticFlatSurfaceMetrics {
+    static let hairline: CGFloat = 1
+}
+
+/// The menu button's dot (follow-up part 2, item 6: View Options while a
+/// filter hides tasks).
+enum AtticMenuButtonMetrics {
+    static let dotSize: CGFloat = 5
+    static let dotInset: CGFloat = 6
+}
+
 enum AtticQuietActionMetrics {
     static let height: CGFloat = 24
     static let horizontalPadding: CGFloat = 6
@@ -237,6 +253,11 @@ enum AtticPageTabsMetrics {
     static let focusRadius: CGFloat = 6
     static let focusOutset: CGFloat = 4
     static let hitOutset: CGFloat = 6
+    /// L1 (option B, owner 2026-09-30): a 2 pt line in the heading ink
+    /// under the active label, as wide as its text, its top 1 pt below the
+    /// labels' 16 pt line.
+    static let underlineHeight: CGFloat = 2
+    static let underlineGap: CGFloat = 1
 }
 
 /// The row's priority mark ("!!" High, "!" Medium) after the title.
@@ -607,6 +628,10 @@ enum AtticPickerMetrics {
     static let dateWidth: CGFloat = 212
     static let tagWidth: CGFloat = 200
     static let tagListMaxHeight: CGFloat = 196
+    /// Move to Task… (control audit item 5): wider than the tag list, for
+    /// task titles and where each is listed; seven rows before it scrolls.
+    static let taskWidth: CGFloat = 260
+    static let taskListMaxHeight: CGFloat = 196
     static let suggestionWidth: CGFloat = 220
     static let monthHeaderHeight: CGFloat = 26
     static let monthButton: CGFloat = 20

@@ -20,7 +20,7 @@ struct TaskActionsMenu: View {
         Button("Copy", systemImage: "doc.on.doc", action: copyTitle)
 
         Menu("Priority") {
-            ForEach(TaskPriority.choices(keeping: [task.priority])) { priority in
+            ForEach(TaskPriority.choices) { priority in
                 Button {
                     store.setPriority(priority, for: task)
                 } label: {

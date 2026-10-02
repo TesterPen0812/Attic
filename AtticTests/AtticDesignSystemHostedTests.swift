@@ -165,10 +165,12 @@ final class AtticDesignSystemHostedTests: XCTestCase {
             perform(kAXIncrementAction as String, on: slider.element)
             XCTAssertGreaterThan(tint, before, "\(context.caption): the slider's increment moves Tint length")
 
-            // The title menu and the pop-up row are native menu buttons:
-            // VoiceOver sees a menu button that can be pressed.
+            // The title menu is a native menu button: VoiceOver sees a menu
+            // button that can be pressed. The pop-up row is a plain button
+            // that opens Attic's own opaque list (round 13), so it is not
+            // a menu button; its list is covered by TasksRound13Tests.
             let menus = items.filter { $0.role == kAXPopUpButtonRole as String || $0.role == kAXMenuButtonRole as String }
-            XCTAssertGreaterThanOrEqual(menus.count, 2, "\(context.caption): menus are not menu buttons: \(items.map(\.role))")
+            XCTAssertGreaterThanOrEqual(menus.count, 1, "\(context.caption): the title menu is not a menu button: \(items.map(\.role))")
             for menu in menus {
                 XCTAssertTrue(menu.actions.contains(kAXPressAction as String) || menu.actions.contains("AXShowMenu"),
                               "\(context.caption): a menu button VoiceOver cannot press: \(menu.actions)")
@@ -186,11 +188,7 @@ final class AtticDesignSystemHostedTests: XCTestCase {
             print("ATTIC_HOSTED_MENUS_OPENED \(opened.count)/\(menus.count) · \(context.caption) · \(ProcessInfo.processInfo.operatingSystemVersionString)")
             if !opened.isEmpty {
                 let titles = opened.flatMap { $0 }
-                XCTAssertTrue(titles.contains("Duplicate") || titles.contains("Glass"), "\(context.caption): a menu opened without its items: \(opened)")
-                if opened.count == menus.count {
-                    XCTAssertTrue(titles.contains("Duplicate"), "\(context.caption): the title menu's commands: \(opened)")
-                    XCTAssertTrue(titles.contains("Glass"), "\(context.caption): the pop-up row's choices: \(opened)")
-                }
+                XCTAssertTrue(titles.contains("Duplicate"), "\(context.caption): a menu opened without its items: \(opened)")
             } else {
                 XCTContext.runActivity(named: "Menus did not open in the inactive unit-test host (\(ProcessInfo.processInfo.operatingSystemVersionString)); AtticNativeMenuUITests covers opening") { _ in }
             }
@@ -242,10 +240,11 @@ final class AtticDesignSystemHostedTests: XCTestCase {
         let (window, hosting) = host(rows.padding(.vertical, 8), size: CGSize(width: 320, height: 80), context: context, key: true)
         XCTAssertTrue(window.isKeyWindow, "Keyboard focus needs a key window")
 
-        /// Whether row `index` shows the ring (read 3 pt outside its highlight).
+        /// Whether row `index` shows the keyboard's line (L2: 1 pt on its
+        /// highlight's own edge).
         func ringShown(_ index: Int) throws -> Bool {
             let (bitmap, scale) = try snapshot(hosting)
-            let x = AtticLayout.rowHighlightInset - AtticRingMetrics.gap - AtticRingMetrics.width / 2
+            let x = AtticLayout.rowHighlightInset + AtticRingMetrics.rowLineWidth / 2
             let y = 8 + CGFloat(index) * AtticLayout.rowPitch + 1 + AtticLayout.rowHighlightHeight / 2
             let pixel = try XCTUnwrap(bitmap.colour(atX: x, y: y, scale: scale))
             return pixel.themeColor.contrastRatio(with: context.tokens.ink(.accent).themeColor) < 1.25

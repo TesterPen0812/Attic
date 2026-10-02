@@ -93,6 +93,59 @@ Phase 1 (Shell, Tasks and Settings) was built in three streams and integrated
 on `redesign/phase-1`. Every change below is additive: no token, colour, radius
 or type style changed.
 
+### Follow-up part 2: owner decisions (Opus, 2026-09-30)
+
+- **Low priority returns** (option A, `mockups/p1f-06-low-priority.png`):
+  `AtticPriorityMark` draws Low as a grey `↓` in the `priorityMark` style and
+  the helper ink, where `!` and `!!` sit. `TaskPriority.choices` replaces
+  `choices(keeping:)` and offers all four everywhere (round 7's R6 rule is
+  lifted). The strip shows `↓` for Low. `AtticTaskShortcut.priorityNone…High`
+  are ⌥⌘0–3; `AtticTaskShortcut.matches` also reads the number row's key
+  codes, so a layout whose ⌥ changes a digit still matches. Why: the owner
+  could not tell Low from none.
+- **Find and View Options** (item 6, option A): **new `AtticViewLine`** (the
+  quiet "Due or overdue · by due date · Show All" line an active filter
+  shows); `AtticMenuButton` gains an optional anchor `holder` (⌥⌘V opens
+  the same menu under the button), a 5 pt accent dot (`showsDot`,
+  **new `AtticMenuButtonMetrics`**) and a VoiceOver `value`. Find reuses
+  `AtticTabsSearchField` on every page.
+- **L1, the active tab** (option B): `AtticPageTabs` draws a 2 pt line in the
+  heading ink under the active label (`AtticPageTabsMetrics.underlineHeight`,
+  `underlineGap`), moving with the slide preset, at once under Reduced
+  animations. The inactive labels' colour is unchanged.
+- **L2, the keyboard's row** (option A): a task row the keyboard is on draws
+  one 1 pt line on its highlight's own edge (`AtticFocusRing` with gap 0,
+  `AtticRingMetrics.rowLineWidth`) over the lighter hover fill, instead of
+  the 2 pt ring 2 pt outside. Other controls keep the ring.
+- **L3, the corner buttons** (option A): **new `AtticFlatSurface`**
+  (`atticFlatSurface`, `AtticFlatSurfaceMetrics.hairline`): the recessed
+  fill and one 1 pt hairline in the selected-chip ink, no rim, sheen, shadow
+  or glass. `AtticRaisedButton(flat:)` and `AtticPageButton(flat:)` use it
+  (shut, the current page's glyph sits on it with no inner chip; a pinned
+  pin takes the chip fill whole). The keyboard ring stays.
+- **L4, Dark Glass and Frosted +1 step**: `openRing()` at rest 0.36 → 0.46.
+  Light, Dark Solid and Increase Contrast are unchanged. The icons and
+  chevrons were not changed: the ladder's #8E8E8E is tuned to the 3 : 1
+  icon floor before use, and every Dark context already renders #B2B2B2,
+  lighter than the approved #A8A8A8 (measured over every palette, surface
+  and Tint).
+- Requested by the owner (decisions of 2026-09-30, "all recommended" and
+  L1–L4).
+
+### Actions-menu Return (GPT-6.1, round 13)
+
+- Bare-key list shortcuts (Return, Space, Shift-Space and Delete) are native
+  menu badge hints. Only shortcuts with Command, Control or Option become
+  active menu equivalents. `AtticMenuCommand.menuShortcut` / `menuBadge` share
+  this policy between `NSMenu` and SwiftUI menu items, including lazy menus.
+- The CI trace showed NSMenu's internal tracker changing the highlight to
+  Edit Title on Return, then running that action after close. The public
+  equivalent override and local event monitors were bypassed. Removed the
+  popup subclass and last-highlight redirect; standard AppKit tracking now
+  owns Return. Ordinary list shortcuts retain their existing key handlers.
+- Requested by the owner to fix Return choosing Edit Title instead of the
+  highlighted actions-menu item. No task mutation or persistence changes.
+
 ### Shell (redesign/p1-shell)
 
 - **`AtticPageSwitch.Item` gains `keyEquivalent` and `accessibilityIdentifier`**
@@ -484,6 +537,7 @@ additive; no token, colour, radius or type style changed.
 - **`AtticTaskRowModel` is `Equatable`** (the subtask counts compared by hand),
   so a list can skip redrawing a row whose model did not change.
 - No token, colour, radius or type style changed.
+
 ### Phase 2 slice 3a — Notes format controls (2026-09-29)
 
 - **New components** (`AtticNoteFormatComponents.swift`): `AtticFormatToggle` (a flat 28 pt
@@ -497,3 +551,129 @@ additive; no token, colour, radius or type style changed.
   236; the link card 272; 12 pt shadow room).
 - The `/` list, date card and link card reuse `AtticPopover` and `AtticPopoverRow`; motion is the
   popover preset's springy variant (fade, 4 pt rise, 0.96 grow), a fade under Reduce Motion.
+
+### Phase 1 follow-up: control audit items 5, 10 and 11 (2026-09-29)
+
+- **New `AtticTaskPicker`** (Move to Task…): the tag picker's pattern for
+  tasks — "Find a task", then `AtticChoiceRow`s with where each task is
+  listed as the detail, one highlight for keys and pointer. Rows are built
+  lazily with a known height (`AtticPickerMetrics.taskWidth` 260,
+  `taskListMaxHeight` 196), so a long list costs a screenful per keystroke.
+- **`AtticSubtaskRow`**: a managed line shows the row's `AtticRowActionsButton`
+  while the pointer or the keyboard is on it, answers ⇧⌘I with its commands
+  as a native menu (`AtticMenuCommand.performSubtaskKey(showActions:)`), and
+  can point a pop-over at itself (`popover`; `AtticQuickLook.popover`). Nothing
+  shows at rest.
+- **`AtticDeletedItemRow`**: selectable (`isSelected` draws `selected` inset
+  4 pt with the control corner rule, `AtticSettingsRowMetrics.selectionInset`;
+  VoiceOver hears "selected"), `onSelect` with the modifiers held, a lazily
+  built right-click menu that is also its VoiceOver actions, and Select /
+  Deselect for VoiceOver.
+- **`AtticActionRow.secondary`** (new `AtticRowAction`): a second small raised
+  button before the first (Recently Deleted's selection row).
+- No token, colour, radius or type style changed.
+
+### Motion Lab: feels (owner, 2026-09-30: "I much more prefer the bounciness, even if it's slight")
+
+- **`AtticMotionTuning`** holds every motion value: the navigation springs
+  (`slide`, also the Tasks pager's settle; `expand`; `doneSlide`), the springs
+  of things that appear (`popover`, `toast`, `complete`, `settle`,
+  `failReturn`), the appear scale, the leave tuck (response, scale) and two
+  styles, Appear and Leave (`AtticMotionStyle`: spring or fade). Every preset
+  reads `AtticMotionTuning.current`; `pageSwitch` (a crossfade) and `hover`
+  are the same in every feel. The design context carries the tuning
+  (`motion`), so a change redraws everything at once.
+- **`AtticMotionFeel`**, three feels as data: **Calm** is round 11 exactly,
+  with its fades; **Lively** (the default): navigation 0.30 s / 0.12 (expand
+  0.26), things that appear 0.26–0.28 s / 0.22 (settle 0.27 / 0.16) from 0.92
+  of their size, leaving in a 0.14 s tuck to 0.96, each spring reaching 95 %
+  of its way within a frame of Calm's; **Playful** is round 9's springs,
+  popping from 0.88 and tucking to 0.94.
+- **Presets**: `animation(reduceMotion:showing:)`, `leaveAnimation`, and
+  `hiddenScale` (for things shown in place: the strip, the send button); the
+  spring leave style also drives `exit`. `transition(reduceMotion:edge:anchor:)`
+  adds, in the spring styles, a scale from the anchor (the edge a thing comes
+  from, or an explicit one) weighted per preset (`scaleWeight`: all of it for
+  pop-overs and the toast, 0.5 for the quick look, 0.4 for rows, none for
+  pages, which hold AppKit scroll views a SwiftUI scale does not carry). A nil
+  edge is a scale and fade with no rise.
+- **Reduce Motion and Settings › Animations › Reduced ignore the feel**: the
+  fallbacks use Calm's timings, and nothing scales.
+- **`TasksPagerSpring`** takes the feel's bounce: a settle may pass its page by
+  at most a fiftieth of a page (the damping and a flick's speed are capped),
+  never toward a second page; Calm stays critically damped.
+- **`atticPopover`**: an experimental spring-in from the arrow for native
+  pop-overs (`AtticPopoverPop`, a Core Animation transform on the pop-over
+  window's frame view), off in every feel; the lab has a switch for it.
+- **New `AtticSegmentedRow`** (Settings): a label and the system segmented
+  control, for the lab's feel.
+- **`AtticMotionLab`**: the Settings › General › Motion Lab group shows only
+  in `com.taha.Attic.preview.*` builds (or another non-release identity with
+  `--attic-motion-lab`), never under `com.taha.Attic`; outside it no stored
+  feel is read.
+- No token, colour, radius or type style changed.
+
+### Motion Lab: finish (owner, 2026-10-01: lively by default, reducible by the user)
+
+- **Settings › General › Animations** is now **Lively** (the default),
+  **Subtle** or **Reduced** (`AtticAnimationLevel`: `lively`, `subtle`,
+  `reduced`). Lively is the Lively feel in every build. Subtle is the
+  `AtticMotionFeel.subtle` tuning: Calm's timings (navigation 0.25 s, things
+  that appear 0.22-0.24 s) with a small bounce (navigation 0.04, things that
+  appear 0.10, settle and fail-return 0.08), springing in from 0.96 and
+  tucking to 0.98 in 0.12 s; no plain fades. Reduced is the Reduce Motion
+  fallback. macOS Reduce Motion forces Reduced whatever is chosen
+  (`design.reduceMotion` is unchanged).
+- A stored "full" becomes Lively (and is rewritten as `lively`); a stored
+  "reduced" stays Reduced (`AtticAnimationLevel.migrated(from:)`).
+- The Motion Lab stays preview-only, and its Feel row gains Subtle. A lab
+  choice overrides Animations until Animations is changed, which puts the
+  feel back to Lively or Subtle.
+- **Edges is removed** (`4fc0f34` reverted): the lists and Notes are back to
+  round 13's clean cut at the tabs' band and the bottom stack. A floating
+  controls design replaces that behaviour later.
+
+### Floating controls: the system soft scroll edge (owner, 2026-10-01)
+
+- **The per-control softening is removed** (owner, 2026-10-01: "the
+  floating icons and controls feel terrible… it is so incredibly laggy").
+  `AtticSoftening`, `AtticSofteningLab`, `AtticControlFootprint(s)`,
+  `atticControlFootprint`, `atticSoftenedByControls`, `AtticSofteningBand`,
+  `AtticSofteningMask`, `AtticLabelHalo`, `AtticSofteningShape` and the
+  tokens `softening`, `softeningMaximumDim`, `softeningMaximumBlur`,
+  `haloRadius` and `softeningFeather` are gone, with the Motion Lab's
+  "Softening behind controls" slider. It re-rendered the content to blur it
+  on every frame of a scroll or a swipe, and showed a muddy box by the tabs.
+- **New `AtticScrollEdgeStyle`** (`Primitives/AtticScrollEdges.swift`):
+  the owner chose macOS 26's own scroll edge effect, soft style. The Tasks
+  page's controls' zones (from the panel's top edge to the resting row,
+  covering the header's buttons and the tabs; the add bar's zone) are its
+  lists' bars (`safeAreaBar` with `AtticScrollEdgeBar`), so each list's
+  scroll view gets the system's pockets there: rows are progressively
+  blurred and faded toward the edge. The controls themselves still float
+  over the lists in the page's own layer (as bar content, XCUITest could
+  not hit the add bar's text view, and typing cost more). The window server
+  draws the effect; Attic re-renders nothing. `atticScrollEdgeEffect(_:)`
+  sets `.soft` (or hides it). Measured in the SDK and in-process: a pocket
+  needs a SwiftUI `ScrollView` under a bar that draws something (no pocket
+  for a clear bar, `safeAreaInset` or `contentMargins`), so
+  `AtticScrollEdgeBar` draws an imperceptible fill; AppKit scroll views
+  (the note editor) and SwiftUI's `TextEditor` get none, and AppKit's
+  `NSScrollEdgeEffectStyle` exists only for title-bar and split-view
+  accessories. Notes keeps round 13's behaviour.
+- **`AtticScrollEdgeLab`**: a preview's developer panel (Motion Lab,
+  "Scroll edges") switches between **System soft edge** (the default) and
+  **Clean cut** (round 13: no bars, the lists' own mask cuts rows at the
+  controls' bands), to feel both. Only a preview identity
+  (`AtticMotionLab.isAvailable`) can leave the system soft edge: the
+  switch, the stored choice and the `ATTIC_UI_TEST_SCROLL_EDGES` override
+  are all gated on it, and the official and every other identity always
+  resolve to the system soft edge.
+- B's edge fade (`AtticEdgeBlur.edgeVisible`) is removed: the system's
+  effect fades the edges, and the clean cut is round 13's mask.
+- **`AtticReorderLiftModifier`**: the lifted card is opaque, in the panel's
+  own colour (`fill(design:)`), no longer the pop-over fill.
+- **`AtticTaskRow`**: hover is a tint only; the actions button is the
+  keyboard's row's only (`showsActionsButton(forced:keyboardFocused:)`), so
+  nothing moves as the pointer passes.
+- No token, colour, radius or type style changed.

@@ -370,13 +370,15 @@ final class SettingsPhase1Tests: XCTestCase {
         XCTAssertEqual(Set(result.keys), [
             "appearance", "palette", "surface", "tint", "tint_length", "reveal_corner", "reveal_delay",
             "hide_delay", "corner_size", "panel_width", "haptics", "animations", "launch_at_login",
-            "quick_capture", "quick_capture_shortcut"
+            "quick_capture", "quick_capture_shortcut",
+            // Control audit item 10: the hover rule, and the displays it can name (read only).
+            "reveal_on_hover", "reveal_modifier", "reveal_displays", "reveal_display_ids", "displays"
         ])
         XCTAssertEqual(result["quick_capture"] as? Bool, true)
         XCTAssertEqual(result["quick_capture_shortcut"] as? String, "⌃⌥Space", "reported, read only")
         XCTAssertEqual(result["corner_size"] as? Double, 52)
         XCTAssertEqual(result["haptics"] as? Bool, true)
-        XCTAssertEqual(result["animations"] as? String, "full")
+        XCTAssertEqual(result["animations"] as? String, "lively")
         XCTAssertEqual(result["launch_at_login"] as? Bool, true, "reported, read only")
         XCTAssertThrowsError(try tools.call(name: "get_settings", arguments: ["palette": "amethyst"]))
     }
@@ -390,7 +392,7 @@ final class SettingsPhase1Tests: XCTestCase {
             "corner_size": 28, "panel_width": 360, "haptics": false, "animations": "reduced"
         ]))
         XCTAssertEqual(settings.animations, .reduced)
-        settings.animations = .full
+        settings.animations = .lively
         XCTAssertEqual(settings.appearance, .dark)
         XCTAssertEqual(settings.panelTheme, .seaGlass)
         XCTAssertEqual(settings.panelSurfaceStyle, .frosted)

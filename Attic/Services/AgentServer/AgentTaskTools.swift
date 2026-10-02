@@ -231,6 +231,32 @@ final class AgentTaskTools {
                 "required": ["id"],
                 "additionalProperties": false
             ]
+        ],
+        [
+            "name": "move_subtask",
+            "title": "Move Attic Subtask",
+            "description": "Move a subtask to another main task, or make it a main task of its own, as the person's Move to Task… and Make Standalone Task do. It keeps its id, title, state, priority, tags, date and its own files; files attached to its old main task stay there. Moved, it goes to the end of the new task's subtasks; the new task must be an unfinished main task (not the subtask's own). Made standalone (parent_id null), it goes right below its old main task, in Later when that task is in Later. Subtasks stay one level deep: a task with subtasks never becomes a subtask. One undoable step. Returns the task.",
+            "annotations": [
+                "readOnlyHint": false,
+                "destructiveHint": false,
+                "idempotentHint": true,
+                "openWorldHint": false
+            ],
+            "inputSchema": [
+                "type": "object",
+                "properties": [
+                    "id": [
+                        "type": "string",
+                        "description": "Subtask id returned by list_tasks (with parent_id)."
+                    ],
+                    "parent_id": [
+                        "type": ["string", "null"],
+                        "description": "The main task to move it to, or null to make it a main task of its own."
+                    ]
+                ],
+                "required": ["id", "parent_id"],
+                "additionalProperties": false
+            ]
         ]
     ]
 
@@ -388,6 +414,37 @@ final class AgentTaskTools {
             ]
         ],
         [
+            "name": "restore_items",
+            "title": "Restore Several Attic Items",
+            "description": "Bring several items back from Recently Deleted as one undoable step, as the person's Restore Selected does: each with its subtasks, attachments and links. Items that can't come back (a subtask whose main task is still deleted, unless it is in the same request) stay in Recently Deleted and are listed with the reason; the rest are restored. Nothing is ever deleted permanently.",
+            "annotations": [
+                "readOnlyHint": false,
+                "destructiveHint": false,
+                "idempotentHint": false,
+                "openWorldHint": false
+            ],
+            "inputSchema": [
+                "type": "object",
+                "properties": [
+                    "items": [
+                        "type": "array",
+                        "minItems": 1,
+                        "items": [
+                            "type": "object",
+                            "properties": [
+                                "kind": ["type": "string", "enum": AtticItemKind.allCases.map(\.rawValue)],
+                                "id": ["type": "string", "description": "The item's UUID, from list_deleted."]
+                            ],
+                            "required": ["kind", "id"],
+                            "additionalProperties": false
+                        ]
+                    ]
+                ],
+                "required": ["items"],
+                "additionalProperties": false
+            ]
+        ],
+        [
             "name": "list_deleted",
             "title": "List Recently Deleted",
             "description": "List what is in Recently Deleted, newest first, with when each item will be removed for good.",
@@ -485,12 +542,14 @@ final class AgentTaskTools {
         case "update_task": try updateTask(arguments)
         case "delete_task": try deleteTask(arguments)
         case "duplicate_task": try duplicateTask(arguments)
+        case "move_subtask": try moveSubtask(arguments)
         case "list_notes": try listNotes(arguments)
         case "create_note": try createNote(arguments)
         case "update_note": try updateNote(arguments)
         case "delete_note": try deleteNote(arguments)
         case "delete_item": try deleteItem(arguments)
         case "restore_item": try restoreItem(arguments)
+        case "restore_items": try restoreItems(arguments)
         case "list_deleted": try listDeleted(arguments)
         case "list_tags": try listTags(arguments)
         case "update_tags": try updateTags(arguments)
@@ -680,6 +739,26 @@ final class AgentTaskTools {
             throw AgentToolError.storeFailure(library.lastFailure?.message ?? store.lastErrorMessage ?? "Unknown error.")
         }
         return try encode(["task": serialize(copy)])
+    }
+
+    /// Move to Task… and Make Standalone Task (control audit item 5).
+    private func moveSubtask(_ arguments: [String: Any]) throws -> String {
+        let task = try findTask(arguments)
+        guard task.parentID != nil, store.parent(of: task) != nil else {
+            throw AgentToolError.invalidArguments("Only a subtask can be moved; this is a main task.")
+        }
+        guard arguments.keys.contains("parent_id") else {
+            throw AgentToolError.invalidArguments("parent_id is required: a main task id, or null to make it a main task.")
+        }
+        var newParentID: UUID?
+        if let raw = arguments["parent_id"], !(raw is NSNull) {
+            guard let string = raw as? String, let id = UUID(uuidString: string) else {
+                throw AgentToolError.invalidArguments("parent_id must be a main task UUID or null.")
+            }
+            newParentID = id
+        }
+        try perform { library.moveSubtask(task.id, toTask: newParentID) }
+        return try encode(["task": serialize(store.task(withID: task.id) ?? task)])
     }
 
     private func findTask(_ arguments: [String: Any], includingDoneLog: Bool = false) throws -> TaskItem {
@@ -1004,6 +1083,28 @@ final class AgentTaskTools {
         }
         try performLibrary { library.restore(ref) }
         return try encode(["restored": ref.id.uuidString, "kind": ref.kind.rawValue])
+    }
+
+    /// Restore Selected (control audit item 11), one step.
+    private func restoreItems(_ arguments: [String: Any]) throws -> String {
+        guard let raw = arguments["items"] as? [[String: Any]], !raw.isEmpty else {
+            throw AgentToolError.invalidArguments("items must be a non-empty array of {kind, id}.")
+        }
+        // The same (kind, id) listed twice is one item.
+        var seen = Set<AtticItemRef>()
+        let refs = try raw.map { try itemRef(from: $0, field: "Each item") }.filter { seen.insert($0).inserted }
+        if let missing = refs.first(where: { library.state(of: $0) != .deleted }) {
+            throw AgentToolError.invalidArguments("No \(missing.kind.rawValue) with id \(missing.id.uuidString) is in Recently Deleted. Nothing was restored.")
+        }
+        let report = library.restoreRecentlyDeleted(items: refs, attachments: [])
+        let failed = Set(report.failures.compactMap(\.item))
+        return try encode([
+            "restored": refs.filter { !failed.contains($0) }.map { ["kind": $0.kind.rawValue, "id": $0.id.uuidString] },
+            "failed": report.failures.compactMap { failure -> [String: Any]? in
+                guard let item = failure.item else { return nil }
+                return ["kind": item.kind.rawValue, "id": item.id.uuidString, "reason": failure.message]
+            }
+        ])
     }
 
     private func listDeleted(_ arguments: [String: Any]) throws -> String {

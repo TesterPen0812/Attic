@@ -162,6 +162,12 @@ enum PerformanceSignposts {
         guard echoes else { return }
         print(String(format: "ATTIC_EVENT %.4f ", CACurrentMediaTime()) + text())
     }
+    /// An input the on-screen performance gate drove (`Scripts/perf_onscreen.zsh`):
+    /// printed beside the frames, so the gate can check that its synthetic
+    /// input reached the app. Nothing without the frame monitor.
+    static func noteInput(_ text: @autoclosure () -> String) {
+        echo(text())
+    }
     private static var pageChoice: OSSignpostIntervalState?
     private static var pageBuild: OSSignpostIntervalState?
     private static var settle: OSSignpostIntervalState?

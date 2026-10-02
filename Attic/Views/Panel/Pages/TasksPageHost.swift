@@ -9,6 +9,13 @@ final class TasksPageState: ObservableObject {
     private var model: TasksPageModel?
     /// The last Search request the page acted on (`PanelUIState.searchRequest`).
     var handledSearchRequest: UInt64 = 0
+    /// Where the page remembers its page and views across relaunch (L7);
+    /// nil keeps them for the session only.
+    let memory: TasksPageMemory?
+
+    init(memory: TasksPageMemory? = nil) {
+        self.memory = memory
+    }
 
     /// The page model, made once over the app's command layer (the same
     /// undo history agents use), or over a library of its own when the
@@ -16,7 +23,7 @@ final class TasksPageState: ObservableObject {
     func model(for store: TaskStore, toasts: PanelToastCenter?) -> TasksPageModel {
         if let model, model.store === store, toasts == nil || model.toasts === toasts { return model }
         let library = store.commandLibrary ?? AtticLibrary(tasks: store)
-        let made = TasksPageModel(library: library, toasts: toasts)
+        let made = TasksPageModel(library: library, toasts: toasts, memory: memory)
         model = made
         return made
     }
@@ -61,6 +68,12 @@ struct TasksPageHost: View {
             )
         )
         .equatable()
+        // Swipe to close (owner, 2026-10-01): a swipe toward the panel's
+        // edge past the last page that way is the panel's, unless pinned.
+        .onAppear { [settings, uiState] in
+            model.pagerSwipe.closeCorner = { settings.corner }
+            model.pagerSwipe.canClose = { !uiState.isPanelPinned }
+        }
         // Edit mode holds the panel only for the page being shown (round
         // 5): an editor left open behind Notes never keeps Notes up.
         .onChange(of: isCurrent) { _, current in

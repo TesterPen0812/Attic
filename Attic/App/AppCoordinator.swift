@@ -380,6 +380,10 @@ final class AppCoordinator: ObservableObject {
     private let newTaskHotKey: GlobalHotKey
     private let performanceRoot: URL?
     private let isPerformanceSeedOnly: Bool
+    /// A preview identity with its own on-disk store: the menu offers Load
+    /// Demo Data (`AtticDemoData`).
+    let demoDataAllowed: Bool
+    private let demoContainer: ModelContainer?
     private var performanceSignalSource: (any DispatchSourceSignal)?
     private var performancePhaseIndex = 0
 
@@ -505,7 +509,30 @@ final class AppCoordinator: ObservableObject {
             try? TasksPagePreview.seedCaughtUp(in: container)
         }
         #endif
+        // Preview builds only (owner, 2026-10-01): a fresh preview identity
+        // opens on demo content, written into its own empty store once.
+        let demoDataAllowed = !inMemoryStore && performanceRoot == nil && !usesCanvasUITestPersistence
+            && !isUITesting && !isRunningTests && !runtime.isGalleryLaunch
+            && AtticDemoData.isAllowed(bundleIdentifier: runtime.bundleIdentifier)
+        var demoSeeded = false
+        if demoDataAllowed {
+            let defaults = runtime.makeSettingsDefaults()
+            if !defaults.bool(forKey: AtticDemoData.seededKey), AtticDemoData.storeIsEmpty(container) {
+                do {
+                    demoSeeded = try AtticDemoData.seed(into: container, bundleIdentifier: runtime.bundleIdentifier) > 0
+                } catch {
+                    NSLog("Attic demo data: %@", error.localizedDescription)
+                }
+            }
+            defaults.set(true, forKey: AtticDemoData.seededKey)
+        }
+        self.demoDataAllowed = demoDataAllowed
+        self.demoContainer = demoDataAllowed ? container : nil
         let (store, noteStore) = runtime.makeItemStores(container: container, performanceRoot: performanceRoot)
+        if demoSeeded {
+            let bundleIdentifier = runtime.bundleIdentifier
+            Task { @MainActor in await AtticDemoData.attachFiles(to: noteStore, bundleIdentifier: bundleIdentifier) }
+        }
         let canvasStore = CanvasStore(container: container)
         let canvasViewDefaults = runtime.isUnitTestHost ? nil : runtime.makeSettingsDefaults()
         if isUITesting,
@@ -524,6 +551,12 @@ final class AppCoordinator: ObservableObject {
             recoveryURL: runtime.noteRecoveryURL
         )
         let uiState = PanelUIState()
+        // The Tasks page's page and views across relaunch (L7), in the
+        // identity's own defaults; a UI test starts from none.
+        let tasksMemory = runtime.isUnitTestHost ? nil : TasksPageMemory(defaults: runtime.makeSettingsDefaults())
+        if isUITesting, let tasksMemory {
+            TasksPageMemory.removedKeys.forEach { tasksMemory.defaults.removeObject(forKey: $0) }
+        }
         let loginItemService = LoginItemService()
         // Local-only disables cloud services, not authenticated loopback MCP.
         // Each bundle identity owns its credential; previews never reuse Daily's.
@@ -566,7 +599,8 @@ final class AppCoordinator: ObservableObject {
             canvasSession: canvasSession,
             noteDraft: noteDraft,
             settings: settings,
-            uiState: uiState
+            uiState: uiState,
+            tasksMemory: tasksMemory
         )
 
         self.settings = settings
@@ -930,6 +964,24 @@ final class AppCoordinator: ObservableObject {
 
     /// The menu-bar Search: the Tasks page's Done search, focused (⌘K
     /// search arrives with the command palette in a later phase).
+    /// Preview builds only: adds the demo tasks and notes that are not in
+    /// this preview identity's store yet, and shows them.
+    func loadDemoData() {
+        guard demoDataAllowed, let demoContainer else { return }
+        let bundleIdentifier = Bundle.main.bundleIdentifier
+        do {
+            try AtticDemoData.seed(into: demoContainer, bundleIdentifier: bundleIdentifier)
+        } catch {
+            NSLog("Attic demo data: %@", error.localizedDescription)
+            return
+        }
+        store.refresh()
+        noteStore.refresh()
+        let notes = noteStore
+        Task { @MainActor in await AtticDemoData.attachFiles(to: notes, bundleIdentifier: bundleIdentifier) }
+        showPanel()
+    }
+
     func showSearch() {
         // The panel takes the keyboard, but not for the add bar: a late add
         // bar focus request would take it back from the search field.

@@ -108,9 +108,51 @@ final class AppSettings: ObservableObject {
         static let pinnedSubtaskWindowFrame = "pinnedSubtaskWindowFrame"
         static let hapticsEnabled = "hapticsEnabled"
         static let animations = "animations"
+        static let motionLabFeel = "motionLabFeel"
+        static let motionLabTuning = "motionLabTuning"
         static let quickCaptureEnabled = "quickCaptureEnabled"
         static let quickCaptureKeyCode = "quickCaptureKeyCode"
         static let quickCaptureModifiers = "quickCaptureModifiers"
+        static let revealOnHover = "revealOnHover"
+        static let revealModifier = "revealModifier"
+        static let revealDisplays = "revealDisplays"
+        static let revealDisplayIDs = "revealDisplayIDs"
+    }
+
+    /// Hovering in the corner reveals the panel (control audit item 10).
+    /// On by default; off, the panel opens only explicitly (the menu bar
+    /// icon, quick capture, New Note).
+    @Published var revealOnHover: Bool {
+        didSet { defaults.set(revealOnHover, forKey: Key.revealOnHover) }
+    }
+
+    /// A key that must be held as the pointer arrives in the corner.
+    @Published var revealModifier: RevealModifier {
+        didSet { defaults.set(revealModifier.rawValue, forKey: Key.revealModifier) }
+    }
+
+    /// Every display's corner, or only the chosen displays'.
+    @Published var revealDisplays: RevealDisplays {
+        didSet { defaults.set(revealDisplays.rawValue, forKey: Key.revealDisplays) }
+    }
+
+    /// The chosen displays (`AtticDisplay.id`), sorted. A display that is
+    /// not connected keeps its place, so it answers again when it returns.
+    @Published var revealDisplayIDs: [String] {
+        didSet {
+            let normalized = Array(Set(revealDisplayIDs.filter { !$0.isEmpty })).sorted()
+            if normalized != revealDisplayIDs {
+                revealDisplayIDs = normalized
+            } else {
+                defaults.set(revealDisplayIDs, forKey: Key.revealDisplayIDs)
+            }
+        }
+    }
+
+    /// The hover rule the corner monitor applies.
+    var cornerRevealPolicy: CornerRevealPolicy {
+        CornerRevealPolicy(revealsOnHover: revealOnHover, modifier: revealModifier, displays: revealDisplays,
+                           selectedDisplayIDs: Set(revealDisplayIDs))
     }
 
     /// The global quick capture shortcut is claimed (round 10: Settings ›
@@ -177,14 +219,56 @@ final class AppSettings: ObservableObject {
         didSet { defaults.set(hapticsEnabled, forKey: Key.hapticsEnabled) }
     }
 
-    /// Full springs or Reduced motion (round 9, owner item 26). Reduced,
-    /// like macOS Reduce Motion, turns every movement into a crossfade or
-    /// an instant change. Full by default.
+    /// Lively (the default) or Subtle springs, or Reduced motion (round 9,
+    /// owner item 26; owner 2026-10-01). Reduced, like macOS Reduce Motion
+    /// (which forces it whatever is chosen), turns every movement into a
+    /// crossfade or an instant change. A change here also drops any Motion
+    /// Lab feel or edit, so the last control touched wins.
     @Published var animations: AtticAnimationLevel {
         didSet {
             defaults.set(animations.rawValue, forKey: Key.animations)
             AtticMotionPreference.level = animations
+            guard oldValue != animations else { return }
+            clearMotionLabChoice()
         }
+    }
+
+    /// The feel in use and the values in use. They follow Animations
+    /// (Lively or Subtle) unless the Motion Lab (preview builds only, owner
+    /// 2026-09-30) has chosen a feel or edited the values. Outside the lab
+    /// nothing stored is read or written, so the release identity only ever
+    /// follows Animations.
+    @Published private(set) var motionFeel: AtticMotionFeel
+
+    @Published var motionTuning: AtticMotionTuning {
+        didSet {
+            AtticMotionTuning.current = motionTuning
+            guard motionLabAvailable, !appliesLevelTuning,
+                  let data = try? JSONEncoder().encode(motionTuning) else { return }
+            defaults.set(data, forKey: Key.motionLabTuning)
+        }
+    }
+
+    /// True while Animations, not the lab, is setting the tuning.
+    private var appliesLevelTuning = false
+
+    /// Back to the Animations level's feel, forgetting the lab's choice.
+    private func clearMotionLabChoice() {
+        if motionLabAvailable { defaults.removeObject(forKey: Key.motionLabFeel); defaults.removeObject(forKey: Key.motionLabTuning) }
+        appliesLevelTuning = true
+        defer { appliesLevelTuning = false }
+        motionFeel = animations.feel
+        motionTuning = animations.feel.tuning
+    }
+
+    let motionLabAvailable: Bool
+
+    /// Chooses a feel in the Motion Lab: its values replace any edits.
+    func chooseMotionFeel(_ feel: AtticMotionFeel) {
+        guard motionLabAvailable else { return }
+        motionFeel = feel
+        defaults.set(feel.rawValue, forKey: Key.motionLabFeel)
+        motionTuning = feel.tuning
     }
 
     @Published var panelCornerSize: Double {
@@ -280,8 +364,10 @@ final class AppSettings: ObservableObject {
 
     private let defaults: UserDefaults
 
-    init(defaults: UserDefaults = .standard) {
+    init(defaults: UserDefaults = .standard, motionLabAvailable: Bool = AtticMotionLab.isAvailable,
+         previewOverrides: AtticPreviewOverrides = .current) {
         self.defaults = defaults
+        self.motionLabAvailable = motionLabAvailable
         cloudSyncStartupErrorMessage = nil
         corner = ScreenCorner(rawValue: defaults.string(forKey: Key.corner) ?? "") ?? .topRight
         let storedDelay = defaults.object(forKey: Key.revealDelay) as? Double
@@ -336,6 +422,10 @@ final class AppSettings: ObservableObject {
         isAgentAccessEnabled = (defaults.object(forKey: Key.isAgentAccessEnabled) as? Bool) ?? false
         hapticsEnabled = (defaults.object(forKey: Key.hapticsEnabled) as? Bool) ?? true
         quickCaptureEnabled = (defaults.object(forKey: Key.quickCaptureEnabled) as? Bool) ?? true
+        revealOnHover = (defaults.object(forKey: Key.revealOnHover) as? Bool) ?? true
+        revealModifier = RevealModifier(rawValue: defaults.string(forKey: Key.revealModifier) ?? "") ?? .none
+        revealDisplays = RevealDisplays(rawValue: defaults.string(forKey: Key.revealDisplays) ?? "") ?? .all
+        revealDisplayIDs = Array(Set((defaults.stringArray(forKey: Key.revealDisplayIDs) ?? []).filter { !$0.isEmpty })).sorted()
         if let code = defaults.object(forKey: Key.quickCaptureKeyCode) as? Int,
            let mask = defaults.object(forKey: Key.quickCaptureModifiers) as? Int, code >= 0, mask >= 0 {
             let stored = GlobalHotKeyCombination(keyCode: UInt32(code), modifiers: UInt32(mask))
@@ -344,9 +434,26 @@ final class AppSettings: ObservableObject {
         } else {
             quickCaptureShortcut = .newTask
         }
-        let storedAnimations = AtticAnimationLevel(rawValue: defaults.string(forKey: Key.animations) ?? "") ?? .full
-        animations = storedAnimations
-        AtticMotionPreference.level = storedAnimations
+        // An earlier build stored "full" (now Lively) or "reduced".
+        let storedAnimations = AtticAnimationLevel.migrated(from: defaults.string(forKey: Key.animations))
+        if defaults.string(forKey: Key.animations) == "full" {
+            defaults.set(storedAnimations.rawValue, forKey: Key.animations)
+        }
+        // A preview's A/B switch (`ATTIC_UI_TEST_MOTION`) forces the level and
+        // the feel for this launch and stores nothing.
+        let forcedMotion = previewOverrides.motion
+        let level = forcedMotion?.level ?? storedAnimations
+        animations = level
+        AtticMotionPreference.level = level
+        let storedFeel = forcedMotion?.feel
+            ?? (motionLabAvailable ? AtticMotionFeel(rawValue: defaults.string(forKey: Key.motionLabFeel) ?? "") : nil)
+        motionFeel = storedFeel ?? level.feel
+        let storedTuning = motionLabAvailable && forcedMotion == nil
+            ? defaults.data(forKey: Key.motionLabTuning).flatMap { try? JSONDecoder().decode(AtticMotionTuning.self, from: $0) }
+            : nil
+        let tuning = storedTuning ?? (storedFeel ?? level.feel).tuning
+        motionTuning = tuning
+        AtticMotionTuning.current = tuning
         panelCornerSize = Self.clamp(
             defaults.object(forKey: Key.panelCornerSize) as? Double ?? PanelCornerSize.defaultValue,
             to: PanelCornerSize.min...PanelCornerSize.max,

@@ -84,9 +84,9 @@ struct SettingsPanelMiniature: View {
             AtticControlGroup {
                 HStack(spacing: 0) {
                     AtticRaisedButton(systemName: "pin", label: "Pin",
-                                      glyphOffsetY: AtticRaisedButtonMetrics.pinGlyphOffsetY, emphasisedGlyph: true) {}
+                                      glyphOffsetY: AtticRaisedButtonMetrics.pinGlyphOffsetY, emphasisedGlyph: true, flat: true) {}
                     Spacer(minLength: AtticSpacing.betweenControls)
-                    AtticPageButton(items: Self.pages, selection: .constant(0), pinnedOpen: false)
+                    AtticPageButton(items: Self.pages, selection: .constant(0), pinnedOpen: false, flat: true)
                 }
             }
             .padding(chrome)

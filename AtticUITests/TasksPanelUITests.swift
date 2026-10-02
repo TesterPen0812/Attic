@@ -85,9 +85,10 @@ final class TasksPanelUITests: XCTestCase {
         XCTAssertFalse(row("Plan the spring trip").exists)
     }
 
-    /// Whatever page Tasks was left on, the panel opens on Now: hidden
-    /// with Esc and shown again from the menu-bar item, three times.
-    func testThePanelAlwaysOpensOnNow() throws {
+    /// The panel opens on the page Tasks was left on (L7, follow-up part 2;
+    /// before, always Now): hidden with Esc and shown again from the
+    /// menu-bar item, three times.
+    func testThePanelOpensOnThePageLastUsed() throws {
         for page in ["backlog", "done", "backlog"] {
             tab(page).click()
             waitFor(tab(page).isSelected, "\(page) is shown")
@@ -103,9 +104,8 @@ final class TasksPanelUITests: XCTestCase {
             XCTAssertTrue(show.waitForExistence(timeout: 3))
             show.click()
             XCTAssertTrue(pin.waitForExistence(timeout: 3), "Show Attic reveals the panel")
-            waitFor(tab("now").isSelected, "the panel opens on Now")
-            XCTAssertFalse(tab(page).isSelected)
-            waitFor(row("Book dentist").exists, "Now's list shows")
+            waitFor(tab(page).isSelected, "the panel opens on \(page), where it was left")
+            XCTAssertFalse(tab("now").isSelected)
         }
     }
 

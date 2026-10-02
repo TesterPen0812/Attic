@@ -114,6 +114,23 @@ final class TasksPageUITests: XCTestCase {
 
     // MARK: - Add bar
 
+    /// The add bar sits in the bottom bar's zone under the system soft edge,
+    /// and a click needs a hit point on it (CI, 2026-10-01: the lists' bars,
+    /// at the pager's level, left the add bar none). Fails with the window's
+    /// accessibility hierarchy attached, to see what covers it.
+    func testTheAddBarHasAHitPointUnderTheSystemSoftEdge() throws {
+        continueAfterFailure = true
+        XCTAssertTrue(addBar.waitForExistence(timeout: 5))
+        let hittable = addBar.isHittable
+        if !hittable {
+            let attachment = XCTAttachment(string: window.debugDescription)
+            attachment.name = "window hierarchy"
+            attachment.lifetime = .keepAlways
+            add(attachment)
+        }
+        XCTAssertTrue(hittable, "the add bar has a hit point: \(addBar.frame)")
+    }
+
     func testTheAddBarUnderstandsShorthandAndKeepsFocusForTheNextTask() throws {
         XCTAssertTrue(addBar.waitForExistence(timeout: 5))
         addBar.click()
@@ -421,7 +438,13 @@ final class TasksPageUITests: XCTestCase {
 
     // MARK: - Round 3: date, tags and priority without the shorthand
 
-    private func menuItem(_ title: String) -> XCUIElement { app.menuItems[title] }
+    /// AppKit appends a native badge to the accessibility title with ", ".
+    /// Keep the command boundary so Delete cannot match Delete 3 Tasks.
+    private func menuItems(_ title: String) -> XCUIElementQuery {
+        app.menuItems.matching(NSPredicate(format: "title == %@ OR title BEGINSWITH %@", title, title + ", "))
+    }
+
+    private func menuItem(_ title: String) -> XCUIElement { menuItems(title).firstMatch }
 
     /// The strip over the add bar (owner fix 5 A2; round 6, item 18): it
     /// shows with a draft; each button shows what the task will get, picked
@@ -454,8 +477,9 @@ final class TasksPageUITests: XCTestCase {
 
         priority.click()
         let high = app.buttons.matching(NSPredicate(format: "label CONTAINS %@", "High")).firstMatch
-        XCTAssertTrue(high.waitForExistence(timeout: 3), "Priority offers No Priority, Medium and High")
-        XCTAssertFalse(app.buttons.matching(NSPredicate(format: "label == %@", "Low")).firstMatch.exists, "no Low")
+        XCTAssertTrue(high.waitForExistence(timeout: 3), "Priority offers all four")
+        XCTAssertTrue(app.buttons.matching(NSPredicate(format: "label CONTAINS %@", "Low")).firstMatch.exists,
+                      "Low is offered (follow-up part 2)")
         high.click()
         waitFor((priority.value as? String) == "High", "the Priority button shows High")
 
@@ -539,7 +563,8 @@ final class TasksPageUITests: XCTestCase {
         barButton("Set priority of 2 tasks").click()
         let high = app.menuItems.matching(NSPredicate(format: "title BEGINSWITH %@", "High")).firstMatch
         XCTAssertTrue(high.waitForExistence(timeout: 3), "its priority menu opens")
-        XCTAssertFalse(app.menuItems.matching(NSPredicate(format: "title == %@", "Low")).firstMatch.exists, "no Low")
+        XCTAssertTrue(app.menuItems.matching(NSPredicate(format: "title BEGINSWITH %@", "Low")).firstMatch.exists,
+                      "Low is offered to a mixed selection (follow-up part 2)")
         high.click()
         waitFor(label("Call the plumber").contains("high priority") && label("Email beta testers").contains("high priority"),
                 "the bar set both to High")
@@ -555,8 +580,8 @@ final class TasksPageUITests: XCTestCase {
     /// A menu item on screen with this title: an open pop-up or context
     /// menu's, never the menu bar's own (those have no size until opened).
     private func openItem(_ title: String) -> XCUIElement {
-        let items = app.menuItems.matching(NSPredicate(format: "title == %@", title)).allElementsBoundByIndex
-        return items.first { $0.frame.width > 0 && $0.frame.height > 0 } ?? app.menuItems[title]
+        let items = menuItems(title).allElementsBoundByIndex
+        return items.first { $0.frame.width > 0 && $0.frame.height > 0 } ?? menuItem(title)
     }
 
     /// Waits until the row stops moving (a page's slide has ended).
@@ -581,16 +606,23 @@ final class TasksPageUITests: XCTestCase {
     func testShiftCommandIOpensTheTasksActions() throws {
         select("Email beta testers")
         app.typeKey("i", modifierFlags: [.command, .shift])
-        let moveDown = menuItem("Move Down")
-        XCTAssertTrue(moveDown.waitForExistence(timeout: 3), "⇧⌘I opens the task's actions")
+        let more = menuItem("More")
+        XCTAssertTrue(more.waitForExistence(timeout: 3), "⇧⌘I opens the task's actions")
         for title in ["Complete", "Start Working", "Edit Title", "Date", "Tags", "Priority", "Move to Later",
-                      "Add Subtask", "Move Up", "Copy", "Duplicate", "Delete"] {
+                      "Add Subtask", "Copy", "Duplicate", "More", "Delete"] {
             XCTAssertTrue(menuItem(title).exists, "the menu offers \(title)")
         }
         XCTAssertLessThan(row("Email beta testers").frame.minY, row("Book dentist").frame.minY, "above Book dentist at first")
+        // The rarer file and reorder commands sit under More (follow-up
+        // part 2, L5).
+        openItem("More").hover()
+        XCTAssertTrue(openItem("Move Down").waitForExistence(timeout: 3), "More holds Move Down")
+        waitFor(openItem("Move Down").frame.width > 0, "More's submenu opens")
+        XCTAssertTrue(openItem("Open Files…").exists && openItem("Move Up").exists, "and Open Files… and Move Up")
         openItem("Move Down").click()
         waitFor(!menuItem("Move Down").exists, "the menu closes")
-        waitFor(row("Email beta testers").frame.minY > row("Book dentist").frame.minY, "Move Down moved it one place down")
+        waitFor(row("Email beta testers").exists && row("Email beta testers").frame.minY > row("Book dentist").frame.minY,
+                "Move Down moved it one place down")
         select("Email beta testers")
         app.typeKey("i", modifierFlags: [.command, .shift])
         XCTAssertTrue(menuItem("Duplicate").waitForExistence(timeout: 3))
@@ -951,6 +983,19 @@ final class TasksPageUITests: XCTestCase {
 
     private func waitForPage(_ page: String, _ message: String, file: StaticString = #filePath, line: UInt = #line) {
         waitFor(tab(page).isSelected && isOnScreen(landmark(page)), message, file: file, line: line)
+        if !(tab(page).isSelected && isOnScreen(landmark(page))) {
+            // Part 2 CI: a Done → Later click twice left Done shown. Keep
+            // the tabs' frames, the window's and the app's state for the
+            // next look.
+            let state = XCTAttachment(string: """
+                app state: \(app.state.rawValue); window: \(window.exists ? "\(window.frame)" : "gone")
+                \(["now", "backlog", "done"].map { "\($0): \(tab($0).frame) selected=\(tab($0).isSelected)" }.joined(separator: "\n"))
+                \(window.debugDescription)
+                """)
+            state.name = "tabs-on-failure"
+            state.lifetime = .keepAlways
+            add(state)
+        }
         for other in ["now", "backlog", "done"] where other != page {
             XCTAssertFalse(isOnScreen(landmark(other)), "\(message): \(other) is not shown", file: file, line: line)
         }
@@ -962,10 +1007,13 @@ final class TasksPageUITests: XCTestCase {
         let pages = ["now", "backlog", "done"]
         for from in pages {
             for to in pages where to != from {
+                // The frames clicked, kept for a failure (part 2 CI).
+                let start = "\(tab(from).frame) in \(window.frame)"
                 tab(from).click()
-                waitForPage(from, "on \(from)")
+                waitForPage(from, "on \(from) (clicked \(start))")
+                let target = "\(tab(to).frame) in \(window.frame)"
                 tab(to).click()
-                waitForPage(to, "a click on \(to) from \(from) lands on \(to)")
+                waitForPage(to, "a click on \(to) from \(from) lands on \(to) (clicked \(target))")
             }
         }
     }

@@ -17,7 +17,7 @@ enum UndoHistoryID: Hashable {
 }
 
 /// What happened when a step was undone or redone.
-enum UndoOutcome: Equatable {
+enum UndoOutcome: Equatable, Error {
     /// The store confirmed the change.
     case applied
     /// The store refused or failed to save; nothing changed and the step can

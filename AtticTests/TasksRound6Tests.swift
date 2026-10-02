@@ -99,10 +99,12 @@ final class TasksRound6Tests: XCTestCase {
         hosted.press("f", keyCode: 3, modifiers: .command)
         XCTAssertTrue(hosted.searchHasKeyboard, "⌘F again after Esc: \(String(describing: hosted.window.firstResponder))")
         hosted.press("\u{1B}", keyCode: 53)
-        // Not on Now: ⌘F there is the menu's.
+        // On Now too since follow-up part 2 (item 6): Now's own Find.
         hosted.go(to: .now)
         hosted.press("f", keyCode: 3, modifiers: .command)
-        XCTAssertFalse(hosted.searchHasKeyboard, "⌘F is Done's")
+        XCTAssertTrue(hosted.searchHasKeyboard, "⌘F is Now's Find")
+        XCTAssertNotNil(hosted.window.contentView.flatMap { AtticTabsSearchField.searchField(in: $0, placeholder: "Search Now") })
+        hosted.press("\u{1B}", keyCode: 53)
     }
 
     /// A click on Done's magnifier, with the add bar holding the keyboard:
@@ -518,10 +520,10 @@ final class TasksRound6ComposerTests: XCTestCase {
 
     // MARK: Low priority (owner item 19)
 
-    func testLowIsOfferedOnlyWhileATaskHasIt() {
-        XCTAssertEqual(TaskPriority.choices(keeping: []), [.none, .medium, .high])
-        XCTAssertEqual(TaskPriority.choices(keeping: [.high, .medium]), [.none, .medium, .high])
-        XCTAssertEqual(TaskPriority.choices(keeping: [.low]), [.none, .low, .medium, .high], "ticked until changed")
+    /// Follow-up part 2 (option A) lifts round 7's rule: Low has its grey
+    /// ↓ now, so every priority menu offers all four.
+    func testEveryPriorityIsOffered() {
+        XCTAssertEqual(TaskPriority.choices, [.none, .low, .medium, .high])
         XCTAssertEqual(TaskPriority.none.pickerTitle, "No Priority")
     }
 }

@@ -17,17 +17,17 @@ extension AtticLibrary {
             guard let copies = self.tasks.duplicate(taskIDs: ids), !copies.isEmpty else { return nil }
             created = copies
             let newIDs = copies.map(\.id)
+            // The copies and the subtasks they were made with.
+            let owned = FamilyOwnership(liveFamilyMembers(of: newIDs))
             return UndoStep(
                 name: ids.count == 1 ? "Duplicate Task" : "Duplicate \(ids.count) Tasks",
                 undoOutcome: { [weak self] in
                     guard let self else { return .obsolete }
-                    if self.tasks.delete(taskIDs: newIDs) { return .applied }
-                    return newIDs.allSatisfy { self.tasks.task(withID: $0) != nil } ? .failed : .obsolete
+                    return self.deleteFamiliesFromHistory(newIDs, owning: owned)
                 },
                 redoOutcome: { [weak self] in
                     guard let self else { return .obsolete }
-                    if self.tasks.restoreDeleted(taskIDs: newIDs) { return .applied }
-                    return newIDs.allSatisfy { self.state(of: AtticItemRef(.task, $0)) == .deleted } ? .failed : .obsolete
+                    return self.restoreFamiliesFromHistory(newIDs, owning: owned)
                 }
             )
         }
@@ -75,18 +75,18 @@ extension AtticLibrary {
     func deleteListedTasks(_ ids: [UUID], in history: UndoHistoryID = .tasks) -> CommandOutcome {
         let serial = tasks.errorSerial
         let deleted = undo.perform(in: history) {
-            guard tasks.delete(taskIDs: ids, includingDoneLog: true) else { return nil }
+            guard deleteFamiliesNow(ids, includingDoneLog: true) else { return nil }
+            // What this delete took, to keep Redo from taking more.
+            let owned = FamilyOwnership(recordedMembers(of: ids))
             return UndoStep(
                 name: ids.count == 1 ? "Delete Task" : "Delete \(ids.count) Tasks",
                 undoOutcome: { [weak self] in
                     guard let self else { return .obsolete }
-                    if self.tasks.restoreDeleted(taskIDs: ids) { return .applied }
-                    return ids.allSatisfy { self.state(of: AtticItemRef(.task, $0)) == .deleted } ? .failed : .obsolete
+                    return self.restoreFamiliesFromHistory(ids, owning: owned)
                 },
                 redoOutcome: { [weak self] in
                     guard let self else { return .obsolete }
-                    if self.tasks.delete(taskIDs: ids, includingDoneLog: true) { return .applied }
-                    return ids.allSatisfy { self.tasks.listedTask(withID: $0) != nil } ? .failed : .obsolete
+                    return self.deleteFamiliesFromHistory(ids, owning: owned, includingDoneLog: true)
                 }
             )
         }

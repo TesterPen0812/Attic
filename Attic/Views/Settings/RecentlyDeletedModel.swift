@@ -1,5 +1,6 @@
 import Combine
 import Foundation
+import SwiftUI
 
 /// One line of Recently Deleted: an item a delete hid (a task with its
 /// subtasks, a note with its attachments, a canvas) or an attachment
@@ -156,6 +157,35 @@ enum RecentlyDeletedPresentation {
         count == 1 ? String(localized: "1 item") : String(localized: "\(count) items")
     }
 
+    /// The selection's line: "3 selected".
+    static func selectedPhrase(_ count: Int) -> String {
+        String(localized: "\(count) selected")
+    }
+
+    static func restoredPhrase(_ count: Int) -> String {
+        count == 1 ? String(localized: "Restored 1 item") : String(localized: "Restored \(count) items")
+    }
+
+    /// A row's commands, counted when they act on several.
+    static func restoreTitle(count: Int) -> String {
+        count == 1 ? String(localized: "Restore") : String(localized: "Restore \(count) Items")
+    }
+
+    static func deleteTitle(count: Int) -> String {
+        count == 1 ? String(localized: "Delete Permanently…") : String(localized: "Delete \(count) Items Permanently…")
+    }
+
+    static func deleteConfirmationTitle(count: Int) -> String {
+        count == 1 ? String(localized: "Delete Permanently?") : String(localized: "Delete \(count) Items Permanently?")
+    }
+
+    /// Why some of a Restore Selected stayed.
+    static func restoreFailure(count: Int, reason: String) -> String {
+        count == 1
+            ? String(localized: "1 item couldn’t be restored: \(reason)")
+            : String(localized: "\(count) items couldn’t be restored. The first: \(reason)")
+    }
+
     /// The confirmation's words: what goes, and that it can't come back.
     static func emptyConfirmation(count: Int) -> String {
         count == 1
@@ -184,19 +214,39 @@ final class RecentlyDeletedModel: ObservableObject {
         let tone: AtticGroupMessage.Tone
     }
 
-    /// What an Empty confirmation shows and, if confirmed, removes: exactly
-    /// the entries listed when it was asked for, never more.
+    /// What a permanent-deletion confirmation shows and, if confirmed,
+    /// removes: exactly the entries it counted when it was asked for, never
+    /// more. Empty All… counts everything here; Delete Permanently… the
+    /// selected entries (control audit item 11).
     struct EmptyRequest: Equatable {
+        enum Scope: Equatable { case all, selected }
         let selection: RecentlyDeletedSelection
+        var scope: Scope = .all
         var count: Int { selection.count }
+        var title: String {
+            scope == .all ? String(localized: "Empty Recently Deleted?") : RecentlyDeletedPresentation.deleteConfirmationTitle(count: count)
+        }
+        var confirmTitle: String { scope == .all ? String(localized: "Empty") : String(localized: "Delete Permanently") }
         var confirmationText: String { RecentlyDeletedPresentation.emptyConfirmation(count: count) }
     }
 
-    @Published private(set) var entries: [RecentlyDeletedEntry] = []
-    @Published var query = ""
+    @Published private(set) var entries: [RecentlyDeletedEntry] = [] {
+        didSet { pruneSelection() }
+    }
+    @Published var query = "" {
+        didSet { if query != oldValue { pruneSelection() } }
+    }
     @Published private(set) var message: Message?
-    /// Set while the Empty confirmation is shown.
+    /// Set while a permanent-deletion confirmation is shown.
     @Published private(set) var emptyRequest: EmptyRequest?
+    /// The selected entries' ids (control audit item 11): only listed
+    /// entries stay selected, so a search never hides what an action
+    /// would touch.
+    @Published private(set) var selection: Set<String> = []
+    /// Where ⇧-click and ⇧↑ ⇧↓ grow the selection from.
+    private var selectionAnchor: String?
+    /// The entry the keyboard's ↑ ↓ are on (the list keeps it in view).
+    @Published private(set) var cursor: String?
 
     let library: AtticLibrary?
     private let now: () -> Date
@@ -211,6 +261,83 @@ final class RecentlyDeletedModel: ObservableObject {
 
     var sections: [RecentlyDeletedPresentation.Section] {
         RecentlyDeletedPresentation.sections(entries, query: query)
+    }
+
+    /// The listed entries, in the order the page shows them.
+    var listedEntries: [RecentlyDeletedEntry] { sections.flatMap(\.entries) }
+
+    /// The selected entries, in list order.
+    var selectedEntries: [RecentlyDeletedEntry] { listedEntries.filter { selection.contains($0.id) } }
+
+    // MARK: - Selection (control audit item 11)
+
+    /// A click on a row: it alone; ⌘-click adds or removes it; ⇧-click
+    /// selects the run from the anchor to it.
+    func click(_ entry: RecentlyDeletedEntry, command: Bool = false, shift: Bool = false) {
+        let listed = listedEntries.map(\.id)
+        if shift, let anchor = selectionAnchor, let from = listed.firstIndex(of: anchor), let to = listed.firstIndex(of: entry.id) {
+            let run = Set(listed[min(from, to)...max(from, to)])
+            selection = command ? selection.union(run) : run
+        } else if command {
+            if selection.contains(entry.id) { selection.remove(entry.id) } else { selection.insert(entry.id) }
+            selectionAnchor = entry.id
+        } else {
+            selection = [entry.id]
+            selectionAnchor = entry.id
+        }
+        cursor = entry.id
+    }
+
+    /// VoiceOver's Select and Deselect: adds or removes one entry.
+    func toggleSelection(_ entry: RecentlyDeletedEntry) {
+        click(entry, command: true)
+        AccessibilityNotification.Announcement(RecentlyDeletedPresentation.selectedPhrase(selection.count)).post()
+    }
+
+    /// ⌘A: every listed entry.
+    func selectAll() {
+        let listed = listedEntries.map(\.id)
+        selection = Set(listed)
+        selectionAnchor = listed.first
+        cursor = listed.first
+    }
+
+    func clearSelection() {
+        selection = []
+        selectionAnchor = nil
+    }
+
+    /// ↑ ↓ move the selection to the next entry; with ⇧ they grow it from
+    /// the anchor.
+    func moveCursor(by step: Int, extending: Bool = false) {
+        let listed = listedEntries
+        guard !listed.isEmpty else { return }
+        let index: Int
+        if let cursor, let current = listed.firstIndex(where: { $0.id == cursor }) {
+            index = min(max(current + step, 0), listed.count - 1)
+        } else {
+            index = step >= 0 ? 0 : listed.count - 1
+        }
+        let entry = listed[index]
+        if extending, selectionAnchor != nil {
+            click(entry, shift: true)
+        } else {
+            click(entry)
+        }
+    }
+
+    /// What a row's command acts on: the selection when the row is part of
+    /// it, otherwise the row alone (the selection is left as it is).
+    func targets(for entry: RecentlyDeletedEntry) -> [RecentlyDeletedEntry] {
+        selection.count > 1 && selection.contains(entry.id) ? selectedEntries : [entry]
+    }
+
+    private func pruneSelection() {
+        let listed = Set(listedEntries.map(\.id))
+        let kept = selection.intersection(listed)
+        if kept != selection { selection = kept }
+        if let anchor = selectionAnchor, !listed.contains(anchor) { selectionAnchor = nil }
+        if let cursor, !listed.contains(cursor) { self.cursor = nil }
     }
 
     /// ⌘Z on the page undoes only a restore made here (the library history
@@ -269,14 +396,52 @@ final class RecentlyDeletedModel: ObservableObject {
         reload()
     }
 
-    /// Empty…: captures exactly what the page lists now, for the
-    /// confirmation to show and, if confirmed, to remove.
-    func requestEmpty() {
-        let selection = RecentlyDeletedSelection(
-            items: entries.compactMap { if case let .item(item) = $0.source { item } else { nil } },
-            attachments: entries.compactMap { if case let .attachment(attachment) = $0.source { attachment } else { nil } }
+    /// Restore (one entry) or Restore Selected (several, ⌘R): several come
+    /// back as one step, so one ⌘Z sends them all back. Whatever could not
+    /// come back stays listed (and selected), with the reason.
+    func restore(_ targets: [RecentlyDeletedEntry]) {
+        guard let library, !targets.isEmpty else { return }
+        guard targets.count > 1 else { return restore(targets[0]) }
+        let report = library.restoreRecentlyDeleted(
+            items: targets.compactMap { if case let .item(item) = $0.source { item.ref } else { nil } },
+            attachments: targets.compactMap { if case let .attachment(attachment) = $0.source { attachment } else { nil } }
         )
-        emptyRequest = selection.isEmpty ? nil : EmptyRequest(selection: selection)
+        message = report.failures.first.map { failure in
+            Message(text: RecentlyDeletedPresentation.restoreFailure(count: report.failures.count, reason: failure.message), tone: .error)
+        }
+        reload()
+        if report.restored > 0 {
+            AccessibilityNotification.Announcement(RecentlyDeletedPresentation.restoredPhrase(report.restored)).post()
+        }
+    }
+
+    /// ⌘R and the selection's Restore.
+    func restoreSelected() {
+        restore(selectedEntries)
+    }
+
+    /// Empty All…: captures exactly what the page holds now (listed or
+    /// not), for the confirmation to show and, if confirmed, to remove.
+    func requestEmpty() {
+        emptyRequest = request(for: entries, scope: .all)
+    }
+
+    /// Delete Permanently… (the selection's, a row's menu, ⌘⌫): the
+    /// confirmation counts exactly these entries.
+    func requestDelete(_ targets: [RecentlyDeletedEntry]) {
+        emptyRequest = request(for: targets, scope: .selected)
+    }
+
+    func requestDeleteSelected() {
+        requestDelete(selectedEntries)
+    }
+
+    private func request(for targets: [RecentlyDeletedEntry], scope: EmptyRequest.Scope) -> EmptyRequest? {
+        let selection = RecentlyDeletedSelection(
+            items: targets.compactMap { if case let .item(item) = $0.source { item } else { nil } },
+            attachments: targets.compactMap { if case let .attachment(attachment) = $0.source { attachment } else { nil } }
+        )
+        return selection.isEmpty ? nil : EmptyRequest(selection: selection, scope: scope)
     }
 
     func cancelEmpty() {

@@ -28,6 +28,10 @@ struct TasksPage: View {
     var chrome = TasksPageChrome()
 
     @Environment(\.atticDesign) private var design
+    /// How the lists meet the floating controls (owner, 2026-10-01: the
+    /// system's soft scroll edge; a preview can switch to round 13's clean
+    /// cut to compare).
+    @ObservedObject private var scrollEdges = AtticScrollEdgeLab.shared
     @StateObject private var focusTracker = AtticKeyboardFocusTracker()
     @FocusState private var focusedRow: AtticRowFocusID?
     @State private var drag: TasksDrag?
@@ -38,8 +42,13 @@ struct TasksPage: View {
     @State private var selectionPicker: SelectionPicker?
     /// The add bar's strip has a picker open.
     @State private var composerPickerOpen = false
-    /// "Started tasks stay together" (review 10), while it shows.
+    /// "Started tasks stay together" (review 10), while it shows, and
+    /// what it says.
     @State private var boundaryHint = false
+    @State private var boundaryHintText = String(localized: "Started tasks stay together")
+    /// The rows a keyboard or menu reorder just exchanged, held invisible
+    /// for a moment so they dissolve into their new places (round 13).
+    @State private var reorderFade: Set<UUID> = []
     @State private var boundaryHintTask: Task<Void, Never>?
     /// A Done row the keyboard moved to, to bring into view.
     @State private var doneReveal: TasksPageModel.ScrollRequest?
@@ -61,8 +70,14 @@ struct TasksPage: View {
     /// Each built list's scroll proxy, for `show` (not observed).
     @State private var listProxies = TasksListProxies()
 
-    /// The Done page's search field has the keyboard.
+    /// The page's Find field (Done's search, Now's and Later's Find) has
+    /// the keyboard.
     @State private var searchFocused = false
+    /// The page the search field was opened on: moving to another page
+    /// lets it go (each page keeps its own query).
+    @State private var searchTab: TasksTab = .done
+    /// The View Options button's AppKit view: ⌥⌘V opens its menu there.
+    @State private var viewOptionsAnchor = AtticMenuAnchor.Holder()
     /// A person's swipe between the pages (round 9: the page owns the
     /// gesture): the model's, so every navigation route cancels it. Not
     /// observed: only the pages' placement redraws while a swipe moves.
@@ -124,13 +139,30 @@ struct TasksPage: View {
     /// The page, its overlays, its keys and its monitors.
     private var frame: some View {
         // One full-height viewport (owner fix 8, review 9): the lists run
-        // to the panel's top edge and fade under the tabs and the header,
-        // which float above them; at rest the first row sits where it
-        // always did (a top content margin, not a moved row).
+        // to the panel's top and bottom edges under the floating controls;
+        // at rest the first row sits where it always did.
         ZStack(alignment: .top) {
+            // The lists meet the controls by their own edges: the system's
+            // soft scroll edge under per-list bars (`tasksListEdges`), or
+            // round 13's clean cut by the list's mask.
             pager
+            // The controls float over the lists in both, in the page's own
+            // layer.
             tabsBand
             tabs
+        }
+        // The neighbours are drawn only as they slide in, never past the
+        // page's edge (the panel's shadow margin lies beyond it). Here, not
+        // on the pager, so the lists still run under the controls.
+        .clipped()
+
+        // A reorder's lifted card, over everything on the page.
+        // (A preview's `ATTIC_UI_TEST_LIFT=off` leaves the layer out: an A/B
+        // switch.)
+        .overlay {
+            if AtticPreviewOverrides.current.drawsLiftLayer {
+                TasksLiftedCardLayer(lift: pointer.liftedCard) { lift in liftedCardRow(lift) }
+            }
         }
         // Files dropped on a row attach to its task (the "Add to page"
         // label shows on the row under them): one destination for the page,
@@ -166,6 +198,12 @@ struct TasksPage: View {
         // The page's own view, so a press is placed from its event (its
         // window, its location), never from a remembered hover point.
         .background(TasksPointerProbe(pointer: pointer).accessibilityHidden(true))
+        #if DEBUG
+        // UI tests read how many drags out began and ended.
+        .overlay(alignment: .topLeading) {
+            if Self.exposesDragOutState { TasksDragOutStateProbe() }
+        }
+        #endif
     }
 
     private func pageAppeared() {
@@ -184,30 +222,48 @@ struct TasksPage: View {
         // keystroke (round 4).
         DispatchQueue.main.async { model.warmUpShorthand() }
         #if DEBUG
-        // Capture seam (`ATTIC_UI_TEST_META=date|tags`): a row's date or
-        // tag list opens by itself for hands-off captures.
-        if let kind = ProcessInfo.processInfo.environment["ATTIC_UI_TEST_META"] {
-            DispatchQueue.main.asyncAfter(deadline: .now() + 2.5) {
+        // Capture seam (`ATTIC_UI_TEST_META=date|tags`, optionally
+        // `@<seconds>`, 2.5 by default): a row's date or tag list opens by
+        // itself for hands-off captures and the on-screen performance gate,
+        // which also closes it after `ATTIC_UI_TEST_META_CLOSE` seconds.
+        let environment = ProcessInfo.processInfo.environment
+        if let seam = environment["ATTIC_UI_TEST_META"] {
+            let parts = seam.split(separator: "@", maxSplits: 1).map(String.init)
+            let kind = parts.first ?? seam
+            let delay = parts.count > 1 ? Double(parts[1]) ?? 2.5 : 2.5
+            let close = environment["ATTIC_UI_TEST_META_CLOSE"].flatMap(Double.init)
+            DispatchQueue.main.asyncAfter(deadline: .now() + delay) {
                 let rows = model.rows(for: model.tab)
                 if kind == "date", let row = rows.first(where: { $0.model.due != nil && $0.model.state != .inProgress }) {
+                    PerformanceSignposts.noteInput("picker-open date")
                     openMeta(.date, on: row.id)
                 } else if kind == "tags", let row = rows.first(where: { !$0.model.tags.isEmpty }) {
+                    PerformanceSignposts.noteInput("picker-open tags")
                     openMeta(.tags, on: row.id)
+                } else {
+                    return
+                }
+                if let close {
+                    DispatchQueue.main.asyncAfter(deadline: .now() + close) {
+                        PerformanceSignposts.noteInput("picker-close")
+                        metaPopover = nil
+                    }
                 }
             }
         }
         #endif
         if findMonitor == nil {
             findMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { event in
-                findPressed(event) || searchEscapePressed(event) || editorEscapePressed(event) || pageEscapePressed(event)
-                    || undoPressed(event) || taskShortcutPressed(event) ? nil : event
+                findPressed(event) || viewOptionsPressed(event) || searchEscapePressed(event) || searchDownPressed(event)
+                    || editorEscapePressed(event) || pageEscapePressed(event) || undoPressed(event) || taskShortcutPressed(event)
+                    ? nil : event
             }
         }
         if scrollMonitor == nil {
             // The pager reads scroll events itself (round 9): a
             // horizontal swipe over the lists is its own, every other
             // scroll goes on to the list (or the panel) untouched.
-            scrollMonitor = NSEvent.addLocalMonitorForEvents(matching: .scrollWheel) { [model, pointer, swipe, bottomStack] event in
+            scrollMonitor = NSEvent.addLocalMonitorForEvents(matching: .scrollWheel) { [model, pointer, swipe, bottomStack, listProxies] event in
                 // Gated before any state is read (round 10): a page that
                 // is not shown, or not in this event's visible window,
                 // takes nothing, not even a gesture it owned before.
@@ -215,7 +271,11 @@ struct TasksPage: View {
                       event.window === window else { return event }
                 let allowed = Self.pagerTakes(event, pointer: pointer, band: swipe.band,
                                               stackHeight: bottomStack.height, pageShown: model.isPageShown)
-                return model.pagerScrolled(TasksPagerSwipe.Sample(event), allowed: allowed) ? nil : event
+                if event.phase == .began { PerformanceSignposts.noteInput("scroll-began") }
+                let sample = TasksPagerSwipe.Sample(event)
+                let consumed = model.pagerScrolled(sample, allowed: allowed)
+                listProxies.apply(TasksScrollerRule.change(phase: sample.phase, momentum: sample.momentum, axis: swipe.axis))
+                return consumed ? nil : event
             }
         }
         if rightClickMonitor == nil {
@@ -310,6 +370,10 @@ struct TasksPage: View {
         }
         .onChange(of: model.tab) { _, _ in
             cancelTransientState()
+            // Each page keeps its own query; the field lets the keyboard go
+            // with the page it searched (read when the change lands: a
+            // search opened on the new page meanwhile keeps it).
+            if searchFocused, searchTab != model.tab { searchFocused = false }
             // The last page's row keeps no claim on the keyboard.
             focusedRow = nil
             // A tab, a key, ⌘1–3, `show` or Search: the page goes straight
@@ -318,7 +382,11 @@ struct TasksPage: View {
         }
         // What the scroll monitor reads that lives in the view.
         .onChange(of: design.reduceMotion, initial: true) { _, reduced in swipe.reduced = reduced }
-        .onChange(of: drag != nil, initial: true) { _, dragging in swipe.dragActive = dragging }
+        .onChange(of: drag != nil, initial: true) { _, dragging in
+            swipe.dragActive = dragging
+            // However the drag ended (a page change, a hide), the card goes.
+            if !dragging { pointer.liftedCard.end() }
+        }
         .onChange(of: pagerBand, initial: true) { _, band in swipe.band = band }
         // Done's rows come into view as the keyboard reaches them too.
         .onChange(of: focusedRow) { _, focus in
@@ -372,6 +440,7 @@ struct TasksPage: View {
             return nil
         }
         let sections = model.sections(for: tab)
+        if model.viewOptions(for: tab).filters, model.trimmedQuery(for: tab).isEmpty { top += AtticLayout.rowPitch }
         for row in sections.open {
             if row.id == id { return (top, rowHeight(id, in: tab)) }
             top += rowHeight(row.id, in: tab)
@@ -413,15 +482,29 @@ struct TasksPage: View {
     // MARK: - Tabs
 
     /// Now · Later · Done under the header, in place of a title and the
-    /// page pill. The tabs stay put while the pages swipe under them. On
-    /// Done a magnifier sits at the line's end (owner item 17, card B of
-    /// v22); while searching, the search field takes the line.
+    /// page pill. The tabs stay put while the pages swipe under them. A
+    /// magnifier sits at the line's end on every page (owner item 17, card B
+    /// of v22; follow-up part 2, item 6), and on Now and Later View Options
+    /// after it; while searching, the search field takes the line.
     private var tabs: some View {
         ZStack(alignment: .topLeading) {
+            // ⌥⌘V's anchor where View Options sits, mounted whatever the
+            // line shows: Find takes the line, and the button and its own
+            // anchor with it (GPT-6.1's review: the key did nothing then).
+            AtticMenuAnchor(holder: viewOptionsAnchor)
+                .frame(width: AtticControlSize.smallMinWidth, height: AtticControlSize.smallHeight)
+                .padding(.trailing, lineEndInset)
+                .frame(maxWidth: .infinity, alignment: .trailing)
+                .padding(.top, tabsTop + (AtticLayout.pageTabsHeight - AtticControlSize.smallHeight) / 2)
+                .allowsHitTesting(false)
+                .accessibilityHidden(true)
             if searchShown {
-                AtticTabsSearchField(placeholder: model.searchPlaceholder, text: $model.doneSearch,
+                AtticTabsSearchField(placeholder: model.searchPlaceholder(for: model.tab),
+                                     text: Binding(get: { model.searchQuery(for: model.tab) },
+                                                   set: { model.setSearchQuery($0, for: model.tab) }),
                                      isFocused: $searchFocused, onEscape: endSearch)
-                    .accessibilityIdentifier("tasks-done-search")
+                    .accessibilityIdentifier(model.tab == .done ? "tasks-done-search" : "tasks-find")
+                    .id(model.tab)
                     // Centred on the tabs' line.
                     .padding(.top, tabsTop - (AtticControlSize.smallHeight - AtticLayout.pageTabsHeight) / 2)
                     // It comes in from the magnifier's end, the tabs leave
@@ -439,13 +522,22 @@ struct TasksPage: View {
                     .accessibilityIdentifier("tasks-page-tabs")
                     .padding(.leading, AtticLayout.pageTabsX)
                     Spacer(minLength: 0)
-                    if model.tab == .done {
-                        // Its glyph ends where the rows' dates end. ⌘F too.
-                        AtticSmallButton(systemName: "magnifyingglass", label: "Search done tasks (⌘F)", action: beginSearch)
-                            .accessibilityIdentifier("tasks-done-search-button")
-                            .padding(.trailing, max(0, AtticLayout.rowHighlightInset + AtticTaskRowMetrics.dateInset
-                                - (AtticControlSize.smallMinWidth - AtticSmallControlMetrics.iconSize) / 2))
-                            .transition(.opacity)
+                    // Find (⌘F) on every page: Done's magnifier.
+                    AtticSmallButton(systemName: "magnifyingglass",
+                                     label: model.tab == .done ? "Search done tasks (⌘F)" : "Find (⌘F)", action: beginSearch)
+                        .accessibilityIdentifier(model.tab == .done ? "tasks-done-search-button" : "tasks-find-button")
+                        .padding(.trailing, model.tab == .done ? lineEndInset : 0)
+                    if model.tab != .done {
+                        // View Options (⌥⌘V): a second quiet icon, its dot
+                        // while a filter hides tasks.
+                        let view = model.viewOptions(for: model.tab)
+                        AtticMenuButton(systemName: "line.3.horizontal.decrease", label: "View Options (⌥⌘V)",
+                                        commands: { viewCommands(for: model.tab) },
+                                        showsDot: view.filters, value: view.spokenValue)
+                            .accessibilityIdentifier("tasks-view-options")
+                            .padding(.trailing, lineEndInset)
+                            // It pops in where it sits (a fade in Calm).
+                            .transition(AtticMotionPreset.popover.transition(reduceMotion: design.reduceMotion, edge: nil))
                     }
                 }
                 .frame(height: AtticLayout.pageTabsHeight)
@@ -459,14 +551,92 @@ struct TasksPage: View {
         // keyboard go with it).
         .animation(searchShown ? AtticMotionPreset.popover.animation(reduceMotion: design.reduceMotion)
                                : AtticMotionPreset.popover.exit(reduceMotion: design.reduceMotion), value: searchShown)
-        .animation(AtticMotionPreset.popover.animation(reduceMotion: design.reduceMotion), value: model.tab == .done)
+        .animation(AtticMotionPreset.popover.animation(reduceMotion: design.reduceMotion, showing: model.tab == .done),
+                   value: model.tab == .done)
         .onChange(of: searchShown) { _, _ in PerformanceSignposts.watchFrames("SearchMotion", seconds: 0.35) }
     }
 
-    /// The Done search is on the tabs' line while it has the keyboard or a
-    /// query (owner item 17); Esc, or clearing and leaving, returns the tabs.
+    /// The last icon's glyph ends where the rows' dates end.
+    private var lineEndInset: CGFloat {
+        max(0, AtticLayout.rowHighlightInset + AtticTaskRowMetrics.dateInset
+            - (AtticControlSize.smallMinWidth - AtticSmallControlMetrics.iconSize) / 2)
+    }
+
+    /// The search is on the tabs' line while it has the keyboard or a
+    /// query (owner item 17; every page since item 6); Esc, or clearing and
+    /// leaving, returns the tabs.
     private var searchShown: Bool {
-        model.tab == .done && (searchFocused || !model.doneSearch.isEmpty)
+        searchFocused || !model.searchQuery(for: model.tab).isEmpty
+    }
+
+    /// View Options (item 6, option A): Show, the priority filter, Sort
+    /// by, Reset View; the system's own menu (type-select, Return,
+    /// VoiceOver), each choice ticked.
+    func viewCommands(for tab: TasksTab) -> [AtticMenuCommand] {
+        let view = model.viewOptions(for: tab)
+        func set(_ change: @escaping (inout TasksViewOptions) -> Void) -> () -> Void {
+            { [model] in
+                var next = model.viewOptions(for: tab)
+                change(&next)
+                model.setViewOptions(next, for: tab)
+            }
+        }
+        var list: [AtticMenuCommand] = [.header(String(localized: "Show"))]
+        let shows: [(TasksViewOptions.Show, String)] = [(.all, String(localized: "All Tasks")),
+                                                        (.dueOrOverdue, String(localized: "Due or Overdue")),
+                                                        (.overdueOnly, String(localized: "Overdue Only"))]
+        list += shows.map { show, title in
+            AtticMenuCommand(verbatim: title, state: view.show == show ? .on : .off, action: set { $0.show = show })
+        }
+        let priorities: [(TasksViewOptions.Priority, String)] = [(.any, String(localized: "Any Priority")),
+                                                                 (.mediumAndHigh, String(localized: "Medium and High")),
+                                                                 (.highOnly, String(localized: "High Only"))]
+        list += priorities.enumerated().map { index, entry in
+            AtticMenuCommand(verbatim: entry.1, startsSection: index == 0, state: view.priority == entry.0 ? .on : .off,
+                             action: set { $0.priority = entry.0 })
+        }
+        list.append(.header(String(localized: "Sort by")))
+        let sorts: [(TasksViewOptions.Sort, String)] = [(.manual, String(localized: "Manual Order")),
+                                                        (.dueDate, String(localized: "Due Date")),
+                                                        (.priority, String(localized: "Priority"))]
+        list += sorts.map { sort, title in
+            AtticMenuCommand(verbatim: title, state: view.sort == sort ? .on : .off, action: set { $0.sort = sort })
+        }
+        list.append(AtticMenuCommand(verbatim: String(localized: "Reset View"), isDisabled: view.isDefault, startsSection: true) {
+            [model] in model.setViewOptions(TasksViewOptions(), for: tab)
+        })
+        return list
+    }
+
+    /// ⌥⌘V, or a click on the button: the menu under the button.
+    private func openViewOptions() {
+        guard model.tab != .done, let anchor = viewOptionsAnchor.view, anchor.window != nil else { return }
+        swipe.cancel()
+        if let open = pointer.openViewOptions {
+            open(anchor)
+            return
+        }
+        AtticNativeMenu.popUp(viewCommands(for: model.tab), in: anchor)
+    }
+
+    /// ⌥⌘V on Now or Later while this page is shown in its key window,
+    /// with no editor or pop-over open (the add bar or Find may have the
+    /// keyboard: the key is never theirs). True when it took the key.
+    private func viewOptionsPressed(_ event: NSEvent) -> Bool {
+        guard Self.answersViewOptions(event: event, pageShown: model.isPageShown, tab: model.tab,
+                                      pageWindow: pointer.view?.window, popoverOpen: AtticTextInput.isPopoverOpen),
+              model.editingTitleID == nil, model.newSubtaskParentID == nil, model.renamingSubtaskID == nil,
+              metaPopover == nil, drag == nil else { return false }
+        openViewOptions()
+        return true
+    }
+
+    /// Whether ⌥⌘V belongs to View Options (pure, tested directly).
+    static func answersViewOptions(event: NSEvent, pageShown: Bool, tab: TasksTab, pageWindow: NSWindow?, popoverOpen: Bool) -> Bool {
+        guard pageShown, tab != .done, !popoverOpen, let pageWindow, event.window === pageWindow, pageWindow.isKeyWindow,
+              event.modifierFlags.intersection([.command, .shift, .option, .control]) == [.command, .option],
+              event.keyCode == 9 || event.charactersIgnoringModifiers?.lowercased() == "v" else { return false }
+        return true
     }
 
     /// The magnifier, ⌘F, typing on the Done page, or the menu bar's
@@ -479,11 +649,13 @@ struct TasksPage: View {
         // No row stays lit behind the search (round 5, the owner's item 16).
         focusedRow = nil
         model.clearSelection()
+        searchTab = model.tab
         searchFocused = true
     }
 
-    /// ⌘F while this page is the one the shell shows, on Done, in its own
-    /// key window, with no pop-over open: the search takes the tabs' line.
+    /// ⌘F while this page is the one the shell shows, on any page (Done's
+    /// search, Now's and Later's Find), in its own key window, with no
+    /// pop-over open: the search takes the tabs' line.
     /// True when it took the key. A Tasks page kept built behind Notes or
     /// Canvas never answers (round 7, R2).
     private func findPressed(_ event: NSEvent) -> Bool {
@@ -536,9 +708,9 @@ struct TasksPage: View {
     /// was left for Esc to do, so it goes on to the panel.
     private func handleEscape(visible: [UUID], current: UUID?) -> Bool {
         if drag != nil { cancelDrag(); return true }
-        if model.doneDetailID != nil { model.doneDetailID = nil; return true }
+        if model.tab == .done, model.doneDetailID != nil { model.doneDetailID = nil; return true }
         // A search left with its query: Esc ends it (the tabs return).
-        if model.tab == .done, !model.doneSearch.isEmpty { endSearch(); return true }
+        if !model.searchQuery(for: model.tab).isEmpty { endSearch(); return true }
         let open = current.flatMap { model.expanded.contains($0) ? $0 : nil }
             ?? (model.expanded.count == 1 ? model.expanded.first.flatMap { visible.contains($0) ? $0 : nil } : nil)
             ?? model.selection.first { model.expanded.contains($0) && visible.contains($0) }
@@ -576,7 +748,7 @@ struct TasksPage: View {
         guard event.type == .keyDown, model.isPageShown, let window = pointer.view?.window, event.window === window,
               window.isKeyWindow, !AtticTextInput.hasKeyboard, model.editingTitleID == nil, model.newSubtaskParentID == nil,
               model.renamingSubtaskID == nil, !addBarFocused, !searchFocused, metaPopover == nil, drag == nil else { return false }
-        let shortcuts = [AtticTaskShortcut.actions, AtticTaskShortcut.copy, AtticTaskShortcut.duplicate]
+        let shortcuts = [AtticTaskShortcut.actions, AtticTaskShortcut.copy, AtticTaskShortcut.duplicate] + AtticTaskShortcut.priorities
         guard let shortcut = shortcuts.first(where: {
             AtticTaskShortcut.matches($0, characters: event.charactersIgnoringModifiers, keyCode: event.keyCode, modifiers: event.modifierFlags)
         }) else { return false }
@@ -599,7 +771,7 @@ struct TasksPage: View {
     /// command never reached the field inside the panel (round 7, found by
     /// the shell test).
     private func searchEscapePressed(_ event: NSEvent) -> Bool {
-        guard searchFocused, model.isPageShown, model.tab == .done, event.keyCode == 53,
+        guard searchFocused, model.isPageShown, event.keyCode == 53,
               event.modifierFlags.intersection([.command, .shift, .option, .control]).isEmpty,
               !AtticTextInput.isPopoverOpen, let window = pointer.view?.window, event.window === window,
               // An input method composing keeps its Esc: it cancels the
@@ -632,9 +804,9 @@ struct TasksPage: View {
         TasksPagerBand(top: listTop - AtticLayout.pageTabsToList / 2, bottomInset: bottomInset)
     }
 
-    /// Whether ⌘F belongs to the Done search (pure, tested directly).
+    /// Whether ⌘F belongs to the page's search (pure, tested directly).
     static func answersFind(event: NSEvent, pageShown: Bool, tab: TasksTab, pageWindow: NSWindow?, popoverOpen: Bool) -> Bool {
-        guard pageShown, tab == .done, !popoverOpen, let pageWindow, event.window === pageWindow, pageWindow.isKeyWindow,
+        guard pageShown, !popoverOpen, let pageWindow, event.window === pageWindow, pageWindow.isKeyWindow,
               event.modifierFlags.intersection([.command, .shift, .option, .control]) == .command,
               event.charactersIgnoringModifiers?.lowercased() == "f" else { return false }
         return true
@@ -643,12 +815,37 @@ struct TasksPage: View {
     /// Esc (or the field's "Esc"): the search ends, the tabs return, and the
     /// Done log shows whole again.
     private func endSearch() {
-        if !model.doneSearch.isEmpty { model.doneSearch = "" }
+        model.setSearchQuery("", for: model.tab)
         searchFocused = false
+    }
+
+    /// ↓ in the search field: the keyboard goes to the first match, so
+    /// Return (the title) and the row's keys work from there; Esc there
+    /// ends the search. Nothing to reach: the field keeps the key.
+    private func searchDownPressed(_ event: NSEvent) -> Bool {
+        guard searchFocused, model.isPageShown, event.keyCode == 125,
+              event.modifierFlags.intersection([.command, .shift, .option, .control]).isEmpty,
+              !AtticTextInput.isPopoverOpen, let window = pointer.view?.window, event.window === window,
+              !Self.isComposing(window.firstResponder), !model.searchQuery(for: model.tab).isEmpty,
+              let first = visibleIDs().first else { return false }
+        searchFocused = false
+        focusTracker.noteKeyboardNavigation()
+        model.selectOnly(first)
+        DispatchQueue.main.async { setFocus(first) }
+        return true
     }
 
     /// Where the lists' first row rests: under the tabs, as before.
     private var listTop: CGFloat { TasksViewport.listTop(tabsTop: tabsTop) }
+
+    private var edgeStyle: AtticScrollEdgeStyle { scrollEdges.style }
+
+    /// The lists' bars' heights under the system soft edge (their scroll
+    /// views' safe area; their content margins are what remains), none for
+    /// the clean cut.
+    private var bars: TasksListBars {
+        edgeStyle == .systemSoft ? TasksListBars(top: listTop, bottom: bottomMargin) : TasksListBars()
+    }
 
     /// The tabs' band owns its clicks (review 9): a row scrolled under it
     /// is not clickable through it. The header above owns its own (the
@@ -707,9 +904,6 @@ struct TasksPage: View {
             }
             .onChange(of: width, initial: true) { _, width in swipe.width = width }
         }
-        // The neighbours are drawn only as they slide in, never past the
-        // page's edge (the panel's shadow margin lies beyond it).
-        .clipped()
     }
 
     /// A page; `drawn` false: kept built but hidden (its list's scroll
@@ -722,8 +916,8 @@ struct TasksPage: View {
             case .done:
                 TasksDonePage(model: model, updates: drawn ? model.cellUpdates : TasksCellUpdates.quiet, store: store,
                               listTop: listTop, bottomClearance: bottomClearance,
-                              bottomMargin: bottomMargin, drawn: drawn,
-                              mask: viewportMask, reveal: $doneReveal,
+                              bottomMargin: bottomMargin, bars: bars, drawn: drawn,
+                              edges: edgeStyle, mask: viewportMask, reveal: $doneReveal,
                               revealRow: { id, proxy in revealRow(id, in: .done, proxy: proxy, animation: nil) },
                               cell: { row in cell(row, tab: .done, group: [], drawn: drawn) },
                               proxies: listProxies,
@@ -750,17 +944,46 @@ struct TasksPage: View {
         let sections = model.sections(for: tab)
         let groups = Dictionary(grouping: rows, by: \.status).mapValues { $0.map(\.id) }
         let travel = design.reduceMotion ? nil : AtticMotionPreset.settle.animation(reduceMotion: false)
+        let view = model.viewOptions(for: tab)
+        let query = model.trimmedQuery(for: tab)
         return ScrollViewReader { proxy in
             ScrollView(.vertical) {
                 LazyVStack(alignment: .leading, spacing: 0) {
+                    // An active filter never hides silently (item 6): what
+                    // is shown, and Show All.
+                    if view.filters, query.isEmpty {
+                        AtticViewLine(summary: view.summary, actionTitle: String(localized: "Show All")) {
+                            model.showAll(on: tab)
+                        }
+                        .accessibilityIdentifier("tasks-view-line")
+                    }
                     ForEach(sections.open) { row in
                         cell(row, tab: tab, group: groups[row.status] ?? [], drawn: drawn)
                             .id(row.id)
+                            .opacity(reorderFade.contains(row.id) ? 0.001 : 1)
+                            // A moved row pops back in with the feel (1, none, in Calm).
+                            .scaleEffect(reorderFade.contains(row.id) ? AtticMotionPreset.settle.hiddenScale(reduceMotion: design.reduceMotion) : 1)
                             // A row added or leaving drops into or rises
                             // out of its place (round 9).
                             .transition(AtticMotionPreset.settle.transition(reduceMotion: design.reduceMotion, edge: .top))
                     }
-                    if sections.open.isEmpty, let message = model.emptyMessage[tab] {
+                    if !query.isEmpty {
+                        // Find's quiet count, or that nothing matches (as on
+                        // Done).
+                        if sections.open.isEmpty {
+                            AtticEmptyLine(text: String(localized: "No tasks on \(tab.title) match “\(query)”."))
+                                .accessibilityIdentifier("tasks-empty-line")
+                        } else if let count = model.listSearchCount(for: tab) {
+                            AtticText(verbatim: String(localized: "\(count.matches) of \(count.total) tasks on \(tab.title)"),
+                                      style: .rowMeta, ink: .helper)
+                                .frame(height: AtticLayout.rowPitch)
+                                .padding(.leading, AtticLayout.textX)
+                                .accessibilityIdentifier("tasks-find-count")
+                        }
+                    } else if sections.open.isEmpty, view.filters {
+                        AtticEmptyLine(text: String(localized: "Nothing in this view"))
+                            .accessibilityIdentifier("tasks-empty-line")
+                    } else if sections.open.isEmpty, let message = model.emptyMessage[tab] {
                         AtticEmptyLine(text: message)
                             .accessibilityIdentifier("tasks-empty-line")
                         // Now is empty and Later has tasks: one quiet step
@@ -796,20 +1019,19 @@ struct TasksPage: View {
                         }
                     }
                 }
-                .animation(travel, value: rows.map(\.id))
+                .animation(reorderFade.isEmpty ? travel : nil, value: rows.map(\.id))
                 // The list's place is kept while its page is not built.
                 .background(TasksScrollKeeper(model: model, tab: tab, proxies: listProxies, drawn: drawn).accessibilityHidden(true))
                 // The clearance past the add bar's zone is room at the end
                 // of the list, not margin (see `TasksViewport.bottomMargin`).
                 .padding(.bottom, bottomClearance - bottomMargin)
             }
-            .contentMargins(.top, listTop, for: .scrollContent)
-            .contentMargins(.bottom, bottomMargin, for: .scrollContent)
-            .contentMargins(.top, listTop, for: .scrollIndicators)
-            .contentMargins(.bottom, bottomClearance, for: .scrollIndicators)
+            .contentMargins(.top, listTop - bars.top, for: .scrollContent)
+            .contentMargins(.bottom, bottomMargin - bars.bottom, for: .scrollContent)
+            .contentMargins(.top, listTop - bars.top, for: .scrollIndicators)
+            .contentMargins(.bottom, bottomClearance - bars.bottom, for: .scrollIndicators)
             .scrollIndicators(.automatic)
-            .scrollEdgeEffectHidden(true, for: .all)
-            .mask { viewportMask }
+            .tasksListEdges(edgeStyle, bars: bars, mask: viewportMask)
             .onChange(of: focusedRow) { _, focus in
                 guard let focus, focus.page == tab.rawValue, rows.contains(where: { $0.id == focus.id }),
                       focusTracker.isKeyboardDriving else { return }
@@ -850,9 +1072,10 @@ struct TasksPage: View {
         }
     }
 
-    /// The viewport's fade (owner fix 8, review 9): by position in the
-    /// viewport, not per row, so an open quick look fades line by line as
-    /// it passes under the tabs and header, or under the add bar.
+    /// Clean cut (round 13, a preview's choice): the viewport's fade, by
+    /// position in the viewport, not per row (owner fix 8, review 9), so an
+    /// open quick look is cut line by line as it passes under the tabs and
+    /// header, or under the add bar. The system soft edge uses no mask.
     private var viewportMask: some View {
         TasksViewportMask(stack: bottomStack, tabsTop: tabsTop, listTop: listTop, bottomInset: bottomInset)
     }
@@ -867,10 +1090,17 @@ struct TasksPage: View {
         // Read when the cell draws (the closures below run in the cell's
         // own body), never captured when the list built it.
         let expanded = { model.expanded.contains(id) && row.status != .done }
+        // Every row drags, out of the panel as a copy (owner-approved,
+        // 2026-10-01); only Now's and Later's manual order reorders. A
+        // sorted view (item 6) and Done have no place to drag to: there the
+        // row's drag group is the row alone, so nothing moves aside, the
+        // release lands it back and commits nothing, and leaving the panel
+        // hands it off (GPT-6.1's review).
+        let reorders = Self.reorders(tab: tab, manual: model.reorders(on: tab))
         TasksReorderCell(
             model: model, updates: drawn ? model.cellUpdates : TasksCellUpdates.quiet, focus: $focusedRow,
-            id: id, tab: tab, group: group, drag: $drag, metaPopover: $metaPopover, fileDropRow: $fileDropRow,
-            enabled: tab != .done && model.editingTitleID != id,
+            id: id, tab: tab, group: reorders ? group : [id], drag: $drag, metaPopover: $metaPopover, fileDropRow: $fileDropRow,
+            enabled: model.editingTitleID != id,
             session: dragSession,
             allowsStart: { [pointer, dragSession] point in
                 // Not the circle column (before the row reports its
@@ -880,9 +1110,15 @@ struct TasksPage: View {
                                                 rowOrigin: pointer.frames[TasksRowID(tab: tab, id: id)]?.origin)
             },
             heights: { rowHeight($0, in: tab) },
-            onBegin: { beginDragSession(in: tab) },
+            onBegin: {
+                beginDragSession(in: tab)
+                if let origin = pointer.frames[TasksRowID(tab: tab, id: id)] {
+                    pointer.liftedCard.begin(id: id, tab: tab, origin: origin)
+                }
+            },
+            onMove: { [pointer] translation in pointer.liftedCard.follow(translation) },
             onEnd: finishDrag,
-            onPushPastGroup: showBoundaryHint
+            onPushPastGroup: { if reorders { showBoundaryHint() } }
         ) { live in
             let isSelected = model.selection.contains(id)
             let run = selectionRun(for: id, in: tab)
@@ -916,12 +1152,14 @@ struct TasksPage: View {
                 .contextMenu { rowMenu(row, tab: tab) }
             }
             .equatable()
-        } below: {
+        } below: { live in
             // Read here, in the cell's own body, as `live.isActive` is.
             let active = model.tab == tab && model.isPageShown
             // A Done log task's details open under its row (Esc or the
             // menu closes them), raised over the list like a pop-over.
-            if model.doneDetailID == id, let detail = model.doneDetail(for: id) {
+            // Only on Done (round 12's identity: Now's "Completed today"
+            // draws the same task, and never opens these).
+            if tab == .done, model.doneDetailID == id, let detail = model.doneDetail(for: id) {
                 TasksDoneDetailView(detail: detail, store: store, restore: {
                     // The details close only once the restore saved; a
                     // failure shows under the row with Retry (round 4).
@@ -931,7 +1169,8 @@ struct TasksPage: View {
                 })
                 .padding(.leading, AtticLayout.textX - AtticPopoverMetrics.padding - AtticPopoverMetrics.rowPadding)
                 .padding(.bottom, AtticSpacing.s8)
-                .transition(AtticMotionPreset.popover.transition(reduceMotion: design.reduceMotion))
+                // Raised from its row: it grows from the row's corner.
+                .transition(AtticMotionPreset.popover.transition(reduceMotion: design.reduceMotion, anchor: .topLeading))
                 .onExitCommand { model.doneDetailID = nil }
             }
             if model.failedSave == .title(id) {
@@ -963,10 +1202,13 @@ struct TasksPage: View {
                     newSubtask: model.newSubtaskParentID == id && active
                         ? AtticTitleEditing(text: $model.newSubtaskTitle, commit: { model.commitNewSubtask() },
                                             cancel: { model.cancelEditing() },
-                                            accessibilityLabel: String(localized: "New subtask of \(row.model.title)"))
-                        : nil
+                                            accessibilityLabel: String(localized: "New subtask of \(row.model.title)"),
+                                            placeholder: String(localized: "Add subtask…"))
+                        : nil,
+                    popover: movePopover(parentID: id, open: live.metaPopover)
                 )
-                .transition(.opacity)
+                // It opens from under its row (a fade in Calm).
+                .transition(AtticMotionPreset.expand.transition(reduceMotion: design.reduceMotion, edge: nil, anchor: .top))
                 if model.subtaskRenameFailed, let renaming = model.renamingSubtaskID,
                    row.subtasks.contains(where: { $0.id == renaming }) {
                     AtticErrorLine(message: String(localized: "Not saved"), onRetry: { _ = model.commitSubtaskRename() })
@@ -988,10 +1230,10 @@ struct TasksPage: View {
     }
 
     /// The quick look opens and closes with the expansion motion (review
-    /// 21); Reduce Motion shows it at once.
+    /// 21, the Motion Lab: `expand`); Reduce Motion shows it at once.
     private func toggleExpanded(_ id: UUID) {
         PerformanceSignposts.watchFrames("QuickLookMotion", seconds: 0.35)
-        withAnimation(design.reduceMotion ? nil : AtticMotionPreset.settle.animation(reduceMotion: false)) {
+        withAnimation(design.reduceMotion ? nil : AtticMotionPreset.expand.animation(reduceMotion: false)) {
             model.toggleExpanded(id)
         }
     }
@@ -1013,6 +1255,7 @@ struct TasksPage: View {
                     model.titleEdit.dismiss(range)
                 },
                 edited: { range, replacement in
+                    model.noteTextEdit()
                     model.titleHistory.willEdit(model.titleEdit, selection: model.titleEditCurrentSelection, range: range, replacement: replacement)
                     model.titleEdit.edited(range, replacement: replacement)
                 },
@@ -1021,8 +1264,8 @@ struct TasksPage: View {
                     var shown = model.titleEdit
                     if shown.markShown(parser: model.parser, caret: caret) { model.titleEdit = shown }
                 },
-                undoDraft: { model.undoTitleEdit() },
-                redoDraft: { model.redoTitleEdit() },
+                undoDraft: { model.taskChangeOwnsUndo ? nil : model.undoTitleEdit() },
+                redoDraft: { model.taskChangeOwnsRedo ? nil : model.redoTitleEdit() },
                 selectionMoved: { model.titleEditSelection = $0 },
                 undoFallback: { model.undo() },
                 redoFallback: { model.redo() }
@@ -1209,8 +1452,8 @@ struct TasksPage: View {
                 model.selectOnly(id)
                 model.beginEditingTitle(id)
             },
-            moveUp: unfinished ? { moveRow(id, by: -1) } : nil,
-            moveDown: unfinished ? { moveRow(id, by: 1) } : nil,
+            moveUp: unfinished && model.reorders(on: tab) ? { moveRow(id, by: -1) } : nil,
+            moveDown: unfinished && model.reorders(on: tab) ? { moveRow(id, by: 1) } : nil,
             addSubtask: unfinished ? { model.beginAddingSubtask(to: id) } : nil,
             copy: { model.copy(model.targets(for: id)) },
             duplicate: { runCommand(on: id) { model.duplicate($0) } },
@@ -1227,26 +1470,22 @@ struct TasksPage: View {
         model.report(command(targets), on: id) { command(targets) }
     }
 
-    /// ⌘Return on a Done page row: a Done log task's details open or close
-    /// in place; a task still in Now's done group opens its files.
+    /// ⌘Return on a Done page row: its details open or close in place, for
+    /// a Done log task and one still in Now's done group alike (follow-up
+    /// part 2, L6: the date, priority and tags a finished task keeps show
+    /// there, with its files).
     private func toggleDetails(_ id: UUID) {
-        if model.doneDetailID == id { model.doneDetailID = nil } else { model.openPage(id) }
-    }
-
-    private func isArchived(_ id: UUID) -> Bool {
-        store.task(withID: id) == nil
+        model.doneDetailID = model.doneDetailID == id ? nil : id
     }
 
     /// VoiceOver's name for `toggleDetails`.
     private func detailsActionName(for id: UUID) -> String {
-        if model.doneDetailID == id { return String(localized: "Close details") }
-        return isArchived(id) ? String(localized: "Show details") : String(localized: "Open files")
+        model.doneDetailID == id ? String(localized: "Close details") : String(localized: "Show details")
     }
 
     /// The right-click menu's name for `toggleDetails`.
     private func detailsMenuTitle(for id: UUID) -> String {
-        if model.doneDetailID == id { return String(localized: "Close Details") }
-        return isArchived(id) ? String(localized: "Show Details") : String(localized: "Open Files…")
+        model.doneDetailID == id ? String(localized: "Close Details") : String(localized: "Show Details")
     }
 
     private func deleteAndMoveFocus(_ ids: [UUID]) {
@@ -1341,36 +1580,41 @@ struct TasksPage: View {
                 menuCommand(key) { model.moveToBacklog($0) }
             })
         }
-        if single, tab != .done {
-            if unfinished {
-                list.append(AtticMenuCommand(verbatim: String(localized: "Add Subtask"), startsSection: true) {
-                    model.beginAddingSubtask(to: menuRowID(key))
-                })
-            }
-            list.append(AtticMenuCommand(verbatim: String(localized: "Open Files…"), shortcut: AtticTaskShortcut.openPage,
-                                         startsSection: !unfinished) {
-                guard !AtticTextInput.ownsCurrentKey else { return }
-                model.openPage(menuRowID(key))
+        // The common actions stay at the top; the rarer file and reorder
+        // commands sit together under More (follow-up part 2, L5), with
+        // the same keys: the keys run them from this one list wherever
+        // they sit (`AtticMenuCommand.command(for:in:)` reads submenus).
+        if single, tab != .done, unfinished {
+            list.append(AtticMenuCommand(verbatim: String(localized: "Add Subtask"), startsSection: true) {
+                model.beginAddingSubtask(to: menuRowID(key))
             })
-            // Reorder (round 10): the same rule as ⌘↑ ⌘↓ and a drag.
-            if unfinished {
-                list.append(AtticMenuCommand(verbatim: String(localized: "Move Up"), shortcut: AtticTaskShortcut.moveUp,
-                                             isDisabled: !canMove(id, by: -1), startsSection: true) {
-                    moveRow(menuRowID(key), by: -1)
-                })
-                list.append(AtticMenuCommand(verbatim: String(localized: "Move Down"), shortcut: AtticTaskShortcut.moveDown,
-                                             isDisabled: !canMove(id, by: 1)) {
-                    moveRow(menuRowID(key), by: 1)
-                })
-            }
         }
-        list.append(AtticMenuCommand(verbatim: String(localized: "Copy"), shortcut: AtticTaskShortcut.copy, startsSection: true) {
+        list.append(AtticMenuCommand(verbatim: String(localized: "Copy"), shortcut: AtticTaskShortcut.copy,
+                                     startsSection: !(single && tab != .done && unfinished)) {
             model.copy(menuTargets(key))
             pointer.endInvocation()
         })
         list.append(AtticMenuCommand(verbatim: String(localized: "Duplicate"), shortcut: AtticTaskShortcut.duplicate) {
             menuCommand(key) { model.duplicate($0) }
         })
+        if single, tab != .done {
+            var more = [AtticMenuCommand(verbatim: String(localized: "Open Files…"), shortcut: AtticTaskShortcut.openPage) {
+                guard !AtticTextInput.ownsCurrentKey else { return }
+                model.openPage(menuRowID(key))
+            }]
+            // Reorder (round 10): the same rule as ⌘↑ ⌘↓ and a drag.
+            if unfinished {
+                more.append(AtticMenuCommand(verbatim: String(localized: "Move Up"), shortcut: AtticTaskShortcut.moveUp,
+                                             isDisabled: !canMove(id, by: -1), startsSection: true) {
+                    moveRow(menuRowID(key), by: -1)
+                })
+                more.append(AtticMenuCommand(verbatim: String(localized: "Move Down"), shortcut: AtticTaskShortcut.moveDown,
+                                             isDisabled: !canMove(id, by: 1)) {
+                    moveRow(menuRowID(key), by: 1)
+                })
+            }
+            list.append(.submenu(String(localized: "More"), more))
+        }
         list.append(AtticMenuCommand(verbatim: single ? String(localized: "Delete") : String(localized: "Delete \(targets.count) Tasks"),
                                      shortcut: AtticTaskShortcut.delete, isDestructive: true, startsSection: true) {
             // A menu's Delete key equivalent never reaches past a field
@@ -1419,12 +1663,12 @@ struct TasksPage: View {
         return list
     }
 
-    /// Priority ▸: No Priority, Medium, High (Low only while every target
-    /// has it, round 7 R6), ticked when every target has it.
+    /// Priority ▸: No Priority, Low, Medium, High with ⌥⌘0–3 (follow-up
+    /// part 2), ticked when every target has it.
     private func priorityCommands(_ key: TasksRowID, targets: [UUID]) -> [AtticMenuCommand] {
         let priorities = Set(targets.compactMap { store.listedTask(withID: $0)?.priority })
-        return TaskPriority.choices(keeping: priorities).map { priority in
-            AtticMenuCommand(verbatim: priority.menuTitle, state: priorities == [priority] ? .on : .off) {
+        return TaskPriority.choices.map { priority in
+            AtticMenuCommand(verbatim: priority.menuTitle, shortcut: priority.shortcut, state: priorities == [priority] ? .on : .off) {
                 menuCommand(key) { model.setPriority(priority, for: $0) }
             }
         }
@@ -1435,7 +1679,7 @@ struct TasksPage: View {
     /// Rename (Return), Move Up and Down among the subtasks in its state
     /// (⌘↑ ⌘↓), Delete (⌫, to Recently Deleted). A failure shows under
     /// the parent row with Retry.
-    private func subtaskCommands(_ subtask: AtticSubtaskModel, of parentID: UUID,
+    func subtaskCommands(_ subtask: AtticSubtaskModel, of parentID: UUID,
                                  in shown: [AtticSubtaskModel]) -> [AtticMenuCommand] {
         let siblings = shown.filter { $0.isDone == subtask.isDone }
         let index = siblings.firstIndex { $0.id == subtask.id }
@@ -1458,6 +1702,18 @@ struct TasksPage: View {
                              isDisabled: index.map { $0 + 1 >= siblings.count } ?? true) {
                 run { model.moveSubtask(subtask.id, by: 1) }
             },
+            // Control audit item 5: to another task, or a task of its own.
+            AtticMenuCommand(verbatim: String(localized: "Move to Task…"), startsSection: true) {
+                openMeta(.move, on: parentID, targets: [subtask.id])
+            },
+            AtticMenuCommand(verbatim: String(localized: "Make Standalone Task")) {
+                run {
+                    let outcome = model.makeStandalone(subtask.id)
+                    // The keyboard follows it to its new row.
+                    if outcome.isApplied { setFocus(subtask.id) }
+                    return outcome
+                }
+            },
             AtticMenuCommand(verbatim: String(localized: "Delete"), shortcut: AtticTaskShortcut.delete, isDestructive: true,
                              startsSection: true) {
                 guard !AtticTextInput.ownsCurrentKey else { return }
@@ -1466,9 +1722,38 @@ struct TasksPage: View {
         ]
     }
 
+    /// Move to Task…'s list, pointing at the subtask's line, while it is
+    /// open on this row (control audit item 5). Choosing a task moves the
+    /// subtask there and closes it; a failure stays in it with Retry.
+    private func movePopover(parentID: UUID, open: TasksMetaPopover?) -> (id: UUID, popover: AtticAnchoredPopover)? {
+        guard let open, open.kind == .move, let subtaskID = open.targets.first else { return nil }
+        let popover = AtticAnchoredPopover(isPresented: metaBinding(.move, id: parentID, open: open)) {
+            AnyView(
+                VStack(alignment: .leading, spacing: 0) {
+                    TaskMovePickerView(choices: model.moveChoices(forSubtask: subtaskID)) { destination in
+                        if model.pickerChange(on: parentID, { model.moveSubtask(subtaskID, toTask: destination) }) {
+                            metaPopover = nil
+                            setFocus(parentID)
+                        }
+                    }
+                    TasksPickerFailureLine(model: model, id: parentID) { metaPopover = nil }
+                }
+                .atticPickerSurface()
+                .onDisappear { model.clearPickerFailure() }
+            )
+        }
+        return (subtaskID, popover)
+    }
+
     /// Whether ⌘↑ (-1) or ⌘↓ (1) can move the row within its group.
     private func canMove(_ id: UUID, by step: Int) -> Bool {
-        guard model.tab != .done, let task = store.task(withID: id), task.status != .done else { return false }
+        guard model.reorders(on: model.tab), let task = store.task(withID: id), task.status != .done else { return false }
+        // A narrowed view moves among what it shows (item 6).
+        if model.narrows(model.tab) {
+            let shown = shownGroup(of: task)
+            guard let index = shown.firstIndex(of: id) else { return false }
+            return shown.indices.contains(index + step)
+        }
         let group = store.orderGroup(of: task)
         guard let index = group.firstIndex(where: { $0.id == id }) else { return false }
         return group.indices.contains(index + step)
@@ -1480,11 +1765,62 @@ struct TasksPage: View {
     private func moveRow(_ id: UUID, by step: Int) {
         guard !AtticTextInput.ownsCurrentKey else { return }
         pointer.endInvocation()
+        // A sorted view has no place to move a task to (item 6): the hint
+        // says how to get one.
+        guard model.reorders(on: model.tab) else {
+            showBoundaryHint(String(localized: "Choose Manual Order to reorder"))
+            return
+        }
         if atGroupEdge(id, step: step) {
             showBoundaryHint()
+        } else if model.narrows(model.tab), let task = store.task(withID: id) {
+            // A filter or Find: one place among the tasks shown.
+            let shown = shownGroup(of: task)
+            guard let index = shown.firstIndex(of: id), shown.indices.contains(index + step) else { return }
+            let move = { model.moveVisible(id, toShownIndex: index + step, in: shown) }
+            reorderWithoutCrossing { model.report(move(), on: id, retry: move) }
         } else {
-            model.report(model.moveBy(id, offset: step), on: id) { model.moveBy(id, offset: step) }
+            reorderWithoutCrossing {
+                model.report(model.moveBy(id, offset: step), on: id) { model.moveBy(id, offset: step) }
+            }
         }
+    }
+
+    /// The rows of `task`'s state as the page shows them (item 6).
+    private func shownGroup(of task: TaskItem) -> [UUID] {
+        model.rows(for: model.tab).filter { $0.status == task.status }.map(\.id)
+    }
+
+    /// Full animation: two rows that exchange places by sliding past each
+    /// other cross while translucent, and their titles and circles collide
+    /// (round 13, review 61). The rows take their new places at once and
+    /// the two that moved dissolve in there; nothing travels through
+    /// another row. Reduced motion already changes places at once.
+    private func reorderWithoutCrossing(_ change: () -> Void) {
+        guard !design.reduceMotion else { change(); return }
+        let before = model.rows(for: model.tab).map(\.id)
+        // The list's placement animation is off while `reorderFade` holds
+        // rows, and both change in this one update.
+        change()
+        let after = model.rows(for: model.tab).map(\.id)
+        reorderFade = Set(after.indices.filter { before.indices.contains($0) && before[$0] != after[$0] }.map { after[$0] })
+        guard !reorderFade.isEmpty else { return }
+        // A run-loop timer in the common modes, not a dispatch block: the
+        // menu runs its command while it is still tracking, and a block
+        // queued from there waited, leaving both rows hidden for good (CI
+        // run 2's recording of a menu Move Down).
+        let fade = $reorderFade
+        let timer = Timer(timeInterval: 0.04, repeats: false) { _ in
+            MainActor.assumeIsolated {
+                // The feel's spring when things spring in; otherwise (Calm,
+                // Reduced) the short fade it always was.
+                let pops = !AtticMotionPreference.reducesMotion && AtticMotionTuning.current.appear == .spring
+                withAnimation(pops ? AtticMotionPreset.settle.animation(reduceMotion: false) : .easeOut(duration: 0.16)) {
+                    fade.wrappedValue = []
+                }
+            }
+        }
+        RunLoop.main.add(timer, forMode: .common)
     }
 
     /// ⇧⌘I, the actions button and VoiceOver's "Show actions": the task's
@@ -1559,9 +1895,9 @@ struct TasksPage: View {
         // keyboard's row, as in a native list (round 5: the owner's Done
         // row stayed lit after a click elsewhere).
         let bandTop = TasksBottomBand.height(stack: bottomStack.height, bottomInset: bottomInset)
-        // A plain click on Done's tabs' line (the search field, or back
-        // into a search already open): no row stays lit (round 7, R3).
-        if model.tab == .done, event.type == .leftMouseDown,
+        // A plain click on the tabs' line (the search field, or back into
+        // a search already open): no row stays lit (round 7, R3).
+        if searchShown, event.type == .leftMouseDown,
            event.modifierFlags.intersection([.command, .shift, .control, .option]).isEmpty,
            let point = pointer.location(of: event), point.y < listTop - AtticLayout.pageTabsToList / 2,
            point.y > layout.headerBottom {
@@ -1596,6 +1932,17 @@ struct TasksPage: View {
         return nil
     }
 
+    /// The quick-look subtask that has the keyboard, with its parent row and
+    /// its commands: the one answer to "does a subtask own this key", read
+    /// from the focus the subtask line itself reports (Tab, a click).
+    private func subtaskKeyboardOwner(visible: [UUID]) -> (parent: UUID, commands: [AtticMenuCommand])? {
+        guard let focused = model.focusedSubtaskID else { return nil }
+        let live = Set(visible)
+        guard let row = model.rows(for: model.tab).first(where: { live.contains($0.id) && $0.subtasks.contains { $0.id == focused } }),
+              let subtask = row.subtasks.first(where: { $0.id == focused }) else { return nil }
+        return (row.id, subtaskCommands(subtask, of: row.id, in: row.subtasks))
+    }
+
     /// The list's keys (spec § Keyboard map, Tasks row): ↑ ↓ move, ⇧↑ ⇧↓
     /// extend, ⌘↑ ⌘↓ reorder, Return edits the title, → and ← open and close
     /// the quick look, Esc closes it or clears a selection, ⌘A selects all,
@@ -1615,9 +1962,9 @@ struct TasksPage: View {
         // Typing on Done faster than the search field takes the keyboard
         // (it appears, then focuses): the letters join the query, never
         // lost (round 8, CI run 3: "inv" became "i").
-        if searchFocused, model.tab == .done, model.isPageShown, modifiers.isEmpty || modifiers == .shift,
+        if searchFocused, model.isPageShown, modifiers.isEmpty || modifiers == .shift,
            Self.startsSearch(press.characters) {
-            model.doneSearch += press.characters
+            model.setSearchQuery(model.searchQuery(for: model.tab) + press.characters, for: model.tab)
             return .handled
         }
         // Every editor keeps its own keys (review 8): the title, a new
@@ -1626,8 +1973,10 @@ struct TasksPage: View {
               !addBarFocused, !searchFocused else { return .ignored }
         // Typing on the Done page starts a search there (owner item 17):
         // the letter is the query's first, the field takes the tabs' line.
+        // Now and Later open Find with ⌘F or the magnifier only (item 6):
+        // their letters may be a draft reaching the add bar a moment late.
         if model.tab == .done, model.isPageShown, modifiers.isEmpty || modifiers == .shift, Self.startsSearch(press.characters) {
-            model.doneSearch = press.characters
+            model.setSearchQuery(press.characters, for: model.tab)
             beginSearch()
             return .handled
         }
@@ -1635,7 +1984,17 @@ struct TasksPage: View {
         // The focused row, or the one selected row when the keyboard is
         // elsewhere in the page (a click on a row in a panel that was not
         // key yet can leave focus on the page's first control).
-        let current = keyboardRow(visible: visible)
+        var current = keyboardRow(visible: visible)
+        // A subtask that has the keyboard (Tab, a click) owns its keys, ahead
+        // of its parent's: SwiftUI hands a key to this page's handler before
+        // the focused subtask's own, so ⌘↑ ⌘↓ and Return would otherwise move
+        // and rename the parent (round 13). Any other key acts from the
+        // parent, as ↑ ↓ and Esc always did.
+        if let owner = subtaskKeyboardOwner(visible: visible) {
+            if AtticMenuCommand.performSubtaskKey(key: press.key, characters: press.characters,
+                                                  modifiers: press.modifiers, in: owner.commands) == .handled { return .handled }
+            current = owner.parent
+        }
         switch press.key {
         case .downArrow, .upArrow:
             let step = press.key == .downArrow ? 1 : -1
@@ -1728,6 +2087,13 @@ struct TasksPage: View {
             cancelDrag()
             return
         }
+        // Out of the panel's window, the reorder becomes a drag to another
+        // app (owner-approved, 2026-10-01): a copy as text, nothing moves.
+        if let location = dragSession.location, let view = pointer.view, let window = view.window,
+           Self.leavesPanel(view.convert(location, to: nil), in: window) {
+            beginDragOut(current, at: location)
+            return
+        }
         guard let location = dragSession.location,
               let scrollView = listScrollView(at: location) else { return }
         let step = TasksDragSession.autoScrollStep(
@@ -1751,6 +2117,38 @@ struct TasksPage: View {
             start: current.startIndex, translation: total, group: current.group, heights: { rowHeight($0, in: tab) }
         )
         drag = next
+    }
+
+    /// Whether a row's drag reorders (Now's and Later's manual order) or
+    /// only carries it out of the panel (a sorted view, Done).
+    nonisolated static func reorders(tab: TasksTab, manual: Bool) -> Bool {
+        tab != .done && manual
+    }
+
+    /// Whether a window point is outside the panel's visible surface (its
+    /// window's frame without the transparent shadow margin).
+    static func leavesPanel(_ windowPoint: CGPoint, in window: NSWindow) -> Bool {
+        let screen = window.convertPoint(toScreen: windowPoint)
+        let surface = (window as? AtticPanel)?.visibleContentFrame ?? window.frame
+        return !surface.contains(screen)
+    }
+
+    /// The reorder left the panel: it ends where it started (nothing moves),
+    /// and the dragged tasks (the whole selection when the row is part of
+    /// it) go on as a copy, as text, Markdown and RTF.
+    private func beginDragOut(_ current: TasksDrag, at location: CGPoint) {
+        let ids = model.selection.contains(current.id) && model.selection.count > 1 ? model.orderedSelection() : [current.id]
+        let export = model.export(ids)
+        cancelDrag()
+        guard let export, let view = pointer.view else { return }
+        if let start = pointer.startDragOut {
+            start(export, location)
+            return
+        }
+        TasksDragOut.begin(export, count: ids.count, from: view, at: location) { [dragSession] in
+            // The drag ate the button's release: the next press starts afresh.
+            dragSession.end()
+        }
     }
 
     /// The list's scroll view under a page point (the page's current tab).
@@ -1778,24 +2176,63 @@ struct TasksPage: View {
         dragSession.timer?.invalidate()
         dragSession.timer = nil
         drag = nil
+        pointer.liftedCard.end()
     }
 
-    /// The drop: the move is one step; the lift clears whether the save
-    /// works or not.
+    /// The lifted card: the row as it is, never interactive.
+    @ViewBuilder
+    private func liftedCardRow(_ lift: TasksLiftedCard.Lift) -> some View {
+        // Done's rows are its log's (a drag out of Done lifts one too).
+        let rows = lift.tab == .done ? model.doneDays().flatMap(\.rows) : model.rows(for: lift.tab)
+        if let row = rows.first(where: { $0.id == lift.id }) {
+            AtticTaskRow(model: row.model, isSelected: model.selection.contains(lift.id),
+                         selectionRun: .single, actions: actions(for: lift.id, in: lift.tab), onToggleExpanded: {})
+        }
+    }
+
+    /// The drop: the card settles into the gap the neighbours opened (the
+    /// Lively settle; at once when motion is reduced), then the move is
+    /// one step, committed with nothing animating, so the row appears
+    /// exactly where the card lies. The lift clears whether the save works
+    /// or not.
     private func finishDrag(_ finished: TasksDrag) {
-        let travel = design.reduceMotion ? nil : AtticMotionPreset.settle.animation(reduceMotion: false)
         // The keyboard comes to the moved row, so ⌘Z (and Esc) reach the
         // list right after a drop.
         setFocus(finished.id)
-        withAnimation(travel) {
-            drag = nil
-            if finished.targetIndex != finished.startIndex {
-                let moved = model.report(model.move(finished.id, toGroupIndex: finished.targetIndex), on: finished.id) {
-                    model.move(finished.id, toGroupIndex: finished.targetIndex)
+        let commit = {
+            var transaction = Transaction()
+            transaction.disablesAnimations = true
+            withTransaction(transaction) {
+                drag = nil
+                pointer.liftedCard.end()
+                if finished.targetIndex != finished.startIndex {
+                    // A filter or Find: among the rows shown (item 6).
+                    let narrowed = model.narrows(model.tab)
+                    let move = {
+                        narrowed ? model.moveVisible(finished.id, toShownIndex: finished.targetIndex, in: finished.group)
+                                 : model.move(finished.id, toGroupIndex: finished.targetIndex)
+                    }
+                    let moved = model.report(move(), on: finished.id, retry: move)
+                    // The tick confirms a move that saved, never a failed one.
+                    if moved.isApplied { AtticHaptics.tick(enabled: design.hapticsEnabled) }
                 }
-                // The tick confirms a move that saved, never a failed one.
-                if moved.isApplied { AtticHaptics.tick(enabled: design.hapticsEnabled) }
             }
+        }
+        guard !design.reduceMotion, let lift = pointer.liftedCard.lift, lift.id == finished.id else {
+            commit()
+            return
+        }
+        var landing = finished
+        landing.scrolled = drag?.id == finished.id ? (drag?.scrolled ?? finished.scrolled) : finished.scrolled
+        landing.landing = true
+        drag = landing
+        let y = TasksLiftedCard.landing(of: landing, originY: lift.origin.minY, heights: { rowHeight($0, in: finished.tab) })
+        withAnimation(AtticMotionPreset.settle.animation(reduceMotion: false)) {
+            pointer.liftedCard.land(at: y)
+        } completion: {
+            // Only the drag that landed (a new press may have begun).
+            guard drag?.id == finished.id, drag?.landing == true else { return }
+            commit()
         }
     }
 
@@ -1810,15 +2247,17 @@ struct TasksPage: View {
         return rows[neighbour].status != rows[index].status && rows[neighbour].status != .done && rows[index].status != .done
     }
 
-    /// "Started tasks stay together" for two seconds (review 10).
-    private func showBoundaryHint() {
+    /// "Started tasks stay together" for two seconds (review 10), or why a
+    /// sorted view does not reorder (item 6).
+    private func showBoundaryHint(_ message: String = String(localized: "Started tasks stay together")) {
         boundaryHintTask?.cancel()
+        boundaryHintText = message
         withAnimation(AtticMotionPreset.popover.animation(reduceMotion: design.reduceMotion)) { boundaryHint = true }
-        AccessibilityNotification.Announcement(String(localized: "Started tasks stay together")).post()
+        AccessibilityNotification.Announcement(message).post()
         boundaryHintTask = Task { @MainActor in
             try? await Task.sleep(for: .seconds(2))
             guard !Task.isCancelled else { return }
-            withAnimation(AtticMotionPreset.popover.animation(reduceMotion: design.reduceMotion)) { boundaryHint = false }
+            withAnimation(AtticMotionPreset.popover.leaveAnimation(reduceMotion: design.reduceMotion)) { boundaryHint = false }
         }
     }
 
@@ -1860,7 +2299,7 @@ struct TasksPage: View {
                 AtticErrorLine(message: String(localized: "Not saved"), onRetry: { model.retryPaste() })
             }
             if boundaryHint {
-                TasksBoundaryHint()
+                TasksBoundaryHint(text: boundaryHintText)
                     .transition(AtticMotionPreset.popover.transition(reduceMotion: design.reduceMotion))
             }
             // A paste offer owns the area over the bar while it asks; the
@@ -1886,8 +2325,10 @@ struct TasksPage: View {
         }
         .padding(.horizontal, max(AtticSpacing.panelMargin, layout.chromeInsets.leading))
         .padding(.bottom, bottomInset)
-        .animation(AtticMotionPreset.popover.animation(reduceMotion: design.reduceMotion), value: model.selection.count > 1)
-        .animation(AtticMotionPreset.popover.animation(reduceMotion: design.reduceMotion), value: model.pasteOffer)
+        .animation(AtticMotionPreset.popover.animation(reduceMotion: design.reduceMotion, showing: model.selection.count > 1),
+                   value: model.selection.count > 1)
+        .animation(AtticMotionPreset.popover.animation(reduceMotion: design.reduceMotion, showing: model.pasteOffer != nil),
+                   value: model.pasteOffer)
         .onChange(of: model.selection.count > 1) { _, _ in PerformanceSignposts.watchFrames("SelectionBarMotion", seconds: 0.35) }
     }
 
@@ -1900,6 +2341,7 @@ struct TasksPage: View {
                     pickerOpen: $composerPickerOpen, leave: leaveAddBar,
                     added: { _ in })
     }
+
 
     /// Esc in the add bar with nothing of its own to
     /// close: the keyboard leaves the field. The next Esc reaches the panel,
@@ -1955,8 +2397,9 @@ struct TasksPage: View {
             .init(systemName: "exclamationmark", label: "Set priority of \(count) tasks", handler: {}, menu: {
                 let priorities = Set(ids.compactMap { store.task(withID: $0)?.priority })
                 // Ticked when every selected task has it, as the tags are.
-                return TaskPriority.choices(keeping: priorities).map { priority in
-                    AtticMenuCommand(verbatim: priority.menuTitle, state: priorities == [priority] ? .on : .off) {
+                return TaskPriority.choices.map { priority in
+                    AtticMenuCommand(verbatim: priority.menuTitle, shortcut: priority.shortcut,
+                                     state: priorities == [priority] ? .on : .off) {
                         run { model.setPriority(priority, for: ids) }
                     }
                 }
@@ -2157,6 +2600,9 @@ private struct TasksAddBar: View {
                 .opacity(stripShown ? 1 : 0)
                 // It rises into place with the bar's spring (round 9).
                 .offset(y: stripShown || design.reduceMotion ? 0 : AtticMotionPreset.popover.rise)
+                // And pops from the bar's corner in the spring style.
+                .scaleEffect(stripShown ? 1 : AtticMotionPreset.popover.hiddenScale(reduceMotion: design.reduceMotion),
+                             anchor: .bottomLeading)
                 .allowsHitTesting(stripShown)
                 .accessibilityHidden(!stripShown)
                 .padding(.bottom, stripShown ? 0 : -AtticPickerMetrics.stripToBar)
@@ -2183,11 +2629,14 @@ private struct TasksAddBar: View {
                             if model.pasteOffer != nil { model.dismissPasteOffer(); return true }
                             return leave()
                         },
-                        edited: { range, replacement in model.addBarEdited(range, replacement: replacement) },
+                        edited: { range, replacement in
+                            model.noteTextEdit()
+                            model.addBarEdited(range, replacement: replacement)
+                        },
                         caretMoved: { caret in model.addBarCaretMoved(caret) },
                         suggestionKey: { key in suggestionKey(key) },
-                        undoDraft: { text.undoDraft() },
-                        redoDraft: { text.redoDraft() },
+                        undoDraft: { model.taskChangeOwnsUndo ? nil : text.undoDraft() },
+                        redoDraft: { model.taskChangeOwnsRedo ? nil : text.redoDraft() },
                         selectionMoved: { text.selection = $0 },
                         // Spec § Undo: typing first, then the page (the
                         // task just added, round 5's CI).
@@ -2208,13 +2657,13 @@ private struct TasksAddBar: View {
                     text.highlighted = 0
                 }
                 .padding(.leading, AtticAddBarMetrics.iconSlot + AtticAddBarMetrics.gap - AtticPopoverMetrics.padding - AtticPopoverMetrics.rowPadding)
-                .transition(.opacity)
+                .transition(AtticMotionPreset.popover.transition(reduceMotion: design.reduceMotion, edge: nil, anchor: .bottomLeading))
                 // Its own height above the composer's top (rows are 28 tall).
                 .offset(y: -(CGFloat(suggestion.count) * AtticControlSize.smallHeight + AtticPopoverMetrics.padding * 2
                     + AtticPickerMetrics.stripToBar))
             }
         }
-        .animation(AtticMotionPreset.popover.animation(reduceMotion: design.reduceMotion), value: stripShown)
+        .animation(AtticMotionPreset.popover.animation(reduceMotion: design.reduceMotion, showing: stripShown), value: stripShown)
         .onChange(of: stripShown) { _, _ in PerformanceSignposts.watchFrames("StripMotion", seconds: 0.35) }
         .onChange(of: datePresented || tagsPresented || priorityPresented) { _, open in
             pickerOpen = open
@@ -2277,7 +2726,7 @@ enum TasksComposerValues {
         switch priority {
         case .high?: AtticStripValue(text: "!!", ink: .priorityMark, style: .priorityMark, spoken: String(localized: "High"))
         case .medium?: AtticStripValue(text: "!", ink: .helper, style: .priorityMark, spoken: String(localized: "Medium"))
-        case .low?: AtticStripValue(text: String(localized: "Low"), spoken: String(localized: "Low"))
+        case .low?: AtticStripValue(text: "↓", ink: .helper, style: .priorityMark, spoken: String(localized: "Low"))
         case .none?, nil: nil
         }
     }
@@ -2304,7 +2753,7 @@ extension TaskPriority {
     var menuLocalization: String.LocalizationValue {
         switch self {
         case .none: "No Priority"
-        case .low: "Low"
+        case .low: "Low  ↓"
         case .medium: "Medium  !"
         case .high: "High  !!"
         }
@@ -2326,6 +2775,91 @@ struct TasksDrag: Equatable {
     /// How far the list has scrolled under the drag (edge auto-scroll):
     /// the row keeps under the pointer and lands by where it is.
     var scrolled: CGFloat = 0
+    /// Released: the lifted card settles into the gap the neighbours
+    /// opened, and the move is committed once it is there.
+    var landing = false
+}
+
+/// The card a reorder lifts (owner, 2026-10-01: the lifted row was unsteady,
+/// sat under other rows and was see-through). It is drawn over the whole
+/// page, outside the list, so no row is ever above it and scrolling under
+/// it never moves it: it stays under the pointer while the neighbours
+/// spring aside. The row's own place in the list keeps the gesture and is
+/// invisible meanwhile. Observed only by the card itself, so following the
+/// pointer redraws the card and nothing else. Used on the main thread only
+/// (it lives on the page's `TasksPointer`).
+final class TasksLiftedCard: ObservableObject {
+    struct Lift: Equatable {
+        let id: UUID
+        let tab: TasksTab
+        /// The row's frame in the page when it was lifted.
+        let origin: CGRect
+        /// The card's top in the page.
+        var y: CGFloat
+    }
+
+    @Published private(set) var lift: Lift?
+
+    func begin(id: UUID, tab: TasksTab, origin: CGRect) {
+        lift = Lift(id: id, tab: tab, origin: origin, y: origin.minY)
+    }
+
+    /// The pointer moved `translation` from where the press began.
+    func follow(_ translation: CGFloat) {
+        guard var lift else { return }
+        let y = lift.origin.minY + translation
+        guard y != lift.y else { return }
+        lift.y = y
+        self.lift = lift
+    }
+
+    /// The card settles at `y` (the caller animates it).
+    func land(at y: CGFloat) {
+        guard var lift else { return }
+        lift.y = y
+        self.lift = lift
+    }
+
+    func end() {
+        if lift != nil { lift = nil }
+    }
+
+    /// Where the card lands: the top of the gap the neighbours opened at
+    /// `drag.targetIndex` (the rows between moved by the lifted row's
+    /// height), less what the list scrolled under the drag.
+    nonisolated static func landing(of drag: TasksDrag, originY: CGFloat, heights: (UUID) -> CGFloat) -> CGFloat {
+        var y = originY - drag.scrolled
+        if drag.targetIndex > drag.startIndex {
+            for index in (drag.startIndex + 1)...drag.targetIndex where drag.group.indices.contains(index) {
+                y += heights(drag.group[index])
+            }
+        } else if drag.targetIndex < drag.startIndex {
+            for index in drag.targetIndex..<drag.startIndex where drag.group.indices.contains(index) {
+                y -= heights(drag.group[index])
+            }
+        }
+        return y
+    }
+}
+
+/// Draws the lifted card where the pointer holds it.
+struct TasksLiftedCardLayer<Card: View>: View {
+    @ObservedObject var lift: TasksLiftedCard
+    @ViewBuilder let card: (TasksLiftedCard.Lift) -> Card
+
+    var body: some View {
+        ZStack(alignment: .topLeading) {
+            if let current = lift.lift {
+                card(current)
+                    .frame(width: current.origin.width, alignment: .topLeading)
+                    .modifier(AtticReorderLiftModifier(lifted: true))
+                    .offset(x: current.origin.minX, y: current.y)
+            }
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+        .allowsHitTesting(false)
+        .accessibilityHidden(true)
+    }
 }
 
 /// One drag's live state outside view state (round 4, Astra's final 7):
@@ -2429,10 +2963,12 @@ struct TasksReorderCell<Row: View, Below: View>: View {
     let allowsStart: (CGPoint) -> Bool
     let heights: (UUID) -> CGFloat
     let onBegin: () -> Void
+    /// The pointer moved the lifted row this far (the lifted card follows).
+    let onMove: (CGFloat) -> Void
     let onEnd: (TasksDrag) -> Void
     let onPushPastGroup: () -> Void
     @ViewBuilder let row: (TasksCellLive) -> Row
-    @ViewBuilder let below: () -> Below
+    @ViewBuilder let below: (TasksCellLive) -> Below
 
     @Environment(\.atticDesign) private var design
     @GestureState private var translation: CGFloat?
@@ -2440,6 +2976,7 @@ struct TasksReorderCell<Row: View, Below: View>: View {
 
     var body: some View {
         let lifted = drag?.id == id && translation != nil
+        let hidden = lifted || (drag?.id == id && drag?.landing == true)
         // Read here, in the cell's own body, so a new target moves the
         // neighbours at once (a list's lazy cells do not re-read the page).
         let offset = drag.map { Self.offset(of: id, in: $0, heights: heights) } ?? 0
@@ -2463,21 +3000,21 @@ struct TasksReorderCell<Row: View, Below: View>: View {
                     MainActor.assumeIsolated { session.controlFrames[TasksRowID(tab: tab, id: id)] = frames }
                 }
                 .simultaneousGesture(gesture, including: enabled ? .all : .subviews)
-            below()
+            below(live)
         }
-        .modifier(AtticReorderLiftModifier(lifted: lifted))
-        // The lifted row follows the pointer, plus whatever the list has
-        // scrolled under it.
-        .offset(y: lifted ? (translation ?? 0) + (drag?.scrolled ?? 0) : offset)
-        .zIndex(lifted ? 1 : 0)
-        .animation(lifted || design.reduceMotion ? nil : AtticMotionPreset.settle.animation(reduceMotion: false), value: offset)
+        // Lifted, the row is the card over the page (`TasksLiftedCard`):
+        // its place here keeps the gesture alive and shows nothing, until
+        // the card has landed in the gap.
+        .opacity(hidden ? 0.001 : 1)
+        .offset(y: hidden ? 0 : offset)
+        .animation(hidden || design.reduceMotion ? nil : AtticMotionPreset.settle.animation(reduceMotion: false), value: offset)
         .onChange(of: translation == nil) { _, ended in
             guard ended else { return }
             // Released, cancelled by the system or by Esc: the lift goes
-            // (a release was committed by `onEnded` already), and the next
+            // (a release is landing, committed by `onEnded`), and the next
             // press starts afresh.
             pushedPast = false
-            if drag?.id == id { drag = nil }
+            if drag?.id == id, drag?.landing != true { drag = nil }
             session.end()
         }
     }
@@ -2493,12 +3030,14 @@ struct TasksReorderCell<Row: View, Below: View>: View {
                       let start = group.firstIndex(of: id) else { return }
                 session.translation = value.translation.height
                 session.location = value.location
+                onMove(value.translation.height)
                 let scrolled = drag?.id == id ? (drag?.scrolled ?? 0) : 0
                 let moved = value.translation.height + scrolled
                 let target = Self.target(start: start, translation: moved, group: group, heights: heights)
                 if drag?.id != id {
                     drag = TasksDrag(id: id, tab: tab, group: group, startIndex: start, targetIndex: target)
                     onBegin()
+                    onMove(value.translation.height)
                 } else if drag?.targetIndex != target {
                     drag?.targetIndex = target
                 }
@@ -2603,10 +3142,12 @@ struct TasksCellLive {
 /// A quiet line over the add bar while a drag or ⌘↑ ⌘↓ meets the edge of
 /// its group (review 10).
 private struct TasksBoundaryHint: View {
+    let text: String
+
     var body: some View {
         HStack(spacing: AtticSpacing.s4) {
             AtticIcon(systemName: "arrow.up.and.down", size: AtticTaskRowMetrics.detailsIconSize, weight: .medium, ink: .icon)
-            AtticText(verbatim: String(localized: "Started tasks stay together"), style: .controlLabel, ink: .helper)
+            AtticText(verbatim: text, style: .controlLabel, ink: .helper)
         }
         .frame(height: AtticErrorLineMetrics.height)
         .padding(.leading, AtticLayout.textX - AtticSpacing.panelMargin - AtticTaskRowMetrics.detailsIconSize - AtticSpacing.s4)
@@ -2621,6 +3162,12 @@ final class TasksPointer {
     /// that two pages list (Now's "Completed today" and Done) is two rows
     /// with two frames (round 12).
     var frames: [TasksRowID: CGRect] = [:]
+    /// The card a reorder lifts, over the whole page.
+    let liftedCard = TasksLiftedCard()
+    /// Tests: receives a drag out of the panel instead of AppKit.
+    var startDragOut: ((TasksTextExport, CGPoint) -> Void)?
+    /// Tests: receives ⌥⌘V's anchor instead of the native menu.
+    var openViewOptions: ((NSView) -> Void)?
     /// The page's own view: a press is placed in the page from its event.
     weak var view: NSView?
 
@@ -2812,7 +3359,9 @@ private struct TasksFileDropDelegate: DropDelegate {
 
 /// A row's open date or tag list, and the tasks it changes.
 struct TasksMetaPopover: Equatable {
-    enum Kind { case date, tags }
+    /// `move`: Move to Task… for the subtask in `targets` (control audit
+    /// item 5), from its line in the quick look of row `id`.
+    enum Kind { case date, tags, move }
     let id: UUID
     /// The page whose copy of the row opened it (a task can be listed by two).
     let tab: TasksTab
@@ -2908,6 +3457,59 @@ private struct TasksNoticeClearance: View {
     }
 }
 
+#if DEBUG
+extension TasksPage {
+    static let exposesDragOutState = ProcessInfo.processInfo.environment["ATTIC_UI_TESTING"] == "1"
+}
+
+/// UI tests: the drags out of the panel (began, ended), as a 1 pt text.
+private struct TasksDragOutStateProbe: View {
+    @ObservedObject private var probe = TasksDragOut.Probe.shared
+
+    var body: some View {
+        let state = "began \(probe.began) ended \(probe.ended)"
+        Text(verbatim: state)
+            .font(.system(size: 1))
+            .frame(width: 1, height: 1)
+            .opacity(0.01)
+            .allowsHitTesting(false)
+            .accessibilityIdentifier("tasks-drag-out-state")
+            .accessibilityValue(state)
+    }
+}
+#endif
+
+/// The lists' bars under the system soft edge: their heights, which the
+/// lists' scroll views take as safe area (`TasksPage.bars`).
+struct TasksListBars: Equatable {
+    var top: CGFloat = 0
+    var bottom: CGFloat = 0
+}
+
+extension View {
+    /// A list's edges: under the system soft edge, the list's own bars (the
+    /// controls' zones, so its scroll view gets the system's edge effect
+    /// there, from the panel's top edge to the resting row and over the add
+    /// bar's zone); round 13's clean cut, the list's own mask.
+    ///
+    /// The bars belong to each list, not to the pager around the pages. A
+    /// bar's content is hosted in its own AppKit container; with the bars on
+    /// the pager those containers sat at the page's root view, beside the
+    /// add bar's, and XCUITest found no hit point on the add bar (CI,
+    /// 2026-10-01). On the list they sit inside the list's own view tree.
+    @ViewBuilder
+    func tasksListEdges<Mask: View>(_ style: AtticScrollEdgeStyle, bars: TasksListBars, mask: Mask) -> some View {
+        switch style {
+        case .systemSoft:
+            atticScrollEdgeEffect(style)
+                .safeAreaBar(edge: .top, spacing: 0) { AtticScrollEdgeBar(height: bars.top) }
+                .safeAreaBar(edge: .bottom, spacing: 0) { AtticScrollEdgeBar(height: bars.bottom) }
+        case .cleanCut:
+            atticScrollEdgeEffect(style).mask { mask }
+        }
+    }
+}
+
 /// The list viewport's geometry (owner fix 8, review 9), pure so the
 /// clearance and the fade are tested directly.
 enum TasksViewport {
@@ -2971,6 +3573,9 @@ enum TasksViewport {
         1 - AtticEdgeBlur.veil(at: depth) / AtticEdgeBlur.maximumVeil
     }
 
+    /// The length of the softened edge where a row meets a fixed band.
+    static let softEdge: CGFloat = 6
+
     /// The fade by position in the viewport: nothing over the header or
     /// under the tabs (so they stay readable over scrolled text), fully
     /// there from the first row's resting place down to the
@@ -2978,20 +3583,22 @@ enum TasksViewport {
     static func maskStops(height: CGFloat, tabsTop: CGFloat, listTop: CGFloat, bottomStack: CGFloat) -> [(location: CGFloat, opacity: Double)] {
         guard height > 0 else { return [(0, 1), (1, 1)] }
         let tabsBottom = tabsTop + AtticLayout.pageTabsHeight
-        // The fade starts in the 16 pt the list keeps from the bar and
-        // ends at the bar's top: nothing shows under the add bar, the
-        // strip or a selection bar (round 12: the round-11 fade left 22 %
-        // to 6 % of every row there, still readable through glass).
-        let fadeStart = max(height - bottomStack - AtticLayout.contentToAddBar * 1.75, listTop)
-        let barTop = max(height - bottomStack, fadeStart)
+        // Round 13 (the hands-on review: faint title fragments hung just
+        // under the tabs and just above the add bar): a row scrolled past
+        // an edge is cut cleanly at the fixed band, with only a short
+        // softening inside the list's own viewport (`softEdge`, the edge
+        // veil's eased ramp). The round-12 ramps were 10 and 28 pt long and
+        // left half-faded rows readable in them.
+        let barTop = max(height - bottomStack, listTop)
+        let fadeStart = max(barTop - softEdge, listTop)
         // Round 11 (the owner: rows scrolled under "Now Later Done" stayed
         // readable and clashed with the labels): nothing shows under the
         // tabs at all. Round 12: the rows come back along the edge veil's
         // own eased ramp (`AtticEdgeBlur.veilStops`, taken to full so it
-        // ends in nothing rather than at its 65 % of a surface veil), from
-        // a little under the tabs to their resting place.
+        // ends in nothing rather than at its 65 % of a surface veil), now
+        // only in the last `softEdge` before their resting place.
         let gap = max(0, listTop - tabsBottom)
-        let clear = tabsBottom + gap * 0.25
+        let clear = max(tabsBottom + gap * 0.25, listTop - softEdge)
         var points: [(CGFloat, Double)] = [(0, 0), (clear, 0)]
         // Rising ramp, depth 1 at `clear` and 0 at the list's top.
         for stop in AtticEdgeBlur.veilStops.reversed() where stop.location < 1 {
@@ -3032,5 +3639,74 @@ final class TasksListProxies {
 
     private struct WeakScrollView {
         weak var view: NSScrollView?
+    }
+
+    // MARK: Scrollers (owner, 2026-10-01)
+
+    /// The lists' scrollers are hidden while a page swipe may be under
+    /// way, and come back for vertical scrolling.
+    private(set) var scrollersHidden = false
+    private var showWork: DispatchWorkItem?
+
+    func apply(_ change: TasksScrollerRule.Change) {
+        switch change {
+        case .keep:
+            return
+        case .hide:
+            showWork?.cancel()
+            setScrollersHidden(true)
+        case .show:
+            showWork?.cancel()
+            setScrollersHidden(false)
+        case .showLater:
+            guard scrollersHidden else { return }
+            showWork?.cancel()
+            let work = DispatchWorkItem { [weak self] in
+                MainActor.assumeIsolated { self?.setScrollersHidden(false) }
+            }
+            showWork = work
+            DispatchQueue.main.asyncAfter(deadline: .now() + TasksScrollerRule.showDelay, execute: work)
+        }
+    }
+
+    private func setScrollersHidden(_ hidden: Bool) {
+        scrollersHidden = hidden
+        for scroll in scrollViews.values {
+            TasksScrollKeeper.styleScrollers(of: scroll, hidden: hidden)
+        }
+    }
+}
+
+/// When the lists' scrollers show (owner, 2026-10-01: a thick, permanent
+/// scroller, and a tall thumb during page swipes): thin overlay scrollers
+/// whatever the system's "Show scroll bars" setting, shown by AppKit only
+/// while a list scrolls, and hidden from the moment two fingers touch until
+/// the gesture turns out vertical, so a page swipe never shows one.
+enum TasksScrollerRule {
+    enum Change: Equatable { case keep, hide, show, showLater }
+
+    /// After a gesture that was not a vertical scroll ends, how long before
+    /// the scrollers may show again (any flash AppKit began while they were
+    /// hidden has faded by then).
+    static let showDelay: TimeInterval = 1.0
+
+    static func change(phase: TasksPagerSwipe.Sample.Phase, momentum: Bool,
+                       axis: TasksPagerSwipe.Axis?) -> Change {
+        if momentum { return .keep }
+        switch phase {
+        case .mayBegin:
+            return .hide
+        case .began, .changed:
+            switch axis {
+            case .vertical?, .foreign?: return .show
+            case .undecided?, .horizontal?, .turned?, .cancelled?, .closing?: return .hide
+            case nil: return .keep
+            }
+        case .ended, .cancelled:
+            return axis == .vertical ? .keep : .showLater
+        case .none:
+            // A mouse wheel: an ordinary vertical scroll.
+            return .show
+        }
     }
 }

@@ -318,7 +318,9 @@ struct AtticColorTokens: Equatable, Sendable {
         let alpha: Double = if emphasised {
             dark ? 0.62 : 0.55
         } else if dark {
-            translucent ? 0.36 : 0.28
+            // L4 (owner, 2026-09-30): Dark Glass and Frosted one step
+            // firmer (0.36 before); Dark Solid unchanged.
+            translucent ? 0.46 : 0.28
         } else {
             translucent ? 0.30 : 0.22
         }

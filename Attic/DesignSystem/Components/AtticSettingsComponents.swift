@@ -214,8 +214,10 @@ struct AtticGroupDivider: View {
     }
 }
 
-/// A label-over-value row (57 pt) with a ⌃⌄ pop-up for choices. The menu is
-/// the system's own (native first); the row is ours.
+/// A label-over-value row (57 pt) with a ⌃⌄ pop-up for choices. The row is
+/// ours; the list is Attic's own opaque pop-over (round 13: the system
+/// menu's blur showed the Settings labels behind it, doubled, through the
+/// choices).
 struct AtticPopUpRow<Choice: Hashable>: View {
     let label: String
     let choices: [(value: Choice, title: String)]
@@ -224,21 +226,14 @@ struct AtticPopUpRow<Choice: Hashable>: View {
     var identifier: String?
 
     @Environment(\.atticCapture) private var capture
+    @State private var isOpen = false
 
     var body: some View {
         let title = choices.first { $0.value == selection }?.title ?? ""
         if capture != nil {
             AtticPopUpRowFace(label: label, value: title)
         } else {
-            Menu {
-                Picker(label, selection: $selection) {
-                    ForEach(choices, id: \.value) { choice in
-                        Text(choice.title).tag(choice.value)
-                    }
-                }
-                .pickerStyle(.inline)
-                .labelsHidden()
-            } label: {
+            Button { isOpen = true } label: {
                 // One element: the row is a single pop-up for VoiceOver
                 // (label "Surface", value "Solid"), not one per text line.
                 AtticPopUpRowFace(label: label, value: title)
@@ -246,13 +241,68 @@ struct AtticPopUpRow<Choice: Hashable>: View {
                     .accessibilityLabel(label)
                     .accessibilityValue(title)
             }
-            .menuStyle(.button)
             .buttonStyle(AtticRowPressStyle())
-            .menuIndicator(.hidden)
             .accessibilityLabel(label)
             .accessibilityValue(title)
             .atticIdentifier(identifier)
+            .atticPopover(isPresented: $isOpen, arrowEdge: .bottom) {
+                AtticPopUpChoices(label: label, choices: choices, selection: selection) { value in
+                    selection = value
+                    isOpen = false
+                }
+            }
         }
+    }
+}
+
+/// The choices of a pop-up row, in Attic's opaque pop-over: the current one
+/// ticked, the keyboard's on a highlighted one (↑ ↓ move, Return or Space
+/// chooses, Escape closes with the pop-over itself).
+struct AtticPopUpChoices<Choice: Hashable>: View {
+    let label: String
+    let choices: [(value: Choice, title: String)]
+    let selection: Choice
+    let choose: (Choice) -> Void
+
+    @FocusState private var focused: Bool
+    @State private var highlighted: Int?
+
+    var body: some View {
+        AtticPopover(width: AtticPopoverMetrics.defaultWidth) {
+            ForEach(Array(choices.enumerated()), id: \.offset) { index, choice in
+                AtticPopoverRow(
+                    systemName: choice.value == selection ? "checkmark" : nil,
+                    title: choice.title,
+                    isHighlighted: highlighted == index,
+                    reservesIconSlot: true
+                ) { choose(choice.value) }
+            }
+        }
+        .focusable()
+        .focusEffectDisabled()
+        .focused($focused)
+        .onAppear {
+            highlighted = choices.firstIndex { $0.value == selection }
+            focused = true
+        }
+        .onKeyPress(.downArrow) { move(1); return .handled }
+        .onKeyPress(.upArrow) { move(-1); return .handled }
+        .onKeyPress(.return) { chooseHighlighted() }
+        .onKeyPress(.space) { chooseHighlighted() }
+        .accessibilityElement(children: .contain)
+        .accessibilityLabel(label)
+    }
+
+    private func move(_ step: Int) {
+        guard !choices.isEmpty else { return }
+        let current = highlighted ?? (step > 0 ? -1 : choices.count)
+        highlighted = min(max(current + step, 0), choices.count - 1)
+    }
+
+    private func chooseHighlighted() -> KeyPress.Result {
+        guard let highlighted, choices.indices.contains(highlighted) else { return .ignored }
+        choose(choices[highlighted].value)
+        return .handled
     }
 }
 
@@ -324,6 +374,43 @@ struct AtticSwitchRow: View {
                     .tint(design.tokens.color(.accent))
                     .atticIdentifier(identifier)
             }
+        }
+        .padding(.leading, AtticLayout.groupedRowTextInset)
+        .padding(.trailing, AtticSettingsMetrics.switchTrailing)
+        .frame(height: AtticLayout.groupedRowSingle)
+        .atticControlProbe(
+            "Grouped row (single)", id: probeID,
+            expectedSize: CGSize(width: 0, height: AtticLayout.groupedRowSingle),
+            radius: 0, expectedRadius: 0
+        )
+    }
+}
+
+/// A label and a system segmented control on one grouped row (the Motion
+/// Lab's feel: Calm, Lively, Playful). Like the slider row, the control is
+/// the system's own.
+struct AtticSegmentedRow<Choice: Hashable>: View {
+    let title: String
+    let choices: [(value: Choice, title: String)]
+    @Binding var selection: Choice
+    var identifier: String?
+
+    @State private var probeID = UUID()
+
+    var body: some View {
+        HStack {
+            AtticText(verbatim: title, style: .rowSingle, ink: .body)
+            Spacer(minLength: AtticSettingsMetrics.rowTrailingMinGap)
+            Picker(title, selection: $selection) {
+                ForEach(choices, id: \.value) { choice in
+                    Text(choice.title).tag(choice.value)
+                }
+            }
+            .pickerStyle(.segmented)
+            .controlSize(.small)
+            .labelsHidden()
+            .fixedSize()
+            .atticIdentifier(identifier)
         }
         .padding(.leading, AtticLayout.groupedRowTextInset)
         .padding(.trailing, AtticSettingsMetrics.switchTrailing)

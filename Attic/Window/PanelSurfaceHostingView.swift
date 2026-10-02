@@ -90,6 +90,12 @@ final class PanelSurfaceWindow: NSPanel {
     }
 
     override func sendEvent(_ event: NSEvent) {
+        // One click activates the surface and acts, as on the panel
+        // (`AtticPanel.sendEvent`, owner 2026-10-01).
+        if AtticPanel.takesFirstPress(event.type), !isKeyWindow, canBecomeKey, isVisible,
+           visibleContentFrame.contains(convertPoint(toScreen: event.locationInWindow)) {
+            makeKey()
+        }
         if let eventForwardingForTesting {
             eventForwardingForTesting(event)
         } else {

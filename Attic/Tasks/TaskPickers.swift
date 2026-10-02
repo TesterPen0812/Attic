@@ -177,9 +177,62 @@ struct TaskTagPickerView: View {
     }
 }
 
-/// Priority as a short list (the strip's Priority): None, ! Medium,
-/// !! High. A task that already has the legacy Low keeps it representable
-/// (review 17): it shows, ticked, until another is chosen.
+/// Move to Task… (control audit item 5): the task list with its state (the
+/// query, the keyboard highlight), as `TaskTagPickerView` is the tag list's.
+/// `choices` are read once when it opens; typing filters them.
+struct TaskMovePickerView: View {
+    let choices: [AtticTaskPicker.Choice]
+    let onChoose: (UUID) -> Void
+
+    @State private var query = ""
+    @State private var highlighted: Int?
+    @FocusState private var fieldFocused: Bool
+
+    /// What `query` leaves, in list order (tests read it).
+    static func filter(_ choices: [AtticTaskPicker.Choice], query: String) -> [AtticTaskPicker.Choice] {
+        let needle = query.trimmingCharacters(in: .whitespaces)
+        return needle.isEmpty ? choices : choices.filter { $0.title.localizedStandardContains(needle) }
+    }
+
+    var body: some View {
+        let filtered = Self.filter(choices, query: query)
+        AtticTaskPicker(
+            query: $query,
+            choices: filtered,
+            highlighted: highlighted,
+            onChoose: onChoose,
+            fieldFocused: $fieldFocused,
+            onHover: { index, inside in
+                let next = AtticListHighlight.hovered(index, inside: inside, current: highlighted)
+                if next != highlighted { highlighted = next }
+            }
+        )
+        .onAppear { fieldFocused = true }
+        // Typing highlights the first match, so Return chooses it.
+        .onChange(of: query) { _, now in highlighted = now.isEmpty || Self.filter(choices, query: now).isEmpty ? nil : 0 }
+        .onKeyPress(phases: .down) { press in
+            switch press.key {
+            case .downArrow:
+                guard !filtered.isEmpty else { return .ignored }
+                highlighted = min((highlighted ?? -1) + 1, filtered.count - 1)
+                return .handled
+            case .upArrow:
+                guard !filtered.isEmpty else { return .ignored }
+                highlighted = max((highlighted ?? filtered.count) - 1, 0)
+                return .handled
+            case .return:
+                guard let highlighted, filtered.indices.contains(highlighted) else { return .ignored }
+                onChoose(filtered[highlighted].id)
+                return .handled
+            default:
+                return .ignored
+            }
+        }
+    }
+}
+
+/// Priority as a short list (the strip's Priority): No Priority, ↓ Low,
+/// ! Medium, !! High (follow-up part 2: all four, everywhere).
 struct TaskPriorityPickerView: View {
     let current: TaskPriority?
     let onPick: (TaskPriority) -> Void
@@ -187,9 +240,7 @@ struct TaskPriorityPickerView: View {
     @State private var highlighted: Int?
     @FocusState private var focused: Bool
 
-    private var options: [TaskPriority] {
-        TaskPriority.choices(keeping: current.map { [$0] } ?? [])
-    }
+    private var options: [TaskPriority] { TaskPriority.choices }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -224,13 +275,19 @@ struct TaskPriorityPickerView: View {
 
 extension TaskPriority {
     /// What every priority menu offers (the row menu, the strip, the bulk
-    /// bar, the details panel; owner item 19): No Priority, Medium and
-    /// High. Low has no mark, so it looked like none; it shows only while
-    /// every target already has it (ticked until changed), so it is never
-    /// offered as a new value, not even to the rest of a mixed selection
-    /// (round 7, R6). The model, storage and agents keep it.
-    static func choices(keeping current: some Sequence<TaskPriority>) -> [TaskPriority] {
-        Set(current) == [.low] ? [.none, .low, .medium, .high] : [.none, .medium, .high]
+    /// bar, the details panel): all four (follow-up part 2, option A). Low
+    /// was hidden while it had no mark (round 7, R6); it now shows as a
+    /// grey ↓, so it is offered to every task and selection again.
+    static let choices: [TaskPriority] = [.none, .low, .medium, .high]
+
+    /// Its key in every priority menu (⌥⌘0–3).
+    var shortcut: KeyboardShortcut {
+        switch self {
+        case .none: AtticTaskShortcut.priorityNone
+        case .low: AtticTaskShortcut.priorityLow
+        case .medium: AtticTaskShortcut.priorityMedium
+        case .high: AtticTaskShortcut.priorityHigh
+        }
     }
 
     /// The toast's wording: "High priority", "Priority removed".
@@ -243,25 +300,39 @@ extension TaskPriority {
         }
     }
 
-    /// The strip's wording: "No Priority", "!  Medium", "!!  High".
+    /// The strip's wording: "No Priority", "↓  Low", "!  Medium", "!!  High".
     var pickerTitle: String {
         switch self {
         case .none: String(localized: "No Priority")
-        case .low: String(localized: "Low")
+        case .low: String(localized: "↓  Low")
         case .medium: String(localized: "!  Medium")
         case .high: String(localized: "!!  High")
         }
     }
 
-    var mark: String? {
+    /// The plain name ("Low", "Medium", "High"; "No Priority").
+    var detailTitle: String {
         switch self {
-        case .medium: "!"
-        case .high: "!!"
-        case .none, .low: nil
+        case .none: String(localized: "No Priority")
+        case .low: String(localized: "Low")
+        case .medium: String(localized: "Medium")
+        case .high: String(localized: "High")
         }
     }
 
-    /// The shorthand the add bar inserts for it.
+    var mark: String? {
+        switch self {
+        case .low: "↓"
+        case .medium: "!"
+        case .high: "!!"
+        case .none: nil
+        }
+    }
+
+    /// The shorthand the add bar inserts for it. Low has none: no typed
+    /// mark is both easy to type and never part of ordinary words (`↓`
+    /// needs a special character, `!low` or `p4` collide with titles); the
+    /// strip's Priority and ⌥⌘1 set it.
     var shorthand: String? {
         switch self {
         case .medium: "!"

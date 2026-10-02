@@ -226,6 +226,46 @@ extension View {
     }
 }
 
+/// L3 (option A, owner 2026-09-30): the header's corner buttons as one flat
+/// surface: the recessed fill and one 1 pt hairline (the selected-chip
+/// ink), no rim, sheen, shadow or glass. Hover lays the chip hover over the
+/// fill, press (and a selected toggle, the pinned pin) the selected chip.
+/// The keyboard's ring is drawn by the control, as before.
+struct AtticFlatSurface: ViewModifier {
+    let cornerRadius: CGFloat
+    var state: AtticControlState = .rest
+    var isSelected = false
+
+    @Environment(\.atticDesign) private var design
+
+    func body(content: Content) -> some View {
+        let tokens = design.tokens
+        let shape = RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+        let overlay: AtticRGBA? = switch state {
+        case .pressed: tokens.chipSelected
+        case .hover: isSelected ? tokens.chipSelected : tokens.chipHover
+        default: isSelected ? tokens.chipSelected : nil
+        }
+        content
+            .background {
+                ZStack {
+                    shape.fill(tokens.recessed.color)
+                    if let overlay { shape.fill(overlay.color) }
+                    shape.strokeBorder(tokens.chipSelected.color, lineWidth: AtticFlatSurfaceMetrics.hairline)
+                }
+                .allowsHitTesting(false)
+                .accessibilityHidden(true)
+            }
+    }
+}
+
+extension View {
+    /// See `AtticFlatSurface`.
+    func atticFlatSurface(cornerRadius: CGFloat, state: AtticControlState = .rest, isSelected: Bool = false) -> some View {
+        modifier(AtticFlatSurface(cornerRadius: cornerRadius, state: state, isSelected: isSelected))
+    }
+}
+
 /// Controls that float together (the header's pin and page switch): live
 /// Liquid Glass shares one `GlassEffectContainer`, so neighbouring glass
 /// renders and blends as one material. A plain group otherwise.
