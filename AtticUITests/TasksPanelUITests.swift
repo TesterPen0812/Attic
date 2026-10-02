@@ -253,6 +253,51 @@ final class TasksPanelUITests: XCTestCase {
         waitFor(!pinned.exists, "Esc dismisses it")
     }
 
+    /// A menu item on screen with this title (an open pop-up or context
+    /// menu's, never the menu bar's own, which have no size until opened).
+    private func openMenuItem(_ title: String) -> XCUIElement {
+        let items = app.menuItems.matching(NSPredicate(format: "title == %@ OR title BEGINSWITH %@", title, title + ", "))
+        return items.allElementsBoundByIndex.first { $0.frame.width > 0 && $0.frame.height > 0 } ?? items.firstMatch
+    }
+
+    /// More › Open Files… in the menu that is open.
+    private func chooseOpenFiles(_ route: String) {
+        let more = openMenuItem("More")
+        XCTAssertTrue(more.waitForExistence(timeout: 3), "\(route): the task's menu opens")
+        more.hover()
+        waitFor(openMenuItem("Open Files…").frame.width > 0, "\(route): More's submenu opens")
+        openMenuItem("Open Files…").click()
+    }
+
+    private func dismissFilesPanel(_ transient: XCUIElement) {
+        transient.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).click()
+        for _ in 0..<3 where transient.exists {
+            app.typeKey(.escape, modifierFlags: [])
+            RunLoop.current.run(until: Date().addingTimeInterval(0.2))
+        }
+        waitFor(!transient.exists, "Esc dismisses the files panel")
+    }
+
+    /// Open Files… opens the task's files from every route (deep review
+    /// P2-03: the right-click menu's opened nothing, while ⌘Return and
+    /// ⇧⌘I's menu did): the row's right-click menu, then ⇧⌘I's menu, both
+    /// under More.
+    func testOpenFilesFromTheRightClickMenuAndTheActionsMenuOpensTheFilesPanel() throws {
+        let transient = element("subtask-panel-")
+        row("Book dentist").coordinate(withNormalizedOffset: .zero).withOffset(CGVector(dx: 90, dy: 16)).rightClick()
+        chooseOpenFiles("right-click")
+        XCTAssertTrue(transient.waitForExistence(timeout: 3), "the right-click menu's Open Files… opens the files panel")
+        XCTAssertTrue(element("add-attachment-").exists, "on the task's files")
+        dismissFilesPanel(transient)
+        XCTAssertTrue(pin.exists, "the main panel stays")
+
+        select("Book dentist")
+        app.typeKey("i", modifierFlags: [.command, .shift])
+        chooseOpenFiles("⇧⌘I")
+        XCTAssertTrue(transient.waitForExistence(timeout: 3), "⇧⌘I's Open Files… opens it too")
+        dismissFilesPanel(transient)
+    }
+
     // MARK: - A page kept built behind another
 
     /// Tasks stays built behind Canvas: while hidden it takes no clicks, no

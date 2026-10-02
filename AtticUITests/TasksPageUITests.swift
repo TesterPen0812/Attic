@@ -575,6 +575,76 @@ final class TasksPageUITests: XCTestCase {
         waitFor(row("Call the plumber").exists && row("Email beta testers").exists, "⌘Z brings them back")
     }
 
+    // MARK: - Deep review P2-04: the keyboard always shows
+
+    /// Tab through the page as a person does, reading the window's pixels
+    /// against a capture taken before the first Tab: every one of Now's
+    /// rows shows the keyboard's ring when Tab reaches it, one ring at a
+    /// time, and the keyboard never rests where nothing shows it, except as
+    /// it leaves the add bar for the window's own key loop (deep review
+    /// P2-04: a row Tab reached drew nothing while Return edited it, and
+    /// Tab went on into the hidden rows of the pages kept beside Now).
+    func testEveryTabStopShowsWhereTheKeyboardIs() throws {
+        let titles = ["Finalize launch checklist", "Ship appearance PR", "Email beta testers", "Book dentist", "Call the plumber"]
+        // The pointer over the header, so no row is hovered.
+        window.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.01)).hover()
+        RunLoop.current.run(until: Date().addingTimeInterval(0.5))
+        let origin = window.frame.origin
+        func local(_ frame: CGRect) -> CGRect { frame.offsetBy(dx: -origin.x, dy: -origin.y) }
+        let rows = titles.map { local(row($0).frame) }
+        let bar = local(addBar.frame).insetBy(dx: -12, dy: -48)
+        let before = try windowBitmap()
+        var stops: [String] = []
+        var previous = "add bar"
+        for _ in 0..<(titles.count + 4) {
+            app.typeKey(XCUIKeyboardKey.tab, modifierFlags: [])
+            RunLoop.current.run(until: Date().addingTimeInterval(0.4))
+            var stop: String
+            if (addBar.value(forKey: "hasKeyboardFocus") as? Bool) == true {
+                stop = "add bar"
+            } else {
+                let after = try windowBitmap()
+                let lit = titles.indices.filter { changedPixels(before, after, in: rows[$0], excluding: nil) > 30 }
+                XCTAssertLessThanOrEqual(lit.count, 1, "one ring at a time (\(lit.map { titles[$0] }))")
+                if let index = lit.first {
+                    stop = titles[index]
+                } else {
+                    let window = CGRect(origin: .zero, size: self.window.frame.size)
+                    stop = changedPixels(before, after, in: window, excluding: bar) > 30 ? "control" : "nothing"
+                }
+            }
+            stops.append(stop)
+            if stop == "nothing" {
+                XCTAssertEqual(previous, "add bar", "the keyboard rests where nothing shows it only on leaving the add bar (\(stops))")
+            }
+            previous = stop
+        }
+        XCTAssertEqual(Set(stops.filter { titles.contains($0) }), Set(titles), "Tab shows the ring on each of Now's rows (\(stops))")
+    }
+
+    private func windowBitmap() throws -> NSBitmapImageRep {
+        try XCTUnwrap(NSBitmapImageRep(data: window.screenshot().pngRepresentation))
+    }
+
+    /// How many sampled pixels (every other one) differ inside `rect`
+    /// (window points, top-left origin), leaving out `excluding`.
+    private func changedPixels(_ a: NSBitmapImageRep, _ b: NSBitmapImageRep, in rect: CGRect, excluding: CGRect?) -> Int {
+        let scale = CGFloat(a.pixelsWide) / window.frame.width
+        let area = rect.intersection(CGRect(origin: .zero, size: window.frame.size))
+        guard !area.isNull, !area.isEmpty else { return 0 }
+        var count = 0
+        for y in stride(from: Int(area.minY * scale), to: min(Int(area.maxY * scale), a.pixelsHigh, b.pixelsHigh), by: 2) {
+            for x in stride(from: Int(area.minX * scale), to: min(Int(area.maxX * scale), a.pixelsWide, b.pixelsWide), by: 2) {
+                if let excluding, excluding.contains(CGPoint(x: CGFloat(x) / scale, y: CGFloat(y) / scale)) { continue }
+                guard let p = a.colorAt(x: x, y: y)?.usingColorSpace(.sRGB),
+                      let q = b.colorAt(x: x, y: y)?.usingColorSpace(.sRGB) else { continue }
+                if max(abs(p.redComponent - q.redComponent), abs(p.greenComponent - q.greenComponent),
+                       abs(p.blueComponent - q.blueComponent)) > 0.08 { count += 1 }
+            }
+        }
+        return count
+    }
+
     // MARK: - Round 10: full control
 
     /// A menu item on screen with this title: an open pop-up or context
