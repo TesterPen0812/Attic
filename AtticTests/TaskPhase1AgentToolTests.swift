@@ -186,6 +186,59 @@ final class TaskPhase1AgentToolTests: XCTestCase {
         XCTAssertNil(store.task(withID: childID)?.doneLoggedAt)
     }
 
+    func testArchivedCompoundUpdateSucceedsWhenOnlyOneSaveCanCommit() throws {
+        // The original split restore/edit path committed its first save,
+        // then failed its second. This test catches that on its own through
+        // the command result and durable fields, without counting saves.
+        var savesRemaining: Int?
+        store = try makeTestStore(now: { [clock] in clock.value }, persist: { context in
+            if let remaining = savesRemaining {
+                guard remaining > 0 else { throw PersistenceGate.Failure() }
+                savesRemaining = remaining - 1
+            }
+            try context.save()
+        })
+        library = AtticLibrary(tasks: store)
+        tools = AgentTaskTools(store: store, library: library)
+        let (parentID, childID) = try archivedFamily(in: store)
+        let childBefore = try XCTUnwrap(store.listedEditableState(of: childID))
+        savesRemaining = 1
+        let result = try call("update_task", ["id": parentID.uuidString, "state": "inProgress",
+                                               "title": "Changed", "priority": "high", "tags": ["new"], "due": NSNull()])
+        XCTAssertEqual((result["task"] as? [String: Any])?["title"] as? String, "Changed")
+        let rows = try ModelContext(store.container).fetch(FetchDescriptor<TaskItem>())
+        let parent = try XCTUnwrap(rows.first { $0.id == parentID })
+        XCTAssertEqual(parent.title, "Changed")
+        XCTAssertEqual(parent.status, .inProgress)
+        XCTAssertEqual(parent.priority, .high)
+        XCTAssertEqual(parent.tags, ["new"])
+        XCTAssertNil(parent.dueDay)
+        XCTAssertNil(parent.completedAt)
+        XCTAssertNil(parent.completedFromRaw)
+        XCTAssertNil(parent.completedFromOrder)
+        XCTAssertTrue(rows.allSatisfy { $0.doneLoggedAt == nil })
+        XCTAssertEqual(rows.first { $0.id == childID }.map(TaskEditableState.init), childBefore)
+        XCTAssertEqual(library.undo.undoName(in: .tasks), "Change Task State")
+    }
+
+    func testCommittedArchivedUpdateReportsSuccessWhenListRefreshFails() throws {
+        let (parentID, _) = try archivedFamily(in: store)
+        store.listRefreshFailures = 1
+        let result = try call("update_task", ["id": parentID.uuidString, "state": "inProgress", "title": "Committed"])
+        XCTAssertNotNil(result["task"], "a committed command must not invite an agent retry")
+        XCTAssertEqual(store.listRefreshFailures, 0)
+        XCTAssertTrue(store.tasks.isEmpty, "the refresh failed, leaving the old presentation intact")
+        XCTAssertTrue(store.errorNotice?.message.contains("Updated, but the list could not be refreshed") == true)
+        XCTAssertNil(library.undo.undoName(in: .tasks), "missing after-state omits history, not success")
+        let rows = try ModelContext(store.container).fetch(FetchDescriptor<TaskItem>())
+        let parent = try XCTUnwrap(rows.first { $0.id == parentID })
+        XCTAssertEqual(parent.title, "Committed")
+        XCTAssertEqual(parent.status, .inProgress)
+        XCTAssertTrue(rows.allSatisfy { $0.doneLoggedAt == nil })
+        store.refresh()
+        XCTAssertEqual(store.task(withID: parentID)?.title, "Committed")
+    }
+
     func testDoneLogReadFailureStopsAfterOneReadAndExplicitRetryWorks() throws {
         _ = try archivedFamily(in: store)
         store.doneLogReadFailures = 10_000

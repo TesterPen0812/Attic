@@ -3267,7 +3267,19 @@ final class TaskStore: ObservableObject {
         }
     }
 
+    #if DEBUG
+    /// Test seam for a failed presentation refresh after a durable save.
+    var listRefreshFailures = 0
+    #endif
+
     private func reloadTasks() throws {
+        #if DEBUG
+        if listRefreshFailures > 0 {
+            listRefreshFailures -= 1
+            throw NSError(domain: "TaskStoreTestRefresh", code: 1,
+                          userInfo: [NSLocalizedDescriptionKey: "Injected list refresh failure"])
+        }
+        #endif
         // A long-lived ModelContext can return cached model instances after
         // CloudKit updates the underlying store. Refresh through a new context
         // so remote values replace the old objects instead of being written

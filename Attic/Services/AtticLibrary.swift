@@ -197,9 +197,11 @@ final class AtticLibrary {
             guard let before = tasks.listedEditableState(of: id),
                   let loggedAt = tasks.listedTask(withID: id)?.doneLoggedAt,
                   tasks.restoreAndUpdateTask(id, title: title, priority: priority, status: status,
-                                             tags: tags, dueDay: dueDay),
-                  let after = tasks.editableState(of: id) else { return nil }
+                                             tags: tags, dueDay: dueDay) else { return nil }
+            // The save has committed even if the subsequent list refresh
+            // failed. Missing presentation state can only omit history.
             succeeded = true
+            guard let after = tasks.editableState(of: id) else { return nil }
             let store = self.tasks
             return UndoStep(
                 name: "Change Task State",
