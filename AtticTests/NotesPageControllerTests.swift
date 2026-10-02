@@ -167,6 +167,106 @@ final class NotesPageControllerTests: XCTestCase {
         assertSaveBaseline(try await measureMainActorSave())
     }
 
+    func testCheckpointRetirementKeepsMainActorWithinSaveTolerance() async throws {
+        let document = NoteDocument(blocks: (0..<5_000).map { .text("Line \($0) with ordinary note text") })
+        let id = UUID()
+        guard case .success = store.createDocumentNote(id: id, document: document) else { return XCTFail("fixture") }
+        let journal = NoteDraftJournal(directory: directory)
+        let controller = makeController(journal: journal)
+        await XCTAssertTrueAsync(await controller.openDurably(noteID: id))
+        let session = try XCTUnwrap(controller.active)
+        let (_, view) = session.engine.makeView()
+        var control: [Double] = [], checkpoint: [Double] = [], retireElapsed: [Double] = []
+        // Warm both paths, then alternate their order. The probe measures the
+        // longest main-actor blockage across save and retirement, excluding
+        // off-actor decode and journal I/O time.
+        for pair in -1..<8 {
+            for hasCheckpoint in pair.isMultiple(of: 2) ? [false, true] : [true, false] {
+                if hasCheckpoint {
+                    type("b", into: session)
+                    view.setMarkedText("中", selectedRange: NSRange(location: 1, length: 0),
+                                       replacementRange: NSRange(location: NSNotFound, length: 0))
+                    await XCTAssertTrueAsync(await controller.preserveAllDurably())
+                    await controller.waitForRecoveryWork()
+                    XCTAssertFalse(try journal.entries().isEmpty)
+                    view.unmarkText()
+                }
+                type("c", into: session)
+                // Match autosave's snapshot boundary. Unmarking IME text
+                // invalidates the engine's body cache; extraction is separate
+                // from the save/retire regression and is warmed in both paths.
+                let snapshot = session.engine.document()
+                let probe = Task { @MainActor in
+                    var worst = 0.0
+                    while !Task.isCancelled {
+                        let start = DispatchTime.now().uptimeNanoseconds
+                        do { try await Task.sleep(for: .milliseconds(1)) } catch { break }
+                        worst = max(worst, Double(DispatchTime.now().uptimeNanoseconds - start) / 1_000_000 - 1)
+                    }
+                    return worst
+                }
+                // Arm the probe before the synchronous save and queued retire.
+                try await Task.sleep(for: .milliseconds(2))
+                let start = DispatchTime.now().uptimeNanoseconds
+                XCTAssertTrue(controller.save(session, snapshot: snapshot, stagedSnapshot: []))
+                let saveMS = Double(DispatchTime.now().uptimeNanoseconds - start) / 1_000_000
+                let retireStart = DispatchTime.now().uptimeNanoseconds
+                await controller.waitForRecoveryWork()
+                let elapsed = Double(DispatchTime.now().uptimeNanoseconds - retireStart) / 1_000_000
+                // Let a probe delayed by the last actor segment report it.
+                try await Task.sleep(for: .milliseconds(2))
+                probe.cancel()
+                let occupancy = max(saveMS, await probe.value)
+                XCTAssertTrue(try journal.entries().isEmpty)
+                if pair >= 0 {
+                    if hasCheckpoint { checkpoint.append(occupancy); retireElapsed.append(elapsed) }
+                    else { control.append(occupancy) }
+                }
+            }
+        }
+        let baseline = control.sorted()[4], recovered = checkpoint.sorted()[4]
+        print("NOTE_RECOVERY_CONTROL_MAIN_ACTOR_MS_MEDIAN=\(baseline) CHECKPOINT_MS_MEDIAN=\(recovered) RETIRE_ELAPSED_MS_MEDIAN=\(retireElapsed.sorted()[4]) MAX=\(retireElapsed.max()!)")
+        XCTAssertLessThanOrEqual(recovered, saveMedianLimit)
+        XCTAssertLessThanOrEqual(recovered - baseline, 55.323833 - 45.781292,
+                                 "Recovery retirement must stay within the measured no-checkpoint save spread")
+    }
+
+    func testRecoveryRetirementKeepsCheckpointOnFailedOrStaleDecode() async throws {
+        for failure in ["decode", "bytes", "revision", "tags"] {
+            let id = UUID()
+            guard case .success = store.createDocumentNote(id: id, document: NoteDocument(blocks: [.text("Saved")])) else {
+                return XCTFail("fixture")
+            }
+            let decoder = SuspendedRecoveryDecoder()
+            let journal = NoteDraftJournal(directory: directory.appendingPathComponent(failure))
+            let controller = NotesPageController(store: store, journal: journal, saveDelay: .seconds(60),
+                decodeRecoveryDocument: { bytes in await decoder.decode(bytes) })
+            await XCTAssertTrueAsync(await controller.openDurably(noteID: id))
+            let session = try XCTUnwrap(controller.active)
+            let (_, view) = session.engine.makeView()
+            type("b", into: session)
+            view.setMarkedText("中", selectedRange: NSRange(location: 1, length: 0),
+                               replacementRange: NSRange(location: NSNotFound, length: 0))
+            await XCTAssertTrueAsync(await controller.preserveAllDurably())
+            let original = try XCTUnwrap(journal.entries().first?.0)
+            view.unmarkText()
+            type("c", into: session)
+            XCTAssertTrue(controller.save(session))
+            await decoder.waitUntilStarted()
+            let note = try XCTUnwrap(store.note(withID: id))
+            switch failure {
+            case "bytes": note.content = try NoteContentCodec.encode(NoteDocument(blocks: [.text("Changed")]))
+            case "revision": note.revisionID = UUID()
+            case "tags": note.tagsRaw = AtticTag.encode(["changed"])
+            default: break
+            }
+            await decoder.resume(fail: failure == "decode")
+            await controller.waitForRecoveryWork()
+            XCTAssertEqual(try journal.entries().first?.0, original, failure)
+            XCTAssertTrue(session.notice?.contains("kept") == true, failure)
+        }
+    }
+
     // Local configuration, macos-26, same macos-ci.yml unit-test lane:
     // runs 36527558056 / 36531130649 / 36538797706 / 36551941396
     // save medians: 50.459750 / 55.323833 / 48.480458 / 45.781292 ms;
@@ -2529,4 +2629,20 @@ private extension NoteSession.State {
         default: false
         }
     }
+}
+
+private actor SuspendedRecoveryDecoder {
+    private var started = false
+    private var continuation: CheckedContinuation<Bool, Never>?
+    func decode(_ bytes: Data) async -> NoteDocument? {
+        let fail = await withCheckedContinuation { continuation in
+            self.continuation = continuation
+            started = true
+        }
+        return fail ? nil : NoteContentCodec.decode(bytes).document
+    }
+    func waitUntilStarted() async {
+        while !started { await Task.yield() }
+    }
+    func resume(fail: Bool) { continuation?.resume(returning: fail); continuation = nil }
 }
