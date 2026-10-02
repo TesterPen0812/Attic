@@ -79,7 +79,7 @@ final class WorkspaceCommitLedger {
         }
         trim()
     }
-    func gatedSave(_ context: ModelContext, before: [WorkspaceModelToken], using save: (ModelContext) throws -> Void) throws {
+    func gatedSave(_ context: ModelContext, before: [WorkspaceModelToken], using save: (ModelContext) throws -> Void, didCommit: () -> Void = {}) throws {
         precondition(savingContext == nil, "Gated saves cannot nest")
         let rows = context.insertedModelsArray + context.changedModelsArray + context.deletedModelsArray
         let deletedIDs = Set(context.deletedModelsArray.map(\.persistentModelID))
@@ -111,6 +111,7 @@ final class WorkspaceCommitLedger {
                     }
                 }
                 trim()
+                didCommit()
             }
             savingContext = nil; observedGatedSave = false
         }

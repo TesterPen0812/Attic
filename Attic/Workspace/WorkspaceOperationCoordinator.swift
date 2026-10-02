@@ -78,6 +78,8 @@ final class WorkspaceOperationCoordinator {
     private var pending: [UUID: (WorkspaceOperationEnvelope, WorkspaceOperationClaim, Publication)] = [:]
     private var publicationStep: [UUID: Int] = [:]
     private var heldOwners: Set<WorkspaceOwner> = []
+    private var purgedMembers: Set<UUID>?
+    private(set) var tombstoneLoads = 0
     private var plainUnknown: ([WorkspaceModelToken], [WorkspaceModelToken], Set<WorkspaceOwner>, [WorkspaceOwner: Set<PersistentIdentifier>])?
     private(set) var startupReconciled = false
     struct RecoveryCopy {
@@ -113,6 +115,9 @@ final class WorkspaceOperationCoordinator {
             try FileManager.default.createDirectory(at: disk.url.deletingLastPathComponent(), withIntermediateDirectories: true)
             writerLease = try WorkspaceWriterLease.attached(to: container) ?? WorkspaceWriterLease.acquire(storeURL: disk.url)
         } else { writerLease = nil }
+        ledger.foreignEntitiesDidChange = { [weak self] entities in
+            if entities.contains(.preservation) { self?.purgedMembers = nil }
+        }
         WorkspaceLegacyBridge.register(self)
     }
 
@@ -125,6 +130,21 @@ final class WorkspaceOperationCoordinator {
         // commits into that inaccessible directory.
         try FileManager.default.createDirectory(at: replacement.directory, withIntermediateDirectories: true)
         journal = replacement
+    }
+
+    private func gatedSave(_ context: ModelContext, before: [WorkspaceModelToken], using writer: (ModelContext) throws -> Void) throws {
+        let records = (context.insertedModelsArray + context.changedModelsArray).compactMap { $0 as? TaskDeletionPreservation }
+        var added = Set<UUID>()
+        if purgedMembers != nil {
+            for record in records where record.purgedAt != nil {
+                added.formUnion(try JSONDecoder().decode(WorkspacePurge.Preservation.self, from: record.snapshot).members.map(\.id))
+            }
+        }
+        let removedPreservation = context.deletedModelsArray.contains { $0 is TaskDeletionPreservation }
+        try ledger.gatedSave(context, before: before, using: writer) {
+            if removedPreservation { purgedMembers = nil }
+            else { purgedMembers?.formUnion(added) }
+        }
     }
 
     func freshContext() -> ModelContext {
@@ -224,7 +244,7 @@ final class WorkspaceOperationCoordinator {
                 compensationOf: envelope.compensationOf))
             WorkspaceCrashHook.reach("K4")
             do {
-                try ledger.gatedSave(context, before: envelope.tokens, using: save)
+                try gatedSave(context, before: envelope.tokens, using: save)
                 #if ATTIC_OPERATION_CRASH_TESTS
                 if ProcessInfo.processInfo.environment["ATTIC_SAVE_THEN_THROW"] == "1" {
                     throw WorkspaceFoundationError.unknown
@@ -286,7 +306,7 @@ final class WorkspaceOperationCoordinator {
                 return .conflict
             }
             do {
-                try ledger.gatedSave(context, before: previous, using: save)
+                try gatedSave(context, before: previous, using: save)
                 // Inserted IDs can become permanent during save. Inspect
                 // these saved instances before discarding the commit context.
                 if let confirmed { confirmed(try WorkspaceModelToken.capture(owners: writes, models: stagedModels)) }
@@ -344,7 +364,7 @@ final class WorkspaceOperationCoordinator {
             let stagedTokens = Dictionary(uniqueKeysWithValues: before.map { ($0.owner, $0) })
             let stagedModels = try WorkspaceModelToken.stagedModels(owners: writes, before: stagedTokens, in: context)
             do {
-                try ledger.gatedSave(context, before: previous, using: writer)
+                try gatedSave(context, before: previous, using: writer)
                 confirmed(try WorkspaceModelToken.capture(owners: writes, models: stagedModels))
                 return .committed
             } catch {
@@ -579,7 +599,7 @@ final class WorkspaceOperationCoordinator {
             rows.forEach(context.delete); removed += 1; removedIDs.insert(id)
         }
         if removed > 0 {
-            do { try ledger.gatedSave(context, before: [], using: save) }
+            do { try gatedSave(context, before: [], using: save) }
             catch {
                 let fresh = freshContext()
                 let survivors = try fresh.fetch(FetchDescriptor<OperationReceipt>())
@@ -595,7 +615,7 @@ final class WorkspaceOperationCoordinator {
         guard try agreeing(rows), !rows.isEmpty else { throw WorkspaceFoundationError.unknown }
         rows.forEach(change)
         let expected = try rows.map { try WorkspaceModelFields.read($0) }
-        do { try ledger.gatedSave(context, before: [], using: save) }
+        do { try gatedSave(context, before: [], using: save) }
         catch {
             try beforeReconciliationRead?()
             let fresh = freshContext()
@@ -704,13 +724,15 @@ extension WorkspaceOperationCoordinator {
     /// including compatibility store wrappers and old replay payloads.
     private func validateTombstones(_ context: ModelContext, before: [WorkspaceModelToken]) throws {
         guard context.container.schema.entities.contains(where: { $0.name == "TaskDeletionPreservation" }) else { return }
-        let records = try context.fetch(FetchDescriptor<TaskDeletionPreservation>()).filter { $0.purgedAt != nil }
-        guard !records.isEmpty else { return }
-        var removed = Set<UUID>()
-        for record in records {
-            let snapshot = try JSONDecoder().decode(WorkspacePurge.Preservation.self, from: record.snapshot)
-            removed.formUnion(snapshot.members.map(\.id))
+        if purgedMembers == nil {
+            let records = try context.fetch(FetchDescriptor<TaskDeletionPreservation>(predicate: #Predicate { $0.purgedAt != nil }))
+            var members = Set<UUID>()
+            for record in records {
+                members.formUnion(try JSONDecoder().decode(WorkspacePurge.Preservation.self, from: record.snapshot).members.map(\.id))
+            }
+            purgedMembers = members; tombstoneLoads += 1
         }
+        guard let removed = purgedMembers, !removed.isEmpty else { return }
         let changes = context.insertedModelsArray + context.changedModelsArray
         for row in changes {
             if let task = row as? TaskItem, removed.contains(task.id) { throw WorkspaceFoundationError.protectedOwner }
@@ -718,13 +740,15 @@ extension WorkspaceOperationCoordinator {
                association.detachedAt == nil, removed.contains(association.taskID) { throw WorkspaceFoundationError.protectedOwner }
             if let note = row as? NoteItem {
                 if note.taskID.map(removed.contains) == true { throw WorkspaceFoundationError.protectedOwner }
+                let original = before.filter { $0.owner == WorkspaceOwner(entity: .note, id: note.id) }
+                    .flatMap(\.replicas).first { $0.physicalID == note.persistentModelID }
+                let content = try WorkspaceModelFields.fingerprint(note)["content"]
+                guard original?.fields["content"] != content else { continue }
                 if note.content.flatMap({ NoteContentCodec.decode($0).document })?.requires.contains("taskNote") == true {
                     let detached = try context.fetch(FetchDescriptor<TaskNoteAssociation>()).contains {
                         $0.noteID == note.id && $0.detachedPreservationID != nil
                     }
                     if detached {
-                        let original = before.filter { $0.owner == WorkspaceOwner(entity: .note, id: note.id) }
-                            .flatMap(\.replicas).first { $0.physicalID == note.persistentModelID }
                         guard let original, let content = original.fields["content"], let format = original.fields["contentFormat"],
                               content == (try WorkspaceModelFields.encode(WorkspaceModelFields.digest(note.content))),
                               try JSONDecoder().decode(Int.self, from: format) == note.contentFormat else { throw WorkspaceFoundationError.protectedOwner }
