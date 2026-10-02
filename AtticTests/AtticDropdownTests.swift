@@ -30,6 +30,12 @@ final class AtticDropdownTests: XCTestCase {
         XCTAssertEqual(AtticDropdownLayout.width(ideal: date, available: 296), 144, "“/da” leaves Date at the minimum")
     }
 
+    func testTheTagListKeepsItsHeightWhileFiltering() {
+        XCTAssertEqual(AtticTagPicker.visibleRows(tagCount: 0), 1, "room for No tags yet or New tag")
+        XCTAssertEqual(AtticTagPicker.visibleRows(tagCount: 5), 5, "p2-24's five tags, no scrolling")
+        XCTAssertEqual(AtticTagPicker.visibleRows(tagCount: 30), 7, "seven rows, then it scrolls")
+    }
+
     // MARK: Where it opens
 
     func testItOpensBelowTheCaretWhenThereIsRoomWithItsLeftEdgeOnTheSlash() {
@@ -218,6 +224,24 @@ final class AtticDropdownTests: XCTestCase {
         XCTAssertFalse(presenter.isOpen)
         XCTAssertTrue(window.firstResponder === previous || window.firstResponder === field.currentEditor(),
                       "the keyboard went back where it was")
+    }
+
+    func testTheTagPickerCardShowsEveryTagItHasRoomFor() {
+        let window = makeWindow()
+        defer { window.close() }
+        let anchor = NSView(frame: NSRect(x: 40, y: 60, width: 60, height: 28))
+        window.contentView?.addSubview(anchor)
+        let presenter = AtticDropdownPresenter()
+        presenter.prefer = .above
+        presenter.content = AnyView(TaskTagPickerView(allTags: ["launch", "home", "work", "design", "travel"], state: { _ in .off },
+                                                      onToggle: { _ in }, onCreate: { _, _ in true }, focusField: false))
+        presenter.present(from: anchor)
+        defer { presenter.close(restoreFocus: false, immediately: true) }
+        let m = AtticDropdownMetrics.self
+        let card = try? XCTUnwrap(presenter.host?.contentRect)
+        // The field, its gap and the five rows, 10 pt in.
+        XCTAssertEqual(card?.height ?? 0, m.inset * 2 + m.fieldHeight + m.fieldGap + 5 * m.rowHeight, accuracy: 1)
+        XCTAssertGreaterThanOrEqual(card?.width ?? 0, m.minWidth)
     }
 
     // MARK: Timings (no regression against the components it replaced)

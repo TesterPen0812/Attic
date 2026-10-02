@@ -313,9 +313,18 @@ struct AtticTagPicker: View {
     var fieldFocused: FocusState<Bool>.Binding
     /// The pointer entered (true) or left row `index`.
     var onHover: ((_ index: Int, _ inside: Bool) -> Void)? = nil
+    /// The rows the list keeps room for (all the tags there are, as it
+    /// opened); nil: the rows it shows now.
+    var listRows: Int? = nil
+
+    /// One row at least (No tags yet, or New tag), seven at most
+    /// (`tagListMaxHeight`).
+    static func visibleRows(tagCount: Int) -> Int {
+        let most = Int(AtticPickerMetrics.tagListMaxHeight / AtticDropdownMetrics.rowHeight)
+        return max(1, min(tagCount, most))
+    }
 
     var body: some View {
-        let m = AtticPickerMetrics.self
         VStack(alignment: .leading, spacing: 0) {
             AtticDropdownField(text: $query, placeholder: String(localized: "Find or add a tag"),
                                systemName: "magnifyingglass", focus: fieldFocused)
@@ -345,8 +354,10 @@ struct AtticTagPicker: View {
                 }
             }
             .scrollIndicators(.never)
-            .frame(maxHeight: m.tagListMaxHeight)
-            .fixedSize(horizontal: false, vertical: true)
+            // A height that holds while typing filters the list, so the
+            // card never jumps; more rows than it holds scroll.
+            .frame(height: CGFloat(Self.visibleRows(tagCount: listRows ?? tags.count + (create == nil ? 0 : 1)))
+                * AtticDropdownMetrics.rowHeight)
             // The keyboard's highlight stays in view in a long list; the
             // pointer's is under the pointer already.
             .onChange(of: highlighted) { _, index in

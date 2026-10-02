@@ -142,7 +142,8 @@ struct TaskTagPickerView: View {
             onHover: { index, inside in
                 let next = AtticListHighlight.hovered(index, inside: inside, current: highlighted)
                 if next != highlighted { highlighted = next }
-            }
+            },
+            listRows: allTags.count
         )
         .atticDropdownFocus($fieldFocused, when: focusField)
         // Typing highlights the first match; an empty field (as after a new
