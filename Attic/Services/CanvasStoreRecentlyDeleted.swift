@@ -303,6 +303,7 @@ extension CanvasStore {
                 if let confirmed, confirmed[id] != Self.winningBoardReplica(in: replicas).deletedAt { continue }
                 let unstamped = replicas.allSatisfy { $0.tombstoned && $0.purgedAt == nil && $0.recentlyDeletedAt == nil }
                 if unstamped, confirmed == nil {
+                    replicas.forEach { WorkspaceLegacyBridge.captureBeforeMutation($0, in: context) }
                     for replica in replicas { replica.recentlyDeletedAt = timestamp }
                     stamped = true
                     continue
@@ -310,6 +311,7 @@ extension CanvasStore {
                 guard let started = unstamped ? first.deletedAt : first.recentlyDeletedAt, started < cutoff,
                       replicas.allSatisfy({ Self.boardDeletionSnapshot($0) == Self.boardDeletionSnapshot(first) }),
                       try contentIsSafeToPurge(canvasID: id) else { continue }
+                replicas.forEach { WorkspaceLegacyBridge.captureBeforeMutation($0, in: context) }
                 let canvasID = id
                 try context.fetchCanvasReplicas(FetchDescriptor<CanvasStrokeItem>(
                     predicate: #Predicate { $0.canvasID == canvasID }

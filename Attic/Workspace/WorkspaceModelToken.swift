@@ -270,7 +270,10 @@ enum WorkspaceModelFields {
             return try record(row, [
                 WorkspaceField("id", \CanvasImageItem.id),
                 WorkspaceField("canvasID", \CanvasImageItem.canvasID),
-                WorkspaceField("encodedData", \CanvasImageItem.encodedData, fingerprint: { try WorkspaceModelFields.encode($0.contentDigest) }),
+                // Canvas collectors explicitly consume image bytes; hash those
+                // bytes rather than trusting metadata that can lag a raw edit.
+                // Lazy note/task/link guards never fetch these image owners.
+                WorkspaceField("encodedData", \CanvasImageItem.encodedData, fingerprint: { Data(SHA256.hash(data: $0.encodedData)) }),
                 WorkspaceField("encodedByteCount", \CanvasImageItem.encodedByteCount),
                 WorkspaceField("contentDigest", \CanvasImageItem.contentDigest),
                 WorkspaceField("contentType", \CanvasImageItem.contentType),
