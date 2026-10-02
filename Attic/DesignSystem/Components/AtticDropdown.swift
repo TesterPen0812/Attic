@@ -519,6 +519,14 @@ final class AtticDropdownPresenter {
         }
     }
 
+    /// Opens it if it is still asked for and the anchor is in a window
+    /// (otherwise the anchor calls again when it joins one).
+    func presentIfWanted(from anchor: NSView) {
+        guard wantsOpen, !isOpen, anchor.window != nil else { return }
+        wantsOpen = false
+        present(from: anchor)
+    }
+
     /// New content while open (the page's state changed: a tick, a failure line).
     func update() {
         host?.rootView = root
@@ -637,8 +645,18 @@ struct AtticDropdownAnchor: NSViewRepresentable {
     let content: () -> AnyView
 
     final class AnchorView: NSView {
+        /// Opens a card that was asked for before this view had a window.
+        var onWindow: (() -> Void)?
+
         override func hitTest(_ point: NSPoint) -> NSView? { nil }
         override func isAccessibilityElement() -> Bool { false }
+
+        override func viewDidMoveToWindow() {
+            super.viewDidMoveToWindow()
+            guard window != nil else { return }
+            // After SwiftUI's layout pass, so the anchor has its frame.
+            DispatchQueue.main.async { [weak self] in self?.onWindow?() }
+        }
     }
 
     func makeCoordinator() -> AtticDropdownPresenter { AtticDropdownPresenter() }
@@ -661,18 +679,24 @@ struct AtticDropdownAnchor: NSViewRepresentable {
             presenter.update()
         } else if !presenter.wantsOpen {
             presenter.wantsOpen = true
+            view.onWindow = { [weak view, weak presenter] in
+                guard let view, let presenter else { return }
+                presenter.presentIfWanted(from: view)
+            }
             // After this update: the anchor has its frame, and opening
             // changes no state while SwiftUI is updating views.
             DispatchQueue.main.async { [weak view, weak presenter] in
-                guard let view, let presenter, presenter.wantsOpen, !presenter.isOpen else { return }
-                presenter.wantsOpen = false
-                presenter.present(from: view)
+                guard let view, let presenter else { return }
+                presenter.presentIfWanted(from: view)
             }
         }
     }
 
+    /// The binding went false (the anchor leaves with it), or the control
+    /// itself went away: the card leaves with its motion and the keyboard
+    /// goes back (its host removes itself, whatever happens to this anchor).
     static func dismantleNSView(_ view: AnchorView, coordinator: AtticDropdownPresenter) {
-        coordinator.close(restoreFocus: false, immediately: true)
+        coordinator.close(restoreFocus: true)
     }
 }
 
@@ -695,10 +719,14 @@ private struct AtticDropdownModifier<Card: View>: ViewModifier {
     @Environment(\.atticDesign) private var design
 
     func body(content: Content) -> some View {
-        content.background(
-            AtticDropdownAnchor(isPresented: $isPresented, prefer: prefer, label: label, design: design,
-                                content: { AnyView(card()) })
-                .accessibilityHidden(true)
-        )
+        // The anchor exists only while the card is asked for: a row at rest
+        // costs nothing (no AppKit view per row).
+        content.background {
+            if isPresented {
+                AtticDropdownAnchor(isPresented: $isPresented, prefer: prefer, label: label, design: design,
+                                    content: { AnyView(card()) })
+                    .accessibilityHidden(true)
+            }
+        }
     }
 }
