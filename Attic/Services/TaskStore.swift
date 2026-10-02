@@ -2460,6 +2460,38 @@ final class TaskStore: ObservableObject {
         return true
     }
 
+    /// An agent edit that returns an archived task and its family to the
+    /// live lists. Validate and stage every requested field before one save;
+    /// failure rolls back archive membership and the edit together.
+    @discardableResult
+    func restoreAndUpdateTask(
+        _ id: UUID,
+        title: String? = nil,
+        priority: TaskPriority? = nil,
+        status: TaskStatus,
+        tags: [String]? = nil,
+        dueDay: DueDay?? = nil
+    ) -> Bool {
+        do {
+            guard let logged = listedTask(withID: id), logged.doneLoggedAt != nil, status != .done else {
+                throw TaskEditRefusal("The task must be in the Done log and reopen to an unfinished state.")
+            }
+            _ = try stageUpdate(logged, title: title, priority: priority, status: status,
+                                tags: tags, dueDay: dueDay)
+            try returnFamiliesFromDoneLog([logged.parentID ?? id])
+        } catch {
+            context.rollback()
+            try? reloadTasks()
+            report(error, owner: nil)
+            return false
+        }
+        guard save(owner: nil) else { return false }
+        do { try reloadTasks() } catch {
+            report("Updated, but the list could not be refreshed: \(error.localizedDescription)", owner: nil)
+        }
+        return true
+    }
+
     /// Puts a family that `restoreToNow` brought back into the Done log
     /// again, when every row is still finished; a family changed since
     /// stays in the list. Written on every replica, in one save.

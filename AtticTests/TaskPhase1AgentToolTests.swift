@@ -116,4 +116,74 @@ final class TaskPhase1AgentToolTests: XCTestCase {
         XCTAssertNil(task["done_logged_at"])
         XCTAssertEqual(store.doneLogCount(), 0)
     }
+    private func archivedFamily(in store: TaskStore) throws -> (UUID, UUID) {
+        let parent = try XCTUnwrap(store.create(title: "Parent", priority: .low))
+        let child = try XCTUnwrap(store.create(title: "Child", parentID: parent.id))
+        XCTAssertTrue(store.update(parent, tags: ["old"], dueDay: .some(DueDay(rawValue: "2026-09-22"))))
+        XCTAssertTrue(store.completeFamily(taskID: parent.id))
+        XCTAssertEqual(store.moveCompletedToDoneLog(before: clock.value.addingTimeInterval(86_400)), 2)
+        return (parent.id, child.id)
+    }
+
+    func testFailedArchivedCompoundUpdatePreservesFamilyAndHistory() throws {
+        let gate = PersistenceGate()
+        store = try makeTestStore(now: { [clock] in clock.value }, persist: gate.save)
+        library = AtticLibrary(tasks: store)
+        tools = AgentTaskTools(store: store, library: library)
+        let (parentID, _) = try archivedFamily(in: store)
+        func durableRows() throws -> [TaskItem] {
+            try ModelContext(store.container).fetch(FetchDescriptor<TaskItem>())
+                .sorted { $0.id.uuidString < $1.id.uuidString }
+        }
+        let before = try durableRows().map(TaskEditableState.init)
+        let logging = try durableRows().map(\.doneLoggedAt)
+        let updated = try durableRows().map(\.updatedAt)
+        let history = library.undo.undoName(in: .tasks)
+        let saves = gate.saveCount
+        gate.shouldFail = true
+        XCTAssertFalse(error("update_task", ["id": parentID.uuidString, "state": "inProgress",
+                                             "title": "Changed", "priority": "high", "tags": ["new"], "due": NSNull()]).isEmpty)
+        XCTAssertEqual(try durableRows().map(TaskEditableState.init), before)
+        XCTAssertEqual(try durableRows().map(\.doneLoggedAt), logging)
+        XCTAssertEqual(try durableRows().map(\.updatedAt), updated)
+        XCTAssertTrue(store.tasks.isEmpty)
+        XCTAssertEqual(library.undo.undoName(in: .tasks), history)
+        XCTAssertEqual(gate.saveCount, saves)
+    }
+
+    func testArchivedCompoundUpdateUsesOneSaveAndOneHistoryStep() throws {
+        let gate = PersistenceGate()
+        store = try makeTestStore(now: { [clock] in clock.value }, persist: gate.save)
+        library = AtticLibrary(tasks: store)
+        tools = AgentTaskTools(store: store, library: library)
+        let (parentID, childID) = try archivedFamily(in: store)
+        let before = try XCTUnwrap(store.listedEditableState(of: parentID))
+        let loggedAt = try XCTUnwrap(store.listedTask(withID: parentID)?.doneLoggedAt)
+        let childBefore = try XCTUnwrap(store.listedEditableState(of: childID))
+        let saves = gate.saveCount
+        _ = try call("update_task", ["id": parentID.uuidString, "state": "inProgress", "title": "Changed",
+                                    "priority": "high", "tags": ["new"], "due": NSNull()])
+        XCTAssertEqual(gate.saveCount, saves + 1)
+        let rows = try ModelContext(store.container).fetch(FetchDescriptor<TaskItem>())
+        let parent = try XCTUnwrap(rows.first { $0.id == parentID })
+        XCTAssertEqual(parent.title, "Changed")
+        XCTAssertEqual(parent.status, .inProgress)
+        XCTAssertEqual(parent.priority, .high)
+        XCTAssertEqual(parent.tags, ["new"])
+        XCTAssertNil(parent.dueDay)
+        XCTAssertNil(parent.completedAt)
+        XCTAssertNil(parent.completedFromRaw)
+        XCTAssertNil(parent.completedFromOrder)
+        XCTAssertTrue(rows.allSatisfy { $0.doneLoggedAt == nil })
+        XCTAssertEqual(store.editableState(of: childID), childBefore)
+        XCTAssertTrue(library.undo.undo(in: .tasks))
+        XCTAssertEqual(store.listedEditableState(of: parentID), before)
+        XCTAssertEqual(store.listedTask(withID: parentID)?.doneLoggedAt, loggedAt)
+        XCTAssertEqual(store.listedEditableState(of: childID), childBefore)
+        XCTAssertNil(library.undo.undoName(in: .tasks), "one undo reverses the whole compound step")
+        XCTAssertTrue(library.undo.redo(in: .tasks))
+        XCTAssertEqual(store.task(withID: parentID)?.title, "Changed")
+        XCTAssertNil(store.task(withID: childID)?.doneLoggedAt)
+    }
+
 }

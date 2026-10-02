@@ -692,23 +692,27 @@ final class AgentTaskTools {
         let newTags = try tags(from: arguments)
         let newDue = try dueDay(from: arguments, allowingClear: true)
 
-        // A task in the Done log comes back to Now first (as to do), then
-        // takes the rest of the edit; each is its own undoable step.
+        // Returning from the Done log and applying the requested fields
+        // must be one durable operation, including the family's membership.
         if store.task(withID: task.id) == nil {
             guard let newStatus, newStatus != .done else {
                 throw AgentToolError.invalidArguments("This task is in the Done log. Set status to todo (or inProgress, backlog) to bring it back to Now first.")
             }
-            try perform { library.restoreToNow(task.id) }
-        }
-        try perform {
-            library.updateTask(
-                task.id,
-                title: newTitle,
-                priority: newPriority,
-                status: newStatus,
-                tags: newTags,
-                dueDay: newDue
-            )
+            try perform {
+                library.restoreAndUpdateTask(task.id, title: newTitle, priority: newPriority,
+                                             status: newStatus, tags: newTags, dueDay: newDue)
+            }
+        } else {
+            try perform {
+                library.updateTask(
+                    task.id,
+                    title: newTitle,
+                    priority: newPriority,
+                    status: newStatus,
+                    tags: newTags,
+                    dueDay: newDue
+                )
+            }
         }
         return try encode(["task": serialize(store.task(withID: task.id) ?? task)])
     }

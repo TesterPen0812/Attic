@@ -179,6 +179,40 @@ final class AtticLibrary {
         return taskOutcome(succeeded, since: serial, ids: [id])
     }
 
+    /// Restore an archived task with all requested edits as one durable
+    /// operation and one history step. Nothing enters history on failure.
+    @discardableResult
+    func restoreAndUpdateTask(
+        _ id: UUID,
+        title: String? = nil,
+        priority: TaskPriority? = nil,
+        status: TaskStatus,
+        tags: [String]? = nil,
+        dueDay: DueDay?? = nil,
+        in history: UndoHistoryID = .tasks
+    ) -> CommandOutcome {
+        var succeeded = false
+        let serial = tasks.errorSerial
+        undo.perform(in: history) {
+            guard let before = tasks.listedEditableState(of: id),
+                  let loggedAt = tasks.listedTask(withID: id)?.doneLoggedAt,
+                  tasks.restoreAndUpdateTask(id, title: title, priority: priority, status: status,
+                                             tags: tags, dueDay: dueDay),
+                  let after = tasks.editableState(of: id) else { return nil }
+            succeeded = true
+            let store = self.tasks
+            return UndoStep(
+                name: "Change Task State",
+                undoOutcome: { store.undoReturnFromDoneLog(from: [after], to: [before], logging: [id: loggedAt]) },
+                redoOutcome: {
+                    store.restoreAndUpdateTask(id, title: title, priority: priority, status: status,
+                                               tags: tags, dueDay: dueDay) ? .applied : .failed
+                }
+            )
+        }
+        return taskOutcome(succeeded, since: serial, ids: [id])
+    }
+
     /// A reorder within a group (⌘↑ ⌘↓, or a drop onto a row) as one step.
     @discardableResult
     func moveTask(_ id: UUID, relativeTo targetID: UUID, in history: UndoHistoryID = .tasks) -> CommandOutcome {
