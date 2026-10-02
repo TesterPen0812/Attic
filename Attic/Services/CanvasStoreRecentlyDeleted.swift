@@ -313,12 +313,12 @@ extension CanvasStore {
                 let canvasID = id
                 try context.fetchCanvasReplicas(FetchDescriptor<CanvasStrokeItem>(
                     predicate: #Predicate { $0.canvasID == canvasID }
-                )).forEach(context.delete)
+                )).forEach { WorkspaceLegacyBridge.delete($0, in: context) }
                 try context.fetchCanvasReplicas(FetchDescriptor<CanvasImageItem>(
                     predicate: #Predicate { $0.canvasID == canvasID }
-                )).forEach(context.delete)
+                )).forEach { WorkspaceLegacyBridge.delete($0, in: context) }
                 #if os(macOS)
-                try storedSemanticReplicas(canvasID: canvasID).forEach(context.delete)
+                try storedSemanticReplicas(canvasID: canvasID).forEach { WorkspaceLegacyBridge.delete($0, in: context) }
                 #endif
                 for replica in replicas {
                     replica.name = ""

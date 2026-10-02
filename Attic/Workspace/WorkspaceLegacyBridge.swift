@@ -14,6 +14,8 @@ enum WorkspaceLegacyBridge {
         let coordinator: WorkspaceOperationCoordinator
         var baseline: [WorkspaceOwner: WorkspaceModelToken]
         var scopeIndex: WorkspaceScopeIndex
+        var scopes: [WorkspaceScope: WorkspaceScopeToken] = [:]
+        var captureFailed = false
         let includeCanvas: Bool
         var plainTaskWrites: Set<UUID>?
         var saveObserver: NSObjectProtocol?
@@ -61,12 +63,12 @@ enum WorkspaceLegacyBridge {
                                 scopeIndex: WorkspaceScopeIndex? = nil) throws {
         context.autosaveEnabled = false
         let coordinator = try coordinator(for: context.container)
-        let baseline = try baseline ?? inventory(in: context, includeCanvas: includeCanvas)
+        let baseline = baseline ?? [:]
         let index = try scopeIndex ?? WorkspaceScopeIndex(baseline)
         let state = ContextState(coordinator, baseline, includeCanvas: includeCanvas, scopeIndex: index)
         let reference = ContextReference(context)
         // Isolated fixtures can save this staging context directly. Capture
-        // its actual saved baseline after success; never refresh guards while
+        // a fresh empty guard cache after success; never refresh guards while
         // a command still has pending edits. This is a read, not a new writer.
         state.saveObserver = NotificationCenter.default.addObserver(forName: ModelContext.didSave, object: context, queue: .main) { _ in
             MainActor.assumeIsolated {
@@ -78,7 +80,7 @@ enum WorkspaceLegacyBridge {
         objc_setAssociatedObject(context, &contextKey, state, .OBJC_ASSOCIATION_RETAIN_NONATOMIC)
     }
     /// Called only after persist confirms the declared mutation. External
-    /// refreshes use context(for:) and perform a complete new inventory.
+    /// refreshes use context(for:) with fresh, lazily captured owner guards.
     static func presentationFollowingCommit(_ source: ModelContext) throws -> ModelContext {
         guard let state = objc_getAssociatedObject(source, &contextKey) as? ContextState else { throw WorkspaceFoundationError.unknown }
         let fresh = state.coordinator.freshContext()
@@ -87,7 +89,26 @@ enum WorkspaceLegacyBridge {
     }
     static func capturedToken(_ owner: WorkspaceOwner, in source: ModelContext) throws -> WorkspaceModelToken {
         guard let state = objc_getAssociatedObject(source, &contextKey) as? ContextState else { throw WorkspaceFoundationError.unknown }
-        return state.baseline[owner] ?? WorkspaceModelToken(owner: owner, replicas: [])
+        if let token = state.baseline[owner] { return token }
+        let token = try WorkspaceModelToken.read(owner, in: source)
+        state.baseline[owner] = token
+        return token
+    }
+    static func captureBeforeMutation(_ row: any PersistentModel, in source: ModelContext) {
+        guard let state = objc_getAssociatedObject(source, &contextKey) as? ContextState,
+              let owner = WorkspaceOperationCoordinator.owner(row), state.baseline[owner] == nil,
+              !source.insertedModelsArray.contains(where: { $0 === row }) else { return }
+        do {
+            let token = try WorkspaceModelToken.read(owner, in: source)
+            state.baseline[owner] = token
+            for scope in WorkspaceScopeToken.scopes(for: [token]) where state.scopes[scope] == nil {
+                state.scopes[scope] = try WorkspaceScopeToken.read(scope, in: source)
+            }
+        } catch { state.captureFailed = true }
+    }
+    static func delete(_ row: any PersistentModel, in context: ModelContext) {
+        captureBeforeMutation(row, in: context)
+        context.delete(row)
     }
     static func confirmedPlainTaskWrites(in source: ModelContext) throws -> Set<UUID>? {
         guard let state = objc_getAssociatedObject(source, &contextKey) as? ContextState else { throw WorkspaceFoundationError.unknown }
@@ -98,6 +119,7 @@ enum WorkspaceLegacyBridge {
         guard let state = objc_getAssociatedObject(source, &contextKey) as? ContextState else {
             throw WorkspaceFoundationError.unknown
         }
+        guard !state.captureFailed else { throw WorkspaceFoundationError.unknown }
         let changes = source.insertedModelsArray + source.changedModelsArray + source.deletedModelsArray
         guard let admission = state.coordinator.ownership.tryAcquire(try state.coordinator.admissionIDs(changes, before: Array(state.baseline.values)), kind: .admission) else {
             throw WorkspaceFoundationError.pendingPublication
@@ -108,12 +130,17 @@ enum WorkspaceLegacyBridge {
             return owner
         })
         if writes.isEmpty { return }
-        let bulkAfter = writes.count > 8 ? try inventory(in: source, includeCanvas: true, entities: Set(writes.map(\.entity))) : nil
         var after: [WorkspaceOwner: WorkspaceModelToken] = [:]
         var before: [WorkspaceOwner: WorkspaceModelToken] = [:]
         for owner in writes {
-            before[owner] = state.baseline[owner] ?? WorkspaceModelToken(owner: owner, replicas: [])
-            after[owner] = try bulkAfter.map { $0[owner] ?? WorkspaceModelToken(owner: owner, replicas: []) } ?? WorkspaceModelToken.read(owner, in: source)
+            // Inserts have expected absence; changed/deleted owners must have
+            // a guard captured before their first staged mutation.
+            if let captured = state.baseline[owner] { before[owner] = captured }
+            else if changes.filter({ WorkspaceOperationCoordinator.owner($0) == owner }).allSatisfy({ row in
+                source.insertedModelsArray.contains { $0 === row }
+            }) { before[owner] = WorkspaceModelToken(owner: owner, replicas: []) }
+            else { throw WorkspaceFoundationError.unknown }
+            after[owner] = try WorkspaceModelToken.read(owner, in: source)
         }
         // Include metadata consumed at associated endpoints and parent heads.
         // Membership scopes below come from the original staging baseline.
@@ -122,61 +149,45 @@ enum WorkspaceLegacyBridge {
                 for field in ["parentID", "taskID"] {
                     if let bytes = replica.fields[field], let id = try JSONDecoder().decode(UUID?.self, from: bytes) {
                         let owner = WorkspaceOwner(entity: .task, id: id)
-                        before[owner] = state.baseline[owner] ?? WorkspaceModelToken(owner: owner, replicas: [])
+                        before[owner] = try capturedToken(owner, in: source)
                     }
                 }
             }
         }
         let reads = before.values.sorted { ($0.owner.entity.rawValue, $0.owner.id.uuidString) < ($1.owner.entity.rawValue, $1.owner.id.uuidString) }
-        let plain = try !history && state.coordinator.mayUsePlainSave(
+        let plain = try state.coordinator.mayUsePlainSave(
             before: writes.map { before[$0]! }, after: writes.map { after[$0]! }, in: source)
-        let scopes = WorkspaceScopeToken.scopes(for: reads).map { state.scopeIndex.token($0) }
+        let scopes = try WorkspaceScopeToken.scopes(for: reads).map { scope in
+            try state.scopes[scope] ?? WorkspaceScopeToken.read(scope, in: state.coordinator.freshContext())
+        }
         var staged: [StagedNoteAttachment] = []
-        for owner in writes where owner.entity == .attachment {
-            guard let next = after[owner], let previous = before[owner], !next.replicas.isEmpty else { continue }
-            let oldPayloads = Set(previous.replicas.compactMap { $0.fields["payload"] })
-            let changed = next.replicas.filter { !oldPayloads.contains($0.fields["payload"] ?? Data()) }
-            guard !changed.isEmpty else { continue }
-            let values = changed[0].fields
-            guard changed.allSatisfy({ $0.fields == values }), let payloadData = values["payload"] else {
-                throw WorkspaceFoundationError.unknown
-            }
-            guard let payload = try JSONDecoder().decode(Data?.self, from: payloadData) else {
-                throw WorkspaceFoundationError.protectedOwner
-            }
-            func field<T: Decodable>(_ key: String, _ type: T.Type) throws -> T {
-                guard let data = values[key] else { throw WorkspaceFoundationError.unknown }
-                return try JSONDecoder().decode(type, from: data)
-            }
-            let value = try state.coordinator.journal.verifiedAttachmentSynchronously(id: owner.id, filename: field("originalFilename", String.self),
-                contentType: field("contentTypeIdentifier", String.self),
-                byteCount: field("byteCount", Int64.self), digest: field("contentDigest", String.self), bytes: payload)
-            staged.append(value)
+        for row in changes.compactMap({ $0 as? NoteAttachment }) {
+            let old = before[.init(entity: .attachment, id: row.id)]?.replicas.first { $0.physicalID == row.persistentModelID }
+            let next = after[.init(entity: .attachment, id: row.id)]?.replicas.first { $0.physicalID == row.persistentModelID }
+            guard old?.fields["payload"] != next?.fields["payload"] else { continue }
+            // New bytes are already supplied by ingestion. Only this class
+            // needs payload materialization and a durable envelope.
+            guard let payload = row.payload else { throw WorkspaceFoundationError.protectedOwner }
+            staged.append(try state.coordinator.journal.verifiedAttachmentSynchronously(id: row.id,
+                filename: row.originalFilename, contentType: row.contentTypeIdentifier,
+                byteCount: row.byteCount, digest: row.contentDigest, bytes: payload))
         }
         var documents: [UUID: Data] = [:]
-        for (owner, next) in after where owner.entity == .note {
-            let contents = try next.replicas.compactMap { replica -> Data? in
-                guard let field = replica.fields["content"] else { throw WorkspaceFoundationError.unknown }
-                return try JSONDecoder().decode(Data?.self, from: field)
+        if !plain {
+            for owner in writes where owner.entity == .note {
+                let id = owner.id
+                let rows = try source.fetch(FetchDescriptor<NoteItem>(predicate: #Predicate { $0.id == id }))
+                let contents = rows.compactMap(\.content)
+                if contents.count == rows.count, Set(contents).count == 1 { documents[id] = contents.first }
             }
-            // Metadata changes can span legacy/document replicas without
-            // rewriting their distinct bodies. An after-document promise is
-            // valid only when every physical row carries that exact candidate.
-            if contents.count == next.replicas.count, Set(contents).count == 1 { documents[owner.id] = contents.first }
         }
         var preDraft: NoteDraftJournalEntry?
         if !plain, documents.count == 1, let (id, document) = documents.first {
             let newNote = before[.init(entity: .note, id: id)]?.replicas.isEmpty == true
-            // For first persistence/import autosave the current candidate is
-            // the user's pre-save draft. Model commands preserve stored before
-            // content here; open mixed commands supply their session pre-copy
-            // through the asynchronous coordinator API instead.
-            let beforeContent = try before[.init(entity: .note, id: id)]?.replicas.first?.fields["content"].flatMap {
-                try JSONDecoder().decode(Data?.self, from: $0)
-            }
-            let content = !history || newNote ? document : (beforeContent ?? document)
+            let pre = state.coordinator.freshContext()
+            let beforeContent = try pre.fetch(FetchDescriptor<NoteItem>(predicate: #Predicate { $0.id == id })).first?.content
             preDraft = NoteDraftJournalEntry(noteID: id, isPersisted: !newNote, baseRevisionID: nil,
-                content: content, selectionLocation: 0, selectionLength: 0,
+                content: !history || newNote ? document : (beforeContent ?? document), selectionLocation: 0, selectionLength: 0,
                 staged: staged.map { .init(id: $0.id, filename: $0.filename, contentTypeIdentifier: $0.contentTypeIdentifier,
                     byteCount: $0.byteCount, digest: $0.digest) }, savedAt: Date())
         }
@@ -192,10 +203,12 @@ enum WorkspaceLegacyBridge {
                     for replica in new.replicas {
                         if let previous = oldByID[replica.physicalID] {
                             let patch = replica.fields.filter { previous[$0.key] != $0.value }
-                            try WorkspaceModelFields.apply(patch, to: target.model(for: replica.physicalID))
+                            try WorkspaceModelFields.apply(try WorkspaceModelFields.patchValues(Set(patch.keys),
+                                from: source.model(for: replica.physicalID)), to: target.model(for: replica.physicalID))
                         } else {
                             let row = try makeRow(owner.entity)
-                            try WorkspaceModelFields.apply(replica.fields, to: row)
+                            try WorkspaceModelFields.apply(try WorkspaceModelFields.patchValues(Set(replica.fields.keys),
+                                from: source.model(for: replica.physicalID)), to: row)
                             target.insert(row)
                         }
                     }
@@ -204,10 +217,8 @@ enum WorkspaceLegacyBridge {
         // The source context remains presentation/staging only; stores replace
         // it with a fresh presentation after a confirmed commit.
         let committed = state.coordinator.freshContext()
-        let confirmed = try writes.count > 8
-            ? inventory(in: committed, includeCanvas: true, entities: Set(writes.map(\.entity)))
-            : Dictionary(uniqueKeysWithValues: writes.map { ($0, try WorkspaceModelToken.read($0, in: committed)) })
-        let updates = Dictionary(uniqueKeysWithValues: writes.map { ($0, confirmed[$0] ?? WorkspaceModelToken(owner: $0, replicas: [])) })
+        let confirmed = try Dictionary(uniqueKeysWithValues: writes.map { ($0, try WorkspaceModelToken.read($0, in: committed)) })
+        let updates = confirmed
         state.scopeIndex = try state.scopeIndex.replacing(updates)
         state.baseline.merge(updates) { _, saved in saved }
         state.plainTaskWrites = plain && writes.allSatisfy({ $0.entity == .task }) ? Set(writes.map(\.id)) : nil
@@ -246,7 +257,7 @@ enum WorkspaceLegacyBridge {
             guard schema.contains(name) else { return }
             for row in try context.fetch(FetchDescriptor<M>()) {
                 guard let owner = WorkspaceOperationCoordinator.owner(row) else { throw WorkspaceFoundationError.unknown }
-                families[owner, default: []].append(.init(physicalID: row.persistentModelID, fields: try WorkspaceModelFields.read(row)))
+                families[owner, default: []].append(.init(physicalID: row.persistentModelID, fields: try WorkspaceModelFields.fingerprint(row)))
             }
         }
         try include(TaskItem.self, name: "TaskItem"); try include(NoteItem.self, name: "NoteItem")

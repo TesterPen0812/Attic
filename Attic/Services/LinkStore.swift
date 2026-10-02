@@ -162,7 +162,7 @@ final class LinkStore {
         for group in Dictionary(grouping: replicas, by: \.id).values {
             let ends = Self.ends(of: group[0])
             guard group.allSatisfy({ Self.ends(of: $0) == ends }) else { continue }
-            group.forEach(context.delete)
+            group.forEach { WorkspaceLegacyBridge.delete($0, in: context) }
             removed += 1
         }
         return removed
@@ -193,7 +193,7 @@ final class LinkStore {
                 guard replicas.allSatisfy({ ($0.deletedAt ?? .distantFuture) < cutoff && Self.snapshot(of: $0) == snapshot }) else {
                     continue
                 }
-                replicas.forEach(context.delete)
+                replicas.forEach { WorkspaceLegacyBridge.delete($0, in: context) }
                 removed += 1
             }
             guard removed > 0 else { return 0 }
@@ -236,6 +236,7 @@ final class LinkStore {
             let replicas = try context.fetch(FetchDescriptor<ItemLink>(predicate: #Predicate { $0.id == linkID }))
             guard !replicas.isEmpty else { throw LinkStoreError.missingLink(linkID) }
             let timestamp = now()
+            replicas.forEach { WorkspaceLegacyBridge.captureBeforeMutation($0, in: context) }
             for replica in replicas {
                 replica.deletedAt = deleted ? timestamp : nil
                 replica.updatedAt = timestamp

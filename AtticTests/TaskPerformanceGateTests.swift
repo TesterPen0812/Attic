@@ -91,6 +91,7 @@ final class TaskPerformanceGateTests: XCTestCase {
     /// and the sections snapshot stays memoized between mutations.
     func testStatusToggleAtSixThousandTasksStaysBounded() throws {
         let store = try seedStore(parents: 1_000, childrenPerParent: 5)
+        let library = AtticLibrary(tasks: store)
         let children = store.tasks.filter { $0.parentID != nil }
         var index = 0
         var toggle = 0.0, snapshot = 0.0, lookup = 0.0
@@ -110,7 +111,7 @@ final class TaskPerformanceGateTests: XCTestCase {
         let median = medianMilliseconds(iterations: 7) {
             let child = children[index]
             index += 1
-            toggle += ms { XCTAssertTrue(store.setStatus(.done, for: child)) }
+            toggle += ms { XCTAssertEqual(library.updateTask(child.id, status: .done), .applied) }
             snapshot += ms { _ = store.snapshot(for: .tasks) }
             lookup += ms { _ = store.subtasks(of: child.parentID!) }
         }
@@ -194,3 +195,188 @@ final class TaskPerformanceGateTests: XCTestCase {
         XCTAssertTrue(task.attachments.isEmpty)
     }
 }
+
+// Process footprint sampled every millisecond during store open and its
+// asynchronous reconciliation. Compare the absolute sampled peak with the
+// identical fixture/base process, including its measured allocation spread.
+private final class PFFootprintSampler: @unchecked Sendable {
+    private let lock = NSLock()
+    private var peak = 0.0
+    private var readFailed = false
+    private let timer = DispatchSource.makeTimerSource(queue: .global(qos: .userInitiated))
+    init() {
+        sample()
+        timer.setEventHandler { [weak self] in self?.sample() }
+        timer.schedule(deadline: .now(), repeating: .milliseconds(1))
+        timer.resume()
+    }
+    private func sample() {
+        var info = task_vm_info_data_t()
+        var count = mach_msg_type_number_t(MemoryLayout<task_vm_info_data_t>.size / MemoryLayout<integer_t>.size)
+        let status = withUnsafeMutablePointer(to: &info) { pointer in
+            pointer.withMemoryRebound(to: integer_t.self, capacity: Int(count)) {
+                task_info(mach_task_self_, task_flavor_t(TASK_VM_INFO), $0, &count)
+            }
+        }
+        lock.lock(); defer { lock.unlock() }
+        readFailed = readFailed || status != KERN_SUCCESS
+        peak = max(peak, Double(info.phys_footprint) / 1_048_576)
+    }
+    func finish() -> Double {
+        timer.cancel()
+        sample()
+        lock.lock(); defer { lock.unlock() }
+        XCTAssertFalse(readFailed, "PF3 footprint sampling must succeed")
+        return peak
+    }
+    deinit { timer.cancel() }
+}
+
+// BEGIN PAIRED PHASE 2 PERF PROBE
+// This probe also runs from an archive of d77ec80 on the SAME runner. The
+// workflow copies this file into that archive; it never touches phase-2's
+// worktree/branch. Limits use that run's observed sample spread, not guesses.
+extension TaskPerformanceGateTests {
+    private struct PFSamples: Codable {
+        var values: [Double]
+        var median: Double { values.sorted()[values.count / 2] }
+        var maximum: Double { values.max()! }
+        var minimum: Double { values.min()! }
+        var spread: Double { maximum - minimum }
+    }
+    private func pfMilliseconds<T>(_ body: () throws -> T) rethrows -> (T, Double) {
+        let start = DispatchTime.now().uptimeNanoseconds
+        let value = try body()
+        return (value, Double(DispatchTime.now().uptimeNanoseconds - start) / 1_000_000)
+    }
+    /// PF2 is measured THROUGH AtticLibrary, including its authoritative undo
+    /// and before/after reads. PF3 compares the identical writes with 240
+    /// unrelated notes, versions, proposals and attachments (over 60 MiB).
+    func testPFFoundationSizeAndProductionPaths() async throws {
+        var results: [String: PFSamples] = [:]
+        let largeTasks = try seedStore(parents: 1_000, childrenPerParent: 5)
+        let largeLibrary = AtticLibrary(tasks: largeTasks)
+        let children = largeTasks.tasks.filter { $0.parentID != nil }
+        results["SIX_THOUSAND_TOGGLE_MS"] = PFSamples(values: (0..<7).map { i in
+            pfMilliseconds { XCTAssertEqual(largeLibrary.updateTask(children[i].id, status: .done), .applied) }.1
+        })
+        XCTAssertLessThanOrEqual(results["SIX_THOUSAND_TOGGLE_MS"]!.maximum, 120)
+        for populated in [false, true] {
+            let root = FileManager.default.temporaryDirectory.appendingPathComponent("AtticPF-\(UUID())")
+            defer { try? FileManager.default.removeItem(at: root) }
+            try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+            let container = try PersistenceController.makeContainer(cloudSyncEnabled: false, storeDirectory: root)
+            let seed = ModelContext(container)
+            let head = TaskItem(title: "Measured head", manualOrder: 0)
+            seed.insert(head)
+            // Keep the active task fixture identical in both size cases.
+            for i in 1..<200 { seed.insert(TaskItem(title: "Task \(i)", manualOrder: Int64(i) * 1_024)) }
+            let document = NoteDocument(blocks: (0..<5_000).map { .text("Line \($0) with ordinary note text") })
+            let prepared = try PreparedNoteDocument(document)
+            let noteID = UUID(), revision = UUID(), timestamp = Date()
+            let note = NoteItem(id: noteID)
+            note.content = prepared.content; note.contentFormat = 1
+            note.title = prepared.title; note.body = prepared.body; note.plainText = prepared.plainText
+            note.revisionID = revision
+            seed.insert(note)
+            if populated {
+                let unrelated = try PreparedNoteDocument(NoteDocument(blocks: [.text(String(repeating: "unrelated ", count: 4_096))]))
+                for i in 0..<240 {
+                    let other = NoteItem(title: "Unrelated \(i)", body: unrelated.body)
+                    other.content = unrelated.content; other.contentFormat = 1
+                    other.plainText = unrelated.plainText; other.revisionID = UUID()
+                    seed.insert(other)
+                    seed.insert(NoteVersion(noteID: other.id, createdAt: timestamp, reason: .leave,
+                        content: unrelated.content, contentFormat: 1, title: other.title, body: other.body,
+                        attachmentIDs: [], sourceRevisionID: other.revisionID))
+                    seed.insert(NotePendingEdit(noteID: other.id, baseRevisionToken: other.revisionToken,
+                        proposedContent: unrelated.content, agentName: "PF seed", createdAt: timestamp))
+                    let bytes = Data(repeating: UInt8(i % 255), count: 128 * 1_024)
+                    seed.insert(NoteAttachment(noteID: other.id, originalFilename: "seed-\(i).bin", byteCount: Int64(bytes.count),
+                        sortIndex: 0, contentDigest: NotePayloadDigest.sha256(bytes), payload: bytes))
+                }
+            }
+            try seed.save()
+            let label = populated ? "POPULATED" : "EMPTY"
+            var opens: [Double] = [], footprints: [Double] = []
+            for _ in 0..<7 {
+                let sampler = PFFootprintSampler()
+                let ((tasks, notes, library), duration) = try pfMilliseconds {
+                    let opened = try PersistenceController.makeContainer(cloudSyncEnabled: false, storeDirectory: root)
+                    let tasks = TaskStore(container: opened)
+                    let notes = NoteStore(container: opened, attachmentFileStore: makeTestAttachmentFileStore())
+                    return (tasks, notes, AtticLibrary(tasks: tasks, notes: notes))
+                }
+                opens.append(duration)
+                XCTAssertEqual(tasks.tasks.count, 200)
+                XCTAssertEqual(library.tasks.tasks.count, 200)
+                await notes.waitForAttachmentReconciliation()
+                footprints.append(sampler.finish())
+            }
+            results["\(label)_OPEN_MS"] = PFSamples(values: opens)
+            results["\(label)_OPEN_PEAK_MB"] = PFSamples(values: footprints)
+            let tasks = TaskStore(container: container)
+            let notes = NoteStore(container: container, attachmentFileStore: makeTestAttachmentFileStore())
+            let library = AtticLibrary(tasks: tasks, notes: notes)
+            await notes.waitForAttachmentReconciliation()
+            // Match autosave of an already-open note; both bases perform the
+            // same capability preflight outside the timed commit.
+            _ = try notes.noteMutationPreflight(noteID, format: .document)
+            let source = AtticItemRef(.task, head.id), target = AtticItemRef(.note, noteID)
+            let link = try XCTUnwrap(library.links.link(source, to: target, kind: .reference))
+            var toggles: [Double] = [], links: [Double] = [], saves: [Double] = []
+            var baseRevision = revision
+            for i in 0..<9 {
+                toggles.append(pfMilliseconds {
+                    XCTAssertEqual(library.updateTask(head.id, status: i.isMultiple(of: 2) ? .done : .todo), .applied)
+                }.1)
+                links.append(pfMilliseconds {
+                    XCTAssertTrue(i.isMultiple(of: 2) ? library.links.unlink(link.id) : library.links.restoreLink(link.id))
+                }.1)
+                var candidate = document
+                candidate.blocks[0] = .text("Saved \(i)")
+                let projection = try PreparedNoteDocument(candidate)
+                let (result, duration) = pfMilliseconds {
+                    notes.saveDocument(noteID: noteID, document: candidate, baseRevisionID: baseRevision, staged: [], prepared: projection)
+                }
+                guard case let .success(next) = result else { return XCTFail("PF autosave failed: \(result)") }
+                baseRevision = next
+                saves.append(duration)
+            }
+            results["\(label)_TOGGLE_MS"] = PFSamples(values: toggles)
+            results["\(label)_LINK_MS"] = PFSamples(values: links)
+            results["\(label)_SAVE_MS"] = PFSamples(values: saves)
+        }
+        for key in results.keys.sorted() {
+            let sample = results[key]!
+            print("PF_\(key)_MEDIAN=\(sample.median) MIN=\(sample.minimum) MAX=\(sample.maximum) SPREAD=\(sample.spread)")
+        }
+        let env = ProcessInfo.processInfo.environment
+        print("PF_REFERENCE_JSON=" + String(decoding: try JSONEncoder().encode(results), as: UTF8.self))
+        // Local probes remain useful without an exported hosted baseline.
+        // CI sets this for both the focused PF lane and the full hosted suite.
+        if env["ATTIC_PF_REQUIRE_REFERENCE"] == "1" {
+            XCTAssertNotNil(env["ATTIC_PF_REFERENCE_JSON"], "CI must measure and export the fixed Phase 2 reference")
+        }
+        if let json = env["ATTIC_PF_REFERENCE_JSON"] {
+            let reference = try JSONDecoder().decode([String: PFSamples].self, from: Data(json.utf8))
+            for key in results.keys.sorted() {
+                let actual = results[key]!, base = try XCTUnwrap(reference[key])
+                // Tolerance = largest reference sample + its measured spread.
+                // This is the same noise rule as Phase 2's PF1 assertions.
+                XCTAssertLessThanOrEqual(actual.median, base.maximum + base.spread, "\(key) exceeded fixed Phase 2 spread")
+                XCTAssertLessThanOrEqual(actual.maximum, base.maximum + base.spread, "\(key) maximum exceeded fixed Phase 2 spread")
+            }
+            for metric in ["SAVE_MS", "TOGGLE_MS", "LINK_MS"] {
+                let empty = results["EMPTY_\(metric)"]!, full = results["POPULATED_\(metric)"]!
+                let bEmpty = reference["EMPTY_\(metric)"]!, bFull = reference["POPULATED_\(metric)"]!
+                // Paired size tolerance uses the reference's worst observed
+                // populated-minus-empty delta plus one observed sample spread.
+                let noise = bFull.maximum - bEmpty.minimum + max(bFull.spread, bEmpty.spread)
+                XCTAssertLessThanOrEqual(full.median - empty.median, noise, "PF3 \(metric) scales with unrelated contents")
+            }
+        }
+        XCTAssertLessThanOrEqual(results["POPULATED_TOGGLE_MS"]!.maximum, 120)
+    }
+}
+// END PAIRED PHASE 2 PERF PROBE

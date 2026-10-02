@@ -22,6 +22,8 @@ jobs:
       BUNDLE_FROZEN: "true"
     steps:
       - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
       - uses: ruby/setup-ruby@v1
         with:
           ruby-version: "3.3"
@@ -32,10 +34,40 @@ jobs:
           sudo cp Scripts/xcodebuild-locked.sh /Users/taha/Developer/attic-redesign-assets/xcodebuild-locked.sh
           sudo chmod +x /Users/taha/Developer/attic-redesign-assets/xcodebuild-locked.sh
           bundle exec ruby Scripts/verify_project_generation.rb
+          mkdir -p .build
+      - name: Measure fixed Phase 2 reference on this runner
+        if: ${{ !inputs.harness_only }}
+        shell: /bin/zsh {0}
+        run: |
+          base="$RUNNER_TEMP/AtticPFBase"
+          mkdir -p "$base"
+          git archive d77ec80ad91930d377bb3a5849c030c4d63c541e | tar -x -C "$base"
+          cp AtticTests/TaskPerformanceGateTests.swift "$base/AtticTests/TaskPerformanceGateTests.swift"
+          F=(CODE_SIGNING_ALLOWED=YES CODE_SIGNING_REQUIRED=YES CODE_SIGN_STYLE=Manual CODE_SIGN_IDENTITY=- DEVELOPMENT_TEAM= ENABLE_DEBUG_DYLIB=NO)
+          /Users/taha/Developer/attic-redesign-assets/xcodebuild-locked.sh \
+            -project "$base/Attic.xcodeproj" -scheme Attic -configuration Local \
+            -destination 'platform=macOS' -derivedDataPath "$RUNNER_TEMP/AtticPFBaseBuild" \
+            ATTIC_MACOS_UNIT_HOST_PRODUCT_NAME=AtticP3PFBaseHost \
+            ATTIC_MACOS_UNIT_HOST_EXECUTABLE_NAME=AtticP3PFBaseHost \
+            ATTIC_MACOS_UNIT_HOST_BUNDLE_IDENTIFIER=com.taha.Attic.p3.pfbase \
+            "${F[@]}" -parallel-testing-enabled NO \
+            -only-testing:AtticTests/TaskPerformanceGateTests/testPFFoundationSizeAndProductionPaths test \
+            | tee .build/pf-base.log
+          python3 - <<'PY'
+          import json, os
+          from pathlib import Path
+          lines = Path('.build/pf-base.log').read_text().splitlines()
+          raw = next(line.split('PF_REFERENCE_JSON=', 1)[1] for line in lines if 'PF_REFERENCE_JSON=' in line)
+          reference = json.loads(raw)
+          Path('.build/pf-base-reference.json').write_text(json.dumps(reference, indent=2))
+          with open(os.environ['GITHUB_ENV'], 'a') as output:
+              output.write('TEST_RUNNER_ATTIC_PF_REFERENCE_JSON=' + raw + '\n')
+              output.write('TEST_RUNNER_ATTIC_PF_REQUIRE_REFERENCE=1\n')
+          PY
       - name: Build and sign the isolated hosted test products
         shell: /bin/zsh {0}
         run: |
-          F=(CODE_SIGNING_ALLOWED=YES CODE_SIGNING_REQUIRED=YES CODE_SIGN_STYLE=Manual CODE_SIGN_IDENTITY=- DEVELOPMENT_TEAM=)
+          F=(CODE_SIGNING_ALLOWED=YES CODE_SIGNING_REQUIRED=YES CODE_SIGN_STYLE=Manual CODE_SIGN_IDENTITY=- DEVELOPMENT_TEAM= ENABLE_DEBUG_DYLIB=NO)
           /Users/taha/Developer/attic-redesign-assets/xcodebuild-locked.sh \
             -project Attic.xcodeproj -scheme Attic -configuration Local \
             -destination 'platform=macOS' -derivedDataPath .build/dd \
@@ -49,7 +81,7 @@ jobs:
           TEST_RUNNER_ATTIC_KEY_WINDOW_TESTS: "1"
         shell: /bin/zsh {0}
         run: |
-          F=(CODE_SIGNING_ALLOWED=YES CODE_SIGNING_REQUIRED=YES CODE_SIGN_STYLE=Manual CODE_SIGN_IDENTITY=- DEVELOPMENT_TEAM=)
+          F=(CODE_SIGNING_ALLOWED=YES CODE_SIGNING_REQUIRED=YES CODE_SIGN_STYLE=Manual CODE_SIGN_IDENTITY=- DEVELOPMENT_TEAM= ENABLE_DEBUG_DYLIB=NO)
           /Users/taha/Developer/attic-redesign-assets/xcodebuild-locked.sh \
             -project Attic.xcodeproj -scheme Attic -configuration Local \
             -destination 'platform=macOS' -derivedDataPath .build/dd \
@@ -65,7 +97,7 @@ jobs:
       - name: Run workspace history before purge
         shell: /bin/zsh {0}
         run: |
-          F=(CODE_SIGNING_ALLOWED=YES CODE_SIGNING_REQUIRED=YES CODE_SIGN_STYLE=Manual CODE_SIGN_IDENTITY=- DEVELOPMENT_TEAM=)
+          F=(CODE_SIGNING_ALLOWED=YES CODE_SIGNING_REQUIRED=YES CODE_SIGN_STYLE=Manual CODE_SIGN_IDENTITY=- DEVELOPMENT_TEAM= ENABLE_DEBUG_DYLIB=NO)
           /Users/taha/Developer/attic-redesign-assets/xcodebuild-locked.sh \
             -project Attic.xcodeproj -scheme Attic -configuration Local \
             -destination 'platform=macOS' -derivedDataPath .build/dd \
@@ -79,7 +111,7 @@ jobs:
       - name: Run coordinated purge restore and K8
         shell: /bin/zsh {0}
         run: |
-          F=(CODE_SIGNING_ALLOWED=YES CODE_SIGNING_REQUIRED=YES CODE_SIGN_STYLE=Manual CODE_SIGN_IDENTITY=- DEVELOPMENT_TEAM=)
+          F=(CODE_SIGNING_ALLOWED=YES CODE_SIGNING_REQUIRED=YES CODE_SIGN_STYLE=Manual CODE_SIGN_IDENTITY=- DEVELOPMENT_TEAM= ENABLE_DEBUG_DYLIB=NO)
           /Users/taha/Developer/attic-redesign-assets/xcodebuild-locked.sh \
             -project Attic.xcodeproj -scheme Attic -configuration Local \
             -destination 'platform=macOS' -derivedDataPath .build/dd \
@@ -96,7 +128,7 @@ jobs:
           TEST_RUNNER_ATTIC_KEY_WINDOW_TESTS: "1"
         shell: /bin/zsh {0}
         run: |
-          F=(CODE_SIGNING_ALLOWED=YES CODE_SIGNING_REQUIRED=YES CODE_SIGN_STYLE=Manual CODE_SIGN_IDENTITY=- DEVELOPMENT_TEAM=)
+          F=(CODE_SIGNING_ALLOWED=YES CODE_SIGNING_REQUIRED=YES CODE_SIGN_STYLE=Manual CODE_SIGN_IDENTITY=- DEVELOPMENT_TEAM= ENABLE_DEBUG_DYLIB=NO)
           /Users/taha/Developer/attic-redesign-assets/xcodebuild-locked.sh \
             -project Attic.xcodeproj -scheme Attic -configuration Local \
             -destination 'platform=macOS' -derivedDataPath .build/dd \
@@ -116,7 +148,7 @@ jobs:
         if: ${{ !cancelled() && !inputs.harness_only }}
         shell: /bin/zsh {0}
         run: |
-          F=(CODE_SIGNING_ALLOWED=YES CODE_SIGNING_REQUIRED=YES CODE_SIGN_STYLE=Manual CODE_SIGN_IDENTITY=- DEVELOPMENT_TEAM=)
+          F=(CODE_SIGNING_ALLOWED=YES CODE_SIGNING_REQUIRED=YES CODE_SIGN_STYLE=Manual CODE_SIGN_IDENTITY=- DEVELOPMENT_TEAM= ENABLE_DEBUG_DYLIB=NO)
           /Users/taha/Developer/attic-redesign-assets/xcodebuild-locked.sh \
             -project Attic.xcodeproj -scheme Attic -configuration Local \
             -destination 'platform=macOS' -derivedDataPath .build/dd \
@@ -140,4 +172,6 @@ jobs:
             .build/history-gate.xcresult
             .build/purge-gate.xcresult
             .build/foundation.xcresult
+            .build/pf-base.log
+            .build/pf-base-reference.json
           retention-days: 3

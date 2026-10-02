@@ -132,15 +132,65 @@ final class WorkspaceCommitTests: XCTestCase {
         XCTAssertEqual(try coordinator.freshContext().fetchCount(FetchDescriptor<OperationReceipt>()), 0)
     }
 
-    func testC5CompatibilityBatchHasOneDomainSaveAndSeparateReceiptOnlyBookkeeping() throws {
+    func testC5TasksBatchHasOnePlainDomainSaveAndNoBookkeeping() throws {
         let gate = PersistenceGate()
         let store = TaskStore(container: container, persist: gate.save)
         let before = gate.saveCount, beforeBookkeeping = gate.bookkeepingSaveCount
         let created = try XCTUnwrap(store.commit([TaskDraft(title: "One"), TaskDraft(title: "Two")]))
         XCTAssertEqual(created.count, 2)
-        XCTAssertEqual(gate.saveCount, before + 1, "the domain rows and receipt share one transaction")
-        XCTAssertEqual(gate.bookkeepingSaveCount, beforeBookkeeping + 2)
+        XCTAssertEqual(gate.saveCount, before + 1, "Tasks commands have one gated domain transaction")
+        XCTAssertEqual(gate.bookkeepingSaveCount, beforeBookkeeping)
+        XCTAssertEqual(try coordinator.freshContext().fetchCount(FetchDescriptor<OperationReceipt>()), 0)
         XCTAssertEqual(try coordinator.freshContext().fetchCount(FetchDescriptor<TaskItem>()), 3)
+    }
+
+    func testC5ProductionTaskCRUDHasNoEnvelopeOrReceipt() async throws {
+        let gate = PersistenceGate()
+        let tasks = TaskStore(container: container, persist: gate.save)
+        let library = AtticLibrary(tasks: tasks)
+        let initial = gate.bookkeepingSaveCount
+        XCTAssertEqual(library.updateTask(taskID, status: .done), .applied)
+        XCTAssertEqual(library.updateTask(taskID, title: "Renamed"), .applied)
+        let added = try XCTUnwrap(library.createTasks([TaskDraft(title: "Added"), TaskDraft(title: "Peer")]))
+        XCTAssertEqual(library.moveTask(added[0].id, toIndex: 1), .applied)
+        XCTAssertEqual(library.deleteTasks([added[0].id]), .applied)
+        XCTAssertEqual(gate.bookkeepingSaveCount, initial)
+        XCTAssertEqual(try coordinator.freshContext().fetchCount(FetchDescriptor<OperationReceipt>()), 0)
+        let envelopes = try await coordinator.journal.operationEnvelopes()
+        XCTAssertTrue(envelopes.isEmpty)
+    }
+
+    func testPF4ProductionHotPathsReadNoStoredPayloads() async throws {
+        let fixture = coordinator.freshContext()
+        let bytes = Data(repeating: 42, count: 2 * 1_024 * 1_024)
+        fixture.insert(NoteAttachment(noteID: noteID, originalFilename: "unreferenced.bin", byteCount: Int64(bytes.count),
+            sortIndex: 0, contentDigest: NotePayloadDigest.sha256(bytes), payload: bytes))
+        fixture.insert(NoteVersion(noteID: noteID, createdAt: Date(), reason: .leave, content: bytes, contentFormat: 1,
+            title: "Stored version", body: "", attachmentIDs: [], sourceRevisionID: UUID()))
+        fixture.insert(NotePendingEdit(noteID: noteID, baseRevisionToken: "old", proposedContent: bytes,
+            agentName: "PF4", createdAt: Date()))
+        try fixture.save()
+        let tasks = TaskStore(container: container), notes = NoteStore(container: container,
+            attachmentFileStore: makeTestAttachmentFileStore())
+        let library = AtticLibrary(tasks: tasks, notes: notes)
+        await notes.waitForAttachmentReconciliation()
+        let current = try XCTUnwrap(notes.note(withID: noteID))
+        var candidate = original!; candidate.blocks[2] = .text("Hot path")
+        let prepared = try PreparedNoteDocument(candidate)
+        WorkspacePayloadAccess.counts = [:]
+        let revision = try notes.saveDocument(noteID: noteID, document: candidate,
+            baseRevisionID: current.revisionID, prepared: prepared).get()
+        XCTAssertNotNil(revision)
+        XCTAssertEqual(library.updateTask(taskID, status: .done), .applied)
+        let link = try XCTUnwrap(library.links.link(.init(.task, taskID), to: .init(.note, noteID), kind: .reference))
+        XCTAssertTrue(library.links.unlink(link.id))
+        XCTAssertEqual(WorkspacePayloadAccess.counts.values.reduce(0, +), 0, "PF4 faults: \(WorkspacePayloadAccess.counts)")
+        // Prove the seam detects real getters; a silently inert counter cannot pass.
+        let positive = coordinator.freshContext()
+        _ = try positive.fetch(FetchDescriptor<NoteAttachment>()).first?.payload
+        _ = try positive.fetch(FetchDescriptor<NoteVersion>()).first?.content
+        _ = try positive.fetch(FetchDescriptor<NotePendingEdit>()).first?.proposedContent
+        XCTAssertEqual(WorkspacePayloadAccess.counts, ["attachment": 1, "version": 1, "proposal": 1])
     }
 
     func testC2IndexedMembershipMatchesFreshQueriesAndKeepsDivergentReplicasComplete() throws {

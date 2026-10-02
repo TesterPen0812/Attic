@@ -15,7 +15,12 @@ final class NoteVersion {
     /// `NoteVersionReason.rawValue`; unknown values from newer builds are kept.
     var reasonRaw: String = ""
     /// The note's content at that time (format ≥ 1), byte for byte.
-    @Attribute(.externalStorage) var content: Data? = nil
+    @Attribute(.externalStorage, originalName: "content") private var contentStorage: Data? = nil
+    var content: Data? {
+        get { WorkspacePayloadAccess.note("version", model: self); return contentStorage }
+        set { contentFingerprint = WorkspaceModelFields.digest(newValue); contentStorage = newValue }
+    }
+    var contentFingerprint: String? = nil
     var contentFormat: Int = 0
     /// A legacy note's title and body (format 0), or the derived ones.
     var title: String = ""
@@ -83,7 +88,12 @@ final class NotePendingEdit {
     var id: UUID = UUID()
     var noteID: UUID = UUID()
     var baseRevisionToken: String = ""
-    @Attribute(.externalStorage) var proposedContent: Data? = nil
+    @Attribute(.externalStorage, originalName: "proposedContent") private var proposedContentStorage: Data? = nil
+    var proposedContent: Data? {
+        get { WorkspacePayloadAccess.note("proposal", model: self); return proposedContentStorage }
+        set { proposalFingerprint = WorkspaceModelFields.digest(newValue); proposedContentStorage = newValue }
+    }
+    var proposalFingerprint: String? = nil
     /// The version inserted in the same transaction as this proposal.
     var baseVersionID: UUID? = nil
     var agentName: String = ""

@@ -175,9 +175,11 @@ struct PreparedNoteDocument: Sendable {
     let firstFileName: String?
     let admissionIDs: Set<UUID>?
     let attachmentBlocks: [NoteBlock]
+    let hasTaskNote: Bool
 
     init(_ document: NoteDocument) throws {
         content = try NoteContentCodec.encode(document)
+        hasTaskNote = document.requires.contains("taskNote")
         admissionIDs = document.isWritableByThisBuild ? Set(document.attachmentIDs) : nil
         title = NoteStore.normalizedTitle(document.title)
         body = NoteTextExport.plainBody(document)
@@ -324,10 +326,15 @@ extension NoteStore {
                     editable = decoded.isEditable
                     countDocumentReplicaDecode()
                     documentReplicaCapabilityCache[key] = (replica.revisionID, data, editable,
-                        decoded.document?.blocks.filter { $0.kind == .image || $0.kind == .file } ?? [])
+                        decoded.document?.blocks.filter { $0.kind == .image || $0.kind == .file } ?? [],
+                        decoded.document?.requires.contains("taskNote") == true)
                 }
                 guard editable else {
                     throw NoteDocumentStoreError.readOnly
+                }
+                if let cached = documentReplicaCapabilityCache[key] {
+                    try? WorkspaceLegacyBridge.coordinator(for: modelContext.container).observeValidatedDocument(data,
+                        attachmentIDs: Set(NoteDocument(blocks: cached.attachmentBlocks).attachmentIDs), hasTaskNote: cached.hasTaskNote)
                 }
             default:
                 throw NoteDocumentStoreError.readOnly
@@ -618,7 +625,7 @@ extension NoteStore {
         Self.stageDocumentContent(projection, format: document.format, on: replicas,
                                   timestamp: timestamp, revision: revision, revisionID: revisionID, tags: tags)
         for replica in replicas {
-            documentReplicaCapabilityCache[ObjectIdentifier(replica)] = (revisionID, projection.content, true, projection.attachmentBlocks)
+            documentReplicaCapabilityCache[ObjectIdentifier(replica)] = (revisionID, projection.content, true, projection.attachmentBlocks, projection.hasTaskNote)
         }
         return revisionID
     }
@@ -887,14 +894,14 @@ extension NoteStore {
             } else if age < 30 * day {
                 bucket = Int64(version.createdAt.timeIntervalSince1970 / day) - 1_000_000_000
             } else {
-                family.forEach(modelContext.delete)
+                family.forEach { WorkspaceLegacyBridge.delete($0, in: modelContext) }
                 removed = true
                 continue
             }
             if buckets.insert(bucket).inserted {
                 keptTimes.insert(version.createdAt)
             } else {
-                family.forEach(modelContext.delete)
+                family.forEach { WorkspaceLegacyBridge.delete($0, in: modelContext) }
                 removed = true
             }
         }
@@ -1168,7 +1175,7 @@ extension NoteStore {
                 modelContext.rollback()
                 continue
             }
-            editRows.forEach(modelContext.delete)
+            editRows.forEach { WorkspaceLegacyBridge.delete($0, in: modelContext) }
             if commitStagedChanges() { applied += 1 }
         }
         return applied
@@ -1312,8 +1319,8 @@ extension NoteStore {
               proposalFamilies.allSatisfy({ NotePhysicalFamilyRetention.proposalEligible($0, noteIDs: noteIDs) }) else {
             throw NoteDocumentStoreError.invalidDocument("Protected, divergent or unreadable history keeps this deleted note safe.")
         }
-        versionFamilies.forEach { $0.forEach(modelContext.delete) }
-        proposalFamilies.forEach { $0.forEach(modelContext.delete) }
+        versionFamilies.forEach { $0.forEach { WorkspaceLegacyBridge.delete($0, in: modelContext) } }
+        proposalFamilies.forEach { $0.forEach { WorkspaceLegacyBridge.delete($0, in: modelContext) } }
     }
 }
 

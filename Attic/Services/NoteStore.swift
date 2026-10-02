@@ -353,7 +353,7 @@ final class NoteStore: ObservableObject {
     // not another copy of each decoded note body. Exact bytes and revision
     // still invalidate the proof even when an external writer reuses a token.
     var documentReplicaCapabilityCache: [ObjectIdentifier: (revisionID: UUID?, content: Data, editable: Bool,
-                                                           attachmentBlocks: [NoteBlock])] = [:]
+                                                           attachmentBlocks: [NoteBlock], hasTaskNote: Bool)] = [:]
     var pendingEditFetchCount = 0
     /// Test seam for a failed destructive-retention scan. Presentation reads
     /// continue to use their own deduplicated query.
@@ -842,11 +842,11 @@ final class NoteStore: ObservableObject {
                           })
                       }) else { continue }
                 references += attachments.map { AttachmentFileReference($0, includePayload: false) }
-                attachments.forEach(context.delete)
+                attachments.forEach { WorkspaceLegacyBridge.delete($0, in: context) }
 #else
                 _ = recordedFamily
 #endif
-                replicas.forEach(context.delete)
+                replicas.forEach { WorkspaceLegacyBridge.delete($0, in: context) }
                 purgedIDs.insert(id)
             }
 #if os(macOS)
@@ -1278,7 +1278,7 @@ final class NoteStore: ObservableObject {
                     continue
                 }
                 references.append(AttachmentFileReference(first, includePayload: false))
-                replicas.forEach(context.delete)
+                replicas.forEach { WorkspaceLegacyBridge.delete($0, in: context) }
             }
         } catch {
             context.rollback()
@@ -1837,7 +1837,10 @@ final class NoteStore: ObservableObject {
                 note.id == targetID
             }
         )
-        return try (sourceContext ?? context).fetch(descriptor)
+        let source = sourceContext ?? context
+        let rows = try source.fetch(descriptor)
+        rows.forEach { WorkspaceLegacyBridge.captureBeforeMutation($0, in: source) }
+        return rows
     }
 
 #if os(macOS)
@@ -1852,7 +1855,9 @@ final class NoteStore: ObservableObject {
                 attachment.id == targetID
             }
         )
-        let replicas = try (sourceContext ?? context).fetch(descriptor)
+        let source = sourceContext ?? context
+        let replicas = try source.fetch(descriptor)
+        replicas.forEach { WorkspaceLegacyBridge.captureBeforeMutation($0, in: source) }
         guard allowMissing || !replicas.isEmpty else {
             throw NoteReplicaMutationError.missingReplica(id)
         }
@@ -1869,7 +1874,10 @@ final class NoteStore: ObservableObject {
                 attachment.noteID == targetNoteID
             }
         )
-        return try (sourceContext ?? context).fetch(descriptor)
+        let source = sourceContext ?? context
+        let rows = try source.fetch(descriptor)
+        rows.forEach { WorkspaceLegacyBridge.captureBeforeMutation($0, in: source) }
+        return rows
     }
 
     private func visibleAttachments(

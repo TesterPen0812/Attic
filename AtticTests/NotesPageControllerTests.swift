@@ -330,6 +330,11 @@ final class NotesPageControllerTests: XCTestCase {
         print("NOTE_PREPARED_COMMIT_5000_LINES_MS_MAX=\(preparedSorted.last ?? 0)")
         print("NOTE_EXTRACT_PREPARE_COMMIT_5000_LINES_MS_MEDIAN=\(combinedSorted[combinedSorted.count / 2])")
         print("NOTE_EXTRACT_PREPARE_COMMIT_5000_LINES_MS_MAX=\(combinedSorted.last ?? 0)")
+        // Five measured CI references (the four pre-3b runs above plus
+        // d77ec80 / 36954437718): save maxima 96.197958...123.233917;
+        // prepared maxima 5.170209...8.652083. One observed spread of noise.
+        XCTAssertLessThanOrEqual(sorted.last ?? 0, 123.233917 + (123.233917 - 96.197958))
+        XCTAssertLessThanOrEqual(preparedSorted.last ?? 0, 8.652083 + (8.652083 - 5.170209))
         XCTAssertTrue(store.versions(noteID: id).isEmpty)
         let result = (save: sorted[sorted.count / 2], prepared: preparedSorted[preparedSorted.count / 2])
         if let label {
