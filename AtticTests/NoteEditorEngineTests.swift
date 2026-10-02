@@ -721,6 +721,68 @@ final class NoteEditorEngineTests: XCTestCase {
         XCTAssertNil(engine.document().blocks[1].style)
     }
 
+    func testFinalEmptyParagraphMetadataSurvivesSaveReopenTypingAndUndoRedo() throws {
+        for (name, level, indent) in [("bullet", nil, 2), ("number", nil, 1), ("heading", 3, nil),
+                                      ("quote", nil, 2), ("mono", nil, nil), ("body", nil, nil)] as [(String, Int?, Int?)] {
+            var empty = NoteBlock.text("")
+            empty.style = name; empty.level = level; empty.indent = indent
+            empty.id = UUID(); empty.extras = ["future": .string("kept")]
+            var original = NoteDocument(blocks: [.text("T"), empty]); original.refreshRequiredCapabilities()
+            let saved = try NoteContentCodec.encode(original)
+            let loaded = try XCTUnwrap(NoteContentCodec.decode(saved).document)
+            let (engine, view) = makeEngine(loaded)
+            XCTAssertEqual(engine.document(), loaded, name)
+            view.setSelectedRange(NSRange(location: engine.textStorage.length, length: 0))
+            type("A", view)
+            var written = empty; written.text = "A"
+            XCTAssertEqual(engine.document().blocks.last, written, name)
+            let typed = engine.document()
+            let again = try XCTUnwrap(NoteContentCodec.decode(try NoteContentCodec.encode(typed)).document)
+            XCTAssertEqual(makeEngine(again).0.document(), typed, name)
+            XCTAssertTrue(engine.history.undo())
+            XCTAssertEqual(engine.document(), loaded, "Undo restores empty metadata: \(name)")
+            XCTAssertTrue(engine.history.redo())
+            XCTAssertEqual(engine.document(), typed, name)
+        }
+    }
+
+    func testReopenedEmptyParagraphFormattingAndIndentAreUndoableWithoutLosingMetadata() throws {
+        var empty = NoteBlock.text(""); empty.style = "bullet"; empty.indent = 1
+        empty.id = UUID(); empty.extras = ["future": .string("kept")]
+        var original = NoteDocument(blocks: [.text("T"), empty]); original.refreshRequiredCapabilities()
+        let (engine, view) = makeEngine(original)
+        view.setSelectedRange(NSRange(location: engine.textStorage.length, length: 0))
+        XCTAssertTrue(engine.perform(.indent))
+        XCTAssertEqual(engine.document().blocks.last?.indent, 2)
+        XCTAssertTrue(engine.history.undo()); XCTAssertEqual(engine.document(), original)
+        XCTAssertTrue(engine.history.redo()); XCTAssertEqual(engine.document().blocks.last?.indent, 2)
+        XCTAssertTrue(engine.perform(.paragraph(.heading(2))))
+        XCTAssertEqual(engine.document().blocks.last?.style, "heading")
+        XCTAssertEqual(engine.document().blocks.last?.id, empty.id)
+        XCTAssertTrue(engine.history.undo()); XCTAssertEqual(engine.document().blocks.last?.style, "bullet")
+        XCTAssertEqual(engine.document().blocks.last?.indent, 2)
+        XCTAssertTrue(engine.history.redo()); XCTAssertEqual(engine.document().blocks.last?.level, 2)
+        type("Hello", view)
+        XCTAssertEqual(engine.document().blocks.last?.extras, empty.extras)
+        XCTAssertTrue(engine.history.undo())
+        XCTAssertEqual(engine.document().blocks.last?.level, 2)
+        XCTAssertEqual(engine.document().blocks.last?.text, "")
+    }
+
+    func testFinalEmptyParagraphFollowsEarlierEditsAndDisappearsWhenItsSeparatorIsRemoved() {
+        var empty = NoteBlock.text(""); empty.style = "number"; empty.indent = 1
+        let (engine, view) = makeEngine(NoteDocument(blocks: [.text("T"), .text("Before"), empty]))
+        let original = engine.document()
+        view.setSelectedRange(NSRange(location: 0, length: 0))
+        type("More ", view)
+        XCTAssertEqual(engine.document().blocks.last, empty)
+        XCTAssertTrue(engine.history.undo()); XCTAssertEqual(engine.document(), original)
+        let end = engine.textStorage.length
+        XCTAssertTrue(engine.performEdit(NSRange(location: end - 1, length: 1), with: NSAttributedString(), name: "Delete"))
+        XCTAssertEqual(engine.document().blocks.count, 2)
+        XCTAssertTrue(engine.history.undo()); XCTAssertEqual(engine.document(), original)
+    }
+
     func testTagPickerEditIsAnEditorUndoStep() {
         let (engine, _) = makeEngine(NoteDocument(blocks: [.text("T"), .text("Body")]))
         engine.setTagsFromPicker(["work"])
