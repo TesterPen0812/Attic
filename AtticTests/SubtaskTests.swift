@@ -9,9 +9,9 @@ final class SubtaskTests: XCTestCase {
     }
 
     func testExistingOnDiskTaskMigratesWithoutLosingFields() throws {
-        let directory = FileManager.default.temporaryDirectory.appendingPathComponent("AtticSubtaskMigration-\(UUID().uuidString)")
+        let directory = ownedTemporaryDirectory(prefix: "AtticSubtaskMigration")
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
-        defer { try? FileManager.default.removeItem(at: directory) }
+
         let url = directory.appendingPathComponent("legacy.store")
         let id = UUID()
         try seedLegacyStore(at: url, id: id)

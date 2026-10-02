@@ -488,7 +488,7 @@ final class MCPRequestHandlerTests: XCTestCase {
         calendar.timeZone = TimeZone(identifier: "Europe/Rome")!
         let now = calendar.date(from: DateComponents(year: 2026, month: 9, day: 24, hour: 10))!
         // Every store shares the task store's container, as in the app.
-        let noteStore = NoteStore(container: store.container, attachmentFileStore: makeTestAttachmentFileStore())
+        let noteStore = trackAttachmentReconciliation(of: NoteStore(container: store.container, attachmentFileStore: makeTestAttachmentFileStore()))
         let library = AtticLibrary(tasks: store, notes: noteStore, canvases: CanvasStore(container: store.container))
         let handler = MCPRequestHandler(
             tools: AgentTaskTools(

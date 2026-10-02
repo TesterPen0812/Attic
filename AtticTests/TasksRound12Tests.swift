@@ -344,7 +344,7 @@ final class TasksRound12Tests: XCTestCase {
         let container = try PersistenceController.makeContainer(inMemory: true, cloudSyncEnabled: false)
         try TasksPagePreview.seedDemo(in: container)
         let store = TaskStore(container: container)
-        let notes = NoteStore(container: container, attachmentFileStore: makeTestAttachmentFileStore())
+        let notes = trackAttachmentReconciliation(of: NoteStore(container: container, attachmentFileStore: makeTestAttachmentFileStore()))
         let state = PanelUIState()
         state.updatePanelSize(CGSize(width: 340, height: 560))
         state.loadPageContent()

@@ -7,9 +7,8 @@ import XCTest
 final class PerformanceSeedTests: XCTestCase {
     func testDoneHistorySeedLivesOnlyInDoneLog() throws {
         let container = try PersistenceController.makeContainer(inMemory: true)
-        let root = FileManager.default.temporaryDirectory
-            .appendingPathComponent("AtticPerformanceSeedTests-\(UUID().uuidString)", isDirectory: true)
-        defer { try? FileManager.default.removeItem(at: root) }
+        let root = ownedTemporaryDirectory(prefix: "AtticPerformanceSeedTests")
+
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
 
         let now = Date(timeIntervalSince1970: 1_800_000_000)

@@ -14,16 +14,6 @@ import XCTest
 /// "did this path rebuild accessibility elements" is a yes-or-no fact.
 @MainActor
 final class CanvasPerformanceGateTests: XCTestCase {
-    private var temporaryStoreDirectories: [URL] = []
-
-    override func tearDown() {
-        for url in temporaryStoreDirectories {
-            try? FileManager.default.removeItem(at: url)
-        }
-        temporaryStoreDirectories.removeAll()
-        super.tearDown()
-    }
-
     // MARK: - CANVAS-016 / PERF-08
 
     func testStrokeSaveOnImageHeavyBoardDoesNotReadImageBytes() throws {
@@ -689,13 +679,11 @@ final class CanvasPerformanceGateTests: XCTestCase {
     // MARK: - Helpers
 
     private func makeOnDiskCanvasStore() throws -> CanvasStore {
-        let directory = FileManager.default.temporaryDirectory
-            .appendingPathComponent("AtticCanvasPerf-\(UUID().uuidString)", isDirectory: true)
+        let directory = ownedTemporaryDirectory(prefix: "AtticCanvasPerf")
         try FileManager.default.createDirectory(
             at: directory,
             withIntermediateDirectories: true
         )
-        temporaryStoreDirectories.append(directory)
         let configuration = ModelConfiguration(
             url: directory.appendingPathComponent("Canvas.store"),
             cloudKitDatabase: .none

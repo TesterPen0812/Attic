@@ -3311,11 +3311,10 @@ private final class HostedCanvasChrome {
 final class CanvasImageDropBatchTests: XCTestCase {
     @MainActor
     func testFileURLDropAdvertisesCopyAndImportsOnlySupportedImages() throws {
-        let root = FileManager.default.temporaryDirectory
-            .appendingPathComponent("AtticCanvasDropTests", isDirectory: true)
+        let root = ownedTemporaryDirectory(prefix: "AtticCanvasDropTests")
             .appendingPathComponent(UUID().uuidString, isDirectory: true)
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
-        defer { try? FileManager.default.removeItem(at: root) }
+
         let imageURL = root.appendingPathComponent("image.png")
         let textURL = root.appendingPathComponent("notes.txt")
         try Data([0x89, 0x50, 0x4E, 0x47]).write(to: imageURL)
@@ -3373,14 +3372,13 @@ final class CanvasImageDropBatchTests: XCTestCase {
 
     @MainActor
     func testFilePromiseCoordinatorKeepsSlotOrderAndRejectsLateDelivery() throws {
-        let root = FileManager.default.temporaryDirectory
-            .appendingPathComponent("AtticCanvasPromiseTests", isDirectory: true)
+        let root = ownedTemporaryDirectory(prefix: "AtticCanvasPromiseTests")
             .appendingPathComponent(UUID().uuidString, isDirectory: true)
         let firstRoot = root.appendingPathComponent("first", isDirectory: true)
         let secondRoot = root.appendingPathComponent("second", isDirectory: true)
         try FileManager.default.createDirectory(at: firstRoot, withIntermediateDirectories: true)
         try FileManager.default.createDirectory(at: secondRoot, withIntermediateDirectories: true)
-        defer { try? FileManager.default.removeItem(at: root) }
+
         let firstURL = firstRoot.appendingPathComponent("first.png")
         let lateURL = secondRoot.appendingPathComponent("late.png")
         try Data([1]).write(to: firstURL)

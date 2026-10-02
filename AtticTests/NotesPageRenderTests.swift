@@ -7,8 +7,8 @@ import XCTest
 /// shown: the title's accessories sit on the title's lines, the tag line
 /// pushes the body down, the header title appears once the title scrolls
 /// away. With `ATTIC_NOTES_RENDER_DIR` set (pass it to xcodebuild as
-/// `TEST_RUNNER_ATTIC_NOTES_RENDER_DIR`), each state is also written as a
-/// PNG for a visual check (drawn controls: an off-screen render cannot show
+/// `TEST_RUNNER_ATTIC_NOTES_RENDER_DIR`), each state is retained in xcresult
+/// as a PNG for a visual check (drawn controls: an off-screen render cannot show
 /// Liquid Glass).
 @MainActor
 final class NotesPageRenderTests: XCTestCase {
@@ -16,13 +16,13 @@ final class NotesPageRenderTests: XCTestCase {
     private var directory: URL!
 
     override func setUp() async throws {
-        directory = FileManager.default.temporaryDirectory.appendingPathComponent("AtticNotesRender-\(UUID().uuidString)")
+        directory = ownedTemporaryDirectory(prefix: "AtticNotesRender")
     }
 
     override func tearDown() async throws {
         for window in windows { window.close() }
         windows.removeAll()
-        try? FileManager.default.removeItem(at: directory)
+
     }
 
     private func spin(_ seconds: TimeInterval = 0.2) {
@@ -70,7 +70,7 @@ final class NotesPageRenderTests: XCTestCase {
     private func write(_ view: NSView, name: String) {
         guard ProcessInfo.processInfo.environment["ATTIC_NOTES_RENDER_DIR"] != nil else { return }
         // The test host's own temporary folder (it may be sandboxed).
-        let path = FileManager.default.temporaryDirectory.appendingPathComponent("AtticNotesRender").path
+        let path = directory.path
         print("NOTES_RENDER_DIR=\(path)")
         view.layoutSubtreeIfNeeded()
         for case let textView as NSTextView in descendants(of: view) {
@@ -82,7 +82,13 @@ final class NotesPageRenderTests: XCTestCase {
         view.cacheDisplay(in: view.bounds, to: rep)
         let url = URL(fileURLWithPath: path).appendingPathComponent("\(name).png")
         try? FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
-        try? rep.representation(using: .png, properties: [:])?.write(to: url)
+        if let data = rep.representation(using: .png, properties: [:]) {
+            try? data.write(to: url)
+            let attachment = XCTAttachment(data: data, uniformTypeIdentifier: "public.png")
+            attachment.name = "\(name).png"
+            attachment.lifetime = .keepAlways
+            add(attachment)
+        }
     }
 
     static func seedPricing(_ store: NoteStore) throws {

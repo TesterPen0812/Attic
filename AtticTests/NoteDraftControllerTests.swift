@@ -245,12 +245,12 @@ final class NoteDraftControllerTests: XCTestCase {
 
     @MainActor
     func testInaccessibleRecoveryDirectoryIsNotTreatedAsMissing() async throws {
-        let directory = FileManager.default.temporaryDirectory.appendingPathComponent("AtticProtectedDraftTests-\(UUID().uuidString)")
+        let directory = ownedTemporaryDirectory(prefix: "AtticProtectedDraftTests")
         let protectedDirectory = directory.appendingPathComponent("protected")
         try FileManager.default.createDirectory(at: protectedDirectory, withIntermediateDirectories: true)
         defer {
             try? FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: protectedDirectory.path)
-            try? FileManager.default.removeItem(at: directory)
+
         }
         let url = protectedDirectory.appendingPathComponent("draft.json")
         let snapshot = NoteDraftRecoverySnapshot(
@@ -284,8 +284,8 @@ final class NoteDraftControllerTests: XCTestCase {
 
     @MainActor
     func testUnreadableRecoveryRemainsVisibleAndUntouchedAcrossOpeningAndSavingNotes() async throws {
-        let directory = FileManager.default.temporaryDirectory.appendingPathComponent("AtticUnreadableDraftTests-\(UUID().uuidString)")
-        defer { try? FileManager.default.removeItem(at: directory) }
+        let directory = ownedTemporaryDirectory(prefix: "AtticUnreadableDraftTests")
+
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         let url = directory.appendingPathComponent("draft.json")
         let unreadable = Data("incomplete recovery file".utf8)
@@ -314,8 +314,8 @@ final class NoteDraftControllerTests: XCTestCase {
 
     @MainActor
     func testRecoveryRetryPreservesCurrentDraftBeforeOpeningWaitingRecovery() async throws {
-        let directory = FileManager.default.temporaryDirectory.appendingPathComponent("AtticWaitingDraftTests-\(UUID().uuidString)")
-        defer { try? FileManager.default.removeItem(at: directory) }
+        let directory = ownedTemporaryDirectory(prefix: "AtticWaitingDraftTests")
+
         let url = directory.appendingPathComponent("draft.json")
         let snapshot = NoteDraftRecoverySnapshot(
             noteID: nil, reservedNoteID: UUID(), title: "", body: "Earlier unsaved draft",
@@ -355,8 +355,8 @@ final class NoteDraftControllerTests: XCTestCase {
 
     @MainActor
     func testUsingSavedVersionClearsDiscardedRecoveryBeforeRelaunch() async throws {
-        let directory = FileManager.default.temporaryDirectory.appendingPathComponent("AtticDiscardRecoveryTests-\(UUID().uuidString)")
-        defer { try? FileManager.default.removeItem(at: directory) }
+        let directory = ownedTemporaryDirectory(prefix: "AtticDiscardRecoveryTests")
+
         let url = directory.appendingPathComponent("draft.json")
         let store = try makeTestNoteStore(attachmentFileStore: makeTestAttachmentFileStore())
         let note = try XCTUnwrap(store.create(body: "Current saved version"))
@@ -379,8 +379,8 @@ final class NoteDraftControllerTests: XCTestCase {
 
     @MainActor
     func testNeverSavedDraftSurvivesFailedSaveAndControllerRelaunch() async throws {
-        let directory = FileManager.default.temporaryDirectory.appendingPathComponent("AtticDraftRecoveryTests-\(UUID().uuidString)")
-        defer { try? FileManager.default.removeItem(at: directory) }
+        let directory = ownedTemporaryDirectory(prefix: "AtticDraftRecoveryTests")
+
         let recoveryURL = directory.appendingPathComponent("draft.json")
         let gate = PersistenceGate()
         let store = try makeTestNoteStore(persist: gate.save, attachmentFileStore: makeTestAttachmentFileStore())
@@ -410,8 +410,8 @@ final class NoteDraftControllerTests: XCTestCase {
 
     @MainActor
     func testRecoveryDoesNotOverwriteNewerSavedNote() async throws {
-        let directory = FileManager.default.temporaryDirectory.appendingPathComponent("AtticDraftConflictTests-\(UUID().uuidString)")
-        defer { try? FileManager.default.removeItem(at: directory) }
+        let directory = ownedTemporaryDirectory(prefix: "AtticDraftConflictTests")
+
         let url = directory.appendingPathComponent("draft.json")
         let store = try makeTestNoteStore(attachmentFileStore: makeTestAttachmentFileStore())
         let note = try XCTUnwrap(store.create(body: "Newer saved body"))
@@ -431,8 +431,8 @@ final class NoteDraftControllerTests: XCTestCase {
     }
 
     func testOlderRecoveryWriteCannotRecreateFileAfterSuccessfulSaveClear() async throws {
-        let directory = FileManager.default.temporaryDirectory.appendingPathComponent("AtticDraftOrderingTests-\(UUID().uuidString)")
-        defer { try? FileManager.default.removeItem(at: directory) }
+        let directory = ownedTemporaryDirectory(prefix: "AtticDraftOrderingTests")
+
         let url = directory.appendingPathComponent("draft.json")
         let journal = NoteDraftRecoveryFile(url: url)
         let snapshot = NoteDraftRecoverySnapshot(
@@ -903,10 +903,10 @@ final class NoteDraftControllerTests: XCTestCase {
     @MainActor
     func testRemoteDeletionPreservesDirtyDraftWithoutResurrectingTheNote() throws {
         let container = try PersistenceController.makeContainer(inMemory: true)
-        let store = NoteStore(
+        let store = trackAttachmentReconciliation(of: NoteStore(
             container: container,
             attachmentFileStore: makeTestAttachmentFileStore()
-        )
+        ))
         let original = try XCTUnwrap(store.create(title: "Draft", body: "Before"))
         let draft = NoteDraftController(noteStore: store, autosaveDelay: .seconds(60))
         XCTAssertTrue(draft.beginEditing(original))
@@ -928,10 +928,10 @@ final class NoteDraftControllerTests: XCTestCase {
     @MainActor
     func testSaveAsNewRecoversDraftAfterRemoteDeletion() throws {
         let container = try PersistenceController.makeContainer(inMemory: true)
-        let store = NoteStore(
+        let store = trackAttachmentReconciliation(of: NoteStore(
             container: container,
             attachmentFileStore: makeTestAttachmentFileStore()
-        )
+        ))
         let original = try XCTUnwrap(store.create(title: "Draft", body: "Before"))
         let draft = NoteDraftController(noteStore: store, autosaveDelay: .seconds(60))
         XCTAssertTrue(draft.beginEditing(original))
@@ -955,10 +955,10 @@ final class NoteDraftControllerTests: XCTestCase {
     @MainActor
     func testConcurrentRemoteEditBlocksSilentOverwrite() throws {
         let container = try PersistenceController.makeContainer(inMemory: true)
-        let store = NoteStore(
+        let store = trackAttachmentReconciliation(of: NoteStore(
             container: container,
             attachmentFileStore: makeTestAttachmentFileStore()
-        )
+        ))
         let note = try XCTUnwrap(store.create(body: "Initial"))
         let draft = NoteDraftController(noteStore: store, autosaveDelay: .seconds(60))
         XCTAssertTrue(draft.beginEditing(note))

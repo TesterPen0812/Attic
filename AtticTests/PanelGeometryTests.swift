@@ -250,7 +250,7 @@ final class PanelGeometryTests: XCTestCase {
         defer { defaults.removePersistentDomain(forName: suite) }
         let persistence = try PersistenceController.makeContainer(inMemory: true, cloudSyncEnabled: false)
         let store = TaskStore(container: persistence)
-        let notes = NoteStore(container: persistence, attachmentFileStore: makeTestAttachmentFileStore())
+        let notes = trackAttachmentReconciliation(of: NoteStore(container: persistence, attachmentFileStore: makeTestAttachmentFileStore()))
         let existingWindows = Set(NSApplication.shared.windows.map(ObjectIdentifier.init))
         let controller = AtticPanelController(
             store: store, noteStore: notes,
@@ -283,7 +283,7 @@ final class PanelGeometryTests: XCTestCase {
         XCTAssertTrue(content.allowsContentInteraction)
         let nativeFrame = panel.frame
         let hostBounds = content.hostingView.bounds
-        let directory = FileManager.default.temporaryDirectory.appendingPathComponent("AtticOriginalMotionFrames")
+        let directory = ownedTemporaryDirectory(prefix: "AtticOriginalMotionFrames")
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         for distance in [0, 45, 90, 150] {
             panel.onTrackpadDismissProgress?(CGFloat(distance))
@@ -293,8 +293,12 @@ final class PanelGeometryTests: XCTestCase {
             let captureView = try XCTUnwrap(panel.contentView)
             let capture = try XCTUnwrap(captureView.bitmapImageRepForCachingDisplay(in: captureView.bounds))
             captureView.cacheDisplay(in: captureView.bounds, to: capture)
-            try XCTUnwrap(capture.representation(using: .png, properties: [:]))
-                .write(to: directory.appendingPathComponent("swipe-\(distance).png"))
+            let data = try XCTUnwrap(capture.representation(using: .png, properties: [:]))
+            try data.write(to: directory.appendingPathComponent("swipe-\(distance).png"))
+            let attachment = XCTAttachment(data: data, uniformTypeIdentifier: "public.png")
+            attachment.name = "swipe-\(distance).png"
+            attachment.lifetime = .keepAlways
+            add(attachment)
             XCTAssertEqual(panel.frame, nativeFrame)
             XCTAssertEqual(content.hostingView.bounds, hostBounds)
         }
@@ -342,7 +346,7 @@ final class PanelGeometryTests: XCTestCase {
         defer { defaults.removePersistentDomain(forName: suite) }
         let persistence = try PersistenceController.makeContainer(inMemory: true, cloudSyncEnabled: false)
         let store = TaskStore(container: persistence)
-        let notes = NoteStore(container: persistence, attachmentFileStore: makeTestAttachmentFileStore())
+        let notes = trackAttachmentReconciliation(of: NoteStore(container: persistence, attachmentFileStore: makeTestAttachmentFileStore()))
         let settings = AppSettings(defaults: defaults)
         let existingWindows = Set(NSApplication.shared.windows.map(ObjectIdentifier.init))
         let controller = AtticPanelController(
@@ -1697,7 +1701,7 @@ final class PanelGeometryTests: XCTestCase {
         defer { defaults.removePersistentDomain(forName: suite) }
         let container = try PersistenceController.makeContainer(inMemory: true, cloudSyncEnabled: false)
         let store = TaskStore(container: container)
-        let notes = NoteStore(container: container, attachmentFileStore: makeTestAttachmentFileStore())
+        let notes = trackAttachmentReconciliation(of: NoteStore(container: container, attachmentFileStore: makeTestAttachmentFileStore()))
         let state = PanelUIState()
         state.updatePanelSize(visible.size)
         state.loadPageContent()

@@ -16,7 +16,7 @@ final class UndoInterleavingTests: XCTestCase {
         let now: () -> Date = { clock?.value ?? Date() }
         return AtticLibrary(
             tasks: TaskStore(container: container, now: now),
-            notes: NoteStore(container: container, now: now, attachmentFileStore: makeTestAttachmentFileStore()),
+            notes: trackAttachmentReconciliation(of: NoteStore(container: container, now: now, attachmentFileStore: makeTestAttachmentFileStore())),
             canvases: CanvasStore(container: container, now: now),
             now: now
         )

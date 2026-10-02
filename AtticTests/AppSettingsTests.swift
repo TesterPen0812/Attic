@@ -98,9 +98,8 @@ final class AppSettingsTests: XCTestCase {
 
     @MainActor
     func testTestHostAttachmentEnvironmentCannotReconcileOutsideItsTempRoot() async throws {
-        let parent = FileManager.default.temporaryDirectory
-            .appendingPathComponent("AppRuntimeAttachmentTests-\(UUID().uuidString)", isDirectory: true)
-        defer { try? FileManager.default.removeItem(at: parent) }
+        let parent = ownedTemporaryDirectory(prefix: "AppRuntimeAttachmentTests")
+
         let outsideRoot = parent.appendingPathComponent("outside", isDirectory: true)
         let isolatedRoot = parent.appendingPathComponent("isolated", isDirectory: true)
         let ownerToken = UUID().uuidString
@@ -138,10 +137,10 @@ final class AppSettingsTests: XCTestCase {
             inMemory: true,
             cloudSyncEnabled: false
         )
-        let store = NoteStore(
+        let store = trackAttachmentReconciliation(of: NoteStore(
             container: container,
             attachmentFileStore: try XCTUnwrap(runtime.makeAttachmentFileStore())
-        )
+        ))
         XCTAssertTrue(store.notes.isEmpty)
 
         let stagingRoot = isolatedRoot.appendingPathComponent(".staging", isDirectory: true)
@@ -162,12 +161,8 @@ final class AppSettingsTests: XCTestCase {
     }
 
     func testTestHostRejectsUnownedExplicitAttachmentRoot() throws {
-        let parent = FileManager.default.temporaryDirectory
-            .appendingPathComponent(
-                "AppRuntimeUnownedAttachmentTests-\(UUID().uuidString)",
-                isDirectory: true
-            )
-        defer { try? FileManager.default.removeItem(at: parent) }
+        let parent = ownedTemporaryDirectory(prefix: "AppRuntimeUnownedAttachmentTests")
+
         try FileManager.default.createDirectory(
             at: parent,
             withIntermediateDirectories: true

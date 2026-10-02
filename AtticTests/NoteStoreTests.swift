@@ -3,11 +3,45 @@ import XCTest
 @testable import Attic
 
 final class NoteStoreTests: XCTestCase {
+    @MainActor
+    func testRepresentativeStoreDirectoryIsRemovedAfterXCTestTeardown() async throws {
+        var directory: URL?
+        // Registered first, this check runs last: after the helper's actual
+        // teardown has drained reconciliation and removed its owned root.
+        addTeardownBlock {
+            let root = try XCTUnwrap(directory)
+            XCTAssertFalse(FileManager.default.fileExists(atPath: root.path),
+                           "The representative store's teardown must remove its root")
+        }
+        let files = makeTestAttachmentFileStore()
+        let root = await files.rootURL
+        directory = root
+        let store = try makeTestNoteStore(attachmentFileStore: files)
+        XCTAssertNotNil(store.create(body: "Cleanup guard"))
+        await store.waitForAttachmentReconciliation()
+        try Data("owned attachment fixture".utf8).write(to: root.appendingPathComponent("guard.txt"))
+        XCTAssertTrue(FileManager.default.fileExists(atPath: root.path))
+    }
+
+    func testTemporaryCleanupRefusesASymlinkAndPreservesTheOtherRoot() throws {
+        let source = OwnedTestTemporaryDirectory(prefix: "AtticTempSymlinkGuard")
+        addTeardownBlock { try source.remove() }
+        let target = ownedTemporaryDirectory(prefix: "AtticTempSentinelGuard")
+        try FileManager.default.createDirectory(at: target, withIntermediateDirectories: true)
+        let sentinel = target.appendingPathComponent("must-survive.txt")
+        try Data("untouched".utf8).write(to: sentinel)
+        try FileManager.default.createSymbolicLink(at: source.url, withDestinationURL: target)
+        XCTAssertThrowsError(try source.remove())
+        XCTAssertEqual(try Data(contentsOf: sentinel), Data("untouched".utf8))
+        // Unlink the symlink this test created; leave the target to its owner.
+        try FileManager.default.removeItem(at: source.url)
+    }
+
     #if ATTIC_LOCAL_ONLY
     @MainActor
     func testLocalOnlyNotesDoNotStartDeferredCloudActivity() async throws {
         let container = try PersistenceController.makeContainer(inMemory: true)
-        let store = NoteStore(container: container, attachmentFileStore: makeTestAttachmentFileStore())
+        let store = trackAttachmentReconciliation(of: NoteStore(container: container, attachmentFileStore: makeTestAttachmentFileStore()))
         let initialStatus = store.cloudSyncStatus
         XCTAssertNotNil(store.create(body: "Local save"))
         let externalContext = ModelContext(container)
@@ -34,9 +68,7 @@ final class NoteStoreTests: XCTestCase {
 
     @MainActor
     func testEmptyStoreReconciliationLeavesSeparateDefaultLikeRootUntouched() async throws {
-        let parent = FileManager.default.temporaryDirectory
-            .appendingPathComponent("AtticNoteStoreSentinel-\(UUID().uuidString)", isDirectory: true)
-        defer { try? FileManager.default.removeItem(at: parent) }
+        let parent = ownedTemporaryDirectory(prefix: "AtticNoteStoreSentinel")
 
         let defaultLikeRoot = parent
             .appendingPathComponent("Library", isDirectory: true)
@@ -58,7 +90,7 @@ final class NoteStoreTests: XCTestCase {
             .appendingPathComponent("v1", isDirectory: true)
         let fileStore = makeTestAttachmentFileStore(rootURL: testRoot)
         let container = try PersistenceController.makeContainer(inMemory: true)
-        let store = NoteStore(container: container, attachmentFileStore: fileStore)
+        let store = trackAttachmentReconciliation(of: NoteStore(container: container, attachmentFileStore: fileStore))
 
         XCTAssertTrue(store.notes.isEmpty)
         let preparationDeadline = ContinuousClock.now + .seconds(2)
@@ -188,10 +220,10 @@ final class NoteStoreTests: XCTestCase {
     @MainActor
     func testRefreshSeesChangesSavedByAnotherModelContext() throws {
         let container = try PersistenceController.makeContainer(inMemory: true)
-        let store = NoteStore(
+        let store = trackAttachmentReconciliation(of: NoteStore(
             container: container,
             attachmentFileStore: makeTestAttachmentFileStore()
-        )
+        ))
         let externalContext = ModelContext(container)
         let externalNote = NoteItem(title: "Created elsewhere", body: "hi")
 
@@ -222,10 +254,10 @@ final class NoteStoreTests: XCTestCase {
         context.insert(newer)
         try context.save()
 
-        let store = NoteStore(
+        let store = trackAttachmentReconciliation(of: NoteStore(
             container: container,
             attachmentFileStore: makeTestAttachmentFileStore()
-        )
+        ))
 
         XCTAssertEqual(store.notes.count, 1)
         XCTAssertEqual(store.notes.first?.title, "Newer")
@@ -245,10 +277,10 @@ final class NoteStoreTests: XCTestCase {
             updatedAt: Date().addingTimeInterval(1)
         ))
         try seedContext.save()
-        let store = NoteStore(
+        let store = trackAttachmentReconciliation(of: NoteStore(
             container: container,
             attachmentFileStore: makeTestAttachmentFileStore()
-        )
+        ))
         let visible = try XCTUnwrap(store.notes.first)
 
         XCTAssertTrue(store.update(visible, title: "Unified", body: "z"))
@@ -278,10 +310,10 @@ final class NoteStoreTests: XCTestCase {
         seedContext.insert(NoteItem(title: "Before iPhone update", body: "v1"))
         try seedContext.save()
 
-        let store = NoteStore(
+        let store = trackAttachmentReconciliation(of: NoteStore(
             container: container,
             attachmentFileStore: makeTestAttachmentFileStore()
-        )
+        ))
         XCTAssertEqual(store.notes.map(\.body), ["v1"])
 
         let externalContext = ModelContext(container)
@@ -309,10 +341,10 @@ final class NoteStoreTests: XCTestCase {
     @MainActor
     func testRemoteDeletionMakesCapturedNoteReferencesNoOps() throws {
         let container = try PersistenceController.makeContainer(inMemory: true)
-        let store = NoteStore(
+        let store = trackAttachmentReconciliation(of: NoteStore(
             container: container,
             attachmentFileStore: makeTestAttachmentFileStore()
-        )
+        ))
         let capturedNote = try XCTUnwrap(store.create(body: "Deleted elsewhere"))
         let externalContext = ModelContext(container)
         let externalNote = try XCTUnwrap(
