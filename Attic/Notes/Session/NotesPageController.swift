@@ -1453,6 +1453,10 @@ final class NotesPageController: ObservableObject {
                 guard let self else { return }
                 do {
                     _ = try await journal.readRecoveryEntries()
+                    // A faster guarded save can now reach missing-row repair
+                    // while the store's existing cache collection still owns
+                    // its bytes. Finish that work before this synchronous save.
+                    await self.store.waitForAttachmentReconciliation()
                     // Prepare stored-byte proofs off-main before comparing
                     // matching checkpoint documents at startup.
                     var savedProofs: [UUID: [UUID: StagedNoteAttachment]] = [:]

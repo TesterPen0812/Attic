@@ -103,7 +103,9 @@ struct WorkspaceModelToken: Codable, Equatable, Sendable {
         var families = Dictionary(uniqueKeysWithValues: owners.map { ($0, [Replica]()) })
         for row in models {
             guard let owner = WorkspaceOperationCoordinator.owner(row), owners.contains(owner) else { throw WorkspaceFoundationError.conflict }
-            families[owner, default: []].append(Replica(physicalID: row.persistentModelID, fields: try WorkspaceModelFields.fingerprint(row)))
+            families[owner, default: []].append(try autoreleasepool {
+                Replica(physicalID: row.persistentModelID, fields: try WorkspaceModelFields.fingerprint(row))
+            })
         }
         var tokens: [WorkspaceOwner: Self] = [:]
         for (owner, replicas) in families {
@@ -251,7 +253,7 @@ enum WorkspaceModelFields {
                         digest = cached
                     } else { digest = WorkspaceModelFields.digest(note.content) }
                     return try WorkspaceModelFields.encode(digest)
-                }),
+                }, copying: { source, target in target.copyStoredContent(from: source) }),
                 WorkspaceField("contentFingerprint", \NoteItem.contentFingerprint),
                 WorkspaceField("contentFormat", \NoteItem.contentFormat),
                 WorkspaceField("plainText", \NoteItem.plainText),
@@ -438,25 +440,52 @@ enum WorkspaceModelFields {
     let fingerprint: (M) throws -> Data
     let write: (M, Data) throws -> Void
     let copy: (M, M) -> Void
-    init<Value: Codable>(_ name: String, _ keyPath: ReferenceWritableKeyPath<M, Value>) {
+    init<Value: Codable & Equatable>(_ name: String, _ keyPath: ReferenceWritableKeyPath<M, Value>) {
         self.name = name
         copy = { source, target in target[keyPath: keyPath] = source[keyPath: keyPath] }
         read = { try WorkspaceModelFields.encode($0[keyPath: keyPath]) }
+        // One immutable value per compiled field. Read the actual model first:
+        // equality can reuse encoding across before/staged/confirmed guards,
+        // but never hides a changed value or retains a row/context. Cold list-
+        // order migration otherwise encodes hundreds of thousands of nil and
+        // scalar values (Time Profiler), leaving temporary allocation pages.
+        var lastValue: Value?, lastFingerprint: Data?
         fingerprint = { model in
             let value = model[keyPath: keyPath]
-            if ["body", "plainText", "title"].contains(name), let text = value as? String {
-                return WorkspaceModelFields.textFingerprint(text)
+            if let lastValue, lastValue == value, let lastFingerprint {
+                // String equality accepts canonical Unicode equivalents; a
+                // persisted-field guard still needs their exact UTF-8 bytes.
+                if let text = value as? String, let previous = lastValue as? String {
+                    if text.utf8.elementsEqual(previous.utf8) { return lastFingerprint }
+                } else if let date = value as? Date, let previous = lastValue as? Date {
+                    if date.timeIntervalSinceReferenceDate.bitPattern == previous.timeIntervalSinceReferenceDate.bitPattern { return lastFingerprint }
+                } else { return lastFingerprint }
             }
-            let bytes = try WorkspaceModelFields.encode(value)
-            return ["snapshot", "pointsData", "payloadData", "encodedData", "payload"].contains(name)
-                ? Data(SHA256.hash(data: bytes)) : bytes
+            let bytes: Data
+            if ["body", "plainText", "title"].contains(name), let text = value as? String {
+                bytes = WorkspaceModelFields.textFingerprint(text)
+            } else {
+                let encoded = try WorkspaceModelFields.encode(value)
+                bytes = ["snapshot", "pointsData", "payloadData", "encodedData", "payload"].contains(name)
+                    ? Data(SHA256.hash(data: encoded)) : encoded
+            }
+            // Large document/text/blob values have their own bounded digest
+            // policy. This scalar memo must not keep their supplied bytes.
+            if (value as? String).map({ $0.utf8.count > 1_024 }) == true ||
+               (value as? Data).map({ $0.count > 1_024 }) == true || value is Double || value is Float {
+                lastValue = nil; lastFingerprint = nil
+            } else {
+                lastValue = value; lastFingerprint = bytes
+            }
+            return bytes
         }
         write = { model, data in model[keyPath: keyPath] = try JSONDecoder().decode(Value.self, from: data) }
     }
     init<Value: Codable>(_ name: String, _ keyPath: ReferenceWritableKeyPath<M, Value>,
-                         fingerprint: @escaping (M) throws -> Data) {
+                         fingerprint: @escaping (M) throws -> Data,
+                         copying: ((M, M) -> Void)? = nil) {
         self.name = name
-        copy = { source, target in target[keyPath: keyPath] = source[keyPath: keyPath] }
+        copy = copying ?? { source, target in target[keyPath: keyPath] = source[keyPath: keyPath] }
         read = { try WorkspaceModelFields.encode($0[keyPath: keyPath]) }
         self.fingerprint = fingerprint
         write = { model, data in model[keyPath: keyPath] = try JSONDecoder().decode(Value.self, from: data) }

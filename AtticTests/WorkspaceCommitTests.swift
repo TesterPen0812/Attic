@@ -176,6 +176,22 @@ final class WorkspaceCommitTests: XCTestCase {
         XCTAssertEqual(try WorkspaceModelFields.fingerprint(copy), try WorkspaceModelFields.fingerprint(note))
     }
 
+    func testC2CanonicalUnicodeMetadataChangeStillRefusesAStaleWrite() throws {
+        let owner = WorkspaceOwner(entity: .note, id: noteID), id = noteID!
+        let source = coordinator.freshContext()
+        let row = try XCTUnwrap(source.fetch(FetchDescriptor<NoteItem>(predicate: #Predicate { $0.id == id })).first)
+        row.tagsRaw = "[\"Cafe\u{301}\"]"
+        try source.save()
+        let before = try WorkspaceModelToken.read(owner, in: coordinator.freshContext())
+        let external = coordinator.freshContext()
+        let changed = try XCTUnwrap(external.fetch(FetchDescriptor<NoteItem>(predicate: #Predicate { $0.id == id })).first)
+        changed.tagsRaw = "[\"Caf\u{e9}\"]"
+        try external.save()
+        var staged = false
+        XCTAssertEqual(coordinator.plainSave(tokens: [before], writes: [owner], stage: { _ in staged = true }), .conflict)
+        XCTAssertFalse(staged, "canonically equal text must not hide different persisted UTF-8 metadata")
+    }
+
     func testC2LegacyMissingPayloadFingerprintsPreserveExplicitSnapshotRoundTrips() throws {
         let bytes = Data("legacy bytes".utf8)
         let attachment = NoteAttachment(noteID: noteID, originalFilename: "legacy.txt", byteCount: Int64(bytes.count),

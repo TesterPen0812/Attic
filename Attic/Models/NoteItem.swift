@@ -52,6 +52,12 @@ final class NoteItem {
     nonisolated static func fingerprint(_ content: Data?) -> String {
         content.map { SHA256.hash(data: $0).map { String(format: "%02x", $0) }.joined() } ?? "nil"
     }
+    /// Typed patches already validated these bytes and their scalar digest.
+    /// Preserve even a legacy nil digest without hashing the bytes on main.
+    func copyStoredContent(from source: NoteItem) {
+        contentStorage = source.contentStorage
+        contentFingerprint = source.contentFingerprint
+    }
     func installPreparedContent(_ projection: PreparedNoteDocument) {
         contentStorage = projection.content
         contentFingerprint = projection.contentFingerprint

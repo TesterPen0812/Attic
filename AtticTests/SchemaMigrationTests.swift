@@ -48,8 +48,8 @@ final class SchemaMigrationTests: XCTestCase {
             XCTAssertTrue(noteAttributes.isSuperset(of: ["deletedAt", "deletedAttachmentIDsRaw", "tagsRaw"]))
             // Phase 2: the note format fields (all defaulted or optional).
             // The guarded getter uses the existing content column through
-            // originalName. The copied pre-Phase-0 fixture below verifies that
-            // the rename preserves every stored byte during migration.
+            // originalName. The copied pre-Phase-0 fixture below separately
+            // verifies compatibility and attachment byte preservation.
             XCTAssertTrue(noteAttributes.isSuperset(of: ["contentStorage", "contentFingerprint", "contentFormat", "plainText", "taskID", "revision", "revisionID"]))
             let boardAttributes = Set(entities["CanvasBoardItem"]?.attributes.map(\.name) ?? [])
             XCTAssertTrue(boardAttributes.isSuperset(of: ["tagsRaw", "purgedAt", "recentlyDeletedAt", "deletedContentCount"]))

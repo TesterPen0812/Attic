@@ -576,8 +576,8 @@ final class TaskStore: ObservableObject {
             WorkspaceLegacyBridge.captureBeforeMutations(stored.filter { $0.listOrderVersion == 0 } + orderChanges.map { $0.0 }, in: context)
             for (replica, order) in orderChanges { replica.manualOrder = order }
             var marked = 0
+            // The complete pending set was guarded above before staging.
             for row in stored where row.listOrderVersion == 0 {
-                WorkspaceLegacyBridge.captureBeforeMutation(row, in: context)
                 row.listOrderVersion = TaskItem.currentListOrderVersion
                 marked += 1
             }
