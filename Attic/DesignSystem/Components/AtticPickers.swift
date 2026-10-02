@@ -329,45 +329,55 @@ struct AtticTagPicker: View {
             AtticDropdownField(text: $query, placeholder: String(localized: "Find or add a tag"),
                                systemName: "magnifyingglass", focus: fieldFocused)
                 .padding(.bottom, AtticDropdownMetrics.fieldGap)
-            ScrollViewReader { proxy in
-            ScrollView(.vertical) {
-                VStack(alignment: .leading, spacing: 0) {
-                    ForEach(Array(tags.enumerated()), id: \.element.id) { index, tag in
-                        AtticDropdownRow(title: "#" + tag.name, check: tag.state, isHighlighted: highlighted == index,
-                                         onHover: hover(index)) {
-                            onToggle(tag.name)
+            let shown = tags.count + (create == nil ? 0 : 1)
+            let room = Self.visibleRows(tagCount: listRows ?? shown)
+            // A height that holds while typing filters the list, so the card
+            // never jumps. Only a list longer than that scrolls: rows that
+            // fit are plain rows (nothing to scroll, for the pointer, the
+            // keyboard or the UI tests).
+            if shown <= room {
+                rows
+                    .frame(height: CGFloat(room) * AtticDropdownMetrics.rowHeight, alignment: .top)
+            } else {
+                ScrollViewReader { proxy in
+                    ScrollView(.vertical) { rows }
+                        .scrollIndicators(.never)
+                        .frame(height: CGFloat(room) * AtticDropdownMetrics.rowHeight)
+                        // The keyboard's highlight stays in view; the
+                        // pointer's is under the pointer already.
+                        .onChange(of: highlighted) { _, index in
+                            guard let index, !AtticListHighlight.isPointerMove(NSApp.currentEvent) else { return }
+                            proxy.scrollTo(index)
                         }
-                        .id(index)
-                    }
-                    if let create {
-                        AtticDropdownRow(title: String(localized: "New tag “#\(create)”"), systemName: "plus", check: .off,
-                                         isHighlighted: highlighted == tags.count, onHover: hover(tags.count)) {
-                            onCreate(create)
-                        }
-                        .id(tags.count)
-                    }
-                    if tags.isEmpty, create == nil {
-                        AtticText(verbatim: String(localized: "No tags yet"), style: .dropdownRow, ink: .helper)
-                            .padding(.horizontal, AtticDropdownMetrics.rowPadding)
-                            .frame(height: AtticDropdownMetrics.rowHeight)
-                    }
                 }
-            }
-            .scrollIndicators(.never)
-            // A height that holds while typing filters the list, so the
-            // card never jumps; more rows than it holds scroll.
-            .frame(height: CGFloat(Self.visibleRows(tagCount: listRows ?? tags.count + (create == nil ? 0 : 1)))
-                * AtticDropdownMetrics.rowHeight)
-            // The keyboard's highlight stays in view in a long list; the
-            // pointer's is under the pointer already.
-            .onChange(of: highlighted) { _, index in
-                guard let index, !AtticListHighlight.isPointerMove(NSApp.currentEvent) else { return }
-                proxy.scrollTo(index)
-            }
             }
         }
         .accessibilityElement(children: .contain)
         .accessibilityLabel(String(localized: "Tags"))
+    }
+
+    private var rows: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            ForEach(Array(tags.enumerated()), id: \.element.id) { index, tag in
+                AtticDropdownRow(title: "#" + tag.name, check: tag.state, isHighlighted: highlighted == index,
+                                 onHover: hover(index)) {
+                    onToggle(tag.name)
+                }
+                .id(index)
+            }
+            if let create {
+                AtticDropdownRow(title: String(localized: "New tag “#\(create)”"), systemName: "plus", check: .off,
+                                 isHighlighted: highlighted == tags.count, onHover: hover(tags.count)) {
+                    onCreate(create)
+                }
+                .id(tags.count)
+            }
+            if tags.isEmpty, create == nil {
+                AtticText(verbatim: String(localized: "No tags yet"), style: .dropdownRow, ink: .helper)
+                    .padding(.horizontal, AtticDropdownMetrics.rowPadding)
+                    .frame(height: AtticDropdownMetrics.rowHeight)
+            }
+        }
     }
 
     private func hover(_ index: Int) -> ((Bool) -> Void)? {

@@ -193,7 +193,11 @@ final class AtticDropdownTests: XCTestCase {
         opener.query = "ho"
         spin(0.1)
         opener.isOpen = false
-        spin(0.5)
+        // The leave motion, then the card's host goes (polled: a busy
+        // machine runs the cleanup late).
+        let deadline = Date().addingTimeInterval(3)
+        repeat { spin(0.1) } while Date() < deadline
+            && !(window.contentView?.subviews.compactMap { $0 as? AtticOverlayHostingView }.isEmpty ?? true)
         XCTAssertFalse(AtticDropdownPresenter.isAnyOpen, "it closed")
         XCTAssertEqual(counter.behind, before, "the page behind was never re-rendered")
         XCTAssertTrue(window.contentView?.subviews.compactMap { $0 as? AtticOverlayHostingView }.isEmpty ?? false,
