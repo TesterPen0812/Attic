@@ -684,7 +684,8 @@ final class AppCoordinator: ObservableObject {
                 // a time after which the panel takes the keyboard as a click
                 // would, for hands-off captures of both looks.
                 let environment = ProcessInfo.processInfo.environment
-                if let page = environment["ATTIC_UI_TEST_PAGE"].flatMap(PanelPage.init(rawValue:)) {
+                if let page = (environment["ATTIC_UI_TEST_PAGE"] ?? AtticDropdownCaptureSeam.current?.page)
+                    .flatMap(PanelPage.init(rawValue:)) {
                     uiState.selectSection(page.section)
                 }
                 if environment["ATTIC_UI_TEST_PINNED"] == "1" { uiState.isPanelPinned = true }

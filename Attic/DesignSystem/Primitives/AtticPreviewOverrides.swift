@@ -82,3 +82,43 @@ struct AtticPreviewOverrides: Equatable, Sendable {
     nonisolated static let current = resolve(environment: ProcessInfo.processInfo.environment,
                                              bundleIdentifier: Bundle.main.bundleIdentifier)
 }
+
+// MARK: - Dropdown capture seam (E1, 2026-10-02)
+
+/// `ATTIC_UI_TEST_POPOVER=slash|slash-da|date|tag|priority`, with
+/// `ATTIC_UI_TESTING=1`, in a strict preview identity only: opens one
+/// dropdown by itself on a seeded note or task, for hands-off captures.
+/// `slash`, `slash-da` and `date` show Notes (the `/` list, "/da" filtered
+/// to Date, the date card with "fri"); `tag` and `priority` show the Tasks
+/// composer strip's picker over the draft "Pay rent". The official identity
+/// and every other one ignore it.
+enum AtticDropdownCaptureSeam: String, CaseIterable, Sendable {
+    case slash
+    case slashDa = "slash-da"
+    case date
+    case tag
+    case priority
+
+    /// The page it opens on.
+    var page: String { self == .tag || self == .priority ? "tasks" : "notes" }
+
+    /// The Notes capture scene that shows it (`NoteFormatCaptureScene`).
+    var notesScene: String? {
+        switch self {
+        case .slash: "slash"
+        case .slashDa: "slash-da"
+        case .date: "date"
+        case .tag, .priority: nil
+        }
+    }
+
+    nonisolated static func resolve(environment: [String: String], bundleIdentifier: String?) -> AtticDropdownCaptureSeam? {
+        guard environment["ATTIC_UI_TESTING"] == "1",
+              AtticPreviewOverrides.isPreviewIdentity(bundleIdentifier) else { return nil }
+        return environment["ATTIC_UI_TEST_POPOVER"].flatMap(AtticDropdownCaptureSeam.init(rawValue:))
+    }
+
+    /// This process's.
+    nonisolated static let current = resolve(environment: ProcessInfo.processInfo.environment,
+                                             bundleIdentifier: Bundle.main.bundleIdentifier)
+}

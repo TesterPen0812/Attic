@@ -333,6 +333,18 @@ final class AtticOverlayHostingView: NSHostingView<AnyView> {
     /// The content's rectangle (the host less its shadow room).
     var contentRect: NSRect { bounds.insetBy(dx: contentInset, dy: contentInset) }
 
+    /// What VoiceOver hears this host as: a dropdown is a menu with its
+    /// items (NSHostingView would say "group").
+    var menuLabel: String?
+
+    override func accessibilityRole() -> NSAccessibility.Role? {
+        menuLabel == nil ? super.accessibilityRole() : .menu
+    }
+
+    override func accessibilityLabel() -> String? {
+        menuLabel ?? super.accessibilityLabel()
+    }
+
     override func hitTest(_ point: NSPoint) -> NSView? {
         guard isInteractive, !isHidden else { return nil }
         let local = convert(point, from: superview)
@@ -493,13 +505,12 @@ final class AtticDropdownPresenter {
         let placed = AtticDropdownLayout.frame(size: size, anchor: anchorRect, bounds: bounds, prefer: prefer)
         stage.side = placed.side
         host.frame = AtticDropdownLayout.topDown(placed.frame.insetBy(dx: -room, dy: -room), in: overlay.parent).integral
-        host.setAccessibilityRole(.menu)
-        host.setAccessibilityLabel(label)
+        host.menuLabel = label
         overlay.parent.addSubview(host, positioned: .above, relativeTo: nil)
         self.host = host
         isOpen = true
         Self.openCount += 1
-        previousResponder = window.firstResponder
+        previousResponder = Self.owner(of: window.firstResponder)
         install(in: window)
         DispatchQueue.main.async { [weak self] in
             guard let self, self.isOpen else { return }
@@ -566,6 +577,15 @@ final class AtticDropdownPresenter {
             window.makeFirstResponder(host)
         }
         stage.focusRequest += 1
+    }
+
+    /// The view to give the keyboard back to: a field's own view, not the
+    /// window's shared field editor, which leaves with the editing.
+    static func owner(of responder: NSResponder?) -> NSResponder? {
+        if let editor = responder as? NSTextView, editor.isFieldEditor, let field = editor.delegate as? NSResponder {
+            return field
+        }
+        return responder
     }
 
     private static func firstTextField(in view: NSView) -> NSTextField? {

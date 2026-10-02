@@ -5,7 +5,7 @@ import AppKit
 /// builds, UI-test launches over the in-memory store only):
 /// `ATTIC_UI_TESTING=1 ATTIC_UI_TEST_NOTES_SCENE=<scene>` types a sample
 /// note into the new draft through the real text view and router, then
-/// shows one state: `structured`, `bar`, `aa`, `slash`, `date`, `link`,
+/// shows one state: `structured`, `bar`, `aa`, `slash`, `slash-da`, `date`, `link`,
 /// `context`, `formatmenu`, `notemenu`, `hint`. Nothing here runs in a
 /// normal launch.
 @MainActor
@@ -15,7 +15,7 @@ enum NoteFormatCaptureScene {
     static var requestedScene: String? {
         let environment = ProcessInfo.processInfo.environment
         guard environment["ATTIC_UI_TESTING"] == "1" else { return nil }
-        return environment["ATTIC_UI_TEST_NOTES_SCENE"]
+        return environment["ATTIC_UI_TEST_NOTES_SCENE"] ?? AtticDropdownCaptureSeam.current?.notesScene
     }
 
     static func runIfRequested(controls: NoteFormatControls, chrome: NotesPageChrome, textView: NoteEditorTextView) {
@@ -122,6 +122,10 @@ enum NoteFormatCaptureScene {
             textView.insertNewline(nil)
             textView.insertNewline(nil)
             type("/", into: textView)
+        case "slash-da":
+            textView.insertNewline(nil)
+            textView.insertNewline(nil)
+            type("/da", into: textView)
         case "date":
             textView.insertNewline(nil)
             textView.insertNewline(nil)

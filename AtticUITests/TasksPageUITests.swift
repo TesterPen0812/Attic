@@ -878,8 +878,9 @@ final class TasksPageUITests: XCTestCase {
         XCTAssertTrue(row("Pay rent").exists, "still in the Done log")
     }
 
-    /// The tag popover points at the tags that were clicked (round 5, the
-    /// owner's item 3), not the middle of the row.
+    /// The tag list opens from the tags that were clicked (round 5, the
+    /// owner's item 3), not the middle of the row: the dropdown's left edge
+    /// is on the tags (E1's width rule).
     func testTheTagPopoverOpensFromTheClickedTags() throws {
         row("Call the plumber").rightClick()
         XCTAssertTrue(menuItem("Tags").waitForExistence(timeout: 3))
@@ -893,13 +894,15 @@ final class TasksPageUITests: XCTestCase {
         let tagPoint = CGPoint(x: rowFrame.minX + 44 + 16, y: rowFrame.maxY - 14)
         row("Call the plumber").coordinate(withNormalizedOffset: .zero)
             .withOffset(CGVector(dx: tagPoint.x - rowFrame.minX, dy: tagPoint.y - rowFrame.minY)).click()
-        let popover = app.popovers.firstMatch
-        XCTAssertTrue(popover.waitForExistence(timeout: 3), "the tag picker opens")
-        // Centred on the tags it came from (a popover centres on its anchor
-        // unless a screen edge pushes it), not on the row's middle.
-        XCTAssertLessThan(abs(popover.frame.midX - tagPoint.x), 40,
-                          "popover \(popover.frame) points at the tags near \(tagPoint), not the row \(rowFrame)")
+        let field = app.descendants(matching: .textField)
+            .matching(NSPredicate(format: "label == %@", "Find or add a tag")).firstMatch
+        XCTAssertTrue(field.waitForExistence(timeout: 3), "the tag picker opens")
+        // The card's left edge sits on the tags (its field 10 pt in), not
+        // centred on the row.
+        XCTAssertLessThan(abs(field.frame.minX - (rowFrame.minX + 44 + 10)), 16,
+                          "the list \(field.frame) opens from the tags near \(tagPoint), not the row \(rowFrame)")
         app.typeKey(.escape, modifierFlags: [])
+        waitFor(!field.exists, "Esc closes it")
     }
 
     /// Waits until `element` has stopped moving (a page sliding in).

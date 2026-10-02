@@ -677,3 +677,46 @@ additive; no token, colour, radius or type style changed.
   keyboard's row's only (`showsActionsButton(forced:keyboardFocused:)`), so
   nothing moves as the pointer passes.
 - No token, colour, radius or type style changed.
+
+### Phase 2: the dropdown family, E1 (owner, 2026-10-02: "this works I guess")
+
+- **New `AtticDropdown.swift`**, one component for every Attic pop-over
+  list: the `/` list, the date card (Notes and Tasks), the tag picker, the
+  priority picker, Aa and the link card. Native menus stay native.
+  - `AtticDropdownCard` on `AtticDropdownSurface`: a solid card
+    (`popoverFill` #FEFEFE / #363637), one 0.5 pt hairline outside it
+    (`popoverOuterRim`, 1 pt and stronger under Increase Contrast) and D's
+    shadow (`AtticShadows.dropdown` 16 / 12 and `dropdownContact` 3 / 2, in
+    the new `dropdownShadow` and `dropdownContactShadow`); 20 pt corners,
+    rows 10 pt in. No blur, so Reduce Transparency changes nothing.
+  - `AtticDropdownRow`: 32 pt, touching; check, priority mark, a 14 pt icon
+    in an 18 pt slot, the 14 pt name (new `dropdownRow` style), a short
+    detail; the pill (new `dropdownHighlight`, #F1F1F1 / #444445) is the
+    whole row, concentric with the corner. No hint column. One highlight
+    per list, moved by the keyboard and the pointer.
+  - `AtticDropdownField`: a row's height and pill on `recessed`; its
+    placeholder sets its width.
+  - `AtticDropdownLayout`: the width rule (fits its content, never under
+    144 pt, never past the panel's 12 pt margin) and where it opens (left
+    edge on the caret's column or the strip button; below when there is
+    room, else above).
+  - `atticDropdown(isPresented:prefer:label:content:)`: the card in the
+    panel's overlay layer (`AtticDropdownPresenter`), with the pop-over
+    preset's motion (Lively by default, a fade under Reduced). Its own host,
+    so opening, filtering and closing never re-render the page behind. Its
+    keys are its own while open (`AtticTextInput.isPopoverOpen`); Esc, a
+    click outside or the panel letting go closes it and the keyboard goes
+    back. VoiceOver hears a menu (`AtticOverlayHostingView.menuLabel`).
+- **`AtticOverlayHostingView`** (was Notes' `NoteOverlayHostingView`) is the
+  design system's overlay host.
+- The Tasks date and tag pickers, the priority picker (⌥⌘0–3 on every row),
+  the composer strip and the selection bar's pickers leave the native
+  pop-over for the dropdown. `atticPopover` stays for Move to Task… and the
+  subtask quick look.
+- The month (both date cards): 30 × 28 cells, a 26 pt disc, a 30 pt header
+  with a 14 pt semibold title (new `dropdownHeading`).
+- Removed: `AtticPickerMetrics.dateWidth`, `tagWidth` and the old month
+  values; `AtticNoteFormatMetrics.slashWidth`, `dateCardWidth`,
+  `calendarCell`, `popoverPadding`. `tagListMaxHeight` is seven 32 pt rows.
+- Preview capture seam `ATTIC_UI_TEST_POPOVER` (`AtticDropdownCaptureSeam`).
+

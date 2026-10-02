@@ -612,15 +612,11 @@ enum AtticNoteFormatMetrics {
     /// toggles, groups spread to the edges, rows 8 apart.
     static let popoverToggleWidth: CGFloat = 32
     static let popoverWidth: CGFloat = 300
-    static let popoverPadding: CGFloat = 10
     static let popoverRowGap: CGFloat = 8
     static let popoverGroupGap: CGFloat = 10
     static let styleChipPadding: CGFloat = 5
     /// The `/` list, the date card and the link card, 6 below the line.
-    static let slashWidth: CGFloat = 256
     static let slashMaxVisibleRows = 9
-    static let dateCardWidth: CGFloat = 236
-    static let calendarCell: CGFloat = 28
     static let linkCardWidth: CGFloat = 272
     static let cardGap: CGFloat = 6
     /// Room around a floating control for its shadow.
@@ -669,9 +665,9 @@ enum AtticNoteObjectMetrics {
     static let carryHeight: CGFloat = 44
 }
 
-/// The pickers of owner fix 5 (v17): the date picker, the tag list, the
-/// composer strip and the suggestions over the add bar. The date grid is
-/// v17-lib's: 28 pt columns, 26 pt rows, a 24 pt day disc, today ringed.
+/// The pickers of owner fix 5 (v17): the composer strip, the suggestions
+/// over the add bar and Move to Task…. The date and tag pickers' card, rows
+/// and month are the dropdown family's (`AtticDropdownMetrics`).
 enum AtticPickerMetrics {
     static let rowGap: CGFloat = 8
     /// Between two lit rows' fills (round 5, the owner saw two adjacent tag
@@ -680,8 +676,6 @@ enum AtticPickerMetrics {
     static let checkSize: CGFloat = 10
     static let checkSlot: CGFloat = 12
     static let dividerGap: CGFloat = 4
-    static let dateWidth: CGFloat = 212
-    static let tagWidth: CGFloat = 200
     /// Seven 32 pt dropdown rows before the tag list scrolls.
     static let tagListMaxHeight: CGFloat = 224
     /// Move to Task… (control audit item 5): wider than the tag list, for
@@ -689,16 +683,7 @@ enum AtticPickerMetrics {
     static let taskWidth: CGFloat = 260
     static let taskListMaxHeight: CGFloat = 196
     static let suggestionWidth: CGFloat = 220
-    static let monthHeaderHeight: CGFloat = 26
-    static let monthButton: CGFloat = 20
-    static let chevronSize: CGFloat = 10
-    static let weekdayHeight: CGFloat = 18
-    static let dayCell: CGFloat = 28
-    static let dayRow: CGFloat = 26
-    static let dayDisc: CGFloat = 24
     static let todayRing: CGFloat = 1.2
-    static let gridInset: CGFloat = 4
-    static let gridBottom: CGFloat = 2
     /// The strip's buttons 4 apart (v19, so two filled pills never touch),
     /// 8 above the bar.
     static let stripSpacing: CGFloat = 4

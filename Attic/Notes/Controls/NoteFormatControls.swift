@@ -114,10 +114,9 @@ final class NoteFormatControls: NSObject {
         cardHost.acceptsKeyboard = true
         // The `/` list and the cards are dropdowns: their room is the card's
         // shadow's, and VoiceOver hears a menu.
-        for host in [slashHost, cardHost] {
-            host.contentInset = AtticDropdownMetrics.shadowRoom
-            host.setAccessibilityRole(.menu)
-        }
+        slashHost.contentInset = AtticDropdownMetrics.shadowRoom
+        slashHost.menuLabel = String(localized: "Insert")
+        cardHost.contentInset = AtticDropdownMetrics.shadowRoom
         hintHost.isHidden = true
         textView.addSubview(hintHost)
         for host in [barHost, slashHost, cardHost, addressHost] { host.isHidden = true }

@@ -2667,6 +2667,19 @@ private struct TasksAddBar: View {
             // its insertion point was (review 14).
             if !open { editor.focus() }
         }
+        #if DEBUG
+        // Capture seam (`ATTIC_UI_TEST_POPOVER=tag|priority`, preview
+        // identities only): a draft, then the strip's picker opens by itself.
+        .onAppear {
+            guard let seam = AtticDropdownCaptureSeam.current, seam == .tag || seam == .priority else { return }
+            DispatchQueue.main.asyncAfter(deadline: .now() + 2.5) {
+                text.text.text = "Pay rent"
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) {
+                    if seam == .tag { tagsPresented = true } else { priorityPresented = true }
+                }
+            }
+        }
+        #endif
     }
 
     private func submit(openingPage: Bool) {
