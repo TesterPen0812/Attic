@@ -188,6 +188,7 @@ final class NotesPageController: ObservableObject {
     private let pauseVersionDelay: Duration
     private let now: () -> Date
     let imageLoader: @Sendable (URL) async -> (StagedNoteAttachment, CGSize?)?
+    private let decodeRecoveryDocument: @Sendable (Data) async -> NoteDocument?
     private let prepareDocument: @Sendable (NoteDocument) async -> PreparedNoteDocument?
     private var cache: [UUID: NoteSession] = [:]
     private var recency: [UUID] = []
@@ -420,6 +421,9 @@ final class NotesPageController: ObservableObject {
          },
          prepareDocument: @escaping @Sendable (NoteDocument) async -> PreparedNoteDocument? = { document in
              await Task.detached { try? PreparedNoteDocument(document) }.value
+         },
+         decodeRecoveryDocument: @escaping @Sendable (Data) async -> NoteDocument? = { bytes in
+             await Task.detached(priority: .userInitiated) { NoteContentCodec.decode(bytes).document }.value
          }) {
         self.store = store
         self.journal = journal
@@ -429,6 +433,7 @@ final class NotesPageController: ObservableObject {
         self.now = now
         self.imageLoader = imageLoader
         self.prepareDocument = prepareDocument
+        self.decodeRecoveryDocument = decodeRecoveryDocument
         if let diskJournal = journal as? NoteDraftJournal {
             diskJournal.liveReferencedIDs = { [weak self] in
                 Set(self?.cache.values.flatMap { Array($0.engine.staged.keys) + (self?.liveAttachmentIDs(in: $0) ?? []) } ?? [])
@@ -1279,11 +1284,30 @@ final class NotesPageController: ObservableObject {
             queueRecoveryWork { [weak self, weak session] in
                 guard let self else { return }
                 do {
-                    let document = self.store.loadDocument(noteID: noteID)?.content.document
+                    let note = self.store.note(withID: noteID)
+                    let bytes = note?.content
+                    let format = note?.contentFormat
+                    let revisionID = note?.revisionID
+                    let tags = note?.tags ?? []
+                    let claim = session?.recoveryClaim
+                    let document: NoteDocument?
+                    if note?.usesDocumentFormat == true {
+                        guard let bytes, let decoded = await self.decodeRecoveryDocument(bytes) else {
+                            throw DamagedNoteRecovery()
+                        }
+                        document = decoded
+                    } else { document = nil }
                     let attachments = await self.durableAttachmentsAsync(in: document ?? .blank)
-                    let saved = document.map { NoteRecoverySavedState(document: $0,
-                        tags: self.store.note(withID: noteID)?.tags ?? [], attachments: attachments) }
-                    try await journal.retireDurably(noteID: noteID, claim: session?.recoveryClaim, saved: saved)
+                    // Decoding and byte verification suspend. Never release recovery
+                    // using a proof of a store or ownership state that has since changed.
+                    let current = self.store.note(withID: noteID)
+                    guard current?.contentFormat == format, current?.revisionID == revisionID,
+                          current?.content == bytes, (current?.tags ?? []) == tags,
+                          session?.recoveryClaim == claim, session?.isImporting != true else {
+                        throw DamagedNoteRecovery()
+                    }
+                    let saved = document.map { NoteRecoverySavedState(document: $0, tags: tags, attachments: attachments) }
+                    try await journal.retireDurably(noteID: noteID, claim: claim, saved: saved)
                     self.retiredNoteIDs.insert(noteID)
                     session?.recoveryClaim = nil
                     if session?.notice == "Saved, but an old recovery copy could not be cleared." { session?.notice = nil }

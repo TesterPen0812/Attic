@@ -109,6 +109,53 @@ final class NoteDocumentStoreTests: XCTestCase {
                        "known bytes must not be decoded again on each save")
     }
 
+    func testBatchAttachmentAdmissionDecodesTheBaseOnlyOnce() throws {
+        let base = NoteDocument(blocks: (0..<5_000).map { .text("Line \($0)") })
+        let (id, _) = try create(base)
+        try store.reloadPresentation() // A cold proof, as after import/reload.
+        let before = store.documentReplicaDecodeCount
+        var candidate = base
+        var staged: [StagedNoteAttachment] = []
+        var milliseconds: [Double] = []
+        for _ in 0..<8 {
+            let item = stagedImage()
+            staged.append(item)
+            candidate.blocks.append(.image(attachmentID: item.id))
+            let start = DispatchTime.now().uptimeNanoseconds
+            XCTAssertNil(store.attachmentAdmissionFailure(noteID: id, document: candidate, staged: staged))
+            milliseconds.append(Double(DispatchTime.now().uptimeNanoseconds - start) / 1_000_000)
+            XCTAssertEqual(store.documentReplicaDecodeCount, before + 1,
+                           "Admission reuses one exact-byte proof for the complete batch")
+        }
+        print("NOTE_ADMISSION_5000_LINES_COLD_MS=\(milliseconds[0]) WARM_BATCH_7_MS=\(milliseconds.dropFirst().reduce(0, +))")
+    }
+
+    func testAttachmentAdmissionProofInvalidatesForBytesRevisionAndReload() throws {
+        let (id, _) = try create(document("Draft"))
+        let missing = NoteBlock.file(attachmentID: UUID(), filename: "missing.pdf",
+                                    contentTypeIdentifier: "com.adobe.pdf", byteCount: 4)
+        let imported = NoteDocument(blocks: [.text("Draft"), missing])
+        let row = try XCTUnwrap(store.note(withID: id))
+        row.content = try NoteContentCodec.encode(imported) // Same revision, different bytes.
+        let before = store.documentReplicaDecodeCount
+        XCTAssertNil(store.attachmentAdmissionFailure(noteID: id, document: imported, staged: []),
+                     "A missing original keeps its exact placement after invalidating the old proof")
+        XCTAssertEqual(store.documentReplicaDecodeCount, before + 1)
+        row.revisionID = UUID()
+        XCTAssertNil(store.attachmentAdmissionFailure(noteID: id, document: imported, staged: []))
+        XCTAssertEqual(store.documentReplicaDecodeCount, before + 2)
+        try store.modelContext.save()
+        try store.reloadPresentation()
+        XCTAssertNil(store.attachmentAdmissionFailure(noteID: id, document: imported, staged: []))
+        XCTAssertEqual(store.documentReplicaDecodeCount, before + 3)
+        let current = try XCTUnwrap(store.note(withID: id))
+        let corrupt = Data("not JSON".utf8)
+        current.content = corrupt
+        XCTAssertNotNil(store.attachmentAdmissionFailure(noteID: id, document: imported, staged: []))
+        XCTAssertEqual(store.documentReplicaDecodeCount, before + 4)
+        XCTAssertEqual(current.content, corrupt, "Admission never repairs or overwrites corrupt bytes")
+    }
+
     func testAttachmentBaseProofInvalidatesWhenBytesChangeWithoutARevisionChange() throws {
         let (id, revision) = try create(document("Draft"))
         let missing = NoteBlock.file(attachmentID: UUID(), filename: "missing.pdf",

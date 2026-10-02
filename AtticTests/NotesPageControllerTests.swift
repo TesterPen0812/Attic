@@ -167,36 +167,180 @@ final class NotesPageControllerTests: XCTestCase {
         assertSaveBaseline(try await measureMainActorSave())
     }
 
-    // Local configuration, macos-26, same macos-ci.yml unit-test lane:
+    func testCheckpointRetirementKeepsMainActorWithinSaveTolerance() async throws {
+        let document = NoteDocument(blocks: (0..<5_000).map { .text("Line \($0) with ordinary note text") })
+        let id = UUID()
+        guard case .success = store.createDocumentNote(id: id, document: document) else { return XCTFail("fixture") }
+        let journal = NoteDraftJournal(directory: directory)
+        let controller = makeController(journal: journal)
+        await XCTAssertTrueAsync(await controller.openDurably(noteID: id))
+        let session = try XCTUnwrap(controller.active)
+        let (_, view) = session.engine.makeView()
+        var control: [Double] = [], checkpoint: [Double] = [], retireElapsed: [Double] = []
+        // Warm both paths, then alternate their order. The probe measures the
+        // longest main-actor blockage across save and retirement, excluding
+        // off-actor decode and journal I/O time.
+        for pair in -1..<8 {
+            for hasCheckpoint in pair.isMultiple(of: 2) ? [false, true] : [true, false] {
+                if hasCheckpoint {
+                    type("b", into: session)
+                    view.setMarkedText("中", selectedRange: NSRange(location: 1, length: 0),
+                                       replacementRange: NSRange(location: NSNotFound, length: 0))
+                    XCTAssertTrue(controller.preserveAll(allowQueued: true))
+                    await controller.waitForRecoveryWork()
+                    XCTAssertFalse(try journal.entries().isEmpty)
+                    view.unmarkText()
+                }
+                type("c", into: session)
+                // Match production autosave's snapshot/preparation boundary.
+                // Extraction and encoding precede its main-actor commit;
+                // the checkpoint must not add a whole-body decode afterward.
+                let snapshot = session.engine.document()
+                let prepared = try await Task.detached { try PreparedNoteDocument(snapshot) }.value
+                let probe = Task { @MainActor in
+                    var worst = 0.0
+                    while !Task.isCancelled {
+                        let start = DispatchTime.now().uptimeNanoseconds
+                        do { try await Task.sleep(for: .milliseconds(1)) } catch { break }
+                        worst = max(worst, Double(DispatchTime.now().uptimeNanoseconds - start) / 1_000_000 - 1)
+                    }
+                    return worst
+                }
+                // Arm the probe before the synchronous save and queued retire.
+                try await Task.sleep(for: .milliseconds(2))
+                let start = DispatchTime.now().uptimeNanoseconds
+                XCTAssertTrue(controller.save(session, snapshot: snapshot, stagedSnapshot: [], prepared: prepared))
+                let saveMS = Double(DispatchTime.now().uptimeNanoseconds - start) / 1_000_000
+                let retireStart = DispatchTime.now().uptimeNanoseconds
+                await controller.waitForRecoveryWork()
+                let elapsed = Double(DispatchTime.now().uptimeNanoseconds - retireStart) / 1_000_000
+                // Let a probe delayed by the last actor segment report it.
+                try await Task.sleep(for: .milliseconds(2))
+                probe.cancel()
+                let occupancy = max(saveMS, await probe.value)
+                XCTAssertTrue(try journal.entries().isEmpty)
+                if pair >= 0 {
+                    if hasCheckpoint { checkpoint.append(occupancy); retireElapsed.append(elapsed) }
+                    else { control.append(occupancy) }
+                }
+            }
+        }
+        let baseline = control.sorted()[4], recovered = checkpoint.sorted()[4]
+        print("NOTE_RECOVERY_CONTROL_MAIN_ACTOR_MS_MEDIAN=\(baseline) CHECKPOINT_MS_MEDIAN=\(recovered) RETIRE_ELAPSED_MS_MEDIAN=\(retireElapsed.sorted()[4]) MAX=\(retireElapsed.max()!)")
+        XCTAssertLessThanOrEqual(recovered, saveMedianLimit)
+        XCTAssertLessThanOrEqual(recovered - baseline, 55.323833 - 45.781292,
+                                 "Recovery retirement must stay within the measured no-checkpoint save spread")
+    }
+
+    func testRecoveryRetirementKeepsCheckpointOnFailedOrStaleDecode() async throws {
+        for failure in ["decode", "bytes", "revision", "tags"] {
+            let id = UUID()
+            guard case .success = store.createDocumentNote(id: id, document: NoteDocument(blocks: [.text("Saved")])) else {
+                return XCTFail("fixture")
+            }
+            let decoder = SuspendedRecoveryDecoder()
+            let journal = NoteDraftJournal(directory: directory.appendingPathComponent(failure))
+            let controller = NotesPageController(store: store, journal: journal, saveDelay: .seconds(60),
+                decodeRecoveryDocument: { bytes in await decoder.decode(bytes) })
+            await XCTAssertTrueAsync(await controller.openDurably(noteID: id))
+            let session = try XCTUnwrap(controller.active)
+            let (_, view) = session.engine.makeView()
+            type("b", into: session)
+            view.setMarkedText("中", selectedRange: NSRange(location: 1, length: 0),
+                               replacementRange: NSRange(location: NSNotFound, length: 0))
+            await XCTAssertTrueAsync(await controller.preserveAllDurably())
+            let original = try XCTUnwrap(journal.entries().first?.0)
+            view.unmarkText()
+            type("c", into: session)
+            XCTAssertTrue(controller.save(session))
+            await decoder.waitUntilStarted()
+            let note = try XCTUnwrap(store.note(withID: id))
+            switch failure {
+            case "bytes": note.content = try NoteContentCodec.encode(NoteDocument(blocks: [.text("Changed")]))
+            case "revision": note.revisionID = UUID()
+            case "tags": note.tagsRaw = AtticTag.encode(["changed"])
+            default: break
+            }
+            await decoder.resume(fail: failure == "decode")
+            await controller.waitForRecoveryWork()
+            XCTAssertEqual(try journal.entries().first?.0, original, failure)
+            XCTAssertTrue(session.notice?.contains("kept") == true, failure)
+        }
+    }
+
+    // Local configuration, macos-26-arm64 image 20260907.0351.1:
     // runs 36527558056 / 36531130649 / 36538797706 / 36551941396
     // save medians: 50.459750 / 55.323833 / 48.480458 / 45.781292 ms;
     // prepared: 5.300167 / 6.087083 / 5.395000 / 4.907000 ms.
-    // Gate = largest baseline median + the observed max-minus-min spread.
-    // This permits one observed spread of runner noise, not a new budget.
-    private let saveMedianLimit = 55.323833 + (55.323833 - 45.781292)
-    private let preparedMedianLimit = 6.087083 + (6.087083 - 4.907000)
+    // Also include four warmed AB/BA baseline d77ec80 test-host runs in CI
+    // 37047731452, with exactly the afebc3a save/scaling fixtures:
+    // save: 54.882334 / 64.080833 / 61.072417 / 70.526333 ms;
+    // prepared: 5.524125 / 6.817541 / 6.216125 / 7.359292 ms.
+    // Keep the same rule: largest baseline median + max-minus-min spread.
+    // No candidate measurement enters a limit. The four historical runs
+    // are independent CI VMs; the four matched runs share one CI VM.
+    private let saveMedianLimit = 70.526333 + (70.526333 - 45.781292)
+    private let preparedMedianLimit = 7.359292 + (7.359292 - 4.907000)
+    // The paired unprepared-save gate uses the same baseline-median
+    // spread as before, recalibrated from the same eight baseline runs.
+    private let storeScalingSaveTolerance = 70.526333 - 45.781292
+    // The old prepared baseline had no attachment. The same four d77ec80
+    // runs measured both small/populated attachment targets (eight medians):
+    // 9.010750 / 7.803417, 8.739500 / 9.612500,
+    // 8.869250 / 8.143417, 8.477458 / 9.844083 ms.
+    private let attachmentPreparedMedianLimit = 9.844083 + (9.844083 - 7.803417)
 
     private func assertSaveBaseline(_ sample: (save: Double, prepared: Double),
+                                    preparedLimit: Double? = nil,
                                     file: StaticString = #filePath, line: UInt = #line) {
         XCTAssertLessThanOrEqual(sample.save, saveMedianLimit, "Main-actor save regressed", file: file, line: line)
-        XCTAssertLessThanOrEqual(sample.prepared, preparedMedianLimit, "Prepared commit regressed", file: file, line: line)
+        XCTAssertLessThanOrEqual(sample.prepared, preparedLimit ?? preparedMedianLimit,
+                                 "Prepared commit regressed", file: file, line: line)
     }
 
     func testMeasuredMainActorSaveIsIndependentOfUnrelatedStoreContents() async throws {
-        let empty = try await measureMainActorSave(label: "EMPTY")
+        let empty = try await makeSavePerformanceFixture()
+        let emptyAttachment = try await makeSavePerformanceFixture(withAttachment: true)
+        // Independent containers keep the empty fixture empty throughout pairing.
+        store = try makeTestNoteStore(persist: { [gate] in try gate!.save($0) },
+                                     attachmentFileStore: makeTestAttachmentFileStore())
         try await populatePerformanceStore()
-        let populated = try await measureMainActorSave(label: "POPULATED")
-        print("NOTE_STORE_SCALING_SAVE_RATIO=\(populated.save / empty.save)")
-        print("NOTE_STORE_SCALING_PREPARED_RATIO=\(populated.prepared / empty.prepared)")
-        assertSaveBaseline(empty)
-        assertSaveBaseline(populated)
-        // The same four baseline runs' prepared maxima were 5.980709,
-        // 6.499917, 6.568041 and 8.652083 ms. Allow their observed spread
-        // for the paired store-size comparison, including sample jitter.
-        XCTAssertLessThanOrEqual(populated.prepared - empty.prepared, 8.652083 - 5.980709,
-                                 "Unrelated notes, history and bytes must not enter an autosave")
-        XCTAssertLessThanOrEqual(populated.save - empty.save, 55.323833 - 45.781292,
-                                 "Main-actor save must stay independent of unrelated store contents")
+        let populated = try await makeSavePerformanceFixture()
+        let populatedAttachment = try await makeSavePerformanceFixture(withAttachment: true)
+        let fixtures = [empty, populated, emptyAttachment, populatedAttachment]
+        let labels = ["EMPTY", "POPULATED", "EMPTY_ATTACHMENT", "POPULATED_ATTACHMENT"]
+        var saves = Array(repeating: [Double](), count: fixtures.count)
+        var prepared = Array(repeating: [Double](), count: fixtures.count)
+        // Discard a warm-up of every fixture before alternating each pair's
+        // order. Neither runtime warm-up nor per-store warm-up can hide slope.
+        for fixture in fixtures {
+            _ = try await measureMainActorSave(fixture: fixture, samples: 1, report: false)
+        }
+        for pair in 0..<8 {
+            for index in pair.isMultiple(of: 2) ? [0, 1, 2, 3] : [1, 0, 3, 2] {
+                let sample = try await measureMainActorSave(fixture: fixtures[index], samples: 1, report: false)
+                saves[index].append(sample.save)
+                prepared[index].append(sample.prepared)
+            }
+        }
+        let medians = fixtures.indices.map { (save: saves[$0].sorted()[4], prepared: prepared[$0].sorted()[4]) }
+        for index in fixtures.indices {
+            let sample = medians[index]
+            print("NOTE_\(labels[index])_SAVE_MS_MEDIAN=\(sample.save) PREPARED_MS_MEDIAN=\(sample.prepared) SAVE_MAX=\(saves[index].max()!) PREPARED_MAX=\(prepared[index].max()!)")
+            assertSaveBaseline(sample, preparedLimit: index >= 2 ? attachmentPreparedMedianLimit : nil)
+        }
+        for (small, large, label) in [(0, 1, "TEXT"), (2, 3, "ATTACHMENT")] {
+            let empty = medians[small], populated = medians[large]
+            print("NOTE_STORE_SCALING_\(label)_SAVE_DIFFERENCE_MS=\(populated.save - empty.save) PREPARED_DIFFERENCE_MS=\(populated.prepared - empty.prepared)")
+            // The four historical baseline runs' prepared maxima were 5.980709,
+            // 6.499917, 6.568041 and 8.652083 ms. Keep their observed spread
+            // for prepared commits; use the updated baseline save-median
+            // spread for the unprepared-save comparison.
+            XCTAssertLessThanOrEqual(populated.prepared - empty.prepared, 8.652083 - 5.980709,
+                                     "Unrelated notes, history and bytes must not enter an autosave")
+            XCTAssertLessThanOrEqual(populated.save - empty.save, storeScalingSaveTolerance,
+                                     "Main-actor save must stay independent of unrelated store contents")
+        }
     }
 
     func testMeasuredColdOpenAndLaunchWithFiveThousandLineNote() async throws {
@@ -283,9 +427,17 @@ final class NotesPageControllerTests: XCTestCase {
         await store.waitForAttachmentReconciliation()
     }
 
-    private func measureMainActorSave(label: String? = nil) async throws -> (save: Double, prepared: Double) {
-        let document = NoteDocument(blocks: (0..<5_000).map { .text("Line \($0) with ordinary note text") })
-        guard case let .success((id, _)) = store.createDocumentNote(id: UUID(), document: document) else {
+    private typealias SavePerformanceFixture = (controller: NotesPageController, session: NoteSession)
+
+    private func makeSavePerformanceFixture(withAttachment: Bool = false) async throws -> SavePerformanceFixture {
+        var document = NoteDocument(blocks: (0..<5_000).map { .text("Line \($0) with ordinary note text") })
+        let staged = withAttachment ? [try realImage()] : []
+        if let image = staged.first {
+            // Keep the same trailing text edit as the text-only baseline;
+            // attachments exercise admission/visibility, not object editing.
+            document.blocks.insert(.image(attachmentID: image.id, pixelWidth: 2, pixelHeight: 2), at: 2_500)
+        }
+        guard case let .success((id, _)) = store.createDocumentNote(id: UUID(), document: document, staged: staged) else {
             XCTFail("large note fixture")
             throw NoteDocumentStoreError.invalidDocument("large note fixture")
         }
@@ -296,12 +448,19 @@ final class NotesPageControllerTests: XCTestCase {
         let openStart = DispatchTime.now().uptimeNanoseconds
         await XCTAssertTrueAsync(await controller.openDurably(noteID: id))
         print("NOTE_OPEN_5000_LINES_MS=\(Double(DispatchTime.now().uptimeNanoseconds - openStart) / 1_000_000)")
-        let session = try XCTUnwrap(controller.active)
+        return (controller, try XCTUnwrap(controller.active))
+    }
+
+    private func measureMainActorSave(label: String? = nil, fixture: SavePerformanceFixture? = nil,
+                                      samples: Int = 8, report: Bool = true) async throws -> (save: Double, prepared: Double) {
+        let target: SavePerformanceFixture
+        if let fixture { target = fixture } else { target = try await makeSavePerformanceFixture() }
+        let (controller, session) = target
         var milliseconds: [Double] = []
         var extractionMilliseconds: [Double] = []
         var preparedCommitMilliseconds: [Double] = []
         var combinedMilliseconds: [Double] = []
-        for _ in 0..<8 {
+        for _ in 0..<samples {
             type("x", into: session)
             let start = DispatchTime.now().uptimeNanoseconds
             XCTAssertTrue(controller.save(session))
@@ -322,15 +481,17 @@ final class NotesPageControllerTests: XCTestCase {
         let extractionSorted = extractionMilliseconds.sorted()
         let preparedSorted = preparedCommitMilliseconds.sorted()
         let combinedSorted = combinedMilliseconds.sorted()
-        print("NOTE_SAVE_5000_LINES_MS_MEDIAN=\(sorted[sorted.count / 2])")
-        print("NOTE_SAVE_5000_LINES_MS_MAX=\(sorted.last ?? 0)")
-        print("NOTE_EXTRACT_5000_LINES_MS_MEDIAN=\(extractionSorted[extractionSorted.count / 2])")
-        print("NOTE_EXTRACT_5000_LINES_MS_MAX=\(extractionSorted.last ?? 0)")
-        print("NOTE_PREPARED_COMMIT_5000_LINES_MS_MEDIAN=\(preparedSorted[preparedSorted.count / 2])")
-        print("NOTE_PREPARED_COMMIT_5000_LINES_MS_MAX=\(preparedSorted.last ?? 0)")
-        print("NOTE_EXTRACT_PREPARE_COMMIT_5000_LINES_MS_MEDIAN=\(combinedSorted[combinedSorted.count / 2])")
-        print("NOTE_EXTRACT_PREPARE_COMMIT_5000_LINES_MS_MAX=\(combinedSorted.last ?? 0)")
-        XCTAssertTrue(store.versions(noteID: id).isEmpty)
+        if report {
+            print("NOTE_SAVE_5000_LINES_MS_MEDIAN=\(sorted[sorted.count / 2])")
+            print("NOTE_SAVE_5000_LINES_MS_MAX=\(sorted.last ?? 0)")
+            print("NOTE_EXTRACT_5000_LINES_MS_MEDIAN=\(extractionSorted[extractionSorted.count / 2])")
+            print("NOTE_EXTRACT_5000_LINES_MS_MAX=\(extractionSorted.last ?? 0)")
+            print("NOTE_PREPARED_COMMIT_5000_LINES_MS_MEDIAN=\(preparedSorted[preparedSorted.count / 2])")
+            print("NOTE_PREPARED_COMMIT_5000_LINES_MS_MAX=\(preparedSorted.last ?? 0)")
+            print("NOTE_EXTRACT_PREPARE_COMMIT_5000_LINES_MS_MEDIAN=\(combinedSorted[combinedSorted.count / 2])")
+            print("NOTE_EXTRACT_PREPARE_COMMIT_5000_LINES_MS_MAX=\(combinedSorted.last ?? 0)")
+        }
+        XCTAssertTrue(controller.store.versions(noteID: session.noteID).isEmpty)
         let result = (save: sorted[sorted.count / 2], prepared: preparedSorted[preparedSorted.count / 2])
         if let label {
             print("NOTE_\(label)_SAVE_MS_MEDIAN=\(result.save) PREPARED_MS_MEDIAN=\(result.prepared)")
@@ -2529,4 +2690,20 @@ private extension NoteSession.State {
         default: false
         }
     }
+}
+
+private actor SuspendedRecoveryDecoder {
+    private var started = false
+    private var continuation: CheckedContinuation<Bool, Never>?
+    func decode(_ bytes: Data) async -> NoteDocument? {
+        let fail = await withCheckedContinuation { continuation in
+            self.continuation = continuation
+            started = true
+        }
+        return fail ? nil : NoteContentCodec.decode(bytes).document
+    }
+    func waitUntilStarted() async {
+        while !started { await Task.yield() }
+    }
+    func resume(fail: Bool) { continuation?.resume(returning: fail); continuation = nil }
 }
