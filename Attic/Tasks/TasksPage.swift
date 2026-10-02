@@ -1538,7 +1538,14 @@ struct TasksPage: View {
     /// ⇧⌘I's did; on the next turn the menu has closed, and every route
     /// opens the files panel the way ⌘Return does.
     private func openFiles(_ id: UUID) {
-        guard !AtticTextInput.ownsCurrentKey else { return }
+        guard !AtticTextInput.ownsCurrentKey else {
+            #if DEBUG
+            if ProcessInfo.processInfo.environment["ATTIC_UI_TESTING"] == "1" {
+                print("Open Files rejected: event=\(String(describing: NSApp.currentEvent)) responder=\(String(describing: NSApp.keyWindow?.firstResponder))")
+            }
+            #endif
+            return
+        }
         pointer.endInvocation()
         DispatchQueue.main.async { [model] in model.openPage(id) }
     }

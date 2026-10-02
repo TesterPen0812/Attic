@@ -298,6 +298,33 @@ final class TasksPanelUITests: XCTestCase {
         dismissFilesPanel(transient)
     }
 
+    /// Unlike the mouse-only case, Return selects the native submenu item
+    /// while the composer remains first responder underneath the NSMenu.
+    /// This was the real-app route that silently rejected Open Files.
+    func testNativeContextMenuReturnOpensFilesWhileTheComposerHasFocus() throws {
+        XCTAssertTrue(addBar.waitForExistence(timeout: 10))
+        addBar.click()
+        addBar.typeText("Keep this draft")
+        XCTAssertEqual(addBar.value(forKey: "hasKeyboardFocus") as? Bool, true)
+        XCTAssertEqual(addBar.value as? String, "Keep this draft")
+
+        row("Book dentist").coordinate(withNormalizedOffset: .zero).withOffset(CGVector(dx: 90, dy: 16)).rightClick()
+        XCTAssertTrue(openMenuItem("More").waitForExistence(timeout: 5))
+        // From no highlighted item: Up selects Delete, Up selects More,
+        // Right enters its submenu, and Return chooses Open Files.
+        app.typeKey(.upArrow, modifierFlags: [])
+        app.typeKey(.upArrow, modifierFlags: [])
+        app.typeKey(.rightArrow, modifierFlags: [])
+        XCTAssertTrue(openMenuItem("Open Files…").waitForExistence(timeout: 5))
+        app.typeKey(.return, modifierFlags: [])
+        XCTAssertTrue(openMenuItem("More").waitForNonExistence(timeout: 5), "the native context menu closes")
+        let transient = element("subtask-panel-")
+        XCTAssertTrue(transient.waitForExistence(timeout: 10), "Return on the native More › Open Files… shows Attachments")
+        XCTAssertTrue(element("add-attachment-").waitForExistence(timeout: 5), "the panel is on Attachments")
+        XCTAssertTrue(app.staticTexts["No attachments yet"].exists)
+        XCTAssertEqual(addBar.value as? String, "Keep this draft", "the menu's Return did not submit the composer")
+    }
+
     // MARK: - A page kept built behind another
 
     /// Tasks stays built behind Canvas: while hidden it takes no clicks, no

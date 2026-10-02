@@ -29,40 +29,31 @@ final class AtticKeyWindowUITests: XCTestCase {
     /// typed right away lands there. (`ATTIC_UI_TEST_HOVER_MONITOR` opens
     /// the panel the way quick capture does.)
     func testAnExplicitOpenFocusesTheAddBarWithoutARing() throws {
-        // The open happens at launch, and an idle quick capture with the
-        // pointer away rightly hides after its grace. On a cold runner the
-        // accessibility setup alone took 4 s and the panel had gone before
-        // the test looked (CI, 2026-10-02, the run's first UI test): so the
-        // open is waited for as it happens, and a launch whose open was
-        // over before the test could see it is launched once more.
-        var addBar: XCUIElement!
-        for attempt in 0..<2 {
-            app = XCUIApplication()
-            app.launchEnvironment["ATTIC_UI_TESTING"] = "1"
-            app.launchEnvironment["ATTIC_UI_TEST_HOVER_MONITOR"] = "1"
-            app.launchArguments += ["-appearancePreference", "light", "-panelSurfaceStyle", "solid"]
-            app.launch()
-            app.activate()
-            addBar = app.descendants(matching: .any).matching(identifier: "AtticTokenField").firstMatch
-            if addBar.waitForExistence(timeout: 5) { break }
-            if attempt == 0 { app.terminate() }
+        continueAfterFailure = false
+        app = XCUIApplication()
+        app.launchEnvironment["ATTIC_UI_TESTING"] = "1"
+        app.launchEnvironment["ATTIC_UI_TEST_HOVER_MONITOR"] = "1"
+        // The real pin protects only test setup from cold accessibility
+        // startup and snapshot latency. It neither assigns focus nor draws
+        // a ring. Exercise an explicit New task after automation is ready.
+        app.launchEnvironment["ATTIC_UI_TEST_PINNED"] = "1"
+        app.launchArguments += ["-appearancePreference", "light", "-panelSurfaceStyle", "solid"]
+        app.launch()
+        app.activate()
+        let statusItem = app.statusItems.firstMatch
+        XCTAssertTrue(statusItem.waitForExistence(timeout: 10))
+        statusItem.click()
+        let newTask = app.menuItems["New task"]
+        XCTAssertTrue(newTask.waitForExistence(timeout: 5))
+        newTask.click()
+        XCTAssertTrue(newTask.waitForNonExistence(timeout: 5), "the menu closes after the explicit open")
+        let addBar = app.descendants(matching: .any).matching(identifier: "AtticTokenField").firstMatch
+        let focused = NSPredicate { _, _ in
+            addBar.exists && addBar.isHittable && (addBar.value(forKey: "hasKeyboardFocus") as? Bool) == true
         }
-        XCTAssertTrue(addBar.exists, "the explicit open shows the panel with its add bar")
-        let deadline = Date().addingTimeInterval(3)
-        while Date() < deadline, (addBar.value(forKey: "hasKeyboardFocus") as? Bool) != true {
-            RunLoop.current.run(until: Date().addingTimeInterval(0.1))
-        }
-        XCTAssertEqual(addBar.value(forKey: "hasKeyboardFocus") as? Bool, true, "the add bar has the keyboard on open")
+        XCTAssertEqual(XCTWaiter.wait(for: [XCTNSPredicateExpectation(predicate: focused, object: nil)], timeout: 10), .completed,
+                       "the explicit open shows a hittable add bar with the keyboard")
 
-        // Typed first, captured after. An idle quick capture with the
-        // pointer away rightly hides after its grace
-        // (`MainPanelAutoHidePolicy`), and a screenshot can take seconds
-        // on CI: taken before typing, it let the panel hide before the
-        // text arrived (3 failed attempts in a row on CI). A draft holds
-        // the panel open, so once the text has landed the capture can take
-        // as long as it needs. The ring would show from the focus the open
-        // gave, which typing letters does not change (only Tab and the
-        // arrows turn rings on), so the capture still judges the open.
         app.typeText("Typed on open")
         let typed = NSPredicate(format: "value CONTAINS %@", "Typed on open")
         XCTAssertEqual(XCTWaiter.wait(for: [expectation(for: typed, evaluatedWith: addBar)], timeout: 10), .completed,

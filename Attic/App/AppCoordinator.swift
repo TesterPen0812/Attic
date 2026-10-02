@@ -668,6 +668,7 @@ final class AppCoordinator: ObservableObject {
         cleanupService.start()
 
         if isUITesting {
+            if ProcessInfo.processInfo.environment["ATTIC_UI_TEST_PINNED"] == "1" { uiState.isPanelPinned = true }
             // LSUIElement apps do not necessarily become active when XCTest
             // launches them. Activate the real process before presenting the
             // key panel so AppKit, not a test-only model shortcut, owns mouse
@@ -684,7 +685,6 @@ final class AppCoordinator: ObservableObject {
                 if let page = environment["ATTIC_UI_TEST_PAGE"].flatMap(PanelPage.init(rawValue:)) {
                     uiState.selectSection(page.section)
                 }
-                if environment["ATTIC_UI_TEST_PINNED"] == "1" { uiState.isPanelPinned = true }
                 // AppKit makes a visible window key when launching finishes,
                 // so the reveal waits until launch is over, as a corner reveal
                 // always does.
