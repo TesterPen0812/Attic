@@ -186,16 +186,17 @@ final class NotesPageControllerTests: XCTestCase {
                     type("b", into: session)
                     view.setMarkedText("中", selectedRange: NSRange(location: 1, length: 0),
                                        replacementRange: NSRange(location: NSNotFound, length: 0))
-                    await XCTAssertTrueAsync(await controller.preserveAllDurably())
+                    XCTAssertTrue(controller.preserveAll(allowQueued: true))
                     await controller.waitForRecoveryWork()
                     XCTAssertFalse(try journal.entries().isEmpty)
                     view.unmarkText()
                 }
                 type("c", into: session)
-                // Match autosave's snapshot boundary. Unmarking IME text
-                // invalidates the engine's body cache; extraction is separate
-                // from the save/retire regression and is warmed in both paths.
+                // Match production autosave's snapshot/preparation boundary.
+                // Extraction and encoding precede its main-actor commit;
+                // the checkpoint must not add a whole-body decode afterward.
                 let snapshot = session.engine.document()
+                let prepared = try await Task.detached { try PreparedNoteDocument(snapshot) }.value
                 let probe = Task { @MainActor in
                     var worst = 0.0
                     while !Task.isCancelled {
@@ -208,7 +209,7 @@ final class NotesPageControllerTests: XCTestCase {
                 // Arm the probe before the synchronous save and queued retire.
                 try await Task.sleep(for: .milliseconds(2))
                 let start = DispatchTime.now().uptimeNanoseconds
-                XCTAssertTrue(controller.save(session, snapshot: snapshot, stagedSnapshot: []))
+                XCTAssertTrue(controller.save(session, snapshot: snapshot, stagedSnapshot: [], prepared: prepared))
                 let saveMS = Double(DispatchTime.now().uptimeNanoseconds - start) / 1_000_000
                 let retireStart = DispatchTime.now().uptimeNanoseconds
                 await controller.waitForRecoveryWork()
