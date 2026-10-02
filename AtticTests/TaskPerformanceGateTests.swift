@@ -41,6 +41,30 @@ final class TaskPerformanceGateTests: XCTestCase {
         return samples.sorted()[iterations / 2]
     }
 
+    /// The real Phase 2 TaskStore mutation entry points, with durable saves.
+    func testMeasuredTaskCRUDSavePaths() throws {
+        let store = try seedStore(parents: 200, childrenPerParent: 0)
+        let task = try XCTUnwrap(store.tasks.first)
+        var tick: [Double] = [], rename: [Double] = [], add: [Double] = [], reorder: [Double] = [], delete: [Double] = []
+        func ms(_ action: () -> Void) -> Double {
+            let start = DispatchTime.now().uptimeNanoseconds
+            action()
+            return Double(DispatchTime.now().uptimeNanoseconds - start) / 1_000_000
+        }
+        for index in 0..<8 {
+            tick.append(ms { XCTAssertTrue(store.setStatus(index % 2 == 0 ? .done : .todo, for: task)) })
+            rename.append(ms { XCTAssertTrue(store.update(task, title: "Renamed \(index)")) })
+            var added: TaskItem?
+            add.append(ms { added = store.create(title: "Added \(index)") })
+            let row = try XCTUnwrap(added)
+            reorder.append(ms { XCTAssertTrue(store.move(taskID: row.id, toIndex: 1)) })
+            delete.append(ms { XCTAssertTrue(store.delete(row)) })
+        }
+        for (name, samples) in [("TICK", tick), ("RENAME", rename), ("ADD", add), ("REORDER", reorder), ("DELETE", delete)] {
+            print("TASK_\(name)_MS_MEDIAN=\(samples.sorted()[samples.count / 2]) MAX=\(samples.max()!)")
+        }
+    }
+
     /// The audit's family-summary shape: three children evaluations per
     /// parent across 1,000 parents / 6,000 tasks measured 357 ms with the
     /// scan-based lookup. The index answers each in O(1).

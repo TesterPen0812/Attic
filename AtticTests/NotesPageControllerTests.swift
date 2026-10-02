@@ -164,12 +164,71 @@ final class NotesPageControllerTests: XCTestCase {
     }
 
     func testMeasuredMainActorSaveOnFiveThousandLineNote() async throws {
+        _ = try await measureMainActorSave()
+    }
+
+    func testMeasuredMainActorSaveIsIndependentOfUnrelatedStoreContents() async throws {
+        let empty = try await measureMainActorSave(label: "EMPTY")
+        try await populatePerformanceStore()
+        let populated = try await measureMainActorSave(label: "POPULATED")
+        print("NOTE_STORE_SCALING_SAVE_RATIO=\(populated.save / empty.save)")
+        print("NOTE_STORE_SCALING_PREPARED_RATIO=\(populated.prepared / empty.prepared)")
+    }
+
+    private func populatePerformanceStore() async throws {
+        let context = store.modelContext
+        let document = NoteDocument(blocks: (0..<1_000).map { .text("Unrelated line \($0)") })
+        let projection = try PreparedNoteDocument(document)
+        let timestamp = Date()
+        for index in 0..<200 {
+            let note = NoteItem(title: "Unrelated \(index)", body: projection.body)
+            note.content = projection.content
+            note.contentFormat = 1
+            note.plainText = projection.plainText
+            note.revisionID = UUID()
+            context.insert(note)
+            context.insert(NoteVersion(noteID: note.id, createdAt: timestamp, reason: .leave,
+                content: projection.content, contentFormat: 1, title: note.title, body: projection.body,
+                attachmentIDs: [], sourceRevisionID: note.revisionID))
+            if index < 20 {
+                context.insert(NotePendingEdit(noteID: note.id, baseRevisionToken: note.revisionToken,
+                    proposedContent: projection.content, agentName: "Perf fixture", createdAt: timestamp))
+            }
+            if index < 4 {
+                let bytes = Data(repeating: UInt8(index), count: 1_024 * 1_024)
+                context.insert(NoteAttachment(noteID: note.id, originalFilename: "fixture-\(index).bin",
+                    byteCount: Int64(bytes.count), sortIndex: 0,
+                    contentDigest: SHA256.hash(data: bytes).map { String(format: "%02x", $0) }.joined(), payload: bytes))
+            }
+        }
+        for index in 0..<2_000 {
+            let task = TaskItem(title: "Done \(index)")
+            task.status = .done
+            task.completedAt = timestamp
+            task.doneLoggedAt = timestamp
+            context.insert(task)
+        }
+        try context.save()
+        let started = DispatchTime.now().uptimeNanoseconds
+        store = NoteStore(container: store.container, persist: { [gate] in try gate!.save($0) },
+                          attachmentFileStore: makeTestAttachmentFileStore())
+        print("NOTE_POPULATED_STORE_INIT_MS=\(Double(DispatchTime.now().uptimeNanoseconds - started) / 1_000_000)")
+        await store.waitForAttachmentReconciliation()
+    }
+
+    private func measureMainActorSave(label: String? = nil) async throws -> (save: Double, prepared: Double) {
         let document = NoteDocument(blocks: (0..<5_000).map { .text("Line \($0) with ordinary note text") })
         guard case let .success((id, _)) = store.createDocumentNote(id: UUID(), document: document) else {
-            return XCTFail("large note fixture")
+            XCTFail("large note fixture")
+            throw NoteDocumentStoreError.invalidDocument("large note fixture")
         }
         let controller = makeController()
+        let launchStart = DispatchTime.now().uptimeNanoseconds
+        await controller.startAndWait()
+        print("NOTE_CONTROLLER_START_MS=\(Double(DispatchTime.now().uptimeNanoseconds - launchStart) / 1_000_000)")
+        let openStart = DispatchTime.now().uptimeNanoseconds
         await XCTAssertTrueAsync(await controller.openDurably(noteID: id))
+        print("NOTE_OPEN_5000_LINES_MS=\(Double(DispatchTime.now().uptimeNanoseconds - openStart) / 1_000_000)")
         let session = try XCTUnwrap(controller.active)
         var milliseconds: [Double] = []
         var extractionMilliseconds: [Double] = []
@@ -205,6 +264,11 @@ final class NotesPageControllerTests: XCTestCase {
         print("NOTE_EXTRACT_PREPARE_COMMIT_5000_LINES_MS_MEDIAN=\(combinedSorted[combinedSorted.count / 2])")
         print("NOTE_EXTRACT_PREPARE_COMMIT_5000_LINES_MS_MAX=\(combinedSorted.last ?? 0)")
         XCTAssertTrue(store.versions(noteID: id).isEmpty)
+        let result = (save: sorted[sorted.count / 2], prepared: preparedSorted[preparedSorted.count / 2])
+        if let label {
+            print("NOTE_\(label)_SAVE_MS_MEDIAN=\(result.save) PREPARED_MS_MEDIAN=\(result.prepared)")
+        }
+        return result
     }
 
     func testFailedSaveIsCheckpointedBeforeNavigationAndRetrySavesIt() async throws {
