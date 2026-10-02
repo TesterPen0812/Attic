@@ -50,6 +50,8 @@ struct AtticDropdownSurface: View {
 /// presenter caps it at the panel's margin (`AtticDropdownLayout.width`).
 struct AtticDropdownCard<Content: View>: View {
     var width: CGFloat?
+    @Environment(\.atticDropdownHeight) private var height
+    @Environment(\.atticDropdownWidth) private var widthLimit
     @ViewBuilder let content: Content
 
     init(width: CGFloat? = nil, @ViewBuilder content: () -> Content) {
@@ -59,10 +61,12 @@ struct AtticDropdownCard<Content: View>: View {
 
     var body: some View {
         let m = AtticDropdownMetrics.self
-        VStack(alignment: .leading, spacing: 0) { content }
+        AtticDropdownViewport(height: height.map { max(0, $0 - m.inset * 2) }) {
+            VStack(alignment: .leading, spacing: 0) { content }
+        }
             .padding(m.inset)
             .frame(minWidth: width == nil ? m.minWidth : nil, alignment: .leading)
-            .frame(width: width, alignment: .leading)
+            .frame(width: widthLimit ?? width, alignment: .leading)
             .background(AtticDropdownSurface())
     }
 }
@@ -91,6 +95,9 @@ struct AtticDropdownRow: View {
     var detail: String?
     /// Typed text to embolden in the name (the `/` list's filter).
     var match: String?
+    var scrollID: String?
+    var position: Int?
+    var itemCount: Int?
     var isHighlighted = false
     var titleInk: AtticInk = .body
     var onHover: ((Bool) -> Void)?
@@ -101,7 +108,10 @@ struct AtticDropdownRow: View {
 
     init(title: String, systemName: String? = nil, check: AtticCheckState? = nil, mark: AtticPriority? = nil,
          detail: String? = nil, match: String? = nil, isHighlighted: Bool = false, titleInk: AtticInk = .body,
-         onHover: ((Bool) -> Void)? = nil, action: @escaping () -> Void) {
+         onHover: ((Bool) -> Void)? = nil, position: Int? = nil, itemCount: Int? = nil, scrollID: String? = nil, action: @escaping () -> Void) {
+        self.scrollID = scrollID
+        self.position = position
+        self.itemCount = itemCount
         self.title = title
         self.systemName = systemName
         self.check = check
@@ -175,9 +185,13 @@ struct AtticDropdownRow: View {
                 onHover?(false)
             }
         }
-        .accessibilityLabel(detail.map { "\(title), \($0)" } ?? title)
-        .accessibilityAddTraits(check == .on || isHighlighted ? .isSelected : [])
-        .accessibilityValue(check == .mixed ? String(localized: "some selected tasks") : "")
+        .id(scrollID ?? title)
+        .preference(key: AtticDropdownHighlightKey.self, value: isHighlighted ? (scrollID ?? title) : nil)
+        .accessibilityRepresentation {
+            AtticDropdownMenuItem(label: detail.map { "\(title), \($0)" } ?? title,
+                                  selected: check == .on || isHighlighted,
+                                  mixed: check == .mixed, position: position, count: itemCount, action: action)
+        }
     }
 
     @ViewBuilder
@@ -285,19 +299,21 @@ enum AtticDropdownLayout {
     /// side, else the roomier one, kept inside `bounds`.
     static func frame(size: CGSize, anchor: CGRect, bounds: CGRect, prefer: Side,
                       gap: CGFloat = AtticDropdownMetrics.anchorGap) -> (frame: CGRect, side: Side) {
-        let x = max(bounds.minX, min(anchor.minX, bounds.maxX - size.width))
-        let belowY = anchor.maxY + gap
-        let aboveY = anchor.minY - gap - size.height
-        let fitsBelow = belowY + size.height <= bounds.maxY
-        let fitsAbove = aboveY >= bounds.minY
+        let width = min(size.width, bounds.width)
+        let x = max(bounds.minX, min(anchor.minX, bounds.maxX - width))
+        let belowY = max(bounds.minY, min(anchor.maxY + gap, bounds.maxY))
+        let aboveEnd = max(bounds.minY, min(anchor.minY - gap, bounds.maxY))
+        let below = max(0, bounds.maxY - belowY)
+        let above = max(0, aboveEnd - bounds.minY)
         let side: Side
-        switch prefer {
-        case .below: side = fitsBelow || !fitsAbove && bounds.maxY - belowY >= anchor.minY - gap - bounds.minY ? .below : .above
-        case .above: side = fitsAbove || !fitsBelow && anchor.minY - gap - bounds.minY > bounds.maxY - belowY ? .above : .below
-        }
-        var y = side == .below ? belowY : aboveY
-        y = max(bounds.minY, min(y, bounds.maxY - size.height))
-        return (CGRect(x: x, y: y, width: size.width, height: size.height), side)
+        if prefer == .below && size.height <= below { side = .below }
+        else if prefer == .above && size.height <= above { side = .above }
+        else if size.height <= above { side = .above }
+        else if size.height <= below { side = .below }
+        else { side = above > below ? .above : .below }
+        let height = min(size.height, side == .below ? below : above)
+        let y = side == .below ? belowY : aboveEnd - height
+        return (CGRect(x: x, y: y, width: width, height: height), side)
     }
 
     /// `rect` in `view` turned top-down (and back: the flip is its own
@@ -362,6 +378,7 @@ final class AtticDropdownStageModel: ObservableObject {
     @Published var side: AtticDropdownLayout.Side = .below
     /// The card's width once the width rule capped it (nil: its content's).
     @Published var width: CGFloat?
+    @Published var height: CGFloat?
     /// Bumped once the card's host has the keyboard: the content's own
     /// focus (`atticDropdownFocus`) takes it then.
     @Published var focusRequest = 0
@@ -407,6 +424,7 @@ private struct AtticDropdownFocusModifier: ViewModifier {
 struct AtticDropdownStage: View {
     @ObservedObject var model: AtticDropdownStageModel
     let content: AnyView
+    var contentHasCard = false
 
     @Environment(\.atticDesign) private var design
 
@@ -416,7 +434,12 @@ struct AtticDropdownStage: View {
         // A card below its anchor comes down from its top edge; above it, up
         // from its bottom edge.
         let fromTop = model.side == .below
-        AtticDropdownCard(width: model.width) { content }
+        Group {
+            if contentHasCard { content }
+            else { AtticDropdownCard(width: model.width) { content } }
+        }
+            .environment(\.atticDropdownHeight, model.height)
+            .environment(\.atticDropdownWidth, model.width)
             .scaleEffect(model.shown ? 1 : preset.hiddenScale(reduceMotion: reduce),
                          anchor: fromTop ? .topLeading : .bottomLeading)
             .offset(y: model.shown || reduce ? 0 : (fromTop ? -preset.rise : preset.rise))
@@ -448,6 +471,10 @@ final class AtticDropdownPresenter {
     /// Sets the presenting binding to false.
     var onDismiss: (() -> Void)?
     var prefer: AtticDropdownLayout.Side = .below
+    var takesKeyboard = true
+    var contentHasCard = false
+    var contentHeight: CGFloat?
+    private var naturalSize = CGSize.zero
     var label = ""
     var design = AtticDesignContext()
     var content = AnyView(EmptyView())
@@ -461,7 +488,7 @@ final class AtticDropdownPresenter {
     init() {}
 
     private var root: AnyView {
-        AnyView(AtticDropdownStage(model: stage, content: content).atticDesign(design))
+        AnyView(AtticDropdownStage(model: stage, content: content, contentHasCard: contentHasCard).atticDesign(design))
     }
 
     /// The overlay layer and the panel's visible rectangle in it; a plain
@@ -489,32 +516,35 @@ final class AtticDropdownPresenter {
         let room = m.shadowRoom
         stage.shown = false
         stage.width = nil
+        stage.height = nil
         stage.side = prefer
         let host = AtticOverlayHostingView(rootView: root)
         host.contentInset = room
-        host.acceptsKeyboard = true
+        host.acceptsKeyboard = takesKeyboard
         host.isInteractive = true
         // The content's size, once, as it opens (the card keeps its width
         // while it is open, so filtering never makes it jump).
         let fitting = host.fittingSize
         let bounds = AtticDropdownLayout.topDown(overlay.panel, in: overlay.parent).insetBy(dx: m.panelMargin, dy: m.panelMargin)
         let width = AtticDropdownLayout.width(ideal: fitting.width - room * 2, available: bounds.width)
-        if width != (fitting.width - room * 2).rounded(.up) { stage.width = width }
-        let size = CGSize(width: width, height: max(0, fitting.height - room * 2))
+        if contentHasCard || width != (fitting.width - room * 2).rounded(.up) { stage.width = width }
+        let size = CGSize(width: width, height: contentHeight ?? max(0, fitting.height - room * 2))
+        naturalSize = size
         let anchorRect = AtticDropdownLayout.topDown(anchor.convert(anchor.bounds, to: overlay.parent), in: overlay.parent)
         let placed = AtticDropdownLayout.frame(size: size, anchor: anchorRect, bounds: bounds, prefer: prefer)
         stage.side = placed.side
+        if placed.frame.height < size.height { stage.height = placed.frame.height }
         host.frame = AtticDropdownLayout.topDown(placed.frame.insetBy(dx: -room, dy: -room), in: overlay.parent).integral
         host.menuLabel = label
         overlay.parent.addSubview(host, positioned: .above, relativeTo: nil)
         self.host = host
         isOpen = true
-        Self.openCount += 1
+        if takesKeyboard { Self.openCount += 1 }
         previousResponder = Self.owner(of: window.firstResponder)
         install(in: window)
         DispatchQueue.main.async { [weak self] in
             guard let self, self.isOpen else { return }
-            self.takeKeyboard()
+            if self.takesKeyboard { self.takeKeyboard() }
             self.stage.shown = true
         }
     }
@@ -530,6 +560,20 @@ final class AtticDropdownPresenter {
     /// New content while open (the page's state changed: a tick, a failure line).
     func update() {
         host?.rootView = root
+        // Typing suggestions can gain or lose rows while open. Their known
+        // height avoids another content-measuring pass on every keystroke.
+        guard let height = contentHeight, height != naturalSize.height,
+              let host, let anchor, let overlay = Self.overlay(for: anchor) else { return }
+        naturalSize.height = height
+        let m = AtticDropdownMetrics.self
+        let bounds = AtticDropdownLayout.topDown(overlay.panel, in: overlay.parent)
+            .insetBy(dx: m.panelMargin, dy: m.panelMargin)
+        let anchorRect = AtticDropdownLayout.topDown(anchor.convert(anchor.bounds, to: overlay.parent), in: overlay.parent)
+        let placed = AtticDropdownLayout.frame(size: naturalSize, anchor: anchorRect, bounds: bounds, prefer: prefer)
+        if stage.side != placed.side { stage.side = placed.side }
+        let limit: CGFloat? = placed.frame.height < height ? placed.frame.height : nil
+        if stage.height != limit { stage.height = limit }
+        host.frame = AtticDropdownLayout.topDown(placed.frame.insetBy(dx: -m.shadowRoom, dy: -m.shadowRoom), in: overlay.parent).integral
     }
 
     /// Closes the card (the binding went false, or the anchor went away).
@@ -537,7 +581,7 @@ final class AtticDropdownPresenter {
         wantsOpen = false
         guard isOpen, let host else { return }
         isOpen = false
-        Self.openCount = max(0, Self.openCount - 1)
+        if takesKeyboard { Self.openCount = max(0, Self.openCount - 1) }
         uninstall()
         host.isInteractive = false
         host.setAccessibilityElement(false)
@@ -641,6 +685,9 @@ struct AtticDropdownAnchor: NSViewRepresentable {
     @Binding var isPresented: Bool
     let prefer: AtticDropdownLayout.Side
     let label: String
+    let takesKeyboard: Bool
+    let contentHasCard: Bool
+    let contentHeight: CGFloat?
     let design: AtticDesignContext
     let content: () -> AnyView
 
@@ -669,6 +716,9 @@ struct AtticDropdownAnchor: NSViewRepresentable {
         presenter.onDismiss = { if binding.wrappedValue { binding.wrappedValue = false } }
         presenter.prefer = prefer
         presenter.label = label
+        presenter.takesKeyboard = takesKeyboard
+        presenter.contentHasCard = contentHasCard
+        presenter.contentHeight = contentHeight
         presenter.design = design
         guard isPresented else {
             if presenter.isOpen || presenter.wantsOpen { presenter.close(restoreFocus: true) }
@@ -705,8 +755,8 @@ extension View {
     /// edge on this view's, on the `prefer` side when there is room. Only
     /// for Attic's own pop-over lists; native menus stay native.
     func atticDropdown<Content: View>(isPresented: Binding<Bool>, prefer: AtticDropdownLayout.Side = .below,
-                                      label: String, @ViewBuilder content: @escaping () -> Content) -> some View {
-        modifier(AtticDropdownModifier(isPresented: isPresented, prefer: prefer, label: label, card: content))
+                                      label: String, takesKeyboard: Bool = true, contentHasCard: Bool = false, contentHeight: CGFloat? = nil, @ViewBuilder content: @escaping () -> Content) -> some View {
+        modifier(AtticDropdownModifier(isPresented: isPresented, prefer: prefer, label: label, takesKeyboard: takesKeyboard, contentHasCard: contentHasCard, contentHeight: contentHeight, card: content))
     }
 }
 
@@ -714,6 +764,9 @@ private struct AtticDropdownModifier<Card: View>: ViewModifier {
     @Binding var isPresented: Bool
     let prefer: AtticDropdownLayout.Side
     let label: String
+    let takesKeyboard: Bool
+    let contentHasCard: Bool
+    let contentHeight: CGFloat?
     let card: () -> Card
 
     @Environment(\.atticDesign) private var design
@@ -723,10 +776,102 @@ private struct AtticDropdownModifier<Card: View>: ViewModifier {
         // costs nothing (no AppKit view per row).
         content.background {
             if isPresented {
-                AtticDropdownAnchor(isPresented: $isPresented, prefer: prefer, label: label, design: design,
+                AtticDropdownAnchor(isPresented: $isPresented, prefer: prefer, label: label, takesKeyboard: takesKeyboard, contentHasCard: contentHasCard, contentHeight: contentHeight, design: design,
                                     content: { AnyView(card()) })
                     .accessibilityHidden(true)
             }
         }
+    }
+}
+
+
+private struct AtticDropdownWidthKey: EnvironmentKey {
+    static let defaultValue: CGFloat? = nil
+}
+
+private struct AtticDropdownHeightKey: EnvironmentKey {
+    static let defaultValue: CGFloat? = nil
+}
+
+extension EnvironmentValues {
+    var atticDropdownWidth: CGFloat? {
+        get { self[AtticDropdownWidthKey.self] }
+        set { self[AtticDropdownWidthKey.self] = newValue }
+    }
+
+    var atticDropdownHeight: CGFloat? {
+        get { self[AtticDropdownHeightKey.self] }
+        set { self[AtticDropdownHeightKey.self] = newValue }
+    }
+}
+
+struct AtticDropdownHighlightKey: PreferenceKey {
+    static let defaultValue: String? = nil
+    static func reduce(value: inout String?, nextValue: () -> String?) {
+        if let next = nextValue() { value = next }
+    }
+}
+
+/// Only cramped cards create a scroll view. The system soft edge reveals
+/// overflow; the keyboard's highlighted row is brought wholly into view.
+struct AtticDropdownViewport<Content: View>: View {
+    var height: CGFloat?
+    var highlighted: String? = nil
+    @ViewBuilder let content: Content
+
+    var body: some View {
+        if let height {
+            ScrollViewReader { proxy in
+                ScrollView(.vertical) { content }
+                    .scrollIndicators(.never)
+                    .safeAreaBar(edge: .top, spacing: 0) { Color.clear.frame(height: AtticDropdownMetrics.scrollEdgeInset).accessibilityHidden(true) }
+                    .safeAreaBar(edge: .bottom, spacing: 0) { Color.clear.frame(height: AtticDropdownMetrics.scrollEdgeInset).accessibilityHidden(true) }
+                    .scrollEdgeEffectStyle(.soft, for: .vertical)
+                    .frame(height: height)
+                    .onAppear { if let highlighted { proxy.scrollTo(highlighted) } }
+                    .onChange(of: highlighted) { _, id in
+                        guard let id, !AtticListHighlight.isPointerMove(NSApp.currentEvent) else { return }
+                        proxy.scrollTo(id)
+                    }
+                    .onPreferenceChange(AtticDropdownHighlightKey.self) { title in
+                        guard let title, !AtticListHighlight.isPointerMove(NSApp.currentEvent) else { return }
+                        proxy.scrollTo(title)
+                    }
+            }
+        } else {
+            content
+        }
+    }
+}
+
+/// SwiftUI has no public menu-item role. Supply its AppKit accessibility
+/// representation while keeping the visible button and key routing intact.
+struct AtticDropdownMenuItem: NSViewRepresentable {
+    let label: String
+    let selected: Bool
+    var mixed = false
+    var position: Int?
+    var count: Int?
+    let action: () -> Void
+
+    final class ItemView: NSView {
+        var action: (() -> Void)?
+        override func accessibilityPerformPress() -> Bool { action?(); return action != nil }
+        override func hitTest(_ point: NSPoint) -> NSView? { nil }
+    }
+
+    func makeNSView(context: Context) -> ItemView { ItemView() }
+    func updateNSView(_ view: ItemView, context: Context) {
+        view.setAccessibilityElement(true)
+        view.setAccessibilityRole(.menuItem)
+        view.setAccessibilityLabel(label)
+        view.setAccessibilitySelected(selected)
+        var value = mixed ? String(localized: "some selected tasks") : ""
+        if let position, let count {
+            value += (value.isEmpty ? "" : ", ") + String(localized: "\(position) of \(count)")
+            view.setAccessibilityIndex(position - 1)
+        }
+        view.setAccessibilityValue(value)
+        view.action = action
     }
 }

@@ -193,9 +193,10 @@ struct AtticDatePicker: View {
     var body: some View {
         let d = AtticDropdownMetrics.self
         VStack(alignment: .leading, spacing: 0) {
-            ForEach(quick) { item in
+            ForEach(Array(quick.enumerated()), id: \.element.id) { index, item in
                 AtticDropdownRow(title: item.title, check: showsChecks ? (item.isChecked ? .on : .off) : nil,
-                                 detail: item.detail, isHighlighted: highlightedRow == item.id, onHover: hoverRow(item.id)) {
+                                 detail: item.detail, isHighlighted: highlightedRow == item.id, onHover: hoverRow(item.id),
+                                 position: index + 1, itemCount: quick.count + (removeTitle == nil ? 0 : 1)) {
                     onQuick(item.id)
                 }
             }
@@ -224,7 +225,8 @@ struct AtticDatePicker: View {
             if let removeTitle {
                 AtticDropdownGap(height: d.fieldGap)
                 AtticDropdownRow(title: removeTitle, check: showsChecks ? .off : nil,
-                                 isHighlighted: highlightedRow == Self.removeID, onHover: hoverRow(Self.removeID), action: onRemove)
+                                 isHighlighted: highlightedRow == Self.removeID, onHover: hoverRow(Self.removeID), position: quick.count + 1,
+                                 itemCount: quick.count + 1, action: onRemove)
             }
         }
         .frame(width: d.monthCellWidth * 7)
@@ -272,6 +274,8 @@ struct AtticDatePicker: View {
         .buttonStyle(AtticUndimmedButtonStyle())
         .focusEffectDisabled()
         .atticOwnFocusRing(.circle(diameter: d.monthDisc))
+        .id(day.id)
+        .preference(key: AtticDropdownHighlightKey.self, value: cursor == day.id ? day.id : nil)
         // The pointer moves the cursor, as it moves a menu's highlight.
         .onContinuousHover { phase in
             switch phase {
@@ -324,6 +328,8 @@ struct AtticTagPicker: View {
         return max(1, min(tagCount, most))
     }
 
+    @Environment(\.atticDropdownHeight) private var cardHeight
+
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             AtticDropdownField(text: $query, placeholder: String(localized: "Find or add a tag"),
@@ -335,21 +341,14 @@ struct AtticTagPicker: View {
             // never jumps. Only a list longer than that scrolls: rows that
             // fit are plain rows (nothing to scroll, for the pointer, the
             // keyboard or the UI tests).
-            if shown <= room {
+            let normalHeight = CGFloat(room) * AtticDropdownMetrics.rowHeight
+            let listHeight = min(normalHeight, cardHeight.map { max(0, $0 - AtticDropdownMetrics.inset * 2
+                                                                     - AtticDropdownMetrics.fieldHeight - AtticDropdownMetrics.fieldGap) } ?? normalHeight)
+            if shown <= room && listHeight == normalHeight {
                 rows
                     .frame(height: CGFloat(room) * AtticDropdownMetrics.rowHeight, alignment: .top)
             } else {
-                ScrollViewReader { proxy in
-                    ScrollView(.vertical) { rows }
-                        .scrollIndicators(.never)
-                        .frame(height: CGFloat(room) * AtticDropdownMetrics.rowHeight)
-                        // The keyboard's highlight stays in view; the
-                        // pointer's is under the pointer already.
-                        .onChange(of: highlighted) { _, index in
-                            guard let index, !AtticListHighlight.isPointerMove(NSApp.currentEvent) else { return }
-                            proxy.scrollTo(index)
-                        }
-                }
+                AtticDropdownViewport(height: listHeight) { rows }
             }
         }
         .accessibilityElement(children: .contain)
@@ -360,14 +359,14 @@ struct AtticTagPicker: View {
         VStack(alignment: .leading, spacing: 0) {
             ForEach(Array(tags.enumerated()), id: \.element.id) { index, tag in
                 AtticDropdownRow(title: "#" + tag.name, check: tag.state, isHighlighted: highlighted == index,
-                                 onHover: hover(index)) {
+                                 onHover: hover(index), position: index + 1, itemCount: tags.count + (create == nil ? 0 : 1)) {
                     onToggle(tag.name)
                 }
                 .id(index)
             }
             if let create {
                 AtticDropdownRow(title: String(localized: "New tag “#\(create)”"), systemName: "plus", check: .off,
-                                 isHighlighted: highlighted == tags.count, onHover: hover(tags.count)) {
+                                 isHighlighted: highlighted == tags.count, onHover: hover(tags.count), position: tags.count + 1, itemCount: tags.count + 1) {
                     onCreate(create)
                 }
                 .id(tags.count)
@@ -412,46 +411,30 @@ struct AtticTaskPicker: View {
     var onHover: ((_ index: Int, _ inside: Bool) -> Void)? = nil
 
     var body: some View {
-        let m = AtticPickerMetrics.self
-        let rowHeight = AtticControlSize.smallHeight
+        let m = AtticDropdownMetrics.self
         VStack(alignment: .leading, spacing: 0) {
-            TextField("", text: $query, prompt: Text(String(localized: "Find a task")))
-                .textFieldStyle(.plain)
-                .font(AtticTextStyle.menuRow.font)
-                .focused(fieldFocused)
-                .padding(.horizontal, AtticPopoverMetrics.rowPadding)
-                .frame(height: rowHeight)
-                .background(AtticPickerFieldBackground())
-                .padding(.bottom, m.dividerGap)
-                .accessibilityLabel(String(localized: "Find a task"))
+            AtticDropdownField(text: $query, placeholder: String(localized: "Find a task"), focus: fieldFocused)
+                .padding(.bottom, m.fieldGap)
             if choices.isEmpty {
                 AtticText(verbatim: query.trimmingCharacters(in: .whitespaces).isEmpty ? emptyText : String(localized: "No task matches"),
-                          style: .menuRow, ink: .helper)
-                    .padding(.horizontal, AtticPopoverMetrics.rowPadding)
-                    .frame(height: rowHeight)
+                          style: .dropdownRow, ink: .helper)
+                    .padding(.horizontal, m.rowPadding)
+                    .frame(height: m.rowHeight)
             } else {
-                ScrollViewReader { proxy in
-                    ScrollView(.vertical) {
-                        LazyVStack(alignment: .leading, spacing: 0) {
-                            ForEach(Array(choices.enumerated()), id: \.element.id) { index, choice in
-                                AtticChoiceRow(title: choice.title, detail: choice.detail, isHighlighted: highlighted == index,
-                                               onHover: hover(index)) {
-                                    onChoose(choice.id)
-                                }
-                                .id(index)
+                AtticDropdownViewport(height: CGFloat(choices.count) * m.rowHeight > AtticPickerMetrics.taskListMaxHeight
+                                      ? AtticPickerMetrics.taskListMaxHeight : nil,
+                                      highlighted: highlighted.flatMap { choices.indices.contains($0) ? choices[$0].id.uuidString : nil }) {
+                    LazyVStack(alignment: .leading, spacing: 0) {
+                        ForEach(Array(choices.enumerated()), id: \.element.id) { index, choice in
+                            AtticDropdownRow(title: choice.title, detail: choice.detail, isHighlighted: highlighted == index,
+                                             onHover: hover(index), position: index + 1, itemCount: choices.count, scrollID: choice.id.uuidString) {
+                                onChoose(choice.id)
                             }
                         }
-                    }
-                    // The height is known without laying every row out.
-                    .frame(height: min(CGFloat(choices.count) * rowHeight, m.taskListMaxHeight))
-                    .onChange(of: highlighted) { _, index in
-                        guard let index, !AtticListHighlight.isPointerMove(NSApp.currentEvent) else { return }
-                        proxy.scrollTo(index)
                     }
                 }
             }
         }
-        .frame(width: m.taskWidth)
         .accessibilityElement(children: .contain)
         .accessibilityLabel(String(localized: "Move to Task"))
     }
@@ -663,11 +646,12 @@ struct AtticSuggestionList: View {
     let onChoose: (Int) -> Void
 
     var body: some View {
-        AtticPopover(width: AtticPickerMetrics.suggestionWidth) {
+        AtticDropdownCard() {
             ForEach(Array(items.enumerated()), id: \.element.id) { index, item in
-                AtticChoiceRow(title: item.title, systemName: item.systemName, detail: item.detail,
+                AtticDropdownRow(title: item.title, systemName: item.systemName, detail: item.detail,
                                isHighlighted: index == highlighted,
-                               onHover: onHover.map { report in { inside in if inside { report(index) } } }) { onChoose(index) }
+                               onHover: onHover.map { report in { inside in if inside { report(index) } } },
+                               position: index + 1, itemCount: items.count) { onChoose(index) }
             }
         }
         .accessibilityElement(children: .contain)

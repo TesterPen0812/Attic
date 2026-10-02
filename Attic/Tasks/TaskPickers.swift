@@ -208,7 +208,7 @@ struct TaskMovePickerView: View {
                 if next != highlighted { highlighted = next }
             }
         )
-        .onAppear { fieldFocused = true }
+        .atticDropdownFocus($fieldFocused)
         // Typing highlights the first match, so Return chooses it.
         .onChange(of: query) { _, now in highlighted = now.isEmpty || Self.filter(choices, query: now).isEmpty ? nil : 0 }
         .onKeyPress(phases: .down) { press in
@@ -255,7 +255,7 @@ struct TaskPriorityPickerView: View {
                                  onHover: { inside in
                                      let next = AtticListHighlight.hovered(index, inside: inside, current: highlighted)
                                      if next != highlighted { highlighted = next }
-                                 }) { onPick(priority) }
+                                 }, position: index + 1, itemCount: options.count) { onPick(priority) }
             }
         }
         .focusable()

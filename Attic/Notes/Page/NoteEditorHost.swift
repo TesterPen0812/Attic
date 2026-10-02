@@ -68,7 +68,9 @@ final class NoteTitleAccessories {
     private let menuHost: NSHostingView<AnyView>
     private let tagHost: NSHostingView<AnyView>
     /// The suggestions under a `#word` being typed in the title.
-    private let suggestionHost: NSHostingView<AnyView>
+    private let suggestionHost: AtticOverlayHostingView
+    private var suggestionHeight: CGFloat?
+    private var suggestionWidth: CGFloat?
     private var suggestions: [AtticTagSuggestion] = []
     /// The row ↑ ↓ are on; nil until they move (Return then takes the
     /// typed word, as Space does), or the typed word's own existing tag.
@@ -104,8 +106,11 @@ final class NoteTitleAccessories {
         self.tagEditor = tagEditor
         menuHost = NSHostingView(rootView: AnyView(EmptyView()))
         tagHost = NSHostingView(rootView: AnyView(EmptyView()))
-        suggestionHost = NSHostingView(rootView: AnyView(EmptyView()))
+        suggestionHost = AtticOverlayHostingView(rootView: AnyView(EmptyView()))
         suggestionHost.isHidden = true
+        suggestionHost.contentInset = AtticDropdownMetrics.shadowRoom
+        suggestionHost.isInteractive = true
+        suggestionHost.menuLabel = String(localized: "Tag suggestions")
         for host in [tagHost, menuHost, suggestionHost] {
             host.translatesAutoresizingMaskIntoConstraints = true
             host.autoresizingMask = []
@@ -233,28 +238,38 @@ final class NoteTitleAccessories {
             highlightedSuggestion = list.firstIndex { !$0.isNew && $0.name == active.tag }
         }
         suggestions = list
-        let m = AtticNoteMetrics.self
-        let room = m.suggestionShadowRoom
-        let height = CGFloat(list.count) * AtticControlSize.smallHeight + AtticPopoverMetrics.padding * 2
-        let width = m.suggestionWidth
-        // The rows' text starts on the hashtag's `#`.
-        let textInset = AtticPopoverMetrics.padding + AtticPopoverMetrics.rowPadding
-        var x = hashRect.minX - textInset
-        x = min(x, textView.bounds.width - width - 8)
-        x = max(x, 8)
-        let frame = NSRect(x: x - room, y: hashRect.maxY + m.suggestionGap - room,
-                           width: width + room * 2, height: height + room * 2)
+        let m = AtticDropdownMetrics.self
+        let room = m.shadowRoom
+        let height = CGFloat(list.count) * m.rowHeight + m.inset * 2
+        let titles = list.map { $0.isNew ? String(localized: "New tag “#\($0.name)”") : "#" + $0.name }
+        let overlay = AtticDropdownPresenter.overlay(for: textView)
+        let parent = overlay?.parent ?? textView
+        let bounds = AtticDropdownLayout.topDown(overlay?.panel ?? textView.visibleRect, in: parent)
+            .insetBy(dx: m.panelMargin, dy: m.panelMargin)
+        let ideal = zip(titles, list).map { title, suggestion in
+            m.inset * 2 + m.rowPadding * 2 + AtticTextStyle.dropdownRow.measuredWidth(title)
+                + (suggestion.isNew ? 0 : m.detailGap + AtticTextStyle.shortcut.measuredWidth("\(suggestion.count)"))
+        }.max() ?? m.minWidth
+        let width = AtticDropdownLayout.width(ideal: ideal, available: bounds.width)
+        let anchor = AtticDropdownLayout.topDown(textView.convert(hashRect, to: parent), in: parent)
+        let placed = AtticDropdownLayout.frame(size: CGSize(width: width, height: height), anchor: anchor, bounds: bounds, prefer: .below)
+        suggestionHeight = placed.frame.height < height ? placed.frame.height : nil
+        suggestionWidth = width
+        if suggestionHost.superview !== parent { parent.addSubview(suggestionHost, positioned: .above, relativeTo: nil) }
+        let frame = AtticDropdownLayout.topDown(placed.frame.insetBy(dx: -room, dy: -room), in: parent)
         if suggestionHost.frame != frame { suggestionHost.frame = frame }
         renderSuggestions()
         suggestionHost.isHidden = false
     }
 
     private func renderSuggestions() {
-        let room = AtticNoteMetrics.suggestionShadowRoom
+        let room = AtticDropdownMetrics.shadowRoom
         suggestionHost.rootView = AnyView(
             AtticTagSuggestionList(suggestions: suggestions, highlighted: highlightedSuggestion ?? -1) { [weak self] index in
                 self?.pickSuggestion(index)
             }
+            .environment(\.atticDropdownHeight, suggestionHeight)
+            .environment(\.atticDropdownWidth, suggestionWidth)
             .padding(room)
             .atticDesign(design)
         )

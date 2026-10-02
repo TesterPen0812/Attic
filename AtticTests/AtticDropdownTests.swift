@@ -67,6 +67,98 @@ final class AtticDropdownTests: XCTestCase {
         XCTAssertGreaterThanOrEqual(placed.frame.minX, 12)
     }
 
+    func testCrampedPlacementUsesTheRoomierSideAndNeverCrossesTheMargin() {
+        let bounds = CGRect(x: 12, y: 12, width: 296, height: 216)
+        let caret = CGRect(x: 28, y: 140, width: 8, height: 18)
+        let placed = AtticDropdownLayout.frame(size: CGSize(width: 165, height: 308), anchor: caret,
+                                               bounds: bounds, prefer: .below)
+        XCTAssertEqual(placed.side, .above)
+        XCTAssertLessThan(placed.frame.height, 308)
+        XCTAssertEqual(placed.frame.maxY, caret.minY - AtticDropdownMetrics.anchorGap)
+        XCTAssertTrue(bounds.contains(placed.frame))
+    }
+
+    /// Inspect the actual accessibility representation, including its action.
+    func testMenuItemRepresentationHasRoleSelectionPositionAndPress() {
+        var pressed = 0
+        let item = AtticDropdownMenuItem(label: "Mono", selected: true, position: 9, count: 9) { pressed += 1 }
+        // NSViewRepresentable.Context cannot be constructed here; host the
+        // representation so SwiftUI builds and updates the real AppKit view.
+        let host = NSHostingView(rootView: item)
+        host.frame = CGRect(x: 0, y: 0, width: 165, height: 32)
+        host.layoutSubtreeIfNeeded()
+        func find(_ root: NSView) -> AtticDropdownMenuItem.ItemView? {
+            if let item = root as? AtticDropdownMenuItem.ItemView { return item }
+            return root.subviews.compactMap { find($0) }.first
+        }
+        guard let represented = find(host) else { return XCTFail("the AppKit menu item exists") }
+        XCTAssertEqual(represented.accessibilityRole(), .menuItem)
+        XCTAssertTrue(represented.isAccessibilitySelected())
+        XCTAssertEqual(represented.accessibilityValue() as? String, "9 of 9")
+        XCTAssertTrue(represented.accessibilityPerformPress())
+        XCTAssertEqual(pressed, 1)
+    }
+
+    func testRenderedRowsExposeMenuItemsAndKeepTheirIdentifiers() throws {
+        let window = makeWindow()
+        defer { window.close() }
+        let model = NoteSlashListModel()
+        model.show(NoteSlashItem.Kind.allCases.map { NoteSlashItem(kind: $0) })
+        let host = NSHostingView(rootView: NoteSlashListView(model: model).atticDesign(AtticDesignContext(reduceMotion: true)))
+        host.frame = CGRect(x: 0, y: 0, width: 200, height: 340)
+        window.contentView?.addSubview(host)
+        host.layoutSubtreeIfNeeded()
+        spin(0.2)
+        func items(_ element: AnyObject) -> [AnyObject] {
+            // SwiftUI's virtual accessibility children implement the ObjC
+            // methods without declaring NSAccessibilityProtocol conformance.
+            let role = element.accessibilityRole?()
+            print("DROPDOWN_AX type=\(type(of: element)) role=\(String(describing: role))")
+            if role == .menuItem { return [element] }
+            return (element.accessibilityChildren?() ?? nil ?? []).flatMap { items($0 as AnyObject) }
+        }
+        let rows = items(host)
+        XCTAssertEqual(rows.count, model.items.count, "the rendered accessibility tree contains menu items")
+        let first = try XCTUnwrap(rows.first)
+        XCTAssertEqual(first.isAccessibilitySelected?(), true)
+        XCTAssertEqual(first.accessibilityValue?() as? String, "1 of 9")
+        XCTAssertEqual(first.accessibilityIdentifier?(), "notes-slash-checklist")
+    }
+
+    func testCrampedSlashScrollKeepsTheKeyboardHighlightVisible() throws {
+        let window = makeWindow()
+        defer { window.close() }
+        let model = NoteSlashListModel()
+        model.viewportHeight = 116
+        model.width = 165
+        model.show(NoteSlashItem.Kind.allCases.map { NoteSlashItem(kind: $0) })
+        let host = NSHostingView(rootView: NoteSlashListView(model: model).atticDesign(AtticDesignContext(reduceMotion: true)))
+        host.frame = CGRect(x: 10, y: 10, width: 189, height: 140)
+        window.contentView?.addSubview(host)
+        host.layoutSubtreeIfNeeded()
+        spin(0.2)
+        func scrolls(_ view: NSView) -> [NSScrollView] {
+            (view as? NSScrollView).map { [$0] } ?? view.subviews.flatMap { scrolls($0) }
+        }
+        let scroll = try XCTUnwrap(scrolls(host).first)
+        XCTAssertGreaterThan(scroll.documentView?.bounds.height ?? 0, scroll.contentView.bounds.height)
+        let before = scroll.contentView.bounds.origin.y
+        model.move(-1) // wraps from the first row to Mono
+        host.layoutSubtreeIfNeeded()
+        spin(0.2)
+        XCTAssertGreaterThan(scroll.contentView.bounds.origin.y, before, "the keyboard scrolls to Mono")
+        let document = try XCTUnwrap(scroll.documentView)
+        XCTAssertGreaterThanOrEqual(scroll.contentView.bounds.maxY, document.bounds.maxY - 1,
+                                    "the last row is wholly visible")
+        model.move(1) // wraps back to the first row
+        host.layoutSubtreeIfNeeded()
+        spin(0.2)
+        XCTAssertLessThanOrEqual(scroll.contentView.bounds.minY, document.bounds.minY,
+                                 "the first row starts within the viewport, allowing the native top inset")
+        XCTAssertGreaterThanOrEqual(scroll.contentView.bounds.maxY, document.bounds.minY + AtticDropdownMetrics.rowHeight,
+                                    "the entire first row is visible")
+    }
+
     // MARK: One highlight
 
     func testOneHighlightIsSharedByThePointerAndTheKeyboard() {
@@ -246,6 +338,34 @@ final class AtticDropdownTests: XCTestCase {
         // The field, its gap and the five rows, 10 pt in.
         XCTAssertEqual(card?.height ?? 0, m.inset * 2 + m.fieldHeight + m.fieldGap + 5 * m.rowHeight, accuracy: 1)
         XCTAssertGreaterThanOrEqual(card?.width ?? 0, m.minWidth)
+    }
+
+    func testTypingSuggestionsKeepTheKeyboardAndResizeWhenRowsChange() throws {
+        let window = makeWindow()
+        defer { window.close() }
+        let field = NSTextField(frame: CGRect(x: 28, y: 50, width: 200, height: 24))
+        window.contentView?.addSubview(field)
+        window.makeFirstResponder(field)
+        let previous = window.firstResponder
+        let anchor = NSView(frame: CGRect(x: 28, y: 90, width: 60, height: 28))
+        window.contentView?.addSubview(anchor)
+        let presenter = AtticDropdownPresenter()
+        presenter.takesKeyboard = false
+        presenter.contentHasCard = true
+        presenter.contentHeight = 52
+        presenter.content = AnyView(AtticSuggestionList(items: [.init(id: "first", title: "First")], highlighted: 0) { _ in })
+        presenter.present(from: anchor)
+        defer { presenter.close(restoreFocus: false, immediately: true) }
+        spin(0.1)
+        XCTAssertIdentical(window.firstResponder, previous, "typing stays in the draft")
+        XCTAssertEqual(presenter.stage.side, .below)
+        presenter.content = AnyView(AtticSuggestionList(items: (0..<9).map { .init(id: "\($0)", title: "Row \($0)") }, highlighted: 0) { _ in })
+        presenter.contentHeight = 308
+        presenter.update()
+        spin(0.1)
+        XCTAssertEqual(presenter.stage.side, .above, "the full grown list fits above")
+        XCTAssertEqual(try XCTUnwrap(presenter.host).contentRect.height, 308, accuracy: 1)
+        XCTAssertIdentical(window.firstResponder, previous)
     }
 
     // MARK: Timings (no regression against the components it replaced)

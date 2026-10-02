@@ -144,7 +144,7 @@ final class NoteSlashListModel: ObservableObject {
     @Published var highlighted = 0
     @Published var shown = false
     /// Rows that fit beside the caret; more scroll.
-    @Published var maxVisibleRows = AtticNoteFormatMetrics.slashMaxVisibleRows
+    @Published var viewportHeight: CGFloat?
     /// The card's width (the width rule, from its names) and the typed
     /// filter, emboldened in the names.
     @Published var width: CGFloat = AtticDropdownMetrics.minWidth
@@ -183,6 +183,7 @@ final class NoteFormatCardModel: ObservableObject {
     }
 
     @Published var card: Card?
+    @Published var viewportHeight: CGFloat?
     /// The card opened above its text (no room below).
     @Published var above = false
     @Published var dateText = "" {

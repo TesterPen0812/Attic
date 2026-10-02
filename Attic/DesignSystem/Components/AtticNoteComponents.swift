@@ -528,8 +528,7 @@ struct AtticTagSuggestion: Equatable, Identifiable {
     }
 }
 
-/// The suggestions under a title hashtag: a raised list (the pop-over's
-/// surface, 28 pt rows) with the keyboard's row highlighted. Space takes
+/// The suggestions under a title hashtag: the E1 card and its 32 pt rows with the keyboard's row highlighted. Space takes
 /// the typed word; Return or Tab the highlighted row; Esc keeps the text.
 struct AtticTagSuggestionList: View {
     let suggestions: [AtticTagSuggestion]
@@ -537,12 +536,11 @@ struct AtticTagSuggestionList: View {
     let onPick: (Int) -> Void
 
     var body: some View {
-        AtticPopover(width: AtticNoteMetrics.suggestionWidth) {
+        AtticDropdownCard() {
             ForEach(Array(suggestions.enumerated()), id: \.element.id) { index, suggestion in
-                AtticPopoverRow(systemName: nil,
-                                title: suggestion.isNew ? String(localized: "New tag “#\(suggestion.name)”") : "#" + suggestion.name,
+                AtticDropdownRow(title: suggestion.isNew ? String(localized: "New tag “#\(suggestion.name)”") : "#" + suggestion.name,
                                 detail: suggestion.isNew ? nil : "\(suggestion.count)",
-                                isHighlighted: index == highlighted) { onPick(index) }
+                                isHighlighted: index == highlighted, position: index + 1, itemCount: suggestions.count) { onPick(index) }
             }
         }
         .accessibilityElement(children: .contain)

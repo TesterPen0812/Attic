@@ -1736,7 +1736,7 @@ struct TasksPage: View {
                     }
                     TasksPickerFailureLine(model: model, id: parentID) { metaPopover = nil }
                 }
-                .atticPickerSurface()
+
                 .onDisappear { model.clearPickerFailure() }
             )
         }
@@ -2644,19 +2644,16 @@ private struct TasksAddBar: View {
                 onSubmit: { submit(openingPage: false) }
             )
         }
-        // Over the strip and the bar, never pushing them (review 14).
-        .overlay(alignment: .topLeading) {
+        .atticDropdown(isPresented: Binding(get: { suggestion != nil }, set: { shown in
+            if !shown, let suggestion { text.hiddenSuggestion = suggestion.range }
+        }), prefer: .above, label: String(localized: "Suggestions"), takesKeyboard: false, contentHasCard: true,
+                         contentHeight: suggestion.map { CGFloat($0.count) * AtticDropdownMetrics.rowHeight + AtticDropdownMetrics.inset * 2 }) {
             if let suggestion {
                 AtticSuggestionList(items: items(for: suggestion), highlighted: min(text.highlighted, suggestion.count - 1),
                                     onHover: { index in if text.highlighted != index { text.highlighted = index } }) { index in
                     model.accept(suggestion, choice: index, editor: editor)
                     text.highlighted = 0
                 }
-                .padding(.leading, AtticAddBarMetrics.iconSlot + AtticAddBarMetrics.gap - AtticPopoverMetrics.padding - AtticPopoverMetrics.rowPadding)
-                .transition(AtticMotionPreset.popover.transition(reduceMotion: design.reduceMotion, edge: nil, anchor: .bottomLeading))
-                // Its own height above the composer's top (rows are 28 tall).
-                .offset(y: -(CGFloat(suggestion.count) * AtticControlSize.smallHeight + AtticPopoverMetrics.padding * 2
-                    + AtticPickerMetrics.stripToBar))
             }
         }
         .animation(AtticMotionPreset.popover.animation(reduceMotion: design.reduceMotion, showing: stripShown), value: stripShown)

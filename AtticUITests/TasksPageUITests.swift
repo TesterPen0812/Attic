@@ -460,7 +460,7 @@ final class TasksPageUITests: XCTestCase {
         addBar.typeText("Water the ferns")
         XCTAssertTrue(date.waitForExistence(timeout: 3), "the strip shows with the first keystroke")
         date.click()
-        let tomorrow = app.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", "Tomorrow")).firstMatch
+        let tomorrow = app.menuItems.matching(NSPredicate(format: "label BEGINSWITH %@", "Tomorrow")).firstMatch
         XCTAssertTrue(tomorrow.waitForExistence(timeout: 3), "the date picker opens")
         tomorrow.click()
         waitFor((date.value as? String) == "Tomorrow", "the Date button shows the pick: \(String(describing: date.value))")
@@ -468,7 +468,7 @@ final class TasksPageUITests: XCTestCase {
         XCTAssertTrue(window.buttons["composer-date-clear"].exists, "a set button has its ×")
 
         tag.click()
-        let launch = app.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", "#launch")).firstMatch
+        let launch = app.menuItems.matching(NSPredicate(format: "label BEGINSWITH %@", "#launch")).firstMatch
         XCTAssertTrue(launch.waitForExistence(timeout: 3), "the Tag button opens the tag list (it types no #)")
         launch.click()
         waitFor((tag.value as? String) == "launch", "the Tag button shows the tag: \(String(describing: tag.value))")
@@ -476,9 +476,9 @@ final class TasksPageUITests: XCTestCase {
         XCTAssertEqual(addBar.value as? String, "Water the ferns")
 
         priority.click()
-        let high = app.buttons.matching(NSPredicate(format: "label CONTAINS %@", "High")).firstMatch
+        let high = app.menuItems.matching(NSPredicate(format: "label CONTAINS %@", "High")).firstMatch
         XCTAssertTrue(high.waitForExistence(timeout: 3), "Priority offers all four")
-        XCTAssertTrue(app.buttons.matching(NSPredicate(format: "label CONTAINS %@", "Low")).firstMatch.exists,
+        XCTAssertTrue(app.menuItems.matching(NSPredicate(format: "label CONTAINS %@", "Low")).firstMatch.exists,
                       "Low is offered (follow-up part 2)")
         high.click()
         waitFor((priority.value as? String) == "High", "the Priority button shows High")
@@ -531,7 +531,7 @@ final class TasksPageUITests: XCTestCase {
         let priority = window.buttons["composer-priority"]
         XCTAssertTrue(priority.waitForExistence(timeout: 3))
         priority.click()
-        let high = app.buttons.matching(NSPredicate(format: "label CONTAINS %@", "High")).firstMatch
+        let high = app.menuItems.matching(NSPredicate(format: "label CONTAINS %@", "High")).firstMatch
         XCTAssertTrue(high.waitForExistence(timeout: 3))
         high.click()
         waitFor((priority.value as? String) == "High", "picked High")
@@ -825,7 +825,7 @@ final class TasksPageUITests: XCTestCase {
         XCTAssertTrue(addBar.waitForExistence(timeout: 5))
         addBar.click()
         addBar.typeText("Buy #la")
-        let suggestion = app.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", "#launch")).firstMatch
+        let suggestion = app.menuItems.matching(NSPredicate(format: "label BEGINSWITH %@", "#launch")).firstMatch
         XCTAssertTrue(suggestion.waitForExistence(timeout: 3), "the suggestions show")
         // The first Backspace may turn the recognised "#la" back into text
         // (a chip's Backspace deletes nothing); either way the keys stay in

@@ -336,6 +336,8 @@ enum AtticDropdownMetrics {
     static let rowPadding: CGFloat = 10
     /// The pill: the whole row, concentric with the corner (20 - 10).
     static let highlightRadius: CGFloat = 10
+    /// Native soft scroll edges overlap this small inset in cramped lists.
+    static let scrollEdgeInset: CGFloat = 6
     static let iconSize: CGFloat = 14
     static let iconSlot: CGFloat = 18
     /// Between a row's columns (check, mark, icon, name).

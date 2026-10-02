@@ -353,6 +353,24 @@ final class NotesFormatControlsTests: XCTestCase {
         XCTAssertFalse(controls.slashModel.shown, "Space closes the list")
     }
 
+    func testFullSlashListFlipsAboveALowCaretAndOpensBelowAHighCaret() throws {
+        // Real editor + controls: this catches the old Notes-only placement
+        // path, which truncated rows before trying the full list above.
+        let (lowControls, lowEngine, lowText) = make(NoteDocument(blocks: [.text("Title")] + (0..<14).map { _ in .text("Line") }))
+        lowText.setSelectedRange(NSRange(location: lowEngine.textStorage.length, length: 0))
+        type("\n/", lowText)
+        XCTAssertTrue(lowControls.slashModel.shown)
+        XCTAssertTrue(lowControls.slashModel.above)
+        XCTAssertNil(lowControls.slashModel.viewportHeight, "all nine rows fit above the low caret")
+
+        let (highControls, highEngine, highText) = make(NoteDocument(blocks: [.text("Title"), .text("")]))
+        highText.setSelectedRange(NSRange(location: highEngine.textStorage.length, length: 0))
+        type("/", highText)
+        XCTAssertTrue(highControls.slashModel.shown)
+        XCTAssertFalse(highControls.slashModel.above)
+        XCTAssertNil(highControls.slashModel.viewportHeight, "all nine rows fit below the high caret")
+    }
+
     func testSlashRowsShowTheirTypingShortcuts() {
         XCTAssertEqual(NoteCommandCatalog.slashHint(.checklist), "-[]")
         XCTAssertEqual(NoteCommandCatalog.slashHint(.heading), "#")
