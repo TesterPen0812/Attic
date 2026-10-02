@@ -2427,6 +2427,18 @@ final class TaskStore: ObservableObject {
                 guard let logged = listedTask(withID: taskID) else {
                     throw TaskEditRefusal("The task is no longer in the Done log.")
                 }
+                // Match live reopening: any nondeleted completed parent
+                // replica blocks a child-only restore, before any mutation.
+                if let parentID = logged.parentID {
+                    let doneRaw = TaskStatus.done.rawValue
+                    var doneParents = FetchDescriptor<TaskItem>(predicate: #Predicate {
+                        $0.id == parentID && $0.statusRaw == doneRaw && $0.deletedAt == nil
+                    })
+                    doneParents.fetchLimit = 1
+                    if try !context.fetch(doneParents).isEmpty {
+                        throw TaskEditRefusal("Reopen the main task before reopening a subtask.")
+                    }
+                }
                 let replicas = try storedTasks(matching: taskID)
                 let order = try nextManualOrder(status: .todo, updatedAt: timestamp)
                 let shownCopy = TaskContentSnapshot(logged)

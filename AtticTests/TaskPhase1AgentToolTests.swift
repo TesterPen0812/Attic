@@ -222,4 +222,57 @@ final class TaskPhase1AgentToolTests: XCTestCase {
         try check(["include_done_log": true, "parent_id": parent.id.uuidString], expected: ["Live child"])
     }
 
+    func testChildOnlyReopeningRefusesCompletedParentReplicasWithoutMutatingFamily() throws {
+        for archived in [false, true] {
+            for divergent in [false, true] {
+                let gate = PersistenceGate()
+                store = try makeTestStore(now: { [clock] in clock.value }, persist: gate.save)
+                library = AtticLibrary(tasks: store)
+                tools = AgentTaskTools(store: store, library: library)
+                let parent = try XCTUnwrap(store.create(title: "Parent"))
+                let child = try XCTUnwrap(store.create(title: "Child", parentID: parent.id))
+                XCTAssertTrue(store.completeFamily(taskID: parent.id))
+                if archived {
+                    XCTAssertEqual(store.moveCompletedToDoneLog(before: clock.value.addingTimeInterval(86_400)), 2)
+                }
+                if divergent {
+                    // Presentation picks this open copy; the hidden Done
+                    // replica must still block reopening the child.
+                    let context = ModelContext(store.container)
+                    let copy = TaskItem(id: parent.id, title: "Open parent replica", status: .todo,
+                                        createdAt: clock.value, updatedAt: clock.value.addingTimeInterval(10))
+                    copy.listOrderVersion = TaskItem.currentListOrderVersion
+                    copy.manualOrder = parent.manualOrder
+                    copy.doneLoggedAt = store.listedTask(withID: parent.id)?.doneLoggedAt
+                    context.insert(copy)
+                    try context.save()
+                    store.refresh()
+                    XCTAssertEqual(store.listedTask(withID: parent.id)?.status, .todo)
+                }
+                func durableRows() throws -> [TaskItem] {
+                    try ModelContext(store.container).fetch(FetchDescriptor<TaskItem>()).sorted { $0.title < $1.title }
+                }
+                let before = try durableRows().map(TaskEditableState.init)
+                let logging = try durableRows().map(\.doneLoggedAt)
+                let updated = try durableRows().map(\.updatedAt)
+                let saves = gate.saveCount
+                let arguments: [String: Any] = ["id": child.id.uuidString, "state": "todo", "title": "Changed",
+                                                "priority": "high", "tags": ["new"], "due": "2026-09-30"]
+                XCTAssertTrue(error("update_task", arguments).contains("Reopen the main task"))
+                XCTAssertFalse(library.restoreToNow(child.id).isApplied, "standalone restore has the same guard")
+                XCTAssertEqual(try durableRows().map(TaskEditableState.init), before)
+                XCTAssertEqual(try durableRows().map(\.doneLoggedAt), logging)
+                XCTAssertEqual(try durableRows().map(\.updatedAt), updated)
+                XCTAssertEqual(gate.saveCount, saves, "refuse before saving")
+                XCTAssertNil(library.undo.undoName(in: .tasks))
+                if !divergent {
+                    _ = try call("update_task", ["id": parent.id.uuidString, "state": "todo"])
+                    _ = try call("update_task", arguments)
+                    XCTAssertEqual(store.task(withID: child.id)?.status, .todo)
+                    XCTAssertEqual(store.task(withID: child.id)?.title, "Changed")
+                }
+            }
+        }
+    }
+
 }
