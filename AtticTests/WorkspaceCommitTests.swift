@@ -170,6 +170,27 @@ final class WorkspaceCommitTests: XCTestCase {
         }
     }
 
+    func testC1PlainAutosaveCanThenEditAnUnrelatedRetainedNoteWithoutDuplicates() throws {
+        let store = NoteStore(container: container, attachmentFileStore: makeTestAttachmentFileStore())
+        let second = NoteDocument(blocks: [.text("Second")])
+        let (secondID, secondBase) = try store.createDocumentNote(id: UUID(), document: second).get()
+        let firstBase = try XCTUnwrap(store.note(withID: noteID)).revisionID
+        var firstChange = original!
+        firstChange.blocks.append(.text("First changed"))
+        _ = try store.saveDocument(noteID: noteID, document: firstChange, baseRevisionID: firstBase,
+                                  prepared: PreparedNoteDocument(firstChange)).get()
+        var secondChange = second
+        secondChange.blocks.append(.text("Second changed"))
+        _ = try store.saveDocument(noteID: secondID, document: secondChange, baseRevisionID: secondBase,
+                                  prepared: PreparedNoteDocument(secondChange)).get()
+        let saved = try coordinator.freshContext().fetch(FetchDescriptor<NoteItem>())
+        XCTAssertEqual(saved.count, 2)
+        for (id, document) in [(noteID!, firstChange), (secondID, secondChange)] {
+            let row = try XCTUnwrap(saved.first { $0.id == id })
+            XCTAssertEqual(NoteContentCodec.decode(try XCTUnwrap(row.content)).document, document)
+        }
+    }
+
     func testC5ProductionTaskCRUDHasNoEnvelopeOrReceipt() async throws {
         let gate = PersistenceGate()
         let tasks = TaskStore(container: container, persist: gate.save)

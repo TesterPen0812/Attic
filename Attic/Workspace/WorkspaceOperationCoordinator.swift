@@ -71,7 +71,7 @@ final class WorkspaceOperationCoordinator {
     private var pending: [UUID: (WorkspaceOperationEnvelope, WorkspaceOperationClaim, Publication)] = [:]
     private var publicationStep: [UUID: Int] = [:]
     private var heldOwners: Set<WorkspaceOwner> = []
-    private var plainUnknown: ([State], [State], Set<WorkspaceOwner>, [WorkspaceOwner: Set<PersistentIdentifier>])?
+    private var plainUnknown: ([WorkspaceModelToken], [WorkspaceModelToken], Set<WorkspaceOwner>, [WorkspaceOwner: Set<PersistentIdentifier>])?
     private(set) var startupReconciled = false
     struct RecoveryCopy {
         let operationID: UUID
@@ -259,7 +259,6 @@ final class WorkspaceOperationCoordinator {
             }
             let previous = sorted(writes).map { validated[$0]! }
             let physicalIDs = Dictionary(uniqueKeysWithValues: previous.map { ($0.owner, Set($0.replicas.map(\.physicalID))) })
-            let before = try states(tokens: previous, physical: true, baselineIDs: physicalIDs)
             let originalContents = try noteContents(previous, in: context)
             try stage(context)
             try validateTombstones(context, before: previous)
@@ -273,10 +272,12 @@ final class WorkspaceOperationCoordinator {
             guard try mayUsePlainSave(before: previous, after: next, in: context) else {
                 return .conflict
             }
-            let after = try states(tokens: next, physical: true, baselineIDs: physicalIDs)
             do { try save(context); return .committed }
             catch {
-                plainUnknown = (before, after, affected, physicalIDs)
+                // These immutable compact guards already describe both sides.
+                // Hash/encode reconciliation proofs only for an ambiguous save,
+                // not every successful tick or prepared note commit.
+                plainUnknown = (previous, next, affected, physicalIDs)
                 heldOwners.formUnion(affected)
                 return reconcilePlain()
             }
@@ -372,8 +373,10 @@ final class WorkspaceOperationCoordinator {
         return true
     }
     func reconcilePlain() -> Outcome {
-        guard let (before, after, affected, physicalIDs) = plainUnknown else { return .conflict }
+        guard let (beforeTokens, afterTokens, affected, physicalIDs) = plainUnknown else { return .conflict }
         do {
+            let before = try states(tokens: beforeTokens, physical: true, baselineIDs: physicalIDs)
+            let after = try states(tokens: afterTokens, physical: true, baselineIDs: physicalIDs)
             try beforeReconciliationRead?()
             let current = try states(Set(before.map(\.owner)), in: freshContext(), physical: true, baselineIDs: physicalIDs)
             let outcome: Outcome

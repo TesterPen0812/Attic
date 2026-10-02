@@ -17,6 +17,7 @@ enum WorkspaceLegacyBridge {
         var captureFailed = false
         let includeCanvas: Bool
         var plainTaskWrites: Set<UUID>?
+        var plainNoteWrites: Set<UUID>?
         var saveObserver: NSObjectProtocol?
         init(_ coordinator: WorkspaceOperationCoordinator, _ baseline: [WorkspaceOwner: WorkspaceModelToken], includeCanvas: Bool,
              scopes: [WorkspaceScope: WorkspaceScopeToken] = [:]) {
@@ -82,6 +83,10 @@ enum WorkspaceLegacyBridge {
         guard let state = objc_getAssociatedObject(source, &contextKey) as? ContextState else { throw WorkspaceFoundationError.unknown }
         let fresh = freshContext ?? state.coordinator.freshContext()
         try registerContext(fresh, includeCanvas: state.includeCanvas, baseline: state.baseline)
+        // Presentation can retain unchanged models from the consumed context.
+        // Its preparation guards are finished; only the new context needs the
+        // confirmed owner fingerprints. Do not retain migration-sized scopes.
+        state.baseline.removeAll(); state.scopes.removeAll()
         return fresh
     }
     static func capturedToken(_ owner: WorkspaceOwner, in source: ModelContext) throws -> WorkspaceModelToken {
@@ -129,6 +134,10 @@ enum WorkspaceLegacyBridge {
     static func confirmedPlainTaskWrites(in source: ModelContext) throws -> Set<UUID>? {
         guard let state = objc_getAssociatedObject(source, &contextKey) as? ContextState else { throw WorkspaceFoundationError.unknown }
         return state.plainTaskWrites
+    }
+    static func confirmedPlainNoteWrites(in source: ModelContext) throws -> Set<UUID>? {
+        guard let state = objc_getAssociatedObject(source, &contextKey) as? ContextState else { throw WorkspaceFoundationError.unknown }
+        return state.plainNoteWrites
     }
     static func persist(_ source: ModelContext, using writer: @escaping (ModelContext) throws -> Void,
                         sourceName: String, history: Bool = true) throws {
@@ -236,8 +245,10 @@ enum WorkspaceLegacyBridge {
         let committed = state.coordinator.freshContext()
         let confirmed = try WorkspaceModelToken.read(owners: writes, in: committed)
         let updates = confirmed
-        state.baseline.merge(updates) { _, saved in saved }
+        state.baseline = updates
+        state.scopes.removeAll()
         state.plainTaskWrites = plain && writes.allSatisfy({ $0.entity == .task }) ? Set(writes.map(\.id)) : nil
+        state.plainNoteWrites = plain && writes.allSatisfy({ $0.entity == .note }) ? Set(writes.map(\.id)) : nil
     }
     static func persistSharedChanges(_ source: ModelContext, using writer: @escaping (ModelContext) throws -> Void) throws {
         if (source.insertedModelsArray + source.changedModelsArray + source.deletedModelsArray).contains(where: { $0 is ItemLink || $0 is TaskItem || $0 is NoteItem }) {

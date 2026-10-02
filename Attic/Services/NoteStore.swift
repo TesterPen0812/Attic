@@ -1597,7 +1597,17 @@ final class NoteStore: ObservableObject {
 
     /// Every physical row of a live note (throws when none).
     func liveReplicas(of id: UUID, in sourceContext: ModelContext? = nil) throws -> [NoteItem] {
-        try storedNotes(matching: id, in: sourceContext)
+        let rows = try storedNotes(matching: id, in: sourceContext)
+        // A cheap confirmed autosave can retain unrelated presentation rows.
+        // Rebind a later edited family to the current staging context first.
+        if sourceContext == nil, let previous = note(withID: id), previous.modelContext !== context,
+           let index = notes.firstIndex(where: { $0 === previous }),
+           let replacement = rows.first(where: { $0.persistentModelID == previous.persistentModelID }) ?? Self.canonicalReplicas(from: rows).first {
+            var byID = presentationByID
+            notes[index] = replacement
+            byID?[id] = replacement; presentationByID = byID
+        }
+        return rows
     }
 
     func replicasIncludingDeleted(of id: UUID) throws -> [NoteItem] {
@@ -1652,7 +1662,35 @@ final class NoteStore: ObservableObject {
         // so remote values replace the old objects instead of being written
         // back to CloudKit by the next local save.
         let refreshedContext = try makeFreshContext()
-        if let confirmedSource { _ = try WorkspaceLegacyBridge.presentationFollowingCommit(confirmedSource, freshContext: refreshedContext) }
+        if let confirmedSource {
+            let changedIDs = try WorkspaceLegacyBridge.confirmedPlainNoteWrites(in: confirmedSource)
+            _ = try WorkspaceLegacyBridge.presentationFollowingCommit(confirmedSource, freshContext: refreshedContext)
+            let previousByID = presentationByID ?? Dictionary(notes.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
+            if let changedIDs, changedIDs.isSubset(of: Set(previousByID.keys)) {
+                let ids = Array(changedIDs)
+                let changed = try refreshedContext.fetch(FetchDescriptor<NoteItem>(predicate: #Predicate { ids.contains($0.id) }))
+                // Lifecycle/insert/removal still rebuilds the complete view.
+                // Ordinary autosave re-reads only its complete physical family.
+                if Set(changed.map(\.id)) == changedIDs, changed.allSatisfy({ $0.deletedAt == nil }) {
+                    let replacements = Dictionary(uniqueKeysWithValues: Self.canonicalReplicas(from: changed).map { ($0.id, $0) })
+                    context = refreshedContext
+                    observeAttachmentContextWrites(refreshedContext)
+                    var updated = notes, byID = previousByID
+                    for (id, replacement) in replacements {
+                        if let previous = previousByID[id], let index = updated.firstIndex(where: { $0 === previous }) {
+                            updated[index] = replacement; byID[id] = replacement
+                        }
+                    }
+                    notes = updated; presentationByID = byID
+                    let retainedKeys = Set(updated.map { ObjectIdentifier($0) })
+                    let retainedProofs = preservingAttachmentProofs ? documentReplicaCapabilityCache.filter { retainedKeys.contains($0.key) } : [:]
+                    rebindDocumentCapabilities(to: changed, preserving: preservingAttachmentProofs)
+                    documentReplicaCapabilityCache.merge(retainedProofs) { fresh, _ in fresh }
+                    revision &+= 1
+                    return
+                }
+            }
+        }
         let presentation = try presentationSnapshot(in: refreshedContext)
         installPresentation(presentation, using: refreshedContext, preservingAttachmentProofs: preservingAttachmentProofs)
     }
@@ -1704,8 +1742,9 @@ final class NoteStore: ObservableObject {
         guard preserving else { documentReplicaCapabilityCache.removeAll(); return }
         let known = Array(documentReplicaCapabilityCache.values)
         documentReplicaCapabilityCache = Dictionary(uniqueKeysWithValues: rows.compactMap { row in
-            guard let bytes = row.content,
-                  let proof = known.first(where: { $0.revisionID == row.revisionID && $0.content == bytes }) else { return nil }
+            // Only a known revision may have a reusable proof. Reading content
+            // first faults every unrelated note during each presentation refresh.
+            guard let proof = known.first(where: { $0.revisionID == row.revisionID && $0.content == row.content }) else { return nil }
             return (ObjectIdentifier(row), proof)
         })
     }
