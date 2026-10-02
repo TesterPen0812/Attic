@@ -82,6 +82,9 @@ final class NoteSession: ObservableObject, Identifiable {
     fileprivate(set) var baseTags: [String] = []
     @Published private(set) var engine: NoteEditorEngine
     let readOnlyReason: NoteReadOnlyReason?
+    /// A readable checkpoint with unavailable placements. Its display ID is
+    /// separate from the original owner; it can never replace that saved note.
+    let recoverySourceNoteID: UUID?
     @Published fileprivate(set) var state: State {
         didSet {
             engine.setWritingToolsAvailable(NoteSessionPolicy.writingToolsAvailable(state,
@@ -110,7 +113,8 @@ final class NoteSession: ObservableObject, Identifiable {
     fileprivate var verifiedDocumentAttachments: [UUID: StagedNoteAttachment] = [:]
 
     fileprivate init(noteID: UUID, isPersisted: Bool, baseRevisionID: UUID?, engine: NoteEditorEngine,
-                     readOnlyReason: NoteReadOnlyReason?) {
+                     readOnlyReason: NoteReadOnlyReason?, recoverySourceNoteID: UUID? = nil) {
+        self.recoverySourceNoteID = recoverySourceNoteID
         self.noteID = noteID
         self.isPersisted = isPersisted
         self.baseRevisionID = baseRevisionID
@@ -130,7 +134,7 @@ final class NoteSession: ObservableObject, Identifiable {
         engine = replacement
     }
 
-    var isReadOnly: Bool { readOnlyReason != nil }
+    var isReadOnly: Bool { readOnlyReason != nil || recoverySourceNoteID != nil }
     var isConflict: Bool { if case .conflict = state { true } else { false } }
     var isImporting: Bool { importBatch != nil }
     var importProgress: NoteImportProgress? {
@@ -972,6 +976,9 @@ final class NotesPageController: ObservableObject {
     /// Save, else checkpoint, else keep in memory and say so.
     @discardableResult
     func preserve(_ session: NoteSession, allowQueued: Bool = false) -> Bool {
+        // This session already has a durable checkpoint, owned by its source.
+        // Navigation must neither overwrite it nor adopt its missing payloads.
+        if session.recoverySourceNoteID != nil { return true }
         session.saveTask?.cancel()
         session.engine.refreshCompositionActivity()
         if session.isImporting { return checkpoint(session, silent: true, allowQueued: allowQueued) }
@@ -1077,7 +1084,8 @@ final class NotesPageController: ObservableObject {
 
     /// All paths that replace a stored document or rekey a draft use this gate.
     private func canCommit(_ session: NoteSession, resolvingConflict: Bool = false) -> Bool {
-        NoteSessionPolicy.canWriteStore(resolvingConflict ? .dirty : session.state,
+        guard session.recoverySourceNoteID == nil else { return false }
+        return NoteSessionPolicy.canWriteStore(resolvingConflict ? .dirty : session.state,
             activity: session.engine.activity,
             hasMarkedText: session.engine.textView?.hasMarkedText() == true)
     }
@@ -1400,9 +1408,10 @@ final class NotesPageController: ObservableObject {
     }
 
     /// Copy Text from the slot: the draft as plain text.
-    func copyActiveText() {
+    func copyActiveText() { copyActiveText(to: .general) }
+
+    func copyActiveText(to pasteboard: NSPasteboard) {
         guard let active else { return }
-        let pasteboard = NSPasteboard.general
         pasteboard.clearContents()
         pasteboard.setString(active.engine.plainText, forType: .string)
     }
@@ -1478,7 +1487,7 @@ final class NotesPageController: ObservableObject {
         // throws and the failure is said.
         let content = try NoteContentCodec.encode(document)
         return NoteRecoverySnapshot(
-            noteID: session.noteID, title: NoteStore.normalizedTitle(document.title), content: content,
+            noteID: session.recoverySourceNoteID ?? session.noteID, title: NoteStore.normalizedTitle(document.title), content: content,
             markdown: NoteMarkdownExport.markdown(document) { names[$0] },
             tags: session.engine.tags, reason: reason, savedAt: now(),
             attachments: attachments, unavailableAttachmentIDs: unavailable, pendingImport: pending)
@@ -1588,7 +1597,22 @@ final class NotesPageController: ObservableObject {
             let available = Set(staged.map(\.id))
                 .union(((try? store.attachmentRows(forNoteID: entry.noteID)) ?? []).map(\.id))
             guard Set(document.attachmentIDs).isSubset(of: available) else {
-                recoveryWarnings.append("Recovery copy for \(entry.noteID.uuidString) refers to an image that is missing from both the checkpoint and the note store.")
+                let message = "Some attachments are unavailable. Copy Text or Save Recovery Copy to recover this draft; the original checkpoint and saved note are kept unchanged."
+                recoveryWarnings.append(message)
+                let displayID = UUID()
+                let recovery = NoteSession(noteID: displayID, isPersisted: false, baseRevisionID: nil,
+                    engine: makeEngine(noteID: displayID, document: document, readOnly: true, staged: staged,
+                                       tags: entry.tags ?? storedTags), readOnlyReason: nil,
+                    recoverySourceNoteID: entry.noteID)
+                recovery.recoveryClaim = claim
+                recovery.baseTags = entry.tags ?? storedTags
+                recovery.state = .notSaved(message)
+                recovery.selection = NSRange(location: entry.selectionLocation, length: entry.selectionLength)
+                recovery.scrollOffset = CGFloat(entry.scrollOffset ?? 0)
+                wire(recovery)
+                cache[displayID] = recovery
+                touch(displayID)
+                newestRecovered = recovery
                 continue
             }
             if let pending = entry.pendingImport,

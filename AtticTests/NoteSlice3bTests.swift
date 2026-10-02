@@ -3252,7 +3252,10 @@ extension NoteSlice3bTests {
         let pasted = target.document()
         XCTAssertTrue(NoteTextExport.plainText(pasted).contains("Copied text"))
         XCTAssertEqual(pasted.attachmentIDs.count, 2)
-        XCTAssertEqual(target.stagedAttachments(for: pasted).map(\.data), pasted.attachmentIDs.map { target.staged[$0]!.data })
+        for id in pasted.attachmentIDs {
+            let copy = try XCTUnwrap(target.staged[id])
+            XCTAssertEqual(copy.data, copy.filename == item.filename ? item.data : image.data)
+        }
         XCTAssertTrue(Set(pasted.attachmentIDs).isDisjoint(with: [item.id, image.id]))
         XCTAssertTrue(target.history.undo())
         XCTAssertEqual(target.document(), before)
@@ -3307,5 +3310,60 @@ extension NoteSlice3bTests {
             XCTAssertTrue(target.staged.isEmpty)
             XCTAssertFalse(target.document().attachmentIDs.contains(item.id))
         }
+    }
+}
+
+@MainActor
+extension NoteSlice3bTests {
+    func testMissingAttachmentRowsExposeReadOnlyRecoveryTextAndExportWithoutReplacingItsOwner() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("AtticReadableRecovery-\(UUID())")
+        defer { try? FileManager.default.removeItem(at: root) }
+        let store = try makeTestNoteStore(attachmentFileStore: makeTestAttachmentFileStore(rootURL: root.appendingPathComponent("files")))
+        let id = UUID(), missingID = UUID(), known = staged()
+        guard case .success = store.createDocumentNote(id: id, document: NoteDocument(blocks: [.text("Stored")])) else { return XCTFail() }
+        var draft = NoteDocument(blocks: [.text("Unique recovered text"), .text("Readable body"), .image(attachmentID: missingID),
+            .file(attachmentID: known.id, filename: known.filename, contentTypeIdentifier: known.contentTypeIdentifier, byteCount: known.byteCount)])
+        draft.refreshRequiredCapabilities()
+        let directory = root.appendingPathComponent("journal")
+        let entry = NoteDraftJournalEntry(noteID: id, isPersisted: true, baseRevisionID: nil,
+            content: try NoteContentCodec.encode(draft), selectionLocation: 0, selectionLength: 0,
+            staged: [.init(id: known.id, filename: known.filename, contentTypeIdentifier: known.contentTypeIdentifier,
+                           byteCount: known.byteCount, digest: known.digest)], savedAt: Date())
+        let claim = try await NoteDraftJournal(directory: directory).writeDurably(entry, staged: [known])
+        let checkpointURL = directory.appendingPathComponent("\(id.uuidString).json")
+        let checkpointBytes = try Data(contentsOf: checkpointURL)
+        let controller = NotesPageController(store: store, journal: NoteDraftJournal(directory: directory), saveDelay: .seconds(60))
+        await controller.startAndWait()
+        let recovery = try XCTUnwrap(controller.active)
+        XCTAssertEqual(recovery.recoverySourceNoteID, id)
+        XCTAssertNotEqual(recovery.noteID, id, "the recovery row remains separately reachable from its saved owner")
+        XCTAssertTrue(recovery.isReadOnly); XCTAssertTrue(recovery.engine.isReadOnly)
+        XCTAssertEqual(recovery.engine.document(), draft)
+        XCTAssertFalse(controller.hasAttachmentBytes(missingID), "the missing placement remains a placeholder")
+        let board = NSPasteboard.withUniqueName()
+        controller.copyActiveText(to: board)
+        XCTAssertTrue(board.string(forType: .string)?.contains("Readable body") == true)
+        XCTAssertTrue(controller.canSaveRecoveryCopy(recovery))
+        let export = root.appendingPathComponent("export")
+        controller.recoveryCopyDestination = { _ in export }
+        await XCTAssertTrueAsync(await controller.saveRecoveryCopy())
+        XCTAssertTrue(try String(contentsOf: export.appendingPathComponent(NoteRecoveryCopy.markdownFile), encoding: .utf8).contains("Readable body"))
+        XCTAssertEqual(NoteContentCodec.decode(try Data(contentsOf: export.appendingPathComponent(NoteRecoveryCopy.noteFile))).document, draft)
+        let decoder = JSONDecoder(); decoder.dateDecodingStrategy = .iso8601
+        let manifest = try decoder.decode(NoteRecoveryCopy.Manifest.self, from: Data(contentsOf: export.appendingPathComponent(NoteRecoveryCopy.manifestFile)))
+        XCTAssertEqual(manifest.noteID, id)
+        XCTAssertEqual(manifest.unavailableImageIDs, [missingID])
+        XCTAssertFalse(controller.save(recovery)); XCTAssertFalse(controller.keepAsNewNote())
+        await XCTAssertTrueAsync(await controller.preserveDurably(recovery))
+        await XCTAssertTrueAsync(await controller.openDurably(noteID: id))
+        XCTAssertEqual(controller.active?.engine.document().title, "Stored")
+        XCTAssertTrue(controller.openFailedDraft(sessionID: recovery.id))
+        XCTAssertTrue(controller.active === recovery)
+        XCTAssertEqual(try Data(contentsOf: checkpointURL), checkpointBytes)
+        XCTAssertEqual(try Data(contentsOf: directory.appendingPathComponent("staged/\(known.id.uuidString)")), known.data)
+        let reread = try await NoteDraftJournal(directory: directory).readRecoveryEntries()
+        guard case let .valid(_, _, retainedClaim) = try XCTUnwrap(reread.first) else { return XCTFail() }
+        XCTAssertEqual(retainedClaim, claim)
+        XCTAssertEqual(store.note(withID: id)?.title, "Stored")
     }
 }
