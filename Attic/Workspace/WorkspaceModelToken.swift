@@ -81,6 +81,8 @@ enum WorkspaceModelFields {
         guard fields.count == M.schemaMetadata.count else { throw WorkspaceFoundationError.unsupportedField(String(describing: M.self)) }
         if let patch {
             guard Set(patch.keys).isSubset(of: Set(fields.map(\.name))) else { throw WorkspaceFoundationError.conflict }
+            // Blob setters compute digests. Their optional digest field follows
+            // the blob, so an explicit legacy snapshot can retain its nil column.
             for field in fields { if let value = patch[field.name] { try field.write(model, value) } }
             return [:] // apply() does not need to serialize every untouched field.
         }
@@ -159,8 +161,8 @@ enum WorkspaceModelFields {
                 WorkspaceField("createdAt", \NoteAttachment.createdAt),
                 WorkspaceField("updatedAt", \NoteAttachment.updatedAt),
                 WorkspaceField("deletedAt", \NoteAttachment.deletedAt),
-                WorkspaceField("payloadFingerprint", \NoteAttachment.payloadFingerprint),
-                WorkspaceField("payload", \NoteAttachment.payload, digest: \NoteAttachment.payloadFingerprint)
+                WorkspaceField("payload", \NoteAttachment.payload, digest: \NoteAttachment.payloadFingerprint),
+                WorkspaceField("payloadFingerprint", \NoteAttachment.payloadFingerprint)
             ], applying: values, fingerprint: fingerprint, keys: keys)
         case let row as NoteVersion:
             return try record(row, [
@@ -168,8 +170,8 @@ enum WorkspaceModelFields {
                 WorkspaceField("noteID", \NoteVersion.noteID),
                 WorkspaceField("createdAt", \NoteVersion.createdAt),
                 WorkspaceField("reasonRaw", \NoteVersion.reasonRaw),
-                WorkspaceField("contentFingerprint", \NoteVersion.contentFingerprint),
                 WorkspaceField("content", \NoteVersion.content, digest: \NoteVersion.contentFingerprint),
+                WorkspaceField("contentFingerprint", \NoteVersion.contentFingerprint),
                 WorkspaceField("contentFormat", \NoteVersion.contentFormat),
                 WorkspaceField("title", \NoteVersion.title),
                 WorkspaceField("body", \NoteVersion.body),
@@ -181,8 +183,8 @@ enum WorkspaceModelFields {
                 WorkspaceField("id", \NotePendingEdit.id),
                 WorkspaceField("noteID", \NotePendingEdit.noteID),
                 WorkspaceField("baseRevisionToken", \NotePendingEdit.baseRevisionToken),
-                WorkspaceField("proposalFingerprint", \NotePendingEdit.proposalFingerprint),
                 WorkspaceField("proposedContent", \NotePendingEdit.proposedContent, digest: \NotePendingEdit.proposalFingerprint),
+                WorkspaceField("proposalFingerprint", \NotePendingEdit.proposalFingerprint),
                 WorkspaceField("baseVersionID", \NotePendingEdit.baseVersionID),
                 WorkspaceField("agentName", \NotePendingEdit.agentName),
                 WorkspaceField("createdAt", \NotePendingEdit.createdAt),

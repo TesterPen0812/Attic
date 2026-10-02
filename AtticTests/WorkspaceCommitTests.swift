@@ -144,6 +144,30 @@ final class WorkspaceCommitTests: XCTestCase {
         XCTAssertEqual(try coordinator.freshContext().fetchCount(FetchDescriptor<TaskItem>()), 3)
     }
 
+    func testC2LegacyMissingPayloadFingerprintsPreserveExplicitSnapshotRoundTrips() throws {
+        let bytes = Data("legacy bytes".utf8)
+        let attachment = NoteAttachment(noteID: noteID, originalFilename: "legacy.txt", byteCount: Int64(bytes.count),
+            sortIndex: 0, contentDigest: NotePayloadDigest.sha256(bytes), payload: bytes)
+        let version = NoteVersion(noteID: noteID, createdAt: Date(), reason: .leave, content: bytes,
+            contentFormat: 1, title: "Legacy", body: "", attachmentIDs: [], sourceRevisionID: nil)
+        let proposal = NotePendingEdit(noteID: noteID, baseRevisionToken: "old", proposedContent: bytes,
+            agentName: "Legacy", createdAt: Date())
+        // Optional digest columns are absent on rows from the previous schema.
+        attachment.payloadFingerprint = nil; version.contentFingerprint = nil; proposal.proposalFingerprint = nil
+        let copies: [any PersistentModel] = [
+            NoteAttachment(noteID: noteID, originalFilename: "", byteCount: 0, sortIndex: 0, contentDigest: ""),
+            NoteVersion(noteID: noteID, createdAt: Date(), reason: .leave, content: nil,
+                contentFormat: 0, title: "", body: "", attachmentIDs: [], sourceRevisionID: nil),
+            NotePendingEdit(noteID: noteID, baseRevisionToken: "", proposedContent: Data(), agentName: "", createdAt: Date())
+        ]
+        for (original, copy) in zip([attachment, version, proposal] as [any PersistentModel], copies) {
+            let snapshot = try WorkspaceModelFields.read(original)
+            try WorkspaceModelFields.apply(snapshot, to: copy)
+            XCTAssertEqual(try WorkspaceModelFields.read(copy), snapshot)
+            XCTAssertEqual(try WorkspaceModelFields.fingerprint(copy), try WorkspaceModelFields.fingerprint(original))
+        }
+    }
+
     func testC5ProductionTaskCRUDHasNoEnvelopeOrReceipt() async throws {
         let gate = PersistenceGate()
         let tasks = TaskStore(container: container, persist: gate.save)
