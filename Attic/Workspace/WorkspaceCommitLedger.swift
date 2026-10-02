@@ -49,6 +49,7 @@ final class WorkspaceCommitLedger {
     }
     deinit { if let observer { NotificationCenter.default.removeObserver(observer) } }
 
+    func isSaving(_ context: ModelContext) -> Bool { savingContext === context }
     func register(_ context: ModelContext) {
         objc_setAssociatedObject(context, &Self.contextKey,
             ContextStamp(ledgerID: identity, syncedGeneration: generation), .OBJC_ASSOCIATION_RETAIN_NONATOMIC)
@@ -81,7 +82,13 @@ final class WorkspaceCommitLedger {
     func gatedSave(_ context: ModelContext, before: [WorkspaceModelToken], using save: (ModelContext) throws -> Void) throws {
         precondition(savingContext == nil, "Gated saves cannot nest")
         let rows = context.insertedModelsArray + context.changedModelsArray + context.deletedModelsArray
-        let changed = Set(rows.compactMap { WorkspaceOperationCoordinator.owner($0) })
+        let deletedIDs = Set(context.deletedModelsArray.map(\.persistentModelID))
+        let mappings = rows.compactMap { row -> ((any PersistentModel), WorkspaceOwner, Set<WorkspaceScope>, PersistentIdentifier, Bool)? in
+            guard let owner = WorkspaceOperationCoordinator.owner(row) else { return nil }
+            let id = row.persistentModelID
+            return (row, owner, Self.membership(row), id, deletedIDs.contains(id))
+        }
+        let changed = Set(mappings.map { $0.1 })
         var memberships = Set<WorkspaceScope>()
         for token in before { for replica in token.replicas { memberships.formUnion(try Self.membership(token.owner, fields: replica.fields)) } }
         for row in rows { memberships.formUnion(Self.membership(row)) }
@@ -96,9 +103,12 @@ final class WorkspaceCommitLedger {
                 for owner in changed { owners[owner] = OwnerEntry(generation: generation, writerContextID: writer) }
                 memberships.formUnion(changed.map { .all($0.entity) })
                 for scope in memberships { scopes[scope] = generation; scopeWriters[scope] = writer }
-                for row in rows {
-                    guard let owner = WorkspaceOperationCoordinator.owner(row) else { continue }
-                    physical[row.persistentModelID] = PhysicalEntry(owner: owner, scopes: Self.membership(row), generation: generation)
+                for (row, owner, membership, previousID, deleted) in mappings {
+                    if deleted { physical.removeValue(forKey: previousID) }
+                    else {
+                        physical.removeValue(forKey: previousID)
+                        physical[row.persistentModelID] = PhysicalEntry(owner: owner, scopes: membership, generation: generation)
+                    }
                 }
                 trim()
             }

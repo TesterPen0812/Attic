@@ -71,7 +71,7 @@ enum WorkspaceLegacyBridge {
         // a command still has pending edits. This is a read, not a new writer.
         state.saveObserver = NotificationCenter.default.addObserver(forName: ModelContext.didSave, object: context, queue: .main) { _ in
             MainActor.assumeIsolated {
-                guard let saved = reference.value else { return }
+                guard let saved = reference.value, !coordinator.ledger.isSaving(saved) else { return }
                 do { try registerContext(saved, includeCanvas: includeCanvas) }
                 catch { objc_setAssociatedObject(saved, &contextKey, nil, .OBJC_ASSOCIATION_RETAIN_NONATOMIC) }
             }
@@ -258,6 +258,20 @@ enum WorkspaceLegacyBridge {
         let missingScopes = requiredScopes.filter { state.scopes[$0] == nil }
         let freshScopes = try WorkspaceScopeToken.read(scopes: Set(missingScopes), in: state.coordinator.freshContext())
         let scopes = requiredScopes.map { state.scopes[$0] ?? freshScopes[$0]! }
+        if plain {
+            var confirmed: [WorkspaceOwner: WorkspaceModelToken] = [:]
+            let result = state.coordinator.commitInPlace(source, before: reads, scopes: scopes,
+                after: writes.map { after[$0]! }, capturedOwners: Set(state.baseline.keys), using: writer,
+                confirmed: { confirmed = $0 })
+            guard result == .committed else {
+                throw result == .conflict ? WorkspaceFoundationError.conflict : WorkspaceFoundationError.unknown
+            }
+            state.baseline.merge(confirmed) { _, saved in saved }
+            state.scopes.removeAll()
+            state.plainTaskWrites = writes.allSatisfy({ $0.entity == .task }) ? Set(writes.map(\.id)) : nil
+            state.plainNoteWrites = writes.allSatisfy({ $0.entity == .note }) ? Set(writes.map(\.id)) : nil
+            return
+        }
         var staged: [StagedNoteAttachment] = []
         for row in changes.compactMap({ $0 as? NoteAttachment }) {
             let old = before[.init(entity: .attachment, id: row.id)]?.replicas.first { $0.physicalID == row.persistentModelID }

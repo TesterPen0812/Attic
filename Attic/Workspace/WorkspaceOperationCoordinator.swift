@@ -308,6 +308,58 @@ final class WorkspaceOperationCoordinator {
         } catch { return .notCommitted }
     }
 
+    /// Plain writes save the presented rows themselves. Validation and save
+    /// remain in one synchronous main-actor section; uncertainty is never a
+    /// reason to grant authority to the presentation cache.
+    func commitInPlace(_ context: ModelContext, before: [WorkspaceModelToken],
+                       scopes: [WorkspaceScopeToken], after: [WorkspaceModelToken],
+                       capturedOwners: Set<WorkspaceOwner>, using writer: (ModelContext) throws -> Void,
+                       confirmed: ([WorkspaceOwner: WorkspaceModelToken]) -> Void) -> Outcome {
+        let writes = Set(after.map(\.owner))
+        let affected = Set(before.map(\.owner)).union(writes)
+        guard affected.isDisjoint(with: heldOwners), plainUnknown == nil else { return .unknown }
+        do {
+            if ledger.canValidate(context, owners: affected, scopes: Set(scopes.map(\.scope))) {
+                validationCounters.fastValidations += 1
+            } else {
+                validationCounters.slowValidations += 1
+                let fresh = freshContext()
+                let current = try WorkspaceModelToken.read(owners: affected, in: fresh)
+                guard before.allSatisfy({ current[$0.owner] == $0 }) else { return .conflict }
+                let membership = try WorkspaceScopeToken.read(scopes: Set(scopes.map(\.scope)), in: fresh)
+                guard scopes.allSatisfy({ membership[$0.scope] == $0 }) else { return .conflict }
+            }
+            let inserted = Set(context.insertedModelsArray.compactMap { Self.owner($0) })
+            try validateWriteSet(context, declared: capturedOwners.union(inserted))
+            try validateTombstones(context, before: before)
+            try validateLegacyAdmission(context, before: before)
+            // Changed supported content was admitted during classification;
+            // opaque metadata is preserved without a document read or decode.
+            try validatePreservedOpaqueContent(context, before: before, contents: [:])
+            let changes = context.insertedModelsArray + context.changedModelsArray
+            guard let admission = ownership.tryAcquire(try admissionIDs(changes, before: before), kind: .admission) else { return .conflict }
+            defer { admission.release() }
+            let previous = before.filter { writes.contains($0.owner) }
+            let physicalIDs = Dictionary(uniqueKeysWithValues: previous.map { ($0.owner, Set($0.replicas.map(\.physicalID))) })
+            let stagedTokens = Dictionary(uniqueKeysWithValues: before.map { ($0.owner, $0) })
+            let stagedModels = try WorkspaceModelToken.stagedModels(owners: writes, before: stagedTokens, in: context)
+            do {
+                try ledger.gatedSave(context, before: previous, using: writer)
+                confirmed(try WorkspaceModelToken.capture(owners: writes, models: stagedModels))
+                return .committed
+            } catch {
+                if previous == after { return .notCommitted }
+                plainUnknown = (previous, after, affected, physicalIDs)
+                heldOwners.formUnion(affected)
+                let outcome = reconcilePlain()
+                if outcome == .committed {
+                    confirmed(try WorkspaceModelToken.read(owners: writes, in: freshContext()))
+                }
+                return outcome
+            }
+        } catch { return .notCommitted }
+    }
+
     /// Classification lives at the writer boundary, so a caller cannot label
     /// a lifecycle/association/import transition as an ordinary autosave.
     func mayUsePlainSave(before: [WorkspaceModelToken], after: [WorkspaceModelToken], in context: ModelContext) throws -> Bool {
