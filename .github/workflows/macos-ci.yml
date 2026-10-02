@@ -14,6 +14,12 @@ on:
         default: false
         type: boolean
 
+      compare_note_save_gates:
+        description: Record four interleaved d77ec80 and afebc3a save-gate runs
+        required: false
+        default: false
+        type: boolean
+
 permissions:
   contents: read
 
@@ -155,6 +161,24 @@ jobs:
           path: ${{ runner.temp }}/AtticUnitTests.xcresult
           if-no-files-found: ignore
           retention-days: 7
+
+      - name: Compare baseline and Fix 2 save gates on this runner
+        if: inputs.compare_note_save_gates
+        timeout-minutes: 20
+        run: |
+          python3 Scripts/compare_note_save_gates.py "$RUNNER_TEMP/NoteSaveGateComparison" --unsigned
+
+      - name: Upload baseline and Fix 2 save-gate evidence
+        if: always() && inputs.compare_note_save_gates
+        uses: actions/upload-artifact@v4
+        with:
+          name: note-save-gate-comparison-${{ github.sha }}
+          path: |
+            ${{ runner.temp }}/NoteSaveGateComparison/results.json
+            ${{ runner.temp }}/NoteSaveGateComparison/*.log
+            ${{ runner.temp }}/NoteSaveGateComparison/*.xcresult
+          if-no-files-found: error
+          retention-days: 14
 
       - name: Run macOS UI tests
         id: ui_tests
