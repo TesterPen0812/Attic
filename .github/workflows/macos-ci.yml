@@ -49,6 +49,7 @@ jobs:
             -derivedDataPath "$RUNNER_TEMP/AtticPhase1Stability" \
             -resultBundlePath "$RUNNER_TEMP/AtticPhase1Stability.xcresult" \
             CODE_SIGNING_ALLOWED=NO \
+            SWIFT_OPTIMIZATION_LEVEL=-O SWIFT_COMPILATION_MODE=wholemodule ENABLE_DEBUG_DYLIB=NO \
             ATTIC_MACOS_BUNDLE_IDENTIFIER=com.taha.Attic.ui.phase1stability \
             -parallel-testing-enabled NO \
             -test-iterations 10 -test-repetition-relaunch-enabled YES \
@@ -57,14 +58,6 @@ jobs:
             -only-testing:AtticUITests/TasksPanelUITests/testNativeContextMenuReturnOpensFilesWhileTheComposerHasFocus \
             -only-testing:AtticUITests/TasksPanelUITests/testNativeContextMenuAfterFindOpensFilesWithRealAutoHide \
             test
-      - name: Collect native Open Files diagnostics
-        if: always()
-        run: |
-          for trace in \
-            "$HOME/Library/Application Support/AtticOpenFilesUITestTrace.txt" \
-            "$HOME/Library/Containers/com.taha.Attic.ui.phase1stability/Data/Library/Application Support/AtticOpenFilesUITestTrace.txt"; do
-            if [ -f "$trace" ]; then cat "$trace"; fi
-          done
       - name: Upload repeated UI results
         if: always()
         uses: actions/upload-artifact@v4

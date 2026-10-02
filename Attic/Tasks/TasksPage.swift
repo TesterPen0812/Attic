@@ -1530,31 +1530,15 @@ struct TasksPage: View {
         )
     }
 
-    /// Open Files… (deep review P2-03): one command for ⌘Return, the row's
-    /// right-click menu, ⇧⌘I's menu, the quick look and VoiceOver. A key
-    /// that belongs to a field typing never runs it. It opens on the next
-    /// turn: a menu runs its command while it still tracks, and the right-
-    /// click menu's Open Files… opened nothing that way while ⌘Return and
-    /// ⇧⌘I's did; on the next turn the menu has closed, and every route
-    /// opens the files panel the way ⌘Return does.
+    /// One command for all routes. A main-queue block can run inside
+    /// NSMenu's nested tracking loop; it does not mean the menu has closed.
+    /// Present in the default mode, after AppKit finishes tracking and
+    /// restores the source window's responder and ordering state.
     private func openFiles(_ id: UUID) {
-        #if DEBUG
-        TasksOpenFilesTrace.write("command id=\(id) ownsKey=\(AtticTextInput.ownsCurrentKey) mode=\(String(describing: CFRunLoopCopyCurrentMode(CFRunLoopGetMain()))) event=\(String(describing: NSApp.currentEvent)) responder=\(String(describing: NSApp.keyWindow?.firstResponder))")
-        #endif
-        guard !AtticTextInput.ownsCurrentKey else {
-            #if DEBUG
-            if ProcessInfo.processInfo.environment["ATTIC_UI_TESTING"] == "1" {
-                print("Open Files rejected: event=\(String(describing: NSApp.currentEvent)) responder=\(String(describing: NSApp.keyWindow?.firstResponder))")
-            }
-            #endif
-            return
-        }
+        guard !AtticTextInput.ownsCurrentKey else { return }
         pointer.endInvocation()
-        DispatchQueue.main.async { [model] in
-            #if DEBUG
-            TasksOpenFilesTrace.write("deferred id=\(id) mode=\(String(describing: CFRunLoopCopyCurrentMode(CFRunLoopGetMain()))) taskExists=\(model.store.task(withID: id) != nil)")
-            #endif
-            model.openPage(id)
+        RunLoop.main.perform(inModes: [.default]) { [model] in
+            MainActor.assumeIsolated { model.openPage(id) }
         }
     }
 
@@ -3858,20 +3842,3 @@ enum TasksScrollerRule {
         }
     }
 }
-
-#if DEBUG
-@MainActor
-enum TasksOpenFilesTrace {
-    static func write(_ message: String) {
-        guard ProcessInfo.processInfo.environment["ATTIC_UI_TESTING"] == "1",
-              let directory = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first else { return }
-        let url = directory.appendingPathComponent("AtticOpenFilesUITestTrace.txt")
-        try? FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
-        if !FileManager.default.fileExists(atPath: url.path) { FileManager.default.createFile(atPath: url.path, contents: nil) }
-        guard let file = try? FileHandle(forWritingTo: url) else { return }
-        defer { try? file.close() }
-        _ = try? file.seekToEnd()
-        try? file.write(contentsOf: Data("\(Date()) \(message)\n".utf8))
-    }
-}
-#endif

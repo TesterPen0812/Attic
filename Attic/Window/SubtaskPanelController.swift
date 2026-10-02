@@ -373,15 +373,9 @@ final class SubtaskPanelController: NSObject, ObservableObject {
     /// The Tasks page's "Open page" until task pages arrive (Phase 3): the
     /// task's old detail panel, on its files and nothing else.
     func openFilesPanel(for familyID: UUID) {
-        #if DEBUG
-        TasksOpenFilesTrace.write("controller id=\(familyID) mainVisible=\(mainPanelVisible) taskExists=\(resolvedParent(familyID) != nil) locks=\(uiState.interactionLockReasons)")
-        #endif
         guard resolvedParent(familyID) != nil else { return }
         panelViews.setFilesOnly(familyID)
         openFamilyPanel(for: familyID, focusEntry: false, view: .attachments)
-        #if DEBUG
-        TasksOpenFilesTrace.write("presented id=\(familyID) transient=\(String(describing: lifecycle.transientFamilyID)) visible=\(transientPanel?.isVisible == true)")
-        #endif
     }
 
     func openFamilyPanel(for familyID: UUID, focusEntry: Bool, view: FamilyPanelView? = nil) {
@@ -644,9 +638,6 @@ final class SubtaskPanelController: NSObject, ObservableObject {
     // MARK: - Main-panel lifecycle
 
     func mainPanelDidHide() {
-        #if DEBUG
-        TasksOpenFilesTrace.write("mainPanelDidHide transient=\(String(describing: lifecycle.transientFamilyID))")
-        #endif
         closeTransientSurface()
     }
 
