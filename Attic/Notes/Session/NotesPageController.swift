@@ -158,8 +158,10 @@ final class NoteSession: ObservableObject, Identifiable {
 /// preserving notes, independent of views.
 ///
 /// Contracts (critique finding 1; spec § Reliability):
-/// - text is saved within `saveDelay` (300 ms) of the last edit, and on
-///   hide, quit, page switch and navigation;
+/// - text is saved within `saveDelay` (300 ms) of the last edit; continuous
+///   typing gets an independent five-second durability deadline using the
+///   same prepared save path (or an owned checkpoint when writes are gated);
+/// - hide, quit, page switch and navigation save or checkpoint pending work;
 /// - before any navigation the draft is saved or checkpointed; if both fail
 ///   the session stays, marked "Only in memory", and navigation is refused;
 /// - recovered drafts reopen before the normal opening rule;
@@ -1139,7 +1141,6 @@ final class NotesPageController: ObservableObject {
     }
 
     private func runDueSaveWork(_ session: NoteSession, isDeadline: Bool = false) async {
-        guard NoteSessionPolicy.hasPendingWork(session.state) else { return }
         session.engine.refreshCompositionActivity()
         if session.isImporting { _ = checkpoint(session, silent: true); return }
         if NoteSessionPolicy.dueSaveAction(session.state, activity: session.engine.activity,
@@ -1182,7 +1183,7 @@ final class NotesPageController: ObservableObject {
         let tags = tagsSnapshot ?? session.engine.tags
         if !session.isPersisted {
             guard !document.isEmpty || !document.objectIDs.isEmpty || !tags.isEmpty else {
-                session.state = .untouched
+                session.state = retainingNewerEdits ? .dirty : .untouched
                 return true
             }
             switch store.createDocumentNote(id: session.noteID, document: document, staged: staged,

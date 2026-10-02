@@ -180,6 +180,28 @@ final class NotesPageControllerTests: XCTestCase {
         XCTAssertFalse(NoteSessionPolicy.hasPendingWork(session.state))
     }
 
+    func testDeadlineWithAnEmptyFirstSnapshotKeepsNewerTypingDirty() async throws {
+        let controller = NotesPageController(store: store, journal: NoteDraftJournal(directory: directory),
+            saveDelay: .seconds(60), prepareDocument: { document in
+                try? await Task.sleep(for: .milliseconds(100))
+                return try? PreparedNoteDocument(document)
+            })
+        await controller.startAndWait()
+        let session = try XCTUnwrap(controller.active)
+        type("Erase", into: session)
+        _ = session.engine.performEdit(NSRange(location: 0, length: session.engine.textStorage.length),
+                                       with: NSAttributedString(), name: "Delete")
+        let deadline = Task { await controller.runDurabilityDeadline(session) }
+        try await Task.sleep(for: .milliseconds(30))
+        type("New text", into: session)
+        await deadline.value
+        XCTAssertTrue(NoteSessionPolicy.hasPendingWork(session.state))
+        XCTAssertTrue(store.notes.isEmpty)
+        await controller.runDueSave(session)
+        XCTAssertEqual(store.notes.first?.title, "New text")
+        XCTAssertFalse(NoteSessionPolicy.hasPendingWork(session.state))
+    }
+
     func testTypingIsSavedWithinTheCoalescingDelay() async throws {
         let controller = makeController(delay: .milliseconds(50))
         await controller.startAndWait()
@@ -1700,7 +1722,9 @@ final class NotesPageControllerTests: XCTestCase {
     func testBothAttachmentPurgeRoutesRespectRecoveryReferences() async throws {
         let journal = NoteDraftJournal(directory: directory)
         let controller = makeController(journal: journal)
-        _ = controller // installs the recovery reference provider on the store
+        // This fixture tests journal-only ownership. Finish startup before
+        // writing its checkpoint, so it cannot also open a live recovery session.
+        await controller.recoverAtLaunchAndWait()
         let image = try realImage()
         let legacy = try XCTUnwrap(store.create(title: "Legacy"))
         let removed = NoteAttachment(id: image.id, noteID: legacy.id, originalFilename: image.filename,
