@@ -109,6 +109,14 @@ enum NoteAgentTextError: LocalizedError, Equatable {
 /// checkbox flips only when all other block fields are preserved.
 enum NoteAgentTextSafety {
     static func validate(base: NoteDocument, proposed: NoteDocument) throws {
+        // Checklist identity, text, metadata and order are independent of
+        // rich formatting. Only the checked state may change on the wire.
+        let checklists: (NoteDocument) -> [NoteBlock] = { document in
+            document.blocks.filter { $0.kind == .checklist }.map { block in
+                var item = block; item.checked = false; return item
+            }
+        }
+        guard checklists(base) == checklists(proposed) else { throw NoteAgentTextError.lossyFormatting }
         let rich = base.blocks.contains {
             $0.style != nil || $0.level != nil || $0.indent != nil || !$0.marks.isEmpty
                 || $0.kind == .divider

@@ -693,6 +693,46 @@ final class NoteDocumentStoreTests: XCTestCase {
         guard case .failure(.versionMissing) = store.restoreVersion(UUID(), noteID: id) else { return XCTFail() }
     }
 
+    func testAgentWritesAndProposalsPreserveTheOrderedPlainChecklistInventory() throws {
+        var first = NoteBlock.checklist("Pay rent", checked: true)
+        first.extras = ["owner": .string("person")]
+        let second = NoteBlock.checklist("Call bank")
+        let base = NoteDocument(blocks: [.text("Bills"), first, .text("Between"), second])
+        let (id, _) = try create(base)
+        let token = try XCTUnwrap(store.note(withID: id)?.revisionToken)
+        var flattened = base; flattened.blocks[1] = .text("Pay rent")
+        var omitted = base; omitted.blocks.remove(at: 1)
+        var duplicate = base; var extra = first; extra.id = UUID(); duplicate.blocks.append(extra)
+        var reordered = base; reordered.blocks.swapAt(1, 3)
+        var renamed = base; renamed.blocks[1].text = "Different"
+        var changedMetadata = base; changedMetadata.blocks[1].extras = [:]
+        for proposed in [flattened, omitted, duplicate, reordered, renamed, changedMetadata] {
+            for disposition in [NoteAgentWriteDisposition.direct, .proposal] {
+                guard case .failure = store.agentWrite(noteID: id, baseRevisionToken: token,
+                    document: proposed, agentName: "Agent", disposition: disposition) else {
+                    return XCTFail("lossy checklist accepted")
+                }
+                XCTAssertEqual(store.loadDocument(noteID: id)?.content.document, base)
+                XCTAssertTrue(store.pendingEdits(noteID: id).isEmpty)
+            }
+        }
+        for body in ["Pay rent\nBetween\n- [ ] Call bank", "Between\n- [ ] Call bank",
+                     "- [x] Pay rent\nBetween\n- [ ] Call bank\n- [x] Pay rent"] {
+            XCTAssertThrowsError(try NoteAgentTextParser.document(title: "Bills", body: body, base: base))
+        }
+        var checked = base; checked.blocks[1].checked = false; checked.blocks[3].checked = true
+        let parsed = try NoteAgentTextParser.document(title: "Bills", body: "- [ ] Pay rent\nBetween\n- [x] Call bank", base: base)
+        XCTAssertEqual(parsed, checked)
+        guard case .success(.pending) = store.agentWrite(noteID: id, baseRevisionToken: token,
+            document: parsed, agentName: "Agent", disposition: .proposal) else { return XCTFail("checked proposal") }
+        XCTAssertEqual(store.applyPendingEdits(noteID: id), 1)
+        XCTAssertEqual(store.loadDocument(noteID: id)?.content.document, checked)
+        let currentToken = try XCTUnwrap(store.note(withID: id)?.revisionToken)
+        guard case .success = store.agentWrite(noteID: id, baseRevisionToken: currentToken,
+            document: base, agentName: "Agent", disposition: .direct) else { return XCTFail("checked direct") }
+        XCTAssertEqual(store.loadDocument(noteID: id)?.content.document, base)
+    }
+
     // MARK: Agent writes (requirement 5)
 
     func testAgentWriteNeedsAnExistingNoteAndItsCurrentRevision() throws {
