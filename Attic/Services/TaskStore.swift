@@ -462,11 +462,6 @@ final class TaskStore: ObservableObject {
         }
     }
     private static let manualOrderStride: Int64 = 1_024
-    private final class PresentedTask {
-        weak var row: TaskItem?
-        init(_ row: TaskItem) { self.row = row }
-    }
-    private var presentedTasks: [ObjectIdentifier: PresentedTask] = [:]
     #if ATTIC_OPERATION_CRASH_TESTS
     var onSaveTiming: ((String, Duration) -> Void)?
     #endif
@@ -581,7 +576,7 @@ final class TaskStore: ObservableObject {
                                         uniquingKeysWith: { _, latest in latest })
                 try WorkspaceLegacyBridge.persistPreparedTaskOrders(Array(rowsByID.values), orders: orders,
                     marking: Set(pendingRows.map(\.persistentModelID)), in: context, using: persist)
-                context = try WorkspaceLegacyBridge.presentationFollowingCommit(context)
+                context = Self.makeStoreContext(container)
                 if !tasks.isEmpty { try reloadTasks() }
                 return pendingRows.count
             }
@@ -605,27 +600,8 @@ final class TaskStore: ObservableObject {
         }
     }
 
-    /// Indexed lookup of a visible task. After an isolated commit, bind an
-    /// unchanged presentation row to the current staging context on demand.
-    func task(withID id: UUID) -> TaskItem? {
-        let index = familyIndex
-        guard var row = index.byID[id] else { return nil }
-        if row.modelContext !== context {
-            do {
-                guard let current = Self.canonicalReplicas(from: try storedTasks(matching: id)).first,
-                      current.deletedAt == nil, current.doneLoggedAt == nil else { return nil }
-                if let position = index.positions[id] {
-                    let sameFamily = index.canRebind([current])
-                    tasks[position] = current
-                    revision &+= 1
-                    if sameFamily { index.rebind([current], revision: revision); familyIndexCache = index }
-                }
-                row = current
-            } catch { report(error, owner: id); return nil }
-        }
-        presentedTasks[ObjectIdentifier(row)] = PresentedTask(row)
-        return row
-    }
+    /// Indexed lookup of a visible task in the current presentation.
+    func task(withID id: UUID) -> TaskItem? { familyIndex.byID[id] }
 
     private var familyIndex: FamilyIndex {
         if let familyIndexCache, familyIndexCache.revision == revision {
@@ -3182,6 +3158,8 @@ final class TaskStore: ObservableObject {
     @discardableResult
     private func save(owner: UUID? = nil) -> Bool {
         do {
+            let changedRows = (context.insertedModelsArray + context.changedModelsArray).compactMap { $0 as? TaskItem }
+            let removedRows = context.deletedModelsArray.contains { $0 is TaskItem }
             let candidateIDs = try WorkspaceLegacyBridge.coordinator(for: container).taskReferenceIDs(
                 (context.insertedModelsArray + context.changedModelsArray).compactMap { $0 as? TaskItem })
             #if ATTIC_OPERATION_CRASH_TESTS
@@ -3197,8 +3175,16 @@ final class TaskStore: ObservableObject {
             onSaveTiming?("writer", writeStart.duration(to: .now))
             let presentationStart = ContinuousClock.now
             #endif
-            do { try reloadTasks(confirmedSource: context); errorNotice = nil }
-            catch { report("Saved, but presentation is still updating: \(error.localizedDescription)", owner: owner) }
+            if try WorkspaceLegacyBridge.wasPlainCommit(in: context) {
+                if let index = familyIndexCache, !removedRows,
+                   changedRows.allSatisfy({ $0.deletedAt == nil && $0.doneLoggedAt == nil }), index.canRebind(changedRows) {
+                    index.rebind(changedRows, revision: revision &+ 1)
+                } else { familyIndexCache = nil }
+                errorNotice = nil
+            } else {
+                do { try reloadTasks(); errorNotice = nil }
+                catch { report("Saved, but presentation is still updating: \(error.localizedDescription)", owner: owner) }
+            }
             #if ATTIC_OPERATION_CRASH_TESTS
             onSaveTiming?("presentation", presentationStart.duration(to: .now))
             #endif
@@ -3210,6 +3196,10 @@ final class TaskStore: ObservableObject {
             #endif
             return true
         } catch {
+            if error is WorkspaceLegacyBridge.CommitHeld {
+                report("The save outcome is still being checked. This item is held.", owner: owner)
+                return false
+            }
             let saveError = error.localizedDescription
             context.rollback()
             do {
@@ -3222,75 +3212,15 @@ final class TaskStore: ObservableObject {
         }
     }
 
-    private func reloadTasks(confirmedSource: ModelContext? = nil) throws {
-        // A long-lived ModelContext can return cached model instances after
-        // CloudKit updates the underlying store. Refresh through a new context
-        // so remote values replace the old objects instead of being written
-        // back to CloudKit by the next local save.
-        let refreshedContext: ModelContext
-        #if os(macOS)
-        if let confirmedSource { refreshedContext = try WorkspaceLegacyBridge.presentationFollowingCommit(confirmedSource) }
-        else { refreshedContext = Self.makeStoreContext(container) }
-        #else
-        refreshedContext = Self.makeStoreContext(container)
-        #endif
-        let plainTaskIDs: Set<UUID>?
-        #if os(macOS)
-        plainTaskIDs = try confirmedSource.flatMap { try WorkspaceLegacyBridge.confirmedPlainTaskWrites(in: $0) }
-        #else
-        plainTaskIDs = nil
-        #endif
-        let canonical: [UUID: TaskItem]
-        let visible: [TaskItem]
-        var reboundIndex: FamilyIndex?
-        if let changedIDs = plainTaskIDs {
-            // An isolated tick/rename changes only these logical families.
-            // Re-read every physical replica of them in the fresh context;
-            // keep confirmed, unrelated presentation rows rather than
-            // refetching the complete table for each single-row command.
-            let ids = Array(changedIDs)
-            let changed = Self.canonicalReplicas(from: try refreshedContext.fetch(FetchDescriptor<TaskItem>(
-                predicate: #Predicate { ids.contains($0.id) }
-            )))
-            canonical = Dictionary(uniqueKeysWithValues: changed.map { ($0.id, $0) })
-            if let index = familyIndexCache, Set(canonical.keys) == changedIDs,
-               changed.allSatisfy({ $0.deletedAt == nil && $0.doneLoggedAt == nil }), index.canRebind(changed) {
-                var updated = tasks
-                for row in changed { updated[index.positions[row.id]!] = row }
-                visible = updated; reboundIndex = index
-            } else {
-                let previousIDs = Set(tasks.map(\.id))
-                visible = tasks.compactMap { row in
-                    guard changedIDs.contains(row.id) else { return row }
-                    guard let saved = canonical[row.id], saved.deletedAt == nil, saved.doneLoggedAt == nil else { return nil }
-                    return saved
-                } + changed.filter { !previousIDs.contains($0.id) && $0.deletedAt == nil && $0.doneLoggedAt == nil }
-            }
-        } else {
-            let fetched = try refreshedContext.fetch(FetchDescriptor<TaskItem>())
-            try WorkspaceLegacyBridge.establishScopeBaseline(refreshedContext, roots: fetched, entities: [.association, .preservation])
-            let unique = Self.canonicalReplicas(from: fetched)
-            canonical = Dictionary(uniqueKeysWithValues: unique.map { ($0.id, $0) })
-            visible = unique.filter { $0.deletedAt == nil && $0.doneLoggedAt == nil }
-        }
-        // Views and callers may still hold a row from the last presentation.
-        // Update those detached presentation objects from the proven saved
-        // family; never use them as the next transaction context.
-        presentedTasks = presentedTasks.filter { $0.value.row != nil }
-        for held in presentedTasks.values {
-            guard let row = held.row, let saved = canonical[row.id] else { continue }
-            #if os(macOS)
-            let values = try WorkspaceModelFields.read(saved)
-            if try WorkspaceModelFields.read(row) != values { try WorkspaceModelFields.apply(values, to: row) }
-            #endif
-        }
+    private func reloadTasks() throws {
+        let refreshedContext = Self.makeStoreContext(container)
+        let fetched = try refreshedContext.fetch(FetchDescriptor<TaskItem>())
+        try WorkspaceLegacyBridge.establishScopeBaseline(refreshedContext, roots: fetched, entities: [.association, .preservation])
+        let unique = Self.canonicalReplicas(from: fetched)
         context = refreshedContext
-        // Deduplicate first, then hide: the replica presentation would show
-        // decides whether the logical task is in Recently Deleted or the Done
-        // log, exactly as it decides every other field.
-        tasks = visible
+        tasks = unique.filter { $0.deletedAt == nil && $0.doneLoggedAt == nil }
         revision &+= 1
-        if let reboundIndex { reboundIndex.rebind(Array(canonical.values), revision: revision); familyIndexCache = reboundIndex }
+        familyIndexCache = nil
     }
 
     /// CloudKit can't enforce a unique UUID attribute. If a malformed import

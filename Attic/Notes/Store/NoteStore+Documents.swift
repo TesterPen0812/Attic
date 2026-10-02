@@ -504,6 +504,13 @@ extension NoteStore {
         }
         present(note)
         refreshAfterDocumentSave(insertedAttachments: !staged.isEmpty)
+        // Creation published a fresh row, whose admitted bytes are already
+        // known from this immutable projection. Prime its first edit directly.
+        if let committed = self.note(withID: id), committed.content == projection.content,
+           committed.revisionID == revisionID {
+            documentReplicaCapabilityCache[ObjectIdentifier(committed)] = (revisionID, projection.content, true,
+                projection.attachmentBlocks, projection.hasTaskNote)
+        }
         for item in attachmentPlan.new + attachmentPlan.repairs.map({ $0.1 }) { cacheVerifiedAttachment(item) }
         return .success((id, revisionID))
     }
@@ -589,22 +596,6 @@ extension NoteStore {
         try? WorkspaceLegacyBridge.coordinator(for: modelContext.container).observePreparedDocument(projection)
         let priorIDs = Set(base.attachmentIDs)
         let removedIDs = priorIDs.subtracting(placements.attachmentIDs)
-        #if os(macOS)
-        // A single ordinary text base cannot require displaced preservation,
-        // byte admission or mixed task writes. Keep all other cases on the
-        // existing staged path, including duplicate and attachment families.
-        if replicas.count == 1, main.taskID == nil, !projection.hasTaskNote,
-           main.revisionID == baseRevisionID, !context.hasChanges,
-           staged.isEmpty, attachmentPlan.existingRows.isEmpty, removedIDs.isEmpty {
-            let revisionID = UUID()
-            guard commitPreparedAutosave(projection, note: main, format: document.format,
-                timestamp: timestamp, revisionID: revisionID, tags: encodedTags) else {
-                return .failure(.saveFailed(lastErrorMessage ?? "The note could not be saved."))
-            }
-            documentSaveCommitted?(baseRevisionID, presentedRevisionID)
-            return .success(revisionID)
-        }
-        #endif
         do {
             try stageDisplacedReplicas(replicas, reason: .replacedByDraft, timestamp: timestamp,
                                       excludingUnchangedBase: removedIDs.isEmpty ? baseRevisionID : nil)

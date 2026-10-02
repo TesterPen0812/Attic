@@ -2,8 +2,8 @@ import Foundation
 import ObjectiveC
 import SwiftData
 
-/// Adapts the existing store staging contexts to the single fresh-context
-/// writer. Presented objects are never inserted into the commit context.
+/// Plain writes save the store context in place. Journaled writes retain the
+/// fresh-context envelope/receipt path and full publication refresh.
 @MainActor
 enum WorkspaceLegacyBridge {
     private final class WeakCoordinator {
@@ -47,10 +47,10 @@ enum WorkspaceLegacyBridge {
         var scopes: [WorkspaceScope: WorkspaceScopeToken] = [:]
         var captureFailed = false
         let includeCanvas: Bool
-        var plainTaskWrites: Set<UUID>?
-        var plainNoteWrites: Set<UUID>?
+        var plainCommit = false
         var scopeBaseline: ScopeBaseline?
         var capturedOwners = Set<WorkspaceOwner>()
+        var foreignAttachmentsChanged: ((Set<UUID>?) -> Void)?
         init(_ coordinator: WorkspaceOperationCoordinator, _ baseline: [WorkspaceOwner: WorkspaceModelToken], includeCanvas: Bool,
              scopes: [WorkspaceScope: WorkspaceScopeToken] = [:]) {
             self.coordinator = coordinator; self.baseline = baseline; self.includeCanvas = includeCanvas; self.scopes = scopes
@@ -100,18 +100,6 @@ enum WorkspaceLegacyBridge {
         }
         objc_setAssociatedObject(context, &contextKey, state, .OBJC_ASSOCIATION_RETAIN_NONATOMIC)
     }
-    /// Called only after persist confirms the declared mutation. External
-    /// refreshes use context(for:) with fresh, lazily captured owner guards.
-    static func presentationFollowingCommit(_ source: ModelContext, freshContext: ModelContext? = nil) throws -> ModelContext {
-        guard let state = objc_getAssociatedObject(source, &contextKey) as? ContextState else { throw WorkspaceFoundationError.unknown }
-        let fresh = freshContext ?? state.coordinator.freshContext()
-        try registerContext(fresh, includeCanvas: state.includeCanvas, baseline: state.baseline)
-        // Presentation can retain unchanged models from the consumed context.
-        // Its preparation guards are finished; only the new context needs the
-        // confirmed owner fingerprints. Do not retain migration-sized scopes.
-        state.baseline.removeAll(); state.scopes.removeAll()
-        return fresh
-    }
     static func foreignContextDidSave(_ context: ModelContext, identifiers: [PersistentIdentifier], deleted: [PersistentIdentifier]) {
         guard let state = objc_getAssociatedObject(context, &contextKey) as? ContextState else { return }
         // Confirm only the direct save's rows. Cached unrelated values are not
@@ -129,12 +117,19 @@ enum WorkspaceLegacyBridge {
                 .first(where: { $0.replicas.contains { $0.physicalID == id } })?.owner { owners.insert(owner) }
             else { state.captureFailed = true }
         }
+        let attachments = Set(owners.filter { $0.entity == .attachment }.map(\.id))
+        if identifiers.contains(where: { $0.entityName == "NoteAttachment" }) || deleted.contains(where: { $0.entityName == "NoteAttachment" }) {
+            state.foreignAttachmentsChanged?(attachments.isEmpty ? nil : attachments)
+        }
         do {
             let confirmed = try WorkspaceModelToken.read(owners: owners, in: context)
             state.baseline.merge(confirmed) { _, saved in saved }
             try state.scopeBaseline?.replace(confirmed)
             state.scopes.removeAll(); state.capturedOwners.removeAll()
         } catch { state.captureFailed = true }
+    }
+    static func observeForeignAttachmentWrites(in context: ModelContext, handler: @escaping (Set<UUID>?) -> Void) {
+        (objc_getAssociatedObject(context, &contextKey) as? ContextState)?.foreignAttachmentsChanged = handler
     }
     static func establishScopeBaseline(_ context: ModelContext, roots: [any PersistentModel],
                                        entities: Set<WorkspaceOwner.Entity>) throws {
@@ -181,35 +176,9 @@ enum WorkspaceLegacyBridge {
         captureBeforeMutation(row, in: context)
         context.delete(row)
     }
-    static func confirmedPlainTaskWrites(in source: ModelContext) throws -> Set<UUID>? {
+    static func wasPlainCommit(in source: ModelContext) throws -> Bool {
         guard let state = objc_getAssociatedObject(source, &contextKey) as? ContextState else { throw WorkspaceFoundationError.unknown }
-        return state.plainTaskWrites
-    }
-    static func confirmedPlainNoteWrites(in source: ModelContext) throws -> Set<UUID>? {
-        guard let state = objc_getAssociatedObject(source, &contextKey) as? ContextState else { throw WorkspaceFoundationError.unknown }
-        return state.plainNoteWrites
-    }
-    /// A prepared, ordinary text autosave needs no mutable presentation copy.
-    /// Use the same fresh writer/classification/reconciliation as compatibility
-    /// saves, then hand its confirmed family to the existing presentation path.
-    static func persistPreparedNote(_ note: NoteItem, in source: ModelContext,
-                                    using writer: @escaping (ModelContext) throws -> Void,
-                                    stage: (ModelContext) throws -> Void) throws {
-        guard !source.hasChanges, note.modelContext === source,
-              let state = objc_getAssociatedObject(source, &contextKey) as? ContextState else {
-            throw WorkspaceFoundationError.unknown
-        }
-        captureBeforeMutation(note, in: source)
-        guard !state.captureFailed else { throw WorkspaceFoundationError.unknown }
-        let owner = WorkspaceOwner(entity: .note, id: note.id)
-        let token = try capturedToken(owner, in: source)
-        let scopes = try scopeTokens(WorkspaceScopeToken.scopes(for: [token]), state: state, in: source)
-        var confirmed: [WorkspaceOwner: WorkspaceModelToken]?
-        try state.coordinator.commitCompatibility(tokens: [token], scopes: scopes, writes: [owner],
-            intent: "Note autosave", plain: true, writer: writer, confirmed: { confirmed = $0 }, stage: stage)
-        state.baseline = try confirmed ?? WorkspaceModelToken.read(owners: [owner], in: state.coordinator.freshContext())
-        state.scopes.removeAll()
-        state.plainNoteWrites = [note.id]; state.plainTaskWrites = nil
+        return state.plainCommit
     }
 
     /// Existing list-order migration has a prepared scalar plan. Avoid
@@ -247,7 +216,7 @@ enum WorkspaceLegacyBridge {
             })
         state.baseline = try confirmed ?? WorkspaceModelToken.read(owners: writes, in: state.coordinator.freshContext())
         state.scopes.removeAll()
-        state.plainTaskWrites = Set(writes.map(\.id)); state.plainNoteWrites = nil
+        state.plainCommit = true
     }
 
     struct CommitHeld: Error {}
@@ -268,8 +237,6 @@ enum WorkspaceLegacyBridge {
             return owner
         })
         if writes.isEmpty { return }
-        let after = try WorkspaceModelToken.capture(owners: writes,
-            models: WorkspaceModelToken.stagedModels(owners: writes, before: state.baseline, in: source))
         var before: [WorkspaceOwner: WorkspaceModelToken] = [:]
         for owner in writes {
             // Inserts have expected absence; changed/deleted owners must have
@@ -287,6 +254,8 @@ enum WorkspaceLegacyBridge {
             }) { before[owner] = WorkspaceModelToken(owner: owner, replicas: []) }
             else { throw WorkspaceFoundationError.unknown }
         }
+        let after = try WorkspaceModelToken.capture(owners: writes,
+            models: WorkspaceModelToken.stagedModels(owners: writes, before: before, in: source))
         // Include metadata consumed at associated endpoints and parent heads.
         // Membership scopes below come from the original staging baseline.
         for token in Array(before.values) + Array(after.values) {
@@ -319,8 +288,7 @@ enum WorkspaceLegacyBridge {
             try state.scopeBaseline?.replace(confirmed)
             state.capturedOwners.removeAll()
             state.scopes.removeAll()
-            state.plainTaskWrites = writes.allSatisfy({ $0.entity == .task }) ? Set(writes.map(\.id)) : nil
-            state.plainNoteWrites = writes.allSatisfy({ $0.entity == .note }) ? Set(writes.map(\.id)) : nil
+            state.plainCommit = true
             return
         }
         let scopes = try scopeTokens(requiredScopes, state: state, in: source)
@@ -387,8 +355,7 @@ enum WorkspaceLegacyBridge {
         let updates = try confirmed ?? WorkspaceModelToken.read(owners: writes, in: state.coordinator.freshContext())
         state.baseline = updates
         state.scopes.removeAll()
-        state.plainTaskWrites = plain && writes.allSatisfy({ $0.entity == .task }) ? Set(writes.map(\.id)) : nil
-        state.plainNoteWrites = plain && writes.allSatisfy({ $0.entity == .note }) ? Set(writes.map(\.id)) : nil
+        state.plainCommit = false
     }
     static func persistSharedChanges(_ source: ModelContext, using writer: @escaping (ModelContext) throws -> Void) throws {
         if (source.insertedModelsArray + source.changedModelsArray + source.deletedModelsArray).contains(where: { $0 is ItemLink || $0 is TaskItem || $0 is NoteItem }) {

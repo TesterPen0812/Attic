@@ -212,29 +212,16 @@ final class NoteStore: ObservableObject {
     /// including payload-only repairs whose metadata and digest did not change.
     private func invalidateAttachmentProofs(in transaction: ModelContext) {
         let changed = transaction.insertedModelsArray + transaction.changedModelsArray + transaction.deletedModelsArray
-        for id in Set(changed.compactMap { ($0 as? NoteAttachment)?.id }) {
+        invalidateAttachmentProofs(ids: Set(changed.compactMap { ($0 as? NoteAttachment)?.id }))
+    }
+    private func invalidateAttachmentProofs(ids: Set<UUID>) {
+        for id in ids {
             attachmentFamilyGenerations[id, default: 0] &+= 1
             verifiedAttachmentPayloads[id] = nil
             verifiedPayloadGenerations[id] = nil
             verifiedByteAvailability[id] = nil
             verifiedPayloadRecency.removeAll { $0 == id }
         }
-    }
-
-    private final class SaveObservation {
-        let token: NSObjectProtocol
-        init(_ token: NSObjectProtocol) { self.token = token }
-        deinit { NotificationCenter.default.removeObserver(token) }
-    }
-    private var attachmentProofSaveObserver: SaveObservation?
-    private func observeAttachmentContextWrites(_ source: ModelContext) {
-        attachmentProofSaveObserver = nil
-        attachmentProofSaveObserver = SaveObservation(NotificationCenter.default.addObserver(forName: ModelContext.willSave, object: source, queue: .main) { [weak self] _ in
-            MainActor.assumeIsolated {
-                guard let self else { return }
-                self.invalidateAttachmentProofs(in: self.context)
-            }
-        })
     }
 
     /// nil means verification is pending, rather than pretending that payload
@@ -1179,8 +1166,8 @@ final class NoteStore: ObservableObject {
         guard save() else { return false }
         attachmentFailures[attachment.id] = nil
         attachmentRetryVersions[attachment.id] = nil
-        // save() installed and reconciled the fresh committed presentation.
-        // Retain its signature so a subsequent refresh does not repeat it.
+        // Visibility changed in place; reconcile the retained file inventory.
+        if let rows = try? context.fetch(FetchDescriptor<NoteAttachment>()) { reconcileFileStorage(with: rows) }
         return true
     }
 
@@ -1245,7 +1232,12 @@ final class NoteStore: ObservableObject {
             return false
         }
         guard save() else { return false }
-        // save() already installed and reconciled the restored family.
+        do {
+            let rows = try context.fetch(FetchDescriptor<NoteAttachment>())
+            attachmentsByNoteID = visibleUniqueAttachments(from: rows)
+            reconciledAttachmentSignature = nil
+            reconcileFileStorage(with: rows)
+        } catch { lastErrorMessage = error.localizedDescription }
         return true
     }
 
@@ -1610,15 +1602,6 @@ final class NoteStore: ObservableObject {
     /// Every physical row of a live note (throws when none).
     func liveReplicas(of id: UUID, in sourceContext: ModelContext? = nil) throws -> [NoteItem] {
         let rows = try storedNotes(matching: id, in: sourceContext)
-        // A cheap confirmed autosave can retain unrelated presentation rows.
-        // Rebind a later edited family to the current staging context first.
-        if sourceContext == nil, let previous = note(withID: id), previous.modelContext !== context,
-           let index = notes.firstIndex(where: { $0 === previous }),
-           let replacement = rows.first(where: { $0.persistentModelID == previous.persistentModelID }) ?? Self.canonicalReplicas(from: rows).first {
-            var byID = presentationByID
-            notes[index] = replacement
-            byID?[id] = replacement; presentationByID = byID
-        }
         return rows
     }
 
@@ -1648,7 +1631,7 @@ final class NoteStore: ObservableObject {
             try Self.persistStoreContext(context, using: persist)
             #endif
             do {
-                try reloadModels(preservingAttachmentProofs: true, confirmedSource: context)
+                if try !WorkspaceLegacyBridge.wasPlainCommit(in: context) { try reloadModels(preservingAttachmentProofs: true) }
                 lastErrorMessage = nil
             } catch {
                 lastErrorMessage = "Saved, but presentation is still updating: \(error.localizedDescription)"
@@ -1656,6 +1639,10 @@ final class NoteStore: ObservableObject {
             registerSuccessfulLocalSave()
             return true
         } catch {
+            if error is WorkspaceLegacyBridge.CommitHeld {
+                lastErrorMessage = "The save outcome is still being checked. This note is held."
+                return false
+            }
             let saveError = error.localizedDescription
             context.rollback()
             do {
@@ -1668,73 +1655,8 @@ final class NoteStore: ObservableObject {
         }
     }
 
-    #if os(macOS)
-    /// The caller has one unchanged supported base and no attachment/version
-    /// obligation. Stage its immutable projection only in the fresh commit
-    /// context; mutating then copying a second full document was hot in PF1.
-    func commitPreparedAutosave(_ projection: PreparedNoteDocument, note: NoteItem,
-                                format: Int, timestamp: Date, revisionID: UUID, tags: String?) -> Bool {
-        let physicalID = note.persistentModelID, revision = note.revision
-        do {
-            try PerformanceSignposts.storeSave {
-                try WorkspaceLegacyBridge.persistPreparedNote(note, in: context, using: persist) { commit in
-                    guard let row = commit.model(for: physicalID) as? NoteItem else { throw WorkspaceFoundationError.conflict }
-                    Self.stageDocumentContent(projection, format: format, on: [row], timestamp: timestamp,
-                        revision: revision, revisionID: revisionID, tags: tags)
-                }
-            }
-            documentReplicaCapabilityCache[ObjectIdentifier(note)] = (revisionID, projection.content, true,
-                projection.attachmentBlocks, projection.hasTaskNote)
-            do { try reloadModels(preservingAttachmentProofs: true, confirmedSource: context); lastErrorMessage = nil }
-            catch { lastErrorMessage = "Saved, but presentation is still updating: \(error.localizedDescription)" }
-            registerSuccessfulLocalSave()
-            return true
-        } catch {
-            let saveError = error.localizedDescription
-            context.rollback()
-            do { try reloadModels(); lastErrorMessage = saveError }
-            catch { lastErrorMessage = "\(saveError) · Reload failed: \(error.localizedDescription)" }
-            return false
-        }
-    }
-
-    #endif
-
-    private func reloadModels(preservingAttachmentProofs: Bool = false, confirmedSource: ModelContext? = nil) throws {
-        // A long-lived ModelContext can return cached model instances after
-        // CloudKit updates the underlying store. Refresh through a new context
-        // so remote values replace the old objects instead of being written
-        // back to CloudKit by the next local save.
+    private func reloadModels(preservingAttachmentProofs: Bool = false) throws {
         let refreshedContext = try makeFreshContext()
-        if let confirmedSource {
-            let changedIDs = try WorkspaceLegacyBridge.confirmedPlainNoteWrites(in: confirmedSource)
-            _ = try WorkspaceLegacyBridge.presentationFollowingCommit(confirmedSource, freshContext: refreshedContext)
-            let previousByID = presentationByID ?? Dictionary(notes.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
-            if let changedIDs, changedIDs.isSubset(of: Set(previousByID.keys)) {
-                let ids = Array(changedIDs)
-                let changed = try refreshedContext.fetch(FetchDescriptor<NoteItem>(predicate: #Predicate { ids.contains($0.id) }))
-                // Lifecycle/insert/removal still rebuilds the complete view.
-                // Ordinary autosave re-reads only its complete physical family.
-                if Set(changed.map(\.id)) == changedIDs, changed.allSatisfy({ $0.deletedAt == nil }) {
-                    let replacements = Dictionary(uniqueKeysWithValues: Self.canonicalReplicas(from: changed).map { ($0.id, $0) })
-                    context = refreshedContext
-                    observeAttachmentContextWrites(refreshedContext)
-                    var updated = notes, byID = previousByID
-                    for (id, replacement) in replacements {
-                        if let previous = previousByID[id], let index = updated.firstIndex(where: { $0 === previous }) {
-                            updated[index] = replacement; byID[id] = replacement
-                        }
-                    }
-                    notes = updated; presentationByID = byID
-                    let retainedKeys = Set(updated.map { ObjectIdentifier($0) })
-                    let retainedProofs = preservingAttachmentProofs ? documentReplicaCapabilityCache.filter { retainedKeys.contains($0.key) } : [:]
-                    rebindDocumentCapabilities(to: changed, preserving: preservingAttachmentProofs)
-                    documentReplicaCapabilityCache.merge(retainedProofs) { fresh, _ in fresh }
-                    revision &+= 1
-                    return
-                }
-            }
-        }
         let presentation = try presentationSnapshot(in: refreshedContext)
         installPresentation(presentation, using: refreshedContext, preservingAttachmentProofs: preservingAttachmentProofs)
     }
@@ -1765,9 +1687,14 @@ final class NoteStore: ObservableObject {
         preservingAttachmentProofs: Bool = false
     ) {
         context = sourceContext
-        observeAttachmentContextWrites(sourceContext)
+        let sourceID = ObjectIdentifier(sourceContext)
+        WorkspaceLegacyBridge.observeForeignAttachmentWrites(in: sourceContext) { [weak self] ids in
+            guard let self, ObjectIdentifier(self.context) == sourceID else { return }
+            if let ids { self.invalidateAttachmentProofs(ids: ids) }
+            else { self.clearVerifiedAttachmentCache() }
+        }
         if !preservingAttachmentProofs { clearVerifiedAttachmentCache() }
-        rebindDocumentCapabilities(to: presentation.notes, preserving: preservingAttachmentProofs)
+        documentReplicaCapabilityCache.removeAll()
         try? WorkspaceLegacyBridge.establishScopeBaseline(sourceContext, roots: presentation.notes, entities: [.attachment, .version, .proposal, .association])
         let uniqueNotes = visibleUniqueNotes(from: presentation.notes)
         notes = uniqueNotes.filter { $0.deletedAt == nil }
@@ -1781,17 +1708,6 @@ final class NoteStore: ObservableObject {
         attachmentRetryVersions = attachmentRetryVersions.filter { availableIDs.contains($0.key) }
         revision &+= 1
         reconcileFileStorage(with: presentation.attachments)
-    }
-
-    private func rebindDocumentCapabilities(to rows: [NoteItem], preserving: Bool) {
-        guard preserving else { documentReplicaCapabilityCache.removeAll(); return }
-        let known = Array(documentReplicaCapabilityCache.values)
-        documentReplicaCapabilityCache = Dictionary(uniqueKeysWithValues: rows.compactMap { row in
-            // Only a known revision may have a reusable proof. Reading content
-            // first faults every unrelated note during each presentation refresh.
-            guard let proof = known.first(where: { $0.revisionID == row.revisionID && $0.content == row.content }) else { return nil }
-            return (ObjectIdentifier(row), proof)
-        })
     }
 
     private func persistImport(

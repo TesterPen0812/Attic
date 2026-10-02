@@ -430,7 +430,7 @@ final class WorkspaceCommitTests: XCTestCase {
         XCTAssertTrue(store.tasks.first { $0.id == other.id } === unchanged,
                       "isolated plain saves must not refetch unrelated presentation rows")
         let rebound = try XCTUnwrap(store.task(withID: other.id))
-        XCTAssertFalse(rebound === unchanged)
+        XCTAssertTrue(store.tasks.contains { $0 === rebound }, "the unrelated row is still presented and usable for the next staging")
         rebound.tagsRaw = "fixture"
         XCTAssertTrue(store.rename(rebound, to: "Other renamed"), store.lastErrorMessage ?? "No failure reason")
         let fresh = coordinator.freshContext()
