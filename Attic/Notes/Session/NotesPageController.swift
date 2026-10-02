@@ -285,9 +285,18 @@ final class NotesPageController: ObservableObject {
         guard await awaitRecoveryForUser() else { return false }
         guard await performAfterRecovery({ open(noteID: noteID) }) else { return false }
         if let session = active {
+            let engine = session.engine
+            // Text-only sessions have no bytes to hydrate. Inspect the
+            // attachment attribute instead of extracting all paragraphs.
+            // A refused Writing Tools rewrite still uses its safety snapshot.
+            if engine.activity == .idle,
+               !engine.rangeContainsObject(NSRange(location: 0, length: engine.textStorage.length)) {
+                session.verifiedDocumentAttachments.removeAll()
+                return true
+            }
             // Live sessions own the bytes used by synchronous copy/paste and
             // Undo; store-cache eviction cannot turn objects into plain text.
-            let engine = session.engine, document = engine.checkpointDocument()
+            let document = engine.checkpointDocument()
             let bytes = await performBoundedUserIO(completedAction: true) { [self] in
                 var verified: [UUID: StagedNoteAttachment] = [:]
                 for id in document.attachmentIDs {
@@ -1247,8 +1256,10 @@ final class NotesPageController: ObservableObject {
         session.refusedWritingToolsSinceSave = false
         updateWritingToolsAvailability(for: session)
         for item in staged { session.verifiedDocumentAttachments[item.id] = item }
-        let liveIDs = Set(session.engine.checkpointDocument().attachmentIDs)
-        session.verifiedDocumentAttachments = session.verifiedDocumentAttachments.filter { liveIDs.contains($0.key) }
+        if !session.verifiedDocumentAttachments.isEmpty {
+            let liveIDs = Set(session.engine.checkpointDocument().attachmentIDs)
+            session.verifiedDocumentAttachments = session.verifiedDocumentAttachments.filter { liveIDs.contains($0.key) }
+        }
         session.engine.forgetStaged(Set(staged.map(\.id)))
         clearRecoveryCopy(for: session)
         schedulePauseVersion(session)

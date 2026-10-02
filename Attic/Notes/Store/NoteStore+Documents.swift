@@ -174,6 +174,7 @@ struct PreparedNoteDocument: Sendable {
     let fileCount: Int
     let firstFileName: String?
     let admissionIDs: Set<UUID>?
+    let attachmentBlocks: [NoteBlock]
 
     init(_ document: NoteDocument) throws {
         content = try NoteContentCodec.encode(document)
@@ -181,9 +182,10 @@ struct PreparedNoteDocument: Sendable {
         title = NoteStore.normalizedTitle(document.title)
         body = NoteTextExport.plainBody(document)
         plainText = NoteTextExport.plainText(document)
-        imageCount = document.blocks.filter { $0.kind == .image }.count
-        fileCount = document.blocks.filter { $0.kind == .file }.count
-        firstFileName = document.blocks.first { $0.kind == .file }?.filename
+        attachmentBlocks = document.blocks.filter { $0.kind == .image || $0.kind == .file }
+        imageCount = attachmentBlocks.filter { $0.kind == .image }.count
+        fileCount = attachmentBlocks.filter { $0.kind == .file }.count
+        firstFileName = attachmentBlocks.first { $0.kind == .file }?.filename
     }
 }
 
@@ -318,9 +320,11 @@ extension NoteStore {
                    cached.revisionID == replica.revisionID, cached.content == data {
                     editable = cached.editable
                 } else {
-                    editable = NoteContentCodec.decode(data).isEditable
+                    let decoded = NoteContentCodec.decode(data)
+                    editable = decoded.isEditable
                     countDocumentReplicaDecode()
-                    documentReplicaCapabilityCache[key] = (replica.revisionID, data, editable)
+                    documentReplicaCapabilityCache[key] = (replica.revisionID, data, editable,
+                        decoded.document?.blocks.filter { $0.kind == .image || $0.kind == .file } ?? [])
                 }
                 guard editable else {
                     throw NoteDocumentStoreError.readOnly
@@ -467,7 +471,7 @@ extension NoteStore {
         let note = NoteItem(id: id, createdAt: timestamp, updatedAt: timestamp)
         let revisionID: UUID
         do {
-            revisionID = try stage(document, on: [note], timestamp: timestamp, revision: 0, prepared: projection,
+            revisionID = stageValidated(document, on: [note], timestamp: timestamp, revision: 0, projection: projection,
                                    tags: tags.map(AtticTag.encode))
             Self.stageAttachments(attachmentPlan, noteID: id, context: context, timestamp: timestamp)
         } catch let error as NoteDocumentStoreError {
@@ -541,11 +545,22 @@ extension NoteStore {
         // in-memory object graph on every supported macOS version.
         let projection: PreparedNoteDocument
         let attachmentPlan: NoteAttachmentAdmission.Plan
+        let base: NoteDocument
+        let placements: NoteDocument
         do {
             guard document.isWritableByThisBuild else { throw NoteDocumentStoreError.readOnly }
             projection = try prepared ?? PreparedNoteDocument(document)
-            let base = main.content.flatMap { NoteContentCodec.decode($0).document }
-            attachmentPlan = try attachmentStagePlan(staged, referencedBy: document, noteID: noteID,
+            // Preflight already proved these exact bytes editable. Local
+            // staging also records the placements with the bytes it writes.
+            // Re-decoding the entire body here (and again for removed IDs)
+            // made every prepared autosave block main for hundreds of ms.
+            guard let cached = documentReplicaCapabilityCache[ObjectIdentifier(main)], cached.editable,
+                  cached.revisionID == main.revisionID, cached.content == main.content else {
+                throw NoteDocumentStoreError.readOnly
+            }
+            base = NoteDocument(blocks: cached.attachmentBlocks)
+            placements = NoteDocument(blocks: projection.attachmentBlocks)
+            attachmentPlan = try attachmentStagePlan(staged, referencedBy: placements, noteID: noteID,
                 previouslyReferencedBy: base)
         } catch let error as NoteDocumentStoreError {
             return .failure(error)
@@ -555,17 +570,18 @@ extension NoteStore {
         let timestamp = currentDate
         let context = modelContext
         try? WorkspaceLegacyBridge.coordinator(for: modelContext.container).observePreparedDocument(projection)
-        let priorIDs = Set((NoteContentCodec.decode(main.content ?? Data()).document)?.attachmentIDs ?? [])
-        let removedIDs = priorIDs.subtracting(document.attachmentIDs)
+        let priorIDs = Set(base.attachmentIDs)
+        let removedIDs = priorIDs.subtracting(placements.attachmentIDs)
         do {
             try stageDisplacedReplicas(replicas, reason: .replacedByDraft, timestamp: timestamp,
                                       excludingUnchangedBase: removedIDs.isEmpty ? baseRevisionID : nil)
-            let revisionID = try stage(document, on: replicas, timestamp: timestamp,
-                                       revision: replicas.map(\.revision).max() ?? 0, prepared: projection,
+            let revisionID = stageValidated(document, on: replicas, timestamp: timestamp,
+                                       revision: replicas.map(\.revision).max() ?? 0, projection: projection,
                                        tags: encodedTags)
             Self.stageAttachments(attachmentPlan, noteID: noteID, context: context, timestamp: timestamp)
-            let visibilityChanged = try stageAttachmentVisibility(referencedBy: document, noteID: noteID,
-                timestamp: timestamp)
+            let visibilityChanged = try stageAttachmentVisibility(referencedBy: placements, noteID: noteID,
+                timestamp: timestamp, rows: attachmentPlan.existingRows)
+
             guard commitStagedChanges() else {
                 return .failure(.saveFailed(lastErrorMessage ?? "The note could not be saved."))
             }
@@ -590,11 +606,19 @@ extension NoteStore {
         let projection: PreparedNoteDocument
         do { projection = try prepared ?? PreparedNoteDocument(document) }
         catch { throw NoteDocumentStoreError.encodingFailed(error.localizedDescription) }
+        return stageValidated(document, on: replicas, timestamp: timestamp, revision: revision,
+                              projection: projection, tags: tags)
+    }
+
+    /// Both save entry points have already checked writability and prepared
+    /// the projection before admission. Agent paths use `stage` above.
+    private func stageValidated(_ document: NoteDocument, on replicas: [NoteItem], timestamp: Date, revision: Int64,
+                                projection: PreparedNoteDocument, tags: String? = nil) -> UUID {
         let revisionID = UUID()
         Self.stageDocumentContent(projection, format: document.format, on: replicas,
                                   timestamp: timestamp, revision: revision, revisionID: revisionID, tags: tags)
         for replica in replicas {
-            documentReplicaCapabilityCache[ObjectIdentifier(replica)] = (revisionID, projection.content, true)
+            documentReplicaCapabilityCache[ObjectIdentifier(replica)] = (revisionID, projection.content, true, projection.attachmentBlocks)
         }
         return revisionID
     }
@@ -627,6 +651,7 @@ extension NoteStore {
             let new: [StagedNoteAttachment]
             let nextSortIndex: Int64
             let repairs: [(NoteAttachment, StagedNoteAttachment)]
+            let existingRows: [NoteAttachment]
         }
 
         static func evaluate(_ staged: [StagedNoteAttachment], referencedBy document: NoteDocument,
@@ -663,7 +688,7 @@ extension NoteStore {
             guard let id = block.attachmentID, block.kind == .image || block.kind == .file else { return nil }
             return (id, block)
         }, by: { $0.0 })
-        let unchangedMissing = document.blocks.filter { $0.attachmentID.map(missing.contains) == true }.allSatisfy { block in
+        let unchangedMissing = missing.isEmpty || document.blocks.filter { $0.attachmentID.map(missing.contains) == true }.allSatisfy { block in
             guard let id = block.attachmentID, let originals = baseBlocks[id] else { return false }
             return originals.contains { pair in
                 let original = pair.1
@@ -699,7 +724,7 @@ extension NoteStore {
               totalBytes <= AttachmentLimits.maxBytesPerNote || noIncrease else {
             throw NoteDocumentStoreError.invalidDocument("This batch exceeds the note's attachment limits.")
         }
-        return Plan(new: new, nextSortIndex: (rows.map(\.sortIndex).max() ?? -1) &+ 1, repairs: repairs)
+        return Plan(new: new, nextSortIndex: (rows.map(\.sortIndex).max() ?? -1) &+ 1, repairs: repairs, existingRows: rows)
         }
     }
 
@@ -756,10 +781,10 @@ extension NoteStore {
     /// again; purge waits for versions, drafts and proposals to release it.
     @discardableResult
     private func stageAttachmentVisibility(referencedBy document: NoteDocument, noteID: UUID,
-                                           timestamp: Date) throws -> Bool {
+                                           timestamp: Date, rows: [NoteAttachment]? = nil) throws -> Bool {
         let shown = Set(document.attachmentIDs)
         var changed = false
-        for row in try attachmentRows(forNoteID: noteID) {
+        for row in try rows ?? attachmentRows(forNoteID: noteID) {
             if shown.contains(row.id) {
                 if row.deletedAt != nil {
                     changed = true
