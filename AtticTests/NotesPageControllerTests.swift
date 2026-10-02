@@ -164,7 +164,22 @@ final class NotesPageControllerTests: XCTestCase {
     }
 
     func testMeasuredMainActorSaveOnFiveThousandLineNote() async throws {
-        _ = try await measureMainActorSave()
+        assertSaveBaseline(try await measureMainActorSave())
+    }
+
+    // Local configuration, macos-26, same macos-ci.yml unit-test lane:
+    // runs 36527558056 / 36531130649 / 36538797706 / 36551941396
+    // save medians: 50.459750 / 55.323833 / 48.480458 / 45.781292 ms;
+    // prepared: 5.300167 / 6.087083 / 5.395000 / 4.907000 ms.
+    // Gate = largest baseline median + the observed max-minus-min spread.
+    // This permits one observed spread of runner noise, not a new budget.
+    private let saveMedianLimit = 55.323833 + (55.323833 - 45.781292)
+    private let preparedMedianLimit = 6.087083 + (6.087083 - 4.907000)
+
+    private func assertSaveBaseline(_ sample: (save: Double, prepared: Double),
+                                    file: StaticString = #filePath, line: UInt = #line) {
+        XCTAssertLessThanOrEqual(sample.save, saveMedianLimit, "Main-actor save regressed", file: file, line: line)
+        XCTAssertLessThanOrEqual(sample.prepared, preparedMedianLimit, "Prepared commit regressed", file: file, line: line)
     }
 
     func testMeasuredMainActorSaveIsIndependentOfUnrelatedStoreContents() async throws {
@@ -173,6 +188,58 @@ final class NotesPageControllerTests: XCTestCase {
         let populated = try await measureMainActorSave(label: "POPULATED")
         print("NOTE_STORE_SCALING_SAVE_RATIO=\(populated.save / empty.save)")
         print("NOTE_STORE_SCALING_PREPARED_RATIO=\(populated.prepared / empty.prepared)")
+        assertSaveBaseline(empty)
+        assertSaveBaseline(populated)
+        // The same four baseline runs' prepared maxima were 5.980709,
+        // 6.499917, 6.568041 and 8.652083 ms. Allow their observed spread
+        // for the paired store-size comparison, including sample jitter.
+        XCTAssertLessThanOrEqual(populated.prepared - empty.prepared, 8.652083 - 5.980709,
+                                 "Unrelated notes, history and bytes must not enter an autosave")
+        XCTAssertLessThanOrEqual(populated.save - empty.save, 55.323833 - 45.781292,
+                                 "Main-actor save must stay independent of unrelated store contents")
+    }
+
+    func testMeasuredColdOpenAndLaunchWithFiveThousandLineNote() async throws {
+        let document = NoteDocument(blocks: (0..<5_000).map { .text("Line \($0) with ordinary note text") })
+        guard case let .success((id, _)) = store.createDocumentNote(id: UUID(), document: document) else {
+            return XCTFail("large note fixture")
+        }
+        let suite = "AtticNoteLaunchPerf.\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        var opens: [Double] = [], hydration: [Double] = [], launches: [Double] = [], initializations: [Double] = []
+        func ms(since start: UInt64) -> Double {
+            Double(DispatchTime.now().uptimeNanoseconds - start) / 1_000_000
+        }
+        for _ in 0..<8 {
+            let controller = makeController()
+            await controller.startAndWait()
+            let openStart = DispatchTime.now().uptimeNanoseconds
+            XCTAssertTrue(controller.open(noteID: id))
+            opens.append(ms(since: openStart))
+            let hydrateStart = DispatchTime.now().uptimeNanoseconds
+            let extractionCount = try XCTUnwrap(controller.active).engine.documentExtractionCount
+            await XCTAssertTrueAsync(await controller.openDurably(noteID: id))
+            hydration.append(ms(since: hydrateStart))
+            XCTAssertEqual(controller.active?.engine.documentExtractionCount, extractionCount,
+                           "Opening text-only notes must not serialize their entire body for byte hydration")
+            defaults.set(id.uuidString, forKey: "notes.lastViewedNote.v2")
+            let launchStart = DispatchTime.now().uptimeNanoseconds
+            let launched = NotesPageController(store: store, journal: NoteDraftJournal(directory: directory),
+                                               defaults: defaults, saveDelay: .seconds(60))
+            await launched.startAndWait()
+            launches.append(ms(since: launchStart))
+            XCTAssertEqual(launched.active?.noteID, id)
+            let initStart = DispatchTime.now().uptimeNanoseconds
+            let reopened = NoteStore(container: store.container, attachmentFileStore: makeTestAttachmentFileStore())
+            initializations.append(ms(since: initStart))
+            XCTAssertEqual(reopened.notes.count, 1)
+            await reopened.waitForAttachmentReconciliation()
+        }
+        for (name, samples) in [("COLD_OPEN_5000_LINES", opens), ("OPEN_HYDRATION_5000_LINES", hydration),
+                                 ("LAUNCH_LAST_NOTE_5000_LINES", launches), ("STORE_INIT", initializations)] {
+            print("NOTE_\(name)_MS_MEDIAN=\(samples.sorted()[samples.count / 2]) MAX=\(samples.max()!)")
+        }
     }
 
     private func populatePerformanceStore() async throws {
