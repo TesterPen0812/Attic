@@ -100,6 +100,7 @@ final class NoteSession: ObservableObject, Identifiable {
     fileprivate var cancellingImport = false
     fileprivate var refusedWritingToolsSinceSave = false
     fileprivate var saveTask: Task<Void, Never>?
+    fileprivate var durabilityTask: Task<Void, Never>?
     fileprivate var pauseTask: Task<Void, Never>?
     /// The recovery checkpoint this session wrote or adopted. Only its
     /// holder may replace or retire a checkpoint holding unsaved work.
@@ -185,6 +186,7 @@ final class NotesPageController: ObservableObject {
     let journal: NoteDraftJournaling?
     private let defaults: UserDefaults?
     private let saveDelay: Duration
+    private let durabilityDelay: Duration
     private let pauseVersionDelay: Duration
     private let now: () -> Date
     let imageLoader: @Sendable (URL) async -> (StagedNoteAttachment, CGSize?)?
@@ -414,7 +416,7 @@ final class NotesPageController: ObservableObject {
     private static func viewStateKey(_ id: UUID) -> String { "notes.viewState.\(id.uuidString)" }
 
     init(store: NoteStore, journal: NoteDraftJournaling?, defaults: UserDefaults? = nil,
-         saveDelay: Duration = .milliseconds(300), pauseVersionDelay: Duration = .seconds(120),
+         saveDelay: Duration = .milliseconds(300), durabilityDelay: Duration = .seconds(5), pauseVersionDelay: Duration = .seconds(120),
          now: @escaping () -> Date = Date.init,
          imageLoader: @escaping @Sendable (URL) async -> (StagedNoteAttachment, CGSize?)? = { url in
              await NotesPageController.loadImageFile(url)
@@ -429,6 +431,7 @@ final class NotesPageController: ObservableObject {
         self.journal = journal
         self.defaults = defaults
         self.saveDelay = saveDelay
+        self.durabilityDelay = durabilityDelay
         self.pauseVersionDelay = pauseVersionDelay
         self.now = now
         self.imageLoader = imageLoader
@@ -846,6 +849,7 @@ final class NotesPageController: ObservableObject {
         }) {
             recency.removeAll { $0 == evict }
             cache[evict]?.saveTask?.cancel()
+            cache[evict]?.durabilityTask?.cancel()
             cache[evict]?.pauseTask?.cancel()
             cache[evict]?.engine.detachView()
             cache[evict] = nil
@@ -1079,6 +1083,7 @@ final class NotesPageController: ObservableObject {
         session.lastEditAt = now()
         updateWritingToolsAvailability(for: session)
         scheduleSave(session)
+        scheduleDurabilityDeadline(session)
     }
 
     private func scheduleSave(_ session: NoteSession) {
@@ -1091,6 +1096,26 @@ final class NotesPageController: ObservableObject {
         }
     }
 
+    /// Typing may reset the coalescing timer, but never this session's deadline.
+    private func scheduleDurabilityDeadline(_ session: NoteSession) {
+        guard session.durabilityTask == nil, NoteSessionPolicy.hasPendingWork(session.state) else { return }
+        let delay = durabilityDelay
+        session.durabilityTask = Task { @MainActor [weak self, weak session] in
+            do { try await Task.sleep(for: delay) } catch { return }
+            guard let self, let session, !Task.isCancelled else { return }
+            await self.runDurabilityDeadline(session)
+            guard !Task.isCancelled else { return }
+            session.durabilityTask = nil
+            self.scheduleDurabilityDeadline(session)
+        }
+    }
+
+    func runDurabilityDeadline(_ session: NoteSession) async {
+        await runDueSaveWork(session, isDeadline: true)
+        await waitForRecoveryWork()
+        checkpointKeys[session.id] = nil
+    }
+
     /// The timer body is separate so the lifecycle matrix can fire it without
     /// wall-clock waits; production still waits for the coalescing delay.
     func runDueSave(_ session: NoteSession) async {
@@ -1099,7 +1124,8 @@ final class NotesPageController: ObservableObject {
         checkpointKeys[session.id] = nil
     }
 
-    private func runDueSaveWork(_ session: NoteSession) async {
+    private func runDueSaveWork(_ session: NoteSession, isDeadline: Bool = false) async {
+        guard NoteSessionPolicy.hasPendingWork(session.state) else { return }
         session.engine.refreshCompositionActivity()
         if session.isImporting { _ = checkpoint(session, silent: true); return }
         if NoteSessionPolicy.dueSaveAction(session.state, activity: session.engine.activity,
@@ -1109,13 +1135,19 @@ final class NotesPageController: ObservableObject {
         }
         let generation = session.editGeneration
         let noteID = session.noteID
+        let engine = session.engine
+        let baseRevisionID = session.baseRevisionID
+        let tags = session.engine.tags
         let document = session.engine.document()
         let staged = session.engine.stagedAttachments(for: document)
         let prepared = await prepareDocument(document)
-        guard !Task.isCancelled, generation == session.editGeneration, noteID == session.noteID else { return }
+        guard !Task.isCancelled, noteID == session.noteID, engine === session.engine,
+              baseRevisionID == session.baseRevisionID,
+              isDeadline || generation == session.editGeneration else { return }
         if session.isImporting { _ = checkpoint(session, silent: true); return }
         guard let prepared else { _ = preserve(session); return }
-        if !save(session, snapshot: document, stagedSnapshot: staged, prepared: prepared) {
+        if !save(session, snapshot: document, stagedSnapshot: staged, prepared: prepared,
+                 tagsSnapshot: tags, retainingNewerEdits: generation != session.editGeneration) {
             _ = preserve(session)
         }
     }
@@ -1124,7 +1156,8 @@ final class NotesPageController: ObservableObject {
     /// content is not written (and counts as saved).
     @discardableResult
     func save(_ session: NoteSession, snapshot: NoteDocument? = nil,
-              stagedSnapshot: [StagedNoteAttachment]? = nil, prepared: PreparedNoteDocument? = nil) -> Bool {
+              stagedSnapshot: [StagedNoteAttachment]? = nil, prepared: PreparedNoteDocument? = nil,
+              tagsSnapshot: [String]? = nil, retainingNewerEdits: Bool = false) -> Bool {
         guard !session.isImporting else { return checkpoint(session, silent: true) }
         guard canCommit(session) else { return false }
         guard NoteSessionPolicy.hasPendingWork(session.state) else { return true }
@@ -1132,7 +1165,7 @@ final class NotesPageController: ObservableObject {
         let engine = session.engine
         let document = snapshot ?? engine.document()
         let staged = stagedSnapshot ?? engine.stagedAttachments(for: document)
-        let tags = session.engine.tags
+        let tags = tagsSnapshot ?? session.engine.tags
         if !session.isPersisted {
             guard !document.isEmpty || !document.objectIDs.isEmpty || !tags.isEmpty else {
                 session.state = .untouched
@@ -1144,7 +1177,7 @@ final class NotesPageController: ObservableObject {
                 session.isPersisted = true
                 session.baseRevisionID = revisionID
                 session.baseTags = tags
-                didSave(session, staged: staged)
+                didSave(session, staged: staged, retainingNewerEdits: retainingNewerEdits)
                 remember(noteID)
                 return true
             case .failure(.noteMissing):
@@ -1157,14 +1190,14 @@ final class NotesPageController: ObservableObject {
                 return false
             }
         }
-        let pendingTags = session.pendingTags
+        let pendingTags = tags == session.baseTags ? nil : tags
         switch store.saveDocument(noteID: session.noteID, document: document,
                                   baseRevisionID: session.baseRevisionID, staged: staged, prepared: prepared,
                                   tags: pendingTags) {
         case let .success(revisionID):
             session.baseRevisionID = revisionID
             if let pendingTags { session.baseTags = pendingTags }
-            didSave(session, staged: staged)
+            didSave(session, staged: staged, retainingNewerEdits: retainingNewerEdits)
             return true
         case .failure(.noteMissing):
             session.state = .conflict(.deleted)
@@ -1244,9 +1277,13 @@ final class NotesPageController: ObservableObject {
         return true
     }
 
-    private func didSave(_ session: NoteSession, staged: [StagedNoteAttachment]) {
+    private func didSave(_ session: NoteSession, staged: [StagedNoteAttachment], retainingNewerEdits: Bool = false) {
         captureViewState(session)
-        session.state = .clean
+        session.state = retainingNewerEdits ? .dirty : .clean
+        if !retainingNewerEdits {
+            session.durabilityTask?.cancel()
+            session.durabilityTask = nil
+        }
         session.refusedWritingToolsSinceSave = false
         updateWritingToolsAvailability(for: session)
         for item in staged { session.verifiedDocumentAttachments[item.id] = item }
@@ -1255,7 +1292,7 @@ final class NotesPageController: ObservableObject {
             session.verifiedDocumentAttachments = session.verifiedDocumentAttachments.filter { liveIDs.contains($0.key) }
         }
         session.engine.forgetStaged(Set(staged.map(\.id)))
-        clearRecoveryCopy(for: session)
+        if !retainingNewerEdits { clearRecoveryCopy(for: session) }
         schedulePauseVersion(session)
     }
 
@@ -2288,6 +2325,7 @@ extension NotesPageController {
         }
         if let session {
             session.saveTask?.cancel()
+            session.durabilityTask?.cancel()
             session.pauseTask?.cancel()
             cache[noteID] = nil
         }

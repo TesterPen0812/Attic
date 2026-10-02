@@ -129,6 +129,57 @@ final class NotesPageControllerTests: XCTestCase {
         XCTAssertEqual(Set(session.engine.tags), ["picker", "external"])
     }
 
+    func testContinuousTypingReachesTheProductionDiskJournalWithoutAPause() async throws {
+        let controller = NotesPageController(store: store, journal: NoteDraftJournal(directory: directory))
+        await controller.startAndWait()
+        let session = try XCTUnwrap(controller.active)
+        gate.shouldFail = true
+        // Every edit cancels the 300 ms timer. The independent five-second
+        // deadline must still checkpoint through the real disk I/O actor.
+        for _ in 0..<60 {
+            type("x", into: session)
+            try await Task.sleep(for: .milliseconds(100))
+        }
+        await controller.waitForRecoveryWork()
+        let entries = try await NoteDraftJournal(directory: directory).entriesDurably()
+        let saved = try XCTUnwrap(entries.first)
+        let checkpoint = try XCTUnwrap(NoteContentCodec.decode(saved.0.content).document)
+        XCTAssertGreaterThanOrEqual(checkpoint.title.count, 40)
+        XCTAssertLessThan(checkpoint.title.count, session.engine.document().title.count)
+        XCTAssertTrue(NoteSessionPolicy.hasPendingWork(session.state))
+        // Simulated process loss: a new controller and journal, without
+        // flushing the newer in-memory edits, read the production checkpoint.
+        let reopened = NotesPageController(store: store, journal: NoteDraftJournal(directory: directory),
+                                            saveDelay: .seconds(60))
+        await reopened.startAndWait()
+        XCTAssertEqual(reopened.active?.engine.document(), checkpoint)
+    }
+
+    func testDeadlineCommitsItsPreparedSnapshotAndLeavesNewerTextAndTagsDirty() async throws {
+        let controller = NotesPageController(store: store, journal: NoteDraftJournal(directory: directory),
+            saveDelay: .seconds(60), prepareDocument: { document in
+                try? await Task.sleep(for: .milliseconds(100))
+                return try? PreparedNoteDocument(document)
+            })
+        await controller.startAndWait()
+        let session = try XCTUnwrap(controller.active)
+        type("First", into: session)
+        session.engine.setTags(["first"])
+        let deadline = Task { await controller.runDurabilityDeadline(session) }
+        try await Task.sleep(for: .milliseconds(30))
+        type(" second", into: session)
+        session.engine.setTags(["second"])
+        await deadline.value
+        XCTAssertEqual(store.note(withID: session.noteID)?.title, "First")
+        XCTAssertEqual(store.note(withID: session.noteID)?.tags, ["first"])
+        XCTAssertEqual(session.engine.document().title, "First second")
+        XCTAssertTrue(NoteSessionPolicy.hasPendingWork(session.state))
+        await controller.runDueSave(session)
+        XCTAssertEqual(store.note(withID: session.noteID)?.title, "First second")
+        XCTAssertEqual(store.note(withID: session.noteID)?.tags, ["second"])
+        XCTAssertFalse(NoteSessionPolicy.hasPendingWork(session.state))
+    }
+
     func testTypingIsSavedWithinTheCoalescingDelay() async throws {
         let controller = makeController(delay: .milliseconds(50))
         await controller.startAndWait()
