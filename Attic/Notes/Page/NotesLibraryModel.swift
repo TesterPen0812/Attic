@@ -1,3 +1,4 @@
+import Combine
 import Foundation
 import SwiftUI
 
@@ -32,6 +33,7 @@ final class NotesLibraryModel: ObservableObject {
     @Published private(set) var matches: Set<UUID>?
     /// The query `matches` answers.
     @Published private(set) var matchedQuery = ""
+    @Published private(set) var matchedRevision: UInt64?
     @Published private(set) var searchState: SearchState = .idle
     /// A search running long enough to show that it is running.
     @Published private(set) var showsLoading = false
@@ -47,6 +49,10 @@ final class NotesLibraryModel: ObservableObject {
     private let calendar: Calendar
     private var searchTask: Task<Void, Never>?
     private var loadingTask: Task<Void, Never>?
+    private weak var observedStore: NoteStore?
+    private var storeSubscription: AnyCancellable?
+    private var storeRevision: UInt64 = 0
+    private var searchGeneration: UInt64 = 0
     private var cache: (key: RowsKey, groups: [Group])?
 
     private struct RowsKey: Equatable {
@@ -57,11 +63,33 @@ final class NotesLibraryModel: ObservableObject {
         let day: Int
     }
 
-    init(search: @escaping (String) async throws -> Set<UUID>, now: @escaping () -> Date = Date.init,
+    init(search: @escaping (String) async throws -> Set<UUID>, store: NoteStore? = nil, now: @escaping () -> Date = Date.init,
          calendar: Calendar = .autoupdatingCurrent) {
         self.search = search
         self.now = now
         self.calendar = calendar
+        if let store { observeStore(store) }
+    }
+
+    private func observeStore(_ store: NoteStore) {
+        guard observedStore !== store else { return }
+        observedStore = store
+        storeRevision = store.revision
+        storeSubscription = store.$revision.sink { [weak self] revision in
+            guard let self, revision != self.storeRevision else { return }
+            self.storeRevision = revision
+            self.cache = nil
+            if self.isSearching { self.scheduleSearch() }
+        }
+        if isSearching { scheduleSearch() }
+    }
+
+    func waitForSearch() async {
+        var generation: UInt64
+        repeat {
+            generation = searchGeneration
+            await searchTask?.value
+        } while generation != searchGeneration
     }
 
     var isSearching: Bool { !query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
@@ -73,11 +101,14 @@ final class NotesLibraryModel: ObservableObject {
 
     private func scheduleSearch(immediately: Bool = false) {
         searchTask?.cancel()
+        searchGeneration &+= 1
+        let generation = searchGeneration, revision = storeRevision
         let text = query.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !text.isEmpty else {
             loadingTask?.cancel()
             matches = nil
             matchedQuery = ""
+            matchedRevision = nil
             searchState = .idle
             showsLoading = false
             return
@@ -96,7 +127,9 @@ final class NotesLibraryModel: ObservableObject {
             guard !Task.isCancelled else { return }
             do {
                 let found = try await run(text)
-                guard !Task.isCancelled, let self else { return }
+                guard !Task.isCancelled, let self, self.searchGeneration == generation,
+                      self.storeRevision == revision,
+                      self.query.trimmingCharacters(in: .whitespacesAndNewlines) == text else { return }
                 // A highlight on a row the results no longer show goes.
                 if let highlighted = self.highlightedID, !found.contains(highlighted),
                    self.failedDraftText(highlighted)?.localizedStandardContains(text) != true {
@@ -104,9 +137,12 @@ final class NotesLibraryModel: ObservableObject {
                 }
                 self.matches = found
                 self.matchedQuery = text
+                self.matchedRevision = revision
                 self.searchState = .idle
             } catch {
-                guard !Task.isCancelled, let self else { return }
+                guard !Task.isCancelled, let self, self.searchGeneration == generation,
+                      self.storeRevision == revision,
+                      self.query.trimmingCharacters(in: .whitespacesAndNewlines) == text else { return }
                 self.searchState = .failed(error.localizedDescription)
             }
             self?.loadingTask?.cancel()
@@ -121,6 +157,7 @@ final class NotesLibraryModel: ObservableObject {
     /// while searching. Drafts that were never saved (a failed first save)
     /// lead the list with their warning.
     func groups(store: NoteStore, drafts: [NoteSession]) -> [Group] {
+        observeStore(store)
         let attention = Set(drafts.map(\.noteID))
         let unsaved = drafts.filter { store.note(withID: $0.noteID) == nil }
         let searching = isSearching

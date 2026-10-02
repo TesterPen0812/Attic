@@ -663,6 +663,72 @@ final class NotesLibraryModelTests: XCTestCase {
         XCTAssertEqual(found, [title, body])
     }
 
+    func testActiveSearchRerunsAfterAgentEditsAndNoteMembershipChanges() async throws {
+        let old = try create("quartz", daysAgo: 0), other = try create("Other", daysAgo: 0)
+        let model = NotesLibraryModel(search: { [store] text in try await store!.searchNoteIDs(matching: text) }, store: store)
+        model.query = "quartz"
+        await model.waitForSearch()
+        XCTAssertEqual(model.matches, [old])
+        func write(_ id: UUID, _ title: String) throws {
+            let token = try XCTUnwrap(store.note(withID: id)?.revisionToken)
+            guard case .success = store.agentWrite(noteID: id, baseRevisionToken: token,
+                document: NoteDocument(blocks: [.text(title)]), agentName: "Agent", disposition: .direct) else { return XCTFail() }
+        }
+        try write(other, "quartz arrived")
+        await model.waitForSearch()
+        XCTAssertEqual(model.matches, [old, other])
+        try write(old, "No longer matches")
+        await model.waitForSearch()
+        XCTAssertEqual(model.matches, [other])
+        XCTAssertEqual(model.groups(store: store, drafts: []).flatMap { $0.rows.map(\.id) }, [other])
+        let added = try create("new quartz", daysAgo: 0)
+        await model.waitForSearch(); XCTAssertEqual(model.matches, [other, added])
+        XCTAssertTrue(store.delete(try XCTUnwrap(store.note(withID: other))))
+        await model.waitForSearch(); XCTAssertEqual(model.matches, [added])
+        XCTAssertEqual(model.matchedRevision, store.revision)
+    }
+
+    func testActiveSearchRerunsWhenAnAttachmentFilenameChanges() async throws {
+        let bytes = Data("payload".utf8)
+        let file = StagedNoteAttachment(id: UUID(), filename: "plain.pdf", contentTypeIdentifier: "com.adobe.pdf",
+            byteCount: Int64(bytes.count), digest: NotePayloadDigest.sha256(bytes), data: bytes)
+        guard case let .success((id, _)) = store.createDocumentNote(id: UUID(),
+            document: NoteDocument(blocks: [.text("Files"), .file(attachmentID: file.id, filename: file.filename,
+                contentTypeIdentifier: file.contentTypeIdentifier, byteCount: file.byteCount)]), staged: [file]) else { return XCTFail() }
+        let model = NotesLibraryModel(search: { [store] text in try await store!.searchNoteIDs(matching: text) }, store: store)
+        model.query = "quartz"; await model.waitForSearch(); XCTAssertEqual(model.matches, [])
+        let row = try XCTUnwrap(store.attachmentRows(forNoteID: id).first)
+        row.originalFilename = "quartz.pdf"; XCTAssertTrue(store.commitStagedChanges())
+        await model.waitForSearch(); XCTAssertEqual(model.matches, [id])
+        row.originalFilename = "plain.pdf"; XCTAssertTrue(store.commitStagedChanges())
+        await model.waitForSearch(); XCTAssertEqual(model.matches, [])
+    }
+
+    func testOldSearchCompletionsCannotReplaceANewerStoreRevisionOrQuery() async throws {
+        let old = try create("old", daysAgo: 0), new = try create("new", daysAgo: 0)
+        var requests: [CheckedContinuation<Set<UUID>, Error>] = []
+        let model = NotesLibraryModel(search: { _ in
+            try await withCheckedThrowingContinuation { requests.append($0) }
+        }, store: store)
+        func waitForRequests(_ count: Int) async throws {
+            for _ in 0..<100 {
+                if requests.count >= count { return }
+                try await Task.sleep(for: .milliseconds(10))
+            }
+            XCTFail("search did not start")
+        }
+        model.query = "quartz"; try await waitForRequests(1)
+        _ = try create("Another", daysAgo: 0); try await waitForRequests(2)
+        requests[1].resume(returning: [new]); await model.waitForSearch()
+        let revision = model.matchedRevision
+        requests[0].resume(returning: [old])
+        try await Task.sleep(for: .milliseconds(20))
+        XCTAssertEqual(model.matches, [new]); XCTAssertEqual(model.matchedRevision, revision)
+        model.query = "granite"; try await waitForRequests(3)
+        model.clearSearch(); requests[2].resume(returning: [old]); await model.waitForSearch()
+        XCTAssertNil(model.matches); XCTAssertNil(model.matchedRevision); XCTAssertEqual(model.matchedQuery, "")
+    }
+
     func testTimesReadAsTimeWeekdayOrDay() async {
         var calendar = Calendar(identifier: .gregorian)
         calendar.timeZone = TimeZone(identifier: "UTC")!
