@@ -207,8 +207,11 @@ final class AtticLibrary {
                 name: "Change Task State",
                 undoOutcome: { store.undoReturnFromDoneLog(from: [after], to: [before], logging: [id: loggedAt]) },
                 redoOutcome: {
-                    store.restoreAndUpdateTask(id, title: title, priority: priority, status: status,
-                                               tags: tags, dueDay: dueDay) ? .applied : .failed
+                    // Undo may restore fields but leave a changed family
+                    // live. That compound restoration no longer applies.
+                    guard store.listedTask(withID: id)?.doneLoggedAt != nil else { return .obsolete }
+                    return store.restoreAndUpdateTask(id, title: title, priority: priority, status: status,
+                                                      tags: tags, dueDay: dueDay) ? .applied : .failed
                 }
             )
         }

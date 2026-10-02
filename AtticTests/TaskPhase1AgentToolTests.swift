@@ -239,6 +239,30 @@ final class TaskPhase1AgentToolTests: XCTestCase {
         XCTAssertEqual(store.task(withID: parentID)?.title, "Committed")
     }
 
+    func testCompoundRedoIsDroppedWhenUndoCannotReturnChangedFamilyToDoneLog() throws {
+        let gate = PersistenceGate()
+        store = try makeTestStore(now: { [clock] in clock.value }, persist: gate.save)
+        library = AtticLibrary(tasks: store)
+        tools = AgentTaskTools(store: store, library: library)
+        let (parentID, childID) = try archivedFamily(in: store)
+        let before = try XCTUnwrap(store.listedEditableState(of: parentID))
+        _ = try call("update_task", ["id": parentID.uuidString, "state": "inProgress", "title": "Changed"])
+        let child = try XCTUnwrap(store.task(withID: childID))
+        XCTAssertTrue(store.update(child, status: .todo), "a later child change prevents family rearchiving")
+        XCTAssertEqual(library.undo.undoStep(in: .tasks), .applied)
+        XCTAssertEqual(store.editableState(of: parentID), before, "Undo still restores the edited fields")
+        XCTAssertNil(store.task(withID: parentID)?.doneLoggedAt)
+        XCTAssertEqual(store.task(withID: childID)?.status, .todo)
+        let saves = gate.saveCount
+        XCTAssertEqual(library.undo.redoStep(in: .tasks), .obsolete)
+        XCTAssertNil(library.undo.redoName(in: .tasks))
+        XCTAssertNil(library.undo.redoStep(in: .tasks), "the obsolete compound step cannot repeatedly fail")
+        XCTAssertEqual(gate.saveCount, saves)
+        let rows = try ModelContext(store.container).fetch(FetchDescriptor<TaskItem>())
+        XCTAssertEqual(rows.first { $0.id == parentID }.map(TaskEditableState.init), before)
+        XCTAssertTrue(rows.allSatisfy { $0.doneLoggedAt == nil })
+    }
+
     func testDoneLogReadFailureStopsAfterOneReadAndExplicitRetryWorks() throws {
         _ = try archivedFamily(in: store)
         store.doneLogReadFailures = 10_000
