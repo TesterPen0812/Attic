@@ -1258,7 +1258,8 @@ struct AtticTaskRow: View {
             }
         }
         .contentShape(Rectangle())
-        .onHover { hovered = $0 }
+        // (A preview's `ATTIC_UI_TEST_HOVER=off` never tints: an A/B switch.)
+        .onHover { hovered = $0 && AtticPreviewOverrides.current.rowHoverTints }
         .onTapGesture { if isEnabled { (onSelect ?? actions.openPage)() } }
         .atticTaskFocus($focused, enabled: isEnabled, actions: actions, listCommands: true,
                         live: capture == nil, external: focus, answersKeys: titleEditing == nil)

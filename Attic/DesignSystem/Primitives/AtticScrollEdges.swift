@@ -41,7 +41,7 @@ enum AtticScrollEdgeStyle: String, CaseIterable, Sendable {
 }
 
 /// The scroll edge style, live. Only a strict preview identity can leave the
-/// system soft edge (`isPreviewIdentity`: `com.taha.Attic.preview.` and a
+/// system soft edge (`AtticPreviewOverrides.isPreviewIdentity`: `com.taha.Attic.preview.` and a
 /// name, with no `--attic-motion-lab` way in, unlike the Motion Lab's own
 /// broader policy): its developer panel (Settings › General › Motion Lab)
 /// shows the switch, the choice is kept in the preview's own defaults, and UI
@@ -53,15 +53,7 @@ enum AtticScrollEdgeStyle: String, CaseIterable, Sendable {
 final class AtticScrollEdgeLab: ObservableObject {
     static let shared = AtticScrollEdgeLab(defaults: .standard,
                                            environment: ProcessInfo.processInfo.environment,
-                                           isPreview: isPreviewIdentity(Bundle.main.bundleIdentifier))
-
-    /// `com.taha.Attic.preview.` plus a non-empty name: the only identities
-    /// that may leave the system soft edge.
-    nonisolated static func isPreviewIdentity(_ bundleIdentifier: String?) -> Bool {
-        guard let bundleIdentifier else { return false }
-        let prefix = AtticMotionLab.previewPrefix
-        return bundleIdentifier.hasPrefix(prefix) && bundleIdentifier.count > prefix.count
-    }
+                                           isPreview: AtticPreviewOverrides.isPreviewIdentity(Bundle.main.bundleIdentifier))
 
     @Published var style: AtticScrollEdgeStyle {
         didSet { defaults?.set(style.rawValue, forKey: Self.styleKey) }

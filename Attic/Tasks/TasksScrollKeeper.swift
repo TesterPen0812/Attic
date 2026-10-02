@@ -59,8 +59,12 @@ struct TasksScrollKeeper: NSViewRepresentable {
     /// Thin overlay scrollers whatever the system's "Show scroll bars"
     /// setting (owner, 2026-10-01): AppKit shows them only while the list
     /// scrolls. `hidden` while a page swipe may be under way.
+    /// (A preview's `ATTIC_UI_TEST_SCROLLERS=system` leaves them to the
+    /// system, round 13's way: an A/B switch.)
     @MainActor
-    static func styleScrollers(of scroll: NSScrollView, hidden: Bool) {
+    static func styleScrollers(of scroll: NSScrollView, hidden: Bool,
+                               overrides: AtticPreviewOverrides = .current) {
+        guard overrides.stylesScrollers else { return }
         if scroll.scrollerStyle != .overlay { scroll.scrollerStyle = .overlay }
         if scroll.hasHorizontalScroller { scroll.hasHorizontalScroller = false }
         guard let scroller = scroll.verticalScroller else { return }

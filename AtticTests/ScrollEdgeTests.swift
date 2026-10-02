@@ -64,7 +64,7 @@ final class ScrollEdgeTests: XCTestCase {
         for identity in identities {
             for arguments in [[String](), [AtticMotionLab.argument]] {
                 let name = "\(identity ?? "nil") \(arguments)"
-                let isPreview = AtticScrollEdgeLab.isPreviewIdentity(identity)
+                let isPreview = AtticPreviewOverrides.isPreviewIdentity(identity)
                 XCTAssertFalse(isPreview, "\(name) is not a preview")
                 let (defaults, cleanup) = try scratchDefaults()
                 defer { cleanup() }
@@ -87,7 +87,7 @@ final class ScrollEdgeTests: XCTestCase {
         XCTAssertTrue(AtticMotionLab.isAvailable(bundleIdentifier: "com.taha.Attic.perf.ui", arguments: [AtticMotionLab.argument]))
         XCTAssertTrue(AtticMotionLab.isAvailable(bundleIdentifier: "com.taha.Attic.preview.", arguments: [AtticMotionLab.argument]))
         // A preview identity is the one that may.
-        XCTAssertTrue(AtticScrollEdgeLab.isPreviewIdentity("com.taha.Attic.preview.main"))
+        XCTAssertTrue(AtticPreviewOverrides.isPreviewIdentity("com.taha.Attic.preview.main"))
         let (defaults, cleanup) = try scratchDefaults()
         defer { cleanup() }
         let preview = AtticScrollEdgeLab(defaults: defaults, isPreview: true)

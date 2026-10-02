@@ -157,7 +157,13 @@ struct TasksPage: View {
         .clipped()
 
         // A reorder's lifted card, over everything on the page.
-        .overlay { TasksLiftedCardLayer(lift: pointer.liftedCard) { lift in liftedCardRow(lift) } }
+        // (A preview's `ATTIC_UI_TEST_LIFT=off` leaves the layer out: an A/B
+        // switch.)
+        .overlay {
+            if AtticPreviewOverrides.current.drawsLiftLayer {
+                TasksLiftedCardLayer(lift: pointer.liftedCard) { lift in liftedCardRow(lift) }
+            }
+        }
         // Files dropped on a row attach to its task (the "Add to page"
         // label shows on the row under them): one destination for the page,
         // which finds the row from the rows' frames.

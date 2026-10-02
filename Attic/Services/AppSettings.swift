@@ -364,7 +364,8 @@ final class AppSettings: ObservableObject {
 
     private let defaults: UserDefaults
 
-    init(defaults: UserDefaults = .standard, motionLabAvailable: Bool = AtticMotionLab.isAvailable) {
+    init(defaults: UserDefaults = .standard, motionLabAvailable: Bool = AtticMotionLab.isAvailable,
+         previewOverrides: AtticPreviewOverrides = .current) {
         self.defaults = defaults
         self.motionLabAvailable = motionLabAvailable
         cloudSyncStartupErrorMessage = nil
@@ -438,14 +439,19 @@ final class AppSettings: ObservableObject {
         if defaults.string(forKey: Key.animations) == "full" {
             defaults.set(storedAnimations.rawValue, forKey: Key.animations)
         }
-        animations = storedAnimations
-        AtticMotionPreference.level = storedAnimations
-        let storedFeel = motionLabAvailable ? AtticMotionFeel(rawValue: defaults.string(forKey: Key.motionLabFeel) ?? "") : nil
-        motionFeel = storedFeel ?? storedAnimations.feel
-        let storedTuning = motionLabAvailable
+        // A preview's A/B switch (`ATTIC_UI_TEST_MOTION`) forces the level and
+        // the feel for this launch and stores nothing.
+        let forcedMotion = previewOverrides.motion
+        let level = forcedMotion?.level ?? storedAnimations
+        animations = level
+        AtticMotionPreference.level = level
+        let storedFeel = forcedMotion?.feel
+            ?? (motionLabAvailable ? AtticMotionFeel(rawValue: defaults.string(forKey: Key.motionLabFeel) ?? "") : nil)
+        motionFeel = storedFeel ?? level.feel
+        let storedTuning = motionLabAvailable && forcedMotion == nil
             ? defaults.data(forKey: Key.motionLabTuning).flatMap { try? JSONDecoder().decode(AtticMotionTuning.self, from: $0) }
             : nil
-        let tuning = storedTuning ?? (storedFeel ?? storedAnimations.feel).tuning
+        let tuning = storedTuning ?? (storedFeel ?? level.feel).tuning
         motionTuning = tuning
         AtticMotionTuning.current = tuning
         panelCornerSize = Self.clamp(
