@@ -158,8 +158,45 @@ private enum NotePersistenceRefreshOutcome {
 @MainActor
 final class NoteStore: ObservableObject {
     @Published private(set) var notes: [NoteItem] = [] {
-        didSet { presentationIndex = nil; presentationByID = nil }
+        didSet { presentationIndex = nil; presentationByID = nil; tagInventory = nil }
     }
+    private var tagInventory: (counts: [String: Int], rows: [UUID: String])?
+    private(set) var tagInventoryBuildCount = 0
+    private(set) var tagInventoryNoteReadCount = 0
+
+    /// Warm suggestions read values only, without revisiting the library's
+    /// models. Content-only saves do not invalidate this inventory.
+    var tagCounts: [String: Int] {
+        if let inventory = tagInventory { return inventory.counts }
+        var counts: [String: Int] = [:], rows: [UUID: String] = [:]
+        for note in notes {
+            let raw = note.tagsRaw
+            rows[note.id] = raw
+            for tag in AtticTag.decode(raw) { counts[tag, default: 0] += 1 }
+            tagInventoryNoteReadCount += 1
+        }
+        tagInventoryBuildCount += 1
+        tagInventory = (counts, rows)
+        return counts
+    }
+
+    /// Compare only this transaction's changed notes with the warmed metadata
+    /// snapshot. An equal assignment of tags during replica convergence is
+    /// not an invalidation; rollback and imported contexts replace `notes`.
+    private func invalidateTagInventory(in transaction: ModelContext) {
+        guard let inventory = tagInventory else { return }
+        if (transaction.insertedModelsArray + transaction.deletedModelsArray).contains(where: { $0 is NoteItem }) {
+            tagInventory = nil
+            return
+        }
+        for case let note as NoteItem in transaction.changedModelsArray {
+            if note.deletedAt != nil || inventory.rows[note.id] != note.tagsRaw {
+                tagInventory = nil
+                return
+            }
+        }
+    }
+
     @Published private(set) var lastErrorMessage: String?
     @Published private(set) var revision: UInt64 = 0
     /// Test/diagnostic seam for PERF-A3: body-only callers derive at most once
@@ -1565,6 +1602,7 @@ final class NoteStore: ObservableObject {
     @discardableResult
     private func save() -> Bool {
         do {
+            invalidateTagInventory(in: context)
             invalidateAttachmentProofs(in: context)
             #if os(macOS)
             try PerformanceSignposts.storeSave { try persist(context) }
@@ -1644,6 +1682,7 @@ final class NoteStore: ObservableObject {
         fallbackPresentation: NotePresentationSnapshot
     ) -> NotePersistenceRefreshOutcome {
         do {
+            invalidateTagInventory(in: transactionContext)
             invalidateAttachmentProofs(in: transactionContext)
             try persist(transactionContext)
             registerSuccessfulLocalSave()

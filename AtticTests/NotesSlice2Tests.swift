@@ -553,6 +553,57 @@ final class NotesLibraryModelTests: XCTestCase {
         return NotesLibraryModel(search: search, now: { [unowned self] in self.now }, calendar: calendar)
     }
 
+    func testWarmedTagInventoryDoesNotRereadTheLibraryWhileTypingOrSavingText() throws {
+        for index in 0..<1_000 {
+            let note = NoteItem(title: "Unrelated \(index)")
+            note.tagsRaw = AtticTag.encode(["shared", index % 2 == 0 ? "even" : "odd"])
+            store.modelContext.insert(note)
+        }
+        XCTAssertTrue(store.commitStagedChanges()); store.refresh()
+        guard case let .success((id, revision)) = store.createDocumentNote(id: UUID(),
+            document: NoteDocument(blocks: [.text("Target")]), tags: ["target"]) else { return XCTFail() }
+        let counts = store.tagCounts
+        XCTAssertEqual(counts["shared"], 1_000)
+        let builds = store.tagInventoryBuildCount, reads = store.tagInventoryNoteReadCount
+        for index in 0..<200 {
+            _ = AtticTagSuggestion.make(typed: index % 2 == 0 ? "sh" : "ev", counts: store.tagCounts, excluding: ["target"])
+        }
+        XCTAssertEqual(store.tagInventoryBuildCount, builds)
+        XCTAssertEqual(store.tagInventoryNoteReadCount, reads, "caret changes read no note properties")
+        guard case .success = store.saveDocument(noteID: id, document: NoteDocument(blocks: [.text("Updated text")]),
+                                                baseRevisionID: revision) else { return XCTFail() }
+        XCTAssertEqual(store.tagCounts, counts)
+        XCTAssertEqual(store.tagInventoryBuildCount, builds, "ordinary content saves retain the inventory")
+        XCTAssertEqual(store.tagInventoryNoteReadCount, reads)
+        let legacy = try XCTUnwrap(store.notes.first { !$0.usesDocumentFormat })
+        XCTAssertTrue(store.update(legacy, body: "Only text changed"))
+        XCTAssertEqual(store.tagCounts, counts)
+        XCTAssertEqual(store.tagInventoryBuildCount, builds, "even equal tag assignments during legacy saves are warm")
+    }
+
+    func testTagInventoryInvalidatesForTagsMembershipExternalRefreshAndRollback() throws {
+        let gate = PersistenceGate()
+        let tracked = try makeTestNoteStore(persist: { try gate.save($0) }, attachmentFileStore: makeTestAttachmentFileStore())
+        guard case let .success((id, _)) = tracked.createDocumentNote(id: UUID(), document: NoteDocument(blocks: [.text("A")]), tags: ["old"]) else { return XCTFail() }
+        XCTAssertEqual(tracked.tagCounts, ["old": 1])
+        XCTAssertTrue(tracked.setTags(["new"], for: try XCTUnwrap(tracked.note(withID: id))))
+        XCTAssertEqual(tracked.tagCounts, ["new": 1])
+        guard case let .success((second, _)) = tracked.createDocumentNote(id: UUID(), document: NoteDocument(blocks: [.text("B")]), tags: ["new"]) else { return XCTFail() }
+        XCTAssertEqual(tracked.tagCounts, ["new": 2])
+        XCTAssertTrue(tracked.delete(try XCTUnwrap(tracked.note(withID: second))))
+        XCTAssertEqual(tracked.tagCounts, ["new": 1])
+        XCTAssertTrue(tracked.restoreDeleted(noteID: second))
+        XCTAssertEqual(tracked.tagCounts, ["new": 2])
+        let external = ModelContext(tracked.container)
+        let rows = try external.fetch(FetchDescriptor<NoteItem>())
+        for row in rows where row.id == id { row.tagsRaw = AtticTag.encode(["external"]) }
+        try external.save(); tracked.refresh()
+        XCTAssertEqual(tracked.tagCounts, ["new": 1, "external": 1])
+        gate.shouldFail = true
+        XCTAssertFalse(tracked.setTags(["failed"], for: try XCTUnwrap(tracked.note(withID: id))))
+        XCTAssertEqual(tracked.tagCounts, ["new": 1, "external": 1], "rollback invalidates without publishing failed tags")
+    }
+
     func testRowsFallIntoPinnedTodayThisWeekAndEarlier() async throws {
         _ = try create("Today", daysAgo: 0)
         _ = try create("Monday", daysAgo: 2)

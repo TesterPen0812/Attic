@@ -186,9 +186,7 @@ struct NotesEditorPage: View {
                                     topInset: topInset, bottomInset: bottomInset, headerBottom: layout.headerBottom,
                                     design: design, tagEditor: { AnyView(tagEditor(for: session)) },
                                     tagCounts: { [noteStore] in
-                                        var counts: [String: Int] = [:]
-                                        for note in noteStore.notes { for tag in note.tags { counts[tag, default: 0] += 1 } }
-                                        return counts
+                                        noteStore.tagCounts
                                     })
                 .id(ObjectIdentifier(session.engine))
                 .overlay(alignment: .top) {
@@ -587,10 +585,7 @@ private struct NoteTagEditor: View {
     }
 
     private func tagCounts(_ current: Set<String>) -> [String: Int] {
-        var counts: [String: Int] = [:]
-        for note in store.notes {
-            for tag in note.tags { counts[tag, default: 0] += 1 }
-        }
+        var counts = store.tagCounts
         for tag in current where counts[tag] == nil { counts[tag] = 1 }
         return counts
     }
