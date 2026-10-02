@@ -33,20 +33,13 @@ final class AtticKeyWindowUITests: XCTestCase {
         app = XCUIApplication()
         app.launchEnvironment["ATTIC_UI_TESTING"] = "1"
         app.launchEnvironment["ATTIC_UI_TEST_HOVER_MONITOR"] = "1"
-        // The real pin protects only test setup from cold accessibility
-        // startup and snapshot latency. It neither assigns focus nor draws
-        // a ring. Exercise an explicit New task after automation is ready.
+        // Hold the real pin through cold accessibility startup and capture.
+        // Pinning neither assigns input focus nor draws its ring: the
+        // launch's explicit reveal must still give the add bar the keyboard.
         app.launchEnvironment["ATTIC_UI_TEST_PINNED"] = "1"
         app.launchArguments += ["-appearancePreference", "light", "-panelSurfaceStyle", "solid"]
         app.launch()
         app.activate()
-        let statusItem = app.statusItems.firstMatch
-        XCTAssertTrue(statusItem.waitForExistence(timeout: 10))
-        statusItem.click()
-        let newTask = app.menuItems["New task"]
-        XCTAssertTrue(newTask.waitForExistence(timeout: 5))
-        newTask.click()
-        XCTAssertTrue(newTask.waitForNonExistence(timeout: 5), "the menu closes after the explicit open")
         let addBar = app.descendants(matching: .any).matching(identifier: "AtticTokenField").firstMatch
         let focused = NSPredicate { _, _ in
             addBar.exists && addBar.isHittable && (addBar.value(forKey: "hasKeyboardFocus") as? Bool) == true

@@ -1538,6 +1538,9 @@ struct TasksPage: View {
     /// ⇧⌘I's did; on the next turn the menu has closed, and every route
     /// opens the files panel the way ⌘Return does.
     private func openFiles(_ id: UUID) {
+        #if DEBUG
+        TasksOpenFilesTrace.write("command id=\(id) ownsKey=\(AtticTextInput.ownsCurrentKey) mode=\(String(describing: CFRunLoopCopyCurrentMode(CFRunLoopGetMain()))) event=\(String(describing: NSApp.currentEvent)) responder=\(String(describing: NSApp.keyWindow?.firstResponder))")
+        #endif
         guard !AtticTextInput.ownsCurrentKey else {
             #if DEBUG
             if ProcessInfo.processInfo.environment["ATTIC_UI_TESTING"] == "1" {
@@ -1547,7 +1550,12 @@ struct TasksPage: View {
             return
         }
         pointer.endInvocation()
-        DispatchQueue.main.async { [model] in model.openPage(id) }
+        DispatchQueue.main.async { [model] in
+            #if DEBUG
+            TasksOpenFilesTrace.write("deferred id=\(id) mode=\(String(describing: CFRunLoopCopyCurrentMode(CFRunLoopGetMain()))) taskExists=\(model.store.task(withID: id) != nil)")
+            #endif
+            model.openPage(id)
+        }
     }
 
     /// A key's or VoiceOver's command on the row's targets, with its
@@ -3850,3 +3858,20 @@ enum TasksScrollerRule {
         }
     }
 }
+
+#if DEBUG
+@MainActor
+enum TasksOpenFilesTrace {
+    static func write(_ message: String) {
+        guard ProcessInfo.processInfo.environment["ATTIC_UI_TESTING"] == "1",
+              let directory = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first else { return }
+        let url = directory.appendingPathComponent("AtticOpenFilesUITestTrace.txt")
+        try? FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        if !FileManager.default.fileExists(atPath: url.path) { FileManager.default.createFile(atPath: url.path, contents: nil) }
+        guard let file = try? FileHandle(forWritingTo: url) else { return }
+        defer { try? file.close() }
+        _ = try? file.seekToEnd()
+        try? file.write(contentsOf: Data("\(Date()) \(message)\n".utf8))
+    }
+}
+#endif
