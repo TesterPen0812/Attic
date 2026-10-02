@@ -236,7 +236,7 @@ final class LinkStore {
             let replicas = try context.fetch(FetchDescriptor<ItemLink>(predicate: #Predicate { $0.id == linkID }))
             guard !replicas.isEmpty else { throw LinkStoreError.missingLink(linkID) }
             let timestamp = now()
-            WorkspaceLegacyBridge.captureBeforeMutations(replicas, in: context)
+            WorkspaceLegacyBridge.prepareMutations(replicas, in: context)
             for replica in replicas {
                 replica.deletedAt = deleted ? timestamp : nil
                 replica.updatedAt = timestamp

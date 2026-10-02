@@ -410,7 +410,15 @@ final class WorkspaceOperationCoordinator {
             let stagedModels = try WorkspaceModelToken.stagedModels(owners: writes, before: stagedTokens, in: context)
             do {
                 try gatedSave(context, before: previous, using: writer)
-                confirmed(try WorkspaceModelToken.capture(owners: writes, models: stagedModels))
+                // Existing rows keep their physical identifiers through save.
+                // Their already-computed after tokens are the confirmed baseline;
+                // only inserts need their permanent identifiers captured now.
+                var saved = Dictionary(uniqueKeysWithValues: after.map { ($0.owner, $0) })
+                if !inserted.isEmpty {
+                    let newFamilies = stagedModels.filter { Self.owner($0).map(inserted.contains) == true }
+                    saved.merge(try WorkspaceModelToken.capture(owners: inserted, models: newFamilies)) { _, permanent in permanent }
+                }
+                confirmed(saved)
                 return .committed
             } catch {
                 if previous == after { return .notCommitted }

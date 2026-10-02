@@ -411,7 +411,7 @@ extension NoteStore {
             guard !replicas.isEmpty else { throw NoteDocumentStoreError.noteMissing(noteID) }
             guard replicas.contains(where: { $0.isPinned != pinned }) else { return .unchanged }
             let timestamp = pinned ? currentDate : nil
-            WorkspaceLegacyBridge.captureBeforeMutations(replicas, in: modelContext)
+            WorkspaceLegacyBridge.prepareMutations(replicas, in: modelContext)
             for replica in replicas { replica.pinnedAt = timestamp }
         } catch {
             modelContext.rollback()
@@ -556,7 +556,7 @@ extension NoteStore {
            replicas.allSatisfy({ $0.content == projection.content && $0.contentFormat == document.format
                && $0.revisionID == presentedRevisionID }) {
             guard replicas.contains(where: { $0.tagsRaw != encodedTags }) else { return .success(presentedRevisionID) }
-            WorkspaceLegacyBridge.captureBeforeMutations(replicas, in: modelContext)
+            WorkspaceLegacyBridge.prepareMutations(replicas, in: modelContext)
             for replica in replicas { replica.tagsRaw = encodedTags }
             guard commitStagedChanges() else {
                 return .failure(.saveFailed(lastErrorMessage ?? "The note could not be saved."))
@@ -650,7 +650,7 @@ extension NoteStore {
     static func stageDocumentContent(_ projection: PreparedNoteDocument, format: Int,
                                      on replicas: [NoteItem], timestamp: Date, revision: Int64,
                                      revisionID: UUID, tags: String? = nil) {
-        if let context = replicas.first?.modelContext { WorkspaceLegacyBridge.captureBeforeMutations(replicas, in: context) }
+        if let context = replicas.first?.modelContext { WorkspaceLegacyBridge.prepareMutations(replicas, in: context) }
         for replica in replicas {
             replica.installPreparedContent(projection)
             replica.contentFormat = format
@@ -809,8 +809,9 @@ extension NoteStore {
                                            timestamp: Date, rows: [NoteAttachment]? = nil) throws -> Bool {
         let shown = Set(document.attachmentIDs)
         var changed = false
-        for row in try rows ?? attachmentRows(forNoteID: noteID) {
-            WorkspaceLegacyBridge.captureBeforeMutation(row, in: modelContext)
+        let family = try rows ?? attachmentRows(forNoteID: noteID)
+        WorkspaceLegacyBridge.prepareMutations(family, in: modelContext)
+        for row in family {
             if shown.contains(row.id) {
                 if row.deletedAt != nil {
                     changed = true
@@ -980,7 +981,7 @@ extension NoteStore {
         let revision = (replicas.map(\.revision).max() ?? 0) &+ 1
         let derived = Self.derivedColumns(content: restoredContent, format: version.contentFormat,
                                           title: restoredTitle, body: version.body)
-        WorkspaceLegacyBridge.captureBeforeMutations(replicas, in: modelContext)
+        WorkspaceLegacyBridge.prepareMutations(replicas, in: modelContext)
         for replica in replicas {
             replica.content = version.contentFormat >= 1 ? restoredContent : nil
             replica.contentFormat = version.contentFormat
@@ -1184,7 +1185,7 @@ extension NoteStore {
                   case let .editable(base) = NoteContentCodec.decode(baseData),
                   (try? NoteAgentTextSafety.validate(base: base, proposed: document)) != nil else {
                 if editRows.contains(where: { !$0.needsReview }) {
-                    editRows.forEach { WorkspaceLegacyBridge.captureBeforeMutation($0, in: modelContext); $0.needsReview = true }
+                    editRows.forEach { WorkspaceLegacyBridge.prepareMutation($0, in: modelContext); $0.needsReview = true }
                     _ = commitStagedChanges()
                 }
                 continue
@@ -1274,7 +1275,7 @@ extension NoteStore {
             return .failure(.changedSincePlanned)
         }
         let replicas = preflight.replicas
-        WorkspaceLegacyBridge.captureBeforeMutations(replicas, in: modelContext)
+        WorkspaceLegacyBridge.prepareMutations(replicas, in: modelContext)
         let timestamp = currentDate
         do { try stageDisplacedReplicas(replicas, reason: .beforeMigration, timestamp: timestamp) }
         catch { return .failure(.saveFailed(error.localizedDescription)) }

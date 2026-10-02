@@ -145,11 +145,11 @@ final class TagService {
         for (identifier, change) in snapshot.changesByRow {
             switch context.model(for: identifier) {
             case let task as TaskItem:
-                if let raw = reverted(task.tagsRaw, change) { WorkspaceLegacyBridge.captureBeforeMutation(task, in: context); task.tagsRaw = raw }
+                if let raw = reverted(task.tagsRaw, change) { WorkspaceLegacyBridge.prepareMutation(task, in: context); task.tagsRaw = raw }
             case let note as NoteItem:
-                if let raw = reverted(note.tagsRaw, change) { WorkspaceLegacyBridge.captureBeforeMutation(note, in: context); note.tagsRaw = raw }
+                if let raw = reverted(note.tagsRaw, change) { WorkspaceLegacyBridge.prepareMutation(note, in: context); note.tagsRaw = raw }
             case let board as CanvasBoardItem:
-                if let raw = reverted(board.tagsRaw, change) { WorkspaceLegacyBridge.captureBeforeMutation(board, in: context); board.tagsRaw = raw }
+                if let raw = reverted(board.tagsRaw, change) { WorkspaceLegacyBridge.prepareMutation(board, in: context); board.tagsRaw = raw }
             default: continue
             }
         }
@@ -175,13 +175,13 @@ final class TagService {
         }
         do {
             for task in try context.fetch(FetchDescriptor<TaskItem>(predicate: #Predicate { $0.tagsRaw != "" })) {
-                if let updated = apply(task.tagsRaw, task.persistentModelID) { WorkspaceLegacyBridge.captureBeforeMutation(task, in: context); task.tagsRaw = updated }
+                if let updated = apply(task.tagsRaw, task.persistentModelID) { WorkspaceLegacyBridge.prepareMutation(task, in: context); task.tagsRaw = updated }
             }
             for note in try context.fetch(FetchDescriptor<NoteItem>(predicate: #Predicate { $0.tagsRaw != "" })) {
-                if let updated = apply(note.tagsRaw, note.persistentModelID) { WorkspaceLegacyBridge.captureBeforeMutation(note, in: context); note.tagsRaw = updated }
+                if let updated = apply(note.tagsRaw, note.persistentModelID) { WorkspaceLegacyBridge.prepareMutation(note, in: context); note.tagsRaw = updated }
             }
             for board in try context.fetch(FetchDescriptor<CanvasBoardItem>(predicate: #Predicate { $0.tagsRaw != "" })) {
-                if let updated = apply(board.tagsRaw, board.persistentModelID) { WorkspaceLegacyBridge.captureBeforeMutation(board, in: context); board.tagsRaw = updated }
+                if let updated = apply(board.tagsRaw, board.persistentModelID) { WorkspaceLegacyBridge.prepareMutation(board, in: context); board.tagsRaw = updated }
             }
         } catch {
             lastErrorMessage = error.localizedDescription

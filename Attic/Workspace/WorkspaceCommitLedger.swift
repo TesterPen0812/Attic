@@ -180,6 +180,7 @@ final class WorkspaceCommitLedger {
         "TaskDeletionPreservation": .preservation, "OperationReceipt": .receipt, "CanvasBoardItem": .board,
         "CanvasStrokeItem": .stroke, "CanvasImageItem": .image, "CanvasSemanticObjectItem": .semantic
     ]
+    static func entity(for id: PersistentIdentifier) -> WorkspaceOwner.Entity? { entities[id.entityName] }
     static func supportedEntities(in container: ModelContainer) -> Set<WorkspaceOwner.Entity> {
         Set(container.schema.entities.compactMap { entities[$0.name] })
     }
@@ -220,7 +221,7 @@ final class WorkspaceCommitLedger {
         default: return []
         }
     }
-    private static func membership(_ row: any PersistentModel) -> Set<WorkspaceScope> {
+    static func membership(_ row: any PersistentModel) -> Set<WorkspaceScope> {
         switch row {
         case let row as TaskItem: row.parentID.map { [.children($0)] } ?? []
         case let row as NoteAttachment: [.attachments(row.noteID)]

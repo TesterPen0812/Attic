@@ -41,6 +41,11 @@ enum WorkspaceLegacyBridge {
             return WorkspaceScopeToken(scope: scope, members: members.sorted { $0.owner.id.uuidString < $1.owner.id.uuidString })
         }
     }
+    private final class RootRow {
+        let physicalID: PersistentIdentifier
+        weak var model: (any PersistentModel)?
+        init(_ row: any PersistentModel) { physicalID = row.persistentModelID; model = row }
+    }
     private final class ContextState {
         let coordinator: WorkspaceOperationCoordinator
         var baseline: [WorkspaceOwner: WorkspaceModelToken]
@@ -49,6 +54,11 @@ enum WorkspaceLegacyBridge {
         let includeCanvas: Bool
         var plainCommit = false
         var scopeBaseline: ScopeBaseline?
+        // Only references and scalar membership from rows presentation already
+        // fetched. Owner fingerprints and dependency guards are demand-loaded.
+        var rootFamilies: [WorkspaceOwner: [RootRow]] = [:]
+        var rootMembers: [WorkspaceScope: Set<WorkspaceOwner>] = [:]
+        var rootEntities = Set<WorkspaceOwner.Entity>()
         var capturedOwners = Set<WorkspaceOwner>()
         var foreignAttachmentsChanged: ((Set<UUID>?) -> Void)?
         init(_ coordinator: WorkspaceOperationCoordinator, _ baseline: [WorkspaceOwner: WorkspaceModelToken], includeCanvas: Bool,
@@ -113,9 +123,14 @@ enum WorkspaceLegacyBridge {
             else { state.captureFailed = true }
         }
         for id in deleted {
-            if let owner = (Array(state.baseline.values) + Array(state.scopeBaseline?.inventory.values ?? [:].values))
+            if let owner = (Array(state.baseline.values) + Array(state.scopeBaseline?.inventory.values ?? [:].values) + state.scopes.values.flatMap(\.members))
                 .first(where: { $0.replicas.contains { $0.physicalID == id } })?.owner { owners.insert(owner) }
-            else { state.captureFailed = true }
+            else if let entity = WorkspaceCommitLedger.entity(for: id) {
+                // The saving fixture never acquired this deleted owner's guard.
+                // Its entity is already invalidated in the ledger; drop only
+                // unconfirmable scope snapshots in this saving context.
+                state.scopes = state.scopes.filter { $0.key.entity != entity }
+            } else { state.captureFailed = true }
         }
         let attachments = Set(owners.filter { $0.entity == .attachment }.map(\.id))
         if identifiers.contains(where: { $0.entityName == "NoteAttachment" }) || deleted.contains(where: { $0.entityName == "NoteAttachment" }) {
@@ -123,9 +138,10 @@ enum WorkspaceLegacyBridge {
         }
         do {
             let confirmed = try WorkspaceModelToken.read(owners: owners, in: context)
+            try updateScopeGuards(confirmed, state: state, in: context)
             state.baseline.merge(confirmed) { _, saved in saved }
             try state.scopeBaseline?.replace(confirmed)
-            state.scopes.removeAll(); state.capturedOwners.removeAll()
+            state.capturedOwners.removeAll()
         } catch { state.captureFailed = true }
     }
     static func observeForeignAttachmentWrites(in context: ModelContext, handler: @escaping (Set<UUID>?) -> Void) {
@@ -134,22 +150,112 @@ enum WorkspaceLegacyBridge {
     static func establishScopeBaseline(_ context: ModelContext, roots: [any PersistentModel],
                                        entities: Set<WorkspaceOwner.Entity>) throws {
         guard let state = objc_getAssociatedObject(context, &contextKey) as? ContextState else { throw WorkspaceFoundationError.unknown }
-        var inventory = try inventory(in: context, includeCanvas: false,
-            entities: entities.intersection(WorkspaceCommitLedger.supportedEntities(in: context.container)))
-        let owners = Set(roots.compactMap { WorkspaceOperationCoordinator.owner($0) })
-        inventory.merge(try WorkspaceModelToken.capture(owners: owners, models: roots)) { _, current in current }
-        state.scopeBaseline = try ScopeBaseline(inventory)
+        state.rootEntities = entities
+        state.rootFamilies.removeAll()
+        state.rootMembers.removeAll()
+        for row in roots {
+            guard let owner = WorkspaceOperationCoordinator.owner(row) else { throw WorkspaceFoundationError.unknown }
+            state.rootFamilies[owner, default: []].append(RootRow(row))
+            for scope in WorkspaceCommitLedger.membership(row) { state.rootMembers[scope, default: []].insert(owner) }
+        }
+    }
+    private static func rootToken(_ owner: WorkspaceOwner, state: ContextState, in source: ModelContext) throws -> WorkspaceModelToken? {
+        guard let rows = state.rootFamilies[owner] else { return nil }
+        return try WorkspaceModelToken.capture(owners: [owner], models: rows.map { $0.model ?? source.model(for: $0.physicalID) })[owner]
+    }
+    /// Mutation sites prepare the owner's dependency guards once, before
+    /// staging. The capture-only API below itself performs no SQL/scope reads.
+    static func prepareMutation(_ row: any PersistentModel, in source: ModelContext) {
+        prepareMutations([row], in: source)
+    }
+    static func prepareMutations(_ rows: [any PersistentModel], in source: ModelContext) {
+        captureBeforeMutations(rows, in: source)
+        guard let state = objc_getAssociatedObject(source, &contextKey) as? ContextState, !state.captureFailed else { return }
+        do {
+            var tokens = rows.compactMap { WorkspaceOperationCoordinator.owner($0).flatMap { state.baseline[$0] } }
+            for token in tokens {
+                for replica in token.replicas {
+                    for field in ["parentID", "taskID"] {
+                        if let bytes = replica.fields[field], let id = try JSONDecoder().decode(UUID?.self, from: bytes) {
+                            tokens.append(try capturedToken(.init(entity: .task, id: id), in: source))
+                        }
+                    }
+                }
+            }
+            _ = try scopeTokens(WorkspaceScopeToken.scopes(for: tokens), state: state, in: source)
+        } catch { state.captureFailed = true }
     }
     private static func scopeTokens(_ scopes: Set<WorkspaceScope>, state: ContextState, in source: ModelContext) throws -> [WorkspaceScopeToken] {
-        if scopes.isEmpty { return [] }
-        if let baseline = state.scopeBaseline { return scopes.map { baseline.token($0) } }
-        guard state.coordinator.ledger.canValidate(source, owners: [], scopes: scopes) else { throw WorkspaceFoundationError.conflict }
-        return Array(try WorkspaceScopeToken.read(scopes: scopes, in: state.coordinator.freshContext()).values)
+        var missing = scopes.filter { state.scopes[$0] == nil }
+        for scope in missing {
+            if let baseline = state.scopeBaseline {
+                state.scopes[scope] = baseline.token(scope)
+            } else if state.rootEntities.contains(scope.entity) {
+                let owners: Set<WorkspaceOwner>
+                if case let .all(entity) = scope { owners = Set(state.rootFamilies.keys.filter { $0.entity == entity }) }
+                else { owners = state.rootMembers[scope] ?? [] }
+                let members = try owners.sorted { $0.id.uuidString < $1.id.uuidString }.compactMap { owner in
+                    try state.baseline[owner] ?? rootToken(owner, state: state, in: source)
+                }
+                state.scopes[scope] = WorkspaceScopeToken(scope: scope, members: members)
+            }
+        }
+        missing = missing.filter { state.scopes[$0] == nil }
+        if !missing.isEmpty {
+            let read = try WorkspaceScopeToken.read(scopes: missing, in: source)
+            let inserted = Set(source.insertedModelsArray.map(\.persistentModelID))
+            // A batch may already have staged other captured rows. Restore
+            // their before-values and expected absence in these new guards.
+            for scope in missing {
+                var members = Dictionary(uniqueKeysWithValues: read[scope]!.members.map { ($0.owner, $0) })
+                for (owner, token) in members {
+                    let persisted = token.replicas.filter { !inserted.contains($0.physicalID) }
+                    members[owner] = persisted.isEmpty ? nil : WorkspaceModelToken(owner: owner, replicas: persisted)
+                }
+                for (owner, original) in state.baseline where owner.entity == scope.entity {
+                    let belongs = try original.replicas.contains { replica in
+                        if case .all = scope { return true }
+                        return try WorkspaceCommitLedger.membership(owner, fields: replica.fields).contains(scope)
+                    }
+                    if belongs { members[owner] = original }
+                    else { members[owner] = nil }
+                }
+                state.scopes[scope] = WorkspaceScopeToken(scope: scope, members: members.values.sorted { $0.owner.id.uuidString < $1.owner.id.uuidString })
+            }
+        }
+        return scopes.map { state.scopes[$0]! }
+    }
+    private static func updateScopeGuards(_ updates: [WorkspaceOwner: WorkspaceModelToken], state: ContextState, in source: ModelContext) throws {
+        for (owner, token) in updates {
+            let previous = state.baseline[owner]
+            var affected: Set<WorkspaceScope> = [.all(owner.entity)]
+            for value in [previous, token].compactMap({ $0 }) {
+                for replica in value.replicas { affected.formUnion(try WorkspaceCommitLedger.membership(owner, fields: replica.fields)) }
+            }
+            for scope in affected {
+                let belongs = try token.replicas.contains { replica in
+                    if case .all = scope { return true }
+                    return try WorkspaceCommitLedger.membership(owner, fields: replica.fields).contains(scope)
+                }
+                if state.rootEntities.contains(owner.entity) {
+                    if belongs { state.rootMembers[scope, default: []].insert(owner) }
+                    else { state.rootMembers[scope]?.remove(owner) }
+                }
+                if let guardToken = state.scopes[scope] {
+                    var members = guardToken.members.filter { $0.owner != owner }
+                    if belongs { members.append(token) }
+                    state.scopes[scope] = WorkspaceScopeToken(scope: scope, members: members.sorted { $0.owner.id.uuidString < $1.owner.id.uuidString })
+                }
+            }
+            if state.rootEntities.contains(owner.entity) {
+                state.rootFamilies[owner] = token.replicas.isEmpty ? nil : token.replicas.map { RootRow(source.model(for: $0.physicalID)) }
+            }
+        }
     }
     static func capturedToken(_ owner: WorkspaceOwner, in source: ModelContext) throws -> WorkspaceModelToken {
         guard let state = objc_getAssociatedObject(source, &contextKey) as? ContextState else { throw WorkspaceFoundationError.unknown }
         if let token = state.baseline[owner] { return token }
-        let token = try state.scopeBaseline?.inventory[owner] ?? WorkspaceModelToken.read(owner, in: source)
+        let token = try state.scopeBaseline?.inventory[owner] ?? rootToken(owner, state: state, in: source) ?? WorkspaceModelToken.read(owner, in: source)
         state.baseline[owner] = token
         return token
     }
@@ -165,15 +271,19 @@ enum WorkspaceLegacyBridge {
             let missing = owners.filter { state.baseline[$0] == nil }
             for owner in missing {
                 if let known = state.scopeBaseline?.inventory[owner] { state.baseline[owner] = known; continue }
-                let family = existing.filter { WorkspaceOperationCoordinator.owner($0) == owner }
-                state.baseline.merge(try WorkspaceModelToken.capture(owners: [owner], models: family)) { saved, _ in saved }
+                // Presented replicas are already resident. Include the complete
+                // logical family without faulting or fetching other owners.
+                let resident = (state.rootFamilies[owner] ?? []).compactMap(\.model)
+                let family = Dictionary((resident + existing.filter { WorkspaceOperationCoordinator.owner($0) == owner })
+                    .map { ($0.persistentModelID, $0) }, uniquingKeysWith: { first, _ in first }).values
+                state.baseline.merge(try WorkspaceModelToken.capture(owners: [owner], models: Array(family))) { saved, _ in saved }
             }
             state.capturedOwners.formUnion(owners)
             try state.coordinator.ledger.observe(owners.compactMap { state.baseline[$0] })
         } catch { state.captureFailed = true }
     }
     static func delete(_ row: any PersistentModel, in context: ModelContext) {
-        captureBeforeMutation(row, in: context)
+        prepareMutation(row, in: context)
         context.delete(row)
     }
     static func wasPlainCommit(in source: ModelContext) throws -> Bool {
@@ -249,6 +359,12 @@ enum WorkspaceLegacyBridge {
                 before[owner] = captured
                 state.capturedOwners.insert(owner)
             }
+            else if state.rootFamilies[owner] != nil {
+                let scopes = WorkspaceScopeToken.scopes(for: [WorkspaceModelToken(owner: owner, replicas: [])])
+                guard state.coordinator.ledger.canValidate(source, owners: [owner], scopes: scopes) else { throw WorkspaceFoundationError.conflict }
+                let original = try WorkspaceModelToken.read(owner, in: state.coordinator.freshContext())
+                before[owner] = original; state.baseline[owner] = original; state.capturedOwners.insert(owner)
+            }
             else if changes.filter({ WorkspaceOperationCoordinator.owner($0) == owner }).allSatisfy({ row in
                 source.insertedModelsArray.contains { $0 === row }
             }) { before[owner] = WorkspaceModelToken(owner: owner, replicas: []) }
@@ -284,10 +400,10 @@ enum WorkspaceLegacyBridge {
                 if result == .unknown { throw CommitHeld() }
                 throw result == .conflict ? WorkspaceFoundationError.conflict : WorkspaceFoundationError.unknown
             }
+            try updateScopeGuards(confirmed, state: state, in: source)
             state.baseline.merge(confirmed) { _, saved in saved }
             try state.scopeBaseline?.replace(confirmed)
             state.capturedOwners.removeAll()
-            state.scopes.removeAll()
             state.plainCommit = true
             return
         }
