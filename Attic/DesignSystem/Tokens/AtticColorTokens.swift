@@ -271,6 +271,12 @@ struct AtticColorTokens: Equatable, Sendable {
     let popoverInnerRim: AtticRGBA
     let popoverOuterRim: AtticRGBA
     let popoverShadow: AtticRGBA
+    /// Attic's own dropdowns (E1): the pill on a solid `popoverFill`
+    /// (#F1F1F1 / #444445) and D's two shadows. The card's edge is
+    /// `popoverOuterRim`, which steps up under Increase Contrast.
+    let dropdownHighlight: AtticRGBA
+    let dropdownShadow: AtticRGBA
+    let dropdownContactShadow: AtticRGBA
     let dragShadow: AtticRGBA
 
     // MARK: Inks
@@ -750,6 +756,9 @@ struct AtticColorTokens: Equatable, Sendable {
             popoverInnerRim: dark ? .white(ic ? 0.24 : 0.10) : .white(0.9),
             popoverOuterRim: dark ? (ic ? .white(0.35) : .black(0.55)) : .black(ic ? 0.30 : 0.11),
             popoverShadow: .black(dark ? 0.40 : 0.11),
+            dropdownHighlight: dark ? AtticRGBA(0x444445) : AtticRGBA(0xF1F1F1),
+            dropdownShadow: .black(dark ? 0.42 : 0.12),
+            dropdownContactShadow: .black(dark ? 0.24 : 0.05),
             dragShadow: .black(dark ? 0.45 : 0.16),
             inks: inks
         )

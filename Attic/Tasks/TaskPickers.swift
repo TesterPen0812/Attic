@@ -68,7 +68,7 @@ struct TaskDatePickerView: View {
         .focusable()
         .focused($focused)
         .focusEffectDisabled()
-        .onAppear { focused = true }
+        .atticDropdownFocus($focused)
         .onKeyPress(phases: .down) { press in key(press, highlight: highlight, quick: quick) }
         .accessibilityElement(children: .contain)
         .accessibilityLabel(String(localized: "Choose a date"))
@@ -144,7 +144,7 @@ struct TaskTagPickerView: View {
                 if next != highlighted { highlighted = next }
             }
         )
-        .onAppear { if focusField { fieldFocused = true } }
+        .atticDropdownFocus($fieldFocused, when: focusField)
         // Typing highlights the first match; an empty field (as after a new
         // tag saved) highlights nothing, so another Return does nothing
         // rather than toggle a tag (round 5, F5).
@@ -245,20 +245,24 @@ struct TaskPriorityPickerView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             ForEach(Array(options.enumerated()), id: \.element) { index, priority in
-                AtticChoiceRow(title: priority.pickerTitle, detail: nil,
-                               check: current == priority || (current == nil && priority == .none) ? .on : .off,
-                               isHighlighted: highlighted == index, titleInk: .body,
-                               onHover: { inside in
-                                   let next = AtticListHighlight.hovered(index, inside: inside, current: highlighted)
-                                   if next != highlighted { highlighted = next }
-                               }) { onPick(priority) }
+                // Its ⌥⌘ key on every row: real commands, learned here (p2-24).
+                AtticDropdownRow(title: priority.choiceTitle,
+                                 check: current == priority || (current == nil && priority == .none) ? .on : .off,
+                                 mark: TaskRowPresentation.priority(priority),
+                                 detail: priority.shortcutHint,
+                                 isHighlighted: highlighted == index,
+                                 onHover: { inside in
+                                     let next = AtticListHighlight.hovered(index, inside: inside, current: highlighted)
+                                     if next != highlighted { highlighted = next }
+                                 }) { onPick(priority) }
             }
         }
-        .frame(width: AtticPickerMetrics.tagWidth - 40)
         .focusable()
         .focused($focused)
         .focusEffectDisabled()
-        .onAppear { focused = true }
+        .atticDropdownFocus($focused)
+        .accessibilityElement(children: .contain)
+        .accessibilityLabel(String(localized: "Priority"))
         .onKeyPress(phases: .down) { press in
             switch press.key {
             case .downArrow: highlighted = min((highlighted ?? -1) + 1, options.count - 1); return .handled
@@ -308,6 +312,22 @@ extension TaskPriority {
         case .medium: String(localized: "!  Medium")
         case .high: String(localized: "!!  High")
         }
+    }
+
+    /// The priority picker's name (p2-24): "None", "Low", "Medium", "High".
+    var choiceTitle: String {
+        switch self {
+        case .none: String(localized: "None")
+        case .low: String(localized: "Low")
+        case .medium: String(localized: "Medium")
+        case .high: String(localized: "High")
+        }
+    }
+
+    /// Its key as the picker's rows show it: "⌥⌘0" to "⌥⌘3".
+    var shortcutHint: String {
+        let key = shortcut.key.character
+        return "⌥⌘" + String(key).uppercased()
     }
 
     /// The plain name ("Low", "Medium", "High"; "No Priority").

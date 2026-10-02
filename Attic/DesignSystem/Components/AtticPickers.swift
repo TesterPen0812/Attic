@@ -191,46 +191,43 @@ struct AtticDatePicker: View {
     @Environment(\.atticDesign) private var design
 
     var body: some View {
-        let m = AtticPickerMetrics.self
+        let d = AtticDropdownMetrics.self
         VStack(alignment: .leading, spacing: 0) {
             ForEach(quick) { item in
-                AtticChoiceRow(title: item.title, detail: item.detail, check: showsChecks ? (item.isChecked ? .on : .off) : nil,
-                               isHighlighted: highlightedRow == item.id, onHover: hoverRow(item.id)) {
+                AtticDropdownRow(title: item.title, check: showsChecks ? (item.isChecked ? .on : .off) : nil,
+                                 detail: item.detail, isHighlighted: highlightedRow == item.id, onHover: hoverRow(item.id)) {
                     onQuick(item.id)
                 }
             }
-            AtticPickerDivider()
-            HStack {
-                AtticText(verbatim: monthTitle, style: .controlLabel, ink: .heading)
+            AtticDropdownGap(height: d.fieldGap)
+            HStack(spacing: 0) {
+                AtticText(verbatim: monthTitle, style: .dropdownHeading, ink: .heading)
                     .accessibilityAddTraits(.isHeader)
-                Spacer()
+                Spacer(minLength: d.detailGap)
                 monthButton(-1, systemName: "chevron.left", label: String(localized: "Previous month"))
                 monthButton(1, systemName: "chevron.right", label: String(localized: "Next month"))
             }
-            .padding(.horizontal, AtticPopoverMetrics.rowPadding)
-            .frame(height: m.monthHeaderHeight)
+            .padding(.leading, d.rowPadding)
+            .frame(height: d.monthHeaderHeight)
             HStack(spacing: 0) {
                 ForEach(Array(weekdays.enumerated()), id: \.offset) { _, symbol in
-                    AtticText(verbatim: symbol, style: .count, ink: .helper)
-                        .frame(width: m.dayCell, height: m.weekdayHeight)
+                    AtticText(verbatim: symbol, style: .tag, ink: .helper)
+                        .frame(width: d.monthCellWidth, height: d.weekdayHeight)
                 }
             }
-            .padding(.horizontal, m.gridInset)
             .accessibilityHidden(true)
-            LazyVGrid(columns: Array(repeating: GridItem(.fixed(m.dayCell), spacing: 0), count: 7), spacing: 0) {
+            LazyVGrid(columns: Array(repeating: GridItem(.fixed(d.monthCellWidth), spacing: 0), count: 7), spacing: 0) {
                 ForEach(days) { day in
                     dayCell(day)
                 }
             }
-            .padding(.horizontal, m.gridInset)
-            .padding(.bottom, m.gridBottom)
             if let removeTitle {
-                AtticPickerDivider()
-                AtticChoiceRow(title: removeTitle, check: showsChecks ? .off : nil,
-                               isHighlighted: highlightedRow == Self.removeID, onHover: hoverRow(Self.removeID), action: onRemove)
+                AtticDropdownGap(height: d.fieldGap)
+                AtticDropdownRow(title: removeTitle, check: showsChecks ? .off : nil,
+                                 isHighlighted: highlightedRow == Self.removeID, onHover: hoverRow(Self.removeID), action: onRemove)
             }
         }
-        .frame(width: m.dateWidth)
+        .frame(width: d.monthCellWidth * 7)
     }
 
     private func hoverRow(_ id: String) -> ((Bool) -> Void)? {
@@ -239,19 +236,20 @@ struct AtticDatePicker: View {
 
     private func monthButton(_ step: Int, systemName: String, label: String) -> some View {
         Button { onMonth(step) } label: {
-            AtticIcon(systemName: systemName, size: AtticPickerMetrics.chevronSize, weight: .semibold, ink: .icon)
-                .frame(width: AtticPickerMetrics.monthButton, height: AtticPickerMetrics.monthButton)
+            AtticIcon(systemName: systemName, size: AtticDropdownMetrics.monthChevron, weight: .semibold, ink: .icon)
+                .frame(width: AtticDropdownMetrics.monthButton, height: AtticDropdownMetrics.monthButton)
                 .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
         .focusEffectDisabled()
-        .atticOwnFocusRing(.circle(diameter: AtticPickerMetrics.monthButton))
+        .atticOwnFocusRing(.circle(diameter: AtticDropdownMetrics.monthButton))
         .help(label)
         .accessibilityLabel(label)
     }
 
     private func dayCell(_ day: Day) -> some View {
         let m = AtticPickerMetrics.self
+        let d = AtticDropdownMetrics.self
         let tokens = design.tokens
         let ink: AtticInk = day.isSelected ? .onInverse : ((!day.inMonth || day.isPast) ? .helper : .body)
         return Button { onDay(day.id) } label: {
@@ -259,20 +257,21 @@ struct AtticDatePicker: View {
                 if day.isSelected {
                     Circle().fill(tokens.color(.inverseFill))
                 } else if cursor == day.id {
-                    Circle().fill(tokens.selected.color)
+                    Circle().fill(tokens.dropdownHighlight.color)
                 }
                 if day.isToday, !day.isSelected {
                     Circle().strokeBorder(tokens.color(.heading), lineWidth: m.todayRing)
                 }
-                AtticText(verbatim: day.number, style: day.isToday ? .rowMetaEmphasis : .rowMeta, ink: ink)
+                AtticText(verbatim: day.number, style: day.isToday ? .rowTitleActive : .listBody, ink: ink)
+                    .monospacedDigit()
             }
-            .frame(width: m.dayDisc, height: m.dayDisc)
-            .frame(width: m.dayCell, height: m.dayRow)
+            .frame(width: d.monthDisc, height: d.monthDisc)
+            .frame(width: d.monthCellWidth, height: d.monthCellHeight)
             .contentShape(Rectangle())
         }
         .buttonStyle(AtticUndimmedButtonStyle())
         .focusEffectDisabled()
-        .atticOwnFocusRing(.circle(diameter: m.dayDisc))
+        .atticOwnFocusRing(.circle(diameter: d.monthDisc))
         // The pointer moves the cursor, as it moves a menu's highlight.
         .onContinuousHover { phase in
             switch phase {
@@ -318,39 +317,34 @@ struct AtticTagPicker: View {
     var body: some View {
         let m = AtticPickerMetrics.self
         VStack(alignment: .leading, spacing: 0) {
-            TextField("", text: $query, prompt: Text(String(localized: "Find or add a tag")))
-                .textFieldStyle(.plain)
-                .font(AtticTextStyle.menuRow.font)
-                .focused(fieldFocused)
-                .padding(.horizontal, AtticPopoverMetrics.rowPadding)
-                .frame(height: AtticControlSize.smallHeight)
-                .background(AtticPickerFieldBackground())
-                .padding(.bottom, m.dividerGap)
-                .accessibilityLabel(String(localized: "Find or add a tag"))
+            AtticDropdownField(text: $query, placeholder: String(localized: "Find or add a tag"),
+                               systemName: "magnifyingglass", focus: fieldFocused)
+                .padding(.bottom, AtticDropdownMetrics.fieldGap)
             ScrollViewReader { proxy in
             ScrollView(.vertical) {
                 VStack(alignment: .leading, spacing: 0) {
                     ForEach(Array(tags.enumerated()), id: \.element.id) { index, tag in
-                        AtticChoiceRow(title: "#" + tag.name, check: tag.state, isHighlighted: highlighted == index,
-                                       onHover: hover(index)) {
+                        AtticDropdownRow(title: "#" + tag.name, check: tag.state, isHighlighted: highlighted == index,
+                                         onHover: hover(index)) {
                             onToggle(tag.name)
                         }
                         .id(index)
                     }
                     if let create {
-                        AtticChoiceRow(title: String(localized: "New tag “#\(create)”"), systemName: "plus", check: .off,
-                                       isHighlighted: highlighted == tags.count, onHover: hover(tags.count)) {
+                        AtticDropdownRow(title: String(localized: "New tag “#\(create)”"), systemName: "plus", check: .off,
+                                         isHighlighted: highlighted == tags.count, onHover: hover(tags.count)) {
                             onCreate(create)
                         }
                         .id(tags.count)
                     }
                     if tags.isEmpty, create == nil {
-                        AtticText(verbatim: String(localized: "No tags yet"), style: .menuRow, ink: .helper)
-                            .padding(.horizontal, AtticPopoverMetrics.rowPadding)
-                            .frame(height: AtticControlSize.smallHeight)
+                        AtticText(verbatim: String(localized: "No tags yet"), style: .dropdownRow, ink: .helper)
+                            .padding(.horizontal, AtticDropdownMetrics.rowPadding)
+                            .frame(height: AtticDropdownMetrics.rowHeight)
                     }
                 }
             }
+            .scrollIndicators(.never)
             .frame(maxHeight: m.tagListMaxHeight)
             .fixedSize(horizontal: false, vertical: true)
             // The keyboard's highlight stays in view in a long list; the
@@ -361,7 +355,8 @@ struct AtticTagPicker: View {
             }
             }
         }
-        .frame(width: m.tagWidth)
+        .accessibilityElement(children: .contain)
+        .accessibilityLabel(String(localized: "Tags"))
     }
 
     private func hover(_ index: Int) -> ((Bool) -> Void)? {
@@ -491,23 +486,23 @@ struct AtticComposerStrip<DateContent: View, TagContent: View, PriorityContent: 
                 // With all three set, a long date gives way after the tag
                 // (never below its first words).
                 .layoutPriority(-0.5)
-                .atticPopover(isPresented: $datePresented, arrowEdge: .top) {
-                    datePicker().atticPickerSurface()
+                .atticDropdown(isPresented: $datePresented, prefer: .above, label: String(localized: "Date")) {
+                    datePicker()
                 }
             AtticStripButton(systemName: "tag", title: String(localized: "Tag"), value: tags, isOpen: tagsPresented,
                              identifier: "composer-tag",
                              keepsPrefix: 4, keptPrefixWidth: AtticPickerMetrics.stripTagPrefix,
                              clearLabel: String(localized: "Clear tags"), open: { tagsPresented = true }, clear: onClearTags)
                 .layoutPriority(-1)
-                .atticPopover(isPresented: $tagsPresented, arrowEdge: .top) {
-                    tagPicker().atticPickerSurface()
+                .atticDropdown(isPresented: $tagsPresented, prefer: .above, label: String(localized: "Tags")) {
+                    tagPicker()
                 }
             AtticStripButton(systemName: "flag", title: String(localized: "Priority"), value: priority, isOpen: priorityPresented,
                              identifier: "composer-priority",
                              clearLabel: String(localized: "Clear priority"), open: { priorityPresented = true }, clear: onClearPriority)
                 .fixedSize(horizontal: true, vertical: false)
-                .atticPopover(isPresented: $priorityPresented, arrowEdge: .top) {
-                    priorityPicker().atticPickerSurface()
+                .atticDropdown(isPresented: $priorityPresented, prefer: .above, label: String(localized: "Priority")) {
+                    priorityPicker()
                 }
         }
         .frame(height: AtticControlSize.smallHeight)

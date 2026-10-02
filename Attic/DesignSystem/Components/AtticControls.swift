@@ -915,7 +915,7 @@ struct AtticSelectionBar: View {
                     AtticMenuButton(systemName: action.systemName, label: action.label, commands: menu)
                 } else if let popover = action.popover {
                     AtticSmallButton(systemName: action.systemName, label: action.label, action: action.handler)
-                        .atticPopover(isPresented: popover.isPresented, arrowEdge: .top) { popover.content() }
+                        .atticDropdown(isPresented: popover.isPresented, prefer: .above, label: String(localized: action.label)) { popover.content() }
                 } else {
                     AtticSmallButton(systemName: action.systemName, label: action.label, action: action.handler)
                 }

@@ -153,13 +153,13 @@ struct NoteFormatPopoverView: View {
                     .accessibilityIdentifier("notes-aa-reason")
             }
         }
-        .padding(m.popoverPadding)
-        .frame(width: m.popoverWidth)
+        // The dropdown card's inset is Aa's padding.
+        .frame(width: m.popoverWidth - AtticDropdownMetrics.inset * 2)
         .focusable()
         .focusEffectDisabled()
         .focused($focused)
+        .atticDropdownFocus($focused)
         .onAppear {
-            focused = true
             model.popoverKeyboardIndex = openedByKeyboard ? currentStyleIndex : nil
         }
         .onDisappear { model.popoverKeyboardIndex = nil }
@@ -230,24 +230,28 @@ struct NoteFormatPopoverView: View {
 
 // MARK: - The / list
 
-/// The flat `/` list at the caret (p2-03): one row per engine item, its
-/// typing shortcut on the right, the keyboard's row highlighted.
+/// The flat `/` list at the caret (p2-03; E1, p2-24 D): one row per
+/// engine item, icon and name only (no hint column), the typed filter
+/// emboldened. The keyboard and the pointer move the one highlight. It
+/// opens below the caret when there is room, its left edge on the `/`.
 struct NoteSlashListView: View {
     @ObservedObject var model: NoteSlashListModel
     @Environment(\.atticDesign) private var design
 
     var body: some View {
-        ZStack(alignment: .topLeading) {
+        let preset = AtticMotionPreset.popover
+        ZStack(alignment: model.above ? .bottomLeading : .topLeading) {
             if model.shown, !model.items.isEmpty {
-                AtticPopover(width: AtticNoteFormatMetrics.slashWidth) {
+                AtticDropdownCard(width: model.width) {
                     if model.items.count > model.maxVisibleRows {
                         ScrollViewReader { proxy in
                             ScrollView(.vertical) {
                                 VStack(alignment: .leading, spacing: 0) { rows }
                             }
                             .scrollIndicators(.never)
-                            .frame(height: CGFloat(model.maxVisibleRows) * AtticControlSize.smallHeight)
+                            .frame(height: CGFloat(model.maxVisibleRows) * AtticDropdownMetrics.rowHeight)
                             .onChange(of: model.highlighted) { _, index in
+                                guard !AtticListHighlight.isPointerMove(NSApp.currentEvent) else { return }
                                 proxy.scrollTo(index, anchor: nil)
                             }
                         }
@@ -255,14 +259,15 @@ struct NoteSlashListView: View {
                         rows
                     }
                 }
-                .transition(NoteFormatMotion.transition(reduceMotion: design.reduceMotion, from: .top))
+                .transition(preset.transition(reduceMotion: design.reduceMotion, edge: model.above ? .bottom : .top,
+                                              anchor: model.above ? .bottomLeading : .topLeading))
                 .accessibilityElement(children: .contain)
                 .accessibilityLabel(String(localized: "Insert"))
                 .accessibilityIdentifier("notes-slash-list")
             }
         }
-        .animation(NoteFormatMotion.animation(reduceMotion: design.reduceMotion), value: model.shown)
-        .padding(AtticNoteFormatMetrics.shadowRoom)
+        .animation(preset.animation(reduceMotion: design.reduceMotion, showing: model.shown), value: model.shown)
+        .padding(AtticDropdownMetrics.shadowRoom)
         .fixedSize()
     }
 }
@@ -271,9 +276,12 @@ extension NoteSlashListView {
     @ViewBuilder
     fileprivate var rows: some View {
         ForEach(Array(model.items.enumerated()), id: \.element.id) { index, item in
-            AtticPopoverRow(systemName: NoteCommandCatalog.slashSymbol(item.kind), title: item.title,
-                            detail: NoteCommandCatalog.slashHint(item.kind),
-                            isHighlighted: index == model.highlighted) {
+            AtticDropdownRow(title: item.title, systemName: NoteCommandCatalog.slashSymbol(item.kind), match: model.query,
+                             isHighlighted: index == model.highlighted,
+                             onHover: { inside in
+                                 // The list always keeps one highlight (Return takes it).
+                                 if inside, model.highlighted != index { model.highlighted = index }
+                             }) {
                 model.onPick?(item.kind)
             }
             .id(index)
@@ -294,31 +302,23 @@ struct NoteDateCardView: View {
 
     var body: some View {
         let candidate = model.candidateDate
-        AtticPopover(width: AtticNoteFormatMetrics.dateCardWidth) {
-            TextField("", text: $model.dateText, prompt: Text(String(localized: "Type a date, like fri")))
-                .textFieldStyle(.plain)
-                .font(AtticTextStyle.menuRow.font)
-                .focused($fieldFocused)
-                .padding(.horizontal, AtticPopoverMetrics.rowPadding)
-                .frame(height: AtticControlSize.smallHeight)
-                .background(RoundedRectangle(cornerRadius: AtticRadius.control(height: AtticControlSize.smallHeight),
-                                             style: .continuous).fill(design.tokens.recessed.color))
-                .onSubmit { if let candidate { model.onCommitDate?(candidate) } }
+        AtticDropdownCard {
+            AtticDropdownField(text: $model.dateText, placeholder: String(localized: "Type a date, like fri"),
+                               focus: $fieldFocused, label: String(localized: "Date"), identifier: "notes-date-field",
+                               onSubmit: { if let candidate { model.onCommitDate?(candidate) } })
                 .onExitCommand { model.onCancel?() }
-                .accessibilityLabel(String(localized: "Date"))
-                .accessibilityIdentifier("notes-date-field")
-            AtticPopoverGap()
+            AtticDropdownGap()
             if let candidate {
-                AtticPopoverRow(systemName: nil, title: candidate.formatted(.dateTime.weekday(.wide)),
-                                detail: candidate.formatted(.dateTime.day().month(.abbreviated)),
-                                isHighlighted: true) { model.onCommitDate?(candidate) }
+                AtticDropdownRow(title: candidate.formatted(.dateTime.weekday(.wide)),
+                                 detail: candidate.formatted(.dateTime.day().month(.abbreviated)),
+                                 isHighlighted: true) { model.onCommitDate?(candidate) }
                     .accessibilityIdentifier("notes-date-suggestion")
             } else {
-                AtticText(verbatim: String(localized: "No date matches"), style: .menuRow, ink: .helper)
-                    .padding(.horizontal, AtticPopoverMetrics.rowPadding)
-                    .frame(height: AtticControlSize.smallHeight)
+                AtticText(verbatim: String(localized: "No date matches"), style: .dropdownRow, ink: .helper)
+                    .padding(.horizontal, AtticDropdownMetrics.rowPadding)
+                    .frame(height: AtticDropdownMetrics.rowHeight)
             }
-            AtticPopoverGap()
+            AtticDropdownGap(height: AtticDropdownMetrics.fieldGap)
             AtticDateCalendar(month: model.dateMonth, today: model.today, selected: candidate, calendar: model.calendar,
                               onPick: { model.onCommitDate?($0) },
                               onMonth: { delta in
@@ -341,25 +341,17 @@ struct NoteLinkCardView: View {
     @Environment(\.atticDesign) private var design
 
     var body: some View {
-        AtticPopover(width: AtticNoteFormatMetrics.linkCardWidth) {
-            TextField("", text: $model.linkText, prompt: Text(String(localized: "Paste or type a link")))
-                .textFieldStyle(.plain)
-                .font(AtticTextStyle.menuRow.font)
-                .focused($fieldFocused)
-                .padding(.horizontal, AtticPopoverMetrics.rowPadding)
-                .frame(height: AtticControlSize.smallHeight)
-                .background(RoundedRectangle(cornerRadius: AtticRadius.control(height: AtticControlSize.smallHeight),
-                                             style: .continuous).fill(design.tokens.recessed.color))
-                .onSubmit { model.submitLink() }
+        AtticDropdownCard(width: AtticNoteFormatMetrics.linkCardWidth) {
+            AtticDropdownField(text: $model.linkText, placeholder: String(localized: "Paste or type a link"),
+                               focus: $fieldFocused, label: String(localized: "Link address"), identifier: "notes-link-field",
+                               onSubmit: { model.submitLink() })
                 .onExitCommand { model.onCancel?() }
-                .accessibilityLabel(String(localized: "Link address"))
-                .accessibilityIdentifier("notes-link-field")
             if let error = model.linkError {
                 AtticText(verbatim: error, style: .helper, ink: .helper)
-                    .padding(.horizontal, AtticPopoverMetrics.rowPadding)
+                    .padding(.horizontal, AtticDropdownMetrics.rowPadding)
                     .padding(.top, 4)
             }
-            AtticPopoverGap()
+            AtticDropdownGap()
             HStack(spacing: 4) {
                 if hasLink {
                     AtticSmallButton(systemName: nil, title: "Remove", label: "Remove Link") { model.onRemoveLink?() }
@@ -385,20 +377,21 @@ struct NoteFormatCardView: View {
     @Environment(\.atticDesign) private var design
 
     var body: some View {
-        ZStack(alignment: .topLeading) {
+        let preset = AtticMotionPreset.popover
+        let transition = preset.transition(reduceMotion: design.reduceMotion, edge: model.above ? .bottom : .top,
+                                           anchor: model.above ? .bottomLeading : .topLeading)
+        ZStack(alignment: model.above ? .bottomLeading : .topLeading) {
             switch model.card {
             case .date:
-                NoteDateCardView(model: model)
-                    .transition(NoteFormatMotion.transition(reduceMotion: design.reduceMotion, from: .top))
+                NoteDateCardView(model: model).transition(transition)
             case let .link(hasLink):
-                NoteLinkCardView(model: model, hasLink: hasLink)
-                    .transition(NoteFormatMotion.transition(reduceMotion: design.reduceMotion, from: .top))
+                NoteLinkCardView(model: model, hasLink: hasLink).transition(transition)
             case nil:
                 EmptyView()
             }
         }
-        .animation(NoteFormatMotion.animation(reduceMotion: design.reduceMotion), value: model.card)
-        .padding(AtticNoteFormatMetrics.shadowRoom)
+        .animation(preset.animation(reduceMotion: design.reduceMotion, showing: model.card != nil), value: model.card)
+        .padding(AtticDropdownMetrics.shadowRoom)
         .fixedSize()
     }
 }

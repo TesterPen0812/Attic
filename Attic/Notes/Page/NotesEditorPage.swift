@@ -270,12 +270,11 @@ struct NotesEditorPage: View {
             chrome.openFormatPopover(keyboard: false)
         }
         .accessibilityIdentifier("notes-format-button")
-        .popover(isPresented: $chrome.isFormatPopoverOpen, arrowEdge: .top) {
+        .atticDropdown(isPresented: $chrome.isFormatPopoverOpen, prefer: .above, label: String(localized: "Format")) {
             if let controls = chrome.controls {
                 NoteFormatPopoverView(model: controls.formatModel, openedByKeyboard: chrome.formatPopoverByKeyboard) {
                     chrome.isFormatPopoverOpen = false
                 }
-                .atticDesign(design)
             }
         }
     }

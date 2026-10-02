@@ -150,7 +150,7 @@ enum AtticTextInput {
     /// An Attic pop-over is on screen: its keys are its own, whichever
     /// window AppKit delivers them to.
     @MainActor static var isPopoverOpen: Bool {
-        popoverWindows.allObjects.contains { $0.isVisible }
+        AtticDropdownPresenter.isAnyOpen || popoverWindows.allObjects.contains { $0.isVisible }
     }
 
     static func isTyping(_ responder: NSResponder?) -> Bool {
@@ -1237,7 +1237,7 @@ struct AtticTaskRow: View {
                 if !twoLine || model.tags.isEmpty {
                     Color.clear.frame(width: 1, height: 1)
                         .padding(.leading, AtticLayout.textX)
-                        .atticPopover(isPresented: tagsPresented(twoLine: false), arrowEdge: .bottom) { meta?.tagPicker() }
+                        .atticDropdown(isPresented: tagsPresented(twoLine: false), label: String(localized: "Tags")) { meta?.tagPicker() }
                 }
             }
         }
@@ -1311,7 +1311,7 @@ struct AtticTaskRow: View {
                 .help(String(localized: "Change the date"))
                 .accessibilityLabel(String(localized: "Due \(due.text)"))
                 .accessibilityHint(String(localized: "Changes the date"))
-                .atticPopover(isPresented: meta.datePresented, arrowEdge: .bottom) { meta.datePicker() }
+                .atticDropdown(isPresented: meta.datePresented, label: String(localized: "Date")) { meta.datePicker() }
             } else {
                 AtticDueText(due: due, disabled: disabled)
                     .fixedSize()
@@ -1319,7 +1319,7 @@ struct AtticTaskRow: View {
         } else if let meta, capture == nil {
             // No date yet: "Pick a Date…" opens the picker from here.
             Color.clear.frame(width: 1, height: 1)
-                .atticPopover(isPresented: meta.datePresented, arrowEdge: .bottom) { meta.datePicker() }
+                .atticDropdown(isPresented: meta.datePresented, label: String(localized: "Date")) { meta.datePicker() }
         }
     }
 
@@ -1531,7 +1531,7 @@ private struct AtticDetailsTags: View {
             .focusEffectDisabled()
             .onHover { hovered = $0 }
             .atticRowControl()
-            .atticPopover(isPresented: popover?.isPresented ?? .constant(false), arrowEdge: .bottom) { popover?.content() }
+            .atticDropdown(isPresented: popover?.isPresented ?? .constant(false), label: String(localized: "Tags")) { popover?.content() }
             .help(tags.map { "#" + $0 }.joined(separator: " "))
             .accessibilityLabel(String(localized: "Tags: \(tags.joined(separator: ", "))"))
             .accessibilityHint(String(localized: "Changes the tags"))

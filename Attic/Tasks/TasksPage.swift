@@ -1323,7 +1323,6 @@ struct TasksPage: View {
             )
             TasksPickerFailureLine(model: model, id: id) { metaPopover = nil }
         }
-        .atticPickerSurface()
         .onDisappear { model.clearPickerFailure() }
     }
 
@@ -1341,7 +1340,6 @@ struct TasksPage: View {
             )
             TasksPickerFailureLine(model: model, id: id, closeOnRetrySuccess: nil)
         }
-        .atticPickerSurface()
         .onDisappear { model.clearPickerFailure() }
     }
 
@@ -2446,7 +2444,6 @@ struct TasksPage: View {
             )
             TasksPickerFailureLine(model: model, id: anchor) { selectionPicker = nil }
         }
-        .atticPickerSurface()
         .onDisappear { model.clearPickerFailure() }
     }
 
@@ -2464,7 +2461,6 @@ struct TasksPage: View {
             )
             TasksPickerFailureLine(model: model, id: anchor, closeOnRetrySuccess: nil)
         }
-        .atticPickerSurface()
         .onDisappear { model.clearPickerFailure() }
     }
 
