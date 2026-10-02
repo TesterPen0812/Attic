@@ -106,7 +106,7 @@ final class AtticDropdownTests: XCTestCase {
         XCTAssertNil(AtticDropdownCaptureSeam.resolve(environment: ["ATTIC_UI_TEST_POPOVER": "tag"],
                                                       bundleIdentifier: "com.taha.Attic.preview.notes"), "needs ATTIC_UI_TESTING")
         XCTAssertEqual(AtticDropdownCaptureSeam.tag.page, "tasks")
-        XCTAssertEqual(AtticDropdownCaptureSeam.date.notesScene, "date")
+        XCTAssertEqual(AtticDropdownCaptureSeam.date.notesScene, "date-lead")
     }
 
     // MARK: The presenter

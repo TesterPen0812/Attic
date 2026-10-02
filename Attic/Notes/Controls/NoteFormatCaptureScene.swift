@@ -5,9 +5,10 @@ import AppKit
 /// builds, UI-test launches over the in-memory store only):
 /// `ATTIC_UI_TESTING=1 ATTIC_UI_TEST_NOTES_SCENE=<scene>` types a sample
 /// note into the new draft through the real text view and router, then
-/// shows one state: `structured`, `bar`, `aa`, `slash`, `slash-da`, `date`, `link`,
-/// `context`, `formatmenu`, `notemenu`, `hint`. Nothing here runs in a
-/// normal launch.
+/// shows one state: `structured`, `bar`, `aa`, `slash`, `date`, `link`,
+/// `context`, `formatmenu`, `notemenu`, `hint`; and, for the dropdown seam,
+/// `slash-lead`, `slash-da` and `date-lead` (under the first paragraph).
+/// Nothing here runs in a normal launch.
 @MainActor
 enum NoteFormatCaptureScene {
     private static var didRun = false
@@ -122,10 +123,24 @@ enum NoteFormatCaptureScene {
             textView.insertNewline(nil)
             textView.insertNewline(nil)
             type("/", into: textView)
-        case "slash-da":
+        case "slash-lead", "slash-da", "date-lead":
+            // The dropdown seam (`ATTIC_UI_TEST_POPOVER`): a new line under
+            // the first paragraph, as in mockups p2-24 and p2-25, so the
+            // list or card opens below the caret.
+            let lead = range(of: "Keep pricing on one screen.", in: textView)
+            guard lead.location != NSNotFound else { return }
+            textView.setSelectedRange(NSRange(location: NSMaxRange(lead), length: 0))
             textView.insertNewline(nil)
-            textView.insertNewline(nil)
-            type("/da", into: textView)
+            switch scene {
+            case "slash-lead":
+                type("/", into: textView)
+            case "slash-da":
+                type("/da", into: textView)
+            default:
+                type("Call Sam /da", into: textView)
+                controls.slashModel.onPick?(.date)
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { controls.cardModel.dateText = "fri" }
+            }
         case "date":
             textView.insertNewline(nil)
             textView.insertNewline(nil)

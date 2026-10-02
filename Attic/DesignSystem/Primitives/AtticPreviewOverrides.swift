@@ -105,9 +105,9 @@ enum AtticDropdownCaptureSeam: String, CaseIterable, Sendable {
     /// The Notes capture scene that shows it (`NoteFormatCaptureScene`).
     var notesScene: String? {
         switch self {
-        case .slash: "slash"
+        case .slash: "slash-lead"
         case .slashDa: "slash-da"
-        case .date: "date"
+        case .date: "date-lead"
         case .tag, .priority: nil
         }
     }
