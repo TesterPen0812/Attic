@@ -348,16 +348,11 @@ extension NoteStore {
     @discardableResult
     func stageDisplacedReplicas(_ replicas: [NoteItem], reason: NoteVersionReason, timestamp: Date,
                                 excludingUnchangedBase baseRevisionID: UUID? = nil) throws -> Int {
-        // Fetch the complete legacy/opaque attachment inventory before any
-        // version is staged. A failed read is unknown, never an empty owner.
-        var fallbackIDs: [UUID: [UUID]] = [:]
-        for replica in replicas where !replica.usesDocumentFormat || replica.content.flatMap({ NoteContentCodec.decode($0).document }) == nil {
-            let id = replica.id
-            fallbackIDs[id] = try modelContext.fetch(FetchDescriptor<NoteAttachment>(predicate: #Predicate { $0.noteID == id }))
-                .filter { $0.deletedAt == nil }.map(\.id)
-        }
+        // The common one-row autosave cannot have a divergent base. Avoid
+        // hashing its full document/body three times just to skip preservation.
+        if replicas.count == 1, let baseRevisionID, replicas[0].revisionID == baseRevisionID { return 0 }
         var seen = Set<NotePreservationState>()
-        var inserted = 0
+        var displaced: [NoteItem] = []
         let baseReplicas = replicas.filter { baseRevisionID != nil && $0.revisionID == baseRevisionID }
         let commonBaseState = Set(baseReplicas.map(NotePreservationState.init)).count == 1
             ? baseReplicas.first.map(NotePreservationState.init) : nil
@@ -365,10 +360,21 @@ extension NoteStore {
             if baseRevisionID != nil, replica.revisionID == baseRevisionID,
                commonBaseState == NotePreservationState(replica) { continue }
             if let latest = latestVersion(noteID: replica.id), isSameState(latest, replica) { continue }
-            stageVersion(of: replica, reason: reason, timestamp: timestamp, context: modelContext, fallbackAttachmentIDs: fallbackIDs[replica.id] ?? [])
-            inserted += 1
+            displaced.append(replica)
         }
-        return inserted
+        // Only rows actually displaced need a dependency inventory. Ordinary
+        // autosave's unchanged base must not decode its entire document here.
+        // Complete every required read before staging the first version.
+        var fallbackIDs: [UUID: [UUID]] = [:]
+        for replica in displaced where !replica.usesDocumentFormat || replica.content.flatMap({ NoteContentCodec.decode($0).document }) == nil {
+            let id = replica.id
+            fallbackIDs[id] = try modelContext.fetch(FetchDescriptor<NoteAttachment>(predicate: #Predicate { $0.noteID == id }))
+                .filter { $0.deletedAt == nil }.map(\.id)
+        }
+        for replica in displaced {
+            stageVersion(of: replica, reason: reason, timestamp: timestamp, context: modelContext, fallbackAttachmentIDs: fallbackIDs[replica.id] ?? [])
+        }
+        return displaced.count
     }
 
     // MARK: Metadata
@@ -1027,7 +1033,9 @@ extension NoteStore {
     }
 
     private func isSameState(_ version: NoteVersion, _ note: NoteItem) -> Bool {
-        return version.contentFormat == note.contentFormat && version.content == note.content
+        // A legacy missing digest cannot prove equality: preserve another
+        // copy rather than faulting stored version content on the save path.
+        return version.contentFormat == note.contentFormat && version.contentFingerprint == WorkspaceModelFields.digest(note.content)
             && version.title == note.title && version.body == note.body
     }
 

@@ -551,8 +551,7 @@ final class TaskStore: ObservableObject {
             }
             // Capture the complete participating set before any sibling's
             // order/version changes, so membership guards describe the base.
-            (stored.filter { $0.listOrderVersion == 0 } + orderChanges.map { $0.0 })
-                .forEach { WorkspaceLegacyBridge.captureBeforeMutation($0, in: context) }
+            WorkspaceLegacyBridge.captureBeforeMutations(stored.filter { $0.listOrderVersion == 0 } + orderChanges.map { $0.0 }, in: context)
             for (replica, order) in orderChanges { replica.manualOrder = order }
             var marked = 0
             for row in stored where row.listOrderVersion == 0 {
@@ -1177,7 +1176,7 @@ final class TaskStore: ObservableObject {
         let groups: [UUID: [TaskItem]] = Dictionary(grouping: try context.fetch(FetchDescriptor<TaskItem>(
             predicate: #Predicate { ids.contains($0.id) }
         )), by: \.id)
-        groups.values.flatMap { $0 }.forEach { WorkspaceLegacyBridge.captureBeforeMutation($0, in: context) }
+        WorkspaceLegacyBridge.captureBeforeMutations(groups.values.flatMap { $0 }, in: context)
         var winners: [UUID: TaskItem] = [:]
         for state in target {
             guard let replicas = groups[state.id],
@@ -1741,7 +1740,7 @@ final class TaskStore: ObservableObject {
         }
         let timestamp = now()
         var deletedIDs = Set<UUID>()
-        staged.flatMap { $0.rows }.forEach { WorkspaceLegacyBridge.captureBeforeMutation($0, in: context) }
+        WorkspaceLegacyBridge.captureBeforeMutations(staged.flatMap { $0.rows }, in: context)
         for (root, rows) in staged {
             let members = Set(rows.map(\.id)).map(\.uuidString).sorted().joined(separator: " ")
             for replica in rows {
@@ -1976,7 +1975,7 @@ final class TaskStore: ObservableObject {
                 }
             }
         }
-        batches.values.flatMap { $0 }.forEach { WorkspaceLegacyBridge.captureBeforeMutation($0, in: context) }
+        WorkspaceLegacyBridge.captureBeforeMutations(batches.values.flatMap { $0 }, in: context)
         for batch in batches.values {
             for replica in batch {
                 WorkspaceLegacyBridge.captureBeforeMutation(replica, in: context)
@@ -1997,7 +1996,7 @@ final class TaskStore: ObservableObject {
         guard let task = adapter.task(withID: taskID),
               let rows = adapter.deletionFamily(of: task, owner: taskID) else { throw WorkspaceFoundationError.conflict }
         let members = Set(rows.map(\.id)).map(\.uuidString).sorted().joined(separator: " ")
-        rows.forEach { WorkspaceLegacyBridge.captureBeforeMutation($0, in: context) }
+        WorkspaceLegacyBridge.captureBeforeMutations(rows, in: context)
         for row in rows {
             WorkspaceLegacyBridge.captureBeforeMutation(row, in: context)
             row.deletedAt = timestamp; row.deletionRootID = taskID; row.deletionMembersRaw = members
@@ -2113,6 +2112,7 @@ final class TaskStore: ObservableObject {
         }
         guard !removed.isEmpty else { return [] }
         let removedFiles = removed.flatMap { $0.attachments + $0.removedAttachments.map(\.reference) }
+        WorkspaceLegacyBridge.captureBeforeMutations(removed, in: context)
         removed.forEach { WorkspaceLegacyBridge.delete($0, in: context) }
         do {
             try alongside?(context, purgedIDs)
@@ -2214,7 +2214,7 @@ final class TaskStore: ObservableObject {
         }
         guard !expiredIDs.isEmpty else { return 0 }
         let timestamp = now()
-        stored.filter { expiredIDs.contains($0.id) }.forEach { WorkspaceLegacyBridge.captureBeforeMutation($0, in: context) }
+        WorkspaceLegacyBridge.captureBeforeMutations(stored.filter { expiredIDs.contains($0.id) }, in: context)
         for replica in stored where expiredIDs.contains(replica.id) {
             WorkspaceLegacyBridge.captureBeforeMutation(replica, in: context)
             replica.doneLoggedAt = timestamp
@@ -2591,7 +2591,7 @@ final class TaskStore: ObservableObject {
         guard !shown.isEmpty, shown.allSatisfy({ $0.status == .done && $0.doneLoggedAt == nil }) else {
             return false
         }
-        replicas.forEach { WorkspaceLegacyBridge.captureBeforeMutation($0, in: context) }
+        WorkspaceLegacyBridge.captureBeforeMutations(replicas, in: context)
         for replica in replicas where replica.doneLoggedAt == nil {
             WorkspaceLegacyBridge.captureBeforeMutation(replica, in: context)
             replica.doneLoggedAt = loggedAt
@@ -2789,7 +2789,7 @@ final class TaskStore: ObservableObject {
         // reopens exactly the subtasks finished with it (Astra 20).
         let timestamp = now()
         _ = try storedTasks(matching: taskID)
-        openChildren.values.flatMap { $0 }.forEach { WorkspaceLegacyBridge.captureBeforeMutation($0, in: context) }
+        WorkspaceLegacyBridge.captureBeforeMutations(openChildren.values.flatMap { $0 }, in: context)
         for (id, copies) in openChildren {
             let shownRow = self.task(withID: id)
             let shown = shownRow.map(TaskContentSnapshot.init)
@@ -3285,7 +3285,7 @@ final class TaskStore: ObservableObject {
         let stored = try context.fetch(FetchDescriptor<TaskItem>(
             predicate: #Predicate { idList.contains($0.id) }
         ))
-        stored.forEach { WorkspaceLegacyBridge.captureBeforeMutation($0, in: context) }
+        WorkspaceLegacyBridge.captureBeforeMutations(stored, in: context)
         let groups = Dictionary(grouping: stored, by: \.id)
         if let missingID = ids.first(where: { groups[$0]?.isEmpty != false }) {
             throw TaskReplicaMutationError.missingReplica(missingID)

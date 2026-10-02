@@ -20,8 +20,15 @@ final class WorkspaceOperationCoordinator {
 
     let container: ModelContainer
     let ownership: WorkspaceOwnershipGate
-    private var admittedDocuments: [Data: Set<UUID>] = [:]
-    private var admissionRecency: [Data] = []
+    private struct Admission {
+        let content: Data
+        let ids: Set<UUID>
+        let digest: String
+    }
+    // At most four immutable documents. Linear byte equality exits at the
+    // first changed bytes; Data-key dictionaries rehash the entire 5k-line
+    // document on every admission lookup on the main actor.
+    private var admittedDocuments: [Admission] = []
     private var admittedNoteKinds: [String: Bool] = [:]
     func observePreparedDocument(_ document: PreparedNoteDocument) {
         guard let ids = document.admissionIDs else { return }
@@ -30,20 +37,26 @@ final class WorkspaceOperationCoordinator {
     func observeValidatedDocument(_ content: Data, attachmentIDs: Set<UUID>, hasTaskNote: Bool) {
         cacheAdmission(content, ids: attachmentIDs, hasTaskNote: hasTaskNote)
     }
+    func admittedContentDigest(_ content: Data) -> String? {
+        admittedDocuments.first { $0.content == content }?.digest
+    }
+    private func cachedAdmission(_ content: Data) -> Set<UUID>? {
+        admittedDocuments.first { $0.content == content }?.ids
+    }
     private func cacheAdmission(_ content: Data, ids: Set<UUID>, hasTaskNote: Bool) {
-        if admittedDocuments[content] == ids { return }
-        admittedNoteKinds[WorkspaceModelFields.digest(content)] = hasTaskNote
-        admissionRecency.removeAll { $0 == content }; admissionRecency.append(content)
-        admittedDocuments[content] = ids
-        while admissionRecency.count > 4 || admissionRecency.reduce(0, { $0 + $1.count }) > 2_097_152 {
-            guard admissionRecency.count > 1 else { break }
-            let expired = admissionRecency.removeFirst()
-            admittedDocuments.removeValue(forKey: expired)
-            admittedNoteKinds.removeValue(forKey: WorkspaceModelFields.digest(expired))
+        if cachedAdmission(content) == ids { return }
+        let digest = WorkspaceModelFields.digest(content)
+        admittedNoteKinds[digest] = hasTaskNote
+        admittedDocuments.removeAll { $0.content == content }
+        admittedDocuments.append(Admission(content: content, ids: ids, digest: digest))
+        while admittedDocuments.count > 4 || admittedDocuments.reduce(0, { $0 + $1.content.count }) > 2_097_152 {
+            guard admittedDocuments.count > 1 else { break }
+            let expired = admittedDocuments.removeFirst()
+            admittedNoteKinds.removeValue(forKey: expired.digest)
         }
     }
     private func documentAdmissionIDs(_ content: Data) -> Set<UUID> {
-        if let ids = admittedDocuments[content] { return ids }
+        if let ids = cachedAdmission(content) { return ids }
         guard case let .editable(document) = NoteContentCodec.decode(content) else { return [ownership.unknownID] }
         let ids = Set(document.attachmentIDs)
         cacheAdmission(content, ids: ids, hasTaskNote: document.requires.contains("taskNote")); return ids
@@ -165,14 +178,16 @@ final class WorkspaceOperationCoordinator {
         let affected = Set(envelope.tokens.map(\.owner)).union(envelope.writes)
         let context = freshContext()
         do {
+            let validated = try WorkspaceModelToken.read(owners: Set((envelope.tokens + envelope.inverseGuards).map(\.owner)), in: context)
             for token in envelope.tokens + envelope.inverseGuards {
-                let current = try WorkspaceModelToken.read(token.owner, in: context)
+                let current = validated[token.owner]!
                 guard current == token else {
                     return .conflict
                 }
             }
+            let validatedScopes = try WorkspaceScopeToken.read(scopes: Set(envelope.scopes.map(\.scope)), in: context)
             for scope in envelope.scopes {
-                let current = try WorkspaceScopeToken.read(scope.scope, in: context)
+                let current = validatedScopes[scope.scope]!
                 guard current == scope else { return .conflict }
             }
             WorkspaceCrashHook.reach("K3-validation")
@@ -231,18 +246,20 @@ final class WorkspaceOperationCoordinator {
         guard affected.isDisjoint(with: heldOwners), plainUnknown == nil else { return .unknown }
         let context = freshContext()
         do {
+            let validated = try WorkspaceModelToken.read(owners: Set(tokens.map(\.owner)).union(writes), in: context)
             for token in tokens {
-                let current = try WorkspaceModelToken.read(token.owner, in: context)
+                let current = validated[token.owner]!
                 guard current == token else {
                     return .conflict
                 }
             }
+            let validatedScopes = try WorkspaceScopeToken.read(scopes: Set(scopes.map(\.scope)), in: context)
             for scope in scopes {
-                guard try WorkspaceScopeToken.read(scope.scope, in: context) == scope else { return .conflict }
+                guard validatedScopes[scope.scope] == scope else { return .conflict }
             }
-            let previous = try sorted(writes).map { try WorkspaceModelToken.read($0, in: context) }
+            let previous = sorted(writes).map { validated[$0]! }
             let physicalIDs = Dictionary(uniqueKeysWithValues: previous.map { ($0.owner, Set($0.replicas.map(\.physicalID))) })
-            let before = try states(writes, in: context, physical: true, baselineIDs: physicalIDs)
+            let before = try states(tokens: previous, physical: true, baselineIDs: physicalIDs)
             let originalContents = try noteContents(previous, in: context)
             try stage(context)
             try validateTombstones(context, before: previous)
@@ -251,11 +268,12 @@ final class WorkspaceOperationCoordinator {
             guard let admission = ownership.tryAcquire(try admissionIDs(context.insertedModelsArray + context.changedModelsArray, before: previous), kind: .admission) else { return .conflict }
             defer { admission.release() }
             try validateWriteSet(context, declared: writes)
-            let next = try sorted(writes).map { try WorkspaceModelToken.read($0, in: context) }
+            let stagedTokens = try WorkspaceModelToken.read(owners: writes, in: context)
+            let next = sorted(writes).map { stagedTokens[$0]! }
             guard try mayUsePlainSave(before: previous, after: next, in: context) else {
                 return .conflict
             }
-            let after = try states(writes, in: context, physical: true, baselineIDs: physicalIDs)
+            let after = try states(tokens: next, physical: true, baselineIDs: physicalIDs)
             do { try save(context); return .committed }
             catch {
                 plainUnknown = (before, after, affected, physicalIDs)
@@ -525,12 +543,16 @@ final class WorkspaceOperationCoordinator {
     }
     private func states(_ owners: Set<WorkspaceOwner>, in context: ModelContext, physical: Bool = false,
                         baselineIDs: [WorkspaceOwner: Set<PersistentIdentifier>]? = nil) throws -> [State] {
-        return try sorted(owners).map { owner in
-            let token = try WorkspaceModelToken.read(owner, in: context)
-            return State(owner: owner, replicas: try token.replicas.map {
+        let tokens = try WorkspaceModelToken.read(owners: owners, in: context)
+        return try states(tokens: sorted(owners).map { tokens[$0]! }, physical: physical, baselineIDs: baselineIDs)
+    }
+    private func states(tokens: [WorkspaceModelToken], physical: Bool = false,
+                        baselineIDs: [WorkspaceOwner: Set<PersistentIdentifier>]? = nil) throws -> [State] {
+        return try tokens.map { token in
+            return State(owner: token.owner, replicas: try token.replicas.map {
                 let digest = WorkspaceModelFields.digest(try WorkspaceModelFields.encode($0.fields))
                 guard physical else { return digest }
-                let physicalKey = baselineIDs?[owner]?.contains($0.physicalID) == false
+                let physicalKey = baselineIDs?[token.owner]?.contains($0.physicalID) == false
                     ? "new" : WorkspaceModelFields.digest(try WorkspaceModelFields.encode($0.physicalID))
                 return physicalKey + ":" + digest
             }.sorted())
@@ -548,7 +570,7 @@ final class WorkspaceOperationCoordinator {
             for row in try context.fetch(FetchDescriptor<NoteItem>(predicate: #Predicate { $0.id == id })) {
                 if let data = row.content {
                     contents[row.persistentModelID] = data
-                    if admittedDocuments[data] == nil, case let .editable(document) = NoteContentCodec.decode(data) {
+                    if cachedAdmission(data) == nil, case let .editable(document) = NoteContentCodec.decode(data) {
                         cacheAdmission(data, ids: Set(document.attachmentIDs), hasTaskNote: document.requires.contains("taskNote"))
                     }
                 }
@@ -569,7 +591,7 @@ final class WorkspaceOperationCoordinator {
             // documents have already had capability validation off this path.
             if row.content == content && row.contentFormat == format { continue }
             let supported = format == 0 && content == nil || format == NoteDocument.currentFormat && content.map {
-                admittedDocuments[$0] != nil || NoteContentCodec.decode($0).isEditable
+                cachedAdmission($0) != nil || NoteContentCodec.decode($0).isEditable
             } == true
             guard supported else { throw WorkspaceFoundationError.protectedOwner }
         }

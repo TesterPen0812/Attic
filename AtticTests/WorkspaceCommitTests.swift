@@ -165,6 +165,8 @@ final class WorkspaceCommitTests: XCTestCase {
             try WorkspaceModelFields.apply(snapshot, to: copy)
             XCTAssertEqual(try WorkspaceModelFields.read(copy), snapshot)
             XCTAssertEqual(try WorkspaceModelFields.fingerprint(copy), try WorkspaceModelFields.fingerprint(original))
+            try WorkspaceModelFields.copy(Set(snapshot.keys), from: original, to: copy)
+            XCTAssertEqual(try WorkspaceModelFields.read(copy), snapshot, "typed ingestion retains legacy missing digests too")
         }
     }
 
@@ -236,6 +238,15 @@ final class WorkspaceCommitTests: XCTestCase {
         try context.save()
         let inventory = try WorkspaceLegacyBridge.inventory(in: context, includeCanvas: false)
         let index = try WorkspaceScopeIndex(inventory)
+        let missing = WorkspaceOwner(entity: .task, id: UUID())
+        let owners = Set(inventory.keys).union([missing])
+        let batched = try WorkspaceModelToken.read(owners: owners, in: context)
+        XCTAssertEqual(batched[missing]?.replicas, [])
+        for owner in owners { XCTAssertEqual(batched[owner], try WorkspaceModelToken.read(owner, in: context)) }
+        let scopes: Set<WorkspaceScope> = [.children(taskID), .children(otherParent), .children(UUID()),
+            .taskAssociations(taskID), .noteAssociations(noteID), .attachments(noteID), .versions(noteID), .proposals(noteID)]
+        let memberships = try WorkspaceScopeToken.read(scopes: scopes, in: context)
+        for scope in scopes { XCTAssertEqual(memberships[scope], try WorkspaceScopeToken.read(scope, in: context)) }
         for parent in [taskID!, otherParent] {
             let scope = WorkspaceScope.children(parent)
             XCTAssertEqual(index.token(scope), try WorkspaceScopeToken.read(scope, in: context))

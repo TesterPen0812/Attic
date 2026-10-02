@@ -1626,7 +1626,7 @@ final class NoteStore: ObservableObject {
             try Self.persistStoreContext(context, using: persist)
             #endif
             do {
-                try reloadModels(preservingAttachmentProofs: true)
+                try reloadModels(preservingAttachmentProofs: true, confirmedSource: context)
                 lastErrorMessage = nil
             } catch {
                 lastErrorMessage = "Saved, but presentation is still updating: \(error.localizedDescription)"
@@ -1646,12 +1646,13 @@ final class NoteStore: ObservableObject {
         }
     }
 
-    private func reloadModels(preservingAttachmentProofs: Bool = false) throws {
+    private func reloadModels(preservingAttachmentProofs: Bool = false, confirmedSource: ModelContext? = nil) throws {
         // A long-lived ModelContext can return cached model instances after
         // CloudKit updates the underlying store. Refresh through a new context
         // so remote values replace the old objects instead of being written
         // back to CloudKit by the next local save.
         let refreshedContext = try makeFreshContext()
+        if let confirmedSource { _ = try WorkspaceLegacyBridge.presentationFollowingCommit(confirmedSource, freshContext: refreshedContext) }
         let presentation = try presentationSnapshot(in: refreshedContext)
         installPresentation(presentation, using: refreshedContext, preservingAttachmentProofs: preservingAttachmentProofs)
     }
@@ -1839,7 +1840,7 @@ final class NoteStore: ObservableObject {
         )
         let source = sourceContext ?? context
         let rows = try source.fetch(descriptor)
-        rows.forEach { WorkspaceLegacyBridge.captureBeforeMutation($0, in: source) }
+        WorkspaceLegacyBridge.captureBeforeMutations(rows, in: source)
         return rows
     }
 
@@ -1857,7 +1858,7 @@ final class NoteStore: ObservableObject {
         )
         let source = sourceContext ?? context
         let replicas = try source.fetch(descriptor)
-        replicas.forEach { WorkspaceLegacyBridge.captureBeforeMutation($0, in: source) }
+        WorkspaceLegacyBridge.captureBeforeMutations(replicas, in: source)
         guard allowMissing || !replicas.isEmpty else {
             throw NoteReplicaMutationError.missingReplica(id)
         }
@@ -1876,7 +1877,7 @@ final class NoteStore: ObservableObject {
         )
         let source = sourceContext ?? context
         let rows = try source.fetch(descriptor)
-        rows.forEach { WorkspaceLegacyBridge.captureBeforeMutation($0, in: source) }
+        WorkspaceLegacyBridge.captureBeforeMutations(rows, in: source)
         return rows
     }
 

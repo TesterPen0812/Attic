@@ -39,6 +39,40 @@ struct WorkspaceModelToken: Codable, Equatable, Sendable {
         }
     }
 
+    /// Batch only declared owners. Unlike an inventory, unrelated rows are
+    /// never fetched; every matching physical replica still enters its guard.
+    @MainActor static func read(owners: Set<WorkspaceOwner>, in context: ModelContext) throws -> [WorkspaceOwner: Self] {
+        if owners.count == 1, let owner = owners.first { return [owner: try read(owner, in: context)] }
+        var result = Dictionary(uniqueKeysWithValues: owners.map { ($0, Self(owner: $0, replicas: [])) })
+        func collect<M: PersistentModel>(_ rows: [M]) throws {
+            var groups: [WorkspaceOwner: [M]] = [:]
+            for row in rows {
+                guard let owner = WorkspaceOperationCoordinator.owner(row), owners.contains(owner) else { throw WorkspaceFoundationError.unknown }
+                groups[owner, default: []].append(row)
+            }
+            for (owner, rows) in groups { result[owner] = try capture(owner, rows: rows) }
+        }
+        for (entity, group) in Dictionary(grouping: owners, by: { $0.entity }) {
+            let ids = group.map(\.id)
+            switch entity {
+            case .task: try collect(context.fetch(FetchDescriptor<TaskItem>(predicate: #Predicate { ids.contains($0.id) })))
+            case .note: try collect(context.fetch(FetchDescriptor<NoteItem>(predicate: #Predicate { ids.contains($0.id) })))
+            case .attachment: try collect(context.fetch(FetchDescriptor<NoteAttachment>(predicate: #Predicate { ids.contains($0.id) })))
+            case .version: try collect(context.fetch(FetchDescriptor<NoteVersion>(predicate: #Predicate { ids.contains($0.id) })))
+            case .proposal: try collect(context.fetch(FetchDescriptor<NotePendingEdit>(predicate: #Predicate { ids.contains($0.id) })))
+            case .link: try collect(context.fetch(FetchDescriptor<ItemLink>(predicate: #Predicate { ids.contains($0.id) })))
+            case .association: try collect(context.fetch(FetchDescriptor<TaskNoteAssociation>(predicate: #Predicate { ids.contains($0.id) })))
+            case .preservation: try collect(context.fetch(FetchDescriptor<TaskDeletionPreservation>(predicate: #Predicate { ids.contains($0.id) })))
+            case .receipt: try collect(context.fetch(FetchDescriptor<OperationReceipt>(predicate: #Predicate { ids.contains($0.id) })))
+            case .board: try collect(context.fetch(FetchDescriptor<CanvasBoardItem>(predicate: #Predicate { ids.contains($0.id) })))
+            case .stroke: try collect(context.fetch(FetchDescriptor<CanvasStrokeItem>(predicate: #Predicate { ids.contains($0.id) })))
+            case .image: try collect(context.fetch(FetchDescriptor<CanvasImageItem>(predicate: #Predicate { ids.contains($0.id) })))
+            case .semantic: try collect(context.fetch(FetchDescriptor<CanvasSemanticObjectItem>(predicate: #Predicate { ids.contains($0.id) })))
+            }
+        }
+        return result
+    }
+
     @MainActor private static func capture<M: PersistentModel>(_ owner: WorkspaceOwner, rows: [M]) throws -> Self {
         let replicas = try rows.map { row in
             Replica(physicalID: row.persistentModelID, fields: try WorkspaceModelFields.fingerprint(row))
@@ -65,6 +99,20 @@ enum WorkspaceModelFields {
     static func digest(_ data: Data?) -> String {
         data.map { SHA256.hash(data: $0).map { String(format: "%02x", $0) }.joined() } ?? "nil"
     }
+    // Immutable, bounded memoization avoids rehashing the same derived text
+    // in source/commit/confirmed fingerprints. Equality checks the real value;
+    // this is not a model/revision cache and cannot hide an external change.
+    @MainActor private static var textFingerprints: [(text: String, digest: Data)] = []
+    @MainActor static func textFingerprint(_ text: String) -> Data {
+        guard text.utf8.count > 1_024 else { return Data(SHA256.hash(data: Data(text.utf8))) }
+        if let cached = textFingerprints.first(where: { $0.text == text }) { return cached.digest }
+        let digest = Data(SHA256.hash(data: Data(text.utf8)))
+        textFingerprints.append((text, digest))
+        while textFingerprints.count > 4 || textFingerprints.reduce(0, { $0 + $1.text.utf8.count }) > 2_097_152 {
+            textFingerprints.removeFirst()
+        }
+        return digest
+    }
     @MainActor static func fingerprint<M: PersistentModel>(_ model: M) throws -> [String: Data] {
         try capture(model, fingerprint: true)
     }
@@ -77,8 +125,14 @@ enum WorkspaceModelFields {
         return fields
     }
 
-    @MainActor private static func record<M: PersistentModel>(_ model: M, _ fields: [WorkspaceField<M>], applying patch: [String: Data]? = nil, fingerprint: Bool = false, keys: Set<String>? = nil) throws -> [String: Data] {
+    @MainActor private static func record<M: PersistentModel>(_ model: M, _ fields: [WorkspaceField<M>], applying patch: [String: Data]? = nil, fingerprint: Bool = false, keys: Set<String>? = nil, copying source: (any PersistentModel)? = nil) throws -> [String: Data] {
         guard fields.count == M.schemaMetadata.count else { throw WorkspaceFoundationError.unsupportedField(String(describing: M.self)) }
+        if let source {
+            guard let source = source as? M, let keys,
+                  keys.isSubset(of: Set(fields.map(\.name))) else { throw WorkspaceFoundationError.conflict }
+            for field in fields where keys.contains(field.name) { field.copy(source, model) }
+            return [:]
+        }
         if let patch {
             guard Set(patch.keys).isSubset(of: Set(fields.map(\.name))) else { throw WorkspaceFoundationError.conflict }
             // Blob setters compute digests. Their optional digest field follows
@@ -94,11 +148,16 @@ enum WorkspaceModelFields {
     @MainActor static func patchValues(_ keys: Set<String>, from model: any PersistentModel) throws -> [String: Data] {
         try capture(model, keys: keys)
     }
+    /// Transfer only changed fields without serializing document bytes/text.
+    /// The complete fingerprints were validated before this typed patch runs.
+    @MainActor static func copy(_ keys: Set<String>, from source: any PersistentModel, to target: any PersistentModel) throws {
+        _ = try capture(target, keys: keys, copying: source)
+    }
     @MainActor static func apply(_ values: [String: Data], to model: any PersistentModel) throws {
         _ = try capture(model, applying: values)
     }
 
-    @MainActor private static func capture(_ model: any PersistentModel, applying values: [String: Data]? = nil, fingerprint: Bool = false, keys: Set<String>? = nil) throws -> [String: Data] {
+    @MainActor private static func capture(_ model: any PersistentModel, applying values: [String: Data]? = nil, fingerprint: Bool = false, keys: Set<String>? = nil, copying source: (any PersistentModel)? = nil) throws -> [String: Data] {
         switch model {
         case let row as TaskItem:
             return try record(row, [
@@ -123,7 +182,7 @@ enum WorkspaceModelFields {
                 WorkspaceField("listOrderVersion", \TaskItem.listOrderVersion),
                 WorkspaceField("completedFromRaw", \TaskItem.completedFromRaw),
                 WorkspaceField("completedFromOrder", \TaskItem.completedFromOrder)
-            ], applying: values, fingerprint: fingerprint, keys: keys)
+            ], applying: values, fingerprint: fingerprint, keys: keys, copying: source)
         case let row as NoteItem:
             return try record(row, [
                 WorkspaceField("id", \NoteItem.id),
@@ -136,7 +195,14 @@ enum WorkspaceModelFields {
                 WorkspaceField("deletedAttachmentIDsRaw", \NoteItem.deletedAttachmentIDsRaw),
                 WorkspaceField("tagsRaw", \NoteItem.tagsRaw),
                 WorkspaceField("pinnedAt", \NoteItem.pinnedAt),
-                WorkspaceField("content", \NoteItem.content, contentDigest: true),
+                WorkspaceField("content", \NoteItem.content, fingerprint: { note in
+                    let digest: String
+                    if let data = note.content, let context = note.modelContext,
+                       let cached = try WorkspaceLegacyBridge.coordinator(for: context.container).admittedContentDigest(data) {
+                        digest = cached
+                    } else { digest = WorkspaceModelFields.digest(note.content) }
+                    return try WorkspaceModelFields.encode(digest)
+                }),
                 WorkspaceField("contentFormat", \NoteItem.contentFormat),
                 WorkspaceField("plainText", \NoteItem.plainText),
                 WorkspaceField("imageCount", \NoteItem.imageCount),
@@ -145,7 +211,7 @@ enum WorkspaceModelFields {
                 WorkspaceField("taskID", \NoteItem.taskID),
                 WorkspaceField("revision", \NoteItem.revision),
                 WorkspaceField("revisionID", \NoteItem.revisionID)
-            ], applying: values, fingerprint: fingerprint, keys: keys)
+            ], applying: values, fingerprint: fingerprint, keys: keys, copying: source)
         case let row as NoteAttachment:
             return try record(row, [
                 WorkspaceField("id", \NoteAttachment.id),
@@ -163,7 +229,7 @@ enum WorkspaceModelFields {
                 WorkspaceField("deletedAt", \NoteAttachment.deletedAt),
                 WorkspaceField("payload", \NoteAttachment.payload, digest: \NoteAttachment.payloadFingerprint),
                 WorkspaceField("payloadFingerprint", \NoteAttachment.payloadFingerprint)
-            ], applying: values, fingerprint: fingerprint, keys: keys)
+            ], applying: values, fingerprint: fingerprint, keys: keys, copying: source)
         case let row as NoteVersion:
             return try record(row, [
                 WorkspaceField("id", \NoteVersion.id),
@@ -177,7 +243,7 @@ enum WorkspaceModelFields {
                 WorkspaceField("body", \NoteVersion.body),
                 WorkspaceField("attachmentIDsRaw", \NoteVersion.attachmentIDsRaw),
                 WorkspaceField("sourceRevisionID", \NoteVersion.sourceRevisionID)
-            ], applying: values, fingerprint: fingerprint, keys: keys)
+            ], applying: values, fingerprint: fingerprint, keys: keys, copying: source)
         case let row as NotePendingEdit:
             return try record(row, [
                 WorkspaceField("id", \NotePendingEdit.id),
@@ -189,7 +255,7 @@ enum WorkspaceModelFields {
                 WorkspaceField("agentName", \NotePendingEdit.agentName),
                 WorkspaceField("createdAt", \NotePendingEdit.createdAt),
                 WorkspaceField("needsReview", \NotePendingEdit.needsReview)
-            ], applying: values, fingerprint: fingerprint, keys: keys)
+            ], applying: values, fingerprint: fingerprint, keys: keys, copying: source)
         case let row as ItemLink:
             return try record(row, [
                 WorkspaceField("id", \ItemLink.id),
@@ -201,7 +267,7 @@ enum WorkspaceModelFields {
                 WorkspaceField("createdAt", \ItemLink.createdAt),
                 WorkspaceField("updatedAt", \ItemLink.updatedAt),
                 WorkspaceField("deletedAt", \ItemLink.deletedAt)
-            ], applying: values, fingerprint: fingerprint, keys: keys)
+            ], applying: values, fingerprint: fingerprint, keys: keys, copying: source)
         case let row as OperationReceipt:
             return try record(row, [
                 WorkspaceField("id", \OperationReceipt.id),
@@ -215,7 +281,7 @@ enum WorkspaceModelFields {
                 WorkspaceField("handoffProof", \OperationReceipt.handoffProof),
                 WorkspaceField("envelopeReleased", \OperationReceipt.envelopeReleased),
                 WorkspaceField("createdAt", \OperationReceipt.createdAt)
-            ], applying: values, fingerprint: fingerprint, keys: keys)
+            ], applying: values, fingerprint: fingerprint, keys: keys, copying: source)
         case let row as TaskNoteAssociation:
             return try record(row, [
                 WorkspaceField("id", \TaskNoteAssociation.id),
@@ -225,7 +291,7 @@ enum WorkspaceModelFields {
                 WorkspaceField("noteGeneration", \TaskNoteAssociation.noteGeneration),
                 WorkspaceField("detachedPreservationID", \TaskNoteAssociation.detachedPreservationID),
                 WorkspaceField("detachedAt", \TaskNoteAssociation.detachedAt)
-            ], applying: values, fingerprint: fingerprint, keys: keys)
+            ], applying: values, fingerprint: fingerprint, keys: keys, copying: source)
         case let row as TaskDeletionPreservation:
             return try record(row, [
                 WorkspaceField("id", \TaskDeletionPreservation.id),
@@ -235,7 +301,7 @@ enum WorkspaceModelFields {
                 WorkspaceField("provenance", \TaskDeletionPreservation.provenance),
                 WorkspaceField("snapshot", \TaskDeletionPreservation.snapshot),
                 WorkspaceField("purgedAt", \TaskDeletionPreservation.purgedAt)
-            ], applying: values, fingerprint: fingerprint, keys: keys)
+            ], applying: values, fingerprint: fingerprint, keys: keys, copying: source)
         case let row as CanvasBoardItem:
             return try record(row, [
                 WorkspaceField("id", \CanvasBoardItem.id),
@@ -252,7 +318,7 @@ enum WorkspaceModelFields {
                 WorkspaceField("purgedAt", \CanvasBoardItem.purgedAt),
                 WorkspaceField("recentlyDeletedAt", \CanvasBoardItem.recentlyDeletedAt),
                 WorkspaceField("deletedContentCount", \CanvasBoardItem.deletedContentCount)
-            ], applying: values, fingerprint: fingerprint, keys: keys)
+            ], applying: values, fingerprint: fingerprint, keys: keys, copying: source)
         case let row as CanvasStrokeItem:
             return try record(row, [
                 WorkspaceField("id", \CanvasStrokeItem.id),
@@ -265,7 +331,7 @@ enum WorkspaceModelFields {
                 WorkspaceField("createdAt", \CanvasStrokeItem.createdAt),
                 WorkspaceField("updatedAt", \CanvasStrokeItem.updatedAt),
                 WorkspaceField("deletedAt", \CanvasStrokeItem.deletedAt)
-            ], applying: values, fingerprint: fingerprint, keys: keys)
+            ], applying: values, fingerprint: fingerprint, keys: keys, copying: source)
         case let row as CanvasImageItem:
             return try record(row, [
                 WorkspaceField("id", \CanvasImageItem.id),
@@ -290,7 +356,7 @@ enum WorkspaceModelFields {
                 WorkspaceField("createdAt", \CanvasImageItem.createdAt),
                 WorkspaceField("updatedAt", \CanvasImageItem.updatedAt),
                 WorkspaceField("deletedAt", \CanvasImageItem.deletedAt)
-            ], applying: values, fingerprint: fingerprint, keys: keys)
+            ], applying: values, fingerprint: fingerprint, keys: keys, copying: source)
         case let row as CanvasSemanticObjectItem:
             return try record(row, [
                 WorkspaceField("id", \CanvasSemanticObjectItem.id),
@@ -310,7 +376,7 @@ enum WorkspaceModelFields {
                 WorkspaceField("createdAt", \CanvasSemanticObjectItem.createdAt),
                 WorkspaceField("updatedAt", \CanvasSemanticObjectItem.updatedAt),
                 WorkspaceField("deletedAt", \CanvasSemanticObjectItem.deletedAt)
-            ], applying: values, fingerprint: fingerprint, keys: keys)
+            ], applying: values, fingerprint: fingerprint, keys: keys, copying: source)
         default: throw WorkspaceFoundationError.unsupportedField(String(describing: type(of: model)))
         }
     }
@@ -321,13 +387,15 @@ enum WorkspaceModelFields {
     let read: (M) throws -> Data
     let fingerprint: (M) throws -> Data
     let write: (M, Data) throws -> Void
+    let copy: (M, M) -> Void
     init<Value: Codable>(_ name: String, _ keyPath: ReferenceWritableKeyPath<M, Value>) {
         self.name = name
+        copy = { source, target in target[keyPath: keyPath] = source[keyPath: keyPath] }
         read = { try WorkspaceModelFields.encode($0[keyPath: keyPath]) }
         fingerprint = { model in
             let value = model[keyPath: keyPath]
             if ["body", "plainText", "title"].contains(name), let text = value as? String {
-                return Data(SHA256.hash(data: Data(text.utf8)))
+                return WorkspaceModelFields.textFingerprint(text)
             }
             let bytes = try WorkspaceModelFields.encode(value)
             return ["snapshot", "pointsData", "payloadData", "encodedData", "payload"].contains(name)
@@ -338,12 +406,14 @@ enum WorkspaceModelFields {
     init<Value: Codable>(_ name: String, _ keyPath: ReferenceWritableKeyPath<M, Value>,
                          fingerprint: @escaping (M) throws -> Data) {
         self.name = name
+        copy = { source, target in target[keyPath: keyPath] = source[keyPath: keyPath] }
         read = { try WorkspaceModelFields.encode($0[keyPath: keyPath]) }
         self.fingerprint = fingerprint
         write = { model, data in model[keyPath: keyPath] = try JSONDecoder().decode(Value.self, from: data) }
     }
     init(_ name: String, _ keyPath: ReferenceWritableKeyPath<M, Data?>, contentDigest: Bool) {
         self.name = name
+        copy = { source, target in target[keyPath: keyPath] = source[keyPath: keyPath] }
         read = { try WorkspaceModelFields.encode($0[keyPath: keyPath]) }
         fingerprint = { try WorkspaceModelFields.encode(WorkspaceModelFields.digest($0[keyPath: keyPath])) }
         write = { model, data in model[keyPath: keyPath] = try JSONDecoder().decode(Data?.self, from: data) }
@@ -351,6 +421,7 @@ enum WorkspaceModelFields {
     init(_ name: String, _ keyPath: ReferenceWritableKeyPath<M, Data?>,
          digest: ReferenceWritableKeyPath<M, String?>) {
         self.name = name
+        copy = { source, target in target[keyPath: keyPath] = source[keyPath: keyPath] }
         read = { model in
             return try WorkspaceModelFields.encode(model[keyPath: keyPath])
         }

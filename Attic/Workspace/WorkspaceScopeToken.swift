@@ -76,6 +76,61 @@ struct WorkspaceScopeToken: Codable, Equatable, Sendable {
     let scope: WorkspaceScope
     let members: [WorkspaceModelToken]
 
+    /// Fetch related rows for the requested families in batches. A large
+    /// touched set (such as list-order migration) must not issue thousands
+    /// of otherwise-empty membership queries or scan unrelated blob owners.
+    @MainActor static func read(scopes: Set<WorkspaceScope>, in context: ModelContext) throws -> [WorkspaceScope: Self] {
+        if scopes.count == 1, let scope = scopes.first { return [scope: try read(scope, in: context)] }
+        var membership = Dictionary(uniqueKeysWithValues: scopes.map { ($0, Set<WorkspaceOwner>()) })
+        var result: [WorkspaceScope: Self] = [:]
+        var children: [UUID?] = [], attachments: [UUID] = [], versions: [UUID] = [], proposals: [UUID] = []
+        var taskAssociations: [UUID] = [], noteAssociations: [UUID] = [], preservations: [UUID] = []
+        for scope in scopes {
+            switch scope {
+            case .all: result[scope] = try read(scope, in: context)
+            case let .children(id): children.append(id)
+            case let .attachments(id): attachments.append(id)
+            case let .versions(id): versions.append(id)
+            case let .proposals(id): proposals.append(id)
+            case let .taskAssociations(id): taskAssociations.append(id)
+            case let .noteAssociations(id): noteAssociations.append(id)
+            case let .preservations(id): preservations.append(id)
+            }
+        }
+        func add(_ row: any PersistentModel, to scope: WorkspaceScope) throws {
+            guard scopes.contains(scope) else { return }
+            guard let owner = WorkspaceOperationCoordinator.owner(row) else { throw WorkspaceFoundationError.unknown }
+            membership[scope, default: []].insert(owner)
+        }
+        if !children.isEmpty {
+            for row in try context.fetch(FetchDescriptor<TaskItem>(predicate: #Predicate { children.contains($0.parentID) })) {
+                if let parent = row.parentID { try add(row, to: .children(parent)) }
+            }
+        }
+        if !attachments.isEmpty {
+            for row in try context.fetch(FetchDescriptor<NoteAttachment>(predicate: #Predicate { attachments.contains($0.noteID) })) { try add(row, to: .attachments(row.noteID)) }
+        }
+        if !versions.isEmpty {
+            for row in try context.fetch(FetchDescriptor<NoteVersion>(predicate: #Predicate { versions.contains($0.noteID) })) { try add(row, to: .versions(row.noteID)) }
+        }
+        if !proposals.isEmpty {
+            for row in try context.fetch(FetchDescriptor<NotePendingEdit>(predicate: #Predicate { proposals.contains($0.noteID) })) { try add(row, to: .proposals(row.noteID)) }
+        }
+        if !taskAssociations.isEmpty || !noteAssociations.isEmpty {
+            for row in try context.fetch(FetchDescriptor<TaskNoteAssociation>(predicate: #Predicate { taskAssociations.contains($0.taskID) || noteAssociations.contains($0.noteID) })) {
+                try add(row, to: .taskAssociations(row.taskID)); try add(row, to: .noteAssociations(row.noteID))
+            }
+        }
+        if !preservations.isEmpty {
+            for row in try context.fetch(FetchDescriptor<TaskDeletionPreservation>(predicate: #Predicate { preservations.contains($0.rootID) })) { try add(row, to: .preservations(row.rootID)) }
+        }
+        let tokens = try WorkspaceModelToken.read(owners: membership.values.reduce(into: Set<WorkspaceOwner>()) { $0.formUnion($1) }, in: context)
+        for (scope, owners) in membership where result[scope] == nil {
+            result[scope] = Self(scope: scope, members: owners.sorted { $0.id.uuidString < $1.id.uuidString }.map { tokens[$0]! })
+        }
+        return result
+    }
+
     @MainActor static func read(_ scope: WorkspaceScope, in context: ModelContext) throws -> Self {
         var owners = Set<WorkspaceOwner>()
         func collect<M: PersistentModel>(_ rows: [M]) throws {
