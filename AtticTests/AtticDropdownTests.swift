@@ -100,6 +100,12 @@ final class AtticDropdownTests: XCTestCase {
     }
 
     func testRenderedRowsExposeMenuItemsAndKeepTheirIdentifiers() throws {
+        // SwiftUI builds its virtual AX tree only when accessibility is
+        // requested. Enable that mode in this test host, then restore it.
+        let attribute = NSAccessibility.Attribute(rawValue: "AXEnhancedUserInterface")
+        let previous = NSApp.accessibilityAttributeValue(attribute)
+        NSApp.accessibilitySetValue(true, forAttribute: attribute)
+        defer { NSApp.accessibilitySetValue(previous, forAttribute: attribute) }
         let window = makeWindow()
         defer { window.close() }
         let model = NoteSlashListModel()
@@ -109,20 +115,23 @@ final class AtticDropdownTests: XCTestCase {
         window.contentView?.addSubview(host)
         host.layoutSubtreeIfNeeded()
         spin(0.2)
-        func items(_ element: AnyObject) -> [AnyObject] {
-            // SwiftUI's virtual accessibility children implement the ObjC
-            // methods without declaring NSAccessibilityProtocol conformance.
-            let role = element.accessibilityRole?()
-            print("DROPDOWN_AX type=\(type(of: element)) role=\(String(describing: role))")
-            if role == .menuItem { return [element] }
-            return (element.accessibilityChildren?() ?? nil ?? []).flatMap { items($0 as AnyObject) }
+        func items(_ element: AnyObject) -> [AtticDropdownMenuItem.ItemView] {
+            if let item = element as? AtticDropdownMenuItem.ItemView { return [item] }
+            // SwiftUI's virtual children expose the ObjC accessibility
+            // methods without declaring protocol conformance.
+            let children = (element.accessibilityChildren?() ?? nil) ?? []
+            return children.flatMap { items($0 as AnyObject) }
         }
         let rows = items(host)
         XCTAssertEqual(rows.count, model.items.count, "the rendered accessibility tree contains menu items")
         let first = try XCTUnwrap(rows.first)
-        XCTAssertEqual(first.isAccessibilitySelected?(), true)
-        XCTAssertEqual(first.accessibilityValue?() as? String, "1 of 9")
-        XCTAssertEqual(first.accessibilityIdentifier?(), "notes-slash-checklist")
+        XCTAssertEqual(first.accessibilityRole(), .menuItem)
+        XCTAssertTrue(first.isAccessibilitySelected())
+        XCTAssertEqual(first.accessibilityValue() as? String, "1 of 9")
+        XCTAssertEqual(first.accessibilityIdentifier(), "notes-slash-checklist")
+        XCTAssertGreaterThan(first.accessibilityFrame().width, 0)
+        XCTAssertEqual(first.accessibilityFrame().height, AtticDropdownMetrics.rowHeight, accuracy: 1)
+        XCTAssertEqual(rows.last?.accessibilityValue() as? String, "9 of 9")
     }
 
     func testCrampedSlashScrollKeepsTheKeyboardHighlightVisible() throws {
