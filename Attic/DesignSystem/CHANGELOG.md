@@ -9,6 +9,39 @@ Phase 1 (Shell, Tasks and Settings) was built in three streams and integrated
 on `redesign/phase-1`. Every change below is additive: no token, colour, radius
 or type style changed.
 
+### The corner buttons become Liquid Glass (Opus, 2026-10-02)
+
+- **L3 → Liquid Glass.** Owner: "I want liquid glass, make it happen without
+  losing any performance." This replaces L3 = A (the flat corner buttons).
+  The header's pin and page button are the system's interactive Liquid Glass
+  again (`atticRaisedMaterial`, `.regular.interactive()`, in the control's
+  42 % continuous shape), both in the header's one `GlassEffectContainer`
+  (`AtticControlGroup`). Their looks are Phase 0's: hover and press as fills
+  inside the glass, the pinned pin and the page button's current page on the
+  selected inner chip, the keyboard ring, and Increase Contrast's stronger
+  edge.
+- **`AtticPageButton`'s glass is now interactive** (it was not, as Phase 0's
+  page switch): a click on any page gets the system's press response, as the
+  pin's does. The pages' own buttons still take the click.
+- **New `AtticCornerButtonStyle`** (`liquidGlass`, `flat`) with
+  `drawsFlat(in:)`: the corner buttons keep L3's `AtticFlatSurface` wherever
+  the controls are not live glass (Reduce Transparency, the Craft style, a
+  Solid panel that is not key), and for the Flat choice. `AtticFlatSurface`
+  stays for exactly those cases.
+- **New `AtticCornerButtonsLab`** (preview identities only, like the scroll
+  edge lab): Settings › General › Motion Lab › Corner buttons, "Liquid Glass /
+  Flat", kept in the preview's defaults; the on-screen gate forces one with
+  `ATTIC_UI_TEST_CORNER_BUTTONS=glass|flat` (`AtticPreviewOverrides.cornerButtons`).
+  The official identity is always Liquid Glass.
+- Settings' panel miniature draws the corner buttons the same way.
+- Unchanged: the Find and View Options glyphs on the tabs line stay quiet,
+  unbacked icons (D4 = A, and the floating controls' B: no backings).
+- Cost (measured headless, `CornerGlassTests`): the shared container gives one
+  backdrop for both buttons (it spans the header's width, at half
+  resolution); interactive and non-interactive glass build the same layers at
+  rest, with no animation running; scrolling and swiping never re-evaluate the
+  header. The on-screen gate is the judge.
+
 ### Follow-up part 2: owner decisions (Opus, 2026-09-30)
 
 - **Low priority returns** (option A, `mockups/p1f-06-low-priority.png`):

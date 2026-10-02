@@ -20,6 +20,9 @@ struct MotionLabSettingsGroup: View {
     /// How lists meet the floating controls (owner, 2026-10-01): the
     /// system's soft scroll edge, or round 13's clean cut, to feel both.
     @ObservedObject private var scrollEdges = AtticScrollEdgeLab.shared
+    /// The header's corner buttons (owner, 2026-10-02): Liquid Glass, or
+    /// L3's flat surface, to compare.
+    @ObservedObject private var cornerButtons = AtticCornerButtonsLab.shared
 
     var body: some View {
         SettingsGroup(
@@ -56,6 +59,15 @@ struct MotionLabSettingsGroup: View {
                     choices: AtticScrollEdgeStyle.allCases.map { ($0, $0.title) },
                     selection: $scrollEdges.style,
                     identifier: "setting-scroll-edges"
+                )
+                AtticGroupDivider()
+            }
+            if cornerButtons.offersChoice {
+                AtticSegmentedRow(
+                    title: "Corner buttons",
+                    choices: AtticCornerButtonStyle.allCases.map { ($0, $0.title) },
+                    selection: $cornerButtons.style,
+                    identifier: "setting-corner-buttons"
                 )
                 AtticGroupDivider()
             }
