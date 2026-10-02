@@ -184,7 +184,18 @@ final class WorkspaceCommitTests: XCTestCase {
         XCTAssertEqual(library.updateTask(taskID, status: .done), .applied)
         let link = try XCTUnwrap(library.links.link(.init(.task, taskID), to: .init(.note, noteID), kind: .reference))
         XCTAssertTrue(library.links.unlink(link.id))
+        let metadata = WorkspaceLegacyBridge.context(for: container)
+        let storedVersion = try XCTUnwrap(metadata.fetch(FetchDescriptor<NoteVersion>()).first)
+        let storedProposal = try XCTUnwrap(metadata.fetch(FetchDescriptor<NotePendingEdit>()).first)
+        WorkspaceLegacyBridge.captureBeforeMutation(storedVersion, in: metadata)
+        WorkspaceLegacyBridge.captureBeforeMutation(storedProposal, in: metadata)
+        storedVersion.createdAt = Date()
+        storedProposal.needsReview = true
+        try WorkspaceLegacyBridge.persist(metadata, using: { try $0.save() }, sourceName: "stored metadata")
         XCTAssertEqual(WorkspacePayloadAccess.counts.values.reduce(0, +), 0, "PF4 faults: \(WorkspacePayloadAccess.counts)")
+        let envelopes = try await coordinator.journal.operationEnvelopes()
+        XCTAssertTrue(envelopes.isEmpty, "Metadata and production hot paths carry no journal obligation")
+        XCTAssertEqual(try coordinator.freshContext().fetchCount(FetchDescriptor<OperationReceipt>()), 0)
         // Prove the seam detects real getters; a silently inert counter cannot pass.
         let positive = coordinator.freshContext()
         _ = try positive.fetch(FetchDescriptor<NoteAttachment>()).first?.payload

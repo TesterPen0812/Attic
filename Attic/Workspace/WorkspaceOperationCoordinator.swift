@@ -269,6 +269,26 @@ final class WorkspaceOperationCoordinator {
     /// a lifecycle/association/import transition as an ordinary autosave.
     func mayUsePlainSave(before: [WorkspaceModelToken], after: [WorkspaceModelToken], in context: ModelContext) throws -> Bool {
         let old = Dictionary(uniqueKeysWithValues: before.map { ($0.owner, $0) })
+        // A metadata-only write carries neither an editor draft nor new bytes.
+        // Keep mixed note/task transitions journaled, even if their fields are
+        // individually metadata, and reject new physical payload rows here.
+        let entities = Set(after.map { $0.owner.entity })
+        if entities.contains(.note), entities.contains(.task) { return false }
+        let metadata: [WorkspaceOwner.Entity: Set<String>] = [
+            .note: ["tagsRaw", "pinnedAt", "deletedAt", "deletedAttachmentIDsRaw", "updatedAt"],
+            .version: ["createdAt", "reasonRaw"],
+            .proposal: ["needsReview", "agentName"],
+            .attachment: ["deletedAt", "updatedAt", "sortIndex", "inlineOffset", "displayWidth", "displayHeight"],
+            .board: ["tagsRaw", "updatedAt"]
+        ]
+        if after.allSatisfy({ token in
+            guard let allowed = metadata[token.owner.entity], let previous = old[token.owner] else { return false }
+            let originals = Dictionary(uniqueKeysWithValues: previous.replicas.map { ($0.physicalID, $0.fields) })
+            return token.replicas.allSatisfy { replica in
+                guard let fields = originals[replica.physicalID] else { return false }
+                return Set(replica.fields.keys.filter { fields[$0] != replica.fields[$0] }).isSubset(of: allowed)
+            }
+        }) { return true }
         // Tasks-only commands, including creation/reorder/soft deletion and
         // their preservation/link metadata, never acquire draft/byte durability.
         // A mixed task + note or any attachment write still promotes below.
