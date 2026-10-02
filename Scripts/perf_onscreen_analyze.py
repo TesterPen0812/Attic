@@ -12,8 +12,9 @@ Each run `<dir>/<label>-<n>` has:
 
 A run is valid only if the driver exited 0 and printed DONE, both phases
 (scroll and swipe) have their start and end marks and frames, GPU samples
-were recorded, and the app echoed input (scrolls or page settles). An invalid
-run is listed with its reasons as a diagnostic and kept out of every mean and
+were recorded, and each phase contains its own input echo (scrolls in scroll,
+page settles in swipe). An invalid run is listed with its reasons as a
+diagnostic and kept out of every mean and
 delta. The comparison is COMPLETE only with `--rounds` rounds in which both
 builds' runs are valid (the means use exactly those rounds, so both builds
 average the same interleaved rounds); anything less is INCOMPLETE, no
@@ -159,9 +160,16 @@ def analyse(base):
     if opened:
         gaps = [g for t, g in frames if opened[0] <= t <= opened[0] + 1.0]
         result["picker"] = frame_stats(gaps, budget, 1.0)
-    # Did the input reach the app? (its own echoes)
-    result["scroll_gestures_seen"] = sum(1 for _, text in events if text == "scroll-began")
-    result["page_choices_seen"] = sum(1 for _, text in events if text.startswith("settle-end"))
+    # Each phase must receive its own input; an echo from another phase
+    # (or before/after the measured window) cannot validate idle frames.
+    def phase_events(phase):
+        start, end = marks.get(f"{phase}_start"), marks.get(f"{phase}_end")
+        if start is None or end is None:
+            return []
+        return [text for t, text in events if start[0] <= t <= end[0]]
+
+    result["scroll_gestures_seen"] = sum(text == "scroll-began" for text in phase_events("scroll"))
+    result["page_choices_seen"] = sum(text.startswith("settle-end") for text in phase_events("swipe"))
     wall = [m[1] for m in marks.values() if m[1] is not None]
     start, end = (min(wall), max(wall)) if wall else (None, None)
     if Path(f"{base}.top").exists() and ws and app:
@@ -200,8 +208,10 @@ def problems(r, marks):
             found.append(f"no frames in the {phase} phase")
     if r["gpu_samples"] == 0:
         found.append("no GPU samples")
-    if r["scroll_gestures_seen"] == 0 and r["page_choices_seen"] == 0:
-        found.append("no input reached the app")
+    if r["scroll_gestures_seen"] == 0:
+        found.append("no input reached the app in the scroll phase")
+    if r["page_choices_seen"] == 0:
+        found.append("no input reached the app in the swipe phase")
     return found
 
 

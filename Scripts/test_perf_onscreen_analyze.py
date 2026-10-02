@@ -27,7 +27,8 @@ def stamp(t):
 
 def write_run(directory, label, *, gap=8.3, gpu=10, drive_exit=0, done=True, abort=None,
               marks=("scroll_start", "scroll_end", "swipe_start", "swipe_end"),
-              input_seen=True, write_gpu=True, write_frames=True, app_missing_in=()):
+              input_seen=True, input_phases=("scroll", "swipe"), input_times=(1, 12),
+              write_gpu=True, write_frames=True, app_missing_in=()):
     """One run's files. Defaults make a valid run; each keyword breaks one
     part of it. `gap` is the frame gap in ms, `gpu` the device utilization."""
     base = Path(directory) / label
@@ -44,7 +45,10 @@ def write_run(directory, label, *, gap=8.3, gpu=10, drive_exit=0, done=True, abo
         frames = ["ATTIC_FRAME_START refresh=120"]
         frames += [f"ATTIC_FRAME {MEDIA + 0.5 + 0.5 * i:.4f} {gap}" for i in range(40)]
         if input_seen:
-            frames += [f"ATTIC_EVENT {MEDIA + 1} scroll-began", f"ATTIC_EVENT {MEDIA + 12} settle-end 1"]
+            if "scroll" in input_phases:
+                frames.append(f"ATTIC_EVENT {MEDIA + input_times[0]} scroll-began")
+            if "swipe" in input_phases:
+                frames.append(f"ATTIC_EVENT {MEDIA + input_times[1]} settle-end 1")
         base.with_suffix(".frames").write_text("\n".join(frames) + "\n")
 
     top = []
@@ -115,6 +119,34 @@ class AnalyzerTests(unittest.TestCase):
         self.assertIn("baseline-1", text)
         self.assertIn("no input reached the app", text)
         self.assertIn("INCOMPLETE", text)
+
+    def test_a_run_missing_scroll_input_does_not_count(self):
+        self.write_pairs(candidate_overrides={1: dict(input_phases=("swipe",))})
+        code, text = report(self.dir)
+        self.assertEqual(code, 1, text)
+        self.assertIn("no input reached the app in the scroll phase", text)
+        self.assertNotIn("no input reached the app in the swipe phase", text)
+        self.assertIn("INCOMPLETE", text)
+        self.assertNotIn("Candidate − baseline", text)
+
+    def test_a_run_missing_swipe_input_does_not_count(self):
+        self.write_pairs(candidate_overrides={1: dict(input_phases=("scroll",))})
+        code, text = report(self.dir)
+        self.assertEqual(code, 1, text)
+        self.assertIn("no input reached the app in the swipe phase", text)
+        self.assertNotIn("no input reached the app in the scroll phase", text)
+        self.assertIn("INCOMPLETE", text)
+        self.assertNotIn("Candidate − baseline", text)
+
+    def test_echoes_outside_their_own_phase_windows_do_not_count(self):
+        for phase, times in [("scroll", (-1, 12)), ("scroll", (12, 12)),
+                             ("swipe", (1, 10)), ("swipe", (1, 21))]:
+            with self.subTest(phase=phase, times=times):
+                self.write_pairs(candidate_overrides={1: dict(input_times=times)})
+                code, text = report(self.dir)
+                self.assertEqual(code, 1, text)
+                self.assertIn(f"no input reached the app in the {phase} phase", text)
+                self.assertIn("INCOMPLETE", text)
 
     def test_a_run_with_a_missing_gpu_file_does_not_count(self):
         self.write_pairs(candidate_overrides={1: dict(write_gpu=False)})

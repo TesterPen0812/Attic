@@ -49,7 +49,7 @@ enum Phase0Schema {
         /// A floating calendar day (`yyyy-MM-dd`, see `DueDay`), so a due date
         /// never moves when the Mac changes time zone.
         var dueDayRaw: String? = nil
-    
+
         /// Images and general files in one ordered list, parent-owned. Decoded
         /// once per stored payload: SwiftUI reads this several times per row body,
         /// so the last decode is kept beside the bytes it came from and reused
@@ -63,15 +63,15 @@ enum Phase0Schema {
             decodedAttachments = DecodedAttachments(data: imageReferencesData, references: references)
             return references
         }
-    
+
         /// Memo for `attachments`; never persisted.
         @Transient private var decodedAttachments: DecodedAttachments? = nil
-    
+
         private struct DecodedAttachments {
             let data: Data
             let references: [TaskImageReference]
         }
-    
+
         init(
             id: UUID = UUID(),
             title: String,
@@ -93,36 +93,36 @@ enum Phase0Schema {
             self.manualOrder = manualOrder
             self.parentID = parentID
         }
-    
+
         var status: TaskStatus {
             get { TaskStatus(rawValue: statusRaw) ?? .todo }
             set { statusRaw = newValue.rawValue }
         }
-    
+
         var priority: TaskPriority {
             get { TaskPriority(rawValue: priorityRaw) ?? .none }
             set { priorityRaw = newValue.rawValue }
         }
-    
+
         var tags: [String] {
             get { AtticTag.decode(tagsRaw) }
             set { tagsRaw = AtticTag.encode(newValue) }
         }
-    
+
         var dueDay: DueDay? {
             get { dueDayRaw.flatMap(DueDay.init(rawValue:)) }
             set { dueDayRaw = newValue?.rawValue }
         }
-    
+
         var isSoftDeleted: Bool { deletedAt != nil }
-    
+
         /// Attachments in Recently Deleted. Unreadable data reads as empty here;
         /// file cleanup decodes strictly and keeps files when it cannot read.
         var removedAttachments: [RemovedTaskAttachment] {
             guard let removedAttachmentsData, !removedAttachmentsData.isEmpty else { return [] }
             return (try? JSONDecoder().decode([RemovedTaskAttachment].self, from: removedAttachmentsData)) ?? []
         }
-    
+
         var deletionMembers: Set<UUID> {
             Set(deletionMembersRaw.split(separator: " ").compactMap { UUID(uuidString: String($0)) })
         }
