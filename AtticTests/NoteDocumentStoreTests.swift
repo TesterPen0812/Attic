@@ -109,6 +109,42 @@ final class NoteDocumentStoreTests: XCTestCase {
                        "known bytes must not be decoded again on each save")
     }
 
+    func testAttachmentBaseProofInvalidatesWhenBytesChangeWithoutARevisionChange() throws {
+        let (id, revision) = try create(document("Draft"))
+        let missing = NoteBlock.file(attachmentID: UUID(), filename: "missing.pdf",
+                                     contentTypeIdentifier: "com.adobe.pdf", byteCount: 4)
+        let imported = NoteDocument(blocks: [.text("Draft"), missing])
+        let importedBytes = try NoteContentCodec.encode(imported)
+        let row = try XCTUnwrap(store.note(withID: id))
+        row.content = importedBytes // A malformed external writer reused the token.
+        try store.modelContext.save()
+        let before = store.documentReplicaDecodeCount
+        var edited = imported
+        edited.blocks[0].text = "Edited"
+        guard case let .success(next) = store.saveDocument(noteID: id, document: edited,
+                                                           baseRevisionID: revision) else {
+            return XCTFail("the unchanged missing original must remain savable")
+        }
+        XCTAssertEqual(store.documentReplicaDecodeCount, before + 1)
+        XCTAssertTrue(try store.attachmentRows(forNoteID: id).isEmpty, "no bytes are invented")
+        guard case .success = store.saveDocument(noteID: id, document: document("Removed"),
+                                                 baseRevisionID: next) else { return XCTFail() }
+        XCTAssertTrue(versions(id).contains { $0.content == (try? NoteContentCodec.encode(edited)) },
+                      "removing the placement preserves the exact displaced document")
+    }
+
+    func testCachedEditableProofCannotOverwriteCorruptBytesAtTheSameRevision() throws {
+        let (id, revision) = try create(document("Draft"))
+        let row = try XCTUnwrap(store.note(withID: id))
+        let corrupt = Data("not JSON".utf8)
+        row.content = corrupt
+        try store.modelContext.save()
+        guard case .failure(.readOnly) = store.saveDocument(noteID: id, document: document("Overwrite"),
+                                                           baseRevisionID: revision) else { return XCTFail() }
+        XCTAssertEqual(row.content, corrupt)
+        XCTAssertTrue(versions(id).isEmpty)
+    }
+
     func testLegacyAutosavesDoNotMakeHistoryRows() throws {
         let note = try XCTUnwrap(store.create(title: "Draft"))
         for number in 0..<20 {

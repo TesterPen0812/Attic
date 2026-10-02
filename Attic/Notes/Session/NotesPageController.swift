@@ -1236,8 +1236,10 @@ final class NotesPageController: ObservableObject {
         session.refusedWritingToolsSinceSave = false
         updateWritingToolsAvailability(for: session)
         for item in staged { session.verifiedDocumentAttachments[item.id] = item }
-        let liveIDs = Set(session.engine.checkpointDocument().attachmentIDs)
-        session.verifiedDocumentAttachments = session.verifiedDocumentAttachments.filter { liveIDs.contains($0.key) }
+        if !session.verifiedDocumentAttachments.isEmpty {
+            let liveIDs = Set(session.engine.checkpointDocument().attachmentIDs)
+            session.verifiedDocumentAttachments = session.verifiedDocumentAttachments.filter { liveIDs.contains($0.key) }
+        }
         session.engine.forgetStaged(Set(staged.map(\.id)))
         clearRecoveryCopy(for: session)
         schedulePauseVersion(session)

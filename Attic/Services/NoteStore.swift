@@ -82,7 +82,6 @@ private struct NoteReplicaSnapshot: Equatable {
 private struct PresentationIndex {
     let revision: UInt64
     let ordered: [NoteItem]
-    let byID: [UUID: NoteItem]
 }
 
 private enum NoteReplicaMutationError: LocalizedError {
@@ -159,7 +158,7 @@ private enum NotePersistenceRefreshOutcome {
 @MainActor
 final class NoteStore: ObservableObject {
     @Published private(set) var notes: [NoteItem] = [] {
-        didSet { presentationIndex = nil }
+        didSet { presentationIndex = nil; presentationByID = nil }
     }
     @Published private(set) var lastErrorMessage: String?
     @Published private(set) var revision: UInt64 = 0
@@ -334,7 +333,11 @@ final class NoteStore: ObservableObject {
     private var context: ModelContext
     /// A successful save keeps this context alive. Reuse the capability check
     /// for identical bytes instead of decoding every replica on each autosave.
-    var documentReplicaCapabilityCache: [ObjectIdentifier: (revisionID: UUID?, content: Data, editable: Bool)] = [:]
+    // Keep only the attachment placements needed by admission and removal,
+    // not another copy of each decoded note body. Exact bytes and revision
+    // still invalidate the proof even when an external writer reuses a token.
+    var documentReplicaCapabilityCache: [ObjectIdentifier: (revisionID: UUID?, content: Data, editable: Bool,
+                                                           attachmentBlocks: [NoteBlock])] = [:]
     var pendingEditFetchCount = 0
     /// Test seam for a failed destructive-retention scan. Presentation reads
     /// continue to use their own deduplicated query.
@@ -342,6 +345,7 @@ final class NoteStore: ObservableObject {
     private(set) var documentReplicaDecodeCount = 0
     func countDocumentReplicaDecode() { documentReplicaDecodeCount += 1 }
     private var presentationIndex: PresentationIndex?
+    private var presentationByID: [UUID: NoteItem]?
     private let now: () -> Date
     private let persist: (ModelContext) throws -> Void
     private let makeFreshContext: () throws -> ModelContext
@@ -1459,7 +1463,10 @@ final class NoteStore: ObservableObject {
     /// visible row per UUID, so this is the deduplicated presentation record —
     /// never a substitute for the replica fetches that mutations use.
     func note(withID id: UUID) -> NoteItem? {
-        currentPresentationIndex().byID[id]
+        if presentationByID == nil {
+            presentationByID = Dictionary(notes.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
+        }
+        return presentationByID?[id]
     }
 
     private func currentPresentationIndex() -> PresentationIndex {
@@ -1474,8 +1481,7 @@ final class NoteStore: ObservableObject {
         }
         let index = PresentationIndex(
             revision: revision,
-            ordered: ordered,
-            byID: Dictionary(notes.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
+            ordered: ordered
         )
         presentationIndex = index
         return index
