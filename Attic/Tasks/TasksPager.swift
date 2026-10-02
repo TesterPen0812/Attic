@@ -342,14 +342,29 @@ final class TasksPagerMotion: ObservableObject {
         trace = String(format: "reach=%.2f lead=%.2f page=%.0f", reach, lead, position)
     }
 
-    /// UI tests may slow the settle to watch it (DEBUG only).
-    static let settleOverride: Double? = {
+    /// UI tests may slow the settle to watch it (DEBUG only): a strict
+    /// preview identity launched for UI testing, nothing else.
+    static let settleOverride: Double? = resolveSettleOverride(environment: ProcessInfo.processInfo.environment,
+                                                               bundleIdentifier: Bundle.main.bundleIdentifier)
+
+    /// The settle durations a test may ask for, in seconds.
+    nonisolated static let settleOverrideRange: ClosedRange<Double> = 0.05...10
+
+    /// `ATTIC_UI_TEST_PAGER_SETTLE` (seconds), honoured only in a DEBUG build
+    /// of a strict preview identity (`com.taha.Attic.preview.` and a name)
+    /// launched with `ATTIC_UI_TESTING=1`, and only as a finite duration in
+    /// `settleOverrideRange` (code review: every DEBUG process read it, the
+    /// official identity included, and took any number).
+    nonisolated static func resolveSettleOverride(environment: [String: String], bundleIdentifier: String?) -> Double? {
         #if DEBUG
-        ProcessInfo.processInfo.environment["ATTIC_UI_TEST_PAGER_SETTLE"].flatMap(Double.init)
+        guard environment["ATTIC_UI_TESTING"] == "1", AtticPreviewOverrides.isPreviewIdentity(bundleIdentifier),
+              let raw = environment["ATTIC_UI_TEST_PAGER_SETTLE"], let seconds = Double(raw), seconds.isFinite,
+              settleOverrideRange.contains(seconds) else { return nil }
+        return seconds
         #else
-        nil
+        return nil
         #endif
-    }()
+    }
 }
 
 /// The pager's settle: a spring from `from` to `to` (pages) over about
@@ -722,11 +737,10 @@ final class TasksPagerSwipe {
     /// Called when another way chooses a page during a swipe or a burst
     /// (the page is then brought to the model's tab).
     var onCancel: (() -> Void)?
-    /// The corner the panel lives in, and whether a swipe may close it now
-    /// (not pinned): a swipe toward that edge with no page left that way is
-    /// the panel's (the shell keeps them current).
+    /// The corner the panel lives in: a swipe toward that edge with no page
+    /// left that way is the panel's (the shell keeps it current; none, as
+    /// in a gallery, leaves it to the pager).
     var closeCorner: () -> ScreenCorner? = { nil }
-    var canClose: () -> Bool = { false }
 
     private(set) var axis: Axis?
     /// The page the swipe started on.
@@ -841,7 +855,7 @@ final class TasksPagerSwipe {
             }
             // A fresh gesture toward the panel's edge with no page left that
             // way: it is the panel's pull to close, never a rubber band.
-            if let corner = closeCorner(), canClose(),
+            if let corner = closeCorner(),
                Self.closesPanel(dx: sample.dx, dy: sample.dy, inverted: sample.inverted, shown: shown, count: count, corner: corner) {
                 axis = .closing
                 ownsMomentum = false

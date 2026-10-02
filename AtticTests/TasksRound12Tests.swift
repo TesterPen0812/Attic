@@ -547,11 +547,14 @@ final class TasksRound12Tests: XCTestCase {
     /// ("#laun..."), the date gives way after it, and a short tag is not
     /// padded.
     func testTheStripKeepsAMeaningfulTagPrefix() throws {
-        let iconAndPaddings: CGFloat = 55
         for width in [296.0, 280.0, 264.0] {
             let pills = try stripPills(date: "Wed 14 Oct", tag: "#launch-checklist +1", priority: "!!", width: width)
             XCTAssertEqual(pills.count, 3, "three pills at \(width): \(pills)")
             guard pills.count == 3 else { continue }
+            // A set pill's icon, gaps and ×: the priority pill less its
+            // "!!" (the usual 55, or 46 once the strip closes up its gaps,
+            // deep review P3-01).
+            let iconAndPaddings = pills[2] - AtticTextStyle.priorityMark.measuredWidth("!!")
             XCTAssertGreaterThanOrEqual(pills[1] - iconAndPaddings, 30, "the tag shows a prefix, not '#', at \(width): \(pills)")
             XCTAssertLessThanOrEqual(pills.reduce(0, +) + 8, width + 1, "the strip fits \(width): \(pills)")
         }

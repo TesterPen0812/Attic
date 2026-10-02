@@ -8,7 +8,7 @@ import XCTest
 final class PreviewOverridesTests: XCTestCase {
     private let everything = [
         "ATTIC_UI_TEST_MOTION": "reduced", "ATTIC_UI_TEST_SCROLLERS": "system",
-        "ATTIC_UI_TEST_HOVER": "off", "ATTIC_UI_TEST_LIFT": "off",
+        "ATTIC_UI_TEST_HOVER": "off", "ATTIC_UI_TEST_LIFT": "off", "ATTIC_UI_TEST_CORNER_BUTTONS": "flat",
     ]
 
     private func scratchDefaults() throws -> (UserDefaults, cleanup: () -> Void) {
@@ -49,6 +49,8 @@ final class PreviewOverridesTests: XCTestCase {
         XCTAssertTrue(resolve("ATTIC_UI_TEST_HOVER", "tint").rowHoverTints)
         XCTAssertFalse(resolve("ATTIC_UI_TEST_LIFT", "off").drawsLiftLayer)
         XCTAssertTrue(resolve("ATTIC_UI_TEST_LIFT", "on").drawsLiftLayer)
+        XCTAssertEqual(resolve("ATTIC_UI_TEST_CORNER_BUTTONS", "flat"), AtticPreviewOverrides(cornerButtons: .flat))
+        XCTAssertEqual(resolve("ATTIC_UI_TEST_CORNER_BUTTONS", "glass"), AtticPreviewOverrides(cornerButtons: .glass))
         // Each one changes only its own part, and an unknown word nothing.
         XCTAssertEqual(resolve("ATTIC_UI_TEST_HOVER", "off").motion, nil)
         XCTAssertEqual(resolve("ATTIC_UI_TEST_MOTION", "bouncy"), .none)
@@ -60,6 +62,7 @@ final class PreviewOverridesTests: XCTestCase {
         XCTAssertEqual(preview, .none)
         XCTAssertTrue(preview.stylesScrollers && preview.rowHoverTints && preview.drawsLiftLayer)
         XCTAssertNil(preview.motion)
+        XCTAssertNil(preview.cornerButtons)
     }
 
     // MARK: - Motion

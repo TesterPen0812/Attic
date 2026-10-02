@@ -25,6 +25,8 @@ struct TasksDonePage<Cell: View, Mask: View>: View {
     /// The page's bars under the system soft edge (none for the clean cut):
     /// the log's scroll view takes them as safe area.
     var bars = TasksListBars()
+    /// The bottom stack, whose height the bottom bar follows.
+    let bottomStack: TasksBottomStackHeight
     /// False while the page is kept built but not shown (round 11).
     var drawn = true
     /// How the log meets the floating controls (`TasksPage.edgeStyle`).
@@ -109,7 +111,7 @@ struct TasksDonePage<Cell: View, Mask: View>: View {
         .contentMargins(.bottom, bottomMargin - bars.bottom, for: .scrollContent)
         .contentMargins(.top, listTop - bars.top, for: .scrollIndicators)
         .contentMargins(.bottom, bottomClearance - bars.bottom, for: .scrollIndicators)
-        .tasksListEdges(edges, bars: bars, mask: mask)
+        .tasksListEdges(edges, bars: bars, stack: bottomStack, mask: mask)
         .coordinateSpace(Self.space)
         .onChange(of: reveal) { _, request in
             guard let request else { return }

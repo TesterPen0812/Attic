@@ -328,6 +328,18 @@ struct AtticRowFocus {
         self.isActive = isActive
         isFocused = isActive() && binding.wrappedValue == id
     }
+
+    /// With the list's own record of which row has the keyboard: a lazy
+    /// list's cell that reads the focus state reads it as it was when the
+    /// list was built (the Tasks page, deep review P2-04), so the list
+    /// keeps a copy and says whether this row has it.
+    init(binding: FocusState<AtticRowFocusID?>.Binding, id: AtticRowFocusID, isFocused: Bool,
+         isActive: @escaping () -> Bool = { true }) {
+        self.binding = binding
+        self.id = id
+        self.isActive = isActive
+        self.isFocused = isFocused
+    }
 }
 
 /// The same keys as `AtticTaskFocusModifier`, with focus held by the list.

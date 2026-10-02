@@ -5,8 +5,8 @@ import XCTest
 /// Part 2 A (owner-approved, 2026-10-01): a two-finger swipe toward the edge
 /// of the screen the panel lives on closes it, wherever that swipe has no
 /// other job: over the header and the controls, over empty space, and past
-/// the last page that way. A pull with resistance and a threshold; never from
-/// momentum; never while pinned.
+/// the last page that way, pinned or not (owner, 2026-10-02). A pull with
+/// resistance and a threshold; never from momentum.
 @MainActor
 final class SwipeToCloseTests: XCTestCase {
     // MARK: Direction
@@ -33,16 +33,15 @@ final class SwipeToCloseTests: XCTestCase {
 
     // MARK: The pager hands its end over
 
-    private func pager(canClose: Bool) -> TasksPagerSwipe {
+    private func pager(corner: ScreenCorner? = .topRight) -> TasksPagerSwipe {
         let swipe = TasksPagerSwipe(count: 3)
         swipe.width = 300
-        swipe.closeCorner = { .topRight }
-        swipe.canClose = { canClose }
+        swipe.closeCorner = { corner }
         return swipe
     }
 
     func testAtTheLastPageThatWayThePagerHandsTheSwipeToThePanel() {
-        let swipe = pager(canClose: true)
+        let swipe = pager()
         XCTAssertEqual(swipe.handle(.init(phase: .began, time: 1, inverted: true), shown: 0, allowed: true), .pass)
         let first = swipe.handle(.init(phase: .changed, dx: 8, time: 1.01, inverted: true), shown: 0, allowed: true)
         XCTAssertFalse(first.consumes, "the panel sees the pull")
@@ -52,8 +51,10 @@ final class SwipeToCloseTests: XCTestCase {
         XCTAssertFalse(swipe.ownsMomentum, "its momentum is not the pager's either (the panel ignores momentum)")
     }
 
-    func testAPinnedPanelOnlyRubberBands() {
-        let swipe = pager(canClose: false)
+    /// A pin no longer matters to the pager (the pager never knew it); a
+    /// pager with no corner (a gallery's) leaves the end to the rubber band.
+    func testAPagerWithNoPanelCornerOnlyRubberBands() {
+        let swipe = pager(corner: nil)
         _ = swipe.handle(.init(phase: .began, time: 1, inverted: true), shown: 0, allowed: true)
         let first = swipe.handle(.init(phase: .changed, dx: 8, time: 1.01, inverted: true), shown: 0, allowed: true)
         XCTAssertTrue(first.consumes, "the pager keeps it: a rubber band")
@@ -63,7 +64,7 @@ final class SwipeToCloseTests: XCTestCase {
     /// A page swipe that reaches the end and goes on is still the pager's:
     /// only a fresh gesture closes, and its momentum stays the pager's.
     func testAPageSwipeThatOverrunsTheEndNeverCloses() {
-        let swipe = pager(canClose: true)
+        let swipe = pager()
         _ = swipe.handle(.init(phase: .began, time: 1, inverted: true), shown: 1, allowed: true)
         XCTAssertTrue(swipe.handle(.init(phase: .changed, dx: 8, time: 1.01, inverted: true), shown: 1, allowed: true).consumes)
         // The live tab is Now by now; the fingers keep going.
@@ -132,7 +133,7 @@ final class SwipeToCloseTests: XCTestCase {
         return try XCTUnwrap(NSEvent(cgEvent: event))
     }
 
-    private func panel(pinned: Bool) -> (AtticPanel, () -> Int) {
+    private func panel() -> (AtticPanel, () -> Int) {
         let panel = AtticPanel(contentRect: CGRect(x: -5_000, y: -5_000, width: 320, height: 480),
                                styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
         panel.isReleasedWhenClosed = false
@@ -140,16 +141,15 @@ final class SwipeToCloseTests: XCTestCase {
         panel.trackpadDismissCorner = .topRight
         var requests = 0
         panel.onTrackpadDismissRequest = { requests += 1 }
-        panel.canCloseBySwipe = { !pinned }
         return (panel, { requests })
     }
 
     /// Phases: 1 began, 2 changed, 4 ended. Momentum: 1 begin, 2 continue, 3 end.
-    func testAFreshPullClosesButMomentumOrAPinNever() throws {
+    func testAFreshPullClosesPinnedOrNotButMomentumNever() throws {
         let point = CGPoint(x: 10, y: 10)
         // A fresh gesture toward the right edge (classic scrolling: negative).
         do {
-            let (panel, requests) = panel(pinned: false)
+            let (panel, requests) = panel()
             defer { panel.close() }
             panel.sendEvent(try scroll(0, phase: 1, at: point))
             for _ in 0..<12 { panel.sendEvent(try scroll(-6, phase: 2, at: point)) }
@@ -158,25 +158,16 @@ final class SwipeToCloseTests: XCTestCase {
         }
         // The same movement arriving only as momentum (a page swipe's).
         do {
-            let (panel, requests) = panel(pinned: false)
+            let (panel, requests) = panel()
             defer { panel.close() }
             panel.sendEvent(try scroll(-6, phase: 0, momentum: 1, at: point))
             for _ in 0..<12 { panel.sendEvent(try scroll(-6, phase: 0, momentum: 2, at: point)) }
             panel.sendEvent(try scroll(0, phase: 0, momentum: 3, at: point))
             XCTAssertEqual(requests(), 0, "momentum never closes")
         }
-        // Pinned.
-        do {
-            let (panel, requests) = panel(pinned: true)
-            defer { panel.close() }
-            panel.sendEvent(try scroll(0, phase: 1, at: point))
-            for _ in 0..<12 { panel.sendEvent(try scroll(-6, phase: 2, at: point)) }
-            panel.sendEvent(try scroll(0, phase: 4, at: point))
-            XCTAssertEqual(requests(), 0, "a pinned panel never closes by swipe")
-        }
         // A vertical scroll.
         do {
-            let (panel, requests) = panel(pinned: false)
+            let (panel, requests) = panel()
             defer { panel.close() }
             let up = { (dy: Int32, phase: Int64) throws -> NSEvent in
                 let event = try XCTUnwrap(CGEvent(scrollWheelEvent2Source: nil, units: .pixel, wheelCount: 2, wheel1: dy, wheel2: -1, wheel3: 0))

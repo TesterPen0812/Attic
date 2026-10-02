@@ -52,6 +52,18 @@ struct TasksScrollKeeper: NSViewRepresentable {
         scroll.reflectScrolledClipView(clip)
     }
 
+    /// Scrolls `scroll` to its top, where the first row rests.
+    @MainActor
+    static func scrollToTop(_ scroll: NSScrollView) {
+        scroll.layoutSubtreeIfNeeded()
+        let clip = scroll.contentView
+        var origin = clip.bounds.origin
+        origin.y = -clip.contentInsets.top
+        guard abs(origin.y - clip.bounds.origin.y) > 0.5 else { return }
+        clip.scroll(to: origin)
+        scroll.reflectScrolledClipView(clip)
+    }
+
     static func dismantleNSView(_ view: KeeperView, coordinator: ()) {
         view.stopObserving()
     }

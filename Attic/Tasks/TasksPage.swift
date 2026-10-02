@@ -388,12 +388,41 @@ struct TasksPage: View {
             if !dragging { pointer.liftedCard.end() }
         }
         .onChange(of: pagerBand, initial: true) { _, band in swipe.band = band }
-        // Done's rows come into view as the keyboard reaches them too.
         .onChange(of: focusedRow) { _, focus in
+            // Tab reached a row of a page kept built beside the one shown
+            // (hidden, so nothing showed where the keyboard was): the
+            // keyboard goes on to the shown page's rows or the add bar.
+            if let focus, model.isPageShown, focus.page != model.tab.rawValue,
+               let page = TasksTab(rawValue: focus.page) {
+                keepKeyboardOnShownPage(arrivedOn: page)
+                return
+            }
+            // The rows draw the keyboard's ring from the model's copy of
+            // the focus (deep review P2-04): a lazy list's cell reading the
+            // page's focus state read it as it was when the list was built
+            // (nil; measured in the hosted page), so the row that had the
+            // keyboard drew no ring, by Tab or by an arrow. The cells redraw
+            // on the model's changes only (round 11), and a focus change is
+            // not one, so they are told here; each compares its snapshot,
+            // and only the rows whose focus changed rebuild.
+            model.keyboardFocus = focus
+            model.cellUpdates.objectWillChange.send()
+            pointer.keyboardRow = focus.flatMap { focus in
+                TasksTab(rawValue: focus.page).map { TasksRowID(tab: $0, id: focus.id) }
+            }
+            // Done's rows come into view as the keyboard reaches them too.
             guard let id = focus?.id, focus?.page == TasksTab.done.rawValue, model.tab == .done,
                   focusTracker.isKeyboardDriving else { return }
             doneReveal = TasksPageModel.ScrollRequest(id: id, tab: .done)
         }
+        // Find, or a view, changes what a list holds: the list starts at
+        // its top, at the first match (deep review P2-01: a query typed
+        // far down a long list left an empty viewport past the matches).
+        .onChange(of: model.trimmedQuery(for: .now)) { _, _ in showListTop(.now) }
+        .onChange(of: model.trimmedQuery(for: .backlog)) { _, _ in showListTop(.backlog) }
+        .onChange(of: model.trimmedQuery(for: .done)) { _, _ in showListTop(.done) }
+        .onChange(of: model.viewOptions(for: .now)) { _, _ in showListTop(.now) }
+        .onChange(of: model.viewOptions(for: .backlog)) { _, _ in showListTop(.backlog) }
 
         // Search (the menu-bar item): the keyboard goes to the Done page's
         // search field on the tabs' line, not the add bar.
@@ -405,6 +434,41 @@ struct TasksPage: View {
         // The shell's toast and notices sit above everything in the bottom
         // stack, so a selection bar or paste offer never hides under them.
         .background(TasksNoticeClearance(stack: bottomStack, footerZone: footerZone))
+    }
+
+    /// Tab or Shift-Tab moved the keyboard into a row of a page kept built
+    /// beside the one shown (deep review P2-04: a Tab stop with nothing to
+    /// show for it, since that page is hidden). It goes where the next
+    /// visible stop is, in the direction it was travelling: past a page
+    /// after the shown one, on to the add bar (Tab) or back to the shown
+    /// page's last row (Shift-Tab); past a page before it, on to the shown
+    /// page's first row (Tab) or back to the add bar (Shift-Tab, wrapping
+    /// as the window's key loop does).
+    private func keepKeyboardOnShownPage(arrivedOn page: TasksTab) {
+        let event = NSApp.currentEvent
+        let backward = event?.type == .keyDown && event?.modifierFlags.contains(.shift) == true
+        let order = TasksTab.allCases
+        let after = (order.firstIndex(of: page) ?? 0) > (order.firstIndex(of: model.tab) ?? 0)
+        let rows = visibleIDs()
+        focusTracker.noteKeyboardNavigation()
+        if backward == after, let row = backward ? rows.last : rows.first {
+            setFocus(row)
+        } else {
+            focusedRow = nil
+            addBarFocused = true
+        }
+    }
+
+    /// A list whose rows a query or a view changed: back to its top, where
+    /// its first match is (deep review P2-01). Once the list has laid out
+    /// what it now holds (the next turn); a list not built starts at its
+    /// top when it is.
+    private func showListTop(_ tab: TasksTab) {
+        model.scrollOffsets[tab] = nil
+        DispatchQueue.main.async { [listProxies] in
+            guard let scroll = listProxies.scrollViews[tab] else { return }
+            TasksScrollKeeper.scrollToTop(scroll)
+        }
     }
 
     /// A `show`'s scroll request, taken once by the list that holds its
@@ -916,7 +980,7 @@ struct TasksPage: View {
             case .done:
                 TasksDonePage(model: model, updates: drawn ? model.cellUpdates : TasksCellUpdates.quiet, store: store,
                               listTop: listTop, bottomClearance: bottomClearance,
-                              bottomMargin: bottomMargin, bars: bars, drawn: drawn,
+                              bottomMargin: bottomMargin, bars: bars, bottomStack: bottomStack, drawn: drawn,
                               edges: edgeStyle, mask: viewportMask, reveal: $doneReveal,
                               revealRow: { id, proxy in revealRow(id, in: .done, proxy: proxy, animation: nil) },
                               cell: { row in cell(row, tab: .done, group: [], drawn: drawn) },
@@ -1031,7 +1095,7 @@ struct TasksPage: View {
             .contentMargins(.top, listTop - bars.top, for: .scrollIndicators)
             .contentMargins(.bottom, bottomClearance - bars.bottom, for: .scrollIndicators)
             .scrollIndicators(.automatic)
-            .tasksListEdges(edgeStyle, bars: bars, mask: viewportMask)
+            .tasksListEdges(edgeStyle, bars: bars, stack: bottomStack, mask: viewportMask)
             .onChange(of: focusedRow) { _, focus in
                 guard let focus, focus.page == tab.rawValue, rows.contains(where: { $0.id == focus.id }),
                       focusTracker.isKeyboardDriving else { return }
@@ -1126,6 +1190,9 @@ struct TasksPage: View {
             // Only the page that answers the keyboard opens an editor: the
             // copy a kept page draws of the same task shows none (round 12).
             let editing = model.editingTitleID == id && live.isActive
+            #if DEBUG
+            let _ = pointer.noteDrawnFocus(TasksRowID(tab: tab, id: id), live.focus.isFocused)
+            #endif
             // The row redraws only when what it shows changed (round 11):
             // every change to the page's model reached every row's cell, and
             // each rebuilt its whole row. An editor or a picker open on the
@@ -1189,7 +1256,7 @@ struct TasksPage: View {
                     subtasks: row.subtasks,
                     onToggle: { subtask in model.report(model.toggleSubtask(subtask.id), on: id) { model.toggleSubtask(subtask.id) } },
                     onAddSubtask: { model.beginAddingSubtask(to: id) },
-                    onOpenPage: { model.openPage(id) },
+                    onOpenPage: { openFiles(id) },
                     commands: { subtask in subtaskCommands(subtask, of: id, in: row.subtasks) },
                     onFocusChange: { subtaskID, focused in
                         if focused { model.focusedSubtaskID = subtaskID } else if model.focusedSubtaskID == subtaskID { model.focusedSubtaskID = nil }
@@ -1436,7 +1503,7 @@ struct TasksPage: View {
                 let targets = model.targets(for: id)
                 model.report(model.toggleWorking(targets), on: id) { model.toggleWorking(targets) }
             },
-            openPage: { model.openPage(id) },
+            openPage: { openFiles(id) },
             // ⌘B: to Later, or back to Now from Later, reported the same way.
             moveToBacklog: {
                 let targets = model.targets(for: id)
@@ -1459,6 +1526,19 @@ struct TasksPage: View {
             showActions: { showActions(for: id, anchor: nil, tab: tab) },
             names: .init(openPage: String(localized: "Open files"))
         )
+    }
+
+    /// Open Files… (deep review P2-03): one command for ⌘Return, the row's
+    /// right-click menu, ⇧⌘I's menu, the quick look and VoiceOver. A key
+    /// that belongs to a field typing never runs it. It opens on the next
+    /// turn: a menu runs its command while it still tracks, and the right-
+    /// click menu's Open Files… opened nothing that way while ⌘Return and
+    /// ⇧⌘I's did; on the next turn the menu has closed, and every route
+    /// opens the files panel the way ⌘Return does.
+    private func openFiles(_ id: UUID) {
+        guard !AtticTextInput.ownsCurrentKey else { return }
+        pointer.endInvocation()
+        DispatchQueue.main.async { [model] in model.openPage(id) }
     }
 
     /// A key's or VoiceOver's command on the row's targets, with its
@@ -1597,8 +1677,7 @@ struct TasksPage: View {
         })
         if single, tab != .done {
             var more = [AtticMenuCommand(verbatim: String(localized: "Open Files…"), shortcut: AtticTaskShortcut.openPage) {
-                guard !AtticTextInput.ownsCurrentKey else { return }
-                model.openPage(menuRowID(key))
+                openFiles(menuRowID(key))
             }]
             // Reorder (round 10): the same rule as ⌘↑ ⌘↓ and a drag.
             if unfinished {
@@ -2720,13 +2799,16 @@ private struct TasksAddBar: View {
 
 /// What the strip's buttons show for the new task (owner item 18).
 enum TasksComposerValues {
-    /// The Tag button's value: the first tag, and how many more.
+    /// The Tag button's value: the first tag, and how many more; its
+    /// tooltip, all of them.
     static func tags(_ tags: [String]) -> AtticStripValue? {
         guard let first = tags.first else { return nil }
         let more = tags.count - 1
         return AtticStripValue(
             text: more > 0 ? "#\(first) +\(more)" : "#\(first)",
-            spoken: more > 0 ? String(localized: "\(first) and \(more) more") : first
+            spoken: more > 0 ? String(localized: "\(first) and \(more) more") : first,
+            // The tooltip names every tag (deep review P3-01).
+            full: tags.map { "#" + $0 }.joined(separator: " ")
         )
     }
 
@@ -2993,9 +3075,12 @@ struct TasksReorderCell<Row: View, Below: View>: View {
         // its rows, but the keyboard, the editors and the pickers belong to
         // the copy on the page the person is on (round 12).
         let active = model.tab == tab && model.isPageShown
+        let focusID = AtticRowFocusID(page: tab.rawValue, id: id)
         let live = TasksCellLive(
             metaPopover: active && metaPopover?.id == id && metaPopover?.tab == tab ? metaPopover : nil,
-            focus: AtticRowFocus(binding: focus, id: AtticRowFocusID(page: tab.rawValue, id: id),
+            // Whether it has the keyboard: the model's copy of the page's
+            // focus (`TasksPageModel.keyboardFocus`), read as the cell draws.
+            focus: AtticRowFocus(binding: focus, id: focusID, isFocused: active && model.keyboardFocus == focusID,
                                  isActive: { [model, tab] in model.tab == tab && model.isPageShown }),
             isDropTarget: active && fileDropRow == TasksRowID(tab: tab, id: id),
             isActive: active
@@ -3179,6 +3264,19 @@ final class TasksPointer {
     var openViewOptions: ((NSView) -> Void)?
     /// The page's own view: a press is placed in the page from its event.
     weak var view: NSView?
+    /// The row that has the keyboard (the page's focus), for tests: which
+    /// row a Tab reached (deep review P2-04).
+    var keyboardRow: TasksRowID?
+
+    #if DEBUG
+    /// Tests: the rows whose cells last drew them as the keyboard's row (with
+    /// its ring), so a test can tell a focus the row never drew (P2-04).
+    private(set) var drawnFocus: Set<TasksRowID> = []
+
+    func noteDrawnFocus(_ row: TasksRowID, _ focused: Bool) {
+        if focused { drawnFocus.insert(row) } else { drawnFocus.remove(row) }
+    }
+    #endif
 
     /// One context menu's binding: the row it was opened on and what its
     /// commands act on, taken at the press that opened it.
@@ -3385,7 +3483,9 @@ final class TasksBottomStackHeight: ObservableObject {
     @Published var height: CGFloat = AtticControlSize.addBarHeight {
         didSet { scheduleMask() }
     }
-    /// What the viewport's fade uses: the height a moment later. Changing
+    /// What the viewport's fade (clean cut) and the lists' bottom bar
+    /// (system soft edge, `TasksBottomEdgeBar`) use: the height a moment
+    /// later. Changing
     /// the lists' mask re-renders their layers (about 12 ms with 500 rows),
     /// so it follows the strip after the keystroke's frame, while the strip
     /// is still fading in, never inside it (round 4: the first keystroke).
@@ -3498,8 +3598,11 @@ struct TasksListBars: Equatable {
 extension View {
     /// A list's edges: under the system soft edge, the list's own bars (the
     /// controls' zones, so its scroll view gets the system's edge effect
-    /// there, from the panel's top edge to the resting row and over the add
-    /// bar's zone); round 13's clean cut, the list's own mask.
+    /// there: from the panel's top edge to the resting row, over the header,
+    /// the tabs' line and Find; and over the whole bottom stack, the add bar
+    /// and whatever shows above it, its strip, a selection bar or a paste
+    /// offer, `TasksBottomEdgeBar`); round 13's clean cut, the list's own
+    /// mask.
     ///
     /// The bars belong to each list, not to the pager around the pages. A
     /// bar's content is hosted in its own AppKit container; with the bars on
@@ -3507,15 +3610,45 @@ extension View {
     /// add bar's, and XCUITest found no hit point on the add bar (CI,
     /// 2026-10-01). On the list they sit inside the list's own view tree.
     @ViewBuilder
-    func tasksListEdges<Mask: View>(_ style: AtticScrollEdgeStyle, bars: TasksListBars, mask: Mask) -> some View {
+    func tasksListEdges<Mask: View>(_ style: AtticScrollEdgeStyle, bars: TasksListBars, stack: TasksBottomStackHeight,
+                                    mask: Mask) -> some View {
         switch style {
         case .systemSoft:
             atticScrollEdgeEffect(style)
                 .safeAreaBar(edge: .top, spacing: 0) { AtticScrollEdgeBar(height: bars.top) }
-                .safeAreaBar(edge: .bottom, spacing: 0) { AtticScrollEdgeBar(height: bars.bottom) }
+                .safeAreaBar(edge: .bottom, spacing: 0) { TasksBottomEdgeBar(stack: stack, minimum: bars.bottom) }
         case .cleanCut:
             atticScrollEdgeEffect(style).mask { mask }
         }
+    }
+}
+
+/// The lists' bottom bar under the system soft edge (deep review P2-02):
+/// the add bar's zone, and, while more shows above the add bar (its strip
+/// of date, tag and priority, a selection bar, a paste offer), the whole
+/// bottom stack, so the system's pocket covers every control there and
+/// grows and shrinks with them. The same system effect, only taller; Attic
+/// draws no blur. It observes the stack itself and follows its settled
+/// height (`maskHeight`, a moment after the change), so a keystroke that
+/// shows the strip redraws only this bar, after the keystroke's frame,
+/// never the page and its rows (round 4).
+struct TasksBottomEdgeBar: View {
+    @ObservedObject var stack: TasksBottomStackHeight
+    /// The add bar's zone: the bar never gets shorter.
+    let minimum: CGFloat
+
+    /// The bar's height for a bottom stack `stack` tall. Idle, the stack
+    /// measures the add bar and the hidden strip's 8 pt gap above it
+    /// (nothing is drawn there): the bar is the add bar's zone, as before.
+    /// Anything shown over the add bar (the strip, a selection bar, a paste
+    /// offer, an error line) is the stack's top: the bar reaches it.
+    nonisolated static func height(stack: CGFloat, minimum: CGFloat) -> CGFloat {
+        let idle = AtticControlSize.addBarHeight + AtticPickerMetrics.stripToBar
+        return stack > idle + 0.5 ? minimum - AtticControlSize.addBarHeight + stack : minimum
+    }
+
+    var body: some View {
+        AtticScrollEdgeBar(height: Self.height(stack: stack.maskHeight, minimum: minimum))
     }
 }
 

@@ -10,7 +10,12 @@ import SwiftUI
 ///   its scroll view a pocket at each edge (AppKit's `NSScrollPocket`): what
 ///   scrolls under a bar is progressively blurred and faded toward the
 ///   panel's edge (a variable blur). The window server draws it; Attic
-///   re-renders nothing.
+///   re-renders nothing. The pocket is its bar's height, and its fade is a
+///   straight ramp over that height (measured in-process, 2026-10-02: the
+///   pocket's backdrop is masked by a linear gradient from clear at the
+///   bar's inner edge to 0.85 at the panel's edge, reaching about 10 pt
+///   past the bar while content is under it). A control near the bar's
+///   inner edge, such as the tabs' line, sits where the fade is weakest.
 /// - **Clean cut** (round 13, preview builds only, to compare): no bars and
 ///   no system effect; the list's own mask cuts rows cleanly at the
 ///   controls' bands. The controls float over the list in both.

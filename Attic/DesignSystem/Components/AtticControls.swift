@@ -340,7 +340,10 @@ struct AtticPageButton<Page: Hashable>: View {
     }
 }
 
-/// The page button's surface: the raised material, or L3's flat one.
+/// The page button's surface: the raised material, or L3's flat one. Live
+/// glass is interactive (owner, 2026-10-02): a click on any of its pages
+/// gets the system's press response, as the pin's does. The pages' own
+/// buttons still take the click: the interactive glass only responds to it.
 private struct AtticPageButtonSurface: ViewModifier {
     let flat: Bool
     let cornerRadius: CGFloat
@@ -350,7 +353,7 @@ private struct AtticPageButtonSurface: ViewModifier {
         if flat {
             content.atticFlatSurface(cornerRadius: cornerRadius)
         } else {
-            content.atticRaisedMaterial(cornerRadius: cornerRadius, interactive: false)
+            content.atticRaisedMaterial(cornerRadius: cornerRadius, interactive: true)
         }
     }
 }
