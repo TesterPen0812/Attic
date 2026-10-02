@@ -98,6 +98,52 @@ final class CornerGlassTests: XCTestCase {
         }
     }
 
+    // MARK: - Clicks still reach the buttons
+
+    /// Interactive glass only responds to a click: the pin's action and the
+    /// page button's pages still take it, glass or flat.
+    func testClicksReachTheButtonsThroughTheGlass() throws {
+        final class Clicks { var pins = 0; var page = 0 }
+        for flat in [false, true] {
+            let clicks = Clicks()
+            let pages: [AtticPageButton<Int>.Item] = [
+                .init(page: 0, systemName: "checkmark.circle", title: "Tasks", shortcut: "⌘1"),
+                .init(page: 1, systemName: "note.text", title: "Notes", shortcut: "⌘2"),
+                .init(page: 2, systemName: "scribble.variable", title: "Canvas", shortcut: "⌘3"),
+            ]
+            let view = AtticControlGroup {
+                HStack(spacing: 0) {
+                    AtticRaisedButton(systemName: "pin", label: "Pin", flat: flat) { clicks.pins += 1 }
+                    Spacer(minLength: 6)
+                    AtticPageButton(items: pages, selection: Binding(get: { clicks.page }, set: { clicks.page = $0 }),
+                                    pinnedOpen: true, flat: flat)
+                }
+            }
+            .atticDesign(AtticDesignContext(mode: .light))
+            let size = CGSize(width: 340, height: 80)
+            let (panel, hosting) = host(view, size: size)
+            defer { panel.orderOut(nil); panel.close() }
+            XCTAssertEqual(backdrops(in: hosting).count, flat ? 0 : 1)
+            func click(_ x: CGFloat) {
+                // The controls are centred vertically; AppKit's window points are y-up.
+                let point = CGPoint(x: x, y: size.height / 2)
+                for type in [NSEvent.EventType.leftMouseDown, .leftMouseUp] {
+                    let event = NSEvent.mouseEvent(with: type, location: point, modifierFlags: [], timestamp: ProcessInfo.processInfo.systemUptime,
+                                                   windowNumber: panel.windowNumber, context: nil, eventNumber: 0, clickCount: 1, pressure: 1)!
+                    panel.sendEvent(event)
+                }
+                RunLoop.current.run(until: Date().addingTimeInterval(0.3))
+            }
+            click(18)
+            XCTAssertEqual(clicks.pins, 1, "flat=\(flat): the pin takes the click")
+            // Open, the pages are 28 pt segments 2 apart inside a 4 pt inset,
+            // ending at the trailing edge: Notes is the middle one.
+            let width = AtticPageButton<Int>.width(open: true, count: 3)
+            click(size.width - width + AtticPageButtonMetrics.inset + AtticPageButtonMetrics.segment * 1.5 + AtticPageButtonMetrics.gap)
+            XCTAssertEqual(clicks.page, 1, "flat=\(flat): a page takes the click")
+        }
+    }
+
     // MARK: - The switch is preview-only
 
     private func scratchDefaults() throws -> (UserDefaults, cleanup: () -> Void) {
