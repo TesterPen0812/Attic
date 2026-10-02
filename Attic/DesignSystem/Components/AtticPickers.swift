@@ -482,10 +482,22 @@ struct AtticComposerStrip<DateContent: View, TagContent: View, PriorityContent: 
     @ViewBuilder let tagPicker: () -> TagContent
     @ViewBuilder let priorityPicker: () -> PriorityContent
 
+    /// The width the strip may take (the bar's), as laid out.
+    @State private var available: CGFloat = .infinity
+
+    /// The buttons' names, and the values' words and styles, for the widths.
+    private var faces: [(title: String, value: Value?)] {
+        [(String(localized: "Date"), date), (String(localized: "Tag"), tags), (String(localized: "Priority"), priority)]
+    }
+
     var body: some View {
+        // Common values in full (deep review P3-01: "Tomorr…", "#q…"):
+        // when the three buttons would not fit at their usual padding,
+        // they close up their inner gaps before anything is cut short.
+        let compact = Self.needsCompactGaps(faces, available: available)
         HStack(spacing: AtticPickerMetrics.stripSpacing) {
             AtticStripButton(systemName: "calendar", title: String(localized: "Date"), value: date, isOpen: datePresented,
-                             identifier: "composer-date",
+                             identifier: "composer-date", compact: compact,
                              keepsPrefix: 5, keptPrefixWidth: AtticPickerMetrics.stripDatePrefix,
                              clearLabel: String(localized: "Clear date"), open: { datePresented = true }, clear: onClearDate)
                 // With all three set, a long date gives way after the tag
@@ -495,7 +507,7 @@ struct AtticComposerStrip<DateContent: View, TagContent: View, PriorityContent: 
                     datePicker().atticPickerSurface()
                 }
             AtticStripButton(systemName: "tag", title: String(localized: "Tag"), value: tags, isOpen: tagsPresented,
-                             identifier: "composer-tag",
+                             identifier: "composer-tag", compact: compact,
                              keepsPrefix: 4, keptPrefixWidth: AtticPickerMetrics.stripTagPrefix,
                              clearLabel: String(localized: "Clear tags"), open: { tagsPresented = true }, clear: onClearTags)
                 .layoutPriority(-1)
@@ -503,7 +515,7 @@ struct AtticComposerStrip<DateContent: View, TagContent: View, PriorityContent: 
                     tagPicker().atticPickerSurface()
                 }
             AtticStripButton(systemName: "flag", title: String(localized: "Priority"), value: priority, isOpen: priorityPresented,
-                             identifier: "composer-priority",
+                             identifier: "composer-priority", compact: compact,
                              clearLabel: String(localized: "Clear priority"), open: { priorityPresented = true }, clear: onClearPriority)
                 .fixedSize(horizontal: true, vertical: false)
                 .atticPopover(isPresented: $priorityPresented, arrowEdge: .top) {
@@ -511,8 +523,33 @@ struct AtticComposerStrip<DateContent: View, TagContent: View, PriorityContent: 
                 }
         }
         .frame(height: AtticControlSize.smallHeight)
+        // The room it has: the bar's width, whatever the buttons take.
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { width in
+            if abs(width - available) > 0.5 { available = width }
+        }
         .accessibilityElement(children: .contain)
         .accessibilityLabel(String(localized: "Date, tag and priority"))
+    }
+
+    /// The width the three buttons take at their usual padding: each
+    /// value's icon, words, × and gaps, or the empty button's name.
+    nonisolated static func usualWidth(_ faces: [(title: String, value: AtticStripValue?)]) -> CGFloat {
+        let m = AtticSmallControlMetrics.self
+        let buttons = faces.map { face -> CGFloat in
+            guard let value = face.value else {
+                let name = AtticTextStyle.controlLabel.measuredWidth(face.title)
+                return max(AtticControlSize.smallMinWidth, m.labelPadding * 2 + m.iconSize + m.iconLabelGap + name)
+            }
+            return m.labelPadding + m.iconSize + m.iconLabelGap + value.style.measuredWidth(value.text)
+                + AtticPickerMetrics.stripClearGap + AtticPickerMetrics.stripClearSize + AtticPickerMetrics.stripValueTrailing
+        }
+        return buttons.reduce(0, +) + AtticPickerMetrics.stripSpacing * CGFloat(max(0, buttons.count - 1))
+    }
+
+    /// Whether the buttons close up their inner gaps to fit `available`.
+    nonisolated static func needsCompactGaps(_ faces: [(title: String, value: AtticStripValue?)], available: CGFloat) -> Bool {
+        available.isFinite && usualWidth(faces) > available + 0.5
     }
 }
 
@@ -523,6 +560,9 @@ struct AtticStripValue: Equatable {
     var ink: AtticInk = .heading
     var style: AtticTextStyle = .controlLabel
     let spoken: String
+    /// The whole value for the tooltip ("#qatest #work"; "Tomorrow, Thu 3
+    /// Oct"); nil shows `text`.
+    var full: String? = nil
 }
 
 /// One strip button: the small button's face (icon, then its name) until
@@ -535,6 +575,9 @@ private struct AtticStripButton: View {
     let isOpen: Bool
     /// For UI tests: the button's; its × adds "-clear".
     let identifier: String
+    /// The strip is short of room: the value's inner gaps close up (its
+    /// icon keeps its place on the circles' line).
+    var compact = false
     /// How many characters of a long value always stay (then "…"): a tag
     /// squeezed by a date and a priority still says what it is ("#laun…"),
     /// never a lone "#".
@@ -556,7 +599,15 @@ private struct AtticStripButton: View {
         let m = AtticSmallControlMetrics.self
         guard let value else { return AtticControlSize.smallMinWidth }
         guard value.text.count > keepsPrefix + 1 else { return 0 }
-        return m.labelPadding + m.iconSize + m.iconLabelGap + keptPrefixWidth + AtticPickerMetrics.stripClearGap
+        return m.labelPadding + m.iconSize + iconLabelGap + keptPrefixWidth + clearGap
+    }
+
+    private var iconLabelGap: CGFloat {
+        compact && value != nil ? AtticPickerMetrics.stripCompactIconGap : AtticSmallControlMetrics.iconLabelGap
+    }
+
+    private var clearGap: CGFloat {
+        compact ? AtticPickerMetrics.stripCompactClearGap : AtticPickerMetrics.stripClearGap
     }
 
     var body: some View {
@@ -574,7 +625,7 @@ private struct AtticStripButton: View {
         }
         HStack(spacing: 0) {
             Button(action: open) {
-                HStack(spacing: m.iconLabelGap) {
+                HStack(spacing: iconLabelGap) {
                     AtticIcon(systemName: systemName, size: m.iconSize, weight: .regular, ink: isEnabled ? .glyph : .disabledIcon)
                     if let value {
                         // A long tag gives way first (the strip keeps to the
@@ -585,14 +636,15 @@ private struct AtticStripButton: View {
                     }
                 }
                 .padding(.leading, m.labelPadding)
-                .padding(.trailing, value == nil ? m.labelPadding : AtticPickerMetrics.stripClearGap)
+                .padding(.trailing, value == nil ? m.labelPadding : clearGap)
                 .frame(minWidth: labelFloor, minHeight: height, maxHeight: height)
                 .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
             .focusEffectDisabled()
             .atticOwnFocusRing(.rounded(radius: radius, height: height))
-            .help(value.map { "\(title): \($0.spoken)" } ?? title)
+            // The whole value, however short the button is.
+            .help(value.map { "\(title): \($0.full ?? $0.text)" } ?? title)
             .accessibilityLabel(title)
             .accessibilityValue(value?.spoken ?? "")
             .accessibilityIdentifier(identifier)
@@ -614,7 +666,7 @@ private struct AtticStripButton: View {
                 .help(clearLabel)
                 .accessibilityLabel(clearLabel)
                 .accessibilityIdentifier(identifier + "-clear")
-                .padding(.trailing, AtticPickerMetrics.stripValueTrailing)
+                .padding(.trailing, compact ? AtticPickerMetrics.stripCompactValueTrailing : AtticPickerMetrics.stripValueTrailing)
                 .transition(AtticMotionPreset.popover.transition(reduceMotion: design.reduceMotion, edge: nil))
             }
         }

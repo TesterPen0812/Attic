@@ -3,11 +3,15 @@ import XCTest
 
 /// A real drag out of the Tasks page (GPT-6.1's review of `ae84d1c`): the
 /// row leaves the window, AppKit's dragging session begins, and the release
-/// over the menu bar, where nothing takes a drop, ends it with no operation,
-/// as Esc does. Nothing moves, nothing is saved, and the page goes on
-/// working. (XCUITest drags in one stroke, so Esc itself cannot be pressed
-/// mid-drag; the session ends the same way.) The page reports the sessions
-/// it began and ended under `ATTIC_UI_TESTING` (`tasks-drag-out-state`).
+/// over the menu bar, where nothing takes a drop, ends it with no
+/// operation. Nothing moves, nothing is saved, and a click still selects a
+/// row afterwards. The page reports the sessions it began and ended under
+/// `ATTIC_UI_TESTING` (`tasks-drag-out-state`).
+///
+/// What this does not cover (code review): XCUITest drags in one stroke, so
+/// Esc cannot be pressed mid-drag, and nothing here receives a drop, so a
+/// copy delivered to another app is not checked. Both stay with the
+/// hands-on acceptance.
 final class TasksDragOutUITests: XCTestCase {
     private var app: XCUIApplication!
 
@@ -61,7 +65,7 @@ final class TasksDragOutUITests: XCTestCase {
         waitFor(state == "began 1 ended 1", "and ended, with nothing dropped (\(state))")
         let after = ["Email beta testers", "Book dentist", "Call the plumber"].map { row($0).frame.minY }
         XCTAssertEqual(after, after.sorted(), "nothing moved")
-        // The page goes on: a click selects a row, a reorder drag works.
+        // The page goes on: a click selects a row.
         row("Call the plumber").coordinate(withNormalizedOffset: .zero).withOffset(CGVector(dx: 90, dy: 16)).click()
         waitFor(row("Call the plumber").isSelected, "a click selects a row afterwards")
     }

@@ -43,17 +43,22 @@ final class AtticKeyWindowUITests: XCTestCase {
         }
         XCTAssertEqual(addBar.value(forKey: "hasKeyboardFocus") as? Bool, true, "the add bar has the keyboard on open")
 
-        // Captured now, judged after typing: the pixel count takes seconds
-        // on CI, and an idle quick capture with the pointer away rightly
-        // hides after its grace (`MainPanelAutoHidePolicy`), so the text
-        // must be typed while the person would still be typing (round 10:
-        // the panel hid before the text arrived since round 8).
-        let image = addBar.screenshot().image
+        // Typed first, captured after. An idle quick capture with the
+        // pointer away rightly hides after its grace
+        // (`MainPanelAutoHidePolicy`), and a screenshot can take seconds
+        // on CI: taken before typing, it let the panel hide before the
+        // text arrived (3 failed attempts in a row on CI). A draft holds
+        // the panel open, so once the text has landed the capture can take
+        // as long as it needs. The ring would show from the focus the open
+        // gave, which typing letters does not change (only Tab and the
+        // arrows turn rings on), so the capture still judges the open.
         app.typeText("Typed on open")
         let typed = NSPredicate(format: "value CONTAINS %@", "Typed on open")
-        XCTAssertEqual(XCTWaiter.wait(for: [expectation(for: typed, evaluatedWith: addBar)], timeout: 3), .completed,
+        XCTAssertEqual(XCTWaiter.wait(for: [expectation(for: typed, evaluatedWith: addBar)], timeout: 10), .completed,
                        "what is typed on open lands in the add bar")
+        XCTAssertEqual(addBar.value(forKey: "hasKeyboardFocus") as? Bool, true, "and the add bar keeps the keyboard")
 
+        let image = addBar.screenshot().image
         attach(image, name: "add-bar-on-open")
         XCTAssertLessThan(try accentFraction(image), 0.002, "no focus ring on open")
     }

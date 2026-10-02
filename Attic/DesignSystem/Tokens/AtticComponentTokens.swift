@@ -524,4 +524,11 @@ enum AtticPickerMetrics {
     static let stripClearSize: CGFloat = 14
     static let stripClearGlyph: CGFloat = 8
     static let stripValueTrailing: CGFloat = 7
+    /// Short of room (deep review P3-01), a set button's inner gaps close
+    /// up before its value is cut short: 3 from the icon to the value and
+    /// from the value to the ×, 4 after the × (9 pt a button). The 9 pt
+    /// before the icon stay, so the first icon keeps the circles' line.
+    static let stripCompactIconGap: CGFloat = 3
+    static let stripCompactClearGap: CGFloat = 3
+    static let stripCompactValueTrailing: CGFloat = 4
 }

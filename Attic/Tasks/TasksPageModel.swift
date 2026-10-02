@@ -219,6 +219,10 @@ final class TasksPageModel: ObservableObject {
     /// The subtask line that has the keyboard (round 10b). Not published: it
     /// only steers which row a shortcut targets, and never redraws.
     var focusedSubtaskID: UUID?
+    /// The task row that has the keyboard: the page's focus, copied here as
+    /// it changes so the rows' cells read it as they draw (deep review
+    /// P2-04). Not published: the page tells the cells (`cellUpdates`).
+    var keyboardFocus: AtticRowFocusID?
     /// Finished rows held where they were for about a second, with the
     /// list and index they held (spec: "stays in place, then slides").
     @Published private(set) var held: [UUID: HeldPlace] = [:]
