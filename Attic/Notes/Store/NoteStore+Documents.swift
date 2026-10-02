@@ -167,6 +167,7 @@ struct StagedNoteAttachment: Equatable, Sendable {
 /// Immutable projection prepared away from the main actor for autosave.
 struct PreparedNoteDocument: Sendable {
     let content: Data
+    let contentFingerprint: String
     let title: String
     let body: String
     let plainText: String
@@ -179,6 +180,7 @@ struct PreparedNoteDocument: Sendable {
 
     init(_ document: NoteDocument) throws {
         content = try NoteContentCodec.encode(document)
+        contentFingerprint = NoteItem.fingerprint(content)
         hasTaskNote = document.requires.contains("taskNote")
         admissionIDs = document.isWritableByThisBuild ? Set(document.attachmentIDs) : nil
         title = NoteStore.normalizedTitle(document.title)
@@ -640,7 +642,7 @@ extension NoteStore {
                                      on replicas: [NoteItem], timestamp: Date, revision: Int64,
                                      revisionID: UUID, tags: String? = nil) {
         for replica in replicas {
-            replica.content = projection.content
+            replica.installPreparedContent(projection)
             replica.contentFormat = format
             replica.title = projection.title
             replica.body = projection.body

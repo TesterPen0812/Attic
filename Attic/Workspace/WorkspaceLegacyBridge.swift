@@ -155,7 +155,8 @@ enum WorkspaceLegacyBridge {
             return owner
         })
         if writes.isEmpty { return }
-        let after = try WorkspaceModelToken.read(owners: writes, in: source)
+        let after = try WorkspaceModelToken.capture(owners: writes,
+            models: WorkspaceModelToken.stagedModels(owners: writes, before: state.baseline, in: source))
         var before: [WorkspaceOwner: WorkspaceModelToken] = [:]
         for owner in writes {
             // Inserts have expected absence; changed/deleted owners must have
@@ -218,8 +219,10 @@ enum WorkspaceLegacyBridge {
                 staged: staged.map { .init(id: $0.id, filename: $0.filename, contentTypeIdentifier: $0.contentTypeIdentifier,
                     byteCount: $0.byteCount, digest: $0.digest) }, savedAt: Date())
         }
+        var confirmed: [WorkspaceOwner: WorkspaceModelToken]?
         try state.coordinator.commitCompatibility(tokens: reads, scopes: scopes, writes: writes, intent: sourceName,
-            plain: plain, writer: writer, staged: staged, afterDocuments: documents, preDraft: preDraft, stage: { target in
+            plain: plain, writer: writer, staged: staged, afterDocuments: documents, preDraft: preDraft,
+            confirmed: { confirmed = $0 }, stage: { target in
                 for owner in writes {
                     guard let old = before[owner], let new = after[owner] else { throw WorkspaceFoundationError.unknown }
                     let oldByID = Dictionary(uniqueKeysWithValues: old.replicas.map { ($0.physicalID, $0.fields) })
@@ -242,9 +245,10 @@ enum WorkspaceLegacyBridge {
             })
         // The source context remains presentation/staging only; stores replace
         // it with a fresh presentation after a confirmed commit.
-        let committed = state.coordinator.freshContext()
-        let confirmed = try WorkspaceModelToken.read(owners: writes, in: committed)
-        let updates = confirmed
+        // An ambiguous-save reconciliation or journaled operation still
+        // confirms from disk. Successful plain saves already returned guards
+        // of every saved instance, including its now-permanent physical ID.
+        let updates = try confirmed ?? WorkspaceModelToken.read(owners: writes, in: state.coordinator.freshContext())
         state.baseline = updates
         state.scopes.removeAll()
         state.plainTaskWrites = plain && writes.allSatisfy({ $0.entity == .task }) ? Set(writes.map(\.id)) : nil

@@ -158,6 +158,24 @@ final class WorkspaceCommitTests: XCTestCase {
         XCTAssertEqual(try coordinator.freshContext().fetchCount(FetchDescriptor<TaskItem>()), 3)
     }
 
+    func testC2NoteFingerprintTracksPreparedBytesAndPreservesLegacySnapshots() throws {
+        let note = NoteItem(), prepared = try PreparedNoteDocument(NoteDocument(blocks: [.text("Prepared bytes")]))
+        note.installPreparedContent(prepared)
+        XCTAssertEqual(note.contentFingerprint, WorkspaceModelFields.digest(note.content))
+        let before = try WorkspaceModelFields.fingerprint(note)
+        note.content = try NoteContentCodec.encode(NoteDocument(blocks: [.text("Direct write")]))
+        XCTAssertNotEqual(try WorkspaceModelFields.fingerprint(note)["content"], before["content"])
+        XCTAssertEqual(note.contentFingerprint, WorkspaceModelFields.digest(note.content))
+        // A migrated row may have no optional digest yet. Its guard must use
+        // the real bytes, and explicit snapshots must round-trip the nil.
+        note.contentFingerprint = nil
+        let snapshot = try WorkspaceModelFields.read(note), copy = NoteItem()
+        try WorkspaceModelFields.apply(snapshot, to: copy)
+        XCTAssertEqual(copy.content, note.content)
+        XCTAssertNil(copy.contentFingerprint)
+        XCTAssertEqual(try WorkspaceModelFields.fingerprint(copy), try WorkspaceModelFields.fingerprint(note))
+    }
+
     func testC2LegacyMissingPayloadFingerprintsPreserveExplicitSnapshotRoundTrips() throws {
         let bytes = Data("legacy bytes".utf8)
         let attachment = NoteAttachment(noteID: noteID, originalFilename: "legacy.txt", byteCount: Int64(bytes.count),

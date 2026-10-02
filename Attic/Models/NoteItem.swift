@@ -1,5 +1,6 @@
 import Foundation
 import SwiftData
+import CryptoKit
 
 @Model
 final class NoteItem {
@@ -37,7 +38,24 @@ final class NoteItem {
 
     /// The stored document; nil while the note is legacy. Kept byte for byte
     /// when this build can only read it (a newer format).
-    @Attribute(.externalStorage) var content: Data? = nil
+    @Attribute(.externalStorage, originalName: "content") private var contentStorage: Data? = nil
+    var content: Data? {
+        get { contentStorage }
+        set {
+            contentFingerprint = Self.fingerprint(newValue)
+            contentStorage = newValue
+        }
+    }
+    /// Optional for existing stores. Guard legacy rows by their real bytes;
+    /// every new write updates this scalar alongside the document.
+    var contentFingerprint: String? = nil
+    nonisolated static func fingerprint(_ content: Data?) -> String {
+        content.map { SHA256.hash(data: $0).map { String(format: "%02x", $0) }.joined() } ?? "nil"
+    }
+    func installPreparedContent(_ projection: PreparedNoteDocument) {
+        contentStorage = projection.content
+        contentFingerprint = projection.contentFingerprint
+    }
     /// 0 legacy title/body, 1 `attic.note/1`, higher = written by a newer Attic.
     var contentFormat: Int = 0
     /// Derived search and agent text (title, then one line per block).

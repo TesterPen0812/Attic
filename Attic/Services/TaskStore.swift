@@ -401,25 +401,47 @@ final class TaskStore: ObservableObject {
     /// made each post-edit snapshot dominate toggle cost at scale (every
     /// model property read goes through SwiftData's storage).
     private final class FamilyIndex {
-        let revision: UInt64
-        let byID: [UUID: TaskItem]
+        var revision: UInt64
+        private(set) var byID: [UUID: TaskItem]
+        let positions: [UUID: Int]
+        let parentIDs: [UUID: UUID]
         /// Tasks that are not a validated child of a live top-level parent:
         /// true roots plus orphaned, self-linked and nested links, which stay
         /// visible instead of vanishing (same rule as `parent(of:)`).
-        let roots: [TaskItem]
-        private let childrenByParent: [UUID: [TaskItem]]
+        private(set) var roots: [TaskItem]
+        private let rootPositions: [UUID: Int]
+        private var childrenByParent: [UUID: [TaskItem]]
         private var sortedChildrenByParent: [UUID: [TaskItem]] = [:]
 
         init(
             revision: UInt64,
             byID: [UUID: TaskItem],
+            positions: [UUID: Int], parentIDs: [UUID: UUID],
             roots: [TaskItem],
             childrenByParent: [UUID: [TaskItem]]
         ) {
             self.revision = revision
             self.byID = byID
+            self.positions = positions; self.parentIDs = parentIDs
             self.roots = roots
+            self.rootPositions = Dictionary(uniqueKeysWithValues: roots.enumerated().map { ($0.element.id, $0.offset) })
             self.childrenByParent = childrenByParent
+        }
+
+        func canRebind(_ rows: [TaskItem]) -> Bool {
+            rows.allSatisfy { byID[$0.id] != nil && parentIDs[$0.id] == $0.parentID }
+        }
+        func rebind(_ rows: [TaskItem], revision: UInt64) {
+            for row in rows {
+                let id = row.id
+                byID[id] = row
+                if let position = rootPositions[id] { roots[position] = row }
+                else if let parent = parentIDs[id], let position = childrenByParent[parent]?.firstIndex(where: { $0.id == id }) {
+                    childrenByParent[parent]?[position] = row
+                    sortedChildrenByParent.removeValue(forKey: parent)
+                }
+            }
+            self.revision = revision
         }
 
         func children(of parentID: UUID) -> [TaskItem] {
@@ -571,14 +593,17 @@ final class TaskStore: ObservableObject {
     /// Indexed lookup of a visible task. After an isolated commit, bind an
     /// unchanged presentation row to the current staging context on demand.
     func task(withID id: UUID) -> TaskItem? {
-        guard var row = familyIndex.byID[id] else { return nil }
+        let index = familyIndex
+        guard var row = index.byID[id] else { return nil }
         if row.modelContext !== context {
             do {
                 guard let current = Self.canonicalReplicas(from: try storedTasks(matching: id)).first,
                       current.deletedAt == nil, current.doneLoggedAt == nil else { return nil }
-                if let index = tasks.firstIndex(where: { $0.id == id }) {
-                    tasks[index] = current
+                if let position = index.positions[id] {
+                    let sameFamily = index.canRebind([current])
+                    tasks[position] = current
                     revision &+= 1
+                    if sameFamily { index.rebind([current], revision: revision); familyIndexCache = index }
                 }
                 row = current
             } catch { report(error, owner: id); return nil }
@@ -592,25 +617,31 @@ final class TaskStore: ObservableObject {
             return familyIndexCache
         }
         var byID: [UUID: TaskItem] = [:]
+        var positions: [UUID: Int] = [:], parents: [UUID: UUID] = [:]
+        var records: [(UUID, TaskItem)] = []
         byID.reserveCapacity(tasks.count)
-        for task in tasks where byID[task.id] == nil {
-            byID[task.id] = task
+        for (offset, task) in tasks.enumerated() {
+            let id = task.id
+            if byID[id] == nil {
+                byID[id] = task; positions[id] = offset; records.append((id, task))
+                if let parent = task.parentID { parents[id] = parent }
+            }
         }
         var childrenByParent: [UUID: [TaskItem]] = [:]
         var roots: [TaskItem] = []
-        for task in tasks {
+        for (id, task) in records {
             // Same root-validation rule as parent(of:): a child counts only
             // under a live top-level parent; orphaned links stay visible as
             // roots instead of vanishing.
-            if let parentID = task.parentID, parentID != task.id,
-               let parent = byID[parentID], parent.parentID == nil {
+            if let parentID = parents[id], parentID != id,
+               byID[parentID] != nil, parents[parentID] == nil {
                 childrenByParent[parentID, default: []].append(task)
             } else {
                 roots.append(task)
             }
         }
         let index = FamilyIndex(
-            revision: revision, byID: byID, roots: roots,
+            revision: revision, byID: byID, positions: positions, parentIDs: parents, roots: roots,
             childrenByParent: childrenByParent
         )
         familyIndexCache = index
@@ -3153,6 +3184,7 @@ final class TaskStore: ObservableObject {
             onSaveTiming?("presentation", presentationStart.duration(to: .now))
             #endif
             revision &+= 1
+            familyIndexCache?.revision = revision
             #if !ATTIC_LOCAL_ONLY
             cloudSyncProtection.noteLocalSave()
             reconcileProtectedCloudSyncActivity(for: .exportData)
@@ -3191,6 +3223,7 @@ final class TaskStore: ObservableObject {
         #endif
         let canonical: [UUID: TaskItem]
         let visible: [TaskItem]
+        var reboundIndex: FamilyIndex?
         if let changedIDs = plainTaskIDs {
             // An isolated tick/rename changes only these logical families.
             // Re-read every physical replica of them in the fresh context;
@@ -3201,12 +3234,19 @@ final class TaskStore: ObservableObject {
                 predicate: #Predicate { ids.contains($0.id) }
             )))
             canonical = Dictionary(uniqueKeysWithValues: changed.map { ($0.id, $0) })
-            let previousIDs = Set(tasks.map(\.id))
-            visible = tasks.compactMap { row in
-                guard changedIDs.contains(row.id) else { return row }
-                guard let saved = canonical[row.id], saved.deletedAt == nil, saved.doneLoggedAt == nil else { return nil }
-                return saved
-            } + changed.filter { !previousIDs.contains($0.id) && $0.deletedAt == nil && $0.doneLoggedAt == nil }
+            if let index = familyIndexCache, Set(canonical.keys) == changedIDs,
+               changed.allSatisfy({ $0.deletedAt == nil && $0.doneLoggedAt == nil }), index.canRebind(changed) {
+                var updated = tasks
+                for row in changed { updated[index.positions[row.id]!] = row }
+                visible = updated; reboundIndex = index
+            } else {
+                let previousIDs = Set(tasks.map(\.id))
+                visible = tasks.compactMap { row in
+                    guard changedIDs.contains(row.id) else { return row }
+                    guard let saved = canonical[row.id], saved.deletedAt == nil, saved.doneLoggedAt == nil else { return nil }
+                    return saved
+                } + changed.filter { !previousIDs.contains($0.id) && $0.deletedAt == nil && $0.doneLoggedAt == nil }
+            }
         } else {
             let fetched = try refreshedContext.fetch(FetchDescriptor<TaskItem>())
             let unique = Self.canonicalReplicas(from: fetched)
@@ -3230,6 +3270,7 @@ final class TaskStore: ObservableObject {
         // log, exactly as it decides every other field.
         tasks = visible
         revision &+= 1
+        if let reboundIndex { reboundIndex.rebind(Array(canonical.values), revision: revision); familyIndexCache = reboundIndex }
     }
 
     /// CloudKit can't enforce a unique UUID attribute. If a malformed import
