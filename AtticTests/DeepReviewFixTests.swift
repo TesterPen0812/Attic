@@ -9,7 +9,7 @@ import XCTest
 /// keyboard focus at every Tab stop (P2-04), the composer strip's values
 /// in full (P3-01) and the pager's test-only settle (code review). Each is
 /// driven the way a person drives it where the hosted page allows: real
-/// key and mouse events through the app's queue, a real context menu.
+/// key and mouse events through the app's queue, real menus.
 @MainActor
 final class DeepReviewFixTests: XCTestCase {
     private var savedEdge: AtticScrollEdgeStyle?
@@ -140,27 +140,34 @@ final class DeepReviewFixTests: XCTestCase {
 
     // MARK: - P2-03: one Open Files command
 
-    /// Open Files… from the row's right-click menu (a real secondary click
-    /// on the row, the menu's own keys), from ⇧⌘I's menu and from ⌘Return:
-    /// each opens the row's files, once, after its menu has closed.
+    /// Open Files… from the row's right-click menu (the menu a secondary
+    /// click on the row gets), from ⇧⌘I's menu (a real ⇧⌘I, the menu's own
+    /// keys) and from ⌘Return: each opens the row's files, once.
     func testOpenFilesOpensFromTheRightClickMenuTheActionsMenuAndCommandReturn() throws {
         let hosted = try Hosted(height: 520)
         defer { hosted.close() }
         var opened: [UUID] = []
         hosted.model.services.openPage = { opened.append($0) }
         let row = try XCTUnwrap(hosted.model.rows(for: .now).first { $0.model.title == "Book dentist" }?.id)
-        // Into More by type-select ("mor", not Move to Later), then its
-        // first item, Open Files…, with Return. A first arrow is harmless
-        // if the menu is still opening when it arrives.
-        let keys: [(characters: String, keyCode: UInt16)] = [("\u{F701}", 125), ("m", 46), ("o", 31), ("r", 15),
-                                                              ("\u{F703}", 124), ("\r", 36)]
-
-        // The right-click menu.
+        // The right-click menu: the menu SwiftUI shows for a secondary click
+        // on the row, its More › Open Files… chosen as AppKit chooses an
+        // item. (Typing into a live context menu in the hosted window was
+        // not dependable across macOS versions; `TasksPanelUITests` clicks
+        // it in the real panel.)
         let frame = try XCTUnwrap(hosted.pointer.frames[TasksRowID(tab: .now, id: row)])
-        let timers = schedule(keys, in: hosted)
-        hosted.rightClickDown(at: CGPoint(x: frame.minX + 110, y: frame.minY + 16))
-        hosted.spin(1)
-        timers.forEach { $0.invalidate() }
+        let content = try XCTUnwrap(hosted.window.contentView)
+        let point = CGPoint(x: frame.minX + 110, y: hosted.height - (frame.minY + 16))
+        let press = try XCTUnwrap(NSEvent.mouseEvent(with: .rightMouseDown, location: point, modifierFlags: [],
+                                                     timestamp: ProcessInfo.processInfo.systemUptime,
+                                                     windowNumber: hosted.window.windowNumber, context: nil,
+                                                     eventNumber: 3, clickCount: 1, pressure: 1))
+        let menu = try XCTUnwrap(content.menu(for: press), "a secondary click on the row has the row's menu")
+        menu.update()
+        let more = try XCTUnwrap(menu.items.first { $0.title == "More" }?.submenu, "with More")
+        more.update()
+        let open = try XCTUnwrap(more.items.firstIndex { $0.title.hasPrefix("Open Files") }, "holding Open Files…")
+        more.performActionForItem(at: open)
+        hosted.spin(0.5)
         XCTAssertEqual(opened, [row], "the right-click menu's Open Files… opens the row's files")
 
         // ⇧⌘I's menu: down to More (its eleventh item), into it, Return.
@@ -309,21 +316,5 @@ final class DeepReviewFixTests: XCTestCase {
         }
         XCTAssertEqual(resolve("0.05"), 0.05)
         XCTAssertEqual(resolve("10"), 10)
-    }
-
-
-
-}
-
-extension Hosted {
-    /// A real secondary press (no release) at a page point: a context menu
-    /// opens and tracks on it, as a held right-click does.
-    func rightClickDown(at point: CGPoint) {
-        let location = CGPoint(x: point.x, y: height - point.y)
-        let event = NSEvent.mouseEvent(with: .rightMouseDown, location: location, modifierFlags: [],
-                                       timestamp: ProcessInfo.processInfo.systemUptime, windowNumber: window.windowNumber,
-                                       context: nil, eventNumber: 2, clickCount: 1, pressure: 1)!
-        NSApp.postEvent(event, atStart: false)
-        Hosted.pumpEvents()
     }
 }

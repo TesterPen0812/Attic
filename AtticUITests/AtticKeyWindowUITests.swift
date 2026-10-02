@@ -29,14 +29,25 @@ final class AtticKeyWindowUITests: XCTestCase {
     /// typed right away lands there. (`ATTIC_UI_TEST_HOVER_MONITOR` opens
     /// the panel the way quick capture does.)
     func testAnExplicitOpenFocusesTheAddBarWithoutARing() throws {
-        app = XCUIApplication()
-        app.launchEnvironment["ATTIC_UI_TESTING"] = "1"
-        app.launchEnvironment["ATTIC_UI_TEST_HOVER_MONITOR"] = "1"
-        app.launchArguments += ["-appearancePreference", "light", "-panelSurfaceStyle", "solid"]
-        app.launch()
-        app.activate()
-        let addBar = app.descendants(matching: .any).matching(identifier: "AtticTokenField").firstMatch
-        XCTAssertTrue(addBar.waitForExistence(timeout: 5))
+        // The open happens at launch, and an idle quick capture with the
+        // pointer away rightly hides after its grace. On a cold runner the
+        // accessibility setup alone took 4 s and the panel had gone before
+        // the test looked (CI, 2026-10-02, the run's first UI test): so the
+        // open is waited for as it happens, and a launch whose open was
+        // over before the test could see it is launched once more.
+        var addBar: XCUIElement!
+        for attempt in 0..<2 {
+            app = XCUIApplication()
+            app.launchEnvironment["ATTIC_UI_TESTING"] = "1"
+            app.launchEnvironment["ATTIC_UI_TEST_HOVER_MONITOR"] = "1"
+            app.launchArguments += ["-appearancePreference", "light", "-panelSurfaceStyle", "solid"]
+            app.launch()
+            app.activate()
+            addBar = app.descendants(matching: .any).matching(identifier: "AtticTokenField").firstMatch
+            if addBar.waitForExistence(timeout: 5) { break }
+            if attempt == 0 { app.terminate() }
+        }
+        XCTAssertTrue(addBar.exists, "the explicit open shows the panel with its add bar")
         let deadline = Date().addingTimeInterval(3)
         while Date() < deadline, (addBar.value(forKey: "hasKeyboardFocus") as? Bool) != true {
             RunLoop.current.run(until: Date().addingTimeInterval(0.1))
