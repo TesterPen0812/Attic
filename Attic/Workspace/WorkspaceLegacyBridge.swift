@@ -139,6 +139,32 @@ enum WorkspaceLegacyBridge {
         guard let state = objc_getAssociatedObject(source, &contextKey) as? ContextState else { throw WorkspaceFoundationError.unknown }
         return state.plainNoteWrites
     }
+    /// A prepared, ordinary text autosave needs no mutable presentation copy.
+    /// Use the same fresh writer/classification/reconciliation as compatibility
+    /// saves, then hand its confirmed family to the existing presentation path.
+    static func persistPreparedNote(_ note: NoteItem, in source: ModelContext,
+                                    using writer: @escaping (ModelContext) throws -> Void,
+                                    stage: (ModelContext) throws -> Void) throws {
+        guard !source.hasChanges, note.modelContext === source,
+              let state = objc_getAssociatedObject(source, &contextKey) as? ContextState else {
+            throw WorkspaceFoundationError.unknown
+        }
+        captureBeforeMutation(note, in: source)
+        guard !state.captureFailed else { throw WorkspaceFoundationError.unknown }
+        let owner = WorkspaceOwner(entity: .note, id: note.id)
+        let token = try capturedToken(owner, in: source)
+        let scopes = try WorkspaceScopeToken.scopes(for: [token]).map { scope in
+            guard let captured = state.scopes[scope] else { throw WorkspaceFoundationError.unknown }
+            return captured
+        }
+        var confirmed: [WorkspaceOwner: WorkspaceModelToken]?
+        try state.coordinator.commitCompatibility(tokens: [token], scopes: scopes, writes: [owner],
+            intent: "Note autosave", plain: true, writer: writer, confirmed: { confirmed = $0 }, stage: stage)
+        state.baseline = try confirmed ?? WorkspaceModelToken.read(owners: [owner], in: state.coordinator.freshContext())
+        state.scopes.removeAll()
+        state.plainNoteWrites = [note.id]; state.plainTaskWrites = nil
+    }
+
     static func persist(_ source: ModelContext, using writer: @escaping (ModelContext) throws -> Void,
                         sourceName: String, history: Bool = true) throws {
         guard let state = objc_getAssociatedObject(source, &contextKey) as? ContextState else {

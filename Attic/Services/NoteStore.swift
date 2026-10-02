@@ -1656,6 +1656,38 @@ final class NoteStore: ObservableObject {
         }
     }
 
+    #if os(macOS)
+    /// The caller has one unchanged supported base and no attachment/version
+    /// obligation. Stage its immutable projection only in the fresh commit
+    /// context; mutating then copying a second full document was hot in PF1.
+    func commitPreparedAutosave(_ projection: PreparedNoteDocument, note: NoteItem,
+                                format: Int, timestamp: Date, revisionID: UUID, tags: String?) -> Bool {
+        let physicalID = note.persistentModelID, revision = note.revision
+        do {
+            try PerformanceSignposts.storeSave {
+                try WorkspaceLegacyBridge.persistPreparedNote(note, in: context, using: persist) { commit in
+                    guard let row = commit.model(for: physicalID) as? NoteItem else { throw WorkspaceFoundationError.conflict }
+                    Self.stageDocumentContent(projection, format: format, on: [row], timestamp: timestamp,
+                        revision: revision, revisionID: revisionID, tags: tags)
+                }
+            }
+            documentReplicaCapabilityCache[ObjectIdentifier(note)] = (revisionID, projection.content, true,
+                projection.attachmentBlocks, projection.hasTaskNote)
+            do { try reloadModels(preservingAttachmentProofs: true, confirmedSource: context); lastErrorMessage = nil }
+            catch { lastErrorMessage = "Saved, but presentation is still updating: \(error.localizedDescription)" }
+            registerSuccessfulLocalSave()
+            return true
+        } catch {
+            let saveError = error.localizedDescription
+            context.rollback()
+            do { try reloadModels(); lastErrorMessage = saveError }
+            catch { lastErrorMessage = "\(saveError) · Reload failed: \(error.localizedDescription)" }
+            return false
+        }
+    }
+
+    #endif
+
     private func reloadModels(preservingAttachmentProofs: Bool = false, confirmedSource: ModelContext? = nil) throws {
         // A long-lived ModelContext can return cached model instances after
         // CloudKit updates the underlying store. Refresh through a new context
