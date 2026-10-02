@@ -158,6 +158,19 @@ final class WorkspaceOperationCoordinator {
         journal = replacement
     }
 
+    /// The launch migration has a typed two-field invariant at its caller.
+    /// Record its direct bookkeeping save without tokens or admission reads.
+    func saveListOrderMigration(_ context: ModelContext, using writer: (ModelContext) throws -> Void) throws {
+        let rows = context.changedModelsArray
+        let owners = Set(rows.compactMap { Self.owner($0) })
+        guard owners.isDisjoint(with: heldOwners),
+              let admission = ownership.tryAcquire(Set(owners.map(\.id)), kind: .admission) else {
+            throw WorkspaceFoundationError.protectedOwner
+        }
+        defer { admission.release() }
+        try gatedSave(context, before: [], using: writer)
+    }
+
     private func gatedSave(_ context: ModelContext, before: [WorkspaceModelToken], using writer: (ModelContext) throws -> Void) throws {
         let records = (context.insertedModelsArray + context.changedModelsArray).compactMap { $0 as? TaskDeletionPreservation }
         var added = Set<UUID>()

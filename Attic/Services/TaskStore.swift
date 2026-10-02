@@ -140,7 +140,7 @@ private struct TaskReplicaSnapshot: Equatable {
     let createdAt: Date
     let updatedAt: Date
     let completedAt: Date?
-    let manualOrder: Int64?
+    var manualOrder: Int64?
     let parentID: UUID?
     private(set) var imageReferencesData: Data?
     let deletedAt: Date?
@@ -159,6 +159,12 @@ private struct TaskReplicaSnapshot: Equatable {
         var copy = self
         copy.imageReferencesData = nil
         copy.removedAttachmentsData = nil
+        return copy
+    }
+
+    var ignoringListOrder: TaskReplicaSnapshot {
+        var copy = self
+        copy.manualOrder = nil
         return copy
     }
 
@@ -499,7 +505,8 @@ final class TaskStore: ObservableObject {
         migrateListOrderIfNeeded()
         // A failed migration stays on screen: refresh() clears notices.
         let migrationNotice = errorNotice
-        refresh()
+        do { try reloadTasks(using: context); errorNotice = nil }
+        catch { report(error, owner: nil) }
         if let migrationNotice, errorNotice == nil { errorNotice = migrationNotice }
         // Deferred iPhone/CloudKit work stays dormant in local-only builds,
         // exactly as NoteStore and CanvasStore keep theirs: no observers, no
@@ -533,12 +540,13 @@ final class TaskStore: ObservableObject {
     /// save failed (reported).
     @discardableResult
     func migrateListOrderIfNeeded() -> Int {
+        let migration = Self.makeStoreContext(container)
         do {
             var pending = FetchDescriptor<TaskItem>(predicate: #Predicate { $0.listOrderVersion == 0 })
             pending.fetchLimit = 1
-            guard try !context.fetch(pending).isEmpty else { return 0 }
+            guard try !migration.fetch(pending).isEmpty else { return 0 }
 
-            let stored = try context.fetch(FetchDescriptor<TaskItem>())
+            let stored = try migration.fetch(FetchDescriptor<TaskItem>())
             let replicasByID = Dictionary(grouping: stored, by: \.id)
             let live = Self.canonicalReplicas(from: stored).filter { $0.deletedAt == nil && $0.doneLoggedAt == nil }
             let liveByID = Dictionary(live.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
@@ -566,35 +574,29 @@ final class TaskStore: ObservableObject {
                     }
                 }
             }
-            #if os(macOS)
-            if !context.hasChanges {
-                let pendingRows = stored.filter { $0.listOrderVersion == 0 }
-                let rowsByID = Dictionary((pendingRows + orderChanges.map { $0.0 }).map {
-                    ($0.persistentModelID, $0)
-                }, uniquingKeysWith: { first, _ in first })
-                let orders = Dictionary(orderChanges.map { ($0.0.persistentModelID, $0.1) },
-                                        uniquingKeysWith: { _, latest in latest })
-                try WorkspaceLegacyBridge.persistPreparedTaskOrders(Array(rowsByID.values), orders: orders,
-                    marking: Set(pendingRows.map(\.persistentModelID)), in: context, using: persist)
-                context = Self.makeStoreContext(container)
-                if !tasks.isEmpty { try reloadTasks() }
-                return pendingRows.count
-            }
-            #endif
-            // Capture the complete participating set before any sibling's
-            // order/version changes, so membership guards describe the base.
-            WorkspaceLegacyBridge.captureBeforeMutations(stored.filter { $0.listOrderVersion == 0 } + orderChanges.map { $0.0 }, in: context)
+            let participating = Dictionary((stored.filter { $0.listOrderVersion == 0 } + orderChanges.map { $0.0 }).map {
+                ($0.persistentModelID, $0)
+            }, uniquingKeysWith: { first, _ in first })
+            let preserved = participating.mapValues { TaskReplicaSnapshot($0).ignoringListOrder }
+            let generations = participating.mapValues { $0.associationGeneration }
             for (replica, order) in orderChanges { replica.manualOrder = order }
-            var marked = 0
-            // The complete pending set was guarded above before staging.
-            for row in stored where row.listOrderVersion == 0 {
-                row.listOrderVersion = TaskItem.currentListOrderVersion
-                marked += 1
-            }
-            try Self.persistStoreContext(context, using: persist, history: commandLibrary != nil)
+            let pendingRows = stored.filter { $0.listOrderVersion == 0 }
+            for row in pendingRows { row.listOrderVersion = TaskItem.currentListOrderVersion }
+            // This launch-only bookkeeping save changes exactly the two order
+            // fields; it does not acquire operation tokens or classify a write.
+            guard migration.insertedModelsArray.isEmpty, migration.deletedModelsArray.isEmpty,
+                  migration.changedModelsArray.allSatisfy({ model in
+                      guard let row = model as? TaskItem else { return false }
+                      return preserved[row.persistentModelID] == TaskReplicaSnapshot(row).ignoringListOrder
+                          && generations[row.persistentModelID] == row.associationGeneration
+                          && row.listOrderVersion == TaskItem.currentListOrderVersion
+                  }) else { throw WorkspaceFoundationError.conflict }
+            try WorkspaceLegacyBridge.coordinator(for: container).saveListOrderMigration(migration, using: persist)
+            context = migration
+            let marked = pendingRows.count
             return marked
         } catch {
-            context.rollback()
+            migration.rollback()
             report("Attic couldn’t update the task order for this version: \(error.localizedDescription)", owner: nil)
             return 0
         }
@@ -3212,8 +3214,8 @@ final class TaskStore: ObservableObject {
         }
     }
 
-    private func reloadTasks() throws {
-        let refreshedContext = Self.makeStoreContext(container)
+    private func reloadTasks(using initialContext: ModelContext? = nil) throws {
+        let refreshedContext = initialContext ?? Self.makeStoreContext(container)
         let fetched = try refreshedContext.fetch(FetchDescriptor<TaskItem>())
         try WorkspaceLegacyBridge.establishScopeBaseline(refreshedContext, roots: fetched, entities: [.association, .preservation])
         let unique = Self.canonicalReplicas(from: fetched)
