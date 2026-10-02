@@ -19,6 +19,13 @@ final class WorkspaceOperationCoordinator {
     }
 
     let container: ModelContainer
+    let ledger: WorkspaceCommitLedger
+    struct ValidationCounters: Equatable {
+        var fastValidations = 0
+        var slowValidations = 0
+        var freshContexts = 0
+    }
+    var validationCounters = ValidationCounters()
     let ownership: WorkspaceOwnershipGate
     private struct Admission {
         let content: Data
@@ -99,6 +106,7 @@ final class WorkspaceOperationCoordinator {
 
     init(container: ModelContainer, journal: NoteDraftJournal) throws {
         self.container = container; self.journal = journal
+        ledger = WorkspaceCommitLedger(container: container)
         let disk = container.configurations.first { !$0.isStoredInMemoryOnly }
         ownership = disk.map { WorkspaceOwnershipGate.shared(for: "store:" + $0.url.resolvingSymlinksInPath().path) } ?? WorkspaceOwnershipGate()
         if let disk {
@@ -120,7 +128,10 @@ final class WorkspaceOperationCoordinator {
     }
 
     func freshContext() -> ModelContext {
-        let context = ModelContext(container); context.autosaveEnabled = false; return context
+        validationCounters.freshContexts += 1
+        let context = ModelContext(container); context.autosaveEnabled = false
+        ledger.register(context)
+        return context
     }
     func capture(_ owners: Set<WorkspaceOwner>) throws -> [WorkspaceModelToken] {
         let context = freshContext()
@@ -213,7 +224,7 @@ final class WorkspaceOperationCoordinator {
                 compensationOf: envelope.compensationOf))
             WorkspaceCrashHook.reach("K4")
             do {
-                try save(context)
+                try ledger.gatedSave(context, before: envelope.tokens, using: save)
                 #if ATTIC_OPERATION_CRASH_TESTS
                 if ProcessInfo.processInfo.environment["ATTIC_SAVE_THEN_THROW"] == "1" {
                     throw WorkspaceFoundationError.unknown
@@ -275,7 +286,7 @@ final class WorkspaceOperationCoordinator {
                 return .conflict
             }
             do {
-                try save(context)
+                try ledger.gatedSave(context, before: previous, using: save)
                 // Inserted IDs can become permanent during save. Inspect
                 // these saved instances before discarding the commit context.
                 if let confirmed { confirmed(try WorkspaceModelToken.capture(owners: writes, models: stagedModels)) }
@@ -516,7 +527,7 @@ final class WorkspaceOperationCoordinator {
             rows.forEach(context.delete); removed += 1; removedIDs.insert(id)
         }
         if removed > 0 {
-            do { try save(context) }
+            do { try ledger.gatedSave(context, before: [], using: save) }
             catch {
                 let fresh = freshContext()
                 let survivors = try fresh.fetch(FetchDescriptor<OperationReceipt>())
@@ -532,7 +543,7 @@ final class WorkspaceOperationCoordinator {
         guard try agreeing(rows), !rows.isEmpty else { throw WorkspaceFoundationError.unknown }
         rows.forEach(change)
         let expected = try rows.map { try WorkspaceModelFields.read($0) }
-        do { try save(context) }
+        do { try ledger.gatedSave(context, before: [], using: save) }
         catch {
             try beforeReconciliationRead?()
             let fresh = freshContext()

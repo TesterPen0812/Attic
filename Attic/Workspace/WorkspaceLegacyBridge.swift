@@ -62,6 +62,7 @@ enum WorkspaceLegacyBridge {
                                 baseline: [WorkspaceOwner: WorkspaceModelToken]? = nil) throws {
         context.autosaveEnabled = false
         let coordinator = try coordinator(for: context.container)
+        coordinator.ledger.register(context)
         let baseline = baseline ?? [:]
         let state = ContextState(coordinator, baseline, includeCanvas: includeCanvas)
         let reference = ContextReference(context)
