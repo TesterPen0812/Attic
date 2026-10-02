@@ -27,6 +27,9 @@
 #                        driver's compilation included (default 170): a
 #                        watchdog started first stops everything, and the preview
 #                        is quit within a bounded 8 s
+#   --no-picker          do not open a row's date picker during the run
+#                        (ATTIC_UI_TEST_META is not set), for a fair comparison
+#                        with a build that ignores it
 #   --quit-running       quit an instance of a build that is already running
 #                        (otherwise the gate stops and touches nothing)
 #   --dry-run            resolve the two bundle identifiers and print the run
@@ -55,10 +58,11 @@
 # No Instruments template is used.
 set -u
 setopt pipefail extendedglob
+zmodload zsh/datetime
 
 readonly root=${0:A:h:h}
 readonly started=$SECONDS
-baseline="" candidate="" rounds=2 out="" sign=1 post=hid max_seconds=170 quit_running=0 dry_run=0
+baseline="" candidate="" rounds=2 out="" sign=1 post=hid max_seconds=170 quit_running=0 dry_run=0 no_picker=0
 baseline_env=() candidate_env=()   # "--env" "KEY=VALUE" pairs, ready for `open`
 gate_keys=(ATTIC_UI_TEST_SEED ATTIC_UI_TEST_META ATTIC_UI_TEST_META_CLOSE)
 
@@ -74,9 +78,10 @@ extra_env() { # extra_env <baseline|candidate> <KEY=VALUE>
 
 while (( $# > 0 )); do
     case $1 in
-        -h|--help) sed -n '2,55p' $0; exit 0 ;;
+        -h|--help) sed -n '2,58p' $0; exit 0 ;;
         --quit-running) quit_running=1; shift; continue ;;
         --dry-run) dry_run=1; shift; continue ;;
+        --no-picker) no_picker=1; shift; continue ;;
         --baseline|--candidate|--rounds|--out|--swipe-sign|--post|--max-seconds|--baseline-env|--candidate-env)
             (( $# >= 2 )) || { print -u2 -- "$1 needs a value"; exit 2 } ;;
         *) print -u2 "unknown option $1"; exit 2 ;;
@@ -148,12 +153,16 @@ wait_for() {
 }
 nap() { wait_for sleep $1 }
 # capture <variable> <command...>: the command's output, from a tracked child.
+# Nothing here runs in the foreground: the scratch file's name is made by the
+# shell, it is read by a builtin, and its removal is a tracked child too.
+capture_count=0
 capture() {
-    local variable=$1 file=$(mktemp "${TMPDIR:-/tmp}/perf_onscreen.XXXXXX"); shift
+    local variable=$1; shift
+    local file=${TMPDIR:-/tmp}/perf_onscreen.$$.$(( ++capture_count ))
     wait_for "$@" > $file 2>/dev/null
     local status_of_command=$?
     typeset -g $variable="$(<$file)"
-    rm -f $file
+    wait_for rm -f $file
     return $status_of_command
 }
 
@@ -175,10 +184,11 @@ typeset -A app_of=(baseline "$baseline" candidate "$candidate")
 typeset -A id_of=(baseline "$base_id" candidate "$cand_id")
 # This invocation's own, new directory: nothing of an earlier invocation is
 # ever read by it, and nothing is ever deleted.
-readonly run_dir=$out/$(date +%Y%m%d-%H%M%S)-$$
+strftime -s stamp %Y%m%d-%H%M%S $EPOCHSECONDS
+readonly run_dir=$out/$stamp-$$
 
 if (( dry_run )); then
-    print "Baseline:  $baseline ($base_id)\nCandidate: $candidate ($cand_id)\nRuns in:   $run_dir\nPlan (label, app, bundle identifier, extra environment; tab-separated):"
+    print "Baseline:  $baseline ($base_id)\nCandidate: $candidate ($cand_id)\nRuns in:   $run_dir\nPicker:    $( (( no_picker )) && print off || print on)\nPlan (label, app, bundle identifier, extra environment; tab-separated):"
     for (( n = 1; n <= rounds; n++ )); do
         for who in baseline candidate; do
             env_name=${who}_env
@@ -188,7 +198,7 @@ if (( dry_run )); then
     done
     exit 0
 fi
-mkdir -p $out && mkdir $run_dir || { print -u2 "could not make a new run directory $run_dir"; exit 2 }
+wait_for mkdir -p $out && wait_for mkdir $run_dir || { print -u2 "could not make a new run directory $run_dir"; exit 2 }
 readonly drive=$run_dir/$drive_name
 
 # The driver, built for this run.
@@ -218,10 +228,12 @@ run() {
     local env_name=${who}_env
     local -a extra=("${(@P)env_name}")
     current_id=$id
-    # The picker opens after the drive (about 18 s after it starts), and
-    # closes 1.5 s later.
+    # The picker (unless --no-picker) opens after the drive (about 18 s after
+    # it starts), and closes 1.5 s later.
+    local -a picker=(--env ATTIC_UI_TEST_META=date@27 --env ATTIC_UI_TEST_META_CLOSE=1.5)
+    (( no_picker )) && picker=()
     wait_for open -n --env ATTIC_UI_TESTING=1 --env ATTIC_UI_TEST_SEED=long --env ATTIC_FRAME_MONITOR=1 \
-        --env ATTIC_UI_TEST_META=date@27 --env ATTIC_UI_TEST_META_CLOSE=1.5 "${extra[@]}" \
+        "${picker[@]}" "${extra[@]}" \
         --stdout $file.frames --stderr /dev/null "$app"
     local pid=""
     for _ in {1..40}; do capture pid $drive pid $id && break; nap 0.25; done
@@ -277,5 +289,5 @@ done
 print "\nBaseline:  $baseline ($base_id)${baseline_env:+ with ${(j: :)${(@)baseline_env:#--env}}}\nCandidate: $candidate ($cand_id)${candidate_env:+ with ${(j: :)${(@)candidate_env:#--env}}}\nRuns:      $run_dir ($(( SECONDS - started )) s)"
 wait_for python3 $root/Scripts/perf_onscreen_analyze.py $run_dir baseline candidate --rounds $rounds > $run_dir/table.md
 analysis=$?
-cat $run_dir/table.md
+wait_for cat $run_dir/table.md
 exit $analysis

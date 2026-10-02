@@ -57,6 +57,11 @@ for bad in "ATTIC_FRAME_MONITOR=1" "HOME=/tmp" "ATTIC_UI_TESTING=1" "ATTIC_UI_TE
     check "environment '${bad//$'\n'/\\n}' is refused (exit 2)" is $? 2
 done
 
+# 1c. --no-picker is shown in the plan, and the default is the picker.
+check "the picker is on by default" test -n "$(print -r -- $plan | grep -E '^Picker:    on$')"
+plan_off=$("$gate" --baseline "$dir/Attic Base A.app" --candidate "$dir/Attic Cand B.app" --out "$tmp/out" --dry-run --no-picker 2>&1)
+check "--no-picker turns it off" test -n "$(print -r -- $plan_off | grep -E '^Picker:    off$')"
+
 # 2. Only preview identities.
 fake_app "$dir/Official.app" com.taha.Attic
 fake_app "$dir/Bare Prefix.app" com.taha.Attic.preview.
@@ -129,6 +134,20 @@ gate_run --max-seconds 2 >/dev/null 2>&1
 check "two invocations made two new directories" is $(( $(ls "$tmp/sig" | wc -l) - before )) 2
 check "an existing run directory is left as it was" is "$(cat "$tmp/sig/20200101-000000-1/baseline-1.drive")" old
 check "and nothing of this invocation lands in --out itself" test -z "$(ls "$tmp/sig" | grep -v -E '^[0-9]{8}-[0-9]{6}-[0-9]+$')"
+
+# 7. No step runs in the foreground, scratch-file creation included: with
+# stand-ins for mktemp, date, rm, mkdir and cat that block, the gate is still
+# cut at the deadline (the stand-ins that it runs are tracked children).
+for tool in mktemp date rm mkdir cat; do
+    printf '#!/bin/sh\nexec sleep 31.4\n' > "$tmp/bin/$tool"; chmod +x "$tmp/bin/$tool"
+done
+pkill -f "sleep 31.4" 2>/dev/null
+start=$SECONDS
+gate_run --max-seconds 2 --out "$tmp/blocked" >/dev/null 2>&1; code=$?
+check "blocked helper tools are cut by the deadline (124)" is $code 124
+check "within seconds" test $(( SECONDS - start )) -lt 8
+check "and leave nothing behind" test -z "$(pgrep -f 'sleep 31.4')"
+for tool in mktemp date rm mkdir cat; do rm -f "$tmp/bin/$tool"; done
 
 print
 if (( failures )); then print "$failures check(s) failed"; exit 1; fi
