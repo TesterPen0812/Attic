@@ -394,6 +394,11 @@ final class AtticUITests: XCTestCase {
         XCTAssertTrue(pin.isSelected)
         pin.click()
         XCTAssertTrue(pin.wait(for: \.isSelected, toEqual: false, timeout: 5))
+        body.click()
+        let focused = NSPredicate { _, _ in
+            body.exists && (body.value(forKey: "hasKeyboardFocus") as? Bool) == true
+        }
+        XCTAssertEqual(XCTWaiter.wait(for: [XCTNSPredicateExpectation(predicate: focused, object: nil)], timeout: 5), .completed)
         app.dialogs.firstMatch.coordinate(withNormalizedOffset: .zero)
             .withOffset(CGVector(dx: -100, dy: 220)).hover()
         XCTAssertTrue(body.waitForNonExistence(timeout: 8), "Autosaved Notes focus must not permanently pin the main panel")
