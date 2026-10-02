@@ -13,7 +13,10 @@ Each run `<dir>/<label>-<n>` has:
 A run is valid only if the driver exited 0 and printed DONE, both phases
 (scroll and swipe) have their start and end marks and frames, GPU samples
 were recorded, and each phase contains its own input echo (scrolls in scroll,
-page settles in swipe). An invalid run is listed with its reasons as a
+page settles in swipe). Explicit --baseline-no-scroll-echo and
+--candidate-no-scroll-echo flags allow older builds with no scroll echo
+anywhere in the recording; scroll frames and swipe echoes are still required,
+and that side's scroll input is labelled unverified. An invalid run is listed with its reasons as a
 diagnostic and kept out of every mean and
 delta. The comparison is COMPLETE only with `--rounds` rounds in which both
 builds' runs are valid (the means use exactly those rounds, so both builds
@@ -144,7 +147,7 @@ def frame_stats(gaps, budget, seconds):
     }
 
 
-def analyse(base):
+def analyse(base, no_scroll_echo=False):
     frames, events, refresh = load_frames(f"{base}.frames")
     marks, ws, app, exit_code, status = load_drive(f"{base}.drive")
     budget = 1000 / refresh
@@ -169,7 +172,10 @@ def analyse(base):
         return [text for t, text in events if start[0] <= t <= end[0]]
 
     result["scroll_gestures_seen"] = sum(text == "scroll-began" for text in phase_events("scroll"))
+    result["scroll_echoes_total"] = sum(text == "scroll-began" for _, text in events)
     result["page_choices_seen"] = sum(text.startswith("settle-end") for text in phase_events("swipe"))
+    result["scroll_input_unverified"] = (no_scroll_echo and result["scroll_echoes_total"] == 0
+                                         and bool(result.get("scroll")) and result["page_choices_seen"] > 0)
     wall = [m[1] for m in marks.values() if m[1] is not None]
     start, end = (min(wall), max(wall)) if wall else (None, None)
     if Path(f"{base}.top").exists() and ws and app:
@@ -208,7 +214,7 @@ def problems(r, marks):
             found.append(f"no frames in the {phase} phase")
     if r["gpu_samples"] == 0:
         found.append("no GPU samples")
-    if r["scroll_gestures_seen"] == 0:
+    if r["scroll_gestures_seen"] == 0 and not r["scroll_input_unverified"]:
         found.append("no input reached the app in the scroll phase")
     if r["page_choices_seen"] == 0:
         found.append("no input reached the app in the swipe phase")
@@ -238,7 +244,7 @@ def fmt(v):
     return "—" if v is None else f"{v:.1f}"
 
 
-def load_runs(directory):
+def load_runs(directory, no_scroll_echo_builds=()):
     """{build: {round: analysed run}} for every run in the directory."""
     labels = {Path(f).stem for pattern in ("*.frames", "*.drive") for f in Path(directory).glob(pattern)}
     runs = {}
@@ -246,7 +252,7 @@ def load_runs(directory):
         build, _, number = label.rpartition("-")
         if not build or not number.isdigit():
             continue
-        runs.setdefault(build, {})[int(number)] = analyse(str(Path(directory) / label))
+        runs.setdefault(build, {})[int(number)] = analyse(str(Path(directory) / label), build in no_scroll_echo_builds)
     return runs
 
 
@@ -257,10 +263,12 @@ def paired_rounds(runs, baseline, candidate):
             if runs.get(baseline, {}).get(n, {}).get("valid") and runs.get(candidate, {}).get(n, {}).get("valid")]
 
 
-def main(directory, baseline, candidate, rounds=2):
+def main(directory, baseline, candidate, rounds=2, baseline_no_scroll_echo=False, candidate_no_scroll_echo=False):
     """Prints the report; returns the exit status: 0 for a complete
     comparison, 1 for an INCOMPLETE one."""
-    runs = load_runs(directory)
+    waived_builds = [build for build, waived in ((baseline, baseline_no_scroll_echo),
+                                                (candidate, candidate_no_scroll_echo)) if waived]
+    runs = load_runs(directory, waived_builds)
     paired = paired_rounds(runs, baseline, candidate)
     complete = len(paired) >= rounds
     names = [n for n, _ in metrics({})]
@@ -270,10 +278,16 @@ def main(directory, baseline, candidate, rounds=2):
     for build in (baseline, candidate):
         for _, r in sorted(runs.get(build, {}).items()):
             seen = f"{r['scroll_gestures_seen']} scrolls, {r['page_choices_seen']} settles"
+            if r["scroll_input_unverified"]:
+                side = "baseline" if build == baseline else "candidate"
+                seen += f"; scroll input unverified ({side})"
             status = "valid" if r["valid"] else "INVALID: " + "; ".join(r["problems"])
             print(f"| {r['label']} | " + " | ".join(fmt(v) for _, v in metrics(r)) + f" | {seen} | {status} |")
     if complete:
-        print(f"\nComparison: COMPLETE, {len(paired)} paired valid rounds ({', '.join(map(str, paired))})")
+        unverified = [f"scroll input unverified ({side})" for side, build in (("baseline", baseline), ("candidate", candidate))
+                      if any(runs[build][n]["scroll_input_unverified"] for n in paired)]
+        qualifier = "; " + "; ".join(unverified) if unverified else ""
+        print(f"\nComparison: COMPLETE, {len(paired)} paired valid rounds ({', '.join(map(str, paired))}){qualifier}")
         print("\nPer build: mean of its valid paired runs (spread: max − min between its runs)")
         print("| build | " + " | ".join(names) + " |")
         print("|---" * (len(names) + 1) + "|")
@@ -313,5 +327,10 @@ if __name__ == "__main__":
     parser.add_argument("baseline")
     parser.add_argument("candidate")
     parser.add_argument("--rounds", type=int, default=2)
+    parser.add_argument("--baseline-no-scroll-echo", action="store_true",
+                        help="allow a baseline built before scroll echoes; requires zero scroll echoes anywhere, scroll frames and swipe echoes")
+    parser.add_argument("--candidate-no-scroll-echo", action="store_true",
+                        help="the same explicit allowance for the candidate only")
     arguments = parser.parse_args()
-    sys.exit(main(arguments.directory, arguments.baseline, arguments.candidate, arguments.rounds))
+    sys.exit(main(arguments.directory, arguments.baseline, arguments.candidate, arguments.rounds,
+                  arguments.baseline_no_scroll_echo, arguments.candidate_no_scroll_echo))

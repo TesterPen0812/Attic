@@ -9,6 +9,10 @@
 #   --baseline <app>     the last accepted build (an optimized preview .app)
 #   --candidate <app>    the build under test
 #   --rounds <n>         interleaved rounds, baseline then candidate (2: A B A B)
+#   --baseline-no-scroll-echo, --candidate-no-scroll-echo
+#                        explicit allowance for that side's pre-Phase-1 build:
+#                        zero scroll echoes anywhere, scroll frames and swipe
+#                        echoes still required; labelled scroll input unverified
 #   --out <dir>          the parent of the runs (default .build/perf-onscreen). Each
 #                        invocation makes its own new child, <out>/<time>-<pid>,
 #                        and the table reads only that: files of an earlier
@@ -64,6 +68,7 @@ readonly root=${0:A:h:h}
 readonly started=$SECONDS
 baseline="" candidate="" rounds=2 out="" sign=1 post=hid max_seconds=170 quit_running=0 dry_run=0 no_picker=0
 baseline_env=() candidate_env=()   # "--env" "KEY=VALUE" pairs, ready for `open`
+analyzer_options=()
 gate_keys=(ATTIC_UI_TEST_SEED ATTIC_UI_TEST_META ATTIC_UI_TEST_META_CLOSE)
 
 # An extra environment variable for one side: ATTIC_UI_TEST_* only, none of
@@ -78,7 +83,8 @@ extra_env() { # extra_env <baseline|candidate> <KEY=VALUE>
 
 while (( $# > 0 )); do
     case $1 in
-        -h|--help) sed -n '2,58p' $0; exit 0 ;;
+        -h|--help) sed -n '2,/^set -u/{ /^set -u/!p; }' $0; exit 0 ;;
+        --baseline-no-scroll-echo|--candidate-no-scroll-echo) analyzer_options+=("$1"); shift; continue ;;
         --quit-running) quit_running=1; shift; continue ;;
         --dry-run) dry_run=1; shift; continue ;;
         --no-picker) no_picker=1; shift; continue ;;
@@ -189,6 +195,7 @@ readonly run_dir=$out/$stamp-$$
 
 if (( dry_run )); then
     print "Baseline:  $baseline ($base_id)\nCandidate: $candidate ($cand_id)\nRuns in:   $run_dir\nPicker:    $( (( no_picker )) && print off || print on)\nPlan (label, app, bundle identifier, extra environment; tab-separated):"
+    (( ${#analyzer_options} )) && print -r -- "Analyzer:  ${(j: :)analyzer_options}"
     for (( n = 1; n <= rounds; n++ )); do
         for who in baseline candidate; do
             env_name=${who}_env
@@ -287,7 +294,7 @@ for (( n = 1; n <= rounds; n++ )); do
 done
 
 print "\nBaseline:  $baseline ($base_id)${baseline_env:+ with ${(j: :)${(@)baseline_env:#--env}}}\nCandidate: $candidate ($cand_id)${candidate_env:+ with ${(j: :)${(@)candidate_env:#--env}}}\nRuns:      $run_dir ($(( SECONDS - started )) s)"
-wait_for python3 $root/Scripts/perf_onscreen_analyze.py $run_dir baseline candidate --rounds $rounds > $run_dir/table.md
+wait_for python3 $root/Scripts/perf_onscreen_analyze.py $run_dir baseline candidate --rounds $rounds "${analyzer_options[@]}" > $run_dir/table.md
 analysis=$?
 wait_for cat $run_dir/table.md
 exit $analysis

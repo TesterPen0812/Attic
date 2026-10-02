@@ -28,7 +28,7 @@ def stamp(t):
 def write_run(directory, label, *, gap=8.3, gpu=10, drive_exit=0, done=True, abort=None,
               marks=("scroll_start", "scroll_end", "swipe_start", "swipe_end"),
               input_seen=True, input_phases=("scroll", "swipe"), input_times=(1, 12),
-              write_gpu=True, write_frames=True, app_missing_in=()):
+              write_gpu=True, write_frames=True, frame_phases=("scroll", "swipe"), app_missing_in=()):
     """One run's files. Defaults make a valid run; each keyword breaks one
     part of it. `gap` is the frame gap in ms, `gpu` the device utilization."""
     base = Path(directory) / label
@@ -43,7 +43,8 @@ def write_run(directory, label, *, gap=8.3, gpu=10, drive_exit=0, done=True, abo
 
     if write_frames:
         frames = ["ATTIC_FRAME_START refresh=120"]
-        frames += [f"ATTIC_FRAME {MEDIA + 0.5 + 0.5 * i:.4f} {gap}" for i in range(40)]
+        frames += [f"ATTIC_FRAME {MEDIA + 0.5 + 0.5 * i:.4f} {gap}" for i in range(40)
+                   if ("scroll" if 0.5 + 0.5 * i <= 10 else "swipe") in frame_phases]
         if input_seen:
             if "scroll" in input_phases:
                 frames.append(f"ATTIC_EVENT {MEDIA + input_times[0]} scroll-began")
@@ -64,12 +65,14 @@ def write_run(directory, label, *, gap=8.3, gpu=10, drive_exit=0, done=True, abo
         gpu_lines = [f'GPU {WALL + 1 + i:.3f} "Device Utilization %"={gpu} "Renderer Utilization %"={gpu} '
                      for i in range(18)]
         base.with_suffix(".gpu").write_text("\n".join(gpu_lines) + "\n")
+    else:
+        base.with_suffix(".gpu").unlink(missing_ok=True)
 
 
-def report(directory, rounds=2):
+def report(directory, rounds=2, **options):
     out = io.StringIO()
     with contextlib.redirect_stdout(out):
-        code = analyzer.main(str(directory), "baseline", "candidate", rounds)
+        code = analyzer.main(str(directory), "baseline", "candidate", rounds, **options)
     return code, out.getvalue()
 
 
@@ -137,6 +140,56 @@ class AnalyzerTests(unittest.TestCase):
         self.assertNotIn("no input reached the app in the scroll phase", text)
         self.assertIn("INCOMPLETE", text)
         self.assertNotIn("Candidate − baseline", text)
+
+    def test_pre_phase_one_baseline_requires_explicit_flag_and_is_labelled(self):
+        self.write_pairs(baseline_overrides={n: dict(input_phases=("swipe",)) for n in (1, 2)})
+        code, text = report(self.dir)
+        self.assertEqual(code, 1, text)
+        self.assertIn("no input reached the app in the scroll phase", text)
+        done = subprocess.run([sys.executable, str(SCRIPT), str(self.dir), "baseline", "candidate",
+                               "--baseline-no-scroll-echo"], capture_output=True, text=True)
+        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+        rows = [line for line in done.stdout.splitlines() if line.startswith(("| baseline-", "Comparison:"))]
+        self.assertEqual(len(rows), 3)
+        self.assertTrue(all("scroll input unverified (baseline)" in row for row in rows))
+        self.assertNotIn("scroll input unverified (candidate)", done.stdout)
+        self.assertIn("+4.0", done.stdout)
+
+    def test_scroll_echo_flags_apply_only_to_the_selected_side(self):
+        for side in ("baseline", "candidate"):
+            with self.subTest(side=side):
+                self.write_pairs(**{f"{side}_overrides": {1: dict(input_phases=("swipe",))}})
+                wrong = "candidate" if side == "baseline" else "baseline"
+                code, text = report(self.dir, **{f"{wrong}_no_scroll_echo": True})
+                self.assertEqual(code, 1, text)
+                done = subprocess.run([sys.executable, str(SCRIPT), str(self.dir), "baseline", "candidate",
+                                       f"--{side}-no-scroll-echo"], capture_output=True, text=True)
+                self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+                self.assertIn(f"scroll input unverified ({side})", done.stdout)
+
+    def test_flag_does_not_waive_an_echo_outside_scroll_or_other_missing_evidence(self):
+        cases = [
+            (dict(input_times=(-1, 12)), "no input reached the app in the scroll phase"),
+            (dict(input_times=(12, 12)), "no input reached the app in the scroll phase"),
+            (dict(input_times=(21, 12)), "no input reached the app in the scroll phase"),
+            (dict(input_seen=False), "no input reached the app in the swipe phase"),
+            (dict(input_phases=("swipe",), input_times=(1, 21)), "no input reached the app in the swipe phase"),
+            (dict(input_phases=("swipe",), frame_phases=("swipe",)), "no frames in the scroll phase"),
+            (dict(input_phases=("swipe",), write_gpu=False), "no GPU samples"),
+        ]
+        for overrides, problem in cases:
+            with self.subTest(overrides=overrides):
+                self.write_pairs(baseline_overrides={1: overrides})
+                code, text = report(self.dir, baseline_no_scroll_echo=True)
+                self.assertEqual(code, 1, text)
+                self.assertIn(problem, text)
+                self.assertNotIn("Candidate − baseline", text)
+
+    def test_flag_does_not_label_a_build_with_verified_scroll_input(self):
+        self.write_pairs()
+        code, text = report(self.dir, baseline_no_scroll_echo=True, candidate_no_scroll_echo=True)
+        self.assertEqual(code, 0, text)
+        self.assertNotIn("unverified", text)
 
     def test_echoes_outside_their_own_phase_windows_do_not_count(self):
         for phase, times in [("scroll", (-1, 12)), ("scroll", (12, 12)),
