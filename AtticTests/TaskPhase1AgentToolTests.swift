@@ -186,4 +186,40 @@ final class TaskPhase1AgentToolTests: XCTestCase {
         XCTAssertNil(store.task(withID: childID)?.doneLoggedAt)
     }
 
+    func testDoneLogReadFailureStopsAfterOneReadAndExplicitRetryWorks() throws {
+        _ = try archivedFamily(in: store)
+        store.doneLogReadFailures = 10_000
+        let start = Date()
+        XCTAssertThrowsError(try call("list_tasks", ["include_done_log": true])) { error in
+            guard case AgentToolError.storeFailure = error else {
+                return XCTFail("Expected a store failure, got \(error)")
+            }
+        }
+        XCTAssertEqual(store.doneLogReadFailures, 9_999, "no implicit retry on the main actor")
+        XCTAssertLessThan(Date().timeIntervalSince(start), 1)
+        store.doneLogReadFailures = 0
+        XCTAssertEqual(Set(titles(try call("list_tasks", ["include_done_log": true]))), ["Parent", "Child"])
+    }
+
+    func testDoneLogChildReadFailuresAreErrorsAndExplicitRetryWorks() throws {
+        _ = try archivedFamily(in: store)
+        func check(_ arguments: [String: Any], expected: Set<String>) throws {
+            for skip in [0, 1] {
+                store.doneFamilyReadsToSkipBeforeFailing = skip
+                XCTAssertThrowsError(try call("list_tasks", arguments)) { error in
+                    guard case AgentToolError.storeFailure = error else {
+                        return XCTFail("Expected a store failure, got \(error)")
+                    }
+                }
+                XCTAssertEqual(Set(titles(try call("list_tasks", arguments))), expected)
+            }
+        }
+        try check(["include_done_log": true], expected: ["Parent", "Child"])
+        // parent_id currently accepts live main tasks only. Exercise its
+        // throwing Done-log child read without changing that validation.
+        let parent = try XCTUnwrap(store.create(title: "Live parent"))
+        _ = try XCTUnwrap(store.create(title: "Live child", parentID: parent.id))
+        try check(["include_done_log": true, "parent_id": parent.id.uuidString], expected: ["Live child"])
+    }
+
 }
