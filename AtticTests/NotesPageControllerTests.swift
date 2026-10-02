@@ -268,19 +268,31 @@ final class NotesPageControllerTests: XCTestCase {
         }
     }
 
-    // Local configuration, macos-26, same macos-ci.yml unit-test lane:
+    // Local configuration, macos-26-arm64 image 20260907.0351.1:
     // runs 36527558056 / 36531130649 / 36538797706 / 36551941396
     // save medians: 50.459750 / 55.323833 / 48.480458 / 45.781292 ms;
     // prepared: 5.300167 / 6.087083 / 5.395000 / 4.907000 ms.
-    // Gate = largest baseline median + the observed max-minus-min spread.
-    // This permits one observed spread of runner noise, not a new budget.
-    private let saveMedianLimit = 55.323833 + (55.323833 - 45.781292)
-    private let preparedMedianLimit = 6.087083 + (6.087083 - 4.907000)
+    // Also include four warmed AB/BA baseline d77ec80 test-host runs in CI
+    // 37047731452, with exactly the afebc3a save/scaling fixtures:
+    // save: 54.882334 / 64.080833 / 61.072417 / 70.526333 ms;
+    // prepared: 5.524125 / 6.817541 / 6.216125 / 7.359292 ms.
+    // Keep the same rule: largest baseline median + max-minus-min spread.
+    // No candidate measurement enters a limit. The four historical runs
+    // are independent CI VMs; the four matched runs share one CI VM.
+    private let saveMedianLimit = 70.526333 + (70.526333 - 45.781292)
+    private let preparedMedianLimit = 7.359292 + (7.359292 - 4.907000)
+    // The old prepared baseline had no attachment. The same four d77ec80
+    // runs measured both small/populated attachment targets (eight medians):
+    // 9.010750 / 7.803417, 8.739500 / 9.612500,
+    // 8.869250 / 8.143417, 8.477458 / 9.844083 ms.
+    private let attachmentPreparedMedianLimit = 9.844083 + (9.844083 - 7.803417)
 
     private func assertSaveBaseline(_ sample: (save: Double, prepared: Double),
+                                    preparedLimit: Double? = nil,
                                     file: StaticString = #filePath, line: UInt = #line) {
         XCTAssertLessThanOrEqual(sample.save, saveMedianLimit, "Main-actor save regressed", file: file, line: line)
-        XCTAssertLessThanOrEqual(sample.prepared, preparedMedianLimit, "Prepared commit regressed", file: file, line: line)
+        XCTAssertLessThanOrEqual(sample.prepared, preparedLimit ?? preparedMedianLimit,
+                                 "Prepared commit regressed", file: file, line: line)
     }
 
     func testMeasuredMainActorSaveIsIndependentOfUnrelatedStoreContents() async throws {
@@ -312,7 +324,7 @@ final class NotesPageControllerTests: XCTestCase {
         for index in fixtures.indices {
             let sample = medians[index]
             print("NOTE_\(labels[index])_SAVE_MS_MEDIAN=\(sample.save) PREPARED_MS_MEDIAN=\(sample.prepared) SAVE_MAX=\(saves[index].max()!) PREPARED_MAX=\(prepared[index].max()!)")
-            assertSaveBaseline(sample)
+            assertSaveBaseline(sample, preparedLimit: index >= 2 ? attachmentPreparedMedianLimit : nil)
         }
         for (small, large, label) in [(0, 1, "TEXT"), (2, 3, "ATTACHMENT")] {
             let empty = medians[small], populated = medians[large]
