@@ -2427,6 +2427,18 @@ final class TaskStore: ObservableObject {
                 guard let logged = listedTask(withID: taskID) else {
                     throw TaskEditRefusal("The task is no longer in the Done log.")
                 }
+                // Match live reopening: any nondeleted completed parent
+                // replica blocks a child-only restore, before any mutation.
+                if let parentID = logged.parentID {
+                    let doneRaw = TaskStatus.done.rawValue
+                    var doneParents = FetchDescriptor<TaskItem>(predicate: #Predicate {
+                        $0.id == parentID && $0.statusRaw == doneRaw && $0.deletedAt == nil
+                    })
+                    doneParents.fetchLimit = 1
+                    if try !context.fetch(doneParents).isEmpty {
+                        throw TaskEditRefusal("Reopen the main task before reopening a subtask.")
+                    }
+                }
                 let replicas = try storedTasks(matching: taskID)
                 let order = try nextManualOrder(status: .todo, updatedAt: timestamp)
                 let shownCopy = TaskContentSnapshot(logged)
@@ -2456,6 +2468,38 @@ final class TaskStore: ObservableObject {
             try reloadTasks()
         } catch {
             report("Restored, but the list could not be refreshed: \(error.localizedDescription)", owner: nil)
+        }
+        return true
+    }
+
+    /// An agent edit that returns an archived task and its family to the
+    /// live lists. Validate and stage every requested field before one save;
+    /// failure rolls back archive membership and the edit together.
+    @discardableResult
+    func restoreAndUpdateTask(
+        _ id: UUID,
+        title: String? = nil,
+        priority: TaskPriority? = nil,
+        status: TaskStatus,
+        tags: [String]? = nil,
+        dueDay: DueDay?? = nil
+    ) -> Bool {
+        do {
+            guard let logged = listedTask(withID: id), logged.doneLoggedAt != nil, status != .done else {
+                throw TaskEditRefusal("The task must be in the Done log and reopen to an unfinished state.")
+            }
+            _ = try stageUpdate(logged, title: title, priority: priority, status: status,
+                                tags: tags, dueDay: dueDay)
+            try returnFamiliesFromDoneLog([logged.parentID ?? id])
+        } catch {
+            context.rollback()
+            try? reloadTasks()
+            report(error, owner: nil)
+            return false
+        }
+        guard save(owner: nil) else { return false }
+        do { try reloadTasks() } catch {
+            report("Updated, but the list could not be refreshed: \(error.localizedDescription)", owner: nil)
         }
         return true
     }
@@ -3223,7 +3267,19 @@ final class TaskStore: ObservableObject {
         }
     }
 
+    #if DEBUG
+    /// Test seam for a failed presentation refresh after a durable save.
+    var listRefreshFailures = 0
+    #endif
+
     private func reloadTasks() throws {
+        #if DEBUG
+        if listRefreshFailures > 0 {
+            listRefreshFailures -= 1
+            throw NSError(domain: "TaskStoreTestRefresh", code: 1,
+                          userInfo: [NSLocalizedDescriptionKey: "Injected list refresh failure"])
+        }
+        #endif
         // A long-lived ModelContext can return cached model instances after
         // CloudKit updates the underlying store. Refresh through a new context
         // so remote values replace the old objects instead of being written

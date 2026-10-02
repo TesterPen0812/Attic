@@ -62,6 +62,12 @@ check "the picker is on by default" test -n "$(print -r -- $plan | grep -E '^Pic
 plan_off=$("$gate" --baseline "$dir/Attic Base A.app" --candidate "$dir/Attic Cand B.app" --out "$tmp/out" --dry-run --no-picker 2>&1)
 check "--no-picker turns it off" test -n "$(print -r -- $plan_off | grep -E '^Picker:    off$')"
 
+for side in baseline candidate; do
+    flagged_plan=$("$gate" --baseline "$dir/Attic Base A.app" --candidate "$dir/Attic Cand B.app" --dry-run --$side-no-scroll-echo 2>&1)
+    check "--$side-no-scroll-echo is accepted" is $? 0
+    check "the plan records the explicit $side allowance" test -n "$(print -r -- $flagged_plan | grep -Fx "Analyzer:  --$side-no-scroll-echo")"
+done
+
 # 2. Only preview identities.
 fake_app "$dir/Official.app" com.taha.Attic
 fake_app "$dir/Bare Prefix.app" com.taha.Attic.preview.

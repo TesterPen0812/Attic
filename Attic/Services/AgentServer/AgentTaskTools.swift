@@ -573,7 +573,13 @@ final class AgentTaskTools {
         var tasks = parentID.map { id in store.subtasks(of: id).filter { statuses.contains($0.status) } }
             ?? statuses.flatMap(store.orderedTasks(for:))
         if try bool(arguments, "include_done_log"), statuses.contains(.done) {
-            tasks += parentID.map { store.doneLogSubtasks(of: $0) } ?? doneLogTasks()
+            do {
+                tasks += try parentID.map { try store.readDoneLogSubtasks(of: $0) } ?? doneLogTasks()
+            } catch let error as AgentToolError {
+                throw error
+            } catch {
+                throw AgentToolError.storeFailure(error.localizedDescription)
+            }
         }
         if let raw = arguments["tag"] {
             guard let string = raw as? String, let tag = AtticTag.normalize(string) else {
@@ -597,16 +603,20 @@ final class AgentTaskTools {
 
     /// Every main task and subtask in the Done log, most recently finished
     /// first, read a page at a time.
-    private func doneLogTasks() -> [TaskItem] {
+    private func doneLogTasks() throws -> [TaskItem] {
         var result: [TaskItem] = []
         var shown = Set<UUID>()
         var cursor = TaskStore.DoneLogCursor()
         while true {
             let page = store.doneLogPage(from: cursor, limit: 500, excluding: shown)
+            if let failure = page.failure { throw AgentToolError.storeFailure(failure) }
+            guard !page.hasMore || page.next.rowOffset > cursor.rowOffset else {
+                throw AgentToolError.storeFailure("The Done log cursor did not advance.")
+            }
             for task in page.tasks {
                 shown.insert(task.id)
                 result.append(task)
-                result += store.doneLogSubtasks(of: task.id)
+                result += try store.readDoneLogSubtasks(of: task.id)
             }
             guard page.hasMore else { return result }
             cursor = page.next
@@ -692,23 +702,27 @@ final class AgentTaskTools {
         let newTags = try tags(from: arguments)
         let newDue = try dueDay(from: arguments, allowingClear: true)
 
-        // A task in the Done log comes back to Now first (as to do), then
-        // takes the rest of the edit; each is its own undoable step.
+        // Returning from the Done log and applying the requested fields
+        // must be one durable operation, including the family's membership.
         if store.task(withID: task.id) == nil {
             guard let newStatus, newStatus != .done else {
                 throw AgentToolError.invalidArguments("This task is in the Done log. Set status to todo (or inProgress, backlog) to bring it back to Now first.")
             }
-            try perform { library.restoreToNow(task.id) }
-        }
-        try perform {
-            library.updateTask(
-                task.id,
-                title: newTitle,
-                priority: newPriority,
-                status: newStatus,
-                tags: newTags,
-                dueDay: newDue
-            )
+            try perform {
+                library.restoreAndUpdateTask(task.id, title: newTitle, priority: newPriority,
+                                             status: newStatus, tags: newTags, dueDay: newDue)
+            }
+        } else {
+            try perform {
+                library.updateTask(
+                    task.id,
+                    title: newTitle,
+                    priority: newPriority,
+                    status: newStatus,
+                    tags: newTags,
+                    dueDay: newDue
+                )
+            }
         }
         return try encode(["task": serialize(store.task(withID: task.id) ?? task)])
     }
