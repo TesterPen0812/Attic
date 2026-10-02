@@ -133,16 +133,39 @@ enum WorkspaceModelFields {
     static func digest(_ data: Data?) -> String {
         data.map { SHA256.hash(data: $0).map { String(format: "%02x", $0) }.joined() } ?? "nil"
     }
+    /// Primitive JSON scalars are byte-identical to the original encoder.
+    /// Their compiled field types need no encoder/container allocation on
+    /// each guard; complex values and dates keep the existing codec.
+    static func scalarFingerprint<Value: Encodable>(_ value: Value) throws -> Data {
+        if Value.self == UUID.self || Value.self == UUID?.self {
+            return (value as? UUID).map { Data(("\"" + $0.uuidString + "\"").utf8) } ?? Data("null".utf8)
+        }
+        if Value.self == Bool.self || Value.self == Bool?.self {
+            return (value as? Bool).map { Data(($0 ? "true" : "false").utf8) } ?? Data("null".utf8)
+        }
+        if Value.self == Int.self || Value.self == Int?.self {
+            return (value as? Int).map { Data(String($0).utf8) } ?? Data("null".utf8)
+        }
+        if Value.self == Int64.self || Value.self == Int64?.self {
+            return (value as? Int64).map { Data(String($0).utf8) } ?? Data("null".utf8)
+        }
+        return try encode(value)
+    }
+
     // Immutable, bounded memoization avoids rehashing the same derived text
     // in source/commit/confirmed fingerprints. Equality checks the real value;
     // this is not a model/revision cache and cannot hide an external change.
-    @MainActor private static var textFingerprints: [(text: String, digest: Data)] = []
+    @MainActor private static var textFingerprints: [(bytes: Data, digest: Data)] = []
     @MainActor static func textFingerprint(_ text: String) -> Data {
-        guard text.utf8.count > 1_024 else { return Data(SHA256.hash(data: Data(text.utf8))) }
-        if let cached = textFingerprints.first(where: { $0.text == text }) { return cached.digest }
-        let digest = Data(SHA256.hash(data: Data(text.utf8)))
-        textFingerprints.append((text, digest))
-        while textFingerprints.count > 4 || textFingerprints.reduce(0, { $0 + $1.text.utf8.count }) > 2_097_152 {
+        let bytes = Data(text.utf8)
+        guard bytes.count > 1_024 else { return Data(SHA256.hash(data: bytes)) }
+        // Data equality compares exact bytes in bulk. String equality accepts
+        // canonical Unicode equivalents; element-by-element UTF-8 comparison
+        // makes debug autosaves linear in expensive iterator calls.
+        if let cached = textFingerprints.first(where: { $0.bytes == bytes }) { return cached.digest }
+        let digest = Data(SHA256.hash(data: bytes))
+        textFingerprints.append((bytes, digest))
+        while textFingerprints.count > 4 || textFingerprints.reduce(0, { $0 + $1.bytes.count }) > 2_097_152 {
             textFingerprints.removeFirst()
         }
         return digest
@@ -451,7 +474,10 @@ enum WorkspaceModelFields {
         // scalar values (Time Profiler), leaving temporary allocation pages.
         var lastValue: Value?, lastFingerprint: Data?
         fingerprint = { model in
-            let value = model[keyPath: keyPath]
+            // These key paths are compiled persisted attributes. Read through
+            // SwiftData's public accessor, as the synthesized getter does,
+            // without registering observation dependencies for guard reads.
+            let value = model.getValue(forKey: keyPath)
             if let lastValue, lastValue == value, let lastFingerprint {
                 // String equality accepts canonical Unicode equivalents; a
                 // persisted-field guard still needs their exact UTF-8 bytes.
@@ -465,7 +491,7 @@ enum WorkspaceModelFields {
             if ["body", "plainText", "title"].contains(name), let text = value as? String {
                 bytes = WorkspaceModelFields.textFingerprint(text)
             } else {
-                let encoded = try WorkspaceModelFields.encode(value)
+                let encoded = try WorkspaceModelFields.scalarFingerprint(value)
                 bytes = ["snapshot", "pointsData", "payloadData", "encodedData", "payload"].contains(name)
                     ? Data(SHA256.hash(data: encoded)) : encoded
             }

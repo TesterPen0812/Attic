@@ -571,6 +571,21 @@ final class TaskStore: ObservableObject {
                     }
                 }
             }
+            #if os(macOS)
+            if !context.hasChanges {
+                let pendingRows = stored.filter { $0.listOrderVersion == 0 }
+                let rowsByID = Dictionary((pendingRows + orderChanges.map { $0.0 }).map {
+                    ($0.persistentModelID, $0)
+                }, uniquingKeysWith: { first, _ in first })
+                let orders = Dictionary(orderChanges.map { ($0.0.persistentModelID, $0.1) },
+                                        uniquingKeysWith: { _, latest in latest })
+                try WorkspaceLegacyBridge.persistPreparedTaskOrders(Array(rowsByID.values), orders: orders,
+                    marking: Set(pendingRows.map(\.persistentModelID)), in: context, using: persist)
+                context = try WorkspaceLegacyBridge.presentationFollowingCommit(context)
+                if !tasks.isEmpty { try reloadTasks() }
+                return pendingRows.count
+            }
+            #endif
             // Capture the complete participating set before any sibling's
             // order/version changes, so membership guards describe the base.
             WorkspaceLegacyBridge.captureBeforeMutations(stored.filter { $0.listOrderVersion == 0 } + orderChanges.map { $0.0 }, in: context)

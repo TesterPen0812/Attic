@@ -176,6 +176,52 @@ final class WorkspaceCommitTests: XCTestCase {
         XCTAssertEqual(try WorkspaceModelFields.fingerprint(copy), try WorkspaceModelFields.fingerprint(note))
     }
 
+    func testC2PreparedTaskOrderRetainsParentGuardAndDoesNotStagePresentation() throws {
+        let source = WorkspaceLegacyBridge.context(for: container)
+        let parentID = taskID!, id = UUID()
+        source.insert(TaskItem(id: id, title: "Child", manualOrder: 3, parentID: parentID))
+        try source.save()
+        let child = try XCTUnwrap(source.fetch(FetchDescriptor<TaskItem>(predicate: #Predicate { $0.id == id })).first)
+        let parent = try XCTUnwrap(source.fetch(FetchDescriptor<TaskItem>(predicate: #Predicate { $0.id == parentID })).first)
+        WorkspaceLegacyBridge.captureBeforeMutations([child, parent], in: source)
+        let external = coordinator.freshContext()
+        let changed = try XCTUnwrap(external.fetch(FetchDescriptor<TaskItem>(predicate: #Predicate { $0.id == parentID })).first)
+        changed.title = "External parent"; try external.save()
+        var saves = 0
+        XCTAssertThrowsError(try WorkspaceLegacyBridge.persistPreparedTaskOrders([child],
+            orders: [child.persistentModelID: 7], marking: [child.persistentModelID], in: source,
+            using: { saves += 1; try $0.save() }))
+        XCTAssertEqual(saves, 0)
+        XCTAssertFalse(source.hasChanges)
+        XCTAssertEqual(child.manualOrder, 3)
+        let persisted = try XCTUnwrap(coordinator.freshContext().fetch(FetchDescriptor<TaskItem>(predicate: #Predicate { $0.id == id })).first)
+        XCTAssertEqual(persisted.manualOrder, 3)
+        XCTAssertEqual(persisted.listOrderVersion, 0)
+    }
+
+    func testC2PrimitiveGuardsRemainCompatibleWithPreviouslyEncodedTokens() throws {
+        let id = UUID(), source = coordinator.freshContext()
+        let child = TaskItem(id: id, title: "Compatible", parentID: taskID)
+        source.insert(child); try source.save()
+        let owner = WorkspaceOwner(entity: .task, id: id)
+        for order in [Int64.min, 0, Int64.max] {
+            let context = coordinator.freshContext()
+            let row = try XCTUnwrap(context.fetch(FetchDescriptor<TaskItem>(predicate: #Predicate { $0.id == id })).first)
+            row.manualOrder = order; try context.save()
+            let current = try WorkspaceModelToken.read(owner, in: coordinator.freshContext())
+            let snapshot = try WorkspaceModelFields.read(row)
+            var legacyFields = current.replicas[0].fields
+            for key in ["id", "parentID", "manualOrder", "listOrderVersion", "associationGeneration"] {
+                legacyFields[key] = snapshot[key]
+            }
+            let legacy = WorkspaceModelToken(owner: owner, replicas: [.init(physicalID: row.persistentModelID, fields: legacyFields)])
+            let reopened = try JSONDecoder().decode(WorkspaceModelToken.self, from: WorkspaceModelFields.encode(legacy))
+            XCTAssertEqual(coordinator.plainSave(tokens: [reopened], writes: [owner], stage: { commit in
+                (commit.model(for: row.persistentModelID) as? TaskItem)?.title = "Accepted \(order)"
+            }), .committed, "existing JSON scalar guards remain valid after the encoding optimization")
+        }
+    }
+
     func testC2CanonicalUnicodeMetadataChangeStillRefusesAStaleWrite() throws {
         let owner = WorkspaceOwner(entity: .note, id: noteID), id = noteID!
         let source = coordinator.freshContext()
@@ -190,6 +236,22 @@ final class WorkspaceCommitTests: XCTestCase {
         var staged = false
         XCTAssertEqual(coordinator.plainSave(tokens: [before], writes: [owner], stage: { _ in staged = true }), .conflict)
         XCTAssertFalse(staged, "canonically equal text must not hide different persisted UTF-8 metadata")
+    }
+
+    func testC2CanonicalUnicodeLongBodyChangeStillRefusesAStaleWrite() throws {
+        let owner = WorkspaceOwner(entity: .note, id: noteID), id = noteID!
+        let source = coordinator.freshContext()
+        let row = try XCTUnwrap(source.fetch(FetchDescriptor<NoteItem>(predicate: #Predicate { $0.id == id })).first)
+        row.body = String(repeating: "Cafe\u{301}", count: 300)
+        try source.save()
+        let before = try WorkspaceModelToken.read(owner, in: coordinator.freshContext())
+        let external = coordinator.freshContext()
+        let changed = try XCTUnwrap(external.fetch(FetchDescriptor<NoteItem>(predicate: #Predicate { $0.id == id })).first)
+        changed.body = String(repeating: "Caf\u{e9}", count: 300)
+        try external.save()
+        var staged = false
+        XCTAssertEqual(coordinator.plainSave(tokens: [before], writes: [owner], stage: { _ in staged = true }), .conflict)
+        XCTAssertFalse(staged, "a memoized long body must still guard its exact persisted UTF-8 bytes")
     }
 
     func testC2LegacyMissingPayloadFingerprintsPreserveExplicitSnapshotRoundTrips() throws {
