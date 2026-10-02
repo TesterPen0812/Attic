@@ -97,6 +97,13 @@ final class AtticDropdownTests: XCTestCase {
         XCTAssertEqual(represented.accessibilityValue() as? String, "9 of 9")
         XCTAssertTrue(represented.accessibilityPerformPress())
         XCTAssertEqual(pressed, 1)
+        let disabled = NSHostingView(rootView: item.disabled(true))
+        disabled.frame = host.frame
+        disabled.layoutSubtreeIfNeeded()
+        let disabledItem = try? XCTUnwrap(find(disabled))
+        XCTAssertEqual(disabledItem?.isAccessibilityEnabled(), false)
+        XCTAssertEqual(disabledItem?.accessibilityPerformPress(), false)
+        XCTAssertEqual(pressed, 1, "a disabled menu item never runs its action")
     }
 
     func testRenderedRowsExposeMenuItemsAndKeepTheirIdentifiers() throws {
@@ -375,6 +382,11 @@ final class AtticDropdownTests: XCTestCase {
         XCTAssertEqual(presenter.stage.side, .above, "the full grown list fits above")
         XCTAssertEqual(try XCTUnwrap(presenter.host).contentRect.height, 308, accuracy: 1)
         XCTAssertIdentical(window.firstResponder, previous)
+        let click = try XCTUnwrap(NSEvent.mouseEvent(with: .leftMouseDown,
+            location: anchor.convert(CGPoint(x: 30, y: 14), to: nil), modifierFlags: [], timestamp: 0,
+            windowNumber: window.windowNumber, context: nil, eventNumber: 1, clickCount: 1, pressure: 1))
+        XCTAssertIdentical(try XCTUnwrap(presenter.handleClick(click)), click, "an editor/strip click still acts")
+        XCTAssertFalse(presenter.isOpen, "the automatic suggestions close on that click")
     }
 
     // MARK: Timings (no regression against the components it replaced)

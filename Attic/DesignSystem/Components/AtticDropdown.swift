@@ -655,21 +655,28 @@ final class AtticDropdownPresenter {
             return nil
         }
         let clicks = NSEvent.addLocalMonitorForEvents(matching: [.leftMouseDown, .rightMouseDown, .otherMouseDown]) { [weak self] event in
-            guard let self, self.isOpen, let host = self.host else { return event }
-            guard event.window === host.window else {
-                self.dismiss()
-                return event
-            }
-            if host.contentRect.contains(host.convert(event.locationInWindow, from: nil)) { return event }
-            // A click on the button that opened it only closes it.
-            let onAnchor = self.anchor.map { $0.bounds.contains($0.convert(event.locationInWindow, from: nil)) } ?? false
-            self.dismiss()
-            return onAnchor ? nil : event
+            guard let self else { return event }
+            return self.handleClick(event)
         }
         monitors = [keys, clicks].compactMap { $0 }
         resignObserver = NotificationCenter.default.addObserver(
             forName: NSWindow.didResignKeyNotification, object: window, queue: .main
         ) { [weak self] _ in MainActor.assumeIsolated { self?.dismiss() } }
+    }
+
+    /// The monitor's real click routing, also exercised off-screen.
+    func handleClick(_ event: NSEvent) -> NSEvent? {
+        guard isOpen, let host else { return event }
+        guard event.window === host.window else {
+            dismiss()
+            return event
+        }
+        if host.contentRect.contains(host.convert(event.locationInWindow, from: nil)) { return event }
+        let onAnchor = anchor.map { $0.bounds.contains($0.convert(event.locationInWindow, from: nil)) } ?? false
+        dismiss()
+        // A toggle button only closes its card. Automatic suggestions have
+        // no toggle: clicks in their editor or strip still perform the action.
+        return onAnchor && takesKeyboard ? nil : event
     }
 
     private func uninstall() {
@@ -853,10 +860,15 @@ struct AtticDropdownMenuItem: NSViewRepresentable {
     var position: Int?
     var count: Int?
     let action: () -> Void
+    @Environment(\.isEnabled) private var enabled
 
     final class ItemView: NSView {
         var action: (() -> Void)?
-        override func accessibilityPerformPress() -> Bool { action?(); return action != nil }
+        override func accessibilityPerformPress() -> Bool {
+            guard isAccessibilityEnabled(), let action else { return false }
+            action()
+            return true
+        }
         override func hitTest(_ point: NSPoint) -> NSView? { nil }
     }
 
@@ -866,6 +878,7 @@ struct AtticDropdownMenuItem: NSViewRepresentable {
         view.setAccessibilityRole(.menuItem)
         view.setAccessibilityLabel(label)
         view.setAccessibilitySelected(selected)
+        view.setAccessibilityEnabled(enabled)
         var value = mixed ? String(localized: "some selected tasks") : ""
         if let position, let count {
             value += (value.isEmpty ? "" : ", ") + String(localized: "\(position) of \(count)")
