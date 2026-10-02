@@ -325,6 +325,29 @@ final class PanelIntegrationTests: XCTestCase {
         XCTAssertEqual(AtticGlassControlTreatment.resolve(reduceTransparency: true, controls: .craft), .opaque)
     }
 
+    /// Swipe to close works pinned too (owner, 2026-10-02): the pull's request
+    /// hides the panel, tells the hover monitor (which then needs the pointer
+    /// to leave the hotspot before a reveal: `CornerHoverStateMachineTests`'
+    /// `testInteractiveForceHide...`), and leaves the pin as it was.
+    func testAPinnedPanelClosesOnAPullAndStaysPinned() throws {
+        let panel = try makePanel()
+        XCTAssertEqual(panel.monitor.revealProgrammatically(section: .tasks), .shown)
+        spin(until: { panel.controller.isVisibleForPerformanceProbe })
+        panel.uiState.isPanelPinned = true
+        var completions = 0
+        let original = panel.controller.onInteractiveHideCompleted
+        panel.controller.onInteractiveHideCompleted = { completions += 1; original?() }
+
+        panel.controller.panelForTesting.onTrackpadDismissRequest?()
+        spin(until: { !panel.controller.isVisibleForPerformanceProbe })
+
+        XCTAssertFalse(panel.controller.isVisibleForPerformanceProbe, "a pinned panel closes on a fresh pull")
+        XCTAssertEqual(completions, 1, "the hover monitor is told, so it does not re-show the panel at once")
+        XCTAssertTrue(panel.uiState.isPanelPinned, "closing by swipe does not change the pin")
+        spin(0.6)
+        XCTAssertFalse(panel.controller.isVisibleForPerformanceProbe, "and it stays hidden")
+    }
+
     func testThePanelFollowsTheHapticsSetting() throws {
         let suite = "PanelIntegrationTests.\(UUID().uuidString)"
         let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))

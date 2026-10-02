@@ -722,11 +722,10 @@ final class TasksPagerSwipe {
     /// Called when another way chooses a page during a swipe or a burst
     /// (the page is then brought to the model's tab).
     var onCancel: (() -> Void)?
-    /// The corner the panel lives in, and whether a swipe may close it now
-    /// (not pinned): a swipe toward that edge with no page left that way is
-    /// the panel's (the shell keeps them current).
+    /// The corner the panel lives in: a swipe toward that edge with no page
+    /// left that way is the panel's (the shell keeps it current; none, as
+    /// in a gallery, leaves it to the pager).
     var closeCorner: () -> ScreenCorner? = { nil }
-    var canClose: () -> Bool = { false }
 
     private(set) var axis: Axis?
     /// The page the swipe started on.
@@ -841,7 +840,7 @@ final class TasksPagerSwipe {
             }
             // A fresh gesture toward the panel's edge with no page left that
             // way: it is the panel's pull to close, never a rubber band.
-            if let corner = closeCorner(), canClose(),
+            if let corner = closeCorner(),
                Self.closesPanel(dx: sample.dx, dy: sample.dy, inverted: sample.inverted, shown: shown, count: count, corner: corner) {
                 axis = .closing
                 ownsMomentum = false

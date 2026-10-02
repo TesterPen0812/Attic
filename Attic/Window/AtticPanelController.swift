@@ -574,18 +574,15 @@ final class AtticPanelController: NSObject, NSWindowDelegate {
         }
         panel.onTrackpadDismissRequest = { [weak self] in
             guard let self else { return }
-            // A pin set mid-swipe still wins.
-            guard !self.uiState.isPanelPinned else { self.cancelInteractiveDismissal(); return }
+            // A pinned panel closes too (owner, 2026-10-02) and stays pinned:
+            // the hide completes through the hover monitor's
+            // `forceHidden(untilHotspotExit:)`, so it neither re-shows at
+            // once nor loses its pin.
             self.hideFadesWhenReduced = true
             if !self.requestInteractiveHide().isAccepted {
                 self.hideFadesWhenReduced = false
                 self.cancelInteractiveDismissal()
             }
-        }
-        // A pinned panel never closes by swipe (Notes' own swipe still works).
-        panel.canCloseBySwipe = { [weak self] in
-            guard let self else { return false }
-            return !self.uiState.isPanelPinned
         }
         panel.onTrackpadDismissProgress = { [weak self] distance in
             self?.updateInteractiveDismissal(distance: distance)

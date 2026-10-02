@@ -68,11 +68,11 @@ struct TasksPageHost: View {
             )
         )
         .equatable()
-        // Swipe to close (owner, 2026-10-01): a swipe toward the panel's
-        // edge past the last page that way is the panel's, unless pinned.
-        .onAppear { [settings, uiState] in
+        // Swipe to close (owner, 2026-10-01; pinned or not, 2026-10-02): a
+        // swipe toward the panel's edge past the last page that way is the
+        // panel's.
+        .onAppear { [settings] in
             model.pagerSwipe.closeCorner = { settings.corner }
-            model.pagerSwipe.canClose = { !uiState.isPanelPinned }
         }
         // Edit mode holds the panel only for the page being shown (round
         // 5): an editor left open behind Notes never keeps Notes up.
