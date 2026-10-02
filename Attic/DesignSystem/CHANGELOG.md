@@ -9,6 +9,28 @@ Phase 1 (Shell, Tasks and Settings) was built in three streams and integrated
 on `redesign/phase-1`. Every change below is additive: no token, colour, radius
 or type style changed.
 
+### Deep review fixes (Opus, 2026-10-02)
+
+- **`AtticRowFocus(binding:id:isFocused:isActive:)`**: a list that keeps
+  its own record of which row has the keyboard says so. The Tasks page's
+  lazy cells read the focus state as it was when the list was built (nil),
+  so the keyboard's row never drew its ring (deep review P2-04). The ring
+  itself is unchanged: the focus-ring token's 1 pt line on the highlight's
+  edge.
+- **The composer strip closes up before it cuts a value short** (P3-01:
+  "Tomorr…", "#q…"): when the three set buttons would not fit at their
+  usual padding, each closes its inner gaps (new tokens
+  `stripCompactIconGap` 3, `stripCompactClearGap` 3,
+  `stripCompactValueTrailing` 4, 9 pt a button); the 9 pt before the icon
+  stay, so the first icon keeps the circles' line. With room, nothing
+  changes. **`AtticStripValue.full`**: the tooltip's whole value (every
+  tag).
+- **The lists' bottom bar under the system soft edge covers the whole
+  bottom stack** (P2-02): the strip, a selection bar or a paste offer while
+  they show (`TasksBottomEdgeBar`, in Tasks). The same system pocket,
+  taller; no blur of Attic's own.
+- No token, colour, radius or type style changed.
+
 ### The corner buttons become Liquid Glass (Opus, 2026-10-02)
 
 - **L3 → Liquid Glass.** Owner: "I want liquid glass, make it happen without
