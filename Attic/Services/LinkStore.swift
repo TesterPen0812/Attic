@@ -78,7 +78,7 @@ final class LinkStore {
         for endpoint in [source, target] where endpointState(endpoint) != .live {
             return fail(LinkStoreError.unavailableEndpoint(endpoint))
         }
-        let context = WorkspaceLegacyBridge.context(for: container)
+        let context = WorkspaceLegacyBridge.context(for: container, captureScopes: false)
         let link = ItemLink(source: source, target: target, kind: kind, createdAt: now())
         context.insert(link)
         guard save(context) else { return nil }
@@ -125,7 +125,7 @@ final class LinkStore {
     @discardableResult
     func purgeLinks(touching items: Set<AtticItemRef>) -> Int {
         guard !items.isEmpty else { return 0 }
-        let context = WorkspaceLegacyBridge.context(for: container)
+        let context = WorkspaceLegacyBridge.context(for: container, captureScopes: false)
         do {
             let removed = try stagePurge(touching: items, in: context)
             guard removed > 0 else { return 0 }
@@ -177,7 +177,7 @@ final class LinkStore {
     /// of the link is identical (same ends, kind and removal).
     @discardableResult
     func purgeRemovedLinks(before cutoff: Date) -> Int {
-        let context = WorkspaceLegacyBridge.context(for: container)
+        let context = WorkspaceLegacyBridge.context(for: container, captureScopes: false)
         do {
             let removedRows = try context.fetch(FetchDescriptor<ItemLink>(predicate: #Predicate {
                 $0.deletedAt != nil
@@ -231,12 +231,12 @@ final class LinkStore {
     // MARK: - Private
 
     private func setDeleted(_ deleted: Bool, linkID: UUID) -> Bool {
-        let context = WorkspaceLegacyBridge.context(for: container)
+        let context = WorkspaceLegacyBridge.context(for: container, captureScopes: false)
         do {
             let replicas = try context.fetch(FetchDescriptor<ItemLink>(predicate: #Predicate { $0.id == linkID }))
             guard !replicas.isEmpty else { throw LinkStoreError.missingLink(linkID) }
             let timestamp = now()
-            replicas.forEach { WorkspaceLegacyBridge.captureBeforeMutation($0, in: context) }
+            WorkspaceLegacyBridge.captureBeforeMutations(replicas, in: context)
             for replica in replicas {
                 replica.deletedAt = deleted ? timestamp : nil
                 replica.updatedAt = timestamp
@@ -262,7 +262,7 @@ final class LinkStore {
         includingUnavailable: Bool
     ) -> [ItemLinkRecord] {
         do {
-            let context = WorkspaceLegacyBridge.context(for: container)
+            let context = WorkspaceLegacyBridge.context(for: container, captureScopes: false)
             let ids = Array(Set(try context.fetch(candidates).map(\.id)))
             guard !ids.isEmpty else { return [] }
             let rows = try context.fetch(FetchDescriptor<ItemLink>(predicate: #Predicate { ids.contains($0.id) }))

@@ -37,6 +37,7 @@ final class WorkspaceCommitLedger {
     private var savingContext: ModelContext?
     private var observedGatedSave = false
     private let container: ModelContainer
+    var foreignContextDidSave: ((ModelContext, [PersistentIdentifier], [PersistentIdentifier]) -> Void)?
     var foreignEntitiesDidChange: ((Set<WorkspaceOwner.Entity>) -> Void)?
 
     init(container: ModelContainer) {
@@ -51,6 +52,7 @@ final class WorkspaceCommitLedger {
 
     func isSaving(_ context: ModelContext) -> Bool { savingContext === context }
     func register(_ context: ModelContext) {
+        if let previous = stamp(context), previous.ledgerID != identity { return }
         objc_setAssociatedObject(context, &Self.contextKey,
             ContextStamp(ledgerID: identity, syncedGeneration: generation), .OBJC_ASSOCIATION_RETAIN_NONATOMIC)
     }
@@ -73,6 +75,7 @@ final class WorkspaceCommitLedger {
     func observe(_ tokens: [WorkspaceModelToken]) throws {
         for token in tokens {
             for replica in token.replicas {
+                guard physical[replica.physicalID] == nil else { continue }
                 physical[replica.physicalID] = PhysicalEntry(owner: token.owner,
                     scopes: try Self.membership(token.owner, fields: replica.fields), generation: generation)
             }
@@ -140,8 +143,16 @@ final class WorkspaceCommitLedger {
                     touched.insert(entry.owner.entity)
                     owners[entry.owner] = OwnerEntry(generation: generation, writerContextID: unknownWriter)
                     var affected = entry.scopes
-                    if let row = Self.registeredModel(id, in: context) { affected.formUnion(Self.membership(row)) }
+                    if let row = Self.registeredModel(id, in: context) {
+                        let membership = Self.membership(row)
+                        affected.formUnion(membership)
+                        if let owner = WorkspaceOperationCoordinator.owner(row) {
+                            owners[owner] = OwnerEntry(generation: generation, writerContextID: unknownWriter)
+                            physical[id] = PhysicalEntry(owner: owner, scopes: membership, generation: generation)
+                        }
+                    }
                     else if updated!.contains(id) { foreign[entry.owner.entity] = generation }
+                    if deleted!.contains(id) { physical.removeValue(forKey: id) }
                     affected.insert(.all(entry.owner.entity))
                     for scope in affected { scopes[scope] = generation; scopeWriters[scope] = unknownWriter }
                 } else if let entity = Self.entities[id.entityName] { foreign[entity] = generation; touched.insert(entity) }
@@ -150,6 +161,7 @@ final class WorkspaceCommitLedger {
         }
         trim()
         foreignEntitiesDidChange?(touched)
+        foreignContextDidSave?(context, (inserted ?? []) + (updated ?? []), deleted ?? [])
     }
     private func trim() {
         while owners.count > capacity, let oldest = owners.min(by: { $0.value.generation < $1.value.generation }) {
@@ -168,7 +180,10 @@ final class WorkspaceCommitLedger {
         "TaskDeletionPreservation": .preservation, "OperationReceipt": .receipt, "CanvasBoardItem": .board,
         "CanvasStrokeItem": .stroke, "CanvasImageItem": .image, "CanvasSemanticObjectItem": .semantic
     ]
-    private static func registeredModel(_ id: PersistentIdentifier, in context: ModelContext) -> (any PersistentModel)? {
+    static func supportedEntities(in container: ModelContainer) -> Set<WorkspaceOwner.Entity> {
+        Set(container.schema.entities.compactMap { entities[$0.name] })
+    }
+    static func registeredModel(_ id: PersistentIdentifier, in context: ModelContext) -> (any PersistentModel)? {
         switch id.entityName {
         case "TaskItem": return context.registeredModel(for: id) as TaskItem?
         case "NoteItem": return context.registeredModel(for: id) as NoteItem?
@@ -186,7 +201,7 @@ final class WorkspaceCommitLedger {
         default: return nil
         }
     }
-    private static func membership(_ owner: WorkspaceOwner, fields: [String: Data]) throws -> Set<WorkspaceScope> {
+    static func membership(_ owner: WorkspaceOwner, fields: [String: Data]) throws -> Set<WorkspaceScope> {
         func id(_ field: String) throws -> UUID? {
             guard let bytes = fields[field] else { throw WorkspaceFoundationError.unknown }
             return try JSONDecoder().decode(UUID?.self, from: bytes)

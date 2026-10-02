@@ -68,6 +68,31 @@ final class WorkspaceOperationCoordinator {
         let ids = Set(document.attachmentIDs)
         cacheAdmission(content, ids: ids, hasTaskNote: document.requires.contains("taskNote")); return ids
     }
+    private struct TaskReferences {
+        let shown: Data?
+        let removed: Data?
+        let values: [TaskImageReference]
+    }
+    private var taskReferenceCache: [TaskReferences] = []
+    private func taskReferences(shown: Data?, removed: Data?) throws -> [TaskImageReference] {
+        if let cached = taskReferenceCache.first(where: { $0.shown == shown && $0.removed == removed }) { return cached.values }
+        let references = try shown.map { try JSONDecoder().decode([TaskImageReference].self, from: $0) } ?? []
+        let removedReferences = try removed.map { try JSONDecoder().decode([RemovedTaskAttachment].self, from: $0).map(\.reference) } ?? []
+        let values = references + removedReferences
+        taskReferenceCache.append(TaskReferences(shown: shown, removed: removed, values: values))
+        while taskReferenceCache.count > 8 { taskReferenceCache.removeFirst() }
+        return values
+    }
+    private func taskReferences(_ replica: WorkspaceModelToken.Replica) throws -> [TaskImageReference] {
+        let shown = try replica.fields["imageReferencesData"].map { try JSONDecoder().decode(Data?.self, from: $0) } ?? nil
+        let removed = try replica.fields["removedAttachmentsData"].map { try JSONDecoder().decode(Data?.self, from: $0) } ?? nil
+        return try taskReferences(shown: shown, removed: removed)
+    }
+    func taskReferenceIDs(_ rows: [TaskItem]) throws -> Set<UUID> {
+        try rows.reduce(into: Set<UUID>()) { ids, row in
+            ids.formUnion(try taskReferences(shown: row.imageReferencesData, removed: row.removedAttachmentsData).map(\.id))
+        }
+    }
     private var legacyFiles: [UUID: WorkspaceOwnershipGate] = [:]
     func registerLegacyFiles(_ files: AttachmentFileStore) {
         files.registerWriter(ownership); legacyFiles[files.ownership.identity] = files.ownership
@@ -118,6 +143,7 @@ final class WorkspaceOperationCoordinator {
         ledger.foreignEntitiesDidChange = { [weak self] entities in
             if entities.contains(.preservation) { self?.purgedMembers = nil }
         }
+        ledger.foreignContextDidSave = { WorkspaceLegacyBridge.foreignContextDidSave($0, identifiers: $1, deleted: $2) }
         WorkspaceLegacyBridge.register(self)
     }
 
@@ -332,22 +358,23 @@ final class WorkspaceOperationCoordinator {
     /// remain in one synchronous main-actor section; uncertainty is never a
     /// reason to grant authority to the presentation cache.
     func commitInPlace(_ context: ModelContext, before: [WorkspaceModelToken],
-                       scopes: [WorkspaceScopeToken], after: [WorkspaceModelToken],
+                       requiredScopes: Set<WorkspaceScope>, scopes: () throws -> [WorkspaceScopeToken], after: [WorkspaceModelToken],
                        capturedOwners: Set<WorkspaceOwner>, using writer: (ModelContext) throws -> Void,
                        confirmed: ([WorkspaceOwner: WorkspaceModelToken]) -> Void) -> Outcome {
         let writes = Set(after.map(\.owner))
         let affected = Set(before.map(\.owner)).union(writes)
         guard affected.isDisjoint(with: heldOwners), plainUnknown == nil else { return .unknown }
         do {
-            if ledger.canValidate(context, owners: affected, scopes: Set(scopes.map(\.scope))) {
+            if ledger.canValidate(context, owners: affected, scopes: requiredScopes) {
                 validationCounters.fastValidations += 1
             } else {
                 validationCounters.slowValidations += 1
                 let fresh = freshContext()
                 let current = try WorkspaceModelToken.read(owners: affected, in: fresh)
                 guard before.allSatisfy({ current[$0.owner] == $0 }) else { return .conflict }
-                let membership = try WorkspaceScopeToken.read(scopes: Set(scopes.map(\.scope)), in: fresh)
-                guard scopes.allSatisfy({ membership[$0.scope] == $0 }) else { return .conflict }
+                let baselineScopes = try scopes()
+                let membership = try WorkspaceScopeToken.read(scopes: requiredScopes, in: fresh)
+                guard baselineScopes.allSatisfy({ membership[$0.scope] == $0 }) else { return .conflict }
             }
             let inserted = Set(context.insertedModelsArray.compactMap { Self.owner($0) })
             try validateWriteSet(context, declared: capturedOwners.union(inserted))
@@ -355,7 +382,12 @@ final class WorkspaceOperationCoordinator {
             try validateLegacyAdmission(context, before: before)
             // Changed supported content was admitted during classification;
             // opaque metadata is preserved without a document read or decode.
-            try validatePreservedOpaqueContent(context, before: before, contents: [:])
+            let changedContents = before.filter { token in
+                token.owner.entity == .note && token.replicas.contains { old in
+                    after.first { $0.owner == token.owner }?.replicas.first { $0.physicalID == old.physicalID }?.fields["content"] != old.fields["content"]
+                }
+            }
+            if !changedContents.isEmpty { try validatePreservedOpaqueContent(context, before: before, contents: [:]) }
             let changes = context.insertedModelsArray + context.changedModelsArray
             guard let admission = ownership.tryAcquire(try admissionIDs(changes, before: before), kind: .admission) else { return .conflict }
             defer { admission.release() }
@@ -410,19 +442,16 @@ final class WorkspaceOperationCoordinator {
         if after.allSatisfy({ [.task, .preservation, .link].contains($0.owner.entity) }) {
             // Adding a new legacy file reference is a new-byte obligation;
             // removals/restores of an already-owned reference remain plain.
-            func references(_ replica: WorkspaceModelToken.Replica) throws -> Set<UUID> {
-                var ids = Set<UUID>()
-                if let bytes = replica.fields["imageReferencesData"], let data = try JSONDecoder().decode(Data?.self, from: bytes) {
-                    ids.formUnion(try JSONDecoder().decode([TaskImageReference].self, from: data).map(\.id))
-                }
-                if let bytes = replica.fields["removedAttachmentsData"], let data = try JSONDecoder().decode(Data?.self, from: bytes) {
-                    ids.formUnion(try JSONDecoder().decode([RemovedTaskAttachment].self, from: data).map { $0.reference.id })
-                }
-                return ids
-            }
             for task in after where task.owner.entity == .task {
-                let owned = try (old[task.owner]?.replicas ?? []).reduce(into: Set<UUID>()) { $0.formUnion(try references($1)) }
-                guard try task.replicas.allSatisfy({ try references($0).isSubset(of: owned) }) else { return false }
+                let previous = old[task.owner]?.replicas ?? []
+                let previousByID = Dictionary(uniqueKeysWithValues: previous.map { ($0.physicalID, $0.fields) })
+                if task.replicas.allSatisfy({ next in
+                    guard let fields = previousByID[next.physicalID] else { return false }
+                    return fields["imageReferencesData"] == next.fields["imageReferencesData"]
+                        && fields["removedAttachmentsData"] == next.fields["removedAttachmentsData"]
+                }) { continue }
+                let owned = try previous.reduce(into: Set<UUID>()) { $0.formUnion(try taskReferences($1).map(\.id)) }
+                guard try task.replicas.allSatisfy({ try Set(taskReferences($0).map(\.id)).isSubset(of: owned) }) else { return false }
             }
             return true
         }
@@ -761,19 +790,15 @@ extension WorkspaceOperationCoordinator {
     private func validateLegacyAdmission(_ context: ModelContext, before: [WorkspaceModelToken]) throws {
         let originals = Dictionary(uniqueKeysWithValues: before.map { ($0.owner, $0) })
         for task in (context.insertedModelsArray + context.changedModelsArray).compactMap({ $0 as? TaskItem }) {
-            let next = try WorkspacePurge.legacyReferences(task)
-            let old = try [originals[WorkspaceOwner(entity: .task, id: task.id)]].compactMap { $0 }.flatMap { token in
-                try token.replicas.flatMap { replica -> [TaskImageReference] in
-                    var refs: [TaskImageReference] = []
-                    if let field = replica.fields["imageReferencesData"], let data = try JSONDecoder().decode(Data?.self, from: field) {
-                        refs += try JSONDecoder().decode([TaskImageReference].self, from: data)
-                    }
-                    if let field = replica.fields["removedAttachmentsData"], let data = try JSONDecoder().decode(Data?.self, from: field) {
-                        refs += try JSONDecoder().decode([RemovedTaskAttachment].self, from: data).map(\.reference)
-                    }
-                    return refs
-                }
+            let token = originals[WorkspaceOwner(entity: .task, id: task.id)]
+            let original = token?.replicas.first { $0.physicalID == task.persistentModelID }
+            if let original {
+                let shown = try original.fields["imageReferencesData"].map { try JSONDecoder().decode(Data?.self, from: $0) } ?? nil
+                let removed = try original.fields["removedAttachmentsData"].map { try JSONDecoder().decode(Data?.self, from: $0) } ?? nil
+                if shown == task.imageReferencesData && removed == task.removedAttachmentsData { continue }
             }
+            let next = try taskReferences(shown: task.imageReferencesData, removed: task.removedAttachmentsData)
+            let old = try (token?.replicas ?? []).flatMap { try taskReferences($0) }
             guard next.filter({ !old.contains($0) }).allSatisfy({ ref in !legacyFiles.values.contains { $0.wasUnlinked(ref.id) } }) else {
                 throw WorkspaceFoundationError.protectedOwner
             }
@@ -803,8 +828,7 @@ extension WorkspaceOperationCoordinator {
         }
         for row in rows {
             if let task = row as? TaskItem {
-                if let data = task.imageReferencesData { ids.formUnion(try JSONDecoder().decode([TaskImageReference].self, from: data).map(\.id)) }
-                if let data = task.removedAttachmentsData { ids.formUnion(try JSONDecoder().decode([RemovedTaskAttachment].self, from: data).map { $0.reference.id }) }
+                ids.formUnion(try taskReferenceIDs([task]))
             } else if let link = row as? ItemLink {
                 ids.formUnion([link.sourceID, link.targetID])
             } else if let association = row as? TaskNoteAssociation {

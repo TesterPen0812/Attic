@@ -10,6 +10,37 @@ enum WorkspaceLegacyBridge {
         weak var value: WorkspaceOperationCoordinator?
         init(_ value: WorkspaceOperationCoordinator) { self.value = value }
     }
+    /// Complete scope guards are taken only when a context is opened/refreshed.
+    /// Incremental replacement mutates dictionaries in place; ordinary saves
+    /// neither enumerate a membership nor copy the full inventory.
+    @MainActor private final class ScopeBaseline {
+        var inventory: [WorkspaceOwner: WorkspaceModelToken] = [:]
+        var membership: [WorkspaceScope: [WorkspaceOwner: WorkspaceModelToken]] = [:]
+        init(_ inventory: [WorkspaceOwner: WorkspaceModelToken]) throws { try replace(inventory) }
+        func replace(_ updates: [WorkspaceOwner: WorkspaceModelToken]) throws {
+            for (owner, token) in updates {
+                if let old = inventory[owner] {
+                    for replica in old.replicas {
+                        for scope in try WorkspaceCommitLedger.membership(owner, fields: replica.fields) {
+                            membership[scope]?[owner] = nil
+                        }
+                    }
+                }
+                inventory[owner] = token
+                for replica in token.replicas {
+                    for scope in try WorkspaceCommitLedger.membership(owner, fields: replica.fields) {
+                        membership[scope, default: [:]][owner] = token
+                    }
+                }
+            }
+        }
+        func token(_ scope: WorkspaceScope) -> WorkspaceScopeToken {
+            let members: [WorkspaceModelToken]
+            if case let .all(entity) = scope { members = inventory.values.filter { $0.owner.entity == entity && !$0.replicas.isEmpty } }
+            else { members = Array(membership[scope, default: [:]].values) }
+            return WorkspaceScopeToken(scope: scope, members: members.sorted { $0.owner.id.uuidString < $1.owner.id.uuidString })
+        }
+    }
     private final class ContextState {
         let coordinator: WorkspaceOperationCoordinator
         var baseline: [WorkspaceOwner: WorkspaceModelToken]
@@ -18,16 +49,12 @@ enum WorkspaceLegacyBridge {
         let includeCanvas: Bool
         var plainTaskWrites: Set<UUID>?
         var plainNoteWrites: Set<UUID>?
-        var saveObserver: NSObjectProtocol?
+        var scopeBaseline: ScopeBaseline?
+        var capturedOwners = Set<WorkspaceOwner>()
         init(_ coordinator: WorkspaceOperationCoordinator, _ baseline: [WorkspaceOwner: WorkspaceModelToken], includeCanvas: Bool,
              scopes: [WorkspaceScope: WorkspaceScopeToken] = [:]) {
             self.coordinator = coordinator; self.baseline = baseline; self.includeCanvas = includeCanvas; self.scopes = scopes
         }
-        deinit { if let saveObserver { NotificationCenter.default.removeObserver(saveObserver) } }
-    }
-    private final class ContextReference: @unchecked Sendable {
-        weak var value: ModelContext?
-        init(_ value: ModelContext) { self.value = value }
     }
     private static var coordinators: [ObjectIdentifier: WeakCoordinator] = [:]
     private static var contextKey: UInt8 = 0
@@ -51,30 +78,25 @@ enum WorkspaceLegacyBridge {
         }
         return try WorkspaceOperationCoordinator(container: container, journal: NoteDraftJournal(directory: directory))
     }
-    static func context(for container: ModelContainer, includeCanvas: Bool = false) -> ModelContext {
+    static func context(for container: ModelContainer, includeCanvas: Bool = false, captureScopes: Bool = true) -> ModelContext {
         let context = ModelContext(container); context.autosaveEnabled = false
         // A failed baseline is represented by no registration. persist then
         // refuses; it never manufactures an empty read set from the failure.
-        try? registerContext(context, includeCanvas: includeCanvas)
+        try? registerContext(context, includeCanvas: includeCanvas, captureScopes: captureScopes)
         return context
     }
     static func registerContext(_ context: ModelContext, includeCanvas: Bool = false,
-                                baseline: [WorkspaceOwner: WorkspaceModelToken]? = nil) throws {
+                                baseline: [WorkspaceOwner: WorkspaceModelToken]? = nil, captureScopes: Bool = true) throws {
         context.autosaveEnabled = false
         let coordinator = try coordinator(for: context.container)
         coordinator.ledger.register(context)
         let baseline = baseline ?? [:]
         let state = ContextState(coordinator, baseline, includeCanvas: includeCanvas)
-        let reference = ContextReference(context)
-        // Isolated fixtures can save this staging context directly. Capture
-        // a fresh empty guard cache after success; never refresh guards while
-        // a command still has pending edits. This is a read, not a new writer.
-        state.saveObserver = NotificationCenter.default.addObserver(forName: ModelContext.didSave, object: context, queue: .main) { _ in
-            MainActor.assumeIsolated {
-                guard let saved = reference.value, !coordinator.ledger.isSaving(saved) else { return }
-                do { try registerContext(saved, includeCanvas: includeCanvas) }
-                catch { objc_setAssociatedObject(saved, &contextKey, nil, .OBJC_ASSOCIATION_RETAIN_NONATOMIC) }
-            }
+        if captureScopes {
+            let entities: Set<WorkspaceOwner.Entity> = [.task, .note, .attachment, .version, .proposal, .association, .preservation]
+            let inventory = try inventory(in: context, includeCanvas: false,
+                entities: entities.intersection(WorkspaceCommitLedger.supportedEntities(in: context.container)))
+            state.scopeBaseline = try ScopeBaseline(inventory)
         }
         objc_setAssociatedObject(context, &contextKey, state, .OBJC_ASSOCIATION_RETAIN_NONATOMIC)
     }
@@ -90,10 +112,49 @@ enum WorkspaceLegacyBridge {
         state.baseline.removeAll(); state.scopes.removeAll()
         return fresh
     }
+    static func foreignContextDidSave(_ context: ModelContext, identifiers: [PersistentIdentifier], deleted: [PersistentIdentifier]) {
+        guard let state = objc_getAssociatedObject(context, &contextKey) as? ContextState else { return }
+        // Confirm only the direct save's rows. Cached unrelated values are not
+        // refreshed by didSave, so its original ledger generation stays put.
+        var owners = Set<WorkspaceOwner>()
+        for id in identifiers {
+            // The registered-model cache is weak: an inline inserted fixture
+            // row may have gone away while its permanent identifier remains.
+            let row = WorkspaceCommitLedger.registeredModel(id, in: context) ?? context.model(for: id)
+            if let owner = WorkspaceOperationCoordinator.owner(row) { owners.insert(owner) }
+            else { state.captureFailed = true }
+        }
+        for id in deleted {
+            if let owner = (Array(state.baseline.values) + Array(state.scopeBaseline?.inventory.values ?? [:].values))
+                .first(where: { $0.replicas.contains { $0.physicalID == id } })?.owner { owners.insert(owner) }
+            else { state.captureFailed = true }
+        }
+        do {
+            let confirmed = try WorkspaceModelToken.read(owners: owners, in: context)
+            state.baseline.merge(confirmed) { _, saved in saved }
+            try state.scopeBaseline?.replace(confirmed)
+            state.scopes.removeAll(); state.capturedOwners.removeAll()
+        } catch { state.captureFailed = true }
+    }
+    static func establishScopeBaseline(_ context: ModelContext, roots: [any PersistentModel],
+                                       entities: Set<WorkspaceOwner.Entity>) throws {
+        guard let state = objc_getAssociatedObject(context, &contextKey) as? ContextState else { throw WorkspaceFoundationError.unknown }
+        var inventory = try inventory(in: context, includeCanvas: false,
+            entities: entities.intersection(WorkspaceCommitLedger.supportedEntities(in: context.container)))
+        let owners = Set(roots.compactMap { WorkspaceOperationCoordinator.owner($0) })
+        inventory.merge(try WorkspaceModelToken.capture(owners: owners, models: roots)) { _, current in current }
+        state.scopeBaseline = try ScopeBaseline(inventory)
+    }
+    private static func scopeTokens(_ scopes: Set<WorkspaceScope>, state: ContextState, in source: ModelContext) throws -> [WorkspaceScopeToken] {
+        if scopes.isEmpty { return [] }
+        if let baseline = state.scopeBaseline { return scopes.map { baseline.token($0) } }
+        guard state.coordinator.ledger.canValidate(source, owners: [], scopes: scopes) else { throw WorkspaceFoundationError.conflict }
+        return Array(try WorkspaceScopeToken.read(scopes: scopes, in: state.coordinator.freshContext()).values)
+    }
     static func capturedToken(_ owner: WorkspaceOwner, in source: ModelContext) throws -> WorkspaceModelToken {
         guard let state = objc_getAssociatedObject(source, &contextKey) as? ContextState else { throw WorkspaceFoundationError.unknown }
         if let token = state.baseline[owner] { return token }
-        let token = try WorkspaceModelToken.read(owner, in: source)
+        let token = try state.scopeBaseline?.inventory[owner] ?? WorkspaceModelToken.read(owner, in: source)
         state.baseline[owner] = token
         return token
     }
@@ -103,29 +164,17 @@ enum WorkspaceLegacyBridge {
     static func captureBeforeMutations(_ rows: [any PersistentModel], in source: ModelContext) {
         guard let state = objc_getAssociatedObject(source, &contextKey) as? ContextState else { return }
         let inserted = Set(source.insertedModelsArray.map { ObjectIdentifier($0) })
-        var owners = Set(rows.filter { !inserted.contains(ObjectIdentifier($0)) }.compactMap { WorkspaceOperationCoordinator.owner($0) })
-        // An attachment/history edit also touches its note's membership. Capture
-        // that dependency before changing the first participant, not later when
-        // note recency is stamped after the attachment was already changed.
-        let insertedOwners = Set(source.insertedModelsArray.compactMap { WorkspaceOperationCoordinator.owner($0) })
-        for row in rows {
-            let noteID: UUID?
-            switch row {
-            case let attachment as NoteAttachment: noteID = attachment.noteID
-            case let version as NoteVersion: noteID = version.noteID
-            case let proposal as NotePendingEdit: noteID = proposal.noteID
-            default: noteID = nil
-            }
-            if let noteID {
-                let owner = WorkspaceOwner(entity: .note, id: noteID)
-                if !insertedOwners.contains(owner) { owners.insert(owner) }
-            }
-        }
+        let existing = rows.filter { !inserted.contains(ObjectIdentifier($0)) }
+        let owners = Set(existing.compactMap { WorkspaceOperationCoordinator.owner($0) })
         do {
             let missing = owners.filter { state.baseline[$0] == nil }
-            state.baseline.merge(try WorkspaceModelToken.read(owners: Set(missing), in: source)) { saved, _ in saved }
-            let needed = WorkspaceScopeToken.scopes(for: owners.map { state.baseline[$0]! }).filter { state.scopes[$0] == nil }
-            state.scopes.merge(try WorkspaceScopeToken.read(scopes: Set(needed), in: source)) { captured, _ in captured }
+            for owner in missing {
+                if let known = state.scopeBaseline?.inventory[owner] { state.baseline[owner] = known; continue }
+                let family = existing.filter { WorkspaceOperationCoordinator.owner($0) == owner }
+                state.baseline.merge(try WorkspaceModelToken.capture(owners: [owner], models: family)) { saved, _ in saved }
+            }
+            state.capturedOwners.formUnion(owners)
+            try state.coordinator.ledger.observe(owners.compactMap { state.baseline[$0] })
         } catch { state.captureFailed = true }
     }
     static func delete(_ row: any PersistentModel, in context: ModelContext) {
@@ -154,10 +203,7 @@ enum WorkspaceLegacyBridge {
         guard !state.captureFailed else { throw WorkspaceFoundationError.unknown }
         let owner = WorkspaceOwner(entity: .note, id: note.id)
         let token = try capturedToken(owner, in: source)
-        let scopes = try WorkspaceScopeToken.scopes(for: [token]).map { scope in
-            guard let captured = state.scopes[scope] else { throw WorkspaceFoundationError.unknown }
-            return captured
-        }
+        let scopes = try scopeTokens(WorkspaceScopeToken.scopes(for: [token]), state: state, in: source)
         var confirmed: [WorkspaceOwner: WorkspaceModelToken]?
         try state.coordinator.commitCompatibility(tokens: [token], scopes: scopes, writes: [owner],
             intent: "Note autosave", plain: true, writer: writer, confirmed: { confirmed = $0 }, stage: stage)
@@ -185,12 +231,7 @@ enum WorkspaceLegacyBridge {
         }
         let tokens = try reads.map { try capturedToken($0, in: source) }
         let needed = WorkspaceScopeToken.scopes(for: tokens)
-        let missing = needed.filter { state.scopes[$0] == nil }
-        state.scopes.merge(try WorkspaceScopeToken.read(scopes: Set(missing), in: source)) { old, _ in old }
-        let scopes = try needed.map { scope in
-            guard let token = state.scopes[scope] else { throw WorkspaceFoundationError.unknown }
-            return token
-        }
+        let scopes = try scopeTokens(needed, state: state, in: source)
         let physicalIDs = Set(rows.map(\.persistentModelID))
         guard Set(orders.keys).isSubset(of: physicalIDs), marking.isSubset(of: physicalIDs) else {
             throw WorkspaceFoundationError.unknown
@@ -208,6 +249,8 @@ enum WorkspaceLegacyBridge {
         state.scopes.removeAll()
         state.plainTaskWrites = Set(writes.map(\.id)); state.plainNoteWrites = nil
     }
+
+    struct CommitHeld: Error {}
 
     static func persist(_ source: ModelContext, using writer: @escaping (ModelContext) throws -> Void,
                         sourceName: String, history: Bool = true) throws {
@@ -231,7 +274,14 @@ enum WorkspaceLegacyBridge {
         for owner in writes {
             // Inserts have expected absence; changed/deleted owners must have
             // a guard captured before their first staged mutation.
-            if let captured = state.baseline[owner] { before[owner] = captured }
+            if let captured = state.baseline[owner] { before[owner] = captured; state.capturedOwners.insert(owner) }
+            else if let captured = state.scopeBaseline?.inventory[owner] {
+                // Membership guards captured this complete physical family at
+                // full refresh too. Direct fixture deletes can use that exact
+                // before-token without a late read of their staged values.
+                before[owner] = captured
+                state.capturedOwners.insert(owner)
+            }
             else if changes.filter({ WorkspaceOperationCoordinator.owner($0) == owner }).allSatisfy({ row in
                 source.insertedModelsArray.contains { $0 === row }
             }) { before[owner] = WorkspaceModelToken(owner: owner, replicas: []) }
@@ -255,23 +305,25 @@ enum WorkspaceLegacyBridge {
         let plain = try state.coordinator.mayUsePlainSave(
             before: writes.map { before[$0]! }, after: writes.map { after[$0]! }, in: source)
         let requiredScopes = WorkspaceScopeToken.scopes(for: reads)
-        let missingScopes = requiredScopes.filter { state.scopes[$0] == nil }
-        let freshScopes = try WorkspaceScopeToken.read(scopes: Set(missingScopes), in: state.coordinator.freshContext())
-        let scopes = requiredScopes.map { state.scopes[$0] ?? freshScopes[$0]! }
         if plain {
             var confirmed: [WorkspaceOwner: WorkspaceModelToken] = [:]
-            let result = state.coordinator.commitInPlace(source, before: reads, scopes: scopes,
-                after: writes.map { after[$0]! }, capturedOwners: Set(state.baseline.keys), using: writer,
+            let result = state.coordinator.commitInPlace(source, before: reads, requiredScopes: requiredScopes,
+                scopes: { try scopeTokens(requiredScopes, state: state, in: source) },
+                after: writes.map { after[$0]! }, capturedOwners: state.capturedOwners, using: writer,
                 confirmed: { confirmed = $0 })
             guard result == .committed else {
+                if result == .unknown { throw CommitHeld() }
                 throw result == .conflict ? WorkspaceFoundationError.conflict : WorkspaceFoundationError.unknown
             }
             state.baseline.merge(confirmed) { _, saved in saved }
+            try state.scopeBaseline?.replace(confirmed)
+            state.capturedOwners.removeAll()
             state.scopes.removeAll()
             state.plainTaskWrites = writes.allSatisfy({ $0.entity == .task }) ? Set(writes.map(\.id)) : nil
             state.plainNoteWrites = writes.allSatisfy({ $0.entity == .note }) ? Set(writes.map(\.id)) : nil
             return
         }
+        let scopes = try scopeTokens(requiredScopes, state: state, in: source)
         var staged: [StagedNoteAttachment] = []
         for row in changes.compactMap({ $0 as? NoteAttachment }) {
             let old = before[.init(entity: .attachment, id: row.id)]?.replicas.first { $0.physicalID == row.persistentModelID }

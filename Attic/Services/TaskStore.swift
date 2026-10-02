@@ -1039,6 +1039,7 @@ final class TaskStore: ObservableObject {
         let shown = TaskContentSnapshot(task)
         let agreeing = Set(replicas.filter { $0 === task || (TaskContentSnapshot($0) == shown && $0.deletedAt == task.deletedAt) }
             .map(\.persistentModelID))
+        WorkspaceLegacyBridge.captureBeforeMutations(replicas, in: context)
         for replica in replicas {
             if titleChanged { replica.title = destinationTitle }
             if priorityChanged { replica.priority = destinationPriority }
@@ -1300,6 +1301,7 @@ final class TaskStore: ObservableObject {
             let shown = TaskContentSnapshot(winner)
             let agreeing = Set(replicas.filter { $0 === winner || TaskContentSnapshot($0) == shown }
                 .map(\.persistentModelID))
+            WorkspaceLegacyBridge.captureBeforeMutations(replicas, in: context)
             for replica in replicas {
                 edits.forEach { $0(replica) }
                 if agreeing.contains(replica.persistentModelID) { replica.updatedAt = timestamp }
@@ -1669,8 +1671,8 @@ final class TaskStore: ObservableObject {
                 guard !old.isEmpty else { continue }
                 let remaining = entries.filter { !isExpired($0) }
                 let remainingData = remaining.isEmpty ? nil : try JSONEncoder().encode(remaining)
+                WorkspaceLegacyBridge.captureBeforeMutations(replicas, in: context)
                 for replica in replicas {
-                    WorkspaceLegacyBridge.captureBeforeMutation(replica, in: context)
                     replica.removedAttachmentsData = remainingData
                 }
                 expired += old.map(\.reference)
@@ -2579,6 +2581,7 @@ final class TaskStore: ObservableObject {
                 let shownCopy = TaskContentSnapshot(logged)
                 let agreeing = Set(replicas.filter { $0 === logged || TaskContentSnapshot($0) == shownCopy }
                     .map(\.persistentModelID))
+                WorkspaceLegacyBridge.captureBeforeMutations(replicas, in: context)
                 for replica in replicas {
                     replica.status = .todo
                     replica.completedAt = nil
@@ -3142,6 +3145,7 @@ final class TaskStore: ObservableObject {
             if let sparseOrder = sparseManualOrder(at: destinationIndex, in: group) {
                 let replicas = try storedTasks(matching: task.id)
                 let shown = TaskContentSnapshot(task)
+                WorkspaceLegacyBridge.captureBeforeMutations(replicas, in: context)
                 for replica in replicas {
                     let agrees = replica === task || TaskContentSnapshot(replica) == shown
                     replica.manualOrder = sparseOrder
@@ -3178,8 +3182,8 @@ final class TaskStore: ObservableObject {
     @discardableResult
     private func save(owner: UUID? = nil) -> Bool {
         do {
-            let candidateIDs = Set(try (context.insertedModelsArray + context.changedModelsArray)
-                .compactMap { $0 as? TaskItem }.flatMap { try WorkspacePurge.legacyReferences($0).map(\.id) })
+            let candidateIDs = try WorkspaceLegacyBridge.coordinator(for: container).taskReferenceIDs(
+                (context.insertedModelsArray + context.changedModelsArray).compactMap { $0 as? TaskItem })
             #if ATTIC_OPERATION_CRASH_TESTS
             let writeStart = ContinuousClock.now
             #endif
@@ -3264,6 +3268,7 @@ final class TaskStore: ObservableObject {
             }
         } else {
             let fetched = try refreshedContext.fetch(FetchDescriptor<TaskItem>())
+            try WorkspaceLegacyBridge.establishScopeBaseline(refreshedContext, roots: fetched, entities: [.association, .preservation])
             let unique = Self.canonicalReplicas(from: fetched)
             canonical = Dictionary(uniqueKeysWithValues: unique.map { ($0.id, $0) })
             visible = unique.filter { $0.deletedAt == nil && $0.doneLoggedAt == nil }
@@ -3341,7 +3346,6 @@ final class TaskStore: ObservableObject {
         let stored = try context.fetch(FetchDescriptor<TaskItem>(
             predicate: #Predicate { idList.contains($0.id) }
         ))
-        WorkspaceLegacyBridge.captureBeforeMutations(stored, in: context)
         let groups = Dictionary(grouping: stored, by: \.id)
         if let missingID = ids.first(where: { groups[$0]?.isEmpty != false }) {
             throw TaskReplicaMutationError.missingReplica(missingID)
@@ -3643,7 +3647,7 @@ final class TaskStore: ObservableObject {
 extension TaskStore {
     private static func makeStoreContext(_ container: ModelContainer) -> ModelContext {
         #if os(macOS)
-        return WorkspaceLegacyBridge.context(for: container)
+        return WorkspaceLegacyBridge.context(for: container, captureScopes: false)
         #else
         let context = ModelContext(container); context.autosaveEnabled = false; return context
         #endif

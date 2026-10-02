@@ -410,7 +410,7 @@ final class NoteStore: ObservableObject {
         self.makeFreshContext = {
             let fresh = try contextFactory()
             #if os(macOS)
-            try WorkspaceLegacyBridge.registerContext(fresh)
+            try WorkspaceLegacyBridge.registerContext(fresh, captureScopes: false)
             #endif
             return fresh
         }
@@ -559,6 +559,7 @@ final class NoteStore: ObservableObject {
                     edits = NoteTextReplacement.edits(from: note.body, to: destinationBody)
                 }
                 for attachment in attachments {
+                    WorkspaceLegacyBridge.captureBeforeMutation(attachment, in: context)
                     if let offset = attachment.inlineOffset {
                         attachment.inlineOffset = NoteInlineAnchor.moved(offset, by: edits, in: destinationBody)
                     }
@@ -574,6 +575,7 @@ final class NoteStore: ObservableObject {
         let contentChanged = titleChanged || bodyChanged
         let revision = replicas.map(\.revision).max() ?? 0
         let revisionID = contentChanged ? UUID() : note.revisionID
+        WorkspaceLegacyBridge.captureBeforeMutations(replicas, in: context)
         for replica in replicas {
             replica.title = destinationTitle
             replica.body = destinationBody
@@ -608,6 +610,7 @@ final class NoteStore: ObservableObject {
         do {
             let replicas = try storedNotes(matching: note.id)
             guard replicas.contains(where: { $0.tagsRaw != encoded }) else { return true }
+            WorkspaceLegacyBridge.captureBeforeMutations(replicas, in: context)
             for replica in replicas { replica.tagsRaw = encoded }
         } catch {
             context.rollback()
@@ -649,6 +652,7 @@ final class NoteStore: ObservableObject {
         // `updatedAt` is kept, so a restored note returns to its place in
         // the newest-first list.
         let timestamp = now()
+        WorkspaceLegacyBridge.captureBeforeMutations(replicas, in: context)
         for replica in replicas {
             replica.deletedAt = timestamp
             replica.deletedAttachmentIDsRaw = attachmentFamily
@@ -720,6 +724,7 @@ final class NoteStore: ObservableObject {
             guard replicas.contains(where: { $0.deletedAt != nil }) else {
                 throw NoteReplicaMutationError.notRecentlyDeleted(noteID)
             }
+            WorkspaceLegacyBridge.captureBeforeMutations(replicas, in: context)
             for replica in replicas {
                 if replica.contentFormat == 0, replica.content == nil {
                     if let title = try WorkspaceRestoreNormalization.detachedTitle(noteID: noteID, in: context) {
@@ -740,6 +745,7 @@ final class NoteStore: ObservableObject {
                         on: [replica], timestamp: currentDate, revision: replica.revision, revisionID: UUID())
                 }
             }
+            WorkspaceLegacyBridge.captureBeforeMutations(replicas, in: context)
             for replica in replicas {
                 replica.deletedAt = nil
                 replica.deletedAttachmentIDsRaw = nil
@@ -1046,6 +1052,7 @@ final class NoteStore: ObservableObject {
             // Attachment changes participate in the same note recency as text.
             let timestamp = now()
             for note in try storedNotes(matching: targetNoteID, in: refreshedContext) {
+                WorkspaceLegacyBridge.captureBeforeMutation(note, in: refreshedContext)
                 note.updatedAt = timestamp
             }
             let presentation = try presentationSnapshot(in: refreshedContext)
@@ -1096,6 +1103,7 @@ final class NoteStore: ObservableObject {
             guard all.contains(where: { $0.id == id }) else { return false }
             let note = notes.first { $0.id == noteID }
             let anchor = offset.map { NoteInlineAnchor.paragraphStart($0, in: note?.body ?? "") }
+            WorkspaceLegacyBridge.captureBeforeMutations(all, in: context)
             for replica in all where replica.id == id {
                 replica.inlineOffset = anchor
                 if let size {
@@ -1116,9 +1124,9 @@ final class NoteStore: ObservableObject {
                     : targetID.flatMap { order.firstIndex(of: $0) }
                 order.insert(id, at: min(index ?? order.endIndex, order.endIndex))
                 let indices = Dictionary(uniqueKeysWithValues: order.enumerated().map { ($0.element, Int64($0.offset)) })
-                for replica in all { replica.sortIndex = indices[replica.id] ?? replica.sortIndex }
+                for replica in all { WorkspaceLegacyBridge.captureBeforeMutation(replica, in: context); replica.sortIndex = indices[replica.id] ?? replica.sortIndex }
             }
-            for owner in try storedNotesIfPresent(matching: noteID) { owner.updatedAt = now() }
+            for owner in try storedNotesIfPresent(matching: noteID) { WorkspaceLegacyBridge.captureBeforeMutation(owner, in: context); owner.updatedAt = now() }
             guard save() else { return false }
             attachmentsByNoteID[noteID] = visibleUniqueAttachments(from: all)[noteID]
             return true
@@ -1154,12 +1162,13 @@ final class NoteStore: ObservableObject {
         }
         let timestamp = now()
         do {
-            for note in try storedNotesIfPresent(matching: noteID) { note.updatedAt = timestamp }
+            for note in try storedNotesIfPresent(matching: noteID) { WorkspaceLegacyBridge.captureBeforeMutation(note, in: context); note.updatedAt = timestamp }
         } catch {
             context.rollback()
             lastErrorMessage = error.localizedDescription
             return false
         }
+        WorkspaceLegacyBridge.captureBeforeMutations(replicas, in: context)
         for replica in replicas {
             replica.deletedAt = timestamp
             replica.updatedAt = timestamp
@@ -1224,11 +1233,12 @@ final class NoteStore: ObservableObject {
                 throw AttachmentFileStoreError.tooManyAttachments
             }
             let timestamp = now()
+            WorkspaceLegacyBridge.captureBeforeMutations(replicas, in: context)
             for replica in replicas {
                 replica.deletedAt = nil
                 replica.updatedAt = timestamp
             }
-            for note in try storedNotes(matching: noteID) { note.updatedAt = timestamp }
+            for note in try storedNotes(matching: noteID) { WorkspaceLegacyBridge.captureBeforeMutation(note, in: context); note.updatedAt = timestamp }
         } catch {
             context.rollback()
             lastErrorMessage = error.localizedDescription
@@ -1403,6 +1413,7 @@ final class NoteStore: ObservableObject {
                   replicas.allSatisfy({ NoteAttachmentReplicaSnapshot($0) == expectedSnapshot }) else {
                 throw AttachmentFileStoreError.inaccessible(sourceURL, "The attachment changed while the file was being selected. Retry with its current version.")
             }
+            WorkspaceLegacyBridge.captureBeforeMutations(replicas, in: refreshedContext)
             for replica in replicas { replica.payload = original.payload }
             let presentation = try presentationSnapshot(in: refreshedContext)
             if case let .failed(message) = persistImport(in: refreshedContext, fallbackPresentation: presentation) {
@@ -1479,6 +1490,7 @@ final class NoteStore: ObservableObject {
                     contentTypeIdentifier: type, byteCount: size, sortIndex: 0, contentDigest: digest,
                     createdAt: currentDate, payload: bytes.data))
             } else {
+                WorkspaceLegacyBridge.captureBeforeMutations(family, in: transaction)
                 for row in family { row.payload = bytes.data }
             }
             let presentation = try presentationSnapshot(in: transaction)
@@ -1756,6 +1768,7 @@ final class NoteStore: ObservableObject {
         observeAttachmentContextWrites(sourceContext)
         if !preservingAttachmentProofs { clearVerifiedAttachmentCache() }
         rebindDocumentCapabilities(to: presentation.notes, preserving: preservingAttachmentProofs)
+        try? WorkspaceLegacyBridge.establishScopeBaseline(sourceContext, roots: presentation.notes, entities: [.attachment, .version, .proposal, .association])
         let uniqueNotes = visibleUniqueNotes(from: presentation.notes)
         notes = uniqueNotes.filter { $0.deletedAt == nil }
         // A deleted note's attachments stay stored (and their files stay
@@ -1911,7 +1924,6 @@ final class NoteStore: ObservableObject {
         )
         let source = sourceContext ?? context
         let rows = try source.fetch(descriptor)
-        WorkspaceLegacyBridge.captureBeforeMutations(rows, in: source)
         return rows
     }
 
@@ -1929,7 +1941,6 @@ final class NoteStore: ObservableObject {
         )
         let source = sourceContext ?? context
         let replicas = try source.fetch(descriptor)
-        WorkspaceLegacyBridge.captureBeforeMutations(replicas, in: source)
         guard allowMissing || !replicas.isEmpty else {
             throw NoteReplicaMutationError.missingReplica(id)
         }
@@ -1948,7 +1959,6 @@ final class NoteStore: ObservableObject {
         )
         let source = sourceContext ?? context
         let rows = try source.fetch(descriptor)
-        WorkspaceLegacyBridge.captureBeforeMutations(rows, in: source)
         return rows
     }
 
@@ -2321,7 +2331,7 @@ final class NoteStore: ObservableObject {
 extension NoteStore {
     private static func makeStoreContext(_ container: ModelContainer) -> ModelContext {
         #if os(macOS)
-        return WorkspaceLegacyBridge.context(for: container)
+        return WorkspaceLegacyBridge.context(for: container, captureScopes: false)
         #else
         let context = ModelContext(container); context.autosaveEnabled = false; return context
         #endif
