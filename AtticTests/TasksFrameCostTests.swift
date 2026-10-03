@@ -127,7 +127,11 @@ final class TasksFrameCostTests: XCTestCase {
         host.model.beginSearch()
         host.spin(0.6)
         let searchFrames = host.type("task 12", focusAddBar: false)
+        // The keystroke frames no longer publish the query (it waits for
+        // 75 ms idle): the frame the results arrive in is its own entry.
+        let resultsFrame = host.frame { host.model.flushDoneSearchInput() }
         report.append("search-keystroke " + Self.stats(searchFrames) + " typed=\(host.model.doneSearch.count)")
+        report.append(String(format: "search-results %.1fms", resultsFrame))
         host.model.doneSearch = ""
         host.place(.now)
 

@@ -196,6 +196,7 @@ final class DoneSearchCostTests: XCTestCase {
         // the 5000-task fixture; no Done data/query is warmed here.
         try measureNativeEditingStartupControl()
         var runs: [[Double]] = []
+        var resultFrames: [Double] = []
         for run in 0..<3 {
             let host = try FrameCostHost()
             host.place(.done)
@@ -216,6 +217,14 @@ final class DoneSearchCostTests: XCTestCase {
                 times.append(parts.reduce(0, +))
                 XCTAssertEqual(TasksPage.tabsEvaluations, before, "typing must not rebuild the task page")
             }
+            // The frame the results arrive in (PR prep, review P2-2): the
+            // keystrokes above publish nothing; after 75 ms idle the query
+            // publishes and the Done list rebuilds. Timed here directly,
+            // before the idle publication can run on its own.
+            XCTAssertNotEqual(host.model.doneSearch, "Finished task 12", "the query is still waiting for the idle publication")
+            let results = host.framePhases { host.model.flushDoneSearchInput() }.reduce(0, +)
+            resultFrames.append(results)
+            print("ATTIC_DONE_RESULTS run=\(run) frame_ms=\(results)")
             host.spin(0.3)
             print("ATTIC_DONE_INPUT run=\(run) " + TasksFrameCostTests.stats(times) + " raw_ms=\(times)")
             XCTAssertEqual(host.model.doneSearchInput.text, "Finished task 12")
@@ -235,6 +244,12 @@ final class DoneSearchCostTests: XCTestCase {
             XCTAssertLessThanOrEqual(median, 16, "Done Find key \(key) median exceeds the 16 ms budget")
             XCTAssertLessThanOrEqual(samples.max()!, 16 + 4.3, "sample exceeds the independently measured noise guard")
         }
+        // The results frame answers to the same rule: one frame (16 ms) at
+        // the median of three fresh fixtures, each within the same noise
+        // guard as the keystroke frames' first-frame measurements.
+        XCTAssertLessThanOrEqual(TasksFrameCostTests.median(resultFrames), 16,
+                                 "the frame the Done results arrive in exceeds the 16 ms budget: \(resultFrames)")
+        XCTAssertLessThanOrEqual(resultFrames.max()!, 16 + 4.3, "a results frame exceeds the noise guard: \(resultFrames)")
     }
 
     func testDoneTodaySlicePreservesSnapshotRootsAndOrder() throws {
