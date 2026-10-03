@@ -534,12 +534,120 @@ final class AtticDropdownTests: XCTestCase {
         XCTAssertIdentical(AtticDropdownPresenter.owner(of: window.firstResponder), original)
     }
 
-    func testTagFieldEscWithFullKeyboardAccess() throws {
+    /// A view that counts the clicks that reach it.
+    final class ClickRecorder: NSView {
+        var clicks = 0
+        override func mouseDown(with event: NSEvent) { clicks += 1 }
+    }
+
+    /// A key panel that never activates the app (no keyboard taken from
+    /// whoever is at the Mac).
+    final class KeyPanel: NSPanel {
+        override var canBecomeKey: Bool { true }
+    }
+
+    /// P3-T1: the tag picker from the keyboard with Full Keyboard Access on,
+    /// through real events in the app's queue: Tab moves from the field to a
+    /// row and Space presses it; ↓ moves the one highlight (VoiceOver's
+    /// "selected"; ticks stay marks); Return toggles the highlighted tag;
+    /// Esc closes the card and gives the keyboard back; a click outside
+    /// closes it and goes through to what is under it.
+    func testTheTagPickerWorksFromTheKeyboardWithFullKeyboardAccess() throws {
         guard ProcessInfo.processInfo.environment["ATTIC_FULL_KEYBOARD_ACCESS_TESTS"] == "1" else {
             throw XCTSkip("CI enables Full Keyboard Access before launching the test host; local tests preserve the user's setting")
         }
         XCTAssertTrue(NSApp.isFullKeyboardAccessEnabled, "verify AppKit's actual mode, not just a preference value")
-        try testTagFieldEscPassesCompositionAndModifiersThenDismissesAndRestoresFocus()
+        let attribute = NSAccessibility.Attribute(rawValue: "AXEnhancedUserInterface")
+        let previous = NSApp.accessibilityAttributeValue(attribute)
+        NSApp.accessibilitySetValue(true, forAttribute: attribute)
+        defer { NSApp.accessibilitySetValue(previous, forAttribute: attribute) }
+        let window = KeyPanel(contentRect: NSRect(x: -4000, y: -4000, width: 320, height: 520),
+                              styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        window.contentView = NSView(frame: NSRect(x: 0, y: 0, width: 320, height: 520))
+        window.orderFront(nil)
+        window.makeKey()
+        defer { window.close() }
+        XCTAssertTrue(window.isKeyWindow)
+        let original = NSTextField(frame: CGRect(x: 20, y: 470, width: 200, height: 24))
+        window.contentView?.addSubview(original)
+        let recorder = ClickRecorder(frame: CGRect(x: 240, y: 20, width: 60, height: 40))
+        window.contentView?.addSubview(recorder)
+        let anchor = NSView(frame: CGRect(x: 20, y: 400, width: 60, height: 28))
+        window.contentView?.addSubview(anchor)
+        var toggled: [String] = []
+        var dismissals = 0
+        func open() throws -> AtticDropdownPresenter {
+            window.makeFirstResponder(original)
+            let presenter = AtticDropdownPresenter()
+            presenter.design = AtticDesignContext(reduceMotion: true)
+            presenter.onDismiss = { dismissals += 1 }
+            presenter.content = AnyView(TaskTagPickerView(allTags: ["design", "home", "launch"], state: { $0 == "home" ? .on : .off },
+                                                          onToggle: { toggled.append($0) }, onCreate: { _, _ in true }))
+            presenter.present(from: anchor)
+            spin(0.3)
+            XCTAssertTrue((window.firstResponder as? NSTextView)?.isFieldEditor == true, "the tag field has the keyboard")
+            return presenter
+        }
+        func deliver(_ events: [NSEvent]) {
+            events.forEach { NSApp.postEvent($0, atStart: false) }
+            var count = 0
+            while count < 64, let next = NSApp.nextEvent(matching: .any, until: Date(), inMode: .default, dequeue: true) {
+                NSApp.sendEvent(next)
+                count += 1
+            }
+            spin(0.2)
+        }
+        func press(_ characters: String, _ code: UInt16) {
+            deliver([NSEvent.EventType.keyDown, .keyUp].map { type in
+                NSEvent.keyEvent(with: type, location: .zero, modifierFlags: [], timestamp: ProcessInfo.processInfo.systemUptime,
+                                 windowNumber: window.windowNumber, context: nil, characters: characters,
+                                 charactersIgnoringModifiers: characters, isARepeat: false, keyCode: code)!
+            })
+        }
+        func items(_ host: NSView) -> [AtticDropdownMenuItem.ItemView] {
+            accessibilityElements(host).compactMap { $0 as? AtticDropdownMenuItem.ItemView }
+        }
+        func selected(_ host: NSView) -> [String] {
+            items(host).filter { $0.isAccessibilitySelected() }.compactMap { $0.accessibilityLabel() }
+        }
+
+        let presenter = try open()
+        let host = try XCTUnwrap(presenter.host)
+        press("\t", 48)
+        let afterTab = window.firstResponder as? NSView
+        XCTAssertFalse((afterTab as? NSTextView)?.isFieldEditor == true, "Tab left the field")
+        XCTAssertTrue(afterTab?.isDescendant(of: host) == true, "the keyboard is still in the card")
+        press(" ", 49)
+        XCTAssertEqual(toggled.count, 1, "Tab reached a row and Space pressed it: \(toggled)")
+        XCTAssertTrue(["design", "home", "launch"].contains(toggled.first ?? ""))
+        XCTAssertTrue(presenter.isOpen, "toggling a tag keeps the card open")
+        press("\u{F701}", 125)
+        XCTAssertEqual(selected(host), ["#design"], "↓ highlights the first row, and only it is selected")
+        press("\u{F701}", 125)
+        XCTAssertEqual(selected(host), ["#home"], "↓ moves the one highlight")
+        XCTAssertEqual(items(host).first { $0.accessibilityLabel() == "#home" }.flatMap(Self.markChar), "✓", "its tick is its mark")
+        press("\r", 36)
+        XCTAssertEqual(toggled.dropFirst().first, "home", "Return toggles the highlighted tag")
+        press("\u{1b}", 53)
+        XCTAssertFalse(presenter.isOpen, "Esc closes the card")
+        XCTAssertEqual(dismissals, 1)
+        XCTAssertIdentical(AtticDropdownPresenter.owner(of: window.firstResponder), original, "the keyboard goes back")
+        presenter.close(restoreFocus: false, immediately: true)
+
+        // A click outside, with a row focused from the keyboard.
+        let second = try open()
+        press("\t", 48)
+        XCTAssertFalse((window.firstResponder as? NSTextView)?.isFieldEditor == true, "Tab left the field")
+        let point = recorder.convert(CGPoint(x: recorder.bounds.midX, y: recorder.bounds.midY), to: nil)
+        deliver([NSEvent.EventType.leftMouseDown, .leftMouseUp].map { type in
+            NSEvent.mouseEvent(with: type, location: point, modifierFlags: [], timestamp: ProcessInfo.processInfo.systemUptime,
+                               windowNumber: window.windowNumber, context: nil, eventNumber: 1, clickCount: 1, pressure: type == .leftMouseDown ? 1 : 0)!
+        })
+        XCTAssertFalse(second.isOpen, "a click outside closes the card")
+        XCTAssertEqual(dismissals, 2)
+        XCTAssertEqual(recorder.clicks, 1, "the click goes through to what is under it")
+        second.close(restoreFocus: false, immediately: true)
     }
 
     func testOutsideClickDismissesAnEditingTagFieldAndPassesThrough() throws {
