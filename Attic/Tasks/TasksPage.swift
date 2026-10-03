@@ -2693,10 +2693,7 @@ private struct TasksAddBar: View {
                 .padding(.bottom, stripShown ? 0 : -AtticPickerMetrics.stripToBar)
             AtticAddBar(
                 placeholder: model.addPlaceholder,
-                // The composer already observes its text state. A projected
-                // nested binding also invalidated the bar on scroll layout
-                // passes without a text edit (D1 hosted counter regression).
-                text: Binding(get: { text.text.text }, set: { text.text.text = $0 }),
+                text: $text.text.text,
                 tokens: AtticAddBar.Tokens(
                     chips: text.text.tokenChips(parser: model.parser, caret: text.caret),
                     isFocused: $isFocused,

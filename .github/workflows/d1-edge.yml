@@ -38,6 +38,8 @@ jobs:
               ENABLE_TESTABILITY=YES ENABLE_HARDENED_RUNTIME=NO) > "$RUNNER_TEMP/d1-evidence/$name-build.log" 2>&1
           done
       - name: Interleave three baseline and candidate cost samples
+        id: costs
+        continue-on-error: true
         shell: bash
         run: |
           for sample in 1 2 3; do
@@ -53,10 +55,12 @@ jobs:
                 -parallel-testing-enabled NO \
                 -only-testing:AtticTests/TasksFrameCostTests -only-testing:AtticTests/TasksRowBuildCostTests) \
                 > "$RUNNER_TEMP/d1-evidence/$name-cost-$sample.log" 2>&1
-              rg 'ATTIC_FRAME_COST|ATTIC_ROW_BUILD' "$RUNNER_TEMP/d1-evidence/$name-cost-$sample.log"
+              grep -E 'ATTIC_FRAME_COST|ATTIC_ROW_BUILD' "$RUNNER_TEMP/d1-evidence/$name-cost-$sample.log"
             done
           done
       - name: Native viewport, invalidation, scroll keeping, reorder, and swipe regressions
+        id: focused
+        continue-on-error: true
         run: |
           Scripts/xcodebuild_locked.sh test-without-building \
             -project Attic.xcodeproj -scheme Attic -configuration Local -destination 'platform=macOS' \
@@ -71,8 +75,11 @@ jobs:
             -only-testing:AtticTests/TasksRound10PagerTests -only-testing:AtticTests/TasksRound11Tests \
             -only-testing:AtticTests/TasksRound12Tests -only-testing:AtticTests/TasksRound13Tests \
             -only-testing:AtticTests/OwnerFindings1001Tests -only-testing:AtticTests/PanelGeometryTests \
+            -only-testing:AtticTests/AtticDesignSystemHostedTests \
             > "$RUNNER_TEMP/d1-evidence/focused.log" 2>&1
       - name: Pixel fade and at-rest checks, hit points, and accessibility order
+        id: pixels
+        continue-on-error: true
         env:
           ATTIC_VISUAL_UAT_DIRECTORY: ${{ runner.temp }}/d1-evidence/pixels
         run: |
@@ -88,6 +95,16 @@ jobs:
             -only-testing:AtticUITests/TasksPageUITests/testEveryTabStopShowsWhereTheKeyboardIs \
             -only-testing:AtticUITests/AtticKeyWindowUITests/testAnExplicitOpenFocusesTheAddBarWithoutARing \
             > "$RUNNER_TEMP/d1-evidence/pixels-and-hits.log" 2>&1
+      - name: Require every verification gate to pass
+        if: always()
+        env:
+          COSTS: ${{ steps.costs.outcome }}
+          FOCUSED: ${{ steps.focused.outcome }}
+          PIXELS: ${{ steps.pixels.outcome }}
+        run: |
+          test "$COSTS" = success
+          test "$FOCUSED" = success
+          test "$PIXELS" = success
       - name: Upload evidence even on failure
         if: always()
         uses: actions/upload-artifact@v4

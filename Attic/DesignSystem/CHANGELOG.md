@@ -19,7 +19,9 @@ or type style changed.
   gaps because `.soft` alone produces no pocket on the installed runtime.
 - Resting row clearance, the independent control layer, and the preview-only
   Clean cut baseline are retained. No custom blur or scroll-driven SwiftUI
-  state was added.
+  state was added. The add bar renders an owner-provided text snapshot;
+  its edit binding is captured for the field, avoiding false whole-bar
+  invalidation on scroll layout passes. Real edits still update the owner.
 
 ### Deep review fixes (Opus, 2026-10-02)
 

@@ -376,7 +376,13 @@ struct AtticAddBar: View {
     }
 
     let placeholder: String
-    @Binding var text: String
+    /// Display state is a snapshot from the owning view. Keeping the edit
+    /// binding out of DynamicProperty avoids invalidating the whole bar on
+    /// scroll layout passes that poll bindings without changing the text.
+    private let text: String
+    // Binding itself conforms to DynamicProperty even without @Binding;
+    // capture it in a closure so only the actual field owns that property.
+    private let fieldText: () -> Binding<String>
     let onSubmit: () -> Void
     /// The leading glyph: `plus` for adding, `magnifyingglass` when the bar
     /// searches (the Done log).
@@ -399,7 +405,8 @@ struct AtticAddBar: View {
 
     init(placeholder: String.LocalizationValue, text: Binding<String>, onSubmit: @escaping () -> Void) {
         self.placeholder = String(localized: placeholder)
-        self._text = text
+        self.text = text.wrappedValue
+        self.fieldText = { text }
         self.onSubmit = onSubmit
     }
 
@@ -408,7 +415,8 @@ struct AtticAddBar: View {
     init(placeholder: String, text: Binding<String>, systemImage: String = "plus", showsSend: Bool = true,
          tokens: Tokens?, onSubmit: @escaping () -> Void) {
         self.placeholder = placeholder
-        self._text = text
+        self.text = text.wrappedValue
+        self.fieldText = { text }
         self.systemImage = systemImage
         self.showsSend = showsSend
         self.tokens = tokens
@@ -478,7 +486,7 @@ struct AtticAddBar: View {
     private func field(disabled: Bool) -> some View {
         if capture == nil, let tokens {
             AtticTokenField(
-                text: $text,
+                text: fieldText(),
                 chips: tokens.chips,
                 isFocused: tokens.isFocused,
                 accessibilityLabel: placeholder,
@@ -512,7 +520,7 @@ struct AtticAddBar: View {
         } else {
             TextField(
                 "",
-                text: $text,
+                text: fieldText(),
                 prompt: Text(verbatim: placeholder).foregroundStyle(design.tokens.color(disabled ? .disabledText : .placeholder))
             )
             .textFieldStyle(.plain)

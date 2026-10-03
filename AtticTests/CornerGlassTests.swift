@@ -304,5 +304,8 @@ final class CornerGlassTests: XCTestCase {
         state.isPanelPinned = true
         spin(0.3)
         XCTAssertGreaterThan(PanelHeader.bodyEvaluations, 0, "the counter sees the header's own changes")
+        model.addBar = TaskAddBarText(text: "A real composer edit #work !!")
+        spin(0.3)
+        XCTAssertGreaterThan(AtticAddBar.bodyEvaluations, 0, "real text edits still render the composer")
     }
 }
