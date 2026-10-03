@@ -482,6 +482,55 @@ final class AtticDropdownTests: XCTestCase {
         XCTAssertEqual(picked, TaskPriority.choices, "closed pickers no longer own the chords")
     }
 
+    final class RetryContent: ObservableObject {
+        @Published var failed = false
+    }
+
+    struct RetryingTagPicker: View {
+        @ObservedObject var model: RetryContent
+        var body: some View {
+            VStack(spacing: 0) {
+                TaskTagPickerView(allTags: (0..<7).map { "tag\($0)" }, state: { _ in .off },
+                                  onToggle: { _ in }, onCreate: { _, _ in false })
+                if model.failed { Text("Save failed; Retry").frame(height: 80) }
+            }
+            // The real row picker clears its failure only when it leaves.
+            .onDisappear { model.failed = false }
+        }
+    }
+
+    func testAHeightChangePreservesTheEditingTagQueryAndRetryState() throws {
+        let window = makeWindow()
+        window.setContentSize(CGSize(width: 320, height: 420))
+        defer { window.close() }
+        let anchor = NSView(frame: CGRect(x: 40, y: 40, width: 60, height: 28))
+        window.contentView?.addSubview(anchor)
+        let model = RetryContent()
+        let presenter = AtticDropdownPresenter()
+        presenter.prefer = .above
+        presenter.content = AnyView(RetryingTagPicker(model: model))
+        presenter.present(from: anchor)
+        defer { presenter.close(restoreFocus: false, immediately: true) }
+        spin(0.2)
+        let editor = try XCTUnwrap(window.firstResponder as? NSTextView)
+        editor.insertText("tag0", replacementRange: NSRange(location: NSNotFound, length: 0))
+        spin(0.1)
+        let field = try XCTUnwrap(editor.delegate as? NSTextField)
+        XCTAssertEqual(field.stringValue, "tag0")
+        XCTAssertNil(presenter.stage.height, "the initial card fits")
+        model.failed = true
+        spin(0.3)
+        XCTAssertTrue(model.failed, "constraining the card must not run its dismissal cleanup")
+        XCTAssertNotNil(presenter.stage.height, "the error grows beyond the available room")
+        let current = try XCTUnwrap((window.firstResponder as? NSTextView)?.delegate as? NSTextField)
+        XCTAssertEqual(current.stringValue, "tag0", "the typed query survives the scrolling threshold")
+        model.failed = false
+        spin(0.3)
+        XCTAssertNil(presenter.stage.height, "clearing the error returns the card to its natural height")
+        let restored = try XCTUnwrap((window.firstResponder as? NSTextView)?.delegate as? NSTextField)
+        XCTAssertEqual(restored.stringValue, "tag0", "shrinking must preserve editing state too")
+    }
+
     private func accessibilityElements(_ root: AnyObject) -> [AnyObject] {
         let children = (root.accessibilityChildren?() ?? nil) ?? []
         return [root] + children.flatMap { accessibilityElements($0 as AnyObject) }

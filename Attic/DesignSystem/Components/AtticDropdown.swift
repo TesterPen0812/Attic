@@ -53,7 +53,6 @@ struct AtticDropdownCard<Content: View>: View {
     @Environment(\.atticDropdownHeight) private var height
     @Environment(\.atticDropdownWidth) private var widthLimit
     @Environment(\.atticDropdownContentHeightChanged) private var heightChanged
-    @State private var persistentViewport = false
     @ViewBuilder let content: Content
 
     init(width: CGFloat? = nil, @ViewBuilder content: () -> Content) {
@@ -63,7 +62,7 @@ struct AtticDropdownCard<Content: View>: View {
 
     var body: some View {
         let m = AtticDropdownMetrics.self
-        AtticDropdownViewport(height: height.map { max(0, $0 - m.inset * 2) }, persistent: persistentViewport) {
+        AtticDropdownViewport(height: height.map { max(0, $0 - m.inset * 2) }, persistent: heightChanged != nil) {
             VStack(alignment: .leading, spacing: 0) { content }
                 .modifier(AtticDropdownHeightObserver(changed: heightChanged))
         }
@@ -71,9 +70,6 @@ struct AtticDropdownCard<Content: View>: View {
             .frame(minWidth: width == nil ? m.minWidth : nil, alignment: .leading)
             .frame(width: widthLimit ?? width, alignment: .leading)
             .background(AtticDropdownSurface())
-            .onPreferenceChange(AtticDropdownPersistentViewportKey.self) { wanted in
-                if wanted { persistentViewport = true }
-            }
     }
 }
 
@@ -874,13 +870,6 @@ extension EnvironmentValues {
     }
 }
 
-/// Stateful calendars retain their scroll container across fit/overflow
-/// transitions so changing the month never reconstructs their cursor state.
-struct AtticDropdownPersistentViewportKey: PreferenceKey {
-    static let defaultValue = false
-    static func reduce(value: inout Bool, nextValue: () -> Bool) { value = value || nextValue() }
-}
-
 struct AtticDropdownHighlightKey: PreferenceKey {
     static let defaultValue: String? = nil
     static func reduce(value: inout String?, nextValue: () -> String?) {
@@ -888,9 +877,9 @@ struct AtticDropdownHighlightKey: PreferenceKey {
     }
 }
 
-/// Lists that fit stay plain. Stateful calendars keep their scroll container
-/// across height changes, disabled while they fit. The system soft edge reveals
-/// overflow; the keyboard's highlighted row is brought wholly into view.
+/// Known-height lists that fit stay plain. Cards measured as they change keep
+/// their scroll container across height changes to preserve editing state.
+/// The system soft edge reveals overflow; the keyboard's highlighted row is brought wholly into view.
 struct AtticDropdownViewport<Content: View>: View {
     var height: CGFloat?
     var highlighted: String? = nil
@@ -902,12 +891,11 @@ struct AtticDropdownViewport<Content: View>: View {
             ScrollViewReader { proxy in
                 ScrollView(.vertical) { content }
                     .scrollIndicators(.never)
-                    .safeAreaBar(edge: .top, spacing: 0) { Color.clear.frame(height: AtticDropdownMetrics.scrollEdgeInset).accessibilityHidden(true) }
-                    .safeAreaBar(edge: .bottom, spacing: 0) { Color.clear.frame(height: AtticDropdownMetrics.scrollEdgeInset).accessibilityHidden(true) }
+                    .safeAreaBar(edge: .top, spacing: 0) { Color.clear.frame(height: height == nil ? 0 : AtticDropdownMetrics.scrollEdgeInset).accessibilityHidden(true) }
+                    .safeAreaBar(edge: .bottom, spacing: 0) { Color.clear.frame(height: height == nil ? 0 : AtticDropdownMetrics.scrollEdgeInset).accessibilityHidden(true) }
                     .scrollEdgeEffectStyle(.soft, for: .vertical)
                     .frame(height: height)
                     .fixedSize(horizontal: false, vertical: height == nil)
-                    .scrollDisabled(height == nil)
                     .onAppear { if let highlighted { proxy.scrollTo(highlighted) } }
                     .onChange(of: highlighted) { _, id in
                         guard let id, !AtticListHighlight.isPointerMove(NSApp.currentEvent) else { return }

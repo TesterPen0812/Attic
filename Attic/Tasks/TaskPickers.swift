@@ -70,7 +70,6 @@ struct TaskDatePickerView: View {
         .focusEffectDisabled()
         .atticDropdownFocus($focused)
         .onKeyPress(phases: .down) { press in key(press, highlight: highlight, quick: quick) }
-        .preference(key: AtticDropdownPersistentViewportKey.self, value: true)
         .accessibilityElement(children: .contain)
         .accessibilityLabel(String(localized: "Choose a date"))
     }
