@@ -250,7 +250,39 @@ final class TasksPageModel: ObservableObject {
         set { addBarState.caret = newValue }
     }
     @Published var pasteOffer: TaskPasteOffer?
-    @Published var doneSearch = ""
+    /// The applied result query. Typing lives in its own small field state
+    /// so it does not invalidate the page and its rows on every key.
+    @Published var doneSearch = "" {
+        didSet {
+            doneSearchTask?.cancel()
+            doneSearchInput.replace(doneSearch)
+        }
+    }
+    let doneSearchInput = TasksDoneSearchInput()
+    private var doneSearchTask: Task<Void, Never>?
+
+    func typeDoneSearch(_ text: String, nativeEdit: Bool = false) {
+        // Native edits already changed the editor. Keyboard fallback letters
+        // must publish to the input view so the next native edit retains them.
+        if nativeEdit { doneSearchInput.edit(text) }
+        else { doneSearchInput.replace(text) }
+        doneSearchTask?.cancel()
+        doneSearchTask = Task { [weak self] in
+            do { try await Task.sleep(for: .milliseconds(75)) } catch { return }
+            guard !Task.isCancelled else { return }
+            self?.flushDoneSearchInput()
+        }
+    }
+
+    /// Keyboard navigation must use the latest field text, including a
+    /// query typed just before Down; Escape/programmatic searches cancel
+    /// a pending publication through doneSearch's setter above.
+    func flushDoneSearchInput() {
+        doneSearchTask?.cancel()
+        let query = doneSearchInput.text
+        if doneSearch != query { doneSearch = query }
+        loadDoneLogIfNeeded()
+    }
     /// Now's and Later's Find, per page (follow-up part 2, item 6; Done's
     /// is `doneSearch`). Read through `searchQuery(for:)`.
     @Published var listSearch: [TasksTab: String] = [:]
@@ -316,7 +348,11 @@ final class TasksPageModel: ObservableObject {
 
     func rowModel(for task: TaskItem, match: String? = nil) -> TasksListRow {
         let subtasks: [TaskItem]
-        if store.parent(of: task) != nil {
+        if task.doneLoggedAt != nil {
+            // Archived families are loaded with the page. Looking these up
+            // in the live-family index needlessly builds all active tasks.
+            subtasks = doneLogChildren[task.id] ?? []
+        } else if store.parent(of: task) != nil {
             subtasks = []
         } else if store.task(withID: task.id) != nil {
             subtasks = store.subtasks(of: task.id)
@@ -504,7 +540,7 @@ final class TasksPageModel: ObservableObject {
 
     private func buildDoneDays() -> [TasksDoneDay] {
         let query = doneSearch.trimmingCharacters(in: .whitespacesAndNewlines)
-        let today = store.snapshot(for: .tasks).sections.first { $0.status == .done }?.tasks ?? []
+        let today = store.doneTodayTasks()
         let finished = (today.filter { query.isEmpty || $0.title.localizedStandardContains(query) } + doneLogTasks)
         let calendar = services.calendar()
         let now = services.now()
@@ -544,9 +580,11 @@ final class TasksPageModel: ObservableObject {
         guard !query.isEmpty else { return nil }
         let key = DoneCountKey(revision: store.revision, query: query)
         if let doneCountCache, doneCountCache.key == key { return doneCountCache.count }
-        let today = store.snapshot(for: .tasks).sections.first { $0.status == .done }?.tasks ?? []
+        let today = store.doneTodayTasks()
         var count: (matches: Int, total: Int)?
-        if let logMatches = store.doneLogTaskCount(matching: query), let logTotal = doneLogTotal() {
+        if doneLogFailure == nil {
+            let logMatches = store.indexedDoneLogCount(matching: query)
+            let logTotal = store.indexedDoneLogCount()
             count = (today.filter { $0.title.localizedStandardContains(query) }.count + logMatches, today.count + logTotal)
         }
         doneCountCache = (key, count)
@@ -560,24 +598,13 @@ final class TasksPageModel: ObservableObject {
 
     private var doneCountCache: (key: DoneCountKey, count: (matches: Int, total: Int)?)?
 
-    /// The Done log's size, read once per store change (round 11): it does
-    /// not depend on the search, and reading it walks every logged task, so
-    /// each keystroke of a search read all 5,000 of them again.
-    private func doneLogTotal() -> Int? {
-        if let doneTotalCache, doneTotalCache.revision == store.revision { return doneTotalCache.total }
-        let total = store.doneLogTaskCount()
-        doneTotalCache = (store.revision, total)
-        return total
-    }
-
-    private var doneTotalCache: (revision: UInt64, total: Int?)?
-
     /// Loads the Done log's first page for the current search, if the store
     /// or the search changed since.
     func loadDoneLogIfNeeded() {
         let query = doneSearch.trimmingCharacters(in: .whitespacesAndNewlines)
         guard doneLogQuery != query || doneLogRevision != store.revision else { return }
-        let page = store.doneLogPage(limit: max(Self.doneLogPageSize, doneLogTasks.count), matching: query)
+        let limit = doneLogQuery == query ? max(Self.doneLogPageSize, doneLogTasks.count) : Self.doneLogPageSize
+        let page = store.indexedDoneLogPage(limit: limit, matching: query)
         if let failure = page.failure {
             // Keep what the page showed for this search; a new search shows
             // what was read. Not marked as loaded, so Retry reads again.
@@ -596,12 +623,17 @@ final class TasksPageModel: ObservableObject {
     }
 
     /// The next page, when the last loaded row comes on screen. The cursor
-    /// walks physical rows, so duplicates and superseded copies never stop it.
+    /// walks canonical matching IDs, so duplicate replicas never stop it.
     /// A failed read keeps what loaded and stops until Retry.
     func loadMoreDoneLog() {
         guard doneLogHasMore, doneLogFailure == nil else { return }
-        let page = store.doneLogPage(from: doneLogCursor, limit: Self.doneLogPageSize, matching: doneLogQuery,
-                                     excluding: Set(doneLogTasks.map(\.id)))
+        let query = doneSearch.trimmingCharacters(in: .whitespacesAndNewlines)
+        if doneLogQuery != query { loadDoneLogIfNeeded(); return }
+        if doneLogRevision != store.revision {
+            loadDoneLogIfNeeded()
+            guard doneLogHasMore, doneLogFailure == nil else { return }
+        }
+        let page = store.indexedDoneLogPage(from: doneLogCursor, limit: Self.doneLogPageSize, matching: doneLogQuery ?? "")
         setDoneLog(doneLogTasks + page.tasks)
         doneLogCursor = page.next
         doneLogHasMore = page.hasMore
@@ -630,6 +662,7 @@ final class TasksPageModel: ObservableObject {
     /// (pages are merged, so a divergent copy never splits a day), with
     /// their families read in one go.
     private func setDoneLog(_ tasks: [TaskItem]) {
+        doneCountCache = nil
         doneLogTasks = tasks.sorted(by: TaskStore.doneLogOrder)
         doneLogChildren = store.doneLogSubtasks(ofParents: doneLogTasks.map(\.id))
     }
@@ -928,6 +961,7 @@ final class TasksPageModel: ObservableObject {
         // page of the Done log loaded, its parent's quick look or details.
         if target == .now, task.status == .done { completedTodayExpanded = true }
         if target == .done {
+            if doneSearch != doneSearchInput.text { doneSearch = doneSearchInput.text }
             let query = doneSearch.trimmingCharacters(in: .whitespacesAndNewlines)
             if !query.isEmpty, !task.title.localizedStandardContains(query) { doneSearch = "" }
             if parent != nil { doneDetailID = task.id }

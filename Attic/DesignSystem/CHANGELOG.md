@@ -93,6 +93,20 @@ Phase 1 (Shell, Tasks and Settings) was built in three streams and integrated
 on `redesign/phase-1`. Every change below is additive: no token, colour, radius
 or type style changed.
 
+### D1 edge fade (Sol, 2026-10-03)
+
+- Owner decisions D1 and D4b replace scrolling beneath control labels.
+  Each Tasks list's native soft viewport now ends below the tallest
+  tabs/Find control and above the entire measured bottom control stack.
+  Native pockets are clipped inside that viewport; the former control-size
+  marker bands are gone. Tiny drawing markers remain in the empty resting
+  gaps because `.soft` alone produces no pocket on the installed runtime.
+- Resting row clearance, the independent control layer, and the preview-only
+  Clean cut baseline are retained. No custom blur or scroll-driven SwiftUI
+  state was added. The add bar renders an owner-provided text snapshot;
+  its edit binding is captured for the field, avoiding false whole-bar
+  invalidation on scroll layout passes. Real edits still update the owner.
+
 ### Deep review fixes (Opus, 2026-10-02)
 
 - **`AtticRowFocus(binding:id:isFocused:isActive:)`**: a list that keeps

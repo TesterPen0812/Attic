@@ -105,6 +105,10 @@ struct TasksPage: View {
     }
 
     static let space = NamedCoordinateSpace.named("AtticTasksPage")
+    #if DEBUG
+    /// Hosted scroll-frame regression, alongside PanelHeader and AtticAddBar.
+    static var tabsEvaluations = 0
+    #endif
 
     /// The row that has the keyboard on the page shown, if any. The focus
     /// state is qualified by page (round 12: a task Now keeps under
@@ -138,13 +142,11 @@ struct TasksPage: View {
 
     /// The page, its overlays, its keys and its monitors.
     private var frame: some View {
-        // One full-height viewport (owner fix 8, review 9): the lists run
-        // to the panel's top and bottom edges under the floating controls;
-        // at rest the first row sits where it always did.
+        // D1: each list ends before the controls. The controls retain their
+        // page-level layer and hit points; the lifted card stays above both.
         ZStack(alignment: .top) {
-            // The lists meet the controls by their own edges: the system's
-            // soft scroll edge under per-list bars (`tasksListEdges`), or
-            // round 13's clean cut by the list's mask.
+            // Native soft edges inside the visible viewport, or the
+            // retained Clean cut preview baseline.
             pager
             // The controls float over the lists in both, in the page's own
             // layer.
@@ -551,7 +553,10 @@ struct TasksPage: View {
     /// of v22; follow-up part 2, item 6), and on Now and Later View Options
     /// after it; while searching, the search field takes the line.
     private var tabs: some View {
-        ZStack(alignment: .topLeading) {
+        #if DEBUG
+        Self.tabsEvaluations += 1
+        #endif
+        return ZStack(alignment: .topLeading) {
             // ⌥⌘V's anchor where View Options sits, mounted whatever the
             // line shows: Find takes the line, and the button and its own
             // anchor with it (GPT-6.1's review: the key did nothing then).
@@ -563,10 +568,17 @@ struct TasksPage: View {
                 .allowsHitTesting(false)
                 .accessibilityHidden(true)
             if searchShown {
-                AtticTabsSearchField(placeholder: model.searchPlaceholder(for: model.tab),
-                                     text: Binding(get: { model.searchQuery(for: model.tab) },
-                                                   set: { model.setSearchQuery($0, for: model.tab) }),
-                                     isFocused: $searchFocused, onEscape: endSearch)
+                Group {
+                    if model.tab == .done {
+                        TasksDoneSearchField(model: model, input: model.doneSearchInput,
+                                             isFocused: $searchFocused, onEscape: endSearch)
+                    } else {
+                        AtticTabsSearchField(placeholder: model.searchPlaceholder(for: model.tab),
+                                             text: Binding(get: { model.searchQuery(for: model.tab) },
+                                                           set: { model.setSearchQuery($0, for: model.tab) }),
+                                             isFocused: $searchFocused, onEscape: endSearch)
+                    }
+                }
                     .accessibilityIdentifier(model.tab == .done ? "tasks-done-search" : "tasks-find")
                     .id(model.tab)
                     // Centred on the tabs' line.
@@ -890,7 +902,9 @@ struct TasksPage: View {
         guard searchFocused, model.isPageShown, event.keyCode == 125,
               event.modifierFlags.intersection([.command, .shift, .option, .control]).isEmpty,
               !AtticTextInput.isPopoverOpen, let window = pointer.view?.window, event.window === window,
-              !Self.isComposing(window.firstResponder), !model.searchQuery(for: model.tab).isEmpty,
+              !Self.isComposing(window.firstResponder) else { return false }
+        if model.tab == .done { model.flushDoneSearchInput() }
+        guard !model.searchQuery(for: model.tab).isEmpty,
               let first = visibleIDs().first else { return false }
         searchFocused = false
         focusTracker.noteKeyboardNavigation()
@@ -904,12 +918,9 @@ struct TasksPage: View {
 
     private var edgeStyle: AtticScrollEdgeStyle { scrollEdges.style }
 
-    /// The lists' bars' heights under the system soft edge (their scroll
-    /// views' safe area; their content margins are what remains), none for
-    /// the clean cut.
-    private var bars: TasksListBars {
-        edgeStyle == .systemSoft ? TasksListBars(top: listTop, bottom: bottomMargin) : TasksListBars()
-    }
+    /// The viewport ends below the tallest control on the tabs line (the
+    /// Find field and the quiet buttons are taller than the tab labels).
+    private var viewportTop: CGFloat { TasksViewport.controlsBottom(tabsTop: tabsTop) }
 
     /// The tabs' band owns its clicks (review 9): a row scrolled under it
     /// is not clickable through it. The header above owns its own (the
@@ -939,7 +950,11 @@ struct TasksPage: View {
     private func revealRow(_ id: UUID, in tab: TasksTab, proxy: ScrollViewProxy, animation: Animation?) {
         let reveal = TasksViewport.reveal(frame: pointer.frames[TasksRowID(tab: tab, id: id)], height: rowHeight(id, in: tab),
                                           viewport: pointer.view?.bounds.height ?? layout.panelSize.height,
-                                          listTop: listTop, bottomMargin: bottomMargin, bottomClearance: bottomClearance)
+                                          listTop: listTop,
+                                          bottomMargin: edgeStyle == .systemSoft
+                                            ? TasksViewport.controlsInset(stack: bottomStack.height, bottomInset: bottomInset) + AtticLayout.contentToAddBar
+                                            : bottomMargin,
+                                          bottomClearance: bottomClearance)
         switch reveal {
         case .none: break
         case .minimal: withAnimation(animation) { proxy.scrollTo(id) }
@@ -980,7 +995,7 @@ struct TasksPage: View {
             case .done:
                 TasksDonePage(model: model, updates: drawn ? model.cellUpdates : TasksCellUpdates.quiet, store: store,
                               listTop: listTop, bottomClearance: bottomClearance,
-                              bottomMargin: bottomMargin, bars: bars, bottomStack: bottomStack, drawn: drawn,
+                              bottomMargin: bottomMargin, viewportTop: viewportTop, bottomInset: bottomInset, bottomStack: bottomStack, drawn: drawn,
                               edges: edgeStyle, mask: viewportMask, reveal: $doneReveal,
                               revealRow: { id, proxy in revealRow(id, in: .done, proxy: proxy, animation: nil) },
                               cell: { row in cell(row, tab: .done, group: [], drawn: drawn) },
@@ -1082,20 +1097,21 @@ struct TasksPage: View {
                             }
                         }
                     }
+                    if edgeStyle == .systemSoft {
+                        TasksListTailClearance(stack: bottomStack, bottomInset: bottomInset, bottomClearance: bottomClearance)
+                    }
                 }
                 .animation(reorderFade.isEmpty ? travel : nil, value: rows.map(\.id))
                 // The list's place is kept while its page is not built.
                 .background(TasksScrollKeeper(model: model, tab: tab, proxies: listProxies, drawn: drawn).accessibilityHidden(true))
                 // The clearance past the add bar's zone is room at the end
                 // of the list, not margin (see `TasksViewport.bottomMargin`).
-                .padding(.bottom, bottomClearance - bottomMargin)
+                .padding(.bottom, edgeStyle == .cleanCut ? bottomClearance - bottomMargin : 0)
             }
-            .contentMargins(.top, listTop - bars.top, for: .scrollContent)
-            .contentMargins(.bottom, bottomMargin - bars.bottom, for: .scrollContent)
-            .contentMargins(.top, listTop - bars.top, for: .scrollIndicators)
-            .contentMargins(.bottom, bottomClearance - bars.bottom, for: .scrollIndicators)
             .scrollIndicators(.automatic)
-            .tasksListEdges(edgeStyle, bars: bars, stack: bottomStack, mask: viewportMask)
+            .tasksListEdges(edgeStyle, top: viewportTop, listTop: listTop, bottomInset: bottomInset,
+                            bottomMargin: bottomMargin, bottomClearance: bottomClearance,
+                            stack: bottomStack, mask: viewportMask)
             .onChange(of: focusedRow) { _, focus in
                 guard let focus, focus.page == tab.rawValue, rows.contains(where: { $0.id == focus.id }),
                       focusTracker.isKeyboardDriving else { return }
@@ -2040,7 +2056,9 @@ struct TasksPage: View {
         // lost (round 8, CI run 3: "inv" became "i").
         if searchFocused, model.isPageShown, modifiers.isEmpty || modifiers == .shift,
            Self.startsSearch(press.characters) {
-            model.setSearchQuery(model.searchQuery(for: model.tab) + press.characters, for: model.tab)
+            let text = model.searchQuery(for: model.tab) + press.characters
+            if model.tab == .done { model.typeDoneSearch(text) }
+            else { model.setSearchQuery(text, for: model.tab) }
             return .handled
         }
         // Every editor keeps its own keys (review 8): the title, a new
@@ -2052,7 +2070,7 @@ struct TasksPage: View {
         // Now and Later open Find with ⌘F or the magnifier only (item 6):
         // their letters may be a draft reaching the add bar a moment late.
         if model.tab == .done, model.isPageShown, modifiers.isEmpty || modifiers == .shift, Self.startsSearch(press.characters) {
-            model.setSearchQuery(press.characters, for: model.tab)
+            model.typeDoneSearch(press.characters)
             beginSearch()
             return .handled
         }
@@ -3479,9 +3497,8 @@ final class TasksBottomStackHeight: ObservableObject {
     @Published var height: CGFloat = AtticControlSize.addBarHeight {
         didSet { scheduleMask() }
     }
-    /// What the viewport's fade (clean cut) and the lists' bottom bar
-    /// (system soft edge, `TasksBottomEdgeBar`) use: the height a moment
-    /// later. Changing
+    /// What the Clean cut preview mask uses: the height a moment later.
+    /// The native viewport follows `height` immediately. Changing
     /// the lists' mask re-renders their layers (about 12 ms with 500 rows),
     /// so it follows the strip after the keystroke's frame, while the strip
     /// is still fading in, never inside it (round 4: the first keystroke).
@@ -3584,67 +3601,70 @@ private struct TasksDragOutStateProbe: View {
 }
 #endif
 
-/// The lists' bars under the system soft edge: their heights, which the
-/// lists' scroll views take as safe area (`TasksPage.bars`).
-struct TasksListBars: Equatable {
-    var top: CGFloat = 0
-    var bottom: CGFloat = 0
+extension View {
+    /// The control layer remains outside the list's AppKit containers.
+    func tasksListEdges<Mask: View>(_ style: AtticScrollEdgeStyle, top: CGFloat, listTop: CGFloat,
+                                    bottomInset: CGFloat, bottomMargin: CGFloat, bottomClearance: CGFloat,
+                                    stack: TasksBottomStackHeight, mask: Mask) -> some View {
+        modifier(TasksListEdges(style: style, top: top, listTop: listTop, bottomInset: bottomInset,
+                                bottomMargin: bottomMargin, bottomClearance: bottomClearance, stack: stack, cleanMask: mask))
+    }
 }
 
-extension View {
-    /// A list's edges: under the system soft edge, the list's own bars (the
-    /// controls' zones, so its scroll view gets the system's edge effect
-    /// there: from the panel's top edge to the resting row, over the header,
-    /// the tabs' line and Find; and over the whole bottom stack, the add bar
-    /// and whatever shows above it, its strip, a selection bar or a paste
-    /// offer, `TasksBottomEdgeBar`); round 13's clean cut, the list's own
-    /// mask.
-    ///
-    /// The bars belong to each list, not to the pager around the pages. A
-    /// bar's content is hosted in its own AppKit container; with the bars on
-    /// the pager those containers sat at the page's root view, beside the
-    /// add bar's, and XCUITest found no hit point on the add bar (CI,
-    /// 2026-10-01). On the list they sit inside the list's own view tree.
+/// Observes control-height changes only. Scroll offsets stay in AppKit:
+/// neither the header, composer nor this modifier observes them.
+private struct TasksListEdges<Mask: View>: ViewModifier {
+    let style: AtticScrollEdgeStyle
+    let top: CGFloat
+    let listTop: CGFloat
+    let bottomInset: CGFloat
+    let bottomMargin: CGFloat
+    let bottomClearance: CGFloat
+    @ObservedObject var stack: TasksBottomStackHeight
+    let cleanMask: Mask
+
     @ViewBuilder
-    func tasksListEdges<Mask: View>(_ style: AtticScrollEdgeStyle, bars: TasksListBars, stack: TasksBottomStackHeight,
-                                    mask: Mask) -> some View {
+    func body(content: Content) -> some View {
         switch style {
         case .systemSoft:
-            atticScrollEdgeEffect(style)
-                .safeAreaBar(edge: .top, spacing: 0) { AtticScrollEdgeBar(height: bars.top) }
-                .safeAreaBar(edge: .bottom, spacing: 0) { TasksBottomEdgeBar(stack: stack, minimum: bars.bottom) }
+            let bottom = TasksViewport.controlsInset(stack: stack.height, bottomInset: bottomInset)
+            content
+                // Keep the first and last rows' resting clearance. Only
+                // these small empty gaps form native edge pockets now.
+                .atticScrollEdgeEffect(style)
+                .safeAreaBar(edge: .top, spacing: 0) { AtticScrollEdgeBar(height: max(0, listTop - top)) }
+                .safeAreaBar(edge: .bottom, spacing: 0) { AtticScrollEdgeBar(height: AtticLayout.contentToAddBar) }
+                // The system pocket may extend beyond its scroll view.
+                // Clip it here, before the padding that excludes controls.
+                .clipped()
+                .padding(.top, top)
+                .padding(.bottom, bottom)
         case .cleanCut:
-            atticScrollEdgeEffect(style).mask { mask }
+            content
+                .contentMargins(.top, listTop, for: .scrollContent)
+                .contentMargins(.bottom, bottomMargin, for: .scrollContent)
+                .contentMargins(.top, listTop, for: .scrollIndicators)
+                .contentMargins(.bottom, bottomClearance, for: .scrollIndicators)
+                .atticScrollEdgeEffect(style)
+                .mask { cleanMask }
         }
     }
 }
 
-/// The lists' bottom bar under the system soft edge (deep review P2-02):
-/// the add bar's zone, and, while more shows above the add bar (its strip
-/// of date, tag and priority, a selection bar, a paste offer), the whole
-/// bottom stack, so the system's pocket covers every control there and
-/// grows and shrinks with them. The same system effect, only taller; Attic
-/// draws no blur. It observes the stack itself and follows its settled
-/// height (`maskHeight`, a moment after the change), so a keystroke that
-/// shows the strip redraws only this bar, after the keystroke's frame,
-/// never the page and its rows (round 4).
-struct TasksBottomEdgeBar: View {
+/// Resting room at the document's end, not a scroll content margin: a
+/// content margin would enlarge the native pocket along with the gap.
+struct TasksListTailClearance: View {
     @ObservedObject var stack: TasksBottomStackHeight
-    /// The add bar's zone: the bar never gets shorter.
-    let minimum: CGFloat
-
-    /// The bar's height for a bottom stack `stack` tall. Idle, the stack
-    /// measures the add bar and the hidden strip's 8 pt gap above it
-    /// (nothing is drawn there): the bar is the add bar's zone, as before.
-    /// Anything shown over the add bar (the strip, a selection bar, a paste
-    /// offer, an error line) is the stack's top: the bar reaches it.
-    nonisolated static func height(stack: CGFloat, minimum: CGFloat) -> CGFloat {
-        let idle = AtticControlSize.addBarHeight + AtticPickerMetrics.stripToBar
-        return stack > idle + 0.5 ? minimum - AtticControlSize.addBarHeight + stack : minimum
-    }
+    let bottomInset: CGFloat
+    let bottomClearance: CGFloat
 
     var body: some View {
-        AtticScrollEdgeBar(height: Self.height(stack: stack.maskHeight, minimum: minimum))
+        Color.clear
+            .frame(height: max(0, bottomClearance
+                               - TasksViewport.controlsInset(stack: stack.height, bottomInset: bottomInset)
+                               - AtticLayout.contentToAddBar))
+            .accessibilityHidden(true)
+            .allowsHitTesting(false)
     }
 }
 
@@ -3654,6 +3674,19 @@ enum TasksViewport {
     /// The bottom stack's room the lists always keep: the add bar, and the
     /// strip over it with its gap (it comes and goes with the draft).
     static let reservedStack = AtticControlSize.addBarHeight + AtticPickerMetrics.stripToBar + AtticControlSize.smallHeight
+
+    /// Below every control on the tabs line, including Find's taller field.
+    static func controlsBottom(tabsTop: CGFloat) -> CGFloat {
+        tabsTop + (AtticLayout.pageTabsHeight + AtticControlSize.smallHeight) / 2
+    }
+
+    /// Bottom edge at the top of the visible stack. Idle, the composer
+    /// keeps an empty strip-to-bar gap; it is not a control.
+    static func controlsInset(stack: CGFloat, bottomInset: CGFloat) -> CGFloat {
+        let idle = AtticControlSize.addBarHeight + AtticPickerMetrics.stripToBar
+        let visible = stack <= idle + 0.5 ? AtticControlSize.addBarHeight : stack
+        return max(visible, AtticControlSize.addBarHeight) + bottomInset
+    }
 
     /// Where the first row rests: the tabs, then 14.
     static func listTop(tabsTop: CGFloat) -> CGFloat {

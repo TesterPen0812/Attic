@@ -266,6 +266,8 @@ final class CornerGlassTests: XCTestCase {
             .filter { $0.frame.height > host.bounds.height / 3 }
             .first { abs($0.convert($0.bounds, to: nil).minX) < host.bounds.width / 2 })
         PanelHeader.bodyEvaluations = 0
+        AtticAddBar.bodyEvaluations = 0
+        TasksPage.tabsEvaluations = 0
         // Scrolling: the list moves under the header 6 pt a frame, down and
         // back, as AppKit scrolls it (its clip view's bounds, which SwiftUI
         // follows).
@@ -279,6 +281,8 @@ final class CornerGlassTests: XCTestCase {
         }
         spin(0.6)
         XCTAssertEqual(PanelHeader.bodyEvaluations, 0, "scrolling never re-evaluates the header")
+        XCTAssertEqual(AtticAddBar.bodyEvaluations, 0, "scrolling never re-evaluates the composer")
+        XCTAssertEqual(TasksPage.tabsEvaluations, 0, "scrolling never re-evaluates the tabs/Find controls")
 
         // Swiping: Now to Later and back, as the page's monitor feeds it.
         var time: TimeInterval = 1_000
@@ -300,5 +304,8 @@ final class CornerGlassTests: XCTestCase {
         state.isPanelPinned = true
         spin(0.3)
         XCTAssertGreaterThan(PanelHeader.bodyEvaluations, 0, "the counter sees the header's own changes")
+        model.addBar = TaskAddBarText(text: "A real composer edit #work !!")
+        spin(0.3)
+        XCTAssertGreaterThan(AtticAddBar.bodyEvaluations, 0, "real text edits still render the composer")
     }
 }

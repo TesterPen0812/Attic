@@ -1,3 +1,4 @@
+import Combine
 import SwiftUI
 
 /// The Done log (spec § Now, Backlog and Done): everything finished, kept
@@ -22,9 +23,9 @@ struct TasksDonePage<Cell: View, Mask: View>: View {
     /// The add bar's zone: the only bottom margin (round 6; the rest of the
     /// clearance is room at the end of the list, so rows there take clicks).
     let bottomMargin: CGFloat
-    /// The page's bars under the system soft edge (none for the clean cut):
-    /// the log's scroll view takes them as safe area.
-    var bars = TasksListBars()
+    /// The visible viewport ends before the tabs/Find and bottom controls.
+    let viewportTop: CGFloat
+    let bottomInset: CGFloat
     /// The bottom stack, whose height the bottom bar follows.
     let bottomStack: TasksBottomStackHeight
     /// False while the page is kept built but not shown (round 11).
@@ -102,16 +103,16 @@ struct TasksDonePage<Cell: View, Mask: View>: View {
                         .padding(.leading, AtticLayout.textX)
                         .accessibilityIdentifier("tasks-done-search-count")
                 }
+                if edges == .systemSoft {
+                    TasksListTailClearance(stack: bottomStack, bottomInset: bottomInset, bottomClearance: bottomClearance)
+                }
             }
-            .padding(.bottom, bottomClearance - bottomMargin)
+            .padding(.bottom, edges == .cleanCut ? bottomClearance - bottomMargin : 0)
             // The log's place is kept while its page is not built (round 10).
             .background(TasksScrollKeeper(model: model, tab: .done, proxies: proxies, drawn: drawn).accessibilityHidden(true))
         }
-        .contentMargins(.top, listTop - bars.top, for: .scrollContent)
-        .contentMargins(.bottom, bottomMargin - bars.bottom, for: .scrollContent)
-        .contentMargins(.top, listTop - bars.top, for: .scrollIndicators)
-        .contentMargins(.bottom, bottomClearance - bars.bottom, for: .scrollIndicators)
-        .tasksListEdges(edges, bars: bars, stack: bottomStack, mask: mask)
+        .tasksListEdges(edges, top: viewportTop, listTop: listTop, bottomInset: bottomInset,
+                        bottomMargin: bottomMargin, bottomClearance: bottomClearance, stack: bottomStack, mask: mask)
         .coordinateSpace(Self.space)
         .onChange(of: reveal) { _, request in
             guard let request else { return }
@@ -136,5 +137,31 @@ private struct TasksDoneRevisionWatcher: View {
             .frame(width: 0, height: 0)
             .onChange(of: store.revision) { _, _ in reload() }
             .accessibilityHidden(true)
+    }
+}
+
+/// Only the Find field observes its draft; result publication is coalesced.
+@MainActor
+final class TasksDoneSearchInput: ObservableObject {
+    let objectWillChange = ObservableObjectPublisher()
+    private(set) var text = ""
+    func edit(_ text: String) { self.text = text }
+    func replace(_ text: String) {
+        guard self.text != text else { return }
+        objectWillChange.send()
+        self.text = text
+    }
+}
+
+struct TasksDoneSearchField: View {
+    let model: TasksPageModel
+    @ObservedObject var input: TasksDoneSearchInput
+    let isFocused: Binding<Bool>
+    let onEscape: () -> Void
+
+    var body: some View {
+        AtticTabsSearchField(placeholder: model.searchPlaceholder(for: .done),
+                             text: Binding(get: { input.text }, set: { model.typeDoneSearch($0, nativeEdit: true) }),
+                             isFocused: isFocused, nativeInputIdentifier: "tasks-done-search", onEscape: onEscape)
     }
 }

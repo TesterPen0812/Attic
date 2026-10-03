@@ -1,0 +1,114 @@
+name: D1 edge verification
+on:
+  workflow_dispatch:
+  push:
+    branches: [redesign/p1-glass]
+    paths: [.github/workflows/d1-edge.yml]
+permissions:
+  contents: read
+jobs:
+  edges:
+    if: github.ref == 'refs/heads/redesign/p1-glass'
+    runs-on: macos-26
+    timeout-minutes: 55
+    env:
+      DEVELOPER_DIR: /Applications/Xcode_26.6.app/Contents/Developer
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+      - uses: ruby/setup-ruby@v1
+        with:
+          ruby-version: '3.3'
+          bundler-cache: true
+      - name: Verify generated project
+        run: bundle exec ruby Scripts/verify_project_generation.rb
+      - name: Build baseline and candidate optimized test hosts
+        shell: bash
+        run: |
+          git worktree add --detach "$RUNNER_TEMP/d1-baseline" 3eee023e537717fbc42538a0a563643880f586eb
+          mkdir -p "$RUNNER_TEMP/d1-evidence"
+          for source in "$RUNNER_TEMP/d1-baseline" "$GITHUB_WORKSPACE"; do
+            name=candidate
+            if [ "$source" != "$GITHUB_WORKSPACE" ]; then name=baseline; fi
+            (cd "$source" && Scripts/xcodebuild_locked.sh build-for-testing \
+              -project Attic.xcodeproj -scheme Attic -configuration Local -destination 'platform=macOS' \
+              -derivedDataPath "$RUNNER_TEMP/d1-$name" CODE_SIGNING_ALLOWED=NO \
+              SWIFT_OPTIMIZATION_LEVEL=-O SWIFT_COMPILATION_MODE=wholemodule ENABLE_DEBUG_DYLIB=NO \
+              ENABLE_TESTABILITY=YES ENABLE_HARDENED_RUNTIME=NO) > "$RUNNER_TEMP/d1-evidence/$name-build.log" 2>&1
+          done
+      - name: Interleave three baseline and candidate cost samples
+        id: costs
+        continue-on-error: true
+        shell: bash
+        run: |
+          for sample in 1 2 3; do
+            for name in baseline candidate; do
+              source="$GITHUB_WORKSPACE"
+              if [ "$name" = baseline ]; then source="$RUNNER_TEMP/d1-baseline"; fi
+              (cd "$source" && Scripts/xcodebuild_locked.sh test-without-building \
+                -project Attic.xcodeproj -scheme Attic -configuration Local -destination 'platform=macOS' \
+                -derivedDataPath "$RUNNER_TEMP/d1-$name" \
+                -resultBundlePath "$RUNNER_TEMP/d1-evidence/$name-cost-$sample.xcresult" \
+                CODE_SIGNING_ALLOWED=NO SWIFT_OPTIMIZATION_LEVEL=-O SWIFT_COMPILATION_MODE=wholemodule \
+                ENABLE_DEBUG_DYLIB=NO ENABLE_TESTABILITY=YES ENABLE_HARDENED_RUNTIME=NO \
+                -parallel-testing-enabled NO \
+                -only-testing:AtticTests/TasksFrameCostTests -only-testing:AtticTests/TasksRowBuildCostTests) \
+                > "$RUNNER_TEMP/d1-evidence/$name-cost-$sample.log" 2>&1
+              grep -E 'ATTIC_FRAME_COST|ATTIC_ROW_BUILD' "$RUNNER_TEMP/d1-evidence/$name-cost-$sample.log"
+            done
+          done
+      - name: Native viewport, invalidation, scroll keeping, reorder, and swipe regressions
+        id: focused
+        continue-on-error: true
+        run: |
+          Scripts/xcodebuild_locked.sh test-without-building \
+            -project Attic.xcodeproj -scheme Attic -configuration Local -destination 'platform=macOS' \
+            -derivedDataPath "$RUNNER_TEMP/d1-candidate" \
+            -resultBundlePath "$RUNNER_TEMP/d1-evidence/focused.xcresult" \
+            CODE_SIGNING_ALLOWED=NO SWIFT_OPTIMIZATION_LEVEL=-O SWIFT_COMPILATION_MODE=wholemodule \
+            ENABLE_DEBUG_DYLIB=NO ENABLE_TESTABILITY=YES ENABLE_HARDENED_RUNTIME=NO \
+            -parallel-testing-enabled NO \
+            -only-testing:AtticTests/ScrollEdgeTests -only-testing:AtticTests/DeepReviewFixTests \
+            -only-testing:AtticTests/CornerGlassTests -only-testing:AtticTests/TasksRound6Tests \
+            -only-testing:AtticTests/TasksRound7Tests -only-testing:AtticTests/TasksRound9Tests \
+            -only-testing:AtticTests/TasksRound10PagerTests -only-testing:AtticTests/TasksRound11Tests \
+            -only-testing:AtticTests/TasksRound12Tests -only-testing:AtticTests/TasksRound13Tests \
+            -only-testing:AtticTests/OwnerFindings1001Tests -only-testing:AtticTests/PanelGeometryTests \
+            -only-testing:AtticTests/AtticDesignSystemHostedTests \
+            > "$RUNNER_TEMP/d1-evidence/focused.log" 2>&1
+      - name: Pixel fade and at-rest checks, hit points, and accessibility order
+        id: pixels
+        continue-on-error: true
+        env:
+          ATTIC_VISUAL_UAT_DIRECTORY: ${{ runner.temp }}/d1-evidence/pixels
+        run: |
+          Scripts/xcodebuild_locked.sh test \
+            -project Attic.xcodeproj -scheme AtticUI -configuration Local -destination 'platform=macOS' \
+            -derivedDataPath "$RUNNER_TEMP/d1-ui" \
+            -resultBundlePath "$RUNNER_TEMP/d1-evidence/pixels-and-hits.xcresult" \
+            CODE_SIGNING_ALLOWED=NO SWIFT_OPTIMIZATION_LEVEL=-O SWIFT_COMPILATION_MODE=wholemodule \
+            ENABLE_DEBUG_DYLIB=NO ATTIC_MACOS_BUNDLE_IDENTIFIER=com.taha.Attic.preview.d1 \
+            -parallel-testing-enabled NO \
+            -only-testing:AtticUITests/ScrollEdgeUITests \
+            -only-testing:AtticUITests/TasksPageUITests/testTheAddBarHasAHitPointUnderTheSystemSoftEdge \
+            -only-testing:AtticUITests/TasksPageUITests/testEveryTabStopShowsWhereTheKeyboardIs \
+            -only-testing:AtticUITests/AtticKeyWindowUITests/testAnExplicitOpenFocusesTheAddBarWithoutARing \
+            > "$RUNNER_TEMP/d1-evidence/pixels-and-hits.log" 2>&1
+      - name: Require every verification gate to pass
+        if: always()
+        env:
+          COSTS: ${{ steps.costs.outcome }}
+          FOCUSED: ${{ steps.focused.outcome }}
+          PIXELS: ${{ steps.pixels.outcome }}
+        run: |
+          test "$COSTS" = success
+          test "$FOCUSED" = success
+          test "$PIXELS" = success
+      - name: Upload evidence even on failure
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: d1-edge-${{ github.sha }}
+          path: ${{ runner.temp }}/d1-evidence
+          retention-days: 14

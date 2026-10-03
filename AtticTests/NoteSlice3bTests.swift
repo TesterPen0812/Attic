@@ -3215,13 +3215,13 @@ private final class DeferredPasteBytes: NoteImageProviding {
 @MainActor
 extension NoteSlice3bTests {
     func testPrivatePasteReadsAllPayloadsAfterDiskRelaunchAndCacheEvictionAsOneUndoStep() async throws {
-        let root = FileManager.default.temporaryDirectory.appendingPathComponent("AtticPasteRelaunch-\(UUID())")
+        let root = ownedTemporaryDirectory(prefix: "AtticPasteRelaunch")
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
-        defer { try? FileManager.default.removeItem(at: root) }
         let files = makeTestAttachmentFileStore(rootURL: root.appendingPathComponent("files"))
         func openStore() throws -> NoteStore {
-            NoteStore(container: try PersistenceController.makeContainer(cloudSyncEnabled: false, storeDirectory: root),
-                      attachmentFileStore: files)
+            trackAttachmentReconciliation(of: NoteStore(
+                container: try PersistenceController.makeContainer(cloudSyncEnabled: false, storeDirectory: root),
+                attachmentFileStore: files))
         }
         let item = staged(), image = try stagedImage(), sourceID = UUID(), destID = UUID()
         let sourceDocument = NoteDocument(blocks: [.text("Source"), .text("Copied text"),
@@ -3316,8 +3316,7 @@ extension NoteSlice3bTests {
 @MainActor
 extension NoteSlice3bTests {
     func testMissingAttachmentRowsExposeReadOnlyRecoveryTextAndExportWithoutReplacingItsOwner() async throws {
-        let root = FileManager.default.temporaryDirectory.appendingPathComponent("AtticReadableRecovery-\(UUID())")
-        defer { try? FileManager.default.removeItem(at: root) }
+        let root = ownedTemporaryDirectory(prefix: "AtticReadableRecovery")
         let store = try makeTestNoteStore(attachmentFileStore: makeTestAttachmentFileStore(rootURL: root.appendingPathComponent("files")))
         let id = UUID(), missingID = UUID(), known = staged()
         guard case .success = store.createDocumentNote(id: id, document: NoteDocument(blocks: [.text("Stored")])) else { return XCTFail() }
@@ -3371,8 +3370,7 @@ extension NoteSlice3bTests {
 @MainActor
 extension NoteSlice3bTests {
     func testJournalReleasesFormerLiveStagingOwnersAcrossRepeatedImportLifetimes() async throws {
-        let directory = FileManager.default.temporaryDirectory.appendingPathComponent("AtticCurrentOwners-\(UUID())")
-        defer { try? FileManager.default.removeItem(at: directory) }
+        let directory = ownedTemporaryDirectory(prefix: "AtticCurrentOwners")
         let journal = NoteDraftJournal(directory: directory)
         var live: Set<UUID> = []
         journal.liveReferencedIDs = { live }
@@ -3396,8 +3394,7 @@ extension NoteSlice3bTests {
     }
 
     func testUnknownJournalOrLiveOwnershipStillPreventsStagingCollection() async throws {
-        let directory = FileManager.default.temporaryDirectory.appendingPathComponent("AtticUnknownOwners-\(UUID())")
-        defer { try? FileManager.default.removeItem(at: directory) }
+        let directory = ownedTemporaryDirectory(prefix: "AtticUnknownOwners")
         let journal = NoteDraftJournal(directory: directory), item = staged(), id = UUID()
         journal.liveReferencedIDs = { [item.id] }
         let entry = NoteDraftJournalEntry(noteID: id, isPersisted: false, baseRevisionID: nil,
