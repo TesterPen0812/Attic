@@ -14,7 +14,10 @@ import SwiftUI
 //   whole row. One highlight per list, which the keyboard and the pointer
 //   share (`onHover` moves the list's).
 // - `AtticDropdownField`: the card's field (Find or add a tag, the date).
-// - `AtticDropdownLayout`: the width rule and where the card opens.
+// - `AtticDropdownLayout`: the width rule and where the card opens;
+//   `AtticDropdownLayout.place` and `AtticDropdownSpace` are the one
+//   placement every card uses (the presenter's, the `/` list, Notes' date
+//   and link cards, the title's tag suggestions).
 // - `atticDropdown(isPresented:…)`: shows a card in the panel's overlay
 //   layer, so opening, filtering and closing it never re-render the page
 //   behind it.
@@ -341,6 +344,79 @@ enum AtticDropdownLayout {
     static func topDown(_ rect: CGRect, in view: NSView) -> CGRect {
         view.isFlipped ? rect : CGRect(x: rect.minX, y: view.bounds.height - rect.maxY, width: rect.width, height: rect.height)
     }
+
+    /// Where a card sits.
+    struct Placement: Equatable {
+        /// The card, top-down in its overlay.
+        var frame: CGRect
+        var side: Side
+        /// The card's height when its side can't hold all of it (it
+        /// scrolls); nil when it fits.
+        var heightLimit: CGFloat?
+        /// The width rule's width.
+        var width: CGFloat { frame.width }
+    }
+
+    /// The one placement every card uses: the width rule from its
+    /// content's `idealWidth`, then its side. A card opens on `prefer`'s
+    /// side when it fits there. Once open (`current`, its side so far) it
+    /// keeps that side, and flips only when the side can't hold it (a
+    /// filter, a calendar month, a scroll).
+    static func place(idealWidth: CGFloat, height: CGFloat, anchor: CGRect, bounds: CGRect,
+                      prefer: Side, current: Side? = nil) -> Placement {
+        let width = width(ideal: idealWidth, available: bounds.width)
+        let placed = frame(size: CGSize(width: width, height: height), anchor: anchor, bounds: bounds, prefer: current ?? prefer)
+        return Placement(frame: placed.frame, side: placed.side,
+                         heightLimit: placed.frame.height < height ? placed.frame.height : nil)
+    }
+}
+
+/// Where a view's cards go: the panel's overlay layer (above the page,
+/// moving with the panel, hit-tested first) and the panel less its 12 pt
+/// margin, top-down in that layer. Outside a panel (tests, capture scenes):
+/// the window's content view, bounded by `bounding`'s visible rectangle.
+@MainActor
+struct AtticDropdownSpace {
+    let parent: NSView
+    /// Where cards may go, top-down in `parent`.
+    let bounds: CGRect
+
+    init?(around view: NSView, bounding: NSView? = nil) {
+        let margin = AtticDropdownMetrics.panelMargin
+        var candidate = view.superview
+        while let current = candidate {
+            if let container = current as? AtticPanelContentContainer {
+                parent = container.overlayLayer
+                bounds = AtticDropdownLayout.topDown(container.hostingView.frame, in: parent).insetBy(dx: margin, dy: margin)
+                return
+            }
+            candidate = current.superview
+        }
+        guard let content = view.window?.contentView else { return nil }
+        parent = content
+        let visible = bounding.map { content.convert($0.visibleRect, from: $0) } ?? content.bounds
+        bounds = AtticDropdownLayout.topDown(visible, in: content).insetBy(dx: margin, dy: margin)
+    }
+
+    /// `rect` in `view`, top-down in this space.
+    func anchor(_ rect: CGRect, in view: NSView) -> CGRect {
+        AtticDropdownLayout.topDown(view.convert(rect, to: parent), in: parent)
+    }
+
+    /// `AtticDropdownLayout.place` within these bounds.
+    func place(idealWidth: CGFloat, height: CGFloat, anchor: CGRect, prefer: AtticDropdownLayout.Side,
+               current: AtticDropdownLayout.Side? = nil) -> AtticDropdownLayout.Placement {
+        AtticDropdownLayout.place(idealWidth: idealWidth, height: height, anchor: anchor, bounds: bounds,
+                                  prefer: prefer, current: current)
+    }
+
+    /// Puts a card's host (the card and its shadow room) where `placement`
+    /// says, in the overlay.
+    func show(_ host: NSView, at placement: AtticDropdownLayout.Placement, room: CGFloat = AtticDropdownMetrics.shadowRoom) {
+        let frame = AtticDropdownLayout.topDown(placement.frame.insetBy(dx: -room, dy: -room), in: parent).integral
+        if host.frame != frame { host.frame = frame }
+        if host.superview !== parent { parent.addSubview(host, positioned: .above, relativeTo: nil) }
+    }
 }
 
 // MARK: - Overlay host
@@ -494,7 +570,10 @@ final class AtticDropdownPresenter {
     var takesKeyboard = true
     var contentHasCard = false
     var contentHeight: CGFloat?
-    private var naturalSize = CGSize.zero
+    /// The open card's width (the width rule's, set as it opens) and
+    /// natural height (its content's, which can change while open).
+    private var openWidth: CGFloat = 0
+    private var naturalHeight: CGFloat = 0
     private var contentKeyHandler: ((NSEvent) -> Bool)?
     var label = ""
     var design = AtticDesignContext()
@@ -517,29 +596,14 @@ final class AtticDropdownPresenter {
             .atticDesign(design))
     }
 
-    /// The overlay layer and the panel's visible rectangle in it; a plain
-    /// window's content view otherwise.
-    static func overlay(for view: NSView) -> (parent: NSView, panel: CGRect)? {
-        var candidate = view.superview
-        while let current = candidate {
-            if let container = current as? AtticPanelContentContainer {
-                return (container.overlayLayer, container.hostingView.frame)
-            }
-            candidate = current.superview
-        }
-        guard let content = view.window?.contentView else { return nil }
-        return (content, content.bounds)
-    }
-
     /// Opens the card from `anchor`.
     func present(from anchor: NSView) {
-        guard !isOpen, let window = anchor.window, let overlay = Self.overlay(for: anchor) else { return }
+        guard !isOpen, let window = anchor.window, let space = AtticDropdownSpace(around: anchor) else { return }
         removal?.cancel()
         removal = nil
         host?.removeFromSuperview()
         self.anchor = anchor
-        let m = AtticDropdownMetrics.self
-        let room = m.shadowRoom
+        let room = AtticDropdownMetrics.shadowRoom
         stage.shown = false
         stage.width = nil
         stage.height = nil
@@ -551,18 +615,16 @@ final class AtticDropdownPresenter {
         // Measure the opening width once. Natural content height is observed
         // inside the card, including when its viewport is constrained.
         let fitting = host.fittingSize
-        let bounds = AtticDropdownLayout.topDown(overlay.panel, in: overlay.parent).insetBy(dx: m.panelMargin, dy: m.panelMargin)
-        let width = AtticDropdownLayout.width(ideal: fitting.width - room * 2, available: bounds.width)
-        if contentHasCard || width != (fitting.width - room * 2).rounded(.up) { stage.width = width }
-        let size = CGSize(width: width, height: contentHeight ?? max(0, fitting.height - room * 2))
-        naturalSize = size
-        let anchorRect = AtticDropdownLayout.topDown(anchor.convert(anchor.bounds, to: overlay.parent), in: overlay.parent)
-        let placed = AtticDropdownLayout.frame(size: size, anchor: anchorRect, bounds: bounds, prefer: prefer)
+        let ideal = fitting.width - room * 2
+        let height = contentHeight ?? max(0, fitting.height - room * 2)
+        let placed = space.place(idealWidth: ideal, height: height, anchor: space.anchor(anchor.bounds, in: anchor), prefer: prefer)
+        if contentHasCard || placed.width != ideal.rounded(.up) { stage.width = placed.width }
+        openWidth = placed.width
+        naturalHeight = height
         stage.side = placed.side
-        if placed.frame.height < size.height { stage.height = placed.frame.height }
-        host.frame = AtticDropdownLayout.topDown(placed.frame.insetBy(dx: -room, dy: -room), in: overlay.parent).integral
+        stage.height = placed.heightLimit
         host.menuLabel = label
-        overlay.parent.addSubview(host, positioned: .above, relativeTo: nil)
+        space.show(host, at: placed)
         self.host = host
         isOpen = true
         if takesKeyboard { Self.openCount += 1 }
@@ -591,19 +653,18 @@ final class AtticDropdownPresenter {
         if let height = contentHeight { resize(height: height) }
     }
 
+    /// The content's natural height changed while open (a filter, a
+    /// calendar month, a failure line): the card keeps its side unless that
+    /// side can't hold it.
     private func resize(height: CGFloat) {
-        guard isOpen, height.isFinite, height > 0, abs(height - naturalSize.height) > 0.5,
-              let host, let anchor, let overlay = Self.overlay(for: anchor) else { return }
-        naturalSize.height = height
-        let m = AtticDropdownMetrics.self
-        let bounds = AtticDropdownLayout.topDown(overlay.panel, in: overlay.parent)
-            .insetBy(dx: m.panelMargin, dy: m.panelMargin)
-        let anchorRect = AtticDropdownLayout.topDown(anchor.convert(anchor.bounds, to: overlay.parent), in: overlay.parent)
-        let placed = AtticDropdownLayout.frame(size: naturalSize, anchor: anchorRect, bounds: bounds, prefer: prefer)
+        guard isOpen, height.isFinite, height > 0, abs(height - naturalHeight) > 0.5,
+              let host, let anchor, let space = AtticDropdownSpace(around: anchor) else { return }
+        naturalHeight = height
+        let placed = space.place(idealWidth: openWidth, height: height, anchor: space.anchor(anchor.bounds, in: anchor),
+                                 prefer: prefer, current: stage.side)
         if stage.side != placed.side { stage.side = placed.side }
-        let limit: CGFloat? = placed.frame.height < height ? placed.frame.height : nil
-        if stage.height != limit { stage.height = limit }
-        host.frame = AtticDropdownLayout.topDown(placed.frame.insetBy(dx: -m.shadowRoom, dy: -m.shadowRoom), in: overlay.parent).integral
+        if stage.height != placed.heightLimit { stage.height = placed.heightLimit }
+        space.show(host, at: placed)
     }
 
     /// Closes the card (the binding went false, or the anchor went away).

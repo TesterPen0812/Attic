@@ -78,6 +78,36 @@ final class AtticDropdownTests: XCTestCase {
         XCTAssertTrue(bounds.contains(placed.frame))
     }
 
+    /// P3-B3: the one placement keeps an open card's side while it fits
+    /// there, and flips only when that side can't hold it.
+    func testAnOpenCardKeepsItsSideUntilThatSideCannotHoldIt() {
+        let bounds = CGRect(x: 12, y: 12, width: 296, height: 496)
+        // 336 pt above the anchor, 120 below.
+        let anchor = CGRect(x: 28, y: 354, width: 60, height: 28)
+        let opened = AtticDropdownLayout.place(idealWidth: 200, height: 252, anchor: anchor, bounds: bounds, prefer: .below)
+        XCTAssertEqual(opened.side, .above, "the full list fits only above")
+        XCTAssertNil(opened.heightLimit)
+        XCTAssertEqual(AtticDropdownLayout.place(idealWidth: 200, height: 88, anchor: anchor, bounds: bounds, prefer: .below).side,
+                       .below, "a fresh short card opens below")
+        let filtered = AtticDropdownLayout.place(idealWidth: 200, height: 88, anchor: anchor, bounds: bounds, prefer: .below,
+                                                 current: opened.side)
+        XCTAssertEqual(filtered.side, .above, "a filtered card keeps its side")
+        XCTAssertEqual(filtered.frame.maxY, anchor.minY - AtticDropdownMetrics.anchorGap, "still hanging from the anchor")
+        let below = AtticDropdownLayout.place(idealWidth: 200, height: 88, anchor: anchor, bounds: bounds, prefer: .above,
+                                              current: .below)
+        XCTAssertEqual(below.side, .below, "a card below stays below while it fits there")
+        let grown = AtticDropdownLayout.place(idealWidth: 200, height: 130, anchor: anchor, bounds: bounds, prefer: .below,
+                                              current: .below)
+        XCTAssertEqual(grown.side, .above, "it flips once its side can't hold it")
+        let tooTall = AtticDropdownLayout.place(idealWidth: 200, height: 400, anchor: anchor, bounds: bounds, prefer: .below,
+                                                current: .below)
+        XCTAssertEqual(tooTall.side, .above, "the roomier side when neither holds it")
+        XCTAssertEqual(tooTall.heightLimit, 336)
+        // The width rule is the same one.
+        XCTAssertEqual(AtticDropdownLayout.place(idealWidth: 90, height: 88, anchor: anchor, bounds: bounds, prefer: .below).width, 144)
+        XCTAssertEqual(AtticDropdownLayout.place(idealWidth: 400, height: 88, anchor: anchor, bounds: bounds, prefer: .below).width, 296)
+    }
+
     /// Inspect the actual accessibility representation, including its action.
     func testMenuItemRepresentationHasRoleSelectionPositionAndPress() {
         var pressed = 0

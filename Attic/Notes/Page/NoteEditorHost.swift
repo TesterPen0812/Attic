@@ -69,8 +69,12 @@ final class NoteTitleAccessories {
     private let tagHost: NSHostingView<AnyView>
     /// The suggestions under a `#word` being typed in the title.
     private let suggestionHost: AtticOverlayHostingView
-    private var suggestionHeight: CGFloat?
-    private var suggestionWidth: CGFloat?
+    /// The shown list's natural size (its widest row, its rows' height),
+    /// the `#` it hangs from, and where it is (nil while hidden): it keeps
+    /// its side while it shows.
+    private var suggestionSize = CGSize.zero
+    private var suggestionHash: Int?
+    private var suggestionPlacement: AtticDropdownLayout.Placement?
     private var suggestions: [AtticTagSuggestion] = []
     /// The row ↑ ↓ are on; nil until they move (Return then takes the
     /// typed word, as Space does), or the typed word's own existing tag.
@@ -130,7 +134,10 @@ final class NoteTitleAccessories {
         clip.postsBoundsChangedNotifications = true
         boundsObserver = NotificationCenter.default.addObserver(forName: NSView.boundsDidChangeNotification, object: clip,
                                                                 queue: .main) { [weak self] _ in
-            MainActor.assumeIsolated { self?.updateHeaderTitle() }
+            MainActor.assumeIsolated {
+                self?.updateHeaderTitle()
+                self?.followSuggestions()
+            }
         }
     }
 
@@ -239,26 +246,45 @@ final class NoteTitleAccessories {
         }
         suggestions = list
         let m = AtticDropdownMetrics.self
-        let room = m.shadowRoom
-        let height = CGFloat(list.count) * m.rowHeight + m.inset * 2
         let titles = list.map { $0.isNew ? String(localized: "New tag “#\($0.name)”") : "#" + $0.name }
-        let overlay = AtticDropdownPresenter.overlay(for: textView)
-        let parent = overlay?.parent ?? textView
-        let bounds = AtticDropdownLayout.topDown(overlay?.panel ?? textView.visibleRect, in: parent)
-            .insetBy(dx: m.panelMargin, dy: m.panelMargin)
         let ideal = zip(titles, list).map { title, suggestion in
             m.inset * 2 + m.rowPadding * 2 + AtticTextStyle.dropdownRow.measuredWidth(title)
                 + (suggestion.isNew ? 0 : m.detailGap + AtticTextStyle.shortcut.measuredWidth("\(suggestion.count)"))
         }.max() ?? m.minWidth
-        let width = AtticDropdownLayout.width(ideal: ideal, available: bounds.width)
-        let anchor = AtticDropdownLayout.topDown(textView.convert(hashRect, to: parent), in: parent)
-        let placed = AtticDropdownLayout.frame(size: CGSize(width: width, height: height), anchor: anchor, bounds: bounds, prefer: .below)
-        suggestionHeight = placed.frame.height < height ? placed.frame.height : nil
-        suggestionWidth = width
-        if suggestionHost.superview !== parent { parent.addSubview(suggestionHost, positioned: .above, relativeTo: nil) }
-        let frame = AtticDropdownLayout.topDown(placed.frame.insetBy(dx: -room, dy: -room), in: parent)
-        if suggestionHost.frame != frame { suggestionHost.frame = frame }
-        renderSuggestions()
+        suggestionSize = CGSize(width: ideal, height: CGFloat(list.count) * m.rowHeight + m.inset * 2)
+        suggestionHash = active.range.location
+        placeSuggestions(hashRect: hashRect, render: true)
+    }
+
+    /// The note scrolled: the suggestions follow their `#` (P3-B4). Only
+    /// the host's frame moves; the list is rebuilt only if its room
+    /// changes. Nothing runs while no suggestions show.
+    private func followSuggestions() {
+        guard suggestionPlacement != nil, let hash = suggestionHash,
+              let hashRect = engine.rect(for: NSRange(location: hash, length: 1)) else { return }
+        placeSuggestions(hashRect: hashRect, render: false)
+    }
+
+    /// Places the list under (or over) the `#` with the shared placement,
+    /// keeping its side while it shows. While the `#` is scrolled out of the
+    /// note's visible part the list waits out of sight.
+    private func placeSuggestions(hashRect: NSRect, render: Bool) {
+        guard let textView, let scrollView, let space = AtticDropdownSpace(around: textView, bounding: textView) else { return }
+        // The clip less the header and bottom insets, in the text's terms.
+        let insets = scrollView.contentInsets
+        let clip = textView.convert(scrollView.contentView.bounds, from: scrollView.contentView)
+        let readable = NSRect(x: clip.minX, y: clip.minY + insets.top, width: clip.width,
+                              height: max(0, clip.height - insets.top - insets.bottom))
+        guard readable.contains(NSPoint(x: hashRect.midX, y: hashRect.midY)) else {
+            suggestionHost.isHidden = true
+            return
+        }
+        let placed = space.place(idealWidth: suggestionSize.width, height: suggestionSize.height,
+                                 anchor: space.anchor(hashRect, in: textView), prefer: .below, current: suggestionPlacement?.side)
+        let resized = placed.heightLimit != suggestionPlacement?.heightLimit || placed.width != suggestionPlacement?.width
+        suggestionPlacement = placed
+        space.show(suggestionHost, at: placed)
+        if render || resized { renderSuggestions() }
         suggestionHost.isHidden = false
     }
 
@@ -268,8 +294,8 @@ final class NoteTitleAccessories {
             AtticTagSuggestionList(suggestions: suggestions, highlighted: highlightedSuggestion ?? -1) { [weak self] index in
                 self?.pickSuggestion(index)
             }
-            .environment(\.atticDropdownHeight, suggestionHeight)
-            .environment(\.atticDropdownWidth, suggestionWidth)
+            .environment(\.atticDropdownHeight, suggestionPlacement?.heightLimit)
+            .environment(\.atticDropdownWidth, suggestionPlacement?.width)
             .padding(room)
             .atticDesign(design)
         )
@@ -280,6 +306,8 @@ final class NoteTitleAccessories {
         suggestionHost.isHidden = true
         suggestions = []
         highlightedSuggestion = nil
+        suggestionHash = nil
+        suggestionPlacement = nil
     }
 
     private func pickSuggestion(_ index: Int) {

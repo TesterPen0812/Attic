@@ -371,6 +371,89 @@ final class NotesFormatControlsTests: XCTestCase {
         XCTAssertNil(highControls.slashModel.viewportHeight, "all nine rows fit below the high caret")
     }
 
+    /// P3-B3: the `/` list keeps its side while typing filters it; a list
+    /// that opens anew takes its side afresh.
+    func testTheSlashListKeepsItsSideWhileFiltering() throws {
+        let (controls, engine, textView) = make(NoteDocument(blocks: [.text("Title")] + (0..<12).map { _ in .text("Line") }))
+        textView.setSelectedRange(NSRange(location: engine.textStorage.length, length: 0))
+        type("\n/", textView)
+        XCTAssertTrue(controls.slashModel.shown)
+        XCTAssertTrue(controls.slashModel.above, "the full list opens above the low caret")
+        let slash = try XCTUnwrap(engine.rect(for: NSRange(location: engine.textStorage.length - 1, length: 1)))
+        let d = AtticDropdownMetrics.self
+        let below = textView.visibleRect.maxY - d.panelMargin - (slash.maxY + d.anchorGap)
+        XCTAssertGreaterThanOrEqual(below, d.rowHeight + d.inset * 2, "one row would fit below the caret")
+        type("hea", textView)
+        XCTAssertEqual(controls.slashModel.items.map(\.kind), [.heading], "the engine filters")
+        XCTAssertTrue(controls.slashModel.above, "the filtered list keeps its side")
+        XCTAssertNil(controls.slashModel.viewportHeight)
+        XCTAssertTrue(controls.handleCommand(#selector(NSResponder.cancelOperation(_:))))
+        XCTAssertFalse(controls.slashModel.shown)
+        // A new list high in the note opens below its caret.
+        textView.setSelectedRange(NSRange(location: ("Title\nLine" as NSString).length, length: 0))
+        type("\n/", textView)
+        XCTAssertTrue(controls.slashModel.shown)
+        XCTAssertFalse(controls.slashModel.above, "a list that opens anew takes its side afresh")
+    }
+
+    /// P3-B4: the title's tag suggestions follow their `#` as the note
+    /// scrolls (they lived in the text view before the overlay), and wait
+    /// out of sight while the `#` is scrolled under the header.
+    func testTitleTagSuggestionsFollowTheHashtagAsTheNoteScrolls() throws {
+        let title = "Launch plan "
+        let engine = NoteEditorEngine(noteID: UUID(), document: NoteDocument(blocks: [.text(title)] + (0..<40).map { _ in .text("Line") }),
+                                      readOnly: false)
+        let (scrollView, textView) = engine.makeView()
+        scrollView.frame = NSRect(x: 0, y: 0, width: 320, height: 500)
+        scrollView.automaticallyAdjustsContentInsets = false
+        let header: CGFloat = 60
+        scrollView.contentInsets = NSEdgeInsets(top: header, left: 0, bottom: 0, right: 0)
+        // Room above the title, so the note can scroll a little with the
+        // title still in view.
+        textView.textContainerInset = NSSize(width: 28, height: 100)
+        let window = NSWindow(contentRect: scrollView.frame, styleMask: [.titled], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        window.contentView = scrollView
+        windows.append(window)
+        let accessories = NoteTitleAccessories(engine: engine, textView: textView, scrollView: scrollView, chrome: NotesPageChrome(),
+                                               design: .default, headerBottom: header, isUntouched: { false },
+                                               tagEditor: { AnyView(EmptyView()) })
+        defer { accessories.invalidate() }
+        accessories.tagCounts = { ["launch": 3, "landing": 1] }
+        func scroll(to y: CGFloat) {
+            scrollView.contentView.scroll(to: NSPoint(x: 0, y: y))
+            scrollView.reflectScrolledClipView(scrollView.contentView)
+            spin()
+        }
+        scrollView.layoutSubtreeIfNeeded()
+        scroll(to: -header)
+        window.makeFirstResponder(textView)
+        textView.setSelectedRange(NSRange(location: (title as NSString).length, length: 0))
+        type("#la", textView)
+        func hosts(_ view: NSView) -> [AtticOverlayHostingView] {
+            ((view as? AtticOverlayHostingView).map { [$0] } ?? []) + view.subviews.flatMap { hosts($0) }
+        }
+        settle { hosts(scrollView).contains { $0.menuLabel == "Tag suggestions" && !$0.isHidden } }
+        let host = try XCTUnwrap(hosts(scrollView).first { $0.menuLabel == "Tag suggestions" })
+        XCTAssertFalse(host.isHidden, "the suggestions show")
+        let hash = try XCTUnwrap(engine.rect(for: NSRange(location: (title as NSString).length, length: 1)))
+        /// The card's top, against the `#`'s bottom, in the text's terms.
+        func gap() -> CGFloat { textView.convert(host.contentRect, from: host).minY - hash.maxY }
+        XCTAssertEqual(gap(), AtticDropdownMetrics.anchorGap, accuracy: 1, "the card hangs from the #")
+        let before = host.frame
+        scroll(to: -header + 40)
+        XCTAssertFalse(host.isHidden)
+        XCTAssertEqual(host.frame.minX, before.minX)
+        XCTAssertNotEqual(host.frame, before, "the card moved with the note")
+        XCTAssertEqual(gap(), AtticDropdownMetrics.anchorGap, accuracy: 1, "and still hangs from the #")
+        scroll(to: 200)
+        XCTAssertTrue(host.isHidden, "the # is under the header: the card waits out of sight")
+        scroll(to: -header)
+        XCTAssertFalse(host.isHidden, "the # is back")
+        XCTAssertEqual(gap(), AtticDropdownMetrics.anchorGap, accuracy: 1)
+        XCTAssertEqual(host.frame, before)
+    }
+
     func testSlashRowsShowTheirTypingShortcuts() {
         XCTAssertEqual(NoteCommandCatalog.slashHint(.checklist), "-[]")
         XCTAssertEqual(NoteCommandCatalog.slashHint(.heading), "#")
