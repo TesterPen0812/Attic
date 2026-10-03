@@ -701,12 +701,11 @@ final class NoteDocumentStoreTests: XCTestCase {
         let (id, _) = try create(base)
         let token = try XCTUnwrap(store.note(withID: id)?.revisionToken)
         var flattened = base; flattened.blocks[1] = .text("Pay rent")
-        var omitted = base; omitted.blocks.remove(at: 1)
         var duplicate = base; var extra = first; extra.id = UUID(); duplicate.blocks.append(extra)
         var reordered = base; reordered.blocks.swapAt(1, 3)
         var renamed = base; renamed.blocks[1].text = "Different"
         var changedMetadata = base; changedMetadata.blocks[1].extras = [:]
-        for proposed in [flattened, omitted, duplicate, reordered, renamed, changedMetadata] {
+        for proposed in [flattened, duplicate, reordered, renamed, changedMetadata] {
             for disposition in [NoteAgentWriteDisposition.direct, .proposal] {
                 guard case .failure = store.agentWrite(noteID: id, baseRevisionToken: token,
                     document: proposed, agentName: "Agent", disposition: disposition) else {
@@ -716,7 +715,7 @@ final class NoteDocumentStoreTests: XCTestCase {
                 XCTAssertTrue(store.pendingEdits(noteID: id).isEmpty)
             }
         }
-        for body in ["Pay rent\nBetween\n- [ ] Call bank", "Between\n- [ ] Call bank",
+        for body in ["Pay rent\nBetween\n- [ ] Call bank",
                      "- [x] Pay rent\nBetween\n- [ ] Call bank\n- [x] Pay rent"] {
             XCTAssertThrowsError(try NoteAgentTextParser.document(title: "Bills", body: body, base: base))
         }
@@ -731,6 +730,24 @@ final class NoteDocumentStoreTests: XCTestCase {
         guard case .success = store.agentWrite(noteID: id, baseRevisionToken: currentToken,
             document: base, agentName: "Agent", disposition: .direct) else { return XCTFail("checked direct") }
         XCTAssertEqual(store.loadDocument(noteID: id)?.content.document, base)
+    }
+
+    func testAgentChecklistRemovalAndAdditionKeepRemainingItemsForDirectWritesAndProposals() throws {
+        for disposition in [NoteAgentWriteDisposition.direct, .proposal] {
+            var first = NoteBlock.checklist("Remove me")
+            first.extras = ["owner": .string("person")]
+            var kept = NoteBlock.checklist("Keep me", checked: true)
+            kept.marks = [NoteMark(.bold, offset: 0, length: 4)]
+            let base = NoteDocument(blocks: [.text("Title"), first, kept])
+            let (id, _) = try create(base)
+            let token = try XCTUnwrap(store.note(withID: id)?.revisionToken)
+            let parsed = try NoteAgentTextParser.document(title: "Title", body: "- [x] Keep me\n- [ ] New item", base: base)
+            XCTAssertEqual(parsed.blocks[1], kept)
+            guard case .success = store.agentWrite(noteID: id, baseRevisionToken: token,
+                document: parsed, agentName: "Agent", disposition: disposition) else { return XCTFail("safe checklist edit refused") }
+            if disposition == .proposal { XCTAssertEqual(store.applyPendingEdits(noteID: id), 1) }
+            XCTAssertEqual(store.loadDocument(noteID: id)?.content.document, parsed)
+        }
     }
 
     // MARK: Agent writes (requirement 5)
