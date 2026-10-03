@@ -299,6 +299,9 @@ final class CornerGlassTests: XCTestCase {
             XCTAssertEqual(model.tab, lands, "the swipe turned the page")
         }
         XCTAssertEqual(PanelHeader.bodyEvaluations, 0, "swiping never re-evaluates the header")
+        // The tabs counter's positive control (review P3): a turned page is
+        // the tabs' own change, so the zero above is a real zero.
+        XCTAssertGreaterThan(TasksPage.tabsEvaluations, 0, "the counter sees the tabs' own changes (the page turned)")
 
         // The seam counts: pinning does re-evaluate it.
         state.isPanelPinned = true
