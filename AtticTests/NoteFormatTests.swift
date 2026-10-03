@@ -260,6 +260,36 @@ final class NoteFormatTests: XCTestCase {
         XCTAssertThrowsError(try NoteContentCodec.encode(fragment))
         XCTAssertFalse(NoteContentCodec.decode(data).isEditable)
     }
+
+    func testChecklistReplacementRequiresPreservedNestingMarksAndExtras() throws {
+        var item = NoteBlock.checklist("Oat")
+        item.indent = 1
+        item.marks = [NoteMark(.bold, offset: 0, length: 3)]
+        item.extras = ["owner": .string("person")]
+        let base = NoteDocument(blocks: [.text("Title"), item])
+        var replacement = item
+        replacement.id = UUID()
+        replacement.text = "Oat milk 2L"
+        replacement.checked = true
+        XCTAssertNoThrow(try NoteAgentTextSafety.validate(base: base,
+            proposed: NoteDocument(blocks: [.text("Title"), replacement])))
+        for field in ["indent", "marks", "extras"] {
+            var lossy = replacement
+            switch field {
+            case "indent": lossy.indent = nil
+            case "marks": lossy.marks = []
+            default: lossy.extras = [:]
+            }
+            XCTAssertThrowsError(try NoteAgentTextSafety.validate(base: base,
+                proposed: NoteDocument(blocks: [.text("Title"), lossy]))) {
+                XCTAssertEqual($0 as? NoteAgentTextError, .unsafeChecklist, field)
+            }
+        }
+        let ticked = try NoteAgentTextParser.document(title: "Title", body: "- [x] Oat", base: base)
+        var expected = base
+        expected.blocks[1].checked = true
+        XCTAssertEqual(ticked, expected, "wire edits keep all metadata when the text survives")
+    }
 }
 
 /// Command metadata and routing without a window or application host.

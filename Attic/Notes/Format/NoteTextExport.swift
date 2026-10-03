@@ -125,7 +125,8 @@ enum NoteAgentTextSafety {
         let survivors = proposedItems.filter { $0.id.map(baseIDs.contains) == true }
         let expected = baseItems.filter { $0.id.map(remainingIDs.contains) == true }
         guard survivors.map(unchecked) == expected.map(unchecked) else { throw NoteAgentTextError.unsafeChecklist }
-        for item in proposedItems where item.id.map(baseIDs.contains) != true {
+        let addedItems = proposedItems.filter { $0.id.map(baseIDs.contains) != true }
+        for item in addedItems {
             // A second wire copy gets a fresh ID during parsing. That must
             // not disguise duplication of an existing checklist line.
             guard !baseItems.contains(where: {
@@ -135,8 +136,23 @@ enum NoteAgentTextSafety {
         for item in baseItems {
             guard !proposed.blocks.contains(where: { block in
                 if let id = item.id, block.id == id, block.kind != .checklist { return true }
-                return block.kind == .text && block.displayText == item.displayText && !base.blocks.contains(block)
+                return item.id.map(remainingIDs.contains) != true && !item.displayText.isEmpty
+                    && block.kind == .text && block.displayText == item.displayText && !base.blocks.contains(block)
             }) else { throw NoteAgentTextError.unsafeChecklist }
+        }
+        // A wire rename becomes removal plus insertion because the text no
+        // longer matches. Do not let that silently discard hidden checklist
+        // metadata. Whole-item deletion remains allowed; replacements must
+        // preserve the removed items' metadata once each.
+        if !addedItems.isEmpty {
+            var replacements = addedItems
+            for item in baseItems where item.id.map(remainingIDs.contains) != true
+                && (item.indent != nil || !item.marks.isEmpty || !item.extras.isEmpty) {
+                guard let index = replacements.firstIndex(where: {
+                    $0.indent == item.indent && $0.marks == item.marks && $0.extras == item.extras
+                }) else { throw NoteAgentTextError.unsafeChecklist }
+                replacements.remove(at: index)
+            }
         }
         let rich = base.blocks.contains {
             $0.style != nil || $0.level != nil || $0.indent != nil || !$0.marks.isEmpty
