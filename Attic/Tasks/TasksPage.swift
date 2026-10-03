@@ -1,4 +1,5 @@
 import AppKit
+import os
 import SwiftUI
 import UniformTypeIdentifiers
 
@@ -1548,12 +1549,21 @@ struct TasksPage: View {
     /// NSMenu's nested tracking loop; it does not mean the menu has closed.
     /// Present in the default mode, after AppKit finishes tracking and
     /// restores the source window's responder and ordering state.
+    ///
+    /// A menu's choice runs through `AtticTextInput.choosing`, so the
+    /// Return that chose Open Files… is never mistaken for a typing field's
+    /// key (PR prep, P2). The queued block does not wake a sleeping run
+    /// loop by itself (`CFRunLoopPerformBlock`), so the loop is woken.
     private func openFiles(_ id: UUID) {
-        guard !AtticTextInput.ownsCurrentKey else { return }
+        guard !AtticTextInput.ownsCurrentKey else {
+            SubtaskPanelController.log.notice("Open Files \(id, privacy: .public) refused: the key belongs to a typing field")
+            return
+        }
         pointer.endInvocation()
         RunLoop.main.perform(inModes: [.default]) { [model] in
             MainActor.assumeIsolated { model.openPage(id) }
         }
+        CFRunLoopWakeUp(CFRunLoopGetMain())
     }
 
     /// A key's or VoiceOver's command on the row's targets, with its
@@ -1926,14 +1936,16 @@ struct TasksPage: View {
         presentMenu(taskCommands(id, tab: tab), at: TasksRowID(tab: tab, id: id), anchor: anchor)
     }
 
-    /// Opens a native menu under `anchor`, or at the row's title line.
+    /// Opens the row's native menu under `anchor`, or at the row's title
+    /// line, as a context menu (its submenus placed as the right-click
+    /// menu's are, PR prep P3).
     private func presentMenu(_ commands: [AtticMenuCommand], at id: TasksRowID, anchor: NSView?) {
         if let anchor, anchor.window != nil {
-            AtticNativeMenu.popUp(commands, in: anchor)
+            AtticNativeMenu.popUpContextMenu(commands, in: anchor)
         } else if let view = pointer.view, let frame = pointer.frames[id] {
-            AtticNativeMenu.popUp(commands, in: view, at: CGPoint(x: frame.minX + AtticLayout.textX, y: frame.minY + AtticLayout.rowPitch))
+            AtticNativeMenu.popUpContextMenu(commands, in: view, at: CGPoint(x: frame.minX + AtticLayout.textX, y: frame.minY + AtticLayout.rowPitch))
         } else if let view = pointer.view {
-            AtticNativeMenu.popUp(commands, in: view, at: CGPoint(x: AtticLayout.textX, y: listTop))
+            AtticNativeMenu.popUpContextMenu(commands, in: view, at: CGPoint(x: AtticLayout.textX, y: listTop))
         }
     }
 

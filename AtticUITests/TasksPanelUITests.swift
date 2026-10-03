@@ -15,7 +15,9 @@ final class TasksPanelUITests: XCTestCase {
         app = XCUIApplication()
         app.launchEnvironment["ATTIC_UI_TESTING"] = "1"
         app.launchEnvironment["ATTIC_UI_TEST_SEED"] = "demo"
-        if name.contains("testNativeContextMenuAfterFind") {
+        // The real hover monitor (auto-hide on once the test unpins): the
+        // menu routes to Open Files are checked as a person meets them.
+        if name.contains("testNativeContextMenu") || name.contains("OnALaterRow") {
             app.launchEnvironment["ATTIC_UI_TEST_HOVER_MONITOR"] = "1"
             app.launchEnvironment["ATTIC_UI_TEST_PINNED"] = "1"
         }
@@ -273,6 +275,45 @@ final class TasksPanelUITests: XCTestCase {
         openMenuItem("Open Files…").click()
     }
 
+    /// The files panel a menu opened is there and stays: the pointer goes
+    /// off both windows (where a native submenu can leave it) and the test
+    /// waits past the hide delay with time to spare. A panel that appears
+    /// and vanishes again fails here (PR prep P1-1: `waitForExistence`
+    /// alone passed the CI run 3 recording, where it flashed and went).
+    private func assertFilesPanelStaysOpen(_ route: String, file: StaticString = #filePath, line: UInt = #line) {
+        let transient = element("subtask-panel-")
+        XCTAssertTrue(transient.waitForExistence(timeout: 10), "\(route) shows the files panel", file: file, line: line)
+        XCTAssertTrue(element("add-attachment-").waitForExistence(timeout: 5), "\(route): on the task's files", file: file, line: line)
+        let windows = app.dialogs.allElementsBoundByIndex.map(\.frame).filter { !$0.isEmpty }
+        let union = windows.dropFirst().reduce(windows.first ?? pin.frame) { $0.union($1) }
+        let screenWidth = NSScreen.screens.map(\.frame.maxX).max() ?? 1_440
+        let x = union.minX - 80 > 10 ? union.minX - 80 : min(union.maxX + 80, screenWidth - 10)
+        pin.coordinate(withNormalizedOffset: .zero)
+            .withOffset(CGVector(dx: x - pin.frame.minX, dy: union.midY - pin.frame.minY))
+            .hover()
+        RunLoop.current.run(until: Date().addingTimeInterval(1.6))
+        XCTAssertTrue(transient.exists, "\(route): the files panel stays with the pointer away, past the hide delay", file: file, line: line)
+        XCTAssertTrue(element("add-attachment-").exists, "\(route): still on the task's files", file: file, line: line)
+        XCTAssertTrue(pin.exists, "\(route): and the main panel with it", file: file, line: line)
+    }
+
+    /// Unpins the panel the hover-monitor launches start pinned, so the
+    /// real auto-hide applies from here.
+    private func unpin() {
+        XCTAssertTrue(pin.wait(for: \.isSelected, toEqual: true, timeout: 5))
+        pin.click()
+        XCTAssertTrue(pin.wait(for: \.isSelected, toEqual: false, timeout: 5))
+    }
+
+    /// Closes the files panel with a click back in the main panel (on the
+    /// tabs, not the task's own row), which also brings the pointer home
+    /// before the unpinned panel's hide delay can run.
+    private func closeFilesPanelFromTheMainPanel(_ transient: XCUIElement) {
+        tab("backlog").click()
+        waitFor(!transient.exists, "a click in the main panel closes the files panel")
+        XCTAssertTrue(pin.exists, "the main panel stays")
+    }
+
     private func dismissFilesPanel(_ transient: XCUIElement) {
         transient.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).click()
         for _ in 0..<3 where transient.exists {
@@ -307,6 +348,7 @@ final class TasksPanelUITests: XCTestCase {
     /// This was the real-app route that silently rejected Open Files.
     func testNativeContextMenuReturnOpensFilesWhileTheComposerHasFocus() throws {
         XCTAssertTrue(addBar.waitForExistence(timeout: 10))
+        unpin()
         addBar.click()
         addBar.typeText("Keep this draft")
         XCTAssertEqual(addBar.value(forKey: "hasKeyboardFocus") as? Bool, true)
@@ -322,9 +364,7 @@ final class TasksPanelUITests: XCTestCase {
         XCTAssertTrue(openMenuItem("Open Files…").waitForExistence(timeout: 5))
         app.typeKey(.return, modifierFlags: [])
         XCTAssertTrue(openMenuItem("More").waitForNonExistence(timeout: 5), "the native context menu closes")
-        let transient = element("subtask-panel-")
-        XCTAssertTrue(transient.waitForExistence(timeout: 10), "Return on the native More › Open Files… shows Attachments")
-        XCTAssertTrue(element("add-attachment-").waitForExistence(timeout: 5), "the panel is on Attachments")
+        assertFilesPanelStaysOpen("Return on the native More › Open Files…")
         XCTAssertTrue(app.staticTexts["No attachments yet"].exists)
         XCTAssertEqual(addBar.value as? String, "Keep this draft", "the menu's Return did not submit the composer")
     }
@@ -342,9 +382,7 @@ final class TasksPanelUITests: XCTestCase {
         app.typeKey(.escape, modifierFlags: [])
         XCTAssertTrue(search.waitForNonExistence(timeout: 5))
         XCTAssertTrue(row("Book dentist").wait(for: \.isHittable, toEqual: true, timeout: 5))
-        XCTAssertTrue(pin.isSelected)
-        pin.click()
-        XCTAssertTrue(pin.wait(for: \.isSelected, toEqual: false, timeout: 5))
+        unpin()
         // All pointer actions stay in the row or its tracked menu. No draft,
         // test-only keep-visible grace, or pin protects the command.
         row("Book dentist").coordinate(withNormalizedOffset: .zero).withOffset(CGVector(dx: 90, dy: 16)).rightClick()
@@ -355,10 +393,50 @@ final class TasksPanelUITests: XCTestCase {
         XCTAssertTrue(openFiles.waitForExistence(timeout: 5))
         openFiles.hover()
         app.typeKey(.return, modifierFlags: [])
-        let transient = element("subtask-panel-")
-        XCTAssertTrue(transient.waitForExistence(timeout: 10), "native Open Files after Find and with real auto-hide shows Attachments")
-        XCTAssertTrue(element("add-attachment-").waitForExistence(timeout: 5))
+        assertFilesPanelStaysOpen("native Open Files after Find, with real auto-hide")
         XCTAssertTrue(app.staticTexts["No attachments yet"].exists)
+    }
+
+    /// CU recheck 3's routes, on a Later row with the real auto-hide: the
+    /// row's right-click menu and ⇧⌘I's menu, each walked with the keys
+    /// and chosen with Return, and ⇧⌘I's chosen with a click. Each leaves
+    /// the files panel open with the pointer away.
+    func testOpenFilesFromBothMenusOnALaterRowStaysOpen() throws {
+        unpin()
+        tab("backlog").click()
+        let trip = row("Plan the spring trip")
+        XCTAssertTrue(trip.waitForExistence(timeout: 5), "Later lists the task")
+        let transient = element("subtask-panel-")
+
+        // Right-click › (Up, Up: More) › Right › Return.
+        trip.coordinate(withNormalizedOffset: .zero).withOffset(CGVector(dx: 90, dy: 16)).rightClick()
+        XCTAssertTrue(openMenuItem("More").waitForExistence(timeout: 5))
+        app.typeKey(.upArrow, modifierFlags: [])
+        app.typeKey(.upArrow, modifierFlags: [])
+        app.typeKey(.rightArrow, modifierFlags: [])
+        XCTAssertTrue(openMenuItem("Open Files…").waitForExistence(timeout: 5))
+        app.typeKey(.return, modifierFlags: [])
+        assertFilesPanelStaysOpen("Later: right-click › More › Open Files… with Return")
+        closeFilesPanelFromTheMainPanel(transient)
+
+        // ⇧⌘I › (Up, Up: More) › Right › Return, from the keyboard alone.
+        select("Plan the spring trip")
+        app.typeKey("i", modifierFlags: [.command, .shift])
+        XCTAssertTrue(openMenuItem("More").waitForExistence(timeout: 5))
+        app.typeKey(.upArrow, modifierFlags: [])
+        app.typeKey(.upArrow, modifierFlags: [])
+        app.typeKey(.rightArrow, modifierFlags: [])
+        XCTAssertTrue(openMenuItem("Open Files…").waitForExistence(timeout: 5))
+        app.typeKey(.return, modifierFlags: [])
+        assertFilesPanelStaysOpen("Later: ⇧⌘I › More › Open Files… with Return")
+        closeFilesPanelFromTheMainPanel(transient)
+
+        // ⇧⌘I › More › Open Files…, clicked.
+        select("Plan the spring trip")
+        app.typeKey("i", modifierFlags: [.command, .shift])
+        chooseOpenFiles("Later: ⇧⌘I, clicked")
+        assertFilesPanelStaysOpen("Later: ⇧⌘I › More › Open Files…, clicked")
+        closeFilesPanelFromTheMainPanel(transient)
     }
 
     // MARK: - A page kept built behind another

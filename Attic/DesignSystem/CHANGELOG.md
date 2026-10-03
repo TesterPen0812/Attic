@@ -93,6 +93,25 @@ Phase 1 (Shell, Tasks and Settings) was built in three streams and integrated
 on `redesign/phase-1`. Every change below is additive: no token, colour, radius
 or type style changed.
 
+### PR prep (Opus, 2026-10-03)
+
+- **A menu's choice is not a typing field's key.** `AtticMenuItems` and
+  `AtticNativeMenu` run a chosen item's command through
+  `AtticTextInput.choosing(_:_:)`. While it runs, `ownsCurrentKey` gives a
+  typing field only the item's own key equivalent; the Return or click
+  that chose the item is the menu's. On macOS 27 a context menu carries
+  its own text field (Ask Siri), so every menu command guarded by
+  `ownsCurrentKey` could be refused (CU recheck 3: More › Open Files… did
+  nothing while ⌘Return worked).
+- **`AtticNativeMenu.popUpContextMenu(_:in:at:)`**: a row's actions menu
+  (⇧⌘I, the row's ⋯, a subtask line's actions) opens as the system opens a
+  right-click menu, so its submenus keep their titles whole. The pop-up
+  style squeezed More's titles to "…" or single letters short of room.
+  Button menus (View Options, the selection bar) keep the pop-up style.
+- **`AtticTabsSearchField`, native input:** the field counts as focused
+  when it takes the keyboard, not at its first edit, and a click on the
+  magnifier or the padding gives it the keyboard.
+
 ### D1 edge fade (Sol, 2026-10-03)
 
 - Owner decisions D1 and D4b replace scrolling beneath control labels.

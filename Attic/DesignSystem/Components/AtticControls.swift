@@ -624,7 +624,17 @@ struct AtticTabsSearchField: View {
         .frame(height: height)
         .background(RoundedRectangle(cornerRadius: AtticRadius.control(height: height), style: .continuous).fill(tokens.recessed.color))
         .contentShape(Rectangle())
-        .onTapGesture { focused = true }
+        .onTapGesture {
+            // The native field has no SwiftUI focus of its own: a click on
+            // the magnifier or the padding gives its AppKit field the
+            // keyboard directly (review P3).
+            if nativeInputIdentifier != nil, capture == nil {
+                if isFocused?.wrappedValue != true { isFocused?.wrappedValue = true }
+                takeKeyboard()
+            } else {
+                focused = true
+            }
+        }
         .onAppear {
             // Once the field is in the window (a focus set as it appears is
             // lost, and the click that opened it ends after this): the
@@ -1238,12 +1248,12 @@ struct AtticMenuItems: View {
             .disabled(command.isDisabled)
         } else if let state = command.state, state != .mixed {
             // A toggle draws the native tick.
-            Toggle(isOn: Binding(get: { state == .on }, set: { _ in command.action() })) { label(command) }
+            Toggle(isOn: Binding(get: { state == .on }, set: { _ in choose(command) })) { label(command) }
                 .disabled(command.isDisabled)
                 .modifier(AtticMenuShortcut(shortcut: command.menuShortcut))
                 .modifier(AtticMenuBadge(detail: command.menuBadge))
         } else {
-            Button(role: command.isDestructive ? .destructive : nil, action: command.action) {
+            Button(role: command.isDestructive ? .destructive : nil, action: { choose(command) }) {
                 if command.state == .mixed {
                     // Some of the targets have it: a dash.
                     SwiftUI.Label(command.title, systemImage: "minus")
@@ -1255,6 +1265,12 @@ struct AtticMenuItems: View {
             .modifier(AtticMenuShortcut(shortcut: command.menuShortcut))
             .modifier(AtticMenuBadge(detail: command.menuBadge))
         }
+    }
+
+    /// A chosen item: its command runs as a menu choice, so a field under
+    /// the menu never takes the Return or click that chose it.
+    private func choose(_ command: AtticMenuCommand) {
+        AtticTextInput.choosing(command.menuShortcut, command.action)
     }
 
     @ViewBuilder
@@ -1319,7 +1335,7 @@ enum AtticNativeMenu {
         } else {
             item.target = AtticMenuTarget.shared
             item.action = #selector(AtticMenuTarget.runCommand(_:))
-            item.representedObject = AtticMenuTarget.Box(command.action)
+            item.representedObject = AtticMenuTarget.Box(command.action, keyEquivalent: command.menuShortcut)
         }
         switch command.state {
         case .on?: item.state = .on
@@ -1388,6 +1404,30 @@ enum AtticNativeMenu {
             menu.popUp(positioning: nil, at: location, in: view)
         }
     }
+
+    /// Opens the menu as the system opens a right-click menu, with its top
+    /// left at `point` in `view` (under its bottom-left corner by default):
+    /// a row's actions (⇧⌘I, the row's ⋯, VoiceOver's Show actions). The
+    /// pop-up style above keeps a menu beside its button and, short of
+    /// room, squeezes a submenu's titles to fragments (CU recheck 3, P3:
+    /// More's Open Files…, Move Up and Move Down showed as "…"); a context
+    /// menu places its submenus as the right-click menu does, titles whole.
+    static func popUpContextMenu(_ commands: [AtticMenuCommand], in view: NSView, at point: CGPoint? = nil) {
+        let menu = make(commands)
+        menu.appearance = view.window?.effectiveAppearance
+        let location = point ?? CGPoint(x: 0, y: view.isFlipped ? view.bounds.maxY + 4 : -4)
+        DispatchQueue.main.async {
+            guard let window = view.window else { return }
+            guard let event = NSEvent.mouseEvent(with: .rightMouseDown, location: view.convert(location, to: nil),
+                                                 modifierFlags: [], timestamp: ProcessInfo.processInfo.systemUptime,
+                                                 windowNumber: window.windowNumber, context: nil, eventNumber: 0,
+                                                 clickCount: 1, pressure: 1) else {
+                menu.popUp(positioning: nil, at: location, in: view)
+                return
+            }
+            NSMenu.popUpContextMenu(menu, with: event, for: view)
+        }
+    }
 }
 
 /// Runs a native menu item's command.
@@ -1397,13 +1437,19 @@ final class AtticMenuTarget: NSObject {
 
     final class Box {
         let action: () -> Void
-        init(_ action: @escaping () -> Void) { self.action = action }
+        let keyEquivalent: KeyboardShortcut?
+        init(_ action: @escaping () -> Void, keyEquivalent: KeyboardShortcut? = nil) {
+            self.action = action
+            self.keyEquivalent = keyEquivalent
+        }
     }
 
     /// Not `perform(_:)`: that is NSObject's `performSelector:`, which the
     /// selector resolved to, so a chosen item ran nothing (round 10, CI run 2).
+    /// The command runs as a menu choice (`AtticTextInput.choosing`).
     @objc func runCommand(_ item: NSMenuItem) {
-        (item.representedObject as? Box)?.action()
+        guard let box = item.representedObject as? Box else { return }
+        AtticTextInput.choosing(box.keyEquivalent, box.action)
     }
 }
 
@@ -1628,9 +1674,20 @@ private struct AtticNativeSearchInput: NSViewRepresentable {
     let onEscape: () -> Void
 
     final class Field: NSTextField {
+        /// The field took the keyboard (a click back into it, ⌘F, Search).
+        var onFocus: (() -> Void)?
         override var intrinsicContentSize: NSSize { NSSize(width: NSView.noIntrinsicMetric, height: 18) }
         // The font and single-line height are fixed; typing changes neither.
         override func invalidateIntrinsicContentSize() {}
+
+        /// Focus counts from the moment the field has the keyboard, not
+        /// from its first edit (`controlTextDidBeginEditing`): ↓ after a
+        /// click back into the field reaches the results (review P3).
+        override func becomeFirstResponder() -> Bool {
+            let became = super.becomeFirstResponder()
+            if became { onFocus?() }
+            return became
+        }
     }
 
     func sizeThatFits(_ proposal: ProposedViewSize, nsView: Field, context: Context) -> CGSize? {
@@ -1656,6 +1713,11 @@ private struct AtticNativeSearchInput: NSViewRepresentable {
 
     func updateNSView(_ field: Field, context: Context) {
         context.coordinator.owner = self
+        let coordinator = context.coordinator
+        field.onFocus = { [weak coordinator] in
+            guard let owner = coordinator?.owner, owner.isFocused?.wrappedValue != true else { return }
+            owner.isFocused?.wrappedValue = true
+        }
         field.font = AtticTextStyle.listBody.nsFont
         field.textColor = color
         field.placeholderAttributedString = NSAttributedString(string: placeholder,

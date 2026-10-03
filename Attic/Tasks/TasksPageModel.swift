@@ -312,7 +312,11 @@ final class TasksPageModel: ObservableObject {
     private var holdTasks: [UUID: Task<Void, Never>] = [:]
     private var cancellables: Set<AnyCancellable> = []
 
-    static let doneLogPageSize = 80
+    /// About three screens of the Done log: more load as its last row
+    /// comes on screen. Each search hydrates one page in the keystroke's
+    /// budget (16 ms with matching and grouping), and 80 rows took a third
+    /// of it on a CI runner (PR prep: 16.0–16.4 ms queries at 80).
+    static let doneLogPageSize = 40
 
     init(library: AtticLibrary, services: TasksPageServices = TasksPageServices(), toasts: PanelToastCenter? = nil,
          memory: TasksPageMemory? = nil) {

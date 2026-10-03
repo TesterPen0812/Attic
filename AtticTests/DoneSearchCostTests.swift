@@ -139,10 +139,10 @@ final class DoneSearchCostTests: XCTestCase {
         model.doneSearch = "task"
         model.loadDoneLogIfNeeded()
         model.loadMoreDoneLog()
-        XCTAssertEqual(model.doneLogTasks.count, 160)
+        XCTAssertEqual(model.doneLogTasks.count, 2 * TasksPageModel.doneLogPageSize)
         model.doneSearch = "Finished"
         model.loadDoneLogIfNeeded()
-        XCTAssertEqual(model.doneLogTasks.count, 80)
+        XCTAssertEqual(model.doneLogTasks.count, TasksPageModel.doneLogPageSize)
     }
 
     func testAFailedSaveNeverPublishesTheDraftIntoSearch() throws {
@@ -196,6 +196,7 @@ final class DoneSearchCostTests: XCTestCase {
         // the 5000-task fixture; no Done data/query is warmed here.
         try measureNativeEditingStartupControl()
         var runs: [[Double]] = []
+        var resultFrames: [Double] = []
         for run in 0..<3 {
             let host = try FrameCostHost()
             host.place(.done)
@@ -216,6 +217,15 @@ final class DoneSearchCostTests: XCTestCase {
                 times.append(parts.reduce(0, +))
                 XCTAssertEqual(TasksPage.tabsEvaluations, before, "typing must not rebuild the task page")
             }
+            // The frame the results arrive in (PR prep, review P2-2): the
+            // keystrokes above publish nothing; after 75 ms idle the query
+            // publishes and the Done list rebuilds. Timed here directly,
+            // before the idle publication can run on its own.
+            XCTAssertNotEqual(host.model.doneSearch, "Finished task 12", "the query is still waiting for the idle publication")
+            let parts = host.framePhases { host.model.flushDoneSearchInput() }
+            let results = parts.reduce(0, +)
+            resultFrames.append(results)
+            print("ATTIC_DONE_RESULTS run=\(run) frame_ms=\(results) change/runloop/layout/display/commit_ms=\(parts)")
             host.spin(0.3)
             print("ATTIC_DONE_INPUT run=\(run) " + TasksFrameCostTests.stats(times) + " raw_ms=\(times)")
             XCTAssertEqual(host.model.doneSearchInput.text, "Finished task 12")
@@ -235,6 +245,14 @@ final class DoneSearchCostTests: XCTestCase {
             XCTAssertLessThanOrEqual(median, 16, "Done Find key \(key) median exceeds the 16 ms budget")
             XCTAssertLessThanOrEqual(samples.max()!, 16 + 4.3, "sample exceeds the independently measured noise guard")
         }
+        // The results frame is measured and printed, not held to the
+        // keystroke budget: the spec budgets one frame per keystroke, and
+        // this is the frame after the typing pauses, where the first result
+        // rows build cold (CI run 37107829899: 86 to 116 ms). Its regression
+        // gate is the interleaved comparison with the accepted baseline
+        // (`search-show` in Scripts/check_cost_comparison.py), where each
+        // keystroke used to show results itself. A sanity bound only here.
+        XCTAssertLessThan(resultFrames.max()!, 500, "the frame the Done results arrive in: \(resultFrames)")
     }
 
     func testDoneTodaySlicePreservesSnapshotRootsAndOrder() throws {
@@ -325,7 +343,7 @@ final class DoneSearchCostTests: XCTestCase {
         var legacyTotal: Int?
         for query in ["F", "Fi", "Finished", "item 12", "zzzz-no-hit", "item", "item 123", "z"] {
             let before = DispatchTime.now().uptimeNanoseconds
-            let legacy = store.doneLogPage(limit: 80, matching: query)
+            let legacy = store.doneLogPage(limit: TasksPageModel.doneLogPageSize, matching: query)
             let legacyMatches = store.doneLogTaskCount(matching: query)
             if legacyTotal == nil { legacyTotal = store.doneLogTaskCount() }
             let legacyMS = Double(DispatchTime.now().uptimeNanoseconds - before) / 1_000_000
@@ -355,10 +373,11 @@ final class DoneSearchCostTests: XCTestCase {
         XCTAssertTrue(store.updateListed([id], title: "Renamed"))
         // No revision watcher has run; paging must itself catch up.
         model.loadMoreDoneLog()
-        XCTAssertEqual(model.doneLogTasks.count, 160)
+        let twoPages = 2 * TasksPageModel.doneLogPageSize
+        XCTAssertEqual(model.doneLogTasks.count, twoPages)
         XCTAssertFalse(model.doneLogTasks.contains { $0.id == id })
-        XCTAssertEqual(Set(model.doneLogTasks.map(\.id)).count, 160)
-        XCTAssertEqual(model.doneLogTasks.map(\.id), store.doneLogPage(limit: 160, matching: "task").tasks.map(\.id))
+        XCTAssertEqual(Set(model.doneLogTasks.map(\.id)).count, twoPages)
+        XCTAssertEqual(model.doneLogTasks.map(\.id), store.doneLogPage(limit: twoPages, matching: "task").tasks.map(\.id))
     }
 
 }
