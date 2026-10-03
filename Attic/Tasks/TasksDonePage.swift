@@ -244,18 +244,21 @@ final class TasksDoneResults: ObservableObject {
     static let quiet = TasksDoneResults()
 }
 
-/// Done's applied query, watched by its own small view: a new query sends
-/// the Done list back to its top (deep review P2-01), while the Tasks page
-/// itself does not redraw for the query or its results.
+/// Done's applied query, watched by its own small view, as the Tasks page
+/// itself does not redraw for the query or its results: a new query sends
+/// the Done list back to its top (deep review P2-01), and any applied query
+/// lets the page check whether its search should now show (`applied`).
 struct TasksDoneQueryWatcher: View {
     @ObservedObject var results: TasksDoneResults
     let model: TasksPageModel
     let changed: () -> Void
+    let applied: () -> Void
 
     var body: some View {
         Color.clear
             .frame(width: 0, height: 0)
             .onChange(of: model.trimmedQuery(for: .done)) { _, _ in changed() }
+            .onChange(of: model.doneSearch) { _, _ in applied() }
             .accessibilityHidden(true)
     }
 }

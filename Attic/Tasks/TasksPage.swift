@@ -81,6 +81,14 @@ struct TasksPage: View {
     @State private var listProxies = TasksListProxies()
     /// Which view draws each Done line (not observed).
     @State private var doneSlots = TasksDoneSlots()
+    /// Whether the search showed on the tabs' line when the page last drew
+    /// (not observed), and a redraw for Done's query: the page does not
+    /// redraw for an applied Done query (`TasksDoneResults`), so when one
+    /// changes whether the search shows (a query applied while the field
+    /// has no keyboard: an agent's, or a composition committed as the field
+    /// let go), the query watcher asks for one here.
+    @State private var drawnSearch = TasksDrawnSearch()
+    @State private var searchRedraw = 0
 
     /// The page's Find field (Done's search, Now's and Later's Find) has
     /// the keyboard.
@@ -445,7 +453,8 @@ struct TasksPage: View {
         .onChange(of: model.trimmedQuery(for: .now)) { _, _ in showListTop(.now) }
         .onChange(of: model.trimmedQuery(for: .backlog)) { _, _ in showListTop(.backlog) }
         // Done's query is published to the Done page alone: its own watcher.
-        .background(TasksDoneQueryWatcher(results: model.doneResults, model: model) { showListTop(.done) })
+        .background(TasksDoneQueryWatcher(results: model.doneResults, model: model, changed: { showListTop(.done) },
+                                          applied: { if drawnSearch.shown != searchShown { searchRedraw &+= 1 } }))
         .onChange(of: model.viewOptions(for: .now)) { _, _ in showListTop(.now) }
         .onChange(of: model.viewOptions(for: .backlog)) { _, _ in showListTop(.backlog) }
 
@@ -615,7 +624,8 @@ struct TasksPage: View {
                 .padding(.top, tabsTop + (AtticLayout.pageTabsHeight - AtticControlSize.smallHeight) / 2)
                 .allowsHitTesting(false)
                 .accessibilityHidden(true)
-            if searchShown {
+            let _ = searchRedraw
+            if drawnSearchShown {
                 Group {
                     if model.tab == .done {
                         TasksDoneSearchField(model: model, input: model.doneSearchInput,
@@ -691,6 +701,13 @@ struct TasksPage: View {
     /// leaving, returns the tabs.
     private var searchShown: Bool {
         searchFocused || !model.searchQuery(for: model.tab).isEmpty
+    }
+
+    /// `searchShown`, noted as the page draws it (`drawnSearch`).
+    private var drawnSearchShown: Bool {
+        let shown = searchShown
+        drawnSearch.shown = shown
+        return shown
     }
 
     /// View Options (item 6, option A): Show, the priority filter, Sort
@@ -2654,6 +2671,11 @@ struct TasksPage: View {
 }
 
 // MARK: - Redraws
+
+/// Whether the page's search showed when the page last drew.
+final class TasksDrawnSearch {
+    var shown = false
+}
 
 /// What a row's cell last reported: its frame in the page and its
 /// controls' frames in the row. A Done cell can draw another task after a
