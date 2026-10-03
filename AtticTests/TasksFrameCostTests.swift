@@ -129,9 +129,12 @@ final class TasksFrameCostTests: XCTestCase {
         let searchFrames = host.type("task 12", focusAddBar: false)
         // The keystroke frames no longer publish the query (it waits for
         // 75 ms idle): the frame the results arrive in is its own entry.
+        // `pending=no` means the results already arrived inside one of the
+        // keystroke frames above (and count in their maximum).
+        let pending = host.model.doneSearch != host.model.doneSearchInput.text
         let resultsFrame = host.frame { host.model.flushDoneSearchInput() }
         report.append("search-keystroke " + Self.stats(searchFrames) + " typed=\(host.model.doneSearch.count)")
-        report.append(String(format: "search-results %.1fms", resultsFrame))
+        report.append(String(format: "search-results %.1fms pending=%@", resultsFrame, pending ? "yes" : "no"))
         host.model.doneSearch = ""
         host.place(.now)
 
