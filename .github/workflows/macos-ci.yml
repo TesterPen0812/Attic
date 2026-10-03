@@ -121,7 +121,6 @@ jobs:
               grep -E 'ATTIC_FRAME_COST|ATTIC_ROW_BUILD' "$RUNNER_TEMP/done-search-evidence/$name-cost-$sample.log"
             done
           done
-          python3 Scripts/check_done_search_costs.py "$RUNNER_TEMP/done-search-evidence"
       - name: Block on the 5000-task query and rendered input budgets
         run: |
           env -u PEEKABOO_MCP_TOKEN -u GITHUB_TOKEN Scripts/xcodebuild_locked.sh test-without-building \
@@ -131,6 +130,11 @@ jobs:
             -parallel-testing-enabled NO -only-testing:AtticTests/DoneSearchCostTests \
             > "$RUNNER_TEMP/done-search-evidence/search.log" 2>&1
           grep -E 'ATTIC_DONE_SEARCH|ATTIC_DONE_INPUT' "$RUNNER_TEMP/done-search-evidence/search.log"
+      # Keep the relative frame/row safeguard, but a failure there must not
+      # prevent the independent, absolute 16 ms query gate from executing.
+      - name: Check frame and row comparison
+        if: always()
+        run: python3 Scripts/check_done_search_costs.py "$RUNNER_TEMP/done-search-evidence"
       - name: Print Done query and input evidence
         if: always()
         run: |
