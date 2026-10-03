@@ -184,6 +184,7 @@ final class NoteFormatCardModel: ObservableObject {
 
     @Published var card: Card?
     @Published var viewportHeight: CGFloat?
+    @Published var viewportWidth: CGFloat?
     /// The card opened above its text (no room below).
     @Published var above = false
     @Published var dateText = "" {

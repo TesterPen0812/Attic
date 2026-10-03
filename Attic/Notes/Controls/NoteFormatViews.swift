@@ -377,6 +377,7 @@ struct NoteFormatCardView: View {
                 EmptyView()
             }
         }
+        .environment(\.atticDropdownWidth, model.viewportWidth)
         .animation(preset.animation(reduceMotion: design.reduceMotion, showing: model.card != nil), value: model.card)
         .padding(AtticDropdownMetrics.shadowRoom)
         .fixedSize()

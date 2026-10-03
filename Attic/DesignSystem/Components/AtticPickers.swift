@@ -505,7 +505,8 @@ struct AtticComposerStrip<DateContent: View, TagContent: View, PriorityContent: 
                              identifier: "composer-priority",
                              clearLabel: String(localized: "Clear priority"), open: { priorityPresented = true }, clear: onClearPriority)
                 .fixedSize(horizontal: true, vertical: false)
-                .atticDropdown(isPresented: $priorityPresented, prefer: .above, label: String(localized: "Priority")) {
+                .atticDropdown(isPresented: $priorityPresented, prefer: .above, label: String(localized: "Priority"),
+                               contentHeight: AtticDropdownMetrics.inset * 2 + AtticDropdownMetrics.rowHeight * 4) {
                     priorityPicker()
                 }
         }

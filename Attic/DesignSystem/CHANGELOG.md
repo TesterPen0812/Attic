@@ -720,3 +720,14 @@ additive; no token, colour, radius or type style changed.
   `calendarCell`, `popoverPadding`. `tagListMaxHeight` is seven 32 pt rows.
 - Preview capture seam `ATTIC_UI_TEST_POPOVER` (`AtticDropdownCaptureSeam`).
 
+
+### Phase 2: E1 dropdown fix round 2 (2026-10-03)
+
+- Unmodified Esc dismisses only after the active text input has finished its
+  marked-text composition. Modified Esc and composition cancellation pass on.
+- Cards keep their opening width and report natural content-height changes to
+  their presenter. Link validation and calendar month changes update placement,
+  hit bounds and the bounded native soft-edge scrolling viewport together.
+  Tasks calendars retain their month when crossing the scrolling threshold.
+- Priority picker rows route their displayed ⌥⌘0–3 shortcuts to the pick action
+  while the picker is mounted. Menu-item semantics from round 1 are retained.

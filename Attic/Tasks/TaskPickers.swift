@@ -70,6 +70,7 @@ struct TaskDatePickerView: View {
         .focusEffectDisabled()
         .atticDropdownFocus($focused)
         .onKeyPress(phases: .down) { press in key(press, highlight: highlight, quick: quick) }
+        .preference(key: AtticDropdownPersistentViewportKey.self, value: true)
         .accessibilityElement(children: .contain)
         .accessibilityLabel(String(localized: "Choose a date"))
     }
@@ -241,6 +242,8 @@ struct TaskPriorityPickerView: View {
     @State private var highlighted: Int?
     @FocusState private var focused: Bool
 
+    @Environment(\.atticDropdownRegisterKeys) private var registerKeys
+
     private var options: [TaskPriority] { TaskPriority.choices }
 
     var body: some View {
@@ -262,6 +265,15 @@ struct TaskPriorityPickerView: View {
         .focused($focused)
         .focusEffectDisabled()
         .atticDropdownFocus($focused)
+        .onAppear {
+            registerKeys { event in
+                guard event.modifierFlags.intersection([.command, .option, .control, .shift]) == [.command, .option],
+                      let priority = options.first(where: { String($0.shortcut.key.character) == event.charactersIgnoringModifiers }) else { return false }
+                onPick(priority)
+                return true
+            }
+        }
+        .onDisappear { registerKeys(nil) }
         .accessibilityElement(children: .contain)
         .accessibilityLabel(String(localized: "Priority"))
         .onKeyPress(phases: .down) { press in

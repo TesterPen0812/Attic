@@ -389,6 +389,171 @@ final class AtticDropdownTests: XCTestCase {
         XCTAssertFalse(presenter.isOpen, "the automatic suggestions close on that click")
     }
 
+    private func key(_ characters: String, code: UInt16, flags: NSEvent.ModifierFlags = [], in window: NSWindow) -> NSEvent {
+        NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: flags, timestamp: 0,
+                        windowNumber: window.windowNumber, context: nil, characters: characters,
+                        charactersIgnoringModifiers: characters, isARepeat: false, keyCode: code)!
+    }
+
+    func testTagFieldEscPassesCompositionAndModifiersThenDismissesAndRestoresFocus() throws {
+        let window = makeWindow()
+        defer { window.close() }
+        let original = NSTextField(frame: CGRect(x: 20, y: 400, width: 200, height: 24))
+        window.contentView?.addSubview(original)
+        window.makeFirstResponder(original)
+        let anchor = NSView(frame: CGRect(x: 20, y: 300, width: 60, height: 28))
+        window.contentView?.addSubview(anchor)
+        let presenter = AtticDropdownPresenter()
+        presenter.content = AnyView(TaskTagPickerView(allTags: ["home"], state: { _ in .off }, onToggle: { _ in }, onCreate: { _, _ in true }))
+        presenter.present(from: anchor)
+        defer { presenter.close(restoreFocus: false, immediately: true) }
+        spin(0.2)
+        let editor = try XCTUnwrap(window.firstResponder as? NSTextView)
+        XCTAssertTrue(editor.isFieldEditor)
+        let field = try XCTUnwrap(editor.delegate as? NSTextField)
+        XCTAssertTrue(field.isDescendant(of: try XCTUnwrap(presenter.host)), "the actual tag field is editing")
+        editor.setMarkedText("に", selectedRange: NSRange(location: 1, length: 0), replacementRange: NSRange(location: NSNotFound, length: 0))
+        XCTAssertTrue(editor.hasMarkedText())
+        let escape = key("\u{1b}", code: 53, in: window)
+        XCTAssertIdentical(presenter.handleKey(escape), escape, "composition cancellation reaches the text input")
+        XCTAssertTrue(presenter.isOpen)
+        // AppKit's input client finishes cancellation; no candidate window
+        // or system input-source switch is required in this headless test.
+        editor.unmarkText()
+        for flags: NSEvent.ModifierFlags in [.command, .option, .control, .shift] {
+            let modified = key("\u{1b}", code: 53, flags: flags, in: window)
+            XCTAssertIdentical(presenter.handleKey(modified), modified)
+            XCTAssertTrue(presenter.isOpen)
+        }
+        XCTAssertNil(presenter.handleKey(escape))
+        XCTAssertFalse(presenter.isOpen)
+        XCTAssertIdentical(AtticDropdownPresenter.owner(of: window.firstResponder), original)
+    }
+
+    func testTagFieldEscWithFullKeyboardAccess() throws {
+        guard ProcessInfo.processInfo.environment["ATTIC_FULL_KEYBOARD_ACCESS_TESTS"] == "1" else {
+            throw XCTSkip("CI enables Full Keyboard Access before launching the test host; local tests preserve the user's setting")
+        }
+        XCTAssertTrue(NSApp.isFullKeyboardAccessEnabled, "verify AppKit's actual mode, not just a preference value")
+        try testTagFieldEscPassesCompositionAndModifiersThenDismissesAndRestoresFocus()
+    }
+
+    func testOutsideClickDismissesAnEditingTagFieldAndPassesThrough() throws {
+        let window = makeWindow()
+        defer { window.close() }
+        let anchor = NSView(frame: CGRect(x: 20, y: 300, width: 60, height: 28))
+        window.contentView?.addSubview(anchor)
+        let presenter = AtticDropdownPresenter()
+        presenter.content = AnyView(TaskTagPickerView(allTags: ["home"], state: { _ in .off }, onToggle: { _ in }, onCreate: { _, _ in true }))
+        presenter.present(from: anchor)
+        defer { presenter.close(restoreFocus: false, immediately: true) }
+        spin(0.2)
+        XCTAssertTrue((window.firstResponder as? NSTextView)?.isFieldEditor == true)
+        let click = try XCTUnwrap(NSEvent.mouseEvent(with: .leftMouseDown, location: CGPoint(x: 310, y: 510),
+            modifierFlags: [], timestamp: 0, windowNumber: window.windowNumber, context: nil,
+            eventNumber: 1, clickCount: 1, pressure: 1))
+        XCTAssertIdentical(presenter.handleClick(click), click)
+        XCTAssertFalse(presenter.isOpen)
+    }
+
+    func testPriorityChordsInvokeTheOpenPickersAction() throws {
+        let window = makeWindow()
+        defer { window.close() }
+        let anchor = NSView(frame: CGRect(x: 20, y: 300, width: 60, height: 28))
+        window.contentView?.addSubview(anchor)
+        let presenter = AtticDropdownPresenter()
+        var picked: [TaskPriority] = []
+        presenter.contentHeight = AtticDropdownMetrics.inset * 2 + AtticDropdownMetrics.rowHeight * 4
+        presenter.content = AnyView(TaskPriorityPickerView(current: nil) { picked.append($0) })
+        presenter.present(from: anchor)
+        defer { presenter.close(restoreFocus: false, immediately: true) }
+        spin(0.2)
+        let host = try XCTUnwrap(presenter.host)
+        for (index, code) in [UInt16(29), 18, 19, 20].enumerated() {
+            NSApp.sendEvent(key("\(index)", code: code, flags: [.option, .command], in: window))
+            spin()
+        }
+        XCTAssertEqual(picked, TaskPriority.choices)
+        XCTAssertFalse(host.performKeyEquivalent(with: key("1", code: 18, flags: .command, in: window)))
+        XCTAssertEqual(picked, TaskPriority.choices)
+        presenter.close(restoreFocus: false, immediately: true)
+        NSApp.sendEvent(key("0", code: 29, flags: [.option, .command], in: window))
+        spin()
+        XCTAssertEqual(picked, TaskPriority.choices, "closed pickers no longer own the chords")
+    }
+
+    private func accessibilityElements(_ root: AnyObject) -> [AnyObject] {
+        let children = (root.accessibilityChildren?() ?? nil) ?? []
+        return [root] + children.flatMap { accessibilityElements($0 as AnyObject) }
+    }
+
+    func testCalendarHeightTracksFourFiveAndSixWeeksAndLastRowRemainsInteractive() throws {
+        let attribute = NSAccessibility.Attribute(rawValue: "AXEnhancedUserInterface")
+        let previous = NSApp.accessibilityAttributeValue(attribute)
+        NSApp.accessibilitySetValue(true, forAttribute: attribute)
+        defer { NSApp.accessibilitySetValue(previous, forAttribute: attribute) }
+        let window = makeWindow()
+        window.setContentSize(CGSize(width: 320, height: 420))
+        defer { window.close() }
+        let anchor = NSView(frame: CGRect(x: 40, y: 40, width: 60, height: 28))
+        window.contentView?.addSubview(anchor)
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = TimeZone(secondsFromGMT: 0)!
+        calendar.firstWeekday = 2
+        let february = try XCTUnwrap(calendar.date(from: DateComponents(year: 2021, month: 2, day: 1)))
+        let choices = TaskDateChoices(parser: TaskTextParser(calendar: calendar, locale: Locale(identifier: "en_GB"), now: { february }))
+        var picked: DueDay?
+        let presenter = AtticDropdownPresenter()
+        presenter.design = AtticDesignContext(reduceMotion: true)
+        presenter.prefer = .above
+        presenter.content = AnyView(TaskDatePickerView(choices: choices, selected: nil, onPick: { picked = $0 }))
+        presenter.present(from: anchor)
+        defer { presenter.close(restoreFocus: false, immediately: true) }
+        spin(0.2)
+        let host = try XCTUnwrap(presenter.host)
+        let four = host.contentRect.size
+        XCTAssertNil(presenter.stage.height, "February 2021's four weeks fit")
+        func nextMonth() throws {
+            let next = try XCTUnwrap(accessibilityElements(host).first { ($0.accessibilityLabel?() ?? nil) == "Next month" })
+            XCTAssertTrue(next.accessibilityPerformPress?() == true)
+            spin(0.2)
+        }
+        try nextMonth() // March: five weeks
+        XCTAssertEqual(host.contentRect.width, four.width, accuracy: 1)
+        XCTAssertEqual(host.contentRect.height, four.height + AtticDropdownMetrics.monthCellHeight, accuracy: 1)
+        try nextMonth() // April: five weeks
+        try nextMonth() // May: six weeks, constrained at this anchor
+        XCTAssertEqual(host.contentRect.width, four.width, accuracy: 1)
+        XCTAssertNotNil(presenter.stage.height)
+        XCTAssertGreaterThan(host.contentRect.height, four.height + AtticDropdownMetrics.monthCellHeight)
+        let inWindow = host.convert(host.contentRect, to: nil)
+        XCTAssertGreaterThanOrEqual(inWindow.minY, 12)
+        XCTAssertLessThanOrEqual(inWindow.maxY, 408)
+        func scrolls(_ view: NSView) -> [NSScrollView] {
+            (view as? NSScrollView).map { [$0] } ?? view.subviews.flatMap { scrolls($0) }
+        }
+        let scroll = try XCTUnwrap(scrolls(host).first)
+        let document = try XCTUnwrap(scroll.documentView)
+        document.scrollToVisible(CGRect(x: 0, y: document.bounds.maxY - 1, width: 1, height: 1))
+        spin(0.2)
+        let last = DueDay(rawValue: "2021-06-06")!
+        let label = TaskRowPresentation.format(try XCTUnwrap(last.startDate(in: calendar)), template: "EEEEdMMMMy", calendar: calendar, locale: choices.parser.locale)
+        let day = try XCTUnwrap(accessibilityElements(host).first { ($0.accessibilityLabel?() ?? nil) == label })
+        let frame: NSRect = day.accessibilityFrame!()
+        let local = host.convert(window.convertFromScreen(frame), from: nil)
+        let center = CGPoint(x: local.midX, y: local.midY)
+        XCTAssertTrue(host.contentRect.contains(center), "the last calendar row is inside the updated hit bounds after scrolling")
+        XCTAssertNotNil(host.hitTest(host.convert(center, to: host.superview)))
+        XCTAssertTrue(day.accessibilityPerformPress?() == true)
+        XCTAssertEqual(picked, last, "the bottom day runs the real pick action")
+        // Shrinking removes the viewport instead of retaining the old limit.
+        let previousMonth = try XCTUnwrap(accessibilityElements(host).first { ($0.accessibilityLabel?() ?? nil) == "Previous month" })
+        XCTAssertTrue(previousMonth.accessibilityPerformPress?() == true)
+        spin(0.2)
+        XCTAssertNil(presenter.stage.height)
+        XCTAssertEqual(host.contentRect.height, four.height + AtticDropdownMetrics.monthCellHeight, accuracy: 1)
+    }
+
     // MARK: Timings (no regression against the components it replaced)
 
     private func ms(_ body: () -> Void) -> Double {
@@ -505,6 +670,8 @@ final class AtticDropdownTests: XCTestCase {
             presenter.close(restoreFocus: false, immediately: true)
             let prio = AtticDropdownPresenter()
             prio.design = design
+            // The real composer strip supplies this fixed four-row height.
+            prio.contentHeight = AtticDropdownMetrics.inset * 2 + AtticDropdownMetrics.rowHeight * 4
             prio.content = AnyView(TaskPriorityPickerView(current: nil, onPick: { _ in }))
             let prioOpened = ms {
                 prio.present(from: anchor)

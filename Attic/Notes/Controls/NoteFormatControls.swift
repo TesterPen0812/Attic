@@ -222,7 +222,13 @@ final class NoteFormatControls: NSObject {
         formatModel.highlightSwatch = AtticColorTokens.resolve(design).tagFill
         barHost.rootView = AnyView(NoteFormatBarView(model: formatModel).atticDesign(design))
         slashHost.rootView = AnyView(NoteSlashListView(model: slashModel).atticDesign(design))
-        cardHost.rootView = AnyView(NoteFormatCardView(model: cardModel).atticDesign(design))
+        cardHost.rootView = AnyView(NoteFormatCardView(model: cardModel)
+            .environment(\.atticDropdownContentHeightChanged, { [weak self] height in
+                guard let self, self.cardModel.card != nil, abs(height - self.cardSize.height) > 0.5 else { return }
+                self.cardSize.height = height
+                self.placeCard()
+            })
+            .atticDesign(design))
         hintHost.rootView = AnyView(NoteSlashHintView().atticDesign(design))
     }
 
@@ -626,6 +632,7 @@ final class NoteFormatControls: NSObject {
         cardSelection = selection
         cardAnchor = fromSlash ? engine.pendingSlashDate?.range : NSRange(location: selection.location, length: 0)
         cardModel.viewportHeight = nil
+        cardModel.viewportWidth = nil
         cardModel.openDate(fromSlash: fromSlash, today: Date())
         presentCard()
     }
@@ -640,6 +647,7 @@ final class NoteFormatControls: NSObject {
         cardSelection = target.selection
         cardAnchor = target.range
         cardModel.viewportHeight = nil
+        cardModel.viewportWidth = nil
         cardModel.openLink(url: target.url)
         presentCard()
     }
@@ -648,7 +656,7 @@ final class NoteFormatControls: NSObject {
 
     private var cardSize = NSSize.zero
 
-    /// The card's size, measured from its content once as it opens.
+    /// Measure the opening width; the card reports subsequent natural heights.
     private func presentCard() {
         let room = AtticDropdownMetrics.shadowRoom
         let measure = NSHostingView(rootView: NoteFormatCardView(model: cardModel).atticDesign(design))
@@ -672,6 +680,7 @@ final class NoteFormatControls: NSObject {
         let room = AtticDropdownMetrics.shadowRoom
         let bounds = panelBounds()
         let width = AtticDropdownLayout.width(ideal: cardSize.width, available: bounds.width)
+        if cardModel.viewportWidth != width { cardModel.viewportWidth = width }
         let anchor = first.union(last)
         let placed = AtticDropdownLayout.frame(size: CGSize(width: width, height: cardSize.height),
                                                anchor: anchor, bounds: bounds, prefer: .below)

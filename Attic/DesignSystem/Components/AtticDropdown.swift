@@ -52,6 +52,8 @@ struct AtticDropdownCard<Content: View>: View {
     var width: CGFloat?
     @Environment(\.atticDropdownHeight) private var height
     @Environment(\.atticDropdownWidth) private var widthLimit
+    @Environment(\.atticDropdownContentHeightChanged) private var heightChanged
+    @State private var persistentViewport = false
     @ViewBuilder let content: Content
 
     init(width: CGFloat? = nil, @ViewBuilder content: () -> Content) {
@@ -61,13 +63,33 @@ struct AtticDropdownCard<Content: View>: View {
 
     var body: some View {
         let m = AtticDropdownMetrics.self
-        AtticDropdownViewport(height: height.map { max(0, $0 - m.inset * 2) }) {
+        AtticDropdownViewport(height: height.map { max(0, $0 - m.inset * 2) }, persistent: persistentViewport) {
             VStack(alignment: .leading, spacing: 0) { content }
+                .modifier(AtticDropdownHeightObserver(changed: heightChanged))
         }
             .padding(m.inset)
             .frame(minWidth: width == nil ? m.minWidth : nil, alignment: .leading)
             .frame(width: widthLimit ?? width, alignment: .leading)
             .background(AtticDropdownSurface())
+            .onPreferenceChange(AtticDropdownPersistentViewportKey.self) { wanted in
+                if wanted { persistentViewport = true }
+            }
+    }
+}
+
+/// Known-height lists avoid observation work on their open/filter path.
+private struct AtticDropdownHeightObserver: ViewModifier {
+    var changed: ((CGFloat) -> Void)?
+    func body(content: Content) -> some View {
+        if let changed {
+            content.onGeometryChange(for: CGFloat.self, of: { $0.size.height }) { height in
+                // Natural content inside the viewport; defer AppKit placement
+                // past layout, rather than observing the constrained host.
+                DispatchQueue.main.async { changed(height + AtticDropdownMetrics.inset * 2) }
+            }
+        } else {
+            content
+        }
     }
 }
 
@@ -475,6 +497,7 @@ final class AtticDropdownPresenter {
     var contentHasCard = false
     var contentHeight: CGFloat?
     private var naturalSize = CGSize.zero
+    private var contentKeyHandler: ((NSEvent) -> Bool)?
     var label = ""
     var design = AtticDesignContext()
     var content = AnyView(EmptyView())
@@ -488,7 +511,12 @@ final class AtticDropdownPresenter {
     init() {}
 
     private var root: AnyView {
-        AnyView(AtticDropdownStage(model: stage, content: content, contentHasCard: contentHasCard).atticDesign(design))
+        AnyView(AtticDropdownStage(model: stage, content: content, contentHasCard: contentHasCard)
+            .environment(\.atticDropdownContentHeightChanged, contentHeight == nil ? { [weak self] height in
+                self?.resize(height: height)
+            } : nil)
+            .environment(\.atticDropdownRegisterKeys, { [weak self] handler in self?.contentKeyHandler = handler })
+            .atticDesign(design))
     }
 
     /// The overlay layer and the panel's visible rectangle in it; a plain
@@ -522,8 +550,8 @@ final class AtticDropdownPresenter {
         host.contentInset = room
         host.acceptsKeyboard = takesKeyboard
         host.isInteractive = true
-        // The content's size, once, as it opens (the card keeps its width
-        // while it is open, so filtering never makes it jump).
+        // Measure the opening width once. Natural content height is observed
+        // inside the card, including when its viewport is constrained.
         let fitting = host.fittingSize
         let bounds = AtticDropdownLayout.topDown(overlay.panel, in: overlay.parent).insetBy(dx: m.panelMargin, dy: m.panelMargin)
         let width = AtticDropdownLayout.width(ideal: fitting.width - room * 2, available: bounds.width)
@@ -562,7 +590,11 @@ final class AtticDropdownPresenter {
         host?.rootView = root
         // Typing suggestions can gain or lose rows while open. Their known
         // height avoids another content-measuring pass on every keystroke.
-        guard let height = contentHeight, height != naturalSize.height,
+        if let height = contentHeight { resize(height: height) }
+    }
+
+    private func resize(height: CGFloat) {
+        guard isOpen, height.isFinite, height > 0, abs(height - naturalSize.height) > 0.5,
               let host, let anchor, let overlay = Self.overlay(for: anchor) else { return }
         naturalSize.height = height
         let m = AtticDropdownMetrics.self
@@ -583,6 +615,7 @@ final class AtticDropdownPresenter {
         isOpen = false
         if takesKeyboard { Self.openCount = max(0, Self.openCount - 1) }
         uninstall()
+        contentKeyHandler = nil
         host.isInteractive = false
         host.setAccessibilityElement(false)
         let window = host.window
@@ -650,9 +683,8 @@ final class AtticDropdownPresenter {
 
     private func install(in window: NSWindow) {
         let keys = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
-            guard let self, self.isOpen, event.keyCode == 53, event.window === self.host?.window else { return event }
-            self.dismiss()
-            return nil
+            guard let self else { return event }
+            return self.handleKey(event)
         }
         let clicks = NSEvent.addLocalMonitorForEvents(matching: [.leftMouseDown, .rightMouseDown, .otherMouseDown]) { [weak self] event in
             guard let self else { return event }
@@ -662,6 +694,17 @@ final class AtticDropdownPresenter {
         resignObserver = NotificationCenter.default.addObserver(
             forName: NSWindow.didResignKeyNotification, object: window, queue: .main
         ) { [weak self] _ in MainActor.assumeIsolated { self?.dismiss() } }
+    }
+
+    /// Let the active input method cancel composition before dismissing.
+    func handleKey(_ event: NSEvent) -> NSEvent? {
+        guard isOpen, event.type == .keyDown, event.window === host?.window,
+              (event.window?.firstResponder as? NSTextInputClient)?.hasMarkedText() != true else { return event }
+        if contentKeyHandler?(event) == true { return nil }
+        guard event.keyCode == 53,
+              event.modifierFlags.intersection([.command, .option, .control, .shift]).isEmpty else { return event }
+        dismiss()
+        return nil
     }
 
     /// The monitor's real click routing, also exercised off-screen.
@@ -792,6 +835,14 @@ private struct AtticDropdownModifier<Card: View>: ViewModifier {
 }
 
 
+private struct AtticDropdownRegisterKeysKey: EnvironmentKey {
+    static let defaultValue: (((NSEvent) -> Bool)?) -> Void = { _ in }
+}
+
+private struct AtticDropdownContentHeightChangedKey: EnvironmentKey {
+    static let defaultValue: ((CGFloat) -> Void)? = nil
+}
+
 private struct AtticDropdownWidthKey: EnvironmentKey {
     static let defaultValue: CGFloat? = nil
 }
@@ -801,6 +852,17 @@ private struct AtticDropdownHeightKey: EnvironmentKey {
 }
 
 extension EnvironmentValues {
+    /// The open card's command chords, routed before AppKit menu equivalents.
+    var atticDropdownRegisterKeys: (((NSEvent) -> Bool)?) -> Void {
+        get { self[AtticDropdownRegisterKeysKey.self] }
+        set { self[AtticDropdownRegisterKeysKey.self] = newValue }
+    }
+
+    var atticDropdownContentHeightChanged: ((CGFloat) -> Void)? {
+        get { self[AtticDropdownContentHeightChangedKey.self] }
+        set { self[AtticDropdownContentHeightChangedKey.self] = newValue }
+    }
+
     var atticDropdownWidth: CGFloat? {
         get { self[AtticDropdownWidthKey.self] }
         set { self[AtticDropdownWidthKey.self] = newValue }
@@ -812,6 +874,13 @@ extension EnvironmentValues {
     }
 }
 
+/// Stateful calendars retain their scroll container across fit/overflow
+/// transitions so changing the month never reconstructs their cursor state.
+struct AtticDropdownPersistentViewportKey: PreferenceKey {
+    static let defaultValue = false
+    static func reduce(value: inout Bool, nextValue: () -> Bool) { value = value || nextValue() }
+}
+
 struct AtticDropdownHighlightKey: PreferenceKey {
     static let defaultValue: String? = nil
     static func reduce(value: inout String?, nextValue: () -> String?) {
@@ -819,15 +888,17 @@ struct AtticDropdownHighlightKey: PreferenceKey {
     }
 }
 
-/// Only cramped cards create a scroll view. The system soft edge reveals
+/// Lists that fit stay plain. Stateful calendars keep their scroll container
+/// across height changes, disabled while they fit. The system soft edge reveals
 /// overflow; the keyboard's highlighted row is brought wholly into view.
 struct AtticDropdownViewport<Content: View>: View {
     var height: CGFloat?
     var highlighted: String? = nil
+    var persistent = false
     @ViewBuilder let content: Content
 
     var body: some View {
-        if let height {
+        if height != nil || persistent {
             ScrollViewReader { proxy in
                 ScrollView(.vertical) { content }
                     .scrollIndicators(.never)
@@ -835,6 +906,8 @@ struct AtticDropdownViewport<Content: View>: View {
                     .safeAreaBar(edge: .bottom, spacing: 0) { Color.clear.frame(height: AtticDropdownMetrics.scrollEdgeInset).accessibilityHidden(true) }
                     .scrollEdgeEffectStyle(.soft, for: .vertical)
                     .frame(height: height)
+                    .fixedSize(horizontal: false, vertical: height == nil)
+                    .scrollDisabled(height == nil)
                     .onAppear { if let highlighted { proxy.scrollTo(highlighted) } }
                     .onChange(of: highlighted) { _, id in
                         guard let id, !AtticListHighlight.isPointerMove(NSApp.currentEvent) else { return }

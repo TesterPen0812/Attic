@@ -125,7 +125,16 @@ jobs:
           # The runner has no person at it: unit tests may make a window key
           # and let AppKit resolve targetless menu actions for real.
           TEST_RUNNER_ATTIC_KEY_WINDOW_TESTS: "1"
+          TEST_RUNNER_ATTIC_FULL_KEYBOARD_ACCESS_TESTS: "1"
         run: |
+          # Enable AppKit Full Keyboard Access before the host starts. This
+          # changes only this disposable CI runner and restores its setting.
+          if old_keyboard_mode=$(defaults read -g AppleKeyboardUIMode 2>/dev/null); then
+            trap 'defaults write -g AppleKeyboardUIMode -int "$old_keyboard_mode"' EXIT
+          else
+            trap 'defaults delete -g AppleKeyboardUIMode >/dev/null 2>&1 || true' EXIT
+          fi
+          defaults write -g AppleKeyboardUIMode -int 3
           rm -rf "$RUNNER_TEMP/AtticUnitTests.xcresult"
           xcodebuild \
             -project Attic.xcodeproj \
