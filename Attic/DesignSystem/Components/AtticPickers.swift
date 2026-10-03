@@ -515,7 +515,7 @@ struct AtticTagPickerCard: View {
 
 extension AtticTagPickerCard {
     /// The row whose tag is exactly the typed name (`#` and case aside).
-    static func exactMatch(_ query: String, in tags: [AtticTagPicker.Tag]) -> Int? {
+    nonisolated static func exactMatch(_ query: String, in tags: [AtticTagPicker.Tag]) -> Int? {
         guard let typed = AtticTag.normalize(query)?.lowercased() else { return nil }
         return tags.firstIndex { $0.name.lowercased() == typed }
     }
