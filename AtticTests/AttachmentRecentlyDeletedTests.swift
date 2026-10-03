@@ -10,8 +10,8 @@ final class AttachmentRecentlyDeletedTests: XCTestCase {
 
 
     func testRemovingATaskAttachmentKeepsItRestorableUntilThePurge() async throws {
-        let root = FileManager.default.temporaryDirectory.appendingPathComponent("AtticAttachmentBin-\(UUID().uuidString)")
-        defer { try? FileManager.default.removeItem(at: root) }
+        let root = ownedTemporaryDirectory(prefix: "AtticAttachmentBin")
+
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
         let source = root.appendingPathComponent("plan.txt")
         try Data("plan".utf8).write(to: source)
@@ -61,7 +61,7 @@ final class AttachmentRecentlyDeletedTests: XCTestCase {
         seed.insert(note)
         seed.insert(attachment)
         try seed.save()
-        let notes = NoteStore(container: container, now: { clock.value }, attachmentFileStore: makeTestAttachmentFileStore())
+        let notes = trackAttachmentReconciliation(of: NoteStore(container: container, now: { clock.value }, attachmentFileStore: makeTestAttachmentFileStore()))
         let library = AtticLibrary(tasks: TaskStore(container: container), notes: notes)
         let visible = try XCTUnwrap(notes.attachments(for: note.id).first)
 
@@ -99,7 +99,7 @@ final class AttachmentRecentlyDeletedTests: XCTestCase {
         seed.insert(NoteAttachment(id: sharedID, noteID: survivor.id, originalFilename: "s.txt", byteCount: 1,
                                    sortIndex: 0, contentDigest: digest, payload: Data([1])))
         try seed.save()
-        let store = NoteStore(container: container, attachmentFileStore: makeTestAttachmentFileStore())
+        let store = trackAttachmentReconciliation(of: NoteStore(container: container, attachmentFileStore: makeTestAttachmentFileStore()))
 
         XCTAssertTrue(store.purgeDeleted(before: .distantFuture).isEmpty, "an ambiguous purge is refused")
         XCTAssertEqual(try ModelContext(container).fetchCount(FetchDescriptor<NoteAttachment>()), 2)
@@ -136,7 +136,7 @@ extension AttachmentRecentlyDeletedTests {
         seed.insert(kept)
         try seed.save()
         let clock = MutableNow(Date(timeIntervalSince1970: 1_000))
-        let store = NoteStore(container: container, now: { clock.value }, attachmentFileStore: makeTestAttachmentFileStore())
+        let store = trackAttachmentReconciliation(of: NoteStore(container: container, now: { clock.value }, attachmentFileStore: makeTestAttachmentFileStore()))
         XCTAssertTrue(store.delete(try XCTUnwrap(store.note(withID: note.id))))
         XCTAssertEqual(try ModelContext(container).fetch(FetchDescriptor<NoteItem>()).first?.deletedAttachmentIDsRaw,
                        kept.id.uuidString, "the delete records its attachment family")
@@ -168,7 +168,7 @@ extension AttachmentRecentlyDeletedTests {
         let context = ModelContext(container)
         try XCTUnwrap(context.fetch(FetchDescriptor<NoteItem>()).first).deletedAttachmentIDsRaw = nil
         try context.save()
-        let store = NoteStore(container: container, attachmentFileStore: makeTestAttachmentFileStore())
+        let store = trackAttachmentReconciliation(of: NoteStore(container: container, attachmentFileStore: makeTestAttachmentFileStore()))
 
         XCTAssertTrue(store.purgeDeleted(before: .distantFuture).isEmpty)
         XCTAssertEqual(try ModelContext(container).fetchCount(FetchDescriptor<NoteAttachment>()), 1)
@@ -189,7 +189,7 @@ extension AttachmentRecentlyDeletedTests {
                                   createdAt: Date(timeIntervalSince1970: 2_000), payload: Data([2]))
         context.insert(late)
         try context.save()
-        let store = NoteStore(container: container, attachmentFileStore: makeTestAttachmentFileStore())
+        let store = trackAttachmentReconciliation(of: NoteStore(container: container, attachmentFileStore: makeTestAttachmentFileStore()))
 
         XCTAssertTrue(store.purgeDeleted(before: .distantFuture).isEmpty)
         XCTAssertEqual(try ModelContext(container).fetchCount(FetchDescriptor<NoteItem>()), 1)
@@ -211,7 +211,7 @@ extension AttachmentRecentlyDeletedTests {
                                       sortIndex: 0, contentDigest: attachment.contentDigest,
                                       createdAt: attachment.createdAt, payload: Data([9])))
         try context.save()
-        let store = NoteStore(container: container, attachmentFileStore: makeTestAttachmentFileStore())
+        let store = trackAttachmentReconciliation(of: NoteStore(container: container, attachmentFileStore: makeTestAttachmentFileStore()))
 
         XCTAssertTrue(store.purgeDeleted(before: .distantFuture).isEmpty)
         let rows = try ModelContext(container).fetch(FetchDescriptor<NoteAttachment>())
@@ -234,7 +234,7 @@ extension AttachmentRecentlyDeletedTests {
             seed.insert(row)
         }
         try seed.save()
-        let store = NoteStore(container: container, attachmentFileStore: makeTestAttachmentFileStore())
+        let store = trackAttachmentReconciliation(of: NoteStore(container: container, attachmentFileStore: makeTestAttachmentFileStore()))
 
         XCTAssertEqual(store.purgeRemovedAttachments(before: .distantFuture), 0)
         let rows = try ModelContext(container).fetch(FetchDescriptor<NoteAttachment>())
@@ -260,7 +260,7 @@ extension AttachmentRecentlyDeletedTests {
         try seed.save()
         let start = Date(timeIntervalSince1970: 100_000)
         let clock = MutableNow(start)
-        let store = NoteStore(container: container, now: { clock.value }, attachmentFileStore: makeTestAttachmentFileStore())
+        let store = trackAttachmentReconciliation(of: NoteStore(container: container, now: { clock.value }, attachmentFileStore: makeTestAttachmentFileStore()))
         let library = AtticLibrary(tasks: TaskStore(container: container), notes: store)
         let calendar = Calendar(identifier: .gregorian)
 

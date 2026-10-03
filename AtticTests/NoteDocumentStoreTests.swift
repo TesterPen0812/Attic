@@ -882,12 +882,12 @@ final class NoteDocumentStoreTests: XCTestCase {
     }
 
     func testPendingProposalAndBaseSurvivePersistentRestart() throws {
-        let directory = FileManager.default.temporaryDirectory.appendingPathComponent("AtticProposal-\(UUID().uuidString)")
-        defer { try? FileManager.default.removeItem(at: directory) }
+        let directory = ownedTemporaryDirectory(prefix: "AtticProposal")
+
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         let firstContainer = try PersistenceController.makeContainer(inMemory: false, cloudSyncEnabled: false,
                                                                       storeDirectory: directory)
-        let first = NoteStore(container: firstContainer, attachmentFileStore: makeTestAttachmentFileStore())
+        let first = trackAttachmentReconciliation(of: NoteStore(container: firstContainer, attachmentFileStore: makeTestAttachmentFileStore()))
         guard case let .success((id, _)) = first.createDocumentNote(id: UUID(), document: document("Base")) else {
             return XCTFail()
         }
@@ -896,7 +896,7 @@ final class NoteDocumentStoreTests: XCTestCase {
             document: document("Proposal"), agentName: "Agent", disposition: .proposal) else { return XCTFail() }
         let secondContainer = try PersistenceController.makeContainer(inMemory: false, cloudSyncEnabled: false,
                                                                        storeDirectory: directory)
-        let second = NoteStore(container: secondContainer, attachmentFileStore: makeTestAttachmentFileStore())
+        let second = trackAttachmentReconciliation(of: NoteStore(container: secondContainer, attachmentFileStore: makeTestAttachmentFileStore()))
         let edit = try XCTUnwrap(second.pendingEdits(noteID: id).first)
         XCTAssertEqual(second.note(withID: id)?.title, "Base")
         XCTAssertEqual(second.versions(noteID: id).first(where: { $0.id == edit.baseVersionID })?.title, "Base")

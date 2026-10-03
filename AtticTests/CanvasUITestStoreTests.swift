@@ -6,9 +6,8 @@ import XCTest
 final class CanvasUITestStoreTests: XCTestCase {
     @MainActor
     func testUITestStorePersistsAcrossReopenAndResetRemovesOnlyItsRows() throws {
-        let root = FileManager.default.temporaryDirectory
-            .appendingPathComponent(UUID().uuidString, isDirectory: true)
-        defer { try? FileManager.default.removeItem(at: root) }
+        let root = ownedTemporaryDirectory(prefix: "CanvasUITestStoreTests")
+
 
         do {
             let container = try PersistenceController.makeCanvasUITestContainer(

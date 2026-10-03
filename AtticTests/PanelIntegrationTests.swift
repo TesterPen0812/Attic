@@ -42,7 +42,7 @@ final class PanelIntegrationTests: XCTestCase {
         let container = try PersistenceController.makeContainer(inMemory: true, cloudSyncEnabled: false)
         let gate = PersistenceGate()
         let store = TaskStore(container: container)
-        let notes = NoteStore(container: container, persist: gate.save, attachmentFileStore: makeTestAttachmentFileStore())
+        let notes = trackAttachmentReconciliation(of: NoteStore(container: container, persist: gate.save, attachmentFileStore: makeTestAttachmentFileStore()))
         let canvasStore = CanvasStore(container: container)
         let canvasSession = CanvasSession(store: canvasStore)
         let noteDraft = NoteDraftController(noteStore: notes)

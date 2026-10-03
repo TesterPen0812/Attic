@@ -1275,8 +1275,8 @@ final class SubtaskPanelControllerTests: XCTestCase {
     }
 
     func testPanelContentIdealHeightFollowsTheActiveView() throws {
-        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
-        defer { try? FileManager.default.removeItem(at: root) }
+        let root = ownedTemporaryDirectory(prefix: "SubtaskPanelControllerTests")
+
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
         let file = root.appendingPathComponent("Itinerary.txt")
         try Data("Day one".utf8).write(to: file)

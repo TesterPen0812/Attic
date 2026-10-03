@@ -218,13 +218,13 @@ final class NotesSlice2ControllerTests: XCTestCase {
         gate = PersistenceGate()
         store = try makeTestNoteStore(persist: { [gate] in try gate!.save($0) },
                                       attachmentFileStore: makeTestAttachmentFileStore())
-        directory = FileManager.default.temporaryDirectory.appendingPathComponent("AtticSlice2-\(UUID().uuidString)")
+        directory = ownedTemporaryDirectory(prefix: "AtticSlice2")
         suiteName = "AtticSlice2-\(UUID().uuidString)"
         defaults = UserDefaults(suiteName: suiteName)
     }
 
     override func tearDown() async throws {
-        try? FileManager.default.removeItem(at: directory)
+
         defaults.removePersistentDomain(forName: suiteName)
     }
 
@@ -762,11 +762,11 @@ final class NotesSlice2MigrationTests: XCTestCase {
 
     override func setUp() async throws {
         store = try makeTestNoteStore(attachmentFileStore: makeTestAttachmentFileStore())
-        directory = FileManager.default.temporaryDirectory.appendingPathComponent("AtticSlice2Migration-\(UUID().uuidString)")
+        directory = ownedTemporaryDirectory(prefix: "AtticSlice2Migration")
     }
 
     override func tearDown() async throws {
-        try? FileManager.default.removeItem(at: directory)
+
     }
 
     private func png() throws -> Data {

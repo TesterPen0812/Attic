@@ -20,7 +20,7 @@ final class NotesSlice2FixRoundTests: XCTestCase {
         gate = PersistenceGate()
         store = try makeTestNoteStore(persist: { [gate] in try gate!.save($0) },
                                       attachmentFileStore: makeTestAttachmentFileStore())
-        directory = FileManager.default.temporaryDirectory.appendingPathComponent("AtticFixRound-\(UUID().uuidString)")
+        directory = ownedTemporaryDirectory(prefix: "AtticFixRound")
         suiteName = "AtticFixRound-\(UUID().uuidString)"
         defaults = UserDefaults(suiteName: suiteName)
     }
@@ -28,7 +28,7 @@ final class NotesSlice2FixRoundTests: XCTestCase {
     override func tearDown() async throws {
         windows.forEach { $0.close() }
         windows.removeAll()
-        try? FileManager.default.removeItem(at: directory)
+
         defaults.removePersistentDomain(forName: suiteName)
     }
 

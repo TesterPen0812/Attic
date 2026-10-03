@@ -1,4 +1,5 @@
 import AppKit
+import Darwin
 import SwiftData
 import SwiftUI
 import XCTest
@@ -255,13 +256,31 @@ final class TasksRound7ShellTests: XCTestCase {
     /// Done search closed and the keyboard where it was; back on Tasks, ⌘F
     /// opens it with the keyboard.
     func testAHiddenTasksPageNeverTakesCommandF() throws {
+        // Menu routing lazily creates AppCoordinator.shared. Give that runtime
+        // this test's owned root instead of an untracked AtticTestHosts tree.
+        let runtimeRoot = ownedTemporaryDirectory(prefix: "AtticShellRuntimeTests")
+        try FileManager.default.createDirectory(at: runtimeRoot, withIntermediateDirectories: true)
+        let token = UUID().uuidString
+        try Data(token.utf8).write(to: runtimeRoot.appendingPathComponent(
+            AppRuntimeEnvironment.testAttachmentRootOwnerMarkerName))
+        let keys = ["ATTIC_TEST_ATTACHMENT_ROOT", "ATTIC_TEST_ATTACHMENT_ROOT_OWNER_TOKEN"]
+        let prior = keys.map { ProcessInfo.processInfo.environment[$0] }
+        setenv(keys[0], runtimeRoot.path, 1)
+        setenv(keys[1], token, 1)
+        defer {
+            for (key, value) in zip(keys, prior) {
+                if let value { setenv(key, value, 1) } else { unsetenv(key) }
+            }
+        }
+        let runtimeNotes = AppCoordinator.shared.noteStore
+        addTeardownBlock { await runtimeNotes.waitForAttachmentReconciliation() }
         let suite = "TasksRound7HostedTests.\(UUID().uuidString)"
         let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
         defer { defaults.removePersistentDomain(forName: suite) }
         let container = try PersistenceController.makeContainer(inMemory: true, cloudSyncEnabled: false)
         try TasksPagePreview.seedDemo(in: container)
         let store = TaskStore(container: container)
-        let notes = NoteStore(container: container, attachmentFileStore: makeTestAttachmentFileStore())
+        let notes = trackAttachmentReconciliation(of: NoteStore(container: container, attachmentFileStore: makeTestAttachmentFileStore()))
         let state = PanelUIState()
         let size = CGSize(width: 340, height: 560)
         state.updatePanelSize(size)

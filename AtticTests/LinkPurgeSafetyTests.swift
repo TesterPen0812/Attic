@@ -12,7 +12,7 @@ final class LinkPurgeSafetyTests: XCTestCase {
         let clock = MutableNow(Date(timeIntervalSince1970: 100_000))
         let container = try PersistenceController.makeContainer(inMemory: true)
         let tasks = TaskStore(container: container, now: { clock.value })
-        let notes = NoteStore(container: container, now: { clock.value }, attachmentFileStore: makeTestAttachmentFileStore())
+        let notes = trackAttachmentReconciliation(of: NoteStore(container: container, now: { clock.value }, attachmentFileStore: makeTestAttachmentFileStore()))
         let library = AtticLibrary(tasks: tasks, notes: notes, now: { clock.value })
         let doomed = try XCTUnwrap(tasks.create(title: "Doomed"))
         let other = try XCTUnwrap(tasks.create(title: "Other"))
@@ -76,8 +76,8 @@ final class LinkPurgeSafetyTests: XCTestCase {
         let container = try PersistenceController.makeContainer(inMemory: true)
         let gate = LinkRemovalFailure()
         let tasks = TaskStore(container: container, now: { clock.value }, persist: gate.save)
-        let notes = NoteStore(container: container, now: { clock.value }, persist: gate.save,
-                              attachmentFileStore: makeTestAttachmentFileStore())
+        let notes = trackAttachmentReconciliation(of: NoteStore(container: container, now: { clock.value }, persist: gate.save,
+                              attachmentFileStore: makeTestAttachmentFileStore()))
         let library = AtticLibrary(tasks: tasks, notes: notes, now: { clock.value }, persist: gate.save)
         let doomed = try XCTUnwrap(tasks.create(title: "Doomed"))
         let other = try XCTUnwrap(tasks.create(title: "Other"))

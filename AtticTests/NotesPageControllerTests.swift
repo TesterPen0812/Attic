@@ -18,11 +18,11 @@ final class NotesPageControllerTests: XCTestCase {
         gate = PersistenceGate()
         store = try makeTestNoteStore(persist: { [gate] in try gate!.save($0) },
                                       attachmentFileStore: makeTestAttachmentFileStore())
-        directory = FileManager.default.temporaryDirectory.appendingPathComponent("AtticNoteDrafts-\(UUID().uuidString)")
+        directory = ownedTemporaryDirectory(prefix: "AtticNoteDrafts")
     }
 
     override func tearDown() async throws {
-        try? FileManager.default.removeItem(at: directory)
+
     }
 
     private func makeController(journal: NoteDraftJournaling? = nil, delay: Duration = .seconds(60)) -> NotesPageController {
@@ -448,7 +448,7 @@ final class NotesPageControllerTests: XCTestCase {
             launches.append(ms(since: launchStart))
             XCTAssertEqual(launched.active?.noteID, id)
             let initStart = DispatchTime.now().uptimeNanoseconds
-            let reopened = NoteStore(container: store.container, attachmentFileStore: makeTestAttachmentFileStore())
+            let reopened = trackAttachmentReconciliation(of: NoteStore(container: store.container, attachmentFileStore: makeTestAttachmentFileStore()))
             initializations.append(ms(since: initStart))
             XCTAssertEqual(reopened.notes.count, 1)
             await reopened.waitForAttachmentReconciliation()
@@ -494,8 +494,8 @@ final class NotesPageControllerTests: XCTestCase {
         }
         try context.save()
         let started = DispatchTime.now().uptimeNanoseconds
-        store = NoteStore(container: store.container, persist: { [gate] in try gate!.save($0) },
-                          attachmentFileStore: makeTestAttachmentFileStore())
+        store = trackAttachmentReconciliation(of: NoteStore(container: store.container, persist: { [gate] in try gate!.save($0) },
+                          attachmentFileStore: makeTestAttachmentFileStore()))
         print("NOTE_POPULATED_STORE_INIT_MS=\(Double(DispatchTime.now().uptimeNanoseconds - started) / 1_000_000)")
         await store.waitForAttachmentReconciliation()
     }
@@ -622,8 +622,8 @@ final class NotesPageControllerTests: XCTestCase {
         defer { defaults.removePersistentDomain(forName: suite) }
         let container = try PersistenceController.makeContainer(inMemory: true, cloudSyncEnabled: false)
         let taskStore = TaskStore(container: container)
-        let noteStore = NoteStore(container: container, persist: { [gate] in try gate!.save($0) },
-                                  attachmentFileStore: makeTestAttachmentFileStore())
+        let noteStore = trackAttachmentReconciliation(of: NoteStore(container: container, persist: { [gate] in try gate!.save($0) },
+                                  attachmentFileStore: makeTestAttachmentFileStore()))
         let noteDraft = NoteDraftController(noteStore: noteStore, sessionDefaults: defaults)
         let state = PanelUIState()
         state.selectSection(.notes)
@@ -1060,7 +1060,7 @@ final class NotesPageControllerTests: XCTestCase {
         try FileManager.default.createDirectory(at: storeDirectory, withIntermediateDirectories: true)
         let container1 = try PersistenceController.makeContainer(inMemory: false, cloudSyncEnabled: false,
                                                                   storeDirectory: storeDirectory)
-        let firstStore = NoteStore(container: container1, attachmentFileStore: makeTestAttachmentFileStore())
+        let firstStore = trackAttachmentReconciliation(of: NoteStore(container: container1, attachmentFileStore: makeTestAttachmentFileStore()))
         let document = NoteDocument(blocks: [.text("Committed")])
         guard case let .success((id, _)) = firstStore.createDocumentNote(id: UUID(), document: document) else {
             return XCTFail()
@@ -1071,7 +1071,7 @@ final class NotesPageControllerTests: XCTestCase {
             staged: [], savedAt: Date()), staged: [])
         let container2 = try PersistenceController.makeContainer(inMemory: false, cloudSyncEnabled: false,
                                                                   storeDirectory: storeDirectory)
-        let secondStore = NoteStore(container: container2, attachmentFileStore: makeTestAttachmentFileStore())
+        let secondStore = trackAttachmentReconciliation(of: NoteStore(container: container2, attachmentFileStore: makeTestAttachmentFileStore()))
         let controller = NotesPageController(store: secondStore, journal: journal)
         await controller.recoverAtLaunchAndWait()
         XCTAssertEqual(secondStore.agentWriteDisposition(id), .direct)
@@ -1091,7 +1091,7 @@ final class NotesPageControllerTests: XCTestCase {
         try FileManager.default.createDirectory(at: storeDirectory, withIntermediateDirectories: true)
         let container1 = try PersistenceController.makeContainer(inMemory: false, cloudSyncEnabled: false,
                                                                   storeDirectory: storeDirectory)
-        let firstStore = NoteStore(container: container1, attachmentFileStore: makeTestAttachmentFileStore())
+        let firstStore = trackAttachmentReconciliation(of: NoteStore(container: container1, attachmentFileStore: makeTestAttachmentFileStore()))
         guard case let .success((id, _)) = firstStore.createDocumentNote(id: UUID(),
             document: NoteDocument(blocks: [.text("Committed")])) else { return XCTFail() }
         let journal = NoteDraftJournal(directory: directory.appendingPathComponent("journal"))
@@ -1100,7 +1100,7 @@ final class NotesPageControllerTests: XCTestCase {
             selectionLocation: 0, selectionLength: 0, staged: [], savedAt: Date()), staged: [])
         let container2 = try PersistenceController.makeContainer(inMemory: false, cloudSyncEnabled: false,
                                                                   storeDirectory: storeDirectory)
-        let secondStore = NoteStore(container: container2, attachmentFileStore: makeTestAttachmentFileStore())
+        let secondStore = trackAttachmentReconciliation(of: NoteStore(container: container2, attachmentFileStore: makeTestAttachmentFileStore()))
         let token = try XCTUnwrap(secondStore.note(withID: id)).revisionToken
         guard case .success(.applied) = secondStore.agentWrite(noteID: id, baseRevisionToken: token,
             document: NoteDocument(blocks: [.text("Agent")]), agentName: "Agent", disposition: .direct) else {
@@ -1769,8 +1769,8 @@ final class NotesPageControllerTests: XCTestCase {
                                                                   storeDirectory: storeDirectory)
         let persistence = PersistenceGate()
         let files = makeTestAttachmentFileStore(rootURL: directory.appendingPathComponent("files"))
-        let firstStore = NoteStore(container: container1, persist: { try persistence.save($0) },
-                                   attachmentFileStore: files)
+        let firstStore = trackAttachmentReconciliation(of: NoteStore(container: container1, persist: { try persistence.save($0) },
+                                   attachmentFileStore: files))
         let first = NotesPageController(store: firstStore, journal: NoteDraftJournal(directory: journalDirectory),
                                         saveDelay: .seconds(60))
         await first.startAndWait()
@@ -1788,8 +1788,8 @@ final class NotesPageControllerTests: XCTestCase {
 
         let container2 = try PersistenceController.makeContainer(inMemory: false, cloudSyncEnabled: false,
                                                                   storeDirectory: storeDirectory)
-        let secondStore = NoteStore(container: container2, persist: { try persistence.save($0) },
-                                    attachmentFileStore: files)
+        let secondStore = trackAttachmentReconciliation(of: NoteStore(container: container2, persist: { try persistence.save($0) },
+                                    attachmentFileStore: files))
         let second = NotesPageController(store: secondStore, journal: NoteDraftJournal(directory: journalDirectory),
                                          saveDelay: .seconds(60))
         await second.startAndWait()
@@ -1810,7 +1810,7 @@ final class NotesPageControllerTests: XCTestCase {
 
         let container3 = try PersistenceController.makeContainer(inMemory: false, cloudSyncEnabled: false,
                                                                   storeDirectory: storeDirectory)
-        let thirdStore = NoteStore(container: container3, attachmentFileStore: files)
+        let thirdStore = trackAttachmentReconciliation(of: NoteStore(container: container3, attachmentFileStore: files))
         let third = NotesPageController(store: thirdStore, journal: NoteDraftJournal(directory: journalDirectory))
         await XCTAssertTrueAsync(await third.openDurably(noteID: newID))
         XCTAssertEqual(third.active?.engine.document().attachmentIDs.count, 1)
@@ -2220,7 +2220,7 @@ final class NoteSessionMatrixTests: XCTestCase {
             XCTAssertEqual(cells.count, Column.allCases.count, "\(event)")
             guard cells.count == Column.allCases.count else { continue }
             for (column, cell) in zip(Column.allCases, cells) {
-                let fixture = try await MatrixFixture.make(column)
+                let fixture = try await MatrixFixture.make(column, owner: self)
                 defer { fixture.cleanup() }
                 let initialState = fixture.session.state
                 let initialActivity = fixture.session.engine.activity
@@ -2247,7 +2247,7 @@ final class NoteSessionMatrixTests: XCTestCase {
     func testStaleBaseNeverCommitsAcrossExternalEvents() async throws {
         for column in [Column.d, .n, .m] {
             for event in [Event.externalChange, .externalDelete] {
-                let fixture = try await MatrixFixture.make(column)
+                let fixture = try await MatrixFixture.make(column, owner: self)
                 defer { fixture.cleanup() }
                 let decision = try await fixture.perform(event)
                 XCTAssertEqual(decision, "A")
@@ -2326,11 +2326,11 @@ final class NoteSessionMatrixTests: XCTestCase {
             }
         }
 
-        static func make(_ column: Column) async throws -> MatrixFixture {
-            let directory = FileManager.default.temporaryDirectory.appendingPathComponent("AtticMatrix-\(UUID().uuidString)")
+        static func make(_ column: Column, owner: XCTestCase) async throws -> MatrixFixture {
+            let directory = owner.ownedTemporaryDirectory(prefix: "AtticMatrix")
             let gate = PersistenceGate()
-            let store = try makeTestNoteStore(persist: { try gate.save($0) },
-                                              attachmentFileStore: makeTestAttachmentFileStore())
+            let store = try owner.makeTestNoteStore(persist: { try gate.save($0) },
+                                              attachmentFileStore: owner.makeTestAttachmentFileStore())
             let journal = MatrixJournal(directory: directory)
             let loader = DelayedImageLoader()
             let image = try pixel()
@@ -2417,7 +2417,7 @@ final class NoteSessionMatrixTests: XCTestCase {
         func cleanup() {
             window.contentView = nil
             window.close()
-            try? FileManager.default.removeItem(at: directory)
+
         }
 
         func perform(_ event: Event) async throws -> Character {

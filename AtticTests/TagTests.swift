@@ -34,7 +34,7 @@ final class TagTests: XCTestCase {
         let container = try PersistenceController.makeContainer(inMemory: true)
         return AtticLibrary(
             tasks: TaskStore(container: container),
-            notes: NoteStore(container: container, attachmentFileStore: makeTestAttachmentFileStore()),
+            notes: trackAttachmentReconciliation(of: NoteStore(container: container, attachmentFileStore: makeTestAttachmentFileStore())),
             canvases: CanvasStore(container: container)
         )
     }
@@ -48,7 +48,7 @@ final class TagTests: XCTestCase {
         try seed.save()
         let library = AtticLibrary(
             tasks: TaskStore(container: container),
-            notes: NoteStore(container: container, attachmentFileStore: makeTestAttachmentFileStore()),
+            notes: trackAttachmentReconciliation(of: NoteStore(container: container, attachmentFileStore: makeTestAttachmentFileStore())),
             canvases: CanvasStore(container: container)
         )
         let note = try XCTUnwrap(library.notes?.create(title: "Note"))

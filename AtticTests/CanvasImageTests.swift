@@ -39,11 +39,8 @@ final class CanvasImageImportTests: XCTestCase {
 
     func testFileImportStoresCanonicalBytesRatherThanSourcePath() async throws {
         let sourceData = try makeTestImageData(width: 120, height: 60)
-        let sourceURL = FileManager.default.temporaryDirectory
-            .appendingPathComponent(UUID().uuidString)
-            .appendingPathExtension("png")
+        let sourceURL = try ownedTemporaryFile(named: "source.png", prefix: "CanvasImageTests")
         try sourceData.write(to: sourceURL, options: .atomic)
-        defer { try? FileManager.default.removeItem(at: sourceURL) }
 
         let prepared = try await CanvasImageImporter.prepare(url: sourceURL)
         try FileManager.default.removeItem(at: sourceURL)
@@ -1124,8 +1121,7 @@ final class CanvasImageImportBatchTests: XCTestCase {
     }
 
     private func makeCleanupRoot() throws -> URL {
-        let root = FileManager.default.temporaryDirectory
-            .appendingPathComponent("AtticCanvasImportTests", isDirectory: true)
+        let root = ownedTemporaryDirectory(prefix: "AtticCanvasImportTests")
             .appendingPathComponent(UUID().uuidString, isDirectory: true)
         try FileManager.default.createDirectory(
             at: root,

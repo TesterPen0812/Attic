@@ -10,7 +10,7 @@ final class LinkStoreTests: XCTestCase {
         let container = try PersistenceController.makeContainer(inMemory: true)
         library = AtticLibrary(
             tasks: TaskStore(container: container),
-            notes: NoteStore(container: container, attachmentFileStore: makeTestAttachmentFileStore()),
+            notes: trackAttachmentReconciliation(of: NoteStore(container: container, attachmentFileStore: makeTestAttachmentFileStore())),
             canvases: CanvasStore(container: container)
         )
     }
@@ -73,7 +73,7 @@ final class LinkStoreTests: XCTestCase {
         let clock = MutableNow(Date(timeIntervalSince1970: 1_000_000))
         let container = try PersistenceController.makeContainer(inMemory: true)
         let tasks = TaskStore(container: container, now: { clock.value })
-        let notes = NoteStore(container: container, now: { clock.value }, attachmentFileStore: makeTestAttachmentFileStore())
+        let notes = trackAttachmentReconciliation(of: NoteStore(container: container, now: { clock.value }, attachmentFileStore: makeTestAttachmentFileStore()))
         let library = AtticLibrary(tasks: tasks, notes: notes, now: { clock.value })
         let task = try XCTUnwrap(tasks.create(title: "Task"))
         let note = try XCTUnwrap(notes.create(title: "Note"))

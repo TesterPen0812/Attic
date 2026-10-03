@@ -52,8 +52,7 @@ final class AtticGalleryLaunchPolicyTests: XCTestCase {
     /// cleanup that considered them unreferenced would remove them.
     private func usedApplicationSupport() throws -> (root: URL, sentinels: [URL]) {
         let fileManager = FileManager.default
-        let root = fileManager.temporaryDirectory
-            .appendingPathComponent("AtticGallerySentinels-\(UUID().uuidString)", isDirectory: true)
+        let root = ownedTemporaryDirectory(prefix: "AtticGallerySentinels")
         let digest = String(repeating: "ab", count: 32)
         let sentinels = [
             root.appendingPathComponent("Attic/Attachments/v1/\(UUID().uuidString)/\(digest)/note.txt"),
@@ -79,23 +78,21 @@ final class AtticGalleryLaunchPolicyTests: XCTestCase {
         let container = try PersistenceController.makeContainer(inMemory: true)
         let (tasks, notes) = launch.makeItemStores(container: container)
         await notes.waitForAttachmentReconciliation()
-        let staging = FileManager.default.temporaryDirectory
-            .appendingPathComponent("AtticGalleryStaging-\(UUID().uuidString)", isDirectory: true)
+        let staging = ownedTemporaryDirectory(prefix: "AtticGalleryStaging")
         _ = await tasks.sweepUnreferencedAttachmentStorage(minimumAge: 0, dropStagingRoot: staging)
-        try? FileManager.default.removeItem(at: staging)
+
     }
 
     @MainActor
     func testAllowedAndRefusedGalleryLaunchesLeaveTheIdentitysFilesAlone() async throws {
         for (label, bundle) in [("allowed", "com.taha.Attic.p0design"), ("refused", "com.taha.Attic")] {
             let (support, sentinels) = try usedApplicationSupport()
-            defer { try? FileManager.default.removeItem(at: support) }
             let launch = AppRuntimeEnvironment(
                 environment: [:], processIdentifier: 1, testRunIdentifier: UUID().uuidString,
                 arguments: ["Attic", "--attic-gallery"], bundleIdentifier: bundle,
                 applicationSupportURL: support
             )
-            defer { try? FileManager.default.removeItem(at: launch.galleryScratchRoot) }
+            registerTemporaryProductDirectory(launch.galleryScratchRoot, parentName: "AtticGallery", prefix: "1")
             XCTAssertEqual(launch.galleryLaunch, label == "allowed" ? .allowed : .refused)
             XCTAssertTrue(launch.usesInMemoryStore, label)
             XCTAssertNil(launch.noteRecoveryURL, "\(label): no draft recovery is read or written")
@@ -119,7 +116,6 @@ final class AtticGalleryLaunchPolicyTests: XCTestCase {
     @MainActor
     func testTheSameCleanupUnderANormalLaunchWouldRemoveTheSentinels() async throws {
         let (support, sentinels) = try usedApplicationSupport()
-        defer { try? FileManager.default.removeItem(at: support) }
         let normal = AppRuntimeEnvironment(
             environment: [:], processIdentifier: 1, testRunIdentifier: "t",
             arguments: ["Attic"], bundleIdentifier: "com.taha.Attic.p0design", applicationSupportURL: support

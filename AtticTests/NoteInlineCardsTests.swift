@@ -15,18 +15,18 @@ final class NoteInlineCardsTests: XCTestCase {
         let second = NoteAttachment(noteID: note.id, originalFilename: "Second.png", byteCount: 0, sortIndex: 1, contentDigest: "")
         context.insert(first); context.insert(second)
         try context.save()
-        let store = NoteStore(container: container)
+        let store = trackAttachmentReconciliation(of: NoteStore(container: container))
         XCTAssertTrue(store.placeAttachment(second.id, in: note.id, offset: 6, before: first.id,
                                              size: CGSize(width: 240, height: 180)))
-        let restored = NoteStore(container: container)
+        let restored = trackAttachmentReconciliation(of: NoteStore(container: container))
         XCTAssertEqual(restored.attachments(for: note.id).map(\.id), [second.id, first.id])
         XCTAssertEqual(restored.attachments(for: note.id)[0].inlineOffset, 6)
         XCTAssertEqual(restored.attachments(for: note.id)[0].displayHeight, 180)
         XCTAssertTrue(restored.update(try XCTUnwrap(restored.notes.first), body: "New\nFirst\nSecond\nThird"))
-        let edited = NoteStore(container: container)
+        let edited = trackAttachmentReconciliation(of: NoteStore(container: container))
         XCTAssertEqual(edited.attachments(for: note.id)[0].inlineOffset, 10)
         XCTAssertTrue(edited.placeAttachment(second.id, in: note.id, offset: nil, size: CGSize(width: 260, height: 56)))
-        let compact = NoteStore(container: container).attachments(for: note.id).first { $0.id == second.id }
+        let compact = trackAttachmentReconciliation(of: NoteStore(container: container)).attachments(for: note.id).first { $0.id == second.id }
         XCTAssertNil(compact?.inlineOffset)
         XCTAssertEqual(compact?.displayHeight, 56)
     }
@@ -104,7 +104,7 @@ final class NoteInlineCardsTests: XCTestCase {
                                         byteCount: 0, sortIndex: 0, contentDigest: "")
         context.insert(attachment)
         try context.save()
-        let store = NoteStore(container: container)
+        let store = trackAttachmentReconciliation(of: NoteStore(container: container))
         XCTAssertTrue(store.placeAttachment(attachment.id, in: note.id, offset: 8))
         XCTAssertEqual(store.attachments(for: note.id).first?.inlineOffset, 8)
         // One update delivers both inserts: "!" after "one" (old offset 3) and
@@ -113,7 +113,7 @@ final class NoteInlineCardsTests: XCTestCase {
                                    body: "one!\ntwo\nthree\nfour!"))
         XCTAssertEqual(store.attachmentAnchorFallbackDerivations, 1,
                        "A body-only save derives one list, not one diff per attachment")
-        let persisted = NoteStore(container: container)
+        let persisted = trackAttachmentReconciliation(of: NoteStore(container: container))
         // New UTF-16 offsets: "one!\n" [0,5), "two\n" [5,9), "three\n" [9,15),
         // "four!" [15,20) — "three" now starts at 9, not at the first edit.
         XCTAssertEqual(persisted.attachments(for: note.id).first?.inlineOffset, 9,
@@ -165,7 +165,7 @@ final class NoteInlineCardsTests: XCTestCase {
         }
         try context.save()
 
-        let store = NoteStore(container: container)
+        let store = trackAttachmentReconciliation(of: NoteStore(container: container))
         let old = "A\nA\nB", new = "A\nA\nA\nB"
         let batch = NoteBodyEditBatch(
             baseText: old,
@@ -189,7 +189,7 @@ final class NoteInlineCardsTests: XCTestCase {
     func testFailedSaveRetainsExactBatchForRetry() throws {
         let container = try PersistenceController.makeContainer(inMemory: true, cloudSyncEnabled: false)
         let gate = PersistenceGate()
-        let store = NoteStore(container: container, persist: gate.save)
+        let store = trackAttachmentReconciliation(of: NoteStore(container: container, persist: gate.save))
         let note = try XCTUnwrap(store.create(body: "A\nA\nB"))
         let context = ModelContext(container)
         let attachment = NoteAttachment(
@@ -459,7 +459,7 @@ final class NoteInlineCardsPerformanceTests: XCTestCase {
     /// recorded edits, not through a single composed span.
     func testResolverRebasesCardsThroughOrderedRecordedEdits() throws {
         let container = try PersistenceController.makeContainer(inMemory: true)
-        let store = NoteStore(container: container, attachmentFileStore: makeTestAttachmentFileStore())
+        let store = trackAttachmentReconciliation(of: NoteStore(container: container, attachmentFileStore: makeTestAttachmentFileStore()))
         let note = try XCTUnwrap(store.create(body: "one\ntwo\nthree\nfour"))
         let context = ModelContext(container)
         let card = NoteAttachment(noteID: note.id, originalFilename: "Card.png",
@@ -656,7 +656,7 @@ final class NoteInlineCardsPerformanceTests: XCTestCase {
             ))
         }
         try context.save()
-        let store = NoteStore(container: container, attachmentFileStore: makeTestAttachmentFileStore())
+        let store = trackAttachmentReconciliation(of: NoteStore(container: container, attachmentFileStore: makeTestAttachmentFileStore()))
         XCTAssertEqual(store.notes.count, 2000)
         let first = store.orderedNotes()
         XCTAssertEqual(first.map(\.id), store.orderedNotes().map(\.id))
@@ -692,7 +692,7 @@ final class NoteInlineCardsPerformanceTests: XCTestCase {
         context.insert(NoteAttachment(noteID: note.id, originalFilename: "attached.txt",
                                       byteCount: 8, sortIndex: 0, contentDigest: "abc"))
         try context.save()
-        let store = NoteStore(container: container, attachmentFileStore: makeTestAttachmentFileStore())
+        let store = trackAttachmentReconciliation(of: NoteStore(container: container, attachmentFileStore: makeTestAttachmentFileStore()))
         let afterLoad = store.attachmentReconciliationPasses
         XCTAssertEqual(afterLoad, 1, "The first load always reconciles")
         let visible = try XCTUnwrap(store.note(withID: note.id))
@@ -712,7 +712,7 @@ final class NoteInlineCardsPerformanceTests: XCTestCase {
 
     func testInlineCardResolverMemoizesAndSplitsTrayFromInlineCards() throws {
         let container = try PersistenceController.makeContainer(inMemory: true)
-        let store = NoteStore(container: container, attachmentFileStore: makeTestAttachmentFileStore())
+        let store = trackAttachmentReconciliation(of: NoteStore(container: container, attachmentFileStore: makeTestAttachmentFileStore()))
         let note = try XCTUnwrap(store.create(body: "First\nSecond\nThird"))
         let context = ModelContext(container)
         let inline = NoteAttachment(noteID: note.id, originalFilename: "Inline.png",

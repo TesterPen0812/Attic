@@ -284,8 +284,8 @@ final class TasksReviewFixTests: XCTestCase {
     // MARK: 5. "Open page" works for a task in the Done log
 
     func testOpenPageOnADoneLogTaskShowsItsSubtasksAndKeptFiles() async throws {
-        let root = FileManager.default.temporaryDirectory.appendingPathComponent("AtticDoneDetail-\(UUID().uuidString)", isDirectory: true)
-        defer { try? FileManager.default.removeItem(at: root) }
+        let root = ownedTemporaryDirectory(prefix: "AtticDoneDetail")
+
         let files = TaskImageFiles(rootURL: root.appendingPathComponent("files", isDirectory: true))
         let source = root.appendingPathComponent("plan.txt")
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
