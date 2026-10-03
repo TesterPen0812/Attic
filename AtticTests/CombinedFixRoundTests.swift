@@ -365,9 +365,21 @@ final class CombinedFixRoundTests: XCTestCase {
         setQuery("launch")
         press("\r", 36)
         XCTAssertEqual(Set(session.engine.tags), ["launch-october", "kyoto"], "Return took the exact tag off")
+        // The rows reorder (the note's own tags first); the highlight stays
+        // on `#launch`, so Return again adds it back and never touches
+        // `#launch-october` (fix round 2, review P2). Space under Full
+        // Keyboard Access presses the same highlight.
+        press("\r", 36)
+        XCTAssertEqual(Set(session.engine.tags), ["launch-october", "kyoto", "launch"], "Return again: the same tag")
+        press("\r", 36)
+        XCTAssertEqual(Set(session.engine.tags), ["launch-october", "kyoto"])
+        // A prefix lights "New tag" for what was typed, never the first match.
+        setQuery("launch-oct")
+        press("\r", 36)
+        XCTAssertEqual(Set(session.engine.tags), ["launch-october", "kyoto", "launch-oct"], "a prefix adds what was typed")
         setQuery("paris")
         press("\r", 36)
-        XCTAssertEqual(Set(session.engine.tags), ["launch-october", "kyoto", "paris"], "a new name is added")
+        XCTAssertEqual(Set(session.engine.tags), ["launch-october", "kyoto", "launch-oct", "paris"], "a new name is added")
         press("\u{1B}", 53)
         spin(0.3)
         XCTAssertFalse(presenter.isOpen, "Esc closed it")
@@ -615,6 +627,66 @@ final class CombinedFixRoundTests: XCTestCase {
         try await Task.sleep(for: .milliseconds(300))
         XCTAssertEqual(engine.textStorage.string, "Plan\nBody\n/file")
         XCTAssertTrue(engine.isPending(try XCTUnwrap(request)), "a stale completion cancels nothing")
+    }
+
+    /// P2 (`bdadf46`): the highlight is the tag, not the row number. Typing
+    /// "launch" lights `#launch` (second, under the note's own
+    /// `#launch-october`); pressing it adds it, Notes lists it first, and
+    /// the highlight must follow it, so a second Return would take it off
+    /// again rather than remove `#launch-october`. A prefix lights only
+    /// "New tag", never the first match.
+    func testTheTagHighlightFollowsItsTagWhenTheRowsReorder() throws {
+        let attribute = NSAccessibility.Attribute(rawValue: "AXEnhancedUserInterface")
+        let previous = NSApp.accessibilityAttributeValue(attribute)
+        NSApp.accessibilitySetValue(true, forAttribute: attribute)
+        defer { NSApp.accessibilitySetValue(previous, forAttribute: attribute) }
+        let (harness, session, presenter) = try tagHarness(keyPanel: false)
+        defer { presenter.close(restoreFocus: false, immediately: true) }
+        let host = try XCTUnwrap(presenter.host)
+        func items() -> [AtticDropdownMenuItem.ItemView] {
+            accessibilityElements(host).compactMap { $0 as? AtticDropdownMenuItem.ItemView }
+        }
+        func lit() -> [String] { items().filter { $0.isAccessibilitySelected() }.compactMap { $0.accessibilityLabel() } }
+        func setQuery(_ text: String) throws {
+            let editor = try XCTUnwrap(harness.window.firstResponder as? NSTextView, "the tag field has the keyboard")
+            editor.selectAll(nil)
+            editor.insertText(text, replacementRange: NSRange(location: NSNotFound, length: 0))
+            spin(0.3)
+        }
+        try setQuery("launch")
+        XCTAssertEqual(items().compactMap { $0.accessibilityLabel() }, ["#launch-october, 1", "#launch, 2"])
+        XCTAssertEqual(lit(), ["#launch, 2"], "the exact tag, though the note's own tag is listed first")
+        let launch = try XCTUnwrap(items().first { $0.accessibilityLabel() == "#launch, 2" })
+        XCTAssertTrue(launch.accessibilityPerformPress())
+        spin(0.3)
+        XCTAssertEqual(Set(session.engine.tags), ["launch-october", "launch"])
+        XCTAssertEqual(items().compactMap { $0.accessibilityLabel() }.first, "#launch, 2", "the rows reordered")
+        XCTAssertEqual(lit(), ["#launch, 2"], "the highlight followed its tag, not its row number")
+        try setQuery("launch-oct")
+        XCTAssertEqual(lit(), ["New tag “#launch-oct”"], "a prefix lights what was typed, never the first match")
+        try setQuery("")
+        XCTAssertEqual(lit(), [], "an empty field lights nothing")
+    }
+
+    /// The tag picker's highlight rule, for both pages.
+    func testTheTagPickerHighlightRule() {
+        typealias H = AtticTagPickerHighlight
+        let tags = [AtticTagPicker.Tag(name: "launch-october", state: .on), AtticTagPicker.Tag(name: "launch", state: .off)]
+        XCTAssertEqual(H.typed("#Launch", in: tags, create: nil), .tag("launch"), "exact, `#` and case aside")
+        XCTAssertEqual(H.typed("laun", in: tags, create: "laun"), .create)
+        XCTAssertNil(H.typed("laun", in: tags, create: nil), "a prefix never lights a tag")
+        XCTAssertNil(H.typed("", in: tags, create: nil))
+        XCTAssertNil(H.typed("#", in: tags, create: nil))
+        let reordered = Array(tags.reversed())
+        XCTAssertEqual(H.tag("launch").index(in: tags, create: nil), 1)
+        XCTAssertEqual(H.tag("launch").index(in: reordered, create: nil), 0, "found again by name")
+        XCTAssertNil(H.tag("kyoto").index(in: tags, create: nil), "filtered away: nothing lit")
+        XCTAssertEqual(H.create.index(in: tags, create: "x"), 2)
+        XCTAssertNil(H.create.index(in: tags, create: nil))
+        XCTAssertEqual(H.at(0, in: tags, create: nil), .tag("launch-october"))
+        XCTAssertEqual(H.at(2, in: tags, create: "x"), .create)
+        XCTAssertNil(H.at(2, in: tags, create: nil))
+        XCTAssertNil(H.at(nil, in: tags, create: "x"))
     }
 
 }
