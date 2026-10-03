@@ -738,7 +738,8 @@ final class NoteDocumentStoreTests: XCTestCase {
             first.extras = ["owner": .string("person")]
             var kept = NoteBlock.checklist("Keep me", checked: true)
             kept.marks = [NoteMark(.bold, offset: 0, length: 4)]
-            let base = NoteDocument(blocks: [.text("Title"), first, kept])
+            var base = NoteDocument(blocks: [.text("Title"), first, kept])
+            base.refreshRequiredCapabilities()
             let (id, _) = try create(base)
             let token = try XCTUnwrap(store.note(withID: id)?.revisionToken)
             let parsed = try NoteAgentTextParser.document(title: "Title", body: "- [x] Keep me\n- [ ] New item", base: base)

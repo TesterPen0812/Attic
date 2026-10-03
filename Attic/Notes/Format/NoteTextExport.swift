@@ -108,8 +108,8 @@ enum NoteAgentTextError: LocalizedError, Equatable {
 }
 
 /// The agent wire format has no mark offsets or complete paragraph metadata.
-/// A rich document can round-trip intact blocks, plain-text edits, and
-/// checkbox flips only when all other block fields are preserved.
+/// Surviving rich blocks retain their fields; plain text and checklist
+/// checked states may change, and whole checklist lines may be added or removed.
 enum NoteAgentTextSafety {
     static func validate(base: NoteDocument, proposed: NoteDocument) throws {
         // Whole checklist lines may be added or removed. Surviving base

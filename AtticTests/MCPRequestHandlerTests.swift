@@ -399,7 +399,8 @@ final class MCPRequestHandlerTests: XCTestCase {
             let (noteStore, handler) = try makeNoteHandler()
             var paragraph = NoteBlock.text("Keep paragraph")
             if rich { paragraph.style = "heading"; paragraph.level = 2 }
-            let base = NoteDocument(blocks: [.text("Title"), paragraph, .checklist("First"), .checklist("Second")])
+            var base = NoteDocument(blocks: [.text("Title"), paragraph, .checklist("First"), .checklist("Second")])
+            base.refreshRequiredCapabilities()
             guard case let .success((id, _)) = noteStore.createDocumentNote(id: UUID(), document: base) else { return XCTFail() }
             let prefix = NoteTextExport.agentLine(paragraph, index: 1) + "\n"
             let token = try XCTUnwrap(noteStore.note(withID: id)?.revisionToken)
