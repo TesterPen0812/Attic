@@ -3246,6 +3246,30 @@ extension NoteSlice3bTests {
         XCTAssertEqual(store.loadDocument(noteID: id)?.content.document, external)
     }
 
+    func testPrivatePasteKeepsTheLiveMarkedTextGuardBeforeActivityNotification() async throws {
+        let store = try makeTestNoteStore(attachmentFileStore: makeTestAttachmentFileStore())
+        let controller = NotesPageController(store: store, journal: nil, saveDelay: .seconds(60))
+        await controller.startAndWait()
+        let engine = try XCTUnwrap(controller.active).engine
+        let (_, view) = engine.makeView()
+        // AppKit's live composition state must gate paste even before the
+        // engine receives the text-change activity notification.
+        view.delegate = nil
+        view.setMarkedText("中", selectedRange: NSRange(location: 1, length: 0),
+                           replacementRange: NSRange(location: 0, length: 0))
+        view.delegate = engine
+        XCTAssertTrue(view.hasMarkedText())
+        XCTAssertEqual(engine.activity, .idle)
+        let before = engine.document()
+        let fragment = try NoteContentCodec.encode(NoteDocument(blocks: [.text("Pasted")]), context: .fragment)
+        await XCTAssertFalseAsync(await engine.pasteDurably(fragmentData: fragment,
+            at: NSRange(location: engine.textStorage.length, length: 0)))
+        XCTAssertEqual(engine.document(), before)
+        XCTAssertTrue(view.hasMarkedText())
+        XCTAssertEqual(controller.active?.notice, "The note or selection changed. Paste again at the new selection.")
+        view.unmarkText()
+    }
+
     func testIneligiblePrivatePastePostsTheExistingRefusalNoticeWithoutMutation() async throws {
         let engine = NoteEditorEngine(noteID: UUID(), document: NoteDocument(blocks: [.text("Before")]))
         engine.canPasteFragment = { false }

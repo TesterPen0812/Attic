@@ -802,6 +802,7 @@ final class NotesPageController: ObservableObject {
             guard let self, let session else { return false }
             return self.active === session && !self.isLibraryPresented && !session.isImporting
                 && !session.isReadOnly
+                && session.engine.textView?.hasMarkedText() != true
         }
         engine.onFragmentAdmission = { [weak self, weak session] proposed, copied in
             guard let self, let session else { return String(localized: "The note is no longer open.") }
