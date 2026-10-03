@@ -1029,6 +1029,10 @@ final class AtticDropdownTests: XCTestCase {
               + " SPREAD=\(spread(samples.slashOpen))/\(spread(samples.legacySlashOpen))")
         print("DROPDOWN\(label)_SLASH_FILTER_MS_MEDIAN=\(median(samples.slashFilter)) LEGACY=\(median(samples.legacySlashFilter))"
               + " SPREAD=\(spread(samples.slashFilter))/\(spread(samples.legacySlashFilter))")
+        // The filter samples alternate: narrowing to the "li" rows, then widening back to all nine.
+        func half(_ samples: [Double], _ start: Int) -> [Double] { stride(from: start, to: samples.count, by: 2).map { samples[$0] } }
+        print("DROPDOWN\(label)_SLASH_NARROW_MS_MEDIAN=\(median(half(samples.slashFilter, 0))) LEGACY=\(median(half(samples.legacySlashFilter, 0)))"
+              + " WIDEN=\(median(half(samples.slashFilter, 1))) LEGACY=\(median(half(samples.legacySlashFilter, 1)))")
         print("DROPDOWN\(label)_TAG_OPEN_MS_MEDIAN=\(median(samples.tag)) LEGACY=\(median(samples.legacyTag))"
               + " SPREAD=\(spread(samples.tag))/\(spread(samples.legacyTag))")
         print("DROPDOWN\(label)_PRIORITY_OPEN_MS_MEDIAN=\(median(samples.priority)) SPREAD=\(spread(samples.priority))")
