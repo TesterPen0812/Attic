@@ -43,6 +43,30 @@ final class NotesSlice2EngineTests: XCTestCase {
 
     // MARK: Title hashtags
 
+    /// The new editor is the default in every strict preview identity
+    /// (the owner's "Attic Preview" is `com.taha.Attic.preview.main`), not
+    /// only `…preview.notes*`; the official identity keeps the legacy
+    /// editor until Phase 2's pull request; the default, when set, decides.
+    func testTheNewEditorIsTheDefaultInEveryPreviewIdentity() throws {
+        let suite = "NotesEditorSettingTests.\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        for identity in ["com.taha.Attic.preview.main", "com.taha.Attic.preview.cureview", "com.taha.Attic.preview.notes",
+                         "com.taha.Attic.preview.notes-e1", "com.taha.Attic.preview.5268758"] {
+            XCTAssertTrue(NotesEditorSetting.isEnabled(defaults: defaults, bundleIdentifier: identity), identity)
+        }
+        for identity in ["com.taha.Attic", "com.taha.Attic.preview", "com.taha.Attic.preview.", "com.taha.Attic.previewer.main",
+                         "com.taha.Attic.UnitTestHost", "com.taha.Attic.perf.ui", "com.emanueledipietro.Attic"] {
+            XCTAssertFalse(NotesEditorSetting.isEnabled(defaults: defaults, bundleIdentifier: identity), identity)
+        }
+        XCTAssertFalse(NotesEditorSetting.isEnabled(defaults: defaults, bundleIdentifier: nil))
+        // The default overrides the identity, both ways.
+        defaults.set(false, forKey: NotesEditorSetting.defaultsKey)
+        XCTAssertFalse(NotesEditorSetting.isEnabled(defaults: defaults, bundleIdentifier: "com.taha.Attic.preview.main"))
+        defaults.set(true, forKey: NotesEditorSetting.defaultsKey)
+        XCTAssertTrue(NotesEditorSetting.isEnabled(defaults: defaults, bundleIdentifier: "com.taha.Attic"))
+    }
+
     func testSpaceAfterAHashtagInTheTitleTakesTheTagAsOneUndoStep() async {
         let (engine, textView) = makeEngine(NoteDocument(blocks: [.text("Pricing")]))
         var tagChanges = 0

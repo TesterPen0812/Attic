@@ -3,16 +3,28 @@ import Combine
 import CryptoKit
 import UniformTypeIdentifiers
 
-/// Whether the Notes page uses the new editor. Internal: a defaults key,
-/// on by default only in the Phase 2 preview identity. A note already in
-/// the new format always opens in the new editor, whatever this says.
+/// Whether the Notes page uses the new editor. Internal: the
+/// `AtticUseNewNotesEditor` default, when set, decides (either way);
+/// otherwise the new editor is on in every preview identity
+/// (`com.taha.Attic.preview.<name>`: "Attic Preview" is
+/// `com.taha.Attic.preview.main`) and off elsewhere. A note already in the
+/// new format always opens in the new editor, whatever this says.
+///
+/// The official `com.taha.Attic` identity keeps the legacy editor by
+/// default for now: switching it is decided at Phase 2's pull request.
 enum NotesEditorSetting {
     static let defaultsKey = "AtticUseNewNotesEditor"
-    static let previewBundlePrefix = "com.taha.Attic.preview.notes"
+    static let previewBundlePrefix = "com.taha.Attic.preview."
 
     static func isEnabled(defaults: UserDefaults = .standard, bundleIdentifier: String? = Bundle.main.bundleIdentifier) -> Bool {
         if defaults.object(forKey: defaultsKey) != nil { return defaults.bool(forKey: defaultsKey) }
-        return bundleIdentifier?.hasPrefix(previewBundlePrefix) ?? false
+        return isPreviewIdentity(bundleIdentifier)
+    }
+
+    /// A strict preview identity: the preview prefix and a name after it.
+    static func isPreviewIdentity(_ bundleIdentifier: String?) -> Bool {
+        guard let bundleIdentifier, bundleIdentifier.hasPrefix(previewBundlePrefix) else { return false }
+        return bundleIdentifier.count > previewBundlePrefix.count
     }
 }
 

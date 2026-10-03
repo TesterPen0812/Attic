@@ -561,6 +561,38 @@ final class AtticDropdownTests: XCTestCase {
         XCTAssertFalse(presenter.isOpen, "the automatic suggestions close on that click")
     }
 
+    /// CU review P3: the add bar's suggestions kept their opening width, so
+    /// "#cuqa" then "Create #cuqaz" showed "Create #c…". A list whose rows
+    /// change while it shows follows its known content width.
+    func testTypingSuggestionsFollowTheirRowsWidth() throws {
+        let window = makeWindow()
+        defer { window.close() }
+        let anchor = NSView(frame: CGRect(x: 28, y: 90, width: 60, height: 28))
+        window.contentView?.addSubview(anchor)
+        let presenter = AtticDropdownPresenter()
+        presenter.takesKeyboard = false
+        presenter.contentHasCard = true
+        func show(_ items: [AtticSuggestionList.Item]) {
+            presenter.content = AnyView(AtticSuggestionList(items: items, highlighted: 0) { _ in })
+            presenter.contentHeight = CGFloat(items.count) * AtticDropdownMetrics.rowHeight + AtticDropdownMetrics.inset * 2
+            presenter.contentWidth = AtticSuggestionList.idealWidth(items)
+        }
+        show([.init(id: "cuqa", title: "#cuqa")])
+        presenter.present(from: anchor)
+        defer { presenter.close(restoreFocus: false, immediately: true) }
+        spin(0.1)
+        let host = try XCTUnwrap(presenter.host)
+        XCTAssertEqual(host.contentRect.width, AtticDropdownMetrics.minWidth, accuracy: 1, "a short tag: the minimum")
+        let create: [AtticSuggestionList.Item] = [.init(id: "create-cuqaz", title: "Create #cuqazzzz", systemName: "plus")]
+        show(create)
+        presenter.update()
+        spin(0.1)
+        let wanted = AtticDropdownLayout.width(ideal: AtticSuggestionList.idealWidth(create), available: 296)
+        XCTAssertGreaterThan(wanted, AtticDropdownMetrics.minWidth, "the create row needs more than the minimum")
+        XCTAssertEqual(host.contentRect.width, wanted, accuracy: 1, "the card grew to its row")
+        XCTAssertEqual(presenter.stage.width, wanted)
+    }
+
     private func key(_ characters: String, code: UInt16, flags: NSEvent.ModifierFlags = [], in window: NSWindow) -> NSEvent {
         NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: flags, timestamp: 0,
                         windowNumber: window.windowNumber, context: nil, characters: characters,
@@ -602,6 +634,112 @@ final class AtticDropdownTests: XCTestCase {
         XCTAssertIdentical(AtticDropdownPresenter.owner(of: window.firstResponder), original)
     }
 
+    /// The rows are one keyboard stop only under Full Keyboard Access, like
+    /// buttons. In the default mode Space typed in the tag field is part of
+    /// the query, and a click on a row toggles it while the field keeps the
+    /// keyboard (typing goes on in it). Real events through the app's queue
+    /// to a key panel: on CI only (`ATTIC_KEY_WINDOW_TESTS`), as a key
+    /// window would take the keyboard from whoever is at the Mac.
+    func testInTheDefaultModeSpaceTypesAndARowClickLeavesTheFieldTheKeyboard() throws {
+        guard ProcessInfo.processInfo.environment["ATTIC_KEY_WINDOW_TESTS"] == "1" else {
+            throw XCTSkip("needs a key window: CI only")
+        }
+        XCTAssertFalse(NSApp.isFullKeyboardAccessEnabled, "the default keyboard mode")
+        let attribute = NSAccessibility.Attribute(rawValue: "AXEnhancedUserInterface")
+        let previous = NSApp.accessibilityAttributeValue(attribute)
+        NSApp.accessibilitySetValue(true, forAttribute: attribute)
+        defer { NSApp.accessibilitySetValue(previous, forAttribute: attribute) }
+        let window = KeyPanel(contentRect: NSRect(x: -4000, y: -4000, width: 320, height: 520),
+                              styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        window.contentView = NSView(frame: NSRect(x: 0, y: 0, width: 320, height: 520))
+        window.orderFront(nil)
+        window.makeKey()
+        defer { window.close() }
+        let anchor = NSView(frame: CGRect(x: 20, y: 400, width: 60, height: 28))
+        window.contentView?.addSubview(anchor)
+        var toggled: [String] = []
+        let presenter = AtticDropdownPresenter()
+        presenter.design = AtticDesignContext(reduceMotion: true)
+        presenter.content = AnyView(TaskTagPickerView(allTags: ["design", "home"], state: { _ in .off },
+                                                      onToggle: { toggled.append($0) }, onCreate: { _, _ in true }))
+        presenter.present(from: anchor)
+        defer { presenter.close(restoreFocus: false, immediately: true) }
+        spin(0.3)
+        let field = try XCTUnwrap((window.firstResponder as? NSTextView)?.delegate as? NSTextField, "the tag field has the keyboard")
+        func deliver(_ events: [NSEvent]) {
+            events.forEach { NSApp.postEvent($0, atStart: false) }
+            var count = 0
+            while count < 64, let next = NSApp.nextEvent(matching: .any, until: Date(), inMode: .default, dequeue: true) {
+                NSApp.sendEvent(next)
+                count += 1
+            }
+            spin(0.2)
+        }
+        deliver([NSEvent.EventType.keyDown, .keyUp].map { type in
+            NSEvent.keyEvent(with: type, location: .zero, modifierFlags: [], timestamp: ProcessInfo.processInfo.systemUptime,
+                             windowNumber: window.windowNumber, context: nil, characters: " ",
+                             charactersIgnoringModifiers: " ", isARepeat: false, keyCode: 49)!
+        })
+        XCTAssertEqual(field.stringValue, " ", "Space typed in the field")
+        XCTAssertEqual(toggled, [], "and pressed no row")
+        let host = try XCTUnwrap(presenter.host)
+        let row = try XCTUnwrap(accessibilityElements(host).compactMap { $0 as? AtticDropdownMenuItem.ItemView }.first { $0.accessibilityLabel() == "#home" })
+        // Where VoiceOver and the pointer find the row (screen points).
+        let screen = row.accessibilityFrame()
+        let point = window.convertPoint(fromScreen: CGPoint(x: screen.midX, y: screen.midY))
+        XCTAssertTrue(host.convert(host.contentRect, to: nil).contains(point), "the row is inside the card: \(screen)")
+        // Tab in the field keeps the caret there in this mode (the rows are
+        // a stop only under Full Keyboard Access).
+        deliver([NSEvent.EventType.keyDown, .keyUp].map { type in
+            NSEvent.keyEvent(with: type, location: .zero, modifierFlags: [], timestamp: ProcessInfo.processInfo.systemUptime,
+                             windowNumber: window.windowNumber, context: nil, characters: "\t",
+                             charactersIgnoringModifiers: "\t", isARepeat: false, keyCode: 48)!
+        })
+        XCTAssertIdentical(AtticDropdownPresenter.owner(of: window.firstResponder), field, "Tab keeps the keyboard in the field")
+        deliver([NSEvent.EventType.leftMouseDown, .leftMouseUp].map { type in
+            NSEvent.mouseEvent(with: type, location: point, modifierFlags: [], timestamp: ProcessInfo.processInfo.systemUptime,
+                               windowNumber: window.windowNumber, context: nil, eventNumber: 1, clickCount: 1,
+                               pressure: type == .leftMouseDown ? 1 : 0)!
+        })
+        XCTAssertEqual(toggled, ["home"], "the click toggled the row")
+        XCTAssertIdentical(AtticDropdownPresenter.owner(of: window.firstResponder), field, "the field keeps the keyboard")
+    }
+
+    /// Tab in a card's field stays in the card. Left to the window's
+    /// key-view loop it gave the keyboard to the card's host view, which
+    /// cleared SwiftUI's focus (so under Full Keyboard Access the rows were
+    /// never reached and Space pressed nothing). In the default mode the
+    /// field keeps the caret. The key goes to the field's editor as the
+    /// window would deliver it.
+    func testTabInATagFieldKeepsTheKeyboardInTheCard() throws {
+        let window = makeWindow()
+        defer { window.close() }
+        let anchor = NSView(frame: CGRect(x: 20, y: 300, width: 60, height: 28))
+        window.contentView?.addSubview(anchor)
+        for picker in ["tags", "move"] {
+            let presenter = AtticDropdownPresenter()
+            presenter.design = AtticDesignContext(reduceMotion: true)
+            presenter.content = picker == "tags"
+                ? AnyView(TaskTagPickerView(allTags: ["design", "home"], state: { _ in .off }, onToggle: { _ in }, onCreate: { _, _ in true }))
+                : AnyView(TaskMovePickerView(choices: [.init(id: UUID(), title: "Alpha", detail: nil)], onChoose: { _ in }))
+            presenter.present(from: anchor)
+            spin(0.3)
+            let editor = try XCTUnwrap(window.firstResponder as? NSTextView, picker)
+            let field = try XCTUnwrap(editor.delegate as? NSTextField)
+            for flags: NSEvent.ModifierFlags in [[], .shift] {
+                // As the app delivers it: the open card's key monitor, then
+                // the first responder.
+                let tab = key("\t", code: 48, flags: flags, in: window)
+                if presenter.handleKey(tab) != nil { editor.keyDown(with: tab) }
+                spin(0.2)
+                XCTAssertIdentical(AtticDropdownPresenter.owner(of: window.firstResponder), field,
+                                   "\(picker): Tab \(flags) keeps the caret in the field (\(String(describing: window.firstResponder)))")
+            }
+            presenter.close(restoreFocus: false, immediately: true)
+        }
+    }
+
     /// A view that counts the clicks that reach it.
     final class ClickRecorder: NSView {
         var clicks = 0
@@ -615,8 +753,9 @@ final class AtticDropdownTests: XCTestCase {
     }
 
     /// P3-T1: the tag picker from the keyboard with Full Keyboard Access on,
-    /// through real events in the app's queue: Tab moves from the field to a
-    /// row and Space presses it; ↓ moves the one highlight (VoiceOver's
+    /// through real events in the app's queue: Tab moves from the field to
+    /// the rows, one keyboard stop that highlights its first row, and Space
+    /// presses it; ↓ moves the one highlight (VoiceOver's
     /// "selected"; ticks stay marks); Return toggles the highlighted tag;
     /// Esc closes the card and gives the keyboard back; a click outside
     /// closes it and goes through to what is under it.
@@ -686,12 +825,11 @@ final class AtticDropdownTests: XCTestCase {
         let afterTab = window.firstResponder as? NSView
         XCTAssertFalse((afterTab as? NSTextView)?.isFieldEditor == true, "Tab left the field")
         XCTAssertTrue(afterTab?.isDescendant(of: host) == true, "the keyboard is still in the card")
+        XCTAssertEqual(selected(host), ["#design"], "Tab reached the rows: the first is highlighted, and only it is selected"
+                       + " (first responder \(String(describing: window.firstResponder)))")
         press(" ", 49)
-        XCTAssertEqual(toggled.count, 1, "Tab reached a row and Space pressed it: \(toggled)")
-        XCTAssertTrue(["design", "home", "launch"].contains(toggled.first ?? ""))
+        XCTAssertEqual(toggled, ["design"], "Space pressed the row Tab reached")
         XCTAssertTrue(presenter.isOpen, "toggling a tag keeps the card open")
-        press("\u{F701}", 125)
-        XCTAssertEqual(selected(host), ["#design"], "↓ highlights the first row, and only it is selected")
         press("\u{F701}", 125)
         XCTAssertEqual(selected(host), ["#home"], "↓ moves the one highlight")
         XCTAssertEqual(items(host).first { $0.accessibilityLabel() == "#home" }.flatMap(Self.markChar), "✓", "its tick is its mark")
@@ -705,6 +843,10 @@ final class AtticDropdownTests: XCTestCase {
 
         // A click outside, with a row focused from the keyboard.
         let second = try open()
+        // In the field, Space types: it presses no row.
+        press(" ", 49)
+        XCTAssertEqual((((window.firstResponder as? NSTextView)?.delegate) as? NSTextField)?.stringValue, " ", "Space typed in the tag field")
+        XCTAssertEqual(toggled, ["design", "home"], "and pressed no row")
         press("\t", 48)
         XCTAssertFalse((window.firstResponder as? NSTextView)?.isFieldEditor == true, "Tab left the field")
         let point = recorder.convert(CGPoint(x: recorder.bounds.midX, y: recorder.bounds.midY), to: nil)

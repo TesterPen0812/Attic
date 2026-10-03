@@ -426,6 +426,45 @@ final class DeepReviewFixTests: XCTestCase {
         XCTAssertEqual(TasksComposerValues.tags(["qatest", "work"])?.full, "#qatest #work", "the tooltip names every tag")
     }
 
+    /// CU review P3 (combined app): "Tomorrow" and a short tag with
+    /// Priority unset. The empty Priority button gave up nothing, so the
+    /// tag was cut to "#c…". Now an unset button shows its icon alone
+    /// (Priority first) before any value is cut short or closed up, and it
+    /// keeps its name whenever the strip fits.
+    func testAnUnsetButtonGivesUpItsNameBeforeAValueIsCutShort() throws {
+        typealias Strip = AtticComposerStrip<EmptyView, EmptyView, EmptyView>
+        let tomorrow = AtticStripValue(text: "Tomorrow", spoken: "Tomorrow")
+        for tag in ["cuqa", "qatest"] {
+            let faces: [(title: String, value: AtticStripValue?)] = [
+                ("Date", tomorrow), ("Tag", TasksComposerValues.tags([tag])), ("Priority", nil),
+            ]
+            for available: CGFloat in [276, 300] {
+                let full = Strip.usualWidth(faces)
+                let iconOnly = Strip.iconOnlyButtons(faces, available: available)
+                if full > available {
+                    XCTAssertEqual(iconOnly, [2], "#\(tag) at \(available): Priority shows its icon alone (\(full))")
+                    XCTAssertLessThanOrEqual(Strip.usualWidth(faces, iconOnly: iconOnly), available,
+                                             "#\(tag) at \(available): then the values fit in full")
+                    XCTAssertFalse(Strip.needsCompactGaps(faces, available: available, iconOnly: iconOnly))
+                } else {
+                    XCTAssertEqual(iconOnly, [], "it fits: every name stays")
+                }
+            }
+        }
+        // The capture's case does need it at the review's width.
+        let capture: [(title: String, value: AtticStripValue?)] = [("Date", tomorrow), ("Tag", TasksComposerValues.tags(["cuqa"])), ("Priority", nil)]
+        XCTAssertGreaterThan(Strip.usualWidth(capture), 276, "the names did not fit")
+        // Unset buttons only, and only with a value to make room for.
+        let empty: [(title: String, value: AtticStripValue?)] = [("Date", nil), ("Tag", nil), ("Priority", nil)]
+        XCTAssertEqual(Strip.iconOnlyButtons(empty, available: 100), [])
+        let set: [(title: String, value: AtticStripValue?)] = [("Date", tomorrow), ("Tag", TasksComposerValues.tags(["a-much-longer-tag"])),
+                                                               ("Priority", TasksComposerValues.priority(.high))]
+        XCTAssertEqual(Strip.iconOnlyButtons(set, available: 200), [], "a set button keeps its value")
+        // Short of room still, Tag's empty name goes next, never Date's value.
+        let tagless: [(title: String, value: AtticStripValue?)] = [("Date", AtticStripValue(text: "Wednesday, 15 October", spoken: "")), ("Tag", nil), ("Priority", nil)]
+        XCTAssertEqual(Strip.iconOnlyButtons(tagless, available: 200), [1, 2])
+    }
+
     // MARK: - Code review: the pager's test-only settle
 
     func testThePagerSettleOverrideNeedsAUITestPreviewAndASaneDuration() {

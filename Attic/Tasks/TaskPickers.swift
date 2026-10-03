@@ -123,6 +123,7 @@ struct TaskTagPickerView: View {
     @State private var query = ""
     @State private var highlighted: Int?
     @FocusState private var fieldFocused: Bool
+    @FocusState private var listFocused: Bool
 
     var body: some View {
         let lowered = query.trimmingCharacters(in: .whitespaces).lowercased().replacingOccurrences(of: "#", with: "")
@@ -143,9 +144,12 @@ struct TaskTagPickerView: View {
                 let next = AtticListHighlight.hovered(index, inside: inside, current: highlighted)
                 if next != highlighted { highlighted = next }
             },
-            listRows: allTags.count
+            listRows: allTags.count,
+            listFocus: $listFocused,
+            onListHighlight: $highlighted
         )
         .atticDropdownFocus($fieldFocused, when: focusField)
+        .atticDropdownTabs(field: $fieldFocused, list: $listFocused)
         // Typing highlights the first match; an empty field (as after a new
         // tag saved) highlights nothing, so another Return does nothing
         // rather than toggle a tag (round 5, F5).
@@ -161,7 +165,10 @@ struct TaskTagPickerView: View {
                 guard count > 0 else { return .ignored }
                 highlighted = max((highlighted ?? count) - 1, 0)
                 return .handled
-            case .return:
+            case .return, .space:
+                // Space presses the highlighted row only while the rows have
+                // the keyboard; in the field it types.
+                if press.key == .space, !listFocused { return .ignored }
                 if let highlighted, highlighted < filtered.count {
                     onToggle(filtered[highlighted])
                 } else if let create {
@@ -188,6 +195,7 @@ struct TaskMovePickerView: View {
     @State private var query = ""
     @State private var highlighted: Int?
     @FocusState private var fieldFocused: Bool
+    @FocusState private var listFocused: Bool
 
     /// What `query` leaves, in list order (tests read it).
     static func filter(_ choices: [AtticTaskPicker.Choice], query: String) -> [AtticTaskPicker.Choice] {
@@ -206,9 +214,12 @@ struct TaskMovePickerView: View {
             onHover: { index, inside in
                 let next = AtticListHighlight.hovered(index, inside: inside, current: highlighted)
                 if next != highlighted { highlighted = next }
-            }
+            },
+            listFocus: $listFocused,
+            onListHighlight: $highlighted
         )
         .atticDropdownFocus($fieldFocused)
+        .atticDropdownTabs(field: $fieldFocused, list: $listFocused)
         // Typing highlights the first match, so Return chooses it.
         .onChange(of: query) { _, now in highlighted = now.isEmpty || Self.filter(choices, query: now).isEmpty ? nil : 0 }
         .onKeyPress(phases: .down) { press in
@@ -221,7 +232,8 @@ struct TaskMovePickerView: View {
                 guard !filtered.isEmpty else { return .ignored }
                 highlighted = max((highlighted ?? filtered.count) - 1, 0)
                 return .handled
-            case .return:
+            case .return, .space:
+                if press.key == .space, !listFocused { return .ignored }
                 guard let highlighted, filtered.indices.contains(highlighted) else { return .ignored }
                 onChoose(filtered[highlighted].id)
                 return .handled
@@ -279,7 +291,7 @@ struct TaskPriorityPickerView: View {
             switch press.key {
             case .downArrow: highlighted = min((highlighted ?? -1) + 1, options.count - 1); return .handled
             case .upArrow: highlighted = max((highlighted ?? options.count) - 1, 0); return .handled
-            case .return:
+            case .return, .space:
                 guard let highlighted else { return .ignored }
                 onPick(options[highlighted])
                 return .handled

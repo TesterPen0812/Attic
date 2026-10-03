@@ -320,6 +320,10 @@ struct AtticTagPicker: View {
     /// The rows the list keeps room for (all the tags there are, as it
     /// opened); nil: the rows it shows now.
     var listRows: Int? = nil
+    /// The rows as one keyboard stop (`atticDropdownList`): Tab from the
+    /// field reaches them. Nil: the rows take no keyboard.
+    var listFocus: FocusState<Bool>.Binding? = nil
+    var onListHighlight: Binding<Int?>? = nil
 
     /// One row at least (No tags yet, or New tag), seven at most
     /// (`tagListMaxHeight`).
@@ -344,12 +348,15 @@ struct AtticTagPicker: View {
             AtticDropdownField(text: $query, placeholder: String(localized: "Find or add a tag"),
                                systemName: "magnifyingglass", focus: fieldFocused)
                 .padding(.bottom, m.fieldGap)
-            if shown <= room && listHeight == normalHeight {
-                rows
-                    .frame(height: normalHeight, alignment: .top)
-            } else {
-                AtticDropdownViewport(height: listHeight) { rows }
+            Group {
+                if shown <= room && listHeight == normalHeight {
+                    rows
+                        .frame(height: normalHeight, alignment: .top)
+                } else {
+                    AtticDropdownViewport(height: listHeight) { rows }
+                }
             }
+            .modifier(AtticOptionalDropdownList(focus: listFocus, highlighted: onListHighlight, count: shown))
         }
         // In a card cut short the list keeps the field and shortens; the
         // card still measures its natural height: the list's full room.
@@ -412,6 +419,9 @@ struct AtticTaskPicker: View {
     let onChoose: (UUID) -> Void
     var fieldFocused: FocusState<Bool>.Binding
     var onHover: ((_ index: Int, _ inside: Bool) -> Void)? = nil
+    /// The rows as one keyboard stop (`atticDropdownList`).
+    var listFocus: FocusState<Bool>.Binding? = nil
+    var onListHighlight: Binding<Int?>? = nil
 
     var body: some View {
         let m = AtticDropdownMetrics.self
@@ -436,6 +446,7 @@ struct AtticTaskPicker: View {
                         }
                     }
                 }
+                .modifier(AtticOptionalDropdownList(focus: listFocus, highlighted: onListHighlight, count: choices.count))
             }
         }
         .accessibilityElement(children: .contain)
@@ -444,6 +455,21 @@ struct AtticTaskPicker: View {
 
     private func hover(_ index: Int) -> ((Bool) -> Void)? {
         onHover.map { report in { inside in report(index, inside) } }
+    }
+}
+
+/// `atticDropdownList` when the picker's owner gives it a focus.
+private struct AtticOptionalDropdownList: ViewModifier {
+    var focus: FocusState<Bool>.Binding?
+    var highlighted: Binding<Int?>?
+    let count: Int
+
+    func body(content: Content) -> some View {
+        if let focus, let highlighted {
+            content.atticDropdownList(focus: focus, highlighted: highlighted, count: count)
+        } else {
+            content
+        }
     }
 }
 
@@ -496,10 +522,15 @@ struct AtticComposerStrip<DateContent: View, TagContent: View, PriorityContent: 
         // Common values in full (deep review P3-01: "Tomorr…", "#q…"):
         // when the three buttons would not fit at their usual padding,
         // they close up their inner gaps before anything is cut short.
-        let compact = Self.needsCompactGaps(faces, available: available)
+        // Before that, an unset button gives up its name (icon only; the
+        // name stays its tooltip and VoiceOver label), Priority first, so a
+        // value is never cut short beside an empty button's name (CU review
+        // P3: "#cuqa" showed as "#c…" beside "Priority").
+        let iconOnly = Self.iconOnlyButtons(faces, available: available)
+        let compact = Self.needsCompactGaps(faces, available: available, iconOnly: iconOnly)
         HStack(spacing: AtticPickerMetrics.stripSpacing) {
             AtticStripButton(systemName: "calendar", title: String(localized: "Date"), value: date, isOpen: datePresented,
-                             identifier: "composer-date", compact: compact,
+                             identifier: "composer-date", compact: compact, showsTitle: !iconOnly.contains(0),
                              keepsPrefix: 5, keptPrefixWidth: AtticPickerMetrics.stripDatePrefix,
                              clearLabel: String(localized: "Clear date"), open: { datePresented = true }, clear: onClearDate)
                 // With all three set, a long date gives way after the tag
@@ -509,7 +540,7 @@ struct AtticComposerStrip<DateContent: View, TagContent: View, PriorityContent: 
                     datePicker()
                 }
             AtticStripButton(systemName: "tag", title: String(localized: "Tag"), value: tags, isOpen: tagsPresented,
-                             identifier: "composer-tag", compact: compact,
+                             identifier: "composer-tag", compact: compact, showsTitle: !iconOnly.contains(1),
                              keepsPrefix: 4, keptPrefixWidth: AtticPickerMetrics.stripTagPrefix,
                              clearLabel: String(localized: "Clear tags"), open: { tagsPresented = true }, clear: onClearTags)
                 .layoutPriority(-1)
@@ -517,7 +548,7 @@ struct AtticComposerStrip<DateContent: View, TagContent: View, PriorityContent: 
                     tagPicker()
                 }
             AtticStripButton(systemName: "flag", title: String(localized: "Priority"), value: priority, isOpen: priorityPresented,
-                             identifier: "composer-priority", compact: compact,
+                             identifier: "composer-priority", compact: compact, showsTitle: !iconOnly.contains(2),
                              clearLabel: String(localized: "Clear priority"), open: { priorityPresented = true }, clear: onClearPriority)
                 .fixedSize(horizontal: true, vertical: false)
                 .atticDropdown(isPresented: $priorityPresented, prefer: .above, label: String(localized: "Priority"),
@@ -536,11 +567,13 @@ struct AtticComposerStrip<DateContent: View, TagContent: View, PriorityContent: 
     }
 
     /// The width the three buttons take at their usual padding: each
-    /// value's icon, words, × and gaps, or the empty button's name.
-    nonisolated static func usualWidth(_ faces: [(title: String, value: AtticStripValue?)]) -> CGFloat {
+    /// value's icon, words, × and gaps, or the empty button's name (or its
+    /// icon alone, for the buttons in `iconOnly`).
+    nonisolated static func usualWidth(_ faces: [(title: String, value: AtticStripValue?)], iconOnly: Set<Int> = []) -> CGFloat {
         let m = AtticSmallControlMetrics.self
-        let buttons = faces.map { face -> CGFloat in
+        let buttons = faces.enumerated().map { index, face -> CGFloat in
             guard let value = face.value else {
+                guard !iconOnly.contains(index) else { return max(AtticControlSize.smallMinWidth, m.labelPadding * 2 + m.iconSize) }
                 let name = AtticTextStyle.controlLabel.measuredWidth(face.title)
                 return max(AtticControlSize.smallMinWidth, m.labelPadding * 2 + m.iconSize + m.iconLabelGap + name)
             }
@@ -551,8 +584,23 @@ struct AtticComposerStrip<DateContent: View, TagContent: View, PriorityContent: 
     }
 
     /// Whether the buttons close up their inner gaps to fit `available`.
-    nonisolated static func needsCompactGaps(_ faces: [(title: String, value: AtticStripValue?)], available: CGFloat) -> Bool {
-        available.isFinite && usualWidth(faces) > available + 0.5
+    nonisolated static func needsCompactGaps(_ faces: [(title: String, value: AtticStripValue?)], available: CGFloat,
+                                             iconOnly: Set<Int> = []) -> Bool {
+        available.isFinite && usualWidth(faces, iconOnly: iconOnly) > available + 0.5
+    }
+
+    /// The unset buttons that show their icon alone so the strip fits
+    /// `available`: none while it fits; then from the last (Priority)
+    /// back, until it fits or every unset button is an icon. Only when a
+    /// value is set: three empty buttons keep their names.
+    nonisolated static func iconOnlyButtons(_ faces: [(title: String, value: AtticStripValue?)], available: CGFloat) -> Set<Int> {
+        guard available.isFinite, faces.contains(where: { $0.value != nil }) else { return [] }
+        var iconOnly: Set<Int> = []
+        for index in faces.indices.reversed() where faces[index].value == nil {
+            if usualWidth(faces, iconOnly: iconOnly) <= available + 0.5 { break }
+            iconOnly.insert(index)
+        }
+        return iconOnly
     }
 }
 
@@ -581,6 +629,9 @@ private struct AtticStripButton: View {
     /// The strip is short of room: the value's inner gaps close up (its
     /// icon keeps its place on the circles' line).
     var compact = false
+    /// An unset button shows its name; false: its icon alone (the strip
+    /// is short of room and a value needs it).
+    var showsTitle = true
     /// How many characters of a long value always stay (then "…"): a tag
     /// squeezed by a date and a priority still says what it is ("#laun…"),
     /// never a lone "#".
@@ -634,7 +685,7 @@ private struct AtticStripButton: View {
                         // A long tag gives way first (the strip keeps to the
                         // bar's width); the full value is the tooltip.
                         AtticText(verbatim: value.text, style: value.style, ink: isEnabled ? value.ink : .disabledText, truncates: true)
-                    } else {
+                    } else if showsTitle {
                         AtticText(verbatim: title, style: .controlLabel, ink: isEnabled ? .heading : .disabledText)
                     }
                 }
@@ -700,6 +751,21 @@ struct AtticSuggestionList: View {
     /// Return take it).
     var onHover: ((Int) -> Void)? = nil
     let onChoose: (Int) -> Void
+
+    /// The card's width for `items` before the width rule: its widest row
+    /// (icon, name, detail) and the card's inset, measured without laying
+    /// the list out, so a list whose rows change while it shows ("#cuqa",
+    /// then "Create #cuqaz") is as wide as its rows (CU review P3: "Create
+    /// #c…").
+    static func idealWidth(_ items: [Item]) -> CGFloat {
+        let m = AtticDropdownMetrics.self
+        let widest = items.map { item -> CGFloat in
+            (item.systemName == nil ? 0 : m.iconSlot + m.columnGap)
+                + AtticTextStyle.dropdownRow.measuredWidth(item.title)
+                + (item.detail.map { m.detailGap + AtticTextStyle.shortcut.measuredWidth($0) } ?? 0)
+        }.max() ?? 0
+        return m.inset * 2 + m.rowPadding * 2 + widest
+    }
 
     var body: some View {
         AtticDropdownCard() {

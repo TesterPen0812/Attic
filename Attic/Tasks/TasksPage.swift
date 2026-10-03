@@ -2755,7 +2755,8 @@ private struct TasksAddBar: View {
         .atticDropdown(isPresented: Binding(get: { suggestion != nil }, set: { shown in
             if !shown, let suggestion { text.hiddenSuggestion = suggestion.range }
         }), prefer: .above, label: String(localized: "Suggestions"), takesKeyboard: false, contentHasCard: true,
-                         contentHeight: suggestion.map { CGFloat($0.count) * AtticDropdownMetrics.rowHeight + AtticDropdownMetrics.inset * 2 }) {
+                         contentHeight: suggestion.map { CGFloat($0.count) * AtticDropdownMetrics.rowHeight + AtticDropdownMetrics.inset * 2 },
+                         contentWidth: suggestion.map { AtticSuggestionList.idealWidth(items(for: $0)) }) {
             if let suggestion {
                 AtticSuggestionList(items: items(for: suggestion), highlighted: min(text.highlighted, suggestion.count - 1),
                                     onHover: { index in if text.highlighted != index { text.highlighted = index } }) { index in
