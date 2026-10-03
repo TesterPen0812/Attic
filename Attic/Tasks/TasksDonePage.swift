@@ -161,7 +161,7 @@ struct TasksDoneSearchField: View {
 
     var body: some View {
         AtticTabsSearchField(placeholder: model.searchPlaceholder(for: .done),
-                             text: Binding(get: { input.text }, set: { model.typeDoneSearch($0) }),
+                             text: Binding(get: { input.text }, set: { model.typeDoneSearch($0, nativeEdit: true) }),
                              isFocused: isFocused, nativeInputIdentifier: "tasks-done-search", onEscape: onEscape)
     }
 }

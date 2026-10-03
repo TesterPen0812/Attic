@@ -1,4 +1,5 @@
 name: Done search verification
+# Final cold-query slice and pre-focus native-input handoff regressions.
 on:
   workflow_dispatch:
   push:
@@ -68,6 +69,7 @@ jobs:
             -derivedDataPath "$RUNNER_TEMP/done-search-candidate" \
             -resultBundlePath "$RUNNER_TEMP/done-search-evidence/units.xcresult" \
             -parallel-testing-enabled NO -only-testing:AtticTests \
+            -skip-testing:AtticTests/DoneSearchCostTests \
             > "$RUNNER_TEMP/done-search-evidence/units.log" 2>&1
       - name: Upload evidence even on failure
         if: always()

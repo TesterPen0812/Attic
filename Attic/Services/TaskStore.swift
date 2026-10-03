@@ -2305,7 +2305,10 @@ final class TaskStore: ObservableObject {
             let winners = Self.canonicalReplicas(from: rows).filter {
                 $0.doneLoggedAt != nil && $0.deletedAt == nil && $0.parentID == nil
             }
-            return DoneLogPage(tasks: winners.sorted(by: Self.doneLogOrder),
+            // The index already holds the canonical completion order;
+            // avoid comparing hydrated model properties again per page.
+            let byID = Dictionary(uniqueKeysWithValues: winners.map { ($0.id, $0) })
+            return DoneLogPage(tasks: pageIDs.compactMap { byID[$0] },
                                next: DoneLogCursor(rowOffset: end), hasMore: end < ids.count)
         } catch {
             report(error.localizedDescription, owner: nil)
@@ -3162,6 +3165,19 @@ final class TaskStore: ObservableObject {
     /// Whether the family has any child, without materializing the list.
     func hasSubtasks(_ parentID: UUID) -> Bool {
         familyIndex.hasChildren(parentID)
+    }
+
+    private var doneTodayCache: (revision: UInt64, tasks: [TaskItem])?
+
+    /// Done needs only its unlogged finished roots. Building every Now/Later
+    /// section and sort key for this slice dominated the first cold query.
+    /// Preserve exactly the snapshot's root validation and section ordering.
+    func doneTodayTasks() -> [TaskItem] {
+        if let doneTodayCache, doneTodayCache.revision == revision { return doneTodayCache.tasks }
+        let done = tasks.filter { $0.statusRaw == TaskStatus.done.rawValue && parent(of: $0) == nil }
+            .map(SectionSortKey.init).sorted(by: SectionSortKey.comesBefore).map(\.task)
+        doneTodayCache = (revision, done)
+        return done
     }
 
     /// Memoized per revision: SwiftUI evaluates view bodies far more often

@@ -261,8 +261,11 @@ final class TasksPageModel: ObservableObject {
     let doneSearchInput = TasksDoneSearchInput()
     private var doneSearchTask: Task<Void, Never>?
 
-    func typeDoneSearch(_ text: String) {
-        doneSearchInput.edit(text)
+    func typeDoneSearch(_ text: String, nativeEdit: Bool = false) {
+        // Native edits already changed the editor. Keyboard fallback letters
+        // must publish to the input view so the next native edit retains them.
+        if nativeEdit { doneSearchInput.edit(text) }
+        else { doneSearchInput.replace(text) }
         doneSearchTask?.cancel()
         doneSearchTask = Task { [weak self] in
             do { try await Task.sleep(for: .milliseconds(75)) } catch { return }
@@ -345,7 +348,11 @@ final class TasksPageModel: ObservableObject {
 
     func rowModel(for task: TaskItem, match: String? = nil) -> TasksListRow {
         let subtasks: [TaskItem]
-        if store.parent(of: task) != nil {
+        if task.doneLoggedAt != nil {
+            // Archived families are loaded with the page. Looking these up
+            // in the live-family index needlessly builds all active tasks.
+            subtasks = doneLogChildren[task.id] ?? []
+        } else if store.parent(of: task) != nil {
             subtasks = []
         } else if store.task(withID: task.id) != nil {
             subtasks = store.subtasks(of: task.id)
@@ -533,7 +540,7 @@ final class TasksPageModel: ObservableObject {
 
     private func buildDoneDays() -> [TasksDoneDay] {
         let query = doneSearch.trimmingCharacters(in: .whitespacesAndNewlines)
-        let today = store.snapshot(for: .tasks).sections.first { $0.status == .done }?.tasks ?? []
+        let today = store.doneTodayTasks()
         let finished = (today.filter { query.isEmpty || $0.title.localizedStandardContains(query) } + doneLogTasks)
         let calendar = services.calendar()
         let now = services.now()
@@ -573,7 +580,7 @@ final class TasksPageModel: ObservableObject {
         guard !query.isEmpty else { return nil }
         let key = DoneCountKey(revision: store.revision, query: query)
         if let doneCountCache, doneCountCache.key == key { return doneCountCache.count }
-        let today = store.snapshot(for: .tasks).sections.first { $0.status == .done }?.tasks ?? []
+        let today = store.doneTodayTasks()
         var count: (matches: Int, total: Int)?
         if doneLogFailure == nil {
             let logMatches = store.indexedDoneLogCount(matching: query)
