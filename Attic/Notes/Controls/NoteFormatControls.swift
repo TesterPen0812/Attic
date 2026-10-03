@@ -172,9 +172,11 @@ final class NoteFormatControls: NSObject {
         ) { [weak self] _ in MainActor.assumeIsolated { self?.selectionDidChange() } }
         let clip = scrollView.contentView
         clip.postsBoundsChangedNotifications = true
+        // A bounds change can come from inside a layout pass (the clip
+        // settling): its placement counts as layout.
         boundsObserver = NotificationCenter.default.addObserver(
             forName: NSView.boundsDidChangeNotification, object: clip, queue: .main
-        ) { [weak self] _ in MainActor.assumeIsolated { self?.layoutDidChange() } }
+        ) { [weak self] _ in MainActor.assumeIsolated { AtticOverlayHierarchy.layoutPass { self?.layoutDidChange() } } }
         keyMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
             self?.handleKey(event) == true ? nil : event
         }
@@ -206,7 +208,7 @@ final class NoteFormatControls: NSObject {
         if engine.pendingSlashDate != nil { engine.cancelSlashDate() }
         textView?.onLayout = previousLayout
         textView?.contextMenuProvider = nil
-        for host in [hintHost, barHost, slashHost, cardHost, addressHost] { host.removeFromSuperview() }
+        for host in [hintHost, barHost, slashHost, cardHost, addressHost] { AtticOverlayHierarchy.remove(host) }
         if Self.active === self { Self.active = nil }
     }
 
@@ -393,12 +395,12 @@ final class NoteFormatControls: NSObject {
     }
 
     /// Lists and cards float over the whole page (above the bottom row), in
-    /// the page's root view, placed from text-view coordinates.
+    /// the page's root view, placed from text-view coordinates. Placing runs
+    /// in the text's layout pass: a host joins its parent only after it
+    /// (`AtticOverlayHierarchy`).
     private func placeOverlay(_ host: AtticOverlayHostingView, rect: NSRect) {
         guard let textView, let parent = overlayParent else { return }
-        if host.superview !== parent { parent.addSubview(host, positioned: .above, relativeTo: nil) }
-        let frame = parent.convert(rect, from: textView).integral
-        if host.frame != frame { host.frame = frame }
+        AtticOverlayHierarchy.place(host, in: parent, frame: parent.convert(rect, from: textView).integral)
     }
 
     /// Above the selection's first line, or under its last when there is no

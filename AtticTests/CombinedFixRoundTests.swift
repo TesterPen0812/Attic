@@ -724,6 +724,97 @@ final class CombinedFixRoundTests: XCTestCase {
         XCTAssertEqual(NoteRowSummary(note: legacy, attachments: []).preview, "- typed __init__ and **this**")
     }
 
+    /// P1-01 hypothesis: an overlay host joins, moves between or leaves
+    /// parents only outside AppKit's layout pass; inside one it only moves.
+    func testOverlayHierarchyChangesWaitForTheEndOfALayoutPass() {
+        let window = NSWindow(contentRect: NSRect(x: -4000, y: -4000, width: 300, height: 300),
+                              styleMask: .borderless, backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        windows.append(window)
+        let content = NSView(frame: NSRect(x: 0, y: 0, width: 300, height: 300))
+        window.contentView = content
+        let parent = NSView(frame: NSRect(x: 0, y: 0, width: 300, height: 300))
+        let other = NSView(frame: NSRect(x: 50, y: 40, width: 200, height: 200))
+        content.addSubview(parent)
+        content.addSubview(other)
+        let view = NSView()
+        let a = NSRect(x: 10, y: 10, width: 40, height: 20), b = NSRect(x: 20, y: 30, width: 40, height: 20)
+        AtticOverlayHierarchy.layoutPass { AtticOverlayHierarchy.place(view, in: parent, frame: a) }
+        XCTAssertNil(view.superview, "no parent change inside a layout pass")
+        AtticOverlayHierarchy.layoutPass { AtticOverlayHierarchy.place(view, in: parent, frame: b) }
+        XCTAssertEqual(AtticOverlayHierarchy.pendingCount, 1, "coalesced")
+        spin(0.05)
+        XCTAssertTrue(view.superview === parent)
+        XCTAssertEqual(view.frame, b, "the latest request wins")
+        AtticOverlayHierarchy.layoutPass { AtticOverlayHierarchy.place(view, in: parent, frame: a) }
+        XCTAssertEqual(view.frame, a, "already there: it moves at once")
+        XCTAssertEqual(AtticOverlayHierarchy.pendingCount, 0)
+        // A move to another parent keeps its place on screen while it waits.
+        let target = NSRect(x: 5, y: 5, width: 40, height: 20)
+        AtticOverlayHierarchy.layoutPass { AtticOverlayHierarchy.place(view, in: other, frame: target) }
+        XCTAssertTrue(view.superview === parent)
+        XCTAssertEqual(view.frame, parent.convert(target, from: other))
+        spin(0.05)
+        XCTAssertTrue(view.superview === other)
+        XCTAssertEqual(view.frame, target)
+        // Leaving waits too, hidden at once.
+        AtticOverlayHierarchy.layoutPass { AtticOverlayHierarchy.remove(view) }
+        XCTAssertTrue(view.superview === other)
+        XCTAssertTrue(view.isHidden)
+        spin(0.05)
+        XCTAssertNil(view.superview)
+        // Outside a layout pass nothing waits.
+        AtticOverlayHierarchy.place(view, in: parent, frame: a)
+        XCTAssertTrue(view.superview === parent)
+        AtticOverlayHierarchy.remove(view)
+        XCTAssertNil(view.superview)
+    }
+
+    /// P1-01 hypothesis, on the Notes page: while the note's text lays out
+    /// (where the bar, the `/` list and the cards are placed), no hosting
+    /// view joins or leaves a parent. The `/` list is made to need its
+    /// parent again during a layout pass; it rejoins after the pass, at the
+    /// place it had.
+    func testNoOverlayJoinsOrLeavesDuringTheTextsLayout() throws {
+        let harness = try makeHarness()
+        XCTAssertTrue(harness.controller.requestNewNote())
+        spin(0.4)
+        let engine = try XCTUnwrap(harness.controller.active?.engine)
+        let textView = try XCTUnwrap(engine.textView)
+        harness.window.makeFirstResponder(textView)
+        let recorder = HierarchyMutationRecorder()
+        defer { recorder.stop() }
+        type("Layout pass\nSome body text to select", into: textView)
+        harness.host.layoutSubtreeIfNeeded()
+        spin(0.2)
+        type("\n/", into: textView)
+        harness.host.layoutSubtreeIfNeeded()
+        spin(0.2)
+        let list = try XCTUnwrap(harness.host.subviews.compactMap { $0 as? AtticOverlayHostingView }.first { $0.menuLabel == "Insert" },
+                                 "the `/` list is in the overlay")
+        let parent = try XCTUnwrap(list.superview)
+        let frame = list.frame
+        // Its parent lost it (as when the overlay is rebuilt): the next text
+        // layout places it again.
+        list.removeFromSuperview()
+        textView.needsLayout = true
+        harness.host.layoutSubtreeIfNeeded()
+        XCTAssertGreaterThan(recorder.layoutPasses, 0, "the text laid out")
+        XCTAssertEqual(recorder.mutationsDuringLayout, [], "nothing joined or left during the text's layout")
+        XCTAssertNil(list.superview, "it waits for the pass to end")
+        spin(0.1)
+        XCTAssertTrue(list.superview === parent, "then rejoins")
+        XCTAssertEqual(list.frame, frame, "where it was")
+        // Typing, a selection (the bar) and scrolling lay out again.
+        type("da", into: textView)
+        textView.setSelectedRange(NSRange(location: 0, length: 6))
+        harness.host.layoutSubtreeIfNeeded()
+        spin(0.2)
+        engine.scrollView?.contentView.scroll(to: NSPoint(x: 0, y: 20))
+        harness.host.layoutSubtreeIfNeeded()
+        spin(0.2)
+        XCTAssertEqual(recorder.mutationsDuringLayout, [])
+    }
 }
 
 /// Records the rectangles a view is asked to redraw (`setNeedsDisplay(_:)`,
@@ -816,3 +907,82 @@ actor SlowLoadGate {
     func release() { open = true }
 }
 
+/// Records hosting views (and Attic's own views) joining or leaving a
+/// parent while a note's text view lays out, by wrapping `layout` on
+/// `NoteEditorTextView` and the hierarchy methods on `NSView` for the
+/// test's duration.
+@MainActor
+final class HierarchyMutationRecorder {
+    private(set) var layoutPasses = 0
+    private(set) var mutationsDuringLayout: [String] = []
+    private var depth = 0
+    private var restores: [() -> Void] = []
+    private static var active: HierarchyMutationRecorder?
+
+    init() {
+        Self.active = self
+        typealias Plain = @convention(c) (NSView, Selector) -> Void
+        typealias AddOne = @convention(c) (NSView, Selector, NSView) -> Void
+        typealias AddPositioned = @convention(c) (NSView, Selector, NSView, Int, NSView?) -> Void
+        wrap(NoteEditorTextView.self, #selector(NSView.layout)) { original, selector in
+            let call = unsafeBitCast(original, to: Plain.self)
+            let block: @convention(block) (NSView) -> Void = { view in
+                let recorder = MainActor.assumeIsolated { HierarchyMutationRecorder.active }
+                MainActor.assumeIsolated { recorder?.depth += 1; recorder?.layoutPasses += 1 }
+                call(view, selector)
+                MainActor.assumeIsolated { recorder?.depth -= 1 }
+            }
+            return imp_implementationWithBlock(block)
+        }
+        wrap(NSView.self, #selector(NSView.addSubview(_:))) { original, selector in
+            let call = unsafeBitCast(original, to: AddOne.self)
+            let block: @convention(block) (NSView, NSView) -> Void = { parent, view in
+                MainActor.assumeIsolated { HierarchyMutationRecorder.active?.note("add", view) }
+                call(parent, selector, view)
+            }
+            return imp_implementationWithBlock(block)
+        }
+        wrap(NSView.self, #selector(NSView.addSubview(_:positioned:relativeTo:))) { original, selector in
+            let call = unsafeBitCast(original, to: AddPositioned.self)
+            let block: @convention(block) (NSView, NSView, Int, NSView?) -> Void = { parent, view, place, relative in
+                MainActor.assumeIsolated { HierarchyMutationRecorder.active?.note("add", view) }
+                call(parent, selector, view, place, relative)
+            }
+            return imp_implementationWithBlock(block)
+        }
+        wrap(NSView.self, #selector(NSView.removeFromSuperview)) { original, selector in
+            let call = unsafeBitCast(original, to: Plain.self)
+            let block: @convention(block) (NSView) -> Void = { view in
+                MainActor.assumeIsolated { HierarchyMutationRecorder.active?.note("remove", view) }
+                call(view, selector)
+            }
+            return imp_implementationWithBlock(block)
+        }
+    }
+
+    private func note(_ kind: String, _ view: NSView) {
+        guard depth > 0 else { return }
+        let name = NSStringFromClass(Swift.type(of: view))
+        guard view is NSHostingView<AnyView> || name.hasPrefix("Attic.") else { return }
+        mutationsDuringLayout.append("\(kind) \(name)")
+    }
+
+    private func wrap(_ cls: AnyClass, _ selector: Selector, _ make: (IMP, Selector) -> IMP) {
+        guard let method = class_getInstanceMethod(cls, selector) else { return XCTFail("no \(selector) on \(cls)") }
+        let original = method_getImplementation(method)
+        let replacement = make(original, selector)
+        if class_addMethod(cls, selector, replacement, method_getTypeEncoding(method)) {
+            // Inherited until now: put the inherited implementation back.
+            restores.append { class_replaceMethod(cls, selector, original, method_getTypeEncoding(method)) }
+        } else {
+            method_setImplementation(method, replacement)
+            restores.append { method_setImplementation(method, original) }
+        }
+    }
+
+    func stop() {
+        restores.reversed().forEach { $0() }
+        restores.removeAll()
+        if Self.active === self { Self.active = nil }
+    }
+}

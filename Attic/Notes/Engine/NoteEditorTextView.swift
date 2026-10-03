@@ -83,10 +83,14 @@ final class NoteEditorTextView: NSTextView, NSAccessibilityCustomRotorItemSearch
     /// the marker closes after the view's own layout or pre-draw pass,
     /// where TextKit 2 lays out the viewport.
     override func layout() {
-        super.layout()
-        PerformanceSignposts.noteDidLayout()
-        updatePlaceholder()
-        onLayout?()
+        // The accessories and overlays placed from here move at once but
+        // join or leave a parent only after this pass (P1-01 hypothesis).
+        AtticOverlayHierarchy.layoutPass {
+            super.layout()
+            PerformanceSignposts.noteDidLayout()
+            updatePlaceholder()
+            onLayout?()
+        }
     }
 
     // MARK: The title's placeholder

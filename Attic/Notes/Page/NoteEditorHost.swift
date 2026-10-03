@@ -156,7 +156,8 @@ final class NoteTitleAccessories {
                                                                 queue: .main) { [weak self] _ in
             MainActor.assumeIsolated {
                 self?.updateHeaderTitle()
-                self?.followSuggestions()
+                // Can run inside a layout pass (the clip settling).
+                AtticOverlayHierarchy.layoutPass { self?.followSuggestions() }
             }
         }
     }
@@ -169,9 +170,7 @@ final class NoteTitleAccessories {
         textView?.onLayout = nil
         textView?.suggestionCommand = nil
         textView?.accessoryViews = []
-        menuHost.removeFromSuperview()
-        tagHost.removeFromSuperview()
-        suggestionHost.removeFromSuperview()
+        for host in [menuHost, tagHost, suggestionHost] { AtticOverlayHierarchy.remove(host) }
         if chrome.accessories === self {
             chrome.accessories = nil
             // Dismantling runs inside a SwiftUI update: publish afterwards.

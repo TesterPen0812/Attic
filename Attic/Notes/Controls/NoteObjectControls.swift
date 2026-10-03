@@ -66,8 +66,8 @@ final class NoteObjectControls: NSObject, NoteObjectInteraction {
         if textView?.objectInteraction === self { textView?.objectInteraction = nil }
         engine.onRetryImportObject = nil
         engine.onLocateObject = nil
-        selectionView.removeFromSuperview()
-        dropView.removeFromSuperview()
+        AtticOverlayHierarchy.remove(selectionView)
+        AtticOverlayHierarchy.remove(dropView)
     }
 
     /// The accent follows the look (a change of palette, not a keystroke).

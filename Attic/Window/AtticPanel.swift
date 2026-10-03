@@ -1192,6 +1192,13 @@ final class AtticPanelHostingView: NSHostingView<AtticPanelView> {
         super.viewWillMove(toWindow: newWindow)
     }
 
+    /// The page's SwiftUI update runs in this pass (a page's controls are
+    /// made and dismantled here): overlay hierarchy changes from it wait
+    /// for the next turn (`AtticOverlayHierarchy`, P1-01 hypothesis).
+    override func layout() {
+        AtticOverlayHierarchy.layoutPass { super.layout() }
+    }
+
     override func hitTest(_ point: NSPoint) -> NSView? {
         let localPoint = convert(point, from: superview)
         let policyPoint = AtticPanelCoordinateSpace.policyPoint(
