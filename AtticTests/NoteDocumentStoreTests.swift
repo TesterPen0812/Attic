@@ -734,20 +734,43 @@ final class NoteDocumentStoreTests: XCTestCase {
 
     func testAgentChecklistRemovalAndAdditionKeepRemainingItemsForDirectWritesAndProposals() throws {
         for disposition in [NoteAgentWriteDisposition.direct, .proposal] {
-            var first = NoteBlock.checklist("Remove me")
-            first.extras = ["owner": .string("person")]
-            var kept = NoteBlock.checklist("Keep me", checked: true)
-            kept.marks = [NoteMark(.bold, offset: 0, length: 4)]
-            var base = NoteDocument(blocks: [.text("Title"), first, kept])
-            base.refreshRequiredCapabilities()
-            let (id, _) = try create(base)
-            let token = try XCTUnwrap(store.note(withID: id)?.revisionToken)
-            let parsed = try NoteAgentTextParser.document(title: "Title", body: "- [x] Keep me\n- [ ] New item", base: base)
-            XCTAssertEqual(parsed.blocks[1], kept)
-            guard case .success = store.agentWrite(noteID: id, baseRevisionToken: token,
-                document: parsed, agentName: "Agent", disposition: disposition) else { return XCTFail("safe checklist edit refused") }
-            if disposition == .proposal { XCTAssertEqual(store.applyPendingEdits(noteID: id), 1) }
-            XCTAssertEqual(store.loadDocument(noteID: id)?.content.document, parsed)
+            for protectedRemoval in [false, true] {
+                var first = NoteBlock.checklist("Remove me")
+                if protectedRemoval { first.extras = ["owner": .string("person")] }
+                var kept = NoteBlock.checklist("Keep me", checked: true)
+                kept.marks = [NoteMark(.bold, offset: 0, length: 4)]
+                var base = NoteDocument(blocks: [.text("Title"), first, kept])
+                base.refreshRequiredCapabilities()
+                let (id, _) = try create(base)
+                var token = try XCTUnwrap(store.note(withID: id)?.revisionToken)
+                let body = "- [x] Keep me\n- [ ] New item"
+                if protectedRemoval {
+                    XCTAssertThrowsError(try NoteAgentTextParser.document(title: "Title", body: body, base: base)) {
+                        XCTAssertEqual($0 as? NoteAgentTextError, .unsafeChecklist)
+                    }
+                    XCTAssertEqual(store.loadDocument(noteID: id)?.content.document, base)
+                    XCTAssertEqual(store.note(withID: id)?.revisionToken, token)
+                    XCTAssertTrue(store.pendingEdits(noteID: id).isEmpty)
+                    // Deleting the metadata-bearing item outright is still safe.
+                    let removed = try NoteAgentTextParser.document(title: "Title", body: "- [x] Keep me", base: base)
+                    var expected = base
+                    expected.blocks.remove(at: 1)
+                    expected.refreshRequiredCapabilities()
+                    XCTAssertEqual(removed, expected)
+                    guard case .success = store.agentWrite(noteID: id, baseRevisionToken: token,
+                        document: removed, agentName: "Agent", disposition: disposition) else { return XCTFail("checklist deletion refused") }
+                    if disposition == .proposal { XCTAssertEqual(store.applyPendingEdits(noteID: id), 1) }
+                    XCTAssertEqual(store.loadDocument(noteID: id)?.content.document, removed)
+                    token = try XCTUnwrap(store.note(withID: id)?.revisionToken)
+                    base = removed
+                }
+                let parsed = try NoteAgentTextParser.document(title: "Title", body: body, base: base)
+                XCTAssertEqual(parsed.blocks[1], kept)
+                guard case .success = store.agentWrite(noteID: id, baseRevisionToken: token,
+                    document: parsed, agentName: "Agent", disposition: disposition) else { return XCTFail("safe checklist edit refused") }
+                if disposition == .proposal { XCTAssertEqual(store.applyPendingEdits(noteID: id), 1) }
+                XCTAssertEqual(store.loadDocument(noteID: id)?.content.document, parsed)
+            }
         }
     }
 
