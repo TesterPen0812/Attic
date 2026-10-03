@@ -5,6 +5,25 @@ Every later change is recorded here: what changed, why, and who asked.
 
 ## Phase 2
 
+### Combined app fix round 2 (redesign/p2-fix2)
+
+Requested by GPT-6.1's review of the combined fix round (2026-10-03). No
+E1 value, token, colour, radius or size changed; nothing looks different.
+
+- **`AtticTagPickerCard`'s highlight is the row's identity**
+  (`AtticTagPickerHighlight`: a tag's name, or the "New tag" row), not its
+  number: a toggle that reorders the rows (Notes lists the note's own tags
+  first) no longer moves Return or Space onto another tag. One typing rule
+  for Tasks and Notes: typing lights the tag with exactly the typed name,
+  else "New tag" for it, never another tag. A prefix's Return adds what was
+  typed (Notes' rule before; in Tasks it used to toggle the first match).
+- **New `AtticOverlayHierarchy`** (P1-01 experiment): every overlay host's
+  attach, detach and reparent (dropdown cards through
+  `AtticDropdownSpace.show` and `AtticDropdownPresenter`, Notes' overlays)
+  waits for the next run-loop turn when it is asked for inside a layout
+  pass, coalesced per view; a host already in its parent moves at once.
+  `AtticOverlayHostingView` marks its own layout pass.
+
 ### Combined app fix round (redesign/p2-integration)
 
 Requested by the combined Tasks + Notes CU reviews of 2026-10-03. No E1
