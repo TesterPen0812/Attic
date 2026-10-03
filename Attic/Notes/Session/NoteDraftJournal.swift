@@ -609,8 +609,10 @@ final class NoteDraftJournal: NoteDraftJournaling {
     let directory: URL
     nonisolated private let io: NoteDraftJournalIO
     var inventoryChanged: (([NoteDraftRecoveryEntry]) -> Void)?
-    private var cached: [NoteDraftRecoveryEntry]? {
-        didSet { if let cached { inventoryChanged?(cached) } }
+    private var cached: [NoteDraftRecoveryEntry]?
+    private func cacheInventory(_ entries: [NoteDraftRecoveryEntry]) {
+        cached = entries
+        inventoryChanged?(entries)
     }
     var liveReferencedIDs: () throws -> Set<UUID> = { [] }
     var requiresAsyncIO: Bool { true }
@@ -641,37 +643,39 @@ final class NoteDraftJournal: NoteDraftJournaling {
     func readRecoveryEntries() async throws -> [NoteDraftRecoveryEntry] {
         try await io.retain(liveReferencedIDs())
         let entries = try await io.recoveryEntries()
+        // Offers omit checkpoints held by pending publication. They are not
+        // proof of owner absence; only complete inventories update the holds.
         cached = entries
         return entries
     }
     func writeDurably(_ entry: NoteDraftJournalEntry, staged: [StagedNoteAttachment], replacing: NoteRecoveryClaim? = nil) async throws -> NoteRecoveryClaim {
         try await io.retain(liveReferencedIDs())
         let claim = try await io.write(entry, staged: staged, replacing: replacing)
-        cached = try await io.recoveryEntries(collectRetired: false, offering: false)
+        cacheInventory(try await io.recoveryEntries(collectRetired: false, offering: false))
         return claim
     }
     func cancelPendingDurably(_ entry: NoteDraftJournalEntry, staged: [StagedNoteAttachment], replacing claim: NoteRecoveryClaim?) async throws -> NoteRecoveryClaim {
         try await io.retain(liveReferencedIDs())
         let updated = try await io.write(entry, staged: staged, replacing: claim, cancellingPending: true)
-        cached = try await io.recoveryEntries(collectRetired: false, offering: false)
+        cacheInventory(try await io.recoveryEntries(collectRetired: false, offering: false))
         return updated
     }
     func retireDurably(noteID: UUID, claim: NoteRecoveryClaim?, saved: NoteRecoverySavedState?) async throws {
         try await io.retain(liveReferencedIDs())
         try await io.retire(noteID: noteID, claim: claim, saved: saved)
-        cached = try await io.recoveryEntries(collectRetired: false, offering: false)
+        cacheInventory(try await io.recoveryEntries(collectRetired: false, offering: false))
     }
     func discardOwnedDurably(noteID: UUID, claim: NoteRecoveryClaim) async throws {
         try await io.retain(liveReferencedIDs())
         try await io.discardOwned(noteID: noteID, claim: claim)
-        cached = try await io.recoveryEntries(collectRetired: false, offering: false)
+        cacheInventory(try await io.recoveryEntries(collectRetired: false, offering: false))
     }
     func listDamagedDurably() async throws -> [NoteDamagedRecoveryDetails] { try await io.listDamaged() }
     func damagedDetailsDurably(noteID: UUID) async throws -> NoteDamagedRecoveryDetails { try await io.damagedDetails(noteID: noteID) }
     func archiveDamagedDurably(_ confirmation: NoteDamagedRecoveryConfirmation, to destination: URL?, resolving: Bool) async throws -> URL {
         try await io.retain(liveReferencedIDs())
         let archive = try await io.archiveDamaged(confirmation, to: destination, resolving: resolving)
-        cached = try await io.recoveryEntries(collectRetired: false, offering: false)
+        cacheInventory(try await io.recoveryEntries(collectRetired: false, offering: false))
         return archive
     }
 }

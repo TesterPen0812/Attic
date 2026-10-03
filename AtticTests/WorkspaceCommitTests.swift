@@ -924,6 +924,28 @@ final class WorkspaceCommitTests: XCTestCase {
         XCTAssertEqual(coordinator.plainSave(tokens: try coordinator.capture([owner]), writes: [owner]) { _ in }, .unknown)
     }
 
+    func testR2PendingCheckpointOffersCannotReleaseItsRawRowAndByteOwners() async throws {
+        let byteID = UUID()
+        var document = original!
+        document.blocks.append(.file(attachmentID: byteID, filename: "existing.txt",
+            contentTypeIdentifier: "public.plain-text", byteCount: 1))
+        var pre = try recoveryDraft("pending pre-copy")
+        pre.content = try PreparedNoteDocument(document).content
+        let claim = try await coordinator.journal.writeDurably(pre, staged: [])
+        let (outcome, _) = try await conversion(preDraft: pre, checkpointClaim: claim,
+            publication: .init(steps: [{ _ in throw WorkspaceFoundationError.unknown }]))
+        XCTAssertEqual(outcome, .publicationPending)
+        try await coordinator.finishLaunch()
+        XCTAssertTrue(coordinator.retainedRecoveryBytes.contains(byteID))
+        let offered = try await coordinator.journal.readRecoveryEntries()
+        XCTAssertTrue(offered.isEmpty, "pending checkpoint must not be offered as unsaved work")
+        XCTAssertTrue(coordinator.retainedRecoveryBytes.contains(byteID), "filtered offers are not a complete ownership inventory")
+        XCTAssertNil(coordinator.ownership.tryAcquire([byteID], kind: .collection))
+        XCTAssertNil(coordinator.ownership.tryAcquire([noteID], kind: .collection))
+        let unrelated = try XCTUnwrap(coordinator.ownership.tryAcquire([UUID()], kind: .collection))
+        unrelated.release()
+    }
+
     func testR2ProductionPlainUnknownRetriesOnDemandAndReturnsToFastValidation() throws {
         var fail = true
         let tasks = TaskStore(container: container, persist: { context in
