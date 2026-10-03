@@ -104,6 +104,78 @@ final class AtticDropdownTests: XCTestCase {
         XCTAssertEqual(disabledItem?.isAccessibilityEnabled(), false)
         XCTAssertEqual(disabledItem?.accessibilityPerformPress(), false)
         XCTAssertEqual(pressed, 1, "a disabled menu item never runs its action")
+        // A ticked row the highlight is not on: its mark, not "selected".
+        let ticked = NSHostingView(rootView: AtticDropdownMenuItem(label: "High", selected: false, check: .on) {})
+        ticked.frame = host.frame
+        ticked.layoutSubtreeIfNeeded()
+        let tickedItem = try? XCTUnwrap(find(ticked))
+        XCTAssertEqual(tickedItem?.isAccessibilitySelected(), false, "a tick is not the highlight")
+        XCTAssertEqual(tickedItem.map(Self.markChar), "✓")
+        XCTAssertNil(Self.markChar(represented), "an unticked item has no mark")
+    }
+
+    /// What the accessibility server reads for a menu item's mark, by the
+    /// same selectors (the NSAccessibility protocol has no accessor for it).
+    private static func markChar(_ element: AnyObject) -> String? {
+        guard let object = element as? NSObject,
+              let names = object.perform(NSSelectorFromString("accessibilityAttributeNames"))?.takeUnretainedValue() as? [String],
+              names.contains(AtticDropdownMenuItem.markCharAttribute.rawValue) else { return nil }
+        return object.perform(NSSelectorFromString("accessibilityAttributeValue:"),
+                              with: AtticDropdownMenuItem.markCharAttribute.rawValue)?.takeUnretainedValue() as? String
+    }
+
+    /// The tag picker as Tasks shows it, with its rows' states and the
+    /// list's one highlight given.
+    struct TagList: View {
+        let tags: [AtticTagPicker.Tag]
+        let highlighted: Int?
+        @FocusState private var focused: Bool
+        var body: some View {
+            AtticTagPicker(query: .constant(""), tags: tags, highlighted: highlighted, onToggle: { _ in }, onCreate: { _ in },
+                           fieldFocused: $focused)
+                .frame(width: 200)
+        }
+    }
+
+    /// P2-B1: VoiceOver tells the ticked rows from the highlighted one. Only
+    /// the highlight is "selected"; ticks are the menu items' marks.
+    func testOnlyTheHighlightIsSelectedAndTicksAreMenuItemMarks() throws {
+        let attribute = NSAccessibility.Attribute(rawValue: "AXEnhancedUserInterface")
+        let previous = NSApp.accessibilityAttributeValue(attribute)
+        NSApp.accessibilitySetValue(true, forAttribute: attribute)
+        defer { NSApp.accessibilitySetValue(previous, forAttribute: attribute) }
+        let window = makeWindow()
+        defer { window.close() }
+        // The priority picker on a High task, ↓ moved to Medium; the tag
+        // picker with two ticked tags, one part-ticked, the highlight on
+        // an unticked one.
+        let tags = [AtticTagPicker.Tag(name: "design", state: .on), AtticTagPicker.Tag(name: "home", state: .off),
+                    AtticTagPicker.Tag(name: "launch", state: .on), AtticTagPicker.Tag(name: "travel", state: .mixed)]
+        let priorities = VStack(spacing: 0) {
+            ForEach(Array(TaskPriority.choices.enumerated()), id: \.element) { index, priority in
+                AtticDropdownRow(title: priority.choiceTitle, check: priority == .high ? .on : .off, isHighlighted: priority == .medium,
+                                 onHover: { _ in }, position: index + 1, itemCount: 4) {}
+            }
+        }
+        let root = VStack(spacing: 0) { priorities.frame(width: 200); TagList(tags: tags, highlighted: 1) }
+        let host = NSHostingView(rootView: root.atticDesign(AtticDesignContext(reduceMotion: true)))
+        host.frame = CGRect(x: 0, y: 0, width: 220, height: 400)
+        window.contentView?.addSubview(host)
+        host.layoutSubtreeIfNeeded()
+        spin(0.2)
+        let items = accessibilityElements(host).compactMap { $0 as? AtticDropdownMenuItem.ItemView }
+        func item(_ label: String) throws -> AtticDropdownMenuItem.ItemView {
+            try XCTUnwrap(items.first { $0.accessibilityLabel() == label }, label)
+        }
+        XCTAssertEqual(items.filter { $0.isAccessibilitySelected() }.map { $0.accessibilityLabel() ?? "" }, ["Medium", "#home"],
+                       "one selected item per list: its highlight")
+        XCTAssertEqual(Self.markChar(try item("High")), "✓", "the checked priority is marked, not selected")
+        XCTAssertNil(Self.markChar(try item("Medium")))
+        XCTAssertEqual(Self.markChar(try item("#design")), "✓")
+        XCTAssertEqual(Self.markChar(try item("#launch")), "✓")
+        XCTAssertEqual(Self.markChar(try item("#travel")), "-", "a part-ticked tag")
+        XCTAssertEqual(try item("#travel").accessibilityValue() as? String, "some selected tasks, 4 of 4")
+        XCTAssertNil(Self.markChar(try item("#home")))
     }
 
     func testRenderedRowsExposeMenuItemsAndKeepTheirIdentifiers() throws {
@@ -139,6 +211,7 @@ final class AtticDropdownTests: XCTestCase {
         XCTAssertGreaterThan(first.accessibilityFrame().width, 0)
         XCTAssertEqual(first.accessibilityFrame().height, AtticDropdownMetrics.rowHeight, accuracy: 1)
         XCTAssertEqual(rows.last?.accessibilityValue() as? String, "9 of 9")
+        XCTAssertEqual(rows.filter { $0.isAccessibilitySelected() }.count, 1, "only the highlight is selected")
     }
 
     func testCrampedSlashScrollKeepsTheKeyboardHighlightVisible() throws {

@@ -205,10 +205,12 @@ struct AtticDropdownRow: View {
         }
         .id(scrollID ?? title)
         .preference(key: AtticDropdownHighlightKey.self, value: isHighlighted ? (scrollID ?? title) : nil)
+        // VoiceOver's "selected" is the one highlight; the tick is the menu
+        // item's own mark, as in a native menu.
         .accessibilityRepresentation {
             AtticDropdownMenuItem(label: detail.map { "\(title), \($0)" } ?? title,
-                                  selected: check == .on || isHighlighted,
-                                  mixed: check == .mixed, position: position, count: itemCount, action: action)
+                                  selected: isHighlighted, check: check,
+                                  position: position, count: itemCount, action: action)
         }
     }
 
@@ -914,23 +916,55 @@ struct AtticDropdownViewport<Content: View>: View {
 
 /// SwiftUI has no public menu-item role. Supply its AppKit accessibility
 /// representation while keeping the visible button and key routing intact.
+///
+/// As in a native menu, `selected` (`AXSelected`) is the list's one
+/// highlight, and the tick is the item's mark (`AXMenuItemMarkChar`): "✓"
+/// for a checked row, "-" for a part-checked one (some of the selected
+/// tasks), none otherwise.
 struct AtticDropdownMenuItem: NSViewRepresentable {
     let label: String
     let selected: Bool
-    var mixed = false
+    var check: AtticCheckState?
     var position: Int?
     var count: Int?
     let action: () -> Void
     @Environment(\.isEnabled) private var enabled
 
+    /// The menu item's mark attribute (HIServices' `kAXMenuItemMarkCharAttribute`).
+    static let markCharAttribute = NSAccessibility.Attribute(rawValue: "AXMenuItemMarkChar")
+
+    static func markChar(_ check: AtticCheckState?) -> String? {
+        switch check {
+        case .on: "✓"
+        case .mixed: "-"
+        case .off, nil: nil
+        }
+    }
+
     final class ItemView: NSView {
         var action: (() -> Void)?
+        /// The tick, as a native menu item reports it.
+        var markChar: String?
+
         override func accessibilityPerformPress() -> Bool {
             guard isAccessibilityEnabled(), let action else { return false }
             action()
             return true
         }
         override func hitTest(_ point: NSPoint) -> NSView? { nil }
+
+        // The NSAccessibility protocol has no menu-item mark, so the item
+        // answers the attribute itself, as AppKit's own menu items do.
+        @available(macOS, deprecated: 10.10, message: "Only the accessibility server calls it")
+        override func accessibilityAttributeNames() -> [NSAccessibility.Attribute] {
+            let names = super.accessibilityAttributeNames()
+            return names.contains(AtticDropdownMenuItem.markCharAttribute) ? names : names + [AtticDropdownMenuItem.markCharAttribute]
+        }
+
+        @available(macOS, deprecated: 10.10, message: "Only the accessibility server calls it")
+        override func accessibilityAttributeValue(_ attribute: NSAccessibility.Attribute) -> Any? {
+            attribute == AtticDropdownMenuItem.markCharAttribute ? markChar : super.accessibilityAttributeValue(attribute)
+        }
     }
 
     func makeNSView(context: Context) -> ItemView { ItemView() }
@@ -940,7 +974,8 @@ struct AtticDropdownMenuItem: NSViewRepresentable {
         view.setAccessibilityLabel(label)
         view.setAccessibilitySelected(selected)
         view.setAccessibilityEnabled(enabled)
-        var value = mixed ? String(localized: "some selected tasks") : ""
+        view.markChar = Self.markChar(check)
+        var value = check == .mixed ? String(localized: "some selected tasks") : ""
         if let position, let count {
             value += (value.isEmpty ? "" : ", ") + String(localized: "\(position) of \(count)")
             view.setAccessibilityIndex(position - 1)
