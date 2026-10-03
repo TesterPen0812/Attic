@@ -798,7 +798,7 @@ final class WorkspaceCommitTests: XCTestCase {
         XCTAssertEqual(coordinator.plainSave(tokens: inserted.map { .init(owner: $0, replicas: []) }, writes: inserted) { b in
             for owner in inserted { b.insert(TaskItem(id: owner.id, title: "Eviction")) }
         }, .committed)
-        XCTAssertGreaterThan(coordinator.ledger.floor, coordinator.ledger.stamp(a)!.syncedGeneration)
+        XCTAssertFalse(coordinator.ledger.canValidate(a, owners: [owner], scopes: []))
         (a.model(for: before.replicas[0].physicalID) as! TaskItem).title = "Exact unchanged owner"
         coordinator.validationCounters = .init()
         XCTAssertEqual(try commitLedgerEdit(a, before: [before], scopes: []), .committed)
@@ -810,7 +810,7 @@ final class WorkspaceCommitTests: XCTestCase {
         let a = coordinator.freshContext(), owner = WorkspaceOwner(entity: .task, id: taskID)
         let before = try WorkspaceModelToken.read(owner, in: a)
         let tasks = TaskStore(container: container)
-        XCTAssertGreaterThan(coordinator.ledger.floor, coordinator.ledger.stamp(a)!.syncedGeneration)
+        XCTAssertFalse(coordinator.ledger.canValidate(a, owners: [owner], scopes: []))
         XCTAssertTrue(coordinator.ledger.owners.isEmpty, "launch recording retains the floor instead of a whole-table map")
         (a.model(for: before.replicas[0].physicalID) as! TaskItem).title = "Stale before migration"
         coordinator.validationCounters = .init()
@@ -869,6 +869,86 @@ final class WorkspaceCommitTests: XCTestCase {
             $0.insert(TaskItem(id: otherID, title: "Also cannot resurrect"))
         }, .notCommitted)
         XCTAssertEqual(coordinator.tombstoneLoads, loads + 1)
+    }
+
+    func testR2FollowupPendingPublicationOffersOnlyForeignClaimAndClearsSuppressionOnRelease() async throws {
+        let pre = try recoveryDraft("operation pre-copy")
+        let claim = try await coordinator.journal.writeDurably(pre, staged: [])
+        let (outcome, id) = try await conversion(preDraft: pre, checkpointClaim: claim,
+            publication: .init(steps: [{ _ in throw WorkspaceFoundationError.unknown }]))
+        XCTAssertEqual(outcome, .publicationPending)
+        try await coordinator.finishLaunch()
+        let initial = try await coordinator.journal.readRecoveryEntries()
+        XCTAssertTrue(initial.isEmpty, "exact pending operation checkpoint is suppressed")
+        let checkpointURL = coordinator.journal.directory.appendingPathComponent(pre.noteID.uuidString + ".json")
+        let exactCheckpointBytes = try Data(contentsOf: checkpointURL)
+        var foreign = pre
+        foreign.content = try PreparedNoteDocument(NoteDocument(blocks: [.text("foreign unsaved copy")])).content
+        _ = try await coordinator.journal.writeDurably(foreign, staged: [], replacing: claim)
+        let offered = try await coordinator.journal.readRecoveryEntries()
+        XCTAssertEqual(offered.compactMap { if case let .valid(entry, _, _) = $0 { return entry.content }; return nil }, [foreign.content])
+        // Recreate the exact claim, then simulate proven receipt absence.
+        // Releasing pending ownership must offer this copy in this session.
+        try exactCheckpointBytes.write(to: checkpointURL, options: .atomic)
+        let suppressedAgain = try await coordinator.journal.readRecoveryEntries()
+        XCTAssertTrue(suppressedAgain.isEmpty)
+        let context = coordinator.freshContext()
+        try context.fetch(FetchDescriptor<OperationReceipt>()).forEach(context.delete)
+        try context.save() // Isolated fixture models proven absence, never production cleanup.
+        let resolved = await coordinator.retryPublication(id)
+        XCTAssertEqual(resolved, .notCommitted)
+        let afterRelease = try await coordinator.journal.readRecoveryEntries()
+        XCTAssertEqual(afterRelease.count, 1, "release must refresh the suppression set in this session")
+    }
+
+    func testR2FollowupEveryRuntimeLaunchCompletesWithoutOpeningNotes() async throws {
+        for environment in [["ATTIC_UI_TESTING": "1"], ["ATTIC_TESTING": "1"],
+                            ["ATTIC_UI_TESTING": "1", "ATTIC_PERF_SEED_ONLY": "1"]] {
+            let isolated = try PersistenceController.makeContainer(inMemory: true, cloudSyncEnabled: false)
+            let gate = try WorkspaceLegacyBridge.coordinator(for: isolated)
+            gate.beginLaunchRegistration()
+            let runtime = AppRuntimeEnvironment(environment: environment, applicationSupportURL: root)
+            let stores = runtime.makeItemStores(container: isolated, performanceRoot: root.appendingPathComponent(UUID().uuidString))
+            // No AppCoordinator/window/Notes page is created. Store construction
+            // is the common production path, even if start() returns early.
+            for _ in 0..<200 where !gate.startupReconciled {
+                try await Task.sleep(for: .milliseconds(5))
+            }
+            XCTAssertTrue(gate.startupReconciled, "launch path \(environment)")
+            let lease = gate.ownership.tryAcquire([UUID()], kind: .collection)
+            XCTAssertNotNil(lease, "launch hold must finish without a Notes visit")
+            lease?.release()
+            await stores.notes.waitForAttachmentReconciliation()
+        }
+    }
+
+    func testR2FollowupPersistentCompatibilityFailureAllowsDisjointFastSaveAndRollsBackRefusedEdit() throws {
+        let tasks = TaskStore(container: container)
+        let disjoint = try XCTUnwrap(tasks.create(title: "disjoint"))
+        try coordinator.commitCompatibility(tokens: coordinator.capture(baseOwners), scopes: [], writes: baseOwners,
+            intent: "persistently held compatibility", plain: false, writer: { context in
+                if context.changedModelsArray.compactMap({ $0 as? OperationReceipt }).contains(where: \.envelopeReleased) {
+                    throw WorkspaceFoundationError.unknown
+                }
+                try context.save()
+            }, stage: { context in
+                try TaskStore.stageUpdate(in: context, taskID: self.taskID, title: "committed once", timestamp: Date())
+                try context.fetch(FetchDescriptor<NoteItem>()).forEach { $0.tagsRaw = "compatibility" }
+            })
+        // Persistent bookkeeping failure, not an unreadable disjoint task.
+        coordinator.save = { _ in throw WorkspaceFoundationError.unknown }
+        tasks.refresh()
+        coordinator.validationCounters = .init()
+        XCTAssertTrue(tasks.update(try XCTUnwrap(tasks.task(withID: disjoint.id)), title: "saved independently"))
+        XCTAssertEqual(coordinator.validationCounters.fastValidations, 1)
+        XCTAssertEqual(coordinator.validationCounters.slowValidations, 0)
+        let held = try XCTUnwrap(tasks.task(withID: taskID))
+        XCTAssertFalse(tasks.update(held, title: "never attempted"))
+        XCTAssertEqual(tasks.task(withID: taskID)?.title, "committed once")
+        XCTAssertFalse(try XCTUnwrap(tasks.task(withID: taskID)?.modelContext).hasChanges)
+        let fresh = coordinator.freshContext()
+        XCTAssertEqual(try fresh.fetch(FetchDescriptor<TaskItem>()).first { $0.id == disjoint.id }?.title, "saved independently")
+        XCTAssertEqual(try fresh.fetch(FetchDescriptor<TaskItem>()).first { $0.id == taskID }?.title, "committed once")
     }
 
     func testR2TasksOnlyLaunchRegistersThenPrunesInBatchesBeforeCheckpointOffers() async throws {
@@ -1056,6 +1136,16 @@ final class WorkspaceCommitTests: XCTestCase {
         _ = try notes.noteMutationPreflight(ordinary, format: .document)
         let link = try XCTUnwrap(library.links.link(.init(.task, headID), to: .init(.note, ordinary), kind: .reference))
         var linkIsLive = true
+        // A journaled writer advances the entity independently; normal refresh
+        // must re-register presentation before the capacity+1 plain writes.
+        let taskOwner = WorkspaceOwner(entity: .task, id: headID)
+        let envelope = try coordinator.newEnvelope(intent: "foreign journaled task write",
+            reads: coordinator.capture([taskOwner]), writes: [taskOwner])
+        let journaled = await coordinator.execute(envelope, stage: {
+            try TaskStore.stageUpdate(in: $0, taskID: headID, title: "journaled then refreshed", timestamp: Date())
+        })
+        XCTAssertEqual(journaled, .committed)
+        tasks.refresh()
         // Touch distinct rows through the same registered presentation context.
         // A small capacity deterministically exercises several eviction batches;
         // repeat at the shipping capacity to catch hidden size-dependent work.
@@ -1178,6 +1268,18 @@ final class WorkspaceCommitTests: XCTestCase {
         var step = UndoStep(name: "retained", undoOutcome: { .failed }, redoOutcome: { .failed })
         step.operationID = envelope.id
         route!.record(step, in: .tasks); coordinator.registerHistory(route!)
+        for _ in 0..<64 { coordinator.registerHistory(UndoRoute()) }
+        coordinator.registerHistory(route!)
+        // Include the pre-Round-2 closure registries so this same assertion
+        // exercises their unbounded entries when backported to the old code.
+        let registries = Mirror(reflecting: coordinator!).children.filter {
+            ["histories", "historyOwners", "historyBytes"].contains($0.label ?? "")
+        }
+        XCTAssertFalse(registries.isEmpty)
+        for registry in registries {
+            XCTAssertEqual(Mirror(reflecting: registry.value).children.count, 1,
+                           "registration must drop dead entries before pruning: \(registry.label ?? "")")
+        }
         try await coordinator.reconcileStartup()
         XCTAssertEqual(try coordinator.prunePublishedReceipts(), 0)
         route = nil

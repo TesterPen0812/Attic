@@ -1962,6 +1962,8 @@ final class NoteStore: ObservableObject {
             guard let self else { return }
             do {
                 try Task.checkCancellation()
+                try await WorkspaceLegacyBridge.coordinator(for: container).finishRegisteredLaunch()
+                try Task.checkCancellation()
                 let report = try await attachmentFileStore.reconcileMetadata(metadata)
                 guard !Task.isCancelled, generation == attachmentReconciliationGeneration else { return }
                 let neededKeys = Set(report.needsMaterialization.map {

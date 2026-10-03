@@ -253,14 +253,18 @@ extension NoteDraftJournaling {
 private final class NoteOperationRecoveryBarrier: @unchecked Sendable {
     private let lock = NSLock()
     private var blocked = false
+    private var suppressedClaims: [NoteRecoveryClaim] = []
     var isBlocked: Bool { lock.lock(); defer { lock.unlock() }; return blocked }
     func setBlocked(_ value: Bool) { lock.lock(); blocked = value; lock.unlock() }
+    func suppress(_ claims: [NoteRecoveryClaim]) { lock.lock(); suppressedClaims = claims; lock.unlock() }
+    func suppresses(_ claim: NoteRecoveryClaim) -> Bool {
+        lock.lock(); defer { lock.unlock() }; return suppressedClaims.contains(claim)
+    }
 }
 
 private actor NoteDraftJournalIO {
     nonisolated let operationBarrier = NoteOperationRecoveryBarrier()
     private var operationReconciled = false
-    private var suppressedOperationNotes = Set<UUID>()
     let directory: URL
     private let fileManagerFactory: @Sendable () -> FileManager
     private lazy var fileManager = fileManagerFactory()
@@ -546,9 +550,9 @@ private actor NoteDraftJournalIO {
         let files = inventory
             .filter { $0.pathExtension == "json" }.sorted { $0.lastPathComponent < $1.lastPathComponent }
         let results: [NoteDraftRecoveryEntry] = files.compactMap { file in
-            if offering, let id = UUID(uuidString: file.deletingPathExtension().lastPathComponent), suppressedOperationNotes.contains(id) { return nil }
             switch ownership(of: file) {
             case let .valid(entry, staged, claim), let .pending(entry, staged, claim):
+                if offering && operationBarrier.suppresses(claim) { return nil }
                 return .valid(entry, staged, claim)
             case let .damaged(message): return .damaged(message)
             case .retired:
@@ -785,8 +789,8 @@ private extension NoteDraftJournalIO {
             operationBarrier.setBlocked(false)
         }
     }
-    func finishOperationReconciliation(suppressing notes: Set<UUID> = []) {
-        suppressedOperationNotes = notes
+    func finishOperationReconciliation(suppressing claims: [NoteRecoveryClaim] = []) {
+        operationBarrier.suppress(claims)
         operationReconciled = true; operationBarrier.setBlocked(false)
     }
     func damagedCheckpointNoteIDs() throws -> Set<UUID> {
@@ -813,7 +817,8 @@ extension NoteDraftJournal {
         return try Self.waitForIO { try await io.verifyAttachment(id: id, filename: filename, contentType: contentType, byteCount: byteCount, digest: digest, bytes: bytes) }
     }
     func inventoryCheckpoints() async throws -> [NoteDraftRecoveryEntry] { try await io.inventoryCheckpoints() }
-    func finishOperationReconciliation(suppressing notes: Set<UUID> = []) async { await io.finishOperationReconciliation(suppressing: notes) }
+    func finishOperationReconciliation(suppressing claims: [NoteRecoveryClaim] = []) async { await io.finishOperationReconciliation(suppressing: claims) }
+    func suppressPendingOperationClaims(_ claims: [NoteRecoveryClaim]) { io.operationBarrier.suppress(claims) }
     func damagedCheckpointNoteIDs() async throws -> Set<UUID> { try await io.damagedCheckpointNoteIDs() }
     func prepareOperation(_ envelope: WorkspaceOperationEnvelope) async throws -> WorkspaceOperationClaim {
         try await io.prepareOperation(envelope)

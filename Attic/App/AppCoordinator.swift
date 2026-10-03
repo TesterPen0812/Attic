@@ -260,6 +260,8 @@ struct AppRuntimeEnvironment {
                 recovery.deletingLastPathComponent().appendingPathComponent("NoteDrafts"), for: container
             )
         }
+        let workspace = try? WorkspaceLegacyBridge.coordinator(for: container)
+        workspace?.beginLaunchRegistration()
         let tasks = TaskStore(
             container: container,
             taskImageFiles: performanceRoot.map {
@@ -272,6 +274,12 @@ struct AppRuntimeEnvironment {
                 AttachmentFileStore(rootURL: $0.appendingPathComponent("NoteAttachments", isDirectory: true))
             } ?? makeAttachmentFileStore()
         )
+        // Every launch path builds these stores, including noninteractive and
+        // seed-only hosts. The main-actor task runs after synchronous launch
+        // presentation construction, independent of start()'s early returns.
+        Task { @MainActor in
+            try? await workspace?.finishLaunch()
+        }
         return (tasks, notes)
     }
 }
@@ -510,8 +518,6 @@ final class AppCoordinator: ObservableObject {
             try? TasksPagePreview.seedCaughtUp(in: container)
         }
         #endif
-        let workspace = try? WorkspaceLegacyBridge.coordinator(for: container)
-        workspace?.beginLaunchRegistration()
         let (store, noteStore) = runtime.makeItemStores(container: container, performanceRoot: performanceRoot)
         let canvasStore = CanvasStore(container: container)
         let canvasViewDefaults = runtime.isUnitTestHost ? nil : runtime.makeSettingsDefaults()
@@ -831,6 +837,9 @@ final class AppCoordinator: ObservableObject {
             guard let self else { return }
             do {
                 try await WorkspaceLegacyBridge.coordinator(for: self.store.container).finishLaunch()
+                // Persistent launch files are swept only after registration
+                // and reconciliation; test stores never judge real files.
+                if !self.isRunningTests { await self.store.sweepUnreferencedAttachmentStorage() }
                 self.noteDraft.pages.recoverAtLaunch()
             } catch { self.noteDraft.pages.recoveryStartupFailed(error) }
         }
@@ -846,11 +855,6 @@ final class AppCoordinator: ObservableObject {
             }
         hoverMonitor.start()
         if !isRunningTests {
-            // Once per launch, on the persistent store only (tests and UI
-            // tests use an in-memory store, whose empty reference set must
-            // never judge real files).
-            let store = store
-            Task { await store.sweepUnreferencedAttachmentStorage() }
             agentAccessObservation = settings.$isAgentAccessEnabled.sink { [weak self] isEnabled in
                 guard let self else { return }
                 if isEnabled {

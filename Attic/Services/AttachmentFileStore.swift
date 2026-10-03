@@ -375,12 +375,13 @@ actor AttachmentFileStore {
     /// bound, a composer's pending items — and anything not shaped like a
     /// materialization are left alone, as is the notes reconciler's tree.
     /// Importer staging batches older than `cutoff` are removed too. Stops
-    /// after `limit` removals; returns how many materializations it removed.
+    /// after `limit` removals; returns the removed count and whether any
+    /// candidate was deferred by ownership, so a launch sweep can retry.
     func removeUnreferencedMaterializations(
         keeping referencedIDs: Set<UUID>,
         modifiedBefore cutoff: Date,
         limit: Int
-    ) async -> Int {
+    ) async -> (removed: Int, complete: Bool) {
         let keys: [URLResourceKey] = [
             .isDirectoryKey, .isSymbolicLinkKey, .creationDateKey, .contentModificationDateKey
         ]
@@ -397,6 +398,7 @@ actor AttachmentFileStore {
         }
 
         var removed = 0
+        var deferred = false
         let idDirectories = (try? fileManager.contentsOfDirectory(
             at: rootURL, includingPropertiesForKeys: keys, options: [.skipsHiddenFiles]
         )) ?? []
@@ -404,13 +406,18 @@ actor AttachmentFileStore {
             guard let id = UUID(uuidString: idDirectory.lastPathComponent),
                   id.uuidString == idDirectory.lastPathComponent,
                   !referencedIDs.contains(id), isDirectory(idDirectory) else { continue }
-            guard let leases = acquireCollection([id]) else { continue }
-            defer { leases.release() }
-            // Read before removing anything changes its modification date.
+            // Recent imports are not collection candidates. Their admission
+            // leases must not turn a completed sweep into a deferred pass.
             let idDirectoryIsOld = isOld(idDirectory)
             let digestDirectories = (try? fileManager.contentsOfDirectory(
                 at: idDirectory, includingPropertiesForKeys: keys, options: []
             )) ?? []
+            guard idDirectoryIsOld || digestDirectories.contains(where: { directory in
+                let name = directory.lastPathComponent
+                return name.count == 64 && name.allSatisfy(\.isHexDigit) && isDirectory(directory) && isOld(directory)
+            }) else { continue }
+            guard let leases = acquireCollection([id]) else { deferred = true; continue }
+            defer { leases.release() }
             for digestDirectory in digestDirectories where removed < limit {
                 let name = digestDirectory.lastPathComponent
                 guard name.count == 64, name.allSatisfy(\.isHexDigit), isDirectory(digestDirectory),
@@ -432,7 +439,7 @@ actor AttachmentFileStore {
         )) ?? [] where !Self.isSymbolicLink(batch, fileManager: fileManager) && isOld(batch) {
             try? fileManager.removeItem(at: batch)
         }
-        return removed
+        return (removed, !deferred)
     }
 
     /// Performs the expensive content check only when a file is about to be

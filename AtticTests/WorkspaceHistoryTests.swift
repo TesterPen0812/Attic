@@ -298,6 +298,7 @@ final class WorkspaceHistoryTests: XCTestCase {
         expectEqual(route.undoStepID(in: workspace.historyID), barrier)
         XCTAssertTrue(workspace.undoName.contains("Claude"))
         expectEqual(await workspace.replay(redo: false), .failed)
+        expectEqual(route.undoStepID(in: workspace.historyID), barrier)
         expectEqual(adapter.storage.string, "local")
         XCTAssertTrue(workspace.canRedo, "a refused barrier clears nothing")
         workspace.recordExternalBarrier(origin: "Other window")

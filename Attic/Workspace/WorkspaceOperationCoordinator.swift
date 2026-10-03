@@ -161,27 +161,34 @@ final class WorkspaceOperationCoordinator {
         catch { launchWork = nil; throw error } // Hold remains; the next launch retry is explicit.
     }
 
+    /// Standalone stores have no app-launch hold. Launch collectors wait for
+    /// registered maintenance rather than skipping their only cleanup pass.
+    func finishRegisteredLaunch() async throws {
+        if launchHold != nil { try await finishLaunch() }
+    }
+
     /// Recovery reads occur only when an earlier write is actually held.
     /// A resolved unknown unlocks the caller's normal exact/ledger validation;
     /// it never replays the original mutation.
-    func retryHeldWrites() -> Bool {
+    func retryHeldWrites(affecting affected: Set<WorkspaceOwner>? = nil) -> Bool {
         if plainUnknown != nil, reconcilePlain() == .unknown { return false }
         for id in compatibilityPending {
             guard let (envelope, claim, _) = pending[id] else { continue }
             switch receiptTruth(id, digest: claim.digest) {
             case .committed:
-                do { try finalizeCompatibility(envelope, claim: claim) } catch { return false }
+                do { try finalizeCompatibility(envelope, claim: claim) } catch { continue }
             case .notCommitted:
                 retainAbortedCompatibility(envelope, claim: claim)
                 releasePending(envelope)
-            default: return false
+            default: continue
             }
         }
-        return true
+        return affected.map { $0.isDisjoint(with: heldOwners) } ?? compatibilityPending.isEmpty
     }
     private func releasePending(_ envelope: WorkspaceOperationEnvelope) {
         pending[envelope.id] = nil; publicationStep[envelope.id] = nil; compatibilityPending.remove(envelope.id)
         heldOwners.subtract(Set(envelope.tokens.map(\.owner)).union(envelope.writes))
+        journal.suppressPendingOperationClaims(pending.values.compactMap { $0.0.checkpointClaim })
     }
     struct RecoveryCopy {
         let operationID: UUID
@@ -462,7 +469,7 @@ final class WorkspaceOperationCoordinator {
                    confirmed: (([WorkspaceOwner: WorkspaceModelToken]) -> Void)? = nil,
                    stage: (ModelContext) throws -> Void) -> Outcome {
         let affected = Set(tokens.map(\.owner)).union(writes)
-        guard retryHeldWrites(), affected.isDisjoint(with: heldOwners) else { return .unknown }
+        guard retryHeldWrites(affecting: affected) else { return .unknown }
         let context = freshContext()
         do {
             let validated = try WorkspaceModelToken.read(owners: Set(tokens.map(\.owner)).union(writes), in: context)
@@ -524,7 +531,7 @@ final class WorkspaceOperationCoordinator {
                        confirmed: ([WorkspaceOwner: WorkspaceModelToken]) -> Void) -> Outcome {
         let writes = Set(after.map(\.owner))
         let affected = Set(before.map(\.owner)).union(writes)
-        guard retryHeldWrites(), affected.isDisjoint(with: heldOwners) else { return .unknown }
+        guard retryHeldWrites(affecting: affected) else { return .conflict }
         do {
             if ledger.canValidate(context, owners: affected, scopes: requiredScopes) {
                 validationCounters.fastValidations += 1
@@ -802,10 +809,7 @@ final class WorkspaceOperationCoordinator {
                 try bookkeeping(id) { $0.envelopeReleased = true }
             }
         }
-        let suppressedNotes = Set(pending.values.flatMap { envelope, _, _ in
-            envelope.tokens.filter { $0.owner.entity == .note }.map { $0.owner.id }
-        })
-        await journal.finishOperationReconciliation(suppressing: suppressedNotes)
+        await journal.finishOperationReconciliation(suppressing: pending.values.compactMap { $0.0.checkpointClaim })
         startupReconciled = true
     }
 

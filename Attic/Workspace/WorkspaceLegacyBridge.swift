@@ -332,7 +332,6 @@ enum WorkspaceLegacyBridge {
         guard let state = objc_getAssociatedObject(source, &contextKey) as? ContextState else {
             throw WorkspaceFoundationError.unknown
         }
-        guard state.coordinator.retryHeldWrites() else { throw CommitHeld() }
         guard !state.captureFailed else { throw WorkspaceFoundationError.unknown }
         let changes = source.insertedModelsArray + source.changedModelsArray + source.deletedModelsArray
         guard let admission = state.coordinator.ownership.tryAcquire(try state.coordinator.admissionIDs(changes, before: Array(state.baseline.values)), kind: .admission) else {
@@ -344,6 +343,11 @@ enum WorkspaceLegacyBridge {
             return owner
         })
         if writes.isEmpty { return }
+        // No save has been attempted for this edit. Refusal must use the
+        // caller's rollback path, never the ambiguous-save dirty-state path.
+        guard state.coordinator.retryHeldWrites(affecting: writes) else {
+            throw WorkspaceFoundationError.protectedOwner
+        }
         var before: [WorkspaceOwner: WorkspaceModelToken] = [:]
         for owner in writes {
             // Inserts have expected absence; changed/deleted owners must have

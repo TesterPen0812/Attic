@@ -1457,6 +1457,7 @@ final class TaskStore: ObservableObject {
     }
 
     private var hasSweptAttachmentStorage = false
+    private var isSweepingAttachmentStorage = false
 
     /// Once per launch, before anything is being attached: removes private
     /// attachment copies no stored task references, such as a composer's
@@ -1467,14 +1468,18 @@ final class TaskStore: ObservableObject {
     /// stops the sweep. Anything created or modified within `minimumAge` is
     /// kept, which also covers an import that starts while the sweep runs.
     /// Only Attic's own storage is touched, never originals. Returns how many
-    /// copies were removed, or nil when the sweep did not run.
+    /// copies were removed, or nil when the sweep did not run. A partial pass
+    /// whose collection was refused does not consume the launch's attempt.
     @discardableResult
     func sweepUnreferencedAttachmentStorage(minimumAge: TimeInterval = 24 * 60 * 60,
                                             dropStagingRoot: URL = TaskAttachmentStaging.ownedRootURL) async -> Int? {
-        guard !hasSweptAttachmentStorage, importingAttachmentTaskIDs.isEmpty else { return nil }
-        hasSweptAttachmentStorage = true
+        guard !hasSweptAttachmentStorage, !isSweepingAttachmentStorage, importingAttachmentTaskIDs.isEmpty else { return nil }
+        isSweepingAttachmentStorage = true
+        defer { isSweepingAttachmentStorage = false }
         let referencedIDs: Set<UUID>
         do {
+            try await WorkspaceLegacyBridge.coordinator(for: container).finishLaunch()
+            guard importingAttachmentTaskIDs.isEmpty else { return nil }
             referencedIDs = try storedAttachmentIDs(excludingTaskIDs: [])
         } catch {
             return nil
@@ -1482,8 +1487,10 @@ final class TaskStore: ObservableObject {
         // File dates are wall-clock times, whatever clock the store was given.
         let cutoff = Date().addingTimeInterval(-minimumAge)
         TaskAttachmentStaging.removeAbandoned(modifiedBefore: cutoff, in: dropStagingRoot)
-        return await taskImageFiles.removeUnreferenced(keeping: referencedIDs, modifiedBefore: cutoff,
-                                                       limit: Self.attachmentSweepLimit)
+        let removed = await taskImageFiles.removeUnreferenced(keeping: referencedIDs, modifiedBefore: cutoff,
+                                                            limit: Self.attachmentSweepLimit)
+        if removed.complete { hasSweptAttachmentStorage = true }
+        return removed.removed
     }
 
     private static let attachmentSweepLimit = 500

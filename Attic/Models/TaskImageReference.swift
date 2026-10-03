@@ -93,11 +93,11 @@ actor TaskImageFiles {
     /// Launch-time cleanup of private copies no task references, such as a
     /// composer's pending items when Attic quit before the task was added.
     /// See `AttachmentFileStore.removeUnreferencedMaterializations`.
-    func removeUnreferenced(keeping referencedIDs: Set<UUID>, modifiedBefore cutoff: Date, limit: Int) async -> Int {
+    func removeUnreferenced(keeping referencedIDs: Set<UUID>, modifiedBefore cutoff: Date, limit: Int) async -> (removed: Int, complete: Bool) {
         let removed = await files.removeUnreferencedMaterializations(
             keeping: referencedIDs, modifiedBefore: cutoff, limit: limit
         )
-        if removed > 0 { thumbnailCache.removeAll() }
+        if removed.removed > 0 { thumbnailCache.removeAll() }
         return removed
     }
 
