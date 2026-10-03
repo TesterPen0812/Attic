@@ -174,6 +174,13 @@ final class WorkspaceCommitLedger {
             floor = max(floor, oldest.value.generation); physical.removeValue(forKey: oldest.key)
         }
     }
+    /// Launch migration may record thousands of rows before presentation is
+    /// built. The floor carries that complete invalidation without retaining
+    /// a whole-table physical/owner map for the subsequent session.
+    func evictLaunchMigrationEntries() {
+        floor = generation
+        owners = [:]; scopes = [:]; scopeWriters = [:]; physical = [:]
+    }
     private static let entities: [String: WorkspaceOwner.Entity] = [
         "TaskItem": .task, "NoteItem": .note, "NoteAttachment": .attachment, "NoteVersion": .version,
         "NotePendingEdit": .proposal, "ItemLink": .link, "TaskNoteAssociation": .association,

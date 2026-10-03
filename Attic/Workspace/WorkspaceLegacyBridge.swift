@@ -291,44 +291,6 @@ enum WorkspaceLegacyBridge {
         return state.plainCommit
     }
 
-    /// Existing list-order migration has a prepared scalar plan. Avoid
-    /// mutating/fingerprinting a presentation copy before the fresh writer.
-    /// Parent heads and membership have the same guards as legacy staging.
-    static func persistPreparedTaskOrders(_ rows: [TaskItem], orders: [PersistentIdentifier: Int64],
-                                         marking: Set<PersistentIdentifier>, in source: ModelContext,
-                                         using writer: @escaping (ModelContext) throws -> Void) throws {
-        guard !source.hasChanges, rows.allSatisfy({ $0.modelContext === source }),
-              let state = objc_getAssociatedObject(source, &contextKey) as? ContextState else {
-            throw WorkspaceFoundationError.unknown
-        }
-        captureBeforeMutations(rows, in: source)
-        guard !state.captureFailed else { throw WorkspaceFoundationError.unknown }
-        let writes = Set(rows.map { WorkspaceOwner(entity: .task, id: $0.id) })
-        var reads = writes
-        for row in rows {
-            if let id = row.parentID { reads.insert(WorkspaceOwner(entity: .task, id: id)) }
-        }
-        let tokens = try reads.map { try capturedToken($0, in: source) }
-        let needed = WorkspaceScopeToken.scopes(for: tokens)
-        let scopes = try scopeTokens(needed, state: state, in: source)
-        let physicalIDs = Set(rows.map(\.persistentModelID))
-        guard Set(orders.keys).isSubset(of: physicalIDs), marking.isSubset(of: physicalIDs) else {
-            throw WorkspaceFoundationError.unknown
-        }
-        var confirmed: [WorkspaceOwner: WorkspaceModelToken]?
-        try state.coordinator.commitCompatibility(tokens: tokens, scopes: scopes, writes: writes,
-            intent: "Task list order", plain: true, writer: writer, confirmed: { confirmed = $0 }, stage: { target in
-                for id in physicalIDs {
-                    guard let row = target.model(for: id) as? TaskItem else { throw WorkspaceFoundationError.unknown }
-                    if let order = orders[id] { row.manualOrder = order }
-                    if marking.contains(id) { row.listOrderVersion = TaskItem.currentListOrderVersion }
-                }
-            })
-        state.baseline = try confirmed ?? WorkspaceModelToken.read(owners: writes, in: state.coordinator.freshContext())
-        state.scopes.removeAll()
-        state.plainCommit = true
-    }
-
     struct CommitHeld: Error {}
 
     static func persist(_ source: ModelContext, using writer: @escaping (ModelContext) throws -> Void,

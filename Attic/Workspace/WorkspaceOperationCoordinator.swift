@@ -169,6 +169,10 @@ final class WorkspaceOperationCoordinator {
         }
         defer { admission.release() }
         try gatedSave(context, before: [], using: writer)
+        ledger.evictLaunchMigrationEntries()
+        // This fresh migration context now builds its first presentation.
+        // Older registered contexts remain below the eviction floor.
+        ledger.register(context)
     }
 
     private func gatedSave(_ context: ModelContext, before: [WorkspaceModelToken], using writer: (ModelContext) throws -> Void) throws {

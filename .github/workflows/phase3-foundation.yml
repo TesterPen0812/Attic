@@ -53,6 +53,17 @@ jobs:
             "${F[@]}" -parallel-testing-enabled NO \
             -only-testing:AtticTests/TaskPerformanceGateTests/testPFFoundationSizeAndProductionPaths test \
             | tee .build/pf-base.log
+          for test in testPF1LargeAutosaveAndPreparedCommitAgainstPairedBase testPF5InterleavedSessionSoakAgainstPairedBase; do
+            /Users/taha/Developer/attic-redesign-assets/xcodebuild-locked.sh \
+              -project "$base/Attic.xcodeproj" -scheme Attic -configuration Local \
+              -destination 'platform=macOS' -derivedDataPath "$RUNNER_TEMP/AtticPFBaseBuild" \
+              ATTIC_MACOS_UNIT_HOST_PRODUCT_NAME=AtticP3PFBaseHost \
+              ATTIC_MACOS_UNIT_HOST_EXECUTABLE_NAME=AtticP3PFBaseHost \
+              ATTIC_MACOS_UNIT_HOST_BUNDLE_IDENTIFIER=com.taha.Attic.p3.pfbase \
+              "${F[@]}" -parallel-testing-enabled NO \
+              -only-testing:"AtticTests/TaskPerformanceGateTests/$test" test-without-building \
+              | tee -a .build/pf-base.log
+          done
           python3 - <<'PY'
           import json, os
           from pathlib import Path
@@ -62,6 +73,10 @@ jobs:
           Path('.build/pf-base-reference.json').write_text(json.dumps(reference, indent=2))
           with open(os.environ['GITHUB_ENV'], 'a') as output:
               output.write('TEST_RUNNER_ATTIC_PF_REFERENCE_JSON=' + raw + '\n')
+              for gate in ['PF1', 'PF5']:
+                  paired = next(line.split(gate + '_REFERENCE_JSON=', 1)[1] for line in lines if gate + '_REFERENCE_JSON=' in line)
+                  Path('.build/' + gate.lower() + '-base-reference.json').write_text(json.dumps(json.loads(paired), indent=2))
+                  output.write('TEST_RUNNER_ATTIC_' + gate + '_REFERENCE_JSON=' + paired + '\n')
               output.write('TEST_RUNNER_ATTIC_PF_REQUIRE_REFERENCE=1\n')
           PY
       - name: Build and sign the isolated hosted test products
@@ -78,7 +93,7 @@ jobs:
           Scripts/sign_crash_harness.zsh .build/dd/Build/Products/Local/AtticP3CrashHost.app
       # The paired probe needs a fresh process, just like the archived base;
       # earlier suites must not contaminate its absolute process footprint.
-      - name: Run blocking paired PF2-PF3 assertions
+      - name: Run blocking paired PF1-PF3 and PF5 assertions
         if: ${{ !cancelled() && !inputs.harness_only }}
         shell: /bin/zsh {0}
         run: |
@@ -92,6 +107,17 @@ jobs:
             ATTIC_MACOS_UNIT_HOST_BUNDLE_IDENTIFIER=com.taha.Attic.p3.crashhost \
             -parallel-testing-enabled NO "${F[@]}" \
             -only-testing:AtticTests/TaskPerformanceGateTests/testPFFoundationSizeAndProductionPaths test-without-building
+          for test in testPF1LargeAutosaveAndPreparedCommitAgainstPairedBase testPF5InterleavedSessionSoakAgainstPairedBase; do
+            /Users/taha/Developer/attic-redesign-assets/xcodebuild-locked.sh \
+              -project Attic.xcodeproj -scheme Attic -configuration Local \
+              -destination 'platform=macOS' -derivedDataPath .build/dd \
+              -resultBundlePath ".build/$test.xcresult" \
+              ATTIC_MACOS_UNIT_HOST_PRODUCT_NAME=AtticP3CrashHost \
+              ATTIC_MACOS_UNIT_HOST_EXECUTABLE_NAME=AtticP3CrashHost \
+              ATTIC_MACOS_UNIT_HOST_BUNDLE_IDENTIFIER=com.taha.Attic.p3.crashhost \
+              "${F[@]}" -parallel-testing-enabled NO \
+              -only-testing:"AtticTests/TaskPerformanceGateTests/$test" test-without-building
+          done
       - name: Run C1-C5 and minimum taskNote format before the full suite
         env:
           TEST_RUNNER_ATTIC_KEY_WINDOW_TESTS: "1"
@@ -155,7 +181,9 @@ jobs:
             -parallel-testing-enabled NO -test-timeouts-enabled YES \
             -default-test-execution-time-allowance 120 -maximum-test-execution-time-allowance 360 \
             "${F[@]}" -only-testing:AtticTests \
-            -skip-testing:AtticTests/TaskPerformanceGateTests/testPFFoundationSizeAndProductionPaths test-without-building
+            -skip-testing:AtticTests/TaskPerformanceGateTests/testPFFoundationSizeAndProductionPaths \
+            -skip-testing:AtticTests/TaskPerformanceGateTests/testPF1LargeAutosaveAndPreparedCommitAgainstPairedBase \
+            -skip-testing:AtticTests/TaskPerformanceGateTests/testPF5InterleavedSessionSoakAgainstPairedBase test-without-building
       - name: Inspect host and helper signature contracts
         if: always()
         run: |

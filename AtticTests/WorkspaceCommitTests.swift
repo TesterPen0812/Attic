@@ -176,29 +176,6 @@ final class WorkspaceCommitTests: XCTestCase {
         XCTAssertEqual(try WorkspaceModelFields.fingerprint(copy), try WorkspaceModelFields.fingerprint(note))
     }
 
-    func testC2PreparedTaskOrderRetainsParentGuardAndDoesNotStagePresentation() throws {
-        let source = WorkspaceLegacyBridge.context(for: container)
-        let parentID = taskID!, id = UUID()
-        source.insert(TaskItem(id: id, title: "Child", manualOrder: 3, parentID: parentID))
-        try source.save()
-        let child = try XCTUnwrap(source.fetch(FetchDescriptor<TaskItem>(predicate: #Predicate { $0.id == id })).first)
-        let parent = try XCTUnwrap(source.fetch(FetchDescriptor<TaskItem>(predicate: #Predicate { $0.id == parentID })).first)
-        WorkspaceLegacyBridge.captureBeforeMutations([child, parent], in: source)
-        let external = coordinator.freshContext()
-        let changed = try XCTUnwrap(external.fetch(FetchDescriptor<TaskItem>(predicate: #Predicate { $0.id == parentID })).first)
-        changed.title = "External parent"; try external.save()
-        var saves = 0
-        XCTAssertThrowsError(try WorkspaceLegacyBridge.persistPreparedTaskOrders([child],
-            orders: [child.persistentModelID: 7], marking: [child.persistentModelID], in: source,
-            using: { saves += 1; try $0.save() }))
-        XCTAssertEqual(saves, 0)
-        XCTAssertFalse(source.hasChanges)
-        XCTAssertEqual(child.manualOrder, 3)
-        let persisted = try XCTUnwrap(coordinator.freshContext().fetch(FetchDescriptor<TaskItem>(predicate: #Predicate { $0.id == id })).first)
-        XCTAssertEqual(persisted.manualOrder, 3)
-        XCTAssertEqual(persisted.listOrderVersion, 0)
-    }
-
     func testC2PrimitiveGuardsRemainCompatibleWithPreviouslyEncodedTokens() throws {
         let id = UUID(), source = coordinator.freshContext()
         let child = TaskItem(id: id, title: "Compatible", parentID: taskID)
@@ -739,6 +716,208 @@ final class WorkspaceCommitTests: XCTestCase {
         XCTAssertEqual(try coordinator.freshContext().fetchCount(FetchDescriptor<OperationReceipt>()), 0)
         XCTAssertFalse(FileManager.default.fileExists(atPath: root.appendingPathComponent("NoteDrafts/operations").path))
     }
+    private func commitLedgerEdit(_ context: ModelContext, before: [WorkspaceModelToken],
+                                  scopes: [WorkspaceScopeToken], through gate: WorkspaceOperationCoordinator? = nil) throws -> WorkspaceOperationCoordinator.Outcome {
+        let gate = gate ?? coordinator!
+        let owners = Set(before.map(\.owner))
+        let after = try WorkspaceModelToken.capture(owners: owners,
+            models: WorkspaceModelToken.stagedModels(owners: owners,
+                before: Dictionary(uniqueKeysWithValues: before.map { ($0.owner, $0) }), in: context))
+        return gate.commitInPlace(context, before: before, requiredScopes: Set(scopes.map(\.scope)),
+            scopes: { scopes }, after: Array(after.values), capturedOwners: owners,
+            using: { try $0.save() }, confirmed: { _ in })
+    }
+
+    func testL1OtherGatedWriterInvalidatesTheOwnerAndRefusesStaleValues() throws {
+        let owner = WorkspaceOwner(entity: .task, id: taskID), a = coordinator.freshContext()
+        let before = try WorkspaceModelToken.read(owner, in: a)
+        let id = taskID!
+        XCTAssertEqual(coordinator.plainSave(tokens: [before], writes: [owner]) { b in
+            try b.fetch(FetchDescriptor<TaskItem>(predicate: #Predicate { $0.id == id })).first!.title = "B"
+        }, .committed)
+        try a.fetch(FetchDescriptor<TaskItem>(predicate: #Predicate { $0.id == id })).first!.title = "A"
+        coordinator.validationCounters = .init()
+        XCTAssertEqual(try commitLedgerEdit(a, before: [before], scopes: []), .conflict)
+        XCTAssertEqual(coordinator.validationCounters.slowValidations, 1)
+        XCTAssertEqual(coordinator.validationCounters.freshContexts, 1)
+        a.rollback()
+        XCTAssertEqual(try coordinator.freshContext().fetch(FetchDescriptor<TaskItem>(predicate: #Predicate { $0.id == id })).first?.title, "B")
+    }
+
+    func testL1ColdPresentationStillRefusesAChangedOwnerFromAnotherGatedContext() throws {
+        let tasks = TaskStore(container: container)
+        let presented = try XCTUnwrap(tasks.task(withID: taskID))
+        let owner = WorkspaceOwner(entity: .task, id: taskID), id = taskID!
+        XCTAssertEqual(coordinator.plainSave(tokens: try coordinator.capture([owner]), writes: [owner]) { b in
+            try b.fetch(FetchDescriptor<TaskItem>(predicate: #Predicate { $0.id == id })).first!.title = "B"
+        }, .committed)
+        coordinator.validationCounters = .init()
+        XCTAssertFalse(tasks.update(presented, title: "Stale A"))
+        XCTAssertEqual(coordinator.validationCounters.slowValidations, 1)
+        XCTAssertEqual(coordinator.validationCounters.freshContexts, 1)
+        XCTAssertEqual(tasks.task(withID: id)?.title, "B")
+    }
+
+    func testL2GatedSiblingInsertInvalidatesChildrenScope() throws {
+        let owner = WorkspaceOwner(entity: .task, id: taskID), a = coordinator.freshContext()
+        let before = try WorkspaceModelToken.read(owner, in: a)
+        let scope = try WorkspaceScopeToken.read(.children(taskID), in: a)
+        let sibling = WorkspaceOwner(entity: .task, id: UUID())
+        XCTAssertEqual(coordinator.plainSave(tokens: [.init(owner: sibling, replicas: [])], writes: [sibling]) { b in
+            b.insert(TaskItem(id: sibling.id, title: "Sibling", parentID: self.taskID))
+        }, .committed)
+        (a.model(for: before.replicas[0].physicalID) as! TaskItem).title = "A"
+        coordinator.validationCounters = .init()
+        XCTAssertEqual(try commitLedgerEdit(a, before: [before], scopes: [scope]), .conflict)
+        XCTAssertEqual(coordinator.validationCounters.slowValidations, 1)
+        XCTAssertEqual(coordinator.validationCounters.freshContexts, 1)
+        a.rollback()
+    }
+
+    func testL3ForeignCanvasSaveLeavesTasksAndNotesFast() throws {
+        let seed = coordinator.freshContext(), ordinary = NoteItem(title: "Independent note")
+        seed.insert(ordinary); try seed.save()
+        let tasks = TaskStore(container: container), notes = NoteStore(container: container,
+            attachmentFileStore: AttachmentFileStore(rootURL: root.appendingPathComponent("Files")))
+        let foreign = ModelContext(container)
+        foreign.insert(CanvasBoardItem(name: "Unrelated")); try foreign.save()
+        coordinator.validationCounters = .init()
+        XCTAssertTrue(tasks.update(try XCTUnwrap(tasks.task(withID: taskID)), title: "Task fast"))
+        XCTAssertTrue(notes.setPinned(true, noteID: ordinary.id))
+        XCTAssertEqual(coordinator.validationCounters.fastValidations, 2)
+        XCTAssertEqual(coordinator.validationCounters.slowValidations, 0)
+        XCTAssertEqual(coordinator.validationCounters.freshContexts, 0)
+    }
+
+    func testL4LedgerEvictionForcesExactValidationBelowTheFloor() throws {
+        let a = coordinator.freshContext(), owner = WorkspaceOwner(entity: .task, id: taskID)
+        let before = try WorkspaceModelToken.read(owner, in: a)
+        coordinator.ledger.capacity = 1
+        let inserted = Set((0..<3).map { _ in WorkspaceOwner(entity: .task, id: UUID()) })
+        XCTAssertEqual(coordinator.plainSave(tokens: inserted.map { .init(owner: $0, replicas: []) }, writes: inserted) { b in
+            for owner in inserted { b.insert(TaskItem(id: owner.id, title: "Eviction")) }
+        }, .committed)
+        XCTAssertGreaterThan(coordinator.ledger.floor, coordinator.ledger.stamp(a)!.syncedGeneration)
+        (a.model(for: before.replicas[0].physicalID) as! TaskItem).title = "Exact unchanged owner"
+        coordinator.validationCounters = .init()
+        XCTAssertEqual(try commitLedgerEdit(a, before: [before], scopes: []), .committed)
+        XCTAssertEqual(coordinator.validationCounters.slowValidations, 1)
+        XCTAssertEqual(coordinator.validationCounters.freshContexts, 1)
+    }
+
+    func testL4LaunchMigrationFloorRetainsExactGuardsForOlderContexts() throws {
+        let a = coordinator.freshContext(), owner = WorkspaceOwner(entity: .task, id: taskID)
+        let before = try WorkspaceModelToken.read(owner, in: a)
+        let tasks = TaskStore(container: container)
+        XCTAssertGreaterThan(coordinator.ledger.floor, coordinator.ledger.stamp(a)!.syncedGeneration)
+        XCTAssertTrue(coordinator.ledger.owners.isEmpty, "launch recording retains the floor instead of a whole-table map")
+        (a.model(for: before.replicas[0].physicalID) as! TaskItem).title = "Stale before migration"
+        coordinator.validationCounters = .init()
+        XCTAssertEqual(try commitLedgerEdit(a, before: [before], scopes: []), .conflict)
+        XCTAssertEqual(coordinator.validationCounters.slowValidations, 1)
+        a.rollback()
+        coordinator.validationCounters = .init()
+        XCTAssertTrue(tasks.update(try XCTUnwrap(tasks.task(withID: taskID)), title: "Current presentation"))
+        XCTAssertEqual(coordinator.validationCounters.fastValidations, 1)
+        XCTAssertEqual(coordinator.validationCounters.slowValidations, 0)
+        XCTAssertEqual(coordinator.validationCounters.freshContexts, 0)
+    }
+
+    func testL5RecreatedCoordinatorCannotReuseAContextsLedgerProof() throws {
+        let a = coordinator.freshContext(), owner = WorkspaceOwner(entity: .task, id: taskID)
+        let before = try WorkspaceModelToken.read(owner, in: a)
+        let originalIdentity = coordinator.ledger.identity
+        let replacement = try WorkspaceOperationCoordinator(container: container, journal: coordinator.journal)
+        replacement.ledger.register(a)
+        XCTAssertNotEqual(replacement.ledger.identity, originalIdentity)
+        XCTAssertEqual(replacement.ledger.stamp(a)?.ledgerID, originalIdentity)
+        (a.model(for: before.replicas[0].physicalID) as! TaskItem).title = "Recreated"
+        replacement.validationCounters = .init()
+        XCTAssertEqual(try commitLedgerEdit(a, before: [before], scopes: [], through: replacement), .committed)
+        XCTAssertEqual(replacement.validationCounters.slowValidations, 1)
+        XCTAssertEqual(replacement.validationCounters.freshContexts, 1)
+    }
+
+    func testL6PurgeUpdatesCachedTombstonesAndForeignPreservationInvalidatesThem() async throws {
+        let owner = WorkspaceOwner(entity: .task, id: taskID)
+        XCTAssertEqual(coordinator.plainSave(tokens: try coordinator.capture([owner]), writes: [owner]) { _ in }, .committed)
+        XCTAssertEqual(coordinator.tombstoneLoads, 1)
+        let context = coordinator.freshContext(), id = taskID!
+        let row = try XCTUnwrap(context.fetch(FetchDescriptor<TaskItem>(predicate: #Predicate { $0.id == id })).first)
+        row.deletedAt = Date(timeIntervalSince1970: 100); row.deletionRootID = id; row.deletionMembersRaw = id.uuidString
+        try context.save()
+        // Reload the cache after this foreign fixture write.
+        XCTAssertEqual(coordinator.plainSave(tokens: try coordinator.capture([owner]), writes: [owner]) { _ in }, .committed)
+        let loads = coordinator.tombstoneLoads
+        let result = await WorkspacePurge.purge(rootID: id, before: .distantFuture, coordinator: coordinator,
+            files: TaskImageFiles(rootURL: root.appendingPathComponent("TaskFiles")), inventory: { .init(generation: 0) })
+        XCTAssertEqual(result.outcome, .committed)
+        XCTAssertEqual(coordinator.tombstoneLoads, loads)
+        XCTAssertEqual(coordinator.plainSave(tokens: [.init(owner: owner, replicas: [])], writes: [owner]) {
+            $0.insert(TaskItem(id: id, title: "Cannot resurrect"))
+        }, .notCommitted)
+        XCTAssertEqual(coordinator.tombstoneLoads, loads, "gated purge updates the resident set")
+        let otherID = UUID(), other = WorkspaceOwner(entity: .task, id: otherID)
+        let snapshot = WorkspacePurge.Preservation(rootID: otherID, title: "Foreign tombstone",
+            members: [.init(id: otherID, fields: ["title": try JSONEncoder().encode("Foreign tombstone")])], originals: [])
+        let foreign = ModelContext(container)
+        let record = TaskDeletionPreservation(rootID: otherID, deletedAt: .distantPast, capturedAt: Date(),
+            provenance: "fixture", snapshot: try JSONEncoder().encode(snapshot))
+        record.purgedAt = Date(); foreign.insert(record); try foreign.save()
+        XCTAssertEqual(coordinator.plainSave(tokens: [.init(owner: other, replicas: [])], writes: [other]) {
+            $0.insert(TaskItem(id: otherID, title: "Also cannot resurrect"))
+        }, .notCommitted)
+        XCTAssertEqual(coordinator.tombstoneLoads, loads + 1)
+    }
+
+    func testPF6ProductionPlainSavesUseLedgerWithExactPositiveControls() async throws {
+        let tasks = TaskStore(container: container), notes = NoteStore(container: container,
+            attachmentFileStore: AttachmentFileStore(rootURL: root.appendingPathComponent("Files")))
+        let headID = try XCTUnwrap(tasks.create(title: "Unassociated head")).id
+        let library = AtticLibrary(tasks: tasks, notes: notes)
+        await notes.waitForAttachmentReconciliation()
+        // An ordinary document note does not carry taskNote semantics.
+        let ordinaryID = UUID(), document = NoteDocument(blocks: [.text("Ordinary")])
+        _ = try notes.createDocumentNote(id: ordinaryID, document: document, staged: []).get()
+        _ = try notes.noteMutationPreflight(ordinaryID, format: .document)
+        let link = try XCTUnwrap(library.links.link(.init(.task, headID), to: .init(.note, ordinaryID), kind: .reference))
+        func check(_ name: String, _ operation: () throws -> Void) rethrows {
+            coordinator.validationCounters = .init(); try operation()
+            let counters = coordinator.validationCounters
+            print("PF6 \(name): fast=\(counters.fastValidations) slow=\(counters.slowValidations) fresh=\(counters.freshContexts)")
+            XCTAssertGreaterThan(counters.fastValidations, 0, name)
+            XCTAssertEqual(counters.slowValidations, 0, name)
+            XCTAssertEqual(counters.freshContexts, 0, name)
+        }
+        // Warm each production path once before the steady-state samples.
+        XCTAssertEqual(library.updateTask(headID, title: "Warm"), .applied)
+        for i in 0..<3 {
+            check("toggle \(i)") { XCTAssertEqual(library.updateTask(headID, status: i.isMultiple(of: 2) ? .done : .todo), .applied) }
+            check("rename \(i)") { XCTAssertEqual(library.updateTask(headID, title: "Steady \(i)"), .applied) }
+            check("link \(i)") { XCTAssertTrue(i.isMultiple(of: 2) ? library.links.unlink(link.id) : library.links.restoreLink(link.id)) }
+            var next = document; next.blocks[0] = .text("Ordinary \(i)")
+            let prepared = try PreparedNoteDocument(next), revision = try XCTUnwrap(notes.loadDocument(noteID: ordinaryID)?.revisionID)
+            try check("autosave \(i)") { _ = try notes.saveDocument(noteID: ordinaryID, document: next,
+                baseRevisionID: revision, staged: [], prepared: prepared).get() }
+        }
+        let id = headID, foreign = ModelContext(container)
+        try foreign.fetch(FetchDescriptor<TaskItem>(predicate: #Predicate { $0.id == id })).first!.title = "Foreign"
+        try foreign.save()
+        coordinator.validationCounters = .init()
+        XCTAssertNotEqual(library.updateTask(id, title: "Stale"), .applied)
+        XCTAssertEqual(coordinator.validationCounters.slowValidations, 1)
+        XCTAssertEqual(coordinator.validationCounters.freshContexts, 1)
+        XCTAssertEqual(library.updateTask(id, title: "Confirmed after refresh"), .applied)
+        let owner = WorkspaceOwner(entity: .task, id: id)
+        XCTAssertEqual(coordinator.plainSave(tokens: try coordinator.capture([owner]), writes: [owner]) { b in
+            try b.fetch(FetchDescriptor<TaskItem>(predicate: #Predicate { $0.id == id })).first!.title = "Gated other"
+        }, .committed)
+        coordinator.validationCounters = .init()
+        XCTAssertNotEqual(library.updateTask(id, title: "Stale again"), .applied)
+        XCTAssertEqual(coordinator.validationCounters.slowValidations, 1)
+        XCTAssertEqual(coordinator.validationCounters.freshContexts, 1)
+    }
+
 }
 
 /// The nonmutating text half of H2. This is not the complete H gate.
@@ -852,4 +1031,5 @@ final class WorkspaceTextReplayTests: XCTestCase {
         XCTAssertEqual(adapter.storage.string, "AbcDef")
         XCTAssertEqual(adapter.undoOps.count, 2)
     }
+
 }

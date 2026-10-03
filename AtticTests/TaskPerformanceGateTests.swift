@@ -352,7 +352,8 @@ extension TaskPerformanceGateTests {
             print("PF_\(key)_MEDIAN=\(sample.median) MIN=\(sample.minimum) MAX=\(sample.maximum) SPREAD=\(sample.spread)")
         }
         let env = ProcessInfo.processInfo.environment
-        print("PF_REFERENCE_JSON=" + String(decoding: try JSONEncoder().encode(results), as: UTF8.self))
+        fflush(stdout)
+        try FileHandle.standardOutput.write(contentsOf: Data(("PF_REFERENCE_JSON=" + String(decoding: try JSONEncoder().encode(results), as: UTF8.self) + "\n").utf8))
         // Local probes remain useful without an exported hosted baseline.
         // CI sets this for both the focused PF lane and the full hosted suite.
         if env["ATTIC_PF_REQUIRE_REFERENCE"] == "1" {
@@ -378,5 +379,174 @@ extension TaskPerformanceGateTests {
         }
         XCTAssertLessThanOrEqual(results["POPULATED_TOGGLE_MS"]!.maximum, 120)
     }
+    /// The base archive runs this identical 200-iteration session in one
+    /// process. Compare each operation with its matching quintile, including
+    /// every maximum; a stable overall median cannot hide session growth.
+    func testPF5InterleavedSessionSoakAgainstPairedBase() async throws {
+        var results: [String: PFSamples] = [:]
+        for populated in [false, true] {
+            let root = FileManager.default.temporaryDirectory.appendingPathComponent("AtticPF5-\(UUID())")
+            try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+            defer { try? FileManager.default.removeItem(at: root) }
+            let container = try PersistenceController.makeContainer(cloudSyncEnabled: false, storeDirectory: root)
+            let seed = ModelContext(container), head = TaskItem(title: "Measured head", manualOrder: 0)
+            seed.insert(head)
+            for i in 1..<200 { seed.insert(TaskItem(title: "Task \(i)", manualOrder: Int64(i) * 1_024)) }
+            let small = NoteDocument(blocks: [.text("Small")])
+            let big = NoteDocument(blocks: (0..<5_000).map { .text("Line \($0) with ordinary note text") })
+            let smallNote = NoteItem(), bigNote = NoteItem()
+            for (row, document) in [(smallNote, small), (bigNote, big)] {
+                let prepared = try PreparedNoteDocument(document)
+                row.content = prepared.content; row.contentFormat = 1
+                row.title = prepared.title; row.body = prepared.body; row.plainText = prepared.plainText; row.revisionID = UUID()
+                seed.insert(row)
+            }
+            if populated {
+                let prepared = try PreparedNoteDocument(NoteDocument(blocks: [.text(String(repeating: "unrelated ", count: 4_096))]))
+                for i in 0..<240 {
+                    let row = NoteItem(title: "Unrelated \(i)", body: prepared.body)
+                    row.content = prepared.content; row.contentFormat = 1; row.plainText = prepared.plainText; row.revisionID = UUID()
+                    seed.insert(row)
+                    seed.insert(NoteVersion(noteID: row.id, createdAt: Date(), reason: .leave, content: prepared.content,
+                        contentFormat: 1, title: row.title, body: row.body, attachmentIDs: [], sourceRevisionID: row.revisionID))
+                    let bytes = Data(repeating: UInt8(i % 255), count: 128 * 1_024)
+                    seed.insert(NoteAttachment(noteID: row.id, originalFilename: "seed-\(i).bin", byteCount: Int64(bytes.count),
+                        sortIndex: 0, contentDigest: NotePayloadDigest.sha256(bytes), payload: bytes))
+                }
+            }
+            try seed.save()
+            let tasks = TaskStore(container: container), notes = NoteStore(container: container,
+                attachmentFileStore: AttachmentFileStore(rootURL: root.appendingPathComponent("Files")))
+            let library = AtticLibrary(tasks: tasks, notes: notes)
+            await notes.waitForAttachmentReconciliation()
+            _ = try notes.noteMutationPreflight(smallNote.id, format: .document)
+            _ = try notes.noteMutationPreflight(bigNote.id, format: .document)
+            let link = try XCTUnwrap(library.links.link(.init(.task, head.id), to: .init(.note, bigNote.id), kind: .reference))
+            var samples: [String: [Double]] = [:]
+            var smallRevision = smallNote.revisionID!, bigRevision = bigNote.revisionID!
+            for i in 0..<200 {
+                samples["TOGGLE", default: []].append(pfMilliseconds {
+                    XCTAssertEqual(library.updateTask(head.id, status: i.isMultiple(of: 2) ? .done : .todo), .applied)
+                }.1)
+                samples["RENAME", default: []].append(pfMilliseconds {
+                    XCTAssertEqual(library.updateTask(head.id, title: "Renamed \(i)"), .applied)
+                }.1)
+                samples["LINK_PAIR", default: []].append(pfMilliseconds {
+                    XCTAssertTrue(library.links.unlink(link.id)); XCTAssertTrue(library.links.restoreLink(link.id))
+                }.1)
+                var smallNext = small; smallNext.blocks[0] = .text("Small \(i)")
+                let smallPrepared = try PreparedNoteDocument(smallNext)
+                samples["SMALL_AUTOSAVE", default: []].append(try pfMilliseconds {
+                    smallRevision = try notes.saveDocument(noteID: smallNote.id, document: smallNext,
+                        baseRevisionID: smallRevision, staged: [], prepared: smallPrepared).get()
+                }.1)
+                var bigNext = big; bigNext.blocks[0] = .text("Big \(i)")
+                let bigPrepared = try PreparedNoteDocument(bigNext)
+                samples["BIG_AUTOSAVE", default: []].append(try pfMilliseconds {
+                    bigRevision = try notes.saveDocument(noteID: bigNote.id, document: bigNext,
+                        baseRevisionID: bigRevision, staged: [], prepared: bigPrepared).get()
+                }.1)
+            }
+            for (operation, values) in samples {
+                XCTAssertEqual(values.count, 200)
+                for q in 0..<5 {
+                    results["\(populated ? "POPULATED" : "EMPTY")_\(operation)_Q\(q + 1)_MS"] = PFSamples(values: Array(values[q * 40..<(q + 1) * 40]))
+                }
+            }
+        }
+        for key in results.keys.sorted() {
+            let sample = results[key]!
+            print("PF5_\(key)_MEDIAN=\(sample.median) MAX=\(sample.maximum) SPREAD=\(sample.spread)")
+        }
+        // Export exact sufficient statistics in a short atomic log line;
+        // raw quintile samples remain separately readable below PIPE_BUF.
+        for key in results.keys.sorted() {
+            print("PF5_SAMPLES_\(key)=" + results[key]!.values.map { String($0) }.joined(separator: ","))
+        }
+        let summary = results.mapValues { PFSamples(values: [$0.minimum, $0.median, $0.maximum]) }
+        fflush(stdout)
+        try FileHandle.standardOutput.write(contentsOf: Data(("PF5_REFERENCE_JSON=" + String(decoding: try JSONEncoder().encode(summary), as: UTF8.self) + "\n").utf8))
+        let env = ProcessInfo.processInfo.environment
+        if env["ATTIC_PF_REQUIRE_REFERENCE"] == "1" {
+            XCTAssertNotNil(env["ATTIC_PF5_REFERENCE_JSON"], "CI must export the matching Phase 2 session")
+        }
+        if let json = env["ATTIC_PF5_REFERENCE_JSON"] {
+            let reference = try JSONDecoder().decode([String: PFSamples].self, from: Data(json.utf8))
+            for key in results.keys.sorted() {
+                let actual = results[key]!, base = try XCTUnwrap(reference[key])
+                XCTAssertLessThanOrEqual(actual.median, base.maximum + base.spread, "PF5 \(key) median")
+                XCTAssertLessThanOrEqual(actual.maximum, base.maximum + base.spread, "PF5 \(key) maximum")
+            }
+        }
+    }
+
+    /// Same-runner attribution for both Phase 2 PF1 production entry points.
+    /// The unchanged NotesPageControllerTests retain their absolute constants.
+    func testPF1LargeAutosaveAndPreparedCommitAgainstPairedBase() async throws {
+        var results: [String: PFSamples] = [:]
+        for populated in [false, true] {
+            let root = FileManager.default.temporaryDirectory.appendingPathComponent("AtticPF1-\(UUID())")
+            try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+            defer { try? FileManager.default.removeItem(at: root) }
+            let container = try PersistenceController.makeContainer(cloudSyncEnabled: false, storeDirectory: root)
+            let seed = ModelContext(container)
+            if populated {
+                let prepared = try PreparedNoteDocument(NoteDocument(blocks: [.text(String(repeating: "unrelated ", count: 4_096))]))
+                for i in 0..<240 {
+                    let note = NoteItem(title: "Unrelated \(i)", body: prepared.body)
+                    note.content = prepared.content; note.contentFormat = 1; note.plainText = prepared.plainText; note.revisionID = UUID()
+                    seed.insert(note)
+                    seed.insert(NoteVersion(noteID: note.id, createdAt: Date(), reason: .leave, content: prepared.content,
+                        contentFormat: 1, title: note.title, body: note.body, attachmentIDs: [], sourceRevisionID: note.revisionID))
+                }
+            }
+            try seed.save()
+            let store = NoteStore(container: container, attachmentFileStore: AttachmentFileStore(rootURL: root.appendingPathComponent("Files")))
+            await store.waitForAttachmentReconciliation()
+            let document = NoteDocument(blocks: (0..<5_000).map { .text("Line \($0) with ordinary note text") })
+            let (id, _) = try store.createDocumentNote(id: UUID(), document: document).get()
+            let controller = NotesPageController(store: store, journal: NoteDraftJournal(directory: root.appendingPathComponent("Drafts")),
+                saveDelay: .seconds(60), pauseVersionDelay: .seconds(600))
+            await controller.startAndWait()
+            let opened = await controller.openDurably(noteID: id)
+            XCTAssertTrue(opened)
+            let session = try XCTUnwrap(controller.active)
+            var autosaves: [Double] = [], commits: [Double] = []
+            for _ in 0..<8 {
+                session.engine.performEdit(NSRange(location: session.engine.textStorage.length, length: 0),
+                    with: NSAttributedString(string: "x"), name: "Typing")
+                autosaves.append(pfMilliseconds { XCTAssertTrue(controller.save(session)) }.1)
+                session.engine.performEdit(NSRange(location: session.engine.textStorage.length, length: 0),
+                    with: NSAttributedString(string: "y"), name: "Typing")
+                let snapshot = session.engine.document(), prepared = try PreparedNoteDocument(snapshot)
+                commits.append(pfMilliseconds {
+                    XCTAssertTrue(controller.save(session, snapshot: snapshot, stagedSnapshot: [], prepared: prepared))
+                }.1)
+            }
+            await controller.waitForRecoveryWork()
+            let label = populated ? "POPULATED" : "EMPTY"
+            results["\(label)_AUTOSAVE_5000_MS"] = PFSamples(values: autosaves)
+            results["\(label)_PREPARED_COMMIT_5000_MS"] = PFSamples(values: commits)
+        }
+        for key in results.keys.sorted() {
+            let sample = results[key]!
+            print("PF1_\(key)_MEDIAN=\(sample.median) MAX=\(sample.maximum) SPREAD=\(sample.spread)")
+        }
+        fflush(stdout)
+        try FileHandle.standardOutput.write(contentsOf: Data(("PF1_REFERENCE_JSON=" + String(decoding: try JSONEncoder().encode(results), as: UTF8.self) + "\n").utf8))
+        let env = ProcessInfo.processInfo.environment
+        if env["ATTIC_PF_REQUIRE_REFERENCE"] == "1" {
+            XCTAssertNotNil(env["ATTIC_PF1_REFERENCE_JSON"], "CI must export the matching Phase 2 PF1 samples")
+        }
+        if let json = env["ATTIC_PF1_REFERENCE_JSON"] {
+            let reference = try JSONDecoder().decode([String: PFSamples].self, from: Data(json.utf8))
+            for key in results.keys.sorted() {
+                let actual = results[key]!, base = try XCTUnwrap(reference[key])
+                XCTAssertLessThanOrEqual(actual.median, base.maximum + base.spread, "PF1 \(key) median")
+                XCTAssertLessThanOrEqual(actual.maximum, base.maximum + base.spread, "PF1 \(key) maximum")
+            }
+        }
+    }
+
 }
 // END PAIRED PHASE 2 PERF PROBE

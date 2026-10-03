@@ -945,9 +945,13 @@ final class TaskStore: ObservableObject {
         allowingUnfinishedSubtasks: Bool = false,
         at fixedTimestamp: Date? = nil
     ) throws -> Bool {
-        let replicas = try storedTasks(matching: task.id)
         let normalizedTitle = title.map(Self.normalized)
         if let normalizedTitle, normalizedTitle.isEmpty { throw TaskEditRefusal("A task needs a title.") }
+        // A family fetch can refresh resident values after another writer's
+        // commit. Freeze the presented family before that fetch, so the exact
+        // fallback still compares against the values the edit began with.
+        WorkspaceLegacyBridge.captureBeforeMutation(task, in: context)
+        let replicas = try storedTasks(matching: task.id)
 
         let destinationTitle = normalizedTitle ?? task.title
         let destinationPriority = priority ?? task.priority
