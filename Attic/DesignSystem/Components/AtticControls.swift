@@ -623,7 +623,17 @@ struct AtticTabsSearchField: View {
         .frame(height: height)
         .background(RoundedRectangle(cornerRadius: AtticRadius.control(height: height), style: .continuous).fill(tokens.recessed.color))
         .contentShape(Rectangle())
-        .onTapGesture { focused = true }
+        .onTapGesture {
+            // The native field has no SwiftUI focus of its own: a click on
+            // the magnifier or the padding gives its AppKit field the
+            // keyboard directly (review P3).
+            if nativeInputIdentifier != nil, capture == nil {
+                if isFocused?.wrappedValue != true { isFocused?.wrappedValue = true }
+                takeKeyboard()
+            } else {
+                focused = true
+            }
+        }
         .onAppear {
             // Once the field is in the window (a focus set as it appears is
             // lost, and the click that opened it ends after this): the
@@ -1637,9 +1647,20 @@ private struct AtticNativeSearchInput: NSViewRepresentable {
     let onEscape: () -> Void
 
     final class Field: NSTextField {
+        /// The field took the keyboard (a click back into it, ⌘F, Search).
+        var onFocus: (() -> Void)?
         override var intrinsicContentSize: NSSize { NSSize(width: NSView.noIntrinsicMetric, height: 18) }
         // The font and single-line height are fixed; typing changes neither.
         override func invalidateIntrinsicContentSize() {}
+
+        /// Focus counts from the moment the field has the keyboard, not
+        /// from its first edit (`controlTextDidBeginEditing`): ↓ after a
+        /// click back into the field reaches the results (review P3).
+        override func becomeFirstResponder() -> Bool {
+            let became = super.becomeFirstResponder()
+            if became { onFocus?() }
+            return became
+        }
     }
 
     func sizeThatFits(_ proposal: ProposedViewSize, nsView: Field, context: Context) -> CGSize? {
@@ -1665,6 +1686,11 @@ private struct AtticNativeSearchInput: NSViewRepresentable {
 
     func updateNSView(_ field: Field, context: Context) {
         context.coordinator.owner = self
+        let coordinator = context.coordinator
+        field.onFocus = { [weak coordinator] in
+            guard let owner = coordinator?.owner, owner.isFocused?.wrappedValue != true else { return }
+            owner.isFocused?.wrappedValue = true
+        }
         field.font = AtticTextStyle.listBody.nsFont
         field.textColor = color
         field.placeholderAttributedString = NSAttributedString(string: placeholder,
