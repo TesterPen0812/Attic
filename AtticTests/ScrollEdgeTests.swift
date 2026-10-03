@@ -170,6 +170,25 @@ final class ScrollEdgeTests: XCTestCase {
         XCTAssertEqual(hosted.shownPage(), 0)
     }
 
+    /// The A/B switch changes viewport coordinates, not the person's place.
+    func testThePreviewSwitchKeepsTheScrolledPlace() throws {
+        use(.systemSoft)
+        let hosted = try Hosted(height: 520, long: true)
+        defer { hosted.close() }
+        let list = try shownList(hosted)
+        list.contentView.scroll(to: CGPoint(x: 0, y: 300))
+        list.reflectScrolledClipView(list.contentView)
+        hosted.spin(0.3)
+        let place = list.contentView.bounds.minY + list.contentView.contentInsets.top
+        for style in [AtticScrollEdgeStyle.cleanCut, .systemSoft] {
+            use(style)
+            hosted.spin(0.6)
+            let current = try shownList(hosted)
+            XCTAssertEqual(current.contentView.bounds.minY + current.contentView.contentInsets.top, place, accuracy: 1,
+                           "the same distance from the first row's resting position after \(style)")
+        }
+    }
+
     // MARK: - Helpers
 
     private func shownList(_ hosted: Hosted) throws -> NSScrollView {
