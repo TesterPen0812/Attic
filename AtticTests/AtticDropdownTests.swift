@@ -416,6 +416,70 @@ final class AtticDropdownTests: XCTestCase {
                       "the card left the overlay after its leave motion")
     }
 
+    /// What the test host writes to its error output while `body` runs
+    /// (AppKit's and SwiftUI's runtime errors land there).
+    private func captureErrorOutput(_ body: () -> Void) -> String {
+        let pipe = Pipe()
+        var captured = Data()
+        let lock = NSLock()
+        pipe.fileHandleForReading.readabilityHandler = { handle in
+            let chunk = handle.availableData
+            lock.lock(); captured.append(chunk); lock.unlock()
+        }
+        fflush(stderr)
+        let saved = dup(STDERR_FILENO)
+        dup2(pipe.fileHandleForWriting.fileDescriptor, STDERR_FILENO)
+        body()
+        fflush(stderr)
+        dup2(saved, STDERR_FILENO)
+        close(saved)
+        try? pipe.fileHandleForWriting.close()
+        spin(0.1)
+        pipe.fileHandleForReading.readabilityHandler = nil
+        lock.lock(); defer { lock.unlock() }
+        return String(decoding: captured, as: UTF8.self)
+    }
+
+    /// With accessibility on (as with VoiceOver or Full Keyboard Access),
+    /// SwiftUI moves focus through key-view proxies. A card's content asked
+    /// for focus as it appeared, while the presenter was measuring it
+    /// outside the window, and AppKit refused the stale proxy by clearing
+    /// the window's first responder: the card lost the keyboard (the Full
+    /// Keyboard Access test's first failure on CI). The content now waits
+    /// for the presenter's request.
+    func testACardKeepsTheKeyboardWithAccessibilityOn() throws {
+        let attribute = NSAccessibility.Attribute(rawValue: "AXEnhancedUserInterface")
+        let previous = NSApp.accessibilityAttributeValue(attribute)
+        NSApp.accessibilitySetValue(true, forAttribute: attribute)
+        defer { NSApp.accessibilitySetValue(previous, forAttribute: attribute) }
+        for (name, content) in [("date", AnyView(TaskDatePickerView(choices: TaskDateChoices(parser: TaskTextParser()), selected: nil, onPick: { _ in }))),
+                                ("tags", AnyView(TaskTagPickerView(allTags: ["home", "launch"], state: { _ in .off },
+                                                                   onToggle: { _ in }, onCreate: { _, _ in true }))),
+                                ("priority", AnyView(TaskPriorityPickerView(current: .high, onPick: { _ in })))] {
+            let window = makeWindow()
+            defer { window.close() }
+            let original = NSTextField(frame: CGRect(x: 20, y: 470, width: 200, height: 24))
+            window.contentView?.addSubview(original)
+            window.makeFirstResponder(original)
+            let anchor = NSView(frame: CGRect(x: 40, y: 300, width: 60, height: 28))
+            window.contentView?.addSubview(anchor)
+            let presenter = AtticDropdownPresenter()
+            presenter.design = AtticDesignContext(reduceMotion: true)
+            presenter.content = content
+            // AppKit reports the refused proxy on the host's error output.
+            let log = captureErrorOutput {
+                presenter.present(from: anchor)
+                spin(0.4)
+            }
+            defer { presenter.close(restoreFocus: false, immediately: true) }
+            XCTAssertFalse(log.contains("KeyViewProxy"), "the \(name) card gave AppKit no stale key-view proxy: \(log)")
+            let host = try XCTUnwrap(presenter.host)
+            let responder = AtticDropdownPresenter.owner(of: window.firstResponder) as? NSView
+            XCTAssertTrue(responder?.isDescendant(of: host) == true,
+                          "the \(name) card has the keyboard (\(String(describing: window.firstResponder)))")
+        }
+    }
+
     func testEscClosesItAndGivesTheKeyboardBack() {
         let window = makeWindow()
         defer { window.close() }

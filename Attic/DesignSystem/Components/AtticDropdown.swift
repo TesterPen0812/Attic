@@ -527,21 +527,29 @@ final class AtticDropdownStageModel: ObservableObject {
 }
 
 private struct AtticDropdownFocusRequestKey: EnvironmentKey {
-    static let defaultValue = 0
+    static let defaultValue: Int? = nil
 }
 
 extension EnvironmentValues {
-    /// Changes when a dropdown's host takes the keyboard.
-    var atticDropdownFocusRequest: Int {
+    /// Changes when a dropdown's host takes the keyboard; nil outside a
+    /// presented dropdown.
+    var atticDropdownFocusRequest: Int? {
         get { self[AtticDropdownFocusRequestKey.self] }
         set { self[AtticDropdownFocusRequestKey.self] = newValue }
     }
 }
 
 extension View {
-    /// Focuses `focus` as the view appears and again when its dropdown's
-    /// host takes the keyboard (the host joins the window after SwiftUI has
-    /// built the content).
+    /// Focuses `focus` when its dropdown's host takes the keyboard, or as
+    /// the view appears outside a presented dropdown.
+    ///
+    /// In a presented dropdown it never asks as it appears: the presenter
+    /// measures the card before its host joins the window, and a focus
+    /// asked for then reached SwiftUI's focus bridge with a key-view proxy
+    /// outside any window, which AppKit refuses by clearing the window's
+    /// first responder ("Setting <SwiftUI.KeyViewProxy> as the first
+    /// responder … but it is in a different window"). With accessibility
+    /// or Full Keyboard Access on, the card's field then lost the keyboard.
     func atticDropdownFocus(_ focus: FocusState<Bool>.Binding, when enabled: Bool = true) -> some View {
         modifier(AtticDropdownFocusModifier(focus: focus, enabled: enabled))
     }
@@ -554,7 +562,7 @@ private struct AtticDropdownFocusModifier: ViewModifier {
 
     func body(content: Content) -> some View {
         content
-            .onAppear { if enabled { focus.wrappedValue = true } }
+            .onAppear { if enabled, request == nil { focus.wrappedValue = true } }
             .onChange(of: request) { _, _ in if enabled { focus.wrappedValue = true } }
     }
 }
