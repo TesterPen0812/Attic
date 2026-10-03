@@ -577,9 +577,6 @@ enum AtticNoteMetrics {
     /// The "Esc" hint at the end of the search field.
     static let searchHintPadding: CGFloat = 10
     static let searchTextX: CGFloat = 36
-    /// The list's top edge fade (the Tasks lists' 16 pt before Phase 1
-    /// round 12 moved them to a veil).
-    static let listTopFade: CGFloat = 16
     static let rowTextX: CGFloat = 16
     /// The ⋯ at the end of a row's title line (in the time's place).
     static let rowActionsGlyphSize: CGFloat = 14

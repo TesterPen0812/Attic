@@ -13,6 +13,8 @@ struct NotesLibraryView: View {
     @ObservedObject var store: NoteStore
     let layout: PanelPageLayout
     let bottomClearance: CGFloat
+    /// The bottom row's top, up from the page's bottom edge (D1).
+    var bottomControls: CGFloat = 0
     @Binding var searchFocused: Bool
     let rowCommands: (UUID) -> [AtticMenuCommand]
     /// The library's own commands (its history), for the page's background:
@@ -62,8 +64,9 @@ struct NotesLibraryView: View {
                 // Centred on the tabs' line, as on Tasks.
                 .padding(.top, layout.headerBottom + AtticLayout.pageTabsTop
                     - (AtticControlSize.smallHeight - AtticLayout.pageTabsHeight) / 2)
+                // The list's own top soft edge (D1) is part of this gap.
                 .padding(.bottom, AtticLayout.pageTabsToList
-                    - (AtticControlSize.smallHeight - AtticLayout.pageTabsHeight) / 2)
+                    - (AtticControlSize.smallHeight - AtticLayout.pageTabsHeight) / 2 - AtticControlsFade.softEdge)
             list(groups, selected: selected)
         }
         .padding(.horizontal, pageEdge)
@@ -266,7 +269,6 @@ struct NotesLibraryView: View {
                     status(groups)
                     ForEach(groups) { group in
                         AtticNoteGroupHeading(title: group.title)
-                            .modifier(AtticScrollEdgeFade(space: Self.space, top: AtticNoteMetrics.listTopFade, bottom: AtticEdgeBlur.panelBottom))
                         ForEach(group.rows) { row in
                             AtticNoteRow(model: row, isSelected: row.id == selected && model.highlightedID == nil,
                                          isHighlighted: row.id == model.highlightedID,
@@ -279,16 +281,19 @@ struct NotesLibraryView: View {
                                 .transition(design.reduceMotion ? .opacity
                                     : .opacity.combined(with: .move(edge: .leading)))
                                 .accessibilityIdentifier("notes-library-row")
-                                .modifier(AtticScrollEdgeFade(space: Self.space, top: AtticNoteMetrics.listTopFade, bottom: AtticEdgeBlur.panelBottom))
                         }
                     }
                 }
                 .animation(AtticMotionPreset.settle.springy(reduceMotion: design.reduceMotion),
                            value: model.orderedIDs(groups))
             }
+            .contentMargins(.top, AtticControlsFade.softEdge, for: .scrollContent)
             .contentMargins(.bottom, bottomClearance, for: .scrollContent)
             .scrollIndicators(.automatic)
             .scrollEdgeEffectHidden(true, for: .all)
+            // D1, as on Tasks (CU P2-02): rows fade out under the label line
+            // and before the bottom row, never readable under a control.
+            .atticControlsFade(restTop: AtticControlsFade.softEdge, bottomControls: bottomControls)
             .coordinateSpace(Self.space)
             // Right-click anywhere the rows are not (all of it, with none):
             // the library's history, so Undo never depends on a row.

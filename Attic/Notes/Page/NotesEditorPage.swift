@@ -75,6 +75,8 @@ struct NotesEditorPage: View {
     private var topInset: CGFloat { layout.headerBottom + AtticNoteMetrics.titleTopGap }
     /// The last line rests 12 above the bottom row.
     private var bottomInset: CGFloat { layout.chromeInsets.bottom + buttonHeight + AtticSpacing.s12 }
+    /// The bottom row's top, up from the panel's bottom edge.
+    private var bottomControls: CGFloat { layout.chromeInsets.bottom + buttonHeight }
     private var noticeClearance: CGFloat {
         max(0, layout.chromeInsets.bottom + buttonHeight + AtticSpacing.s8 - layout.contentInsets.bottom)
     }
@@ -168,7 +170,7 @@ struct NotesEditorPage: View {
     private var content: some View {
         if controller.isLibraryPresented {
             NotesLibraryView(model: library, controller: controller, store: noteStore, layout: layout,
-                             bottomClearance: bottomInset, searchFocused: $searchFocused,
+                             bottomClearance: bottomInset, bottomControls: bottomControls, searchFocused: $searchFocused,
                              rowCommands: { id in rowCommands(id) },
                              libraryCommands: { Self.historyCommands(for: controller) },
                              onOpen: { id in openFromLibrary(id) },
@@ -189,12 +191,10 @@ struct NotesEditorPage: View {
                                         noteStore.tagCounts
                                     })
                 .id(ObjectIdentifier(session.engine))
-                .overlay(alignment: .top) {
-                    AtticEdgeVeil(edge: .top, height: AtticEdgeBlur.panelTop)
-                }
-                .overlay(alignment: .bottom) {
-                    AtticEdgeVeil(edge: .bottom, height: AtticEdgeBlur.panelBottom)
-                }
+                // D1, as on Tasks (CU P2-02): the text fades out before the
+                // header's controls and the bottom row, so it never reads
+                // under a label. Clean cut: no native soft edge here.
+                .atticControlsFade(restTop: topInset, bottomControls: bottomControls)
                 .accessibilityIdentifier("note-editor")
                 .accessibilitySortPriority(3)
                 .transition(slide(from: Self.noteEdge))

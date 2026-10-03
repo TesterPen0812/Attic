@@ -96,3 +96,81 @@ extension View {
         }
     }
 }
+
+// MARK: - Content fades before fixed controls (D1, shared)
+
+/// D1 (owner, 2026-10-02) for a page whose content scrolls between fixed
+/// controls: an opacity mask over the scroll view, the mechanism Tasks'
+/// lists use (`TasksViewport.maskStops`). Nothing shows above `clearTop`
+/// (the controls at the top); the content comes back along the edge veil's
+/// eased ramp over the last `softEdge` before `restTop`, where its first
+/// line rests; it recedes along the same ramp over the `softEdge` before
+/// the bottom controls' top (`bottomControls` up from the bottom edge) and
+/// nothing shows under them. A cheap opacity mask: no blur, no per-scroll
+/// state. It works with either scroll edge style; Notes passes Clean cut
+/// (owner, 2026-10-03: the native soft edge is off by default).
+enum AtticControlsFade {
+    /// The length of the softened edge where content meets a control band.
+    static let softEdge: CGFloat = 6
+
+    /// Opacity at `depth` into the ramp (0: fully there, 1: gone).
+    static func opacity(atDepth depth: Double) -> Double {
+        1 - AtticEdgeBlur.veil(at: depth) / AtticEdgeBlur.maximumVeil
+    }
+
+    /// The mask's stops for a view `height` tall: locations 0…1, opacity.
+    static func stops(height: CGFloat, restTop: CGFloat, bottomControls: CGFloat) -> [(location: CGFloat, opacity: Double)] {
+        guard height > 0 else { return [(0, 1), (1, 1)] }
+        let clear = max(0, restTop - softEdge)
+        let barTop = max(height - bottomControls, restTop)
+        let fadeStart = max(barTop - softEdge, restTop)
+        var points: [(CGFloat, Double)] = [(0, 0), (clear, 0)]
+        for stop in AtticEdgeBlur.veilStops.reversed() where stop.location < 1 {
+            points.append((restTop - (restTop - clear) * CGFloat(stop.location), opacity(atDepth: stop.location)))
+        }
+        points.append((restTop, 1))
+        points.append((fadeStart, 1))
+        for stop in AtticEdgeBlur.veilStops where stop.location > 0 && stop.location < 1 {
+            points.append((fadeStart + (barTop - fadeStart) * CGFloat(stop.location), opacity(atDepth: stop.location)))
+        }
+        points.append((barTop, 0))
+        points.append((height, 0))
+        var result: [(location: CGFloat, opacity: Double)] = []
+        var last: CGFloat = -1
+        for (y, opacity) in points {
+            let location = min(max(y / height, 0), 1)
+            guard location > last || result.isEmpty else { continue }
+            result.append((location, opacity))
+            last = location
+        }
+        return result
+    }
+}
+
+/// The D1 mask (`AtticControlsFade`), sized to the view it masks.
+struct AtticControlsFadeMask: View {
+    /// Where the first line rests, from the view's top.
+    let restTop: CGFloat
+    /// The bottom controls' top, up from the view's bottom edge.
+    let bottomControls: CGFloat
+
+    var body: some View {
+        GeometryReader { proxy in
+            LinearGradient(
+                stops: AtticControlsFade.stops(height: proxy.size.height, restTop: restTop, bottomControls: bottomControls)
+                    .map { Gradient.Stop(color: .black.opacity($0.opacity), location: $0.location) },
+                startPoint: .top, endPoint: .bottom
+            )
+        }
+        .allowsHitTesting(false)
+        .accessibilityHidden(true)
+    }
+}
+
+extension View {
+    /// D1: this scrolling content fades out before the fixed controls (see
+    /// `AtticControlsFade`).
+    func atticControlsFade(restTop: CGFloat, bottomControls: CGFloat) -> some View {
+        mask { AtticControlsFadeMask(restTop: restTop, bottomControls: bottomControls) }
+    }
+}

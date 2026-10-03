@@ -366,6 +366,56 @@ final class CombinedFixRoundTests: XCTestCase {
         spin(0.3)
         XCTAssertFalse(presenter.isOpen, "Esc closed it")
     }
+
+    // MARK: P2-02: D1 in Notes
+
+    /// The fade's geometry for the Notes page in a 320 × 520 panel: nothing
+    /// shows over the header's controls or under the bottom row; the title's
+    /// resting line and the last resting line are fully there.
+    func testTheNotesFadeEndsBeforeTheControls() {
+        let size = CGSize(width: 320, height: 520)
+        let layout = PanelPageLayout(cornerSize: 52, panelSize: size)
+        let restTop = layout.headerBottom + AtticNoteMetrics.titleTopGap
+        let bottomControls = layout.chromeInsets.bottom + AtticControlSize.panelButton.height
+        let stops = AtticControlsFade.stops(height: size.height, restTop: restTop, bottomControls: bottomControls)
+        func opacity(at y: CGFloat) -> Double {
+            let location = y / size.height
+            guard let upper = stops.firstIndex(where: { $0.location >= location }) else { return stops.last!.opacity }
+            guard upper > 0 else { return stops[0].opacity }
+            let a = stops[upper - 1], b = stops[upper]
+            let t = b.location > a.location ? Double((location - a.location) / (b.location - a.location)) : 1
+            return a.opacity + (b.opacity - a.opacity) * t
+        }
+        for y in stride(from: 0, through: layout.headerBottom, by: 1) {
+            XCTAssertEqual(opacity(at: y), 0, accuracy: 0.001, "nothing under the header's controls at \(y)")
+        }
+        XCTAssertEqual(opacity(at: restTop), 1, accuracy: 0.001, "the title's resting line is fully there")
+        let barTop = size.height - bottomControls
+        let lastRest = size.height - (bottomControls + AtticSpacing.s12)
+        XCTAssertEqual(opacity(at: lastRest), 1, accuracy: 0.001, "the last resting line is fully there")
+        for y in stride(from: barTop, through: size.height, by: 1) {
+            XCTAssertEqual(opacity(at: y), 0, accuracy: 0.001, "nothing under the bottom row at \(y)")
+        }
+        XCTAssertGreaterThan(opacity(at: barTop - 3), 0)
+        XCTAssertLessThan(opacity(at: barTop - 3), 1, "a short eased ramp before the bottom row")
+    }
+
+    /// The fade reaches the AppKit editor: SwiftUI masks the platform view
+    /// (the edge veils it replaces were drawn over the text, which stayed
+    /// readable under the controls).
+    func testTheNoteEditorIsMaskedByTheFade() throws {
+        let harness = try makeHarness()
+        XCTAssertTrue(harness.controller.requestNewNote())
+        spin(0.5)
+        let textView = try XCTUnwrap(harness.controller.active?.engine.textView)
+        var masked = false
+        var view: NSView? = textView.superview
+        while let current = view, current !== harness.host {
+            if let mask = current.layer?.mask, mask.bounds.height >= 500 { masked = true }
+            view = current.superview
+        }
+        XCTAssertTrue(masked, "a full-height mask over the note's scroll view")
+    }
 }
 
 /// Records the rectangles a view is asked to redraw (`setNeedsDisplay(_:)`,

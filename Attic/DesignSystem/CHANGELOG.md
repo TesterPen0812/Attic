@@ -28,6 +28,16 @@ value, token, colour, radius or size changed.
   first match (Notes lists the note's own tags first). `AtticTagPicker.Tag`
   gains an optional `detail` (Notes' per-tag count, in the row's detail
   column).
+- **New `AtticControlsFade` / `atticControlsFade(restTop:bottomControls:)`**
+  (D1 for any page that scrolls between fixed controls; CU P2-02): the
+  opacity mask Tasks' lists use (`TasksViewport.maskStops`: nothing over
+  the top controls, the edge veil's eased ramp over the last 6 pt before
+  the first line's resting place, the same ramp in the 6 pt before the
+  bottom controls, nothing under them). Notes' editor and All notes use it
+  with Clean cut (owner, 2026-10-03: no native soft edge on Notes). The
+  editor's two `AtticEdgeVeil` overlays and the library rows' per-row
+  `AtticScrollEdgeFade` (a blur and fade per row, by position) are gone;
+  `AtticNoteMetrics.listTopFade` is removed. Tasks is unchanged.
 - **Removed `AtticNoteTagList`** and its `AtticNoteMetrics.tagEditorWidth` /
   `tagEditorMaxListHeight`: replaced by the shared card above.
 
