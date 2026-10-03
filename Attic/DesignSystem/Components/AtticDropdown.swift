@@ -56,6 +56,7 @@ struct AtticDropdownCard<Content: View>: View {
     @Environment(\.atticDropdownHeight) private var height
     @Environment(\.atticDropdownWidth) private var widthLimit
     @Environment(\.atticDropdownContentHeightChanged) private var heightChanged
+    @Environment(\.atticDropdownContentWidthChanged) private var widthChanged
     @ViewBuilder let content: Content
 
     init(width: CGFloat? = nil, @ViewBuilder content: () -> Content) {
@@ -68,6 +69,7 @@ struct AtticDropdownCard<Content: View>: View {
         AtticDropdownViewport(height: height.map { max(0, $0 - m.inset * 2) }, persistent: heightChanged != nil) {
             VStack(alignment: .leading, spacing: 0) { content }
                 .modifier(AtticDropdownHeightObserver(changed: heightChanged))
+                .modifier(AtticDropdownWidthObserver(changed: widthChanged))
         }
             .padding(m.inset)
             .frame(minWidth: width == nil ? m.minWidth : nil, alignment: .leading)
@@ -122,6 +124,34 @@ private final class AtticDropdownHeightReporter {
     }
 }
 
+/// Reports the widest row a measured card's content asks for
+/// (`atticDropdownIdealWidth`), as a card width, once per turn: a row that
+/// appears while filtering (the tag picker's "New tag “#…”") widens the card
+/// instead of being cut short at the width it opened with (CU P3-03).
+private struct AtticDropdownWidthObserver: ViewModifier {
+    var changed: ((CGFloat) -> Void)?
+    @State private var reporter = AtticDropdownHeightReporter()
+
+    func body(content: Content) -> some View {
+        if let changed {
+            content.onPreferenceChange(AtticDropdownIdealWidthKey.self) { [reporter] width in
+                MainActor.assumeIsolated {
+                    guard width > 0 else { return }
+                    reporter.report(width + AtticDropdownMetrics.inset * 2, to: changed)
+                }
+            }
+        } else {
+            content
+        }
+    }
+}
+
+/// The widest row of a card's content, its insets excluded (0: not known).
+struct AtticDropdownIdealWidthKey: PreferenceKey {
+    static let defaultValue: CGFloat = 0
+    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) { value = max(value, nextValue()) }
+}
+
 /// A measured card's natural content height: the laid-out height, plus the
 /// height any part gave up to fit the card's limit.
 struct AtticDropdownNaturalHeightKey: PreferenceKey {
@@ -135,6 +165,12 @@ extension View {
     /// height.
     func atticDropdownHeightGivenUp(_ height: CGFloat) -> some View {
         preference(key: AtticDropdownNaturalHeightKey.self, value: max(0, height))
+    }
+
+    /// The width this part of a card's content needs (its widest row, the
+    /// card's insets excluded): an open card grows to it, never shrinks.
+    func atticDropdownIdealWidth(_ width: CGFloat) -> some View {
+        preference(key: AtticDropdownIdealWidthKey.self, value: max(0, width))
     }
 }
 
@@ -724,6 +760,9 @@ final class AtticDropdownPresenter {
             .environment(\.atticDropdownContentHeightChanged, contentHeight == nil ? { [weak self] height in
                 self?.resize(height: height)
             } : nil)
+            .environment(\.atticDropdownContentWidthChanged, contentWidth == nil ? { [weak self] width in
+                self?.grow(toWidth: width)
+            } : nil)
             .environment(\.atticDropdownRegisterKeys, { [weak self] handler in self?.contentKeyHandler = handler })
             .atticDesign(design))
     }
@@ -808,6 +847,27 @@ final class AtticDropdownPresenter {
         if stage.height != placed.heightLimit { stage.height = placed.heightLimit }
         space.show(host, at: placed)
     }
+
+    /// A measured card's content needs more width than the card opened
+    /// with (a longer row appeared while filtering): the card grows, within
+    /// the width rule, keeping its side. It never narrows while open, so
+    /// filtering never makes it jump in.
+    func grow(toWidth width: CGFloat) {
+        guard isOpen, width.isFinite, width > openIdealWidth + 0.5,
+              let host, let anchor, let space = AtticDropdownSpace(around: anchor) else { return }
+        openIdealWidth = width
+        let placed = space.place(idealWidth: width, height: naturalHeight, anchor: space.anchor(anchor.bounds, in: anchor),
+                                 prefer: prefer, current: stage.side)
+        guard placed.width > openWidth + 0.5 else { return }
+        openWidth = placed.width
+        stage.width = placed.width
+        if stage.side != placed.side { stage.side = placed.side }
+        if stage.height != placed.heightLimit { stage.height = placed.heightLimit }
+        space.show(host, at: placed)
+    }
+
+    /// The open card's width (tests).
+    var cardWidth: CGFloat { openWidth }
 
     /// Closes the card (the binding went false, or the anchor went away).
     func close(restoreFocus: Bool, immediately: Bool = false) {
@@ -1048,6 +1108,10 @@ private struct AtticDropdownContentHeightChangedKey: EnvironmentKey {
     static let defaultValue: ((CGFloat) -> Void)? = nil
 }
 
+private struct AtticDropdownContentWidthChangedKey: EnvironmentKey {
+    static let defaultValue: ((CGFloat) -> Void)? = nil
+}
+
 private struct AtticDropdownWidthKey: EnvironmentKey {
     static let defaultValue: CGFloat? = nil
 }
@@ -1066,6 +1130,12 @@ extension EnvironmentValues {
     var atticDropdownContentHeightChanged: ((CGFloat) -> Void)? {
         get { self[AtticDropdownContentHeightChangedKey.self] }
         set { self[AtticDropdownContentHeightChangedKey.self] = newValue }
+    }
+
+    /// A measured card's content asks for a wider card (a longer row).
+    var atticDropdownContentWidthChanged: ((CGFloat) -> Void)? {
+        get { self[AtticDropdownContentWidthChangedKey.self] }
+        set { self[AtticDropdownContentWidthChangedKey.self] = newValue }
     }
 
     var atticDropdownWidth: CGFloat? {

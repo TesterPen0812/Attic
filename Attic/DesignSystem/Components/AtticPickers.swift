@@ -361,6 +361,8 @@ struct AtticTagPicker: View {
         // In a card cut short the list keeps the field and shortens; the
         // card still measures its natural height: the list's full room.
         .atticDropdownHeightGivenUp(normalHeight - listHeight)
+        // "New tag “#…”" appears as you type: the card widens for it.
+        .atticDropdownIdealWidth(Self.rowsWidth(tags: tags.map(\.name), create: create))
         .accessibilityElement(children: .contain)
         .accessibilityLabel(String(localized: "Tags"))
     }
@@ -391,6 +393,17 @@ struct AtticTagPicker: View {
 
     private func hover(_ index: Int) -> ((Bool) -> Void)? {
         onHover.map { report in { inside in report(index, inside) } }
+    }
+
+    /// The widest row's width (check column, the create row's icon, the
+    /// name), the card's insets excluded: measured from the names, no
+    /// layout pass.
+    static func rowsWidth(tags: [String], create: String?) -> CGFloat {
+        let m = AtticDropdownMetrics.self
+        let style = AtticTextStyle.dropdownRow
+        let widestTag = tags.map { style.measuredWidth("#" + $0) }.max() ?? 0
+        let createRow = create.map { m.iconSlot + m.columnGap + style.measuredWidth(String(localized: "New tag “#\($0)”")) } ?? 0
+        return ceil(m.rowPadding * 2 + m.checkSlot + m.columnGap + max(widestTag, createRow))
     }
 }
 

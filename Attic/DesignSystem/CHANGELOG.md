@@ -5,6 +5,20 @@ Every later change is recorded here: what changed, why, and who asked.
 
 ## Phase 2
 
+### Combined app fix round (redesign/p2-integration)
+
+Requested by the combined Tasks + Notes CU reviews of 2026-10-03. No E1
+value, token, colour, radius or size changed.
+
+- **A measured dropdown card grows for a wider row** (CU P3-03: the tag
+  picker's "New tag “#cu2”" was cut to "New tag “#c…" in a half-empty
+  card). Content reports its widest row with `atticDropdownIdealWidth(_:)`;
+  `AtticDropdownCard` passes it on (`atticDropdownContentWidthChanged`) and
+  `AtticDropdownPresenter.grow(toWidth:)` widens the open card within the
+  width rule, keeping its side. It never narrows while open, so filtering
+  never makes it jump in. `AtticTagPicker` reports its rows' width
+  (`rowsWidth(tags:create:)`, measured from the names without a layout pass).
+
 ### Notes audit fix B2 (redesign/p2-audit-fix)
 
 Requested by the Phase 2 audit (finding B2: the delete toast could take

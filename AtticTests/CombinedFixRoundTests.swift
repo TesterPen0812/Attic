@@ -211,6 +211,46 @@ final class CombinedFixRoundTests: XCTestCase {
         XCTAssertEqual(NoteRowSummary.plainInline("2 * 3 = 6 and snake_case_name"), "2 * 3 = 6 and snake_case_name",
                        "lone marks stay")
     }
+
+    // MARK: P3-03: the tag picker's create row is never cut short
+
+    /// The card opens at its rows' width; typing "cu2" adds "New tag
+    /// “#cu2”", wider than "#cu2shared": the card grows for it (CU pass 2,
+    /// capture 51: "New tag “#c…" in a half-empty card).
+    func testTheTagPickerGrowsForItsCreateRow() throws {
+        let window = NSWindow(contentRect: NSRect(x: -4000, y: -4000, width: 340, height: 560),
+                              styleMask: .borderless, backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        window.contentView = NSView(frame: NSRect(x: 0, y: 0, width: 340, height: 560))
+        window.orderFrontRegardless()
+        windows.append(window)
+        let anchor = NSView(frame: CGRect(x: 40, y: 400, width: 60, height: 28))
+        window.contentView?.addSubview(anchor)
+        let presenter = AtticDropdownPresenter()
+        presenter.design = AtticDesignContext(reduceMotion: true)
+        let tags = ["cu2shared", "cuqa"]
+        presenter.content = AnyView(TaskTagPickerView(allTags: tags, state: { _ in .off }, onToggle: { _ in },
+                                                      onCreate: { _, _ in true }))
+        presenter.present(from: anchor)
+        defer { presenter.close(restoreFocus: false, immediately: true) }
+        spin(0.3)
+        let opened = presenter.cardWidth
+        let m = AtticDropdownMetrics.self
+        XCTAssertGreaterThanOrEqual(opened + 0.5, AtticTagPicker.rowsWidth(tags: tags, create: nil) + m.inset * 2,
+                                    "the rows fit as it opens")
+        let editor = try XCTUnwrap(window.firstResponder as? NSTextView)
+        editor.insertText("cu2", replacementRange: NSRange(location: NSNotFound, length: 0))
+        spin(0.3)
+        let needed = AtticTagPicker.rowsWidth(tags: ["cu2shared"], create: "cu2") + m.inset * 2
+        XCTAssertGreaterThan(needed, opened, "the create row is wider than the card it opened as")
+        XCTAssertGreaterThanOrEqual(presenter.cardWidth + 0.5, needed, "the card grew for “New tag “#cu2””")
+        let host = try XCTUnwrap(presenter.host)
+        XCTAssertEqual(host.contentRect.width, presenter.cardWidth, accuracy: 1)
+        // Filtering back to fewer, shorter rows never narrows it while open.
+        editor.deleteBackward(nil)
+        spin(0.3)
+        XCTAssertGreaterThanOrEqual(presenter.cardWidth + 0.5, needed)
+    }
 }
 
 /// Records the rectangles a view is asked to redraw (`setNeedsDisplay(_:)`,
