@@ -1647,7 +1647,8 @@ final class NoteEditorEngine: NSObject, NSTextViewDelegate, NSTextStorageDelegat
         let view = textView
         let viewSelection = view?.selectedRange()
         var resolved: [UUID: StagedNoteAttachment] = [:]
-        for id in Set(decoded.attachmentIDs) {
+        let sameNote = decoded.extras["sourceNoteID"]?.stringValue.flatMap(UUID.init(uuidString:)) == noteID
+        for id in sameNote ? Set<UUID>() : Set(decoded.attachmentIDs) {
             let payload: StagedNoteAttachment?
             if let live = staged[id] { payload = live }
             else { payload = await imageProvider?.verifiedBytes(forAttachment: id) }

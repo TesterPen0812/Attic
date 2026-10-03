@@ -3202,11 +3202,13 @@ private final class AllPayloadReadBarrier: @unchecked Sendable {
 @MainActor
 private final class DeferredPasteBytes: NoteImageProviding {
     let payloads: [UUID: StagedNoteAttachment]
+    private(set) var readCount = 0
     init(_ payloads: [UUID: StagedNoteAttachment]) { self.payloads = payloads }
     func fileURL(forAttachment id: UUID) async -> URL? { nil }
     func filename(forAttachment id: UUID) -> String? { payloads[id]?.filename }
     func imageBytes(forAttachment id: UUID) -> StagedNoteAttachment? { nil }
     func verifiedBytes(forAttachment id: UUID) async -> StagedNoteAttachment? {
+        readCount += 1
         try? await Task.sleep(for: .milliseconds(80))
         return payloads[id]
     }
@@ -3256,6 +3258,29 @@ extension NoteSlice3bTests {
         XCTAssertEqual(notice, "The note or selection changed. Paste again at the new selection.")
         XCTAssertEqual(engine.document(), before)
         XCTAssertFalse(engine.history.canUndo)
+    }
+
+    func testSameNotePrivatePasteReusesAttachmentIDsWithoutReadingAvailableOrMissingPayloads() async throws {
+        let item = staged()
+        for payloadAvailable in [true, false] {
+            let provider = DeferredPasteBytes(payloadAvailable ? [item.id: item] : [:])
+            let engine = NoteEditorEngine(noteID: UUID(), document: NoteDocument(blocks: [.text("Title"),
+                .file(attachmentID: item.id, filename: item.filename,
+                      contentTypeIdentifier: item.contentTypeIdentifier, byteCount: item.byteCount)]), imageProvider: provider)
+            let before = engine.document()
+            let fragment = engine.fragment(for: NSRange(location: 6, length: engine.textStorage.length - 6))
+            let bytes = try NoteContentCodec.encode(fragment, context: .fragment)
+            await XCTAssertTrueAsync(await engine.pasteDurably(fragmentData: bytes,
+                at: NSRange(location: engine.textStorage.length, length: 0)))
+            XCTAssertEqual(provider.readCount, 0, "same-note paste must not read or hash payloads")
+            XCTAssertEqual(engine.document().attachmentIDs, [item.id, item.id])
+            XCTAssertEqual(Set(engine.document().objectIDs).count, 2, "new placement identity, same attachment")
+            XCTAssertTrue(engine.staged.isEmpty)
+            XCTAssertTrue(engine.history.undo())
+            XCTAssertEqual(engine.document(), before)
+            XCTAssertTrue(engine.history.redo())
+            XCTAssertEqual(engine.document().attachmentIDs, [item.id, item.id])
+        }
     }
 
     func testPrivatePasteReadsAllPayloadsAfterDiskRelaunchAndCacheEvictionAsOneUndoStep() async throws {
