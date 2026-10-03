@@ -34,7 +34,16 @@ struct TasksPage: View {
     /// cut to compare).
     @ObservedObject private var scrollEdges = AtticScrollEdgeLab.shared
     @StateObject private var focusTracker = AtticKeyboardFocusTracker()
-    @FocusState private var focusedRow: AtticRowFocusID?
+    /// The rows' keyboard focus. Its `FocusState` is owned by
+    /// `TasksRowFocusOwner`, under the page's body, not by the page: SwiftUI
+    /// redraws a focus state's owner whenever a focusable view comes or
+    /// goes, and as the page's own it redrew the whole page each time a
+    /// list built new rows (the frame Done's first results arrive in).
+    @State private var rowFocus = TasksRowFocusLink()
+    private var focusedRow: AtticRowFocusID? {
+        get { rowFocus.binding.wrappedValue }
+        nonmutating set { rowFocus.binding.wrappedValue = newValue }
+    }
     @State private var drag: TasksDrag?
     @State private var fileDropRow: TasksRowID?
     /// A row's date or tag list that is open (owner fix 5 C and D).
@@ -136,9 +145,19 @@ struct TasksPage: View {
     static let listFooter: CGFloat = AtticControlSize.addBarHeight + AtticStyle.chromeMinimumInset + AtticLayout.contentToAddBar
 
     var body: some View {
-        // In three parts (round 10: one chain was too long for the
-        // compiler to type-check in time on CI).
-        observingModel(observingEdits(frame))
+        // The page's own state changed (or it is new): its content redraws.
+        // The focus owner alone redraws for focusable views coming and
+        // going, and the content again only when the focused row changes.
+        let generation = TasksRowFocusLink.nextGeneration()
+        TasksRowFocusOwner { [rowFocus] focus in
+            let _ = rowFocus.binding = focus
+            TasksPageFocusedContent(generation: generation, focusedRow: focus.wrappedValue) {
+                // In three parts (round 10: one chain was too long for the
+                // compiler to type-check in time on CI).
+                observingModel(observingEdits(frame))
+            }
+            .equatable()
+        }
     }
 
     /// The page, its overlays, its keys and its monitors.
@@ -423,7 +442,8 @@ struct TasksPage: View {
         // far down a long list left an empty viewport past the matches).
         .onChange(of: model.trimmedQuery(for: .now)) { _, _ in showListTop(.now) }
         .onChange(of: model.trimmedQuery(for: .backlog)) { _, _ in showListTop(.backlog) }
-        .onChange(of: model.trimmedQuery(for: .done)) { _, _ in showListTop(.done) }
+        // Done's query is published to the Done page alone: its own watcher.
+        .background(TasksDoneQueryWatcher(results: model.doneResults, model: model) { showListTop(.done) })
         .onChange(of: model.viewOptions(for: .now)) { _, _ in showListTop(.now) }
         .onChange(of: model.viewOptions(for: .backlog)) { _, _ in showListTop(.backlog) }
 
@@ -994,7 +1014,8 @@ struct TasksPage: View {
             case .now, .backlog:
                 listPage(tab, drawn: drawn)
             case .done:
-                TasksDonePage(model: model, updates: drawn ? model.cellUpdates : TasksCellUpdates.quiet, store: store,
+                TasksDonePage(model: model, updates: drawn ? model.cellUpdates : TasksCellUpdates.quiet,
+                              results: drawn ? model.doneResults : TasksDoneResults.quiet, store: store,
                               listTop: listTop, bottomClearance: bottomClearance,
                               bottomMargin: bottomMargin, viewportTop: viewportTop, bottomInset: bottomInset, bottomStack: bottomStack, drawn: drawn,
                               edges: edgeStyle, mask: viewportMask, reveal: $doneReveal,
@@ -1179,7 +1200,7 @@ struct TasksPage: View {
         // hands it off (GPT-6.1's review).
         let reorders = Self.reorders(tab: tab, manual: model.reorders(on: tab))
         TasksReorderCell(
-            model: model, updates: drawn ? model.cellUpdates : TasksCellUpdates.quiet, focus: $focusedRow,
+            model: model, updates: drawn ? model.cellUpdates : TasksCellUpdates.quiet, focus: rowFocus.binding,
             id: id, tab: tab, group: reorders ? group : [id], drag: $drag, metaPopover: $metaPopover, fileDropRow: $fileDropRow,
             enabled: model.editingTitleID != id,
             session: dragSession,
@@ -2607,6 +2628,46 @@ struct TasksPage: View {
 }
 
 // MARK: - Redraws
+
+/// Where the page reaches its rows' focus state, which `TasksRowFocusOwner`
+/// holds: set as the owner draws the page, read by the page's handlers.
+@MainActor
+final class TasksRowFocusLink {
+    var binding: FocusState<AtticRowFocusID?>.Binding!
+
+    private static var generation: UInt64 = 0
+    /// A new number each time the page's body runs (`TasksPageFocusedContent`).
+    static func nextGeneration() -> UInt64 {
+        generation &+= 1
+        return generation
+    }
+}
+
+/// Owns the rows' `FocusState` for the Tasks page. SwiftUI redraws a focus
+/// state's owner when the focus system's views change (a list building or
+/// letting go of focusable rows), so the owner is this small view: it hands
+/// the page's content the binding, and the content is redrawn only when
+/// the page's body ran again or the focused row changed.
+struct TasksRowFocusOwner<Content: View>: View {
+    @FocusState private var focusedRow: AtticRowFocusID?
+    @ViewBuilder let content: (FocusState<AtticRowFocusID?>.Binding) -> Content
+
+    var body: some View { content($focusedRow) }
+}
+
+/// The Tasks page's content under its focus owner: equal (not redrawn)
+/// while the page's body has not run again and the focused row is the same.
+struct TasksPageFocusedContent<Content: View>: View, Equatable {
+    let generation: UInt64
+    let focusedRow: AtticRowFocusID?
+    @ViewBuilder let content: () -> Content
+
+    var body: some View { content() }
+
+    nonisolated static func == (lhs: Self, rhs: Self) -> Bool {
+        MainActor.assumeIsolated { lhs.generation == rhs.generation && lhs.focusedRow == rhs.focusedRow }
+    }
+}
 
 /// The page redraws from its own observed state (the model, the store); a
 /// parent redrawing (a lock, the panel's key state, another page showing)

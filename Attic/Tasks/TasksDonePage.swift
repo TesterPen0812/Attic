@@ -13,6 +13,10 @@ struct TasksDonePage<Cell: View, Mask: View>: View {
     /// Every change to the model while the page is drawn; nothing while it
     /// is kept built but not drawn (round 11, `TasksCellUpdates`).
     @ObservedObject var updates: TasksCellUpdates
+    /// The query and the loaded log, published to this page alone (the
+    /// Tasks page does not redraw for them); `.quiet` while kept built but
+    /// not drawn, as `updates` is.
+    @ObservedObject var results: TasksDoneResults
     /// Observed only while the page is drawn (`TasksDoneRevisionWatcher`).
     let store: TaskStore
     /// Where the first line rests (under the tabs) and what the bottom
@@ -136,6 +140,33 @@ private struct TasksDoneRevisionWatcher: View {
         Color.clear
             .frame(width: 0, height: 0)
             .onChange(of: store.revision) { _, _ in reload() }
+            .accessibilityHidden(true)
+    }
+}
+
+/// The Done page's applied query and loaded log changed (`TasksPageModel`'s
+/// `doneSearch`, `doneLogTasks`, `doneLogHasMore`, `doneLogFailure`). Only
+/// the Done page and Done's query watcher observe it: the first results of
+/// a search redraw the Done list, not the whole Tasks page.
+@MainActor
+final class TasksDoneResults: ObservableObject {
+    let objectWillChange = ObservableObjectPublisher()
+    /// Never fires: a Done page kept built but not drawn.
+    static let quiet = TasksDoneResults()
+}
+
+/// Done's applied query, watched by its own small view: a new query sends
+/// the Done list back to its top (deep review P2-01), while the Tasks page
+/// itself does not redraw for the query or its results.
+struct TasksDoneQueryWatcher: View {
+    @ObservedObject var results: TasksDoneResults
+    let model: TasksPageModel
+    let changed: () -> Void
+
+    var body: some View {
+        Color.clear
+            .frame(width: 0, height: 0)
+            .onChange(of: model.trimmedQuery(for: .done)) { _, _ in changed() }
             .accessibilityHidden(true)
     }
 }
