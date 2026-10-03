@@ -1038,7 +1038,7 @@ struct AtticDropdownMenuItem: NSViewRepresentable {
     @Environment(\.isEnabled) private var enabled
 
     /// The menu item's mark attribute (HIServices' `kAXMenuItemMarkCharAttribute`).
-    static let markCharAttribute = NSAccessibility.Attribute(rawValue: "AXMenuItemMarkChar")
+    nonisolated static let markCharAttribute = NSAccessibility.Attribute(rawValue: "AXMenuItemMarkChar")
 
     static func markChar(_ check: AtticCheckState?) -> String? {
         switch check {
@@ -1061,7 +1061,8 @@ struct AtticDropdownMenuItem: NSViewRepresentable {
         override func hitTest(_ point: NSPoint) -> NSView? { nil }
 
         // The NSAccessibility protocol has no menu-item mark, so the item
-        // answers the attribute itself, as AppKit's own menu items do.
+        // answers the attribute itself, as AppKit's own menu items do. The
+        // accessibility server asks on the main thread.
         @available(macOS, deprecated: 10.10, message: "Only the accessibility server calls it")
         override func accessibilityAttributeNames() -> [NSAccessibility.Attribute] {
             let names = super.accessibilityAttributeNames()
@@ -1070,7 +1071,8 @@ struct AtticDropdownMenuItem: NSViewRepresentable {
 
         @available(macOS, deprecated: 10.10, message: "Only the accessibility server calls it")
         override func accessibilityAttributeValue(_ attribute: NSAccessibility.Attribute) -> Any? {
-            attribute == AtticDropdownMenuItem.markCharAttribute ? markChar : super.accessibilityAttributeValue(attribute)
+            guard attribute == AtticDropdownMenuItem.markCharAttribute else { return super.accessibilityAttributeValue(attribute) }
+            return MainActor.assumeIsolated { markChar }
         }
     }
 
