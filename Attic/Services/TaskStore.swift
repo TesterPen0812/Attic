@@ -3342,12 +3342,6 @@ final class TaskStore: ObservableObject {
             let changedIDs = Set((context.insertedModelsArray + context.changedModelsArray + context.deletedModelsArray)
                 .compactMap { ($0 as? TaskItem)?.id })
             let deleted = Set(context.deletedModelsArray.map(\.persistentModelID))
-            let ids = Array(changedIDs)
-            let changedRows = ids.isEmpty ? [] : try context.fetch(
-                FetchDescriptor<TaskItem>(predicate: #Predicate { ids.contains($0.id) }))
-            let changedEntries = Self.canonicalReplicas(from: changedRows.filter { !deleted.contains($0.persistentModelID) })
-                .filter { $0.doneLoggedAt != nil && $0.deletedAt == nil && $0.parentID == nil }
-                .map(DoneSearchEntry.init)
             #if os(macOS)
             try PerformanceSignposts.storeSave { try persist(context) }
             #else
@@ -3355,12 +3349,27 @@ final class TaskStore: ObservableObject {
             #endif
             // Publish the revision only after the index sees the durable
             // change. Undo/Redo use the same save path; failed saves rebuild
-            // from the rolled-back context below.
+            // from the rolled-back context below. The changed rows are read
+            // after the save is durable (review P3): a failed read must
+            // never roll back a save that succeeded; it rebuilds the index
+            // from a fresh read instead.
+            var indexReadFailed = false
             if !changedIDs.isEmpty {
-                updateDoneSearch(changedEntries, replacing: changedIDs)
+                let ids = Array(changedIDs)
+                do {
+                    let changedRows = try context.fetch(
+                        FetchDescriptor<TaskItem>(predicate: #Predicate { ids.contains($0.id) }))
+                    let changedEntries = Self.canonicalReplicas(from: changedRows.filter { !deleted.contains($0.persistentModelID) })
+                        .filter { $0.doneLoggedAt != nil && $0.deletedAt == nil && $0.parentID == nil }
+                        .map(DoneSearchEntry.init)
+                    updateDoneSearch(changedEntries, replacing: changedIDs)
+                } catch {
+                    indexReadFailed = true
+                }
             }
             errorNotice = nil
             revision &+= 1
+            if indexReadFailed { refresh() }
             #if !ATTIC_LOCAL_ONLY
             cloudSyncProtection.noteLocalSave()
             reconcileProtectedCloudSyncActivity(for: .exportData)
