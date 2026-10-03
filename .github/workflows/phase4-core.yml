@@ -1,0 +1,67 @@
+name: Phase 4 headless core
+on:
+  push:
+    branches: [redesign/phase-4]
+permissions:
+  contents: read
+  actions: read
+concurrency:
+  group: phase4-core-${{ github.ref }}
+  cancel-in-progress: false
+jobs:
+  core:
+    runs-on: macos-26
+    timeout-minutes: 90
+    env:
+      DEVELOPER_DIR: /Applications/Xcode_26.6.app/Contents/Developer
+      BUNDLE_FROZEN: "true"
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+      - uses: ruby/setup-ruby@v1
+        with:
+          ruby-version: "3.3"
+      - name: Prepare locked runner
+        run: |
+          bundle install --jobs 4 --retry 3
+          sudo mkdir -p /Users/taha/Developer/attic-redesign-assets
+          sudo cp Scripts/xcodebuild-locked.sh /Users/taha/Developer/attic-redesign-assets/xcodebuild-locked.sh
+          sudo chmod +x /Users/taha/Developer/attic-redesign-assets/xcodebuild-locked.sh
+          mkdir -p .build
+      - name: Pinned optimized empty reference
+        shell: /bin/zsh {0}
+        run: |
+          set -euo pipefail
+          base="$PWD/.build/pinned"
+          mkdir -p "$base"
+          git archive f4453108301a0d902235b0f4f8985a43b8a8b3d9 | tar -x -C "$base"
+          cp AtticTests/CanvasCoreReferenceTests.swift "$base/AtticTests/"
+          cd "$base"
+          bundle exec ruby Scripts/generate_project.rb
+          bundle exec ruby Scripts/verify_project_generation.rb
+          /Users/taha/Developer/attic-redesign-assets/xcodebuild-locked.sh \
+            -project Attic.xcodeproj -scheme Attic -configuration Local \
+            -destination 'platform=macOS' -derivedDataPath .build/dd \
+            SWIFT_OPTIMIZATION_LEVEL=-O SWIFT_COMPILATION_MODE=wholemodule \
+            ENABLE_TESTABILITY=YES ENABLE_DEBUG_DYLIB=NO \
+            CODE_SIGNING_ALLOWED=YES CODE_SIGNING_REQUIRED=YES CODE_SIGN_STYLE=Manual \
+            CODE_SIGN_IDENTITY=- DEVELOPMENT_TEAM= \
+            -parallel-testing-enabled NO -only-testing:AtticTests/CanvasCoreReferenceTests test \
+            > ../p4-reference.log 2>&1
+          python3 - <<'PY'
+          import json, pathlib
+          line = next(x for x in pathlib.Path('../p4-reference.log').read_text().splitlines() if 'P4_REFERENCE_JSON ' in x)
+          samples = json.loads(line.split('P4_REFERENCE_JSON ', 1)[1])
+          pathlib.Path('../p4-reference.json').write_text(json.dumps(samples, indent=2))
+          PY
+          cd ../..
+          rm -rf .build/pinned
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: p4-reference
+          path: |
+            .build/p4-reference.json
+            .build/p4-reference.log
+          retention-days: 3
