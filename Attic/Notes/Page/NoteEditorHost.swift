@@ -26,7 +26,24 @@ final class NotesPageChrome: ObservableObject {
         case insert, slash
         case retry(UUID), locate(UUID)
     }
-    @Published var fileRequest: FileRequest?
+    @Published var fileRequest: FileRequest? {
+        didSet { if let fileRequest { presentedFileRequest = fileRequest } }
+    }
+    /// What the open panel on screen was opened for. SwiftUI sets the
+    /// presentation binding to false (clearing `fileRequest`) before it
+    /// calls the importer's completion, so the completion reads this (CU
+    /// P3-01: a `/` Image or File… pick was taken for a plain Insert and
+    /// left `/image` or `/file` in the text).
+    private(set) var presentedFileRequest: FileRequest?
+
+    /// The open panel finished: what it was opened for, once.
+    func takeFileRequest() -> FileRequest? {
+        defer {
+            presentedFileRequest = nil
+            if fileRequest != nil { fileRequest = nil }
+        }
+        return presentedFileRequest ?? fileRequest
+    }
 
     /// The note menu's commands for the note on screen (built by the page).
     var menuCommands: () -> [AtticMenuCommand] = { [] }

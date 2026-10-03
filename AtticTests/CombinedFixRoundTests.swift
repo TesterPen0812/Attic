@@ -125,6 +125,62 @@ final class CombinedFixRoundTests: XCTestCase {
             XCTAssertTrue(covered(), "\(entry): emptied, the placeholder is drawn again in full: \(recorder.rects)")
         }
     }
+
+
+    // MARK: P3-01: `/image` and `/file` are consumed
+
+    /// SwiftUI clears the importer's presentation binding before it calls
+    /// the completion: the request it was opened for must survive that.
+    func testTheOpenPanelKeepsWhatItWasOpenedForUntilItsCompletion() {
+        let chrome = NotesPageChrome()
+        chrome.fileRequest = .slash
+        chrome.fileRequest = nil // the binding, as the panel closes
+        XCTAssertEqual(chrome.takeFileRequest(), .slash)
+        XCTAssertNil(chrome.takeFileRequest(), "taken once")
+        XCTAssertNil(chrome.fileRequest)
+        chrome.fileRequest = .insert
+        XCTAssertEqual(chrome.takeFileRequest(), .insert, "with the binding not yet cleared")
+        XCTAssertNil(chrome.fileRequest)
+        let id = UUID()
+        chrome.fileRequest = .locate(id)
+        chrome.fileRequest = nil
+        XCTAssertEqual(chrome.takeFileRequest(), .locate(id))
+    }
+
+    /// The `/` Image or File… row replaces its typed command with the
+    /// picture or the file card, at a line's start or after text, as the
+    /// other `/` rows consume theirs.
+    func testSlashImageAndSlashFileReplaceTheirCommand() throws {
+        let harness = try makeHarness()
+        XCTAssertTrue(harness.controller.requestNewNote())
+        spin(0.4)
+        let engine = try XCTUnwrap(harness.controller.active?.engine)
+        let textView = try XCTUnwrap(engine.textView)
+        harness.window.makeFirstResponder(textView)
+        let (image, file) = try fixtures()
+        // The open panel is the page's; the test answers for it.
+        engine.onSlashFileRequest = {}
+        type("Attachments\nBefore the image ", into: textView)
+        type("/image", into: textView)
+        XCTAssertTrue(engine.acceptSlashItem(.imageOrFile))
+        harness.controller.importSlashImage(image)
+        for _ in 0..<60 where !engine.textStorage.string.contains(NoteDocument.objectCharacter) { spin(0.05) }
+        XCTAssertEqual(engine.textStorage.string, "Attachments\nBefore the image \n\(NoteDocument.objectCharacter)\n")
+        type("/file", into: textView)
+        XCTAssertTrue(engine.acceptSlashItem(.imageOrFile))
+        harness.controller.importSlashImage(file)
+        for _ in 0..<60 where engine.textStorage.string.filter({ $0 == NoteDocument.objectCharacter }).count < 2 { spin(0.05) }
+        let text = engine.textStorage.string
+        XCTAssertFalse(text.contains("/image") || text.contains("/file"), text.debugDescription)
+        XCTAssertEqual(text, "Attachments\nBefore the image \n\(NoteDocument.objectCharacter)\n\(NoteDocument.objectCharacter)\n")
+        let blocks = engine.document().blocks
+        XCTAssertEqual(blocks.filter { $0.kind == .image }.count, 1)
+        XCTAssertEqual(blocks.filter { $0.kind == .file }.count, 1)
+        XCTAssertNil(harness.controller.active?.notice)
+        // One Undo takes the file back out and leaves the typed `/file`.
+        XCTAssertTrue(engine.history.undo())
+        XCTAssertTrue(engine.textStorage.string.hasSuffix("/file"), engine.textStorage.string.debugDescription)
+    }
 }
 
 /// Records the rectangles a view is asked to redraw (`setNeedsDisplay(_:)`,

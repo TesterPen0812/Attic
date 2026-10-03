@@ -278,8 +278,7 @@ struct NotesEditorPage: View {
     }
 
     private func finishFileRequest(_ result: Result<[URL], Error>?) {
-        let request = chrome.fileRequest
-        chrome.fileRequest = nil
+        let request = chrome.takeFileRequest()
         let urls: [URL] = if case let .success(urls)? = result { urls } else { [] }
         switch request {
         case .slash:
