@@ -155,6 +155,113 @@ final class TasksRound6Tests: XCTestCase {
         let bottom = 100 + fraction * (visible - 34) + 34
         XCTAssertEqual(bottom, 520 - clearance, accuracy: 0.5)
     }
+    // MARK: - Done's first results: a new query's rows in the last query's views
+
+    private func doneRow(_ id: UUID, _ title: String) -> TasksListRow {
+        TasksListRow(id: id, model: AtticTaskRowModel(id: id, title: title, state: .done), status: .done, subtasks: [])
+    }
+
+    /// `TasksDoneSlots`: a task keeps its row's view within a query; a new
+    /// query takes the last query's views in order only when the page says
+    /// the rows are interchangeable, and asks only when the query changed.
+    func testDoneSlotsKeepATasksViewAndPassViewsOnOnlyForANewQuery() {
+        let slots = TasksDoneSlots()
+        let today = Date(timeIntervalSince1970: 1_800_000_000)
+        let yesterday = today.addingTimeInterval(-86_400)
+        let a = UUID(), b = UUID(), c = UUID(), d = UUID(), e = UUID()
+        var asked = 0
+        func lines(_ days: [TasksDoneDay], _ query: String, _ interchangeable: Bool) -> [TasksDoneLine] {
+            slots.lines(for: days, query: query, interchangeable: { asked += 1; return interchangeable })
+        }
+        func rowSlots(_ lines: [TasksDoneLine]) -> [Int] { lines.filter { !$0.id.heading }.map(\.id.slot) }
+        func headingSlots(_ lines: [TasksDoneLine]) -> [Int] { lines.filter { $0.id.heading }.map(\.id.slot) }
+
+        let all = lines([TasksDoneDay(id: today, title: "Today", rows: [doneRow(a, "A"), doneRow(b, "B")]),
+                         TasksDoneDay(id: yesterday, title: "Yesterday", rows: [doneRow(c, "C")])], "", true)
+        XCTAssertEqual(asked, 0, "the first lines have no views to pass on")
+        XCTAssertEqual(Set(all.map(\.id)).count, all.count, "every line has its own view")
+        XCTAssertEqual(all.compactMap { if case let .row(row) = $0.content { row.id } else { nil } }, [a, b, c], "lines keep the days' order")
+
+        // The same query: a task keeps its view, a new task gets a new one.
+        let same = lines([TasksDoneDay(id: today, title: "Today", rows: [doneRow(b, "B"), doneRow(d, "D")])], "", true)
+        XCTAssertEqual(asked, 0, "the same query never passes views on")
+        XCTAssertEqual(slots.line(for: b)?.slot, rowSlots(all)[1])
+        XCTAssertFalse(rowSlots(all).contains(rowSlots(same)[1]), "a task new to the list has a new view")
+        XCTAssertEqual(headingSlots(same), [headingSlots(all)[0]], "a day keeps its heading's view")
+
+        // A new query, interchangeable rows: its rows take the views in order.
+        let found = lines([TasksDoneDay(id: yesterday, title: "Yesterday", rows: [doneRow(e, "E"), doneRow(c, "C"), doneRow(a, "A")])], "e", true)
+        XCTAssertEqual(asked, 1)
+        XCTAssertEqual(Array(rowSlots(found).prefix(2)), rowSlots(same), "the last query's views, in order")
+        XCTAssertFalse(rowSlots(same).contains(rowSlots(found)[2]), "a line past them gets a new view")
+        XCTAssertEqual(headingSlots(found), headingSlots(same))
+        XCTAssertEqual(slots.line(for: e)?.slot, rowSlots(found)[0])
+        XCTAssertNil(slots.line(for: b), "a task no longer listed has no line to scroll to")
+
+        // A new query while a row holds something: each task keeps or gets its own view.
+        let held = lines([TasksDoneDay(id: yesterday, title: "Yesterday", rows: [doneRow(c, "C"), doneRow(b, "B")])], "", false)
+        XCTAssertEqual(asked, 2)
+        XCTAssertEqual(rowSlots(held)[0], slots.line(for: c)?.slot)
+        XCTAssertEqual(rowSlots(held)[0], rowSlots(found)[1], "C keeps the view that drew it")
+        XCTAssertFalse(rowSlots(found).contains(rowSlots(held)[1]), "B, gone and back, gets a new view")
+        XCTAssertEqual(Set(held.map(\.id)).count, held.count)
+    }
+
+    /// A cell that draws another task moves its controls' frames to that
+    /// task, and takes nothing from a task another cell reported since
+    /// (rows trading places, in either order).
+    func testControlFramesFollowTheCellThatReportedThem() {
+        let session = TasksDragSession()
+        let first = TasksCellReports(), second = TasksCellReports()
+        let x = TasksRowID(tab: .done, id: UUID()), a = TasksRowID(tab: .done, id: UUID()), c = TasksRowID(tab: .done, id: UUID())
+        first.controls = [CGRect(x: 1, y: 1, width: 1, height: 1)]
+        second.controls = [CGRect(x: 2, y: 2, width: 2, height: 2)]
+        // `first` drew X, `second` drew A; now `first` draws A and `second` draws C.
+        for order in [true, false] {
+            session.setControlFrames(first.controls!, for: x, from: first)
+            session.setControlFrames(second.controls!, for: a, from: second)
+            session.controlFrames[c] = nil
+            if order {
+                session.moveControlFrames(from: x, to: a, of: first)
+                session.moveControlFrames(from: a, to: c, of: second)
+            } else {
+                session.moveControlFrames(from: a, to: c, of: second)
+                session.moveControlFrames(from: x, to: a, of: first)
+            }
+            XCTAssertNil(session.controlFrames[x], "order \(order)")
+            XCTAssertEqual(session.controlFrames[a], first.controls, "order \(order)")
+            XCTAssertEqual(session.controlFrames[c], second.controls, "order \(order)")
+        }
+    }
+
+    /// The rows' frames (right-click, drag-out, reveal) follow a new Done
+    /// query's rows when they are drawn by the last query's views: each
+    /// listed task has its own frame, in list order, and no task the list
+    /// no longer shows keeps one.
+    func testANewDoneQueryKeepsEveryRowFrameWithItsTask() throws {
+        let hosted = try Hosted(height: 520)
+        defer { hosted.close() }
+        hosted.model.select(tab: .done)
+        hosted.model.showPagerPage(animated: false)
+        hosted.spin(0.6)
+        func check(_ label: String) {
+            hosted.window.contentView?.layoutSubtreeIfNeeded()
+            hosted.spin(0.2)
+            let shown = hosted.model.doneDays().flatMap { $0.rows.map(\.id) }
+            let framed = hosted.pointer.frames.filter { $0.key.tab == .done }
+            XCTAssertFalse(shown.isEmpty, label)
+            XCTAssertEqual(Set(framed.keys.map(\.id)), Set(shown), label)
+            let tops = shown.compactMap { framed[TasksRowID(tab: .done, id: $0)]?.minY }
+            XCTAssertEqual(tops, tops.sorted(), label)
+            XCTAssertEqual(Set(tops).count, tops.count, "\(label): one frame a row")
+        }
+        check("all")
+        for query in ["Renew", "a", "Pay rent", "an", ""] {
+            hosted.model.typeDoneSearch(query)
+            hosted.model.flushDoneSearchInput()
+            check(query.isEmpty ? "all again" : query)
+        }
+    }
 }
 
 /// The Tasks page with the demo tasks in a window off screen, as the panel

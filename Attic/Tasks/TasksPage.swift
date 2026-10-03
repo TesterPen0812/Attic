@@ -79,6 +79,8 @@ struct TasksPage: View {
     @State private var addBarEditor = AtticTokenFieldEditor()
     /// Each built list's scroll proxy, for `show` (not observed).
     @State private var listProxies = TasksListProxies()
+    /// Which view draws each Done line (not observed).
+    @State private var doneSlots = TasksDoneSlots()
 
     /// The page's Find field (Done's search, Now's and Later's Find) has
     /// the keyboard.
@@ -507,8 +509,33 @@ struct TasksPage: View {
             // yet); then SwiftUI's scroll to the row itself, which centres
             // it exactly once it is built.
             if let place, let scroll = listProxies.scrollViews[tab] { TasksScrollKeeper.centre(place, in: scroll) }
-            proxy.scrollTo(request.id, anchor: .center)
+            scroll(proxy, to: request.id, in: tab, anchor: .center)
         }
+    }
+
+    /// Scrolls a list to `id`'s row: on Done, to the line that draws it
+    /// (`TasksDoneSlots`).
+    private func scroll(_ proxy: ScrollViewProxy, to id: UUID, in tab: TasksTab, anchor: UnitPoint? = nil) {
+        if tab == .done, let line = doneSlots.line(for: id) {
+            proxy.scrollTo(line, anchor: anchor)
+        } else {
+            proxy.scrollTo(id, anchor: anchor)
+        }
+    }
+
+    /// Whether Done's rows hold nothing of their own, so a new query's rows
+    /// may come up in the views that drew the last query's
+    /// (`TasksDoneSlots`): no keyboard focus, selection, editor, pop-over,
+    /// details, drag or file on them, the pointer over none of them, and
+    /// VoiceOver off. Otherwise each task's row is drawn by its own view.
+    private func doneRowsAreInterchangeable() -> Bool {
+        let done = TasksTab.done.rawValue
+        return !NSWorkspace.shared.isVoiceOverEnabled
+            && drag == nil && metaPopover == nil && fileDropRow == nil
+            && model.selection.isEmpty && model.doneDetailID == nil && model.editingTitleID == nil
+            && model.renamingSubtaskID == nil && model.newSubtaskParentID == nil
+            && focusedRow?.page != done && model.keyboardFocus?.page != done
+            && !pointer.isOverRow(on: .done)
     }
 
     /// A row's top and height in its list's content, from the heights of
@@ -978,8 +1005,8 @@ struct TasksPage: View {
                                           bottomClearance: bottomClearance)
         switch reveal {
         case .none: break
-        case .minimal: withAnimation(animation) { proxy.scrollTo(id) }
-        case let .bottom(fraction): withAnimation(animation) { proxy.scrollTo(id, anchor: UnitPoint(x: 0, y: fraction)) }
+        case .minimal: withAnimation(animation) { scroll(proxy, to: id, in: tab) }
+        case let .bottom(fraction): withAnimation(animation) { scroll(proxy, to: id, in: tab, anchor: UnitPoint(x: 0, y: fraction)) }
         }
     }
 
@@ -1025,7 +1052,9 @@ struct TasksPage: View {
                               registerList: { proxy in
                                   listProxies.lists[.done] = proxy
                                   takeScrollRequest(in: .done)
-                              })
+                              },
+                              slots: doneSlots,
+                              rowsAreInterchangeable: { doneRowsAreInterchangeable() })
             }
         }
         // Larger corners move the pin (and the add bar) inward; the tabs
@@ -1204,6 +1233,7 @@ struct TasksPage: View {
             id: id, tab: tab, group: reorders ? group : [id], drag: $drag, metaPopover: $metaPopover, fileDropRow: $fileDropRow,
             enabled: model.editingTitleID != id,
             session: dragSession,
+            pointer: pointer,
             allowsStart: { [pointer, dragSession] point in
                 // Not the circle column (before the row reports its
                 // controls), and never one of the row's controls.
@@ -1325,10 +1355,6 @@ struct TasksPage: View {
                 }
             }
         }
-        .onGeometryChange(for: CGRect.self) { $0.frame(in: Self.space) } action: { [pointer] frame in
-            pointer.frames[TasksRowID(tab: tab, id: id)] = frame
-        }
-        .onDisappear { [pointer] in pointer.frames[TasksRowID(tab: tab, id: id)] = nil }
         // Files dropped on a row: one drop destination for the page
         // (`fileDropTarget(at:)`), not one per row (round 11: a drop
         // destination on every row made a screenful of rows slower to build).
@@ -2629,6 +2655,14 @@ struct TasksPage: View {
 
 // MARK: - Redraws
 
+/// What a row's cell last reported: its frame in the page and its
+/// controls' frames in the row. A Done cell can draw another task after a
+/// new query (`TasksDoneSlots`); what it reported then moves to that task.
+final class TasksCellReports {
+    var frame: CGRect?
+    var controls: [CGRect]?
+}
+
 /// Where the page reaches its rows' focus state, which `TasksRowFocusOwner`
 /// holds: set as the owner draws the page, read by the page's handlers.
 @MainActor
@@ -3046,7 +3080,27 @@ final class TasksDragSession {
     var translation: CGFloat = 0
     var location: CGPoint?
     var controlFrames: [TasksRowID: [CGRect]] = [:]
+    /// Which cell reported each row's control frames (`TasksCellReports`).
+    private var controlOwners: [TasksRowID: ObjectIdentifier] = [:]
     var timer: Timer?
+
+    /// A row's controls, as its cell reports them.
+    func setControlFrames(_ frames: [CGRect], for row: TasksRowID, from cell: TasksCellReports) {
+        controlFrames[row] = frames
+        controlOwners[row] = ObjectIdentifier(cell)
+    }
+
+    /// A cell now draws another task (a Done row after a new query,
+    /// `TasksDoneSlots`): its controls move to that task, and the task it
+    /// drew keeps none of them unless another cell reported them since.
+    func moveControlFrames(from old: TasksRowID, to new: TasksRowID, of cell: TasksCellReports) {
+        if controlOwners[old] == ObjectIdentifier(cell) {
+            controlFrames[old] = nil
+            controlOwners[old] = nil
+        }
+        guard let frames = cell.controls else { return }
+        setControlFrames(frames, for: new, from: cell)
+    }
 
     func cancel() { isCancelled = true }
 
@@ -3130,6 +3184,8 @@ struct TasksReorderCell<Row: View, Below: View>: View {
     let enabled: Bool
     /// The drag's live state: cancellation, pointer, control frames.
     let session: TasksDragSession
+    /// Where the rows are in the page (each cell reports its own).
+    let pointer: TasksPointer
     /// Whether a press at this page point may start a drag (not on the
     /// row's circle, checklist, date or tags).
     let allowsStart: (CGPoint) -> Bool
@@ -3145,6 +3201,8 @@ struct TasksReorderCell<Row: View, Below: View>: View {
     @Environment(\.atticDesign) private var design
     @GestureState private var translation: CGFloat?
     @State private var pushedPast = false
+    /// What this cell last reported of its row (its frame, its controls).
+    @State private var reports = TasksCellReports()
 
     var body: some View {
         let lifted = drag?.id == id && translation != nil
@@ -3171,8 +3229,11 @@ struct TasksReorderCell<Row: View, Below: View>: View {
             // date, the tags, the checklist) keep their clicks; a press that
             // moves 4 pt drags at once, with no hold.
             row(live)
-                .onPreferenceChange(AtticRowControlFramesKey.self) { [session, id, tab] frames in
-                    MainActor.assumeIsolated { session.controlFrames[TasksRowID(tab: tab, id: id)] = frames }
+                .onPreferenceChange(AtticRowControlFramesKey.self) { [session, id, tab, reports] frames in
+                    MainActor.assumeIsolated {
+                        reports.controls = frames
+                        session.setControlFrames(frames, for: TasksRowID(tab: tab, id: id), from: reports)
+                    }
                 }
                 .simultaneousGesture(gesture, including: enabled ? .all : .subviews)
             below(live)
@@ -3183,6 +3244,19 @@ struct TasksReorderCell<Row: View, Below: View>: View {
         .opacity(hidden ? 0.001 : 1)
         .offset(y: hidden ? 0 : offset)
         .animation(hidden || design.reduceMotion ? nil : AtticMotionPreset.settle.animation(reduceMotion: false), value: offset)
+        // A Done row's cell can draw another task after a new query
+        // (`TasksDoneSlots`): its controls' frames go with it.
+        .onChange(of: id) { [session, pointer, tab, reports] old, new in
+            session.moveControlFrames(from: TasksRowID(tab: tab, id: old), to: TasksRowID(tab: tab, id: new), of: reports)
+            pointer.moveFrame(from: TasksRowID(tab: tab, id: old), to: TasksRowID(tab: tab, id: new), of: reports)
+        }
+        // Each row's frame in the page, for the pointer's questions (which
+        // row a right-click, a drop or a drag-out is on) and the reveal.
+        .onGeometryChange(for: CGRect.self) { $0.frame(in: TasksPage.space) } action: { [pointer, tab, id, reports] frame in
+            reports.frame = frame
+            pointer.setFrame(frame, for: TasksRowID(tab: tab, id: id), from: reports)
+        }
+        .onDisappear { [pointer, tab, id, reports] in pointer.removeFrame(for: TasksRowID(tab: tab, id: id), of: reports) }
         .onChange(of: translation == nil) { _, ended in
             guard ended else { return }
             // Released, cancelled by the system or by Esc: the lift goes
@@ -3419,6 +3493,37 @@ final class TasksPointer {
             return
         }
         invocation = Invocation(row: TasksRowID(tab: tab, id: id), targets: select(id), pressedAt: event.timestamp)
+    }
+
+    /// Which cell reported each row's frame (`TasksCellReports`).
+    private var frameOwners: [TasksRowID: ObjectIdentifier] = [:]
+
+    func setFrame(_ frame: CGRect, for row: TasksRowID, from cell: TasksCellReports) {
+        frames[row] = frame
+        frameOwners[row] = ObjectIdentifier(cell)
+    }
+
+    /// A cell now draws another task (`TasksDoneSlots`): its frame moves to
+    /// that task, and the task it drew keeps none unless another cell
+    /// reported one since.
+    func moveFrame(from old: TasksRowID, to new: TasksRowID, of cell: TasksCellReports) {
+        removeFrame(for: old, of: cell)
+        guard let frame = cell.frame else { return }
+        setFrame(frame, for: new, from: cell)
+    }
+
+    /// A cell went: the frame it reported goes with it.
+    func removeFrame(for row: TasksRowID, of cell: TasksCellReports) {
+        guard frameOwners[row] == nil || frameOwners[row] == ObjectIdentifier(cell) else { return }
+        frames[row] = nil
+        frameOwners[row] = nil
+    }
+
+    /// Whether the pointer is over one of `tab`'s rows now.
+    func isOverRow(on tab: TasksTab) -> Bool {
+        guard let view, let window = view.window else { return false }
+        let point = view.convert(window.mouseLocationOutsideOfEventStream, from: nil)
+        return frames.contains { $0.key.tab == tab && $0.value.contains(point) }
     }
 
     /// The event's location in the page, or nil when it is another

@@ -46,12 +46,20 @@ struct TasksDonePage<Cell: View, Mask: View>: View {
     /// Where the page keeps the log's scroll view and proxy (round 10).
     var proxies: TasksListProxies?
     var registerList: (ScrollViewProxy) -> Void = { _ in }
+    /// Which view draws each line (`TasksDoneSlots`); the page scrolls to
+    /// a row through it.
+    var slots = TasksDoneSlots()
+    /// Whether a new query's rows may come up in the views of the last
+    /// query's rows (`TasksDoneSlots`): only when no row holds anything of
+    /// its own (the page decides; asked only when the query changed).
+    var rowsAreInterchangeable: () -> Bool = { false }
 
     static var space: NamedCoordinateSpace { .named("AtticTasksDone") }
 
     var body: some View {
-        let days = model.doneDays()
-        list(days)
+        let lines = slots.lines(for: model.doneDays(), query: model.trimmedQuery(for: .done),
+                                interchangeable: rowsAreInterchangeable)
+        list(lines)
         // Round 12: a page kept built but not drawn reads nothing and
         // watches nothing (its copy of the log is not on screen); drawn
         // again, it catches up with whatever changed meanwhile.
@@ -65,21 +73,25 @@ struct TasksDonePage<Cell: View, Mask: View>: View {
         }
     }
 
-    private func list(_ days: [TasksDoneDay]) -> some View {
+    private func list(_ lines: [TasksDoneLine]) -> some View {
         ScrollViewReader { proxy in
         ScrollView(.vertical) {
             LazyVStack(alignment: .leading, spacing: 0) {
-                ForEach(days) { day in
-                    // A day heading takes one row's pitch, its text on
-                    // the rows' title line, so the log keeps the 34 / 48
-                    // rhythm of the rows under it.
-                    AtticText(verbatim: day.title, style: .rowMeta, ink: .helper)
-                        .frame(height: AtticTaskRowMetrics.titleLineHeight)
-                        .frame(height: AtticLayout.rowPitch)
-                        .padding(.leading, AtticLayout.circleX)
-                        .accessibilityAddTraits(.isHeader)
-                    ForEach(day.rows) { row in
-                        cell(row).id(row.id)
+                // One line a day heading or a row, each drawn by its slot's
+                // view (`TasksDoneSlots`); a row is scrolled to by its slot.
+                ForEach(lines) { line in
+                    switch line.content {
+                    case let .heading(title):
+                        // A day heading takes one row's pitch, its text on
+                        // the rows' title line, so the log keeps the 34 / 48
+                        // rhythm of the rows under it.
+                        AtticText(verbatim: title, style: .rowMeta, ink: .helper)
+                            .frame(height: AtticTaskRowMetrics.titleLineHeight)
+                            .frame(height: AtticLayout.rowPitch)
+                            .padding(.leading, AtticLayout.circleX)
+                            .accessibilityAddTraits(.isHeader)
+                    case let .row(row):
+                        cell(row)
                     }
                 }
                 if model.doneLogFailure != nil {
@@ -95,7 +107,7 @@ struct TasksDonePage<Cell: View, Mask: View>: View {
                         // the sentinel already in view reads the next page.
                         .task(id: drawn) { if drawn { model.loadMoreDoneLog() } }
                 }
-                if days.isEmpty, model.doneLogFailure == nil {
+                if lines.isEmpty, model.doneLogFailure == nil {
                     let query = model.doneSearch.trimmingCharacters(in: .whitespacesAndNewlines)
                     AtticEmptyLine(text: query.isEmpty
                         ? String(localized: "Finished tasks collect here.")
@@ -128,6 +140,83 @@ struct TasksDonePage<Cell: View, Mask: View>: View {
         .onAppear { registerList(proxy) }
         }
     }
+}
+
+/// A line of the Done log: a day's heading or a task's row.
+struct TasksDoneLine: Identifiable {
+    enum Content {
+        case heading(String)
+        case row(TasksListRow)
+    }
+
+    let id: TasksDoneLineID
+    let content: Content
+}
+
+/// A Done line's identity in the list: the slot (the view) that draws it.
+struct TasksDoneLineID: Hashable {
+    let heading: Bool
+    let slot: Int
+}
+
+/// Which view draws each Done line. A task keeps its row's view, and a day
+/// its heading's, while they stay in the list, as with identity by task.
+/// When the query changes and the rows hold nothing of their own (no
+/// keyboard focus, selection, editor, pop-over, details, drag, pointer or
+/// VoiceOver on them; the page decides), the new query's rows come up in
+/// the views that drew the last query's rows, in order. Building a
+/// screenful of rows cold, and letting the old ones go, was most of the
+/// frame the first results arrived in (PR prep: 86–116 ms on CI).
+@MainActor
+final class TasksDoneSlots {
+    private var query: String?
+    private var rows: [UUID: Int] = [:]
+    private var headings: [Date: Int] = [:]
+    private var rowOrder: [Int] = []
+    private var headingOrder: [Int] = []
+    private var next = 0
+
+    func lines(for days: [TasksDoneDay], query: String, interchangeable: () -> Bool) -> [TasksDoneLine] {
+        let positional = self.query != nil && self.query != query && interchangeable()
+        self.query = query
+        var rows: [UUID: Int] = [:]
+        var headings: [Date: Int] = [:]
+        var rowOrder: [Int] = []
+        var headingOrder: [Int] = []
+        var lines: [TasksDoneLine] = []
+        func fresh() -> Int {
+            next += 1
+            return next
+        }
+        for day in days {
+            var heading = positional ? self.headingOrder[safe: headingOrder.count] : self.headings[day.id]
+            if heading == nil || headingOrder.contains(heading!) { heading = fresh() }
+            headings[day.id] = heading
+            headingOrder.append(heading!)
+            lines.append(TasksDoneLine(id: TasksDoneLineID(heading: true, slot: heading!), content: .heading(day.title)))
+            for row in day.rows {
+                var slot = positional ? self.rowOrder[safe: rowOrder.count] : self.rows[row.id]
+                if slot == nil || rows[row.id] != nil { slot = fresh() }
+                rows[row.id] = slot
+                rowOrder.append(slot!)
+                lines.append(TasksDoneLine(id: TasksDoneLineID(heading: false, slot: slot!), content: .row(row)))
+            }
+        }
+        self.rows = rows
+        self.headings = headings
+        self.rowOrder = rowOrder
+        self.headingOrder = headingOrder
+        return lines
+    }
+
+    /// The line that draws `id`'s row, to scroll to; nil when not listed.
+    func line(for id: UUID) -> TasksDoneLineID? {
+        rows[id].map { TasksDoneLineID(heading: false, slot: $0) }
+    }
+}
+
+private extension Array {
+    subscript(safe index: Int) -> Element? { indices.contains(index) ? self[index] : nil }
 }
 
 /// The store's revision, watched by its own small view so that a Done page
