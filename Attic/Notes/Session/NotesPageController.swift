@@ -1298,6 +1298,7 @@ final class NotesPageController: ObservableObject {
     private func didSave(_ session: NoteSession, staged: [StagedNoteAttachment], retainingNewerEdits: Bool = false) {
         captureViewState(session)
         session.state = retainingNewerEdits ? .dirty : .clean
+        if retainingNewerEdits { scheduleSave(session) }
         if !retainingNewerEdits {
             session.durabilityTask?.cancel()
             session.durabilityTask = nil

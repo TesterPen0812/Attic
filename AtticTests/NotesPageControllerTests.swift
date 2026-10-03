@@ -219,6 +219,43 @@ final class NotesPageControllerTests: XCTestCase {
         XCTAssertEqual(reopened.active?.engine.document(), checkpoint)
     }
 
+    func testDeadlineRetainingNewerEditsReschedulesTheCoalescedSave() async throws {
+        let preparer = ControlledDeadlinePreparer()
+        let controller = NotesPageController(store: store, journal: NoteDraftJournal(directory: directory),
+            prepareDocument: { document in await preparer.prepare(document) })
+        await controller.startAndWait()
+        let session = try XCTUnwrap(controller.active)
+        type("First", into: session)
+        let deadline = Task { await controller.runDurabilityDeadline(session) }
+        try await waitForPreparations(preparer, count: 1)
+        type(" second", into: session)
+        // Both prepares captured the old base revision. Complete the deadline
+        // first: it must schedule a replacement for the stale coalesced save.
+        try await waitForPreparations(preparer, count: 2)
+        await preparer.release(0)
+        await deadline.value
+        XCTAssertEqual(store.notes.first?.title, "First")
+        XCTAssertTrue(NoteSessionPolicy.hasPendingWork(session.state))
+        await preparer.release(1)
+        // Await the scheduled 300 ms save, without firing another deadline.
+        try await waitForPreparations(preparer, count: 3)
+        for _ in 0..<200 {
+            if !NoteSessionPolicy.hasPendingWork(session.state) { break }
+            try await Task.sleep(for: .milliseconds(5))
+        }
+        await controller.waitForRecoveryWork()
+        XCTAssertEqual(store.notes.first?.title, "First second")
+        XCTAssertFalse(NoteSessionPolicy.hasPendingWork(session.state))
+    }
+
+    private func waitForPreparations(_ preparer: ControlledDeadlinePreparer, count: Int) async throws {
+        for _ in 0..<200 {
+            if await preparer.started >= count { return }
+            try await Task.sleep(for: .milliseconds(5))
+        }
+        XCTFail("Expected document preparation did not start")
+    }
+
     func testDeadlineCommitsItsPreparedSnapshotAndLeavesNewerTextAndTagsDirty() async throws {
         let controller = NotesPageController(store: store, journal: NoteDraftJournal(directory: directory),
             saveDelay: .seconds(60), prepareDocument: { document in
@@ -2863,4 +2900,18 @@ private final class CountingDeadlineJournal: NoteDraftJournaling {
     }
     func recoveryEntries() throws -> [NoteDraftRecoveryEntry] { try base.recoveryEntries() }
     func readRecoveryEntries() async throws -> [NoteDraftRecoveryEntry] { try await base.readRecoveryEntries() }
+}
+
+private actor ControlledDeadlinePreparer {
+    private(set) var started = 0
+    private var pending: [Int: CheckedContinuation<Void, Never>] = [:]
+    func prepare(_ document: NoteDocument) async -> PreparedNoteDocument? {
+        let index = started
+        started += 1
+        if index < 2 {
+            await withCheckedContinuation { pending[index] = $0 }
+        }
+        return try? PreparedNoteDocument(document)
+    }
+    func release(_ index: Int) { pending.removeValue(forKey: index)?.resume() }
 }
