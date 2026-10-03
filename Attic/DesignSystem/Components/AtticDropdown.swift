@@ -138,6 +138,37 @@ extension View {
     }
 }
 
+extension View {
+    /// A dropdown's rows as one keyboard stop, as a native menu's or
+    /// list's are: with Full Keyboard Access, Tab (and Shift-Tab) reach the
+    /// list, never each row, and arriving puts the list's one highlight on
+    /// its first row when it has none. The list's keys (↑ ↓, Return, and
+    /// Space while the list has the keyboard) move and press that
+    /// highlight; the pill is the keyboard's place, so the list draws no
+    /// ring of its own. Like a button, the list is a stop only under Full
+    /// Keyboard Access, and a click never moves the keyboard to it (the
+    /// field keeps typing).
+    func atticDropdownList(focus: FocusState<Bool>.Binding, highlighted: Binding<Int?>, count: Int) -> some View {
+        modifier(AtticDropdownListFocus(focus: focus, highlighted: highlighted, count: count))
+    }
+}
+
+private struct AtticDropdownListFocus: ViewModifier {
+    var focus: FocusState<Bool>.Binding
+    @Binding var highlighted: Int?
+    let count: Int
+
+    func body(content: Content) -> some View {
+        content
+            .focusable(count > 0, interactions: .activate)
+            .focused(focus)
+            .focusEffectDisabled()
+            .onChange(of: focus.wrappedValue) { _, now in
+                if now, highlighted == nil, count > 0 { highlighted = 0 }
+            }
+    }
+}
+
 /// A quiet gap between a card's groups (space, never a line).
 struct AtticDropdownGap: View {
     var height: CGFloat = AtticDropdownMetrics.groupGap
@@ -236,8 +267,12 @@ struct AtticDropdownRow: View {
             .contentShape(Rectangle())
         }
         .buttonStyle(AtticUndimmedButtonStyle())
+        // Never its own Tab stop: a list's rows are one keyboard stop, as a
+        // native menu's are (`atticDropdownList`), and the one highlight
+        // shows where the keyboard is. Under Full Keyboard Access a row
+        // took Tab as a button but its Space reached nothing.
+        .focusable(false)
         .focusEffectDisabled()
-        .atticOwnFocusRing(.rounded(radius: m.highlightRadius, height: m.rowHeight))
         // The whole row answers the pointer (no dead gap between rows). A
         // row sliding under a resting pointer as the keyboard scrolls the
         // list is not the pointer moving: the keyboard keeps its highlight.

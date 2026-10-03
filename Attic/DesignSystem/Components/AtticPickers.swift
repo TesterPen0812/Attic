@@ -320,6 +320,10 @@ struct AtticTagPicker: View {
     /// The rows the list keeps room for (all the tags there are, as it
     /// opened); nil: the rows it shows now.
     var listRows: Int? = nil
+    /// The rows as one keyboard stop (`atticDropdownList`): Tab from the
+    /// field reaches them. Nil: the rows take no keyboard.
+    var listFocus: FocusState<Bool>.Binding? = nil
+    var onListHighlight: Binding<Int?>? = nil
 
     /// One row at least (No tags yet, or New tag), seven at most
     /// (`tagListMaxHeight`).
@@ -344,12 +348,15 @@ struct AtticTagPicker: View {
             AtticDropdownField(text: $query, placeholder: String(localized: "Find or add a tag"),
                                systemName: "magnifyingglass", focus: fieldFocused)
                 .padding(.bottom, m.fieldGap)
-            if shown <= room && listHeight == normalHeight {
-                rows
-                    .frame(height: normalHeight, alignment: .top)
-            } else {
-                AtticDropdownViewport(height: listHeight) { rows }
+            Group {
+                if shown <= room && listHeight == normalHeight {
+                    rows
+                        .frame(height: normalHeight, alignment: .top)
+                } else {
+                    AtticDropdownViewport(height: listHeight) { rows }
+                }
             }
+            .modifier(AtticOptionalDropdownList(focus: listFocus, highlighted: onListHighlight, count: shown))
         }
         // In a card cut short the list keeps the field and shortens; the
         // card still measures its natural height: the list's full room.
@@ -412,6 +419,9 @@ struct AtticTaskPicker: View {
     let onChoose: (UUID) -> Void
     var fieldFocused: FocusState<Bool>.Binding
     var onHover: ((_ index: Int, _ inside: Bool) -> Void)? = nil
+    /// The rows as one keyboard stop (`atticDropdownList`).
+    var listFocus: FocusState<Bool>.Binding? = nil
+    var onListHighlight: Binding<Int?>? = nil
 
     var body: some View {
         let m = AtticDropdownMetrics.self
@@ -436,6 +446,7 @@ struct AtticTaskPicker: View {
                         }
                     }
                 }
+                .modifier(AtticOptionalDropdownList(focus: listFocus, highlighted: onListHighlight, count: choices.count))
             }
         }
         .accessibilityElement(children: .contain)
@@ -444,6 +455,21 @@ struct AtticTaskPicker: View {
 
     private func hover(_ index: Int) -> ((Bool) -> Void)? {
         onHover.map { report in { inside in report(index, inside) } }
+    }
+}
+
+/// `atticDropdownList` when the picker's owner gives it a focus.
+private struct AtticOptionalDropdownList: ViewModifier {
+    var focus: FocusState<Bool>.Binding?
+    var highlighted: Binding<Int?>?
+    let count: Int
+
+    func body(content: Content) -> some View {
+        if let focus, let highlighted {
+            content.atticDropdownList(focus: focus, highlighted: highlighted, count: count)
+        } else {
+            content
+        }
     }
 }
 
