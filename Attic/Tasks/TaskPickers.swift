@@ -208,7 +208,7 @@ struct TaskMovePickerView: View {
                 if next != highlighted { highlighted = next }
             }
         )
-        .onAppear { fieldFocused = true }
+        .atticDropdownFocus($fieldFocused)
         // Typing highlights the first match, so Return chooses it.
         .onChange(of: query) { _, now in highlighted = now.isEmpty || Self.filter(choices, query: now).isEmpty ? nil : 0 }
         .onKeyPress(phases: .down) { press in
@@ -241,6 +241,8 @@ struct TaskPriorityPickerView: View {
     @State private var highlighted: Int?
     @FocusState private var focused: Bool
 
+    @Environment(\.atticDropdownRegisterKeys) private var registerKeys
+
     private var options: [TaskPriority] { TaskPriority.choices }
 
     var body: some View {
@@ -255,13 +257,22 @@ struct TaskPriorityPickerView: View {
                                  onHover: { inside in
                                      let next = AtticListHighlight.hovered(index, inside: inside, current: highlighted)
                                      if next != highlighted { highlighted = next }
-                                 }) { onPick(priority) }
+                                 }, position: index + 1, itemCount: options.count) { onPick(priority) }
             }
         }
         .focusable()
         .focused($focused)
         .focusEffectDisabled()
         .atticDropdownFocus($focused)
+        .onAppear {
+            registerKeys { event in
+                guard event.modifierFlags.intersection([.command, .option, .control, .shift]) == [.command, .option],
+                      let priority = options.first(where: { String($0.shortcut.key.character) == event.charactersIgnoringModifiers }) else { return false }
+                onPick(priority)
+                return true
+            }
+        }
+        .onDisappear { registerKeys(nil) }
         .accessibilityElement(children: .contain)
         .accessibilityLabel(String(localized: "Priority"))
         .onKeyPress(phases: .down) { press in

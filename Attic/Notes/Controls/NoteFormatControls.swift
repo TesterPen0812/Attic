@@ -222,7 +222,13 @@ final class NoteFormatControls: NSObject {
         formatModel.highlightSwatch = AtticColorTokens.resolve(design).tagFill
         barHost.rootView = AnyView(NoteFormatBarView(model: formatModel).atticDesign(design))
         slashHost.rootView = AnyView(NoteSlashListView(model: slashModel).atticDesign(design))
-        cardHost.rootView = AnyView(NoteFormatCardView(model: cardModel).atticDesign(design))
+        cardHost.rootView = AnyView(NoteFormatCardView(model: cardModel)
+            .environment(\.atticDropdownContentHeightChanged, { [weak self] height in
+                guard let self, self.cardModel.card != nil, abs(height - self.cardSize.height) > 0.5 else { return }
+                self.cardSize.height = height
+                self.placeCard()
+            })
+            .atticDesign(design))
         hintHost.rootView = AnyView(NoteSlashHintView().atticDesign(design))
     }
 
@@ -372,20 +378,6 @@ final class NoteFormatControls: NSObject {
         let top = visible.minY + max(0, insets.top - AtticNoteMetrics.titleTopGap)
         let bottom = overBottomRow ? visible.maxY - 8 : visible.maxY - insets.bottom
         return NSRect(x: visible.minX, y: top, width: visible.width, height: max(0, bottom - top))
-    }
-
-    /// Below the anchor line, else above it; with room on neither side, the
-    /// roomier one, and the height it can have there.
-    private func floatingPlacement(anchorTop: CGFloat, anchorBottom: CGFloat, height: CGFloat)
-        -> (y: CGFloat, height: CGFloat) {
-        let area = usableRect(overBottomRow: true)
-        let gap = AtticNoteFormatMetrics.cardGap
-        let roomBelow = area.maxY - (anchorBottom + gap)
-        let roomAbove = (anchorTop - gap) - area.minY
-        if height <= roomBelow { return (anchorBottom + gap, height) }
-        if height <= roomAbove { return (anchorTop - gap - height, height) }
-        if roomBelow >= roomAbove { return (anchorBottom + gap, max(0, roomBelow)) }
-        return (area.minY, max(0, roomAbove))
     }
 
     /// The panel's overlay layer (above the page, moving with the panel,
@@ -597,28 +589,21 @@ final class NoteFormatControls: NSObject {
     private func placeSlashList() {
         guard let session = engine.slashSession,
               let anchor = engine.rect(for: NSRange(location: session.range.location, length: 1)) else { return }
-        let m = AtticNoteFormatMetrics.self
         let d = AtticDropdownMetrics.self
         let room = d.shadowRoom
-        let row = d.rowHeight
-        let padding = d.inset * 2
-        let wanted = CGFloat(min(slashModel.items.count, m.slashMaxVisibleRows)) * row + padding
-        let place = floatingPlacement(anchorTop: anchor.minY, anchorBottom: anchor.maxY, height: wanted)
-        let rows = max(3, min(slashModel.items.count, Int((place.height - padding) / row)))
-        if slashModel.maxVisibleRows != rows { slashModel.maxVisibleRows = rows }
-        let height = CGFloat(min(slashModel.items.count, rows)) * row + padding
-        let above = place.y < anchor.minY
-        let y = above ? anchor.minY - m.cardGap - height : place.y
-        // The width rule: as wide as its names, its left edge on the "/".
         let bounds = panelBounds()
         let width = AtticDropdownLayout.width(ideal: AtticDropdownLayout.listWidth(titles: slashModel.items.map(\.title),
                                                                                     match: session.query),
                                               available: bounds.width)
-        let x = max(bounds.minX, min(anchor.minX, bounds.maxX - width))
+        let wanted = CGFloat(slashModel.items.count) * d.rowHeight + d.inset * 2
+        let placed = AtticDropdownLayout.frame(size: CGSize(width: width, height: wanted), anchor: anchor,
+                                               bounds: bounds, prefer: .below)
+        let height: CGFloat? = placed.frame.height < wanted ? placed.frame.height : nil
+        if slashModel.viewportHeight != height { slashModel.viewportHeight = height }
         if slashModel.width != width { slashModel.width = width }
         if slashModel.query != session.query { slashModel.query = session.query }
-        if slashModel.above != above { slashModel.above = above }
-        placeOverlay(slashHost, rect: NSRect(x: x - room, y: y - room, width: width + room * 2, height: height + room * 2))
+        if slashModel.above != (placed.side == .above) { slashModel.above = placed.side == .above }
+        placeOverlay(slashHost, rect: placed.frame.insetBy(dx: -room, dy: -room))
     }
 
     /// The panel less its 12 pt margin, in the text view's coordinates
@@ -635,7 +620,7 @@ final class NoteFormatControls: NSObject {
             }
             view = candidate.superview
         }
-        return textView.visibleRect.insetBy(dx: margin, dy: 0)
+        return textView.visibleRect.insetBy(dx: margin, dy: margin)
     }
 
     // MARK: Cards (date, link)
@@ -646,6 +631,8 @@ final class NoteFormatControls: NSObject {
         cardFromSlash = fromSlash
         cardSelection = selection
         cardAnchor = fromSlash ? engine.pendingSlashDate?.range : NSRange(location: selection.location, length: 0)
+        cardModel.viewportHeight = nil
+        cardModel.viewportWidth = nil
         cardModel.openDate(fromSlash: fromSlash, today: Date())
         presentCard()
     }
@@ -659,6 +646,8 @@ final class NoteFormatControls: NSObject {
         linkTarget = target
         cardSelection = target.selection
         cardAnchor = target.range
+        cardModel.viewportHeight = nil
+        cardModel.viewportWidth = nil
         cardModel.openLink(url: target.url)
         presentCard()
     }
@@ -667,7 +656,7 @@ final class NoteFormatControls: NSObject {
 
     private var cardSize = NSSize.zero
 
-    /// The card's size, measured from its content once as it opens.
+    /// Measure the opening width; the card reports subsequent natural heights.
     private func presentCard() {
         let room = AtticDropdownMetrics.shadowRoom
         let measure = NSHostingView(rootView: NoteFormatCardView(model: cardModel).atticDesign(design))
@@ -683,24 +672,22 @@ final class NoteFormatControls: NSObject {
 
     private func placeCard() {
         guard let textView, let anchorRange = cardAnchor, engine.textStorage.length > 0 else { return }
-        let m = AtticNoteFormatMetrics.self
         let length = engine.textStorage.length
         let start = min(anchorRange.location, length - 1)
         let end = min(max(start, NSMaxRange(anchorRange) - 1), length - 1)
         guard let first = engine.rect(for: NSRange(location: start, length: 1)) ?? caretRect(),
               let last = engine.rect(for: NSRange(location: end, length: 1)) ?? caretRect() else { return }
         let room = AtticDropdownMetrics.shadowRoom
-        let place = floatingPlacement(anchorTop: first.minY, anchorBottom: last.maxY, height: cardSize.height)
-        // A card never shrinks: without room it covers the text rather than the page's edge.
-        let area = usableRect(overBottomRow: true)
-        let y = place.height < cardSize.height ? max(area.minY, area.maxY - cardSize.height) : place.y
-        let above = y < first.minY
-        if cardModel.above != above { cardModel.above = above }
-        // Its left edge on the text's column, moved left only for the panel's margin.
         let bounds = panelBounds()
-        let x = max(bounds.minX, min(first.minX, bounds.maxX - cardSize.width))
-        placeOverlay(cardHost, rect: NSRect(x: x - room, y: y - room, width: cardSize.width + room * 2,
-                                            height: cardSize.height + room * 2))
+        let width = AtticDropdownLayout.width(ideal: cardSize.width, available: bounds.width)
+        if cardModel.viewportWidth != width { cardModel.viewportWidth = width }
+        let anchor = first.union(last)
+        let placed = AtticDropdownLayout.frame(size: CGSize(width: width, height: cardSize.height),
+                                               anchor: anchor, bounds: bounds, prefer: .below)
+        let height: CGFloat? = placed.frame.height < cardSize.height ? placed.frame.height : nil
+        if cardModel.viewportHeight != height { cardModel.viewportHeight = height }
+        if cardModel.above != (placed.side == .above) { cardModel.above = placed.side == .above }
+        placeOverlay(cardHost, rect: placed.frame.insetBy(dx: -room, dy: -room))
     }
 
     /// The field may not exist until SwiftUI's next pass: a few turns, then

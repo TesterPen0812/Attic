@@ -1785,7 +1785,7 @@ struct AtticSubtaskRow: View {
         .onHover { inside in if managed, hovered != inside { hovered = inside } }
         .onChange(of: focused) { _, now in onFocusChange(now) }
         .onDisappear { if focused { onFocusChange(false) } }
-        .atticPopover(isPresented: popover?.isPresented ?? .constant(false), arrowEdge: .bottom) { popover?.content() }
+        .atticDropdown(isPresented: popover?.isPresented ?? .constant(false), label: String(localized: "Move to Task")) { popover?.content() }
         .accessibilityElement(children: renaming == nil ? .combine : .contain)
         .accessibilityLabel(subtask.title)
         .accessibilityValue(subtask.isDone ? String(localized: "done") : String(localized: "to do"))

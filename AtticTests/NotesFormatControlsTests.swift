@@ -353,6 +353,24 @@ final class NotesFormatControlsTests: XCTestCase {
         XCTAssertFalse(controls.slashModel.shown, "Space closes the list")
     }
 
+    func testFullSlashListFlipsAboveALowCaretAndOpensBelowAHighCaret() throws {
+        // Real editor + controls: this catches the old Notes-only placement
+        // path, which truncated rows before trying the full list above.
+        let (lowControls, lowEngine, lowText) = make(NoteDocument(blocks: [.text("Title")] + (0..<14).map { _ in .text("Line") }))
+        lowText.setSelectedRange(NSRange(location: lowEngine.textStorage.length, length: 0))
+        type("\n/", lowText)
+        XCTAssertTrue(lowControls.slashModel.shown)
+        XCTAssertTrue(lowControls.slashModel.above)
+        XCTAssertNil(lowControls.slashModel.viewportHeight, "all nine rows fit above the low caret")
+
+        let (highControls, highEngine, highText) = make(NoteDocument(blocks: [.text("Title"), .text("")]))
+        highText.setSelectedRange(NSRange(location: highEngine.textStorage.length, length: 0))
+        type("/", highText)
+        XCTAssertTrue(highControls.slashModel.shown)
+        XCTAssertFalse(highControls.slashModel.above)
+        XCTAssertNil(highControls.slashModel.viewportHeight, "all nine rows fit below the high caret")
+    }
+
     func testSlashRowsShowTheirTypingShortcuts() {
         XCTAssertEqual(NoteCommandCatalog.slashHint(.checklist), "-[]")
         XCTAssertEqual(NoteCommandCatalog.slashHint(.heading), "#")
@@ -444,6 +462,76 @@ final class NotesFormatControlsTests: XCTestCase {
         controls.cardModel.onRemoveLink?()
         XCTAssertTrue(engine.document().blocks[1].marks.isEmpty)
         XCTAssertEqual(engine.history.undoActionName, "Remove Link")
+    }
+
+    func testLinkValidationGrowthUpdatesBoundsAndBottomActionsAtCompactSize() throws {
+        let attribute = NSAccessibility.Attribute(rawValue: "AXEnhancedUserInterface")
+        let previous = NSApp.accessibilityAttributeValue(attribute)
+        NSApp.accessibilitySetValue(true, forAttribute: attribute)
+        defer { NSApp.accessibilitySetValue(previous, forAttribute: attribute) }
+        let (controls, engine, textView) = make()
+        let window = try XCTUnwrap(textView.window)
+        window.setContentSize(CGSize(width: 320, height: 240))
+        window.contentView?.layoutSubtreeIfNeeded()
+        let target = range("free tier", textView)
+        controls.router.run(.link("https://example.com"), from: .linkPopover, selection: target)
+        textView.setSelectedRange(target)
+        controls.router.run(.mark(.link), from: .shortcut)
+        settle { controls.cardHasKeyboard }
+        let host = try XCTUnwrap(window.contentView?.subviews.compactMap { $0 as? AtticOverlayHostingView }.first { $0.acceptsKeyboard && $0.isInteractive })
+        let before = host.contentRect.size
+        controls.cardModel.linkText = "https://"
+        controls.cardModel.submitLink()
+        settle { host.contentRect.height > before.height }
+        XCTAssertNotNil(controls.cardModel.linkError)
+        XCTAssertGreaterThan(host.contentRect.height, before.height)
+        XCTAssertEqual(host.contentRect.width, before.width, accuracy: 1)
+        let placed = textView.convert(host.contentRect, from: host)
+        XCTAssertGreaterThanOrEqual(placed.minY, textView.visibleRect.minY + 11)
+        XCTAssertLessThanOrEqual(placed.maxY, textView.visibleRect.maxY - 11)
+        func elements(_ root: AnyObject) -> [AnyObject] {
+            let children = (root.accessibilityChildren?() ?? nil) ?? []
+            return [root] + children.flatMap { elements($0 as AnyObject) }
+        }
+        func action(_ identifier: String) throws -> AnyObject {
+            try XCTUnwrap(elements(host).first { ($0.accessibilityIdentifier?() ?? nil) == identifier })
+        }
+        for identifier in ["notes-link-remove", "notes-link-apply"] {
+            let button = try action(identifier)
+            let frame: NSRect = button.accessibilityFrame!()
+            let local = host.convert(window.convertFromScreen(frame), from: nil)
+            let center = CGPoint(x: local.midX, y: local.midY)
+            XCTAssertTrue(host.contentRect.contains(center), "\(identifier) is inside the updated interactive bounds")
+            XCTAssertNotNil(host.hitTest(host.convert(center, to: host.superview)))
+        }
+        // Force the error card to overflow, then bring its bottom actions
+        // into view through the real scroll container.
+        window.setContentSize(CGSize(width: 320, height: 160))
+        window.contentView?.layoutSubtreeIfNeeded()
+        textView.onLayout?()
+        settle { controls.cardModel.viewportHeight != nil }
+        XCTAssertNotNil(controls.cardModel.viewportHeight)
+        func scrolls(_ view: NSView) -> [NSScrollView] {
+            (view as? NSScrollView).map { [$0] } ?? view.subviews.flatMap { scrolls($0) }
+        }
+        settle { !scrolls(host).isEmpty }
+        let scroll = try XCTUnwrap(scrolls(host).first)
+        let document = try XCTUnwrap(scroll.documentView)
+        document.scrollToVisible(CGRect(x: 0, y: document.bounds.maxY - 1, width: 1, height: 1))
+        spin()
+        controls.cardModel.linkText = "example.org"
+        spin()
+        for identifier in ["notes-link-remove", "notes-link-apply"] {
+            let button = try action(identifier)
+            let frame: NSRect = button.accessibilityFrame!()
+            let local = host.convert(window.convertFromScreen(frame), from: nil)
+            let center = CGPoint(x: local.midX, y: local.midY)
+            XCTAssertTrue(host.contentRect.contains(center), "\(identifier) is reachable after scrolling")
+            XCTAssertNotNil(host.hitTest(host.convert(center, to: host.superview)))
+        }
+        XCTAssertTrue(try action("notes-link-apply").accessibilityPerformPress?() == true)
+        XCTAssertFalse(controls.isCardOpen)
+        XCTAssertEqual(engine.document().blocks[1].marks.first?.url, "https://example.org")
     }
 
     func testEditLinkAtACaretUpdatesTheWholeLinkAndAStaleTargetCancelsQuietly() throws {

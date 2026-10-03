@@ -446,6 +446,36 @@ final class TasksPageUITests: XCTestCase {
 
     private func menuItem(_ title: String) -> XCUIElement { menuItems(title).firstMatch }
 
+    /// E1 exposes AXMenuItem for VoiceOver, but is a custom overlay rather
+    /// than NSMenu. Its pointer path must not ask XCUITest to enter native
+    /// menu tracking and wait for a menu-open notification.
+    private func clickDropdownRow(_ item: XCUIElement) {
+        let viewport = app.scrollViews.containing(NSPredicate(format: "label == %@", item.label)).firstMatch
+        if viewport.exists {
+            var wheelSign: CGFloat = 1
+            for _ in 0..<6 {
+                let target = item.frame
+                let visible = viewport.frame
+                if visible.contains(CGPoint(x: target.midX, y: target.midY)) { break }
+                let delta: CGFloat = target.midY > visible.midY ? 160 : -160
+                viewport.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5))
+                    .scroll(byDeltaX: 0, deltaY: delta * wheelSign)
+                RunLoop.current.run(until: Date().addingTimeInterval(0.15))
+                let moved = item.frame.midY
+                // macOS/Xcode scroll direction varies; observe travel rather
+                // than assuming the runner's natural-scroll preference.
+                if abs(moved - target.midY) < 0.5 || abs(moved - visible.midY) > abs(target.midY - visible.midY) {
+                    wheelSign *= -1
+                }
+            }
+            XCTAssertTrue(viewport.frame.contains(CGPoint(x: item.frame.midX, y: item.frame.midY)),
+                          "the dropdown action is inside its scrolling viewport")
+        }
+        XCTAssertGreaterThan(item.frame.width, 0, "the dropdown row has a rendered hit frame")
+        XCTAssertGreaterThan(item.frame.height, 0)
+        item.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).click()
+    }
+
     /// The strip over the add bar (owner fix 5 A2; round 6, item 18): it
     /// shows with a draft; each button shows what the task will get, picked
     /// or typed, on its button (never in the text), with a clear ×; the Tag
@@ -460,27 +490,27 @@ final class TasksPageUITests: XCTestCase {
         addBar.typeText("Water the ferns")
         XCTAssertTrue(date.waitForExistence(timeout: 3), "the strip shows with the first keystroke")
         date.click()
-        let tomorrow = app.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", "Tomorrow")).firstMatch
+        let tomorrow = app.menuItems.matching(NSPredicate(format: "label BEGINSWITH %@", "Tomorrow")).firstMatch
         XCTAssertTrue(tomorrow.waitForExistence(timeout: 3), "the date picker opens")
-        tomorrow.click()
+        clickDropdownRow(tomorrow)
         waitFor((date.value as? String) == "Tomorrow", "the Date button shows the pick: \(String(describing: date.value))")
         XCTAssertEqual(addBar.value as? String, "Water the ferns", "picking never inserts text")
         XCTAssertTrue(window.buttons["composer-date-clear"].exists, "a set button has its ×")
 
         tag.click()
-        let launch = app.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", "#launch")).firstMatch
+        let launch = app.menuItems.matching(NSPredicate(format: "label BEGINSWITH %@", "#launch")).firstMatch
         XCTAssertTrue(launch.waitForExistence(timeout: 3), "the Tag button opens the tag list (it types no #)")
-        launch.click()
+        clickDropdownRow(launch)
         waitFor((tag.value as? String) == "launch", "the Tag button shows the tag: \(String(describing: tag.value))")
         app.typeKey(.escape, modifierFlags: [])
         XCTAssertEqual(addBar.value as? String, "Water the ferns")
 
         priority.click()
-        let high = app.buttons.matching(NSPredicate(format: "label CONTAINS %@", "High")).firstMatch
+        let high = app.menuItems.matching(NSPredicate(format: "label CONTAINS %@", "High")).firstMatch
         XCTAssertTrue(high.waitForExistence(timeout: 3), "Priority offers all four")
-        XCTAssertTrue(app.buttons.matching(NSPredicate(format: "label CONTAINS %@", "Low")).firstMatch.exists,
+        XCTAssertTrue(app.menuItems.matching(NSPredicate(format: "label CONTAINS %@", "Low")).firstMatch.exists,
                       "Low is offered (follow-up part 2)")
-        high.click()
+        clickDropdownRow(high)
         waitFor((priority.value as? String) == "High", "the Priority button shows High")
 
         // Each × takes its button's value, over the bottom stack's band
@@ -492,12 +522,12 @@ final class TasksPageUITests: XCTestCase {
         // And back, for the task.
         tag.click()
         XCTAssertTrue(launch.waitForExistence(timeout: 3))
-        launch.click()
+        clickDropdownRow(launch)
         waitFor((tag.value as? String) == "launch", "the tag again")
         app.typeKey(.escape, modifierFlags: [])
         priority.click()
         XCTAssertTrue(high.waitForExistence(timeout: 3))
-        high.click()
+        clickDropdownRow(high)
         waitFor((priority.value as? String) == "High", "High again")
 
         // A typed piece shows on its button too; the × clears it, words and all.
@@ -531,9 +561,9 @@ final class TasksPageUITests: XCTestCase {
         let priority = window.buttons["composer-priority"]
         XCTAssertTrue(priority.waitForExistence(timeout: 3))
         priority.click()
-        let high = app.buttons.matching(NSPredicate(format: "label CONTAINS %@", "High")).firstMatch
+        let high = app.menuItems.matching(NSPredicate(format: "label CONTAINS %@", "High")).firstMatch
         XCTAssertTrue(high.waitForExistence(timeout: 3))
-        high.click()
+        clickDropdownRow(high)
         waitFor((priority.value as? String) == "High", "picked High")
         addBar.click()
         addBar.typeKey(.rightArrow, modifierFlags: .command)
@@ -812,9 +842,9 @@ final class TasksPageUITests: XCTestCase {
         // The date sits at the row's right end, on the title line.
         let row = row("Book dentist")
         row.coordinate(withNormalizedOffset: .zero).withOffset(CGVector(dx: row.frame.width - 50, dy: 17)).click()
-        let remove = app.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", "Remove date")).firstMatch
+        let remove = app.menuItems.matching(NSPredicate(format: "label BEGINSWITH %@", "Remove date")).firstMatch
         XCTAssertTrue(remove.waitForExistence(timeout: 3), "the picker offers Remove date")
-        remove.click()
+        clickDropdownRow(remove)
         waitFor(!label("Book dentist").contains("due"), "the date is removed")
         let toast = window.descendants(matching: .any).matching(NSPredicate(format: "label == %@", "Date removed")).firstMatch
         XCTAssertTrue(toast.waitForExistence(timeout: 3), "with an Undo toast")
@@ -860,6 +890,32 @@ final class TasksPageUITests: XCTestCase {
         XCTAssertTrue(row("Call the plumber").exists)
     }
 
+    func testTagFieldEscReturnsFocusAndOutsideClickDismisses() throws {
+        XCTAssertTrue(addBar.waitForExistence(timeout: 5))
+        addBar.click()
+        addBar.typeText("Dropdown focus")
+        let tags = window.buttons["composer-tag"]
+        XCTAssertTrue(tags.waitForExistence(timeout: 3))
+        tags.click()
+        let field = app.textFields.matching(NSPredicate(format: "label == %@", "Find or add a tag")).firstMatch
+        XCTAssertTrue(field.waitForExistence(timeout: 3))
+        field.typeText("ho")
+        XCTAssertEqual(field.value as? String, "ho", "the tag field is actually editing")
+        app.typeKey(.escape, modifierFlags: [])
+        waitFor(!field.exists, "Esc dismisses the tag picker")
+        app.typeText(" continued")
+        waitFor((addBar.value as? String) == "Dropdown focus continued", "Esc returned typing to the draft")
+
+        tags.click()
+        XCTAssertTrue(field.waitForExistence(timeout: 3))
+        field.typeText("ho")
+        XCTAssertEqual(field.value as? String, "ho")
+        tab("now").click()
+        waitFor(!field.exists, "a click outside dismisses the editing picker")
+        XCTAssertEqual(addBar.value as? String, "Dropdown focus continued", "dismissal preserves the draft")
+        XCTAssertTrue(row("Book dentist").exists)
+    }
+
     /// The row's keys a person might press while the keyboard is somewhere
     /// else: Backspace, forward delete, Space, ⇧Space and ⌘B.
     private func pressRowKeys(in element: XCUIElement? = nil) {
@@ -877,7 +933,7 @@ final class TasksPageUITests: XCTestCase {
     func testKeysPressedInTheDatePickerNeverReachTheRow() throws {
         let row = row("Book dentist")
         row.coordinate(withNormalizedOffset: .zero).withOffset(CGVector(dx: row.frame.width - 50, dy: 17)).click()
-        let remove = app.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", "Remove date")).firstMatch
+        let remove = app.menuItems.matching(NSPredicate(format: "label BEGINSWITH %@", "Remove date")).firstMatch
         XCTAssertTrue(remove.waitForExistence(timeout: 3), "the date picker opens")
         pressRowKeys()
         XCTAssertTrue(self.row("Book dentist").exists, "the task is still there")
@@ -895,7 +951,7 @@ final class TasksPageUITests: XCTestCase {
         XCTAssertTrue(addBar.waitForExistence(timeout: 5))
         addBar.click()
         addBar.typeText("Buy #la")
-        let suggestion = app.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", "#launch")).firstMatch
+        let suggestion = app.menuItems.matching(NSPredicate(format: "label BEGINSWITH %@", "#launch")).firstMatch
         XCTAssertTrue(suggestion.waitForExistence(timeout: 3), "the suggestions show")
         // The first Backspace may turn the recognised "#la" back into text
         // (a chip's Backspace deletes nothing); either way the keys stay in

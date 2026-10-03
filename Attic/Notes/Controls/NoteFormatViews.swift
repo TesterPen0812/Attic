@@ -243,22 +243,9 @@ struct NoteSlashListView: View {
         ZStack(alignment: model.above ? .bottomLeading : .topLeading) {
             if model.shown, !model.items.isEmpty {
                 AtticDropdownCard(width: model.width) {
-                    if model.items.count > model.maxVisibleRows {
-                        ScrollViewReader { proxy in
-                            ScrollView(.vertical) {
-                                VStack(alignment: .leading, spacing: 0) { rows }
-                            }
-                            .scrollIndicators(.never)
-                            .frame(height: CGFloat(model.maxVisibleRows) * AtticDropdownMetrics.rowHeight)
-                            .onChange(of: model.highlighted) { _, index in
-                                guard !AtticListHighlight.isPointerMove(NSApp.currentEvent) else { return }
-                                proxy.scrollTo(index, anchor: nil)
-                            }
-                        }
-                    } else {
-                        rows
-                    }
+                    rows
                 }
+                .environment(\.atticDropdownHeight, model.viewportHeight)
                 .transition(preset.transition(reduceMotion: design.reduceMotion, edge: model.above ? .bottom : .top,
                                               anchor: model.above ? .bottomLeading : .topLeading))
                 .accessibilityElement(children: .contain)
@@ -281,7 +268,7 @@ extension NoteSlashListView {
                              onHover: { inside in
                                  // The list always keeps one highlight (Return takes it).
                                  if inside, model.highlighted != index { model.highlighted = index }
-                             }) {
+                             }, position: index + 1, itemCount: model.items.count) {
                 model.onPick?(item.kind)
             }
             .id(index)
@@ -311,7 +298,7 @@ struct NoteDateCardView: View {
             if let candidate {
                 AtticDropdownRow(title: candidate.formatted(.dateTime.weekday(.wide)),
                                  detail: candidate.formatted(.dateTime.day().month(.abbreviated)),
-                                 isHighlighted: true) { model.onCommitDate?(candidate) }
+                                 isHighlighted: true, position: 1, itemCount: 1) { model.onCommitDate?(candidate) }
                     .accessibilityIdentifier("notes-date-suggestion")
             } else {
                 AtticText(verbatim: String(localized: "No date matches"), style: .dropdownRow, ink: .helper)
@@ -383,13 +370,14 @@ struct NoteFormatCardView: View {
         ZStack(alignment: model.above ? .bottomLeading : .topLeading) {
             switch model.card {
             case .date:
-                NoteDateCardView(model: model).transition(transition)
+                NoteDateCardView(model: model).environment(\.atticDropdownHeight, model.viewportHeight).transition(transition)
             case let .link(hasLink):
-                NoteLinkCardView(model: model, hasLink: hasLink).transition(transition)
+                NoteLinkCardView(model: model, hasLink: hasLink).environment(\.atticDropdownHeight, model.viewportHeight).transition(transition)
             case nil:
                 EmptyView()
             }
         }
+        .environment(\.atticDropdownWidth, model.viewportWidth)
         .animation(preset.animation(reduceMotion: design.reduceMotion, showing: model.card != nil), value: model.card)
         .padding(AtticDropdownMetrics.shadowRoom)
         .fixedSize()
