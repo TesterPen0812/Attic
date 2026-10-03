@@ -1374,6 +1374,9 @@ final class NoteEditorEngine: NSObject, NSTextViewDelegate, NSTextStorageDelegat
     func textStorage(_ textStorage: NSTextStorage, didProcessEditing editedMask: NSTextStorageEditActions,
                      range editedRange: NSRange, changeInLength delta: Int) {
         guard editedMask.contains(.editedCharacters) else { return }
+        // An edit that empties the note or fills an empty one (an Undo, a
+        // paste, an agent's change included): "Title" comes or goes.
+        if textStorage.length == 0 || textStorage.length == delta { textView?.updatePlaceholder() }
         let emptyBefore = pendingParagraphStyle.flatMap { pending in
             pending.location == textStorage.length - delta ? block(for: pending.state) : nil
         }

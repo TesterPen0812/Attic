@@ -85,13 +85,55 @@ final class NoteEditorTextView: NSTextView, NSAccessibilityCustomRotorItemSearch
     override func layout() {
         super.layout()
         PerformanceSignposts.noteDidLayout()
+        updatePlaceholder()
         onLayout?()
+    }
+
+    // MARK: The title's placeholder
+
+    /// "Title" is drawn by this view itself, on its own layer. TextKit 2
+    /// draws the text in separate fragment views and the caret in its own
+    /// view, so an edit never asks this view to draw again (CU P2-01: the
+    /// first title typed or pasted into a new note was drawn over the stale
+    /// "Title" until the editor was rebuilt). Whenever the placeholder comes
+    /// or goes, its whole line is redrawn here.
+    private var drawsPlaceholder = false
+
+    private var showsPlaceholder: Bool {
+        guard let engine else { return false }
+        return engine.textStorage.length == 0 && !hasMarkedText()
+    }
+
+    /// The placeholder's line, the column's full width.
+    var placeholderRect: NSRect {
+        let height = max(NoteTextStyle.titleLineHeight, ceil((engine?.style.titleFont).map { $0.ascender - $0.descender } ?? 0))
+        return NSRect(x: 0, y: textContainerOrigin.y, width: bounds.width, height: height + 4)
+    }
+
+    /// Redraws the placeholder's line when it comes or goes. Cheap: one
+    /// comparison per edit, layout pass and composition change.
+    func updatePlaceholder() {
+        let shows = showsPlaceholder
+        guard shows != drawsPlaceholder else { return }
+        drawsPlaceholder = shows
+        setNeedsDisplay(placeholderRect)
+    }
+
+    override func didChangeText() {
+        super.didChangeText()
+        updatePlaceholder()
+    }
+
+    override func unmarkText() {
+        super.unmarkText()
+        updatePlaceholder()
     }
 
     /// "Title" on a new note's empty first line.
     override func draw(_ dirtyRect: NSRect) {
         super.draw(dirtyRect)
-        guard let engine, engine.textStorage.length == 0, !hasMarkedText() else { return }
+        drawsPlaceholder = showsPlaceholder
+        guard drawsPlaceholder, let engine else { return }
         let origin = textContainerOrigin
         let placeholder = NSAttributedString(string: String(localized: "Title"), attributes: [
             .font: engine.style.titleFont,
@@ -139,6 +181,7 @@ final class NoteEditorTextView: NSTextView, NSAccessibilityCustomRotorItemSearch
             engine?.history.beginComposition(replacing: replaced)
         }
         asUserEdit { super.setMarkedText(string, selectedRange: selectedRange, replacementRange: replacementRange) }
+        updatePlaceholder()
     }
 
     /// A list the keys reach first (the title's tag suggestions): ↑ ↓,
