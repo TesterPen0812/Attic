@@ -155,6 +155,104 @@ final class TasksRound6Tests: XCTestCase {
         let bottom = 100 + fraction * (visible - 34) + 34
         XCTAssertEqual(bottom, 520 - clearance, accuracy: 0.5)
     }
+    // MARK: - CU recheck 4b (P2s)
+
+    private func post(_ hosted: Hosted, key characters: String, keyCode: UInt16, modifiers: NSEvent.ModifierFlags = []) throws {
+        for type in [NSEvent.EventType.keyDown, .keyUp] {
+            NSApp.postEvent(try XCTUnwrap(NSEvent.keyEvent(
+                with: type, location: .zero, modifierFlags: modifiers, timestamp: ProcessInfo.processInfo.systemUptime,
+                windowNumber: hosted.window.windowNumber, context: nil, characters: characters,
+                charactersIgnoringModifiers: characters, isARepeat: false, keyCode: keyCode)), atStart: false)
+        }
+        Hosted.pumpEvents()
+        hosted.spin(0.3)
+    }
+
+    private func click(_ hosted: Hosted, on view: NSView) throws {
+        let point = view.convert(CGPoint(x: view.bounds.midX, y: view.bounds.midY), to: nil)
+        for type in [NSEvent.EventType.leftMouseDown, .leftMouseUp] {
+            NSApp.postEvent(try XCTUnwrap(NSEvent.mouseEvent(
+                with: type, location: point, modifierFlags: [], timestamp: ProcessInfo.processInfo.systemUptime,
+                windowNumber: hosted.window.windowNumber, context: nil, eventNumber: 0, clickCount: 1, pressure: 1)), atStart: false)
+        }
+        Hosted.pumpEvents()
+        hosted.spin(0.5)
+    }
+
+    /// Done search, ↓ into the results, a click back on the query's text,
+    /// ↓ again: the field takes the keyboard back, and ↓ reaches the
+    /// results again (CU recheck 4b, P2: the click left the keyboard with
+    /// the panel and ↓ did nothing).
+    func testAClickBackOnTheQueryTextLetsDownReachTheResultsAgain() throws {
+        let hosted = try Hosted(height: 520)
+        defer { hosted.close() }
+        hosted.window.makeKey()
+        hosted.go(to: .done)
+        hosted.model.beginSearch()
+        hosted.spin(0.8)
+        let content = try XCTUnwrap(hosted.window.contentView)
+        let field = try XCTUnwrap(AtticTabsSearchField.searchField(in: content, placeholder: "Search done tasks"))
+        func fieldHasKeyboard() -> Bool {
+            ((hosted.window.firstResponder as? NSTextView)?.delegate as? NSTextField) === field
+        }
+        XCTAssertTrue(fieldHasKeyboard(), "the search has the keyboard")
+        hosted.model.typeDoneSearch("the")
+        hosted.model.flushDoneSearchInput()
+        hosted.spin(0.3)
+        let first = try XCTUnwrap(hosted.model.doneDays().first?.rows.first?.id, "results")
+        XCTAssertTrue(fieldHasKeyboard(), "the search still has the keyboard")
+        try post(hosted, key: String(UnicodeScalar(NSDownArrowFunctionKey)!), keyCode: 125)
+        XCTAssertEqual(hosted.model.keyboardFocus?.id, first, "↓ reaches the first result")
+        XCTAssertFalse(fieldHasKeyboard())
+
+        try click(hosted, on: field)
+        XCTAssertTrue(fieldHasKeyboard(), "a click on the query's text gives the field the keyboard: \(String(describing: hosted.window.firstResponder))")
+        XCTAssertNil(hosted.model.keyboardFocus, "no row keeps the keyboard")
+        try post(hosted, key: String(UnicodeScalar(NSDownArrowFunctionKey)!), keyCode: 125)
+        XCTAssertEqual(hosted.model.keyboardFocus?.id, first, "↓ reaches the first result again")
+        XCTAssertEqual(hosted.model.selection, [first])
+    }
+
+    /// The composer has the keyboard and a Later row is selected (CU
+    /// recheck 4b, P2): ⌘Return with no draft opens the row's files; with
+    /// a draft it stays the composer's (it adds the task and opens it).
+    func testCommandReturnInTheComposerOpensTheSelectedRowsFilesOnlyWithoutADraft() throws {
+        XCTAssertTrue(TasksPage.typingFieldPasses(AtticTaskShortcut.actions, composerDraft: "a draft"), "⇧⌘I: no field acts on it")
+        XCTAssertTrue(TasksPage.typingFieldPasses(AtticTaskShortcut.openPage, composerDraft: "  "))
+        XCTAssertTrue(TasksPage.typingFieldPasses(AtticTaskShortcut.openPage, composerDraft: nil), "Find has no ⌘Return")
+        XCTAssertFalse(TasksPage.typingFieldPasses(AtticTaskShortcut.openPage, composerDraft: "Call"), "a draft's ⌘Return adds it")
+        for kept in [AtticTaskShortcut.copy, AtticTaskShortcut.duplicate] + AtticTaskShortcut.priorities {
+            XCTAssertFalse(TasksPage.typingFieldPasses(kept, composerDraft: nil), "the field keeps \(kept)")
+        }
+
+        let hosted = try Hosted(height: 520)
+        defer { hosted.close() }
+        hosted.window.makeKey()
+        var opened: [UUID] = []
+        hosted.model.services.openPage = { opened.append($0) }
+        hosted.go(to: .backlog)
+        let later = try XCTUnwrap(hosted.model.rows(for: .backlog).first?.id)
+        hosted.model.selectOnly(later)
+        hosted.focus.addBar = true
+        hosted.model.objectWillChange.send()
+        hosted.spin(0.5)
+        XCTAssertTrue(hosted.window.firstResponder is AtticTokenTextView, "the composer has the keyboard")
+        try post(hosted, key: "\r", keyCode: 36, modifiers: .command)
+        hosted.spin(0.3)
+        XCTAssertEqual(opened, [later], "⌘Return with no draft opens the selected row's files")
+
+        opened = []
+        hosted.model.addBar = TaskAddBarText(text: "Call the plumber")
+        hosted.spin(0.3)
+        let before = Set(hosted.model.rows(for: .backlog).map(\.id) + hosted.model.rows(for: .now).map(\.id))
+        try post(hosted, key: "\r", keyCode: 36, modifiers: .command)
+        hosted.spin(0.3)
+        XCTAssertFalse(opened.contains(later), "with a draft, ⌘Return is the composer's")
+        let added = Set(hosted.model.rows(for: .backlog).map(\.id) + hosted.model.rows(for: .now).map(\.id)).subtracting(before)
+        XCTAssertEqual(added.count, 1, "the draft was added")
+        XCTAssertEqual(opened, Array(added), "and its page opened")
+    }
+
     // MARK: - Done's first results: a new query's rows in the last query's views
 
     private func doneRow(_ id: UUID, _ title: String) -> TasksListRow {

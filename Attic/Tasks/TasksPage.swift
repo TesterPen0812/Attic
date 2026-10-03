@@ -883,12 +883,16 @@ struct TasksPage: View {
     /// before any menu sees them (round 10), as ⌘F is, since the app's Edit
     /// menu answers ⌘C itself. ⌘C and ⌘D run the command the row's menu
     /// holds for their key (`taskCommands`), so the key and the menu can
-    /// never differ; ⇧⌘I opens that menu. A field typing, an editor or a
-    /// picker keeps every key.
+    /// never differ; ⇧⌘I opens that menu. An editor or a picker keeps every
+    /// key; the composer and Find keep the keys they act on
+    /// (`typingFieldPasses`).
     private func taskShortcutPressed(_ event: NSEvent) -> Bool {
         guard event.type == .keyDown, model.isPageShown, let window = pointer.view?.window, event.window === window,
-              window.isKeyWindow, !AtticTextInput.hasKeyboard, model.editingTitleID == nil, model.newSubtaskParentID == nil,
-              model.renamingSubtaskID == nil, !addBarFocused, !searchFocused, metaPopover == nil, drag == nil else { return false }
+              window.isKeyWindow, model.editingTitleID == nil, model.newSubtaskParentID == nil,
+              model.renamingSubtaskID == nil, metaPopover == nil, drag == nil else { return false }
+        if AtticTextInput.hasKeyboard || addBarFocused || searchFocused {
+            return typingFieldShortcutPressed(event, in: window)
+        }
         let shortcuts = [AtticTaskShortcut.actions, AtticTaskShortcut.copy, AtticTaskShortcut.duplicate] + AtticTaskShortcut.priorities
         guard let shortcut = shortcuts.first(where: {
             AtticTaskShortcut.matches($0, characters: event.charactersIgnoringModifiers, keyCode: event.keyCode, modifiers: event.modifierFlags)
@@ -906,6 +910,49 @@ struct TasksPage: View {
         return true
     }
 
+    /// The rule for a typing field (the composer, Find) with the keyboard
+    /// while rows are selected, as the menu model has it: a key equivalent
+    /// goes to the field when the field acts on it, else to the command
+    /// that acts on the selection (CU recheck 4b, P2: with the composer
+    /// focused, ⇧⌘I and ⌘Return did nothing for a selected Later row).
+    /// - The field keeps text editing, ⌘C and ⌘D (the Edit menu's, on its
+    ///   text) and ⌥⌘0–3, as before.
+    /// - ⇧⌘I, which no typing field acts on, opens the selected row's
+    ///   actions.
+    /// - ⌘Return stays the composer's while it holds a draft (it adds the
+    ///   task and opens it); with no draft to add, and in Find, which has
+    ///   no ⌘Return, it opens the selected row's files.
+    /// Editors (a title, a subtask) and pickers keep every key.
+    static func typingFieldPasses(_ shortcut: KeyboardShortcut, composerDraft: String?) -> Bool {
+        if shortcut == AtticTaskShortcut.actions { return true }
+        if shortcut == AtticTaskShortcut.openPage {
+            return composerDraft?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ?? true
+        }
+        return false
+    }
+
+    /// `typingFieldPasses` for the composer or Find with the keyboard: the
+    /// key runs as the selected row's command, never as the field's key.
+    private func typingFieldShortcutPressed(_ event: NSEvent, in window: NSWindow) -> Bool {
+        guard addBarFocused || searchFocused, !AtticTextInput.isPopoverOpen, !Self.isComposing(window.firstResponder),
+              let shortcut = [AtticTaskShortcut.actions, AtticTaskShortcut.openPage].first(where: {
+                  AtticTaskShortcut.matches($0, characters: event.charactersIgnoringModifiers, keyCode: event.keyCode,
+                                            modifiers: event.modifierFlags)
+              }),
+              Self.typingFieldPasses(shortcut, composerDraft: addBarFocused ? model.addBar.text : nil),
+              !model.selection.isEmpty else { return false }
+        let visible = visibleIDs()
+        guard let current = model.shortcutRow(focusedRow: nil, visible: Set(visible)) else { return false }
+        pointer.endInvocation()
+        if shortcut == AtticTaskShortcut.actions {
+            showActions(for: current, anchor: nil, tab: model.tab)
+            return true
+        }
+        guard let command = AtticMenuCommand.command(for: shortcut, in: taskCommands(current, tab: model.tab)) else { return false }
+        AtticTextInput.passingToSelection { command.action() }
+        return true
+    }
+
     /// Esc with the keyboard in the Done search ends it. Here, not in the
     /// field's exit command: the panel's hosting view answers Esc itself
     /// (it ends a resize or move, else passes it up), so SwiftUI's exit
@@ -920,6 +967,13 @@ struct TasksPage: View {
               !Self.isComposing(window.firstResponder) else { return false }
         endSearch()
         return true
+    }
+
+    /// Whether a mouse event lands on the page's search field itself.
+    static func isOnSearchField(_ event: NSEvent, in window: NSWindow, placeholder: String) -> Bool {
+        guard let content = window.contentView,
+              let field = AtticTabsSearchField.searchField(in: content, placeholder: placeholder) else { return false }
+        return field.bounds.contains(field.convert(event.locationInWindow, from: nil))
     }
 
     /// The responder is a text view with marked text (an input method
@@ -2072,7 +2126,20 @@ struct TasksPage: View {
            let point = pointer.location(of: event), point.y < listTop - AtticLayout.pageTabsToList / 2,
            point.y > layout.headerBottom {
             if !model.selection.isEmpty { model.clearSelection() }
-            if focusedRow != nil { focusedRow = nil }
+            if focusedRow != nil {
+                if Self.isOnSearchField(event, in: window, placeholder: model.searchPlaceholder(for: model.tab)) {
+                    // A click on the query's own text, which the field
+                    // takes with the click: the row lets go of the keyboard
+                    // now, before it. Cleared through the focus state, the
+                    // row's focus went after the click and took the
+                    // keyboard from the field to the panel, so ↓ reached
+                    // nothing (CU recheck 4b, P2).
+                    focusedRow = nil
+                    window.contentView?.layoutSubtreeIfNeeded()
+                } else {
+                    focusedRow = nil
+                }
+            }
         }
         if pointer.isPlainPressOutsideRows(event, tab: model.tab, top: listTop - AtticLayout.pageTabsToList / 2,
                                            bottomInset: bandTop) {

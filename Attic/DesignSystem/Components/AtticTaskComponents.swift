@@ -199,6 +199,13 @@ enum AtticTextInput {
         action()
     }
 
+    /// Runs a key's command that a typing field passed on to the selection
+    /// (`TasksPage.typingFieldPasses`): as a menu choice without a key
+    /// equivalent, the key is not the field's while it runs.
+    @MainActor static func passingToSelection(_ action: () -> Void) {
+        choosing(nil, action)
+    }
+
     /// The rule, without AppKit state (tests): a key down while a field
     /// has the keyboard belongs to the field, unless a menu choice is
     /// running and the key is not that item's own key equivalent.
