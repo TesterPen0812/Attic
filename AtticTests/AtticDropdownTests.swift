@@ -660,14 +660,32 @@ final class AtticDropdownTests: XCTestCase {
         }
     }
 
-    func testOpenAndFilterCostNoMoreThanBefore() {
-        let window = makeWindow()
-        defer { window.close() }
+    /// One timing sample set: each interaction's samples, the dropdown's
+    /// and the component it replaced.
+    struct Samples {
+        var slashOpen: [Double] = [], slashFilter: [Double] = []
+        var legacySlashOpen: [Double] = [], legacySlashFilter: [Double] = []
+        var tag: [Double] = [], legacyTag: [Double] = [], priority: [Double] = []
+    }
+
+    /// The upper and lower quartiles' distance: the samples' own spread.
+    private func spread(_ samples: [Double]) -> Double {
+        let sorted = samples.sorted()
+        return sorted[sorted.count * 3 / 4] - sorted[sorted.count / 4]
+    }
+
+    /// Opens, filters and closes the dropdowns and the components they
+    /// replaced, the same way. With `readAccessibility`, each sample also
+    /// reads the shown list's accessibility tree, as VoiceOver does when a
+    /// menu opens or changes (that is when SwiftUI builds each row's
+    /// accessibility element).
+    private func measureDropdownCosts(in window: NSWindow, readAccessibility: Bool = false) -> Samples {
         let design = AtticDesignContext()
         let all = NoteSlashItem.Kind.allCases.map { NoteSlashItem(kind: $0) }
         let filtered = all.filter { $0.title.lowercased().contains("li") }
+        var samples = Samples()
 
-        func slashTimings<V: View>(_ make: (NoteSlashListModel) -> V) -> (open: Double, filter: Double) {
+        func slashTimings<V: View>(_ make: (NoteSlashListModel) -> V) -> (open: [Double], filter: [Double]) {
             let model = NoteSlashListModel()
             let host = NSHostingView(rootView: make(model).atticDesign(design))
             host.frame = NSRect(x: 0, y: 0, width: 320, height: 420)
@@ -676,25 +694,26 @@ final class AtticDropdownTests: XCTestCase {
             host.layoutSubtreeIfNeeded()
             window.displayIfNeeded()
             var open: [Double] = [], filter: [Double] = []
+            func read() { if readAccessibility { _ = accessibilityElements(host) } }
             for _ in 0..<15 {
-                model.hide(); host.layoutSubtreeIfNeeded(); window.displayIfNeeded()
-                open.append(ms { model.show(all); host.layoutSubtreeIfNeeded(); window.displayIfNeeded() })
-                filter.append(ms { model.show(filtered); host.layoutSubtreeIfNeeded(); window.displayIfNeeded() })
-                filter.append(ms { model.show(all); host.layoutSubtreeIfNeeded(); window.displayIfNeeded() })
+                model.hide(); host.layoutSubtreeIfNeeded(); window.displayIfNeeded(); read()
+                open.append(ms { model.show(all); host.layoutSubtreeIfNeeded(); window.displayIfNeeded(); read() })
+                filter.append(ms { model.show(filtered); host.layoutSubtreeIfNeeded(); window.displayIfNeeded(); read() })
+                filter.append(ms { model.show(all); host.layoutSubtreeIfNeeded(); window.displayIfNeeded(); read() })
             }
-            return (median(open), median(filter))
+            return (open, filter)
         }
 
         // Warm both (first-use costs: fonts, symbols), then measure.
         _ = slashTimings { LegacySlashList(model: $0) }
         _ = slashTimings { NoteSlashListView(model: $0) }
-        let legacySlash = slashTimings { LegacySlashList(model: $0) }
-        let slash = slashTimings { NoteSlashListView(model: $0) }
+        (samples.legacySlashOpen, samples.legacySlashFilter) = slashTimings { LegacySlashList(model: $0) }
+        (samples.slashOpen, samples.slashFilter) = slashTimings { NoteSlashListView(model: $0) }
 
         let tags = (0..<12).map { "tag\($0)" }
         let anchor = NSView(frame: NSRect(x: 40, y: 60, width: 60, height: 28))
         window.contentView?.addSubview(anchor)
-        var legacyTag: [Double] = [], tag: [Double] = [], priority: [Double] = []
+        defer { anchor.removeFromSuperview() }
         for round in 0..<16 {
             // Before E1 the Tasks pickers were native pop-overs.
             let popover = NSPopover()
@@ -703,42 +722,85 @@ final class AtticDropdownTests: XCTestCase {
             let legacy = ms {
                 popover.show(relativeTo: anchor.bounds, of: anchor, preferredEdge: .maxY)
                 popover.contentViewController?.view.window?.displayIfNeeded()
+                if readAccessibility, let view = popover.contentViewController?.view { _ = accessibilityElements(view) }
             }
             popover.close()
-            if round > 0 { legacyTag.append(legacy) }
+            if round > 0 { samples.legacyTag.append(legacy) }
             let presenter = AtticDropdownPresenter()
             presenter.design = design
             presenter.prefer = .above
-            presenter.content = AnyView(TaskTagPickerView(allTags: tags, state: { _ in .off }, onToggle: { _ in },
+            presenter.content = AnyView(TaskTagPickerView(allTags: tags, state: { $0 == "tag2" ? .on : .off }, onToggle: { _ in },
                                                           onCreate: { _, _ in true }, focusField: false))
             let opened = ms {
                 presenter.present(from: anchor)
                 presenter.host?.layoutSubtreeIfNeeded(); window.displayIfNeeded()
+                if readAccessibility, let host = presenter.host { _ = accessibilityElements(host) }
             }
-            if round > 0 { tag.append(opened) }
+            if round > 0 { samples.tag.append(opened) }
             presenter.close(restoreFocus: false, immediately: true)
             let prio = AtticDropdownPresenter()
             prio.design = design
             // The real composer strip supplies this fixed four-row height.
             prio.contentHeight = AtticDropdownMetrics.inset * 2 + AtticDropdownMetrics.rowHeight * 4
-            prio.content = AnyView(TaskPriorityPickerView(current: nil, onPick: { _ in }))
+            prio.content = AnyView(TaskPriorityPickerView(current: .high, onPick: { _ in }))
             let prioOpened = ms {
                 prio.present(from: anchor)
                 prio.host?.layoutSubtreeIfNeeded(); window.displayIfNeeded()
+                if readAccessibility, let host = prio.host { _ = accessibilityElements(host) }
             }
-            if round > 0 { priority.append(prioOpened) }
+            if round > 0 { samples.priority.append(prioOpened) }
             prio.close(restoreFocus: false, immediately: true)
         }
-        let tagMedian = median(tag), legacyTagMedian = median(legacyTag), priorityMedian = median(priority)
-        print("DROPDOWN_SLASH_OPEN_MS_MEDIAN=\(slash.open) LEGACY=\(legacySlash.open)")
-        print("DROPDOWN_SLASH_FILTER_MS_MEDIAN=\(slash.filter) LEGACY=\(legacySlash.filter)")
-        print("DROPDOWN_TAG_OPEN_MS_MEDIAN=\(tagMedian) LEGACY=\(legacyTagMedian)")
-        print("DROPDOWN_PRIORITY_OPEN_MS_MEDIAN=\(priorityMedian)")
+        return samples
+    }
+
+    private func report(_ samples: Samples, label: String) {
+        print("DROPDOWN\(label)_SLASH_OPEN_MS_MEDIAN=\(median(samples.slashOpen)) LEGACY=\(median(samples.legacySlashOpen))"
+              + " SPREAD=\(spread(samples.slashOpen))/\(spread(samples.legacySlashOpen))")
+        print("DROPDOWN\(label)_SLASH_FILTER_MS_MEDIAN=\(median(samples.slashFilter)) LEGACY=\(median(samples.legacySlashFilter))"
+              + " SPREAD=\(spread(samples.slashFilter))/\(spread(samples.legacySlashFilter))")
+        print("DROPDOWN\(label)_TAG_OPEN_MS_MEDIAN=\(median(samples.tag)) LEGACY=\(median(samples.legacyTag))"
+              + " SPREAD=\(spread(samples.tag))/\(spread(samples.legacyTag))")
+        print("DROPDOWN\(label)_PRIORITY_OPEN_MS_MEDIAN=\(median(samples.priority)) SPREAD=\(spread(samples.priority))")
+    }
+
+    func testOpenAndFilterCostNoMoreThanBefore() {
+        let window = makeWindow()
+        defer { window.close() }
+        let samples = measureDropdownCosts(in: window)
+        report(samples, label: "")
+        let slashOpen = median(samples.slashOpen), slashFilter = median(samples.slashFilter)
+        let legacySlashOpen = median(samples.legacySlashOpen), legacySlashFilter = median(samples.legacySlashFilter)
+        let tagMedian = median(samples.tag), legacyTagMedian = median(samples.legacyTag), priorityMedian = median(samples.priority)
         // No regression: within half again of the replaced component, plus a
         // millisecond for timer noise on a busy CI machine.
-        XCTAssertLessThanOrEqual(slash.open, legacySlash.open * 1.5 + 1, "the / list opens no slower")
-        XCTAssertLessThanOrEqual(slash.filter, legacySlash.filter * 1.5 + 1, "a filter keystroke costs no more")
+        XCTAssertLessThanOrEqual(slashOpen, legacySlashOpen * 1.5 + 1, "the / list opens no slower")
+        XCTAssertLessThanOrEqual(slashFilter, legacySlashFilter * 1.5 + 1, "a filter keystroke costs no more")
         XCTAssertLessThanOrEqual(tagMedian, legacyTagMedian * 1.5 + 1, "the tag picker opens no slower")
         XCTAssertLessThanOrEqual(priorityMedian, legacyTagMedian * 1.5 + 1, "the priority picker opens no slower")
+    }
+
+    /// The same gate with accessibility on and the tree read (as VoiceOver
+    /// reads a menu), so each row's accessibility element is built and paid
+    /// for. The replaced components build and read theirs too. No
+    /// fixed tolerance: a dropdown's median may exceed the replaced
+    /// component's only by the two sample sets' own spreads (their
+    /// interquartile ranges, measured in this run).
+    func testOpenAndFilterCostNoMoreThanBeforeWithAccessibilityOn() {
+        let attribute = NSAccessibility.Attribute(rawValue: "AXEnhancedUserInterface")
+        let previous = NSApp.accessibilityAttributeValue(attribute)
+        NSApp.accessibilitySetValue(true, forAttribute: attribute)
+        defer { NSApp.accessibilitySetValue(previous, forAttribute: attribute) }
+        let window = makeWindow()
+        defer { window.close() }
+        let samples = measureDropdownCosts(in: window, readAccessibility: true)
+        report(samples, label: "_AX")
+        func noRegression(_ new: [Double], _ old: [Double], _ message: String) {
+            XCTAssertLessThanOrEqual(median(new), median(old) + spread(new) + spread(old), message)
+        }
+        noRegression(samples.slashOpen, samples.legacySlashOpen, "the / list opens no slower with accessibility on")
+        noRegression(samples.slashFilter, samples.legacySlashFilter, "a filter keystroke costs no more with accessibility on")
+        noRegression(samples.tag, samples.legacyTag, "the tag picker opens no slower with accessibility on")
+        noRegression(samples.priority, samples.legacyTag, "the priority picker opens no slower with accessibility on")
     }
 }
