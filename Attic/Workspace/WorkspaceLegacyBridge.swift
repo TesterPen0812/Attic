@@ -41,9 +41,7 @@ enum WorkspaceLegacyBridge {
             return WorkspaceScopeToken(scope: scope, members: members.sorted { $0.owner.id.uuidString < $1.owner.id.uuidString })
         }
     }
-    // Store the weak handle inline in each family array. A separate class
-    // allocation per physical row adds no identity or lifetime guarantee.
-    private struct RootRow {
+    private final class RootRow {
         let physicalID: PersistentIdentifier
         weak var model: (any PersistentModel)?
         init(_ row: any PersistentModel) { physicalID = row.persistentModelID; model = row }
