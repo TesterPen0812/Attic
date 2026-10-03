@@ -884,13 +884,15 @@ final class NoteEditorEngineTests: XCTestCase {
         XCTAssertFalse(engine.acceptSlashItem(.date))
         view.setSelectedRange(NSRange(location: engine.textStorage.length, length: 0))
         type(" /im", view)
+        var request: NoteSlashFileRequest?
+        engine.onSlashFileRequest = { request = $0 }
         XCTAssertTrue(engine.acceptSlashItem(.imageOrFile))
         let image = StagedNoteAttachment(id: UUID(), filename: "x.png", contentTypeIdentifier: "public.png",
                                          byteCount: 0, digest: "", data: Data())
         XCTAssertTrue(engine.performEdit(NSRange(location: 2, length: 0),
                                          with: NSAttributedString(string: "before "), name: "Edit"))
         let before = engine.textStorage.string
-        XCTAssertFalse(engine.commitSlashImage(image, pixelSize: nil))
+        XCTAssertFalse(engine.commitSlashImage(image, pixelSize: nil, for: try XCTUnwrap(request)))
         XCTAssertEqual(engine.textStorage.string, before)
     }
 

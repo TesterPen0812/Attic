@@ -61,8 +61,9 @@ final class NoteFormatControls: NSObject {
     /// ⌃Tab or ⌘T without a bar, and Aa's own button: the page's pop-over.
     var requestFormatPopover: ((_ keyboard: Bool) -> Void)?
     var closeFormatPopover: (() -> Void)?
-    /// Image or File…: the page's open panel (one image for `/`).
-    var requestFile: ((_ fromSlash: Bool) -> Void)?
+    /// Image or File…: the page's open panel. `slash` is the `/` row's
+    /// request (one file, replacing its command); nil for Insert.
+    var requestFile: ((_ slash: NoteSlashFileRequest?) -> Void)?
     /// A `/` row was taken (tests: the list runs the engine's commands).
     var onSlashPick: ((NoteSlashItem.Kind) -> Void)?
     /// Aa is open: its toggles follow the selection too.
@@ -135,7 +136,7 @@ final class NoteFormatControls: NSObject {
             self?.returnKeyboardFromBar()
         }
         router.requestDate = { [weak self] in self?.openDateCard(fromSlash: false) }
-        router.requestFile = { [weak self] in self?.requestFile?(false) }
+        router.requestFile = { [weak self] in self?.requestFile?(nil) }
         formatModel.willRequestLink = { [weak self] in
             if self?.isFormatPopoverOpen == true { self?.closeFormatPopover?() }
         }
@@ -147,7 +148,7 @@ final class NoteFormatControls: NSObject {
 
         engine.onSlashSessionChange = { [weak self] session in self?.slashSessionChanged(session) }
         engine.onSlashDateRequest = { [weak self] in self?.openDateCard(fromSlash: true) }
-        engine.onSlashFileRequest = { [weak self] in self?.requestFile?(true) }
+        engine.onSlashFileRequest = { [weak self] request in self?.requestFile?(request) }
         engine.onLinkRequest = { [weak self] target in self?.openLinkCard(target: target) }
         previousActivity = engine.onActivityChanged
         engine.onActivityChanged = { [weak self] old, new in

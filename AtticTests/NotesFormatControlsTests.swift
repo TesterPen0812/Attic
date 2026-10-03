@@ -506,13 +506,15 @@ final class NotesFormatControlsTests: XCTestCase {
     func testSlashImageAsksForAFileAndCancelLeavesTheCommand() {
         let (controls, engine, textView) = make()
         var asked: Bool?
-        controls.requestFile = { asked = $0 }
+        var request: NoteSlashFileRequest?
+        controls.requestFile = { asked = $0 != nil; request = $0 }
         textView.setSelectedRange(NSRange(location: (textView.string as NSString).length, length: 0))
         type("\n/ima", textView)
         XCTAssertEqual(controls.slashModel.items.map(\.kind), [.imageOrFile])
         XCTAssertTrue(controls.handleCommand(#selector(NSResponder.insertNewline(_:))))
         XCTAssertEqual(asked, true, "the open panel, for the / row")
-        engine.cancelSlashFile()
+        request?.cancel()
+        XCTAssertNil(engine.pendingSlashFile)
         XCTAssertTrue(textView.string.hasSuffix("/ima"))
         find("Image or File…", in: controls.router.menuCommands(from: .noteMenu))?.action()
         XCTAssertEqual(asked, false, "Insert › Image or File… asks too")

@@ -90,6 +90,16 @@ final class NoteSlice3bTests: XCTestCase {
         }
         XCTFail("Timed out waiting for import state")
     }
+    /// A pending `/` Image or File… request in the active note, as the
+    /// page's open panel would carry it.
+    private func slashTicket(_ controller: NotesPageController) throws -> NoteSlashFileTicket {
+        let session = try XCTUnwrap(controller.active)
+        let engine = session.engine
+        let target = NoteSlashSession(noteID: engine.noteID,
+                                      range: NSRange(location: engine.textStorage.length, length: 0), query: "image")
+        return NoteSlashFileTicket(sessionID: session.id, request: engine.requestSlashFile(for: target))
+    }
+
     private func staged(_ name: String = "plan.pdf") -> StagedNoteAttachment {
         let data = Data("file bytes".utf8)
         return StagedNoteAttachment(id: UUID(), filename: name, contentTypeIdentifier: "com.adobe.pdf",
@@ -912,7 +922,7 @@ final class NoteSlice3bTests: XCTestCase {
         let afterPaste = await reads.count
         XCTAssertEqual(afterPaste, 0)
         XCTAssertEqual(controller.active?.engine.document().blocks.filter { $0.importFailure != nil }.count, 2)
-        controller.importSlashImage(source)
+        controller.importSlashImage(source, for: try slashTicket(controller))
         let afterSlash = await reads.count
         XCTAssertEqual(afterSlash, 0)
         let retryID = try XCTUnwrap(doc.blocks.last?.id)
@@ -953,7 +963,7 @@ final class NoteSlice3bTests: XCTestCase {
         XCTAssertNotNil(controller.sourceAdmissionFailure(source, in: try XCTUnwrap(controller.active)).1)
         controller.importFiles([source])
         try await waitFor { controller.active?.isImporting == false }
-        controller.importSlashImage(source)
+        controller.importSlashImage(source, for: try slashTicket(controller))
         let retryID = try XCTUnwrap(doc.blocks.last?.id)
         let retried = await controller.retryFailedFile(retryID, with: source)
         XCTAssertFalse(retried)
@@ -2096,6 +2106,7 @@ extension NoteSlice3bTests {
                 for character in "/ima" { view.insertText(String(character), replacementRange: NSRange(location: NSNotFound, length: 0)) }
                 XCTAssertTrue(engine.acceptSlashItem(.imageOrFile))
             }
+            let slashRequest = engine.pendingSlashFile
             let before = engine.document(), undo = engine.history.canUndo
             let at = NSRange(location: engine.textStorage.length, length: 0)
             let imported = NoteImportedObject(staged: item, pixelSize: nil)
@@ -2106,7 +2117,7 @@ extension NoteSlice3bTests {
                 accepted = engine.performEdit(at, with: NoteTextCodec.attachmentString(object, attributes: [:]), name: "Direct")
             case .image: accepted = engine.insertImage(item, pixelSize: CGSize(width: 8, height: 8))
             case .batch: engine.beginImageImport(); accepted = engine.insertImportedObjects([imported])
-            case .slash: accepted = engine.commitSlashObject(imported)
+            case .slash: accepted = engine.commitSlashObject(imported, for: try XCTUnwrap(slashRequest))
             case .retry: accepted = engine.replaceFailedFile(try XCTUnwrap(engine.objects().first?.0.objectID), with: imported)
             case .privatePaste:
                 let block = NoteBlock.file(attachmentID: item.id, filename: item.filename, contentTypeIdentifier: item.contentTypeIdentifier, byteCount: item.byteCount)

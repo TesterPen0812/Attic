@@ -117,7 +117,7 @@ final class NoteEditorEngine: NSObject, NSTextViewDelegate, NSTextStorageDelegat
     var onCaretChange: (() -> Void)?
     var onSlashSessionChange: ((NoteSlashSession?) -> Void)?
     var onSlashDateRequest: (() -> Void)?
-    var onSlashFileRequest: (() -> Void)?
+    var onSlashFileRequest: ((NoteSlashFileRequest) -> Void)?
     var onLinkRequest: ((NoteLinkTarget) -> Void)?
     var onRetryImportObject: ((UUID) -> Void)?
     var onLocateObject: ((UUID) -> Void)?
@@ -132,7 +132,10 @@ final class NoteEditorEngine: NSObject, NSTextViewDelegate, NSTextStorageDelegat
     private var pendingLinkTarget: NoteLinkTarget?
     private var activeSlashSession: NoteSlashSession?
     private var slashDateRequest: NoteSlashSession?
-    private var pendingSlashFile: NoteSlashSession?
+    /// The `/` Image or File… request the open panel or the loading answers.
+    /// Only that request's completion may commit or cancel it.
+    private(set) var pendingSlashFile: NoteSlashFileRequest?
+    private var slashFileGeneration: UInt64 = 0
     private var pendingParagraphStyle: (location: Int, state: NoteUndoHistory.ParagraphState)?
 
     fileprivate func notifyTagsChanged() {
@@ -1231,8 +1234,8 @@ final class NoteEditorEngine: NSObject, NSTextViewDelegate, NSTextStorageDelegat
                selection != NSRange(location: NSMaxRange(session.range), length: 0) { slashSession = nil }
             if let session = pendingSlashDate,
                selection != NSRange(location: NSMaxRange(session.range), length: 0) { pendingSlashDate = nil }
-            if let session = pendingSlashFile,
-               selection != NSRange(location: NSMaxRange(session.range), length: 0) { pendingSlashFile = nil }
+            if let request = pendingSlashFile,
+               selection != NSRange(location: NSMaxRange(request.target.range), length: 0) { pendingSlashFile = nil }
             if let target = pendingLinkTarget, selection != target.selection { pendingLinkTarget = nil }
         }
         if !history.isChangeInFlight, let open = history.openStep,
@@ -2660,6 +2663,27 @@ struct NoteSlashItem: Hashable, Identifiable {
     static let all = Kind.allCases.map(NoteSlashItem.init(kind:))
 }
 
+/// One `/` Image or File… request: the engine it was made in, the command
+/// it captured and its generation there. Equal only to itself, so a late
+/// completion can never be taken for a newer request (review P2, `8008974`).
+@MainActor
+final class NoteSlashFileRequest: Equatable {
+    private(set) weak var engine: NoteEditorEngine?
+    let target: NoteSlashSession
+    let generation: UInt64
+
+    init(engine: NoteEditorEngine, target: NoteSlashSession, generation: UInt64) {
+        self.engine = engine
+        self.target = target
+        self.generation = generation
+    }
+
+    /// Cancels this request in its engine, never a newer one.
+    func cancel() { engine?.cancelSlashFile(self) }
+
+    nonisolated static func == (lhs: NoteSlashFileRequest, rhs: NoteSlashFileRequest) -> Bool { lhs === rhs }
+}
+
 struct NoteSlashSession {
     var noteID: UUID
     var range: NSRange
@@ -2863,8 +2887,7 @@ extension NoteEditorEngine {
             onSlashDateRequest?()
             return true
         case .imageOrFile:
-            pendingSlashFile = session
-            onSlashFileRequest?()
+            onSlashFileRequest?(requestSlashFile(for: session))
             return true
         default:
             history.beginGroup()
@@ -2898,7 +2921,25 @@ extension NoteEditorEngine {
     }
 
     func cancelSlashDate() { pendingSlashDate = nil }
-    func cancelSlashFile() { pendingSlashFile = nil }
+    /// A new `/` Image or File… request for `target`: it supersedes any
+    /// older one, whose late completion then commits nothing.
+    func requestSlashFile(for target: NoteSlashSession) -> NoteSlashFileRequest {
+        slashFileGeneration &+= 1
+        let request = NoteSlashFileRequest(engine: self, target: target, generation: slashFileGeneration)
+        pendingSlashFile = request
+        return request
+    }
+
+    /// `request` is still the one waiting for its file: made here, and no
+    /// newer request or cancellation since.
+    func isPending(_ request: NoteSlashFileRequest) -> Bool {
+        request.engine === self && pendingSlashFile?.generation == request.generation
+    }
+
+    /// Cancels `request` only: a newer request stays pending.
+    func cancelSlashFile(_ request: NoteSlashFileRequest) {
+        if isPending(request) { pendingSlashFile = nil }
+    }
     func dismissSlashSession() { slashSession = nil }
 }
 
@@ -3060,13 +3101,17 @@ extension NoteEditorEngine {
     /// The image importer calls this only after a slash Image or File request
     /// has produced a staged image. Cancel leaves the literal command intact.
     @discardableResult
-    func commitSlashImage(_ item: StagedNoteAttachment, pixelSize: CGSize?) -> Bool {
-        commitSlashObject(NoteImportedObject(staged: item, pixelSize: pixelSize))
+    func commitSlashImage(_ item: StagedNoteAttachment, pixelSize: CGSize?, for request: NoteSlashFileRequest) -> Bool {
+        commitSlashObject(NoteImportedObject(staged: item, pixelSize: pixelSize), for: request)
     }
 
+    /// Replaces `request`'s captured command with the object. A request that
+    /// is no longer pending (cancelled, or superseded by a newer `/` Image
+    /// or File…) commits nothing and leaves the newer request alone.
     @discardableResult
-    func commitSlashObject(_ item: NoteImportedObject) -> Bool {
-        guard let session = pendingSlashFile else { return false }
+    func commitSlashObject(_ item: NoteImportedObject, for request: NoteSlashFileRequest) -> Bool {
+        guard isPending(request) else { return false }
+        let session = request.target
         if let staged = item.staged, let reason = onImportAdmission?(staged) {
             onNotice?(reason)
             return false

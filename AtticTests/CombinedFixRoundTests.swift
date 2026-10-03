@@ -141,9 +141,12 @@ final class CombinedFixRoundTests: XCTestCase {
     /// the completion: the request it was opened for must survive that.
     func testTheOpenPanelKeepsWhatItWasOpenedForUntilItsCompletion() {
         let chrome = NotesPageChrome()
-        chrome.fileRequest = .slash
+        let engine = NoteEditorEngine(noteID: UUID(), document: NoteDocument(blocks: [.text("Title")]))
+        let slash = NotesPageChrome.FileRequest.slash(NoteSlashFileTicket(sessionID: UUID(), request: engine.requestSlashFile(
+            for: NoteSlashSession(noteID: engine.noteID, range: NSRange(location: 0, length: 0), query: "image"))))
+        chrome.fileRequest = slash
         chrome.fileRequest = nil // the binding, as the panel closes
-        XCTAssertEqual(chrome.takeFileRequest(), .slash)
+        XCTAssertEqual(chrome.takeFileRequest(), slash)
         XCTAssertNil(chrome.takeFileRequest(), "taken once")
         XCTAssertNil(chrome.fileRequest)
         chrome.fileRequest = .insert
@@ -167,16 +170,19 @@ final class CombinedFixRoundTests: XCTestCase {
         harness.window.makeFirstResponder(textView)
         let (image, file) = try fixtures()
         // The open panel is the page's; the test answers for it.
-        engine.onSlashFileRequest = {}
+        var request: NoteSlashFileRequest?
+        engine.onSlashFileRequest = { request = $0 }
+        let sessionID = try XCTUnwrap(harness.controller.active).id
+        func ticket() throws -> NoteSlashFileTicket { NoteSlashFileTicket(sessionID: sessionID, request: try XCTUnwrap(request)) }
         type("Attachments\nBefore the image ", into: textView)
         type("/image", into: textView)
         XCTAssertTrue(engine.acceptSlashItem(.imageOrFile))
-        harness.controller.importSlashImage(image)
+        harness.controller.importSlashImage(image, for: try ticket())
         for _ in 0..<60 where !engine.textStorage.string.contains(NoteDocument.objectCharacter) { spin(0.05) }
         XCTAssertEqual(engine.textStorage.string, "Attachments\nBefore the image \n\(NoteDocument.objectCharacter)\n")
         type("/file", into: textView)
         XCTAssertTrue(engine.acceptSlashItem(.imageOrFile))
-        harness.controller.importSlashImage(file)
+        harness.controller.importSlashImage(file, for: try ticket())
         for _ in 0..<60 where engine.textStorage.string.filter({ $0 == NoteDocument.objectCharacter }).count < 2 { spin(0.05) }
         let text = engine.textStorage.string
         XCTAssertFalse(text.contains("/image") || text.contains("/file"), text.debugDescription)
@@ -491,6 +497,7 @@ final class CombinedFixRoundTests: XCTestCase {
         let textView = try XCTUnwrap(engine.textView)
         panel.makeFirstResponder(textView)
         let (image, file) = try fixtures()
+        var request: NoteSlashFileRequest?
         func choose(_ url: URL, slash: Bool) {
             chooser.orderFront(nil)
             chooser.makeKey()
@@ -498,13 +505,17 @@ final class CombinedFixRoundTests: XCTestCase {
             chooser.orderOut(nil)
             panel.makeKey()
             panel.makeFirstResponder(textView)
-            if slash { controller.importSlashImage(url) } else { controller.importFiles([url]) }
+            if slash, let request, let session = controller.active {
+                controller.importSlashImage(url, for: NoteSlashFileTicket(sessionID: session.id, request: request))
+            } else {
+                controller.importFiles([url])
+            }
             for _ in 0..<60 where controller.active?.isImporting == true { spin(0.05) }
             content.layoutSubtreeIfNeeded()
             spin(0.5)
         }
         // The page's open panel is answered by the test.
-        engine.onSlashFileRequest = {}
+        engine.onSlashFileRequest = { request = $0 }
         type("CU2 attachment retry\nBefore the image ", into: textView)
         type("/image", into: textView)
         spin(0.3)
@@ -521,6 +532,91 @@ final class CombinedFixRoundTests: XCTestCase {
         XCTAssertEqual(engine.textStorage.string.filter { $0 == NoteDocument.objectCharacter }.count, 4)
         XCTAssertFalse(engine.textStorage.string.contains("/image") || engine.textStorage.string.contains("/file"))
     }
+
+    // MARK: - Fix round 2 (GPT-6.1 review of 6aaec55)
+
+    private func waitUntil(_ condition: () -> Bool, timeout: TimeInterval = 3) async {
+        let deadline = Date().addingTimeInterval(timeout)
+        while !condition(), Date() < deadline { try? await Task.sleep(for: .milliseconds(20)) }
+    }
+
+    /// P2 (`8008974`): a slow image pick, then another `/file` before the
+    /// image has loaded. The late image must not replace the newer command,
+    /// and the first request's cancel must not cancel the newer one.
+    func testALateSlashCompletionNeverTakesANewerRequest() async throws {
+        let store = try makeTestNoteStore(attachmentFileStore: makeTestAttachmentFileStore())
+        let id = UUID()
+        guard case .success = store.createDocumentNote(id: id, document: NoteDocument(blocks: [.text("Plan"), .text("Body")])) else {
+            return XCTFail("seed")
+        }
+        let (image, file) = try fixtures()
+        let data = try Data(contentsOf: image)
+        let staged = StagedNoteAttachment(id: UUID(), filename: "late.png", contentTypeIdentifier: "public.png",
+                                          byteCount: Int64(data.count), digest: "", data: data)
+        let gate = SlowLoadGate()
+        let controller = NotesPageController(store: store, journal: nil, imageLoader: { _ in
+            await gate.wait()
+            return (staged, CGSize(width: 40, height: 30))
+        })
+        await XCTAssertTrueAsync(await controller.openDurably(noteID: id))
+        let session = try XCTUnwrap(controller.active)
+        let engine = session.engine
+        let (_, view) = engine.makeView()
+        var requests: [NoteSlashFileRequest] = []
+        engine.onSlashFileRequest = { requests.append($0) }
+        view.setSelectedRange(NSRange(location: engine.textStorage.length, length: 0))
+        type("\n/image", into: view)
+        XCTAssertTrue(engine.acceptSlashItem(.imageOrFile))
+        let first = try XCTUnwrap(requests.last)
+        controller.importSlashImage(image, for: NoteSlashFileTicket(sessionID: session.id, request: first))
+        // Before the image has loaded: another `/` Image or File….
+        type(" /fi", into: view)
+        XCTAssertTrue(engine.acceptSlashItem(.imageOrFile))
+        let second = try XCTUnwrap(requests.last)
+        XCTAssertNotEqual(first, second)
+        XCTAssertFalse(engine.isPending(first), "typing on abandoned the first request")
+        first.cancel()
+        XCTAssertTrue(engine.isPending(second), "the first request's cancel leaves the newer one")
+        await gate.release()
+        await waitUntil { session.notice != nil }
+        XCTAssertNotNil(session.notice, "the late image says it was not added")
+        XCTAssertEqual(engine.textStorage.string, "Plan\nBody\n/image /fi", "the late image replaced nothing")
+        XCTAssertTrue(engine.isPending(second), "and left the newer request waiting for its file")
+        session.notice = nil
+        controller.importSlashImage(file, for: NoteSlashFileTicket(sessionID: session.id, request: second))
+        await waitUntil { engine.textStorage.string.contains(NoteDocument.objectCharacter) }
+        XCTAssertEqual(engine.textStorage.string, "Plan\nBody\n/image \n\(NoteDocument.objectCharacter)\n",
+                       "the file replaced its own command only")
+        XCTAssertEqual(engine.document().blocks.filter { $0.kind == .file }.count, 1)
+        XCTAssertEqual(engine.document().blocks.filter { $0.kind == .image }.count, 0)
+        XCTAssertNil(session.notice)
+    }
+
+    /// A completion for a note that is no longer on screen is dropped.
+    func testASlashCompletionForAnotherSessionIsDropped() async throws {
+        let store = try makeTestNoteStore(attachmentFileStore: makeTestAttachmentFileStore())
+        let id = UUID()
+        guard case .success = store.createDocumentNote(id: id, document: NoteDocument(blocks: [.text("Plan"), .text("Body")])) else {
+            return XCTFail("seed")
+        }
+        let controller = NotesPageController(store: store, journal: nil)
+        await XCTAssertTrueAsync(await controller.openDurably(noteID: id))
+        let session = try XCTUnwrap(controller.active)
+        let engine = session.engine
+        let (_, view) = engine.makeView()
+        var request: NoteSlashFileRequest?
+        engine.onSlashFileRequest = { request = $0 }
+        view.setSelectedRange(NSRange(location: engine.textStorage.length, length: 0))
+        type("\n/file", into: view)
+        XCTAssertTrue(engine.acceptSlashItem(.imageOrFile))
+        let (_, file) = try fixtures()
+        // The ticket names a different session (the panel was opened from another note).
+        controller.importSlashImage(file, for: NoteSlashFileTicket(sessionID: UUID(), request: try XCTUnwrap(request)))
+        try await Task.sleep(for: .milliseconds(300))
+        XCTAssertEqual(engine.textStorage.string, "Plan\nBody\n/file")
+        XCTAssertTrue(engine.isPending(try XCTUnwrap(request)), "a stale completion cancels nothing")
+    }
+
 }
 
 /// Records the rectangles a view is asked to redraw (`setNeedsDisplay(_:)`,
@@ -603,3 +699,13 @@ private struct CombinedFixNotesRoot: View {
             .background(AtticPanelStageSurface(cornerSize: 0))
     }
 }
+
+/// Gates a slow image load (fix round 2's late completion).
+actor SlowLoadGate {
+    private var open = false
+    func wait() async {
+        while !open { try? await Task.sleep(for: .milliseconds(10)) }
+    }
+    func release() { open = true }
+}
+

@@ -23,7 +23,10 @@ final class NotesPageChrome: ObservableObject {
     /// The open panel for Insert › Image or File…, the `/` row (one file),
     /// or a failed object's Retry and Locate… (one file, for that object).
     enum FileRequest: Equatable {
-        case insert, slash
+        case insert
+        /// The `/` row's request, with the session it was made in: its
+        /// completion goes to that request only (review P2, `8008974`).
+        case slash(NoteSlashFileTicket)
         case retry(UUID), locate(UUID)
     }
     @Published var fileRequest: FileRequest? {
@@ -499,7 +502,9 @@ struct NoteEditorRepresentable: NSViewRepresentable {
         let chrome = chrome
         controls.requestFormatPopover = { [weak chrome] keyboard in chrome?.openFormatPopover(keyboard: keyboard) }
         controls.closeFormatPopover = { [weak chrome] in chrome?.isFormatPopoverOpen = false }
-        controls.requestFile = { [weak chrome] fromSlash in chrome?.fileRequest = fromSlash ? .slash : .insert }
+        controls.requestFile = { [weak chrome, sessionID = session.id] slash in
+            chrome?.fileRequest = slash.map { .slash(NoteSlashFileTicket(sessionID: sessionID, request: $0)) } ?? .insert
+        }
         context.coordinator.controls = controls
         chrome.controls = controls
         let objects = NoteObjectControls(engine: engine, textView: textView)
