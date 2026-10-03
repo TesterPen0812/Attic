@@ -223,6 +223,19 @@ final class WorkspaceHistory {
         guard await coordinator.retryPublication(operation) == .committed else { return false }
         pendingReplayID = nil; pendingCommandID = nil; releaseInput(); return true
     }
+    /// Applied changes from another surface have one originating history.
+    /// This history names that origin and stops without running an inverse.
+    func recordExternalBarrier(origin: String) {
+        closeGroup()
+        route.record(UndoStep(name: "Edited by \(origin): can't undo past this",
+            undoOutcome: { .failed }, redoOutcome: { .failed }), in: historyID)
+    }
+    /// Toasts retain a concrete entry identity; a later entry removes their
+    /// authority. Native responder/menu binding belongs to slice 0b.
+    func undoLatest(stepID: UUID) async -> UndoOutcome? {
+        guard route.undoStepID(in: historyID) == stepID else { return nil }
+        return await replay(redo: false)
+    }
     @discardableResult func undo() -> Bool { closeGroup(); return canUndo && route.undo(in: historyID) }
     @discardableResult func redo() -> Bool { closeGroup(); return canRedo && route.redo(in: historyID) }
     func replay(redo: Bool) async -> UndoOutcome? {

@@ -260,6 +260,7 @@ private final class NoteOperationRecoveryBarrier: @unchecked Sendable {
 private actor NoteDraftJournalIO {
     nonisolated let operationBarrier = NoteOperationRecoveryBarrier()
     private var operationReconciled = false
+    private var suppressedOperationNotes = Set<UUID>()
     let directory: URL
     private let fileManagerFactory: @Sendable () -> FileManager
     private lazy var fileManager = fileManagerFactory()
@@ -516,8 +517,13 @@ private actor NoteDraftJournalIO {
         guard damagedConfirmation(file: checkpoint) == confirmation else {
             throw NoteDraftJournalError.unknownOwnership
         }
+        try journalSync(stagedArchive)
+        try journalSync(archive)
+        try journalSync(parent)
         if resolving {
             try fileManager.moveItem(at: checkpoint, to: archive.appendingPathComponent("resolved-checkpoint.raw"))
+            try journalSync(archive)
+            try journalSync(directory)
             // Quarantine is independent: active staged collection never enters
             // it. Its byte-for-byte copies own all unknown bytes indefinitely.
             removeUnreferencedStagedFiles()
@@ -540,6 +546,7 @@ private actor NoteDraftJournalIO {
         let files = inventory
             .filter { $0.pathExtension == "json" }.sorted { $0.lastPathComponent < $1.lastPathComponent }
         let results: [NoteDraftRecoveryEntry] = files.compactMap { file in
+            if offering, let id = UUID(uuidString: file.deletingPathExtension().lastPathComponent), suppressedOperationNotes.contains(id) { return nil }
             switch ownership(of: file) {
             case let .valid(entry, staged, claim), let .pending(entry, staged, claim):
                 return .valid(entry, staged, claim)
@@ -601,7 +608,10 @@ private actor NoteDraftJournalIO {
 final class NoteDraftJournal: NoteDraftJournaling {
     let directory: URL
     nonisolated private let io: NoteDraftJournalIO
-    private var cached: [NoteDraftRecoveryEntry]?
+    var inventoryChanged: (([NoteDraftRecoveryEntry]) -> Void)?
+    private var cached: [NoteDraftRecoveryEntry]? {
+        didSet { if let cached { inventoryChanged?(cached) } }
+    }
     var liveReferencedIDs: () throws -> Set<UUID> = { [] }
     var requiresAsyncIO: Bool { true }
 
@@ -771,7 +781,19 @@ private extension NoteDraftJournalIO {
             operationBarrier.setBlocked(false)
         }
     }
-    func finishOperationReconciliation() { operationReconciled = true; operationBarrier.setBlocked(false) }
+    func finishOperationReconciliation(suppressing notes: Set<UUID> = []) {
+        suppressedOperationNotes = notes
+        operationReconciled = true; operationBarrier.setBlocked(false)
+    }
+    func damagedCheckpointNoteIDs() throws -> Set<UUID> {
+        let files: [URL]
+        do { files = try fileManager.contentsOfDirectory(at: directory, includingPropertiesForKeys: nil) }
+        catch { if journalFileIsMissing(error) { return [] }; throw error }
+        return Set(files.filter { $0.pathExtension == "json" }.compactMap { file in
+            guard case .damaged = ownership(of: file) else { return nil }
+            return UUID(uuidString: file.deletingPathExtension().lastPathComponent)
+        })
+    }
     func inventoryCheckpoints() throws -> [NoteDraftRecoveryEntry] {
         try recoveryEntries(collectRetired: false, offering: false)
     }
@@ -787,7 +809,8 @@ extension NoteDraftJournal {
         return try Self.waitForIO { try await io.verifyAttachment(id: id, filename: filename, contentType: contentType, byteCount: byteCount, digest: digest, bytes: bytes) }
     }
     func inventoryCheckpoints() async throws -> [NoteDraftRecoveryEntry] { try await io.inventoryCheckpoints() }
-    func finishOperationReconciliation() async { await io.finishOperationReconciliation() }
+    func finishOperationReconciliation(suppressing notes: Set<UUID> = []) async { await io.finishOperationReconciliation(suppressing: notes) }
+    func damagedCheckpointNoteIDs() async throws -> Set<UUID> { try await io.damagedCheckpointNoteIDs() }
     func prepareOperation(_ envelope: WorkspaceOperationEnvelope) async throws -> WorkspaceOperationClaim {
         try await io.prepareOperation(envelope)
     }
@@ -827,6 +850,10 @@ extension NoteDraftJournal {
     nonisolated func prepareOperationSynchronously(_ envelope: WorkspaceOperationEnvelope) throws -> WorkspaceOperationClaim {
         let io = self.io
         return try Self.waitForIO { try await io.prepareOperation(envelope) }
+    }
+    nonisolated func inventoryCheckpointsSynchronously() throws -> [NoteDraftRecoveryEntry] {
+        let io = self.io
+        return try Self.waitForIO { try await io.inventoryCheckpoints() }
     }
     nonisolated func operationEnvelopesSynchronously() throws -> [(WorkspaceOperationEnvelope, WorkspaceOperationClaim)] {
         let io = self.io

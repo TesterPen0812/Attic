@@ -510,6 +510,8 @@ final class AppCoordinator: ObservableObject {
             try? TasksPagePreview.seedCaughtUp(in: container)
         }
         #endif
+        let workspace = try? WorkspaceLegacyBridge.coordinator(for: container)
+        workspace?.beginLaunchRegistration()
         let (store, noteStore) = runtime.makeItemStores(container: container, performanceRoot: performanceRoot)
         let canvasStore = CanvasStore(container: container)
         let canvasViewDefaults = runtime.isUnitTestHost ? nil : runtime.makeSettingsDefaults()
@@ -825,7 +827,13 @@ final class AppCoordinator: ObservableObject {
             return
         }
 
-        noteDraft.pages.recoverAtLaunch()
+        Task { @MainActor [weak self] in
+            guard let self else { return }
+            do {
+                try await WorkspaceLegacyBridge.coordinator(for: self.store.container).finishLaunch()
+                self.noteDraft.pages.recoverAtLaunch()
+            } catch { self.noteDraft.pages.recoveryStartupFailed(error) }
+        }
         if settings.quickCaptureEnabled { newTaskHotKey.register() }
         // Settings › General › Quick Capture (round 10): a new combination
         // or the switch releases the old claim and makes the new one.

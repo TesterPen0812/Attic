@@ -614,15 +614,16 @@ final class WorkspaceCommitTests: XCTestCase {
         let unrelatedID = UUID()
         let fixture = coordinator.freshContext()
         fixture.insert(TaskItem(id: unrelatedID, title: "Unrelated")); try fixture.save()
-        do { try await coordinator.reconcileStartup(); XCTFail("damage classified as empty") }
-        catch { }
+        try await coordinator.reconcileStartup()
+        XCTAssertFalse(coordinator.damagedCheckpointNotes.isEmpty)
+        XCTAssertNil(coordinator.ownership.tryAcquire([UUID()], kind: .collection), "unbounded damaged bytes retain collection")
         let owners: Set<WorkspaceOwner> = [.init(entity: .task, id: unrelatedID)]
         let result = coordinator.plainSave(tokens: try coordinator.capture(owners), writes: owners, stage: {
             try TaskStore.stageUpdate(in: $0, taskID: unrelatedID, title: "Still editable", timestamp: Date())
         })
         XCTAssertEqual(result, .committed)
         XCTAssertEqual(try Data(contentsOf: damagedURL), raw)
-        XCTAssertFalse(coordinator.startupReconciled)
+        XCTAssertTrue(coordinator.startupReconciled)
     }
 
     func testC5MixedReplicaSaveOutcomeIsUnknownAndPreservesEachUntouchedMetadataValue() throws {
@@ -868,6 +869,316 @@ final class WorkspaceCommitTests: XCTestCase {
             $0.insert(TaskItem(id: otherID, title: "Also cannot resurrect"))
         }, .notCommitted)
         XCTAssertEqual(coordinator.tombstoneLoads, loads + 1)
+    }
+
+    func testR2TasksOnlyLaunchRegistersThenPrunesInBatchesBeforeCheckpointOffers() async throws {
+        let context = coordinator.freshContext()
+        for _ in 0..<130 {
+            let receipt = OperationReceipt(id: UUID(), envelopeDigest: "released", affectedIDs: Data(), resultingTokens: Data())
+            receipt.publicationComplete = true; receipt.handoffProof = Data(); receipt.envelopeReleased = true
+            context.insert(receipt)
+        }
+        try context.save()
+        coordinator.beginLaunchRegistration()
+        XCTAssertNil(coordinator.ownership.tryAcquire([UUID()], kind: .collection))
+        let tasks = TaskStore(container: container), library = AtticLibrary(tasks: tasks)
+        XCTAssertNotNil(tasks.task(withID: taskID), "presentation exists before maintenance")
+        XCTAssertEqual(try coordinator.freshContext().fetchCount(FetchDescriptor<OperationReceipt>()), 130)
+        async let first: Void = coordinator.finishLaunch()
+        async let second: Void = coordinator.finishLaunch()
+        try await first; try await second
+        XCTAssertEqual(coordinator.launchPruneBatches, [64, 64, 2])
+        XCTAssertEqual(try coordinator.freshContext().fetchCount(FetchDescriptor<OperationReceipt>()), 0)
+        let lease = try XCTUnwrap(coordinator.ownership.tryAcquire([UUID()], kind: .collection)); lease.release()
+        XCTAssertNotNil(library.tasks.task(withID: taskID))
+        try await coordinator.finishLaunch()
+        XCTAssertEqual(coordinator.launchPruneBatches, [64, 64, 2])
+    }
+
+    func testR2DamagedCheckpointHoldsOnlyItsPublicationAndIndependentOffersContinue() async throws {
+        let pre = try recoveryDraft("pre-copy")
+        let claim = try await coordinator.journal.writeDurably(pre, staged: [])
+        let (outcome, operation) = try await conversion(preDraft: pre, checkpointClaim: claim,
+            publication: .init(steps: [{ _ in throw WorkspaceFoundationError.unknown }]))
+        XCTAssertEqual(outcome, .publicationPending)
+        let damaged = coordinator.journal.directory.appendingPathComponent("\(noteID!.uuidString).json")
+        let raw = Data("broken checkpoint".utf8); try raw.write(to: damaged)
+        let independentID = UUID(), content = try PreparedNoteDocument(NoteDocument(blocks: [.text("independent")])).content
+        let independent = NoteDraftJournalEntry(noteID: independentID, isPersisted: false, baseRevisionID: nil,
+            content: content, selectionLocation: 0, selectionLength: 0, staged: [], savedAt: Date())
+        _ = try await coordinator.journal.writeDurably(independent, staged: [])
+        coordinator = try WorkspaceOperationCoordinator(container: container, journal: coordinator.journal)
+        try await coordinator.finishLaunch()
+        XCTAssertEqual(coordinator.damagedCheckpointNotes, [noteID])
+        let entries = try await coordinator.journal.readRecoveryEntries()
+        XCTAssertEqual(entries.compactMap { if case let .valid(entry, _, _) = $0 { return entry.noteID }; return nil }, [independentID])
+        XCTAssertEqual(try Data(contentsOf: damaged), raw)
+        XCTAssertEqual(try coordinator.journal.operationEnvelopesSynchronously().map { $0.0.id }, [operation])
+        XCTAssertNil(coordinator.ownership.tryAcquire([UUID()], kind: .collection))
+        let owner = WorkspaceOwner(entity: .task, id: taskID)
+        // The affected task remains held; a disjoint note is still writable.
+        let other = WorkspaceOwner(entity: .task, id: independentID)
+        XCTAssertEqual(coordinator.plainSave(tokens: [.init(owner: other, replicas: [])], writes: [other]) {
+            $0.insert(TaskItem(id: independentID, title: "editable"))
+        }, .committed)
+        XCTAssertEqual(coordinator.plainSave(tokens: try coordinator.capture([owner]), writes: [owner]) { _ in }, .unknown)
+    }
+
+    func testR2ProductionPlainUnknownRetriesOnDemandAndReturnsToFastValidation() throws {
+        var fail = true
+        let tasks = TaskStore(container: container, persist: { context in
+            try context.save()
+            if fail { throw WorkspaceFoundationError.unknown }
+        })
+        coordinator.beforeReconciliationRead = { throw WorkspaceFoundationError.unknown }
+        XCTAssertFalse(tasks.update(try XCTUnwrap(tasks.task(withID: taskID)), title: "saved but unknown"))
+        fail = false; coordinator.beforeReconciliationRead = nil
+        coordinator.validationCounters = .init()
+        XCTAssertTrue(tasks.update(try XCTUnwrap(tasks.task(withID: taskID)), title: "resolved retry"))
+        XCTAssertLessThanOrEqual(coordinator.validationCounters.slowValidations, 1)
+        coordinator.validationCounters = .init()
+        XCTAssertTrue(tasks.update(try XCTUnwrap(tasks.task(withID: taskID)), title: "steady again"))
+        XCTAssertEqual(coordinator.validationCounters, .init(fastValidations: 1, slowValidations: 0, freshContexts: 0))
+        XCTAssertEqual(try coordinator.freshContext().fetchCount(FetchDescriptor<OperationReceipt>()), 0)
+    }
+
+    func testR2CompatibilityRetriesReleasedEnvelopeBookkeepingWithoutReexecutingMutation() throws {
+        var domainSaves = 0
+        let reads = try coordinator.capture(baseOwners)
+        try coordinator.commitCompatibility(tokens: reads, scopes: [], writes: baseOwners, intent: "mixed compatibility", plain: false,
+            writer: { context in
+                let receipts = (context.insertedModelsArray + context.changedModelsArray).compactMap { $0 as? OperationReceipt }
+                if receipts.contains(where: \.envelopeReleased) { throw WorkspaceFoundationError.unknown }
+                if context.changedModelsArray.contains(where: { $0 is TaskItem }) { domainSaves += 1 }
+                try context.save()
+            }, stage: { context in
+                try TaskStore.stageUpdate(in: context, taskID: self.taskID, title: "committed once", timestamp: Date())
+                try context.fetch(FetchDescriptor<NoteItem>()).forEach { $0.tagsRaw = "compatibility" }
+            })
+        XCTAssertEqual(domainSaves, 1)
+        XCTAssertTrue(try coordinator.journal.operationEnvelopesSynchronously().isEmpty, "release preceded failed receipt save")
+        XCTAssertTrue(coordinator.retryHeldWrites())
+        let receipt = try XCTUnwrap(coordinator.freshContext().fetch(FetchDescriptor<OperationReceipt>()).first)
+        XCTAssertTrue(receipt.envelopeReleased); XCTAssertTrue(receipt.publicationComplete)
+        XCTAssertTrue(coordinator.retryHeldWrites()); XCTAssertEqual(domainSaves, 1)
+        let tasks = TaskStore(container: container)
+        coordinator.validationCounters = .init()
+        XCTAssertTrue(tasks.update(try XCTUnwrap(tasks.task(withID: taskID)), title: "ordinary next command"))
+        XCTAssertEqual(coordinator.validationCounters, .init(fastValidations: 1, slowValidations: 0, freshContexts: 0))
+    }
+
+    func testR2PreservationSnapshotAndPurgedTombstoneCannotBeDeletedRewrittenOrCleared() async throws {
+        let context = coordinator.freshContext(), rootID = taskID!
+        let task = try XCTUnwrap(context.fetch(FetchDescriptor<TaskItem>()).first)
+        task.deletedAt = .distantPast; task.deletionRootID = rootID; task.deletionMembersRaw = rootID.uuidString
+        try context.save()
+        let result = await WorkspacePurge.purge(rootID: rootID, before: .distantFuture, coordinator: coordinator,
+            files: TaskImageFiles(rootURL: root.appendingPathComponent("LifetimeFiles")), inventory: { .init(generation: 0) })
+        XCTAssertEqual(result.outcome, .committed)
+        let record = try XCTUnwrap(coordinator.freshContext().fetch(FetchDescriptor<TaskDeletionPreservation>()).first)
+        let owner = WorkspaceOwner(entity: .preservation, id: record.id), original = try coordinator.capture([owner])
+        for edit in 0..<3 {
+            XCTAssertEqual(coordinator.plainSave(tokens: original, writes: [owner]) { commit in
+                let row = try XCTUnwrap(commit.fetch(FetchDescriptor<TaskDeletionPreservation>()).first)
+                switch edit { case 0: commit.delete(row); case 1: row.snapshot = Data(); default: row.purgedAt = nil }
+            }, .notCommitted)
+            XCTAssertEqual(try coordinator.capture([owner]), original)
+        }
+    }
+
+    func testR2FailedPurgeCannotPublishTentativeTombstonesIntoTheCache() async throws {
+        let context = coordinator.freshContext(), id = taskID!
+        let task = try XCTUnwrap(context.fetch(FetchDescriptor<TaskItem>()).first)
+        task.deletedAt = .distantPast; task.deletionRootID = id; task.deletionMembersRaw = id.uuidString
+        try context.save()
+        coordinator.save = { _ in throw WorkspaceFoundationError.unknown }
+        let result = await WorkspacePurge.purge(rootID: id, before: .distantFuture, coordinator: coordinator,
+            files: TaskImageFiles(rootURL: root.appendingPathComponent("FailedTombstoneFiles")), inventory: { .init(generation: 0) })
+        XCTAssertEqual(result.outcome, .notCommitted)
+        XCTAssertEqual(try coordinator.freshContext().fetchCount(FetchDescriptor<TaskDeletionPreservation>()), 0)
+        coordinator.save = { try $0.save() }
+        let owner = WorkspaceOwner(entity: .task, id: id)
+        XCTAssertEqual(coordinator.plainSave(tokens: try coordinator.capture([owner]), writes: [owner]) {
+            let row = try XCTUnwrap($0.fetch(FetchDescriptor<TaskItem>()).first)
+            row.title = "retained after refusal"
+        }, .committed)
+    }
+
+    func testR2ForeignPreservationRemovalCannotForgetACachedRetiredUUID() async throws {
+        let context = coordinator.freshContext(), id = taskID!
+        let task = try XCTUnwrap(context.fetch(FetchDescriptor<TaskItem>()).first)
+        task.deletedAt = .distantPast; task.deletionRootID = id; task.deletionMembersRaw = id.uuidString
+        try context.save()
+        let result = await WorkspacePurge.purge(rootID: id, before: .distantFuture, coordinator: coordinator,
+            files: TaskImageFiles(rootURL: root.appendingPathComponent("ForeignTombstoneFiles")), inventory: { .init(generation: 0) })
+        XCTAssertEqual(result.outcome, .committed)
+        let foreign = ModelContext(container)
+        for row in try foreign.fetch(FetchDescriptor<TaskDeletionPreservation>()) { foreign.delete(row) }
+        try foreign.save()
+        let owner = WorkspaceOwner(entity: .task, id: id), loads = coordinator.tombstoneLoads
+        XCTAssertEqual(coordinator.plainSave(tokens: [.init(owner: owner, replicas: [])], writes: [owner]) {
+            $0.insert(TaskItem(id: id, title: "retired UUID"))
+        }, .notCommitted)
+        XCTAssertEqual(coordinator.tombstoneLoads, loads + 1)
+        XCTAssertEqual(try coordinator.freshContext().fetchCount(FetchDescriptor<TaskItem>()), 0)
+    }
+
+    func testR2CapacityPlusOneDistinctGatedWritesKeepPresentationToggleLinkAndAutosaveFast() async throws {
+        let tasks = TaskStore(container: container), notes = NoteStore(container: container,
+            attachmentFileStore: AttachmentFileStore(rootURL: root.appendingPathComponent("EvictionFiles")))
+        let library = AtticLibrary(tasks: tasks, notes: notes)
+        let headID = try XCTUnwrap(tasks.create(title: "Eviction head")).id
+        let ordinary = UUID(), document = NoteDocument(blocks: [.text("ordinary")])
+        _ = try notes.createDocumentNote(id: ordinary, document: document, staged: []).get()
+        await notes.waitForAttachmentReconciliation()
+        _ = try notes.noteMutationPreflight(ordinary, format: .document)
+        let link = try XCTUnwrap(library.links.link(.init(.task, headID), to: .init(.note, ordinary), kind: .reference))
+        var linkIsLive = true
+        // Touch distinct rows through the same registered presentation context.
+        // A small capacity deterministically exercises several eviction batches;
+        // repeat at the shipping capacity to catch hidden size-dependent work.
+        for capacity in [32, 8_192] {
+            coordinator.ledger.capacity = capacity
+            let source = try XCTUnwrap(tasks.task(withID: headID)?.modelContext)
+            var first: [Double] = [], last: [Double] = []
+            let clock = ContinuousClock()
+            coordinator.validationCounters = .init()
+            for i in 0...capacity {
+                let row = TaskItem(title: "distinct \(capacity)-\(i)")
+                source.insert(row)
+                let owner = WorkspaceOwner(entity: .task, id: row.id), before = WorkspaceModelToken(owner: owner, replicas: [])
+                let start = clock.now
+                XCTAssertEqual(try commitLedgerEdit(source, before: [before], scopes: []), .committed)
+                let elapsed = start.duration(to: clock.now)
+                let ms = Double(elapsed.components.seconds) * 1_000 + Double(elapsed.components.attoseconds) / 1e15
+                if i < 24 { first.append(ms) }
+                if i > capacity - 24 { last.append(ms) }
+            }
+            XCTAssertEqual(coordinator.validationCounters, .init(fastValidations: capacity + 1, slowValidations: 0, freshContexts: 0))
+            print("R2_EVICTION capacity=\(capacity) first_median_ms=\(first.sorted()[first.count/2]) last_median_ms=\(last.sorted()[last.count/2]) trim_passes=\(coordinator.ledger.trimPasses)")
+            // Per-save proofs stay constant: zero exact reads/fresh contexts.
+            // Hosted timing remains subject to the unchanged paired PF gate.
+            for i in 0..<3 {
+                coordinator.validationCounters = .init()
+                XCTAssertEqual(library.updateTask(headID, status: tasks.task(withID: headID)?.status == .done ? .todo : .done), .applied)
+                XCTAssertEqual(coordinator.validationCounters, .init(fastValidations: 1, slowValidations: 0, freshContexts: 0))
+                coordinator.validationCounters = .init()
+                XCTAssertTrue(linkIsLive ? library.links.unlink(link.id) : library.links.restoreLink(link.id))
+                XCTAssertEqual(coordinator.validationCounters, .init(fastValidations: 1, slowValidations: 0, freshContexts: 0))
+                linkIsLive.toggle()
+                var next = document; next.blocks[0] = .text("ordinary \(capacity)-\(i)")
+                let prepared = try PreparedNoteDocument(next), revision = try XCTUnwrap(notes.loadDocument(noteID: ordinary)?.revisionID)
+                coordinator.validationCounters = .init()
+                _ = try notes.saveDocument(noteID: ordinary, document: next, baseRevisionID: revision, staged: [], prepared: prepared).get()
+                XCTAssertEqual(coordinator.validationCounters, .init(fastValidations: 1, slowValidations: 0, freshContexts: 0))
+            }
+        }
+    }
+
+    func testR2FailedCompatibilityDraftReleasesOnlyAfterExactClaimedCheckpointHandoff() async throws {
+        let id = UUID(), owner = WorkspaceOwner(entity: .note, id: id)
+        let prepared = try PreparedNoteDocument(NoteDocument(blocks: [.text("Only pre-copy")]))
+        let pre = NoteDraftJournalEntry(noteID: id, isPersisted: false, baseRevisionID: nil,
+            content: prepared.content, selectionLocation: 0, selectionLength: 0, staged: [], savedAt: Date())
+        XCTAssertThrowsError(try coordinator.commitCompatibility(tokens: [.init(owner: owner, replicas: [])], scopes: [],
+            writes: [owner], intent: "Failed first creation", plain: false, writer: { _ in throw WorkspaceFoundationError.unknown },
+            afterDocuments: [id: prepared.content], preDraft: pre, stage: { context in
+                let note = NoteItem(id: id)
+                NoteStore.stageDocumentContent(prepared, format: 1, on: [note], timestamp: Date(), revision: 0, revisionID: UUID())
+                context.insert(note)
+            }))
+        XCTAssertEqual(try coordinator.journal.operationEnvelopesSynchronously().count, 1)
+        var different = pre
+        different.content = try PreparedNoteDocument(NoteDocument(blocks: [.text("Different foreign copy")])).content
+        let claim = try await coordinator.journal.writeDurably(different, staged: [])
+        XCTAssertEqual(try coordinator.journal.operationEnvelopesSynchronously().count, 1, "a different checkpoint owns no pre-copy")
+        _ = try await coordinator.journal.writeDurably(pre, staged: [], replacing: claim)
+        XCTAssertTrue(try coordinator.journal.operationEnvelopesSynchronously().isEmpty)
+        let restart = NoteDraftJournal(directory: coordinator.journal.directory)
+        let entries = try await restart.readRecoveryEntries()
+        XCTAssertEqual(entries.count, 1)
+        guard case let .valid(entry, _, _) = entries[0] else { return XCTFail("handoff lost the checkpoint") }
+        XCTAssertEqual(entry.content, pre.content)
+    }
+
+    func testR2PruningFailureRetainsReceiptButAllowsIndependentCheckpointOffersAndSweepRetry() async throws {
+        let context = coordinator.freshContext()
+        let receipt = OperationReceipt(id: UUID(), envelopeDigest: "released", affectedIDs: Data(), resultingTokens: Data())
+        receipt.publicationComplete = true; receipt.handoffProof = Data(); receipt.envelopeReleased = true
+        context.insert(receipt); try context.save()
+        let independent = NoteDraftJournalEntry(noteID: UUID(), isPersisted: false, baseRevisionID: nil,
+            content: try PreparedNoteDocument(NoteDocument(blocks: [.text("offer after reconciliation")])).content,
+            selectionLocation: 0, selectionLength: 0, staged: [], savedAt: Date())
+        _ = try await coordinator.journal.writeDurably(independent, staged: [])
+        coordinator.save = { _ in throw WorkspaceFoundationError.unknown }
+        try await coordinator.finishLaunch()
+        XCTAssertNotNil(coordinator.launchPruningError)
+        XCTAssertEqual(try coordinator.freshContext().fetchCount(FetchDescriptor<OperationReceipt>()), 1)
+        let offered = try await coordinator.journal.readRecoveryEntries()
+        XCTAssertEqual(offered.compactMap { if case let .valid(entry, _, _) = $0 { return entry.noteID }; return nil }, [independent.noteID])
+        coordinator.save = { try $0.save() }
+        try await coordinator.finishLaunch()
+        XCTAssertNil(coordinator.launchPruningError)
+        XCTAssertEqual(try coordinator.freshContext().fetchCount(FetchDescriptor<OperationReceipt>()), 0)
+    }
+
+    func testR2LaunchCheckpointOwnersRetainRowsAndBytesWithoutNotesPageAndReleaseAfterRetirement() async throws {
+        let byteID = UUID(), note = UUID()
+        let payload = Data("checkpoint only".utf8)
+        let staged = StagedNoteAttachment(id: byteID, filename: "only.txt", contentTypeIdentifier: "public.plain-text",
+            byteCount: Int64(payload.count), digest: NotePayloadDigest.sha256(payload), data: payload)
+        let document = NoteDocument(blocks: [.text("checkpoint"), .file(attachmentID: byteID, filename: "only.txt",
+            contentTypeIdentifier: "public.plain-text", byteCount: Int64(payload.count))])
+        let entry = NoteDraftJournalEntry(noteID: note, isPersisted: false, baseRevisionID: nil,
+            content: try PreparedNoteDocument(document).content, selectionLocation: 0, selectionLength: 0,
+            staged: [.init(id: byteID, filename: staged.filename, contentTypeIdentifier: staged.contentTypeIdentifier,
+                byteCount: staged.byteCount, digest: staged.digest)], savedAt: Date())
+        let claim = try await coordinator.journal.writeDurably(entry, staged: [staged])
+        try await coordinator.finishLaunch()
+        XCTAssertTrue(coordinator.retainedRecoveryBytes.contains(byteID))
+        XCTAssertNil(coordinator.ownership.tryAcquire([byteID], kind: .collection))
+        XCTAssertNil(coordinator.ownership.tryAcquire([note], kind: .collection))
+        let unrelated = try XCTUnwrap(coordinator.ownership.tryAcquire([UUID()], kind: .collection)); unrelated.release()
+        try await coordinator.journal.retireDurably(noteID: note, claim: claim,
+            saved: .init(document: document, tags: [], attachments: [byteID: staged]))
+        XCTAssertFalse(coordinator.retainedRecoveryBytes.contains(byteID))
+        let freed = try XCTUnwrap(coordinator.ownership.tryAcquire([byteID, note], kind: .collection)); freed.release()
+    }
+
+    func testR2HistoryRegistrationRetainsLiveReceiptAndReleasesItWhenHistoryEnds() async throws {
+        let owner = WorkspaceOwner(entity: .task, id: taskID)
+        let envelope = try coordinator.newEnvelope(intent: "history retention", reads: coordinator.capture([owner]), writes: [owner])
+        let outcome = await coordinator.execute(envelope, stage: {
+            try TaskStore.stageUpdate(in: $0, taskID: self.taskID, title: "history owner", timestamp: Date())
+        })
+        XCTAssertEqual(outcome, .committed)
+        var route: UndoRoute? = UndoRoute()
+        var step = UndoStep(name: "retained", undoOutcome: { .failed }, redoOutcome: { .failed })
+        step.operationID = envelope.id
+        route!.record(step, in: .tasks); coordinator.registerHistory(route!)
+        try await coordinator.reconcileStartup()
+        XCTAssertEqual(try coordinator.prunePublishedReceipts(), 0)
+        route = nil
+        XCTAssertEqual(try coordinator.prunePublishedReceipts(), 1)
+    }
+
+    func testR2GateRegistrySharesLiveDomainsAndReleasesDeadDomains() throws {
+        let key = "round2-registry-\(UUID())"
+        var gate: WorkspaceOwnershipGate? = .shared(for: key)
+        weak var old = gate
+        XCTAssertTrue(gate === WorkspaceOwnershipGate.shared(for: key))
+        let lease = try XCTUnwrap(gate?.tryAcquire([UUID()], kind: .admission))
+        gate = nil
+        XCTAssertNotNil(old, "a live lease owns its domain")
+        lease.release()
+        // The lexical lease still owns its gate; after its scope ends the weak
+        // registry must permit the domain to deallocate.
+        func abandonedDomain() -> () -> Bool {
+            let other = WorkspaceOwnershipGate.shared(for: key + "-abandoned")
+            weak var weakOther = other
+            return { weakOther == nil }
+        }
+        XCTAssertTrue(abandonedDomain()())
     }
 
     func testPF6ProductionPlainSavesUseLedgerWithExactPositiveControls() async throws {

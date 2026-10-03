@@ -104,9 +104,85 @@ final class WorkspaceOperationCoordinator {
     private var publicationStep: [UUID: Int] = [:]
     private var heldOwners: Set<WorkspaceOwner> = []
     private var purgedMembers: Set<UUID>?
+    private var tombstonesNeedReload = false
     private(set) var tombstoneLoads = 0
     private var plainUnknown: ([WorkspaceModelToken], [WorkspaceModelToken], Set<WorkspaceOwner>, [WorkspaceOwner: Set<PersistentIdentifier>])?
     private(set) var startupReconciled = false
+    private var launchWork: Task<Void, Error>?
+    private var launchFinished = false
+    private var launchHold: WorkspaceOwnershipGate.Lease?
+    private var damagedCollectionHold: WorkspaceOwnershipGate.Lease?
+    private(set) var damagedCheckpointNotes = Set<UUID>()
+    private var compatibilityPending = Set<UUID>()
+    private var abortedCompatibility: [UUID: (WorkspaceOperationEnvelope, WorkspaceOperationClaim)] = [:]
+    private var checkpointOwners = Set<WorkspaceOwner>()
+    private var checkpointBytes = Set<UUID>()
+    private var checkpointCollectionHold: WorkspaceOwnershipGate.Lease?
+    var retainedRecoveryBytes: Set<UUID> {
+        checkpointBytes.union(pending.values.flatMap { $0.0.payloads.map(\.id) })
+            .union(abortedCompatibility.values.flatMap { $0.0.payloads.map(\.id) })
+    }
+    private(set) var launchPruneBatches: [Int] = []
+    private(set) var launchPruningError: String?
+
+    /// Called before creating the launch presentation, including Tasks-only
+    /// launches. Collection waits while immutable journal owners are registered.
+    func beginLaunchRegistration() {
+        if launchHold == nil { launchHold = ownership.tryAcquire([ownership.unknownID], kind: .admission) }
+    }
+    /// Shared by app launch and Notes recovery. Presentation construction is
+    /// synchronous and precedes this asynchronous, bounded maintenance work.
+    func finishLaunch() async throws {
+        if let launchWork { return try await launchWork.value }
+        if launchFinished { return }
+        beginLaunchRegistration()
+        let work = Task { @MainActor in
+            try await self.reconcileStartup()
+            self.launchPruningError = nil
+            repeat {
+                do {
+                    let count = try self.prunePublishedReceipts(limit: 64)
+                    self.launchPruneBatches.append(count)
+                    if count < 64 { break }
+                } catch {
+                    // Reconciled checkpoint offers do not depend on successful
+                    // collection. Retain receipts and retry at the next sweep.
+                    self.launchPruningError = error.localizedDescription
+                    break
+                }
+                await Task.yield()
+            } while !Task.isCancelled
+            try Task.checkCancellation()
+            self.launchHold?.release(); self.launchHold = nil
+            self.launchFinished = self.launchPruningError == nil
+        }
+        launchWork = work
+        do { try await work.value; launchWork = nil }
+        catch { launchWork = nil; throw error } // Hold remains; the next launch retry is explicit.
+    }
+
+    /// Recovery reads occur only when an earlier write is actually held.
+    /// A resolved unknown unlocks the caller's normal exact/ledger validation;
+    /// it never replays the original mutation.
+    func retryHeldWrites() -> Bool {
+        if plainUnknown != nil, reconcilePlain() == .unknown { return false }
+        for id in compatibilityPending {
+            guard let (envelope, claim, _) = pending[id] else { continue }
+            switch receiptTruth(id, digest: claim.digest) {
+            case .committed:
+                do { try finalizeCompatibility(envelope, claim: claim) } catch { return false }
+            case .notCommitted:
+                retainAbortedCompatibility(envelope, claim: claim)
+                releasePending(envelope)
+            default: return false
+            }
+        }
+        return true
+    }
+    private func releasePending(_ envelope: WorkspaceOperationEnvelope) {
+        pending[envelope.id] = nil; publicationStep[envelope.id] = nil; compatibilityPending.remove(envelope.id)
+        heldOwners.subtract(Set(envelope.tokens.map(\.owner)).union(envelope.writes))
+    }
     struct RecoveryCopy {
         let operationID: UUID
         let draft: NoteDraftJournalEntry
@@ -114,13 +190,16 @@ final class WorkspaceOperationCoordinator {
         let payloads: [WorkspaceOperationEnvelope.Payload]
     }
     private(set) var preOperationRecoveryCopies: [RecoveryCopy] = []
-    private var historyOwners: [UUID: () -> Set<UUID>] = [:]
-    private var historyBytes: [UUID: () -> Set<UUID>] = [:]
-    func registerHistory(_ route: UndoRoute) {
-        historyOwners[route.ownershipID] = { [weak route] in route?.referencedOperationIDs ?? [] }
-        historyBytes[route.ownershipID] = { [weak route] in route?.referencedAttachmentIDs ?? [] }
+    private final class WeakHistory {
+        weak var value: UndoRoute?
+        init(_ value: UndoRoute) { self.value = value }
     }
-    var retainedHistoryBytes: Set<UUID> { historyBytes.values.reduce(into: []) { $0.formUnion($1()) } }
+    private var histories: [UUID: WeakHistory] = [:]
+    func registerHistory(_ route: UndoRoute) {
+        histories = histories.filter { $0.value.value != nil }
+        histories[route.ownershipID] = WeakHistory(route)
+    }
+    var retainedHistoryBytes: Set<UUID> { histories.values.reduce(into: []) { $0.formUnion($1.value?.referencedAttachmentIDs ?? []) } }
     var historyReferences: () throws -> Set<UUID> = { [] }
     var recoveryReferences: () throws -> Set<UUID> = { [] }
     var save: (ModelContext) throws -> Void = { try $0.save() }
@@ -141,10 +220,64 @@ final class WorkspaceOperationCoordinator {
             writerLease = try WorkspaceWriterLease.attached(to: container) ?? WorkspaceWriterLease.acquire(storeURL: disk.url)
         } else { writerLease = nil }
         ledger.foreignEntitiesDidChange = { [weak self] entities in
-            if entities.contains(.preservation) { self?.purgedMembers = nil }
+            if entities.contains(.preservation) { self?.tombstonesNeedReload = true }
         }
         ledger.foreignContextDidSave = { WorkspaceLegacyBridge.foreignContextDidSave($0, identifiers: $1, deleted: $2) }
         WorkspaceLegacyBridge.register(self)
+        observeCheckpointInventory()
+    }
+
+    private func observeCheckpointInventory() {
+        journal.inventoryChanged = { [weak self] entries in
+            guard let self else { return }
+            do { try self.registerCheckpointInventory(entries) }
+            catch {
+                // Keep the last known owners and hold unbounded collection.
+                if self.damagedCollectionHold == nil {
+                    self.damagedCollectionHold = self.ownership.tryAcquire([self.ownership.unknownID], kind: .admission)
+                }
+            }
+        }
+    }
+    private func registerCheckpointInventory(_ entries: [NoteDraftRecoveryEntry]) throws {
+        var rows = Set<WorkspaceOwner>(), bytes = Set<UUID>()
+        for item in entries {
+            guard case let .valid(entry, _, _) = item else { throw WorkspaceFoundationError.unknown }
+            rows.insert(.init(entity: .note, id: entry.noteID))
+            guard let document = NoteContentCodec.decode(entry.content).document else { throw WorkspaceFoundationError.unknown }
+            let ids = Set(document.attachmentIDs).union(entry.staged.map(\.id))
+                .union(entry.pendingImport?.items.compactMap(\.stagedID) ?? [])
+            bytes.formUnion(ids); rows.formUnion(ids.map { .init(entity: .attachment, id: $0) })
+        }
+        guard let hold = ownership.tryAcquire(bytes.union(rows.map(\.id)), kind: .admission) else { throw WorkspaceFoundationError.unknown }
+        checkpointCollectionHold?.release(); checkpointCollectionHold = hold
+        checkpointOwners = rows; checkpointBytes = bytes
+        try releaseAbortedCompatibility(ownedCheckpoints: entries)
+    }
+    /// Proven receipt absence cancels intent, but not recovery. Release only
+    /// after an independently claimed checkpoint owns the exact pre-copy and
+    /// every supplied payload. A damaged or different copy never qualifies;
+    /// this handoff does not replace or retire any checkpoint.
+    private func retainAbortedCompatibility(_ envelope: WorkspaceOperationEnvelope, claim: WorkspaceOperationClaim) {
+        abortedCompatibility[envelope.id] = (envelope, claim)
+        if let checkpoints = try? journal.inventoryCheckpointsSynchronously() {
+            try? releaseAbortedCompatibility(ownedCheckpoints: checkpoints)
+        }
+    }
+    private func releaseAbortedCompatibility(ownedCheckpoints entries: [NoteDraftRecoveryEntry]) throws {
+        for (id, (envelope, claim)) in abortedCompatibility {
+            if let pre = envelope.preDraft {
+                guard entries.contains(where: { item in
+                    guard case let .valid(entry, _, _) = item, entry.noteID == pre.noteID,
+                          entry.content == pre.content, pre.changedTags == nil || entry.changedTags == pre.changedTags else { return false }
+                    return envelope.payloads.allSatisfy { payload in
+                        entry.staged.contains { $0.id == payload.id && $0.digest == payload.digest && $0.byteCount == payload.byteCount }
+                    }
+                }) else { continue }
+            } else if !envelope.payloads.isEmpty { continue }
+            try journal.releaseOperationSynchronously(claim)
+            abortedCompatibility.removeValue(forKey: id)
+        }
     }
 
     func adoptJournal(_ replacement: NoteDraftJournal) throws {
@@ -155,7 +288,10 @@ final class WorkspaceOperationCoordinator {
         // workspace's writable operation journal. Do not move all subsequent
         // commits into that inaccessible directory.
         try FileManager.default.createDirectory(at: replacement.directory, withIntermediateDirectories: true)
+        journal.inventoryChanged = nil
         journal = replacement
+        startupReconciled = false; launchFinished = false
+        observeCheckpointInventory()
     }
 
     /// The launch migration has a typed two-field invariant at its caller.
@@ -176,6 +312,14 @@ final class WorkspaceOperationCoordinator {
     }
 
     private func gatedSave(_ context: ModelContext, before: [WorkspaceModelToken], using writer: (ModelContext) throws -> Void) throws {
+        try validatePreservationLifetime(context, before: before)
+        for row in context.deletedModelsArray {
+            guard launchHold == nil || startupReconciled,
+                  damagedCollectionHold == nil,
+                  Self.owner(row).map({ !checkpointOwners.contains($0) && !heldOwners.contains($0) }) == true else {
+                throw WorkspaceFoundationError.protectedOwner
+            }
+        }
         let records = (context.insertedModelsArray + context.changedModelsArray).compactMap { $0 as? TaskDeletionPreservation }
         var added = Set<UUID>()
         if purgedMembers != nil {
@@ -185,7 +329,7 @@ final class WorkspaceOperationCoordinator {
         }
         let removedPreservation = context.deletedModelsArray.contains { $0 is TaskDeletionPreservation }
         try ledger.gatedSave(context, before: before, using: writer) {
-            if removedPreservation { purgedMembers = nil }
+            if removedPreservation { tombstonesNeedReload = true }
             else { purgedMembers?.formUnion(added) }
         }
     }
@@ -318,7 +462,7 @@ final class WorkspaceOperationCoordinator {
                    confirmed: (([WorkspaceOwner: WorkspaceModelToken]) -> Void)? = nil,
                    stage: (ModelContext) throws -> Void) -> Outcome {
         let affected = Set(tokens.map(\.owner)).union(writes)
-        guard affected.isDisjoint(with: heldOwners), plainUnknown == nil else { return .unknown }
+        guard retryHeldWrites(), affected.isDisjoint(with: heldOwners) else { return .unknown }
         let context = freshContext()
         do {
             let validated = try WorkspaceModelToken.read(owners: Set(tokens.map(\.owner)).union(writes), in: context)
@@ -380,7 +524,7 @@ final class WorkspaceOperationCoordinator {
                        confirmed: ([WorkspaceOwner: WorkspaceModelToken]) -> Void) -> Outcome {
         let writes = Set(after.map(\.owner))
         let affected = Set(before.map(\.owner)).union(writes)
-        guard affected.isDisjoint(with: heldOwners), plainUnknown == nil else { return .unknown }
+        guard retryHeldWrites(), affected.isDisjoint(with: heldOwners) else { return .unknown }
         do {
             if ledger.canValidate(context, owners: affected, scopes: requiredScopes) {
                 validationCounters.fastValidations += 1
@@ -553,7 +697,14 @@ final class WorkspaceOperationCoordinator {
 
     func retryPublication(_ id: UUID) async -> Outcome {
         guard let (envelope, claim, publication) = pending[id] else { return .conflict }
-        guard receiptTruth(id, digest: claim.digest) == .committed else { return .unknown }
+        switch receiptTruth(id, digest: claim.digest) {
+        case .notCommitted: releasePending(envelope); return .notCommitted
+        case .committed: break
+        default: return .unknown
+        }
+        if envelope.checkpointClaim != nil, let note = envelope.preDraft?.noteID, damagedCheckpointNotes.contains(note) {
+            return .publicationPending
+        }
         do {
             let context = freshContext()
             let receipts = try context.fetch(FetchDescriptor<OperationReceipt>(predicate: #Predicate { $0.id == id }))
@@ -599,8 +750,7 @@ final class WorkspaceOperationCoordinator {
             WorkspaceCrashHook.reach("K7")
             try await journal.releaseOperation(claim)
             try bookkeeping(id) { $0.envelopeReleased = true }
-            pending[id] = nil; publicationStep[id] = nil
-            heldOwners.subtract(Set(envelope.tokens.map(\.owner)).union(envelope.writes))
+            releasePending(envelope)
             return .committed
         } catch { return .publicationPending }
     }
@@ -612,16 +762,24 @@ final class WorkspaceOperationCoordinator {
         startupReconciled = false
         preOperationRecoveryCopies.removeAll()
         let checkpoints = try await journal.inventoryCheckpoints()
-        guard !checkpoints.contains(where: { if case .damaged = $0 { return true }; return false }) else {
-            throw WorkspaceFoundationError.unknown
-        }
+        try registerCheckpointInventory(checkpoints.filter { if case .valid = $0 { return true }; return false })
+        damagedCheckpointNotes = try await journal.damagedCheckpointNoteIDs()
+        if checkpoints.contains(where: { if case .damaged = $0 { return true }; return false }) {
+            // Raw damage can name arbitrary bytes. Its note publication hold
+            // is bounded by the filename; byte collection stays conservative
+            // until explicit archive/repair proves the complete inventory.
+            if damagedCollectionHold == nil {
+                damagedCollectionHold = ownership.tryAcquire([ownership.unknownID], kind: .admission)
+            }
+        } else { damagedCollectionHold?.release(); damagedCollectionHold = nil }
         let envelopes = try await journal.operationEnvelopes()
         for (envelope, claim) in envelopes {
             switch receiptTruth(envelope.id, digest: claim.digest) {
             case .committed:
-                pending[envelope.id] = (envelope, claim, Publication())
+                if pending[envelope.id] == nil { pending[envelope.id] = (envelope, claim, Publication()) }
                 heldOwners.formUnion(Set(envelope.tokens.map(\.owner)).union(envelope.writes))
-                guard await retryPublication(envelope.id) == .committed else { throw WorkspaceFoundationError.unknown }
+                let outcome = await retryPublication(envelope.id)
+                guard outcome == .committed || outcome == .publicationPending else { throw WorkspaceFoundationError.unknown }
             case .notCommitted:
                 if let pre = envelope.preDraft {
                     preOperationRecoveryCopies.append(RecoveryCopy(operationID: envelope.id,
@@ -635,8 +793,8 @@ final class WorkspaceOperationCoordinator {
         // remains authoritative across later revisions and session restart.
         let recorded = Set(envelopes.map { $0.0.id })
         let context = freshContext()
-        let rows = try context.fetch(FetchDescriptor<OperationReceipt>())
-        for (id, family) in Dictionary(grouping: rows, by: \.id) where !recorded.contains(id) {
+        let receiptRows = try context.fetch(FetchDescriptor<OperationReceipt>())
+        for (id, family) in Dictionary(grouping: receiptRows, by: \.id) where !recorded.contains(id) {
             guard try agreeing(family), family.allSatisfy({ $0.publicationComplete && $0.handoffProof != nil }) else {
                 throw WorkspaceFoundationError.unknown
             }
@@ -644,17 +802,27 @@ final class WorkspaceOperationCoordinator {
                 try bookkeeping(id) { $0.envelopeReleased = true }
             }
         }
-        await journal.finishOperationReconciliation()
+        let suppressedNotes = Set(pending.values.flatMap { envelope, _, _ in
+            envelope.tokens.filter { $0.owner.entity == .note }.map { $0.owner.id }
+        })
+        await journal.finishOperationReconciliation(suppressing: suppressedNotes)
         startupReconciled = true
     }
 
     func prunePublishedReceipts(limit: Int = 64) throws -> Int {
         guard startupReconciled, limit > 0 else { return 0 }
+        histories = histories.filter { $0.value.value != nil }
         let referenced = try historyReferences().union(recoveryReferences()).union(pending.keys)
-            .union(historyOwners.values.reduce(into: Set<UUID>()) { $0.formUnion($1()) })
-        let envelopes = Set(try FileManager.default.contentsOfDirectory(
-            at: journal.directory.appendingPathComponent("operations"), includingPropertiesForKeys: nil
-        ).compactMap { UUID(uuidString: $0.lastPathComponent) })
+            .union(histories.values.reduce(into: Set<UUID>()) { $0.formUnion($1.value?.referencedOperationIDs ?? []) })
+        let operationFiles: [URL]
+        do { operationFiles = try FileManager.default.contentsOfDirectory(
+            at: journal.directory.appendingPathComponent("operations"), includingPropertiesForKeys: nil) }
+        catch {
+            let failure = error as NSError
+            guard failure.domain == NSCocoaErrorDomain && [NSFileNoSuchFileError, NSFileReadNoSuchFileError].contains(failure.code) else { throw error }
+            operationFiles = []
+        }
+        let envelopes = Set(operationFiles.compactMap { UUID(uuidString: $0.lastPathComponent) })
         let context = freshContext()
         let families = Dictionary(grouping: try context.fetch(FetchDescriptor<OperationReceipt>()), by: \.id)
         var removed = 0
@@ -793,15 +961,43 @@ final class WorkspaceOperationCoordinator {
 extension WorkspaceOperationCoordinator {
     /// Permanent deletion is an irreversible boundary for every writer,
     /// including compatibility store wrappers and old replay payloads.
+    /// Purged records are permanent UUID tombstones. Preservation snapshots
+    /// retain their row/byte dependencies independently of the task lifetime.
+    /// Current sweeps have no authorized last-owner retirement protocol.
+    private func validatePreservationLifetime(_ context: ModelContext, before: [WorkspaceModelToken]) throws {
+        guard !context.deletedModelsArray.contains(where: { $0 is TaskDeletionPreservation }) else {
+            throw WorkspaceFoundationError.protectedOwner
+        }
+        for record in context.changedModelsArray.compactMap({ $0 as? TaskDeletionPreservation }) {
+            guard let token = before.first(where: { $0.owner == Self.owner(record) }),
+                  let original = token.replicas.first(where: { $0.physicalID == record.persistentModelID }) else {
+                throw WorkspaceFoundationError.unknown
+            }
+            let fields = try WorkspaceModelFields.fingerprint(record)
+            guard fields.filter({ $0.key != "purgedAt" }) == original.fields.filter({ $0.key != "purgedAt" }),
+                  original.fields["purgedAt"] == (try WorkspaceModelFields.encode(Date?.none)) || fields["purgedAt"] == original.fields["purgedAt"] else {
+                throw WorkspaceFoundationError.protectedOwner
+            }
+        }
+    }
     private func validateTombstones(_ context: ModelContext, before: [WorkspaceModelToken], rows: [any PersistentModel]? = nil) throws {
         guard context.container.schema.entities.contains(where: { $0.name == "TaskDeletionPreservation" }) else { return }
-        if purgedMembers == nil {
-            let records = try context.fetch(FetchDescriptor<TaskDeletionPreservation>(predicate: #Predicate { $0.purgedAt != nil }))
+        if purgedMembers == nil || tombstonesNeedReload {
+            var descriptor = FetchDescriptor<TaskDeletionPreservation>(predicate: #Predicate { $0.purgedAt != nil })
+            // Cache durable tombstones only. A purge staged in this context
+            // may still roll back; gatedSave adds its members after success.
+            descriptor.includePendingChanges = false
+            let records = try context.fetch(descriptor)
             var members = Set<UUID>()
             for record in records {
                 members.formUnion(try JSONDecoder().decode(WorkspacePurge.Preservation.self, from: record.snapshot).members.map(\.id))
             }
-            purgedMembers = members; tombstoneLoads += 1
+            // A foreign writer can remove a physical preservation replica,
+            // but cannot grant resurrection rights for a UUID already retired
+            // in this session. Refresh additions without forgetting tombstones.
+            if purgedMembers == nil { purgedMembers = members }
+            else { purgedMembers?.formUnion(members) }
+            tombstonesNeedReload = false; tombstoneLoads += 1
         }
         guard let removed = purgedMembers, !removed.isEmpty else { return }
         let changes = rows ?? (context.insertedModelsArray + context.changedModelsArray)
@@ -930,22 +1126,34 @@ extension WorkspaceOperationCoordinator {
         guard affected.isDisjoint(with: heldOwners) else { throw WorkspaceFoundationError.unknown }
         let claim = try journal.prepareOperationSynchronously(envelope)
         let result = commitPrepared(envelope, claim: claim, stage: stage, publication: Publication())
+        if result == .unknown { compatibilityPending.insert(envelope.id) }
+        if result == .notCommitted || result == .conflict {
+            retainAbortedCompatibility(envelope, claim: claim)
+        }
         guard result == .publicationPending else { throw WorkspaceFoundationError.unknown }
-        do {
-            let context = freshContext()
-            let id = envelope.id
-            let receipts = try context.fetch(FetchDescriptor<OperationReceipt>(predicate: #Predicate { $0.id == id }))
-            guard try agreeing(receipts), let receipt = receipts.first else { throw WorkspaceFoundationError.unknown }
-            let expected = try JSONDecoder().decode([State].self, from: receipt.resultingTokens)
-            guard try states(writes, in: context) == expected else { throw WorkspaceFoundationError.unknown }
-            let proof = try WorkspaceModelFields.encode(expected)
-            try bookkeeping(id) { $0.publicationComplete = true; $0.handoffProof = proof }
-            try journal.releaseOperationSynchronously(claim)
-            try bookkeeping(id) { $0.envelopeReleased = true }
-            pending[id] = nil; heldOwners.subtract(affected)
-        } catch {
-            // The mutation committed. Retain its publication identity for
-            // reconciliation; a cleanup failure is never "failed, unchanged".
+        compatibilityPending.insert(envelope.id)
+        do { try finalizeCompatibility(envelope, claim: claim) }
+        catch {
+            // Committed model state remains authoritative. Keep this identity
+            // so the next real command retries finalization without saving the
+            // original mutation again, even after its envelope was released.
         }
     }
+    private func finalizeCompatibility(_ envelope: WorkspaceOperationEnvelope, claim: WorkspaceOperationClaim) throws {
+        let context = freshContext(), id = envelope.id
+        let receipts = try context.fetch(FetchDescriptor<OperationReceipt>(predicate: #Predicate { $0.id == id }))
+        guard try agreeing(receipts), let receipt = receipts.first else { throw WorkspaceFoundationError.unknown }
+        let expected = try JSONDecoder().decode([State].self, from: receipt.resultingTokens)
+        guard try states(envelope.writes, in: context) == expected else { throw WorkspaceFoundationError.unknown }
+        let proof = try WorkspaceModelFields.encode(expected)
+        if !receipt.publicationComplete || receipt.handoffProof == nil {
+            try bookkeeping(id) { $0.publicationComplete = true; $0.handoffProof = proof }
+        }
+        if !receipt.envelopeReleased {
+            try journal.releaseOperationSynchronously(claim)
+            try bookkeeping(id) { $0.envelopeReleased = true }
+        }
+        releasePending(envelope)
+    }
+
 }

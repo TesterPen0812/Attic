@@ -74,6 +74,18 @@ class PairedGateTests(unittest.TestCase):
         base['PF']['SIX_THOUSAND_TOGGLE_MS'] = [1, 2, 121]
         self.assertEqual(self.run_gate(base, fixture(), base)[0], 2)
 
+    def test_accepted_memory_is_bounded_and_does_not_relax_aa(self):
+        candidate = fixture()
+        candidate['PF']['POPULATED_OPEN_PEAK_MB'] = [9.75] * 3
+        self.assertEqual(self.run_gate(fixture(), candidate, fixture())[0], 0)
+        candidate['PF']['POPULATED_OPEN_PEAK_MB'] = [9.751] * 3
+        self.assertEqual(self.run_gate(fixture(), candidate, fixture())[0], 1)
+        candidate['PF']['POPULATED_OPEN_PEAK_MB'] = [6] * 3
+        self.assertEqual(self.run_gate(fixture(), fixture(), candidate)[0], 2)
+        candidate = fixture()
+        candidate['PF']['EMPTY_OPEN_PEAK_MB'] = [5.01] * 3
+        self.assertEqual(self.run_gate(fixture(), candidate, fixture())[0], 1)
+
     def test_exit_missing_or_unparsable(self):
         with contextlib.redirect_stderr(io.StringIO()):
             self.assertEqual(gate.main([]), 3)

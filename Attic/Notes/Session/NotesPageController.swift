@@ -491,6 +491,10 @@ final class NotesPageController: ObservableObject {
     func refreshRecoveryWarningsAfterResolution() async {
         guard let journal else { return }
         do {
+            if let diskJournal = journal as? NoteDraftJournal,
+               let coordinator = try? WorkspaceLegacyBridge.coordinator(for: store.container), coordinator.journal === diskJournal {
+                try await coordinator.reconcileStartup()
+            }
             let remaining = try await journal.listDamagedDurably()
             recoveryWarnings.removeAll { damagedRecoveryWarnings.contains($0) }
             damagedRecoveryWarnings = Set(remaining.map { "Recovery data is damaged: \($0.confirmation.checkpointFilename)." })
@@ -1444,6 +1448,9 @@ final class NotesPageController: ObservableObject {
 
     /// Materializes recovery drafts before agent access starts. Safe to call
     /// again from `start()` in tests that do not create an AppCoordinator.
+    func recoveryStartupFailed(_ error: Error) {
+        reportRecoveryRetentionWarning("Recovery could not be checked: \(error.localizedDescription)")
+    }
     func recoverAtLaunch() {
         guard !didRecoverAtLaunch else { return }
         if let journal, journal.requiresAsyncIO {
@@ -1452,6 +1459,11 @@ final class NotesPageController: ObservableObject {
             queueRecoveryWork { [weak self] in
                 guard let self else { return }
                 do {
+                    if let diskJournal = journal as? NoteDraftJournal {
+                        let coordinator = try WorkspaceLegacyBridge.coordinator(for: self.store.container)
+                        if coordinator.journal !== diskJournal { try coordinator.adoptJournal(diskJournal) }
+                        try await coordinator.finishLaunch()
+                    }
                     _ = try await journal.readRecoveryEntries()
                     // A faster guarded save can now reach missing-row repair
                     // while the store's existing cache collection still owns

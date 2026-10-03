@@ -9,7 +9,8 @@ final class WorkspaceCommitLedger {
     final class ContextStamp {
         let contextID = UUID()
         let ledgerID: UUID
-        let syncedGeneration: UInt64
+        var syncedEntities: [WorkspaceOwner.Entity: UInt64] = [:]
+        var syncedGeneration: UInt64
         init(ledgerID: UUID, syncedGeneration: UInt64) {
             self.ledgerID = ledgerID; self.syncedGeneration = syncedGeneration
         }
@@ -23,9 +24,17 @@ final class WorkspaceCommitLedger {
         let scopes: Set<WorkspaceScope>
         let generation: UInt64
     }
+    private final class WeakStamp {
+        weak var value: ContextStamp?
+        init(_ value: ContextStamp) { self.value = value }
+    }
+    private var contexts: [WeakStamp] = []
+    private(set) var trimPasses = 0
     let identity = UUID()
     private(set) var generation: UInt64 = 0
     private(set) var floor: UInt64 = 0
+    private var entityFloors: [WorkspaceOwner.Entity: UInt64] = [:]
+    private var entityGenerations: [WorkspaceOwner.Entity: UInt64] = [:]
     private(set) var owners: [WorkspaceOwner: OwnerEntry] = [:]
     private(set) var scopes: [WorkspaceScope: UInt64] = [:]
     private(set) var foreign: [WorkspaceOwner.Entity: UInt64] = [:]
@@ -53,22 +62,25 @@ final class WorkspaceCommitLedger {
     func isSaving(_ context: ModelContext) -> Bool { savingContext === context }
     func register(_ context: ModelContext) {
         if let previous = stamp(context), previous.ledgerID != identity { return }
-        objc_setAssociatedObject(context, &Self.contextKey,
-            ContextStamp(ledgerID: identity, syncedGeneration: generation), .OBJC_ASSOCIATION_RETAIN_NONATOMIC)
+        let current = ContextStamp(ledgerID: identity, syncedGeneration: generation)
+        objc_setAssociatedObject(context, &Self.contextKey, current, .OBJC_ASSOCIATION_RETAIN_NONATOMIC)
+        contexts.removeAll { $0.value == nil }
+        contexts.append(WeakStamp(current))
     }
     func stamp(_ context: ModelContext) -> ContextStamp? {
         objc_getAssociatedObject(context, &Self.contextKey) as? ContextStamp
     }
     func canValidate(_ context: ModelContext, owners requestedOwners: Set<WorkspaceOwner>, scopes requestedScopes: Set<WorkspaceScope>) -> Bool {
-        guard let stamp = stamp(context), stamp.ledgerID == identity, stamp.syncedGeneration >= floor else { return false }
+        guard let stamp = stamp(context), stamp.ledgerID == identity else { return false }
         let entities = Set(requestedOwners.map(\.entity)).union(requestedScopes.map(\.entity))
-        guard entities.allSatisfy({ (foreign[$0] ?? 0) <= stamp.syncedGeneration }) else { return false }
+        func baseline(_ entity: WorkspaceOwner.Entity) -> UInt64 { stamp.syncedEntities[entity] ?? stamp.syncedGeneration }
+        guard entities.allSatisfy({ baseline($0) >= (entityFloors[$0] ?? 0) && (foreign[$0] ?? 0) <= baseline($0) }) else { return false }
         guard requestedOwners.allSatisfy({ owner in
             guard let entry = owners[owner] else { return true }
-            return entry.generation <= stamp.syncedGeneration || entry.writerContextID == stamp.contextID
+            return entry.generation <= baseline(owner.entity) || entry.writerContextID == stamp.contextID
         }) else { return false }
         return requestedScopes.allSatisfy { scope in
-            (scopes[scope] ?? 0) <= stamp.syncedGeneration || scopeWriters[scope] == stamp.contextID
+            (scopes[scope] ?? 0) <= baseline(scope.entity) || scopeWriters[scope] == stamp.contextID
         }
     }
     /// Capture mappings only from supplied rows, never by fetching a family.
@@ -112,6 +124,18 @@ final class WorkspaceCommitLedger {
                         physical.removeValue(forKey: previousID)
                         physical[row.persistentModelID] = PhysicalEntry(owner: owner, scopes: membership, generation: generation)
                     }
+                }
+                for entity in Set(changed.map(\.entity)).union(memberships.map(\.entity)) {
+                    if let current = stamp(context), (current.syncedEntities[entity] ?? current.syncedGeneration) >= (entityGenerations[entity] ?? 0) {
+                        current.syncedEntities[entity] = generation
+                    }
+                    entityGenerations[entity] = generation
+                }
+                // Only a contiguous sequence of this context's own writes
+                // advances its global baseline. Unseen writes by another
+                // context still require exact owner/scope validation.
+                if let current = stamp(context), current.syncedGeneration == generation - 1 {
+                    current.syncedGeneration = generation
                 }
                 trim()
                 didCommit()
@@ -159,19 +183,44 @@ final class WorkspaceCommitLedger {
                 else { for entity in Self.entities.values { foreign[entity] = generation; touched.insert(entity) } }
             }
         }
+        for entity in touched { entityGenerations[entity] = generation }
         trim()
         foreignEntitiesDidChange?(touched)
         foreignContextDidSave?(context, (inserted ?? []) + (updated ?? []), deleted ?? [])
     }
     private func trim() {
-        while owners.count > capacity, let oldest = owners.min(by: { $0.value.generation < $1.value.generation }) {
-            floor = max(floor, oldest.value.generation); owners.removeValue(forKey: oldest.key)
+        guard owners.count > capacity || scopes.count > capacity || physical.count > capacity else { return }
+        trimPasses += 1
+        contexts.removeAll { $0.value == nil }
+        var oldestLive: [WorkspaceOwner.Entity: UInt64] = [:]
+        for entity in Self.entities.values {
+            oldestLive[entity] = contexts.compactMap { $0.value.map { $0.syncedEntities[entity] ?? $0.syncedGeneration } }.min() ?? generation
         }
-        while scopes.count > capacity, let oldest = scopes.min(by: { $0.value < $1.value }) {
-            floor = max(floor, oldest.value); scopes.removeValue(forKey: oldest.key); scopeWriters.removeValue(forKey: oldest.key)
+        // Sort once per bounded batch, leaving headroom for later writes.
+        // This amortizes eviction instead of scanning O(n) per removed entry.
+        let target = max(0, capacity / 2)
+        func forget(_ entryGeneration: UInt64, entity: WorkspaceOwner.Entity) {
+            if entryGeneration > (oldestLive[entity] ?? generation) {
+                floor = max(floor, entryGeneration)
+                entityFloors[entity] = max(entityFloors[entity] ?? 0, entryGeneration)
+            }
         }
-        while physical.count > capacity, let oldest = physical.min(by: { $0.value.generation < $1.value.generation }) {
-            floor = max(floor, oldest.value.generation); physical.removeValue(forKey: oldest.key)
+        if owners.count > capacity {
+            for entry in owners.sorted(by: { $0.value.generation < $1.value.generation }).prefix(owners.count - target) {
+                forget(entry.value.generation, entity: entry.key.entity); owners.removeValue(forKey: entry.key)
+            }
+        }
+        if scopes.count > capacity {
+            for entry in scopes.sorted(by: { $0.value < $1.value }).prefix(scopes.count - target) {
+                forget(entry.value, entity: entry.key.entity); scopes.removeValue(forKey: entry.key); scopeWriters.removeValue(forKey: entry.key)
+            }
+        }
+        if physical.count > capacity {
+            // Lost mappings already cause entity-wide foreign invalidation.
+            // Dropping a mapping alone cannot grant stale validation authority.
+            for entry in physical.sorted(by: { $0.value.generation < $1.value.generation }).prefix(physical.count - target) {
+                physical.removeValue(forKey: entry.key)
+            }
         }
     }
     /// Launch migration may record thousands of rows before presentation is
@@ -179,6 +228,7 @@ final class WorkspaceCommitLedger {
     /// a whole-table physical/owner map for the subsequent session.
     func evictLaunchMigrationEntries() {
         floor = generation
+        for entity in Self.entities.values { entityFloors[entity] = generation }
         owners = [:]; scopes = [:]; scopeWriters = [:]; physical = [:]
     }
     private static let entities: [String: WorkspaceOwner.Entity] = [

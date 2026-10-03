@@ -108,11 +108,16 @@ final class WorkspaceOwnershipGate: @unchecked Sendable {
     /// Multiple filesystem actors addressing the same tree share one gate.
     private final class Registry: @unchecked Sendable {
         let lock = NSLock()
-        var values: [String: WorkspaceOwnershipGate] = [:]
+        final class WeakGate {
+            weak var value: WorkspaceOwnershipGate?
+            init(_ value: WorkspaceOwnershipGate) { self.value = value }
+        }
+        var values: [String: WeakGate] = [:]
         func gate(_ key: String) -> WorkspaceOwnershipGate {
             lock.withLock {
-                if let value = values[key] { return value }
-                let value = WorkspaceOwnershipGate(); values[key] = value; return value
+                values = values.filter { $0.value.value != nil }
+                if let value = values[key]?.value { return value }
+                let value = WorkspaceOwnershipGate(); values[key] = WeakGate(value); return value
             }
         }
     }

@@ -68,18 +68,30 @@ enum WorkspaceLegacyBridge {
     }
     private static var coordinators: [ObjectIdentifier: WeakCoordinator] = [:]
     private static var contextKey: UInt8 = 0
-    private static var journalDirectories: [ObjectIdentifier: URL] = [:]
+    private final class JournalDirectory {
+        weak var container: ModelContainer?
+        let url: URL
+        init(_ url: URL, _ container: ModelContainer) { self.url = url; self.container = container }
+    }
+    private static var journalDirectories: [ObjectIdentifier: JournalDirectory] = [:]
+    private static func trimRegistries() {
+        coordinators = coordinators.filter { $0.value.value != nil }
+        journalDirectories = journalDirectories.filter { $0.value.container != nil }
+    }
     static func configureJournalDirectory(_ directory: URL, for container: ModelContainer) {
-        journalDirectories[ObjectIdentifier(container)] = directory
+        trimRegistries()
+        journalDirectories[ObjectIdentifier(container)] = JournalDirectory(directory, container)
     }
     static func register(_ coordinator: WorkspaceOperationCoordinator) {
+        trimRegistries()
         coordinators[ObjectIdentifier(coordinator.container)] = WeakCoordinator(coordinator)
     }
     static func coordinator(for container: ModelContainer) throws -> WorkspaceOperationCoordinator {
+        trimRegistries()
         if let existing = coordinators[ObjectIdentifier(container)]?.value { return existing }
         let directory: URL
         if let configured = journalDirectories[ObjectIdentifier(container)] {
-            directory = configured
+            directory = configured.url
         } else if let disk = container.configurations.first(where: { !$0.isStoredInMemoryOnly }) {
             directory = disk.url.deletingLastPathComponent().appendingPathComponent("NoteDrafts", isDirectory: true)
         } else {
@@ -320,6 +332,7 @@ enum WorkspaceLegacyBridge {
         guard let state = objc_getAssociatedObject(source, &contextKey) as? ContextState else {
             throw WorkspaceFoundationError.unknown
         }
+        guard state.coordinator.retryHeldWrites() else { throw CommitHeld() }
         guard !state.captureFailed else { throw WorkspaceFoundationError.unknown }
         let changes = source.insertedModelsArray + source.changedModelsArray + source.deletedModelsArray
         guard let admission = state.coordinator.ownership.tryAcquire(try state.coordinator.admissionIDs(changes, before: Array(state.baseline.values)), kind: .admission) else {

@@ -99,9 +99,15 @@ def evaluate(candidate, references, label):
     for group in ('PF', 'PF1', 'PF5'):
         for key, actual in sorted(candidate[group].items()):
             pooled = [v for ref in references for v in ref[group][key]]
-            passed = median(actual) <= bound(pooled)
+            # Owner acceptance: /Users/taha/Developer/attic-redesign-assets/phase2/
+            # owner-decisions.md, "Decisions, 2026-10-03 ~19:30".
+            # Round 1c measured +4.703247 MiB for duplicate-safe guards.
+            # Only the candidate pooled-reference populated-open peak gets this
+            # accepted cost; A/A validity and every other bound stay unchanged.
+            limit = bound(pooled) + (4.75 if group == 'PF' and key == 'POPULATED_OPEN_PEAK_MB' and len(references) == 2 else 0)
+            passed = median(actual) <= limit
             failed |= not passed
-            numbers = (median(pooled), max(pooled), spread(pooled), median(actual), max(actual), bound(pooled))
+            numbers = (median(pooled), max(pooled), spread(pooled), median(actual), max(actual), limit)
             print(f'| {group}_{key} | ' + ' | '.join(f'{v:.9f}' for v in numbers)
                   + f' | {"PASS" if passed else "FAIL"} |')
     for metric in ('SAVE_MS', 'TOGGLE_MS', 'LINK_MS'):

@@ -108,7 +108,11 @@ final class WorkspaceHistoryTests: XCTestCase {
         }
     }
     func testH1ForwardMakeSubtaskReservesTypingAndReplaysRealChildAndFullDraftAtomically() async throws {
-        type("earlier\nMake child")
+        let tasks = TaskStore(container: coordinator.container), library = AtticLibrary(tasks: tasks, undo: route)
+        let tickID = try XCTUnwrap(tasks.create(title: "Tick child", parentID: taskID)).id
+        type("earlier"); workspace.closeGroup()
+        expectEqual(library.updateTask(tickID, status: .done, in: workspace.historyID), .applied)
+        type("\nMake child")
         let childID = UUID(), forwardEntry = UUID(), parent = taskID!, noteID = noteID!
         var group: WorkspaceHistory.TextGroup!
         var forwardID: UUID!
@@ -153,14 +157,15 @@ final class WorkspaceHistoryTests: XCTestCase {
                         else { try TaskStore.stageSoftDeletion(in: commit, taskID: childID, preservationID: preservation, timestamp: Date()) }
                         try NoteStore.stageDocument(in: commit, noteID: noteID, document: document, prepared: prepared,
                             revisionID: UUID(), versionIDs: versions, timestamp: Date())
-                    })
+                    }, publication: .init(steps: [{ _ in tasks.refresh() }]))
                 }
             }, publication: .init(steps: [{ _ in
                 guard adapter.installCommand(command) else { throw WorkspaceFoundationError.conflict }
+                tasks.refresh()
             }]))
         }
         expectEqual(outcome, .committed); expectEqual(delivered, 1); expectEqual(adapter.storage.string, "earlier queued")
-        expectEqual(route.undoCount(in: workspace.historyID), 3)
+        expectEqual(route.undoCount(in: workspace.historyID), 5)
         let id = forwardID!
         let receipt = try XCTUnwrap(coordinator.freshContext().fetch(FetchDescriptor<OperationReceipt>(predicate: #Predicate { $0.id == id })).first)
         expectEqual(receipt.historyEffect, try WorkspaceModelFields.encode(WorkspaceHistory.ForwardEffect(workspaceID: workspace.id, entryID: forwardEntry)))
@@ -170,6 +175,13 @@ final class WorkspaceHistoryTests: XCTestCase {
         expectEqual(adapter.storage.string, "earlier\nMake child"); expectEqual(try savedDocument().blocks.map(\.text), ["Workspace", "earlier", "Make child"])
         let deleted = try XCTUnwrap(coordinator.freshContext().fetch(FetchDescriptor<TaskItem>(predicate: #Predicate { $0.id == childID })).first)
         XCTAssertNotNil(deleted.deletedAt)
+        expectTrue(adapter.undo()); expectEqual(adapter.storage.string, "earlier")
+        expectEqual(await workspace.replay(redo: false), .applied)
+        expectEqual(tasks.task(withID: tickID)?.status, .todo)
+        expectTrue(adapter.undo()); expectEqual(adapter.storage.string, "")
+        expectTrue(adapter.redo()); expectEqual(await workspace.replay(redo: true), .applied)
+        expectEqual(tasks.task(withID: tickID)?.status, .done)
+        expectTrue(adapter.redo()); expectEqual(adapter.storage.string, "earlier\nMake child")
         expectEqual(await workspace.replay(redo: true), .applied); expectEqual(adapter.storage.string, "earlier")
         XCTAssertNil(try coordinator.freshContext().fetch(FetchDescriptor<TaskItem>(predicate: #Predicate { $0.id == childID })).first?.deletedAt)
         expectEqual(try savedDocument().blocks.map(\.text), ["Workspace", "earlier"])
@@ -238,20 +250,65 @@ final class WorkspaceHistoryTests: XCTestCase {
     }
 
     func testH1TypingAndRealModelCommandsShareOneChronologicalCursorWithoutAutosave() async throws {
-        type("first"); try await recordRename(from: "Before", to: "Tick"); type(" second")
-        try await recordRename(from: "Tick", to: "Child", mixed: true)
+        let tasks = TaskStore(container: coordinator.container)
+        let library = AtticLibrary(tasks: tasks, undo: route)
+        type("first"); workspace.closeGroup()
+        expectEqual(library.updateTask(taskID, status: .done, in: workspace.historyID), .applied)
+        type(" second")
+        try await recordRename(from: "Before", to: "Child", mixed: true,
+            publish: .init(steps: [{ _ in tasks.refresh() }]))
         expectEqual(route.undoCount(in: workspace.historyID), 4)
         expectEqual(await workspace.replay(redo: false), .applied)
-        expectEqual(adapter.storage.string, "first second"); expectEqual(try title(), "Tick")
+        expectEqual(adapter.storage.string, "first second"); expectEqual(try title(), "Before")
         expectEqual(try savedDocument().blocks[1].text, "first second")
         XCTAssertTrue(adapter.undo()); expectEqual(adapter.storage.string, "first")
         expectEqual(await workspace.replay(redo: false), .applied); expectEqual(try title(), "Before")
+        expectEqual(try coordinator.freshContext().fetch(FetchDescriptor<TaskItem>()).first?.status, .todo)
         XCTAssertTrue(adapter.undo()); expectEqual(adapter.storage.string, "")
         XCTAssertTrue(adapter.redo()); expectEqual(await workspace.replay(redo: true), .applied)
         XCTAssertTrue(adapter.redo()); expectEqual(await workspace.replay(redo: true), .applied)
         expectEqual(adapter.storage.string, "first second transformed"); expectEqual(try title(), "Child")
         expectEqual(try savedDocument().blocks[1].text, "first second transformed")
     }
+    func testH1RealReorderOccupiesItsChronologicalPlaceAndReplaysBothWays() async throws {
+        let tasks = TaskStore(container: coordinator.container), library = AtticLibrary(tasks: tasks, undo: route)
+        let sibling = try XCTUnwrap(tasks.create(title: "Sibling"))
+        let before = tasks.orderedTasks(for: .todo).map(\.id)
+        type("before order"); workspace.closeGroup()
+        expectEqual(library.moveTask(taskID, relativeTo: sibling.id, in: workspace.historyID), .applied)
+        let after = tasks.orderedTasks(for: .todo).map(\.id)
+        XCTAssertNotEqual(before, after)
+        type(" after order")
+        expectTrue(adapter.undo()); expectEqual(adapter.storage.string, "before order")
+        expectEqual(await workspace.replay(redo: false), .applied)
+        expectEqual(tasks.orderedTasks(for: .todo).map(\.id), before)
+        expectTrue(adapter.undo()); expectEqual(adapter.storage.string, "")
+        expectTrue(adapter.redo()); expectEqual(await workspace.replay(redo: true), .applied)
+        expectEqual(tasks.orderedTasks(for: .todo).map(\.id), after)
+        expectTrue(adapter.redo()); expectEqual(adapter.storage.string, "before order after order")
+    }
+    func testH3DirtyTypingPrecedesNamedExternalBarrierAndToastIsLatestOnly() async throws {
+        type("local"); workspace.closeGroup()
+        let toast = try XCTUnwrap(route.undoStepID(in: workspace.historyID))
+        workspace.recordExternalBarrier(origin: "Claude")
+        let barrier = route.undoStepID(in: workspace.historyID)
+        expectNil(await workspace.undoLatest(stepID: toast))
+        type(" dirty")
+        expectTrue(adapter.undo()); expectEqual(adapter.storage.string, "local")
+        expectEqual(route.undoStepID(in: workspace.historyID), barrier)
+        XCTAssertTrue(workspace.undoName.contains("Claude"))
+        expectEqual(await workspace.replay(redo: false), .failed)
+        expectEqual(adapter.storage.string, "local")
+        XCTAssertTrue(workspace.canRedo, "a refused barrier clears nothing")
+        workspace.recordExternalBarrier(origin: "Other window")
+        XCTAssertFalse(workspace.canRedo, "an applied external change clears redo")
+        type(" latest")
+        let latest = try XCTUnwrap(route.undoStepID(in: workspace.historyID))
+        expectEqual(await workspace.undoLatest(stepID: latest), .applied)
+        expectEqual(adapter.storage.string, "local")
+        expectNil(await workspace.undoLatest(stepID: latest))
+    }
+
     func testH1LazyBindingKeepsSequenceAndReflectionsCannotReplayTwice() throws {
         type("hello"); let noteID = UUID()
         XCTAssertTrue(workspace.bind(noteID: noteID)); XCTAssertTrue(route.workspace(for: .note(noteID)) === workspace)

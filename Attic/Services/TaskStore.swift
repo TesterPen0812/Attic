@@ -495,7 +495,9 @@ final class TaskStore: ObservableObject {
                 do {
                     let fresh = ModelContext(self.container)
                     var ids = Set(try fresh.fetch(FetchDescriptor<TaskItem>()).flatMap { try WorkspacePurge.legacyReferences($0).map(\.id) })
-                    ids.formUnion(try WorkspaceLegacyBridge.coordinator(for: self.container).retainedHistoryBytes)
+                    let coordinator = try WorkspaceLegacyBridge.coordinator(for: self.container)
+                    ids.formUnion(coordinator.retainedHistoryBytes)
+                    ids.formUnion(coordinator.retainedRecoveryBytes)
                     return ids
                 } catch { return nil }
             }
