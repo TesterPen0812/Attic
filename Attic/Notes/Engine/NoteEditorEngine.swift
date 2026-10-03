@@ -2887,7 +2887,9 @@ extension NoteEditorEngine {
             onSlashDateRequest?()
             return true
         case .imageOrFile:
-            onSlashFileRequest?(requestSlashFile(for: session))
+            // Made before the call: optional chaining would skip it.
+            let request = requestSlashFile(for: session)
+            onSlashFileRequest?(request)
             return true
         default:
             history.beginGroup()
