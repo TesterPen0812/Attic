@@ -29,6 +29,11 @@ env:
   # were accepted before Phase 1's D1 edge fade and Done search index
   # (redesign/p1-glass at 3eee023). Move it forward when a phase lands.
   COST_BASELINE_COMMIT: 3eee023e537717fbc42538a0a563643880f586eb
+  # The Done search query samples compare against the last accepted build
+  # with the Done search index (redesign/p1-glass at dab5d2f, CI run
+  # 37121778773): the slowest sample is held to no regression there, and
+  # each query's median to the 16 ms budget (owner, 2026-10-03).
+  DONE_SEARCH_BASELINE_COMMIT: dab5d2fb74b081529b0053797aca1af591b06e8b
 
 jobs:
   macos:
@@ -329,14 +334,17 @@ jobs:
           xcodebuild -version
           xcodebuild -version | head -n 1 | grep -Eq '^Xcode 26\.'
           git merge-base --is-ancestor "$COST_BASELINE_COMMIT" HEAD
+          git merge-base --is-ancestor "$DONE_SEARCH_BASELINE_COMMIT" HEAD
           mkdir -p "$RUNNER_TEMP/AtticCosts"
 
       - name: Build optimized baseline and candidate test hosts
         run: |
           git worktree add --detach "$RUNNER_TEMP/AtticCostBaseline" "$COST_BASELINE_COMMIT"
-          for name in baseline candidate; do
+          git worktree add --detach "$RUNNER_TEMP/AtticDoneSearchBaseline" "$DONE_SEARCH_BASELINE_COMMIT"
+          for name in baseline candidate donebase; do
             source="$GITHUB_WORKSPACE"
             if [ "$name" = baseline ]; then source="$RUNNER_TEMP/AtticCostBaseline"; fi
+            if [ "$name" = donebase ]; then source="$RUNNER_TEMP/AtticDoneSearchBaseline"; fi
             # shellcheck disable=SC2086
             (cd "$source" && xcodebuild build-for-testing \
               -project Attic.xcodeproj -scheme Attic -configuration Local -destination 'platform=macOS' \
@@ -365,6 +373,26 @@ jobs:
           done
           python3 Scripts/check_cost_comparison.py "$RUNNER_TEMP/AtticCosts"
 
+      - name: Done search query samples of the accepted baseline
+        run: |
+          # Three runs of the accepted build's query fixtures, for the
+          # slowest-sample comparison below. Its own per-sample 16 ms
+          # assertions may fail on a slow runner; only its samples are used,
+          # and every run must have printed them.
+          for sample in 1 2 3; do
+            # shellcheck disable=SC2086
+            (cd "$RUNNER_TEMP/AtticDoneSearchBaseline" && xcodebuild test-without-building \
+              -project Attic.xcodeproj -scheme Attic -configuration Local -destination 'platform=macOS' \
+              -derivedDataPath "$RUNNER_TEMP/AtticCost-donebase" \
+              -resultBundlePath "$RUNNER_TEMP/AtticCosts/done-search-baseline-$sample.xcresult" $COST_FLAGS \
+              -parallel-testing-enabled NO \
+              -only-testing:AtticTests/DoneSearchCostTests/testMeasuresDoneSearchOn5000Tasks \
+              -only-testing:AtticTests/DoneSearchCostTests/testTheDiskBackedPhase5SeedAlsoFitsTheQueryBudget) \
+              > "$RUNNER_TEMP/AtticCosts/done-search-baseline-$sample.log" 2>&1 || true
+            grep -q 'ATTIC_DONE_SEARCH session=2 ' "$RUNNER_TEMP/AtticCosts/done-search-baseline-$sample.log"
+            grep -q 'ATTIC_PHASE5_DONE query=z ' "$RUNNER_TEMP/AtticCosts/done-search-baseline-$sample.log"
+          done
+
       - name: Done search query, keystroke and results-frame budgets
         run: |
           # shellcheck disable=SC2086
@@ -375,7 +403,10 @@ jobs:
             -parallel-testing-enabled NO -only-testing:AtticTests/DoneSearchCostTests \
             > "$RUNNER_TEMP/AtticCosts/done-search.log" 2>&1 \
             || { tail -n 120 "$RUNNER_TEMP/AtticCosts/done-search.log"; exit 1; }
-          grep -E 'ATTIC_DONE_SEARCH|ATTIC_DONE_INPUT|ATTIC_DONE_RESULTS' "$RUNNER_TEMP/AtticCosts/done-search.log"
+          grep -E 'ATTIC_DONE_SEARCH|ATTIC_PHASE5_DONE|ATTIC_DONE_QUERY_MEDIAN|ATTIC_DONE_INPUT|ATTIC_DONE_RESULTS' "$RUNNER_TEMP/AtticCosts/done-search.log"
+
+      - name: Compare the slowest Done search query sample with the baseline
+        run: python3 Scripts/check_done_search_costs.py "$RUNNER_TEMP/AtticCosts"
 
       - name: Upload cost evidence
         if: always()
