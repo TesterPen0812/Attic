@@ -76,19 +76,65 @@ struct AtticDropdownCard<Content: View>: View {
     }
 }
 
+/// Reports a measured card's natural height: its content's laid-out height
+/// plus what any part of it gave up to fit the card's limit
+/// (`atticDropdownHeightGivenUp`, the tag picker's shortened list). Both
+/// arrive as one preference value, in the same pass, so a constrained card
+/// never reports its constrained height as natural (P3-B2: a picker taller
+/// than both sides flickered `nil → 178 → nil → 178` as it opened).
 /// Known-height lists avoid observation work on their open/filter path.
 private struct AtticDropdownHeightObserver: ViewModifier {
     var changed: ((CGFloat) -> Void)?
+    @State private var reporter = AtticDropdownHeightReporter()
+
     func body(content: Content) -> some View {
         if let changed {
-            content.onGeometryChange(for: CGFloat.self, of: { $0.size.height }) { height in
-                // Natural content inside the viewport; defer AppKit placement
-                // past layout, rather than observing the constrained host.
-                DispatchQueue.main.async { changed(height + AtticDropdownMetrics.inset * 2) }
-            }
+            content
+                .background(GeometryReader { proxy in
+                    Color.clear.preference(key: AtticDropdownNaturalHeightKey.self, value: proxy.size.height)
+                })
+                .onPreferenceChange(AtticDropdownNaturalHeightKey.self) { [reporter] height in
+                    MainActor.assumeIsolated {
+                        reporter.report(height + AtticDropdownMetrics.inset * 2, to: changed)
+                    }
+                }
         } else {
             content
         }
+    }
+}
+
+/// Defers AppKit placement past layout, once per turn, with the latest
+/// height (an intermediate value is never placed).
+@MainActor
+private final class AtticDropdownHeightReporter {
+    private var latest: CGFloat?
+
+    func report(_ height: CGFloat, to changed: @escaping (CGFloat) -> Void) {
+        let scheduled = latest != nil
+        latest = height
+        guard !scheduled else { return }
+        DispatchQueue.main.async { [self] in
+            guard let height = latest else { return }
+            latest = nil
+            changed(height)
+        }
+    }
+}
+
+/// A measured card's natural content height: the laid-out height, plus the
+/// height any part gave up to fit the card's limit.
+struct AtticDropdownNaturalHeightKey: PreferenceKey {
+    static let defaultValue: CGFloat = 0
+    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) { value += nextValue() }
+}
+
+extension View {
+    /// The height this part of a measured card gave up to fit the card's
+    /// limit (`atticDropdownHeight`), so the card still knows its natural
+    /// height.
+    func atticDropdownHeightGivenUp(_ height: CGFloat) -> some View {
+        preference(key: AtticDropdownNaturalHeightKey.self, value: max(0, height))
     }
 }
 

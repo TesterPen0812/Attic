@@ -1,4 +1,5 @@
 import AppKit
+import Combine
 import SwiftUI
 import XCTest
 @testable import Attic
@@ -632,6 +633,64 @@ final class AtticDropdownTests: XCTestCase {
         XCTAssertNil(presenter.stage.height, "clearing the error returns the card to its natural height")
         let restored = try XCTUnwrap((window.firstResponder as? NSTextView)?.delegate as? NSTextField)
         XCTAssertEqual(restored.stringValue, "tag0", "shrinking must preserve editing state too")
+    }
+
+    /// P3-B2: a tag picker taller than both sides of its anchor settles its
+    /// height in one step as it opens (it flickered `nil → 178 → nil …`).
+    func testATagPickerTallerThanBothSidesSettlesItsHeightInOneStep() throws {
+        let window = makeWindow()
+        window.setContentSize(CGSize(width: 320, height: 420))
+        defer { window.close() }
+        // Mid-panel: 162 pt above the anchor, 194 below; the card is 280.
+        let anchor = NSView(frame: CGRect(x: 40, y: 212, width: 60, height: 28))
+        window.contentView?.addSubview(anchor)
+        let presenter = AtticDropdownPresenter()
+        presenter.design = AtticDesignContext(reduceMotion: true)
+        presenter.prefer = .above
+        var heights: [CGFloat?] = []
+        let watch = presenter.stage.$height.dropFirst().sink { heights.append($0) }
+        defer { watch.cancel() }
+        presenter.content = AnyView(TaskTagPickerView(allTags: (0..<7).map { "tag\($0)" }, state: { _ in .off },
+                                                      onToggle: { _ in }, onCreate: { _, _ in true }))
+        presenter.present(from: anchor)
+        defer { presenter.close(restoreFocus: false, immediately: true) }
+        spin(0.6)
+        let m = AtticDropdownMetrics.self
+        let natural = m.inset * 2 + m.fieldHeight + m.fieldGap + 7 * m.rowHeight
+        let limit = try XCTUnwrap(presenter.stage.height, "neither side holds the card")
+        XCTAssertLessThan(limit, natural)
+        XCTAssertEqual(presenter.stage.side, .below, "the roomier side")
+        XCTAssertEqual(Array(heights.drop { $0 == nil }), [limit], "one step from nil to the limit, then it holds: \(heights)")
+        XCTAssertEqual(try XCTUnwrap(presenter.host).contentRect.height, limit, accuracy: 1)
+    }
+
+    /// P3-B3: Move to Task… low in the panel opens above; typing a filter
+    /// until the list would fit below leaves it above (it jumped across
+    /// the row mid-typing).
+    func testAFilteredCardKeepsItsSide() throws {
+        let window = makeWindow()
+        defer { window.close() }
+        // 336 pt above the anchor, 120 below.
+        let anchor = NSView(frame: CGRect(x: 40, y: 138, width: 60, height: 28))
+        window.contentView?.addSubview(anchor)
+        let presenter = AtticDropdownPresenter()
+        presenter.design = AtticDesignContext(reduceMotion: true)
+        let names = ["Alpha", "Bravo", "Charlie", "Delta", "Echo", "Foxtrot", "Golf", "Hotel"]
+        presenter.content = AnyView(TaskMovePickerView(choices: names.map { .init(id: UUID(), title: $0, detail: "Now") }, onChoose: { _ in }))
+        presenter.present(from: anchor)
+        defer { presenter.close(restoreFocus: false, immediately: true) }
+        spin(0.3)
+        let host = try XCTUnwrap(presenter.host)
+        XCTAssertEqual(presenter.stage.side, .above, "the full list fits only above")
+        let editor = try XCTUnwrap(window.firstResponder as? NSTextView)
+        editor.insertText("Alpha", replacementRange: NSRange(location: NSNotFound, length: 0))
+        spin(0.3)
+        let card = AtticDropdownLayout.topDown(host.convert(host.contentRect, to: window.contentView), in: window.contentView!)
+        let anchorTop = 520 - anchor.frame.maxY
+        XCTAssertLessThanOrEqual(card.height, 520 - 12 - (anchorTop + 28 + AtticDropdownMetrics.anchorGap),
+                                 "the filtered card would fit below")
+        XCTAssertEqual(presenter.stage.side, .above, "it keeps its side while filtering")
+        XCTAssertEqual(card.maxY, anchorTop - AtticDropdownMetrics.anchorGap, accuracy: 1, "still hanging from the row")
     }
 
     private func accessibilityElements(_ root: AnyObject) -> [AnyObject] {
