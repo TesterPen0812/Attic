@@ -9,6 +9,18 @@ final class CanvasStrokeItem {
     var canvasID: UUID = CanvasBoardItem.logicalBoardID
     var payloadVersion: Int = 1
     var payload: Data = Data()
+    // Provisional v2 contract. Existing JSON is canonical and never replaced
+    // by a cache. Spike A's remaining presentation evidence may change these
+    // optional fields before the slice 3 migration/schema freeze.
+    @Attribute(.externalStorage) var binaryPayload: Data? = nil
+    var binaryDigest: String? = nil
+    var boundsMinX: Double? = nil
+    var boundsMinY: Double? = nil
+    var boundsMaxX: Double? = nil
+    var boundsMaxY: Double? = nil
+    var offsetX: Double = 0
+    var offsetY: Double = 0
+    var rankOverride: Int64? = nil
     var boardGeneration: Int64 = 0
     var mutationVersion: Int64 = 1
     var tombstoned: Bool = false

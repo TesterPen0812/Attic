@@ -604,6 +604,17 @@ final class WorkspaceOperationCoordinator {
         // individually metadata, and reject new physical payload rows here.
         let entities = Set(after.map { $0.owner.entity })
         if entities.contains(.note), entities.contains(.task) { return false }
+        // Canvas ordinary model writes have no new original-file obligation.
+        // Image byte imports remain journaled; metadata-only image changes are
+        // allowed only when the exact existing byte guards are unchanged.
+        if entities.isSubset(of: [.board, .stroke, .semantic, .image]) {
+            for image in after where image.owner.entity == .image {
+                guard let previous = old[image.owner],
+                      previous.replicas.map(\.physicalID) == image.replicas.map(\.physicalID),
+                      zip(previous.replicas, image.replicas).allSatisfy({ $0.fields["encodedData"] == $1.fields["encodedData"] }) else { return false }
+            }
+            return true
+        }
         let metadata: [WorkspaceOwner.Entity: Set<String>] = [
             .note: ["tagsRaw", "pinnedAt", "deletedAt", "deletedAttachmentIDsRaw", "updatedAt"],
             .version: ["createdAt", "reasonRaw"],

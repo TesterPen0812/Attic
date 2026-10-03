@@ -13,6 +13,7 @@ final class CanvasCoreReferenceTests: XCTestCase {
     func testPinnedEmptyProductionReference() throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent("P4Reference-\(UUID())")
         defer { try? FileManager.default.removeItem(at: root) }
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
         let container = try PersistenceController.makeContainer(cloudSyncEnabled: false, storeDirectory: root)
         let seed = ModelContext(container); seed.autosaveEnabled = false
         seed.insert(CanvasBoardItem()); try seed.save()

@@ -57,11 +57,266 @@ jobs:
           PY
           cd ../..
           rm -rf .build/pinned
+      - name: Measure fixed Phase 2 reference on this runner
+        shell: /bin/zsh {0}
+        run: |
+          base="$PWD/.build/pf-base"
+          mkdir -p "$base"
+          git archive d77ec80ad91930d377bb3a5849c030c4d63c541e | tar -x -C "$base"
+          cp AtticTests/TaskPerformanceGateTests.swift "$base/AtticTests/TaskPerformanceGateTests.swift"
+          F=(CODE_SIGNING_ALLOWED=YES CODE_SIGNING_REQUIRED=YES CODE_SIGN_STYLE=Manual CODE_SIGN_IDENTITY=- DEVELOPMENT_TEAM= ENABLE_DEBUG_DYLIB=NO)
+          /Users/taha/Developer/attic-redesign-assets/xcodebuild-locked.sh \
+            -project "$base/Attic.xcodeproj" -scheme Attic -configuration Local \
+            -destination 'platform=macOS' -derivedDataPath "$PWD/.build/pf-base-dd" \
+            ATTIC_MACOS_UNIT_HOST_PRODUCT_NAME=AtticP3PFBaseHost \
+            ATTIC_MACOS_UNIT_HOST_EXECUTABLE_NAME=AtticP3PFBaseHost \
+            ATTIC_MACOS_UNIT_HOST_BUNDLE_IDENTIFIER=com.taha.Attic.p3.pfbase \
+            "${F[@]}" -parallel-testing-enabled NO \
+            -only-testing:AtticTests/TaskPerformanceGateTests/testPFFoundationSizeAndProductionPaths test \
+            | tee .build/pf-base.log || true
+          for test in testPF1LargeAutosaveAndPreparedCommitAgainstPairedBase testPF5InterleavedSessionSoakAgainstPairedBase; do
+            /Users/taha/Developer/attic-redesign-assets/xcodebuild-locked.sh \
+              -project "$base/Attic.xcodeproj" -scheme Attic -configuration Local \
+              -destination 'platform=macOS' -derivedDataPath "$PWD/.build/pf-base-dd" \
+              ATTIC_MACOS_UNIT_HOST_PRODUCT_NAME=AtticP3PFBaseHost \
+              ATTIC_MACOS_UNIT_HOST_EXECUTABLE_NAME=AtticP3PFBaseHost \
+              ATTIC_MACOS_UNIT_HOST_BUNDLE_IDENTIFIER=com.taha.Attic.p3.pfbase \
+              "${F[@]}" -parallel-testing-enabled NO \
+              -only-testing:"AtticTests/TaskPerformanceGateTests/$test" test-without-building \
+              | tee -a .build/pf-base.log || true
+          done
+          echo 'TEST_RUNNER_ATTIC_PF_REQUIRE_REFERENCE=1' >> "$GITHUB_ENV"
+          for test in testMeasuredMainActorSaveOnFiveThousandLineNote testMeasuredMainActorSaveIsIndependentOfUnrelatedStoreContents; do
+            /Users/taha/Developer/attic-redesign-assets/xcodebuild-locked.sh \
+              -project "$base/Attic.xcodeproj" -scheme Attic -configuration Local \
+              -destination 'platform=macOS' -derivedDataPath "$PWD/.build/pf-base-dd" \
+              ATTIC_MACOS_UNIT_HOST_PRODUCT_NAME=AtticP3PFBaseHost \
+              ATTIC_MACOS_UNIT_HOST_EXECUTABLE_NAME=AtticP3PFBaseHost \
+              ATTIC_MACOS_UNIT_HOST_BUNDLE_IDENTIFIER=com.taha.Attic.p3.pfbase \
+              "${F[@]}" -parallel-testing-enabled NO \
+              -only-testing:"AtticTests/NotesPageControllerTests/$test" test-without-building \
+              | tee -a .build/pf-base-phase2.log || true
+          done
+      - name: Build and sign the isolated hosted test products
+        shell: /bin/zsh {0}
+        run: |
+          F=(CODE_SIGNING_ALLOWED=YES CODE_SIGNING_REQUIRED=YES CODE_SIGN_STYLE=Manual CODE_SIGN_IDENTITY=- DEVELOPMENT_TEAM= ENABLE_DEBUG_DYLIB=NO)
+          /Users/taha/Developer/attic-redesign-assets/xcodebuild-locked.sh \
+            -project Attic.xcodeproj -scheme Attic -configuration Local \
+            -destination 'platform=macOS' -derivedDataPath .build/dd \
+            ATTIC_MACOS_UNIT_HOST_PRODUCT_NAME=AtticP3CrashHost \
+            ATTIC_MACOS_UNIT_HOST_EXECUTABLE_NAME=AtticP3CrashHost \
+            ATTIC_MACOS_UNIT_HOST_BUNDLE_IDENTIFIER=com.taha.Attic.p3.crashhost \
+            "${F[@]}" build-for-testing
+          Scripts/sign_crash_harness.zsh .build/dd/Build/Products/Local/AtticP3CrashHost.app
+      - name: Run Canvas core contracts and compatibility (headless)
+        if: ${{ !cancelled() }}
+        shell: /bin/zsh {0}
+        run: |
+          F=(CODE_SIGNING_ALLOWED=YES CODE_SIGNING_REQUIRED=YES CODE_SIGN_STYLE=Manual CODE_SIGN_IDENTITY=- DEVELOPMENT_TEAM= ENABLE_DEBUG_DYLIB=NO)
+          /Users/taha/Developer/attic-redesign-assets/xcodebuild-locked.sh \
+            -project Attic.xcodeproj -scheme Attic -configuration Local \
+            -destination 'platform=macOS' -derivedDataPath .build/dd \
+            -resultBundlePath .build/canvas-core.xcresult \
+            ATTIC_MACOS_UNIT_HOST_PRODUCT_NAME=AtticP3CrashHost \
+            ATTIC_MACOS_UNIT_HOST_EXECUTABLE_NAME=AtticP3CrashHost \
+            ATTIC_MACOS_UNIT_HOST_BUNDLE_IDENTIFIER=com.taha.Attic.p3.crashhost \
+            -parallel-testing-enabled NO "${F[@]}" \
+            -only-testing:AtticTests/CanvasCoreContractsTests \
+            -only-testing:AtticTests/CanvasCoreWriterTests \
+            -only-testing:AtticTests/CanvasCoreStorageTests \
+            -only-testing:AtticTests/CanvasCoreBudgetTests/testP4NegativeControlFullBoardFetchMustFailChangedReplicaBound \
+            -only-testing:AtticTests/CanvasCoreBudgetTests/testP4NegativeControlSampleDropMustFailLosslessContract test-without-building
+      - name: Blocking restricted metadata SQL proof
+        if: ${{ !cancelled() }}
+        env:
+          TEST_RUNNER_ATTIC_P4_METADATA_SQL_PROOF: "1"
+        shell: /bin/zsh {0}
+        run: |
+          F=(CODE_SIGNING_ALLOWED=YES CODE_SIGNING_REQUIRED=YES CODE_SIGN_STYLE=Manual CODE_SIGN_IDENTITY=- DEVELOPMENT_TEAM= ENABLE_DEBUG_DYLIB=NO)
+          /Users/taha/Developer/attic-redesign-assets/xcodebuild-locked.sh \
+            -project Attic.xcodeproj -scheme Attic -configuration Local \
+            -destination 'platform=macOS' -derivedDataPath .build/dd \
+            ATTIC_MACOS_UNIT_HOST_PRODUCT_NAME=AtticP3CrashHost \
+            ATTIC_MACOS_UNIT_HOST_EXECUTABLE_NAME=AtticP3CrashHost \
+            ATTIC_MACOS_UNIT_HOST_BUNDLE_IDENTIFIER=com.taha.Attic.p3.crashhost \
+            -parallel-testing-enabled NO "${F[@]}" \
+            -only-testing:AtticTests/CanvasCoreStorageTests/testP4MetadataQueryBudgetRestrictedFetchOf20By2000LeavesBodiesUnrequested \
+            test-without-building > .build/p4-metadata-sql.log 2>&1
+          python3 Scripts/p4_metadata_projection_gate.py .build/p4-metadata-sql.log
+      # The paired probe needs a fresh process, just like the archived base;
+      # earlier suites must not contaminate its absolute process footprint.
+      - name: Run blocking paired PF1-PF3 and PF5 assertions
+        if: ${{ !cancelled() }}
+        shell: /bin/zsh {0}
+        run: |
+          F=(CODE_SIGNING_ALLOWED=YES CODE_SIGNING_REQUIRED=YES CODE_SIGN_STYLE=Manual CODE_SIGN_IDENTITY=- DEVELOPMENT_TEAM= ENABLE_DEBUG_DYLIB=NO)
+          set -o pipefail
+          paired_status=0
+          /Users/taha/Developer/attic-redesign-assets/xcodebuild-locked.sh \
+            -project Attic.xcodeproj -scheme Attic -configuration Local \
+            -destination 'platform=macOS' -derivedDataPath .build/dd \
+            -resultBundlePath .build/performance-gate.xcresult \
+            ATTIC_MACOS_UNIT_HOST_PRODUCT_NAME=AtticP3CrashHost \
+            ATTIC_MACOS_UNIT_HOST_EXECUTABLE_NAME=AtticP3CrashHost \
+            ATTIC_MACOS_UNIT_HOST_BUNDLE_IDENTIFIER=com.taha.Attic.p3.crashhost \
+            -parallel-testing-enabled NO "${F[@]}" \
+            -only-testing:AtticTests/TaskPerformanceGateTests/testPFFoundationSizeAndProductionPaths test-without-building \
+            | tee .build/pf-candidate.log || paired_status=$?
+          for test in testPF1LargeAutosaveAndPreparedCommitAgainstPairedBase testPF5InterleavedSessionSoakAgainstPairedBase; do
+            /Users/taha/Developer/attic-redesign-assets/xcodebuild-locked.sh \
+              -project Attic.xcodeproj -scheme Attic -configuration Local \
+              -destination 'platform=macOS' -derivedDataPath .build/dd \
+              -resultBundlePath ".build/$test.xcresult" \
+              ATTIC_MACOS_UNIT_HOST_PRODUCT_NAME=AtticP3CrashHost \
+              ATTIC_MACOS_UNIT_HOST_EXECUTABLE_NAME=AtticP3CrashHost \
+              ATTIC_MACOS_UNIT_HOST_BUNDLE_IDENTIFIER=com.taha.Attic.p3.crashhost \
+              "${F[@]}" -parallel-testing-enabled NO \
+              -only-testing:"AtticTests/TaskPerformanceGateTests/$test" test-without-building \
+              | tee -a .build/pf-candidate.log || paired_status=$?
+          done
+          exit "$paired_status"
+      - name: Measure fixed Phase 2 reference again
+        if: ${{ !cancelled() }}
+        shell: /bin/zsh {0}
+        run: |
+          base="$PWD/.build/pf-base"
+          F=(CODE_SIGNING_ALLOWED=YES CODE_SIGNING_REQUIRED=YES CODE_SIGN_STYLE=Manual CODE_SIGN_IDENTITY=- DEVELOPMENT_TEAM= ENABLE_DEBUG_DYLIB=NO)
+          for test in testPFFoundationSizeAndProductionPaths testPF1LargeAutosaveAndPreparedCommitAgainstPairedBase testPF5InterleavedSessionSoakAgainstPairedBase; do
+            /Users/taha/Developer/attic-redesign-assets/xcodebuild-locked.sh \
+              -project "$base/Attic.xcodeproj" -scheme Attic -configuration Local \
+              -destination 'platform=macOS' -derivedDataPath "$PWD/.build/pf-base-dd" \
+              ATTIC_MACOS_UNIT_HOST_PRODUCT_NAME=AtticP3PFBaseHost \
+              ATTIC_MACOS_UNIT_HOST_EXECUTABLE_NAME=AtticP3PFBaseHost \
+              ATTIC_MACOS_UNIT_HOST_BUNDLE_IDENTIFIER=com.taha.Attic.p3.pfbase \
+              "${F[@]}" -parallel-testing-enabled NO \
+              -only-testing:"AtticTests/TaskPerformanceGateTests/$test" test-without-building \
+              | tee -a .build/pf-base-after.log || true
+          done
+          for test in testMeasuredMainActorSaveOnFiveThousandLineNote testMeasuredMainActorSaveIsIndependentOfUnrelatedStoreContents; do
+            /Users/taha/Developer/attic-redesign-assets/xcodebuild-locked.sh \
+              -project "$base/Attic.xcodeproj" -scheme Attic -configuration Local \
+              -destination 'platform=macOS' -derivedDataPath "$PWD/.build/pf-base-dd" \
+              ATTIC_MACOS_UNIT_HOST_PRODUCT_NAME=AtticP3PFBaseHost \
+              ATTIC_MACOS_UNIT_HOST_EXECUTABLE_NAME=AtticP3PFBaseHost \
+              ATTIC_MACOS_UNIT_HOST_BUNDLE_IDENTIFIER=com.taha.Attic.p3.pfbase \
+              "${F[@]}" -parallel-testing-enabled NO \
+              -only-testing:"AtticTests/NotesPageControllerTests/$test" test-without-building \
+              | tee -a .build/pf-base-after-phase2.log || true
+          done
+      - name: Test paired PF gate plumbing
+        if: ${{ !cancelled() }}
+        run: python3 Scripts/test_pf_paired_gate.py
+      - name: Evaluate paired PF gate
+        if: ${{ !cancelled() }}
+        shell: /bin/zsh {0}
+        run: |
+          set -o pipefail
+          gate_status=0
+          python3 Scripts/pf_paired_gate.py --base .build/pf-base.log --candidate .build/pf-candidate.log --base-after .build/pf-base-after.log | tee .build/pf-gate.txt || gate_status=$?
+          if [[ "$gate_status" == 2 ]]; then
+            echo 'UNMEASURABLE: base failed against itself; rerun the failed job once'
+          fi
+          exit "$gate_status"
+      - name: Run C1-C5 and minimum taskNote format before the full suite
+        if: ${{ !cancelled() }}
+        shell: /bin/zsh {0}
+        run: |
+          F=(CODE_SIGNING_ALLOWED=YES CODE_SIGNING_REQUIRED=YES CODE_SIGN_STYLE=Manual CODE_SIGN_IDENTITY=- DEVELOPMENT_TEAM= ENABLE_DEBUG_DYLIB=NO)
+          /Users/taha/Developer/attic-redesign-assets/xcodebuild-locked.sh \
+            -project Attic.xcodeproj -scheme Attic -configuration Local \
+            -destination 'platform=macOS' -derivedDataPath .build/dd \
+            -resultBundlePath .build/commit-gate.xcresult \
+            ATTIC_MACOS_UNIT_HOST_PRODUCT_NAME=AtticP3CrashHost \
+            ATTIC_MACOS_UNIT_HOST_EXECUTABLE_NAME=AtticP3CrashHost \
+            ATTIC_MACOS_UNIT_HOST_BUNDLE_IDENTIFIER=com.taha.Attic.p3.crashhost \
+            -parallel-testing-enabled NO -test-timeouts-enabled YES \
+            -default-test-execution-time-allowance 120 -maximum-test-execution-time-allowance 360 \
+            "${F[@]}" -only-testing:AtticTests/OperationCrashHarnessTests \
+            -only-testing:AtticTests/WorkspaceCommitTests -only-testing:AtticTests/NoteFormatTests \
+            -skip-testing:AtticTests/OperationCrashHarnessTests/testK8CoordinatedPurgeCrashesLeaveOnlyRecoverableExclusiveFileSurplus test-without-building
+      - name: Run workspace history before purge
+        if: ${{ !cancelled() }}
+        shell: /bin/zsh {0}
+        run: |
+          F=(CODE_SIGNING_ALLOWED=YES CODE_SIGNING_REQUIRED=YES CODE_SIGN_STYLE=Manual CODE_SIGN_IDENTITY=- DEVELOPMENT_TEAM= ENABLE_DEBUG_DYLIB=NO)
+          /Users/taha/Developer/attic-redesign-assets/xcodebuild-locked.sh \
+            -project Attic.xcodeproj -scheme Attic -configuration Local \
+            -destination 'platform=macOS' -derivedDataPath .build/dd \
+            -resultBundlePath .build/history-gate.xcresult \
+            ATTIC_MACOS_UNIT_HOST_PRODUCT_NAME=AtticP3CrashHost \
+            ATTIC_MACOS_UNIT_HOST_EXECUTABLE_NAME=AtticP3CrashHost \
+            ATTIC_MACOS_UNIT_HOST_BUNDLE_IDENTIFIER=com.taha.Attic.p3.crashhost \
+            -parallel-testing-enabled NO -test-timeouts-enabled YES \
+            -default-test-execution-time-allowance 120 -maximum-test-execution-time-allowance 360 \
+            "${F[@]}" -only-testing:AtticTests/WorkspaceHistoryTests -only-testing:AtticTests/WorkspaceTextReplayTests test-without-building
+      - name: Run coordinated purge restore and K8
+        if: ${{ !cancelled() }}
+        shell: /bin/zsh {0}
+        run: |
+          F=(CODE_SIGNING_ALLOWED=YES CODE_SIGNING_REQUIRED=YES CODE_SIGN_STYLE=Manual CODE_SIGN_IDENTITY=- DEVELOPMENT_TEAM= ENABLE_DEBUG_DYLIB=NO)
+          /Users/taha/Developer/attic-redesign-assets/xcodebuild-locked.sh \
+            -project Attic.xcodeproj -scheme Attic -configuration Local \
+            -destination 'platform=macOS' -derivedDataPath .build/dd \
+            -resultBundlePath .build/purge-gate.xcresult \
+            ATTIC_MACOS_UNIT_HOST_PRODUCT_NAME=AtticP3CrashHost \
+            ATTIC_MACOS_UNIT_HOST_EXECUTABLE_NAME=AtticP3CrashHost \
+            ATTIC_MACOS_UNIT_HOST_BUNDLE_IDENTIFIER=com.taha.Attic.p3.crashhost \
+            -parallel-testing-enabled NO -test-timeouts-enabled YES \
+            -default-test-execution-time-allowance 120 -maximum-test-execution-time-allowance 360 \
+            "${F[@]}" -only-testing:AtticTests/WorkspacePurgeTests -only-testing:AtticTests/OperationCrashHarnessTests/testK8CoordinatedPurgeCrashesLeaveOnlyRecoverableExclusiveFileSurplus test-without-building
+      - name: Run the full hosted unit suite alone
+        if: ${{ !cancelled() }}
+        shell: /bin/zsh {0}
+        run: |
+          F=(CODE_SIGNING_ALLOWED=YES CODE_SIGNING_REQUIRED=YES CODE_SIGN_STYLE=Manual CODE_SIGN_IDENTITY=- DEVELOPMENT_TEAM= ENABLE_DEBUG_DYLIB=NO)
+          /Users/taha/Developer/attic-redesign-assets/xcodebuild-locked.sh \
+            -project Attic.xcodeproj -scheme Attic -configuration Local \
+            -destination 'platform=macOS' -derivedDataPath .build/dd \
+            -resultBundlePath .build/foundation.xcresult \
+            ATTIC_MACOS_UNIT_HOST_PRODUCT_NAME=AtticP3CrashHost \
+            ATTIC_MACOS_UNIT_HOST_EXECUTABLE_NAME=AtticP3CrashHost \
+            ATTIC_MACOS_UNIT_HOST_BUNDLE_IDENTIFIER=com.taha.Attic.p3.crashhost \
+            -parallel-testing-enabled NO -test-timeouts-enabled YES \
+            -default-test-execution-time-allowance 120 -maximum-test-execution-time-allowance 360 \
+            "${F[@]}" -only-testing:AtticTests -skip-testing:AtticTests/CanvasCoreBudgetTests \
+            -skip-testing:AtticTests/TaskPerformanceGateTests/testPFFoundationSizeAndProductionPaths \
+            -skip-testing:AtticTests/TaskPerformanceGateTests/testPF1LargeAutosaveAndPreparedCommitAgainstPairedBase \
+            -skip-testing:AtticTests/TaskPerformanceGateTests/testPF5InterleavedSessionSoakAgainstPairedBase \
+            -skip-testing:AtticTests/AtticDesignSystemHostedTests/testAddBarFollowsRealFocusAndDisabled -skip-testing:AtticTests/AtticDesignSystemHostedTests/testNativeControlsAreHostedAsTheSystemsOwn -skip-testing:AtticTests/AtticDesignSystemHostedTests/testSidebarRowFollowsTheEnvironmentsEnabledState -skip-testing:AtticTests/AtticDesignSystemHostedTests/testTaskCardOffersExpandAndTheTaskActions -skip-testing:AtticTests/AtticDesignSystemHostedTests/testTaskCardTakesKeyboardFocus -skip-testing:AtticTests/AtticDesignSystemHostedTests/testTaskRowOffersTheSpecifiedVoiceOverActions -skip-testing:AtticTests/AtticDesignSystemHostedTests/testTaskRowTakesKeyboardFocusAndAnswersTheTaskKeys -skip-testing:AtticTests/AtticDesignSystemHostedTests/testThePagesReadAsNamedButtonsAndTakeArrows -skip-testing:AtticTests/CanvasDomainTests/testANeverOpenedEditMenuStopsSwallowingCommandZInTheCanvasAlertFields -skip-testing:AtticTests/CanvasDomainTests/testAStaleDisabledUndoItemCannotSwallowCommandZAfterFocusMovesToAForeignField -skip-testing:AtticTests/CanvasDomainTests/testAddMenuRedoRoutesToFocusedTextEditor -skip-testing:AtticTests/CanvasDomainTests/testAddMenuUndoRoutesToFocusedTextEditor -skip-testing:AtticTests/CanvasDomainTests/testClosedTextEditorLeavesNoTypingHistoryForPlainEditMenu -skip-testing:AtticTests/CanvasDomainTests/testEditCommandRouteIsSafeToInvokeWithNothingToUndo -skip-testing:AtticTests/CanvasDomainTests/testEditingAvailabilityRepublishesWhileTypingWithEmptyCanvasHistory -skip-testing:AtticTests/CanvasDomainTests/testFocusMonitorPublishesOnlyWhenForeignTextViewOwnershipChanges -skip-testing:AtticTests/CanvasDomainTests/testFocusedEmptyTextEditorDisablesToolbarAndMenuUndoRedo -skip-testing:AtticTests/CanvasDomainTests/testKeyboardEditEntryAfterCommittedTypingRendersFreshEditorUndoRedo -skip-testing:AtticTests/CanvasDomainTests/testKeyboardUndoInReopenedTextEditorRerendersUndoRedoAndDraft -skip-testing:AtticTests/CanvasDomainTests/testRestyleThatClearsEditorHistoryRerendersUndoRedo -skip-testing:AtticTests/CanvasDomainTests/testShadowingUndoRedoEnablementTracksTheCanvasToolbar -skip-testing:AtticTests/CanvasDomainTests/testTextEditorInNonKeyPanelKeepsUndoRedoAndCommitVeto -skip-testing:AtticTests/CanvasDomainTests/testTextToolInsertionSpawnRendersEditorUndoRedoOverCanvasHistory -skip-testing:AtticTests/CanvasDomainTests/testToolbarUndoRedoFollowFocusedTextEditor -skip-testing:AtticTests/CanvasDomainTests/testTypingInFocusedTextEditorEnablesToolbarUndoWithEmptyCanvasHistory -skip-testing:AtticTests/PanelGeometryTests/testPanelSwipeCannotFinishAfterLosingKeyWindow -skip-testing:AtticTests/PanelGeometryTests/testSwipeReleasePreservesLatestFingerPositionBeforeNextDisplayFrame -skip-testing:AtticTests/PanelIntegrationTests/testShowNeverInterruptsAnActiveCanvasTextEditor -skip-testing:AtticTests/PanelSurfaceHostingViewTests/testQuietMenuGlyphIsWhatActuallyColoursABorderlessMenuLabel -skip-testing:AtticTests/SettingsWindowHostedTests/testTrafficLightsSitOnTheTitleLineAndStayThroughResizes -skip-testing:AtticTests/TasksFrameCostTests/testMeasuresWhatEachInteractionCostsTheMainThread -skip-testing:AtticTests/TasksRound10PagerTests/testEscStopsASubtaskFieldAndCommandZUndoesFromAnywhere -skip-testing:AtticTests/TasksRound12Tests/testEscClosesTheQuickLookFirstThenClearsTheSelection -skip-testing:AtticTests/TasksRound12Tests/testTheSelectionBarNeverCutsItsCountMidWord -skip-testing:AtticTests/TasksRound12Tests/testTheStripKeepsAMeaningfulTagPrefix -skip-testing:AtticTests/TasksRound12Tests/testTheTasksPageIsWhereYouLeftItAfterOtherSections -skip-testing:AtticTests/TasksRound4Tests/testATypingFieldIsRecognisedAndItsCommandZFallsToTheTasksHistory -skip-testing:AtticTests/TasksRound4Tests/testTheEditMenuUndoesTheDraftThenTheTasksHistoryAfterTheFieldIsRemoved -skip-testing:AtticTests/TasksRound5Tests/testAnAtticPopoversWindowOwnsItsKeys -skip-testing:AtticTests/TasksRound6Tests/testCommandFOnDoneGivesTheSearchTheKeyboard -skip-testing:AtticTests/TasksRound6Tests/testDoneRowsAreClickSelectableAndRestoreTogether -skip-testing:AtticTests/TasksRound6Tests/testEveryTabLandsOnItsOwnPageFromEveryOther -skip-testing:AtticTests/TasksRound6Tests/testTheMagnifierGivesTheSearchTheKeyboard -skip-testing:AtticTests/TasksRound7Tests/testAHiddenTasksPageNeverTakesCommandF test-without-building
+      - name: Inspect host and helper signature contracts
+        if: always()
+        run: |
+          host=.build/dd/Build/Products/Local/AtticP3CrashHost.app
+          python3 Scripts/verify_crash_harness_signature.py "$host"
+      - name: Strict local-only build
+        if: ${{ !cancelled() }}
+        shell: /bin/zsh {0}
+        run: |
+          F=(CODE_SIGNING_ALLOWED=YES CODE_SIGNING_REQUIRED=YES CODE_SIGN_STYLE=Manual CODE_SIGN_IDENTITY=- DEVELOPMENT_TEAM= ENABLE_DEBUG_DYLIB=NO)
+          /Users/taha/Developer/attic-redesign-assets/xcodebuild-locked.sh \
+            -project Attic.xcodeproj -scheme Attic -configuration Local \
+            -destination 'platform=macOS' -derivedDataPath .build/dd \
+            SWIFT_STRICT_CONCURRENCY=complete "${F[@]}" build
+          bundle exec ruby Scripts/verify_project_generation.rb
+          git diff --exit-code
+      - name: Require two valid pinned references before accepting Canvas timings
+        if: ${{ !cancelled() }}
+        run: |
+          echo 'BLOCKED: CI run 37156644616 produced no pinned samples; no ceiling can be frozen.'
+          exit 1
       - uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: p4-reference
+          name: p4-slice0-evidence
           path: |
             .build/p4-reference.json
+            .build/canvas-core.xcresult
             .build/p4-reference.log
+            .build/performance-gate.xcresult
+            .build/commit-gate.xcresult
+            .build/history-gate.xcresult
+            .build/purge-gate.xcresult
+            .build/foundation.xcresult
+            .build/pf-gate.txt
           retention-days: 3
