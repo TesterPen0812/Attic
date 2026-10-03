@@ -335,7 +335,8 @@ final class CombinedFixRoundTests: XCTestCase {
         host.layoutSubtreeIfNeeded()
         XCTAssertEqual(labels(), ["#launch-october, 1", "#launch, 3", "#cu2taskonly, 1", "#kyoto, 1"],
                        "the already-open E1 card refreshes from the cross-page inventory")
-        XCTAssertEqual(AtticTagSuggestion.make(typed: "CU2TaskOnly", counts: harness.store.tagCounts, excluding: []),
+        XCTAssertEqual(AtticTagSuggestion.make(typed: try XCTUnwrap(AtticTag.normalize("#CU2TaskOnly")),
+                                               counts: harness.store.tagCounts, excluding: []),
                        [AtticTagSuggestion(name: "cu2taskonly", count: 1, isNew: false)])
         XCTAssertEqual(Set(model.tagChoices(for: [task.id])), Set(library.tags.names))
         XCTAssertEqual(Set(model.composerTagChoices), Set(library.tags.names))

@@ -8,7 +8,24 @@ import XCTest
 /// A keystroke follows panel reveal; reveal does not precompute any query.
 @MainActor
 final class DoneSearchCostTests: XCTestCase {
+    /// The spec's 16 ms query budget holds each query's median across the
+    /// three fresh sessions (owner, 2026-10-03), not every single sample: a
+    /// shared CI runner's spike put one sample of 24 over 16 ms (16.19 ms
+    /// in a session whose median was 12.6 ms). The slowest sample is held
+    /// to no regression instead: `Scripts/check_done_search_costs.py`
+    /// compares it with the accepted baseline's slowest plus its spread.
+    static func assertMediansFitTheBudget(_ samples: [String: [Double]], _ fixture: String,
+                                          file: StaticString = #filePath, line: UInt = #line) {
+        for (query, values) in samples.sorted(by: { $0.key < $1.key }) {
+            let median = TasksFrameCostTests.median(values)
+            print("ATTIC_DONE_QUERY_MEDIAN fixture=\(fixture) query=\(query) median_ms=\(median) sessions=\(values.count)")
+            XCTAssertLessThanOrEqual(median, 16, "\(fixture): the median Done query \"\(query)\" exceeds the 16 ms budget",
+                                     file: file, line: line)
+        }
+    }
+
     func testMeasuresDoneSearchOn5000Tasks() throws {
+        var byQuery: [String: [Double]] = [:]
         for session in 0..<3 {
             let container = try PersistenceController.makeContainer(inMemory: true, cloudSyncEnabled: false)
             try TasksPagePreview.seedScale(in: container)
@@ -27,15 +44,12 @@ final class DoneSearchCostTests: XCTestCase {
                 marks.append(DispatchTime.now().uptimeNanoseconds)
                 let parts = zip(marks.dropFirst(), marks).map { Double($0 - $1) / 1_000_000 }
                 samples.append(parts.reduce(0, +))
-                // Calibration: optimized sessions measured 11–12 ms cold
-                // and about 8 ms warm, with <1 ms cold-session spread.
-                // The remaining headroom fits within the absolute budget.
-                // No tolerance is allowed to raise the product budget.
-                XCTAssertLessThanOrEqual(samples.last!, 16, "Done query exceeded the 16 ms budget")
+                byQuery[query, default: []].append(samples.last!)
                 print("ATTIC_DONE_SEARCH session=\(session) query=\(query) page/group/count_ms=\(parts) total_ms=\(samples.last!)")
             }
             print("ATTIC_DONE_SEARCH summary session=\(session) cold=\(samples[0]) warm=\(TasksFrameCostTests.stats(Array(samples.dropFirst())))")
         }
+        Self.assertMediansFitTheBudget(byQuery, "memory")
     }
 
     private func revealBeforeTyping(_ model: TasksPageModel) {
@@ -245,14 +259,20 @@ final class DoneSearchCostTests: XCTestCase {
             XCTAssertLessThanOrEqual(median, 16, "Done Find key \(key) median exceeds the 16 ms budget")
             XCTAssertLessThanOrEqual(samples.max()!, 16 + 4.3, "sample exceeds the independently measured noise guard")
         }
-        // The results frame is measured and printed, not held to the
-        // keystroke budget: the spec budgets one frame per keystroke, and
-        // this is the frame after the typing pauses, where the first result
-        // rows build cold (CI run 37107829899: 86 to 116 ms). Its regression
-        // gate is the interleaved comparison with the accepted baseline
-        // (`search-show` in Scripts/check_cost_comparison.py), where each
-        // keystroke used to show results itself. A sanity bound only here.
-        XCTAssertLessThan(resultFrames.max()!, 500, "the frame the Done results arrive in: \(resultFrames)")
+        // The frame after the typing pauses, where the first results
+        // arrive (not a keystroke frame, so not the keystroke budget). It
+        // took 86–116 ms on CI (run 37107829899) while it redrew the whole
+        // page twice and built the result rows cold; after the fix it
+        // measured 73.9, 57.0 and 53.8 ms on CI (run 37135232964), and
+        // 17–22 ms against 37–56 ms before on the owner's Mac (local,
+        // optimized, interleaved).
+        // Bound: that CI median plus its measured spread, 57.04 + 20.11 ms,
+        // on the median of the three runs. The no-regression comparison
+        // with the accepted baseline stays (`search-show`,
+        // Scripts/check_cost_comparison.py).
+        let resultsMedian = TasksFrameCostTests.median(resultFrames)
+        print("ATTIC_DONE_RESULTS median_ms=\(resultsMedian) bound_ms=77.15")
+        XCTAssertLessThanOrEqual(resultsMedian, 57.04 + 20.11, "the frame the Done results arrive in: \(resultFrames)")
     }
 
     func testDoneTodaySlicePreservesSnapshotRootsAndOrder() throws {
@@ -331,6 +351,17 @@ final class DoneSearchCostTests: XCTestCase {
     }
 
     func testTheDiskBackedPhase5SeedAlsoFitsTheQueryBudget() throws {
+        // Three sessions, each its own freshly seeded store measured as the
+        // seed leaves it (as the accepted build measured its one session):
+        // the budget holds each query's median across them.
+        var byQuery: [String: [Double]] = [:]
+        for session in 0..<3 {
+            try measurePhase5Session(session, into: &byQuery)
+        }
+        Self.assertMediansFitTheBudget(byQuery, "phase5")
+    }
+
+    private func measurePhase5Session(_ session: Int, into byQuery: inout [String: [Double]]) throws {
         let root = ownedTemporaryDirectory(prefix: "AtticDoneSearch")
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
         let container = try PersistenceController.makeContainer(cloudSyncEnabled: false, storeDirectory: root)
@@ -353,12 +384,12 @@ final class DoneSearchCostTests: XCTestCase {
             _ = model.doneDays()
             let count = model.doneSearchCount()
             let indexedMS = Double(DispatchTime.now().uptimeNanoseconds - start) / 1_000_000
-            print("ATTIC_PHASE5_DONE query=\(query) legacy_page_count_lower_bound_ms=\(legacyMS) indexed_page_group_count_ms=\(indexedMS)")
+            byQuery[query, default: []].append(indexedMS)
+            print("ATTIC_PHASE5_DONE session=\(session) query=\(query) legacy_page_count_lower_bound_ms=\(legacyMS) indexed_page_group_count_ms=\(indexedMS)")
             XCTAssertNil(legacy.failure)
             XCTAssertEqual(model.doneLogTasks.map(\.id), legacy.tasks.map(\.id))
             XCTAssertEqual(store.indexedDoneLogCount(matching: query), legacyMatches)
             XCTAssertEqual(count?.total, legacyTotal! + (store.snapshot(for: .tasks).sections.first { $0.status == .done }?.tasks.count ?? 0))
-            XCTAssertLessThanOrEqual(indexedMS, 16, "disk-backed Phase 5 Done query exceeded the spec's budget")
         }
     }
 

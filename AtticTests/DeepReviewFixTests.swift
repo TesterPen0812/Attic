@@ -5,7 +5,7 @@ import XCTest
 
 /// Phase 1's deep review, the UI fix round: Find from far down a list
 /// (P2-01), the soft edge's pockets over the whole control regions
-/// (P2-02), one Open Files command for every route (P2-03), a visible
+/// (P2-02, a preview's choice since Clean cut became the default), one Open Files command for every route (P2-03), a visible
 /// keyboard focus at every Tab stop (P2-04), the composer strip's values
 /// in full (P3-01) and the pager's test-only settle (code review). Each is
 /// driven the way a person drives it where the hosted page allows: real

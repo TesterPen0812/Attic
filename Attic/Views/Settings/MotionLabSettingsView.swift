@@ -17,8 +17,8 @@ struct MotionLabSettingsGroup: View {
 
     @State private var showsFineTuning = false
     @State private var copied = false
-    /// How lists meet the floating controls (owner, 2026-10-01): the
-    /// system's soft scroll edge, or round 13's clean cut, to feel both.
+    /// How lists meet the floating controls: Clean cut (the default, owner
+    /// 2026-10-03), or the system's soft scroll edge, to compare.
     @ObservedObject private var scrollEdges = AtticScrollEdgeLab.shared
     /// The header's corner buttons (owner, 2026-10-02): Liquid Glass, or
     /// L3's flat surface, to compare.

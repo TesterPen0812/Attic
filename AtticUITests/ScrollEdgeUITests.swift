@@ -1,13 +1,15 @@
 import AppKit
 import XCTest
 
-/// The lists' edges on screen (owner, 2026-10-01: the system's soft scroll
-/// edge). Round 13's clean cut is a preview identity's only, and CI runs the
-/// official identity, so only the system edge is captured here. The window server draws the
-/// system's edge effect, so these captures are the evidence the hosted tests
-/// cannot give: rows scrolled under the tabs, the header's buttons and the
-/// add bar, in Light Solid, Light Glass and Dark Glass. Each capture is
-/// attached to the result (and saved with the visual UAT when CI asks).
+/// The lists' edges on screen: Clean cut, D1's fade before the controls
+/// (owner, 2026-10-03, reversing D4b's system soft edge). The soft edge is a
+/// preview identity's choice only, and CI runs the official identity, which
+/// ignores `ATTIC_UI_TEST_SCROLL_EDGES`, so every capture here is Clean cut,
+/// whatever `edge` a fixture names. These captures are the evidence the
+/// hosted tests cannot give: rows scrolled under the tabs, the header's
+/// buttons and the add bar, in Light Solid, Light Glass and Dark Glass. Each
+/// capture is attached to the result (and saved with the visual UAT when CI
+/// asks).
 final class ScrollEdgeUITests: XCTestCase {
     override func setUp() {
         continueAfterFailure = true

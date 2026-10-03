@@ -129,6 +129,24 @@ Phase 1 (Shell, Tasks and Settings) was built in three streams and integrated
 on `redesign/phase-1`. Every change below is additive: no token, colour, radius
 or type style changed.
 
+### Clean cut by default (owner, 2026-10-03)
+
+- **`AtticScrollEdgeLab` resolves to `.cleanCut`** for every identity, and
+  a strict preview starts on it too; the system soft edge stays a
+  preview-only A/B choice (Settings › General › Motion Lab, or
+  `ATTIC_UI_TEST_SCROLL_EDGES=soft` in a preview). This reverses D4b. On
+  Attic Glass at `dab5d2f` (gate g10) the soft edge cost about 9.5 GPU
+  points mean, 17 peak and 5 WindowServer CPU while scrolling, and
+  GPT-6.1's still captures with it on and off were pixel-identical: D1
+  already fades the rows out before the fixed controls. D1's fade (the
+  list's mask) is unchanged. `TasksDonePage.edges` defaults to it as well.
+
+### Done's first results (Opus, 2026-10-03)
+
+- **`AtticTextInput.passingToSelection(_:)`**: runs a key's command that a
+  typing field passed on to the selection (⇧⌘I, or ⌘Return with no draft,
+  from the composer or Find), so the key is not the field's while it runs.
+
 ### PR prep (Opus, 2026-10-03)
 
 - **A menu's choice is not a typing field's key.** `AtticMenuItems` and

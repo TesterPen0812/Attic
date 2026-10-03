@@ -29,12 +29,22 @@ struct TasksPage: View {
     var chrome = TasksPageChrome()
 
     @Environment(\.atticDesign) private var design
-    /// How the lists meet the floating controls (owner, 2026-10-01: the
-    /// system's soft scroll edge; a preview can switch to round 13's clean
-    /// cut to compare).
+    /// How the lists meet the floating controls: Clean cut, D1's fade
+    /// before the controls (owner, 2026-10-03, reversing D4b's system soft
+    /// edge, which cost GPU and drew the same picture); a preview can switch
+    /// to the system's soft edge to compare.
     @ObservedObject private var scrollEdges = AtticScrollEdgeLab.shared
     @StateObject private var focusTracker = AtticKeyboardFocusTracker()
-    @FocusState private var focusedRow: AtticRowFocusID?
+    /// The rows' keyboard focus. Its `FocusState` is owned by
+    /// `TasksRowFocusOwner`, under the page's body, not by the page: SwiftUI
+    /// redraws a focus state's owner whenever a focusable view comes or
+    /// goes, and as the page's own it redrew the whole page each time a
+    /// list built new rows (the frame Done's first results arrive in).
+    @State private var rowFocus = TasksRowFocusLink()
+    private var focusedRow: AtticRowFocusID? {
+        get { rowFocus.binding.wrappedValue }
+        nonmutating set { rowFocus.binding.wrappedValue = newValue }
+    }
     @State private var drag: TasksDrag?
     @State private var fileDropRow: TasksRowID?
     /// A row's date or tag list that is open (owner fix 5 C and D).
@@ -70,6 +80,16 @@ struct TasksPage: View {
     @State private var addBarEditor = AtticTokenFieldEditor()
     /// Each built list's scroll proxy, for `show` (not observed).
     @State private var listProxies = TasksListProxies()
+    /// Which view draws each Done line (not observed).
+    @State private var doneSlots = TasksDoneSlots()
+    /// Whether the search showed on the tabs' line when the page last drew
+    /// (not observed), and a redraw for Done's query: the page does not
+    /// redraw for an applied Done query (`TasksDoneResults`), so when one
+    /// changes whether the search shows (a query applied while the field
+    /// has no keyboard: an agent's, or a composition committed as the field
+    /// let go), the query watcher asks for one here.
+    @State private var drawnSearch = TasksDrawnSearch()
+    @State private var searchRedraw = 0
 
     /// The page's Find field (Done's search, Now's and Later's Find) has
     /// the keyboard.
@@ -136,9 +156,19 @@ struct TasksPage: View {
     static let listFooter: CGFloat = AtticControlSize.addBarHeight + AtticStyle.chromeMinimumInset + AtticLayout.contentToAddBar
 
     var body: some View {
-        // In three parts (round 10: one chain was too long for the
-        // compiler to type-check in time on CI).
-        observingModel(observingEdits(frame))
+        // The page's own state changed (or it is new): its content redraws.
+        // The focus owner alone redraws for focusable views coming and
+        // going, and the content again only when the focused row changes.
+        let generation = TasksRowFocusLink.nextGeneration()
+        TasksRowFocusOwner { [rowFocus] focus in
+            let _ = rowFocus.binding = focus
+            TasksPageFocusedContent(generation: generation, focusedRow: focus.wrappedValue) {
+                // In three parts (round 10: one chain was too long for the
+                // compiler to type-check in time on CI).
+                observingModel(observingEdits(frame))
+            }
+            .equatable()
+        }
     }
 
     /// The page, its overlays, its keys and its monitors.
@@ -146,8 +176,8 @@ struct TasksPage: View {
         // D1: each list ends before the controls. The controls retain their
         // page-level layer and hit points; the lifted card stays above both.
         ZStack(alignment: .top) {
-            // Native soft edges inside the visible viewport, or the
-            // retained Clean cut preview baseline.
+            // Clean cut (D1's fade before the controls, the default), or
+            // the preview-only native soft edges inside the visible viewport.
             pager
             // The controls float over the lists in both, in the page's own
             // layer.
@@ -423,7 +453,9 @@ struct TasksPage: View {
         // far down a long list left an empty viewport past the matches).
         .onChange(of: model.trimmedQuery(for: .now)) { _, _ in showListTop(.now) }
         .onChange(of: model.trimmedQuery(for: .backlog)) { _, _ in showListTop(.backlog) }
-        .onChange(of: model.trimmedQuery(for: .done)) { _, _ in showListTop(.done) }
+        // Done's query is published to the Done page alone: its own watcher.
+        .background(TasksDoneQueryWatcher(results: model.doneResults, model: model, changed: { showListTop(.done) },
+                                          applied: { if drawnSearch.shown != searchShown { searchRedraw &+= 1 } }))
         .onChange(of: model.viewOptions(for: .now)) { _, _ in showListTop(.now) }
         .onChange(of: model.viewOptions(for: .backlog)) { _, _ in showListTop(.backlog) }
 
@@ -487,8 +519,33 @@ struct TasksPage: View {
             // yet); then SwiftUI's scroll to the row itself, which centres
             // it exactly once it is built.
             if let place, let scroll = listProxies.scrollViews[tab] { TasksScrollKeeper.centre(place, in: scroll) }
-            proxy.scrollTo(request.id, anchor: .center)
+            scroll(proxy, to: request.id, in: tab, anchor: .center)
         }
+    }
+
+    /// Scrolls a list to `id`'s row: on Done, to the line that draws it
+    /// (`TasksDoneSlots`).
+    private func scroll(_ proxy: ScrollViewProxy, to id: UUID, in tab: TasksTab, anchor: UnitPoint? = nil) {
+        if tab == .done, let line = doneSlots.line(for: id) {
+            proxy.scrollTo(line, anchor: anchor)
+        } else {
+            proxy.scrollTo(id, anchor: anchor)
+        }
+    }
+
+    /// Whether Done's rows hold nothing of their own, so a new query's rows
+    /// may come up in the views that drew the last query's
+    /// (`TasksDoneSlots`): no keyboard focus, selection, editor, pop-over,
+    /// details, drag or file on them, the pointer over none of them, and
+    /// VoiceOver off. Otherwise each task's row is drawn by its own view.
+    private func doneRowsAreInterchangeable() -> Bool {
+        let done = TasksTab.done.rawValue
+        return !NSWorkspace.shared.isVoiceOverEnabled
+            && drag == nil && metaPopover == nil && fileDropRow == nil
+            && model.selection.isEmpty && model.doneDetailID == nil && model.editingTitleID == nil
+            && model.renamingSubtaskID == nil && model.newSubtaskParentID == nil
+            && focusedRow?.page != done && model.keyboardFocus?.page != done
+            && !pointer.isOverRow(on: .done)
     }
 
     /// A row's top and height in its list's content, from the heights of
@@ -568,7 +625,8 @@ struct TasksPage: View {
                 .padding(.top, tabsTop + (AtticLayout.pageTabsHeight - AtticControlSize.smallHeight) / 2)
                 .allowsHitTesting(false)
                 .accessibilityHidden(true)
-            if searchShown {
+            let _ = searchRedraw
+            if drawnSearchShown {
                 Group {
                     if model.tab == .done {
                         TasksDoneSearchField(model: model, input: model.doneSearchInput,
@@ -644,6 +702,13 @@ struct TasksPage: View {
     /// leaving, returns the tabs.
     private var searchShown: Bool {
         searchFocused || !model.searchQuery(for: model.tab).isEmpty
+    }
+
+    /// `searchShown`, noted as the page draws it (`drawnSearch`).
+    private var drawnSearchShown: Bool {
+        let shown = searchShown
+        drawnSearch.shown = shown
+        return shown
     }
 
     /// View Options (item 6, option A): Show, the priority filter, Sort
@@ -819,12 +884,16 @@ struct TasksPage: View {
     /// before any menu sees them (round 10), as ⌘F is, since the app's Edit
     /// menu answers ⌘C itself. ⌘C and ⌘D run the command the row's menu
     /// holds for their key (`taskCommands`), so the key and the menu can
-    /// never differ; ⇧⌘I opens that menu. A field typing, an editor or a
-    /// picker keeps every key.
+    /// never differ; ⇧⌘I opens that menu. An editor or a picker keeps every
+    /// key; the composer and Find keep the keys they act on
+    /// (`typingFieldPasses`).
     private func taskShortcutPressed(_ event: NSEvent) -> Bool {
         guard event.type == .keyDown, model.isPageShown, let window = pointer.view?.window, event.window === window,
-              window.isKeyWindow, !AtticTextInput.hasKeyboard, model.editingTitleID == nil, model.newSubtaskParentID == nil,
-              model.renamingSubtaskID == nil, !addBarFocused, !searchFocused, metaPopover == nil, drag == nil else { return false }
+              window.isKeyWindow, model.editingTitleID == nil, model.newSubtaskParentID == nil,
+              model.renamingSubtaskID == nil, metaPopover == nil, drag == nil else { return false }
+        if AtticTextInput.hasKeyboard || addBarFocused || searchFocused {
+            return typingFieldShortcutPressed(event, in: window)
+        }
         let shortcuts = [AtticTaskShortcut.actions, AtticTaskShortcut.copy, AtticTaskShortcut.duplicate] + AtticTaskShortcut.priorities
         guard let shortcut = shortcuts.first(where: {
             AtticTaskShortcut.matches($0, characters: event.charactersIgnoringModifiers, keyCode: event.keyCode, modifiers: event.modifierFlags)
@@ -842,6 +911,49 @@ struct TasksPage: View {
         return true
     }
 
+    /// The rule for a typing field (the composer, Find) with the keyboard
+    /// while rows are selected, as the menu model has it: a key equivalent
+    /// goes to the field when the field acts on it, else to the command
+    /// that acts on the selection (CU recheck 4b, P2: with the composer
+    /// focused, ⇧⌘I and ⌘Return did nothing for a selected Later row).
+    /// - The field keeps text editing, ⌘C and ⌘D (the Edit menu's, on its
+    ///   text) and ⌥⌘0–3, as before.
+    /// - ⇧⌘I, which no typing field acts on, opens the selected row's
+    ///   actions.
+    /// - ⌘Return stays the composer's while it holds a draft (it adds the
+    ///   task and opens it); with no draft to add, and in Find, which has
+    ///   no ⌘Return, it opens the selected row's files.
+    /// Editors (a title, a subtask) and pickers keep every key.
+    static func typingFieldPasses(_ shortcut: KeyboardShortcut, composerDraft: String?) -> Bool {
+        if shortcut == AtticTaskShortcut.actions { return true }
+        if shortcut == AtticTaskShortcut.openPage {
+            return composerDraft?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ?? true
+        }
+        return false
+    }
+
+    /// `typingFieldPasses` for the composer or Find with the keyboard: the
+    /// key runs as the selected row's command, never as the field's key.
+    private func typingFieldShortcutPressed(_ event: NSEvent, in window: NSWindow) -> Bool {
+        guard addBarFocused || searchFocused, !AtticTextInput.isPopoverOpen, !Self.isComposing(window.firstResponder),
+              let shortcut = [AtticTaskShortcut.actions, AtticTaskShortcut.openPage].first(where: {
+                  AtticTaskShortcut.matches($0, characters: event.charactersIgnoringModifiers, keyCode: event.keyCode,
+                                            modifiers: event.modifierFlags)
+              }),
+              Self.typingFieldPasses(shortcut, composerDraft: addBarFocused ? model.addBar.text : nil),
+              !model.selection.isEmpty else { return false }
+        let visible = visibleIDs()
+        guard let current = model.shortcutRow(focusedRow: nil, visible: Set(visible)) else { return false }
+        pointer.endInvocation()
+        if shortcut == AtticTaskShortcut.actions {
+            showActions(for: current, anchor: nil, tab: model.tab)
+            return true
+        }
+        guard let command = AtticMenuCommand.command(for: shortcut, in: taskCommands(current, tab: model.tab)) else { return false }
+        AtticTextInput.passingToSelection { command.action() }
+        return true
+    }
+
     /// Esc with the keyboard in the Done search ends it. Here, not in the
     /// field's exit command: the panel's hosting view answers Esc itself
     /// (it ends a resize or move, else passes it up), so SwiftUI's exit
@@ -856,6 +968,13 @@ struct TasksPage: View {
               !Self.isComposing(window.firstResponder) else { return false }
         endSearch()
         return true
+    }
+
+    /// Whether a mouse event lands on the page's search field itself.
+    static func isOnSearchField(_ event: NSEvent, in window: NSWindow, placeholder: String) -> Bool {
+        guard let content = window.contentView,
+              let field = AtticTabsSearchField.searchField(in: content, placeholder: placeholder) else { return false }
+        return field.bounds.contains(field.convert(event.locationInWindow, from: nil))
     }
 
     /// The responder is a text view with marked text (an input method
@@ -958,8 +1077,8 @@ struct TasksPage: View {
                                           bottomClearance: bottomClearance)
         switch reveal {
         case .none: break
-        case .minimal: withAnimation(animation) { proxy.scrollTo(id) }
-        case let .bottom(fraction): withAnimation(animation) { proxy.scrollTo(id, anchor: UnitPoint(x: 0, y: fraction)) }
+        case .minimal: withAnimation(animation) { scroll(proxy, to: id, in: tab) }
+        case let .bottom(fraction): withAnimation(animation) { scroll(proxy, to: id, in: tab, anchor: UnitPoint(x: 0, y: fraction)) }
         }
     }
 
@@ -994,7 +1113,8 @@ struct TasksPage: View {
             case .now, .backlog:
                 listPage(tab, drawn: drawn)
             case .done:
-                TasksDonePage(model: model, updates: drawn ? model.cellUpdates : TasksCellUpdates.quiet, store: store,
+                TasksDonePage(model: model, updates: drawn ? model.cellUpdates : TasksCellUpdates.quiet,
+                              results: drawn ? model.doneResults : TasksDoneResults.quiet, store: store,
                               listTop: listTop, bottomClearance: bottomClearance,
                               bottomMargin: bottomMargin, viewportTop: viewportTop, bottomInset: bottomInset, bottomStack: bottomStack, drawn: drawn,
                               edges: edgeStyle, mask: viewportMask, reveal: $doneReveal,
@@ -1004,7 +1124,9 @@ struct TasksPage: View {
                               registerList: { proxy in
                                   listProxies.lists[.done] = proxy
                                   takeScrollRequest(in: .done)
-                              })
+                              },
+                              slots: doneSlots,
+                              rowsAreInterchangeable: { doneRowsAreInterchangeable() })
             }
         }
         // Larger corners move the pin (and the add bar) inward; the tabs
@@ -1153,7 +1275,7 @@ struct TasksPage: View {
         }
     }
 
-    /// Clean cut (round 13, a preview's choice): the viewport's fade, by
+    /// Clean cut (the default since 2026-10-03): the viewport's fade, by
     /// position in the viewport, not per row (owner fix 8, review 9), so an
     /// open quick look is cut line by line as it passes under the tabs and
     /// header, or under the add bar. The system soft edge uses no mask.
@@ -1179,10 +1301,11 @@ struct TasksPage: View {
         // hands it off (GPT-6.1's review).
         let reorders = Self.reorders(tab: tab, manual: model.reorders(on: tab))
         TasksReorderCell(
-            model: model, updates: drawn ? model.cellUpdates : TasksCellUpdates.quiet, focus: $focusedRow,
+            model: model, updates: drawn ? model.cellUpdates : TasksCellUpdates.quiet, focus: rowFocus.binding,
             id: id, tab: tab, group: reorders ? group : [id], drag: $drag, metaPopover: $metaPopover, fileDropRow: $fileDropRow,
             enabled: model.editingTitleID != id,
             session: dragSession,
+            pointer: pointer,
             allowsStart: { [pointer, dragSession] point in
                 // Not the circle column (before the row reports its
                 // controls), and never one of the row's controls.
@@ -1304,10 +1427,6 @@ struct TasksPage: View {
                 }
             }
         }
-        .onGeometryChange(for: CGRect.self) { $0.frame(in: Self.space) } action: { [pointer] frame in
-            pointer.frames[TasksRowID(tab: tab, id: id)] = frame
-        }
-        .onDisappear { [pointer] in pointer.frames[TasksRowID(tab: tab, id: id)] = nil }
         // Files dropped on a row: one drop destination for the page
         // (`fileDropTarget(at:)`), not one per row (round 11: a drop
         // destination on every row made a screenful of rows slower to build).
@@ -2006,7 +2125,20 @@ struct TasksPage: View {
            let point = pointer.location(of: event), point.y < listTop - AtticLayout.pageTabsToList / 2,
            point.y > layout.headerBottom {
             if !model.selection.isEmpty { model.clearSelection() }
-            if focusedRow != nil { focusedRow = nil }
+            if focusedRow != nil {
+                if Self.isOnSearchField(event, in: window, placeholder: model.searchPlaceholder(for: model.tab)) {
+                    // A click on the query's own text, which the field
+                    // takes with the click: the row lets go of the keyboard
+                    // now, before it. Cleared through the focus state, the
+                    // row's focus went after the click and took the
+                    // keyboard from the field to the panel, so ↓ reached
+                    // nothing (CU recheck 4b, P2).
+                    focusedRow = nil
+                    window.contentView?.layoutSubtreeIfNeeded()
+                } else {
+                    focusedRow = nil
+                }
+            }
         }
         if pointer.isPlainPressOutsideRows(event, tab: model.tab, top: listTop - AtticLayout.pageTabsToList / 2,
                                            bottomInset: bandTop) {
@@ -2604,6 +2736,59 @@ struct TasksPage: View {
 
 // MARK: - Redraws
 
+/// Whether the page's search showed when the page last drew.
+final class TasksDrawnSearch {
+    var shown = false
+}
+
+/// What a row's cell last reported: its frame in the page and its
+/// controls' frames in the row. A Done cell can draw another task after a
+/// new query (`TasksDoneSlots`); what it reported then moves to that task.
+final class TasksCellReports {
+    var frame: CGRect?
+    var controls: [CGRect]?
+}
+
+/// Where the page reaches its rows' focus state, which `TasksRowFocusOwner`
+/// holds: set as the owner draws the page, read by the page's handlers.
+@MainActor
+final class TasksRowFocusLink {
+    var binding: FocusState<AtticRowFocusID?>.Binding!
+
+    private static var generation: UInt64 = 0
+    /// A new number each time the page's body runs (`TasksPageFocusedContent`).
+    static func nextGeneration() -> UInt64 {
+        generation &+= 1
+        return generation
+    }
+}
+
+/// Owns the rows' `FocusState` for the Tasks page. SwiftUI redraws a focus
+/// state's owner when the focus system's views change (a list building or
+/// letting go of focusable rows), so the owner is this small view: it hands
+/// the page's content the binding, and the content is redrawn only when
+/// the page's body ran again or the focused row changed.
+struct TasksRowFocusOwner<Content: View>: View {
+    @FocusState private var focusedRow: AtticRowFocusID?
+    @ViewBuilder let content: (FocusState<AtticRowFocusID?>.Binding) -> Content
+
+    var body: some View { content($focusedRow) }
+}
+
+/// The Tasks page's content under its focus owner: equal (not redrawn)
+/// while the page's body has not run again and the focused row is the same.
+struct TasksPageFocusedContent<Content: View>: View, Equatable {
+    let generation: UInt64
+    let focusedRow: AtticRowFocusID?
+    @ViewBuilder let content: () -> Content
+
+    var body: some View { content() }
+
+    nonisolated static func == (lhs: Self, rhs: Self) -> Bool {
+        MainActor.assumeIsolated { lhs.generation == rhs.generation && lhs.focusedRow == rhs.focusedRow }
+    }
+}
+
 /// The page redraws from its own observed state (the model, the store); a
 /// parent redrawing (a lock, the panel's key state, another page showing)
 /// passes the same inputs and does not redraw the list. The chrome's
@@ -2992,7 +3177,27 @@ final class TasksDragSession {
     var translation: CGFloat = 0
     var location: CGPoint?
     var controlFrames: [TasksRowID: [CGRect]] = [:]
+    /// Which cell reported each row's control frames (`TasksCellReports`).
+    private var controlOwners: [TasksRowID: ObjectIdentifier] = [:]
     var timer: Timer?
+
+    /// A row's controls, as its cell reports them.
+    func setControlFrames(_ frames: [CGRect], for row: TasksRowID, from cell: TasksCellReports) {
+        controlFrames[row] = frames
+        controlOwners[row] = ObjectIdentifier(cell)
+    }
+
+    /// A cell now draws another task (a Done row after a new query,
+    /// `TasksDoneSlots`): its controls move to that task, and the task it
+    /// drew keeps none of them unless another cell reported them since.
+    func moveControlFrames(from old: TasksRowID, to new: TasksRowID, of cell: TasksCellReports) {
+        if controlOwners[old] == ObjectIdentifier(cell) {
+            controlFrames[old] = nil
+            controlOwners[old] = nil
+        }
+        guard let frames = cell.controls else { return }
+        setControlFrames(frames, for: new, from: cell)
+    }
 
     func cancel() { isCancelled = true }
 
@@ -3076,6 +3281,8 @@ struct TasksReorderCell<Row: View, Below: View>: View {
     let enabled: Bool
     /// The drag's live state: cancellation, pointer, control frames.
     let session: TasksDragSession
+    /// Where the rows are in the page (each cell reports its own).
+    let pointer: TasksPointer
     /// Whether a press at this page point may start a drag (not on the
     /// row's circle, checklist, date or tags).
     let allowsStart: (CGPoint) -> Bool
@@ -3091,6 +3298,8 @@ struct TasksReorderCell<Row: View, Below: View>: View {
     @Environment(\.atticDesign) private var design
     @GestureState private var translation: CGFloat?
     @State private var pushedPast = false
+    /// What this cell last reported of its row (its frame, its controls).
+    @State private var reports = TasksCellReports()
 
     var body: some View {
         let lifted = drag?.id == id && translation != nil
@@ -3117,8 +3326,11 @@ struct TasksReorderCell<Row: View, Below: View>: View {
             // date, the tags, the checklist) keep their clicks; a press that
             // moves 4 pt drags at once, with no hold.
             row(live)
-                .onPreferenceChange(AtticRowControlFramesKey.self) { [session, id, tab] frames in
-                    MainActor.assumeIsolated { session.controlFrames[TasksRowID(tab: tab, id: id)] = frames }
+                .onPreferenceChange(AtticRowControlFramesKey.self) { [session, id, tab, reports] frames in
+                    MainActor.assumeIsolated {
+                        reports.controls = frames
+                        session.setControlFrames(frames, for: TasksRowID(tab: tab, id: id), from: reports)
+                    }
                 }
                 .simultaneousGesture(gesture, including: enabled ? .all : .subviews)
             below(live)
@@ -3129,6 +3341,19 @@ struct TasksReorderCell<Row: View, Below: View>: View {
         .opacity(hidden ? 0.001 : 1)
         .offset(y: hidden ? 0 : offset)
         .animation(hidden || design.reduceMotion ? nil : AtticMotionPreset.settle.animation(reduceMotion: false), value: offset)
+        // A Done row's cell can draw another task after a new query
+        // (`TasksDoneSlots`): its controls' frames go with it.
+        .onChange(of: id) { [session, pointer, tab, reports] old, new in
+            session.moveControlFrames(from: TasksRowID(tab: tab, id: old), to: TasksRowID(tab: tab, id: new), of: reports)
+            pointer.moveFrame(from: TasksRowID(tab: tab, id: old), to: TasksRowID(tab: tab, id: new), of: reports)
+        }
+        // Each row's frame in the page, for the pointer's questions (which
+        // row a right-click, a drop or a drag-out is on) and the reveal.
+        .onGeometryChange(for: CGRect.self) { $0.frame(in: TasksPage.space) } action: { [pointer, tab, id, reports] frame in
+            reports.frame = frame
+            pointer.setFrame(frame, for: TasksRowID(tab: tab, id: id), from: reports)
+        }
+        .onDisappear { [pointer, tab, id, reports] in pointer.removeFrame(for: TasksRowID(tab: tab, id: id), of: reports) }
         .onChange(of: translation == nil) { _, ended in
             guard ended else { return }
             // Released, cancelled by the system or by Esc: the lift goes
@@ -3365,6 +3590,37 @@ final class TasksPointer {
             return
         }
         invocation = Invocation(row: TasksRowID(tab: tab, id: id), targets: select(id), pressedAt: event.timestamp)
+    }
+
+    /// Which cell reported each row's frame (`TasksCellReports`).
+    private var frameOwners: [TasksRowID: ObjectIdentifier] = [:]
+
+    func setFrame(_ frame: CGRect, for row: TasksRowID, from cell: TasksCellReports) {
+        frames[row] = frame
+        frameOwners[row] = ObjectIdentifier(cell)
+    }
+
+    /// A cell now draws another task (`TasksDoneSlots`): its frame moves to
+    /// that task, and the task it drew keeps none unless another cell
+    /// reported one since.
+    func moveFrame(from old: TasksRowID, to new: TasksRowID, of cell: TasksCellReports) {
+        removeFrame(for: old, of: cell)
+        guard let frame = cell.frame else { return }
+        setFrame(frame, for: new, from: cell)
+    }
+
+    /// A cell went: the frame it reported goes with it.
+    func removeFrame(for row: TasksRowID, of cell: TasksCellReports) {
+        guard frameOwners[row] == nil || frameOwners[row] == ObjectIdentifier(cell) else { return }
+        frames[row] = nil
+        frameOwners[row] = nil
+    }
+
+    /// Whether the pointer is over one of `tab`'s rows now.
+    func isOverRow(on tab: TasksTab) -> Bool {
+        guard let view, let window = view.window else { return false }
+        let point = view.convert(window.mouseLocationOutsideOfEventStream, from: nil)
+        return frames.contains { $0.key.tab == tab && $0.value.contains(point) }
     }
 
     /// The event's location in the page, or nil when it is another
