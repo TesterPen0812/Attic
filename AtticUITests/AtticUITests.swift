@@ -10,6 +10,12 @@ final class AtticUITests: XCTestCase {
         app.launchEnvironment["ATTIC_UI_TESTING"] = "1"
         if name.contains("testMainPanelIdle") {
             app.launchEnvironment["ATTIC_UI_TEST_HOVER_MONITOR"] = "1"
+            app.launchEnvironment["ATTIC_UI_TEST_PINNED"] = "1"
+        }
+        if name.contains("RecentlyDeleted") {
+            // A deleted task (with a subtask) and a deleted note in the
+            // in-memory UI-test store.
+            app.launchEnvironment["ATTIC_UI_TEST_SEED_RECENTLY_DELETED"] = "1"
         }
         forwardOwnedAttachmentRoot(to: app)
         app.launch()
@@ -38,6 +44,12 @@ final class AtticUITests: XCTestCase {
     /// the right side of the default 1024pt CI display. Move Settings into the
     /// clear work area before interacting with controls that otherwise exist
     /// but are correctly reported as not hittable behind that panel.
+    /// An entry of an open Settings pop-up row's list (Attic's own pop-over,
+    /// round 13; its entries are buttons labelled with the choice).
+    private func popUpChoice(_ title: String) -> XCUIElement {
+        app.descendants(matching: .any).matching(NSPredicate(format: "label == %@", title)).firstMatch
+    }
+
     private func openSettings(section identifier: String) -> XCUIElement {
         app.typeKey(",", modifierFlags: .command)
         let settings = app.windows["Attic Settings"]
@@ -61,15 +73,6 @@ final class AtticUITests: XCTestCase {
         XCTAssertTrue(section.isHittable)
         section.click()
         return settings
-    }
-
-    private func setTaskOptionsExpanded(_ expanded: Bool) {
-        let menu = app.descendants(matching: .any)["add-task-button"]
-        XCTAssertTrue(menu.waitForExistence(timeout: 3))
-        menu.click()
-        let action = app.menuItems[expanded ? "Task options" : "Close task options"]
-        XCTAssertTrue(action.waitForExistence(timeout: 2))
-        action.click()
     }
 
     /// Distance kept between a Settings control and the floating Attic panel's
@@ -166,11 +169,22 @@ final class AtticUITests: XCTestCase {
             XCTFail("Settings scroll anchor must be visible and finite")
             return .pinned
         }
-        anchor.coordinate(withNormalizedOffset: .zero)
+        let point = anchor.coordinate(withNormalizedOffset: .zero)
             .withOffset(CGVector(dx: pageFrame.minX + 8 - anchorFrame.minX,
                                  dy: (top + bottom) / 2 - anchorFrame.minY))
-            .scroll(byDeltaX: 0, deltaY: delta)
-        guard let after = settledFrame(of: element, differingFrom: before) else { return .pinned }
+        // A wheel gesture can be lost: the pointer arrives from the sidebar
+        // (its own scroll view) with the gesture, and the page does not move
+        // at all even though it has room (CI runs 36303234568 and
+        // 36305447077: the page never moved, so the reveal took it for a
+        // page at its end). Rest the pointer on the page first, and only
+        // call the page pinned when a second gesture moves nothing either.
+        var settled: CGRect?
+        for _ in 0..<2 where settled == nil {
+            point.hover()
+            point.scroll(byDeltaX: 0, deltaY: delta)
+            settled = settledFrame(of: element, differingFrom: before)
+        }
+        guard let after = settled else { return .pinned }
         let travelled = before.minY - after.minY
         let outcome = Self.outcome(for: towardsTop ? travelled : -travelled)
         if outcome == .backwards {
@@ -325,11 +339,31 @@ final class AtticUITests: XCTestCase {
         }
     }
 
+    /// The Tasks page's add bar (the chip-drawing native field).
+    private var addBar: XCUIElement {
+        app.descendants(matching: .any).matching(identifier: "AtticTokenField").firstMatch
+    }
+
+    private func waitForValue(_ value: String, in field: XCUIElement,
+                              file: StaticString = #filePath, line: UInt = #line) {
+        let matches = NSPredicate { _, _ in field.exists && field.value as? String == value }
+        XCTAssertEqual(XCTWaiter.wait(for: [XCTNSPredicateExpectation(predicate: matches, object: nil)], timeout: 10), .completed,
+                       "the editor has the expected value", file: file, line: line)
+    }
+
     func testMainPanelIdleRetainsTaskDraftThenHidesCleanEditor() throws {
-        let field = app.textFields["quick-entry-title"]
-        XCTAssertTrue(field.waitForExistence(timeout: 3))
+        let field = addBar
+        // Cold accessibility startup can outlast the explicit-open grace.
+        // Set up under the real pin, then test idle behavior unpinned.
+        XCTAssertTrue(field.waitForExistence(timeout: 10))
+        XCTAssertTrue(field.wait(for: \.isHittable, toEqual: true, timeout: 10))
         field.click()
         field.typeText("Keep this unfinished draft")
+        waitForValue("Keep this unfinished draft", in: field)
+        let pin = app.buttons["panel-pin-button"]
+        XCTAssertTrue(pin.isSelected)
+        pin.click()
+        XCTAssertTrue(pin.wait(for: \.isSelected, toEqual: false, timeout: 5))
         let outside = app.dialogs.firstMatch.coordinate(withNormalizedOffset: .zero)
             .withOffset(CGVector(dx: -100, dy: 220))
         outside.hover()
@@ -340,13 +374,14 @@ final class AtticUITests: XCTestCase {
         field.click()
         field.typeKey("a", modifierFlags: .command)
         field.typeKey(.delete, modifierFlags: [])
+        waitForValue("", in: field)
         outside.hover()
         XCTAssertTrue(field.waitForNonExistence(timeout: 8), "A clean idle main entry must stop acting as a pin")
     }
 
     func testMainPanelIdleHidesAutosavedNoteWithEditorFocus() throws {
-        app.textFields["quick-entry-title"].click()
-        app.typeKey("3", modifierFlags: .command)
+        addBar.click()
+        app.typeKey("2", modifierFlags: .command)
         let newNote = app.buttons["new-note-empty-state"]
         XCTAssertTrue(newNote.waitForExistence(timeout: 3))
         newNote.click()
@@ -354,6 +389,16 @@ final class AtticUITests: XCTestCase {
         XCTAssertTrue(body.waitForExistence(timeout: 3))
         body.click()
         body.typeText("An autosaved note can rest.")
+        waitForValue("An autosaved note can rest.", in: body)
+        let pin = app.buttons["panel-pin-button"]
+        XCTAssertTrue(pin.isSelected)
+        pin.click()
+        XCTAssertTrue(pin.wait(for: \.isSelected, toEqual: false, timeout: 5))
+        body.click()
+        let focused = NSPredicate { _, _ in
+            body.exists && (body.value(forKey: "hasKeyboardFocus") as? Bool) == true
+        }
+        XCTAssertEqual(XCTWaiter.wait(for: [XCTNSPredicateExpectation(predicate: focused, object: nil)], timeout: 5), .completed)
         app.dialogs.firstMatch.coordinate(withNormalizedOffset: .zero)
             .withOffset(CGVector(dx: -100, dy: 220)).hover()
         XCTAssertTrue(body.waitForNonExistence(timeout: 8), "Autosaved Notes focus must not permanently pin the main panel")
@@ -386,18 +431,17 @@ final class AtticUITests: XCTestCase {
         XCTAssertTrue(settings.descendants(matching: .any)["settings-agent-disabled-message"].waitForExistence(timeout: 3))
     }
 
+    /// Phase 1 Settings: the Appearance page is built from the design
+    /// system. Mode is three tiles, palettes are tiles, and Surface and Tint
+    /// are native ⌃⌄ pop-ups (menu items), with Tint length under Advanced.
     func testAppearanceControlsCoverEveryPaletteSurfaceAndTint() throws {
         let settings = openSettings(section: "settings-nav-appearance")
         let page = settings.descendants(matching: .any)["settings-page-appearance"]
         XCTAssertTrue(page.waitForExistence(timeout: 3))
-        let appearance = settings.descendants(matching: .any)["setting-appearance"]
         let surface = settings.descendants(matching: .any)["setting-panel-surface"]
         let tint = settings.descendants(matching: .any)["setting-panel-tint"]
         let preview = settings.descendants(matching: .any)["setting-appearance-preview"]
 
-        func segment(_ title: String, in picker: XCUIElement) -> XCUIElement {
-            picker.descendants(matching: .any).matching(NSPredicate(format: "label == %@", title)).firstMatch
-        }
         func reveal(_ element: XCUIElement) {
             revealSettingsControl(element, in: settings, page: page)
             XCTAssertTrue(element.isHittable, "Settings control must be reachable without resizing the window")
@@ -408,13 +452,20 @@ final class AtticUITests: XCTestCase {
         }
         func assertSelected(_ element: XCUIElement) {
             waitFor("Expected selection: \(element.label)") {
-                element.isSelected || (element.value as? String) == "1"
-                    || (element.value as? NSNumber)?.boolValue == true
+                element.isSelected || (element.value as? String) == "Selected"
             }
+        }
+        func choose(_ title: String, in popUp: XCUIElement) {
+            reveal(popUp)
+            popUp.click()
+            let item = popUpChoice(title)
+            XCTAssertTrue(item.waitForExistence(timeout: 3), "the pop-up offers \(title)")
+            item.click()
+            waitFor("\(popUp.label) shows \(title)") { (popUp.value as? String) == title }
         }
         func recordPanel(_ name: String) {
             // Evidence only: the live panel, and the Settings window as the
-            // user sees it at that moment (the redesigned controls).
+            // user sees it at that moment.
             let attachment = XCTAttachment(screenshot: app.dialogs.firstMatch.screenshot())
             attachment.name = name
             attachment.lifetime = .keepAlways
@@ -426,19 +477,19 @@ final class AtticUITests: XCTestCase {
         }
 
         XCTAssertTrue(preview.waitForExistence(timeout: 3), "the live preview is one element")
+        XCTAssertTrue((preview.label).hasPrefix("Panel preview:"), "the preview says what it shows")
         XCTAssertTrue(surface.exists)
         XCTAssertTrue(tint.exists)
         XCTAssertFalse(settings.descendants(matching: .any)["setting-translucency"].exists)
         XCTAssertFalse(settings.descendants(matching: .any)["setting-glass-style"].exists)
         XCTAssertFalse(settings.sliders["setting-panel-gradient-coverage"].exists)
 
-        // Every surface, on every palette, in both explicit appearances,
-        // with Tint exercised once: nothing is ever
-        // unavailable and no choice is erased by another.
+        // Every surface, on every palette, in both explicit appearances:
+        // nothing is ever unavailable and no choice is erased by another.
         let themes = ["original", "midnightCobalt", "porcelainVapor", "smokedUmber",
                       "electricBlue", "seaGlass", "amethyst"]
-        for scheme in ["Light", "Dark"] {
-            let schemeControl = segment(scheme, in: appearance)
+        for scheme in ["light", "dark"] {
+            let schemeControl = settings.buttons["setting-appearance-\(scheme)"]
             reveal(schemeControl)
             schemeControl.click()
             assertSelected(schemeControl)
@@ -447,12 +498,9 @@ final class AtticUITests: XCTestCase {
                 XCTAssertTrue(choice.waitForExistence(timeout: 3))
                 reveal(choice)
                 choice.click()
-                waitFor("Selected theme must update") { (choice.value as? String) == "Selected" }
+                assertSelected(choice)
                 for style in ["Solid", "Glass", "Frosted"] {
-                    let styleControl = segment(style, in: surface)
-                    reveal(styleControl)
-                    styleControl.click()
-                    assertSelected(styleControl)
+                    choose(style, in: surface)
                 }
                 // Evidence only: these screenshots do not assert contrast or
                 // physical desktop readability on their own.
@@ -461,21 +509,17 @@ final class AtticUITests: XCTestCase {
         }
 
         let tintLength = settings.sliders["setting-panel-tint-length"]
-        XCTAssertTrue(tintLength.waitForExistence(timeout: 3), "Tint has a Length slider")
+        XCTAssertTrue(tintLength.waitForExistence(timeout: 3), "Tint has a Length slider under Advanced")
         for level in ["Subtle", "Vivid", "Bold", "Off"] {
-            let levelControl = segment(level, in: tint)
-            reveal(levelControl)
-            levelControl.click()
-            assertSelected(levelControl)
+            choose(level, in: tint)
             if level == "Bold" {
                 reveal(tintLength)
                 waitFor("Length is adjustable while a Tint step is on") { tintLength.isEnabled }
                 // XCUITest reports a macOS slider's raw value (0.3...1), not
                 // the spoken description; accept either. The drag is
-                // pixel-positioned and lands differently from run to run
-                // (CI has read 0.33, 0.87 and 0.976 for the two ends), so
-                // check that each drag clearly moves the length, not where
-                // it lands exactly.
+                // pixel-positioned and lands differently from run to run, so
+                // check that each drag clearly moves the length, not where it
+                // lands exactly.
                 func length() -> Double? {
                     if let number = tintLength.value as? NSNumber { return number.doubleValue }
                     guard let text = tintLength.value as? String else { return nil }
@@ -498,13 +542,11 @@ final class AtticUITests: XCTestCase {
         }
         waitFor("Length is disabled while Tint is Off") { !tintLength.isEnabled }
 
-        let glass = segment("Glass", in: surface)
-        reveal(glass)
-        glass.click()
-        assertSelected(glass)
-        let systemAppearance = segment("System", in: appearance)
+        choose("Glass", in: surface)
+        let systemAppearance = settings.buttons["setting-appearance-system"]
         reveal(systemAppearance)
         systemAppearance.click()
+        assertSelected(systemAppearance)
         settings.buttons[XCUIIdentifierCloseWindow].click()
         XCTAssertTrue(app.descendants(matching: .any)["panel-section-picker"].exists)
     }
@@ -513,15 +555,10 @@ final class AtticUITests: XCTestCase {
         let settings = openSettings(section: "settings-nav-appearance")
         let page = settings.descendants(matching: .any)["settings-page-appearance"]
         XCTAssertTrue(page.waitForExistence(timeout: 3))
-        let appearance = settings.descendants(matching: .any)["setting-appearance"]
         let surface = settings.descendants(matching: .any)["setting-panel-surface"]
         func reveal(_ element: XCUIElement) {
             revealSettingsControl(element, in: settings, page: page)
             XCTAssertTrue(element.isHittable)
-        }
-        func segment(_ title: String, in picker: XCUIElement) -> XCUIElement {
-            picker.descendants(matching: .any)
-                .matching(NSPredicate(format: "label == %@", title)).firstMatch
         }
         func waitFor(_ message: @autoclosure () -> String, _ condition: @escaping () -> Bool) {
             let expectation = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in condition() }, object: nil)
@@ -530,407 +567,155 @@ final class AtticUITests: XCTestCase {
         let original = settings.buttons["setting-panel-theme-original"]
         reveal(original)
         original.click()
-        // Surface never depends on the mode or the palette.
-        for scheme in ["Dark", "Light", "Dark"] {
-            let choice = segment(scheme, in: appearance)
+        // Surface never depends on the mode or the palette: its pop-up always
+        // offers all three.
+        for scheme in ["dark", "light", "dark"] {
+            let choice = settings.buttons["setting-appearance-\(scheme)"]
             reveal(choice)
             choice.click()
+            reveal(surface)
+            surface.click()
             waitFor("Every surface stays available in \(scheme)") {
-                ["Solid", "Glass", "Frosted"].allSatisfy { segment($0, in: surface).exists }
+                ["Solid", "Glass", "Frosted"].allSatisfy { self.popUpChoice($0).exists }
             }
+            app.typeKey(.escape, modifierFlags: [])
         }
         for style in ["Frosted", "Solid", "Glass"] {
-            let choice = segment(style, in: surface)
-            reveal(choice)
-            choice.click()
-            waitFor("Surface selection must settle on \(style)") {
-                choice.isSelected || (choice.value as? String) == "1"
-                    || (choice.value as? NSNumber)?.boolValue == true
-            }
+            reveal(surface)
+            surface.click()
+            let item = popUpChoice(style)
+            XCTAssertTrue(item.waitForExistence(timeout: 3))
+            item.click()
+            waitFor("Surface selection must settle on \(style)") { (surface.value as? String) == style }
         }
         settings.buttons[XCUIIdentifierCloseWindow].click()
     }
 
-    func testCreateAdvanceCompleteAndOpenContextMenu() throws {
-        let addButton = app.descendants(matching: .any)["add-task-button"]
-        XCTAssertTrue(addButton.waitForExistence(timeout: 3))
-        setTaskOptionsExpanded(true)
+    /// The sidebar lists every page (Recently Deleted included), each opens
+    /// its page in the content card, and the back button (⌘[) returns to the
+    /// page before; it is a disabled ghost with no history.
+    func testSettingsSidebarOpensEveryPageAndBackReturns() throws {
+        let settings = openSettings(section: "settings-nav-general")
+        let back = settings.buttons["settings-back"]
+        XCTAssertTrue(settings.descendants(matching: .any)["settings-page-general"].waitForExistence(timeout: 3))
+        for section in ["panel", "appearance", "recentlyDeleted", "agentAccess", "about", "general"] {
+            let row = settings.descendants(matching: .any)["settings-nav-\(section)"]
+            XCTAssertTrue(row.waitForExistence(timeout: 3))
+            row.click()
+            XCTAssertTrue(settings.descendants(matching: .any)["settings-page-\(section)"].waitForExistence(timeout: 3),
+                          "\(section) opens its page")
+        }
+        XCTAssertTrue(back.isEnabled)
+        back.click()
+        XCTAssertTrue(settings.descendants(matching: .any)["settings-page-about"].waitForExistence(timeout: 3))
+        settings.typeKey("[", modifierFlags: .command)
+        XCTAssertTrue(settings.descendants(matching: .any)["settings-page-agentAccess"].waitForExistence(timeout: 3))
 
-        let composer = app.descendants(matching: .any)["task-entry-bar"]
-        let submit = app.buttons["quick-entry-submit"]
-        XCTAssertTrue(composer.waitForExistence(timeout: 2))
-        XCTAssertGreaterThanOrEqual(addButton.frame.minY - composer.frame.minY, 4,
-                                    "The expanded composer needs space above its action hit targets")
-        XCTAssertGreaterThanOrEqual(addButton.frame.minX - composer.frame.minX, 6)
-        // The submit button closes the composer's trailing edge by design;
-        // its breathing room is the composer's inset inside the docked panel.
-        XCTAssertGreaterThanOrEqual(app.dialogs.firstMatch.frame.maxX - submit.frame.maxX, 6)
-
-        let titleField = app.textFields["quick-entry-title"]
-        XCTAssertTrue(titleField.waitForExistence(timeout: 2))
-        XCTAssertFalse(app.textFields["new-task-title"].exists, "Task options must expand the one composer, not create a second input")
-        titleField.typeText("Ship prototype")
-        let highPriority = app.buttons["task-priority-high"]
-        XCTAssertTrue(highPriority.waitForExistence(timeout: 2))
-        highPriority.click()
-        titleField.typeKey(.return, modifierFlags: [])
-
-        let title = app.staticTexts["Ship prototype"]
-        XCTAssertTrue(title.waitForExistence(timeout: 2))
-        let statusButton = app.buttons.matching(NSPredicate(
-            format: "identifier BEGINSWITH %@", "complete-task-"
-        )).firstMatch
-        XCTAssertEqual(statusButton.value as? String, "High priority")
-        // A successful Return keeps the same composer ready for consecutive
-        // entry, including keyboard focus transfer to its priority controls.
-        titleField.typeText("Next thought")
-        titleField.typeKey(.tab, modifierFlags: [])
-        XCTAssertTrue(highPriority.exists)
-        titleField.click()
-        titleField.typeKey("a", modifierFlags: .command)
-        titleField.typeKey(.delete, modifierFlags: [])
-        titleField.typeKey(.escape, modifierFlags: [])
-        let row = app.descendants(matching: .any).matching(
-            NSPredicate(format: "identifier BEGINSWITH %@", "task-row-")
-        ).firstMatch
-        XCTAssertTrue(row.waitForExistence(timeout: 2))
-        row.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.9)).doubleClick()
-        let inProgressSection = app.staticTexts["task-section-inProgress"]
-        XCTAssertTrue(inProgressSection.waitForExistence(timeout: 2))
-
-        let markDone = app.buttons.matching(NSPredicate(format: "label == %@", "Mark done")).firstMatch
-        XCTAssertTrue(markDone.waitForExistence(timeout: 2))
-        markDone.coordinate(
-            withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)
-        ).click()
-        let doneSection = app.staticTexts["task-section-done"]
-        XCTAssertTrue(doneSection.waitForExistence(timeout: 2))
-
-        // The row menu is revealed (and exposed) only on row hover or focus.
-        row.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).hover()
-        let actions = app.descendants(matching: .any).matching(
-            NSPredicate(format: "identifier BEGINSWITH %@", "task-actions-")
-        ).firstMatch
-        XCTAssertTrue(actions.waitForExistence(timeout: 2))
-        actions.click()
-
-        XCTAssertTrue(app.menuItems["Copy"].waitForExistence(timeout: 2))
-
-        let editTitle = app.menuItems["Edit title…"]
-        XCTAssertTrue(editTitle.waitForExistence(timeout: 2))
-        editTitle.click()
-
-        let editField = app.textFields.matching(
-            NSPredicate(format: "identifier BEGINSWITH %@", "edit-task-title-")
-        ).firstMatch
-        XCTAssertTrue(editField.waitForExistence(timeout: 2))
+        // General: Haptics is a switch that remembers its state.
+        settings.descendants(matching: .any)["settings-nav-general"].click()
+        let haptics = settings.descendants(matching: .any)["setting-haptics"]
+        XCTAssertTrue(haptics.waitForExistence(timeout: 3))
+        // On the 1024 pt CI display the panel covers part of Settings.
+        revealSettingsControl(haptics, in: settings,
+                              page: settings.descendants(matching: .any)["settings-page-general"])
+        XCTAssertTrue(haptics.isHittable, "Settings control must be reachable without resizing the window")
+        let before = String(describing: haptics.value)
+        haptics.click()
+        let expectation = XCTNSPredicateExpectation(
+            predicate: NSPredicate { _, _ in String(describing: haptics.value) != before }, object: nil
+        )
+        XCTAssertEqual(XCTWaiter.wait(for: [expectation], timeout: 3), .completed, "Haptics toggles")
+        haptics.click()
     }
 
-    func testCompactComposerAndSubtaskPanels() throws {
-        // Keep this long editing workflow independent of pointer-driven
-        // auto-hide; interaction-lock policy has separate focused coverage.
-        app.buttons["panel-pin-button"].click()
-        let title = app.textFields["quick-entry-title"]
-        XCTAssertTrue(title.waitForExistence(timeout: 3))
-        let composer = app.descendants(matching: .any)["task-entry-bar"]
-        let collapsedHeight = composer.frame.height
-        title.click()
-        title.typeText("Plan weekend trip")
-        XCTAssertFalse(app.buttons["task-priority-high"].exists, "Typing should keep the composer compact")
-        XCTAssertEqual(composer.frame.height, collapsedHeight, accuracy: 1)
-        setTaskOptionsExpanded(true)
-        let high = app.buttons["task-priority-high"]
-        XCTAssertTrue(high.waitForExistence(timeout: 2))
-        XCTAssertLessThanOrEqual(composer.frame.height - collapsedHeight, 35)
-        high.click()
-        setTaskOptionsExpanded(false)
-        XCTAssertEqual(title.value as? String, "Plan weekend trip")
-        XCTAssertFalse(high.exists)
-        app.buttons["quick-entry-submit"].click()
-        XCTAssertTrue(app.staticTexts["Plan weekend trip"].waitForExistence(timeout: 2))
-        XCTAssertFalse(high.exists)
-
-        func waitForChange(_ description: String, _ condition: @escaping () -> Bool) {
+    /// Round 10: the quick capture shortcut is recorded, refused when it
+    /// would take a key other apps use, reset, and turned off and on.
+    func testTheQuickCaptureShortcutIsRecordedResetAndTurnedOff() throws {
+        func waitFor(_ message: @autoclosure () -> String, _ condition: @escaping () -> Bool) {
             let expectation = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in condition() }, object: nil)
-            XCTAssertEqual(XCTWaiter.wait(for: [expectation], timeout: 3), .completed, description)
+            XCTAssertEqual(XCTWaiter.wait(for: [expectation], timeout: 3), .completed, message())
         }
-        // The auxiliary surfaces are separate borderless panels; querying by
-        // identifier works whatever window class AppKit reports them as.
-        func subtaskSurface(_ prefix: String) -> XCUIElement {
-            app.descendants(matching: .any).matching(
-                NSPredicate(format: "identifier BEGINSWITH %@", prefix)
-            ).firstMatch
-        }
+        let settings = openSettings(section: "settings-nav-general")
+        let page = settings.descendants(matching: .any)["settings-page-general"]
+        let recorder = settings.descendants(matching: .any)["setting-quick-capture-shortcut"]
+        XCTAssertTrue(recorder.waitForExistence(timeout: 3))
+        revealSettingsControl(recorder, in: settings, page: page)
+        XCTAssertEqual(recorder.value as? String, "Control Option Space", "the default, read by name")
+        let reset = settings.descendants(matching: .any)["setting-quick-capture-shortcut-reset"]
+        XCTAssertFalse(reset.isEnabled, "nothing to reset")
 
-        // The menu's explicit open is the click/keyboard/VoiceOver path: it
-        // latches the panel and focuses the inline entry field.
-        let taskRow = app.descendants(matching: .any).matching(NSPredicate(format: "identifier BEGINSWITH %@ AND label == %@", "task-row-", "Plan weekend trip")).firstMatch
-        let parentID = taskRow.identifier.replacingOccurrences(of: "task-row-", with: "")
-        // The row menu is revealed (and exposed) only on row hover or focus.
-        taskRow.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).hover()
-        let actions = app.descendants(matching: .any)["task-actions-\(parentID)"]
-        XCTAssertTrue(actions.waitForExistence(timeout: 2))
-        actions.click()
-        app.menuItems["Add subtask…"].click()
-        let hoverPanel = subtaskSurface("subtask-panel-\(parentID)")
-        XCTAssertTrue(hoverPanel.waitForExistence(timeout: 2))
-        let childTitle = app.textFields.matching(NSPredicate(format: "identifier BEGINSWITH %@", "subtask-title-\(parentID)")).firstMatch
-        XCTAssertTrue(childTitle.waitForExistence(timeout: 2))
-        childTitle.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).click()
-        childTitle.typeText("Choose destination")
-        childTitle.typeKey(.return, modifierFlags: [])
-        XCTAssertTrue(app.staticTexts["Choose destination"].waitForExistence(timeout: 2))
-        childTitle.typeText("Book accommodation")
-        childTitle.typeKey(.return, modifierFlags: [])
-        XCTAssertTrue(app.staticTexts["Book accommodation"].waitForExistence(timeout: 2))
-        // The compact parent row shows passive N/M progress metadata; its
-        // accessibility value still reports "N of M complete". The row
-        // itself (not the metadata) opens the family panel.
-        let progress = app.descendants(matching: .any).matching(NSPredicate(format: "identifier BEGINSWITH %@", "subtask-progress-\(parentID)")).firstMatch
-        XCTAssertFalse(app.buttons["subtask-progress-\(parentID)"].exists, "progress is metadata, not a button")
-        let parentRow = app.descendants(matching: .any)["task-row-\(parentID)"]
-        func assertProgress(_ text: String) {
-            // SwiftUI's AX value can lag the visible status animation by a
-            // snapshot. Wait for the same exact result, rather than sleeping.
-            waitForChange("Expected progress: \(text)") { (progress.value as? String) == text }
-        }
-        assertProgress("0 of 2 complete")
-        assertSectionCount("To do", count: 1)
-        // Completing a child in the panel updates progress without touching
-        // the parent's manual status.
-        let childRow = app.descendants(matching: .any).matching(NSPredicate(format: "identifier BEGINSWITH %@ AND label == %@", "task-row-", "Choose destination")).firstMatch
-        childRow.buttons.matching(NSPredicate(format: "identifier BEGINSWITH %@", "complete-task-")).firstMatch
-            .coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).click()
-        assertProgress("1 of 2 complete")
-        assertSectionCount("Done", count: 0)
+        recorder.click()
+        waitFor("It records") { (self.recorder(in: settings).value as? String)?.hasPrefix("Recording") == true }
+        settings.typeKey("k", modifierFlags: .command)
+        XCTAssertTrue(settings.descendants(matching: .any)["setting-quick-capture-shortcut-problem"].waitForExistence(timeout: 3),
+                      "⌘K alone is refused, with the reason")
+        settings.typeKey("k", modifierFlags: [.control, .option])
+        waitFor("⌃⌥K is recorded") { (self.recorder(in: settings).value as? String) == "Control Option K" }
+        XCTAssertTrue(reset.isEnabled)
 
-        childTitle.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).click()
-        childTitle.typeText("Draft step")
+        reset.click()
+        waitFor("Reset goes back to ⌃⌥Space") { (self.recorder(in: settings).value as? String) == "Control Option Space" }
 
-        // The switch beside the composer names its destination. Attachments
-        // replace the list in the same panel; neutral hover and a click on the
-        // family's own row keep the chosen view.
-        let viewSwitch = app.buttons["subtask-view-switch-\(parentID)"]
-        XCTAssertTrue(viewSwitch.waitForExistence(timeout: 2))
-        XCTAssertEqual(viewSwitch.label, "Show attachments")
-        viewSwitch.click()
-        let addAttachment = app.buttons["add-attachment-\(parentID)"]
-        XCTAssertTrue(addAttachment.waitForExistence(timeout: 2))
-        waitForChange("Attachments replace the subtask list") { !childTitle.exists }
-        XCTAssertTrue(subtaskSurface("subtask-attachments-\(parentID)").exists)
-        waitForChange("The switch now names Subtasks") { viewSwitch.label == "Show subtasks" }
-        parentRow.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).hover()
-        XCTAssertFalse(childTitle.waitForExistence(timeout: 1), "hover must not reset the view")
-        parentRow.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).click()
-        XCTAssertFalse(childTitle.waitForExistence(timeout: 1), "re-activating an open panel keeps its view")
-        XCTAssertTrue(addAttachment.exists)
-
-        // Defocusing without Escape preserves the entry and its draft; the
-        // outside click that dismisses the latched panel must not discard it.
-        title.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).click()
-        waitForChange("Outside click dismisses the latched panel") { !subtaskSurface("subtask-panel-\(parentID)").exists }
-        parentRow.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).click()
-        XCTAssertTrue(subtaskSurface("subtask-panel-\(parentID)").waitForExistence(timeout: 2))
-        // A fresh open starts on Subtasks, with the retained draft.
-        XCTAssertTrue(childTitle.waitForExistence(timeout: 2))
-        XCTAssertFalse(addAttachment.exists)
-        XCTAssertEqual(childTitle.value as? String, "Draft step")
-
-        // Escape inside the entry is the deliberate cancel: it drops the
-        // draft and collapses the row back to the '+ Add subtask' affordance.
-        // (Window-level Escape dismissal is a separate path.) Reopening from
-        // the row keeps the draft but deliberately does not steal keyboard
-        // focus (focusEntry: false), so the quick-entry field clicked above
-        // still owns it; return to the entry first, as a user would.
-        childTitle.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).click()
-        XCTAssertEqual(childTitle.value as? String, "Draft step")
-        childTitle.typeKey(.escape, modifierFlags: [])
-        let addAffordance = app.buttons.matching(NSPredicate(format: "identifier == %@", "add-subtask-\(parentID)")).firstMatch
-        XCTAssertTrue(addAffordance.waitForExistence(timeout: 2))
-        waitForChange("Escape collapses the entry row") { !childTitle.exists }
-        // The affordance deliberately reopens and focuses the entry.
-        addAffordance.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).click()
-        XCTAssertTrue(childTitle.waitForExistence(timeout: 2))
-
-        // Pin promotes the same checklist into the independent mini-window.
-        app.buttons["subtask-pin-\(parentID)"].click()
-        XCTAssertTrue(subtaskSurface("subtask-pinned-\(parentID)").waitForExistence(timeout: 2))
-        XCTAssertFalse(subtaskSurface("subtask-panel-\(parentID)").exists)
-        // Unpin returns to the transient surface while the anchor row exists.
-        app.buttons["subtask-unpin-\(parentID)"].click()
-        XCTAssertTrue(subtaskSurface("subtask-panel-\(parentID)").waitForExistence(timeout: 2))
-        XCTAssertFalse(subtaskSurface("subtask-pinned-\(parentID)").exists)
-        let screenshot = XCTAttachment(screenshot: app.screenshot())
-        screenshot.name = "Subtask panel and compact composer"
-        screenshot.lifetime = .keepAlways
-        add(screenshot)
-
-        // Completing a parent with an unfinished child asks first; it is a
-        // confirmation, not a persistence error banner.
-        let parentStatus = app.buttons["complete-task-\(parentID)"]
-        let confirmationTitle = app.staticTexts["Complete this task?"]
-        let confirmationMessage = app.staticTexts["Some subtasks are unfinished. They will stay unfinished if you complete this task."]
-        // Confirmation buttons are mirrored into the sheet's Touch Bar;
-        // scope to the sheet so the query stays unambiguous.
-        let completeAnyway = app.sheets.buttons["Complete anyway"].firstMatch
-        let cancelCompletion = app.sheets.buttons["Cancel"].firstMatch
-        func requestParentCompletion() {
-            parentStatus.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).click()
-            XCTAssertTrue(confirmationTitle.waitForExistence(timeout: 2))
-            XCTAssertTrue(confirmationMessage.exists)
-            XCTAssertTrue(completeAnyway.exists)
-            XCTAssertTrue(cancelCompletion.exists)
-            XCTAssertFalse(app.staticTexts["panel-error-message"].exists)
-        }
-
-        // Cancel leaves the parent in To do and the child state untouched.
-        requestParentCompletion()
-        cancelCompletion.click()
-        waitForChange("Cancel dismisses the confirmation") { !confirmationTitle.exists }
-        assertSectionCount("To do", count: 1)
-        assertSectionCount("Done", count: 0)
-        assertProgress("1 of 2 complete")
-
-        // Complete anyway moves the parent to Done; the unfinished child stays
-        // unfinished.
-        requestParentCompletion()
-        completeAnyway.click()
-        waitForChange("Complete anyway dismisses the confirmation") { !confirmationTitle.exists }
-        assertSectionCount("Done", count: 1)
-        assertSectionCount("To do", count: 0)
-        assertProgress("1 of 2 complete")
-        XCTAssertTrue(app.staticTexts["Book accommodation"].exists)
-
-        // Reopen the parent, then finish the family normally.
-        parentStatus.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).click()
-        assertSectionCount("To do", count: 1)
-        assertSectionCount("Done", count: 0)
-        assertProgress("1 of 2 complete")
-        parentRow.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).click()
-        XCTAssertTrue(subtaskSurface("subtask-panel-\(parentID)").waitForExistence(timeout: 2))
-        let secondRow = app.descendants(matching: .any).matching(NSPredicate(format: "identifier BEGINSWITH %@ AND label == %@", "task-row-", "Book accommodation")).firstMatch
-        secondRow.buttons.matching(NSPredicate(format: "identifier BEGINSWITH %@", "complete-task-")).firstMatch
-            .coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).click()
-        assertProgress("2 of 2 complete")
-        assertSectionCount("To do", count: 1)
-        app.buttons["complete-task-\(parentID)"].coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).click()
-        assertSectionCount("Done", count: 1)
-        app.buttons["complete-task-\(parentID)"].coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).click()
-        assertSectionCount("To do", count: 1)
-        parentRow.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).hover()
-        let parentMenu = app.descendants(matching: .any)["task-actions-\(parentID)"]
-        XCTAssertTrue(parentMenu.waitForExistence(timeout: 2))
-        parentMenu.click()
-        app.menuItems["Delete task and subtasks"].click()
-        XCTAssertTrue(app.sheets.buttons["Cancel"].waitForExistence(timeout: 2))
-        app.sheets.buttons["Cancel"].click()
-        XCTAssertTrue(app.staticTexts["Plan weekend trip"].exists)
-        // The confirmation sheet takes the pointer and the key window, so the
-        // row's hover affordances are hidden again once it dismisses; return
-        // the pointer to the row before re-opening its menu, as a user would.
-        parentRow.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).hover()
-        XCTAssertTrue(parentMenu.waitForExistence(timeout: 2))
-        parentMenu.click()
-        app.menuItems["Delete task and subtasks"].click()
-        app.sheets.buttons["Delete all"].click()
-        waitForChange("Confirmed deletion removes the entire family") { !self.app.staticTexts["Plan weekend trip"].exists }
-        XCTAssertFalse(app.staticTexts["Choose destination"].exists)
-        XCTAssertFalse(app.staticTexts["Book accommodation"].exists)
+        let toggle = settings.descendants(matching: .any)["setting-quick-capture"]
+        revealSettingsControl(toggle, in: settings, page: page)
+        toggle.click()
+        waitFor("Off: the recorder rests") { !self.recorder(in: settings).isEnabled }
+        toggle.click()
+        waitFor("On again") { self.recorder(in: settings).isEnabled }
     }
 
-    private func assertSectionCount(_ title: String, count: Int, file: StaticString = #filePath, line: UInt = #line) {
-        // macOS can merge adjacent empty-section text into one AX text node.
-        // Assert the displayed count, not whether that node kept one header ID.
-        let text = "\(title) · \(count)"
-        let header = app.staticTexts.matching(NSPredicate(format: "label CONTAINS %@ OR value CONTAINS %@", text, text)).firstMatch
-        XCTAssertTrue(header.waitForExistence(timeout: 2), "Expected \(text)", file: file, line: line)
+    private func recorder(in settings: XCUIElement) -> XCUIElement {
+        settings.descendants(matching: .any)["setting-quick-capture-shortcut"]
     }
 
-    /// TASK-003: a long title stays on one line at the row's normal height
-    /// (it fades at the trailing edge instead of wrapping), while the full
-    /// text remains available as the row's accessibility label.
-    func testLongTaskTitleStaysOnOneLineAndKeepsFullTextAccessible() throws {
-        let shortTitle = "Short"
-        let longTitle = "A long task title that must stay on a single row and fade at the trailing edge instead of wrapping"
-        let titleField = app.textFields["quick-entry-title"]
-        XCTAssertTrue(titleField.waitForExistence(timeout: 2))
-        // Establish keyboard focus explicitly: title layout is under test
-        // here, and the hosted runner does not always hand this field the
-        // field editor at launch.
-        titleField.click()
-        titleField.typeText(shortTitle)
-        app.typeKey(.return, modifierFlags: [])
-        titleField.typeText(longTitle)
-        app.typeKey(.return, modifierFlags: [])
+    /// Recently Deleted lists what was deleted (a task with its subtask, a
+    /// note; seeded in the UI-test store), searches it, restores an item,
+    /// and empties the rest after a clear confirmation.
+    func testRecentlyDeletedRestoresSearchesAndEmpties() throws {
+        let settings = openSettings(section: "settings-nav-recentlyDeleted")
+        let page = settings.descendants(matching: .any)["settings-page-recentlyDeleted"]
+        XCTAssertTrue(page.waitForExistence(timeout: 3))
+        let restoreTask = settings.buttons["Restore Plan the launch"]
+        let restoreNote = settings.buttons["Restore Meeting notes"]
+        XCTAssertTrue(restoreTask.waitForExistence(timeout: 3), "the deleted task is listed")
+        XCTAssertTrue(restoreNote.exists, "the deleted note is listed")
+        XCTAssertTrue(settings.descendants(matching: .any)
+            .matching(NSPredicate(format: "label CONTAINS %@ OR value CONTAINS %@", "with 1 subtask", "with 1 subtask")).firstMatch.exists,
+            "its subtask is counted")
 
-        func row(_ title: String) -> XCUIElement {
-            app.descendants(matching: .any).matching(NSPredicate(
-                format: "identifier BEGINSWITH %@ AND label == %@", "task-row-", title
-            )).firstMatch
-        }
-        let shortRow = row(shortTitle)
-        let longRow = row(longTitle)
-        XCTAssertTrue(shortRow.waitForExistence(timeout: 2))
-        XCTAssertTrue(longRow.waitForExistence(timeout: 2), "the full title is the row's accessibility label")
-        XCTAssertEqual(longRow.frame.height, shortRow.frame.height, accuracy: 1,
-                       "a long title never increases the row height")
+        let search = settings.textFields["recently-deleted-search"]
+        XCTAssertTrue(search.waitForExistence(timeout: 3))
+        revealSettingsControl(search, in: settings, page: page)
+        search.click()
+        search.typeText("meeting")
+        let hidden = XCTNSPredicateExpectation(predicate: NSPredicate(format: "exists == false"), object: restoreTask)
+        XCTAssertEqual(XCTWaiter.wait(for: [hidden], timeout: 3), .completed, "search narrows the list")
+        XCTAssertTrue(restoreNote.exists)
+        search.typeKey(.escape, modifierFlags: [])
 
-        let title = app.staticTexts.matching(
-            NSPredicate(format: "value BEGINSWITH %@", "A long task title")
-        ).firstMatch
-        XCTAssertTrue(title.waitForExistence(timeout: 2))
-        XCTAssertLessThanOrEqual(title.frame.height, 20, "the title renders as a single line")
-        // The row fades the title out at its trailing edge instead of wrapping,
-        // and the accessibility frame reports the unmasked text: on both the
-        // local and hosted runtime the clipped title measures wider than its
-        // row. Verify overflow and stable row geometry here. These AX
-        // assertions do not prove the pixels are clipped or faded; that
-        // appearance still requires rendered inspection.
-        XCTAssertGreaterThan(title.frame.width, longRow.frame.width,
-                             "the full title is wider than the available row")
-        XCTAssertEqual(longRow.frame.width, shortRow.frame.width, accuracy: 1,
-                       "a long title does not widen its row")
-    }
+        XCTAssertTrue(restoreTask.waitForExistence(timeout: 3))
+        revealSettingsControl(restoreTask, in: settings, page: page)
+        restoreTask.click()
+        let restored = XCTNSPredicateExpectation(predicate: NSPredicate(format: "exists == false"), object: restoreTask)
+        XCTAssertEqual(XCTWaiter.wait(for: [restored], timeout: 3), .completed, "a restored task leaves the list")
 
-    func testDragReordersTasksWithMatchingPriority() throws {
-        addTask(named: "Alpha")
-        addTask(named: "Beta")
-
-        let first = app.staticTexts["Alpha"]
-        let second = app.staticTexts["Beta"]
-        XCTAssertTrue(first.waitForExistence(timeout: 2))
-        XCTAssertTrue(second.waitForExistence(timeout: 2))
-        XCTAssertLessThan(second.frame.minY, first.frame.minY)
-
-        let rows = app.groups.matching(
-            NSPredicate(format: "identifier BEGINSWITH %@", "task-row-")
-        )
-        XCTAssertEqual(rows.count, 2)
-        let betaRow = rows.matching(NSPredicate(format: "label == %@", "Beta")).firstMatch
-        let alphaRow = rows.matching(NSPredicate(format: "label == %@", "Alpha")).firstMatch
-        XCTAssertTrue(betaRow.waitForExistence(timeout: 2))
-        XCTAssertTrue(alphaRow.waitForExistence(timeout: 2))
-        XCTAssertTrue(second.isHittable)
-        XCTAssertTrue(first.isHittable)
-
-        let dragStart = betaRow.coordinate(withNormalizedOffset: CGVector(dx: 0.25, dy: 0.5))
-        let dragEnd = alphaRow.coordinate(withNormalizedOffset: CGVector(dx: 0.25, dy: 0.5))
-        dragStart.click(
-            forDuration: 0.5,
-            thenDragTo: dragEnd,
-            withVelocity: .slow,
-            thenHoldForDuration: 0.5
-        )
-
-        let deadline = Date().addingTimeInterval(2)
-        while second.frame.minY <= first.frame.minY && Date() < deadline {
-            RunLoop.current.run(until: Date().addingTimeInterval(0.05))
-        }
-        XCTAssertGreaterThan(second.frame.minY, first.frame.minY)
+        let empty = settings.buttons["recently-deleted-empty"]
+        XCTAssertTrue(empty.waitForExistence(timeout: 3))
+        revealSettingsControl(empty, in: settings, page: page)
+        empty.click()
+        // The native alert's destructive button (identified, or by its title
+        // where the alert does not carry the identifier through).
+        let confirm = app.descendants(matching: .button).matching(NSPredicate(
+            format: "identifier == %@ OR label == %@", "recently-deleted-confirm-empty", "Empty"
+        )).firstMatch
+        XCTAssertTrue(confirm.waitForExistence(timeout: 3), "emptying asks first")
+        confirm.click()
+        XCTAssertTrue(settings.descendants(matching: .any)["recently-deleted-empty-state"].waitForExistence(timeout: 3))
+        XCTAssertFalse(restoreNote.exists)
     }
 
     func testNotesEditorKeepsDraftWhileBrowsingSavedNotes() throws {
-        app.typeKey("3", modifierFlags: .command)
+        app.typeKey("2", modifierFlags: .command)
 
         let newNote = app.buttons["new-note-empty-state"]
         XCTAssertTrue(newNote.waitForExistence(timeout: 3))
@@ -1019,12 +804,12 @@ final class AtticUITests: XCTestCase {
         XCTAssertEqual(panel.frame.maxX, initial.maxX, accuracy: 1)
         XCTAssertEqual(panel.frame.minY, initial.minY, accuracy: 1)
         XCTAssertTrue(app.buttons["panel-pin-button"].isSelected)
-        XCTAssertTrue(app.textFields["quick-entry-title"].isHittable)
+        XCTAssertTrue(addBar.isHittable)
         XCTAssertTrue(app.buttons["panel-section-tasks"].isHittable)
     }
 
     func testNoteTextScrollsUnderStationaryControls() throws {
-        app.typeKey("3", modifierFlags: .command)
+        app.typeKey("2", modifierFlags: .command)
         let newNote = app.buttons["new-note-empty-state"]
         XCTAssertTrue(newNote.waitForExistence(timeout: 3))
         newNote.click()
@@ -1058,7 +843,7 @@ final class AtticUITests: XCTestCase {
     }
 
     func testNotesBodyPreservesFocusAcrossIncrementalTyping() throws {
-        app.typeKey("3", modifierFlags: .command)
+        app.typeKey("2", modifierFlags: .command)
 
         let newNote = app.buttons["new-note-empty-state"]
         XCTAssertTrue(newNote.waitForExistence(timeout: 3))
@@ -1076,14 +861,6 @@ final class AtticUITests: XCTestCase {
         app.typeText("c")
 
         XCTAssertEqual(body.value as? String, "abc")
-    }
-
-    private func addTask(named title: String) {
-        let titleField = app.textFields["quick-entry-title"]
-        XCTAssertTrue(titleField.waitForExistence(timeout: 2))
-        titleField.click()
-        titleField.typeText(title)
-        titleField.typeKey(.return, modifierFlags: [])
     }
 
 }

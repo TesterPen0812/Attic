@@ -1,5 +1,6 @@
 import AppKit
 import Combine
+import os
 import SwiftUI
 
 /// Owns one deliberately opened transient surface (anchored to its row or
@@ -88,7 +89,7 @@ final class SubtaskPanelController: NSObject, ObservableObject {
             .store(in: &cancellables)
         uiState.$selectedSection
             .dropFirst()
-            .sink { [weak self] _ in self?.dismissTransient() }
+            .sink { [weak self] _ in self?.closeTransientSurface(reason: "page changed") }
             .store(in: &cancellables)
         // The lock must engage the moment a draft/focus change lands, so
         // these sinks hand the just-emitted values to syncComposerLock —
@@ -370,15 +371,31 @@ final class SubtaskPanelController: NSObject, ObservableObject {
     /// an import reveal, which switches deliberately after opening).
     /// Re-activating a panel already presenting the family keeps its view
     /// unless `view` asks for one; entering a subtask always shows Subtasks.
+    /// The Tasks page's "Open page" until task pages arrive (Phase 3): the
+    /// task's old detail panel, on its files and nothing else.
+    func openFilesPanel(for familyID: UUID) {
+        guard resolvedParent(familyID) != nil else {
+            Self.log.notice("Open Files \(familyID, privacy: .public) refused: no such parent task")
+            return
+        }
+        Self.log.notice("Open Files \(familyID, privacy: .public)")
+        panelViews.setFilesOnly(familyID)
+        openFamilyPanel(for: familyID, focusEntry: false, view: .attachments)
+    }
+
     func openFamilyPanel(for familyID: UUID, focusEntry: Bool, view: FamilyPanelView? = nil) {
         guard resolvedParent(familyID) != nil else { return }
+        let focusEntry = focusEntry && !panelViews.isFilesOnly(familyID)
         let requestedView = focusEntry ? .subtasks : view
         if lifecycle.pinnedFamilyIDs.contains(familyID) {
             if let requestedView { showPanelView(requestedView, for: familyID) }
             raisePinned(familyID, focusEntry: focusEntry)
             return
         }
-        guard mainPanelVisible else { return }
+        guard mainPanelVisible else {
+            Self.log.notice("panel \(familyID, privacy: .public) refused: main panel not visible")
+            return
+        }
         // An in-flight edit or confirmation inside the current surface takes
         // precedence over switching it to another family. Deliberate opens
         // (menu commands, count control, keyboard/VoiceOver) are never
@@ -386,6 +403,7 @@ final class SubtaskPanelController: NSObject, ObservableObject {
         // and a menu's own action would otherwise eat the user's choice.
         if let current = lifecycle.transientFamilyID, current != familyID,
            familyEditBusy(current) {
+            Self.log.notice("panel \(familyID, privacy: .public) refused: \(current, privacy: .public) is mid-edit")
             return
         }
         // Already on screen for this family: the action still means "bring
@@ -427,7 +445,7 @@ final class SubtaskPanelController: NSObject, ObservableObject {
     func showPanelView(_ view: FamilyPanelView, for familyID: UUID) {
         guard lifecycle.transientFamilyID == familyID || lifecycle.pinnedFamilyIDs.contains(familyID),
               panelViews.view(for: familyID) != view else { return }
-        let animation: Animation? = NSWorkspace.shared.accessibilityDisplayShouldReduceMotion
+        let animation: Animation? = AtticMotionPreference.reducesMotion
             ? .easeInOut(duration: 0.15)
             : .easeInOut(duration: SubtaskPanelLayout.viewSwitchDuration)
         withAnimation(animation) {
@@ -491,7 +509,7 @@ final class SubtaskPanelController: NSObject, ObservableObject {
         }
         if lifecycle.transientFamilyID == familyID {
             guard !familyEditBusy(familyID) else { return }
-            closeTransientSurface()
+            closeTransientSurface(reason: "toggled closed")
             return
         }
         // The outside-click monitor dismisses on mouse-down, one beat before
@@ -508,7 +526,7 @@ final class SubtaskPanelController: NSObject, ObservableObject {
     }
 
     func dismissTransient() {
-        closeTransientSurface()
+        closeTransientSurface(reason: "dismissed")
     }
 
     /// The main panel's "pointer inside" coverage: hovering the open
@@ -593,13 +611,15 @@ final class SubtaskPanelController: NSObject, ObservableObject {
         } ?? false
         let refocusEntry = entryFocusEngaged(for: familyID)
         let retainedView = panelViews.view(for: familyID)
+        let filesOnly = panelViews.isFilesOnly(familyID)
         let surface = pinnedSurfaces.removeValue(forKey: familyID)
         lifecycle.unpin(familyID)
         if mainPanelVisible, !evictionBusy {
-            closeTransientSurface()
+            closeTransientSurface(reason: "unpin replaces it")
             lifecycle.openTransient(familyID)
             lifecycle.detachTransient()
             // The same window stays up, so it keeps the view it showed.
+            if filesOnly { panelViews.setFilesOnly(familyID) }
             panelViews.set(retainedView, for: familyID)
             transientPanel = surface?.window
             transientHost = surface?.host
@@ -629,7 +649,7 @@ final class SubtaskPanelController: NSObject, ObservableObject {
     // MARK: - Main-panel lifecycle
 
     func mainPanelDidHide() {
-        closeTransientSurface()
+        closeTransientSurface(reason: "main panel hid")
     }
 
     func mainPanelFrameDidChange() {
@@ -652,6 +672,7 @@ final class SubtaskPanelController: NSObject, ObservableObject {
         transientFamilyID = nil
         pinnedFamilyIDs = []
         uiState.setInteractionLock(.subtaskComposer, isActive: false)
+        uiState.setInteractionLock(.taskFiles, isActive: false)
         if let transientWas { releaseFamilyInteractionState(transientWas) }
         for familyID in released { releaseFamilyInteractionState(familyID) }
     }
@@ -703,6 +724,12 @@ final class SubtaskPanelController: NSObject, ObservableObject {
         var presented = lifecycle.pinnedFamilyIDs
         if let transient = lifecycle.transientFamilyID { presented.insert(transient) }
         panelViews.retain(presented)
+        // A native submenu can close with the pointer outside both windows.
+        // Files have no entry focus or draft: keep the deliberately opened
+        // transient alive until outside-click/explicit dismissal or pinning.
+        uiState.setInteractionLock(.taskFiles, isActive:
+            lifecycle.transientFamilyID.map { panelViews.isFilesOnly($0) } ?? false
+        )
         syncComposerLock()
         updateOutsideClickMonitoring()
         syncPointerPassthroughMonitoring()
@@ -820,8 +847,9 @@ final class SubtaskPanelController: NSObject, ObservableObject {
         }
     }
 
-    private func closeTransientSurface() {
+    private func closeTransientSurface(reason: String) {
         let closing = lifecycle.transientFamilyID
+        if let closing { Self.log.notice("files/subtasks panel \(closing, privacy: .public) closes: \(reason, privacy: .public)") }
         lifecycle.closeTransient()
         syncState()
         if let closing {
@@ -870,13 +898,16 @@ final class SubtaskPanelController: NSObject, ObservableObject {
         surface.setAccessibilityIdentifier("\(prefix)-\(familyID.uuidString)")
         surface.onEscape = { [weak self] in
             if mode == .pinned { self?.closePinned(familyID) }
-            else { self?.closeTransientSurface() }
+            else { self?.closeTransientSurface(reason: "Escape") }
         }
     }
 
     private func presentTransient(_ familyID: UUID) {
         guard presentationEnabled, resolvedParent(familyID) != nil,
-              let panel = panelWindow, panel.isVisible else { return }
+              let panel = panelWindow, panel.isVisible else {
+            if presentationEnabled { Self.log.notice("panel \(familyID, privacy: .public) not presented: no visible main panel") }
+            return
+        }
         let pair: (window: PanelSurfaceWindow, host: SurfaceHost)
         if let surface = transientPanel, let host = transientHost {
             pair = (surface, host)
@@ -887,7 +918,10 @@ final class SubtaskPanelController: NSObject, ObservableObject {
         }
         configureSurface(pair.window, host: pair.host, familyID: familyID, mode: .transient)
         let anchor = screenAnchorRect(for: familyID)
-        guard let visibleFrame = (anchorScreen(for: anchor) ?? panel.screen ?? NSScreen.main)?.visibleFrame else { return }
+        guard let visibleFrame = (anchorScreen(for: anchor) ?? panel.screen ?? NSScreen.main)?.visibleFrame else {
+            Self.log.notice("panel \(familyID, privacy: .public) not presented: no screen")
+            return
+        }
         stopFrameAnimation(pair.window, at: SubtaskPanelLayout.transientFrame(
             size: fittingSize(of: pair.host), anchorScreenRect: anchor,
             panelScreenFrame: (panel as? AtticPanel)?.visibleContentFrame ?? panel.frame,
@@ -895,6 +929,7 @@ final class SubtaskPanelController: NSObject, ObservableObject {
             occupiedFrames: visiblePinnedFrames
         ))
         pair.window.orderFrontRegardless()
+        Self.log.notice("panel \(familyID, privacy: .public) presented at \(NSStringFromRect(pair.window.visibleContentFrame), privacy: .public)")
         // A reused window may carry a stale pass-through flag from its last
         // presentation, and the pointer may already be parked on it.
         updateSurfacePointerPassthrough(at: NSEvent.mouseLocation)
@@ -996,7 +1031,7 @@ final class SubtaskPanelController: NSObject, ObservableObject {
             && abs(frame.minX - current.minX) < 0.5
             && abs(frame.width - current.width) < 0.5
         guard surface.isVisible, holdsTopAndWidth,
-              !NSWorkspace.shared.accessibilityDisplayShouldReduceMotion else {
+              !AtticMotionPreference.reducesMotion else {
             stopFrameAnimation(surface, at: frame)
             return
         }
@@ -1100,7 +1135,7 @@ final class SubtaskPanelController: NSObject, ObservableObject {
         if screenControlRect(for: openFamily)?.contains(location) == true {
             lastOutsideDismissal = (openFamily, Self.now())
         }
-        closeTransientSurface()
+        closeTransientSurface(reason: "outside \(event.type == .rightMouseDown ? "right-" : "")click")
     }
 
     /// Whether a screen point lands on the family's visible main-list row.
@@ -1118,7 +1153,7 @@ final class SubtaskPanelController: NSObject, ObservableObject {
 
     private func reconcileStore() {
         if let open = lifecycle.transientFamilyID, resolvedParent(open) == nil {
-            closeTransientSurface()
+            closeTransientSurface(reason: "task gone")
         }
         for familyID in lifecycle.pinnedFamilyIDs where resolvedParent(familyID) == nil {
             closePinned(familyID)
@@ -1136,6 +1171,11 @@ final class SubtaskPanelController: NSObject, ObservableObject {
         DispatchQueue.main.async { [weak self] in self?.refreshSurfaceSizes() }
     }
 
+    /// What opens, refuses or closes a task's panel, in the unified log
+    /// (`log show --predicate 'subsystem == "com.taha.Attic" AND category == "TaskPanels"'`):
+    /// the on-screen check reads it when a panel does not appear.
+    static let log = Logger(subsystem: "com.taha.Attic", category: "TaskPanels")
+
     private static func now() -> TimeInterval {
         ProcessInfo.processInfo.systemUptime
     }
@@ -1145,7 +1185,7 @@ extension SubtaskPanelController: NSWindowDelegate {
     func windowWillClose(_ notification: Notification) {
         guard let window = notification.object as? NSWindow else { return }
         if window === transientPanel {
-            closeTransientSurface()
+            closeTransientSurface(reason: "window closed")
         } else if let familyID = pinnedSurfaces.first(where: { $0.value.window === window })?.key {
             closePinned(familyID)
         }
@@ -1192,12 +1232,23 @@ struct SurfaceFrameAnimationTargets {
 @MainActor
 final class FamilyPanelViewState: ObservableObject {
     @Published private(set) var views: [UUID: FamilyPanelView] = [:]
+    /// Families opened from the Tasks page (Phase 1): the old panel shows
+    /// their files only. Subtasks live in the row's quick look, so this
+    /// panel never offers a second subtask editor for them.
+    @Published private(set) var filesOnly: Set<UUID> = []
 
     func view(for familyID: UUID) -> FamilyPanelView {
-        views[familyID] ?? .subtasks
+        filesOnly.contains(familyID) ? .attachments : (views[familyID] ?? .subtasks)
+    }
+
+    func isFilesOnly(_ familyID: UUID) -> Bool { filesOnly.contains(familyID) }
+
+    func setFilesOnly(_ familyID: UUID) {
+        filesOnly.insert(familyID)
     }
 
     func set(_ view: FamilyPanelView, for familyID: UUID) {
+        if filesOnly.contains(familyID) { return }
         let stored: FamilyPanelView? = view == .subtasks ? nil : view
         guard views[familyID] != stored else { return }
         views[familyID] = stored
@@ -1224,6 +1275,9 @@ final class FamilyPanelViewState: ObservableObject {
     func retain(_ familyIDs: Set<UUID>) {
         if freshAttachmentIDs.keys.contains(where: { !familyIDs.contains($0) }) {
             freshAttachmentIDs = freshAttachmentIDs.filter { familyIDs.contains($0.key) }
+        }
+        if filesOnly.contains(where: { !familyIDs.contains($0) }) {
+            filesOnly = filesOnly.filter { familyIDs.contains($0) }
         }
         guard views.keys.contains(where: { !familyIDs.contains($0) }) else { return }
         views = views.filter { familyIDs.contains($0.key) }

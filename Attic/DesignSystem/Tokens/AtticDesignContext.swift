@@ -30,6 +30,10 @@ struct AtticDesignContext: Hashable, Sendable {
     /// What raised controls are made of. The text on them is tuned against
     /// both materials, so this changes no colour token.
     var controls: AtticControlMaterial = .liquidGlass
+    /// The motion's feel (the Motion Lab). The presets read
+    /// `AtticMotionTuning.current`; it is here so that a new feel redraws
+    /// every view at once and applies with no relaunch.
+    var motion: AtticMotionTuning = AtticMotionFeel.recommended.tuning
 
     /// Reduce Transparency makes glass and blur solid.
     var effectiveSurface: AtticPanelSurfaceTreatment.Kind {
@@ -119,13 +123,17 @@ extension View {
     /// Derives the context from the system (Light or Dark, Increase Contrast,
     /// Reduce Transparency, Reduce Motion, Differentiate Without Colour) plus
     /// the three customisation layers. Phase 1 feeds these from AppSettings.
+    /// `animations` is Settings › General › Animations: Reduced sets
+    /// `reduceMotion` as macOS Reduce Motion does (round 9, owner item 26).
     func atticDesignFromSystem(
         palette: AtticPanelTheme = .original,
         surface: PanelSurfaceStyle = .solid,
         tint: PanelTintLevel = .off,
         tintLength: Double = PanelTintLength.defaultValue,
         hapticsEnabled: Bool = true,
-        controls: AtticControlMaterial = .liquidGlass
+        animations: AtticAnimationLevel = .lively,
+        controls: AtticControlMaterial = .liquidGlass,
+        motion: AtticMotionTuning = .current
     ) -> some View {
         modifier(AtticSystemDesignModifier(
             controls: controls,
@@ -133,7 +141,9 @@ extension View {
             surface: surface,
             tint: tint,
             tintLength: tintLength,
-            hapticsEnabled: hapticsEnabled
+            hapticsEnabled: hapticsEnabled,
+            animations: animations,
+            motion: motion
         ))
     }
 }
@@ -145,6 +155,8 @@ private struct AtticSystemDesignModifier: ViewModifier {
     let tint: PanelTintLevel
     let tintLength: Double
     let hapticsEnabled: Bool
+    let animations: AtticAnimationLevel
+    let motion: AtticMotionTuning
 
     @Environment(\.colorScheme) private var colorScheme
     @Environment(\.colorSchemeContrast) private var contrast
@@ -161,10 +173,11 @@ private struct AtticSystemDesignModifier: ViewModifier {
             tintLength: tintLength,
             increaseContrast: contrast == .increased,
             reduceTransparency: reduceTransparency,
-            reduceMotion: reduceMotion,
+            reduceMotion: animations.reducesMotion(systemReduceMotion: reduceMotion),
             differentiateWithoutColor: differentiateWithoutColor,
             hapticsEnabled: hapticsEnabled,
-            controls: controls
+            controls: controls,
+            motion: motion
         ))
     }
 }

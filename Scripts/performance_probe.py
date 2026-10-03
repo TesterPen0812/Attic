@@ -2,10 +2,14 @@
 """Build a unique local-only preview, seed owned temporary stores, then probe.
 
 The measured phase runs under the same machine-wide lock as xcodebuild. No
-production bundle or store is ever opened. Baseline B: add --done-history.
+production bundle or store is ever opened. Baseline B: add --done-history. `--extra` adds unsampled phases after the
+standard five (a warm reveal, page switches between built pages, add-bar
+typing, a warm Tasks reveal); their timings carry a label prefix, so the
+standard phases and timing names stay comparable with Baselines A and B.
 """
 
 import argparse
+import ctypes
 import re
 import json
 import os
@@ -56,6 +60,33 @@ def wait_for_phase(root, expected, timeout=300, pid=None):
     raise TimeoutError(f"No {expected} phase within {timeout}s; root={root}")
 
 
+class _Point(ctypes.Structure):
+    _fields_ = [("x", ctypes.c_double), ("y", ctypes.c_double)]
+
+
+class _Size(ctypes.Structure):
+    _fields_ = [("width", ctypes.c_double), ("height", ctypes.c_double)]
+
+
+class _Rect(ctypes.Structure):
+    _fields_ = [("origin", _Point), ("size", _Size)]
+
+
+def park_pointer():
+    """Moves the pointer to the middle of the main display, away from every
+    reveal corner and the panel, so a pointer left in (or crossing) the
+    probed corner cannot reveal or hide the panel mid-window. The probe does
+    this itself before launch and before every phase."""
+    graphics = ctypes.CDLL("/System/Library/Frameworks/ApplicationServices.framework/ApplicationServices")
+    graphics.CGMainDisplayID.restype = ctypes.c_uint32
+    graphics.CGDisplayBounds.restype = _Rect
+    graphics.CGDisplayBounds.argtypes = [ctypes.c_uint32]
+    graphics.CGWarpMouseCursorPosition.argtypes = [_Point]
+    bounds = graphics.CGDisplayBounds(graphics.CGMainDisplayID())
+    graphics.CGWarpMouseCursorPosition(_Point(bounds.origin.x + bounds.size.width / 2,
+                                              bounds.origin.y + bounds.size.height / 2))
+
+
 def process_sample(helper, pid):
     return json.loads(output(str(helper), str(pid)))
 
@@ -96,7 +127,10 @@ def sample_phase(helper, pid, phase, seconds, run_dir):
     }
 
 
-def launch(app, root, token, logs, seed=False, done=False):
+EXTRA_PHASES = ("warm_open", "switches_done", "typing_done", "tasks_hidden", "tasks_warm_open", "scroll_done")
+
+
+def launch(app, root, token, logs, seed=False, done=False, extra=False, corner=None):
     env = {
         "ATTIC_UI_TESTING": "1",
         "ATTIC_UI_TEST_CANVAS_PERSISTENCE": "1",
@@ -107,7 +141,10 @@ def launch(app, root, token, logs, seed=False, done=False):
         "ATTIC_PERF_PROBE": "0" if seed else "1",
         "ATTIC_PERF_EXTERNAL_CONTROL": "0" if seed else "1",
         "ATTIC_PERF_WINDOW_SECONDS": os.environ.get("ATTIC_PERF_WINDOW_SECONDS", "10"),
+        "ATTIC_PERF_EXTRA": "1" if extra and not seed else "0",
     }
+    if corner and not seed:
+        env["ATTIC_PERF_CORNER"] = corner
     command("/usr/bin/open", "-n", "--stdout", str(logs.with_suffix(".stdout.log")),
             "--stderr", str(logs.with_suffix(".stderr.log")),
             *(arg for pair in env.items() for arg in ("--env", f"{pair[0]}={pair[1]}")), str(app))
@@ -193,7 +230,8 @@ def measure(args, app, executable, bundle, helper):
             (root / "phase.json").unlink()
             shutil.rmtree(root / "phase-markers", ignore_errors=True)
             (root / "timings.ndjson").unlink(missing_ok=True)
-            launch(app, root, token, run_dir / "probe")
+            park_pointer()
+            launch(app, root, token, run_dir / "probe", extra=args.extra, corner=args.corner)
             first = wait_for_phase(root, "hidden_idle")
             if first.get("panel_visible") != 0:
                 raise RuntimeError(f"Panel was visible at hidden-idle marker: {first}")
@@ -222,6 +260,7 @@ def measure(args, app, executable, bundle, helper):
                                                    or marker.get("visible_strokes") != 1700):
                         raise RuntimeError(f"Large canvas was not selected: {marker}")
                     sample = sample_phase(helper, pid, phase, args.window, run_dir)
+                    park_pointer()
                     command("/bin/kill", "-USR1", str(pid))
                     end = wait_for_phase(root, phase + "_end", timeout=30, pid=pid)
                     if end.get("panel_visible") != marker.get("panel_visible") or \
@@ -230,6 +269,15 @@ def measure(args, app, executable, bundle, helper):
                         raise RuntimeError(f"Panel visibility changed during {phase}: {marker} -> {end}")
                     sample["end_marker"] = end
                     phases.append(sample)
+                if args.extra:
+                    # The last standard USR1 already started the first extra
+                    # phase; each later USR1 ends one and starts the next.
+                    for index, phase in enumerate(EXTRA_PHASES):
+                        if index > 0:
+                            park_pointer()
+                            command("/bin/kill", "-USR1", str(pid))
+                        wait_for_phase(root, phase, timeout=60, pid=pid)
+                        time.sleep(1)
             finally:
                 command("/bin/kill", "-TERM", str(pid))
             timing_file = root / "timings.ndjson"
@@ -264,7 +312,10 @@ def summarize(doc):
                      f"{span('cpu_percent_one_core')} | {span('interrupt_wakeups_per_s')} |")
     lines += ["", "CPU and interrupt wake-ups are process-counter deltas over each fixed window; "
               "footprint is Apple's physical footprint. Transition/settling time is excluded.", ""]
-    for name in ("CoordinatorInitToMenuStarted", "StoreOpen", "PanelRevealToOrderedFront", "PageSwitch"):
+    standard = ("CoordinatorInitToMenuStarted", "StoreOpen", "PanelRevealToOrderedFront", "PageSwitch")
+    labelled = sorted({entry["name"] for run in doc["runs"] for entry in run.get("timings", [])
+                       if "." in entry["name"]})
+    for name in standard + tuple(labelled):
         values = [entry["milliseconds"] for run in doc["runs"]
                   for entry in run.get("timings", []) if entry["name"] == name]
         if values:
@@ -279,6 +330,8 @@ def main():
     parser.add_argument("--runs", type=int, default=3)
     parser.add_argument("--window", type=float, default=10)
     parser.add_argument("--done-history", action="store_true")
+    parser.add_argument("--extra", action="store_true")
+    parser.add_argument("--corner", choices=["topLeft", "topRight", "bottomLeft", "bottomRight"])
     parser.add_argument("--output", type=Path, default=ROOT / "Docs" / "performance-baseline-A.json")
     parser.add_argument("--measure", action="store_true", help=argparse.SUPPRESS)
     parser.add_argument("--build-only", action="store_true", help=argparse.SUPPRESS)
@@ -294,6 +347,8 @@ def main():
         return command("/usr/bin/lockf", "-k", LOCK, sys.executable, __file__,
                        "--measure", "--identity", identity, "--runs", str(args.runs),
                        "--window", str(args.window), *( ["--done-history"] if args.done_history else []),
+                       *(["--extra"] if args.extra else []),
+                       *(["--corner", args.corner] if args.corner else []),
                        "--output", str(args.output))
     app = BUILD / "dd" / "Build" / "Products" / "Local" / f"AtticPerf{identity}.app"
     executable = app / "Contents" / "MacOS" / f"AtticPerf{identity}"
@@ -332,7 +387,7 @@ def main():
         "seed_version": 2 if args.done_history else 1,
         "seed_counts": {"tasks": 500, "notes": 200, "canvases": 20,
                                       "objects_per_canvas": 2000, "extra_done_tasks": 5000 if args.done_history else 0},
-        "done_history": args.done_history, "window_s": args.window, "runs": runs,
+        "done_history": args.done_history, "extra_phases": args.extra, "window_s": args.window, "runs": runs,
     }
     args.output.parent.mkdir(parents=True, exist_ok=True)
     args.output.write_text(json.dumps(doc, indent=2) + "\n")

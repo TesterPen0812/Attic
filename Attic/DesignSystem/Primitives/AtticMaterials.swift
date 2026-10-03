@@ -108,7 +108,17 @@ struct AtticRecipeBackground: View {
     let cornerRadius: CGFloat
 
     var body: some View {
-        let shape = RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+        AtticRecipeShapeBackground(recipe: recipe, shape: RoundedRectangle(cornerRadius: cornerRadius, style: .continuous))
+    }
+}
+
+/// `AtticRecipeBackground` in any control shape (a circle, a capsule, the
+/// panel's squircle): the same layers, the shape's own outline.
+struct AtticRecipeShapeBackground<S: InsettableShape>: View {
+    let recipe: AtticRaisedRecipe
+    let shape: S
+
+    var body: some View {
         let reach = min(max(recipe.sheenReach, 0.01), 0.45)
         ZStack {
             if recipe.shadow.alpha > 0 {
@@ -145,6 +155,21 @@ struct AtticRecipeBackground: View {
         }
         .allowsHitTesting(false)
         .accessibilityHidden(true)
+    }
+}
+
+/// The Craft-style raised material at rest, in any control shape. The
+/// panel's older controls (Notes, Canvas, subtask and attachment controls,
+/// through `atticGlassControl`) draw it while the panel is not key, the same
+/// rule as the design system's own controls: native Liquid Glass renders
+/// flat in a window that is not key.
+struct AtticRaisedShapeBackground<S: InsettableShape>: View {
+    let shape: S
+
+    @Environment(\.atticDesign) private var design
+
+    var body: some View {
+        AtticRecipeShapeBackground(recipe: design.tokens.raised, shape: shape)
     }
 }
 
@@ -198,6 +223,48 @@ extension View {
     /// The raised material in a control's shape (see `AtticRaisedMaterialModifier`).
     func atticRaisedMaterial(cornerRadius: CGFloat, state: AtticControlState = .rest, interactive: Bool = true) -> some View {
         modifier(AtticRaisedMaterialModifier(cornerRadius: cornerRadius, state: state, interactive: interactive))
+    }
+}
+
+/// L3 (option A, owner 2026-09-30): the header's corner buttons as one flat
+/// surface: the recessed fill and one 1 pt hairline (the selected-chip
+/// ink), no rim, sheen, shadow or glass. Since 2026-10-02 the corner buttons
+/// are Liquid Glass; this is their opaque look wherever the controls are not
+/// live glass, and the preview's Flat arm (`AtticCornerButtonStyle`). Hover lays the chip hover over the
+/// fill, press (and a selected toggle, the pinned pin) the selected chip.
+/// The keyboard's ring is drawn by the control, as before.
+struct AtticFlatSurface: ViewModifier {
+    let cornerRadius: CGFloat
+    var state: AtticControlState = .rest
+    var isSelected = false
+
+    @Environment(\.atticDesign) private var design
+
+    func body(content: Content) -> some View {
+        let tokens = design.tokens
+        let shape = RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+        let overlay: AtticRGBA? = switch state {
+        case .pressed: tokens.chipSelected
+        case .hover: isSelected ? tokens.chipSelected : tokens.chipHover
+        default: isSelected ? tokens.chipSelected : nil
+        }
+        content
+            .background {
+                ZStack {
+                    shape.fill(tokens.recessed.color)
+                    if let overlay { shape.fill(overlay.color) }
+                    shape.strokeBorder(tokens.chipSelected.color, lineWidth: AtticFlatSurfaceMetrics.hairline)
+                }
+                .allowsHitTesting(false)
+                .accessibilityHidden(true)
+            }
+    }
+}
+
+extension View {
+    /// See `AtticFlatSurface`.
+    func atticFlatSurface(cornerRadius: CGFloat, state: AtticControlState = .rest, isSelected: Bool = false) -> some View {
+        modifier(AtticFlatSurface(cornerRadius: cornerRadius, state: state, isSelected: isSelected))
     }
 }
 
@@ -363,6 +430,17 @@ struct AtticSurfaceBackground<S: Shape>: View {
             if model.kind != .solid {
                 underlay
                 shape.fill(model.base.withAlpha(model.foundationOpacity).color)
+            } else if model.porcelain {
+                // Visual A: the flat surface, with its top sheen kept within
+                // the first 24 pt.
+                shape.fill(model.base.color)
+                ZStack(alignment: .top) {
+                    Color.clear
+                    LinearGradient(colors: [AtticSurfaceModel.calmSheen(dark: model.appearance == .dark).color, .clear],
+                                   startPoint: .top, endPoint: .bottom)
+                        .frame(height: AtticSurfaceModel.calmSheenHeight)
+                }
+                .clipShape(shape)
             } else {
                 shape.fill(model.base.color)
             }
@@ -393,21 +471,28 @@ struct AtticSurfaceBackground<S: Shape>: View {
                 // The wallpaper as the native surface renders it: blurred,
                 // then each channel mapped through the measured black and
                 // white renders of this surface kind (a linear model).
-                let endpoints = AtticSurfaceModel.renderEndpoints(kind: model.kind, appearance: model.appearance) ?? (0, 255)
+                let endpoints = AtticSurfaceModel.renderEndpoints(kind: model.kind, appearance: model.nativeAppearance) ?? (0, 255)
                 AtticStandInWallpaper(tone: tone, dark: model.appearance == .dark)
                     .blur(radius: model.kind == .frosted ? 28 : 16, opaque: true)
                     .colorMultiply(Color(.sRGB, white: (endpoints.white - endpoints.black) / 255))
                     .overlay(Color(.sRGB, white: endpoints.black / 255, opacity: 1).blendMode(BlendMode.plusLighter))
                     .compositingGroup()
                     .clipShape(shape)
+                shape.fill(model.materialWash.color)
             }
         } else if isChrome {
             AtticVisualEffect(material: .sidebar)
                 .clipShape(shape)
         } else if model.kind == .glass {
             shape.fill(Color.clear).glassEffect(.regular, in: shape)
+                .environment(\.colorScheme, model.nativeAppearance == .dark ? .dark : .light)
         } else {
-            shape.fill(.ultraThinMaterial)
+            ZStack {
+                shape.fill(.ultraThinMaterial)
+                    .environment(\.colorScheme, model.nativeAppearance == .dark ? .dark : .light)
+                // Phase 0: the palette's wash over the Frosted material.
+                shape.fill(model.materialWash.color)
+            }
         }
     }
 }
@@ -468,6 +553,67 @@ struct AtticVisualEffect: NSViewRepresentable {
     func updateNSView(_ view: NSVisualEffectView, context: Context) {
         view.material = material
         view.blendingMode = blending
+    }
+}
+
+// MARK: - The panel's surface
+
+/// The panel's own surface inside its squircle: the palette-hued base, the
+/// native material on Glass and Frosted, and the Tint (the live panel and
+/// the gallery draw the same surface).
+struct AtticPanelStageSurface: View {
+    var cornerSize: CGFloat
+    @Environment(\.atticDesign) private var design
+
+    var body: some View {
+        AtticSurfaceBackground(model: design.tokens.panel, shape: Squircle(cornerRadius: cornerSize, exponent: AtticStyle.panelSquircleExponent))
+    }
+}
+
+/// The panel's edge: a hairline, and in Dark an inner light rim. The live
+/// panel, the gallery and Settings' Appearance miniature all draw this one.
+struct AtticPanelRim: View {
+    var cornerSize: CGFloat
+    @Environment(\.atticDesign) private var design
+
+    var body: some View {
+        let shape = Squircle(cornerRadius: cornerSize, exponent: AtticStyle.panelSquircleExponent)
+        let dark = design.mode == .dark
+        ZStack {
+            if let edge = design.tokens.panel.edge {
+                // Phase 0's hairline: the palette's edge colour on the shape's
+                // edge (half of it shows inside the clip).
+                shape.stroke(edge.color.color, lineWidth: edge.width)
+                if let highlight = edge.innerHighlight {
+                    // Defined Dark Edge: a faint line just inside it.
+                    Squircle(cornerRadius: max(cornerSize - edge.width, 0), exponent: AtticStyle.panelSquircleExponent)
+                        .stroke(highlight.color, lineWidth: 0.5)
+                        .padding(edge.width)
+                }
+            } else if design.tokens.panel.porcelain {
+                // Visual A: one 0.5 pt inside edge (black 6 % / white 8 %).
+                shape.inset(by: AtticHairline.width / 2)
+                    .stroke((dark ? AtticRGBA.white(0.08) : AtticRGBA.black(0.06)).color, lineWidth: AtticHairline.width)
+            } else {
+                legacyRim(shape: shape, dark: dark)
+            }
+        }
+        .allowsHitTesting(false)
+        .accessibilityHidden(true)
+    }
+
+    @ViewBuilder
+    private func legacyRim(shape: Squircle, dark: Bool) -> some View {
+        ZStack {
+            shape.stroke(dark ? Color.black.opacity(0.5) : Color.black.opacity(design.increaseContrast ? 0.3 : 0.10), lineWidth: design.increaseContrast ? 1 : 0.5)
+            if dark {
+                Squircle(cornerRadius: max(cornerSize - 0.75, 0), exponent: AtticStyle.panelSquircleExponent)
+                    .stroke(Color.white.opacity(design.increaseContrast ? 0.3 : 0.08), lineWidth: 0.5)
+                    .padding(0.75)
+            }
+        }
+        .allowsHitTesting(false)
+        .accessibilityHidden(true)
     }
 }
 

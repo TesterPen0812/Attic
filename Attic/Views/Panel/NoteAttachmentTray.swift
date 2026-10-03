@@ -857,6 +857,13 @@ enum NoteAttachmentPasteboardRouter {
 /// Native text layout owns body height; resizing never replaces the editor or
 /// publishes geometry through the SwiftUI draft model.
 final class NoteDocumentScrollView: NSScrollView {
+    /// Thin overlay scrollers in the panel whatever the system's "Show
+    /// scroll bars" setting (owner, 2026-10-01).
+    override var scrollerStyle: NSScroller.Style {
+        get { .overlay }
+        set { super.scrollerStyle = .overlay }
+    }
+
     override func layout() {
         super.layout()
         (documentView as? NoteEditorDocumentView)?.layoutDocument(viewport: contentSize)
@@ -1203,6 +1210,13 @@ struct AttachmentAwareTextEditor: NSViewRepresentable {
     static func dismantleNSView(_ scrollView: NSScrollView, coordinator: Coordinator) {
         coordinator.captureViewState()
         coordinator.parent.onViewStateCommit()
+        // Its typing undo was registered with the window's undo manager,
+        // which outlives this editor: an action left there crashes ⌘Z
+        // once the editor is gone (round 3, the computer-use review).
+        if let textView = coordinator.textView, let undoManager = textView.undoManager {
+            undoManager.removeAllActions(withTarget: textView)
+            if let storage = textView.textStorage { undoManager.removeAllActions(withTarget: storage) }
+        }
         coordinator.textView?.textStorage?.delegate = nil
         coordinator.textView?.delegate = nil
     }

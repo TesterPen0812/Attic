@@ -85,11 +85,10 @@ final class AtticGalleryDemo {
 
     func taskActions(_ title: String) -> AtticTaskActions {
         AtticTaskActions(
-            advance: record("Advance", title),
-            start: record("Start", title),
-            complete: record("Complete", title),
+            toggleDone: record("Complete", title),
+            toggleWorking: record("Start working", title),
             openPage: record("Open page", title),
-            moveToBacklog: record("Move to Backlog", title),
+            moveToBacklog: record("Move to Later", title),
             delete: record("Delete", title)
         )
     }
@@ -212,29 +211,55 @@ private struct BoardHeading: View {
 // MARK: - Sample data
 
 enum AtticGallerySamples {
+    /// "Call mom fri #family !!": the date (with its calendar), the tag and
+    /// High's mark as recognised pieces.
+    @MainActor
+    static var chipTokens: AtticAddBar.Tokens {
+        AtticAddBar.Tokens(
+            chips: [AtticTokenChip(range: NSRange(location: 9, length: 3), kind: .date),
+                    AtticTokenChip(range: NSRange(location: 13, length: 7)),
+                    AtticTokenChip(range: NSRange(location: 21, length: 2), kind: .high)],
+            isFocused: .constant(false),
+            actions: AtticTokenFieldActions(submit: { _ in }, dismissChip: { _ in }, multilinePaste: { _ in false },
+                                            escape: { false },
+                                            edited: { _, _ in }, caretMoved: { _ in })
+        )
+    }
+
+    /// The composer strip with these values (nil: the button's name).
+    @MainActor
+    static func strip(date: AtticStripValue?, tags: AtticStripValue?, priority: AtticStripValue?) -> some View {
+        AtticComposerStrip(
+            datePresented: .constant(false), tagsPresented: .constant(false), priorityPresented: .constant(false),
+            date: date, tags: tags, priority: priority,
+            onClearDate: {}, onClearTags: {}, onClearPriority: {},
+            datePicker: { EmptyView() }, tagPicker: { EmptyView() }, priorityPicker: { EmptyView() }
+        )
+    }
+
     static let rows: [AtticTaskRowModel] = [
         .init(title: "Finalize launch checklist", state: .inProgress, priority: .high,
-              due: .init(text: "Today", isUrgent: true), tags: ["launch"], subtasks: (1, 3)),
+              due: .init(text: "Today", tone: .today), tags: ["launch"], subtasks: (1, 3)),
         .init(title: "Ship appearance PR", state: .todo, priority: .high, subtasks: (2, 4)),
-        .init(title: "Email beta testers", state: .todo, priority: .medium, due: .init(text: "Fri", isUrgent: false)),
-        .init(title: "Book dentist", state: .todo, priority: .none, due: .init(text: "Tomorrow", isUrgent: false)),
+        .init(title: "Email beta testers", state: .todo, priority: .medium, due: .init(text: "Fri")),
+        .init(title: "Book dentist", state: .todo, priority: .none, due: .init(text: "Tomorrow")),
         .init(title: "Renew domain", state: .done, priority: .low)
     ]
 
     /// More rows for the live panel, so its list scrolls under the header
     /// and the add bar.
     static let moreRows: [AtticTaskRowModel] = [
-        .init(title: "Draft the onboarding email", state: .todo, priority: .medium, due: .init(text: "Mon", isUrgent: false)),
+        .init(title: "Draft the onboarding email", state: .todo, priority: .medium, due: .init(text: "Mon")),
         .init(title: "Review the Settings copy", state: .inProgress, priority: .low, tags: ["design"]),
-        .init(title: "Pay the studio invoice", state: .todo, priority: .high, due: .init(text: "Yesterday", isUrgent: true)),
+        .init(title: "Pay the studio invoice", state: .todo, priority: .high, due: .init(text: "Yesterday", tone: .overdue)),
         .init(title: "Back up the photo library"),
         .init(title: "Order printer paper", state: .todo, priority: .low),
         .init(title: "Plan the team offsite", state: .todo, priority: .medium, subtasks: (0, 5)),
-        .init(title: "Renew the passport", state: .todo, priority: .none, due: .init(text: "Next week", isUrgent: false)),
+        .init(title: "Renew the passport", state: .todo, priority: .none, due: .init(text: "Next week")),
         .init(title: "Water the plants", state: .done),
-        .init(title: "Call the bank about the card", state: .todo, priority: .high, due: .init(text: "Today", isUrgent: true)),
+        .init(title: "Call the bank about the card", state: .todo, priority: .high, due: .init(text: "Today", tone: .today)),
         .init(title: "Sketch the Canvas toolbar", state: .inProgress, priority: .medium, tags: ["canvas"]),
-        .init(title: "Book the car service", due: .init(text: "Oct 3", isUrgent: false)),
+        .init(title: "Book the car service", due: .init(text: "Oct 3")),
         .init(title: "Send the contract back", state: .todo, priority: .medium),
         .init(title: "Tidy the Downloads folder", state: .todo, priority: .low)
     ]
@@ -245,16 +270,16 @@ enum AtticGallerySamples {
         .init(title: "Tag the build")
     ]
 
-    static let pages: [AtticPageSwitch<Int>.Item] = [
+    static let pages: [AtticPageButton<Int>.Item] = [
         .init(page: 0, systemName: "checkmark.circle", title: String(localized: "Tasks"), shortcut: "⌘1"),
         .init(page: 1, systemName: "note.text", title: String(localized: "Notes"), shortcut: "⌘2"),
         .init(page: 2, systemName: "scribble.variable", title: String(localized: "Canvas"), shortcut: "⌘3")
     ]
 
-    static let tabs: [AtticStatusTabs<Int>.Item] = [
-        .init(tab: 0, title: String(localized: "Now"), count: 4),
-        .init(tab: 1, title: String(localized: "Backlog"), count: 3),
-        .init(tab: 2, title: String(localized: "Done"), count: nil)
+    static let pageTabs: [AtticPageTabs<Int>.Item] = [
+        .init(page: 0, title: String(localized: "Now")),
+        .init(page: 1, title: String(localized: "Later")),
+        .init(page: 2, title: String(localized: "Done"))
     ]
 }
 
@@ -323,10 +348,15 @@ struct AtticGalleryPanelComposition: View {
     /// The panel's own coordinate space (the scroll edge zones are measured in it).
     static let space = NamedCoordinateSpace.named("AtticGalleryPanel")
 
-    /// Above the status tabs: the header's margin, controls and gap.
-    private static let headerZone = AtticSpacing.panelMargin + AtticControlSize.capsuleHeight + AtticLayout.statusTabsTop
-    /// Below the list: the add bar and its margins.
-    private static let footerZone = AtticControlSize.addBarHeight + AtticSpacing.panelMargin * 2
+    /// The live panel's lines at the default corner size (52): the
+    /// controls' inset, and the page 12 inside the panel's own frame.
+    private static let chrome = PanelGeometry.chromeInsets(cornerSize: 52, panelSize: AtticLayout.panelSize).leading
+    private static let pageInset = max(0, chrome - AtticSpacing.panelMargin)
+    /// Above the list: the header's margin and controls, then the page tabs.
+    private static let headerZone = chrome + AtticControlSize.headerControl + AtticLayout.pageTabsTop
+        + AtticLayout.pageTabsHeight + AtticLayout.pageTabsToList
+    /// Below the list: the add bar, its margin and the gap above it.
+    private static let footerZone = AtticControlSize.addBarHeight + chrome + AtticLayout.contentToAddBar
 
     var body: some View {
         Group {
@@ -379,12 +409,15 @@ struct AtticGalleryPanelComposition: View {
     }
 
     private var controls: some View {
-        VStack(spacing: 0) {
+        VStack(alignment: .leading, spacing: 0) {
             header
+            AtticPageTabs(items: AtticGallerySamples.pageTabs, selection: $demo.tab)
+                .padding(.top, AtticLayout.pageTabsTop)
+                .padding(.leading, Self.pageInset + AtticLayout.pageTabsX - Self.chrome)
             Spacer(minLength: 0)
             addBar
         }
-        .padding(AtticSpacing.panelMargin)
+        .padding(Self.chrome)
     }
 
     private var veils: some View {
@@ -398,24 +431,24 @@ struct AtticGalleryPanelComposition: View {
     private var header: some View {
         AtticControlGroup {
             HStack(spacing: 0) {
-                AtticRaisedButton(systemName: "pin", label: "Pin", help: "Pin (⇧⌘P)", action: demo.record("Pin"))
+                AtticRaisedButton(systemName: "pin", label: "Pin", help: "Pin (⇧⌘P)",
+                                  glyphOffsetY: AtticRaisedButtonMetrics.pinGlyphOffsetY, emphasisedGlyph: true,
+                                  action: demo.record("Pin"))
                 Spacer(minLength: AtticSpacing.betweenControls)
-                AtticPageSwitch(items: AtticGallerySamples.pages, selection: $demo.page)
+                AtticPageButton(items: AtticGallerySamples.pages, selection: $demo.page)
             }
         }
     }
 
     private var addBar: some View {
-        AtticAddBar(placeholder: "Add a task…", text: $demo.addText) { demo.addText = "" }
+        AtticAddBar(placeholder: "Add a task", text: $demo.addText) { demo.addText = "" }
     }
 
     private func list(_ rows: [AtticTaskRowModel], fades: Bool = false) -> some View {
-        VStack(alignment: .leading, spacing: 0) {
-            AtticStatusTabs(items: AtticGallerySamples.tabs, selection: $demo.tab)
-                .padding(.leading, AtticLayout.circleX)
-                .atticScrollEdgeFade(fades, in: Self.space)
-            Color.clear.frame(height: AtticLayout.statusTabsToList)
-            ForEach(Array(rows.enumerated()), id: \.element.id) { index, row in
+        let open = rows.filter { $0.state != .done }
+        let done = rows.count - open.count
+        return VStack(alignment: .leading, spacing: 0) {
+            ForEach(Array(open.enumerated()), id: \.element.id) { index, row in
                 GalleryTaskRow(model: row, isSelected: index == selectedIndex, isExpanded: showsQuickLook && index == 0)
                     .atticScrollEdgeFade(fades, in: Self.space)
                 if showsQuickLook, index == 0 {
@@ -423,48 +456,23 @@ struct AtticGalleryPanelComposition: View {
                         .atticScrollEdgeFade(fades, in: Self.space)
                 }
             }
-            AtticEmptyLine(text: String(localized: "Done tasks move to Done tomorrow"))
-                .atticScrollEdgeFade(fades, in: Self.space)
-        }
-    }
-}
-
-/// The panel's own surface inside its squircle (the gallery draws the
-/// Phase 1 default corner, 52).
-struct AtticPanelStageSurface: View {
-    var cornerSize: CGFloat
-    @Environment(\.atticDesign) private var design
-
-    var body: some View {
-        AtticSurfaceBackground(model: design.tokens.panel, shape: Squircle(cornerRadius: cornerSize, exponent: AtticStyle.panelSquircleExponent))
-    }
-}
-
-struct AtticPanelRim: View {
-    var cornerSize: CGFloat
-    @Environment(\.atticDesign) private var design
-
-    var body: some View {
-        let shape = Squircle(cornerRadius: cornerSize, exponent: AtticStyle.panelSquircleExponent)
-        let dark = design.mode == .dark
-        ZStack {
-            shape.stroke(dark ? Color.black.opacity(0.5) : Color.black.opacity(design.increaseContrast ? 0.3 : 0.10), lineWidth: design.increaseContrast ? 1 : 0.5)
-            if dark {
-                Squircle(cornerRadius: cornerSize - 0.75, exponent: AtticStyle.panelSquircleExponent)
-                    .stroke(Color.white.opacity(design.increaseContrast ? 0.3 : 0.08), lineWidth: 0.5)
-                    .padding(0.75)
+            if done > 0 {
+                AtticCompletedLine(title: String(localized: "Completed today"), count: done, isExpanded: false, action: demo.record("Completed today"))
+                    .padding(.top, AtticCompletedLineMetrics.top)
+                    .atticScrollEdgeFade(fades, in: Self.space)
             }
         }
-        .allowsHitTesting(false)
+        .padding(.horizontal, Self.pageInset)
     }
 }
+
 
 // MARK: Raised controls
 
 private struct RaisedControlsBoard: View {
     @Environment(AtticGalleryDemo.self) private var demo
     var body: some View {
-        BoardHeading(title: "Single button · 36 × 32, radius 13.5")
+        BoardHeading(title: "Single button · 32 × 32, radius 13.5 (visual A)")
         SpecimenRow {
             ForEach([AtticControlState.rest, .hover, .pressed], id: \.self) { state in
                 AtticSpecimen(state.title) {
@@ -479,7 +487,7 @@ private struct RaisedControlsBoard: View {
                 }
             }
             AtticSpecimen("Pinned") {
-                AtticRaisedButton(systemName: "pin.fill", label: "Unpin", action: demo.record("Unpin"))
+                AtticRaisedButton(systemName: "pin", label: "Unpin", isSelected: true, action: demo.record("Unpin"))
             }
         }
         BoardHeading(title: "Label buttons · 32 tall")
@@ -509,38 +517,37 @@ private struct PageSwitchBoard: View {
     @Bindable var demo: AtticGalleryDemo
 
     var body: some View {
-        BoardHeading(title: "Group capsule · 32 tall, chips 24, radius 9.5, inset 4")
-        ForEach(0..<3, id: \.self) { page in
-            SpecimenRow {
-                AtticSpecimen(["Tasks selected", "Notes selected", "Canvas selected"][page]) {
-                    AtticPageSwitch(items: AtticGallerySamples.pages, selection: .constant(page))
-                }
-            }
-        }
+        BoardHeading(title: "Page button (Phase 0's mode dock) · 36 × 36, opens to 96")
         SpecimenRow {
-            AtticSpecimen("Live (click, or ⌘1–⌘3 in Phase 1)") {
-                AtticPageSwitch(items: AtticGallerySamples.pages, selection: $demo.page)
+            AtticSpecimen("Shut: the current page") {
+                AtticPageButton(items: AtticGallerySamples.pages, selection: .constant(0), pinnedOpen: false)
+            }
+            AtticSpecimen("Open: every page") {
+                AtticPageButton(items: AtticGallerySamples.pages, selection: .constant(1), pinnedOpen: true)
+            }
+            AtticSpecimen("Live (hover to open)") {
+                AtticPageButton(items: AtticGallerySamples.pages, selection: $demo.page)
             }
         }
-        SpecimenRow {
-            AtticSpecimen("Hover on Notes") {
-                AtticPageSwitch(items: AtticGallerySamples.pages, selection: .constant(0), statePinnedPage: 1).atticForcedState(.hover)
-            }
-        }
-        SpecimenRow {
-            AtticSpecimen("Keyboard focus on Canvas") {
-                AtticPageSwitch(items: AtticGallerySamples.pages, selection: .constant(0), statePinnedPage: 2).atticForcedState(.focused)
-            }
-        }
-        BoardHeading(title: "Status tabs · 13 pt, 14 apart, no underline")
+        BoardHeading(title: "Page tabs · 11.5 pt rounded, the selected page semibold, 16 apart")
         SpecimenRow {
             AtticSpecimen("Now selected") {
-                AtticStatusTabs(items: AtticGallerySamples.tabs, selection: .constant(0))
+                AtticPageTabs(items: AtticGallerySamples.pageTabs, selection: .constant(0))
             }
         }
         SpecimenRow {
-            AtticSpecimen("Backlog selected, hover on Done") {
-                AtticStatusTabs(items: AtticGallerySamples.tabs, selection: .constant(1), statePinnedTab: 2).atticForcedState(.hover)
+            AtticSpecimen("Later selected, hover on Done") {
+                AtticPageTabs(items: AtticGallerySamples.pageTabs, selection: .constant(1), statePinnedPage: 2).atticForcedState(.hover)
+            }
+        }
+        SpecimenRow {
+            AtticSpecimen("Keyboard focus (← → move)") {
+                AtticPageTabs(items: AtticGallerySamples.pageTabs, selection: .constant(0), statePinnedPage: 0).atticForcedState(.focused)
+            }
+        }
+        SpecimenRow {
+            AtticSpecimen("Live") {
+                AtticPageTabs(items: AtticGallerySamples.pageTabs, selection: $demo.tab)
             }
         }
     }
@@ -555,22 +562,43 @@ private struct AddBarBoard: View {
         BoardHeading(title: "Add bar · 36 tall, radius 15; send appears with text")
         Group {
             AtticSpecimen("Empty", fullWidth: true) {
-                AtticAddBar(placeholder: "Add a task…", text: .constant(""), onSubmit: demo.record("Add")).padding(.horizontal, 12)
+                AtticAddBar(placeholder: "Add a task", text: .constant(""), onSubmit: demo.record("Add")).padding(.horizontal, 12)
             }
             AtticSpecimen("Hover: no fill; the cursor becomes the I-beam", fullWidth: true) {
-                AtticAddBar(placeholder: "Add a task…", text: .constant(""), onSubmit: demo.record("Add")).padding(.horizontal, 12).atticForcedState(.hover)
+                AtticAddBar(placeholder: "Add a task", text: .constant(""), onSubmit: demo.record("Add")).padding(.horizontal, 12).atticForcedState(.hover)
             }
             AtticSpecimen("With text: send button inside", fullWidth: true) {
-                AtticAddBar(placeholder: "Add a task…", text: .constant(demo.addTextFilled), onSubmit: demo.record("Add")).padding(.horizontal, 12)
+                AtticAddBar(placeholder: "Add a task", text: .constant(demo.addTextFilled), onSubmit: demo.record("Add")).padding(.horizontal, 12)
             }
-            AtticSpecimen("Backlog page", fullWidth: true) {
-                AtticAddBar(placeholder: "Add to backlog…", text: .constant(""), onSubmit: demo.record("Add")).padding(.horizontal, 12)
+            AtticSpecimen("Later page", fullWidth: true) {
+                AtticAddBar(placeholder: "Add to later", text: .constant(""), onSubmit: demo.record("Add")).padding(.horizontal, 12)
+            }
+            AtticSpecimen("Recognised pieces turn secondary; a date gets its calendar", fullWidth: true) {
+                AtticAddBar(placeholder: "Add a task", text: .constant("Call mom fri #family !!"),
+                            tokens: AtticGallerySamples.chipTokens, onSubmit: demo.record("Add"))
+                    .padding(.horizontal, 12)
+            }
+            AtticSpecimen("The strip over the bar: Date · Tag · Priority", fullWidth: true) {
+                AtticGallerySamples.strip(date: nil, tags: nil, priority: nil)
+                    .padding(.horizontal, 12)
+            }
+            AtticSpecimen("The strip shows what the task will get, with a clear ×", fullWidth: true) {
+                AtticGallerySamples.strip(
+                    date: AtticStripValue(text: "Tomorrow", spoken: "Tomorrow"),
+                    tags: AtticStripValue(text: "#home +1", spoken: "home and 1 more"),
+                    priority: AtticStripValue(text: "!!", ink: .priorityMark, style: .priorityMark, spoken: "High")
+                )
+                .padding(.horizontal, 12)
+            }
+            AtticSpecimen("Done page: the bar still adds; its search takes the tabs' line", fullWidth: true) {
+                AtticTabsSearchField(placeholder: "Search done tasks", text: .constant("invoice"), onEscape: {})
+                    .padding(.horizontal, 12)
             }
             AtticSpecimen("Keyboard focus", fullWidth: true) {
-                AtticAddBar(placeholder: "Add a task…", text: .constant(""), onSubmit: demo.record("Add")).padding(.horizontal, 12).atticForcedState(.focused)
+                AtticAddBar(placeholder: "Add a task", text: .constant(""), onSubmit: demo.record("Add")).padding(.horizontal, 12).atticForcedState(.focused)
             }
             AtticSpecimen("Live (type to see the send button)", fullWidth: true) {
-                AtticAddBar(placeholder: "Add a task…", text: $demo.addText) { demo.addText = "" }.padding(.horizontal, 12)
+                AtticAddBar(placeholder: "Add a task", text: $demo.addText) { demo.addText = "" }.padding(.horizontal, 12)
             }
         }
     }
@@ -640,49 +668,52 @@ private struct SmallControlsBoard: View {
 private struct StatusCircleBoard: View {
     @Bindable var demo: AtticGalleryDemo
 
-    /// Ticked of three subtasks, and none at all.
-    private static let fractions: [(title: String, subtasks: (done: Int, total: Int)?)] = [
-        ("0 of 3", (0, 3)), ("1 of 3", (1, 3)), ("2 of 3", (2, 3)), ("No subtasks", nil)
-    ]
-
     var body: some View {
-        BoardHeading(title: "States × priorities · 16 pt · weight shows priority, only High is red")
+        BoardHeading(title: "States · 16 pt · one grey ring at one weight (Direction A)")
         VStack(alignment: .leading, spacing: 10) {
             ForEach(AtticTaskState.allCases, id: \.self) { state in
                 AtticSpecimen(stateTitle(state), fullWidth: true) {
-                    priorities { AtticStatusCircle(state: state, priority: $0) }
+                    AtticStatusCircle(state: state).padding(.horizontal, 16)
                 }
             }
         }
-        BoardHeading(title: "In progress · the wedge is the share of subtasks ticked (at least a quarter)")
+        BoardHeading(title: "In progress · the centre dot, then a true pie once a subtask is ticked")
+        AtticSpecimen("No subtasks, 0 of 3, 1 of 3, 2 of 3, 3 of 3", fullWidth: true) {
+            HStack(spacing: 22) {
+                ForEach(Array([nil, (0, 3), (1, 3), (2, 3), (3, 3)].enumerated()), id: \.offset) { _, subtasks in
+                    AtticStatusCircle(state: .inProgress, subtasks: subtasks)
+                }
+            }
+            .padding(.horizontal, 16)
+        }
+        BoardHeading(title: "Priority is a mark after the title, not the ring")
         VStack(alignment: .leading, spacing: 10) {
-            ForEach(Self.fractions, id: \.title) { fraction in
-                AtticSpecimen(fraction.title, fullWidth: true) {
-                    priorities { AtticStatusCircle(state: .inProgress, priority: $0, progress: AtticStatusCircle.progress(fraction.subtasks)) }
+            ForEach(AtticPriority.allCases.reversed(), id: \.self) { priority in
+                AtticSpecimen(priority.rawValue.capitalized, fullWidth: true) {
+                    HStack(spacing: AtticPriorityMarkMetrics.titleGap) {
+                        AtticText(verbatim: "Ship appearance PR", style: .rowTitle, ink: .body)
+                        AtticPriorityMark(priority: priority)
+                    }
+                    .padding(.horizontal, 16)
                 }
             }
         }
-        BoardHeading(title: "Completion · the wedge sweeps to a full disc, then the check draws")
-        AtticSpecimen("Frames from 1 of 3: sweep 0, 50, 100 %, then check 50, 100 %", fullWidth: true) {
+        BoardHeading(title: "Completion · the done disc sweeps in, then the check draws")
+        AtticSpecimen("Frames: sweep 0, 50, 100 %, then check 50, 100 %", fullWidth: true) {
             HStack(spacing: 22) {
                 ForEach(Array([(0.0, 0.0), (0.5, 0.0), (1.0, 0.0), (1.0, 0.5), (1.0, 1.0)].enumerated()), id: \.offset) { _, frame in
                     // Frames of the animation: the in-between frames are
                     // transient, so only the settled frame is judged.
-                    AtticStatusCircle(state: .done, priority: .high, progress: 1.0 / 3, checkProgress: frame.1, completionProgress: frame.0)
+                    AtticStatusCircle(state: .done, checkProgress: frame.1, completionProgress: frame.0)
                         .transformEnvironment(\.atticProbesDisabled) { if frame.1 < 1 { $0 = true } }
                 }
             }
             .padding(.horizontal, 16)
         }
-        AtticSpecimen("Live: click the circle to advance (1 of 3 subtasks)", fullWidth: true) {
+        AtticSpecimen("Live: click the circle to complete, again to undo", fullWidth: true) {
             HStack(spacing: 10) {
                 AtticStatusButton(state: demo.liveState, priority: .medium, subtasks: (1, 3)) {
-                    demo.liveState = switch demo.liveState {
-                    case .todo: .inProgress
-                    case .inProgress: .done
-                    case .done: .todo
-                    case .backlog: .todo
-                    }
+                    demo.liveState = demo.liveState == .done ? .todo : .done
                 }
                 AtticText(verbatim: demo.liveState.spokenName.prefix(1).uppercased() + demo.liveState.spokenName.dropFirst(), style: .rowMeta, ink: .helper)
             }
@@ -690,39 +721,19 @@ private struct StatusCircleBoard: View {
         }
         AtticSpecimen("Keyboard focus (Full Keyboard Access)", fullWidth: true) {
             HStack(spacing: 22) {
-                AtticStatusButton(state: .todo, priority: .high, onAdvance: demo.record("Advance")).atticForcedState(.focused)
-                AtticStatusButton(state: .done, priority: .none, onAdvance: demo.record("Advance")).atticForcedState(.focused)
+                AtticStatusButton(state: .todo, priority: .high, onToggle: demo.record("Complete")).atticForcedState(.focused)
+                AtticStatusButton(state: .done, priority: .none, onToggle: demo.record("Mark as not done")).atticForcedState(.focused)
             }
             .padding(.horizontal, 10)
         }
-        AtticSpecimen("Differentiate Without Colour: High is heavier than Medium", fullWidth: true) {
-            VStack(alignment: .leading, spacing: 8) {
-                priorities { AtticStatusCircle(state: .todo, priority: $0) }
-                priorities { AtticStatusCircle(state: .inProgress, priority: $0, progress: 1.0 / 3) }
-            }
-            .transformEnvironment(\.atticDesign) { $0.differentiateWithoutColor = true }
-        }
-    }
-
-    /// One circle per priority, labelled.
-    private func priorities(@ViewBuilder _ circle: @escaping (AtticPriority) -> some View) -> some View {
-        HStack(spacing: 22) {
-            ForEach(AtticPriority.allCases, id: \.self) { priority in
-                VStack(spacing: 4) {
-                    circle(priority)
-                    AtticText(verbatim: priority.rawValue.capitalized, style: .rowMeta, ink: .helper)
-                }
-            }
-        }
-        .padding(.horizontal, 16)
     }
 
     private func stateTitle(_ state: AtticTaskState) -> String {
         switch state {
-        case .todo: "To do: a grey ring, heavier and darker with priority; High is red"
-        case .inProgress: "In progress, no subtasks: a quarter wedge (started)"
+        case .todo: "To do: a grey ring"
+        case .inProgress: "In progress: the ring with a centre dot (a pie once a subtask is ticked)"
         case .done: "Done: a quiet grey disc with a darker check"
-        case .backlog: "Backlog: a dashed grey ring"
+        case .backlog: "Later: a dashed grey ring"
         }
     }
 }
@@ -737,10 +748,10 @@ private struct TaskRowsBoard: View {
         AtticSpecimen("Rest", fullWidth: true) { GalleryTaskRow(model: rows[2]) }
         AtticSpecimen("Details line: today, tag", fullWidth: true) { GalleryTaskRow(model: rows[0]) }
         AtticSpecimen("Date and count on the title line", fullWidth: true) {
-            GalleryTaskRow(model: .init(title: "Plan the offsite", priority: .low, due: .init(text: "Mon", isUrgent: false), subtasks: (0, 2)))
+            GalleryTaskRow(model: .init(title: "Plan the offsite", priority: .low, due: .init(text: "Mon"), subtasks: (0, 2)))
         }
         AtticSpecimen("Overdue at the right end", fullWidth: true) {
-            GalleryTaskRow(model: .init(title: "Pay the invoice", priority: .high, due: .init(text: "Yesterday", isUrgent: true)))
+            GalleryTaskRow(model: .init(title: "Pay the invoice", priority: .high, due: .init(text: "Yesterday", tone: .overdue)))
         }
         AtticSpecimen("Hover", fullWidth: true) { GalleryTaskRow(model: rows[1]).atticForcedState(.hover) }
         AtticSpecimen("Selected", fullWidth: true) { GalleryTaskRow(model: rows[1], isSelected: true) }
@@ -748,7 +759,7 @@ private struct TaskRowsBoard: View {
         AtticSpecimen("Keyboard focus", fullWidth: true) { GalleryTaskRow(model: rows[3]).atticForcedState(.focused) }
         AtticSpecimen("Disabled (while saving)", fullWidth: true) { GalleryTaskRow(model: rows[3]).atticForcedState(.disabled) }
         AtticSpecimen("Done: struck through, faded", fullWidth: true) { GalleryTaskRow(model: rows[4]) }
-        AtticSpecimen("Backlog", fullWidth: true) {
+        AtticSpecimen("Later", fullWidth: true) {
             GalleryTaskRow(model: .init(title: "Plan Friday retro", state: .backlog, priority: .low))
         }
         AtticSpecimen("Touching selected rows merge", fullWidth: true) {
@@ -759,7 +770,7 @@ private struct TaskRowsBoard: View {
             }
         }
         AtticSpecimen("In a window; date, files and links", fullWidth: true) {
-            GalleryTaskRow(model: .init(title: "Draft the pricing page", priority: .medium, due: .init(text: "Thu", isUrgent: false), attachments: 2, links: 2, inWindow: true))
+            GalleryTaskRow(model: .init(title: "Draft the pricing page", priority: .medium, due: .init(text: "Thu"), attachments: 2, links: 2, inWindow: true))
         }
         AtticSpecimen("A very long title truncates, never wraps", fullWidth: true) {
             GalleryTaskRow(model: .init(title: "Write the long overdue follow-up to everyone who replied to the beta invite", subtasks: (0, 5)))
@@ -797,16 +808,16 @@ private struct QuickLookBoard: View {
                 GalleryTaskCard(model: .init(title: "Go to the appointment", priority: .high)).padding(.horizontal, 16)
             }
             AtticSpecimen("Collapsed with details", fullWidth: true) {
-                GalleryTaskCard(model: .init(title: "Go to the appointment", priority: .high, due: .init(text: "Thu", isUrgent: false), tags: ["personal"], subtasks: (1, 3)))
+                GalleryTaskCard(model: .init(title: "Go to the appointment", priority: .high, due: .init(text: "Thu"), tags: ["personal"], subtasks: (1, 3)))
                     .padding(.horizontal, 16)
             }
             AtticSpecimen("Hover", fullWidth: true) {
-                GalleryTaskCard(model: .init(title: "Ask Sam for the copy", priority: .medium, due: .init(text: "Thu", isUrgent: false)))
+                GalleryTaskCard(model: .init(title: "Ask Sam for the copy", priority: .medium, due: .init(text: "Thu")))
                     .padding(.horizontal, 16).atticForcedState(.hover)
             }
             AtticSpecimen("Expanded", fullWidth: true) {
                 GalleryTaskCard(
-                    model: .init(title: "Go to the appointment", state: .inProgress, priority: .high, due: .init(text: "Thu", isUrgent: false), tags: ["personal"], subtasks: (1, 3)),
+                    model: .init(title: "Go to the appointment", state: .inProgress, priority: .high, due: .init(text: "Thu"), tags: ["personal"], subtasks: (1, 3)),
                     subtasks: [.init(title: "Bring insurance card", isDone: true), .init(title: "Leave by 2:15"), .init(title: "Ask about the X-ray")],
                     isExpanded: true
                 )
@@ -859,7 +870,7 @@ private struct FeedbackBoard: View {
             AtticUndoToast(message: String(localized: "Task deleted"), onUndo: demo.record("Undo")).padding(.horizontal, 16)
         }
         AtticSpecimen("Undo hover", fullWidth: true) {
-            AtticUndoToast(message: String(localized: "Moved to Backlog"), onUndo: demo.record("Undo")).padding(.horizontal, 16).atticForcedState(.hover)
+            AtticUndoToast(message: String(localized: "Moved to Later"), onUndo: demo.record("Undo")).padding(.horizontal, 16).atticForcedState(.hover)
         }
         AtticSpecimen("Live: slides up, fades under Reduce Motion", fullWidth: true) {
             VStack(alignment: .leading, spacing: 8) {
@@ -877,7 +888,10 @@ private struct FeedbackBoard: View {
             .padding(.horizontal, 16)
         }
         BoardHeading(title: "Empty · one quiet italic line, where the first row goes")
-        AtticSpecimen("Now", fullWidth: true) { AtticEmptyLine(text: String(localized: "Nothing here yet. Add a task below.")) }
+        AtticSpecimen("Now, first use", fullWidth: true) { AtticEmptyLine(text: String(localized: "Add your first task")) }
+        AtticSpecimen("Now, all finished today", fullWidth: true) { AtticEmptyLine(text: String(localized: "You’re caught up")) }
+        AtticSpecimen("Now, tasks waiting in Later", fullWidth: true) { AtticEmptyLine(text: String(localized: "Nothing active. Choose from Later.")) }
+        AtticSpecimen("Later", fullWidth: true) { AtticEmptyLine(text: String(localized: "Nothing for later")) }
         AtticSpecimen("Done", fullWidth: true) { AtticEmptyLine(text: String(localized: "Finished tasks collect here.")) }
         AtticSpecimen("Search with no results", fullWidth: true) { AtticEmptyLine(text: String(localized: "No tasks match “invoice”.")) }
         BoardHeading(title: "Error · never hidden, with the next step")
@@ -977,7 +991,7 @@ private struct EdgeBlurBoard: View {
                             Spacer()
                         }
                         Spacer()
-                        AtticAddBar(placeholder: "Add a task…", text: .constant(""), onSubmit: demo.record("Add"))
+                        AtticAddBar(placeholder: "Add a task", text: .constant(""), onSubmit: demo.record("Add"))
                     }
                     .padding(AtticSpacing.panelMargin)
                 }
@@ -1048,11 +1062,7 @@ private struct DragBoard: View {
         }
         BoardHeading(title: "Drop target · words only when not obvious")
         AtticSpecimen("File over a row", fullWidth: true) {
-            GalleryTaskRow(model: .init(title: "Email beta testers", priority: .medium, due: .init(text: "Fri", isUrgent: false)), dropLabel: String(localized: "Add to page"))
-        }
-        AtticSpecimen("Task over the Backlog tab (no words needed)", fullWidth: true) {
-            AtticStatusTabs(items: AtticGallerySamples.tabs, selection: .constant(0), dropTargetTab: 1)
-                .padding(.leading, AtticLayout.circleX)
+            GalleryTaskRow(model: .init(title: "Email beta testers", priority: .medium, due: .init(text: "Fri")), dropLabel: String(localized: "Add to page"))
         }
         AtticSpecimen("Live: settle with the tick, or fail and return", fullWidth: true) {
             DropDemo(demo: demo)
@@ -1117,6 +1127,51 @@ private struct SettingsBoard: View {
                 AtticPopUpRow(label: String(localized: "Open Attic on"), choices: [("last", String(localized: "Last page")), ("tasks", String(localized: "Tasks"))], selection: .constant("last"))
                 AtticGroupDivider()
                 AtticSwitchRow(title: String(localized: "Haptics"), isOn: $demo.haptics)
+            }
+            .frame(width: 480)
+            .padding(16)
+            .background(AtticContentCard { Color.clear })
+            .padding(.horizontal, 16)
+        }
+        AtticSpecimen("Phase 1 · rows with an action, messages, footnote", fullWidth: true) {
+            VStack(alignment: .leading, spacing: 0) {
+                AtticGroupCard {
+                    AtticActionRow(title: String(localized: "Endpoint"), value: "http://127.0.0.1:7335/mcp",
+                                   actionTitle: String(localized: "Copy"), action: demo.record("Copy"))
+                    AtticGroupDivider()
+                    AtticActionRow(title: String(localized: "2 items"), actionTitle: String(localized: "Empty…"),
+                                   action: demo.record("Empty"))
+                    AtticGroupDivider()
+                    AtticStatusRow(title: String(localized: "Listening on this Mac only"), systemName: "checkmark.circle")
+                    AtticGroupDivider()
+                    AtticGroupMessage(text: String(localized: "Agent Access is off. Nothing is listening."))
+                    AtticGroupDivider()
+                    AtticGroupMessage(text: String(localized: "1 item was kept: its copies don’t match yet."), tone: .warning)
+                    AtticGroupDivider()
+                    AtticGroupMessage(text: String(localized: "Could not start the server."), tone: .error,
+                                      actionTitle: String(localized: "Retry"), action: demo.record("Retry"))
+                }
+                AtticGroupFootnote(String(localized: "Deleted tasks, notes, canvases and attachments stay here for 30 days, then are removed for good."))
+            }
+            .frame(width: 480)
+            .padding(16)
+            .background(AtticContentCard { Color.clear })
+            .padding(.horizontal, 16)
+        }
+        AtticSpecimen("Phase 1 · Recently Deleted", fullWidth: true) {
+            VStack(alignment: .leading, spacing: AtticSpacing.s20) {
+                AtticSearchField(placeholder: String(localized: "Search Recently Deleted"), text: .constant(""))
+                AtticSearchField(placeholder: String(localized: "Search Recently Deleted"), text: .constant("launch"))
+                AtticGroupCard {
+                    AtticDeletedItemRow(systemName: "checkmark.circle", kind: String(localized: "Task"), title: "Plan the launch",
+                                        detail: String(localized: "Deleted 3 days ago · with 2 subtasks"), onRestore: demo.record("Restore", "Plan the launch"))
+                    AtticGroupDivider(leadingInset: AtticSettingsRowMetrics.iconTextInset)
+                    AtticDeletedItemRow(systemName: "paperclip", kind: String(localized: "Attachment"), title: "brief.pdf",
+                                        detail: String(localized: "From “Launch plan” · Deleted today"), onRestore: demo.record("Restore", "brief.pdf"))
+                }
+                AtticGroupCard {
+                    AtticGroupEmptyRow(text: String(localized: "Nothing has been deleted."))
+                }
             }
             .frame(width: 480)
             .padding(16)

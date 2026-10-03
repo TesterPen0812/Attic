@@ -2132,6 +2132,48 @@ final class CanvasAccessibilityTests: XCTestCase {
         )
     }
 
+    /// Round 2 #3: the page switch builds Canvas behind Tasks; built but
+    /// hidden, it starts no image decode until it is shown.
+    @MainActor
+    func testAHiddenPrebuiltCanvasDecodesNoImagesUntilItShows() async throws {
+        let session = CanvasSession(store: try makeTestCanvasStore())
+        XCTAssertTrue(session.importPreparedImage(corruptCanvasImage(7), at: CanvasPoint(x: 0, y: 0)))
+        let image = try XCTUnwrap(session.images.first)
+        let view = CanvasNSView(frame: CGRect(x: 0, y: 0, width: 480, height: 360))
+        let hidden = CanvasNSViewRepresentable(session: session, selectionAccentColor: .systemBlue,
+                                               clearReadabilityEnabled: false, decodesImages: false)
+        hidden.configure(view)
+        view.display()
+        hidden.configure(view)
+        XCTAssertEqual(view.imageDecodePreparationCount, 0, "no decode pass while hidden")
+        XCTAssertEqual(view.imageCache.state(for: image), .idle)
+
+        let shown = CanvasNSViewRepresentable(session: session, selectionAccentColor: .systemBlue, clearReadabilityEnabled: false)
+        shown.configure(view)
+        XCTAssertGreaterThan(view.imageDecodePreparationCount, 0)
+        XCTAssertNotEqual(view.imageCache.state(for: image), .idle, "showing it starts the visible decodes")
+    }
+
+    /// Round 10 (the owner saw an open hand over Tasks rows): the Canvas
+    /// kept built behind another page is only transparent, so its cursor
+    /// rects and pointer tracking were live. Hidden, it sets no cursor.
+    @MainActor
+    func testAHiddenPrebuiltCanvasSetsNoCursor() throws {
+        let session = CanvasSession(store: try makeTestCanvasStore())
+        let view = CanvasNSView(frame: CGRect(x: 0, y: 0, width: 480, height: 360))
+        let hidden = CanvasNSViewRepresentable(session: session, selectionAccentColor: .systemBlue,
+                                               clearReadabilityEnabled: false, decodesImages: false)
+        hidden.configure(view)
+        XCTAssertFalse(view.isPageShown)
+        XCTAssertTrue(view.pointerCursorRects().isEmpty, "no cursor rects while hidden")
+        XCTAssertNil(view.cursorForMove(at: CGPoint(x: 240, y: 180)), "a pointer move sets nothing")
+        let shown = CanvasNSViewRepresentable(session: session, selectionAccentColor: .systemBlue, clearReadabilityEnabled: false)
+        shown.configure(view)
+        XCTAssertTrue(view.isPageShown)
+        XCTAssertFalse(view.pointerCursorRects().isEmpty, "shown, the board's cursor is back")
+        XCTAssertNotNil(view.cursorForMove(at: CGPoint(x: 240, y: 180)))
+    }
+
     @MainActor
     func testRetryFailedImageDecodesRequeuesEveryVisibleFailure() async throws {
         let session = CanvasSession(store: try makeTestCanvasStore())

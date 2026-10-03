@@ -2,12 +2,13 @@ import Combine
 import Foundation
 
 /// Independent reasons that make hover-driven auto-hide unsafe. Presentation
-/// state is intentionally not a lock by itself: a clean, unfocused composer
+/// state of a main editor is not a lock by itself: a clean, unfocused composer
 /// or saved note may remain presented while an unpinned panel hides normally.
 enum PanelInteractionLockReason: Hashable, Sendable {
     case quickEntryFocus
     case taskComposer
     case taskEditing
+    case taskFiles
     case subtaskComposer
     case taskConfirmation
     case notesEditorFocus
@@ -32,6 +33,13 @@ final class TaskRenameDraft: ObservableObject {
 @MainActor
 final class PanelUIState: ObservableObject {
     @Published var isComposerPresented = false
+    /// Whether the panel is the key window. Native Liquid Glass renders flat
+    /// in a window that is not key, so while it is not (a hover reveal never
+    /// takes the keyboard) the shell draws its controls in the Craft style.
+    @Published private(set) var isPanelKey = false
+    /// Bumped when an explicit open (Show Attic, quick capture) should put
+    /// the keyboard in the current page's primary input (the Tasks add bar).
+    @Published private(set) var primaryInputFocusRequest: UInt64 = 0
     @Published var editingTaskID: UUID?
     /// Rename text for `editingTaskID`, owned here rather than by the row view
     /// so an in-flight rename survives surface promotion, family swaps, and
@@ -118,6 +126,86 @@ final class PanelUIState: ObservableObject {
         }
     }
 
+    /// Whether the pages are built. Nothing is built before the first
+    /// reveal, and pages are released again after the panel has been hidden
+    /// for a while (spec § Performance: released when hidden), so a hidden
+    /// panel holds only the shell. What pages need to keep (drafts, undo,
+    /// the open note or canvas) lives outside their views.
+    @Published private(set) var isPageContentLoaded = false
+
+    func loadPageContent() {
+        guard !isPageContentLoaded else { return }
+        isPageContentLoaded = true
+        builtPages = [PanelPage(selectedSection)]
+    }
+
+    func releasePageContent() {
+        guard isPageContentLoaded else { return }
+        isPageContentLoaded = false
+        builtPages = []
+    }
+
+    /// The pages built and kept while hidden behind the current one, so a
+    /// switch back to them only shows them (spec § Performance: page switch
+    /// within 50 ms). A page joins when it is first shown (or when the
+    /// pointer rests on the page switch); the hidden release frees them.
+    /// Notes is never kept: its editor saves and releases its locks when it
+    /// leaves the screen, and it is rebuilt in Phase 2.
+    @Published private(set) var builtPages: Set<PanelPage> = []
+
+    static func keepsBuilt(_ page: PanelPage) -> Bool { page != .notes }
+
+    /// Builds `page` behind the current one (the pointer is on the switch).
+    func prepareBuiltPage(_ page: PanelPage) {
+        guard isPageContentLoaded, Self.keepsBuilt(page), !builtPages.contains(page) else { return }
+        builtPages.insert(page)
+    }
+
+    /// The hidden release: every page but the current one goes.
+    func releaseBackgroundPages() {
+        let current: Set<PanelPage> = isPageContentLoaded ? [PanelPage(selectedSection)] : []
+        if builtPages != current { builtPages = current }
+    }
+
+    /// The item an agent last asked to show, for the page to scroll to and
+    /// highlight. Pages clear it once shown.
+    @Published var shownItem: AtticItemRef?
+
+    /// An agent's `show` of an item; the page that lists it consumes it
+    /// (nil once handled).
+    func showItem(_ ref: AtticItemRef?) {
+        shownItem = ref
+    }
+
+    func setPanelKey(_ isKey: Bool) {
+        guard isPanelKey != isKey else { return }
+        isPanelKey = isKey
+    }
+
+    func requestPrimaryInputFocus() {
+        primaryInputFocusRequest &+= 1
+    }
+
+    /// Search (the menu-bar item): the Tasks page opens its Done search
+    /// with the keyboard in the field. A counter, so each request is seen
+    /// once, whether or not the page is built yet.
+    @Published private(set) var searchRequest: UInt64 = 0
+
+    /// The panel's explicit lifecycle (Astra 7), marked by the panel
+    /// controller: each reveal (ordered front from hidden) and each hide
+    /// (ordered out). Pages reset on these ("Tasks opens on Now"), never on
+    /// window occlusion: a pinned panel covered by another window, or on
+    /// another Space, is still open and keeps its place.
+    @Published private(set) var revealCount: UInt64 = 0
+    @Published private(set) var hideCount: UInt64 = 0
+
+    func panelDidReveal() { revealCount &+= 1 }
+    func panelDidHide() { hideCount &+= 1 }
+
+    func requestSearch() {
+        searchRequest &+= 1
+    }
+
     func updatePanelSize(_ size: CGSize) {
         guard size.width.isFinite, size.height.isFinite,
               size.width > 0, size.height > 0 else { return }
@@ -166,6 +254,14 @@ final class PanelUIState: ObservableObject {
 
     func selectSection(_ section: PanelSection) {
         guard selectedSection != section else { return }
+        if isPageContentLoaded {
+            // The page being left stays built behind the new one unless it
+            // is one that is never kept.
+            let leaving = PanelPage(selectedSection)
+            var pages = builtPages.filter { Self.keepsBuilt($0) || $0 != leaving }
+            pages.insert(PanelPage(section))
+            if pages != builtPages { builtPages = pages }
+        }
         managedInteractionLocks.remove(.quickEntryFocus)
         managedInteractionLocks.remove(.notesEditorFocus)
         managedInteractionLocks.remove(.notesPopover)
@@ -249,5 +345,73 @@ final class PanelUIState: ObservableObject {
         guard let draggedTaskID else { return nil }
         self.draggedTaskID = nil
         return releasedOutsidePanel ? draggedTaskID : nil
+    }
+}
+
+/// Edit mode's hold on the panel (round 5, the owner's item 2): while an
+/// editor, a picker or a popover is open the panel does not auto-hide,
+/// whatever the pointer does. When the last one closes, the hold lasts a
+/// short grace more, so a pointer already outside does not collapse the
+/// panel the instant a picker closes; then the normal hover rules resume.
+/// One lock for all of them: the shell's editing lock (`.taskEditing`).
+@MainActor
+final class PanelEditHold {
+    static let defaultGrace: Duration = .milliseconds(600)
+
+    let grace: Duration
+    /// Sets the shell's lock; called only when the hold changes.
+    var apply: (Bool) -> Void
+
+    private(set) var isHeld = false
+    private var release: Task<Void, Never>?
+    /// What the page last said is open, kept while suspended.
+    private var wantsHold = false
+    /// The page is kept built behind another page (or has gone): its open
+    /// editor never holds the panel for that page (round 5).
+    private(set) var isSuspended = false
+
+    init(grace: Duration = PanelEditHold.defaultGrace, apply: @escaping (Bool) -> Void = { _ in }) {
+        self.grace = grace
+        self.apply = apply
+    }
+
+    /// Whether anything that is edit mode is open now.
+    func set(_ editing: Bool) {
+        wantsHold = editing
+        guard !isSuspended else { return }
+        if editing {
+            release?.cancel()
+            release = nil
+            guard !isHeld else { return }
+            isHeld = true
+            apply(true)
+        } else {
+            guard isHeld, release == nil else { return }
+            release = Task { [weak self, grace] in
+                try? await Task.sleep(for: grace)
+                guard !Task.isCancelled, let self else { return }
+                self.release = nil
+                self.isHeld = false
+                self.apply(false)
+            }
+        }
+    }
+
+    /// The page stopped (true) or started again (false) being the one
+    /// shown: a suspended page's editor holds nothing, and on its return
+    /// whatever is still open holds the panel again.
+    func setSuspended(_ suspended: Bool) {
+        guard suspended != isSuspended else { return }
+        isSuspended = suspended
+        if suspended { end() } else if wantsHold { set(true) }
+    }
+
+    /// The panel hid or the page went away: no grace is owed.
+    func end() {
+        release?.cancel()
+        release = nil
+        guard isHeld else { return }
+        isHeld = false
+        apply(false)
     }
 }

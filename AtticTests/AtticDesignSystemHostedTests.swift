@@ -135,7 +135,7 @@ final class AtticDesignSystemHostedTests: XCTestCase {
             var tint = 0.6
             var surface = "solid"
             let view = VStack(alignment: .leading, spacing: 12) {
-                AtticAddBar(placeholder: "Add a task…", text: .constant(""), onSubmit: {})
+                AtticAddBar(placeholder: "Add a task", text: .constant(""), onSubmit: {})
                 AtticGroupCard {
                     AtticSwitchRow(title: "Haptics", isOn: Binding(get: { isOn }, set: { isOn = $0 }))
                     AtticGroupDivider()
@@ -165,10 +165,12 @@ final class AtticDesignSystemHostedTests: XCTestCase {
             perform(kAXIncrementAction as String, on: slider.element)
             XCTAssertGreaterThan(tint, before, "\(context.caption): the slider's increment moves Tint length")
 
-            // The title menu and the pop-up row are native menu buttons:
-            // VoiceOver sees a menu button that can be pressed.
+            // The title menu is a native menu button: VoiceOver sees a menu
+            // button that can be pressed. The pop-up row is a plain button
+            // that opens Attic's own opaque list (round 13), so it is not
+            // a menu button; its list is covered by TasksRound13Tests.
             let menus = items.filter { $0.role == kAXPopUpButtonRole as String || $0.role == kAXMenuButtonRole as String }
-            XCTAssertGreaterThanOrEqual(menus.count, 2, "\(context.caption): menus are not menu buttons: \(items.map(\.role))")
+            XCTAssertGreaterThanOrEqual(menus.count, 1, "\(context.caption): the title menu is not a menu button: \(items.map(\.role))")
             for menu in menus {
                 XCTAssertTrue(menu.actions.contains(kAXPressAction as String) || menu.actions.contains("AXShowMenu"),
                               "\(context.caption): a menu button VoiceOver cannot press: \(menu.actions)")
@@ -186,11 +188,7 @@ final class AtticDesignSystemHostedTests: XCTestCase {
             print("ATTIC_HOSTED_MENUS_OPENED \(opened.count)/\(menus.count) · \(context.caption) · \(ProcessInfo.processInfo.operatingSystemVersionString)")
             if !opened.isEmpty {
                 let titles = opened.flatMap { $0 }
-                XCTAssertTrue(titles.contains("Duplicate") || titles.contains("Glass"), "\(context.caption): a menu opened without its items: \(opened)")
-                if opened.count == menus.count {
-                    XCTAssertTrue(titles.contains("Duplicate"), "\(context.caption): the title menu's commands: \(opened)")
-                    XCTAssertTrue(titles.contains("Glass"), "\(context.caption): the pop-up row's choices: \(opened)")
-                }
+                XCTAssertTrue(titles.contains("Duplicate"), "\(context.caption): a menu opened without its items: \(opened)")
             } else {
                 XCTContext.runActivity(named: "Menus did not open in the inactive unit-test host (\(ProcessInfo.processInfo.operatingSystemVersionString)); AtticNativeMenuUITests covers opening") { _ in }
             }
@@ -210,7 +208,7 @@ final class AtticDesignSystemHostedTests: XCTestCase {
             XCTAssertGreaterThanOrEqual(glyph.ink.contrast(on: glass) + AtticAppearanceCheck.glyphTolerance, floor, "\(context.caption): hosted placeholder \(glyph.ink) on glass \(glass)")
 
             // The hosted add bar keeps its token height.
-            XCTAssertEqual(NSHostingView(rootView: AtticAddBar(placeholder: "Add a task…", text: .constant(""), onSubmit: {}).atticDesign(context)).fittingSize.height, AtticControlSize.addBarHeight, accuracy: 0.5)
+            XCTAssertEqual(NSHostingView(rootView: AtticAddBar(placeholder: "Add a task", text: .constant(""), onSubmit: {}).atticDesign(context)).fittingSize.height, AtticControlSize.addBarHeight, accuracy: 0.5)
 
             // One window at a time: the accessibility walk covers every window.
             for window in windows { window.orderOut(nil); window.close() }
@@ -227,9 +225,10 @@ final class AtticDesignSystemHostedTests: XCTestCase {
         var fired: [String] = []
         func actions(_ row: String) -> AtticTaskActions {
             AtticTaskActions(
-                advance: { fired.append("\(row) advance") }, start: { fired.append("\(row) start") },
-                complete: { fired.append("\(row) complete") }, openPage: { fired.append("\(row) open") },
-                moveToBacklog: { fired.append("\(row) backlog") }, delete: { fired.append("\(row) delete") }
+                toggleDone: { fired.append("\(row) done") }, toggleWorking: { fired.append("\(row) working") },
+                openPage: { fired.append("\(row) open") },
+                moveToBacklog: { fired.append("\(row) backlog") }, delete: { fired.append("\(row) delete") },
+                editTitle: { fired.append("\(row) edit") }
             )
         }
         // A palette with a coloured accent, so the ring is unmistakable.
@@ -241,10 +240,11 @@ final class AtticDesignSystemHostedTests: XCTestCase {
         let (window, hosting) = host(rows.padding(.vertical, 8), size: CGSize(width: 320, height: 80), context: context, key: true)
         XCTAssertTrue(window.isKeyWindow, "Keyboard focus needs a key window")
 
-        /// Whether row `index` shows the ring (read 3 pt outside its highlight).
+        /// Whether row `index` shows the keyboard's line (L2: 1 pt on its
+        /// highlight's own edge).
         func ringShown(_ index: Int) throws -> Bool {
             let (bitmap, scale) = try snapshot(hosting)
-            let x = AtticLayout.rowHighlightInset - AtticRingMetrics.gap - AtticRingMetrics.width / 2
+            let x = AtticLayout.rowHighlightInset + AtticRingMetrics.rowLineWidth / 2
             let y = 8 + CGFloat(index) * AtticLayout.rowPitch + 1 + AtticLayout.rowHighlightHeight / 2
             let pixel = try XCTUnwrap(bitmap.colour(atX: x, y: y, scale: scale))
             return pixel.themeColor.contrastRatio(with: context.tokens.ink(.accent).themeColor) < 1.25
@@ -274,11 +274,13 @@ final class AtticDesignSystemHostedTests: XCTestCase {
 
         // Real key events reach the focused row, and only it.
         key(window, " ", code: 49)
+        key(window, " ", code: 49, modifiers: .shift)
         key(window, "\u{A0}", code: 49, modifiers: .option, ignoring: " ")
         key(window, "\r", code: 36, modifiers: .command)
         key(window, "b", code: 11, modifiers: .command)
         key(window, "\u{7F}", code: 51)
-        XCTAssertEqual(fired, ["B advance", "B complete", "B open", "B backlog", "B delete"])
+        key(window, "\r", code: 36)
+        XCTAssertEqual(fired, ["B done", "B working", "B done", "B open", "B backlog", "B delete", "B edit"])
     }
 
     /// The add bar's state comes from its own field's keyboard focus and the
@@ -290,7 +292,7 @@ final class AtticDesignSystemHostedTests: XCTestCase {
         let pad: CGFloat = 12
         let size = CGSize(width: 320, height: AtticControlSize.addBarHeight + pad * 2)
         func bar(_ disabled: Bool) -> some View {
-            AtticAddBar(placeholder: "Add a task…", text: .constant(""), onSubmit: {}).padding(pad).disabled(disabled)
+            AtticAddBar(placeholder: "Add a task", text: .constant(""), onSubmit: {}).padding(pad).disabled(disabled)
         }
         /// Whether the ring shows (read on its stroke, left of the bar).
         func ringShown(_ hosting: NSView) throws -> Bool {
@@ -389,7 +391,7 @@ final class AtticDesignSystemHostedTests: XCTestCase {
     func testTaskCardTakesKeyboardFocus() throws {
         var fired: [String] = []
         let actions = AtticTaskActions(
-            advance: { fired.append("advance") }, start: {}, complete: { fired.append("complete") },
+            toggleDone: { fired.append("done") }, toggleWorking: { fired.append("working") },
             openPage: { fired.append("open") }, moveToBacklog: {}, delete: {}
         )
         let context = AtticDesignContext(mode: .light, palette: .electricBlue)
@@ -404,10 +406,10 @@ final class AtticDesignSystemHostedTests: XCTestCase {
         let pixel = try XCTUnwrap(bitmap.colour(atX: 12 - 3, y: 28, scale: scale))
         XCTAssertLessThan(pixel.themeColor.contrastRatio(with: context.tokens.ink(.accent).themeColor), 1.25, "Tab focuses the card and draws the ring")
         key(window, " ", code: 49)
-        key(window, "\u{A0}", code: 49, modifiers: .option, ignoring: " ")
+        key(window, " ", code: 49, modifiers: .shift)
         key(window, "\r", code: 36, modifiers: .command)
         key(window, "\u{7F}", code: 51)
-        XCTAssertEqual(fired, ["advance", "complete", "open"], "Cards take no list commands (Delete)")
+        XCTAssertEqual(fired, ["done", "working", "open"], "Cards take no list commands (Delete)")
     }
 
     // MARK: VoiceOver
@@ -481,12 +483,12 @@ final class AtticDesignSystemHostedTests: XCTestCase {
     func testTaskRowOffersTheSpecifiedVoiceOverActions() throws {
         var fired: [String] = []
         let actions = AtticTaskActions(
-            advance: { fired.append("advance") }, start: { fired.append("start") },
-            complete: { fired.append("complete") }, openPage: { fired.append("open") },
+            toggleDone: { fired.append("complete") }, toggleWorking: { fired.append("start") },
+            openPage: { fired.append("open") },
             moveToBacklog: { fired.append("backlog") }, delete: { fired.append("delete") }
         )
         let row = AtticTaskRow(
-            model: .init(title: "Email beta testers", priority: .high, due: .init(text: "Friday", isUrgent: false), tags: ["launch"], subtasks: (1, 3)),
+            model: .init(title: "Email beta testers", priority: .high, due: .init(text: "Friday"), tags: ["launch"], subtasks: (1, 3)),
             actions: actions, onToggleExpanded: { fired.append("expand") }
         )
         _ = host(row, size: CGSize(width: 320, height: 44))
@@ -496,10 +498,10 @@ final class AtticDesignSystemHostedTests: XCTestCase {
         )
         XCTAssertEqual(item.description, "Email beta testers, to do, high priority, due Friday, tagged launch, 1 of 3 subtasks")
         let names = item.actions.map(actionName)
-        for name in ["Start", "Complete", "Open page", "Move to Backlog", "Delete", "Show subtasks"] {
+        for name in ["Complete", "Start working", "Open page", "Move to Later", "Delete", "Show subtasks"] {
             XCTAssertTrue(names.contains(name), "Missing VoiceOver action \(name): \(names)")
         }
-        for (name, expected) in [("Start", "start"), ("Complete", "complete"), ("Open page", "open"), ("Move to Backlog", "backlog"), ("Delete", "delete"), ("Show subtasks", "expand")] {
+        for (name, expected) in [("Start working", "start"), ("Complete", "complete"), ("Open page", "open"), ("Move to Later", "backlog"), ("Delete", "delete"), ("Show subtasks", "expand")] {
             fired.removeAll()
             let raw = try XCTUnwrap(item.actions.first { actionName($0) == name })
             perform(raw, on: item.element)
@@ -507,11 +509,53 @@ final class AtticDesignSystemHostedTests: XCTestCase {
         }
     }
 
+    /// The page button and the page tabs each read as one "Pages" group
+    /// with a named button per page, the current one selected; pressing a
+    /// button selects its page. The tabs take ← → while they have focus.
+    func testThePagesReadAsNamedButtonsAndTakeArrows() throws {
+        final class Record { var tab = 0; var page = 0 }
+        let record = Record()
+        let harness = PagesHarness(onTab: { record.tab = $0 }, onPage: { record.page = $0 })
+        _ = host(harness, size: CGSize(width: 320, height: 90), key: true)
+
+        let items = accessibilityItems()
+        XCTAssertEqual(items.filter { $0.description == "Pages" }.count, 2, "one group for the button, one for the tabs")
+        for name in ["Tasks", "Notes", "Canvas", "Now", "Later", "Done"] {
+            XCTAssertTrue(items.contains { $0.description == name && $0.role == kAXButtonRole as String },
+                          "\(name) is a named button: \(items.map(\.description))")
+        }
+        func selected(_ name: String) -> Bool {
+            guard let item = accessibilityItems().first(where: { $0.description == name }) else { return false }
+            var value: CFTypeRef?
+            AXUIElementCopyAttributeValue(item.element, kAXSelectedAttribute as CFString, &value)
+            return (value as? Bool) == true
+        }
+        XCTAssertTrue(selected("Tasks") && selected("Now"))
+        XCTAssertFalse(selected("Notes") || selected("Later"))
+
+        let canvas = try XCTUnwrap(accessibilityItems().first { $0.description == "Canvas" })
+        AXUIElementPerformAction(canvas.element, kAXPressAction as CFString)
+        spin()
+        XCTAssertEqual(record.page, 2, "pressing Canvas selects it, even with the button shut")
+
+        // ← → while the tabs or the page button have keyboard focus (a Tab
+        // stop when keyboard navigation is on, like any button).
+        XCTAssertEqual(AtticPageArrows.next(from: 0, key: .rightArrow, modifiers: [], count: 3), 1)
+        XCTAssertEqual(AtticPageArrows.next(from: 1, key: .leftArrow, modifiers: [], count: 3), 0)
+        XCTAssertEqual(AtticPageArrows.next(from: 2, key: .rightArrow, modifiers: [], count: 3), 2, "the last page stays")
+        XCTAssertNil(AtticPageArrows.next(from: 0, key: .rightArrow, modifiers: .command, count: 3))
+        XCTAssertNil(AtticPageArrows.next(from: 0, key: .downArrow, modifiers: [], count: 3))
+        let done = try XCTUnwrap(accessibilityItems().first { $0.description == "Done" })
+        AXUIElementPerformAction(done.element, kAXPressAction as CFString)
+        spin()
+        XCTAssertEqual(record.tab, 2)
+    }
+
     func testTaskCardOffersExpandAndTheTaskActions() throws {
         var fired: [String] = []
         let actions = AtticTaskActions(
-            advance: { fired.append("advance") }, start: { fired.append("start") },
-            complete: { fired.append("complete") }, openPage: { fired.append("open") },
+            toggleDone: { fired.append("complete") }, toggleWorking: { fired.append("start") },
+            openPage: { fired.append("open") },
             moveToBacklog: { fired.append("backlog") }, delete: { fired.append("delete") }
         )
         let card = AtticTaskCard(
@@ -522,7 +566,7 @@ final class AtticDesignSystemHostedTests: XCTestCase {
         let item = try XCTUnwrap(accessibilityItems().first { $0.description.hasPrefix("Go to the appointment") })
         XCTAssertTrue(item.description.hasSuffix("card, in note Launch sync"), item.description)
         let names = item.actions.map(actionName)
-        for name in ["Expand", "Start", "Complete", "Open page", "Open in Tasks"] {
+        for name in ["Expand", "Start working", "Complete", "Open page", "Open in Tasks"] {
             XCTAssertTrue(names.contains(name), "Missing VoiceOver action \(name): \(names)")
         }
         fired.removeAll()
@@ -536,4 +580,21 @@ final class AtticDesignSystemHostedTests: XCTestCase {
 private final class KeyTestWindow: NSWindow {
     override var canBecomeKey: Bool { true }
     override var isKeyWindow: Bool { true }
+}
+
+/// The page button over the page tabs, each with its own selection.
+private struct PagesHarness: View {
+    let onTab: (Int) -> Void
+    let onPage: (Int) -> Void
+    @State private var tab = 0
+    @State private var page = 0
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            AtticPageButton(items: AtticGallerySamples.pages, selection: $page, pinnedOpen: false)
+            AtticPageTabs(items: AtticGallerySamples.pageTabs, selection: $tab)
+        }
+        .onChange(of: tab) { _, value in onTab(value) }
+        .onChange(of: page) { _, value in onPage(value) }
+    }
 }

@@ -60,8 +60,8 @@ final class TaskDraftTests: XCTestCase {
         let created = try XCTUnwrap(store.commit(drafts))
         XCTAssertEqual(gate.saveCount, 1)
         XCTAssertEqual(created.map(\.title), ["First", "Second", "Third"])
-        XCTAssertEqual(store.orderedTasks(for: .todo).map(\.title), ["Third", "First", "Second"],
-                       "priority first, then the drafts' own order")
+        XCTAssertEqual(store.orderedTasks(for: .todo).map(\.title), ["First", "Second", "Third"],
+                       "the drafts' own order; priority no longer sorts (Phase 1)")
         XCTAssertEqual(created[0].tags, ["a"])
         XCTAssertEqual(created[1].dueDay, DueDay(year: 2026, month: 9, day: 25))
         XCTAssertEqual(created[2].priority, .medium)

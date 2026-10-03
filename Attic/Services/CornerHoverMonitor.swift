@@ -39,6 +39,29 @@ enum RevealRefreshPolicy: Equatable {
     }
 }
 
+/// What an explicit reveal did.
+enum PanelRevealOutcome: Equatable {
+    case shown
+    case refused(PanelRevealRefusal)
+}
+
+enum PanelRevealRefusal: Equatable {
+    /// No display to show the panel on.
+    case noScreen
+    /// The open note could not be saved, so the page did not change.
+    case unsavedNote
+    /// The display has no usable area for the panel.
+    case noUsableScreenArea
+
+    var explanation: String {
+        switch self {
+        case .noScreen: "no display is available for the Attic panel."
+        case .unsavedNote: "the note open in Attic could not be saved, so the panel stayed on it. Nothing was moved."
+        case .noUsableScreenArea: "the display has no room for the Attic panel right now."
+        }
+    }
+}
+
 @MainActor
 final class CornerHoverMonitor {
     private let settings: AppSettings
@@ -51,10 +74,15 @@ final class CornerHoverMonitor {
 
     private var stateMachine = CornerHoverStateMachine()
     private var samplingState = CornerHoverSamplingState()
-    private var pollingTimer: DispatchSourceTimer?
-    private var pollingTimerEpoch = CornerHoverTimerEpoch()
     private var scheduledCadence: CornerHoverSamplingCadence?
+    /// The frames of the displays whose corner answers hover (all of them,
+    /// the chosen ones, or none when hover is off): the sampling cadence
+    /// is responsive only near those corners.
     private var cachedScreenFrames: [CGRect] = []
+    /// Every display's frame and identifier, read when displays change.
+    private var cachedScreens: [(frame: CGRect, id: String?)] = []
+    /// The hover rule (Settings › Panel › Corner), read when it changes.
+    private var revealPolicy = CornerRevealPolicy()
     private var localPointerMonitor: Any?
     private var globalPointerMonitor: Any?
     private var screenChangeToken: NSObjectProtocol?
@@ -64,13 +92,15 @@ final class CornerHoverMonitor {
     private var dragReleaseTask: Task<Void, Never>?
     private var isRunning = false
     private var lastKeyboardInputAt: TimeInterval = -.infinity
-    /// Visible-panel sampling is event-driven: bursts of pointer events are
-    /// coalesced to one sample per `eventSampleInterval`, with a trailing
-    /// sample so the last position is never missed.
+    /// Sampling is event-driven: bursts of pointer events near the corner or
+    /// over the visible panel are coalesced to one sample per
+    /// `eventSampleInterval`, with a trailing sample so the last position is
+    /// never missed.
     private var lastEventSampleAt: TimeInterval = -.infinity
     private var trailingSampleWork: DispatchWorkItem?
-    /// One-shot follow-up for the hide delay while visible; see
-    /// `CornerHoverStateMachine.nextTimedDecision`.
+    /// The only timed work: one follow-up at the next decision deadline (the
+    /// reveal delay while hidden, the hide delay while visible); see
+    /// `scheduleFollowUp`.
     private var followUpWork: DispatchWorkItem?
     private var lockObservation: AnyCancellable?
     private var lockSampleScheduled = false
@@ -120,18 +150,30 @@ final class CornerHoverMonitor {
                 self?.samplePointer()
             }
         }
-        cornerObservation = settings.$corner
-            .dropFirst()
-            .sink { [weak self] _ in
-                guard let self else { return }
-                samplingState = CornerHoverSamplingState()
-                samplePointer()
-            }
+        // The corner and the hover rule (control audit item 10): a change
+        // re-reads which corners answer and samples once.
+        cornerObservation = Publishers.MergeMany(
+            settings.$corner.dropFirst().map { _ in () }.eraseToAnyPublisher(),
+            settings.$revealOnHover.dropFirst().map { _ in () }.eraseToAnyPublisher(),
+            settings.$revealModifier.dropFirst().map { _ in () }.eraseToAnyPublisher(),
+            settings.$revealDisplays.dropFirst().map { _ in () }.eraseToAnyPublisher(),
+            settings.$revealDisplayIDs.dropFirst().map { _ in () }.eraseToAnyPublisher()
+        )
+        // @Published sends before the value is stored: read it next turn.
+        .receive(on: RunLoop.main)
+        .sink { [weak self] in
+            guard let self, isRunning else { return }
+            refreshCachedScreenFrames()
+            samplingState = CornerHoverSamplingState()
+            samplePointer()
+        }
         // Locks and the pin are the other inputs to the auto-hide decision.
         // With no timer while visible, a change to either re-samples once on
         // the next turn (coalesced across a burst of publications).
         lockObservation = uiState.objectWillChange
             .sink { [weak self] _ in self?.scheduleLockSample() }
+
+        panelController.buildTasksPageWhenIdle()
 
         // Establish the initial cadence synchronously. A pointer already near
         // the configured corner gets the responsive path immediately; hidden
@@ -141,9 +183,6 @@ final class CornerHoverMonitor {
 
     func stop() {
         isRunning = false
-        pollingTimer?.cancel()
-        pollingTimer = nil
-        pollingTimerEpoch.invalidate()
         scheduledCadence = nil
         stopPointerActivityMonitoring()
         revealRefreshTask?.cancel()
@@ -172,21 +211,48 @@ final class CornerHoverMonitor {
         }
     }
 
-    func revealProgrammatically(openComposer: Bool = false, section: PanelSection? = nil) {
-        guard let screen = screen(containing: NSEvent.mouseLocation) ?? NSScreen.main else { return }
-        guard preparePresentation(openComposer: openComposer, section: section) else { return }
+    /// An explicit open (Show Attic, quick capture, New note, the Dock icon)
+    /// takes the keyboard: the panel becomes key, and on Tasks the add bar
+    /// is focused. `takesKeyboard: false` shows the panel without touching
+    /// the keyboard (an agent's `show` while the user may be typing).
+    ///
+    /// Returns whether the panel now shows the requested page. A refusal
+    /// changes nothing: a Notes draft that could not be saved keeps its
+    /// page, and no reveal starts.
+    @discardableResult
+    func revealProgrammatically(
+        openComposer: Bool = false,
+        section: PanelSection? = nil,
+        takesKeyboard: Bool = true,
+        focusesAddBar: Bool = true
+    ) -> PanelRevealOutcome {
+        guard let screen = screen(containing: NSEvent.mouseLocation) ?? NSScreen.main else {
+            return .refused(.noScreen)
+        }
+        if let refusal = preparePresentation(openComposer: openComposer, section: section) {
+            return .refused(refusal)
+        }
         PerformanceSignposts.beginReveal()
         refreshStoreForReveal()
+        let wasVisible = stateMachine.isVisible
         stateMachine.forceVisible(at: ProcessInfo.processInfo.systemUptime, grace: 3)
         refreshSamplingCadence(at: NSEvent.mouseLocation)
-        panelController.show(on: screen, corner: settings.corner, makeKey: openComposer)
+        guard panelController.show(on: screen, corner: settings.corner, makeKey: takesKeyboard) else {
+            if !wasVisible { stateMachine.forceHidden() }
+            refreshSamplingCadence(at: NSEvent.mouseLocation)
+            return .refused(.noUsableScreenArea)
+        }
+        if takesKeyboard, focusesAddBar, uiState.selectedSection.isTaskBased {
+            uiState.requestPrimaryInputFocus()
+        }
+        return .shown
     }
 
     /// Keep the real panel on screen through a performance sample, including
     /// a section change made while it is already visible.
     func revealForPerformanceProbe(section: PanelSection) {
         guard let screen = NSScreen.main,
-              preparePresentation(openComposer: false, section: section) else { return }
+              preparePresentation(openComposer: false, section: section) == nil else { return }
         PerformanceSignposts.beginReveal()
         refreshStoreForReveal()
         stateMachine.forceVisible(at: ProcessInfo.processInfo.systemUptime, grace: 86_400)
@@ -207,40 +273,42 @@ final class CornerHoverMonitor {
         }
     }
 
-    func keepVisibleForUITesting(openComposer: Bool = false) {
+    func keepVisibleForUITesting(openComposer: Bool = false, makeKey: Bool = true) {
         guard let screen = NSScreen.main else { return }
-        guard preparePresentation(openComposer: openComposer, section: nil) else { return }
+        guard preparePresentation(openComposer: openComposer, section: nil) == nil else { return }
         stateMachine.forceVisible(at: ProcessInfo.processInfo.systemUptime, grace: 86_400)
         refreshSamplingCadence(at: NSEvent.mouseLocation)
-        panelController.show(on: screen, corner: settings.corner, makeKey: true)
+        panelController.show(on: screen, corner: settings.corner, makeKey: makeKey)
     }
 
+    /// Moves to the target page (and opens its composer) before a reveal.
+    /// Returns why it could not, having changed nothing, or nil.
     private func preparePresentation(
         openComposer: Bool,
         section: PanelSection?
-    ) -> Bool {
+    ) -> PanelRevealRefusal? {
         let targetSection = section ?? uiState.selectedSection
 
         if targetSection != uiState.selectedSection {
             if uiState.selectedSection.isNotes, noteDraft.isActive {
-                guard noteDraft.close() else { return false }
+                guard noteDraft.close() else { return .unsavedNote }
             }
             PerformanceSignposts.beginPageSwitch()
             uiState.selectSection(targetSection)
         }
 
-        guard openComposer else { return true }
+        guard openComposer else { return nil }
         if targetSection.isNotes {
             guard noteDraft.beginNew() else {
                 PerformanceSignposts.cancelPageSwitch()
-                return false
+                return .unsavedNote
             }
         }
 
         var transaction = Transaction()
         transaction.disablesAnimations = true
         withTransaction(transaction) { uiState.beginAdding() }
-        return true
+        return nil
     }
 
     private func samplePointer(at location: CGPoint = NSEvent.mouseLocation) {
@@ -252,10 +320,13 @@ final class CornerHoverMonitor {
         // When the cursor is pinned against a screen edge, mouseLocation sits exactly on
         // the frame boundary (e.g. y == maxY at the top), which CGRect.contains excludes.
         // Expand the hotspot outward so edge-pinned coordinates still count as inside.
+        // Only a corner that answers hover, with the chosen key held now
+        // (Settings › Panel › Corner; control audit item 10).
         let isInHotspot = activeScreen.map {
-            PanelGeometry.hotspot(in: $0.frame, corner: settings.corner)
-                .insetBy(dx: -1, dy: -1)
-                .contains(location)
+            revealPolicy.reveals(displayID: displayID(of: $0), flags: NSEvent.modifierFlags)
+                && PanelGeometry.hotspot(in: $0.frame, corner: settings.corner)
+                    .insetBy(dx: -1, dy: -1)
+                    .contains(location)
         } ?? false
         // Mouse passthrough and resize cursors belong to the panel
         // controller's own pointer monitors, which run only while the panel
@@ -300,8 +371,8 @@ final class CornerHoverMonitor {
             hideDelay: settings.hideDelay
         )
         scheduleFollowUp(
-            at: uptime, isInPanel: isInPanel, isInteractionLocked: isInteractionLocked,
-            isMouseButtonPressed: isMouseButtonPressed
+            at: uptime, isInHotspot: isInHotspot, isInPanel: isInPanel,
+            isInteractionLocked: isInteractionLocked, isMouseButtonPressed: isMouseButtonPressed
         )
 
         switch transition {
@@ -371,23 +442,32 @@ final class CornerHoverMonitor {
         }
     }
 
-    /// The only timed work while visible: a single follow-up at the next
-    /// decision deadline. This is normally the hide delay or reveal grace;
-    /// clean editor focus also gets one deadline because keyboard-idle time
-    /// can expire that lock without another event. Persistent locks and pins
-    /// remain event-driven (see `scheduleLockSample`), and a pressed button is
-    /// followed by its mouse-up event.
+    /// The only timed work: a single follow-up at the next decision
+    /// deadline. Hidden, that is the reveal delay of a pointer resting in the
+    /// hotspot (it sends no more events). Visible, it is normally the hide
+    /// delay or reveal grace; clean editor focus also gets one deadline
+    /// because keyboard-idle time can expire that lock without another event.
+    /// Persistent locks and pins remain event-driven (see
+    /// `scheduleLockSample`), and a pressed button is followed by its
+    /// mouse-up event.
     private func scheduleFollowUp(
-        at uptime: TimeInterval, isInPanel: Bool, isInteractionLocked: Bool, isMouseButtonPressed: Bool
+        at uptime: TimeInterval, isInHotspot: Bool, isInPanel: Bool,
+        isInteractionLocked: Bool, isMouseButtonPressed: Bool
     ) {
         followUpWork?.cancel()
         followUpWork = nil
+        guard stateMachine.isVisible else {
+            if let deadline = stateMachine.nextRevealDeadline(revealDelay: settings.revealDelay) {
+                scheduleFollowUp(after: deadline - uptime)
+            }
+            return
+        }
         let isPinned = uiState.isPanelPinned
-        guard stateMachine.isVisible, !stateMachine.isHidePending,
+        guard !stateMachine.isHidePending,
               !isMouseButtonPressed, !isPinned else { return }
         let stateDeadline = stateMachine.nextTimedDecision(
-            at: uptime, isInPanel: isInPanel, isInteractionLocked: isInteractionLocked,
-            isPinned: isPinned, hideDelay: settings.hideDelay
+            at: uptime, isInHotspot: isInHotspot, isInPanel: isInPanel,
+            isInteractionLocked: isInteractionLocked, isPinned: isPinned, hideDelay: settings.hideDelay
         )
         let focusDeadline = MainPanelAutoHidePolicy.focusExpirationDeadline(
             reasons: uiState.interactionLockReasons,
@@ -396,13 +476,18 @@ final class CornerHoverMonitor {
             timestamp: uptime
         )
         guard let deadline = [stateDeadline, focusDeadline].compactMap({ $0 }).min() else { return }
+        scheduleFollowUp(after: deadline - uptime)
+    }
+
+    private func scheduleFollowUp(after delay: TimeInterval) {
         let work = DispatchWorkItem { [weak self] in
             guard let self, self.isRunning else { return }
             self.followUpWork = nil
             self.samplePointer()
         }
         followUpWork = work
-        DispatchQueue.main.asyncAfter(deadline: .now() + max(0.01, deadline - uptime) + 0.02, execute: work)
+        followUpCountForTesting += 1
+        DispatchQueue.main.asyncAfter(deadline: .now() + max(0.01, delay) + 0.02, execute: work)
     }
 
     private func refreshSamplingCadence(at location: CGPoint) {
@@ -416,42 +501,27 @@ final class CornerHoverMonitor {
         applySamplingCadence(decision.cadence)
     }
 
+    /// Records the cadence and holds the App Nap exemption only near the
+    /// corner. No cadence starts a timer.
     private func applySamplingCadence(_ cadence: CornerHoverSamplingCadence) {
         guard isRunning, cadence != scheduledCadence else { return }
-        pollingTimer?.cancel()
-        pollingTimer = nil
-        let timerEpoch = pollingTimerEpoch.beginTimer()
         scheduledCadence = cadence
         updateResponsivenessActivity(for: cadence)
-        guard let interval = cadence.intervalMilliseconds else {
-            // Visible: no repeating timer at all.
-            return
-        }
-
-        let timer = DispatchSource.makeTimerSource(queue: .main)
-        timer.schedule(
-            deadline: .now() + .milliseconds(interval),
-            repeating: .milliseconds(interval),
-            leeway: .milliseconds(cadence.leewayMilliseconds)
-        )
-        timer.setEventHandler { [weak self] in
-            MainActor.assumeIsolated {
-                guard let self,
-                      self.pollingTimerEpoch.permits(
-                        timerEpoch,
-                        whileRunning: self.isRunning
-                      ) else { return }
-                self.samplePointer()
+        if cadence == .responsive {
+            // Near the corner of a hidden panel: build its pages during the
+            // reveal delay (once; released again if no reveal follows).
+            DispatchQueue.main.async { [weak self] in
+                guard let self, self.isRunning, self.scheduledCadence == .responsive else { return }
+                self.panelController.preparePagesForReveal()
             }
         }
-        pollingTimer = timer
-        timer.resume()
     }
 
-    /// Test seam: whether a repeating sampling timer exists right now.
-    var hasPollingTimerForTesting: Bool { pollingTimer != nil }
     var scheduledCadenceForTesting: CornerHoverSamplingCadence? { scheduledCadence }
     var holdsResponsivenessActivityForTesting: Bool { responsivenessActivity != nil }
+    var hasPendingFollowUpForTesting: Bool { followUpWork != nil }
+    /// Test seam: how many one-shot follow-ups were scheduled.
+    private(set) var followUpCountForTesting = 0
 
     private func updateResponsivenessActivity(for cadence: CornerHoverSamplingCadence) {
         if cadence.holdsResponsivenessActivity {
@@ -472,7 +542,25 @@ final class CornerHoverMonitor {
     }
 
     private func refreshCachedScreenFrames() {
-        cachedScreenFrames = NSScreen.screens.map(\.frame)
+        cachedScreens = NSScreen.screens.map { ($0.frame, AtticDisplay.identifier(for: $0)) }
+        revealPolicy = settings.cornerRevealPolicy
+        cachedScreenFrames = cachedScreens.filter { revealPolicy.answers(displayID: $0.id) }.map(\.frame)
+    }
+
+    /// The identifier of the display at `screen`'s frame, from the cache.
+    private func displayID(of screen: NSScreen) -> String? {
+        cachedScreens.first { $0.frame == screen.frame }?.id ?? AtticDisplay.identifier(for: screen)
+    }
+
+    /// Test seams: the frames whose corners answer hover, and the rule.
+    var hoverScreenFramesForTesting: [CGRect] { cachedScreenFrames }
+    var revealPolicyForTesting: CornerRevealPolicy { revealPolicy }
+    /// Test seam: whether a pointer at `location` counts as in the hotspot
+    /// with `flags` held, as a sample decides it.
+    func isInHotspotForTesting(_ location: CGPoint, flags: NSEvent.ModifierFlags) -> Bool {
+        guard let screen = screen(containing: location) else { return false }
+        return revealPolicy.reveals(displayID: displayID(of: screen), flags: flags)
+            && PanelGeometry.hotspot(in: screen.frame, corner: settings.corner).insetBy(dx: -1, dy: -1).contains(location)
     }
 
     private func startPointerActivityMonitoring() {

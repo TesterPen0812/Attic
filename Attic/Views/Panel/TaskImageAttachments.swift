@@ -86,17 +86,6 @@ enum TaskAttachmentPicker {
         }
     }
 
-    /// The main composer's picker: files are imported as pending attachments
-    /// of the task being written.
-    static func chooseForComposer(uiState: PanelUIState, picked: @escaping @MainActor ([URL]) -> Void) {
-        guard !isPresenting(uiState) else { return }
-        uiState.isComposerAttachmentPickerPresented = true
-        TaskAttachmentPickerSession.present(owner: nil) { urls in
-            uiState.isComposerAttachmentPickerPresented = false
-            if !urls.isEmpty { picked(urls) }
-        }
-    }
-
     /// Ends a picker whose owner no longer exists (deleted task) or whose
     /// host is being torn down, as a cancel. Every mark clears through the
     /// session's single finish path.

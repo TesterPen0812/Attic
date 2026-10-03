@@ -24,7 +24,16 @@ concurrency:
 env:
   LUNA_REPAIRED_COMMIT: 8063d92c995015b77a0493723270b6c183adb784
   BUNDLE_FROZEN: "true"
-  PERF_REFERENCE_COMMIT: 33aace64a96f656e04a39d75183f968a4b850ef6
+  PERF_REFERENCE_COMMIT: fb450820f5ccab289a050de3cf0695958786a465
+  # The optimized cost gates compare against the last build whose costs
+  # were accepted before Phase 1's D1 edge fade and Done search index
+  # (redesign/p1-glass at 3eee023). Move it forward when a phase lands.
+  COST_BASELINE_COMMIT: 3eee023e537717fbc42538a0a563643880f586eb
+  # The Done search query samples compare against the last accepted build
+  # with the Done search index (redesign/p1-glass at dab5d2f, CI run
+  # 37121778773): the slowest sample is held to no regression there, and
+  # each query's median to the 16 ms budget (owner, 2026-10-03).
+  DONE_SEARCH_BASELINE_COMMIT: dab5d2fb74b081529b0053797aca1af591b06e8b
 
 jobs:
   macos:
@@ -121,6 +130,10 @@ jobs:
         id: unit_tests
         continue-on-error: true
         timeout-minutes: 20
+        env:
+          # The runner has no person at it: unit tests may make a window key
+          # and let AppKit resolve targetless menu actions for real.
+          TEST_RUNNER_ATTIC_KEY_WINDOW_TESTS: "1"
         run: |
           rm -rf "$RUNNER_TEMP/AtticUnitTests.xcresult"
           xcodebuild \
@@ -132,6 +145,9 @@ jobs:
             -resultBundlePath "$RUNNER_TEMP/AtticUnitTests.xcresult" \
             CODE_SIGNING_ALLOWED=NO \
             -only-testing:AtticTests \
+            -skip-testing:AtticTests/DoneSearchCostTests \
+            -skip-testing:AtticTests/TasksFrameCostTests \
+            -skip-testing:AtticTests/TasksRowBuildCostTests \
             test
 
       - name: Print macOS unit-test summary
@@ -293,6 +309,114 @@ jobs:
           test "$ANALYZER" = success
           test "$FINAL_STATE" = success
 
+
+  costs:
+    name: Optimized frame, row and Done search cost gates
+    runs-on: macos-26
+    timeout-minutes: 90
+    env:
+      DEVELOPER_DIR: /Applications/Xcode_26.6.app/Contents/Developer
+      COST_FLAGS: >-
+        CODE_SIGNING_ALLOWED=NO SWIFT_OPTIMIZATION_LEVEL=-O SWIFT_COMPILATION_MODE=wholemodule
+        ENABLE_DEBUG_DYLIB=NO ENABLE_TESTABILITY=YES ENABLE_HARDENED_RUNTIME=NO
+
+    # These fixtures time wall-clock work, so they run only here, on
+    # optimized builds and one test at a time; the -Onone unit lane skips
+    # them. Each fixture runs once per sample; nothing runs twice.
+    steps:
+      - name: Check out candidate and baseline history
+        uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+
+      - name: Verify Xcode 26 toolchain and the cost baseline
+        run: |
+          xcodebuild -version
+          xcodebuild -version | head -n 1 | grep -Eq '^Xcode 26\.'
+          git merge-base --is-ancestor "$COST_BASELINE_COMMIT" HEAD
+          git merge-base --is-ancestor "$DONE_SEARCH_BASELINE_COMMIT" HEAD
+          mkdir -p "$RUNNER_TEMP/AtticCosts"
+
+      - name: Build optimized baseline and candidate test hosts
+        run: |
+          git worktree add --detach "$RUNNER_TEMP/AtticCostBaseline" "$COST_BASELINE_COMMIT"
+          git worktree add --detach "$RUNNER_TEMP/AtticDoneSearchBaseline" "$DONE_SEARCH_BASELINE_COMMIT"
+          for name in baseline candidate donebase; do
+            source="$GITHUB_WORKSPACE"
+            if [ "$name" = baseline ]; then source="$RUNNER_TEMP/AtticCostBaseline"; fi
+            if [ "$name" = donebase ]; then source="$RUNNER_TEMP/AtticDoneSearchBaseline"; fi
+            # shellcheck disable=SC2086
+            (cd "$source" && xcodebuild build-for-testing \
+              -project Attic.xcodeproj -scheme Attic -configuration Local -destination 'platform=macOS' \
+              -derivedDataPath "$RUNNER_TEMP/AtticCost-$name" $COST_FLAGS) \
+              > "$RUNNER_TEMP/AtticCosts/$name-build.log" 2>&1 \
+              || { tail -n 80 "$RUNNER_TEMP/AtticCosts/$name-build.log"; exit 1; }
+          done
+
+      - name: Compare interleaved frame and row costs with the baseline
+        run: |
+          for sample in 1 2 3; do
+            for name in baseline candidate; do
+              source="$GITHUB_WORKSPACE"
+              if [ "$name" = baseline ]; then source="$RUNNER_TEMP/AtticCostBaseline"; fi
+              # shellcheck disable=SC2086
+              (cd "$source" && xcodebuild test-without-building \
+                -project Attic.xcodeproj -scheme Attic -configuration Local -destination 'platform=macOS' \
+                -derivedDataPath "$RUNNER_TEMP/AtticCost-$name" \
+                -resultBundlePath "$RUNNER_TEMP/AtticCosts/$name-cost-$sample.xcresult" $COST_FLAGS \
+                -parallel-testing-enabled NO \
+                -only-testing:AtticTests/TasksFrameCostTests -only-testing:AtticTests/TasksRowBuildCostTests) \
+                > "$RUNNER_TEMP/AtticCosts/$name-cost-$sample.log" 2>&1 \
+                || { tail -n 80 "$RUNNER_TEMP/AtticCosts/$name-cost-$sample.log"; exit 1; }
+              grep -E 'ATTIC_FRAME_COST|ATTIC_ROW_BUILD' "$RUNNER_TEMP/AtticCosts/$name-cost-$sample.log"
+            done
+          done
+          python3 Scripts/check_cost_comparison.py "$RUNNER_TEMP/AtticCosts"
+
+      - name: Done search query samples of the accepted baseline
+        run: |
+          # Three runs of the accepted build's query fixtures, for the
+          # slowest-sample comparison below. Its own per-sample 16 ms
+          # assertions may fail on a slow runner; only its samples are used,
+          # and every run must have printed them.
+          for sample in 1 2 3; do
+            # shellcheck disable=SC2086
+            (cd "$RUNNER_TEMP/AtticDoneSearchBaseline" && xcodebuild test-without-building \
+              -project Attic.xcodeproj -scheme Attic -configuration Local -destination 'platform=macOS' \
+              -derivedDataPath "$RUNNER_TEMP/AtticCost-donebase" \
+              -resultBundlePath "$RUNNER_TEMP/AtticCosts/done-search-baseline-$sample.xcresult" $COST_FLAGS \
+              -parallel-testing-enabled NO \
+              -only-testing:AtticTests/DoneSearchCostTests/testMeasuresDoneSearchOn5000Tasks \
+              -only-testing:AtticTests/DoneSearchCostTests/testTheDiskBackedPhase5SeedAlsoFitsTheQueryBudget) \
+              > "$RUNNER_TEMP/AtticCosts/done-search-baseline-$sample.log" 2>&1 || true
+            grep -q 'ATTIC_DONE_SEARCH session=2 ' "$RUNNER_TEMP/AtticCosts/done-search-baseline-$sample.log"
+            grep -q 'ATTIC_PHASE5_DONE query=z ' "$RUNNER_TEMP/AtticCosts/done-search-baseline-$sample.log"
+          done
+
+      - name: Done search query, keystroke and results-frame budgets
+        run: |
+          # shellcheck disable=SC2086
+          xcodebuild test-without-building \
+            -project Attic.xcodeproj -scheme Attic -configuration Local -destination 'platform=macOS' \
+            -derivedDataPath "$RUNNER_TEMP/AtticCost-candidate" \
+            -resultBundlePath "$RUNNER_TEMP/AtticCosts/done-search.xcresult" $COST_FLAGS \
+            -parallel-testing-enabled NO -only-testing:AtticTests/DoneSearchCostTests \
+            > "$RUNNER_TEMP/AtticCosts/done-search.log" 2>&1 \
+            || { tail -n 120 "$RUNNER_TEMP/AtticCosts/done-search.log"; exit 1; }
+          grep -E 'ATTIC_DONE_SEARCH|ATTIC_PHASE5_DONE|ATTIC_DONE_QUERY_MEDIAN|ATTIC_DONE_INPUT|ATTIC_DONE_RESULTS' "$RUNNER_TEMP/AtticCosts/done-search.log"
+
+      - name: Compare the slowest Done search query sample with the baseline
+        run: python3 Scripts/check_done_search_costs.py "$RUNNER_TEMP/AtticCosts"
+
+      - name: Upload cost evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: macos-cost-gates-${{ github.sha }}
+          path: ${{ runner.temp }}/AtticCosts
+          if-no-files-found: ignore
+          retention-days: 14
+
   performance:
     name: Observe seeded performance on a fresh macOS runner
     runs-on: macos-26
@@ -379,9 +503,16 @@ jobs:
           fi
 
   appearance:
-    name: Design system appearance matrix
+    name: Design system appearance matrix (${{ matrix.shard }} of 4)
     runs-on: macos-26
     timeout-minutes: 45
+    # Four shards in parallel, together every combination (round 4: the
+    # whole matrix outgrew one 45-minute job; round 6 removed the review
+    # switches, and the shards stay for headroom).
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2, 3, 4]
     env:
       DEVELOPER_DIR: /Applications/Xcode_26.6.app/Contents/Developer
 
@@ -415,13 +546,14 @@ jobs:
           Scripts/run_appearance_matrix.zsh \
             --output "$RUNNER_TEMP/AtticAppearance" \
             --derived-data "$RUNNER_TEMP/AtticAppearanceBuild" \
+            --shard "$(( ${{ matrix.shard }} - 1 ))/4" \
             -- CODE_SIGNING_ALLOWED=NO
 
       - name: Upload contact sheets and report
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: appearance-matrix-${{ github.sha }}
+          name: appearance-matrix-${{ github.sha }}-${{ matrix.shard }}
           path: ${{ runner.temp }}/AtticAppearance
           if-no-files-found: ignore
           retention-days: 14

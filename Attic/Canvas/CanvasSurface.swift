@@ -10,6 +10,7 @@ struct CanvasSurface: View {
     /// image's original bytes. The owning view presents the file exporter.
     var onRequestImageExport: (CanvasPlacedImage) -> Void = { _ in }
     @Environment(\.atticClearGlassForegroundReadabilityEnabled) private var clearReadabilityEnabled
+    @Environment(\.atticPanelPageIsCurrent) private var isCurrentPage
 #if os(macOS)
     @Environment(\.atticPanelThemePalette) private var panelThemePalette
     @Environment(\.atticPanelUsesSystemAccent) private var panelUsesSystemAccent
@@ -44,6 +45,7 @@ struct CanvasSurface: View {
             selectionAccentColor: canvasSelectionAccentColor,
             clearReadabilityEnabled: clearReadabilityEnabled,
             excludedRects: excludedRects,
+            decodesImages: isCurrentPage,
             onRequestImageExport: onRequestImageExport
         )
 #elseif os(iOS)

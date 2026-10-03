@@ -16,6 +16,17 @@ final class AtticPanel: NSPanel {
     var onTrackpadDismissProgress: ((CGFloat) -> Void)?
     var onTrackpadDismissCancelled: (() -> Void)?
     var onDirectContentInteraction: (() -> Void)?
+    /// Esc that nothing inside the panel used (a menu, a field, the list's
+    /// own Esc all come first): the panel hides.
+    var onUnhandledEscape: (() -> Void)?
+    /// ⌘Z (or ⇧⌘Z, `true`) that nothing inside the panel used: no text
+    /// field or editor, no page with keyboard focus. The page's history
+    /// takes it (Astra 23: the Undo toast owns no shortcut of its own).
+    var onUnhandledUndo: ((_ redo: Bool) -> Void)?
+    /// Whether `onUnhandledUndo` has a step to take (⇧: redo), so the Edit
+    /// menu's Undo and Redo are enabled for the page's history when the
+    /// window's own undo manager has nothing.
+    var canPerformUnhandledUndo: ((_ redo: Bool) -> Bool)?
     var trackpadDismissCorner: ScreenCorner = .topRight {
         didSet {
             if trackpadDismissCorner != oldValue { cancelTrackpadSwipe() }
@@ -57,8 +68,149 @@ final class AtticPanel: NSPanel {
         setFrame(nativeFrame(forVisibleFrame: frame), display: display)
     }
 
+    /// The visible surface is always placed inside the work area
+    /// (`PanelGeometry`), 12 pt from its edges. AppKit would push a window
+    /// whose frame crosses the menu bar down, which moved the surface as far
+    /// below the menu bar as its transparent shadow margin (28 pt) at the
+    /// top corners while it sat 12 pt from the side. Only the click-through
+    /// margin crosses, so the frame is kept as placed.
+    override func constrainFrameRect(_ frameRect: NSRect, to screen: NSScreen?) -> NSRect {
+        frameRect
+    }
+
     override var canBecomeKey: Bool { true }
     override var canBecomeMain: Bool { false }
+
+    /// Esc reaches the window only when no responder in it handled the key:
+    /// a text field or editor, the page's own Esc (closing a quick look,
+    /// clearing a selection) and an open menu all see it first. A text view
+    /// never passes Esc on here (it has its own completion behaviour), so
+    /// the field's owner decides whether Esc leaves it.
+    // MARK: Undo registrations that outlive their text view
+
+    /// Every text view that took the keyboard in this panel, held until its
+    /// typing-undo registrations are removed. The window's undo manager
+    /// keeps its targets unretained: a field torn down with registrations
+    /// left behind made the next ⌘Z (the Edit menu's Undo) message a freed
+    /// object and crash. Holding the view keeps that pointer valid until the
+    /// view has left the panel, when its registrations are removed.
+    private var undoParticipants: [NSTextView] = []
+
+    override func makeFirstResponder(_ responder: NSResponder?) -> Bool {
+        let changed = super.makeFirstResponder(responder)
+        if let textView = firstResponder as? NSTextView, !undoParticipants.contains(where: { $0 === textView }) {
+            undoParticipants.append(textView)
+        }
+        removeDepartedUndoParticipants()
+        return changed
+    }
+
+    /// Removes the undo registrations of text views that are no longer in
+    /// the panel, and lets them go. Runs on every focus change and before
+    /// any ⌘Z is dispatched (`performKeyEquivalent`, ahead of the menu).
+    func removeDepartedUndoParticipants() {
+        guard !undoParticipants.isEmpty else { return }
+        let manager = undoManager
+        undoParticipants.removeAll { textView in
+            guard textView.window !== self else { return false }
+            manager?.removeAllActions(withTarget: textView)
+            if let storage = textView.textStorage { manager?.removeAllActions(withTarget: storage) }
+            if let own = textView.undoManager, own !== manager {
+                own.removeAllActions(withTarget: textView)
+                if let storage = textView.textStorage { own.removeAllActions(withTarget: storage) }
+            }
+            return true
+        }
+    }
+
+    override func performKeyEquivalent(with event: NSEvent) -> Bool {
+        if Self.isUndoKey(event) { removeDepartedUndoParticipants() }
+        return super.performKeyEquivalent(with: event)
+    }
+
+    /// The Edit menu's Undo and Redo once nothing before the window in the
+    /// responder chain took them (the add bar and title editor answer their
+    /// own; a native text view's typing lives in this window's manager).
+    /// Whichever route sent them (a key equivalent, a click on the menu, the
+    /// chain from a removed field), the window's undo manager never invokes
+    /// a registration of a text view that has left the panel (round 4, the
+    /// ⌘Z crash in `popAndInvoke`). With nothing of its own to undo, the
+    /// window hands the command to the page's history, as ⌘Z pressed with
+    /// the keyboard nowhere in a page does (round 5, F1).
+    @objc func undo(_ sender: Any?) {
+        performUndo(redo: false)
+    }
+
+    @objc func redo(_ sender: Any?) {
+        performUndo(redo: true)
+    }
+
+    private func performUndo(redo: Bool) {
+        removeDepartedUndoParticipants()
+        if let manager = undoManager, redo ? manager.canRedo : manager.canUndo {
+            redo ? manager.redo() : manager.undo()
+            return
+        }
+        // Spec § Undo: a field's own typing first (its manager, above), then
+        // the place being worked in.
+        onUnhandledUndo?(redo)
+    }
+
+    /// Undo and Redo are enabled when the window's manager or the page's
+    /// history has a step. NSWindow validates menu items in
+    /// `validateMenuItem:` (which AppKit asks first) and other controls in
+    /// `validateUserInterfaceItem:`; both answer the same.
+    override func validateMenuItem(_ menuItem: NSMenuItem) -> Bool {
+        undoAvailability(for: menuItem.action) ?? super.validateMenuItem(menuItem)
+    }
+
+    override func validateUserInterfaceItem(_ item: any NSValidatedUserInterfaceItem) -> Bool {
+        undoAvailability(for: item.action) ?? super.validateUserInterfaceItem(item)
+    }
+
+    private func undoAvailability(for action: Selector?) -> Bool? {
+        let redo: Bool
+        switch action {
+        case #selector(undo(_:)): redo = false
+        case #selector(redo(_:)): redo = true
+        default: return nil
+        }
+        removeDepartedUndoParticipants()
+        if let manager = undoManager, redo ? manager.canRedo : manager.canUndo { return true }
+        return canPerformUnhandledUndo?(redo) == true
+    }
+
+    static func isUndoKey(_ event: NSEvent) -> Bool {
+        let flags = event.modifierFlags.intersection([.command, .option, .control, .shift])
+        return event.charactersIgnoringModifiers?.lowercased() == "z" && (flags == .command || flags == [.command, .shift])
+    }
+
+    override func keyDown(with event: NSEvent) {
+        if event.keyCode == 53,
+           event.modifierFlags.intersection([.command, .option, .control, .shift]).isEmpty,
+           !(firstResponder is NSTextView) {
+            onUnhandledEscape?()
+            return
+        }
+        if Self.isUndoKey(event), !AtticTextInput.isTyping(firstResponder), let onUnhandledUndo {
+            onUnhandledUndo(event.modifierFlags.contains(.shift))
+            return
+        }
+        super.keyDown(with: event)
+    }
+
+    override func cancelOperation(_ sender: Any?) {
+        guard !(firstResponder is NSTextView) else {
+            super.cancelOperation(sender)
+            return
+        }
+        onUnhandledEscape?()
+    }
+
+    /// The presses that make an inactive panel key and still act.
+    nonisolated static func takesFirstPress(_ type: NSEvent.EventType) -> Bool {
+        type == .leftMouseDown || type == .rightMouseDown || type == .otherMouseDown
+    }
 
     override func resignKey() {
         cancelTrackpadSwipe()
@@ -66,6 +218,15 @@ final class AtticPanel: NSPanel {
     }
 
     override func sendEvent(_ event: NSEvent) {
+        // One click both activates the panel and acts (owner, 2026-10-01):
+        // the panel becomes key before AppKit sees the press, so the press
+        // is never spent on activation, whatever view is under it (SwiftUI's
+        // own views in a list do not accept the first mouse). The panel is
+        // non-activating, so Attic stays where it is.
+        if Self.takesFirstPress(event.type), !isKeyWindow, canBecomeKey, isVisible,
+           visibleContentFrame.contains(convertPoint(toScreen: event.locationInWindow)) {
+            makeKey()
+        }
         guard event.type == .scrollWheel else {
             if [.magnify, .beginGesture, .leftMouseDown, .rightMouseDown, .otherMouseDown, .keyDown, .flagsChanged].contains(event.type) {
                 cancelTrackpadSwipe()
@@ -170,7 +331,8 @@ final class AtticPanel: NSPanel {
                 deltaY: trackerDelta.y,
                 phase: trackerPhase,
                 isPrecise: event.hasPreciseScrollingDeltas,
-                isDirectionInvertedFromDevice: event.isDirectionInvertedFromDevice
+                isDirectionInvertedFromDevice: event.isDirectionInvertedFromDevice,
+                time: event.timestamp
             ),
             dockedCorner: trackpadDismissCorner,
             towardDockedSide: route == .hide || swipeStartedInLibrary
@@ -839,11 +1001,53 @@ final class AtticPanelContentContainer: NSView {
         CATransaction.commit()
     }
 
+    /// Under Reduced motion a swipe fades the panel instead of moving it.
+    func resetReducedFade() {
+        guard let layer = motionView.layer, layer.opacity != 1 else { return }
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        layer.removeAnimation(forKey: Self.fadeAnimationKey)
+        layer.opacity = 1
+        CATransaction.commit()
+    }
+
+    private static let fadeAnimationKey = "AtticPanelReducedFade"
+
     func setCollapseProgress(
         _ progress: CGFloat, corner: ScreenCorner, reduceMotion: Bool,
-        duration: TimeInterval = 0, completion: (() -> Void)? = nil
+        duration: TimeInterval = 0, spring: AtticMotionSpring? = nil, fades: Bool = false,
+        completion: (() -> Void)? = nil
     ) {
         guard let layer = motionView.layer else { completion?(); return }
+        if reduceMotion {
+            // No travel: the pull and a swipe's close or spring-back fade
+            // (a live pull dims toward `reducedMinimumOpacity`).
+            // An instant collapse (an ordinary hide under Reduced) changes
+            // nothing: only a live pull dims.
+            let target: Float = fades ? (progress >= 1 ? 0 : 1)
+                : progress >= 1 ? 1 : Float(PanelCollapseGeometry.reducedOpacity(progress: progress))
+            let from = layer.presentation()?.opacity ?? layer.opacity
+            CATransaction.begin()
+            CATransaction.setDisableActions(true)
+            layer.removeAnimation(forKey: Self.fadeAnimationKey)
+            layer.transform = CATransform3DIdentity
+            layer.opacity = target
+            if fades, duration > 0, from != target {
+                let animation = CABasicAnimation(keyPath: "opacity")
+                animation.fromValue = from
+                animation.toValue = target
+                animation.duration = duration
+                animation.timingFunction = CAMediaTimingFunction(name: .easeOut)
+                CATransaction.setCompletionBlock(completion)
+                layer.add(animation, forKey: Self.fadeAnimationKey)
+                CATransaction.commit()
+            } else {
+                CATransaction.commit()
+                completion?()
+            }
+            return
+        }
+        if layer.opacity != 1 { resetReducedFade() }
         let from = presentationTransform
         let target = CATransform3DMakeAffineTransform(PanelCollapseGeometry.transform(
             progress: progress, visibleBounds: hostingView.frame,
@@ -858,11 +1062,21 @@ final class AtticPanelContentContainer: NSView {
         layer.removeAnimation(forKey: Self.collapseAnimationKey)
         layer.transform = target
         if duration > 0, !reduceMotion, !CATransform3DEqualToTransform(from, target) {
-            let animation = CABasicAnimation(keyPath: "transform")
+            let animation: CABasicAnimation
+            if let spring {
+                // The feel's spring (a swipe's spring-back): it settles in
+                // its own time.
+                let springAnimation = CASpringAnimation(perceptualDuration: spring.response, bounce: spring.bounce)
+                springAnimation.duration = springAnimation.settlingDuration
+                animation = springAnimation
+            } else {
+                animation = CABasicAnimation(keyPath: "transform")
+                animation.duration = duration
+                animation.timingFunction = CAMediaTimingFunction(controlPoints: 0.22, 0.8, 0.28, 1)
+            }
+            animation.keyPath = "transform"
             animation.fromValue = NSValue(caTransform3D: from)
             animation.toValue = NSValue(caTransform3D: target)
-            animation.duration = duration
-            animation.timingFunction = CAMediaTimingFunction(controlPoints: 0.22, 0.8, 0.28, 1)
             CATransaction.setCompletionBlock(completion)
             layer.add(animation, forKey: Self.collapseAnimationKey)
             CATransaction.commit()
@@ -998,21 +1212,6 @@ final class AtticPanelHostingView: NSHostingView<AtticPanelView> {
         true
     }
 
-    func isChromeControlPoint(_ windowPoint: CGPoint) -> Bool {
-        let point = AtticPanelCoordinateSpace.policyPoint(
-            fromHostingPoint: convert(windowPoint, from: nil), in: bounds, isFlipped: isFlipped
-        )
-        let insets = PanelGeometry.chromeInsets(cornerSize: panelCornerRadius, panelSize: bounds.size)
-        let topControlsY = bounds.maxY - insets.top - AtticStyle.controlHitSize
-        let pinRect = CGRect(x: bounds.minX + insets.leading, y: topControlsY,
-                             width: AtticStyle.controlHitSize, height: AtticStyle.controlHitSize)
-        let modeRect = CGRect(x: bounds.maxX - insets.trailing - chromeInteractionState.modeDockWidth,
-                              y: topControlsY, width: chromeInteractionState.modeDockWidth,
-                              height: AtticStyle.controlHitSize)
-        return pinRect.contains(point) || modeRect.contains(point)
-            || point.y < bounds.minY + insets.bottom + chromeInteractionState.bottomControlsHeight
-    }
-
     override func mouseDown(with event: NSEvent) {
         let hostingPoint = convert(event.locationInWindow, from: nil)
         let policyPoint = AtticPanelCoordinateSpace.policyPoint(
@@ -1143,10 +1342,29 @@ final class AtticPanelHostingView: NSHostingView<AtticPanelView> {
 
     override func cancelOperation(_ sender: Any?) {
         guard interactionLifecycle.activeInteraction != nil else {
-            super.cancelOperation(sender)
+            // SwiftUI's exit commands (`onExitCommand`: a new subtask's
+            // field, a title editor, Done's details) are reached through
+            // the hosting view's own forwarding for the command; this
+            // override shadowed it, so Esc never reached them inside the
+            // panel (round 8: the quick look's CI test). Forward first;
+            // otherwise pass Esc up. `super` itself would raise: NSView
+            // declares cancelOperation: without implementing it.
+            if let target = Self.exitCommandTarget(super.forwardingTarget(for: #selector(cancelOperation(_:))), excluding: self) {
+                _ = target.tryToPerform(#selector(cancelOperation(_:)), with: sender)
+                return
+            }
+            passUp(#selector(cancelOperation(_:)), sender)
             return
         }
         cancelActiveInteraction(reason: .escape)
+    }
+
+    /// The responder SwiftUI forwards an exit command to, if one answers it
+    /// (never this view itself).
+    static func exitCommandTarget(_ forwarded: Any?, excluding view: NSView) -> NSResponder? {
+        guard let responder = forwarded as? NSResponder, responder !== view,
+              responder.responds(to: #selector(NSResponder.cancelOperation(_:))) else { return nil }
+        return responder
     }
 
     func cancelActiveInteraction(
@@ -1413,5 +1631,17 @@ final class AtticPanelHostingView: NSHostingView<AtticPanelView> {
 
     func displayResizeCursor(for edges: PanelResizeEdges) {
         resizeCursor(for: edges).set()
+    }
+}
+
+extension NSResponder {
+    /// Hand a standard action this responder chose not to handle to the rest
+    /// of the responder chain. AppKit declares actions such as
+    /// `cancelOperation:` on NSResponder without implementing them in NSView
+    /// or NSTextView, so calling `super` for them raises an unrecognized
+    /// selector; this walks on to the first responder that does implement it
+    /// (the window, in the end) and does nothing when none does.
+    func passUp(_ action: Selector, _ sender: Any?) {
+        _ = nextResponder?.tryToPerform(action, with: sender)
     }
 }

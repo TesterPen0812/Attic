@@ -14,13 +14,15 @@ enum PanelSection: String, CaseIterable, Hashable, Identifiable {
     var title: String {
         switch self {
         case .tasks: "Tasks"
-        case .backlog: "Backlog"
+        case .backlog: "Later"
         case .notes: "Notes"
         case .canvas: "Canvas"
         }
     }
 
     var isNotes: Bool { self == .notes }
+    /// Tasks and Backlog share the Tasks page.
+    var isTaskBased: Bool { taskScope != nil }
     var isCanvas: Bool { self == .canvas }
 
     var taskScope: TaskScope? {
@@ -34,7 +36,7 @@ enum PanelSection: String, CaseIterable, Hashable, Identifiable {
     var newItemTitle: String {
         switch self {
         case .tasks: "New Task"
-        case .backlog: "New Backlog Idea"
+        case .backlog: "New Task for Later"
         case .notes: "New Note"
         case .canvas: "Canvas"
         }

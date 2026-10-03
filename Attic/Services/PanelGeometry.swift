@@ -362,6 +362,8 @@ struct PanelTrackpadSwipeSample: Equatable {
     let phase: PanelTrackpadSwipePhase
     let isPrecise: Bool
     let isDirectionInvertedFromDevice: Bool
+    /// The event's timestamp (seconds), for the release's speed.
+    var time: TimeInterval = 0
 }
 
 /// Accumulates only the undecided prefix of one precise, phase-owned gesture.
@@ -410,6 +412,32 @@ enum PanelCollapseGeometry {
         return min(0.95, max(0, distance / travel))
     }
 
+    /// The pull (owner, 2026-10-01): the panel follows the fingers with
+    /// resistance, firm at first and giving less the further it goes
+    /// (UIKit's rubber band, tending to the whole travel), so it never
+    /// races ahead of the fingers.
+    static func resistedProgress(forSwipeDistance distance: CGFloat, panelWidth: CGFloat) -> CGFloat {
+        guard distance.isFinite, panelWidth.isFinite, distance > 0 else { return 0 }
+        let travel = min(280, max(120, panelWidth * 0.65))
+        let resisted = (1 - 1 / (distance * pullResistance / travel + 1)) * travel
+        return progress(forSwipeDistance: resisted, panelWidth: panelWidth)
+    }
+
+    /// The rubber band's constant (UIKit's 0.55).
+    static let pullResistance: CGFloat = 0.55
+
+    /// Under Reduced motion the pull fades the panel instead of moving it:
+    /// its opacity at `progress` (never below `reducedMinimumOpacity` while
+    /// the fingers are down).
+    static func reducedOpacity(progress: CGFloat) -> CGFloat {
+        let progress = progress.isFinite ? min(1, max(0, progress)) : 0
+        return 1 - progress * (1 - reducedMinimumOpacity)
+    }
+
+    static let reducedMinimumOpacity: CGFloat = 0.35
+    /// A swipe's close or spring-back under Reduced motion: a short fade.
+    static let reducedFadeDuration: TimeInterval = 0.18
+
     static func transform(
         progress: CGFloat, visibleBounds: CGRect, layerBounds: CGRect,
         corner: ScreenCorner, reduceMotion: Bool = false, layerAnchor: CGPoint? = nil
@@ -434,7 +462,13 @@ enum PanelCollapseGeometry {
 /// that owns the panel. Mouse wheels and ordinary content scrolling remain on
 /// their existing paths.
 struct PanelTrackpadDismissTracker {
+    /// Released past this far toward the edge, the panel closes.
     static let minimumDistance: CGFloat = 48
+    /// Or released at least this fast toward the edge (points per second,
+    /// over the last tenth of a second) once it has moved `minimumFlickDistance`.
+    static let closeSpeed: CGFloat = 450
+    static let minimumFlickDistance: CGFloat = 12
+    static let velocityWindow: TimeInterval = 0.1
     static let horizontalDominance: CGFloat = 1.25
     static let minimumIntentDelta: CGFloat = 0.5
 
@@ -448,6 +482,27 @@ struct PanelTrackpadDismissTracker {
     private var state = State.idle
     private var intent = PanelTrackpadSwipeIntent()
     private(set) var progress: CGFloat = 0
+    /// Recent movement toward the edge, for the release's speed.
+    private var recent: [(time: TimeInterval, delta: CGFloat)] = []
+
+    /// Whether a release at `progress` with `velocity` toward the edge
+    /// closes the panel (a distance, or a flick that has started to move).
+    static func closes(progress: CGFloat, velocity: CGFloat) -> Bool {
+        progress >= minimumDistance || (velocity >= closeSpeed && progress >= minimumFlickDistance)
+    }
+
+    private func velocity(at time: TimeInterval) -> CGFloat {
+        let window = recent.filter { time - $0.time <= Self.velocityWindow }
+        guard let first = window.first, time > 0 else { return 0 }
+        let span = max(time - first.time, 1 / 120)
+        return window.reduce(0) { $0 + $1.delta } / CGFloat(span)
+    }
+
+    private mutating func record(_ delta: CGFloat, at time: TimeInterval) {
+        guard time > 0 else { return }
+        recent.append((time, delta))
+        recent.removeAll { time - $0.time > Self.velocityWindow }
+    }
 
     static func isTowardDockedSide(
         deltaX: CGFloat,
@@ -486,8 +541,10 @@ struct PanelTrackpadDismissTracker {
         if sample.phase == .ended {
             let inversion: CGFloat = sample.isDirectionInvertedFromDevice ? -1 : 1
             let direction = Self.horizontalEdgeDirection(for: dockedCorner) * (towardDockedSide ? 1 : -1)
-            progress = max(0, progress + sample.deltaX * inversion * direction)
-            let shouldHide = state == .tracking && progress >= Self.minimumDistance
+            let delta = sample.deltaX * inversion * direction
+            progress = max(0, progress + delta)
+            record(delta, at: sample.time)
+            let shouldHide = state == .tracking && Self.closes(progress: progress, velocity: velocity(at: sample.time))
             reset()
             return shouldHide ? .requestHide : .passThrough
         }
@@ -512,10 +569,12 @@ struct PanelTrackpadDismissTracker {
             }
             state = .tracking
             progress = intent.displacement.x * edgeDirection
+            record(progress, at: sample.time)
             return .tracking
         }
 
         progress = max(0, progress + edgeProgress)
+        record(edgeProgress, at: sample.time)
         return .tracking
     }
 
@@ -527,6 +586,7 @@ struct PanelTrackpadDismissTracker {
         state = .idle
         intent = PanelTrackpadSwipeIntent()
         progress = 0
+        recent = []
     }
 
     private static func horizontalEdgeDirection(for corner: ScreenCorner) -> CGFloat {

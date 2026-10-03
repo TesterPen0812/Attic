@@ -17,10 +17,13 @@ final class MCPRequestHandler {
     static let supportedProtocolVersions = ["2025-11-25", "2025-06-18", "2025-03-26"]
 
     private let tools: AgentTaskTools
+    /// The shell's tools (`show`), when the app has a panel to show things in.
+    private let shellTools: AgentShellTools?
     private let serverVersion: String
 
-    init(tools: AgentTaskTools, serverVersion: String = MCPRequestHandler.appVersion) {
+    init(tools: AgentTaskTools, shellTools: AgentShellTools? = nil, serverVersion: String = MCPRequestHandler.appVersion) {
         self.tools = tools
+        self.shellTools = shellTools
         self.serverVersion = serverVersion
     }
 
@@ -74,7 +77,7 @@ final class MCPRequestHandler {
         case "ping":
             return resultResponse(id: id, result: [:])
         case "tools/list":
-            return resultResponse(id: id, result: ["tools": tools.definitions])
+            return resultResponse(id: id, result: ["tools": tools.definitions + (shellTools?.definitions ?? [])])
         case "tools/call":
             return callTool(id: id, params: params)
         default:
@@ -116,7 +119,11 @@ final class MCPRequestHandler {
             arguments = [:]
         }
         do {
-            let text = try tools.call(name: name, arguments: arguments)
+            let text = if let shellTools, shellTools.handles(name) {
+                try shellTools.call(name: name, arguments: arguments)
+            } else {
+                try tools.call(name: name, arguments: arguments)
+            }
             return toolResponse(id: id, text: text, isError: false)
         } catch let error as AgentToolError {
             if case .unknownTool = error {

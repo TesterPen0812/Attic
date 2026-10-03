@@ -13,7 +13,8 @@ enum AtticStyle {
     /// Transparent, click-through room the native window keeps around the
     /// visible surface so the SwiftUI shape elevation can fade out instead of
     /// being cut at the window edge. It never becomes a resize grip.
-    static let panelElevationMargin: CGFloat = 24
+    /// 28 pt (visual A): room for the panel's 12 pt, y 4 shadow to fade out.
+    static let panelElevationMargin: CGFloat = 28
     static let horizontalPadding: CGFloat = 16
     static let rowHeight: CGFloat = 32
     static let taskSpacing: CGFloat = 4
@@ -38,8 +39,11 @@ enum AtticStyle {
     /// edge. Larger squircles can require more room where the corner curve
     /// moves inward, so PanelGeometry adds curve-aware clearance to this
     /// minimum rather than treating it as a fixed position.
-    static let chromeMinimumInset: CGFloat = 22
-    static let chromeCornerClearance: CGFloat = 8
+    /// 24 pt from every edge at the default corner size (Phase 0's room,
+    /// brought into Direction A, 2026-09-26); larger corners still push the
+    /// controls inward.
+    static let chromeMinimumInset: CGFloat = 24
+    static let chromeCornerClearance: CGFloat = 7
     static let chromeWorkspaceSpacing: CGFloat = 24
     static let taskScrollTopPadding: CGFloat = 22
 }
@@ -227,6 +231,17 @@ struct AtticPanelOutsideShadow: View {
                     x: 0,
                     y: elevation.offsetY
                 )
+            if elevation.contactOpacity > 0 {
+                shape
+                    .fill(Color.black)
+                    .padding(Self.casterInset)
+                    .shadow(
+                        color: Color.black.opacity(elevation.contactOpacity),
+                        radius: elevation.contactRadius,
+                        x: 0,
+                        y: elevation.contactOffsetY
+                    )
+            }
             shape
                 .fill(Color.black)
                 .blendMode(.destinationOut)
@@ -254,11 +269,21 @@ extension EnvironmentValues {
 enum AtticGlassControlTreatment: Equatable {
     case opaque
     case nativeGlass
+    /// The design system's drawn raised material: the panel is not key
+    /// (a corner reveal), where native glass renders flat.
+    case drawn
 
     static let systemSupportsNativeGlass = true
 
-    static func resolve(reduceTransparency: Bool) -> Self {
-        reduceTransparency ? .opaque : .nativeGlass
+    /// Reduce Transparency wins; otherwise the controls follow the panel's
+    /// design context: real glass while the panel is key, the drawn look
+    /// while it is not (`PanelKeyTreatment`).
+    static func resolve(
+        reduceTransparency: Bool,
+        controls: AtticControlMaterial = .liquidGlass
+    ) -> Self {
+        if reduceTransparency { return .opaque }
+        return controls == .craft ? .drawn : .nativeGlass
     }
 
     /// Native Liquid Glass takes its tone from whatever is behind it, so on a
@@ -277,7 +302,7 @@ enum AtticGlassControlTreatment: Equatable {
     }
 }
 
-private struct AtticGlassControlModifier<S: Shape>: ViewModifier {
+private struct AtticGlassControlModifier<S: InsettableShape>: ViewModifier {
     let shape: S
     let interactive: Bool
 
@@ -285,12 +310,18 @@ private struct AtticGlassControlModifier<S: Shape>: ViewModifier {
     @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
     @Environment(\.atticPanelThemePalette) private var palette
     @Environment(\.atticPanelUsesSystemOpaqueSurface) private var usesSystemOpaqueSurface
+    @Environment(\.atticDesign) private var design
 
     @ViewBuilder
     func body(content: Content) -> some View {
         switch AtticGlassControlTreatment.resolve(
-            reduceTransparency: reduceTransparency
+            reduceTransparency: reduceTransparency,
+            controls: design.controls
         ) {
+        case .drawn:
+            // The panel is not key (a corner reveal): the design system's
+            // drawn material, as every design-system control draws then.
+            content.background(AtticRaisedShapeBackground(shape: shape))
         case .opaque:
             content
                 .background(opaqueControlColor, in: shape)
@@ -342,10 +373,11 @@ private struct AtticGlassEffectContainerModifier: ViewModifier {
     let spacing: CGFloat
 
     @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
+    @Environment(\.atticDesign) private var design
 
     @ViewBuilder
     func body(content: Content) -> some View {
-        if AtticGlassControlTreatment.resolve(reduceTransparency: reduceTransparency) == .nativeGlass {
+        if AtticGlassControlTreatment.resolve(reduceTransparency: reduceTransparency, controls: design.controls) == .nativeGlass {
             GlassEffectContainer(spacing: spacing) {
                 content
             }
@@ -370,7 +402,7 @@ extension View {
         )
     }
 
-    func atticGlassControl<S: Shape>(
+    func atticGlassControl<S: InsettableShape>(
         in shape: S,
         interactive: Bool = true
     ) -> some View {

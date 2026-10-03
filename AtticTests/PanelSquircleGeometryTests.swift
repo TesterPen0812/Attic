@@ -46,6 +46,21 @@ final class PanelSquircleGeometryTests: XCTestCase {
         XCTAssertEqual(panel.accessibilityFrame(), visible)
     }
 
+    /// At a top corner the surface sits 12 pt under the menu bar, like the
+    /// side edge: AppKit must not push the frame down because its
+    /// transparent margin crosses the menu bar.
+    @MainActor
+    func testTheShadowMarginMayCrossTheMenuBar() throws {
+        let screen = try XCTUnwrap(NSScreen.main)
+        let panel = AtticPanel(contentRect: .zero, styleMask: [.borderless, .nonactivatingPanel],
+                               backing: .buffered, defer: true)
+        panel.surfaceMargin = AtticStyle.panelElevationMargin
+        let visible = CGRect(x: screen.visibleFrame.maxX - 332, y: screen.visibleFrame.maxY - 12 - 464, width: 320, height: 464)
+        let native = panel.nativeFrame(forVisibleFrame: visible)
+        XCTAssertGreaterThan(native.maxY, screen.visibleFrame.maxY, "the margin reaches past the work area")
+        XCTAssertEqual(panel.constrainFrameRect(native, to: screen), native)
+    }
+
     @MainActor
     func testSurfaceMarginWidensTheNativeFrameWithoutMovingTheVisibleSurface() {
         let visible = CGRect(x: 100, y: 200, width: 480, height: 620)
@@ -56,7 +71,8 @@ final class PanelSquircleGeometryTests: XCTestCase {
         XCTAssertEqual(panel.nativeMargin, AtticStyle.panelElevationMargin)
         panel.setVisibleContentFrame(visible, display: false)
         XCTAssertEqual(panel.visibleContentFrame, visible)
-        XCTAssertEqual(panel.frame, visible.insetBy(dx: -24, dy: -24))
+        XCTAssertEqual(panel.frame, visible.insetBy(dx: -AtticStyle.panelElevationMargin, dy: -AtticStyle.panelElevationMargin))
+        XCTAssertEqual(AtticStyle.panelElevationMargin, 28, "visual A: room for the 12 pt, y 4 shadow")
         XCTAssertEqual(panel.accessibilityFrame(), visible)
 
         // A margin smaller than the grip never shrinks the acquisition band.
@@ -110,8 +126,8 @@ final class PanelSquircleGeometryTests: XCTestCase {
         XCTAssertEqual(AtticStyle.controlHitSize, 42)
         XCTAssertEqual(AtticStyle.composerControlHeight, 42)
         XCTAssertEqual(AtticStyle.composerActionSize, 34)
-        XCTAssertEqual(AtticStyle.chromeMinimumInset, 22)
-        XCTAssertEqual(AtticStyle.chromeCornerClearance, 8)
+        XCTAssertEqual(AtticStyle.chromeMinimumInset, 24)
+        XCTAssertEqual(AtticStyle.chromeCornerClearance, 7)
         XCTAssertEqual(AtticStyle.chromeWorkspaceSpacing, 24)
         XCTAssertEqual(AtticStyle.taskScrollTopPadding, 22)
         XCTAssertGreaterThan(AtticStyle.controlHitSize, AtticStyle.actionControlSize)

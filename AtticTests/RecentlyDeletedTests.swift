@@ -62,6 +62,7 @@ final class RecentlyDeletedTests: XCTestCase {
         [parent, child, childReplica].forEach(seed.insert)
         try seed.save()
         let store = TaskStore(container: container)
+        let order = try XCTUnwrap(store.task(withID: parent.id)?.manualOrder)
 
         XCTAssertTrue(store.delete(store.task(withID: parent.id)!))
         XCTAssertEqual(store.recentlyDeletedTasks().map(\.ref), [AtticItemRef(.task, parent.id)])
@@ -69,7 +70,7 @@ final class RecentlyDeletedTests: XCTestCase {
 
         XCTAssertTrue(store.restoreDeleted(taskID: parent.id))
         XCTAssertEqual(store.subtasks(of: parent.id).map(\.id), [child.id])
-        XCTAssertEqual(store.task(withID: parent.id)?.manualOrder, 5_000)
+        XCTAssertEqual(store.task(withID: parent.id)?.manualOrder, order)
         XCTAssertEqual(store.task(withID: parent.id)?.tags, ["home"])
         XCTAssertTrue(try allTasks(container).allSatisfy { $0.deletedAt == nil && $0.deletionRootID == nil })
         XCTAssertTrue(store.recentlyDeletedTasks().isEmpty)

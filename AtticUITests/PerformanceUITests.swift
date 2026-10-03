@@ -67,7 +67,12 @@ final class PerformanceUITests: XCTestCase {
         launchOptions.iterationCount = 3
         measure(metrics: [XCTApplicationLaunchMetric(waitUntilResponsive: true)],
                 options: launchOptions) {
-            if visible.state != .notRunning { visible.terminate() }
+            // Every iteration is a cold launch: the previous one has fully
+            // exited before the next starts, or the metric records nothing.
+            if visible.state != .notRunning {
+                visible.terminate()
+                _ = visible.wait(for: .notRunning, timeout: 15)
+            }
             visible.launch()
         }
         XCTAssertTrue(visible.descendants(matching: .any)["panel-section-picker"]
@@ -80,9 +85,12 @@ final class PerformanceUITests: XCTestCase {
         XCTAssertTrue(picker.waitForExistence(timeout: 20))
         let tasks = visible.buttons["panel-section-tasks"]
         XCTAssertTrue(tasks.waitForExistence(timeout: 5))
+        // The page button opens under the pointer; the other pages take
+        // clicks once it has.
         tasks.hover()
         let canvas = visible.buttons["panel-section-canvas"]
         XCTAssertTrue(canvas.waitForExistence(timeout: 5))
+        XCTAssertTrue(waitUntil { canvas.isHittable }, "the page button did not open under the pointer")
         canvas.click()
         XCTAssertTrue(visible.descendants(matching: .any)["canvas-surface"]
             .waitForExistence(timeout: 10))

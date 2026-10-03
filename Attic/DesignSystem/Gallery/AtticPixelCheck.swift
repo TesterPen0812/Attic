@@ -240,22 +240,34 @@ enum AtticGeometryCheck {
         }
     }
 
+    /// The subtask checkbox is a true squircle (superellipse, exponent 4,
+    /// across the whole 14 pt box), not a rounded rectangle: its expected
+    /// radius is what the same fit reads from that squircle drawn alone.
+    static var subtaskCheckboxRadius: CGFloat {
+        let size = AtticControlSize.subtaskCheckbox
+        return AtticCornerMeasure.measure(
+            Squircle(cornerRadius: size / 2, exponent: AtticRadius.subtaskCheckboxExponent).fill(Color.gray),
+            layoutSize: CGSize(width: size, height: size), context: .default
+        )?.radius ?? 0
+    }
+
     static func specimens(demo: AtticGalleryDemo = AtticGalleryDemo()) -> [Specimen] {
         let noop = demo.record("Geometry check")
         let tokens = AtticDesignContext.default.tokens
         let panelButton = AtticControlSize.panelButton
         let back = AtticControlSize.settingsBackButton
         let row = CGSize(width: AtticLayout.panelSize.width - 2 * AtticLayout.rowHighlightInset, height: AtticLayout.rowHighlightHeight)
+        let checkbox = AtticControlSize.subtaskCheckbox
         return [
             Specimen(name: "Single button", view: AnyView(AtticRaisedButton(systemName: "pin", label: "Pin", action: noop)),
-                     expectedSize: panelButton, expectedRadius: 13.5),
+                     expectedSize: panelButton, expectedRadius: AtticRadius.control(height: panelButton.height)),
             Specimen(name: "Settings back button", view: AnyView(AtticRaisedButton(systemName: "chevron.left", label: "Back", size: back, action: noop)),
                      expectedSize: back, expectedRadius: 14.5),
             Specimen(name: "Label button", view: AnyView(AtticRaisedButton(systemName: "list.bullet", title: "All notes", action: noop)),
-                     expectedSize: CGSize(width: 0, height: 32), expectedRadius: 13.5),
-            Specimen(name: "Page switch", view: AnyView(AtticPageSwitch(items: AtticGallerySamples.pages, selection: .constant(0))),
-                     expectedSize: CGSize(width: 0, height: AtticControlSize.capsuleHeight), expectedRadius: 13.5),
-            Specimen(name: "Add bar", view: AnyView(AtticAddBar(placeholder: "Add a task…", text: .constant(""), onSubmit: noop)),
+                     expectedSize: CGSize(width: 0, height: panelButton.height), expectedRadius: AtticRadius.control(height: panelButton.height)),
+            Specimen(name: "Page button", view: AnyView(AtticPageButton(items: AtticGallerySamples.pages, selection: .constant(0), pinnedOpen: false)),
+                     expectedSize: panelButton, expectedRadius: AtticRadius.control(height: panelButton.height)),
+            Specimen(name: "Add bar", view: AnyView(AtticAddBar(placeholder: "Add a task", text: .constant(""), onSubmit: noop)),
                      layoutSize: CGSize(width: 296, height: AtticControlSize.addBarHeight),
                      expectedSize: CGSize(width: 296, height: 36), expectedRadius: 15),
             Specimen(name: "Small control (pressed)", view: AnyView(AtticSmallButton(systemName: "flag", label: "Priority", action: noop).atticForcedState(.pressed)),
@@ -293,8 +305,8 @@ enum AtticGeometryCheck {
                      expectedSize: CGSize(width: row.width + 2 * AtticRingMetrics.outset, height: row.height + 2 * AtticRingMetrics.outset),
                      expectedRadius: AtticRadius.ring(around: AtticRadius.highlight, offset: AtticRingMetrics.outset)),
             Specimen(name: "Subtask checkbox (done)", view: AnyView(AtticSubtaskCheckbox(isDone: true)),
-                     expectedSize: CGSize(width: AtticControlSize.subtaskCheckbox, height: AtticControlSize.subtaskCheckbox),
-                     expectedRadius: AtticRadius.subtaskCheckbox)
+                     expectedSize: CGSize(width: checkbox, height: checkbox),
+                     expectedRadius: subtaskCheckboxRadius)
         ]
     }
 

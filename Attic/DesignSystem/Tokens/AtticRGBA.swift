@@ -62,6 +62,32 @@ struct AtticRGBA: Equatable, Hashable, Sendable, CustomStringConvertible {
         )
     }
 
+    /// A translucent overlay that, drawn over the opaque `surface`, gives
+    /// exactly `target`: how a state fill specified as a solid colour on
+    /// one surface stays a fill over cards, menus and selections.
+    static func overlay(reaching target: AtticRGBA, on surface: AtticRGBA) -> AtticRGBA {
+        var alpha = 0.0
+        for (t, s) in [(target.red, surface.red), (target.green, surface.green), (target.blue, surface.blue)] {
+            let d = t - s
+            if d < 0 { alpha = max(alpha, -d / max(s, 1e-6)) } else if d > 0 { alpha = max(alpha, d / max(1 - s, 1e-6)) }
+        }
+        // A little more than the least alpha keeps the overlay's colour
+        // inside the gamut rather than at black or white.
+        alpha = min(1, alpha * 1.25)
+        guard alpha > 0 else { return .clear }
+        func channel(_ t: Double, _ s: Double) -> Double { min(max(s + (t - s) / alpha, 0), 1) }
+        return AtticRGBA(red: channel(target.red, surface.red), green: channel(target.green, surface.green),
+                         blue: channel(target.blue, surface.blue), alpha: alpha)
+    }
+
+    /// The neutral grey (R = G = B) with this colour's relative luminance.
+    var neutralGrey: AtticRGBA {
+        let target = relativeLuminance
+        func linear(_ c: Double) -> Double { c <= 0.04045 ? c / 12.92 : pow((c + 0.055) / 1.055, 2.4) }
+        let byte = (0...255).min { abs(linear(Double($0) / 255) - target) < abs(linear(Double($1) / 255) - target) } ?? 0
+        return AtticRGBA.grey(Double(byte)).withAlpha(alpha)
+    }
+
     /// Straight mix toward `other` by `amount` (0 = self, 1 = other), alpha included.
     func mixed(with other: AtticRGBA, amount: Double) -> AtticRGBA {
         let t = min(max(amount, 0), 1)

@@ -90,8 +90,8 @@ final class AtticKeyboardFocusUITests: XCTestCase {
     }
 
     /// The ring points (design tokens). A row's highlight is inset 8 pt and
-    /// starts 1 pt down; its ring sits 2 pt outside and is 2 pt wide, so its
-    /// middle is 3 pt outside, at x = 5. The status circle (16 pt) is centred
+    /// starts 1 pt down; since L2 (follow-up part 2) the keyboard's row draws
+    /// a 1 pt line on the highlight's own edge, so its middle is at x = 8.5. The status circle (16 pt) is centred
     /// in its 28 pt button; its ring's middle is 8 + 3 = 11 pt from the
     /// centre. A raised button's ring middle is 3 pt outside its edge.
     private func ringPoints() -> [(Stop, CGPoint)] {
@@ -100,7 +100,7 @@ final class AtticKeyboardFocusUITests: XCTestCase {
         var points: [(Stop, CGPoint)] = []
         for index in 0..<3 {
             let frame = element("keyboard-lab-row-\(index)").frame
-            points.append((.row(index), local(CGPoint(x: frame.minX + 5, y: frame.minY + 16))))
+            points.append((.row(index), local(CGPoint(x: frame.minX + 8.5, y: frame.minY + 16))))
         }
         let status = element("keyboard-lab-status").frame
         points.append((.status, local(CGPoint(x: status.midX - 11, y: status.midY))))
@@ -192,14 +192,16 @@ final class AtticKeyboardFocusUITests: XCTestCase {
         XCTAssertTrue(lastAction.waitForExistence(timeout: 2))
 
         app.typeKey(XCUIKeyboardKey.space, modifierFlags: [])
-        XCTAssertEqual(text(of: lastAction), "Advance · \(title)")
-        // Option-Space (Complete) is not typed here: launchers such as
+        XCTAssertEqual(text(of: lastAction), "Complete · \(title)")
+        app.typeKey(XCUIKeyboardKey.space, modifierFlags: .shift)
+        XCTAssertEqual(text(of: lastAction), "Start working · \(title)")
+        // Option-Space (also Complete) is not typed here: launchers such as
         // ChatGPT and Raycast take it as a global hot key, so the app may
         // never see it. The hosted unit tests cover it with real key events.
         app.typeKey(XCUIKeyboardKey.return, modifierFlags: .command)
         XCTAssertEqual(text(of: lastAction), "Open page · \(title)")
         app.typeKey("b", modifierFlags: .command)
-        XCTAssertEqual(text(of: lastAction), "Move to Backlog · \(title)")
+        XCTAssertEqual(text(of: lastAction), "Move to Later · \(title)")
         app.typeKey(XCUIKeyboardKey.delete, modifierFlags: [])
         XCTAssertEqual(text(of: lastAction), "Delete · \(title)")
         // The ring stays on the row throughout.

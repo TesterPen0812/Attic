@@ -50,17 +50,24 @@ struct AtticSidebarRow: View {
     let systemName: String
     let title: String
     var isSelected = false
+    /// The UI-test identifier (Phase 1).
+    var identifier: String?
+    /// Phase 1: the sidebar that owns keyboard focus says when this row
+    /// shows it (the ring appears only while the keyboard drives, never
+    /// after a click). Nil reads the row's own focus.
+    var keyboardFocused: Bool?
     let action: () -> Void
 
     @Environment(\.atticDesign) private var design
     @Environment(\.atticForcedState) private var forced
-    @Environment(\.isFocused) private var isFocused
+    @Environment(\.isFocused) private var environmentFocused
     @Environment(\.isEnabled) private var isEnabled
     @State private var hovered = false
     @State private var probeID = UUID()
 
     var body: some View {
         let tokens = design.tokens
+        let isFocused = keyboardFocused ?? environmentFocused
         let state = AtticStateResolver(forced: forced, isEnabled: isEnabled, isHovered: hovered, isPressed: false, isFocused: isFocused).state
         let disabled = state == .disabled
         let fill: AtticRGBA? = isSelected ? tokens.selected : (state == .hover ? tokens.hover : nil)
@@ -79,14 +86,14 @@ struct AtticSidebarRow: View {
             .frame(height: AtticLayout.sidebarHighlightHeight)
             .background {
                 if let fill {
-                    AtticHighlight(fill: fill).padding(.horizontal, AtticLayout.rowHighlightInset)
+                    AtticHighlight(fill: fill).padding(.horizontal, AtticLayout.sidebarHighlightInset)
                 }
             }
             .overlay {
                 if state == .focused {
                     Color.clear
                         .atticFocusRing(true, cornerRadius: AtticRadius.highlight)
-                        .padding(.horizontal, AtticLayout.rowHighlightInset)
+                        .padding(.horizontal, AtticLayout.sidebarHighlightInset)
                 }
             }
             .frame(height: AtticLayout.sidebarRowPitch)
@@ -99,6 +106,8 @@ struct AtticSidebarRow: View {
         .onHover { hovered = $0 }
         .accessibilityLabel(title)
         .accessibilityAddTraits(isSelected ? [.isSelected, .isButton] : .isButton)
+        .accessibilityRemoveTraits(isSelected ? [] : .isSelected)
+        .atticIdentifier(identifier)
         .atticControlProbe(
             "Sidebar row", id: probeID,
             expectedSize: CGSize(width: 0, height: AtticLayout.sidebarRowPitch),
@@ -189,6 +198,10 @@ struct AtticGroupCard<Content: View>: View {
 
 /// The divider inside a group card.
 struct AtticGroupDivider: View {
+    /// Where the divider starts: the rows' text column (14, or 40 for rows
+    /// with an icon, `AtticSettingsRowMetrics.iconTextInset`).
+    var leadingInset: CGFloat = AtticLayout.groupedRowTextInset
+
     @Environment(\.atticDesign) private var design
     @Environment(\.displayScale) private var displayScale
 
@@ -196,34 +209,31 @@ struct AtticGroupDivider: View {
         Rectangle()
             .fill(design.tokens.divider.color)
             .frame(height: max(1 / displayScale, 0.5))
-            .padding(.leading, AtticLayout.groupedRowTextInset)
+            .padding(.leading, leadingInset)
             .accessibilityHidden(true)
     }
 }
 
-/// A label-over-value row (57 pt) with a ⌃⌄ pop-up for choices. The menu is
-/// the system's own (native first); the row is ours.
+/// A label-over-value row (57 pt) with a ⌃⌄ pop-up for choices. The row is
+/// ours; the list is Attic's own opaque pop-over (round 13: the system
+/// menu's blur showed the Settings labels behind it, doubled, through the
+/// choices).
 struct AtticPopUpRow<Choice: Hashable>: View {
     let label: String
     let choices: [(value: Choice, title: String)]
     @Binding var selection: Choice
+    /// The UI-test identifier of the pop-up (Phase 1).
+    var identifier: String?
 
     @Environment(\.atticCapture) private var capture
+    @State private var isOpen = false
 
     var body: some View {
         let title = choices.first { $0.value == selection }?.title ?? ""
         if capture != nil {
             AtticPopUpRowFace(label: label, value: title)
         } else {
-            Menu {
-                Picker(label, selection: $selection) {
-                    ForEach(choices, id: \.value) { choice in
-                        Text(choice.title).tag(choice.value)
-                    }
-                }
-                .pickerStyle(.inline)
-                .labelsHidden()
-            } label: {
+            Button { isOpen = true } label: {
                 // One element: the row is a single pop-up for VoiceOver
                 // (label "Surface", value "Solid"), not one per text line.
                 AtticPopUpRowFace(label: label, value: title)
@@ -231,12 +241,68 @@ struct AtticPopUpRow<Choice: Hashable>: View {
                     .accessibilityLabel(label)
                     .accessibilityValue(title)
             }
-            .menuStyle(.button)
             .buttonStyle(AtticRowPressStyle())
-            .menuIndicator(.hidden)
             .accessibilityLabel(label)
             .accessibilityValue(title)
+            .atticIdentifier(identifier)
+            .atticPopover(isPresented: $isOpen, arrowEdge: .bottom) {
+                AtticPopUpChoices(label: label, choices: choices, selection: selection) { value in
+                    selection = value
+                    isOpen = false
+                }
+            }
         }
+    }
+}
+
+/// The choices of a pop-up row, in Attic's opaque pop-over: the current one
+/// ticked, the keyboard's on a highlighted one (↑ ↓ move, Return or Space
+/// chooses, Escape closes with the pop-over itself).
+struct AtticPopUpChoices<Choice: Hashable>: View {
+    let label: String
+    let choices: [(value: Choice, title: String)]
+    let selection: Choice
+    let choose: (Choice) -> Void
+
+    @FocusState private var focused: Bool
+    @State private var highlighted: Int?
+
+    var body: some View {
+        AtticPopover(width: AtticPopoverMetrics.defaultWidth) {
+            ForEach(Array(choices.enumerated()), id: \.offset) { index, choice in
+                AtticPopoverRow(
+                    systemName: choice.value == selection ? "checkmark" : nil,
+                    title: choice.title,
+                    isHighlighted: highlighted == index,
+                    reservesIconSlot: true
+                ) { choose(choice.value) }
+            }
+        }
+        .focusable()
+        .focusEffectDisabled()
+        .focused($focused)
+        .onAppear {
+            highlighted = choices.firstIndex { $0.value == selection }
+            focused = true
+        }
+        .onKeyPress(.downArrow) { move(1); return .handled }
+        .onKeyPress(.upArrow) { move(-1); return .handled }
+        .onKeyPress(.return) { chooseHighlighted() }
+        .onKeyPress(.space) { chooseHighlighted() }
+        .accessibilityElement(children: .contain)
+        .accessibilityLabel(label)
+    }
+
+    private func move(_ step: Int) {
+        guard !choices.isEmpty else { return }
+        let current = highlighted ?? (step > 0 ? -1 : choices.count)
+        highlighted = min(max(current + step, 0), choices.count - 1)
+    }
+
+    private func chooseHighlighted() -> KeyPress.Result {
+        guard let highlighted, choices.indices.contains(highlighted) else { return .ignored }
+        choose(choices[highlighted].value)
+        return .handled
     }
 }
 
@@ -287,6 +353,8 @@ private struct AtticRowPressStyle: ButtonStyle {
 struct AtticSwitchRow: View {
     let title: String
     @Binding var isOn: Bool
+    /// The UI-test identifier of the switch (Phase 1).
+    var identifier: String?
 
     @Environment(\.atticDesign) private var design
     @Environment(\.atticCapture) private var capture
@@ -304,7 +372,45 @@ struct AtticSwitchRow: View {
                     .controlSize(.small)
                     .labelsHidden()
                     .tint(design.tokens.color(.accent))
+                    .atticIdentifier(identifier)
             }
+        }
+        .padding(.leading, AtticLayout.groupedRowTextInset)
+        .padding(.trailing, AtticSettingsMetrics.switchTrailing)
+        .frame(height: AtticLayout.groupedRowSingle)
+        .atticControlProbe(
+            "Grouped row (single)", id: probeID,
+            expectedSize: CGSize(width: 0, height: AtticLayout.groupedRowSingle),
+            radius: 0, expectedRadius: 0
+        )
+    }
+}
+
+/// A label and a system segmented control on one grouped row (the Motion
+/// Lab's feel: Calm, Lively, Playful). Like the slider row, the control is
+/// the system's own.
+struct AtticSegmentedRow<Choice: Hashable>: View {
+    let title: String
+    let choices: [(value: Choice, title: String)]
+    @Binding var selection: Choice
+    var identifier: String?
+
+    @State private var probeID = UUID()
+
+    var body: some View {
+        HStack {
+            AtticText(verbatim: title, style: .rowSingle, ink: .body)
+            Spacer(minLength: AtticSettingsMetrics.rowTrailingMinGap)
+            Picker(title, selection: $selection) {
+                ForEach(choices, id: \.value) { choice in
+                    Text(choice.title).tag(choice.value)
+                }
+            }
+            .pickerStyle(.segmented)
+            .controlSize(.small)
+            .labelsHidden()
+            .fixedSize()
+            .atticIdentifier(identifier)
         }
         .padding(.leading, AtticLayout.groupedRowTextInset)
         .padding(.trailing, AtticSettingsMetrics.switchTrailing)
@@ -354,6 +460,8 @@ struct AtticModeTile: View {
 
     let choice: Choice
     var isSelected = false
+    /// The UI-test identifier (Phase 1).
+    var identifier: String?
     let action: () -> Void
 
     @State private var probeID = UUID()
@@ -378,6 +486,8 @@ struct AtticModeTile: View {
         .buttonStyle(.plain)
         .accessibilityLabel(title)
         .accessibilityAddTraits(isSelected ? [.isSelected, .isButton] : .isButton)
+        .accessibilityRemoveTraits(isSelected ? [] : .isSelected)
+        .atticIdentifier(identifier)
     }
 
     private var title: String {
@@ -435,9 +545,57 @@ private struct AtticModePreview: View {
 
 /// A palette: its Light and Dark surfaces with the accent dot, and its
 /// name. Recessed, borderless; the current one gets the ring.
+/// Tiles in rows, left to right, wrapping to the width it is given (the
+/// palette tiles). Not lazy: every tile is always built.
+struct AtticTileFlow: Layout {
+    var spacing: CGFloat
+
+    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
+        let rows = arrange(width: proposal.width ?? .infinity, subviews: subviews)
+        let width = rows.map(\.width).max() ?? 0
+        let height = rows.reduce(0) { $0 + $1.height } + spacing * CGFloat(max(rows.count - 1, 0))
+        return CGSize(width: proposal.width.map { min($0, width) } ?? width, height: height)
+    }
+
+    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
+        var y = bounds.minY
+        for row in arrange(width: bounds.width, subviews: subviews) {
+            var x = bounds.minX
+            for index in row.indices {
+                let size = subviews[index].sizeThatFits(.unspecified)
+                subviews[index].place(at: CGPoint(x: x, y: y), proposal: ProposedViewSize(size))
+                x += size.width + spacing
+            }
+            y += row.height + spacing
+        }
+    }
+
+    private struct Row { var indices: [Int] = []; var width: CGFloat = 0; var height: CGFloat = 0 }
+
+    private func arrange(width: CGFloat, subviews: Subviews) -> [Row] {
+        var rows: [Row] = []
+        var row = Row()
+        for index in subviews.indices {
+            let size = subviews[index].sizeThatFits(.unspecified)
+            let next = row.indices.isEmpty ? size.width : row.width + spacing + size.width
+            if !row.indices.isEmpty, next > width {
+                rows.append(row)
+                row = Row()
+            }
+            row.width = row.indices.isEmpty ? size.width : row.width + spacing + size.width
+            row.height = max(row.height, size.height)
+            row.indices.append(index)
+        }
+        if !row.indices.isEmpty { rows.append(row) }
+        return rows
+    }
+}
+
 struct AtticPaletteTile: View {
     let palette: AtticPanelTheme
     var isSelected = false
+    /// The UI-test identifier (Phase 1).
+    var identifier: String?
     let action: () -> Void
 
     @Environment(\.atticDesign) private var design
@@ -466,7 +624,10 @@ struct AtticPaletteTile: View {
         }
         .buttonStyle(.plain)
         .accessibilityLabel(palette.title)
+        .accessibilityValue(isSelected ? String(localized: "Selected") : String(localized: "Not selected"))
         .accessibilityAddTraits(isSelected ? [.isSelected, .isButton] : .isButton)
+        .accessibilityRemoveTraits(isSelected ? [] : .isSelected)
+        .atticIdentifier(identifier)
         .atticControlProbe("Palette tile", id: probeID, expectedSize: nil, radius: AtticRadius.tile, expectedRadius: 10)
     }
 
@@ -494,29 +655,38 @@ struct AtticSliderRow: View {
     let valueText: String
     @Binding var value: Double
     let range: ClosedRange<Double>
+    /// Phase 1: a step, what VoiceOver reads when it differs from the
+    /// visible value ("0.2 seconds" for "0.2 s"), and the UI-test identifier.
+    var step: Double?
+    var accessibilityValue: String?
+    var identifier: String?
 
     @Environment(\.atticDesign) private var design
     @Environment(\.atticCapture) private var capture
+    @Environment(\.isEnabled) private var isEnabled
     @State private var probeID = UUID()
 
     var body: some View {
         let m = AtticSettingsMetrics.self
         HStack(spacing: m.sliderGap) {
+            // Disabled (Tint length while Tint is Off), the label and value
+            // take the disabled ink, which keeps the secondary-text floor.
             VStack(alignment: .leading, spacing: m.labelValueGap) {
-                AtticText(verbatim: label, style: .groupLabel, ink: .label)
-                AtticText(verbatim: valueText, style: .groupValue, ink: .body)
+                AtticText(verbatim: label, style: .groupLabel, ink: isEnabled ? .label : .disabledText)
+                AtticText(verbatim: valueText, style: .groupValue, ink: isEnabled ? .body : .disabledText)
             }
             Spacer(minLength: m.rowTrailingMinGap)
             Group {
                 if capture != nil {
                     AtticSliderDrawing(fraction: (value - range.lowerBound) / (range.upperBound - range.lowerBound))
                 } else {
-                    Slider(value: $value, in: range)
+                    slider
                         .controlSize(.small)
                         .tint(design.tokens.color(.accent))
                         .labelsHidden()
                         .accessibilityLabel(label)
-                        .accessibilityValue(valueText)
+                        .accessibilityValue(accessibilityValue ?? valueText)
+                        .atticIdentifier(identifier)
                 }
             }
             .frame(width: m.sliderWidth)
@@ -529,6 +699,20 @@ struct AtticSliderRow: View {
             expectedSize: CGSize(width: 0, height: AtticLayout.groupedRowTall),
             radius: 0, expectedRadius: 0
         )
+    }
+
+    /// A step rounds the value as it moves; the slider itself stays
+    /// continuous, because a stepped macOS slider draws a tick mark per
+    /// step (a solid comb on the Width slider's hundreds of points).
+    private var slider: some View {
+        Slider(value: Binding(
+            get: { value },
+            set: { newValue in
+                guard let step, step > 0 else { value = newValue; return }
+                let stepped = range.lowerBound + ((newValue - range.lowerBound) / step).rounded() * step
+                value = min(max(stepped, range.lowerBound), range.upperBound)
+            }
+        ), in: range)
     }
 }
 
@@ -565,6 +749,8 @@ private struct AtticSliderDrawing: View {
 struct AtticAppearancePreview<Panel: View>: View {
     var height: CGFloat = AtticSettingsMetrics.previewHeight
     var scale: CGFloat = AtticSettingsMetrics.previewScale
+    /// What VoiceOver reads: the look the preview shows (Phase 1).
+    var accessibilityLabel: String = String(localized: "Preview of the panel")
     @ViewBuilder let panel: Panel
 
     @Environment(\.atticDesign) private var design
@@ -573,6 +759,9 @@ struct AtticAppearancePreview<Panel: View>: View {
         let shape = RoundedRectangle(cornerRadius: AtticRadius.groupCard, style: .continuous)
         ZStack(alignment: .top) {
             AtticStandInWallpaper(dark: design.mode == .dark)
+            // The miniature panel runs past the card's bottom: it fades out
+            // over the last 36 pt (CU review, visual 3), so the card never
+            // ends in a hard crop through a row.
             panel
                 .scaleEffect(scale, anchor: .top)
                 .frame(width: AtticLayout.panelSize.width * scale, height: AtticLayout.panelSize.height * scale, alignment: .top)
@@ -583,11 +772,19 @@ struct AtticAppearancePreview<Panel: View>: View {
                 .padding(.top, AtticSettingsMetrics.previewTop)
                 .environment(\.atticProbesDisabled, true)
                 .allowsHitTesting(false)
+                .frame(height: height, alignment: .top)
+                .mask {
+                    VStack(spacing: 0) {
+                        Color.black
+                        LinearGradient(colors: [.black, .black.opacity(0)], startPoint: .top, endPoint: .bottom)
+                            .frame(height: AtticSettingsMetrics.previewBottomFade)
+                    }
+                }
         }
         .frame(maxWidth: .infinity)
         .frame(height: height, alignment: .top)
         .clipShape(shape)
         .accessibilityElement()
-        .accessibilityLabel(String(localized: "Preview of the panel"))
+        .accessibilityLabel(accessibilityLabel)
     }
 }

@@ -306,8 +306,17 @@ final class AppCoordinator: ObservableObject {
     /// during `start()`, which can land after a menu has already been built.
     @Published private(set) var globalShortcutRegistration: GlobalHotKeyRegistration = .notRegistered
 
+    /// Whether the panel is pinned, mirrored for the menu bar's Open ▸ Pin
+    /// Panel tick (the menu observes nothing else of the shell).
+    @Published private(set) var isPanelPinned = false
+    private var pinObservation: AnyCancellable?
+
     /// The combination that shortcut claims, for the menu that advertises it.
     var globalShortcutCombination: GlobalHotKeyCombination { newTaskHotKey.combination }
+
+    /// The hot key itself, for Settings' recorder (it releases the claim
+    /// while a new combination is typed).
+    var quickCaptureHotKey: GlobalHotKey { newTaskHotKey }
 
     let settings: AppSettings
     let store: TaskStore
@@ -355,6 +364,8 @@ final class AppCoordinator: ObservableObject {
     }
     private let settingsWindowController: SettingsWindowController
     private let hoverMonitor: CornerHoverMonitor
+    /// An agent's `show` over the real panel (the shell tools hold it weakly).
+    private let agentPresenter: PanelAgentPresenter
     private let agentServer: AgentServer
     private let isUITesting: Bool
     private let isRunningTests: Bool
@@ -363,11 +374,16 @@ final class AppCoordinator: ObservableObject {
     private var menuTrackingState = PanelMenuTrackingState()
     private var agentAccessObservation: AnyCancellable?
     private var globalShortcutObservation: AnyCancellable?
+    private var quickCaptureObservation: AnyCancellable?
     private var appearanceObservation: AnyCancellable?
     private var hasStarted = false
     private let newTaskHotKey: GlobalHotKey
     private let performanceRoot: URL?
     private let isPerformanceSeedOnly: Bool
+    /// A preview identity with its own on-disk store: the menu offers Load
+    /// Demo Data (`AtticDemoData`).
+    let demoDataAllowed: Bool
+    private let demoContainer: ModelContainer?
     private var performanceSignalSource: (any DispatchSourceSignal)?
     private var performancePhaseIndex = 0
 
@@ -477,7 +493,46 @@ final class AppCoordinator: ObservableObject {
             #endif
         }
 
+        #if DEBUG
+        // Capture seam: the in-memory UI-test store holds the design mockup's
+        // tasks (`TasksPagePreview.seedDemo`), never anything of the owner's.
+        if inMemoryStore, isUITesting, environment["ATTIC_UI_TEST_SEED"] == "demo" || environment["ATTIC_UI_TEST_SEED"] == "long" {
+            try? TasksPagePreview.seedDemo(in: container, long: environment["ATTIC_UI_TEST_SEED"] == "long")
+        }
+        // The spec's sizes (round 11, on-screen measurement): 500 open, 500
+        // in Later, 5,000 in the Done log.
+        if inMemoryStore, isUITesting, environment["ATTIC_UI_TEST_SEED"] == "scale" {
+            try? TasksPagePreview.seedScale(in: container)
+        }
+        // Everything finished today: the caught-up Now page.
+        if inMemoryStore, isUITesting, environment["ATTIC_UI_TEST_SEED"] == "caughtup" {
+            try? TasksPagePreview.seedCaughtUp(in: container)
+        }
+        #endif
+        // Preview builds only (owner, 2026-10-01): a fresh preview identity
+        // opens on demo content, written into its own empty store once.
+        let demoDataAllowed = !inMemoryStore && performanceRoot == nil && !usesCanvasUITestPersistence
+            && !isUITesting && !isRunningTests && !runtime.isGalleryLaunch
+            && AtticDemoData.isAllowed(bundleIdentifier: runtime.bundleIdentifier)
+        var demoSeeded = false
+        if demoDataAllowed {
+            let defaults = runtime.makeSettingsDefaults()
+            if !defaults.bool(forKey: AtticDemoData.seededKey), AtticDemoData.storeIsEmpty(container) {
+                do {
+                    demoSeeded = try AtticDemoData.seed(into: container, bundleIdentifier: runtime.bundleIdentifier) > 0
+                } catch {
+                    NSLog("Attic demo data: %@", error.localizedDescription)
+                }
+            }
+            defaults.set(true, forKey: AtticDemoData.seededKey)
+        }
+        self.demoDataAllowed = demoDataAllowed
+        self.demoContainer = demoDataAllowed ? container : nil
         let (store, noteStore) = runtime.makeItemStores(container: container, performanceRoot: performanceRoot)
+        if demoSeeded {
+            let bundleIdentifier = runtime.bundleIdentifier
+            Task { @MainActor in await AtticDemoData.attachFiles(to: noteStore, bundleIdentifier: bundleIdentifier) }
+        }
         let canvasStore = CanvasStore(container: container)
         let canvasViewDefaults = runtime.isUnitTestHost ? nil : runtime.makeSettingsDefaults()
         if isUITesting,
@@ -496,13 +551,26 @@ final class AppCoordinator: ObservableObject {
             recoveryURL: runtime.noteRecoveryURL
         )
         let uiState = PanelUIState()
+        // The Tasks page's page and views across relaunch (L7), in the
+        // identity's own defaults; a UI test starts from none.
+        let tasksMemory = runtime.isUnitTestHost ? nil : TasksPageMemory(defaults: runtime.makeSettingsDefaults())
+        if isUITesting, let tasksMemory {
+            TasksPageMemory.removedKeys.forEach { tasksMemory.defaults.removeObject(forKey: $0) }
+        }
         let loginItemService = LoginItemService()
         // Local-only disables cloud services, not authenticated loopback MCP.
         // Each bundle identity owns its credential; previews never reuse Daily's.
         // Both kinds of test host avoid Keychain. In normal use, credential
         // loading starts only after opt-in and runs away from the main thread.
         let library = AtticLibrary(tasks: store, notes: noteStore, canvases: canvasStore)
-        let agentHandler = MCPRequestHandler(tools: AgentTaskTools(store: store, noteStore: noteStore, library: library))
+        let shellTools = AgentShellTools()
+        let agentHandler = MCPRequestHandler(
+            tools: AgentTaskTools(
+                store: store, noteStore: noteStore, library: library,
+                settingsTools: AgentSettingsTools(settings: settings, loginItemService: loginItemService, undo: library.undo)
+            ),
+            shellTools: shellTools
+        )
         let agentServer: AgentServer
         if runtime.usesEphemeralAgentCredential {
             agentServer = AgentServer(port: settings.agentServerPort,
@@ -513,13 +581,14 @@ final class AppCoordinator: ObservableObject {
         }
         // Built before the window so Settings observes the same hot key it
         // reports on; its action is bound once `self` exists.
-        let newTaskHotKey = GlobalHotKey()
+        // The combination Settings chose (round 10: the recorder).
+        let newTaskHotKey = GlobalHotKey(combination: settings.quickCaptureShortcut)
         let settingsWindowController = SettingsWindowController(
             settings: settings,
             loginItemService: loginItemService,
             agentServer: agentServer,
             globalHotKey: newTaskHotKey,
-            store: store
+            library: library
         )
         let panelController = AtticPanelController(
             store: store,
@@ -527,7 +596,8 @@ final class AppCoordinator: ObservableObject {
             canvasSession: canvasSession,
             noteDraft: noteDraft,
             settings: settings,
-            uiState: uiState
+            uiState: uiState,
+            tasksMemory: tasksMemory
         )
 
         self.settings = settings
@@ -549,7 +619,7 @@ final class AppCoordinator: ObservableObject {
                 library.purgeExpired(now: now, calendar: calendar)
             }
         )
-        hoverMonitor = CornerHoverMonitor(
+        let hoverMonitor = CornerHoverMonitor(
             settings: settings,
             panelController: panelController,
             uiState: uiState,
@@ -558,7 +628,19 @@ final class AppCoordinator: ObservableObject {
             canvasStore: canvasStore,
             noteDraft: noteDraft
         )
+        self.hoverMonitor = hoverMonitor
+        agentPresenter = PanelAgentPresenter(
+            uiState: uiState, store: store, noteStore: noteStore,
+            canvasSession: canvasSession, noteDraft: noteDraft,
+            reveal: { [weak hoverMonitor] section in
+                hoverMonitor?.revealProgrammatically(section: section, takesKeyboard: false) ?? .refused(.noScreen)
+            }
+        )
         newTaskHotKey.action = { [weak self] in self?.showNewTask() }
+        shellTools.presenter = agentPresenter
+        pinObservation = uiState.$isPanelPinned
+            .removeDuplicates()
+            .sink { [weak self] pinned in self?.isPanelPinned = pinned }
         globalShortcutObservation = newTaskHotKey.$registration
             .sink { [weak self] registration in
                 self?.globalShortcutRegistration = registration
@@ -572,24 +654,58 @@ final class AppCoordinator: ObservableObject {
         if isPerformanceSeedOnly {
             return
         }
-        NSApp.appearance = settings.appearance.nsAppearance
+        // Attic's chosen Light, Dark or System applies to the whole app, so
+        // every window and every native menu (the menu-bar item's included)
+        // follows it; the panel also sets it on its own window.
+        AtticWindowAppearance.applyToApp(settings.appearance.designMode)
         appearanceObservation = settings.$appearance
             .removeDuplicates()
             .sink { preference in
-                NSApp.appearance = preference.nsAppearance
+                AtticWindowAppearance.applyToApp(preference.designMode)
             }
 
         observeMenuTracking()
         cleanupService.start()
 
         if isUITesting {
+            if ProcessInfo.processInfo.environment["ATTIC_UI_TEST_PINNED"] == "1" { uiState.isPanelPinned = true }
             // LSUIElement apps do not necessarily become active when XCTest
             // launches them. Activate the real process before presenting the
             // key panel so AppKit, not a test-only model shortcut, owns mouse
             // and keyboard delivery through the installed UI hierarchy.
+            // Key-window check seam: reveal the panel the way the corner
+            // does (not key, app not activated). The UI test then brings
+            // another app forward and clicks the panel, as a person would,
+            // and reads the key state the panel exposes to UI tests.
+            if ProcessInfo.processInfo.environment["ATTIC_UI_TEST_NONKEY_REVEAL"] == "1" {
+                // Capture seams: the page to show (tasks, notes, canvas), and
+                // a time after which the panel takes the keyboard as a click
+                // would, for hands-off captures of both looks.
+                let environment = ProcessInfo.processInfo.environment
+                if let page = environment["ATTIC_UI_TEST_PAGE"].flatMap(PanelPage.init(rawValue:)) {
+                    uiState.selectSection(page.section)
+                }
+                // AppKit makes a visible window key when launching finishes,
+                // so the reveal waits until launch is over, as a corner reveal
+                // always does.
+                DispatchQueue.main.asyncAfter(deadline: .now() + 1) { [weak self] in
+                    self?.hoverMonitor.keepVisibleForUITesting(makeKey: false)
+                }
+                if let delay = environment["ATTIC_UI_TEST_KEY_AFTER"].flatMap(Double.init) {
+                    DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [weak self] in
+                        self?.panelController.makeKeyForCapture()
+                    }
+                }
+                return
+            }
             NSApp.activate()
             if let performanceRoot,
                ProcessInfo.processInfo.environment["ATTIC_PERF_PROBE"] == "1" {
+                // `--corner`: a probe on a Mac in use can move the reveal
+                // away from the corner the person's pointer visits.
+                if let corner = ProcessInfo.processInfo.environment["ATTIC_PERF_CORNER"].flatMap(ScreenCorner.init(rawValue:)) {
+                    settings.corner = corner
+                }
                 hoverMonitor.start()
                 let window = Double(ProcessInfo.processInfo.environment["ATTIC_PERF_WINDOW_SECONDS"] ?? "10") ?? 10
                 func write(_ phase: String) {
@@ -613,12 +729,63 @@ final class AppCoordinator: ObservableObject {
                     // slow reveal, footprint call, or AppKit hide completion.
                     signal(SIGUSR1, SIG_IGN)
                     let source = DispatchSource.makeSignalSource(signal: SIGUSR1, queue: .main)
+                    // `--extra` adds phases the Phase 0 schedule lacks: a
+                    // warm reveal, page switches between built pages, typing
+                    // in the add bar, and a warm reveal of Tasks. Their
+                    // timings are labelled, so the standard names and the
+                    // five sampled phases stay exactly as Baselines A and B.
+                    let extra = ProcessInfo.processInfo.environment["ATTIC_PERF_EXTRA"] == "1"
+                    let phases = ["hidden_idle", "tasks_open", "canvas_open", "after_hide", "hidden_idle_final"]
+                        + (extra ? ["warm_open", "switches_done", "typing_done", "tasks_hidden", "tasks_warm_open", "scroll_done"] : [])
                     source.setEventHandler { [weak self] in
-                        guard let self, self.performancePhaseIndex < 5 else { return }
-                        let phases = ["hidden_idle", "tasks_open", "canvas_open", "after_hide", "hidden_idle_final"]
+                        guard let self, self.performancePhaseIndex < phases.count else { return }
                         write(phases[self.performancePhaseIndex] + "_end")
                         self.performancePhaseIndex += 1
                         switch self.performancePhaseIndex {
+                        case 5 where extra:
+                            PerformanceSignposts.timingLabel = "warm"
+                            self.hoverMonitor.revealForPerformanceProbe(section: self.uiState.selectedSection)
+                            later(1) { PerformanceSignposts.timingLabel = nil; write("warm_open") }
+                        case 6:
+                            // Canvas → Tasks → Notes → Canvas → Tasks, one a second.
+                            let route: [PanelSection] = [.tasks, .notes, .canvas, .tasks]
+                            for (step, section) in route.enumerated() {
+                                later(Double(step)) {
+                                    PerformanceSignposts.timingLabel = "switch"
+                                    self.hoverMonitor.revealForPerformanceProbe(section: section)
+                                }
+                            }
+                            later(Double(route.count) + 0.5) { PerformanceSignposts.timingLabel = nil; write("switches_done") }
+                        case 7:
+                            self.uiState.requestPrimaryInputFocus()
+                            later(1) {
+                                PerformanceSignposts.timingLabel = "typing"
+                                for duration in self.panelController.typeForPerformanceProbe("quiet probe keystrokes abc") {
+                                    PerformanceSignposts.recordProbeTiming("AddBarKeystrokeToDisplay", milliseconds: duration)
+                                }
+                                PerformanceSignposts.timingLabel = nil
+                                write("typing_done")
+                            }
+                        case 8:
+                            let result = self.hoverMonitor.hideForPerformanceProbe { outcome in
+                                write(outcome == .hidden ? "tasks_hidden" : "hide_failed")
+                            }
+                            if !result.isAccepted { write("hide_failed") }
+                        case 9:
+                            later(2) {
+                                PerformanceSignposts.timingLabel = "warmTasks"
+                                self.hoverMonitor.revealForPerformanceProbe(section: .tasks)
+                                later(1) { PerformanceSignposts.timingLabel = nil; write("tasks_warm_open") }
+                            }
+                        case 10:
+                            // Round 3: scrolling the 500-task Now list, one
+                            // 40 pt step at a time, each drawn before the next.
+                            later(1) {
+                                for duration in self.panelController.scrollForPerformanceProbe(steps: 120, step: 40) {
+                                    PerformanceSignposts.recordProbeTiming("ListScrollStep", milliseconds: duration)
+                                }
+                                write("scroll_done")
+                            }
                         case 1:
                             self.hoverMonitor.revealForPerformanceProbe(section: .tasks)
                             later(1) { write("tasks_open") }
@@ -684,7 +851,16 @@ final class AppCoordinator: ObservableObject {
             return
         }
 
-        newTaskHotKey.register()
+        if settings.quickCaptureEnabled { newTaskHotKey.register() }
+        // Settings › General › Quick Capture (round 10): a new combination
+        // or the switch releases the old claim and makes the new one.
+        quickCaptureObservation = settings.$quickCaptureShortcut
+            .combineLatest(settings.$quickCaptureEnabled)
+            .dropFirst()
+            .removeDuplicates { $0.0 == $1.0 && $0.1 == $1.1 }
+            .sink { [weak self] combination, enabled in
+                self?.newTaskHotKey.apply(combination, enabled: enabled)
+            }
         hoverMonitor.start()
         if !isRunningTests {
             // Once per launch, on the persistent store only (tests and UI
@@ -755,8 +931,48 @@ final class AppCoordinator: ObservableObject {
         hoverMonitor.revealProgrammatically(openComposer: true, section: .tasks)
     }
 
+    /// The menu bar's Open ▸ Tasks, Notes, Canvas (round 10): the panel on
+    /// that page.
+    func showPage(_ page: PanelPage) {
+        hoverMonitor.revealProgrammatically(section: page.section)
+    }
+
+    /// The menu bar's Open ▸ Pin Panel: pinning shows the panel too (a
+    /// pinned panel is one that stays open).
+    func setPinned(_ pinned: Bool) {
+        if uiState.isPanelPinned != pinned { uiState.isPanelPinned = pinned }
+        if pinned { showPanel() }
+    }
+
     func showNewNote() {
         hoverMonitor.revealProgrammatically(openComposer: true, section: .notes)
+    }
+
+    /// The menu-bar Search: the Tasks page's Done search, focused (⌘K
+    /// search arrives with the command palette in a later phase).
+    /// Preview builds only: adds the demo tasks and notes that are not in
+    /// this preview identity's store yet, and shows them.
+    func loadDemoData() {
+        guard demoDataAllowed, let demoContainer else { return }
+        let bundleIdentifier = Bundle.main.bundleIdentifier
+        do {
+            try AtticDemoData.seed(into: demoContainer, bundleIdentifier: bundleIdentifier)
+        } catch {
+            NSLog("Attic demo data: %@", error.localizedDescription)
+            return
+        }
+        store.refresh()
+        noteStore.refresh()
+        let notes = noteStore
+        Task { @MainActor in await AtticDemoData.attachFiles(to: notes, bundleIdentifier: bundleIdentifier) }
+        showPanel()
+    }
+
+    func showSearch() {
+        // The panel takes the keyboard, but not for the add bar: a late add
+        // bar focus request would take it back from the search field.
+        guard hoverMonitor.revealProgrammatically(section: .tasks, focusesAddBar: false) == .shown else { return }
+        uiState.requestSearch()
     }
 
     func openSettings() {

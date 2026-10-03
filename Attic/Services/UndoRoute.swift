@@ -13,7 +13,7 @@ enum UndoHistoryID: Hashable {
 }
 
 /// What happened when a step was undone or redone.
-enum UndoOutcome: Equatable {
+enum UndoOutcome: Equatable, Error {
     /// The store confirmed the change.
     case applied
     /// The store refused or failed to save; nothing changed and the step can
@@ -27,6 +27,9 @@ enum UndoOutcome: Equatable {
 
 /// One undoable step: how to reverse it and how to apply it again.
 struct UndoStep {
+    /// Which step this is, so something bound to it (the Undo toast) can
+    /// tell whether it is still the one an undo would reverse.
+    let id = UUID()
     let name: String
     let undo: @MainActor () -> UndoOutcome
     let redo: @MainActor () -> UndoOutcome
@@ -131,44 +134,56 @@ final class UndoRoute: ObservableObject {
     /// next undo reaches the step before it).
     @discardableResult
     func undo(in history: UndoHistoryID) -> Bool {
-        guard var entry = histories[history], let step = entry.undo.last else { return false }
-        switch step.undo() {
+        undoStep(in: history) == .applied
+    }
+
+    @discardableResult
+    func redo(in history: UndoHistoryID) -> Bool {
+        redoStep(in: history) == .applied
+    }
+
+    /// `undo(in:)` with what happened: nil when there was nothing to undo.
+    @discardableResult
+    func undoStep(in history: UndoHistoryID) -> UndoOutcome? {
+        guard var entry = histories[history], let step = entry.undo.last else { return nil }
+        let outcome = step.undo()
+        switch outcome {
         case .failed:
-            return false
+            break
         case .obsolete:
             entry.undo.removeLast()
             histories[history] = entry
             revision &+= 1
-            return false
         case .applied:
             entry.undo.removeLast()
             entry.redo.append(step)
             histories[history] = entry
             touch(history)
             revision &+= 1
-            return true
         }
+        return outcome
     }
 
+    /// `redo(in:)` with what happened: nil when there was nothing to redo.
     @discardableResult
-    func redo(in history: UndoHistoryID) -> Bool {
-        guard var entry = histories[history], let step = entry.redo.last else { return false }
-        switch step.redo() {
+    func redoStep(in history: UndoHistoryID) -> UndoOutcome? {
+        guard var entry = histories[history], let step = entry.redo.last else { return nil }
+        let outcome = step.redo()
+        switch outcome {
         case .failed:
-            return false
+            break
         case .obsolete:
             entry.redo.removeLast()
             histories[history] = entry
             revision &+= 1
-            return false
         case .applied:
             entry.redo.removeLast()
             entry.undo.append(step)
             histories[history] = entry
             touch(history)
             revision &+= 1
-            return true
         }
+        return outcome
     }
 
     func canUndo(in history: UndoHistoryID) -> Bool {
@@ -186,6 +201,11 @@ final class UndoRoute: ObservableObject {
 
     func redoName(in history: UndoHistoryID) -> String? {
         histories[history]?.redo.last?.name
+    }
+
+    /// The step an undo would reverse now.
+    func undoStepID(in history: UndoHistoryID) -> UUID? {
+        histories[history]?.undo.last?.id
     }
 
     func undoCount(in history: UndoHistoryID) -> Int {

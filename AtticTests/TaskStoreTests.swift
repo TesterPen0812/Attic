@@ -614,9 +614,12 @@ final class TaskStoreTests: XCTestCase {
         XCTAssertEqual(replicas.count, 2)
         XCTAssertTrue(replicas.allSatisfy { $0.deletedAt != nil && $0.deletionRootID == id })
         XCTAssertTrue(store.tasks.isEmpty)
-        XCTAssertEqual(store.purgeDeleted(before: .distantFuture), [id])
+        // Phase 1: an edit writes only the fields it changed, so the copies
+        // still differ where the edit did not reach (their creation time and
+        // when they changed); a purge never removes copies that disagree.
+        XCTAssertEqual(store.purgeDeleted(before: .distantFuture), [])
         replicas = try ModelContext(container).fetch(FetchDescriptor<TaskItem>())
-        XCTAssertTrue(replicas.isEmpty)
+        XCTAssertEqual(replicas.count, 2)
     }
 
     @MainActor
@@ -661,8 +664,14 @@ final class TaskStoreTests: XCTestCase {
         let container = try PersistenceController.makeContainer(inMemory: true)
         let context = ModelContext(container)
         let sharedID = UUID()
-        context.insert(TaskItem(id: sharedID, title: "Older"))
-        context.insert(TaskItem(id: sharedID, title: "Newer", updatedAt: Date().addingTimeInterval(1)))
+        // Rows already on the Phase 1 order, so opening the store has no
+        // one-time migration to save.
+        let older = TaskItem(id: sharedID, title: "Older")
+        let newer = TaskItem(id: sharedID, title: "Newer", updatedAt: Date().addingTimeInterval(1))
+        for row in [older, newer] {
+            row.listOrderVersion = TaskItem.currentListOrderVersion
+            context.insert(row)
+        }
         try context.save()
 
         let gate = PersistenceGate()
@@ -830,30 +839,23 @@ final class TaskStoreTests: XCTestCase {
         XCTAssertEqual(saved.completedAt, Date(timeIntervalSince1970: 2_000))
     }
 
+    /// Phase 1: one manual order per state group. Priority shows on the
+    /// ring and never sorts; renaming never moves a task.
     @MainActor
-    func testOrderingUsesPriorityThenMostRecentUpdate() throws {
+    func testOrderingIsManualNewestPlacementFirstAndIgnoresPriority() throws {
         let clock = MutableNow(Date(timeIntervalSince1970: 1_000))
         let store = try makeTestStore(now: { clock.value })
         let low = try XCTUnwrap(store.create(title: "Low", priority: .low))
         clock.value = Date(timeIntervalSince1970: 1_100)
         let highOlder = try XCTUnwrap(store.create(title: "High older", priority: .high))
         clock.value = Date(timeIntervalSince1970: 1_200)
-        let highNewer = try XCTUnwrap(store.create(title: "High newer", priority: .high))
+        let none = try XCTUnwrap(store.create(title: "None"))
 
-        XCTAssertEqual(store.orderedTasks(for: .todo).map(\.id), [highNewer.id, highOlder.id, low.id])
+        XCTAssertEqual(store.orderedTasks(for: .todo).map(\.id), [none.id, highOlder.id, low.id])
 
         clock.value = Date(timeIntervalSince1970: 1_300)
         store.rename(highOlder, to: "High most recent")
-        XCTAssertEqual(store.orderedTasks(for: .todo).map(\.id), [highOlder.id, highNewer.id, low.id])
-    }
-
-    @MainActor
-    func testNonePrioritySortsAfterLow() throws {
-        let store = try makeTestStore()
-        let none = try XCTUnwrap(store.create(title: "None", priority: .none))
-        let low = try XCTUnwrap(store.create(title: "Low", priority: .low))
-
-        XCTAssertEqual(store.orderedTasks(for: .todo).map(\.id), [low.id, none.id])
+        XCTAssertEqual(store.orderedTasks(for: .todo).map(\.id), [none.id, highOlder.id, low.id])
     }
 
     @MainActor
@@ -1081,7 +1083,8 @@ final class TaskStoreTests: XCTestCase {
         store.setStatus(.inProgress, for: anotherMedium)
 
         XCTAssertFalse(store.reorder(taskID: medium.id, relativeTo: medium.id))
-        XCTAssertFalse(store.reorder(taskID: medium.id, relativeTo: high.id))
+        // Phase 1: priorities share one order, so this is a real move.
+        XCTAssertTrue(store.reorder(taskID: medium.id, relativeTo: high.id))
         XCTAssertFalse(store.reorder(taskID: medium.id, relativeTo: anotherMedium.id))
         XCTAssertFalse(store.reorder(taskID: UUID(), relativeTo: medium.id))
     }

@@ -1062,6 +1062,54 @@ final class SubtaskPanelControllerTests: XCTestCase {
 
     /// An import reveal is the one path that lands on Attachments, and it
     /// still opens the workspace on Subtasks first and switches deliberately.
+    /// Round 2 #5: "Open page" from the Tasks page opens the old panel on
+    /// the task's files and never offers its Subtasks editor.
+    func testTheTasksPageOpensTheFilesPanelWithoutASubtasksRoute() throws {
+        let harness = try makeHarness()
+        let parent = try XCTUnwrap(harness.store.create(title: "Parent"))
+        installAnchor(harness, for: parent.id)
+        let controller = harness.controller
+        controller.openFilesPanel(for: parent.id)
+        XCTAssertEqual(controller.transientFamilyID, parent.id)
+        XCTAssertEqual(controller.panelView(for: parent.id), .attachments)
+        XCTAssertTrue(controller.panelViews.isFilesOnly(parent.id))
+        controller.showPanelView(.subtasks, for: parent.id)
+        XCTAssertEqual(controller.panelView(for: parent.id), .attachments, "no way back to Subtasks")
+        controller.openFamilyPanel(for: parent.id, focusEntry: true)
+        XCTAssertEqual(controller.panelView(for: parent.id), .attachments, "nor through the entry request")
+        XCTAssertFalse(harness.uiState.subtaskEntryActiveIDs.contains(parent.id), "and no subtask field takes the keyboard")
+    }
+
+    func testExplicitFilesPanelSurvivesIdleOutsidePointerUntilClosedOrPinned() throws {
+        let harness = try makeHarness()
+        let parent = try XCTUnwrap(harness.store.create(title: "Parent"))
+        let controller = harness.controller
+        func idleHideIsBlocked() -> Bool {
+            MainPanelAutoHidePolicy.isInteractionLocked(
+                reasons: harness.uiState.interactionLockReasons,
+                pointerInside: false, secondsSinceKeyboardInput: 20
+            )
+        }
+        // The native submenu can leave the pointer outside both windows.
+        // Files have no text entry or draft to protect their presentation.
+        controller.openFilesPanel(for: parent.id)
+        XCTAssertTrue(idleHideIsBlocked(), "Open Files must survive menu close and idle pointer sampling")
+        controller.dismissTransient()
+        XCTAssertFalse(idleHideIsBlocked(), "an outside click or explicit close releases the hold")
+        let other = try XCTUnwrap(harness.store.create(title: "Other"))
+        controller.openFilesPanel(for: parent.id)
+        controller.openFamilyPanel(for: other.id, focusEntry: false)
+        XCTAssertFalse(idleHideIsBlocked(), "a normal family panel does not inherit the files hold")
+        controller.openFilesPanel(for: parent.id)
+        controller.pinFamily(parent.id)
+        XCTAssertFalse(idleHideIsBlocked(), "the pinned files window is independent")
+        controller.unpinPinned(parent.id)
+        XCTAssertTrue(controller.panelViews.isFilesOnly(parent.id), "unpin keeps the files-only route")
+        XCTAssertTrue(idleHideIsBlocked(), "unpin restores the transient files hold")
+        controller.tearDown()
+        XCTAssertFalse(idleHideIsBlocked(), "teardown never leaves a hold behind")
+    }
+
     func testImportRevealOpensOnSubtasksThenSwitchesToAttachments() throws {
         let harness = try makeHarness()
         let parent = try XCTUnwrap(harness.store.create(title: "Parent"))

@@ -466,9 +466,14 @@ final class NoteStore: ObservableObject {
     /// keeps it. Returns the purged ids. `alongside` stages dependent
     /// removals (their links) in the same context, so they are saved with
     /// the notes or not at all; if it throws, nothing is purged.
+    ///
+    /// `confirmed` (emptying Recently Deleted by hand) limits the purge to
+    /// the notes the person was shown, each with the deletion time it had
+    /// then; a note deleted since, or deleted again, stays.
     @discardableResult
     func purgeDeleted(
         before cutoff: Date,
+        confirmed: [UUID: Date]? = nil,
         alongside: ((ModelContext, Set<UUID>) throws -> Void)? = nil
     ) -> Set<UUID> {
         var purgedIDs = Set<UUID>()
@@ -483,6 +488,7 @@ final class NoteStore: ObservableObject {
             for id in expiredIDs {
                 let replicas = try storedNotesIncludingDeleted(matching: id)
                 guard let first = replicas.first, first.deletedAt.map({ $0 < cutoff }) == true else { continue }
+                if let confirmed, confirmed[id] != first.deletedAt { continue }
                 let snapshot = NoteReplicaSnapshot(first)
                 guard replicas.allSatisfy({ NoteReplicaSnapshot($0) == snapshot }) else { continue }
                 // The delete must have recorded its attachment family; a note
@@ -909,8 +915,10 @@ final class NoteStore: ObservableObject {
     /// replica of the attachment is identical (bytes included) and its note
     /// is not itself in Recently Deleted.
     /// Returns how many attachments were purged.
+    /// `confirmed` limits it to the removals the person was shown
+    /// (attachment id and removal time).
     @discardableResult
-    func purgeRemovedAttachments(before cutoff: Date) -> Int {
+    func purgeRemovedAttachments(before cutoff: Date, confirmed: [UUID: Date]? = nil) -> Int {
         var references: [AttachmentFileReference] = []
         do {
             let removed = try context.fetch(FetchDescriptor<NoteAttachment>(
@@ -923,6 +931,7 @@ final class NoteStore: ObservableObject {
                 // bytes, not just the same stored digest) and removed before
                 // the cutoff.
                 guard let first = replicas.first, (first.deletedAt ?? .distantFuture) < cutoff else { continue }
+                if let confirmed, confirmed[id] != first.deletedAt { continue }
                 let snapshot = NoteAttachmentReplicaSnapshot(first)
                 guard replicas.dropFirst().allSatisfy({ NoteAttachmentReplicaSnapshot($0) == snapshot }) else {
                     continue

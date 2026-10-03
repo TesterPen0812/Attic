@@ -20,14 +20,14 @@ struct TaskActionsMenu: View {
         Button("Copy", systemImage: "doc.on.doc", action: copyTitle)
 
         Menu("Priority") {
-            ForEach(TaskPriority.allCases.reversed()) { priority in
+            ForEach(TaskPriority.choices) { priority in
                 Button {
                     store.setPriority(priority, for: task)
                 } label: {
                     if task.priority == priority {
-                        Label(priority.title, systemImage: "checkmark")
+                        Label(priority.menuTitle, systemImage: "checkmark")
                     } else {
-                        Text(priority.title)
+                        Text(priority.menuTitle)
                     }
                 }
             }

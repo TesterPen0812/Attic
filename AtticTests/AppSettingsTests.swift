@@ -434,14 +434,11 @@ final class AppSettingsTests: XCTestCase {
 
         let light = AtticPanelSurfaceElevation.light
         let dark = AtticPanelSurfaceElevation.dark
-        // Broad, soft, low opacity, nearly no offset, no dark halo.
-        XCTAssertLessThanOrEqual(light.opacity, 0.12)
+        // Visual A: black 10 % / 24 %, y 4, radius 12, and a contact shadow
+        // of 3 % / 8 % at y 0.5, radius 1. Broad, soft, low opacity.
+        XCTAssertEqual(light, AtticPanelSurfaceElevation(opacity: 0.10, radius: 12, offsetY: 4, contactOpacity: 0.03, contactRadius: 1, contactOffsetY: 0.5))
+        XCTAssertEqual(dark, AtticPanelSurfaceElevation(opacity: 0.24, radius: 12, offsetY: 4, contactOpacity: 0.08, contactRadius: 1, contactOffsetY: 0.5))
         XCTAssertLessThan(light.opacity, dark.opacity)
-        XCTAssertLessThanOrEqual(dark.opacity, 0.35)
-        XCTAssertGreaterThanOrEqual(light.radius, 8)
-        XCTAssertEqual(light.radius, dark.radius)
-        XCTAssertLessThanOrEqual(abs(light.offsetY), 2)
-        XCTAssertLessThanOrEqual(abs(dark.offsetY), 2)
         // The native window must leave room for the shadow to fade out.
         XCTAssertGreaterThanOrEqual(AtticStyle.panelElevationMargin, light.extent)
         XCTAssertGreaterThanOrEqual(AtticStyle.panelElevationMargin, dark.extent)

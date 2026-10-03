@@ -9,103 +9,66 @@ struct AgentAccessSettingsView: View {
     @State private var didCopyEndpoint = false
 
     var body: some View {
-        SettingsPage(
-            title: "Agent Access",
-            subtitle: "Let trusted AI tools on this Mac work with your tasks through MCP.",
-            accessibilityIdentifier: "settings-page-agentAccess"
-        ) {
-            Section {
-                SettingsRow(
-                    title: "Allow agent access",
-                    description: "Local agents can read, create and update items. Their deletes go to Recently Deleted, never permanently.",
-                    systemImage: "sparkles",
-                    tint: .orange
-                ) {
-                    Toggle("Allow local AI agent access", isOn: $settings.isAgentAccessEnabled)
-                        .labelsHidden()
-                        .toggleStyle(.switch)
-                        .help("Enable Attic's loopback-only MCP server")
-                        .accessibilityLabel("Allow local AI agent access")
-                        .accessibilityIdentifier("setting-agent-access")
-                }
+        SettingsPage(section: .agentAccess) {
+            SettingsGroup(
+                title: String(localized: "Access"),
+                footnote: String(localized: "Local agents can read, create and update tasks and notes. Their deletes go to Recently Deleted, never permanently.")
+            ) {
+                AtticSwitchRow(
+                    title: String(localized: "Allow agent access"),
+                    isOn: $settings.isAgentAccessEnabled,
+                    identifier: "setting-agent-access"
+                )
+                .help(String(localized: "Turn on Attic's MCP server, reachable only from this Mac"))
 
                 if !SettingsVisibility.showsAgentConnection(isEnabled: settings.isAgentAccessEnabled) {
-                    SettingsMessage(text: "Agent Access is off. Nothing is listening.", tone: .information)
+                    AtticGroupDivider()
+                    AtticGroupMessage(text: String(localized: "Agent Access is off. Nothing is listening."))
                         .accessibilityIdentifier("settings-agent-disabled-message")
                 }
-            } header: {
-                Text("Access")
             }
 
-            if SettingsVisibility.showsAgentConnection(
-                isEnabled: settings.isAgentAccessEnabled
-            ) {
-                Section {
-                    agentServerStatus
-                        .accessibilityElement(children: .contain)
-                        .accessibilityIdentifier("settings-agent-server-status")
-                } header: {
-                    Text("Local server")
-                } footer: {
-                    SettingsFootnote("Attic listens only on this Mac, at the loopback address below.")
+            if SettingsVisibility.showsAgentConnection(isEnabled: settings.isAgentAccessEnabled) {
+                SettingsGroup(
+                    title: String(localized: "Local server"),
+                    footnote: String(localized: "Attic listens only on this Mac, at the address below.")
+                ) {
+                    serverStatus
                 }
+                .accessibilityIdentifier("settings-agent-server-status")
 
-                Section {
-                    LabeledContent {
-                        HStack(spacing: 10) {
-                            endpointText
-                            copyEndpointButton
-                        }
-                    } label: {
-                        SettingsRowLabel(
-                            title: "Endpoint",
-                            description: nil,
-                            systemImage: "link",
-                            tint: .blue
-                        )
-                    }
-                    .accessibilityElement(children: .contain)
-                    .accessibilityIdentifier("settings-agent-connection")
-
-                    LabeledContent {
-                        HStack(alignment: .center, spacing: 10) {
-                            if didCopyAgentSetupPrompt {
-                                Text("Ready to paste")
-                                    .font(.caption)
-                                    .foregroundStyle(.green)
-                                    .accessibilityIdentifier("settings-agent-setup-copied")
-                            }
-                            Button(action: copyAgentSetupPrompt) {
-                                Label(
-                                    didCopyAgentSetupPrompt ? "Copy Setup Prompt Again" : "Copy Setup Prompt",
-                                    systemImage: didCopyAgentSetupPrompt ? "checkmark" : "doc.on.clipboard"
-                                )
-                            }
-                            .disabled(!AgentAccessTokenStore.isValid(agentServer.setupToken))
-                            .accessibilityIdentifier("settings-copy-agent-setup")
-                            .help("Copy connection instructions with the private token")
-                        }
-                    } label: {
-                        Label {
-                            VStack(alignment: .leading, spacing: 2) {
-                                Text("Authorization")
-                                Text(AgentSetupPrompt.authorizationSummary)
-                                    .font(.caption)
-                                    .foregroundStyle(.secondary)
-                                    .fixedSize(horizontal: false, vertical: true)
-                                    .accessibilityIdentifier("settings-agent-authorization-summary")
-                            }
-                        } icon: {
-                            SettingsIcon(systemImage: "key.fill", tint: .gray)
-                        }
-                    }
-                } header: {
-                    Text("Connection")
-                } footer: {
-                    SettingsFootnote(
-                        "The setup prompt puts the private token on your clipboard. "
-                        + "Paste it only into a trusted local AI client."
+                SettingsGroup(
+                    title: String(localized: "Connection"),
+                    footnote: String(localized: "The setup prompt puts the private token on your clipboard. Paste it only into a trusted local AI client.")
+                ) {
+                    AtticActionRow(
+                        title: String(localized: "Endpoint"),
+                        value: endpoint,
+                        valueIsSelectable: true,
+                        valueIdentifier: "settings-agent-endpoint",
+                        actionTitle: didCopyEndpoint ? String(localized: "Copied") : String(localized: "Copy"),
+                        actionIdentifier: "settings-copy-agent-endpoint",
+                        actionHelp: String(localized: "Copy the local MCP endpoint"),
+                        action: copyEndpoint
                     )
+                    .accessibilityIdentifier("settings-agent-connection")
+                    AtticGroupDivider()
+                    AtticActionRow(
+                        title: String(localized: "Authorization"),
+                        value: AgentSetupPrompt.authorizationSummary,
+                        actionTitle: didCopyAgentSetupPrompt
+                            ? String(localized: "Copy again")
+                            : String(localized: "Copy setup prompt"),
+                        actionIdentifier: "settings-copy-agent-setup",
+                        actionHelp: String(localized: "Copy connection instructions with the private token"),
+                        action: copyAgentSetupPrompt
+                    )
+                    .disabled(!AgentAccessTokenStore.isValid(agentServer.setupToken))
+                    if didCopyAgentSetupPrompt {
+                        AtticGroupDivider()
+                        AtticGroupMessage(text: String(localized: "Ready to paste into your AI client."))
+                            .accessibilityIdentifier("settings-agent-setup-copied")
+                    }
                 }
             }
         }
@@ -115,58 +78,24 @@ struct AgentAccessSettingsView: View {
         "http://127.0.0.1:\(settings.agentServerPort)/mcp"
     }
 
-    private var endpointText: some View {
-        Text(endpoint)
-            .font(.callout.monospaced())
-            .foregroundStyle(.secondary)
-            .textSelection(.enabled)
-            .fixedSize(horizontal: false, vertical: true)
-            .accessibilityIdentifier("settings-agent-endpoint")
-    }
-
-    private var copyEndpointButton: some View {
-        Button {
-            copyEndpoint()
-        } label: {
-            Label(
-                didCopyEndpoint ? "Copied" : "Copy",
-                systemImage: didCopyEndpoint ? "checkmark" : "doc.on.doc"
-            )
-        }
-        .controlSize(.small)
-        .help("Copy the local MCP endpoint")
-        .accessibilityIdentifier("settings-copy-agent-endpoint")
-    }
-
     @ViewBuilder
-    private var agentServerStatus: some View {
+    private var serverStatus: some View {
         switch agentServer.state {
         case .stopped:
-            SettingsRow(title: "Server stopped", systemImage: "circle", tint: .gray) { EmptyView() }
+            AtticStatusRow(title: String(localized: "Server stopped"), systemName: "circle")
         case .starting:
-            SettingsRow(title: "Starting the local server…", systemImage: "circle.dotted", tint: .gray) {
-                ProgressView().controlSize(.small)
-            }
+            AtticStatusRow(title: String(localized: "Starting the local server…"), systemName: "circle.dotted")
         case .running:
-            SettingsRow(
-                title: "Listening on this Mac only",
-                systemImage: "checkmark.circle.fill",
-                tint: .green
-            ) { EmptyView() }
+            AtticStatusRow(title: String(localized: "Listening on this Mac only"), systemName: "checkmark.circle")
         case let .failed(message):
-            SettingsRow(
-                title: "Could not start the server",
-                description: message,
-                systemImage: "exclamationmark.triangle.fill",
-                tint: .red,
-                selectableDescription: true
+            AtticGroupMessage(
+                text: String(localized: "Could not start the server: \(message)"),
+                tone: .error,
+                actionTitle: String(localized: "Retry")
             ) {
-                Button("Retry") {
-                    agentServer.start()
-                }
-                .accessibilityIdentifier("settings-agent-retry")
+                agentServer.start()
             }
-            .help(message)
+            .accessibilityIdentifier("settings-agent-retry")
         }
     }
 

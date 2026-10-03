@@ -169,7 +169,7 @@ final class CanvasUITests: XCTestCase {
         assertStrokeCount(1)
 
         app.typeKey("1", modifierFlags: .command)
-        app.typeKey("4", modifierFlags: .command)
+        app.typeKey("3", modifierFlags: .command)
         assertStrokeCount(1)
 
         app.typeKey(",", modifierFlags: .command)
@@ -247,77 +247,6 @@ final class CanvasUITests: XCTestCase {
         try saveVisualEvidence(named: "canvas-second-document")
     }
 
-    func testModeDockExpandsOnHoverAndCollapsesAfterPointerLeaves() {
-        let dock = app.descendants(matching: .any)
-            .matching(identifier: "panel-section-picker")
-            .firstMatch
-        let tasks = app.buttons["panel-section-tasks"]
-        let backlog = app.buttons["panel-section-backlog"]
-        let notes = app.buttons["panel-section-notes"]
-        let canvas = app.buttons["panel-section-canvas"]
-        let pin = app.buttons["panel-pin-button"]
-
-        XCTAssertTrue(dock.waitForExistence(timeout: 3))
-        XCTAssertTrue(pin.waitForExistence(timeout: 3))
-        pin.hover()
-        XCTAssertTrue(backlog.waitForNonExistence(timeout: 2))
-        XCTAssertTrue(tasks.exists)
-        XCTAssertFalse(backlog.exists)
-        XCTAssertFalse(notes.exists)
-        XCTAssertFalse(canvas.exists)
-
-        tasks.hover()
-        XCTAssertTrue(backlog.waitForExistence(timeout: 2))
-        XCTAssertTrue(notes.exists)
-        XCTAssertTrue(canvas.exists)
-
-        pin.hover()
-        XCTAssertTrue(backlog.waitForNonExistence(timeout: 2))
-        XCTAssertFalse(notes.exists)
-        XCTAssertFalse(canvas.exists)
-        XCTAssertTrue(tasks.exists)
-    }
-
-    func testModeDockExposesExactlyOneAccessibilitySelectionAcrossTransitions() {
-        let dock = app.descendants(matching: .any)
-            .matching(identifier: "panel-section-picker")
-            .firstMatch
-        let tasks = app.buttons["panel-section-tasks"]
-        let backlog = app.buttons["panel-section-backlog"]
-        let notes = app.buttons["panel-section-notes"]
-        let canvas = app.buttons["panel-section-canvas"]
-        let pin = app.buttons["panel-pin-button"]
-        let modes = [tasks, backlog, notes, canvas]
-
-        XCTAssertTrue(dock.waitForExistence(timeout: 3))
-        tasks.hover()
-        XCTAssertTrue(canvas.waitForExistence(timeout: 2))
-        assertExactlyOneSelected(in: modes, expected: tasks)
-
-        backlog.hover()
-        backlog.coordinate(
-            withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)
-        ).click()
-        assertExactlyOneSelected(in: modes, expected: backlog)
-
-        app.typeKey("3", modifierFlags: .command)
-        assertExactlyOneSelected(in: modes, expected: notes)
-
-        app.typeKey("4", modifierFlags: .command)
-        assertExactlyOneSelected(in: modes, expected: canvas)
-
-        pin.hover()
-        XCTAssertTrue(tasks.waitForNonExistence(timeout: 2))
-        XCTAssertTrue(backlog.waitForNonExistence(timeout: 2))
-        XCTAssertTrue(notes.waitForNonExistence(timeout: 2))
-        XCTAssertTrue(canvas.exists)
-        XCTAssertTrue(canvas.isSelected)
-
-        canvas.hover()
-        XCTAssertTrue(tasks.waitForExistence(timeout: 2))
-        assertExactlyOneSelected(in: modes, expected: canvas)
-    }
-
     private func launch(resetCanvasStore: Bool) {
         app = XCUIApplication()
         app.launchEnvironment["ATTIC_UI_TESTING"] = "1"
@@ -352,7 +281,7 @@ final class CanvasUITests: XCTestCase {
     }
 
     private func openCanvas() {
-        app.typeKey("4", modifierFlags: .command)
+        app.typeKey("3", modifierFlags: .command)
         XCTAssertTrue(
             canvasSurface.waitForExistence(timeout: 3)
         )
@@ -396,31 +325,6 @@ final class CanvasUITests: XCTestCase {
                               file: StaticString = #filePath, line: UInt = #line) {
         XCTAssertEqual(XCTWaiter.wait(for: [XCTNSPredicateExpectation(predicate: predicate, object: element)], timeout: 3),
                        .completed, file: file, line: line)
-    }
-
-    private func assertExactlyOneSelected(
-        in modes: [XCUIElement],
-        expected: XCUIElement,
-        file: StaticString = #filePath,
-        line: UInt = #line
-    ) {
-        let settledSelection = NSPredicate { _, _ in
-            let selected = modes.filter(\.isSelected)
-            return selected.count == 1
-                && selected.first?.identifier == expected.identifier
-        }
-        XCTAssertEqual(
-            XCTWaiter.wait(
-                for: [XCTNSPredicateExpectation(predicate: settledSelection, object: nil)],
-                timeout: 3
-            ),
-            .completed,
-            file: file,
-            line: line
-        )
-        let selected = modes.filter(\.isSelected)
-        XCTAssertEqual(selected.count, 1, file: file, line: line)
-        XCTAssertEqual(selected.first?.identifier, expected.identifier, file: file, line: line)
     }
 
     private func waitForSelection(

@@ -66,6 +66,11 @@ enum AtticGalleryLaunch {
             openLab(AnyView(AtticGalleryKeyboardLab()), title: "Attic Keyboard Lab", height: 240)
             return true
         }
+        if TasksPagePreview.isRequested {
+            // The Phase 1 Tasks page on its own (Attic/Tasks), in memory.
+            TasksPagePreview.open()
+            return true
+        }
         if ProcessInfo.processInfo.arguments.contains(menuLabArgument) {
             openLab(AnyView(AtticGalleryMenuLab()), title: "Attic Menu Lab", height: 200)
             return true
@@ -170,7 +175,7 @@ struct AtticGalleryKeyboardLab: View {
             // Controls after the rows: a standalone status circle (its own
             // Tab stop, with Attic's ring) and a raised button.
             HStack(spacing: AtticSpacing.betweenControls) {
-                AtticStatusButton(state: .todo, priority: .high, onAdvance: demo.record("Advance", "standalone circle"))
+                AtticStatusButton(state: .todo, priority: .high, onToggle: demo.record("Complete", "standalone circle"))
                     .accessibilityIdentifier("keyboard-lab-status")
                 AtticRaisedButton(systemName: "pin", label: "Pin", action: demo.record("Pin"))
                     .accessibilityIdentifier("keyboard-lab-pin")

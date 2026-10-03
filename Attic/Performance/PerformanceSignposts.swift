@@ -1,4 +1,5 @@
-import Foundation
+import AppKit
+import QuartzCore
 import os
 
 /// One Instruments stream: subsystem `com.taha.Attic`, category `Performance`.
@@ -21,6 +22,10 @@ enum PerformanceSignposts {
     private static var noteStart: UInt64?
     private static var canvasStart: UInt64?
     static var hasPendingPageSwitch: Bool { pageSwitch != nil || pageStart != nil }
+    /// The probe's optional extra phases (`--extra`) label the timings they
+    /// cause ("warm.PanelRevealToOrderedFront"), so the standard names keep
+    /// meaning exactly what Baselines A and B measured.
+    static var timingLabel: String?
 
     private static func started() -> UInt64? {
         captureRoot == nil ? nil : DispatchTime.now().uptimeNanoseconds
@@ -29,7 +34,13 @@ enum PerformanceSignposts {
     private static func record(_ name: String, from start: UInt64?) {
         guard let start, let captureRoot else { return }
         let elapsed = Double(DispatchTime.now().uptimeNanoseconds - start) / 1_000_000
-        PerformanceProbe.writeTiming(name, milliseconds: elapsed, root: captureRoot)
+        PerformanceProbe.writeTiming(timingLabel.map { "\($0).\(name)" } ?? name, milliseconds: elapsed, root: captureRoot)
+    }
+
+    /// A duration the probe measured itself (the extra phases' keystrokes).
+    static func recordProbeTiming(_ name: String, milliseconds: Double) {
+        guard let captureRoot else { return }
+        PerformanceProbe.writeTiming(timingLabel.map { "\($0).\(name)" } ?? name, milliseconds: milliseconds, root: captureRoot)
     }
 
     static func beginLaunch() {
@@ -120,6 +131,101 @@ enum PerformanceSignposts {
         canvasStart = nil
     }
 
+    // MARK: Frames (round 11)
+
+    /// Per-frame signposts (the swipe's frames, animation watches): on only
+    /// when asked for, at launch (`ATTIC_FRAME_SIGNPOSTS=1`, or the
+    /// `AtticFrameSignposts` default), so a normal run adds no display link.
+    /// The pager's settle and page choices are signposted always (their
+    /// clock runs anyway).
+    static let framesEnabled: Bool = {
+        ProcessInfo.processInfo.environment["ATTIC_FRAME_SIGNPOSTS"] == "1"
+            || UserDefaults.standard.bool(forKey: "AtticFrameSignposts")
+    }()
+    /// With the preview's frame monitor on (`ATTIC_FRAME_MONITOR=1`), the
+    /// pager's moments are printed beside its frames, so an on-screen run
+    /// can check what each synthetic input did.
+    private static let echoes = ProcessInfo.processInfo.environment["ATTIC_FRAME_MONITOR"] == "1"
+    private static func echo(_ text: @autoclosure () -> String) {
+        guard echoes else { return }
+        print(String(format: "ATTIC_EVENT %.4f ", CACurrentMediaTime()) + text())
+    }
+    /// An input the on-screen performance gate drove (`Scripts/perf_onscreen.zsh`):
+    /// printed beside the frames, so the gate can check that its synthetic
+    /// input reached the app. Nothing without the frame monitor.
+    static func noteInput(_ text: @autoclosure () -> String) {
+        echo(text())
+    }
+    private static var pageChoice: OSSignpostIntervalState?
+    private static var pageBuild: OSSignpostIntervalState?
+    private static var settle: OSSignpostIntervalState?
+
+    /// A page chosen by a tab, a key, ⌘1–3, `show` or Search: ends at the
+    /// first frame of its slide (after the page it shows is built).
+    static func beginPageChoice() {
+        echo("page-choice")
+        guard signposter.isEnabled else { return }
+        if let pageChoice { signposter.endInterval("PageChoiceToFirstFrame", pageChoice, "superseded") }
+        pageChoice = signposter.beginInterval("PageChoiceToFirstFrame")
+    }
+
+    /// A page is built for a move (a slide or a swipe): ends at the next frame.
+    static func beginPageBuild(_ pages: ClosedRange<Int>) {
+        echo("page-build \(pages.lowerBound)-\(pages.upperBound)")
+        guard signposter.isEnabled, pageBuild == nil else { return }
+        pageBuild = signposter.beginInterval("PageBuildToFrame", "pages \(pages.lowerBound)-\(pages.upperBound)")
+    }
+
+    /// A page built beside the one shown while idle (not waiting for a frame).
+    static func pageWarmed(_ pages: ClosedRange<Int>) {
+        echo("page-warm \(pages.lowerBound)-\(pages.upperBound)")
+        guard signposter.isEnabled else { return }
+        signposter.emitEvent("PageWarm", "pages \(pages.lowerBound)-\(pages.upperBound)")
+    }
+
+    /// The pages a finished move passed are let go.
+    static func pagesReleased(_ pages: ClosedRange<Int>) {
+        echo("page-release to \(pages.lowerBound)-\(pages.upperBound)")
+    }
+
+    /// A frame of a move was shown: whatever was waiting for one ends.
+    static func moveFrame() {
+        if let pageBuild { signposter.endInterval("PageBuildToFrame", pageBuild) }
+        pageBuild = nil
+    }
+
+    static func pagerSettleBegan() {
+        guard signposter.isEnabled else { return }
+        if let settle { signposter.endInterval("PagerSettle", settle, "superseded") }
+        settle = signposter.beginInterval("PagerSettle")
+    }
+
+    /// The settle's first frame: the chosen page starts to show.
+    static func pagerFirstFrame() {
+        echo("settle-first-frame")
+        moveFrame()
+        if let pageChoice { signposter.endInterval("PageChoiceToFirstFrame", pageChoice) }
+        pageChoice = nil
+    }
+
+    /// The settle ended: how many frames it drew and how many it missed.
+    static func pagerSettleEnded(frames: Int, late: Int, interrupted: Bool) {
+        if !interrupted { echo("settle-end frames=\(frames) late=\(late)") }
+        guard let settle else { return }
+        signposter.endInterval("PagerSettle", settle, "frames=\(frames) late=\(late) interrupted=\(interrupted)")
+        self.settle = nil
+    }
+
+    /// Counts the frames drawn (and missed) while something moves: a swipe,
+    /// or `seconds` after an animation starts. Only with `framesEnabled`.
+    @discardableResult
+    static func watchFrames(_ name: StaticString, seconds: Double? = nil) -> AtticFrameWatch? {
+        guard framesEnabled, signposter.isEnabled else { return nil }
+        let watch = AtticFrameWatch(name: name, signposter: signposter)
+        watch.start(seconds: seconds)
+        return watch
+    }
+
     static func storeOpen<T>(_ operation: () throws -> T) rethrows -> T {
         let state = signposter.isEnabled ? signposter.beginInterval("StoreOpen") : nil
         let start = started()
@@ -138,5 +244,58 @@ enum PerformanceSignposts {
             record("StoreSave", from: start)
         }
         return try operation()
+    }
+}
+
+/// A frame count over a motion (round 11): a display link on the main
+/// screen counts each frame and the refreshes it missed, and the interval
+/// ends with both ("frames=… late=…"). Instruments reads it with the
+/// Points of Interest / os_signpost instrument; no hitch template needed.
+@MainActor
+final class AtticFrameWatch: NSObject {
+    private let name: StaticString
+    private let signposter: OSSignposter
+    private var state: OSSignpostIntervalState?
+    private var link: CADisplayLink?
+    private var last: CFTimeInterval?
+    private var until: CFTimeInterval?
+    private var frames = 0
+    private var late = 0
+    private var worst: CFTimeInterval = 0
+
+    init(name: StaticString, signposter: OSSignposter) {
+        self.name = name
+        self.signposter = signposter
+    }
+
+    func start(seconds: Double?) {
+        guard let screen = NSScreen.main else { return }
+        state = signposter.beginInterval(name)
+        until = seconds.map { CACurrentMediaTime() + $0 }
+        let link = screen.displayLink(target: self, selector: #selector(frame(_:)))
+        link.add(to: .main, forMode: .common)
+        self.link = link
+    }
+
+    @objc private func frame(_ link: CADisplayLink) {
+        PerformanceSignposts.moveFrame()
+        let interval = link.targetTimestamp - link.timestamp
+        if let last, interval > 0 {
+            let gap = link.timestamp - last
+            worst = max(worst, gap)
+            late += max(0, Int((gap / interval).rounded()) - 1)
+        }
+        last = link.timestamp
+        frames += 1
+        if let until, link.timestamp >= until { stop() }
+    }
+
+    func stop() {
+        link?.invalidate()
+        link = nil
+        guard let state else { return }
+        let frames = frames, late = late, worst = Int(worst * 1_000)
+        signposter.endInterval(name, state, "frames=\(frames) late=\(late) worstGapMs=\(worst)")
+        self.state = nil
     }
 }

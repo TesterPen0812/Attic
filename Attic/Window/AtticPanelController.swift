@@ -154,6 +154,8 @@ enum PanelHideRequestResult: Equatable {
 final class AtticPanelController: NSObject, NSWindowDelegate {
     private let panel: AtticPanel
     var isVisibleForPerformanceProbe: Bool { panel.isVisible }
+    /// Tests: the panel's window, to send it a swipe as the system does.
+    var panelForTesting: AtticPanel { panel }
     private(set) var performanceVisibilityChanges = 0
     private let hostingView: AtticPanelHostingView
     private let store: TaskStore
@@ -164,11 +166,16 @@ final class AtticPanelController: NSObject, NSWindowDelegate {
     private let settings: AppSettings
     private let uiState: PanelUIState
     let subtaskPanels: SubtaskPanelController
+    /// The panel's Undo toast; dismissed whenever the panel hides.
+    let toasts: PanelToastCenter
     private var cancellables: Set<AnyCancellable> = []
     private var isShowing = false
     private var isPanelMotionActive = false
     private var isInteractiveDismissal = false
     private var interactiveSwipeStartProgress: CGFloat = 0
+    /// The next hide was asked for by a swipe: under Reduced motion it
+    /// fades out rather than vanishing at once (owner, 2026-10-01).
+    private var hideFadesWhenReduced = false
     private var needsResizeAfterShowing = false
     private var isLiveResizing = false
     private var resizePersistenceState = PanelResizePersistenceState()
@@ -183,6 +190,9 @@ final class AtticPanelController: NSObject, NSWindowDelegate {
     private var lastUsableFrame: CGRect?
     private(set) var currentCorner: ScreenCorner = .topRight
     var onInteractiveHideCompleted: (() -> Void)?
+    /// Where the pointer is, for the click-through hit test. Tests place it.
+    var pointerLocation: () -> CGPoint = { NSEvent.mouseLocation }
+    private var isResamplingPassthrough = false
 
     private var contentContainer: AtticPanelContentContainer? {
         panel.contentView as? AtticPanelContentContainer
@@ -194,7 +204,8 @@ final class AtticPanelController: NSObject, NSWindowDelegate {
         canvasSession: CanvasSession,
         noteDraft: NoteDraftController,
         settings: AppSettings,
-        uiState: PanelUIState
+        uiState: PanelUIState,
+        tasksMemory: TasksPageMemory? = nil
     ) {
         self.store = store
         self.noteStore = noteStore
@@ -209,6 +220,8 @@ final class AtticPanelController: NSObject, NSWindowDelegate {
         uiState.updatePanelSize(initialSize)
         let chromeInteractionState = PanelChromeInteractionState()
         self.chromeInteractionState = chromeInteractionState
+        let toasts = PanelToastCenter()
+        self.toasts = toasts
         panel = AtticPanel(
             contentRect: CGRect(origin: .zero, size: initialSize),
             styleMask: [.borderless, .nonactivatingPanel],
@@ -229,7 +242,10 @@ final class AtticPanelController: NSObject, NSWindowDelegate {
                 chromeInteractionState: chromeInteractionState,
                 uiState: uiState,
                 settings: settings,
-                subtaskPanels: subtaskPanels
+                subtaskPanels: subtaskPanels,
+                toasts: toasts,
+                // The Tasks page remembers its page and views (L7).
+                tasksPageState: TasksPageState(memory: tasksMemory)
             ),
             panelCornerRadius: settings.panelCornerSize,
             dockedCorner: settings.corner,
@@ -359,7 +375,15 @@ final class AtticPanelController: NSObject, NSWindowDelegate {
         }
     }
 
-    func show(on screen: NSScreen, corner: ScreenCorner, makeKey: Bool = false) {
+    /// Orders the panel front at `corner`. Returns false (and shows
+    /// nothing) when the screen has no usable area for it.
+    @discardableResult
+    func show(on screen: NSScreen, corner: ScreenCorner, makeKey: Bool = false) -> Bool {
+        cancelPageRelease()
+        // Build the pages now, before the first frame is shown, so the panel
+        // never slides in empty; the reveal signpost includes it.
+        buildPagesIfNeeded()
+        defer { buildKeptPagesAfterReveal() }
         // A reveal always supersedes an in-flight hide, even when its frame
         // already matches. This prevents that hide's completion from ordering
         // out a panel the user has just asked to see again.
@@ -370,7 +394,7 @@ final class AtticPanelController: NSObject, NSWindowDelegate {
         guard let workArea = refreshCurrentWorkArea(preferredScreen: screen) else {
             PerformanceSignposts.cancelReveal()
             PerformanceSignposts.cancelPageSwitch()
-            return
+            return false
         }
         let visibleFrame = workArea.visibleFrame
         let priorFrame = panel.visibleContentFrame
@@ -394,9 +418,10 @@ final class AtticPanelController: NSObject, NSWindowDelegate {
             }
             if makeKey { panel.makeKey() }
             panel.orderFrontRegardless()
+            resamplePointerPassthrough()
             animateShow(to: safeFrame)
             PerformanceSignposts.panelOrderedFront()
-            return
+            return true
         }
 
         let finalFrame = frame(in: visibleFrame, corner: corner)
@@ -416,9 +441,10 @@ final class AtticPanelController: NSObject, NSWindowDelegate {
                 panel.orderFrontRegardless()
             }
 
+            resamplePointerPassthrough()
             animateShow(to: finalFrame)
             PerformanceSignposts.panelOrderedFront()
-            return
+            return true
         }
 
         panel.setVisibleContentFrame(finalFrame, display: true)
@@ -433,14 +459,22 @@ final class AtticPanelController: NSObject, NSWindowDelegate {
             panel.orderFrontRegardless()
         }
 
+        // The pointer monitor started before the panel was on screen, so
+        // its first hit test could not see the corner wedges or the shadow
+        // margin; a pointer resting there sends no event to correct it.
+        resamplePointerPassthrough()
         animateShow(to: finalFrame)
         PerformanceSignposts.panelOrderedFront()
+        // A reveal: the panel was hidden and is now on screen.
+        uiState.panelDidReveal()
+        return true
     }
 
-    private func animateShow(to finalFrame: CGRect) {
+    private func animateShow(to finalFrame: CGRect, spring: AtticMotionSpring? = nil) {
         let generation = visibilityTransition.beginTransition()
         isShowing = true
-        animatePanel(to: finalFrame, collapseProgress: 0, duration: 0.24) { [weak self] in
+        animatePanel(to: finalFrame, collapseProgress: 0, duration: 0.24, spring: spring,
+                     reducedFade: spring != nil) { [weak self] in
             MainActor.assumeIsolated {
                 guard let self else { return }
                 guard self.visibilityTransition.completeTransition(generation) else { return }
@@ -449,6 +483,7 @@ final class AtticPanelController: NSObject, NSWindowDelegate {
                     self.needsResizeAfterShowing = false
                     self.resizeAndReanchor()
                 }
+                self.resamplePointerPassthrough()
             }
         }
     }
@@ -493,14 +528,20 @@ final class AtticPanelController: NSObject, NSWindowDelegate {
         let targetFrame = PanelGeometry.panelFrame(
             in: screen.visibleFrame, size: safeFrame.size, corner: currentCorner
         )
-        animatePanel(to: targetFrame, collapseProgress: 1, duration: 0.22) { [weak self] in
+        let reducedFade = hideFadesWhenReduced
+        hideFadesWhenReduced = false
+        animatePanel(to: targetFrame, collapseProgress: 1, duration: 0.22, reducedFade: reducedFade) { [weak self] in
             MainActor.assumeIsolated {
                 guard let self, self.visibilityTransition.ownsCompletion(generation) else { return }
                 self.panel.orderOut(nil)
+                self.contentContainer?.resetReducedFade()
                 self.performanceVisibilityChanges += 1
+                self.uiState.panelDidHide()
                 self.panel.alphaValue = 1
                 self.stopPointerPassthroughMonitoring()
                 self.subtaskPanels.mainPanelDidHide()
+                self.toasts.dismiss()
+                self.schedulePageRelease()
                 self.visibilityTransition.completeHideTransition(generation)
             }
         }
@@ -533,7 +574,13 @@ final class AtticPanelController: NSObject, NSWindowDelegate {
         }
         panel.onTrackpadDismissRequest = { [weak self] in
             guard let self else { return }
+            // A pinned panel closes too (owner, 2026-10-02) and stays pinned:
+            // the hide completes through the hover monitor's
+            // `forceHidden(untilHotspotExit:)`, so it neither re-shows at
+            // once nor loses its pin.
+            self.hideFadesWhenReduced = true
             if !self.requestInteractiveHide().isAccepted {
+                self.hideFadesWhenReduced = false
                 self.cancelInteractiveDismissal()
             }
         }
@@ -542,6 +589,22 @@ final class AtticPanelController: NSObject, NSWindowDelegate {
         }
         panel.onTrackpadDismissCancelled = { [weak self] in
             self?.cancelInteractiveDismissal()
+        }
+        // Esc with nothing left to close hides the panel, as a swipe does;
+        // the corner then needs the pointer to leave before it reveals again.
+        panel.onUnhandledEscape = { [weak self] in
+            guard let self, self.panel.isVisible else { return }
+            self.requestInteractiveHide()
+        }
+        // ⌘Z with the keyboard nowhere in a page (after clicking the pin,
+        // say): the Tasks history, the one the Undo toast names.
+        panel.onUnhandledUndo = { [weak self] redo in
+            guard let self, self.uiState.selectedSection.isTaskBased, let library = self.store.commandLibrary else { return }
+            _ = redo ? library.redo(in: .tasks) : library.undo(in: .tasks)
+        }
+        panel.canPerformUnhandledUndo = { [weak self] redo in
+            guard let self, self.uiState.selectedSection.isTaskBased, let library = self.store.commandLibrary else { return false }
+            return redo ? library.undo.canRedo(in: .tasks) : library.undo.canUndo(in: .tasks)
         }
         panel.onDirectContentInteraction = { [weak self] in
             guard let self, self.isShowing || self.isInteractiveDismissal else { return }
@@ -555,8 +618,10 @@ final class AtticPanelController: NSObject, NSWindowDelegate {
                 .windowMove, .windowResize, .menuTracking, .blockingSave, .canvasConfirmation,
                 .notesImport, .taskEditing
             ]
+            // Over the header and the controls too (owner, 2026-10-01):
+            // a swipe has no other job there. Controls that scroll sideways
+            // keep theirs (`contentOwnsHorizontalScrolling`).
             return self.uiState.interactionLockReasons.isDisjoint(with: blockers)
-                && !self.hostingView.isChromeControlPoint(event.locationInWindow)
         }
         hostingView.onLiveResizeBegan = { [weak self] in
             self?.beginLiveResize()
@@ -593,7 +658,17 @@ final class AtticPanelController: NSObject, NSWindowDelegate {
         uiState.$selectedSection
             .removeDuplicates()
             .dropFirst()
-            .sink { [weak self] _ in self?.panel.cancelTrackpadSwipe() }
+            .sink { [weak self] _ in
+                guard let self else { return }
+                panel.cancelTrackpadSwipe()
+                // A page kept built behind the new one must not keep the
+                // keyboard (a field in it would take what is typed on the
+                // page now showing). The new page asks for focus itself.
+                if let responder = panel.firstResponder as? NSView, responder !== hostingView,
+                   responder.isDescendant(of: hostingView) {
+                    panel.makeFirstResponder(nil)
+                }
+            }
             .store(in: &cancellables)
 
         settings.$corner
@@ -747,10 +822,12 @@ final class AtticPanelController: NSObject, NSWindowDelegate {
         guard let resizedPanel = notification.object as? NSWindow else { return }
         uiState.updatePanelSize(((resizedPanel as? AtticPanel)?.visibleContentFrame ?? resizedPanel.frame).size)
         subtaskPanels.mainPanelFrameDidChange()
+        if !isPanelMotionActive { resamplePointerPassthrough() }
     }
 
     func windowDidMove(_ notification: Notification) {
         subtaskPanels.mainPanelFrameDidChange()
+        if !isPanelMotionActive { resamplePointerPassthrough() }
     }
 
     func windowDidEndLiveResize(_ notification: Notification) {
@@ -893,6 +970,7 @@ final class AtticPanelController: NSObject, NSWindowDelegate {
         )
     }
 
+    @discardableResult
     private func requestInteractiveHide() -> PanelHideRequestResult {
         requestHide { [weak self] completion in
             guard completion == .hidden else { return }
@@ -911,14 +989,15 @@ final class AtticPanelController: NSObject, NSWindowDelegate {
             ))
             uiState.setInteractionLock(.panelSwipe, isActive: true)
         }
-        let progress = PanelCollapseGeometry.progress(
+        // A pull: it follows the fingers with resistance.
+        let progress = PanelCollapseGeometry.resistedProgress(
             forSwipeDistance: distance, panelWidth: panel.visibleContentFrame.width
         )
         contentContainer?.allowsContentInteraction = false
         contentContainer?.setCollapseProgress(
             interactiveSwipeStartProgress + (1 - interactiveSwipeStartProgress) * progress,
             corner: currentCorner,
-            reduceMotion: NSWorkspace.shared.accessibilityDisplayShouldReduceMotion
+            reduceMotion: AtticMotionPreference.reducesMotion
         )
     }
 
@@ -933,7 +1012,9 @@ final class AtticPanelController: NSObject, NSWindowDelegate {
         clearInteractiveDismissal()
         stopPanelMotion()
         guard panel.isVisible else { restoreFullPresentation(); return }
-        animateShow(to: panel.visibleContentFrame)
+        // Below the threshold it springs back with the feel's navigation
+        // spring (Lively by default); under Reduced it fades back.
+        animateShow(to: panel.visibleContentFrame, spring: AtticMotionTuning.current.slide)
     }
 
     private func restoreFullPresentation() {
@@ -992,16 +1073,21 @@ final class AtticPanelController: NSObject, NSWindowDelegate {
         to frame: CGRect,
         collapseProgress: CGFloat,
         duration: TimeInterval,
+        spring: AtticMotionSpring? = nil,
+        reducedFade: Bool = false,
         completion: @escaping () -> Void
     ) {
         let generation = visibilityTransition.generation
         isPanelMotionActive = true
         contentContainer?.allowsContentInteraction = false
-        let reduceMotion = NSWorkspace.shared.accessibilityDisplayShouldReduceMotion
+        let reduceMotion = AtticMotionPreference.reducesMotion
         let currentScale = contentContainer?.presentationTransform.m11 ?? 1
         let targetScale = 1 - collapseProgress * (1 - PanelCollapseGeometry.collapsedScale)
         let remaining = min(1, abs(currentScale - targetScale) / (1 - PanelCollapseGeometry.collapsedScale))
-        let duration = reduceMotion ? 0 : remaining > 0.001 ? max(0.08, duration * sqrt(remaining)) : duration
+        // A swipe's close or spring-back under Reduced motion fades.
+        let fades = reduceMotion && reducedFade
+        let duration = fades ? PanelCollapseGeometry.reducedFadeDuration
+            : reduceMotion ? 0 : remaining > 0.001 ? max(0.08, duration * sqrt(remaining)) : duration
         let finishes = PanelMotionCompletionBarrier { [weak self] in
             MainActor.assumeIsolated {
                 guard let self, self.visibilityTransition.ownsCompletion(generation) else { return }
@@ -1012,7 +1098,7 @@ final class AtticPanelController: NSObject, NSWindowDelegate {
         }
         contentContainer?.setCollapseProgress(
             collapseProgress, corner: currentCorner, reduceMotion: reduceMotion,
-            duration: duration, completion: {
+            duration: duration, spring: spring, fades: fades, completion: {
                 MainActor.assumeIsolated { finishes.finishPresentation() }
             }
         )
@@ -1138,9 +1224,280 @@ final class AtticPanelController: NSObject, NSWindowDelegate {
         recoverPanelInsideUsableArea(preferredScreen: destinationScreen)
     }
 
+    func windowDidBecomeKey(_ notification: Notification) {
+        uiState.setPanelKey(true)
+    }
+
     func windowDidResignKey(_ notification: Notification) {
+        uiState.setPanelKey(false)
         hostingView.cancelActiveInteraction(reason: .windowDeactivated)
     }
+
+    // MARK: Built on approach, released when hidden
+
+    private func buildPagesIfNeeded() {
+        guard !uiState.isPageContentLoaded else { return }
+        uiState.loadPageContent()
+        hostingView.layoutSubtreeIfNeeded()
+    }
+
+    /// After launch, once the main thread is idle: build the Tasks page
+    /// while hidden, so the first explicit open (quick capture, Show Attic)
+    /// shows a built list instead of building it before its first frame.
+    /// Tasks is never released while hidden, so this happens once. A
+    /// one-shot, not a timer.
+    func buildTasksPageWhenIdle(after delay: TimeInterval = 1) {
+        DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [weak self] in
+            MainActor.assumeIsolated {
+                guard let self, !self.panel.isVisible, !self.uiState.isPageContentLoaded,
+                      !Self.releasesWhenHidden(self.uiState.selectedSection) else { return }
+                self.buildPagesIfNeeded()
+            }
+        }
+    }
+
+    /// Once the panel has been shown for a moment: build the pages the
+    /// switch leads to (Canvas, and Tasks from another page) behind the
+    /// current one, one per main-thread turn, so a first ⌘1–⌘3 or click
+    /// only shows them. A hidden Canvas decodes no images until it shows
+    /// (`atticPanelPageIsCurrent`), and the hidden release frees them.
+    /// A one-shot per reveal, not a timer.
+    static var keptPagesBuildDelay: TimeInterval = 0.6
+
+    private func buildKeptPagesAfterReveal() {
+        DispatchQueue.main.asyncAfter(deadline: .now() + Self.keptPagesBuildDelay) { [weak self] in
+            MainActor.assumeIsolated {
+                guard let self, self.panel.isVisible, self.uiState.isPageContentLoaded else { return }
+                let current = PanelPage(self.uiState.selectedSection)
+                let pending = PanelPage.allCases.filter {
+                    $0 != current && PanelUIState.keepsBuilt($0) && !self.uiState.builtPages.contains($0)
+                }
+                for (index, page) in pending.enumerated() {
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.05 * Double(index)) { [weak self] in
+                        MainActor.assumeIsolated {
+                            guard let self, self.panel.isVisible else { return }
+                            self.uiState.prepareBuiltPage(page)
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    /// The pointer is approaching the corner of a hidden panel: build the
+    /// pages during the reveal delay instead of after it. If no reveal
+    /// follows, the usual hidden release frees a heavy page again.
+    func preparePagesForReveal() {
+        guard !panel.isVisible, !uiState.isPageContentLoaded else { return }
+        buildPagesIfNeeded()
+        schedulePageRelease()
+    }
+
+    /// How long the panel stays hidden before its pages are released (spec:
+    /// about 5 minutes; a tunable, adjusted after real use).
+    static var pageReleaseDelay: TimeInterval = 300
+    private var pageReleaseWork: DispatchWorkItem?
+
+    /// One one-shot deadline per hide; a reveal cancels it. Nothing else runs
+    /// while hidden.
+    private func schedulePageRelease() {
+        cancelPageRelease()
+        let work = DispatchWorkItem { [weak self] in
+            MainActor.assumeIsolated {
+                guard let self else { return }
+                self.pageReleaseWork = nil
+                self.releasePagesIfSafe()
+            }
+        }
+        pageReleaseWork = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + Self.pageReleaseDelay, execute: work)
+    }
+
+    private func cancelPageRelease() {
+        pageReleaseWork?.cancel()
+        pageReleaseWork = nil
+        pageReleaseRetry = nil
+    }
+
+    /// A release the deadline had to skip (an import, a lock, an unsaved
+    /// draft) waits for that work to finish: every input to the decision
+    /// publishes its change, so the retry is event-driven, never polled,
+    /// and exists only between a skipped release and the next reveal.
+    private var pageReleaseRetry: AnyCancellable?
+
+    private func retryPageReleaseWhenWorkFinishes() {
+        guard pageReleaseRetry == nil else { return }
+        // Locks, the note draft and the canvas session announce every change
+        // before it lands; the retry runs on the next turn, after it.
+        pageReleaseRetry = Publishers.Merge3(
+            uiState.objectWillChange.map { _ in () },
+            noteDraft.objectWillChange.map { _ in () },
+            canvasSession.objectWillChange.map { _ in () }
+        )
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] _ in
+                MainActor.assumeIsolated {
+                    guard let self, self.pageReleaseRetry != nil else { return }
+                    self.releasePagesIfSafe()
+                }
+            }
+    }
+
+    var hasPendingPageReleaseRetryForTesting: Bool { pageReleaseRetry != nil }
+
+    /// Whether the page showing is one the hidden release frees. The spec
+    /// releases heavy views (an open canvas, large images: the Canvas and
+    /// Notes pages); the Tasks list stays, so an explicit open after a long
+    /// idle (quick capture, Show Attic) never waits for the list to be
+    /// rebuilt. Speed outranks weight.
+    static func releasesWhenHidden(_ section: PanelSection) -> Bool {
+        PanelPage(section) != .tasks
+    }
+
+    /// Releases the pages only while hidden, only for a heavy page, and only
+    /// once every change is saved: a dirty note draft, an import, an open
+    /// confirmation or any other interaction lock keeps them (the next hide
+    /// tries again).
+    ///
+    /// A release skipped for unfinished work is retried when that work
+    /// finishes, while the panel stays hidden (a reveal cancels it).
+    func releasePagesIfSafe() {
+        let current = PanelPage(uiState.selectedSection)
+        let releasesCurrent = Self.releasesWhenHidden(uiState.selectedSection)
+        let hasBackgroundPages = !uiState.builtPages.subtracting([current]).isEmpty
+        guard !panel.isVisible, uiState.isPageContentLoaded, releasesCurrent || hasBackgroundPages else {
+            pageReleaseRetry = nil
+            return
+        }
+        // Focus left in a field, and text typed in the add bar (kept in the
+        // shell's TasksPageState), are not unsaved work; every other lock is.
+        let keepsPages = uiState.interactionLockReasons
+            .subtracting([.quickEntryFocus, .notesEditorFocus, .taskComposer])
+        let importInFlight = canvasSession.imageImportProgress.map { $0.completedCount < $0.items.count } ?? false
+        guard keepsPages.isEmpty,
+              !noteDraft.isDirty,
+              !importInFlight,
+              canvasSession.pendingPlacement == nil,
+              noteDraft.flush() else {
+            retryPageReleaseWhenWorkFinishes()
+            return
+        }
+        pageReleaseRetry = nil
+        canvasSession.flushViewState()
+        if releasesCurrent {
+            uiState.releasePageContent()
+        } else {
+            // Tasks stays built (an explicit open never waits for the list);
+            // the pages kept behind it go.
+            uiState.releaseBackgroundPages()
+        }
+    }
+
+    /// Performance probe (`--extra`): types `text` one key at a time into
+    /// whatever holds the panel's keyboard (the Tasks add bar after an
+    /// explicit open), through AppKit's own key path, and returns how long
+    /// each keystroke took until the panel had laid out and displayed it.
+    /// A proxy for "one frame per keystroke": it ends at the panel's
+    /// display pass, not at scan-out. The text is removed again afterwards.
+    func typeForPerformanceProbe(_ text: String) -> [Double] {
+        guard panel.isVisible else { return [] }
+        if !(panel.firstResponder is AtticTokenTextView), let bar = Self.firstTokenField(in: panel.contentView) {
+            panel.makeFirstResponder(bar)
+        }
+        guard let field = panel.firstResponder as? NSTextView else { return [] }
+        var durations: [Double] = []
+        for character in text {
+            let characters = String(character)
+            guard let event = NSEvent.keyEvent(
+                with: .keyDown, location: .zero, modifierFlags: [],
+                timestamp: ProcessInfo.processInfo.systemUptime, windowNumber: panel.windowNumber,
+                context: nil, characters: characters, charactersIgnoringModifiers: characters,
+                isARepeat: false, keyCode: character == " " ? 49 : 0
+            ) else { continue }
+            let start = DispatchTime.now().uptimeNanoseconds
+            panel.sendEvent(event)
+            panel.contentView?.layoutSubtreeIfNeeded()
+            panel.displayIfNeeded()
+            CATransaction.flush()
+            durations.append(Double(DispatchTime.now().uptimeNanoseconds - start) / 1_000_000)
+        }
+        field.selectAll(nil)
+        field.insertText("", replacementRange: field.selectedRange())
+        return durations
+    }
+
+    /// Performance seam (probe only): scrolls the tallest visible vertical
+    /// list down `steps` times by `step` points, drawing each step before
+    /// the next, and returns each step's time in milliseconds.
+    func scrollForPerformanceProbe(steps: Int, step: CGFloat) -> [Double] {
+        guard panel.isVisible, let scrollView = Self.tallestScrollView(in: panel.contentView) else { return [] }
+        let clip = scrollView.contentView
+        var durations: [Double] = []
+        for _ in 0..<steps {
+            let start = DispatchTime.now().uptimeNanoseconds
+            var origin = clip.bounds.origin
+            let maxY = max(0, (scrollView.documentView?.frame.height ?? 0) - clip.bounds.height)
+            origin.y = min(origin.y + step, maxY)
+            clip.scroll(to: origin)
+            scrollView.reflectScrolledClipView(clip)
+            panel.contentView?.layoutSubtreeIfNeeded()
+            panel.displayIfNeeded()
+            CATransaction.flush()
+            durations.append(Double(DispatchTime.now().uptimeNanoseconds - start) / 1_000_000)
+        }
+        return durations
+    }
+
+    private static func tallestScrollView(in view: NSView?) -> NSScrollView? {
+        guard let view, !view.isHiddenOrHasHiddenAncestor else { return nil }
+        var best: NSScrollView?
+        if let scroll = view as? NSScrollView, scroll.hasVerticalScroller || (scroll.documentView?.frame.height ?? 0) > scroll.frame.height,
+           scroll.visibleRect.width > 0 {
+            best = scroll
+        }
+        for subview in view.subviews {
+            if let found = tallestScrollView(in: subview),
+               (found.documentView?.frame.height ?? 0) > (best?.documentView?.frame.height ?? 0) { best = found }
+        }
+        return best
+    }
+
+    private static func firstTokenField(in view: NSView?) -> AtticTokenTextView? {
+        guard let view else { return nil }
+        if let field = view as? AtticTokenTextView, !field.isHiddenOrHasHiddenAncestor { return field }
+        for subview in view.subviews {
+            if let found = firstTokenField(in: subview) { return found }
+        }
+        return nil
+    }
+
+    /// Capture seam (UI testing only): the panel takes the keyboard as a
+    /// click would.
+    func makeKeyForCapture() {
+        panel.makeKey()
+        DispatchQueue.main.async { [weak self] in
+            guard let self else { return }
+            NSLog("Attic capture seam: panel key = %d, shell key state = %d",
+                  self.panel.isKeyWindow ? 1 : 0, self.uiState.isPanelKey ? 1 : 0)
+        }
+    }
+
+    /// Re-runs the click-through hit test where the pointer is now: after
+    /// the panel is ordered front and after its geometry changes, when a
+    /// resting pointer sends no event of its own. Only while visible and
+    /// monitored; a live resize or drag keeps its own state.
+    private func resamplePointerPassthrough() {
+        guard panel.isVisible, localPointerMonitor != nil || globalPointerMonitor != nil,
+              !isResamplingPassthrough else { return }
+        isResamplingPassthrough = true
+        defer { isResamplingPassthrough = false }
+        updateMousePassthrough(at: pointerLocation())
+    }
+
+    /// Test seam: whether clicks at the pointer now pass to the app behind.
+    var ignoresMouseEventsForTesting: Bool { panel.ignoresMouseEvents }
+    /// Test seam: the visible surface's frame on screen.
+    var visibleContentFrameForTesting: CGRect { panel.visibleContentFrame }
 
     private func startPointerPassthroughMonitoring() {
         guard localPointerMonitor == nil, globalPointerMonitor == nil else { return }
@@ -1152,7 +1509,8 @@ final class AtticPanelController: NSObject, NSWindowDelegate {
         ]
         localPointerMonitor = NSEvent.addLocalMonitorForEvents(matching: mask) { [weak self] event in
             MainActor.assumeIsolated {
-                self?.updateMousePassthrough(at: NSEvent.mouseLocation)
+                guard let self else { return }
+                self.updateMousePassthrough(at: self.pointerLocation())
             }
             return event
         }
@@ -1161,10 +1519,11 @@ final class AtticPanelController: NSObject, NSWindowDelegate {
             // Keep acquisition synchronous so a fast outside-in move cannot
             // outrun the corner halo before the next mouse event arrives.
             MainActor.assumeIsolated {
-                self?.updateMousePassthrough(at: NSEvent.mouseLocation)
+                guard let self else { return }
+                self.updateMousePassthrough(at: self.pointerLocation())
             }
         }
-        updateMousePassthrough(at: NSEvent.mouseLocation)
+        updateMousePassthrough(at: pointerLocation())
     }
 
     private func stopPointerPassthroughMonitoring() {

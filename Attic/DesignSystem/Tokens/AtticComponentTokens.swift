@@ -25,6 +25,10 @@ enum AtticRingMetrics {
     static let gap: CGFloat = 2
     /// How far the ring's outer edge sits outside the shape.
     static var outset: CGFloat { width + gap }
+    /// L2 (option A, owner 2026-09-30): a task row the keyboard is on
+    /// draws one 1 pt line on its highlight's own edge (no gap), over the
+    /// lighter hover fill, in place of the 2 pt ring 2 pt outside.
+    static let rowLineWidth: CGFloat = 1
     /// The drop-target outline, drawn inside the selection shape.
     static let dropOutlineWidth: CGFloat = 1.5
 }
@@ -62,46 +66,33 @@ enum AtticHairline {
 
 // MARK: - Status circle and subtasks
 
-/// The status circle (spec § The status circle): 16 pt.
+/// The status circle (Phase 0's confident circles, 2026-09-26): 16 pt.
 enum AtticStatusCircleMetrics {
-    /// Keeps the ring's outer edge half a point inside the 16 pt frame.
-    static let edgeInset: CGFloat = 0.5
-    /// Priority is the ring's weight (only High is also red): None 1.2 pt,
-    /// Low 1.5, Medium and High 1.9. Under Differentiate Without Colour High
-    /// is heavier still (2.6 pt), so it never relies on its red; Increase
-    /// Contrast adds 0.4 pt to every ring.
-    static func ringWidth(_ priority: AtticPriority, increaseContrast: Bool, differentiateWithoutColor: Bool) -> CGFloat {
-        let width: CGFloat = switch priority {
-        case .none: 1.2
-        case .low: 1.5
-        case .medium: 1.9
-        case .high: differentiateWithoutColor ? 2.6 : 1.9
-        }
-        return width + (increaseContrast ? 0.4 : 0)
+    /// The ring's outer edge is the frame's edge (the stroke is inward).
+    static let edgeInset: CGFloat = 0
+    /// Every open ring is one ink at one weight (Direction A): 1.6 pt,
+    /// 2 pt under Increase Contrast.
+    static func ringWidth(increaseContrast: Bool) -> CGFloat {
+        increaseContrast ? 2 : 1.6
     }
-    /// In progress: the wedge's inset from the frame, and the least gap it
-    /// keeps inside a heavy ring.
+    /// In progress: the ring with a filled 5 pt centre dot ("working on
+    /// it"), never a share of anything.
+    static let activeDotDiameter: CGFloat = 5
+    /// Completing: the done disc sweeps in from 12 o'clock, starting this
+    /// far inside the frame, and the least gap it keeps inside the ring.
     static let wedgeInset: CGFloat = 3.2
     static let wedgeGap: CGFloat = 0.7
-    /// The least wedge: a quarter, meaning "started" (no subtasks, or none
-    /// ticked yet).
-    static let minimumWedge = 0.25
+    /// The done check (the 16 pt disc's, as before visual A).
     static let checkLineWidth: CGFloat = 1.6
     /// Inset of the check inside the done disc.
     static let checkInset: CGFloat = 4.25
-    /// Backlog's dashed ring: weight and dash / gap.
-    static let backlogLineWidth: CGFloat = 1.4
-    static let backlogLineWidthIncreased: CGFloat = 1.8
+    /// Later's dashed ring: weight and dash / gap.
+    static let backlogLineWidth: CGFloat = 1.6
+    static let backlogLineWidthIncreased: CGFloat = 2
     static let backlogDash: [CGFloat] = [2.2, 2.2]
 
     static func wedgeInset(ringWidth: CGFloat) -> CGFloat {
         max(wedgeInset, edgeInset + ringWidth + wedgeGap)
-    }
-
-    /// The wedge's share of the disc: the share of subtasks ticked, at
-    /// least a quarter; a quarter when the task has no subtasks.
-    static func wedgeSweep(_ progress: Double?) -> Double {
-        min(1, max(minimumWedge, progress ?? 0))
     }
 }
 
@@ -119,40 +110,55 @@ enum AtticSubtaskMetrics {
 
 // MARK: - Task row, quick look and card
 
+/// A task row (34 pt, 48 with a details line), from the row's top: the
+/// text block centred (the title's 18 pt line box at 8 in a 34 pt row;
+/// title, 2 pt, then the 16 pt details line at 6 in a 48 pt one), the
+/// circle centred on the title line (17, or 15), the 30 / 44 pt highlight
+/// 2 pt inside the row.
 enum AtticTaskRowMetrics {
-    /// A two-line row's title line and details line.
     static let titleLineHeight: CGFloat = 18
     static let detailsLineHeight: CGFloat = 16
-    static let titleToDetails: CGFloat = 1
-    /// Top of the title in a two-line row (centres both lines in 42).
-    static let twoLineTextTop: CGFloat = 5
-    /// The circle rises a point in a two-line row, level with the title.
-    static let twoLineCircleLift: CGFloat = 1
-    /// The row sits 1 pt below its pitch's top (half the 2 pt row gap).
-    static let pitchTopInset: CGFloat = 1
-    static let trailingMinGap: CGFloat = 8
+    static let titleToDetails: CGFloat = 2
+    /// The text block (title, or title + 2 + details) is centred in the
+    /// row: 8 from the top of a 34 pt row, 6 in a 48 pt one.
+    static func titleTop(twoLine: Bool) -> CGFloat {
+        let block = titleLineHeight + (twoLine ? titleToDetails + detailsLineHeight : 0)
+        return ((twoLine ? AtticLayout.detailRowPitch : AtticLayout.rowPitch) - block) / 2
+    }
+    /// The circle's centre below the row's top: the title line's centre.
+    static func circleCentreY(twoLine: Bool) -> CGFloat { titleTop(twoLine: twoLine) + titleLineHeight / 2 }
+    /// The highlight sits 2 pt below the row's top (2 pt clear above and
+    /// below, owner 2026-09-26).
+    static var pitchTopInset: CGFloat { (AtticLayout.rowPitch - AtticLayout.rowHighlightHeight) / 2 }
+    /// The least room between a title (or its priority mark) and the date.
+    static let trailingMinGap: CGFloat = 12
     /// Small icons in the details line (window, paperclip).
     static let detailsIconSize: CGFloat = 10
-    static let detailsIconGap: CGFloat = 3
-    static let attachmentIconGap: CGFloat = 2
-    /// "Add to page" sits this far inside the highlight's trailing edge.
-    static let dropLabelInset: CGFloat = 10
-    /// The subtask count sits this far inside the highlight's trailing edge.
-    static let countInset: CGFloat = 2
-    /// A date alone at the right end sits where the count's text would end.
+    /// Owner fix 2 (2026-09-27): an icon 5 pt before its label (the
+    /// paperclip's too), items 14 pt apart with no " · " between them.
+    static let detailsIconGap: CGFloat = 5
+    static let detailsItemSpacing: CGFloat = 14
+    /// The hover pill behind a clickable date or tags (owner fix 5 C):
+    /// 18 tall, reaching 5 pt past the text on each side.
+    static let metaPillHeight: CGFloat = 18
+    static let metaPillOutset: CGFloat = 5
+    /// The date at the right end sits this far inside the highlight.
     static let dateInset: CGFloat = 8
-    /// Between the date and the count at the right end.
-    static let trailingGap: CGFloat = 4
-}
-
-/// "1/3 ›": the subtask count button in a row.
-enum AtticSubtaskCountMetrics {
-    static let height: CGFloat = 22
-    static let horizontalPadding: CGFloat = 6
-    static let gap: CGFloat = 3
 }
 
 /// Quiet text actions inside content ("Add subtask", "Open page").
+/// L3's flat corner buttons (`AtticFlatSurface`).
+enum AtticFlatSurfaceMetrics {
+    static let hairline: CGFloat = 1
+}
+
+/// The menu button's dot (follow-up part 2, item 6: View Options while a
+/// filter hides tasks).
+enum AtticMenuButtonMetrics {
+    static let dotSize: CGFloat = 5
+    static let dotInset: CGFloat = 6
+}
+
 enum AtticQuietActionMetrics {
     static let height: CGFloat = 24
     static let horizontalPadding: CGFloat = 6
@@ -193,6 +199,9 @@ enum AtticTaskCardMetrics {
 // MARK: - Controls
 
 enum AtticRaisedButtonMetrics {
+    /// The pin's glyph sits half a point up in its button (visual A), so
+    /// its visible outline reads as centred.
+    static let pinGlyphOffsetY: CGFloat = -0.5
     /// Icon and label buttons: padding each side and icon-to-label gap.
     static let labelPadding: CGFloat = 12
     static let iconLabelGap: CGFloat = 6
@@ -200,20 +209,24 @@ enum AtticRaisedButtonMetrics {
     static let labelIconSize: CGFloat = 13
 }
 
-/// The page switch: icons in one capsule, the selected one also showing its
-/// label (spec § Raised controls: 32 tall, chips 24, radius 9.5, inset 4).
-enum AtticPageSwitchMetrics {
-    static let chipSpacing: CGFloat = 2
+/// The header's page button (Phase 0's mode dock): 36 pt, inset 4,
+/// 28 pt segments 2 apart (36 shut, 96 open), 13 pt icons.
+enum AtticPageButtonMetrics {
+    static let inset: CGFloat = 4
+    static let segment: CGFloat = 28
+    static let gap: CGFloat = 2
     static let iconSize: CGFloat = 13
-    /// The glyph's slot inside a chip (the widest of the three symbols).
-    static let iconSlot: CGFloat = 16
-    static let iconLabelGap: CGFloat = 5
-    static let selectedPadding: CGFloat = 9
+    /// Phase 0's hairline around an accented current page.
+    static let accentStrokeWidth: CGFloat = 0.75
 }
 
 /// The add bar (spec: 36 tall, radius 15; the send button inside).
 enum AtticAddBarMetrics {
-    static let leadingPadding: CGFloat = 12
+    /// With the bar 24 from the panel's edge, the plus is centred on the
+    /// status circles' centre line (36 = 24 + 24 / 2) and the text starts
+    /// on the task titles' line (56 = 24 + 24 + 8).
+    static let leadingPadding: CGFloat = 0
+    static let iconSlot: CGFloat = 24
     static let gap: CGFloat = 8
     static let plusSize: CGFloat = 12.5
     static let sendGlyphSize: CGFloat = 12
@@ -232,14 +245,63 @@ enum AtticSelectionBarMetrics {
     static let countTrailing: CGFloat = 6
 }
 
-/// Status tabs under the header (spec: 13 pt, 14 apart).
-enum AtticStatusTabMetrics {
-    static let height: CGFloat = 22
-    static let countGap: CGFloat = 4
-    static let focusRadius: CGFloat = 4
-    /// A task dragged over a tab outlines it in this shape.
-    static let dropOutlineHeight: CGFloat = 26
-    static let dropOutlineOutset: CGFloat = 7
+/// Direction A's page tabs as quiet labels (Phase 0's qualities): 16 pt
+/// apart; the focus ring sits 4 pt around the selected label; the click
+/// target reaches 6 pt past the text.
+enum AtticPageTabsMetrics {
+    static let spacing: CGFloat = 16
+    static let focusRadius: CGFloat = 6
+    static let focusOutset: CGFloat = 4
+    static let hitOutset: CGFloat = 6
+    /// L1 (option B, owner 2026-09-30): a 2 pt line in the heading ink
+    /// under the active label, as wide as its text, its top 1 pt below the
+    /// labels' 16 pt line.
+    static let underlineHeight: CGFloat = 2
+    static let underlineGap: CGFloat = 1
+}
+
+/// The row's priority mark ("!!" High, "!" Medium) after the title.
+enum AtticPriorityMarkMetrics {
+    static let titleGap: CGFloat = 6
+}
+
+/// The subtask count on a row's details line: a checklist glyph and
+/// "1/3", with a hover fill that reads as a control.
+enum AtticSubtaskChecklistMetrics {
+    /// A 10 pt glyph in a 12 pt slot, 4 pt before the count: 5 pt from
+    /// the glyph's edge, like every details icon (owner fix 2).
+    static let iconSize: CGFloat = 10
+    static let iconSlot: CGFloat = 12
+    static let iconGap: CGFloat = 4
+    static let horizontalPadding: CGFloat = 4
+    static let height: CGFloat = 18
+}
+
+/// "Completed today · N ›": the Now list's done section toggle.
+/// A task row's actions button (round 10).
+enum AtticRowActionsMetrics {
+    static let width: CGFloat = 22
+    static let iconSize: CGFloat = 12
+    /// After the date (or the title when there is none).
+    static let gap: CGFloat = 4
+}
+
+enum AtticCompletedLineMetrics {
+    static let height: CGFloat = 24
+    /// Visual A: 12 below the last open row, its text on the title line.
+    static let top: CGFloat = 12
+    static let gap: CGFloat = 6
+    /// An 8 pt medium chevron, 6 after the count.
+    static let chevronSize: CGFloat = 8
+    static let horizontalPadding: CGFloat = 6
+}
+
+/// The Done page's search on the tabs line (`AtticTabsSearchField`).
+enum AtticTabsSearchMetrics {
+    /// The magnifier (13 pt) on the circles' line.
+    static let iconSize: CGFloat = 13
+    /// The "Esc" hint's padding inside the field's end.
+    static let hintPadding: CGFloat = 10
 }
 
 /// Title menus and Attic's own pop-overs (radius 20).
@@ -269,6 +331,10 @@ enum AtticToastMetrics {
     static let leadingPadding: CGFloat = 14
     static let gap: CGFloat = 10
     static let buttonPadding: CGFloat = 10
+}
+
+enum AtticNoticeMetrics {
+    static let gap: CGFloat = 8
 }
 
 enum AtticErrorLineMetrics {
@@ -360,6 +426,8 @@ enum AtticSettingsMetrics {
     static let previewHeight: CGFloat = 156
     static let previewScale: CGFloat = 0.62
     static let previewTop: CGFloat = 18
+    /// The miniature fades out over the preview card's last 36 pt.
+    static let previewBottomFade: CGFloat = 36
     static let previewShadow = AtticShadowSpec(radius: 8, y: 3)
     static let previewShadowAlphaLight: Double = 0.14
     static let previewShadowAlphaDark: Double = 0.35
@@ -411,4 +479,56 @@ enum AtticPaletteTileMetrics {
 /// Tag chips (18 tall, control corner rule).
 enum AtticTagMetrics {
     static let horizontalPadding: CGFloat = 6
+}
+
+/// The pickers of owner fix 5 (v17): the date picker, the tag list, the
+/// composer strip and the suggestions over the add bar. The date grid is
+/// v17-lib's: 28 pt columns, 26 pt rows, a 24 pt day disc, today ringed.
+enum AtticPickerMetrics {
+    static let rowGap: CGFloat = 8
+    /// Between two lit rows' fills (round 5, the owner saw two adjacent tag
+    /// rows lit as one block): each fill is inset half of it top and bottom.
+    static let highlightGap: CGFloat = 2
+    static let checkSize: CGFloat = 10
+    static let checkSlot: CGFloat = 12
+    static let dividerGap: CGFloat = 4
+    static let dateWidth: CGFloat = 212
+    static let tagWidth: CGFloat = 200
+    static let tagListMaxHeight: CGFloat = 196
+    /// Move to Task… (control audit item 5): wider than the tag list, for
+    /// task titles and where each is listed; seven rows before it scrolls.
+    static let taskWidth: CGFloat = 260
+    static let taskListMaxHeight: CGFloat = 196
+    static let suggestionWidth: CGFloat = 220
+    static let monthHeaderHeight: CGFloat = 26
+    static let monthButton: CGFloat = 20
+    static let chevronSize: CGFloat = 10
+    static let weekdayHeight: CGFloat = 18
+    static let dayCell: CGFloat = 28
+    static let dayRow: CGFloat = 26
+    static let dayDisc: CGFloat = 24
+    static let todayRing: CGFloat = 1.2
+    static let gridInset: CGFloat = 4
+    static let gridBottom: CGFloat = 2
+    /// The strip's buttons 4 apart (v19, so two filled pills never touch),
+    /// 8 above the bar.
+    static let stripSpacing: CGFloat = 4
+    /// The room a squeezed value keeps for its first characters and "…"
+    /// (a tag's "#laun…", a date's "Wed …"); round 12.
+    static let stripTagPrefix: CGFloat = 34
+    static let stripDatePrefix: CGFloat = 42
+    static let stripToBar: CGFloat = 8
+    /// A set strip button (v19): its value, 7 pt, the clear × (14 pt, its
+    /// glyph 8), then 7 pt to the pill's end.
+    static let stripClearGap: CGFloat = 7
+    static let stripClearSize: CGFloat = 14
+    static let stripClearGlyph: CGFloat = 8
+    static let stripValueTrailing: CGFloat = 7
+    /// Short of room (deep review P3-01), a set button's inner gaps close
+    /// up before its value is cut short: 3 from the icon to the value and
+    /// from the value to the ×, 4 after the × (9 pt a button). The 9 pt
+    /// before the icon stay, so the first icon keeps the circles' line.
+    static let stripCompactIconGap: CGFloat = 3
+    static let stripCompactClearGap: CGFloat = 3
+    static let stripCompactValueTrailing: CGFloat = 4
 }

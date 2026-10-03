@@ -503,7 +503,7 @@ struct SubtaskPanelContent: View {
                     composer
                 }
                 .atticGlassControl(in: Capsule(), interactive: false)
-                viewSwitch
+                if !panelViews.isFilesOnly(parentID) { viewSwitch }
             }
             if let message = panelErrorMessage { errorRow(message) }
         }
