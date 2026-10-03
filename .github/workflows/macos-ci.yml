@@ -191,7 +191,48 @@ jobs:
             -resultBundlePath "$RUNNER_TEMP/AtticUnitTests.xcresult" \
             CODE_SIGNING_ALLOWED=NO \
             -only-testing:AtticTests \
+            -skip-testing:AtticTests/DoneSearchCostTests \
             test
+
+      # Phase 1's unchanged 16 ms input budget is calibrated on an optimized
+      # host. Keep every Done test in a required full-CI step, rather than
+      # relying on the retiring Phase 1-only done-search.yml workflow.
+      - name: Run optimized Done search gates
+        id: done_search
+        continue-on-error: true
+        timeout-minutes: 20
+        run: |
+          Scripts/xcodebuild_locked.sh \
+            -project Attic.xcodeproj \
+            -scheme Attic \
+            -configuration Local \
+            -destination 'platform=macOS' \
+            -derivedDataPath "$RUNNER_TEMP/AtticDoneSearch" \
+            -resultBundlePath "$RUNNER_TEMP/AtticDoneSearch.xcresult" \
+            CODE_SIGNING_ALLOWED=NO \
+            SWIFT_OPTIMIZATION_LEVEL=-O SWIFT_COMPILATION_MODE=wholemodule \
+            ENABLE_DEBUG_DYLIB=NO ENABLE_TESTABILITY=YES ENABLE_HARDENED_RUNTIME=NO \
+            -parallel-testing-enabled NO \
+            -only-testing:AtticTests/DoneSearchCostTests \
+            test
+
+      - name: Print optimized Done search summary
+        if: always()
+        run: |
+          if [ -d "$RUNNER_TEMP/AtticDoneSearch.xcresult" ]; then
+            xcrun xcresulttool get test-results summary \
+              --path "$RUNNER_TEMP/AtticDoneSearch.xcresult" \
+              --format json
+          fi
+
+      - name: Upload optimized Done search results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: macos-done-search-results-${{ github.sha }}
+          path: ${{ runner.temp }}/AtticDoneSearch.xcresult
+          if-no-files-found: ignore
+          retention-days: 14
 
       - name: Print macOS unit-test summary
         if: always()
@@ -345,6 +386,7 @@ jobs:
           MAC_BUILD: ${{ steps.mac_build.outcome }}
           STRICT_BUILD: ${{ steps.strict_build.outcome }}
           UNIT_TESTS: ${{ steps.unit_tests.outcome }}
+          DONE_SEARCH: ${{ steps.done_search.outcome }}
           UI_TESTS: ${{ steps.ui_tests.outcome }}
           PERF_UI_TESTS: ${{ steps.perf_ui_tests.outcome }}
           ANALYZER: ${{ steps.analyzer.outcome }}
@@ -355,6 +397,7 @@ jobs:
             mac-build "$MAC_BUILD" \
             strict-concurrency "$STRICT_BUILD" \
             unit-tests "$UNIT_TESTS" \
+            optimized-done-search "$DONE_SEARCH" \
             ui-tests "$UI_TESTS" \
             performance-ui-tests "$PERF_UI_TESTS" \
             analyzer "$ANALYZER" \
@@ -366,6 +409,7 @@ jobs:
           test "$MAC_BUILD" = success
           test "$STRICT_BUILD" = success
           test "$UNIT_TESTS" = success
+          test "$DONE_SEARCH" = success
           test "$UI_TESTS" = success
           test "$ANALYZER" = success
           test "$FINAL_STATE" = success
