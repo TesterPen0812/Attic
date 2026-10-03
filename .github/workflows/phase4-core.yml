@@ -6,7 +6,9 @@ permissions:
   contents: read
   actions: read
 concurrency:
-  group: phase4-core-${{ github.ref }}
+  # Each calibration run keeps its own pending slot. GitHub otherwise
+  # replaces an older pending reference even with cancel-in-progress:false.
+  group: phase4-core-${{ github.ref }}-${{ contains(github.event.head_commit.message, '[p4-reference]') && github.run_id || 'validation' }}
   cancel-in-progress: false
 jobs:
   reference:
@@ -41,7 +43,7 @@ jobs:
           cd "$base"
           bundle exec ruby Scripts/generate_project.rb
           bundle exec ruby Scripts/verify_project_generation.rb
-          /Users/taha/Developer/attic-redesign-assets/xcodebuild-locked.sh \
+          env -u PEEKABOO_MCP_TOKEN -u GITHUB_TOKEN /Users/taha/Developer/attic-redesign-assets/xcodebuild-locked.sh \
             -project Attic.xcodeproj -scheme Attic -configuration Local \
             -destination 'platform=macOS' -derivedDataPath .build/dd \
             SWIFT_OPTIMIZATION_LEVEL=-O SWIFT_COMPILATION_MODE=wholemodule \
@@ -97,7 +99,7 @@ jobs:
           git archive d77ec80ad91930d377bb3a5849c030c4d63c541e | tar -x -C "$base"
           cp AtticTests/TaskPerformanceGateTests.swift "$base/AtticTests/TaskPerformanceGateTests.swift"
           F=(SWIFT_OPTIMIZATION_LEVEL=-O SWIFT_COMPILATION_MODE=wholemodule ENABLE_TESTABILITY=YES CODE_SIGNING_ALLOWED=YES CODE_SIGNING_REQUIRED=YES CODE_SIGN_STYLE=Manual CODE_SIGN_IDENTITY=- DEVELOPMENT_TEAM= ENABLE_DEBUG_DYLIB=NO)
-          /Users/taha/Developer/attic-redesign-assets/xcodebuild-locked.sh \
+          env -u PEEKABOO_MCP_TOKEN -u GITHUB_TOKEN /Users/taha/Developer/attic-redesign-assets/xcodebuild-locked.sh \
             -project "$base/Attic.xcodeproj" -scheme Attic -configuration Local \
             -destination 'platform=macOS' -derivedDataPath "$PWD/.build/pf-base-dd" \
             ATTIC_MACOS_UNIT_HOST_PRODUCT_NAME=AtticP3PFBaseHost \
@@ -107,7 +109,7 @@ jobs:
             -only-testing:AtticTests/TaskPerformanceGateTests/testPFFoundationSizeAndProductionPaths test \
             | tee .build/pf-base.log || true
           for test in testPF1LargeAutosaveAndPreparedCommitAgainstPairedBase testPF5InterleavedSessionSoakAgainstPairedBase; do
-            /Users/taha/Developer/attic-redesign-assets/xcodebuild-locked.sh \
+            env -u PEEKABOO_MCP_TOKEN -u GITHUB_TOKEN /Users/taha/Developer/attic-redesign-assets/xcodebuild-locked.sh \
               -project "$base/Attic.xcodeproj" -scheme Attic -configuration Local \
               -destination 'platform=macOS' -derivedDataPath "$PWD/.build/pf-base-dd" \
               ATTIC_MACOS_UNIT_HOST_PRODUCT_NAME=AtticP3PFBaseHost \
@@ -119,7 +121,7 @@ jobs:
           done
           echo 'TEST_RUNNER_ATTIC_PF_REQUIRE_REFERENCE=1' >> "$GITHUB_ENV"
           for test in testMeasuredMainActorSaveOnFiveThousandLineNote testMeasuredMainActorSaveIsIndependentOfUnrelatedStoreContents; do
-            /Users/taha/Developer/attic-redesign-assets/xcodebuild-locked.sh \
+            env -u PEEKABOO_MCP_TOKEN -u GITHUB_TOKEN /Users/taha/Developer/attic-redesign-assets/xcodebuild-locked.sh \
               -project "$base/Attic.xcodeproj" -scheme Attic -configuration Local \
               -destination 'platform=macOS' -derivedDataPath "$PWD/.build/pf-base-dd" \
               ATTIC_MACOS_UNIT_HOST_PRODUCT_NAME=AtticP3PFBaseHost \
@@ -133,7 +135,7 @@ jobs:
         shell: /bin/zsh {0}
         run: |
           F=(SWIFT_OPTIMIZATION_LEVEL=-O SWIFT_COMPILATION_MODE=wholemodule ENABLE_TESTABILITY=YES CODE_SIGNING_ALLOWED=YES CODE_SIGNING_REQUIRED=YES CODE_SIGN_STYLE=Manual CODE_SIGN_IDENTITY=- DEVELOPMENT_TEAM= ENABLE_DEBUG_DYLIB=NO)
-          /Users/taha/Developer/attic-redesign-assets/xcodebuild-locked.sh \
+          env -u PEEKABOO_MCP_TOKEN -u GITHUB_TOKEN /Users/taha/Developer/attic-redesign-assets/xcodebuild-locked.sh \
             -project Attic.xcodeproj -scheme Attic -configuration Local \
             -destination 'platform=macOS' -derivedDataPath .build/dd \
             ATTIC_MACOS_UNIT_HOST_PRODUCT_NAME=AtticP3CrashHost \
@@ -146,7 +148,7 @@ jobs:
         shell: /bin/zsh {0}
         run: |
           F=(SWIFT_OPTIMIZATION_LEVEL=-O SWIFT_COMPILATION_MODE=wholemodule ENABLE_TESTABILITY=YES CODE_SIGNING_ALLOWED=YES CODE_SIGNING_REQUIRED=YES CODE_SIGN_STYLE=Manual CODE_SIGN_IDENTITY=- DEVELOPMENT_TEAM= ENABLE_DEBUG_DYLIB=NO)
-          /Users/taha/Developer/attic-redesign-assets/xcodebuild-locked.sh \
+          env -u PEEKABOO_MCP_TOKEN -u GITHUB_TOKEN /Users/taha/Developer/attic-redesign-assets/xcodebuild-locked.sh \
             -project Attic.xcodeproj -scheme Attic -configuration Local \
             -destination 'platform=macOS' -derivedDataPath .build/dd \
             -resultBundlePath .build/canvas-core.xcresult \
@@ -165,7 +167,7 @@ jobs:
         shell: /bin/zsh {0}
         run: |
           F=(SWIFT_OPTIMIZATION_LEVEL=-O SWIFT_COMPILATION_MODE=wholemodule ENABLE_TESTABILITY=YES CODE_SIGNING_ALLOWED=YES CODE_SIGNING_REQUIRED=YES CODE_SIGN_STYLE=Manual CODE_SIGN_IDENTITY=- DEVELOPMENT_TEAM= ENABLE_DEBUG_DYLIB=NO)
-          /Users/taha/Developer/attic-redesign-assets/xcodebuild-locked.sh \
+          env -u PEEKABOO_MCP_TOKEN -u GITHUB_TOKEN /Users/taha/Developer/attic-redesign-assets/xcodebuild-locked.sh \
             -project Attic.xcodeproj -scheme Attic -configuration Local \
             -destination 'platform=macOS' -derivedDataPath .build/dd \
             ATTIC_MACOS_UNIT_HOST_PRODUCT_NAME=AtticP3CrashHost \
@@ -174,6 +176,7 @@ jobs:
             -parallel-testing-enabled NO "${F[@]}" \
             -only-testing:AtticTests/CanvasCoreStorageTests/testP4MetadataQueryBudgetRestrictedFetchOf20By2000LeavesBodiesUnrequested \
             test-without-building > .build/p4-metadata-sql.log 2>&1
+          python3 Scripts/test_p4_metadata_projection_gate.py
           python3 Scripts/p4_metadata_projection_gate.py .build/p4-metadata-sql.log
           rm -f .build/p4-metadata-sql.log
       # The paired probe needs a fresh process, just like the archived base;
@@ -185,7 +188,7 @@ jobs:
           F=(SWIFT_OPTIMIZATION_LEVEL=-O SWIFT_COMPILATION_MODE=wholemodule ENABLE_TESTABILITY=YES CODE_SIGNING_ALLOWED=YES CODE_SIGNING_REQUIRED=YES CODE_SIGN_STYLE=Manual CODE_SIGN_IDENTITY=- DEVELOPMENT_TEAM= ENABLE_DEBUG_DYLIB=NO)
           set -o pipefail
           paired_status=0
-          /Users/taha/Developer/attic-redesign-assets/xcodebuild-locked.sh \
+          env -u PEEKABOO_MCP_TOKEN -u GITHUB_TOKEN /Users/taha/Developer/attic-redesign-assets/xcodebuild-locked.sh \
             -project Attic.xcodeproj -scheme Attic -configuration Local \
             -destination 'platform=macOS' -derivedDataPath .build/dd \
             -resultBundlePath .build/performance-gate.xcresult \
@@ -196,7 +199,7 @@ jobs:
             -only-testing:AtticTests/TaskPerformanceGateTests/testPFFoundationSizeAndProductionPaths test-without-building \
             | tee .build/pf-candidate.log || paired_status=$?
           for test in testPF1LargeAutosaveAndPreparedCommitAgainstPairedBase testPF5InterleavedSessionSoakAgainstPairedBase; do
-            /Users/taha/Developer/attic-redesign-assets/xcodebuild-locked.sh \
+            env -u PEEKABOO_MCP_TOKEN -u GITHUB_TOKEN /Users/taha/Developer/attic-redesign-assets/xcodebuild-locked.sh \
               -project Attic.xcodeproj -scheme Attic -configuration Local \
               -destination 'platform=macOS' -derivedDataPath .build/dd \
               -resultBundlePath ".build/$test.xcresult" \
@@ -215,7 +218,7 @@ jobs:
           base="$PWD/.build/pf-base"
           F=(SWIFT_OPTIMIZATION_LEVEL=-O SWIFT_COMPILATION_MODE=wholemodule ENABLE_TESTABILITY=YES CODE_SIGNING_ALLOWED=YES CODE_SIGNING_REQUIRED=YES CODE_SIGN_STYLE=Manual CODE_SIGN_IDENTITY=- DEVELOPMENT_TEAM= ENABLE_DEBUG_DYLIB=NO)
           for test in testPFFoundationSizeAndProductionPaths testPF1LargeAutosaveAndPreparedCommitAgainstPairedBase testPF5InterleavedSessionSoakAgainstPairedBase; do
-            /Users/taha/Developer/attic-redesign-assets/xcodebuild-locked.sh \
+            env -u PEEKABOO_MCP_TOKEN -u GITHUB_TOKEN /Users/taha/Developer/attic-redesign-assets/xcodebuild-locked.sh \
               -project "$base/Attic.xcodeproj" -scheme Attic -configuration Local \
               -destination 'platform=macOS' -derivedDataPath "$PWD/.build/pf-base-dd" \
               ATTIC_MACOS_UNIT_HOST_PRODUCT_NAME=AtticP3PFBaseHost \
@@ -226,7 +229,7 @@ jobs:
               | tee -a .build/pf-base-after.log || true
           done
           for test in testMeasuredMainActorSaveOnFiveThousandLineNote testMeasuredMainActorSaveIsIndependentOfUnrelatedStoreContents; do
-            /Users/taha/Developer/attic-redesign-assets/xcodebuild-locked.sh \
+            env -u PEEKABOO_MCP_TOKEN -u GITHUB_TOKEN /Users/taha/Developer/attic-redesign-assets/xcodebuild-locked.sh \
               -project "$base/Attic.xcodeproj" -scheme Attic -configuration Local \
               -destination 'platform=macOS' -derivedDataPath "$PWD/.build/pf-base-dd" \
               ATTIC_MACOS_UNIT_HOST_PRODUCT_NAME=AtticP3PFBaseHost \
@@ -255,7 +258,7 @@ jobs:
         shell: /bin/zsh {0}
         run: |
           F=(SWIFT_OPTIMIZATION_LEVEL=-O SWIFT_COMPILATION_MODE=wholemodule ENABLE_TESTABILITY=YES CODE_SIGNING_ALLOWED=YES CODE_SIGNING_REQUIRED=YES CODE_SIGN_STYLE=Manual CODE_SIGN_IDENTITY=- DEVELOPMENT_TEAM= ENABLE_DEBUG_DYLIB=NO)
-          /Users/taha/Developer/attic-redesign-assets/xcodebuild-locked.sh \
+          env -u PEEKABOO_MCP_TOKEN -u GITHUB_TOKEN /Users/taha/Developer/attic-redesign-assets/xcodebuild-locked.sh \
             -project Attic.xcodeproj -scheme Attic -configuration Local \
             -destination 'platform=macOS' -derivedDataPath .build/dd \
             -resultBundlePath .build/commit-gate.xcresult \
@@ -272,7 +275,7 @@ jobs:
         shell: /bin/zsh {0}
         run: |
           F=(SWIFT_OPTIMIZATION_LEVEL=-O SWIFT_COMPILATION_MODE=wholemodule ENABLE_TESTABILITY=YES CODE_SIGNING_ALLOWED=YES CODE_SIGNING_REQUIRED=YES CODE_SIGN_STYLE=Manual CODE_SIGN_IDENTITY=- DEVELOPMENT_TEAM= ENABLE_DEBUG_DYLIB=NO)
-          /Users/taha/Developer/attic-redesign-assets/xcodebuild-locked.sh \
+          env -u PEEKABOO_MCP_TOKEN -u GITHUB_TOKEN /Users/taha/Developer/attic-redesign-assets/xcodebuild-locked.sh \
             -project Attic.xcodeproj -scheme Attic -configuration Local \
             -destination 'platform=macOS' -derivedDataPath .build/dd \
             -resultBundlePath .build/history-gate.xcresult \
@@ -287,7 +290,7 @@ jobs:
         shell: /bin/zsh {0}
         run: |
           F=(SWIFT_OPTIMIZATION_LEVEL=-O SWIFT_COMPILATION_MODE=wholemodule ENABLE_TESTABILITY=YES CODE_SIGNING_ALLOWED=YES CODE_SIGNING_REQUIRED=YES CODE_SIGN_STYLE=Manual CODE_SIGN_IDENTITY=- DEVELOPMENT_TEAM= ENABLE_DEBUG_DYLIB=NO)
-          /Users/taha/Developer/attic-redesign-assets/xcodebuild-locked.sh \
+          env -u PEEKABOO_MCP_TOKEN -u GITHUB_TOKEN /Users/taha/Developer/attic-redesign-assets/xcodebuild-locked.sh \
             -project Attic.xcodeproj -scheme Attic -configuration Local \
             -destination 'platform=macOS' -derivedDataPath .build/dd \
             -resultBundlePath .build/purge-gate.xcresult \
@@ -302,7 +305,7 @@ jobs:
         shell: /bin/zsh {0}
         run: |
           F=(SWIFT_OPTIMIZATION_LEVEL=-O SWIFT_COMPILATION_MODE=wholemodule ENABLE_TESTABILITY=YES CODE_SIGNING_ALLOWED=YES CODE_SIGNING_REQUIRED=YES CODE_SIGN_STYLE=Manual CODE_SIGN_IDENTITY=- DEVELOPMENT_TEAM= ENABLE_DEBUG_DYLIB=NO)
-          /Users/taha/Developer/attic-redesign-assets/xcodebuild-locked.sh \
+          env -u PEEKABOO_MCP_TOKEN -u GITHUB_TOKEN /Users/taha/Developer/attic-redesign-assets/xcodebuild-locked.sh \
             -project Attic.xcodeproj -scheme Attic -configuration Local \
             -destination 'platform=macOS' -derivedDataPath .build/dd \
             -resultBundlePath .build/foundation.xcresult \
@@ -312,6 +315,7 @@ jobs:
             -parallel-testing-enabled NO -test-timeouts-enabled YES \
             -default-test-execution-time-allowance 120 -maximum-test-execution-time-allowance 360 \
             "${F[@]}" -only-testing:AtticTests -skip-testing:AtticTests/CanvasCoreBudgetTests \
+            -skip-testing:AtticTests/CanvasCoreReferenceTests \
             -skip-testing:AtticTests/TaskPerformanceGateTests/testPFFoundationSizeAndProductionPaths \
             -skip-testing:AtticTests/TaskPerformanceGateTests/testPF1LargeAutosaveAndPreparedCommitAgainstPairedBase \
             -skip-testing:AtticTests/TaskPerformanceGateTests/testPF5InterleavedSessionSoakAgainstPairedBase \
@@ -326,7 +330,7 @@ jobs:
         shell: /bin/zsh {0}
         run: |
           F=(SWIFT_OPTIMIZATION_LEVEL=-O SWIFT_COMPILATION_MODE=wholemodule ENABLE_TESTABILITY=YES CODE_SIGNING_ALLOWED=YES CODE_SIGNING_REQUIRED=YES CODE_SIGN_STYLE=Manual CODE_SIGN_IDENTITY=- DEVELOPMENT_TEAM= ENABLE_DEBUG_DYLIB=NO)
-          /Users/taha/Developer/attic-redesign-assets/xcodebuild-locked.sh \
+          env -u PEEKABOO_MCP_TOKEN -u GITHUB_TOKEN /Users/taha/Developer/attic-redesign-assets/xcodebuild-locked.sh \
             -project Attic.xcodeproj -scheme Attic -configuration Local \
             -destination 'platform=macOS' -derivedDataPath .build/dd \
             SWIFT_STRICT_CONCURRENCY=complete "${F[@]}" build
