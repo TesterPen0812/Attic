@@ -217,13 +217,6 @@ final class CombinedFixRoundTests: XCTestCase {
         ])
         let summary = NoteRowSummary(document: document, filename: { _ in nil })
         XCTAssertEqual(summary.preview, "Section Alpha Bullet one, Bullet two, Number one A quote let x = 1 Milk Plain line")
-        XCTAssertEqual(NoteRowSummary.previewText("### Deep heading").0, "Deep heading")
-        XCTAssertEqual(NoteRowSummary.previewText("12) Twelfth").0, "Twelfth")
-        XCTAssertEqual(NoteRowSummary.previewText("#launch is a tag").0, "#launch is a tag", "a hashtag is text")
-        XCTAssertEqual(NoteRowSummary.plainInline("**Bold** and *it* and _under_ and `code` and ~~gone~~"),
-                       "Bold and it and under and code and gone")
-        XCTAssertEqual(NoteRowSummary.plainInline("2 * 3 = 6 and snake_case_name"), "2 * 3 = 6 and snake_case_name",
-                       "lone marks stay")
     }
 
     // MARK: P3-03: the tag picker's create row is never cut short
@@ -687,6 +680,48 @@ final class CombinedFixRoundTests: XCTestCase {
         XCTAssertEqual(H.at(2, in: tags, create: "x"), .create)
         XCTAssertNil(H.at(2, in: tags, create: nil))
         XCTAssertNil(H.at(nil, in: tags, create: "x"))
+    }
+
+    /// P3 (`d5e2c0d`): previews drop formatting from the blocks' kinds and
+    /// marks, never by stripping patterns from the text.
+    func testPreviewsKeepLiteralTextAndDropOnlyFormatting() throws {
+        func styled(_ text: String, _ style: String) -> NoteBlock {
+            var block = NoteBlock.text(text)
+            block.style = style
+            return block
+        }
+        var bold = NoteBlock.text("Bold words stay")
+        bold.marks = [NoteMark(.bold, offset: 0, length: 4)]
+        var heading = styled("#launch plan", "heading")
+        heading.level = 2
+        let document = NoteDocument(blocks: [
+            .text("Literal text"),
+            styled("def __init__(self):", "mono"),
+            .text("See https://example.com/__v1__/docs"),
+            .text("- typed dash, not a list"),
+            .text("2 * 3 = 6 and *stars*"),
+            bold, heading,
+            styled("Oat milk", "bullet"), styled("Lemons", "number"),
+            .checklist("Milk", checked: true), .checklist("Rice"),
+            .divider()
+        ])
+        let expected = "def __init__(self): See https://example.com/__v1__/docs - typed dash, not a list 2 * 3 = 6 and *stars* "
+            + "Bold words stay #launch plan Oat milk, Lemons, Milk, Rice"
+        let draft = NoteRowSummary(document: document, filename: { _ in nil })
+        XCTAssertEqual(draft.preview, expected)
+        XCTAssertEqual(draft.checklist?.done, 1)
+        XCTAssertEqual(draft.checklist?.total, 2)
+        // A stored note reads its document the same way (not its derived text).
+        let store = try makeTestNoteStore(attachmentFileStore: makeTestAttachmentFileStore())
+        let id = UUID()
+        guard case .success = store.createDocumentNote(id: id, document: document) else { return XCTFail("seed") }
+        let note = try XCTUnwrap(store.note(withID: id))
+        XCTAssertTrue(note.plainText.contains("    def __init__"), "the derived text keeps its markers")
+        let stored = NoteRowSummary(note: note, attachments: [])
+        XCTAssertEqual(stored, draft)
+        // A legacy note's text is shown as written.
+        let legacy = try XCTUnwrap(store.create(title: "Legacy", body: "- typed\n__init__ and **this**"))
+        XCTAssertEqual(NoteRowSummary(note: legacy, attachments: []).preview, "- typed __init__ and **this**")
     }
 
 }
