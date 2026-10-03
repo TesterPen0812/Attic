@@ -2,12 +2,13 @@ import Combine
 import Foundation
 
 /// Independent reasons that make hover-driven auto-hide unsafe. Presentation
-/// state is intentionally not a lock by itself: a clean, unfocused composer
+/// state of a main editor is not a lock by itself: a clean, unfocused composer
 /// or saved note may remain presented while an unpinned panel hides normally.
 enum PanelInteractionLockReason: Hashable, Sendable {
     case quickEntryFocus
     case taskComposer
     case taskEditing
+    case taskFiles
     case subtaskComposer
     case taskConfirmation
     case notesEditorFocus
