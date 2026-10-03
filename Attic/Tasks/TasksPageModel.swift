@@ -629,7 +629,7 @@ final class TasksPageModel: ObservableObject {
     /// The next page, when the last loaded row comes on screen. The cursor
     /// walks canonical matching IDs, so duplicate replicas never stop it.
     /// A failed read keeps what loaded and stops until Retry.
-    func loadMoreDoneLog() {
+    func loadMoreDoneLog(limit: Int = doneLogPageSize) {
         guard doneLogHasMore, doneLogFailure == nil else { return }
         let query = doneSearch.trimmingCharacters(in: .whitespacesAndNewlines)
         if doneLogQuery != query { loadDoneLogIfNeeded(); return }
@@ -637,7 +637,7 @@ final class TasksPageModel: ObservableObject {
             loadDoneLogIfNeeded()
             guard doneLogHasMore, doneLogFailure == nil else { return }
         }
-        let page = store.indexedDoneLogPage(from: doneLogCursor, limit: Self.doneLogPageSize, matching: doneLogQuery ?? "")
+        let page = store.indexedDoneLogPage(from: doneLogCursor, limit: limit, matching: doneLogQuery ?? "")
         setDoneLog(doneLogTasks + page.tasks)
         doneLogCursor = page.next
         doneLogHasMore = page.hasMore
@@ -994,17 +994,26 @@ final class TasksPageModel: ObservableObject {
         scrollRequest = ScrollRequest(id: id, tab: tab)
     }
 
+    /// How far an explicit reveal reads into the Done log: 16,080 rows, the
+    /// reach it had with 80-row pages (the first page and 200 more). It is
+    /// counted in rows, so the browsing page size never shortens it
+    /// (GPT-6.1's PR prep review, P3: 40-row pages halved it to 8,040).
+    static let doneRevealReach = 80 + 200 * 80
+    /// A reveal reads in 80-row steps, as before the 40-row pages: each
+    /// step re-reads the loaded rows' families, so smaller steps would
+    /// double the reads for the same reach.
+    static let doneRevealStep = 80
+
     /// Loads the Done log until `id`'s page is in, and says whether it is.
-    /// A failed read or the paging bound (200 pages) is an incomplete
+    /// A failed read or the reach (`doneRevealReach` rows) is an incomplete
     /// result, never taken for success.
     private func revealInDoneLog(_ id: UUID) -> Bool {
         isRevealing = true
         defer { isRevealing = false }
         loadDoneLogIfNeeded()
-        var pages = 0
-        while !doneLogTasks.contains(where: { $0.id == id }), doneLogHasMore, doneLogFailure == nil, pages < 200 {
-            loadMoreDoneLog()
-            pages += 1
+        while !doneLogTasks.contains(where: { $0.id == id }), doneLogHasMore, doneLogFailure == nil,
+              doneLogTasks.count < Self.doneRevealReach {
+            loadMoreDoneLog(limit: min(Self.doneRevealStep, Self.doneRevealReach - doneLogTasks.count))
         }
         return doneLogTasks.contains { $0.id == id }
     }
