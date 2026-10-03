@@ -450,6 +450,27 @@ final class TasksPageUITests: XCTestCase {
     /// than NSMenu. Its pointer path must not ask XCUITest to enter native
     /// menu tracking and wait for a menu-open notification.
     private func clickDropdownRow(_ item: XCUIElement) {
+        let viewport = app.scrollViews.containing(NSPredicate(format: "label == %@", item.label)).firstMatch
+        if viewport.exists {
+            var wheelSign: CGFloat = 1
+            for _ in 0..<6 {
+                let target = item.frame
+                let visible = viewport.frame
+                if visible.contains(CGPoint(x: target.midX, y: target.midY)) { break }
+                let delta: CGFloat = target.midY > visible.midY ? 160 : -160
+                viewport.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5))
+                    .scroll(byDeltaX: 0, deltaY: delta * wheelSign)
+                RunLoop.current.run(until: Date().addingTimeInterval(0.15))
+                let moved = item.frame.midY
+                // macOS/Xcode scroll direction varies; observe travel rather
+                // than assuming the runner's natural-scroll preference.
+                if abs(moved - target.midY) < 0.5 || abs(moved - visible.midY) > abs(target.midY - visible.midY) {
+                    wheelSign *= -1
+                }
+            }
+            XCTAssertTrue(viewport.frame.contains(CGPoint(x: item.frame.midX, y: item.frame.midY)),
+                          "the dropdown action is inside its scrolling viewport")
+        }
         XCTAssertGreaterThan(item.frame.width, 0, "the dropdown row has a rendered hit frame")
         XCTAssertGreaterThan(item.frame.height, 0)
         item.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).click()
