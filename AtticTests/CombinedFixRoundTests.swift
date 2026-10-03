@@ -181,6 +181,36 @@ final class CombinedFixRoundTests: XCTestCase {
         XCTAssertTrue(engine.history.undo())
         XCTAssertTrue(engine.textStorage.string.hasSuffix("/file"), engine.textStorage.string.debugDescription)
     }
+
+    // MARK: P3-02: clean previews in All notes
+
+    /// A row's preview is the note's text, not its Markdown: the CU review
+    /// saw `## Section Alpha - Bullet one - Bullet two 1. N…`.
+    @MainActor
+    func testLibraryPreviewsShowCleanText() {
+        var heading = NoteBlock.text("Section Alpha")
+        heading.style = "heading"
+        heading.level = 2
+        func styled(_ text: String, _ style: String) -> NoteBlock {
+            var block = NoteBlock.text(text)
+            block.style = style
+            return block
+        }
+        let document = NoteDocument(blocks: [
+            .text("CU2 formats"), heading, styled("Bullet one", "bullet"), styled("Bullet two", "bullet"),
+            styled("Number one", "number"), styled("A quote", "quote"), styled("let x = 1", "mono"),
+            .checklist("Milk"), .text("Plain line")
+        ])
+        let summary = NoteRowSummary(document: document, filename: { _ in nil })
+        XCTAssertEqual(summary.preview, "Section Alpha Bullet one, Bullet two, Number one A quote let x = 1 Milk Plain line")
+        XCTAssertEqual(NoteRowSummary.previewText("### Deep heading").0, "Deep heading")
+        XCTAssertEqual(NoteRowSummary.previewText("12) Twelfth").0, "Twelfth")
+        XCTAssertEqual(NoteRowSummary.previewText("#launch is a tag").0, "#launch is a tag", "a hashtag is text")
+        XCTAssertEqual(NoteRowSummary.plainInline("**Bold** and *it* and _under_ and `code` and ~~gone~~"),
+                       "Bold and it and under and code and gone")
+        XCTAssertEqual(NoteRowSummary.plainInline("2 * 3 = 6 and snake_case_name"), "2 * 3 = 6 and snake_case_name",
+                       "lone marks stay")
+    }
 }
 
 /// Records the rectangles a view is asked to redraw (`setNeedsDisplay(_:)`,

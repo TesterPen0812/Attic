@@ -333,24 +333,26 @@ struct NoteRowSummary: Equatable {
     private init(title: String, bodyLines: [String], images: Int, files: Int, firstFile: String?) {
         var done = 0
         var total = 0
-        var previewParts: [String] = []
-        var listLike = false
+        var previewParts: [(text: String, isListItem: Bool)] = []
         // Counts read the whole note; only the preview stops early (it
         // shows one line).
         var previewLength = 0
         for line in bodyLines {
             let trimmed = line.trimmingCharacters(in: .whitespaces)
             if trimmed.isEmpty || trimmed == "[Image]" || trimmed.hasPrefix("[File: ")
-                || trimmed == "[Unsupported content]" { continue }
+                || trimmed == "[Unsupported content]" || Self.isDivider(trimmed) { continue }
             let isChecklist = trimmed.hasPrefix("[ ] ") || trimmed.hasPrefix("[x] ")
             if isChecklist {
                 total += 1
                 if trimmed.hasPrefix("[x] ") { done += 1 }
             }
             guard previewLength <= 160 else { continue }
-            if isChecklist, previewParts.isEmpty { listLike = true }
-            let part = isChecklist ? String(trimmed.dropFirst(4)) : trimmed
-            previewParts.append(part)
+            // Clean text (CU P3-02): no heading hashes, list or quote
+            // markers, or emphasis marks.
+            let (part, isListItem) = isChecklist ? (Self.plainInline(String(trimmed.dropFirst(4))), true)
+                : Self.previewText(trimmed)
+            guard !part.isEmpty else { continue }
+            previewParts.append((part, isListItem))
             previewLength += part.count + 1
         }
         let cleanTitle = title.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -362,11 +364,54 @@ struct NoteRowSummary: Equatable {
                          images > 0 ? (images == 1 ? String(localized: "1 image") : String(localized: "\(images) images")) : nil]
             preview = parts.compactMap { $0 }.joined(separator: ", ")
         } else {
-            preview = previewParts.joined(separator: listLike ? ", " : " ")
+            // A list reads as "Oat milk, Lemons, Rice"; other lines run on.
+            var joined = ""
+            for (index, part) in previewParts.enumerated() {
+                if index > 0 { joined += previewParts[index - 1].isListItem && part.isListItem ? ", " : " " }
+                joined += part.text
+            }
+            preview = joined
         }
         checklist = total > 0 ? (done, total) : nil
         self.images = images
         self.files = files
+    }
+
+    private static func isDivider(_ line: String) -> Bool {
+        line.count >= 3 && Set(line).count == 1 && ["-", "*", "_"].contains(line.first!)
+    }
+
+    /// A body line without its block marker: `## `, `- `, `* `, `+ `,
+    /// `1. ` or `1) `, `> `; and whether it is a list item.
+    static func previewText(_ line: String) -> (String, Bool) {
+        var text = Substring(line)
+        var isListItem = false
+        if let hashes = text.firstIndex(where: { $0 != "#" }), hashes != text.startIndex,
+           text.distance(from: text.startIndex, to: hashes) <= 6, text[hashes] == " " {
+            text = text[text.index(after: hashes)...]
+        } else if text.hasPrefix("> ") || text == ">" {
+            text = text.dropFirst(min(2, text.count))
+        } else if let marker = text.first, ["-", "*", "+", "•"].contains(marker), text.dropFirst().first == " " {
+            text = text.dropFirst(2)
+            isListItem = true
+        } else if let digitsEnd = text.firstIndex(where: { !$0.isASCII || !$0.isNumber }), digitsEnd != text.startIndex,
+                  [".", ")"].contains(text[digitsEnd]), text[text.index(after: digitsEnd)...].first == " " {
+            text = text[text.index(digitsEnd, offsetBy: 2)...]
+            isListItem = true
+        }
+        if text.hasPrefix("[ ] ") || text.hasPrefix("[x] ") || text.hasPrefix("[X] ") { text = text.dropFirst(4) }
+        return (plainInline(String(text).trimmingCharacters(in: .whitespaces)), isListItem)
+    }
+
+    /// Paired emphasis marks taken out: `**bold**`, `__bold__`, `*it*`,
+    /// `_it_`, `~~struck~~`, `` `code` ``. A lone mark stays.
+    static func plainInline(_ text: String) -> String {
+        guard text.contains(where: { "*_~`".contains($0) }) else { return text }
+        var result = text
+        for pattern in [#"(\*\*|__|~~)(?=\S)(.+?)(?<=\S)\1"#, #"(?<![\w*])([*_])(?=\S)(.+?)(?<=\S)\1(?![\w*])"#, #"(`)(.+?)\1"#] {
+            result = result.replacingOccurrences(of: pattern, with: "$2", options: .regularExpression)
+        }
+        return result
     }
 
     /// "Pricing page, edited 09:40, not saved, 1 of 3 checked, 1 image".
