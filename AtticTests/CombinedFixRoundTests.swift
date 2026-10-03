@@ -416,6 +416,111 @@ final class CombinedFixRoundTests: XCTestCase {
         }
         XCTAssertTrue(masked, "a full-height mask over the note's scroll view")
     }
+
+    // MARK: P1-01: inserting a file after an image froze the app
+
+    /// The CU sequence in the whole panel, as the app hosts it (its pages,
+    /// its overlay layer), on a key panel with accessibility on (an AX
+    /// client, as the CU tool is): `/image` then `/file` through the page's
+    /// open-panel route (the open panel's key loss and return included),
+    /// then ⋯ Insert's batch path with an image and a file. The CU build
+    /// froze at 100 % CPU in SwiftUI's key-view-loop rebuild during the
+    /// second insertion; a watchdog ends the run if the main thread sticks.
+    /// CI only (`ATTIC_KEY_WINDOW_TESTS`): it needs a key window.
+    func testImageThenFileInsertionNeverSticksTheMainThread() throws {
+        guard ProcessInfo.processInfo.environment["ATTIC_KEY_WINDOW_TESTS"] == "1" else {
+            throw XCTSkip("CI only: the freeze needs a key panel, which locally would take the keyboard")
+        }
+        let watchdog = Watchdog(seconds: 90, label: "the image-then-file insertion (CU P1-01)")
+        defer { watchdog.finish() }
+        let attribute = NSAccessibility.Attribute(rawValue: "AXEnhancedUserInterface")
+        let previous = NSApp.accessibilityAttributeValue(attribute)
+        NSApp.accessibilitySetValue(true, forAttribute: attribute)
+        defer { NSApp.accessibilitySetValue(previous, forAttribute: attribute) }
+        UserDefaults.standard.set(true, forKey: NotesEditorSetting.defaultsKey)
+        defer { UserDefaults.standard.removeObject(forKey: NotesEditorSetting.defaultsKey) }
+        let suite = "CombinedFixRoundTests.\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let container = try PersistenceController.makeContainer(inMemory: true, cloudSyncEnabled: false)
+        try TasksPagePreview.seedDemo(in: container)
+        let store = TaskStore(container: container)
+        let notes = NoteStore(container: container, attachmentFileStore: makeTestAttachmentFileStore())
+        let state = PanelUIState()
+        let size = CGSize(width: 340, height: 560)
+        state.updatePanelSize(size)
+        state.loadPageContent()
+        let chrome = PanelChromeInteractionState()
+        let settings = AppSettings(defaults: defaults)
+        let noteDraft = NoteDraftController(noteStore: notes)
+        let host = AtticPanelHostingView(
+            rootView: AtticPanelView(
+                store: store, noteStore: notes,
+                canvasSession: CanvasSession(store: CanvasStore(container: container)),
+                noteDraft: noteDraft,
+                chromeInteractionState: chrome, uiState: state, settings: settings,
+                subtaskPanels: SubtaskPanelController(store: store, uiState: state, settings: settings),
+                tasksPageState: TasksPageState()
+            ),
+            panelCornerRadius: 52, dockedCorner: .topRight, chromeInteractionState: chrome
+        )
+        let content = AtticPanelContentContainer(hostingView: host, visibleSize: size, perimeter: 0)
+        let panel = KeyPanel(contentRect: CGRect(origin: CGPoint(x: -4000, y: -4000), size: size),
+                             styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
+        panel.isReleasedWhenClosed = false
+        panel.contentView = content
+        panel.orderFront(nil)
+        panel.makeKey()
+        // Stands in for the open panel: it takes the key and gives it back.
+        let chooser = KeyPanel(contentRect: CGRect(x: -3000, y: -3000, width: 200, height: 120),
+                               styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
+        chooser.isReleasedWhenClosed = false
+        windows += [panel, chooser]
+        defer {
+            host.cancelActiveInteraction(reason: .lostWindow)
+            state.releasePageContent()
+            spin(0.3)
+        }
+        spin(1.0)
+        state.selectSection(.notes)
+        spin(1.0)
+        let controller = noteDraft.pages
+        XCTAssertTrue(controller.requestNewNote())
+        spin(0.5)
+        let engine = try XCTUnwrap(controller.active?.engine)
+        let textView = try XCTUnwrap(engine.textView)
+        panel.makeFirstResponder(textView)
+        let (image, file) = try fixtures()
+        func choose(_ url: URL, slash: Bool) {
+            chooser.orderFront(nil)
+            chooser.makeKey()
+            spin(0.3)
+            chooser.orderOut(nil)
+            panel.makeKey()
+            panel.makeFirstResponder(textView)
+            if slash { controller.importSlashImage(url) } else { controller.importFiles([url]) }
+            for _ in 0..<60 where controller.active?.isImporting == true { spin(0.05) }
+            content.layoutSubtreeIfNeeded()
+            spin(0.5)
+        }
+        // The page's open panel is answered by the test.
+        engine.onSlashFileRequest = {}
+        type("CU2 attachment retry\nBefore the image ", into: textView)
+        type("/image", into: textView)
+        spin(0.3)
+        XCTAssertTrue(engine.acceptSlashItem(.imageOrFile))
+        choose(image, slash: true)
+        type("/file", into: textView)
+        spin(0.3)
+        XCTAssertTrue(engine.acceptSlashItem(.imageOrFile))
+        choose(file, slash: true)
+        XCTAssertEqual(engine.textStorage.string.filter { $0 == NoteDocument.objectCharacter }.count, 2)
+        // ⋯ Insert › Image or File…: the batch path, an image then a file.
+        choose(image, slash: false)
+        choose(file, slash: false)
+        XCTAssertEqual(engine.textStorage.string.filter { $0 == NoteDocument.objectCharacter }.count, 4)
+        XCTAssertFalse(engine.textStorage.string.contains("/image") || engine.textStorage.string.contains("/file"))
+    }
 }
 
 /// Records the rectangles a view is asked to redraw (`setNeedsDisplay(_:)`,
