@@ -29,6 +29,7 @@ final class AtticLibrary {
     let links: LinkStore
     let tags: TagService
     let undo: UndoRoute
+    private var tagInventoryObservation: AnyCancellable?
     private let container: ModelContainer
     private(set) var lastErrorMessage: String?
     /// The last task command that changed nothing, and why (Astra 6). Also
@@ -57,6 +58,18 @@ final class AtticLibrary {
         tags = TagService(container: tasks.container, persist: persist)
         links.endpointState = { [weak self] ref in self?.state(of: ref) ?? .missing }
         tasks.commandLibrary = self
+        let inventory = tags
+        tasks.tagInventoryWillSave = { [weak inventory] in inventory?.invalidate(in: $0) }
+        tasks.tagInventoryDidSave = { [weak inventory] in inventory?.publishInventoryChange() }
+        tasks.tagInventoryDidRefresh = { [weak inventory] in inventory?.invalidateInventory() }
+        notes?.tagInventoryWillSave = { [weak inventory] in inventory?.invalidate(in: $0) }
+        notes?.tagInventoryDidSave = { [weak inventory] in inventory?.publishInventoryChange() }
+        notes?.tagInventoryDidRefresh = { [weak inventory] in inventory?.invalidateInventory() }
+        notes?.sharedTagCounts = { [weak inventory] in inventory?.countsByName }
+        canvases?.tagInventoryWillSave = { [weak inventory] in inventory?.invalidate(in: $0) }
+        canvases?.tagInventoryDidSave = { [weak inventory] in inventory?.publishInventoryChange() }
+        canvases?.tagInventoryDidRefresh = { [weak inventory] in inventory?.invalidateInventory() }
+        tagInventoryObservation = tags.inventoryChanges.sink { [weak notes] in notes?.objectWillChange.send() }
         tags.afterChange = { [weak self] in self?.refreshItemStores() }
     }
 

@@ -158,15 +158,21 @@ private enum NotePersistenceRefreshOutcome {
 @MainActor
 final class NoteStore: ObservableObject {
     @Published private(set) var notes: [NoteItem] = [] {
-        didSet { presentationIndex = nil; presentationByID = nil; tagInventory = nil }
+        didSet { presentationIndex = nil; presentationByID = nil; tagInventory = nil; tagInventoryDidRefresh() }
     }
+    /// Wired by AtticLibrary to the shared tag inventory. No store scans on save.
+    var tagInventoryWillSave: (ModelContext) -> Void = { _ in }
+    var tagInventoryDidSave: () -> Void = {}
+    var tagInventoryDidRefresh: () -> Void = {}
     private var tagInventory: (counts: [String: Int], rows: [UUID: String])?
     private(set) var tagInventoryBuildCount = 0
     private(set) var tagInventoryNoteReadCount = 0
 
     /// Warm suggestions read values only, without revisiting the library's
     /// models. Content-only saves do not invalidate this inventory.
+    var sharedTagCounts: (() -> [String: Int]?)?
     var tagCounts: [String: Int] {
+        if let counts = sharedTagCounts?() { return counts }
         if let inventory = tagInventory { return inventory.counts }
         var counts: [String: Int] = [:], rows: [UUID: String] = [:]
         for note in notes {
@@ -184,6 +190,7 @@ final class NoteStore: ObservableObject {
     /// snapshot. An equal assignment of tags during replica convergence is
     /// not an invalidation; rollback and imported contexts replace `notes`.
     private func invalidateTagInventory(in transaction: ModelContext) {
+        tagInventoryWillSave(transaction)
         guard let inventory = tagInventory else { return }
         if (transaction.insertedModelsArray + transaction.deletedModelsArray).contains(where: { $0 is NoteItem }) {
             tagInventory = nil
@@ -1615,6 +1622,7 @@ final class NoteStore: ObservableObject {
         } catch {
             let saveError = error.localizedDescription
             context.rollback()
+            tagInventoryDidRefresh()
             do {
                 try reloadModels()
                 lastErrorMessage = saveError
@@ -1636,6 +1644,7 @@ final class NoteStore: ObservableObject {
     }
 
     private func registerSuccessfulLocalSave() {
+        tagInventoryDidSave()
         revision &+= 1
         #if !ATTIC_LOCAL_ONLY
         cloudSyncProtection.noteLocalSave()
@@ -1689,6 +1698,7 @@ final class NoteStore: ObservableObject {
         } catch {
             let saveError = error.localizedDescription
             transactionContext.rollback()
+            tagInventoryDidRefresh()
             do {
                 try reloadModels()
                 lastErrorMessage = saveError

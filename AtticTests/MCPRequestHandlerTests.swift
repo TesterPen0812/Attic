@@ -809,7 +809,12 @@ final class MCPRequestHandlerTests: XCTestCase {
 
     func testListTagsAndUpdateTagsRenameAndMerge() throws {
         let (library, handler) = try makeLibraryHandler()
-        let first = try XCTUnwrap(store.create(title: "One"))
+        XCTAssertEqual(try callNoteTool(handler, "list_tags", [:])["count"] as? Int, 0, "warm before MCP mutations")
+        let created = try callNoteTool(handler, "create_task", ["title": "One", "tags": ["#Work"]])
+        let createdTask = try XCTUnwrap(created["task"] as? [String: Any])
+        let firstID = try XCTUnwrap((createdTask["id"] as? String).flatMap(UUID.init(uuidString:)))
+        let first = try XCTUnwrap(store.task(withID: firstID))
+        XCTAssertEqual(library.notes?.tagCounts, ["work": 1], "MCP creation reaches Notes suggestions")
         let second = try XCTUnwrap(store.create(title: "Two"))
         let note = try XCTUnwrap(library.notes?.create(title: "Note"))
         XCTAssertTrue(library.setTags(["work", "urgent"], on: AtticItemRef(.task, first.id)))
@@ -821,6 +826,10 @@ final class MCPRequestHandlerTests: XCTestCase {
         let tags = try XCTUnwrap(listed["tags"] as? [[String: Any]])
         XCTAssertEqual(tags.first?["name"] as? String, "work")
         XCTAssertEqual(tags.first?["count"] as? Int, 2)
+        _ = try callNoteTool(handler, "update_task", ["id": first.id.uuidString, "tags": ["work", "urgent", "mcp-only"]])
+        XCTAssertEqual(library.notes?.tagCounts["mcp-only"], 1, "MCP update invalidates the warmed shared inventory")
+        _ = try callNoteTool(handler, "update_task", ["id": first.id.uuidString, "tags": ["work", "urgent"]])
+        XCTAssertNil(library.notes?.tagCounts["mcp-only"], "last use removal invalidates too")
 
         let renamed = try callNoteTool(handler, "update_tags", ["action": "rename", "from": "urgent", "to": "Now"])
         XCTAssertEqual(renamed["tag"] as? String, "now")
