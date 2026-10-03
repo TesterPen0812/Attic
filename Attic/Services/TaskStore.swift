@@ -370,6 +370,11 @@ final class TaskStore: ObservableObject {
         guard let task = task(withID: taskID) else { return nil }
         return familyOwner(of: task)
     }
+    /// Wired by AtticLibrary to the shared tag inventory. No store scans on save.
+    var tagInventoryWillSave: (ModelContext) -> Void = { _ in }
+    var tagInventoryDidSave: () -> Void = {}
+    var tagInventoryDidRefresh: () -> Void = {}
+
     @Published private(set) var revision: UInt64 = 0
     @Published private(set) var cloudSyncStatus = CloudSyncStatus()
     /// The command layer built over this store (the app has one), so a page
@@ -3338,6 +3343,7 @@ final class TaskStore: ObservableObject {
     /// operation that asked for it; a success clears any notice outright.
     @discardableResult
     private func save(owner: UUID? = nil) -> Bool {
+        tagInventoryWillSave(context)
         do {
             let changedIDs = Set((context.insertedModelsArray + context.changedModelsArray + context.deletedModelsArray)
                 .compactMap { ($0 as? TaskItem)?.id })
@@ -3347,6 +3353,7 @@ final class TaskStore: ObservableObject {
             #else
             try persist(context)
             #endif
+            tagInventoryDidSave()
             // Publish the revision only after the index sees the durable
             // change. Undo/Redo use the same save path; failed saves rebuild
             // from the rolled-back context below. The changed rows are read
@@ -3378,6 +3385,7 @@ final class TaskStore: ObservableObject {
         } catch {
             let saveError = error.localizedDescription
             context.rollback()
+            tagInventoryDidRefresh()
             do {
                 try reloadTasks()
                 report(saveError, owner: owner)
@@ -3394,6 +3402,7 @@ final class TaskStore: ObservableObject {
     #endif
 
     private func reloadTasks() throws {
+        defer { tagInventoryDidRefresh() }
         #if DEBUG
         if listRefreshFailures > 0 {
             listRefreshFailures -= 1

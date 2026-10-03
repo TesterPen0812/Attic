@@ -1,3 +1,4 @@
+import Combine
 import Foundation
 import SwiftData
 
@@ -42,6 +43,73 @@ enum TagServiceError: LocalizedError {
 /// everywhere or nowhere. The item stores are refreshed afterwards.
 @MainActor
 final class TagService {
+    /// Value-only inventory shared by pickers, shorthand and MCP. Rebuilt only
+    /// after tag/membership changes or a fresh external presentation.
+    private struct RowState: Hashable {
+        let raw: String
+        let unavailable: Bool
+    }
+    private struct Inventory {
+        let counts: [TagCount]
+        let countsByName: [String: Int]
+        let names: [String]
+        let rows: [PersistentIdentifier: RowState]
+        let divergent: Set<AtticItemRef>
+    }
+    private var inventory: Inventory?
+    private var needsPublication = false
+    let inventoryChanges = PassthroughSubject<Void, Never>()
+    private(set) var inventoryBuildCount = 0
+    private(set) var inventoryFetchCount = 0
+    private(set) var inventoryRowReadCount = 0
+
+    var names: [String] { _ = counts(); return inventory?.names ?? [] }
+    var countsByName: [String: Int] { _ = counts(); return inventory?.countsByName ?? [:] }
+
+    /// Inspect only rows touched by this transaction, never the whole store.
+    /// Divergent replicas can change the winning tag set through a content
+    /// edit, so those identities also invalidate when any replica changes.
+    func invalidate(in context: ModelContext) {
+        guard let inventory else { return }
+        func state(_ model: any PersistentModel) -> (AtticItemRef, RowState)? {
+            switch model {
+            case let task as TaskItem:
+                return (AtticItemRef(.task, task.id), RowState(raw: task.tagsRaw, unavailable: task.deletedAt != nil))
+            case let note as NoteItem:
+                return (AtticItemRef(.note, note.id), RowState(raw: note.tagsRaw, unavailable: note.deletedAt != nil))
+            case let board as CanvasBoardItem:
+                return (AtticItemRef(.canvas, board.id), RowState(raw: board.tagsRaw, unavailable: board.tombstoned || board.purgedAt != nil))
+            default: return nil
+            }
+        }
+        for model in context.insertedModelsArray + context.deletedModelsArray where state(model) != nil {
+            invalidateInventory(publish: false)
+            return
+        }
+        for model in context.changedModelsArray {
+            guard let (ref, current) = state(model) else { continue }
+            let previous = inventory.rows[model.persistentModelID] ?? RowState(raw: "", unavailable: current.unavailable)
+            if previous != current || inventory.divergent.contains(ref) {
+                invalidateInventory(publish: false)
+                return
+            }
+        }
+    }
+
+    /// Called after persistence (or rollback), so observers never warm a cache
+    /// with an uncommitted tag set. Fresh external contexts invalidate outright.
+    func publishInventoryChange() {
+        guard needsPublication else { return }
+        needsPublication = false
+        inventoryChanges.send()
+    }
+
+    func invalidateInventory(publish: Bool = true) {
+        inventory = nil
+        needsPublication = true
+        if publish { publishInventoryChange() }
+    }
+
     private let container: ModelContainer
     private let persist: (ModelContext) throws -> Void
     /// Replaces the item stores' contexts after a successful change.
@@ -61,14 +129,21 @@ final class TagService {
     /// Every tag in use on a live item, with how many items carry it, most
     /// used first.
     func counts() -> [TagCount] {
+        if let inventory { return inventory.counts }
         do {
+            var rows: [PersistentIdentifier: RowState] = [:]
+            var divergent = Set<AtticItemRef>()
             var itemsByTag: [String: Set<AtticItemRef>] = [:]
-            for (ref, tags) in try liveTags() {
+            for (ref, tags) in try liveTags(rows: &rows, divergent: &divergent) {
                 for tag in tags { itemsByTag[tag, default: []].insert(ref) }
             }
-            return itemsByTag
+            let counts = itemsByTag
                 .map { TagCount(name: $0.key, count: $0.value.count) }
                 .sorted { $0.count != $1.count ? $0.count > $1.count : $0.name < $1.name }
+            inventory = Inventory(counts: counts, countsByName: Dictionary(uniqueKeysWithValues: counts.map { ($0.name, $0.count) }),
+                                  names: counts.map(\.name), rows: rows, divergent: divergent)
+            inventoryBuildCount += 1
+            return counts
         } catch {
             lastErrorMessage = error.localizedDescription
             return []
@@ -79,7 +154,9 @@ final class TagService {
     func items(taggedWith tag: String) -> Set<AtticItemRef> {
         guard let tag = AtticTag.normalize(tag) else { return [] }
         do {
-            return Set(try liveTags().filter { $0.value.contains(tag) }.map(\.key))
+            var rows: [PersistentIdentifier: RowState] = [:]
+            var divergent = Set<AtticItemRef>()
+            return Set(try liveTags(rows: &rows, divergent: &divergent).filter { $0.value.contains(tag) }.map(\.key))
         } catch {
             lastErrorMessage = error.localizedDescription
             return []
@@ -195,41 +272,57 @@ final class TagService {
     /// then resolved (`canonicalReplicas`, the canvas winner) before the
     /// live and tag filters, so an older tagged copy never answers for a
     /// newer one that has no tags or is deleted.
-    private func liveTags() throws -> [AtticItemRef: Set<String>] {
+    private func liveTags(rows metadata: inout [PersistentIdentifier: RowState],
+                          divergent: inout Set<AtticItemRef>) throws -> [AtticItemRef: Set<String>] {
         let context = ModelContext(container)
         var result: [AtticItemRef: Set<String>] = [:]
+        var firstState: [AtticItemRef: RowState] = [:]
+        func remember(_ identifier: PersistentIdentifier, _ ref: AtticItemRef, _ raw: String, _ unavailable: Bool) {
+            let state = RowState(raw: raw, unavailable: unavailable)
+            metadata[identifier] = state
+            if let first = firstState[ref], first != state { divergent.insert(ref) }
+            firstState[ref] = state
+            inventoryRowReadCount += 1
+        }
+        func fetch<T: PersistentModel>(_ descriptor: FetchDescriptor<T>) throws -> [T] {
+            inventoryFetchCount += 1
+            return try context.fetch(descriptor)
+        }
         func record(_ ref: AtticItemRef, _ raw: String) {
             let tags = Set(AtticTag.decode(raw))
             if !tags.isEmpty { result[ref] = tags }
         }
 
-        let taskIDs = Array(Set(try context.fetch(FetchDescriptor<TaskItem>(
+        let taskIDs = Array(Set(try fetch(FetchDescriptor<TaskItem>(
             predicate: #Predicate { $0.tagsRaw != "" }
         )).map(\.id)))
         if !taskIDs.isEmpty {
-            let rows = try context.fetch(FetchDescriptor<TaskItem>(predicate: #Predicate { taskIDs.contains($0.id) }))
+            let rows = try fetch(FetchDescriptor<TaskItem>(predicate: #Predicate { taskIDs.contains($0.id) }))
+            for task in rows { remember(task.persistentModelID, AtticItemRef(.task, task.id), task.tagsRaw, task.deletedAt != nil) }
             for task in TaskStore.canonicalReplicas(from: rows) where task.deletedAt == nil {
                 record(AtticItemRef(.task, task.id), task.tagsRaw)
             }
         }
 
-        let noteIDs = Array(Set(try context.fetch(FetchDescriptor<NoteItem>(
+        let noteIDs = Array(Set(try fetch(FetchDescriptor<NoteItem>(
             predicate: #Predicate { $0.tagsRaw != "" }
         )).map(\.id)))
         if !noteIDs.isEmpty {
-            let rows = try context.fetch(FetchDescriptor<NoteItem>(predicate: #Predicate { noteIDs.contains($0.id) }))
+            let rows = try fetch(FetchDescriptor<NoteItem>(predicate: #Predicate { noteIDs.contains($0.id) }))
+            for note in rows { remember(note.persistentModelID, AtticItemRef(.note, note.id), note.tagsRaw, note.deletedAt != nil) }
             for note in NoteStore.canonicalReplicas(from: rows) where note.deletedAt == nil {
                 record(AtticItemRef(.note, note.id), note.tagsRaw)
             }
         }
 
-        let boardIDs = Array(Set(try context.fetch(FetchDescriptor<CanvasBoardItem>(
+        let boardIDs = Array(Set(try fetch(FetchDescriptor<CanvasBoardItem>(
             predicate: #Predicate { $0.tagsRaw != "" }
         )).map(\.id)))
         if !boardIDs.isEmpty {
-            let rows = try context.fetch(FetchDescriptor<CanvasBoardItem>(
+            let rows = try fetch(FetchDescriptor<CanvasBoardItem>(
                 predicate: #Predicate { boardIDs.contains($0.id) }
             ))
+            for board in rows { remember(board.persistentModelID, AtticItemRef(.canvas, board.id), board.tagsRaw, board.tombstoned || board.purgedAt != nil) }
             for replicas in Dictionary(grouping: rows, by: \.id).values {
                 let board = CanvasStore.winningBoardReplica(in: replicas)
                 guard !board.tombstoned, board.purgedAt == nil else { continue }
@@ -240,11 +333,14 @@ final class TagService {
     }
 
     private func save(_ context: ModelContext) -> Bool {
+        invalidate(in: context)
         do {
             try persist(context)
+            publishInventoryChange()
             lastErrorMessage = nil
         } catch {
             context.rollback()
+            invalidateInventory()
             lastErrorMessage = error.localizedDescription
             return false
         }

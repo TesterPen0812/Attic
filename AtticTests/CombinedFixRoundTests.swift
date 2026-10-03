@@ -314,6 +314,40 @@ final class CombinedFixRoundTests: XCTestCase {
         XCTAssertNil(AtticTagPickerCard.exactMatch("", in: launch))
     }
 
+    func testTheOpenNoteE1CardUsesTheSharedInventoryWhenTaskTagsChange() throws {
+        let attribute = NSAccessibility.Attribute(rawValue: "AXEnhancedUserInterface")
+        let previous = NSApp.accessibilityAttributeValue(attribute)
+        NSApp.accessibilitySetValue(true, forAttribute: attribute)
+        defer { NSApp.accessibilitySetValue(previous, forAttribute: attribute) }
+        let (harness, _, presenter) = try tagHarness(keyPanel: false)
+        defer { presenter.close(restoreFocus: false, immediately: true) }
+        let tasks = TaskStore(container: harness.store.container)
+        let library = AtticLibrary(tasks: tasks, notes: harness.store)
+        let model = TasksPageModel(library: library)
+        let host = try XCTUnwrap(presenter.host)
+        func labels() -> [String] {
+            accessibilityElements(host).compactMap { ($0 as? AtticDropdownMenuItem.ItemView)?.accessibilityLabel() }
+        }
+        XCTAssertEqual(model.cachedTags, library.tags.names) // Warm the composer before the edit.
+        let task = try XCTUnwrap(tasks.create(title: "Task-only tag"))
+        XCTAssertTrue(tasks.setTags(["cu2taskonly", "launch"], for: task))
+        spin(0.4)
+        host.layoutSubtreeIfNeeded()
+        XCTAssertEqual(labels(), ["#launch-october, 1", "#launch, 3", "#cu2taskonly, 1", "#kyoto, 1"],
+                       "the already-open E1 card refreshes from the cross-page inventory")
+        XCTAssertEqual(AtticTagSuggestion.make(typed: "CU2TaskOnly", counts: harness.store.tagCounts, excluding: []),
+                       [AtticTagSuggestion(name: "cu2taskonly", count: 1, isNew: false)])
+        XCTAssertEqual(Set(model.tagChoices(for: [task.id])), Set(library.tags.names))
+        XCTAssertEqual(Set(model.composerTagChoices), Set(library.tags.names))
+        XCTAssertTrue(model.cachedTags.contains("kyoto"), "the warm composer includes note-only tags")
+        XCTAssertTrue(tasks.setTags([], for: task))
+        spin(0.4)
+        host.layoutSubtreeIfNeeded()
+        XCTAssertEqual(labels(), ["#launch-october, 1", "#launch, 2", "#kyoto, 1"],
+                       "removing the last task use removes it from the open card")
+        withExtendedLifetime(library) {}
+    }
+
     /// The keyboard model, with real key events to a key panel (CI only,
     /// `ATTIC_KEY_WINDOW_TESTS`): ↓ ↓ Return toggles the highlighted tag,
     /// typing lights the exact tag, a new name is added, Esc closes. The CU

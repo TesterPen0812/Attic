@@ -330,6 +330,9 @@ final class TasksPageModel: ObservableObject {
         library.tasks.$revision
             .sink { [weak self] _ in DispatchQueue.main.async { self?.pruneMissing() } }
             .store(in: &cancellables)
+        library.tags.inventoryChanges
+            .sink { [weak self] in self?.objectWillChange.send() }
+            .store(in: &cancellables)
         // A subtask moved, or a move undone or redone (from here or the
         // shared history): the open quick look takes the new order.
         library.subtaskOrderChanges
@@ -483,16 +486,8 @@ final class TasksPageModel: ObservableObject {
         return tasks.map { rowModel(for: $0, match: query.isEmpty ? nil : query) }
     }
 
-    /// The library's tags, most used first, read once per store change
-    /// (the suggestions look at them on every keystroke).
-    var cachedTags: [String] {
-        if let tagsCache, tagsCache.revision == store.revision { return tagsCache.tags }
-        let tags = library.tags.counts().map(\.name)
-        tagsCache = (store.revision, tags)
-        return tags
-    }
-
-    private var tagsCache: (revision: UInt64, tags: [String])?
+    /// The shared value-only inventory: Notes changes reach the add bar too.
+    var cachedTags: [String] { library.tags.names }
 
     /// Now is empty and Later has tasks: the empty line offers "Choose
     /// from Later" (review 24).

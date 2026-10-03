@@ -582,6 +582,8 @@ struct NoteTagEditor: View {
     }
 
     private func tagCounts(_ current: Set<String>) -> [String: Int] {
+        // The attached library supplies the same inventory as Tasks and
+        // both title/composer suggestions; keep unsaved engine tags too.
         var counts = store.tagCounts
         for tag in current where counts[tag] == nil { counts[tag] = 1 }
         return counts
