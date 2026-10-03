@@ -139,10 +139,10 @@ final class DoneSearchCostTests: XCTestCase {
         model.doneSearch = "task"
         model.loadDoneLogIfNeeded()
         model.loadMoreDoneLog()
-        XCTAssertEqual(model.doneLogTasks.count, 160)
+        XCTAssertEqual(model.doneLogTasks.count, 2 * TasksPageModel.doneLogPageSize)
         model.doneSearch = "Finished"
         model.loadDoneLogIfNeeded()
-        XCTAssertEqual(model.doneLogTasks.count, 80)
+        XCTAssertEqual(model.doneLogTasks.count, TasksPageModel.doneLogPageSize)
     }
 
     func testAFailedSaveNeverPublishesTheDraftIntoSearch() throws {
@@ -344,7 +344,7 @@ final class DoneSearchCostTests: XCTestCase {
         var legacyTotal: Int?
         for query in ["F", "Fi", "Finished", "item 12", "zzzz-no-hit", "item", "item 123", "z"] {
             let before = DispatchTime.now().uptimeNanoseconds
-            let legacy = store.doneLogPage(limit: 80, matching: query)
+            let legacy = store.doneLogPage(limit: TasksPageModel.doneLogPageSize, matching: query)
             let legacyMatches = store.doneLogTaskCount(matching: query)
             if legacyTotal == nil { legacyTotal = store.doneLogTaskCount() }
             let legacyMS = Double(DispatchTime.now().uptimeNanoseconds - before) / 1_000_000
@@ -374,10 +374,11 @@ final class DoneSearchCostTests: XCTestCase {
         XCTAssertTrue(store.updateListed([id], title: "Renamed"))
         // No revision watcher has run; paging must itself catch up.
         model.loadMoreDoneLog()
-        XCTAssertEqual(model.doneLogTasks.count, 160)
+        let twoPages = 2 * TasksPageModel.doneLogPageSize
+        XCTAssertEqual(model.doneLogTasks.count, twoPages)
         XCTAssertFalse(model.doneLogTasks.contains { $0.id == id })
-        XCTAssertEqual(Set(model.doneLogTasks.map(\.id)).count, 160)
-        XCTAssertEqual(model.doneLogTasks.map(\.id), store.doneLogPage(limit: 160, matching: "task").tasks.map(\.id))
+        XCTAssertEqual(Set(model.doneLogTasks.map(\.id)).count, twoPages)
+        XCTAssertEqual(model.doneLogTasks.map(\.id), store.doneLogPage(limit: twoPages, matching: "task").tasks.map(\.id))
     }
 
 }
