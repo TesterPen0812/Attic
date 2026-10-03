@@ -605,9 +605,10 @@ enum AtticOverlayHierarchy {
 
     private struct Change {
         weak var view: NSView?
-        /// nil: leave the parent.
+        /// Leave the parent (otherwise join `parent`).
+        var leaves = false
         weak var parent: NSView?
-        var frame: NSRect
+        var frame: NSRect = .zero
     }
     private static var pending: [ObjectIdentifier: Change] = [:]
     private static var isScheduled = false
@@ -649,7 +650,7 @@ enum AtticOverlayHierarchy {
         }
         guard view.superview != nil || pending[id] != nil else { return }
         if !view.isHidden { view.isHidden = true }
-        pending[id] = Change(view: view, parent: nil, frame: .zero)
+        pending[id] = Change(view: view, leaves: true)
         schedule()
     }
 
@@ -666,11 +667,11 @@ enum AtticOverlayHierarchy {
         pending = [:]
         for change in changes.values {
             guard let view = change.view else { continue }
-            if let parent = change.parent {
+            if change.leaves {
+                if view.superview != nil { view.removeFromSuperview() }
+            } else if let parent = change.parent {
                 if view.frame != change.frame { view.frame = change.frame }
                 if view.superview !== parent { parent.addSubview(view, positioned: .above, relativeTo: nil) }
-            } else if view.superview != nil {
-                view.removeFromSuperview()
             }
         }
     }
