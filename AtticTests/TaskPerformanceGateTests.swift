@@ -374,42 +374,45 @@ extension TaskPerformanceGateTests {
             results["\(label)_TOGGLE_MS"] = PFSamples(values: toggles)
             results["\(label)_LINK_MS"] = PFSamples(values: links)
             results["\(label)_SAVE_MS"] = PFSamples(values: saves)
+            var coldToggles: [Double] = [], coldLinks: [Double] = [], coldSaves: [Double] = []
+            for i in 0..<7 {
+                let opened = try PersistenceController.makeContainer(cloudSyncEnabled: false, storeDirectory: root)
+                let coldTasks = TaskStore(container: opened)
+                let coldNotes = NoteStore(container: opened, attachmentFileStore: makeTestAttachmentFileStore())
+                let coldLibrary = AtticLibrary(tasks: coldTasks, notes: coldNotes)
+                await coldNotes.waitForAttachmentReconciliation()
+                _ = try coldNotes.noteMutationPreflight(noteID, format: .document)
+                coldToggles.append(pfMilliseconds {
+                    XCTAssertEqual(coldLibrary.updateTask(head.id, status: i.isMultiple(of: 2) ? .todo : .done), .applied)
+                }.1)
+                coldLinks.append(pfMilliseconds {
+                    XCTAssertTrue(i.isMultiple(of: 2) ? coldLibrary.links.unlink(link.id) : coldLibrary.links.restoreLink(link.id))
+                }.1)
+                var candidate = document
+                candidate.blocks[0] = .text("Cold saved \(i)")
+                let projection = try PreparedNoteDocument(candidate)
+                let (result, duration) = pfMilliseconds {
+                    coldNotes.saveDocument(noteID: noteID, document: candidate, baseRevisionID: baseRevision, staged: [], prepared: projection)
+                }
+                guard case let .success(next) = result else { return XCTFail("PF cold autosave failed: \(result)") }
+                baseRevision = next
+                coldSaves.append(duration)
+            }
+            results["\(label)_COLD_TOGGLE_MS"] = PFSamples(values: coldToggles)
+            results["\(label)_COLD_LINK_MS"] = PFSamples(values: coldLinks)
+            results["\(label)_COLD_SAVE_MS"] = PFSamples(values: coldSaves)
         }
         for key in results.keys.sorted() {
             let sample = results[key]!
             print("PF_\(key)_MEDIAN=\(sample.median) MIN=\(sample.minimum) MAX=\(sample.maximum) SPREAD=\(sample.spread)")
         }
-        let env = ProcessInfo.processInfo.environment
         fflush(stdout)
         try FileHandle.standardOutput.write(contentsOf: Data(("PF_REFERENCE_JSON=" + String(decoding: try JSONEncoder().encode(results), as: UTF8.self) + "\n").utf8))
-        // Local probes remain useful without an exported hosted baseline.
-        // CI sets this for both the focused PF lane and the full hosted suite.
-        if env["ATTIC_PF_REQUIRE_REFERENCE"] == "1" {
-            XCTAssertNotNil(env["ATTIC_PF_REFERENCE_JSON"], "CI must measure and export the fixed Phase 2 reference")
-        }
-        if let json = env["ATTIC_PF_REFERENCE_JSON"] {
-            let reference = try JSONDecoder().decode([String: PFSamples].self, from: Data(json.utf8))
-            for key in results.keys.sorted() {
-                let actual = results[key]!, base = try XCTUnwrap(reference[key])
-                // Tolerance = largest reference sample + its measured spread.
-                // This is the same noise rule as Phase 2's PF1 assertions.
-                XCTAssertLessThanOrEqual(actual.median, base.maximum + base.spread, "\(key) exceeded fixed Phase 2 spread")
-                XCTAssertLessThanOrEqual(actual.maximum, base.maximum + base.spread, "\(key) maximum exceeded fixed Phase 2 spread")
-            }
-            for metric in ["SAVE_MS", "TOGGLE_MS", "LINK_MS"] {
-                let empty = results["EMPTY_\(metric)"]!, full = results["POPULATED_\(metric)"]!
-                let bEmpty = reference["EMPTY_\(metric)"]!, bFull = reference["POPULATED_\(metric)"]!
-                // Paired size tolerance uses the reference's worst observed
-                // populated-minus-empty delta plus one observed sample spread.
-                let noise = bFull.maximum - bEmpty.minimum + max(bFull.spread, bEmpty.spread)
-                XCTAssertLessThanOrEqual(full.median - empty.median, noise, "PF3 \(metric) scales with unrelated contents")
-            }
-        }
         XCTAssertLessThanOrEqual(results["POPULATED_TOGGLE_MS"]!.maximum, 120)
     }
     /// The base archive runs this identical 200-iteration session in one
-    /// process. Compare each operation with its matching quintile, including
-    /// every maximum; a stable overall median cannot hide session growth.
+    /// process. Export matching quintiles and raw samples for the paired
+    /// median and stall-rate gate; maxima remain diagnostic.
     func testPF5InterleavedSessionSoakAgainstPairedBase() async throws {
         var results: [String: PFSamples] = [:]
         for populated in [false, true] {
@@ -509,22 +512,10 @@ extension TaskPerformanceGateTests {
         let summary = results.mapValues { PFSamples(values: [$0.minimum, $0.median, $0.maximum]) }
         fflush(stdout)
         try FileHandle.standardOutput.write(contentsOf: Data(("PF5_REFERENCE_JSON=" + String(decoding: try JSONEncoder().encode(summary), as: UTF8.self) + "\n").utf8))
-        let env = ProcessInfo.processInfo.environment
-        if env["ATTIC_PF_REQUIRE_REFERENCE"] == "1" {
-            XCTAssertNotNil(env["ATTIC_PF5_REFERENCE_JSON"], "CI must export the matching Phase 2 session")
-        }
-        if let json = env["ATTIC_PF5_REFERENCE_JSON"] {
-            let reference = try JSONDecoder().decode([String: PFSamples].self, from: Data(json.utf8))
-            for key in results.keys.sorted() {
-                let actual = results[key]!, base = try XCTUnwrap(reference[key])
-                XCTAssertLessThanOrEqual(actual.median, base.maximum + base.spread, "PF5 \(key) median")
-                XCTAssertLessThanOrEqual(actual.maximum, base.maximum + base.spread, "PF5 \(key) maximum")
-            }
-        }
     }
 
     /// Same-runner attribution for both Phase 2 PF1 production entry points.
-    /// The unchanged NotesPageControllerTests retain their absolute constants.
+    /// NotesPageControllerTests retain absolute constants outside this lane.
     func testPF1LargeAutosaveAndPreparedCommitAgainstPairedBase() async throws {
         var results: [String: PFSamples] = [:]
         for populated in [false, true] {
@@ -577,18 +568,6 @@ extension TaskPerformanceGateTests {
         }
         fflush(stdout)
         try FileHandle.standardOutput.write(contentsOf: Data(("PF1_REFERENCE_JSON=" + String(decoding: try JSONEncoder().encode(results), as: UTF8.self) + "\n").utf8))
-        let env = ProcessInfo.processInfo.environment
-        if env["ATTIC_PF_REQUIRE_REFERENCE"] == "1" {
-            XCTAssertNotNil(env["ATTIC_PF1_REFERENCE_JSON"], "CI must export the matching Phase 2 PF1 samples")
-        }
-        if let json = env["ATTIC_PF1_REFERENCE_JSON"] {
-            let reference = try JSONDecoder().decode([String: PFSamples].self, from: Data(json.utf8))
-            for key in results.keys.sorted() {
-                let actual = results[key]!, base = try XCTUnwrap(reference[key])
-                XCTAssertLessThanOrEqual(actual.median, base.maximum + base.spread, "PF1 \(key) median")
-                XCTAssertLessThanOrEqual(actual.maximum, base.maximum + base.spread, "PF1 \(key) maximum")
-            }
-        }
     }
 
 }

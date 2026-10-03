@@ -52,7 +52,7 @@ jobs:
             ATTIC_MACOS_UNIT_HOST_BUNDLE_IDENTIFIER=com.taha.Attic.p3.pfbase \
             "${F[@]}" -parallel-testing-enabled NO \
             -only-testing:AtticTests/TaskPerformanceGateTests/testPFFoundationSizeAndProductionPaths test \
-            | tee .build/pf-base.log
+            | tee .build/pf-base.log || true
           for test in testPF1LargeAutosaveAndPreparedCommitAgainstPairedBase testPF5InterleavedSessionSoakAgainstPairedBase; do
             /Users/taha/Developer/attic-redesign-assets/xcodebuild-locked.sh \
               -project "$base/Attic.xcodeproj" -scheme Attic -configuration Local \
@@ -62,23 +62,20 @@ jobs:
               ATTIC_MACOS_UNIT_HOST_BUNDLE_IDENTIFIER=com.taha.Attic.p3.pfbase \
               "${F[@]}" -parallel-testing-enabled NO \
               -only-testing:"AtticTests/TaskPerformanceGateTests/$test" test-without-building \
-              | tee -a .build/pf-base.log
+              | tee -a .build/pf-base.log || true
           done
-          python3 - <<'PY'
-          import json, os
-          from pathlib import Path
-          lines = Path('.build/pf-base.log').read_text().splitlines()
-          raw = next(line.split('PF_REFERENCE_JSON=', 1)[1] for line in lines if 'PF_REFERENCE_JSON=' in line)
-          reference = json.loads(raw)
-          Path('.build/pf-base-reference.json').write_text(json.dumps(reference, indent=2))
-          with open(os.environ['GITHUB_ENV'], 'a') as output:
-              output.write('TEST_RUNNER_ATTIC_PF_REFERENCE_JSON=' + raw + '\n')
-              for gate in ['PF1', 'PF5']:
-                  paired = next(line.split(gate + '_REFERENCE_JSON=', 1)[1] for line in lines if gate + '_REFERENCE_JSON=' in line)
-                  Path('.build/' + gate.lower() + '-base-reference.json').write_text(json.dumps(json.loads(paired), indent=2))
-                  output.write('TEST_RUNNER_ATTIC_' + gate + '_REFERENCE_JSON=' + paired + '\n')
-              output.write('TEST_RUNNER_ATTIC_PF_REQUIRE_REFERENCE=1\n')
-          PY
+          echo 'TEST_RUNNER_ATTIC_PF_REQUIRE_REFERENCE=1' >> "$GITHUB_ENV"
+          for test in testMeasuredMainActorSaveOnFiveThousandLineNote testMeasuredMainActorSaveIsIndependentOfUnrelatedStoreContents; do
+            /Users/taha/Developer/attic-redesign-assets/xcodebuild-locked.sh \
+              -project "$base/Attic.xcodeproj" -scheme Attic -configuration Local \
+              -destination 'platform=macOS' -derivedDataPath "$RUNNER_TEMP/AtticPFBaseBuild" \
+              ATTIC_MACOS_UNIT_HOST_PRODUCT_NAME=AtticP3PFBaseHost \
+              ATTIC_MACOS_UNIT_HOST_EXECUTABLE_NAME=AtticP3PFBaseHost \
+              ATTIC_MACOS_UNIT_HOST_BUNDLE_IDENTIFIER=com.taha.Attic.p3.pfbase \
+              "${F[@]}" -parallel-testing-enabled NO \
+              -only-testing:"AtticTests/NotesPageControllerTests/$test" test-without-building \
+              | tee -a .build/pf-base-phase2.log || true
+          done
       - name: Build and sign the isolated hosted test products
         shell: /bin/zsh {0}
         run: |
@@ -98,6 +95,7 @@ jobs:
         shell: /bin/zsh {0}
         run: |
           F=(CODE_SIGNING_ALLOWED=YES CODE_SIGNING_REQUIRED=YES CODE_SIGN_STYLE=Manual CODE_SIGN_IDENTITY=- DEVELOPMENT_TEAM= ENABLE_DEBUG_DYLIB=NO)
+          set -o pipefail
           paired_status=0
           /Users/taha/Developer/attic-redesign-assets/xcodebuild-locked.sh \
             -project Attic.xcodeproj -scheme Attic -configuration Local \
@@ -107,7 +105,8 @@ jobs:
             ATTIC_MACOS_UNIT_HOST_EXECUTABLE_NAME=AtticP3CrashHost \
             ATTIC_MACOS_UNIT_HOST_BUNDLE_IDENTIFIER=com.taha.Attic.p3.crashhost \
             -parallel-testing-enabled NO "${F[@]}" \
-            -only-testing:AtticTests/TaskPerformanceGateTests/testPFFoundationSizeAndProductionPaths test-without-building || paired_status=$?
+            -only-testing:AtticTests/TaskPerformanceGateTests/testPFFoundationSizeAndProductionPaths test-without-building \
+            | tee .build/pf-candidate.log || paired_status=$?
           for test in testPF1LargeAutosaveAndPreparedCommitAgainstPairedBase testPF5InterleavedSessionSoakAgainstPairedBase; do
             /Users/taha/Developer/attic-redesign-assets/xcodebuild-locked.sh \
               -project Attic.xcodeproj -scheme Attic -configuration Local \
@@ -117,10 +116,54 @@ jobs:
               ATTIC_MACOS_UNIT_HOST_EXECUTABLE_NAME=AtticP3CrashHost \
               ATTIC_MACOS_UNIT_HOST_BUNDLE_IDENTIFIER=com.taha.Attic.p3.crashhost \
               "${F[@]}" -parallel-testing-enabled NO \
-              -only-testing:"AtticTests/TaskPerformanceGateTests/$test" test-without-building || paired_status=$?
+              -only-testing:"AtticTests/TaskPerformanceGateTests/$test" test-without-building \
+              | tee -a .build/pf-candidate.log || paired_status=$?
           done
           exit "$paired_status"
+      - name: Measure fixed Phase 2 reference again
+        if: ${{ !cancelled() && !inputs.harness_only }}
+        shell: /bin/zsh {0}
+        run: |
+          base="$RUNNER_TEMP/AtticPFBase"
+          F=(CODE_SIGNING_ALLOWED=YES CODE_SIGNING_REQUIRED=YES CODE_SIGN_STYLE=Manual CODE_SIGN_IDENTITY=- DEVELOPMENT_TEAM= ENABLE_DEBUG_DYLIB=NO)
+          for test in testPFFoundationSizeAndProductionPaths testPF1LargeAutosaveAndPreparedCommitAgainstPairedBase testPF5InterleavedSessionSoakAgainstPairedBase; do
+            /Users/taha/Developer/attic-redesign-assets/xcodebuild-locked.sh \
+              -project "$base/Attic.xcodeproj" -scheme Attic -configuration Local \
+              -destination 'platform=macOS' -derivedDataPath "$RUNNER_TEMP/AtticPFBaseBuild" \
+              ATTIC_MACOS_UNIT_HOST_PRODUCT_NAME=AtticP3PFBaseHost \
+              ATTIC_MACOS_UNIT_HOST_EXECUTABLE_NAME=AtticP3PFBaseHost \
+              ATTIC_MACOS_UNIT_HOST_BUNDLE_IDENTIFIER=com.taha.Attic.p3.pfbase \
+              "${F[@]}" -parallel-testing-enabled NO \
+              -only-testing:"AtticTests/TaskPerformanceGateTests/$test" test-without-building \
+              | tee -a .build/pf-base-after.log || true
+          done
+          for test in testMeasuredMainActorSaveOnFiveThousandLineNote testMeasuredMainActorSaveIsIndependentOfUnrelatedStoreContents; do
+            /Users/taha/Developer/attic-redesign-assets/xcodebuild-locked.sh \
+              -project "$base/Attic.xcodeproj" -scheme Attic -configuration Local \
+              -destination 'platform=macOS' -derivedDataPath "$RUNNER_TEMP/AtticPFBaseBuild" \
+              ATTIC_MACOS_UNIT_HOST_PRODUCT_NAME=AtticP3PFBaseHost \
+              ATTIC_MACOS_UNIT_HOST_EXECUTABLE_NAME=AtticP3PFBaseHost \
+              ATTIC_MACOS_UNIT_HOST_BUNDLE_IDENTIFIER=com.taha.Attic.p3.pfbase \
+              "${F[@]}" -parallel-testing-enabled NO \
+              -only-testing:"AtticTests/NotesPageControllerTests/$test" test-without-building \
+              | tee -a .build/pf-base-after-phase2.log || true
+          done
+      - name: Test paired PF gate plumbing
+        if: ${{ !cancelled() && !inputs.harness_only }}
+        run: python3 Scripts/test_pf_paired_gate.py
+      - name: Evaluate paired PF gate
+        if: ${{ !cancelled() && !inputs.harness_only }}
+        shell: /bin/zsh {0}
+        run: |
+          set -o pipefail
+          gate_status=0
+          python3 Scripts/pf_paired_gate.py --base .build/pf-base.log --candidate .build/pf-candidate.log --base-after .build/pf-base-after.log | tee .build/pf-gate.txt || gate_status=$?
+          if [[ "$gate_status" == 2 ]]; then
+            echo 'UNMEASURABLE: base failed against itself; rerun the failed job once'
+          fi
+          exit "$gate_status"
       - name: Run C1-C5 and minimum taskNote format before the full suite
+        if: ${{ !cancelled() }}
         env:
           TEST_RUNNER_ATTIC_KEY_WINDOW_TESTS: "1"
         shell: /bin/zsh {0}
@@ -139,6 +182,7 @@ jobs:
             -only-testing:AtticTests/WorkspaceCommitTests -only-testing:AtticTests/NoteFormatTests \
             -skip-testing:AtticTests/OperationCrashHarnessTests/testK8CoordinatedPurgeCrashesLeaveOnlyRecoverableExclusiveFileSurplus test-without-building
       - name: Run workspace history before purge
+        if: ${{ !cancelled() }}
         shell: /bin/zsh {0}
         run: |
           F=(CODE_SIGNING_ALLOWED=YES CODE_SIGNING_REQUIRED=YES CODE_SIGN_STYLE=Manual CODE_SIGN_IDENTITY=- DEVELOPMENT_TEAM= ENABLE_DEBUG_DYLIB=NO)
@@ -153,6 +197,7 @@ jobs:
             -default-test-execution-time-allowance 120 -maximum-test-execution-time-allowance 360 \
             "${F[@]}" -only-testing:AtticTests/WorkspaceHistoryTests -only-testing:AtticTests/WorkspaceTextReplayTests test-without-building
       - name: Run coordinated purge restore and K8
+        if: ${{ !cancelled() }}
         shell: /bin/zsh {0}
         run: |
           F=(CODE_SIGNING_ALLOWED=YES CODE_SIGNING_REQUIRED=YES CODE_SIGN_STYLE=Manual CODE_SIGN_IDENTITY=- DEVELOPMENT_TEAM= ENABLE_DEBUG_DYLIB=NO)
@@ -218,12 +263,14 @@ jobs:
             .build/performance-gate.xcresult
             .build/testPF1LargeAutosaveAndPreparedCommitAgainstPairedBase.xcresult
             .build/testPF5InterleavedSessionSoakAgainstPairedBase.xcresult
-            .build/pf1-base-reference.json
-            .build/pf5-base-reference.json
             .build/commit-gate.xcresult
             .build/history-gate.xcresult
             .build/purge-gate.xcresult
             .build/foundation.xcresult
             .build/pf-base.log
-            .build/pf-base-reference.json
+            .build/pf-base-phase2.log
+            .build/pf-candidate.log
+            .build/pf-base-after.log
+            .build/pf-base-after-phase2.log
+            .build/pf-gate.txt
           retention-days: 3

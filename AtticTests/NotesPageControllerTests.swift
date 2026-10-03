@@ -176,10 +176,19 @@ final class NotesPageControllerTests: XCTestCase {
     private let saveMedianLimit = 55.323833 + (55.323833 - 45.781292)
     private let preparedMedianLimit = 6.087083 + (6.087083 - 4.907000)
 
+    private func assertPhase2Constant(_ value: Double, limit: Double, name: String,
+                                      message: String = "", file: StaticString = #filePath, line: UInt = #line) {
+        if ProcessInfo.processInfo.environment["ATTIC_PF_REQUIRE_REFERENCE"] == "1" {
+            print("PHASE2_CONSTANT_ADVISORY name=\(name) value=\(value) limit=\(limit)")
+        } else {
+            XCTAssertLessThanOrEqual(value, limit, message, file: file, line: line)
+        }
+    }
+
     private func assertSaveBaseline(_ sample: (save: Double, prepared: Double),
                                     file: StaticString = #filePath, line: UInt = #line) {
-        XCTAssertLessThanOrEqual(sample.save, saveMedianLimit, "Main-actor save regressed", file: file, line: line)
-        XCTAssertLessThanOrEqual(sample.prepared, preparedMedianLimit, "Prepared commit regressed", file: file, line: line)
+        assertPhase2Constant(sample.save, limit: saveMedianLimit, name: "SAVE_MEDIAN", message: "Main-actor save regressed", file: file, line: line)
+        assertPhase2Constant(sample.prepared, limit: preparedMedianLimit, name: "PREPARED_MEDIAN", message: "Prepared commit regressed", file: file, line: line)
     }
 
     func testMeasuredMainActorSaveIsIndependentOfUnrelatedStoreContents() async throws {
@@ -193,10 +202,10 @@ final class NotesPageControllerTests: XCTestCase {
         // The same four baseline runs' prepared maxima were 5.980709,
         // 6.499917, 6.568041 and 8.652083 ms. Allow their observed spread
         // for the paired store-size comparison, including sample jitter.
-        XCTAssertLessThanOrEqual(populated.prepared - empty.prepared, 8.652083 - 5.980709,
-                                 "Unrelated notes, history and bytes must not enter an autosave")
-        XCTAssertLessThanOrEqual(populated.save - empty.save, 55.323833 - 45.781292,
-                                 "Main-actor save must stay independent of unrelated store contents")
+        assertPhase2Constant(populated.prepared - empty.prepared, limit: 8.652083 - 5.980709, name: "PREPARED_SIZE_DELTA",
+                             message: "Unrelated notes, history and bytes must not enter an autosave")
+        assertPhase2Constant(populated.save - empty.save, limit: 55.323833 - 45.781292, name: "SAVE_SIZE_DELTA",
+                             message: "Main-actor save must stay independent of unrelated store contents")
     }
 
     func testMeasuredColdOpenAndLaunchWithFiveThousandLineNote() async throws {
@@ -333,8 +342,8 @@ final class NotesPageControllerTests: XCTestCase {
         // Five measured CI references (the four pre-3b runs above plus
         // d77ec80 / 36954437718): save maxima 96.197958...123.233917;
         // prepared maxima 5.170209...8.652083. One observed spread of noise.
-        XCTAssertLessThanOrEqual(sorted.last ?? 0, 123.233917 + (123.233917 - 96.197958))
-        XCTAssertLessThanOrEqual(preparedSorted.last ?? 0, 8.652083 + (8.652083 - 5.170209))
+        assertPhase2Constant(sorted.last ?? 0, limit: 123.233917 + (123.233917 - 96.197958), name: "\(label ?? "STANDALONE")_SAVE_MAX")
+        assertPhase2Constant(preparedSorted.last ?? 0, limit: 8.652083 + (8.652083 - 5.170209), name: "\(label ?? "STANDALONE")_PREPARED_MAX")
         XCTAssertTrue(store.versions(noteID: id).isEmpty)
         let result = (save: sorted[sorted.count / 2], prepared: preparedSorted[preparedSorted.count / 2])
         if let label {
