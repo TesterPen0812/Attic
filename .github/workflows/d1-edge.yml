@@ -1,6 +1,9 @@
 name: D1 edge verification
 on:
   workflow_dispatch:
+  push:
+    branches: [redesign/p1-glass]
+    paths: [.github/workflows/d1-edge.yml]
 permissions:
   contents: read
 jobs:
