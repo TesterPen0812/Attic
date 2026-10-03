@@ -368,6 +368,93 @@ final class MCPRequestHandlerTests: XCTestCase {
         XCTAssertEqual(noteStore.note(withID: note.id)?.body, "old")
     }
 
+    func testUpdateNoteCanAddAndRemoveChecklistLinesInPlainAndRichNotes() throws {
+        for rich in [false, true] {
+            for removing in [false, true] {
+                let (noteStore, handler) = try makeNoteHandler()
+                var paragraph = NoteBlock.text("Keep this paragraph")
+                if rich { paragraph.style = "heading"; paragraph.level = 2 }
+                var kept = NoteBlock.checklist("Keep this item", checked: true)
+                kept.extras = ["owner": .string("person")]
+                let removed = NoteBlock.checklist("Remove this item")
+                let base = NoteDocument(blocks: [.text("Title"), paragraph, kept] + (removing ? [removed] : []))
+                guard case let .success((id, _)) = noteStore.createDocumentNote(id: UUID(), document: base) else { return XCTFail() }
+                var lines = NoteTextExport.agentBody(base).components(separatedBy: "\n")
+                if removing { lines.removeLast() } else { lines.append("- [ ] Buy milk") }
+                let token = try XCTUnwrap(noteStore.note(withID: id)?.revisionToken)
+                let payload = try callNoteTool(handler, "update_note", ["id": id.uuidString,
+                    "base_revision": token, "body": lines.joined(separator: "\n")])
+                XCTAssertEqual(payload["status"] as? String, "applied")
+                let document = try XCTUnwrap(noteStore.loadDocument(noteID: id)?.content.document)
+                XCTAssertEqual(document.blocks.prefix(3), base.blocks.prefix(3), "kept metadata and IDs survive")
+                XCTAssertEqual(document.blocks.filter { $0.kind == .checklist }.map(\.text),
+                               removing ? ["Keep this item"] : ["Keep this item", "Buy milk"])
+            }
+        }
+    }
+
+    func testUpdateNoteRejectsFlattenedDuplicatedAndReorderedChecklistLinesWithAccurateMessage() throws {
+        let message = "This edit would flatten, duplicate, reorder, or change an existing checklist item. Keep remaining checklist lines unchanged except for their checked states; add or remove complete checklist lines."
+        for rich in [false, true] {
+            let (noteStore, handler) = try makeNoteHandler()
+            var paragraph = NoteBlock.text("Keep paragraph")
+            if rich { paragraph.style = "heading"; paragraph.level = 2 }
+            var base = NoteDocument(blocks: [.text("Title"), paragraph, .checklist("First"), .checklist("Second")])
+            base.refreshRequiredCapabilities()
+            guard case let .success((id, _)) = noteStore.createDocumentNote(id: UUID(), document: base) else { return XCTFail() }
+            let prefix = NoteTextExport.agentLine(paragraph, index: 1) + "\n"
+            let token = try XCTUnwrap(noteStore.note(withID: id)?.revisionToken)
+            for body in ["First\n- [ ] Second", "- [ ] First\n- [ ] Second\n- [ ] First", "- [ ] Second\n- [ ] First"] {
+                XCTAssertEqual(try noteToolError(handler, ["id": id.uuidString, "base_revision": token, "body": prefix + body]), message)
+                XCTAssertEqual(noteStore.loadDocument(noteID: id)?.content.document, base)
+            }
+        }
+    }
+
+    func testUpdateNoteWithAnEmptyChecklistItemCanAddOrEditBlankParagraphs() throws {
+        for body in ["- [ ] Milk\n- [ ] \nParagraph\n\nNew paragraph",
+                     "- [ ] Milk\n- [ ] \n",
+                     "- [ ] Milk\n\nParagraph",
+                     "- [ ] Milk\n- [ ] \nParagraph\nMilk"] {
+            let (noteStore, handler) = try makeNoteHandler()
+            let base = NoteDocument(blocks: [.text("Title"), .checklist("Milk"),
+                                             .checklist(""), .text("Paragraph")])
+            guard case let .success((id, _)) = noteStore.createDocumentNote(id: UUID(), document: base) else { return XCTFail() }
+            let token = try XCTUnwrap(noteStore.note(withID: id)?.revisionToken)
+            let payload = try callNoteTool(handler, "update_note", ["id": id.uuidString,
+                "base_revision": token, "body": body])
+            XCTAssertEqual(payload["status"] as? String, "applied")
+            let document = try XCTUnwrap(noteStore.loadDocument(noteID: id)?.content.document)
+            XCTAssertEqual(NoteTextExport.agentBody(document), body)
+            XCTAssertEqual(document.blocks[1], base.blocks[1])
+            if body.contains("- [ ] \n") { XCTAssertEqual(document.blocks[2], base.blocks[2]) }
+            XCTAssertNotEqual(noteStore.note(withID: id)?.revisionToken, token)
+        }
+    }
+
+    func testUpdateNoteRejectsChecklistRenamesThatLoseNestingMarksOrExtras() throws {
+        let message = "This edit would flatten, duplicate, reorder, or change an existing checklist item. Keep remaining checklist lines unchanged except for their checked states; add or remove complete checklist lines."
+        var nested = NoteBlock.checklist("Oat"); nested.indent = 1
+        var bold = NoteBlock.checklist("Oat"); bold.marks = [NoteMark(.bold, offset: 0, length: 3)]
+        var struck = NoteBlock.checklist("Oat"); struck.marks = [NoteMark(.strikethrough, offset: 0, length: 3)]
+        var extra = NoteBlock.checklist("Oat"); extra.extras = ["owner": .string("person")]
+        for item in [nested, bold, struck, extra] {
+            let (noteStore, handler) = try makeNoteHandler()
+            var base = NoteDocument(blocks: [.text("Title"), item])
+            base.refreshRequiredCapabilities()
+            guard case let .success((id, _)) = noteStore.createDocumentNote(id: UUID(), document: base) else { return XCTFail() }
+            let token = try XCTUnwrap(noteStore.note(withID: id)?.revisionToken)
+            XCTAssertEqual(try noteToolError(handler, ["id": id.uuidString,
+                "base_revision": token, "body": "- [ ] Oat milk 2L"]), message)
+            XCTAssertEqual(noteStore.loadDocument(noteID: id)?.content.document, base)
+            XCTAssertEqual(noteStore.note(withID: id)?.revisionToken, token)
+            let deleted = try callNoteTool(handler, "update_note", ["id": id.uuidString,
+                "base_revision": token, "body": ""])
+            XCTAssertEqual(deleted["status"] as? String, "applied", "whole-item deletion remains allowed")
+            XCTAssertEqual(noteStore.loadDocument(noteID: id)?.content.document?.blocks, [.text("Title")])
+        }
+    }
+
     func testUpdateNoteInTheNewFormatKeepsObjectsAndWaitsWhileTheNoteIsOpen() throws {
         let (noteStore, handler) = try makeNoteHandler()
         let checklistID = UUID()

@@ -553,6 +553,42 @@ final class NotesLibraryModelTests: XCTestCase {
         return NotesLibraryModel(search: search, now: { [unowned self] in self.now }, calendar: calendar)
     }
 
+    func testHiddenLibraryAutosavesDoNotRunSearchAfterAnyDismissalRoute() async throws {
+        enum Exit: CaseIterable { case dismiss, newNote, duplicate, openNote, failedDraft }
+        for route in Exit.allCases {
+            let controller = NotesPageController(store: store, journal: nil, saveDelay: .seconds(60))
+            await controller.startAndWait()
+            let initial = try XCTUnwrap(controller.active)
+            _ = initial.engine.performEdit(NSRange(location: 0, length: 0),
+                                          with: NSAttributedString(string: "quartz"), name: "Typing")
+            XCTAssertTrue(controller.save(initial))
+            var searches = 0
+            let library = NotesLibraryModel(search: { _ in searches += 1; return [] },
+                                            store: store, controller: controller)
+            XCTAssertTrue(controller.showLibrary())
+            library.query = "quartz"
+            await library.waitForSearch()
+            XCTAssertEqual(searches, 1)
+            switch route {
+            case .dismiss: controller.dismissLibrary()
+            case .newNote: XCTAssertTrue(controller.requestNewNote())
+            case .duplicate: XCTAssertTrue(controller.duplicateNote(noteID: initial.noteID))
+            case .openNote: await XCTAssertTrueAsync(await controller.openDurably(noteID: initial.noteID)); controller.dismissLibrary()
+            case .failedDraft: XCTAssertTrue(controller.openFailedDraft(sessionID: initial.id))
+            }
+            XCTAssertFalse(controller.isLibraryPresented)
+            XCTAssertEqual(library.query, "", "\(route) must end the search")
+            let target = try XCTUnwrap(controller.active)
+            for _ in 0..<3 {
+                _ = target.engine.performEdit(NSRange(location: target.engine.textStorage.length, length: 0),
+                                              with: NSAttributedString(string: " edit"), name: "Typing")
+                await controller.runDueSave(target)
+                await library.waitForSearch()
+            }
+            XCTAssertEqual(searches, 1, "autosaves with the library hidden must do no full-library search")
+        }
+    }
+
     func testWarmedTagInventoryDoesNotRereadTheLibraryWhileTypingOrSavingText() throws {
         for index in 0..<1_000 {
             let note = NoteItem(title: "Unrelated \(index)")

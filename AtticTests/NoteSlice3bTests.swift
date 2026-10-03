@@ -3202,11 +3202,13 @@ private final class AllPayloadReadBarrier: @unchecked Sendable {
 @MainActor
 private final class DeferredPasteBytes: NoteImageProviding {
     let payloads: [UUID: StagedNoteAttachment]
+    private(set) var readCount = 0
     init(_ payloads: [UUID: StagedNoteAttachment]) { self.payloads = payloads }
     func fileURL(forAttachment id: UUID) async -> URL? { nil }
     func filename(forAttachment id: UUID) -> String? { payloads[id]?.filename }
     func imageBytes(forAttachment id: UUID) -> StagedNoteAttachment? { nil }
     func verifiedBytes(forAttachment id: UUID) async -> StagedNoteAttachment? {
+        readCount += 1
         try? await Task.sleep(for: .milliseconds(80))
         return payloads[id]
     }
@@ -3214,6 +3216,97 @@ private final class DeferredPasteBytes: NoteImageProviding {
 
 @MainActor
 extension NoteSlice3bTests {
+    func testPrivatePasteIntoChangedElsewhereBehavesLikeTypingAndKeepsTheConflict() async throws {
+        let store = try makeTestNoteStore(attachmentFileStore: makeTestAttachmentFileStore())
+        let original = NoteDocument(blocks: [.text("Title"), .text("Original")])
+        let id = UUID()
+        guard case let .success((_, revision)) = store.createDocumentNote(id: id, document: original) else { return XCTFail() }
+        let controller = NotesPageController(store: store,
+            journal: NoteDraftJournal(directory: ownedTemporaryDirectory(prefix: "AtticConflictPaste")), saveDelay: .seconds(60))
+        await XCTAssertTrueAsync(await controller.openDurably(noteID: id))
+        let session = try XCTUnwrap(controller.active), engine = session.engine
+        XCTAssertTrue(engine.performEdit(NSRange(location: engine.textStorage.length, length: 0),
+                                         with: NSAttributedString(string: " local"), name: "Typing"))
+        let external = NoteDocument(blocks: [.text("External")])
+        guard case .success = store.saveDocument(noteID: id, document: external, baseRevisionID: revision) else { return XCTFail() }
+        XCTAssertFalse(controller.save(session))
+        XCTAssertEqual(session.state, .conflict(.changed))
+        XCTAssertTrue(engine.performEdit(NSRange(location: engine.textStorage.length, length: 0),
+                                         with: NSAttributedString(string: " typed"), name: "Typing"))
+        let fragment = try NoteContentCodec.encode(NoteDocument(blocks: [.text(" pasted")]), context: .fragment)
+        let before = engine.document()
+        await XCTAssertTrueAsync(await engine.pasteDurably(fragmentData: fragment,
+            at: NSRange(location: engine.textStorage.length, length: 0)))
+        XCTAssertEqual(engine.textStorage.string, "Title\nOriginal local typed pasted")
+        XCTAssertEqual(session.state, .conflict(.changed))
+        XCTAssertTrue(engine.history.undo())
+        XCTAssertEqual(engine.document(), before)
+        XCTAssertTrue(engine.history.redo())
+        await XCTAssertTrueAsync(await controller.preserveAllDurably())
+        XCTAssertEqual(store.loadDocument(noteID: id)?.content.document, external)
+    }
+
+    func testPrivatePasteKeepsTheLiveMarkedTextGuardBeforeActivityNotification() async throws {
+        let store = try makeTestNoteStore(attachmentFileStore: makeTestAttachmentFileStore())
+        let controller = NotesPageController(store: store, journal: nil, saveDelay: .seconds(60))
+        await controller.startAndWait()
+        let engine = try XCTUnwrap(controller.active).engine
+        let (_, view) = engine.makeView()
+        // AppKit's live composition state must gate paste even before the
+        // engine receives the text-change activity notification.
+        view.delegate = nil
+        view.setMarkedText("中", selectedRange: NSRange(location: 1, length: 0),
+                           replacementRange: NSRange(location: 0, length: 0))
+        view.delegate = engine
+        XCTAssertTrue(view.hasMarkedText())
+        XCTAssertEqual(engine.activity, .idle)
+        let before = engine.document()
+        let fragment = try NoteContentCodec.encode(NoteDocument(blocks: [.text("Pasted")]), context: .fragment)
+        await XCTAssertFalseAsync(await engine.pasteDurably(fragmentData: fragment,
+            at: NSRange(location: engine.textStorage.length, length: 0)))
+        XCTAssertEqual(engine.document(), before)
+        XCTAssertTrue(view.hasMarkedText())
+        XCTAssertEqual(controller.active?.notice, "The note or selection changed. Paste again at the new selection.")
+        view.unmarkText()
+    }
+
+    func testIneligiblePrivatePastePostsTheExistingRefusalNoticeWithoutMutation() async throws {
+        let engine = NoteEditorEngine(noteID: UUID(), document: NoteDocument(blocks: [.text("Before")]))
+        engine.canPasteFragment = { false }
+        var notice: String?
+        engine.onNotice = { notice = $0 }
+        let fragment = try NoteContentCodec.encode(NoteDocument(blocks: [.text("Pasted")]), context: .fragment)
+        let before = engine.document()
+        await XCTAssertFalseAsync(await engine.pasteDurably(fragmentData: fragment,
+            at: NSRange(location: engine.textStorage.length, length: 0)))
+        XCTAssertEqual(notice, "The note or selection changed. Paste again at the new selection.")
+        XCTAssertEqual(engine.document(), before)
+        XCTAssertFalse(engine.history.canUndo)
+    }
+
+    func testSameNotePrivatePasteReusesAttachmentIDsWithoutReadingAvailableOrMissingPayloads() async throws {
+        let item = staged()
+        for payloadAvailable in [true, false] {
+            let provider = DeferredPasteBytes(payloadAvailable ? [item.id: item] : [:])
+            let engine = NoteEditorEngine(noteID: UUID(), document: NoteDocument(blocks: [.text("Title"),
+                .file(attachmentID: item.id, filename: item.filename,
+                      contentTypeIdentifier: item.contentTypeIdentifier, byteCount: item.byteCount)]), imageProvider: provider)
+            let before = engine.document()
+            let fragment = engine.fragment(for: NSRange(location: 6, length: engine.textStorage.length - 6))
+            let bytes = try NoteContentCodec.encode(fragment, context: .fragment)
+            await XCTAssertTrueAsync(await engine.pasteDurably(fragmentData: bytes,
+                at: NSRange(location: engine.textStorage.length, length: 0)))
+            XCTAssertEqual(provider.readCount, 0, "same-note paste must not read or hash payloads")
+            XCTAssertEqual(engine.document().attachmentIDs, [item.id, item.id])
+            XCTAssertEqual(Set(engine.document().objectIDs).count, 2, "new placement identity, same attachment")
+            XCTAssertTrue(engine.staged.isEmpty)
+            XCTAssertTrue(engine.history.undo())
+            XCTAssertEqual(engine.document(), before)
+            XCTAssertTrue(engine.history.redo())
+            XCTAssertEqual(engine.document().attachmentIDs, [item.id, item.id])
+        }
+    }
+
     func testPrivatePasteReadsAllPayloadsAfterDiskRelaunchAndCacheEvictionAsOneUndoStep() async throws {
         let root = ownedTemporaryDirectory(prefix: "AtticPasteRelaunch")
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)

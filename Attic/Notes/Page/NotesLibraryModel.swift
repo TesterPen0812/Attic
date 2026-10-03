@@ -51,6 +51,7 @@ final class NotesLibraryModel: ObservableObject {
     private var loadingTask: Task<Void, Never>?
     private weak var observedStore: NoteStore?
     private var storeSubscription: AnyCancellable?
+    private var presentationSubscription: AnyCancellable?
     private var storeRevision: UInt64 = 0
     private var searchGeneration: UInt64 = 0
     private var cache: (key: RowsKey, groups: [Group])?
@@ -63,12 +64,19 @@ final class NotesLibraryModel: ObservableObject {
         let day: Int
     }
 
-    init(search: @escaping (String) async throws -> Set<UUID>, store: NoteStore? = nil, now: @escaping () -> Date = Date.init,
+    init(search: @escaping (String) async throws -> Set<UUID>, store: NoteStore? = nil, controller: NotesPageController? = nil, now: @escaping () -> Date = Date.init,
          calendar: Calendar = .autoupdatingCurrent) {
         self.search = search
         self.now = now
         self.calendar = calendar
         if let store { observeStore(store) }
+        // Every exit route publishes here, including corner New Note and
+        // Duplicate. Clear synchronously before hidden-editor autosaves.
+        if let controller {
+            presentationSubscription = controller.$isLibraryPresented.sink { [weak self] shown in
+                if !shown { self?.clearSearch() }
+            }
+        }
     }
 
     private func observeStore(_ store: NoteStore) {

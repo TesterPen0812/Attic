@@ -801,8 +801,8 @@ final class NotesPageController: ObservableObject {
         engine.canPasteFragment = { [weak self, weak session] in
             guard let self, let session else { return false }
             return self.active === session && !self.isLibraryPresented && !session.isImporting
-                && self.canCommit(session)
-                && (!session.isPersisted || self.store.note(withID: session.noteID)?.revisionID == session.baseRevisionID)
+                && !session.isReadOnly
+                && session.engine.textView?.hasMarkedText() != true
         }
         engine.onFragmentAdmission = { [weak self, weak session] proposed, copied in
             guard let self, let session else { return String(localized: "The note is no longer open.") }
@@ -1119,10 +1119,13 @@ final class NotesPageController: ObservableObject {
         session.durabilityTask = Task { @MainActor [weak self, weak session] in
             do { try await Task.sleep(for: delay) } catch { return }
             guard let self, let session, !Task.isCancelled else { return }
+            let generation = session.editGeneration
             await self.runDurabilityDeadline(session)
             guard !Task.isCancelled else { return }
             session.durabilityTask = nil
-            self.scheduleDurabilityDeadline(session)
+            // Pending work can stay pending after a failure or conflict.
+            // Only edits made during this attempt justify another deadline.
+            if session.editGeneration != generation { self.scheduleDurabilityDeadline(session) }
         }
     }
 
@@ -1295,6 +1298,7 @@ final class NotesPageController: ObservableObject {
     private func didSave(_ session: NoteSession, staged: [StagedNoteAttachment], retainingNewerEdits: Bool = false) {
         captureViewState(session)
         session.state = retainingNewerEdits ? .dirty : .clean
+        if retainingNewerEdits { scheduleSave(session) }
         if !retainingNewerEdits {
             session.durabilityTask?.cancel()
             session.durabilityTask = nil

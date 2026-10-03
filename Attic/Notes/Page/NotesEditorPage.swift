@@ -51,7 +51,7 @@ struct NotesEditorPage: View {
         }))
         _library = StateObject(wrappedValue: NotesLibraryModel(search: librarySearch ?? { query in
             try await store.searchNoteIDs(matching: query)
-        }, store: store))
+        }, store: store, controller: controller))
     }
 
     // MARK: Direction
