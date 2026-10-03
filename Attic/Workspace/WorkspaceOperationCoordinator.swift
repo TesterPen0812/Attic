@@ -393,10 +393,17 @@ final class WorkspaceOperationCoordinator {
                 let membership = try WorkspaceScopeToken.read(scopes: requiredScopes, in: fresh)
                 guard baselineScopes.allSatisfy({ membership[$0.scope] == $0 }) else { return .conflict }
             }
-            let inserted = Set(context.insertedModelsArray.compactMap { Self.owner($0) })
-            try validateWriteSet(context, declared: capturedOwners.union(inserted))
-            try validateTombstones(context, before: before)
-            try validateLegacyAdmission(context, before: before)
+            // No mutation or suspension occurs during validation. Snapshot
+            // SwiftData's write lists once for the complete plain read set.
+            let insertedRows = context.insertedModelsArray
+            let changedRows = context.changedModelsArray
+            let deletedRows = context.deletedModelsArray
+            let changes = insertedRows + changedRows
+            let inserted = Set(insertedRows.compactMap { Self.owner($0) })
+            let afterByOwner = Dictionary(uniqueKeysWithValues: after.map { ($0.owner, $0) })
+            try validateWriteSet(context, declared: capturedOwners.union(inserted), rows: changes + deletedRows)
+            try validateTombstones(context, before: before, rows: changes)
+            try validateLegacyAdmission(context, before: before, rows: changes, after: afterByOwner)
             // Changed supported content was admitted during classification;
             // opaque metadata is preserved without a document read or decode.
             let changedContents = before.filter { token in
@@ -410,9 +417,9 @@ final class WorkspaceOperationCoordinator {
                 // of fingerprinting every large derived text field again.
                 let contentGuards = Dictionary(uniqueKeysWithValues: after.filter { $0.owner.entity == .note }
                     .flatMap(\.replicas).compactMap { replica in replica.fields["content"].map { (replica.physicalID, $0) } })
-                try validatePreservedOpaqueContent(context, before: before, contents: [:], contentGuards: contentGuards)
+                try validatePreservedOpaqueContent(context, before: before, contents: [:], contentGuards: contentGuards,
+                    changedRows: changedRows, insertedIDs: Set(insertedRows.map(\.persistentModelID)))
             }
-            let changes = context.insertedModelsArray + context.changedModelsArray
             guard let admission = ownership.tryAcquire(try admissionIDs(changes, before: before), kind: .admission) else { return .conflict }
             defer { admission.release() }
             let previous = before.filter { writes.contains($0.owner) }
@@ -424,7 +431,7 @@ final class WorkspaceOperationCoordinator {
                 // Existing rows keep their physical identifiers through save.
                 // Their already-computed after tokens are the confirmed baseline;
                 // only inserts need their permanent identifiers captured now.
-                var saved = Dictionary(uniqueKeysWithValues: after.map { ($0.owner, $0) })
+                var saved = afterByOwner
                 if !inserted.isEmpty {
                     let newFamilies = stagedModels.filter { Self.owner($0).map(inserted.contains) == true }
                     saved.merge(try WorkspaceModelToken.capture(owners: inserted, models: newFamilies)) { _, permanent in permanent }
@@ -718,8 +725,8 @@ final class WorkspaceOperationCoordinator {
             }.sorted())
         }
     }
-    private func validateWriteSet(_ context: ModelContext, declared: Set<WorkspaceOwner>) throws {
-        for row in context.insertedModelsArray + context.changedModelsArray + context.deletedModelsArray {
+    private func validateWriteSet(_ context: ModelContext, declared: Set<WorkspaceOwner>, rows: [any PersistentModel]? = nil) throws {
+        for row in rows ?? (context.insertedModelsArray + context.changedModelsArray + context.deletedModelsArray) {
             guard let owner = Self.owner(row), declared.contains(owner) else { throw WorkspaceFoundationError.conflict }
         }
     }
@@ -742,10 +749,11 @@ final class WorkspaceOperationCoordinator {
     }
     private func validatePreservedOpaqueContent(_ context: ModelContext, before: [WorkspaceModelToken],
                                                 contents: [PersistentIdentifier: Data],
-                                                contentGuards: [PersistentIdentifier: Data] = [:]) throws {
+                                                contentGuards: [PersistentIdentifier: Data] = [:],
+                                                changedRows: [any PersistentModel]? = nil, insertedIDs: Set<PersistentIdentifier>? = nil) throws {
         let notes = before.filter { $0.owner.entity == .note }
-        let inserted = Set(context.insertedModelsArray.map(\.persistentModelID))
-        for row in context.changedModelsArray.compactMap({ $0 as? NoteItem }) where !inserted.contains(row.persistentModelID) {
+        let inserted = insertedIDs ?? Set(context.insertedModelsArray.map(\.persistentModelID))
+        for row in (changedRows ?? context.changedModelsArray).compactMap({ $0 as? NoteItem }) where !inserted.contains(row.persistentModelID) {
             guard let original = notes.flatMap(\.replicas).first(where: { $0.physicalID == row.persistentModelID }),
                   let formatData = original.fields["contentFormat"],
                   let contentData = original.fields["content"] else { throw WorkspaceFoundationError.unknown }
@@ -785,7 +793,7 @@ final class WorkspaceOperationCoordinator {
 extension WorkspaceOperationCoordinator {
     /// Permanent deletion is an irreversible boundary for every writer,
     /// including compatibility store wrappers and old replay payloads.
-    private func validateTombstones(_ context: ModelContext, before: [WorkspaceModelToken]) throws {
+    private func validateTombstones(_ context: ModelContext, before: [WorkspaceModelToken], rows: [any PersistentModel]? = nil) throws {
         guard context.container.schema.entities.contains(where: { $0.name == "TaskDeletionPreservation" }) else { return }
         if purgedMembers == nil {
             let records = try context.fetch(FetchDescriptor<TaskDeletionPreservation>(predicate: #Predicate { $0.purgedAt != nil }))
@@ -796,7 +804,7 @@ extension WorkspaceOperationCoordinator {
             purgedMembers = members; tombstoneLoads += 1
         }
         guard let removed = purgedMembers, !removed.isEmpty else { return }
-        let changes = context.insertedModelsArray + context.changedModelsArray
+        let changes = rows ?? (context.insertedModelsArray + context.changedModelsArray)
         for row in changes {
             if let task = row as? TaskItem, removed.contains(task.id) { throw WorkspaceFoundationError.protectedOwner }
             if let association = row as? TaskNoteAssociation,
@@ -821,11 +829,16 @@ extension WorkspaceOperationCoordinator {
         }
     }
 
-    private func validateLegacyAdmission(_ context: ModelContext, before: [WorkspaceModelToken]) throws {
+    private func validateLegacyAdmission(_ context: ModelContext, before: [WorkspaceModelToken],
+                                         rows: [any PersistentModel]? = nil, after: [WorkspaceOwner: WorkspaceModelToken] = [:]) throws {
         let originals = Dictionary(uniqueKeysWithValues: before.map { ($0.owner, $0) })
-        for task in (context.insertedModelsArray + context.changedModelsArray).compactMap({ $0 as? TaskItem }) {
-            let token = originals[WorkspaceOwner(entity: .task, id: task.id)]
+        for task in (rows ?? (context.insertedModelsArray + context.changedModelsArray)).compactMap({ $0 as? TaskItem }) {
+            let owner = WorkspaceOwner(entity: .task, id: task.id)
+            let token = originals[owner]
             let original = token?.replicas.first { $0.physicalID == task.persistentModelID }
+            if let original, let next = after[owner]?.replicas.first(where: { $0.physicalID == task.persistentModelID }),
+               original.fields["imageReferencesData"] == next.fields["imageReferencesData"],
+               original.fields["removedAttachmentsData"] == next.fields["removedAttachmentsData"] { continue }
             if let original {
                 let shown = try original.fields["imageReferencesData"].map { try JSONDecoder().decode(Data?.self, from: $0) } ?? nil
                 let removed = try original.fields["removedAttachmentsData"].map { try JSONDecoder().decode(Data?.self, from: $0) } ?? nil

@@ -288,6 +288,8 @@ enum WorkspaceLegacyBridge {
             // never admit an externally inserted replica into that baseline.
             for owner in owners {
                 guard let original = state.baseline[owner], let roots = state.rootFamilies[owner] else { continue }
+                if roots.count == 1, original.replicas.count == 1,
+                   roots[0].physicalID == original.replicas[0].physicalID { continue }
                 let known = Set(roots.map(\.physicalID))
                 let captured = Set(original.replicas.map(\.physicalID))
                 let additional = existing.filter {
