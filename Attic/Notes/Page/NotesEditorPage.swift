@@ -552,35 +552,33 @@ struct NotesEditorPage: View {
 }
 
 /// ⋯ → Tags… (or a click on a tag): the note's tags, ticked, among every
-/// tag in Notes with its count. A change is an edit of the note: it is
-/// saved with the note's text, through the session.
-private struct NoteTagEditor: View {
+/// tag in Notes with its count, in the shared E1 tag picker (the Tasks
+/// tag picker's card, highlight and keys; CU P2-03). A change is an edit of
+/// the note: it is saved with the note's text, through the session.
+struct NoteTagEditor: View {
     @ObservedObject var session: NoteSession
     @ObservedObject var store: NoteStore
     let onClose: () -> Void
 
-    @State private var query = ""
     @State private var revision = 0
-    @FocusState private var fieldFocused: Bool
 
     var body: some View {
         // The engine's tags are not observable: a change bumps `revision`.
         let _ = revision
         let current = Set(session.engine.tags)
         let counts = tagCounts(current)
-        let typed = AtticTag.normalize(query)
-        let create: String? = typed.flatMap { counts[$0] == nil ? $0 : nil }
-        return AtticNoteTagList(query: $query, tags: rows(counts, current: current, typed: typed), create: create,
-                                onToggle: { name in toggle(name, on: !current.contains(name)) },
-                                onCreate: { name in
-                                    toggle(name, on: true)
-                                    query = ""
-                                },
-                                fieldFocused: $fieldFocused)
-            .onAppear { fieldFocused = true }
-            .onDisappear { onClose() }
-            .onExitCommand { onClose() }
-            .accessibilityIdentifier("notes-tag-editor")
+        AtticTagPickerCard(rows: { query in
+            let typed = AtticTag.normalize(query)
+            let create: String? = typed.flatMap { counts[$0] == nil ? $0 : nil }
+            return (rows(counts, current: current, typed: typed), create)
+        }, listRows: counts.count, onToggle: { name in
+            toggle(name, on: !Set(session.engine.tags).contains(name))
+        }, onCreate: { name, _ in
+            toggle(name, on: true)
+            return true
+        })
+        .onDisappear { onClose() }
+        .accessibilityIdentifier("notes-tag-editor")
     }
 
     private func tagCounts(_ current: Set<String>) -> [String: Int] {
@@ -589,18 +587,18 @@ private struct NoteTagEditor: View {
         return counts
     }
 
-    private func rows(_ counts: [String: Int], current: Set<String>, typed: String?) -> [AtticNoteTagList.Tag] {
-        var rows: [AtticNoteTagList.Tag] = []
+    private func rows(_ counts: [String: Int], current: Set<String>, typed: String?) -> [AtticTagPicker.Tag] {
+        var rows: [(name: String, count: Int, isOn: Bool)] = []
         for (name, count) in counts {
             if let typed, !name.localizedStandardContains(typed) { continue }
-            rows.append(AtticNoteTagList.Tag(name: name, count: count, isOn: current.contains(name)))
+            rows.append((name, count, current.contains(name)))
         }
         rows.sort { lhs, rhs in
             if lhs.isOn != rhs.isOn { return lhs.isOn }
             if lhs.count != rhs.count { return lhs.count > rhs.count }
             return lhs.name < rhs.name
         }
-        return rows
+        return rows.map { AtticTagPicker.Tag(name: $0.name, state: $0.isOn ? .on : .off, detail: "\($0.count)") }
     }
 
     private func toggle(_ name: String, on: Bool) {

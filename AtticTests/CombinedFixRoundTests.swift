@@ -29,7 +29,12 @@ final class CombinedFixRoundTests: XCTestCase {
 
     private let gate = PersistenceGate()
 
-    private func makeHarness(context: AtticDesignContext = AtticDesignContext(controls: .craft),
+    /// A key panel that never activates the app (CI's key-window tests).
+    final class KeyPanel: NSPanel {
+        override var canBecomeKey: Bool { true }
+    }
+
+    private func makeHarness(context: AtticDesignContext = AtticDesignContext(controls: .craft), keyPanel: Bool = false,
                              seed: (NoteStore) throws -> Void = { _ in }) throws -> Harness {
         let gate = gate
         let store = try makeTestNoteStore(persist: { try gate.save($0) }, attachmentFileStore: makeTestAttachmentFileStore())
@@ -41,11 +46,14 @@ final class CombinedFixRoundTests: XCTestCase {
             .atticDesign(context)
         let host = NSHostingView(rootView: AnyView(root))
         host.frame = CGRect(origin: .zero, size: size)
-        let window = NSWindow(contentRect: CGRect(origin: CGPoint(x: -4000, y: -4000), size: size),
-                              styleMask: [.borderless], backing: .buffered, defer: false)
+        let frame = CGRect(origin: CGPoint(x: -4000, y: -4000), size: size)
+        let window = keyPanel
+            ? KeyPanel(contentRect: frame, styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
+            : NSWindow(contentRect: frame, styleMask: [.borderless], backing: .buffered, defer: false)
         window.isReleasedWhenClosed = false
         window.contentView = host
         window.orderFrontRegardless()
+        if keyPanel { window.makeKey() }
         windows.append(window)
         host.layoutSubtreeIfNeeded()
         spin()
@@ -250,6 +258,113 @@ final class CombinedFixRoundTests: XCTestCase {
         editor.deleteBackward(nil)
         spin(0.3)
         XCTAssertGreaterThanOrEqual(presenter.cardWidth + 0.5, needed)
+    }
+
+    // MARK: P2-03: Notes ⋯ → Tags… is the shared E1 tag picker
+
+    private func tagHarness(keyPanel: Bool) throws -> (Harness, NoteSession, AtticDropdownPresenter) {
+        let harness = try makeHarness(keyPanel: keyPanel) { store in
+            _ = store.createDocumentNote(id: UUID(), document: NoteDocument(blocks: [.text("Plan"), .text("Body")]),
+                                         tags: ["launch-october"])
+            _ = store.createDocumentNote(id: UUID(), document: NoteDocument(blocks: [.text("Other"), .text("Body")]),
+                                         tags: ["launch", "kyoto"])
+            _ = store.createDocumentNote(id: UUID(), document: NoteDocument(blocks: [.text("Third"), .text("Body")]),
+                                         tags: ["launch"])
+        }
+        let note = try XCTUnwrap(harness.store.notes.first { $0.title == "Plan" })
+        XCTAssertTrue(harness.controller.open(noteID: note.id))
+        spin(0.4)
+        let session = try XCTUnwrap(harness.controller.active)
+        let anchor = NSView(frame: CGRect(x: 200, y: 440, width: 28, height: 28))
+        harness.host.addSubview(anchor)
+        let presenter = AtticDropdownPresenter()
+        presenter.design = AtticDesignContext(reduceMotion: true)
+        presenter.label = "Tags"
+        presenter.content = AnyView(NoteTagEditor(session: session, store: harness.store) {})
+        presenter.present(from: anchor)
+        spin(0.4)
+        return (harness, session, presenter)
+    }
+
+    private func accessibilityElements(_ root: AnyObject) -> [AnyObject] {
+        let children = (root.accessibilityChildren?() ?? nil) ?? []
+        return [root] + children.flatMap { accessibilityElements($0 as AnyObject) }
+    }
+
+    /// The note's tag editor is the shared E1 card (an opaque card in the
+    /// panel's overlay, not a translucent arrow popover): the note's own
+    /// tags first, then by count, each with its count; ticks are marks.
+    func testTheNoteTagEditorIsTheSharedE1Card() throws {
+        let attribute = NSAccessibility.Attribute(rawValue: "AXEnhancedUserInterface")
+        let previous = NSApp.accessibilityAttributeValue(attribute)
+        NSApp.accessibilitySetValue(true, forAttribute: attribute)
+        defer { NSApp.accessibilitySetValue(previous, forAttribute: attribute) }
+        let (_, _, presenter) = try tagHarness(keyPanel: false)
+        defer { presenter.close(restoreFocus: false, immediately: true) }
+        let host = try XCTUnwrap(presenter.host)
+        XCTAssertTrue(presenter.isOpen)
+        let items = accessibilityElements(host).compactMap { $0 as? AtticDropdownMenuItem.ItemView }
+        XCTAssertEqual(items.compactMap { $0.accessibilityLabel() }, ["#launch-october, 1", "#launch, 2", "#kyoto, 1"],
+                       "the note's tag first, then by count, as the tag editor listed them")
+        XCTAssertTrue(items.allSatisfy { !$0.isAccessibilitySelected() }, "an empty field lights nothing")
+        // Typing lights the exact tag, never the note's own tag listed first.
+        let launch = [AtticTagPicker.Tag(name: "launch-october", state: .on), AtticTagPicker.Tag(name: "launch", state: .off)]
+        XCTAssertEqual(AtticTagPickerCard.exactMatch("#Launch", in: launch), 1)
+        XCTAssertNil(AtticTagPickerCard.exactMatch("laun", in: launch))
+        XCTAssertNil(AtticTagPickerCard.exactMatch("", in: launch))
+    }
+
+    /// The keyboard model, with real key events to a key panel (CI only,
+    /// `ATTIC_KEY_WINDOW_TESTS`): ↓ ↓ Return toggles the highlighted tag,
+    /// typing lights the exact tag, a new name is added, Esc closes. The CU
+    /// review found ↓ ↓ Return moved nothing in the old popover.
+    func testTheNoteTagEditorKeysOnAKeyPanel() throws {
+        guard ProcessInfo.processInfo.environment["ATTIC_KEY_WINDOW_TESTS"] == "1" else {
+            throw XCTSkip("CI only: real key events need a key panel, which locally would take the keyboard")
+        }
+        let (harness, session, presenter) = try tagHarness(keyPanel: true)
+        defer { presenter.close(restoreFocus: false, immediately: true) }
+        let window = harness.window
+        XCTAssertTrue(window.isKeyWindow)
+        XCTAssertTrue((window.firstResponder as? NSTextView)?.isFieldEditor == true, "the tag field has the keyboard")
+        func deliver(_ events: [NSEvent]) {
+            events.forEach { NSApp.postEvent($0, atStart: false) }
+            var count = 0
+            while count < 64, let next = NSApp.nextEvent(matching: .any, until: Date(), inMode: .default, dequeue: true) {
+                NSApp.sendEvent(next)
+                count += 1
+            }
+            spin(0.2)
+        }
+        func press(_ characters: String, _ code: UInt16) {
+            deliver([NSEvent.EventType.keyDown, .keyUp].map { type in
+                NSEvent.keyEvent(with: type, location: .zero, modifierFlags: [], timestamp: ProcessInfo.processInfo.systemUptime,
+                                 windowNumber: window.windowNumber, context: nil, characters: characters,
+                                 charactersIgnoringModifiers: characters, isARepeat: false, keyCode: code)!
+            })
+        }
+        func setQuery(_ text: String) {
+            guard let editor = window.firstResponder as? NSTextView else { return XCTFail("the field lost the keyboard") }
+            editor.selectAll(nil)
+            editor.insertText(text, replacementRange: NSRange(location: NSNotFound, length: 0))
+            spin(0.2)
+        }
+        press("\u{F701}", 125)
+        press("\u{F701}", 125)
+        press("\r", 36)
+        XCTAssertEqual(Set(session.engine.tags), ["launch-october", "launch"], "↓ ↓ Return added the highlighted tag")
+        setQuery("kyoto")
+        press("\r", 36)
+        XCTAssertEqual(Set(session.engine.tags), ["launch-october", "launch", "kyoto"])
+        setQuery("launch")
+        press("\r", 36)
+        XCTAssertEqual(Set(session.engine.tags), ["launch-october", "kyoto"], "Return took the exact tag off")
+        setQuery("paris")
+        press("\r", 36)
+        XCTAssertEqual(Set(session.engine.tags), ["launch-october", "kyoto", "paris"], "a new name is added")
+        press("\u{1B}", 53)
+        spin(0.3)
+        XCTAssertFalse(presenter.isOpen, "Esc closed it")
     }
 }
 

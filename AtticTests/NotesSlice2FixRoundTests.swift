@@ -361,16 +361,6 @@ final class NotesSlice2FixRoundTests: XCTestCase {
 
     // MARK: Should fix
 
-    func testReturnInTheTagEditorActsOnlyOnWhatWasTyped() async {
-        let tags = [AtticNoteTagList.Tag(name: "launch-october", count: 3, isOn: true),
-                    AtticNoteTagList.Tag(name: "launch", count: 5, isOn: false)]
-        XCTAssertEqual(AtticNoteTagList.submitAction(query: "launch", tags: tags, create: nil), .toggle("launch"),
-                       "the exact tag, not the owned one listed first")
-        XCTAssertNil(AtticNoteTagList.submitAction(query: "", tags: tags, create: nil), "an empty field does nothing")
-        XCTAssertNil(AtticNoteTagList.submitAction(query: "laun", tags: tags, create: nil), "nor does a partial word")
-        XCTAssertEqual(AtticNoteTagList.submitAction(query: "#Kyoto", tags: [], create: "kyoto"), .create("kyoto"))
-    }
-
     func testUndoKeepsAnAlreadyOwnedHashtagLiteral() async throws {
         let engine = NoteEditorEngine(noteID: UUID(), document: NoteDocument(blocks: [.text("Plan")]), tags: ["launch"])
         let session = NoteSessionStub(engine: engine)

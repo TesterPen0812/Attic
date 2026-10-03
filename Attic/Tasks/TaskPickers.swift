@@ -107,8 +107,10 @@ struct TaskDatePickerView: View {
     }
 }
 
-/// The tag list with its state (the query, the keyboard highlight). `state`
-/// says how many of the targets have a tag.
+/// The Tasks tag list: every tag, ticked as `state` says (how many of the
+/// targets have it), filtered by what is typed, with "New tag “#…”" for a
+/// name no tag has. The card, its highlight and keys are the shared
+/// `AtticTagPickerCard` (Notes' ⋯ → Tags… uses the same one).
 struct TaskTagPickerView: View {
     let allTags: [String]
     let state: (String) -> AtticCheckState
@@ -120,68 +122,13 @@ struct TaskTagPickerView: View {
     /// Opened by "New Tag…": the field has the keyboard at once.
     var focusField = true
 
-    @State private var query = ""
-    @State private var highlighted: Int?
-    @FocusState private var fieldFocused: Bool
-    @FocusState private var listFocused: Bool
-
     var body: some View {
-        let lowered = query.trimmingCharacters(in: .whitespaces).lowercased().replacingOccurrences(of: "#", with: "")
-        let filtered = lowered.isEmpty ? allTags : allTags.filter { $0.lowercased().contains(lowered) }
-        let create = AtticTag.normalize(lowered).flatMap { name in allTags.contains { $0.lowercased() == name.lowercased() } ? nil : name }
-        AtticTagPicker(
-            query: $query,
-            tags: filtered.map { AtticTagPicker.Tag(name: $0, state: state($0)) },
-            create: create,
-            highlighted: highlighted,
-            onToggle: onToggle,
-            onCreate: { name in
-                let clear = { query = "" }
-                if onCreate(name, clear) { clear() }
-            },
-            fieldFocused: $fieldFocused,
-            onHover: { index, inside in
-                let next = AtticListHighlight.hovered(index, inside: inside, current: highlighted)
-                if next != highlighted { highlighted = next }
-            },
-            listRows: allTags.count,
-            listFocus: $listFocused,
-            onListHighlight: $highlighted
-        )
-        .atticDropdownFocus($fieldFocused, when: focusField)
-        .atticDropdownTabs(field: $fieldFocused, list: $listFocused)
-        // Typing highlights the first match; an empty field (as after a new
-        // tag saved) highlights nothing, so another Return does nothing
-        // rather than toggle a tag (round 5, F5).
-        .onChange(of: query) { _, _ in highlighted = lowered.isEmpty || (filtered.isEmpty && create == nil) ? nil : 0 }
-        .onKeyPress(phases: .down) { press in
-            let count = filtered.count + (create == nil ? 0 : 1)
-            switch press.key {
-            case .downArrow:
-                guard count > 0 else { return .ignored }
-                highlighted = min((highlighted ?? -1) + 1, count - 1)
-                return .handled
-            case .upArrow:
-                guard count > 0 else { return .ignored }
-                highlighted = max((highlighted ?? count) - 1, 0)
-                return .handled
-            case .return, .space:
-                // Space presses the highlighted row only while the rows have
-                // the keyboard; in the field it types.
-                if press.key == .space, !listFocused { return .ignored }
-                if let highlighted, highlighted < filtered.count {
-                    onToggle(filtered[highlighted])
-                } else if let create {
-                    let clear = { query = "" }
-                    if onCreate(create, clear) { clear() }
-                } else {
-                    return .ignored
-                }
-                return .handled
-            default:
-                return .ignored
-            }
-        }
+        AtticTagPickerCard(rows: { query in
+            let lowered = query.trimmingCharacters(in: .whitespaces).lowercased().replacingOccurrences(of: "#", with: "")
+            let filtered = lowered.isEmpty ? allTags : allTags.filter { $0.lowercased().contains(lowered) }
+            let create = AtticTag.normalize(lowered).flatMap { name in allTags.contains { $0.lowercased() == name.lowercased() } ? nil : name }
+            return (filtered.map { AtticTagPicker.Tag(name: $0, state: state($0)) }, create)
+        }, listRows: allTags.count, onToggle: onToggle, onCreate: onCreate, focusField: focusField)
     }
 }
 

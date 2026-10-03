@@ -591,9 +591,6 @@ enum AtticNoteMetrics {
     static let suggestionWidth: CGFloat = 220
     static let suggestionGap: CGFloat = 6
     static let suggestionShadowRoom: CGFloat = 10
-    /// The tag editor: 240 wide, at most 8 rows before it scrolls.
-    static let tagEditorWidth: CGFloat = 240
-    static let tagEditorMaxListHeight: CGFloat = 8 * 28
 }
 
 /// Notes' format controls (Phase 2 slice 3, mockups p2-16 D and p2-03):

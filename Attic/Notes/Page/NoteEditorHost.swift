@@ -426,9 +426,11 @@ private struct NoteMenuButtonRoot: View {
     var body: some View {
         AtticNoteMenuButton(isOpen: chrome.isMenuOpen, action: action)
             .accessibilityIdentifier("notes-menu-button")
-            .popover(isPresented: Binding(get: { chrome.tagEditor == .menu },
-                                          set: { if !$0, chrome.tagEditor == .menu { chrome.tagEditor = nil } }),
-                     arrowEdge: .bottom) { tagEditor() }
+            // The E1 tag picker, as in Tasks (CU P2-03), in the panel's
+            // overlay layer.
+            .atticDropdown(isPresented: Binding(get: { chrome.tagEditor == .menu },
+                                                set: { if !$0, chrome.tagEditor == .menu { chrome.tagEditor = nil } }),
+                           label: String(localized: "Tags")) { tagEditor() }
     }
 }
 
@@ -441,9 +443,9 @@ private struct NoteTagLineRoot: View {
         AtticNoteTagLine(tags: tags) { _ in chrome.tagEditor = .tags }
             .frame(maxWidth: .infinity, alignment: .leading)
             .accessibilityIdentifier("notes-tag-line")
-            .popover(isPresented: Binding(get: { chrome.tagEditor == .tags },
-                                          set: { if !$0, chrome.tagEditor == .tags { chrome.tagEditor = nil } }),
-                     arrowEdge: .bottom) { tagEditor() }
+            .atticDropdown(isPresented: Binding(get: { chrome.tagEditor == .tags },
+                                                set: { if !$0, chrome.tagEditor == .tags { chrome.tagEditor = nil } }),
+                           label: String(localized: "Tags")) { tagEditor() }
     }
 }
 

@@ -18,6 +18,18 @@ value, token, colour, radius or size changed.
   width rule, keeping its side. It never narrows while open, so filtering
   never makes it jump in. `AtticTagPicker` reports its rows' width
   (`rowsWidth(tags:create:)`, measured from the names without a layout pass).
+- **New `AtticTagPickerCard`**: the tag picker with its state and keys (the
+  query, the one highlight, ↑ ↓, Return, Space on the rows under Full
+  Keyboard Access, Tab between field and rows), moved out of Tasks'
+  `TaskTagPickerView` so Notes' ⋯ → Tags… uses the same card (CU P2-03: it
+  was a translucent arrow popover with dark-on-dark text in Dark and no
+  keyboard highlight). The caller supplies the rows for a query. Typing now
+  lights the tag with exactly the typed name when there is one, else the
+  first match (Notes lists the note's own tags first). `AtticTagPicker.Tag`
+  gains an optional `detail` (Notes' per-tag count, in the row's detail
+  column).
+- **Removed `AtticNoteTagList`** and its `AtticNoteMetrics.tagEditorWidth` /
+  `tagEditorMaxListHeight`: replaced by the shared card above.
 
 ### Notes audit fix B2 (redesign/p2-audit-fix)
 

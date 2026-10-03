@@ -302,6 +302,8 @@ struct AtticTagPicker: View {
     struct Tag: Identifiable {
         let name: String
         let state: AtticCheckState
+        /// Quiet trailing text (Notes: how many notes carry the tag).
+        var detail: String? = nil
         var id: String { name }
     }
 
@@ -362,7 +364,7 @@ struct AtticTagPicker: View {
         // card still measures its natural height: the list's full room.
         .atticDropdownHeightGivenUp(normalHeight - listHeight)
         // "New tag “#…”" appears as you type: the card widens for it.
-        .atticDropdownIdealWidth(Self.rowsWidth(tags: tags.map(\.name), create: create))
+        .atticDropdownIdealWidth(Self.rowsWidth(tags: tags.map(\.name), create: create, details: tags.compactMap(\.detail)))
         .accessibilityElement(children: .contain)
         .accessibilityLabel(String(localized: "Tags"))
     }
@@ -370,7 +372,7 @@ struct AtticTagPicker: View {
     private var rows: some View {
         VStack(alignment: .leading, spacing: 0) {
             ForEach(Array(tags.enumerated()), id: \.element.id) { index, tag in
-                AtticDropdownRow(title: "#" + tag.name, check: tag.state, isHighlighted: highlighted == index,
+                AtticDropdownRow(title: "#" + tag.name, check: tag.state, detail: tag.detail, isHighlighted: highlighted == index,
                                  onHover: hover(index), position: index + 1, itemCount: tags.count + (create == nil ? 0 : 1)) {
                     onToggle(tag.name)
                 }
@@ -398,12 +400,115 @@ struct AtticTagPicker: View {
     /// The widest row's width (check column, the create row's icon, the
     /// name), the card's insets excluded: measured from the names, no
     /// layout pass.
-    static func rowsWidth(tags: [String], create: String?) -> CGFloat {
+    static func rowsWidth(tags: [String], create: String?, details: [String] = []) -> CGFloat {
         let m = AtticDropdownMetrics.self
         let style = AtticTextStyle.dropdownRow
-        let widestTag = tags.map { style.measuredWidth("#" + $0) }.max() ?? 0
+        let widestDetail = details.map { AtticTextStyle.shortcut.measuredWidth($0) }.max().map { m.detailGap + $0 } ?? 0
+        let widestTag = (tags.map { style.measuredWidth("#" + $0) }.max() ?? 0) + widestDetail
         let createRow = create.map { m.iconSlot + m.columnGap + style.measuredWidth(String(localized: "New tag “#\($0)”")) } ?? 0
         return ceil(m.rowPadding * 2 + m.checkSlot + m.columnGap + max(widestTag, createRow))
+    }
+}
+
+// MARK: - Tag picker card (Tasks and Notes)
+
+/// The tag picker with its state: the query, the one highlight and the
+/// keys (the E1 keyboard model). Typing filters and highlights the first
+/// row (an empty field highlights nothing, so Return does nothing); ↑ ↓
+/// move the highlight, the pointer moves it too; Return presses it (a tag
+/// toggles, "New tag" adds); with Full Keyboard Access the rows are one Tab
+/// stop and Space presses the highlight there; Esc is the card's (it
+/// closes). The caller says which rows a query shows: Tasks lists every
+/// tag; Notes lists its own tags with their counts.
+struct AtticTagPickerCard: View {
+    /// The rows for what is typed, in order, and the name "New tag “#…”"
+    /// would add (nil when the typed name is a tag already, or empty).
+    let rows: (_ query: String) -> (tags: [AtticTagPicker.Tag], create: String?)
+    /// The rows the list keeps room for (all there are, as it opened).
+    let listRows: Int
+    let onToggle: (String) -> Void
+    /// Adds a new tag; false when it did not save, so what was typed stays.
+    /// `completed` clears the field when a later Retry saves it.
+    let onCreate: (_ name: String, _ completed: @escaping () -> Void) -> Bool
+    /// The field has the keyboard as the card opens.
+    var focusField = true
+
+    @State private var query = ""
+    @State private var highlighted: Int?
+    @FocusState private var fieldFocused: Bool
+    @FocusState private var listFocused: Bool
+
+    var body: some View {
+        let shown = rows(query)
+        let filtered = shown.tags
+        let create = shown.create
+        let typedNothing = query.trimmingCharacters(in: .whitespaces).replacingOccurrences(of: "#", with: "").isEmpty
+        AtticTagPicker(
+            query: $query,
+            tags: filtered,
+            create: create,
+            highlighted: highlighted,
+            onToggle: onToggle,
+            onCreate: { name in
+                let clear = { query = "" }
+                if onCreate(name, clear) { clear() }
+            },
+            fieldFocused: $fieldFocused,
+            onHover: { index, inside in
+                let next = AtticListHighlight.hovered(index, inside: inside, current: highlighted)
+                if next != highlighted { highlighted = next }
+            },
+            listRows: listRows,
+            listFocus: $listFocused,
+            onListHighlight: $highlighted
+        )
+        .atticDropdownFocus($fieldFocused, when: focusField)
+        .atticDropdownTabs(field: $fieldFocused, list: $listFocused)
+        // Typing highlights the tag with exactly the typed name, else the
+        // first match (Notes lists the note's own tags first: "launch" must
+        // not light "launch-october"); an empty field (as after a new tag
+        // saved) highlights nothing, so another Return does nothing rather
+        // than toggle a tag (round 5, F5).
+        .onChange(of: query) { _, _ in
+            highlighted = typedNothing || (filtered.isEmpty && create == nil) ? nil
+                : Self.exactMatch(query, in: filtered) ?? 0
+        }
+        .onKeyPress(phases: .down) { press in
+            let count = filtered.count + (create == nil ? 0 : 1)
+            switch press.key {
+            case .downArrow:
+                guard count > 0 else { return .ignored }
+                highlighted = min((highlighted ?? -1) + 1, count - 1)
+                return .handled
+            case .upArrow:
+                guard count > 0 else { return .ignored }
+                highlighted = max((highlighted ?? count) - 1, 0)
+                return .handled
+            case .return, .space:
+                // Space presses the highlighted row only while the rows have
+                // the keyboard; in the field it types.
+                if press.key == .space, !listFocused { return .ignored }
+                if let highlighted, highlighted < filtered.count {
+                    onToggle(filtered[highlighted].name)
+                } else if let create {
+                    let clear = { query = "" }
+                    if onCreate(create, clear) { clear() }
+                } else {
+                    return .ignored
+                }
+                return .handled
+            default:
+                return .ignored
+            }
+        }
+    }
+}
+
+extension AtticTagPickerCard {
+    /// The row whose tag is exactly the typed name (`#` and case aside).
+    static func exactMatch(_ query: String, in tags: [AtticTagPicker.Tag]) -> Int? {
+        guard let typed = AtticTag.normalize(query)?.lowercased() else { return nil }
+        return tags.firstIndex { $0.name.lowercased() == typed }
     }
 }
 
