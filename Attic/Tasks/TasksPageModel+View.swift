@@ -157,12 +157,12 @@ extension TasksPageModel {
 
     /// The page's Find (Done's is its search): what is typed, per page.
     func searchQuery(for tab: TasksTab) -> String {
-        tab == .done ? doneSearch : (listSearch[tab] ?? "")
+        tab == .done ? doneSearchInput.text : (listSearch[tab] ?? "")
     }
 
     func setSearchQuery(_ text: String, for tab: TasksTab) {
         if tab == .done {
-            if doneSearch != text { doneSearch = text }
+            if doneSearch != text || doneSearchInput.text != text { doneSearch = text }
         } else if (listSearch[tab] ?? "") != text {
             listSearch[tab] = text.isEmpty ? nil : text
         }
@@ -170,7 +170,7 @@ extension TasksPageModel {
 
     /// The trimmed query that filters the page.
     func trimmedQuery(for tab: TasksTab) -> String {
-        searchQuery(for: tab).trimmingCharacters(in: .whitespacesAndNewlines)
+        (tab == .done ? doneSearch : searchQuery(for: tab)).trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
     /// The Find field's placeholder.

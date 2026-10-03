@@ -565,6 +565,7 @@ struct AtticTabsSearchField: View {
     let placeholder: String
     @Binding var text: String
     var isFocused: Binding<Bool>?
+    var nativeInputIdentifier: String? = nil
     /// Esc, or a click on the "Esc" hint: the search ends.
     let onEscape: () -> Void
 
@@ -582,7 +583,14 @@ struct AtticTabsSearchField: View {
                 .frame(width: AtticControlSize.statusCircle)
                 .padding(.leading, AtticLayout.circleX - AtticLayout.rowHighlightInset)
             Group {
-                if capture == nil {
+                if capture == nil, let nativeInputIdentifier {
+                    AtticNativeSearchInput(text: $text, placeholder: placeholder,
+                        identifier: nativeInputIdentifier, isFocused: isFocused,
+                        color: NSColor(tokens.color(.heading)), placeholderColor: NSColor(tokens.color(.helper)),
+                        onEscape: onEscape)
+                        .background(AtticFieldClaimProbe(claim: claim, placeholder: placeholder,
+                            wanted: { isFocused?.wrappedValue == true }).accessibilityHidden(true))
+                } else if capture == nil {
                     TextField("", text: $text, prompt: Text(verbatim: placeholder).foregroundStyle(tokens.color(.helper)))
                         .textFieldStyle(.plain)
                         .font(AtticTextStyle.listBody.font)
@@ -1579,4 +1587,72 @@ struct AtticPopover<Content: View>: View {
 /// A quiet grouping gap inside a pop-over (space, not a line).
 struct AtticPopoverGap: View {
     var body: some View { Color.clear.frame(height: AtticPopoverMetrics.groupGap).accessibilityHidden(true) }
+}
+
+/// Literal native edits do not change the field's allocated geometry or
+/// invalidate the surrounding task page. External replacements still update.
+private struct AtticNativeSearchInput: NSViewRepresentable {
+    @Binding var text: String
+    let placeholder: String
+    let identifier: String
+    let isFocused: Binding<Bool>?
+    let color: NSColor
+    let placeholderColor: NSColor
+    let onEscape: () -> Void
+
+    final class Field: NSTextField {
+        override var intrinsicContentSize: NSSize { NSSize(width: NSView.noIntrinsicMetric, height: 18) }
+        // The font and single-line height are fixed; typing changes neither.
+        override func invalidateIntrinsicContentSize() {}
+    }
+
+    func sizeThatFits(_ proposal: ProposedViewSize, nsView: Field, context: Context) -> CGSize? {
+        CGSize(width: proposal.width ?? 200, height: 18)
+    }
+
+    func makeCoordinator() -> Coordinator { Coordinator(self) }
+    func makeNSView(context: Context) -> Field {
+        let field = Field()
+        field.isBordered = false
+        field.isBezeled = false
+        field.drawsBackground = false
+        field.isEditable = true
+        field.isSelectable = true
+        field.focusRingType = .none
+        field.cell?.usesSingleLineMode = true
+        field.cell?.isScrollable = true
+        field.delegate = context.coordinator
+        field.setAccessibilityLabel(placeholder)
+        field.setAccessibilityIdentifier(identifier)
+        return field
+    }
+
+    func updateNSView(_ field: Field, context: Context) {
+        context.coordinator.owner = self
+        field.font = AtticTextStyle.listBody.nsFont
+        field.textColor = color
+        field.placeholderAttributedString = NSAttributedString(string: placeholder,
+            attributes: [.font: AtticTextStyle.listBody.nsFont, .foregroundColor: placeholderColor])
+        if field.stringValue != text { field.stringValue = text }
+    }
+
+    final class Coordinator: NSObject, NSTextFieldDelegate {
+        var owner: AtticNativeSearchInput
+        init(_ owner: AtticNativeSearchInput) { self.owner = owner }
+        func controlTextDidChange(_ notification: Notification) {
+            guard let field = notification.object as? NSTextField else { return }
+            owner.text = field.stringValue
+        }
+        func controlTextDidBeginEditing(_ notification: Notification) {
+            if owner.isFocused?.wrappedValue != true { owner.isFocused?.wrappedValue = true }
+        }
+        func controlTextDidEndEditing(_ notification: Notification) {
+            if owner.isFocused?.wrappedValue == true { owner.isFocused?.wrappedValue = false }
+        }
+        func control(_ control: NSControl, textView: NSTextView, doCommandBy commandSelector: Selector) -> Bool {
+            guard commandSelector == #selector(NSResponder.cancelOperation(_:)) else { return false }
+            owner.onEscape()
+            return true
+        }
+    }
 }

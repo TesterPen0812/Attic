@@ -2232,6 +2232,87 @@ final class TaskStore: ObservableObject {
         }
     }
 
+    /// A compact title index, retained with the store that owns the panel.
+    /// Reload already resolves every replica; copy only searchable/order fields
+    /// there, not on the Find binding's keystroke. Models stay page-sized.
+    private struct DoneSearchEntry {
+        let id: UUID
+        let title: String
+        let completed: Date
+        let created: Date
+
+        init(_ task: TaskItem) {
+            id = task.id
+            title = task.title
+            completed = task.completedAt ?? task.updatedAt
+            created = task.createdAt
+        }
+    }
+
+    private var doneSearchEntries: [DoneSearchEntry] = []
+    private var doneSearchMatches: (query: String, locale: String, ids: [UUID])?
+
+    private func indexDoneSearch(_ winners: [TaskItem], replacing ids: Set<UUID>? = nil) {
+        updateDoneSearch(winners.filter {
+            $0.doneLoggedAt != nil && $0.deletedAt == nil && $0.parentID == nil
+        }.map(DoneSearchEntry.init), replacing: ids)
+    }
+
+    private func updateDoneSearch(_ entries: [DoneSearchEntry], replacing ids: Set<UUID>? = nil) {
+        if let ids {
+            guard !entries.isEmpty || doneSearchEntries.contains(where: { ids.contains($0.id) }) else { return }
+            doneSearchEntries.removeAll { ids.contains($0.id) }
+        }
+        else { doneSearchEntries.removeAll(keepingCapacity: true) }
+        doneSearchEntries += entries
+        doneSearchEntries.sort {
+            if $0.completed != $1.completed { return $0.completed > $1.completed }
+            if $0.created != $1.created { return $0.created > $1.created }
+            return $0.id.uuidString < $1.id.uuidString
+        }
+        doneSearchMatches = nil
+    }
+
+    private func doneSearchIDs(matching query: String) -> [UUID] {
+        let query = query.trimmingCharacters(in: .whitespacesAndNewlines)
+        let locale = Locale.current.identifier
+        if let cached = doneSearchMatches, cached.query == query, cached.locale == locale { return cached.ids }
+        // Keep the exact localized matching semantics, including diacritics;
+        // folding to a different comparison would subtly change results.
+        let ids = doneSearchEntries.compactMap {
+            query.isEmpty || $0.title.localizedStandardContains(query) ? $0.id : nil
+        }
+        doneSearchMatches = (query, locale, ids)
+        return ids
+    }
+
+    func indexedDoneLogCount(matching query: String = "") -> Int {
+        query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            ? doneSearchEntries.count : doneSearchIDs(matching: query).count
+    }
+
+    /// The panel's logical cursor walks matching canonical IDs. Only this
+    /// page is hydrated; no SQL string predicate or full-log count on typing.
+    /// The raw physical cursor above remains available to command clients.
+    func indexedDoneLogPage(from cursor: DoneLogCursor = DoneLogCursor(), limit: Int,
+                            matching query: String = "") -> DoneLogPage {
+        let ids = doneSearchIDs(matching: query)
+        let start = min(cursor.rowOffset, ids.count)
+        let end = min(start + max(0, limit), ids.count)
+        let pageIDs = Array(ids[start..<end])
+        do {
+            let rows = try readDoneLog(FetchDescriptor<TaskItem>(predicate: #Predicate { pageIDs.contains($0.id) }))
+            let winners = Self.canonicalReplicas(from: rows).filter {
+                $0.doneLoggedAt != nil && $0.deletedAt == nil && $0.parentID == nil
+            }
+            return DoneLogPage(tasks: winners.sorted(by: Self.doneLogOrder),
+                               next: DoneLogCursor(rowOffset: end), hasMore: end < ids.count)
+        } catch {
+            report(error.localizedDescription, owner: nil)
+            return DoneLogPage(tasks: [], next: cursor, hasMore: true, failure: error.localizedDescription)
+        }
+    }
+
     /// The Done log's order: most recently finished first (the shown
     /// replica's completion time), then newest created, then id.
     static func doneLogOrder(_ lhs: TaskItem, _ rhs: TaskItem) -> Bool {
@@ -3242,11 +3323,26 @@ final class TaskStore: ObservableObject {
     @discardableResult
     private func save(owner: UUID? = nil) -> Bool {
         do {
+            let changedIDs = Set((context.insertedModelsArray + context.changedModelsArray + context.deletedModelsArray)
+                .compactMap { ($0 as? TaskItem)?.id })
+            let deleted = Set(context.deletedModelsArray.map(\.persistentModelID))
+            let ids = Array(changedIDs)
+            let changedRows = ids.isEmpty ? [] : try context.fetch(
+                FetchDescriptor<TaskItem>(predicate: #Predicate { ids.contains($0.id) }))
+            let changedEntries = Self.canonicalReplicas(from: changedRows.filter { !deleted.contains($0.persistentModelID) })
+                .filter { $0.doneLoggedAt != nil && $0.deletedAt == nil && $0.parentID == nil }
+                .map(DoneSearchEntry.init)
             #if os(macOS)
             try PerformanceSignposts.storeSave { try persist(context) }
             #else
             try persist(context)
             #endif
+            // Publish the revision only after the index sees the durable
+            // change. Undo/Redo use the same save path; failed saves rebuild
+            // from the rolled-back context below.
+            if !changedIDs.isEmpty {
+                updateDoneSearch(changedEntries, replacing: changedIDs)
+            }
             errorNotice = nil
             revision &+= 1
             #if !ATTIC_LOCAL_ONLY
@@ -3290,7 +3386,9 @@ final class TaskStore: ObservableObject {
         // Deduplicate first, then hide: the replica presentation would show
         // decides whether the logical task is in Recently Deleted or the Done
         // log, exactly as it decides every other field.
-        tasks = visibleUniqueTasks(from: fetched).filter {
+        let winners = visibleUniqueTasks(from: fetched)
+        indexDoneSearch(winners)
+        tasks = winners.filter {
             $0.deletedAt == nil && $0.doneLoggedAt == nil
         }
         revision &+= 1

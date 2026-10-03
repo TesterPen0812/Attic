@@ -1,3 +1,4 @@
+import Combine
 import SwiftUI
 
 /// The Done log (spec § Now, Backlog and Done): everything finished, kept
@@ -136,5 +137,31 @@ private struct TasksDoneRevisionWatcher: View {
             .frame(width: 0, height: 0)
             .onChange(of: store.revision) { _, _ in reload() }
             .accessibilityHidden(true)
+    }
+}
+
+/// Only the Find field observes its draft; result publication is coalesced.
+@MainActor
+final class TasksDoneSearchInput: ObservableObject {
+    let objectWillChange = ObservableObjectPublisher()
+    private(set) var text = ""
+    func edit(_ text: String) { self.text = text }
+    func replace(_ text: String) {
+        guard self.text != text else { return }
+        objectWillChange.send()
+        self.text = text
+    }
+}
+
+struct TasksDoneSearchField: View {
+    let model: TasksPageModel
+    @ObservedObject var input: TasksDoneSearchInput
+    let isFocused: Binding<Bool>
+    let onEscape: () -> Void
+
+    var body: some View {
+        AtticTabsSearchField(placeholder: model.searchPlaceholder(for: .done),
+                             text: Binding(get: { input.text }, set: { model.typeDoneSearch($0) }),
+                             isFocused: isFocused, nativeInputIdentifier: "tasks-done-search", onEscape: onEscape)
     }
 }

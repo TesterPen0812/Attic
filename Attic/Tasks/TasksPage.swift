@@ -568,10 +568,17 @@ struct TasksPage: View {
                 .allowsHitTesting(false)
                 .accessibilityHidden(true)
             if searchShown {
-                AtticTabsSearchField(placeholder: model.searchPlaceholder(for: model.tab),
-                                     text: Binding(get: { model.searchQuery(for: model.tab) },
-                                                   set: { model.setSearchQuery($0, for: model.tab) }),
-                                     isFocused: $searchFocused, onEscape: endSearch)
+                Group {
+                    if model.tab == .done {
+                        TasksDoneSearchField(model: model, input: model.doneSearchInput,
+                                             isFocused: $searchFocused, onEscape: endSearch)
+                    } else {
+                        AtticTabsSearchField(placeholder: model.searchPlaceholder(for: model.tab),
+                                             text: Binding(get: { model.searchQuery(for: model.tab) },
+                                                           set: { model.setSearchQuery($0, for: model.tab) }),
+                                             isFocused: $searchFocused, onEscape: endSearch)
+                    }
+                }
                     .accessibilityIdentifier(model.tab == .done ? "tasks-done-search" : "tasks-find")
                     .id(model.tab)
                     // Centred on the tabs' line.
@@ -895,7 +902,9 @@ struct TasksPage: View {
         guard searchFocused, model.isPageShown, event.keyCode == 125,
               event.modifierFlags.intersection([.command, .shift, .option, .control]).isEmpty,
               !AtticTextInput.isPopoverOpen, let window = pointer.view?.window, event.window === window,
-              !Self.isComposing(window.firstResponder), !model.searchQuery(for: model.tab).isEmpty,
+              !Self.isComposing(window.firstResponder) else { return false }
+        if model.tab == .done { model.flushDoneSearchInput() }
+        guard !model.searchQuery(for: model.tab).isEmpty,
               let first = visibleIDs().first else { return false }
         searchFocused = false
         focusTracker.noteKeyboardNavigation()
@@ -2049,7 +2058,9 @@ struct TasksPage: View {
         // lost (round 8, CI run 3: "inv" became "i").
         if searchFocused, model.isPageShown, modifiers.isEmpty || modifiers == .shift,
            Self.startsSearch(press.characters) {
-            model.setSearchQuery(model.searchQuery(for: model.tab) + press.characters, for: model.tab)
+            let text = model.searchQuery(for: model.tab) + press.characters
+            if model.tab == .done { model.typeDoneSearch(text) }
+            else { model.setSearchQuery(text, for: model.tab) }
             return .handled
         }
         // Every editor keeps its own keys (review 8): the title, a new
@@ -2061,7 +2072,7 @@ struct TasksPage: View {
         // Now and Later open Find with ⌘F or the magnifier only (item 6):
         // their letters may be a draft reaching the add bar a moment late.
         if model.tab == .done, model.isPageShown, modifiers.isEmpty || modifiers == .shift, Self.startsSearch(press.characters) {
-            model.setSearchQuery(press.characters, for: model.tab)
+            model.typeDoneSearch(press.characters)
             beginSearch()
             return .handled
         }

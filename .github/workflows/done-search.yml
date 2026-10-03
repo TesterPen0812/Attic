@@ -1,0 +1,78 @@
+name: Done search verification
+on:
+  workflow_dispatch:
+  push:
+    branches: [redesign/p1-glass]
+    paths: [.github/workflows/done-search.yml]
+permissions:
+  contents: read
+jobs:
+  done-search:
+    if: github.ref == 'refs/heads/redesign/p1-glass'
+    runs-on: macos-26
+    timeout-minutes: 45
+    env:
+      DEVELOPER_DIR: /Applications/Xcode_26.6.app/Contents/Developer
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+      - uses: ruby/setup-ruby@v1
+        with:
+          ruby-version: '3.3'
+          bundler-cache: true
+      - name: Verify generated project
+        run: bundle exec ruby Scripts/verify_project_generation.rb
+      - name: Build optimized baseline and candidate through the lock
+        run: |
+          mkdir -p "$RUNNER_TEMP/done-search-evidence"
+          git worktree add --detach "$RUNNER_TEMP/done-search-baseline" 6e436c2c71964e016d72889523f9f523b4c32bcb
+          for name in baseline candidate; do
+            source="$GITHUB_WORKSPACE"
+            if [ "$name" = baseline ]; then source="$RUNNER_TEMP/done-search-baseline"; fi
+            (cd "$source" && env -u PEEKABOO_MCP_TOKEN -u GITHUB_TOKEN Scripts/xcodebuild_locked.sh build-for-testing \
+              -project Attic.xcodeproj -scheme Attic -configuration Local -destination 'platform=macOS' \
+              -derivedDataPath "$RUNNER_TEMP/done-search-$name" CODE_SIGNING_ALLOWED=NO \
+              SWIFT_OPTIMIZATION_LEVEL=-O SWIFT_COMPILATION_MODE=wholemodule ENABLE_DEBUG_DYLIB=NO \
+              ENABLE_TESTABILITY=YES ENABLE_HARDENED_RUNTIME=NO) > "$RUNNER_TEMP/done-search-evidence/$name-build.log" 2>&1
+          done
+      - name: Interleave three frame and row samples
+        run: |
+          for sample in 1 2 3; do
+            for name in baseline candidate; do
+              source="$GITHUB_WORKSPACE"
+              if [ "$name" = baseline ]; then source="$RUNNER_TEMP/done-search-baseline"; fi
+              (cd "$source" && env -u PEEKABOO_MCP_TOKEN -u GITHUB_TOKEN Scripts/xcodebuild_locked.sh test-without-building \
+                -project Attic.xcodeproj -scheme Attic -configuration Local -destination 'platform=macOS' \
+                -derivedDataPath "$RUNNER_TEMP/done-search-$name" \
+                -resultBundlePath "$RUNNER_TEMP/done-search-evidence/$name-cost-$sample.xcresult" \
+                -parallel-testing-enabled NO -only-testing:AtticTests/TasksFrameCostTests \
+                -only-testing:AtticTests/TasksRowBuildCostTests) > "$RUNNER_TEMP/done-search-evidence/$name-cost-$sample.log" 2>&1
+              grep -E 'ATTIC_FRAME_COST|ATTIC_ROW_BUILD' "$RUNNER_TEMP/done-search-evidence/$name-cost-$sample.log"
+            done
+          done
+          python3 Scripts/check_done_search_costs.py "$RUNNER_TEMP/done-search-evidence"
+      - name: Block on the 5000-task query and rendered input budgets
+        run: |
+          env -u PEEKABOO_MCP_TOKEN -u GITHUB_TOKEN Scripts/xcodebuild_locked.sh test-without-building \
+            -project Attic.xcodeproj -scheme Attic -configuration Local -destination 'platform=macOS' \
+            -derivedDataPath "$RUNNER_TEMP/done-search-candidate" \
+            -resultBundlePath "$RUNNER_TEMP/done-search-evidence/search.xcresult" \
+            -parallel-testing-enabled NO -only-testing:AtticTests/DoneSearchCostTests \
+            > "$RUNNER_TEMP/done-search-evidence/search.log" 2>&1
+          grep -E 'ATTIC_DONE_SEARCH|ATTIC_DONE_INPUT' "$RUNNER_TEMP/done-search-evidence/search.log"
+      - name: All macOS unit regressions including paging edits delete and Undo
+        run: |
+          env -u PEEKABOO_MCP_TOKEN -u GITHUB_TOKEN Scripts/xcodebuild_locked.sh test-without-building \
+            -project Attic.xcodeproj -scheme Attic -configuration Local -destination 'platform=macOS' \
+            -derivedDataPath "$RUNNER_TEMP/done-search-candidate" \
+            -resultBundlePath "$RUNNER_TEMP/done-search-evidence/units.xcresult" \
+            -parallel-testing-enabled NO -only-testing:AtticTests \
+            > "$RUNNER_TEMP/done-search-evidence/units.log" 2>&1
+      - name: Upload evidence even on failure
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: done-search-${{ github.sha }}
+          path: ${{ runner.temp }}/done-search-evidence
+          retention-days: 14
