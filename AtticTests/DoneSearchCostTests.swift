@@ -273,6 +273,9 @@ final class DoneSearchCostTests: XCTestCase {
         let resultsMedian = TasksFrameCostTests.median(resultFrames)
         print("ATTIC_DONE_RESULTS median_ms=\(resultsMedian) bound_ms=77.15")
         XCTAssertLessThanOrEqual(resultsMedian, 57.04 + 20.11, "the frame the Done results arrive in: \(resultFrames)")
+        // The earlier sanity bound on every run stays, so one runaway run
+        // can't hide behind a good median.
+        XCTAssertLessThan(resultFrames.max()!, 500, "the frame the Done results arrive in: \(resultFrames)")
     }
 
     func testDoneTodaySlicePreservesSnapshotRootsAndOrder() throws {
