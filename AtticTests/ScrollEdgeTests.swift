@@ -3,8 +3,8 @@ import SwiftUI
 import XCTest
 @testable import Attic
 
-/// The lists' edges under the floating controls (owner, 2026-10-01): the
-/// system's soft scroll edge by default, round 13's clean cut as a
+/// The lists' edges under the floating controls: Clean cut by default
+/// (owner, 2026-10-03, reversing D4b), the system's soft scroll edge as a
 /// preview-only comparison, and nothing left of the per-control softening
 /// (no content re-rendered to blur it).
 @MainActor
@@ -30,33 +30,34 @@ final class ScrollEdgeTests: XCTestCase {
         return (defaults, { defaults.removePersistentDomain(forName: suite) })
     }
 
-    func testTheSystemSoftEdgeIsTheDefault() throws {
+    func testTheCleanCutIsTheDefault() throws {
         let (defaults, cleanup) = try scratchDefaults()
         defer { cleanup() }
-        XCTAssertEqual(AtticScrollEdgeLab(defaults: defaults, isPreview: true).style, .systemSoft)
-        XCTAssertEqual(AtticScrollEdgeLab(defaults: defaults, isPreview: false).style, .systemSoft)
+        XCTAssertEqual(AtticScrollEdgeLab(defaults: defaults, isPreview: true).style, .cleanCut)
+        XCTAssertEqual(AtticScrollEdgeLab(defaults: defaults, isPreview: false).style, .cleanCut)
+        XCTAssertEqual(AtticScrollEdgeLab.shared.style, .cleanCut, "the test host, not a preview, draws Clean cut")
     }
 
     func testAPreviewKeepsItsChoiceAndUITestsCanForceOne() throws {
         let (defaults, cleanup) = try scratchDefaults()
         defer { cleanup() }
         let lab = AtticScrollEdgeLab(defaults: defaults, isPreview: true)
-        XCTAssertEqual(lab.style, .systemSoft)
-        lab.style = .cleanCut
-        XCTAssertEqual(AtticScrollEdgeLab(defaults: defaults, isPreview: true).style, .cleanCut, "a preview keeps the owner's choice")
-        XCTAssertEqual(AtticScrollEdgeLab(defaults: defaults, environment: ["ATTIC_UI_TEST_SCROLL_EDGES": "soft"], isPreview: true).style, .systemSoft)
+        XCTAssertEqual(lab.style, .cleanCut)
+        lab.style = .systemSoft
+        XCTAssertEqual(AtticScrollEdgeLab(defaults: defaults, isPreview: true).style, .systemSoft, "a preview keeps the owner's choice")
+        XCTAssertEqual(AtticScrollEdgeLab(defaults: defaults, environment: ["ATTIC_UI_TEST_SCROLL_EDGES": "clean"], isPreview: true).style, .cleanCut)
         let (fresh, freshCleanup) = try scratchDefaults()
         defer { freshCleanup() }
-        XCTAssertEqual(AtticScrollEdgeLab(defaults: fresh, environment: ["ATTIC_UI_TEST_SCROLL_EDGES": "clean"], isPreview: true).style, .cleanCut)
+        XCTAssertEqual(AtticScrollEdgeLab(defaults: fresh, environment: ["ATTIC_UI_TEST_SCROLL_EDGES": "soft"], isPreview: true).style, .systemSoft)
         XCTAssertEqual(AtticScrollEdgeStyle.allCases.map(\.title), ["System soft edge", "Clean cut"])
     }
 
-    /// The official identity and every other non-preview one: the system
-    /// soft edge, whatever the environment or the stored choice says, no
+    /// The official identity and every other non-preview one: Clean cut,
+    /// whatever the environment or the stored choice says, no
     /// switch, and nothing is kept. The strict predicate ignores the launch
     /// arguments (`--attic-motion-lab` widens the Motion Lab, not this), so
     /// each identity is paired with and without it.
-    func testNoNonPreviewIdentityLeavesTheSystemSoftEdge() throws {
+    func testNoNonPreviewIdentityLeavesTheCleanCut() throws {
         let identities: [String?] = [
             "com.taha.Attic", "com.taha.Attic.UnitTestHost", "com.taha.Attic.perf.ui",
             "com.taha.Attic.previewish", "com.taha.Attic.preview.", "com.taha.AtticUITests", "", nil,
@@ -68,17 +69,17 @@ final class ScrollEdgeTests: XCTestCase {
                 XCTAssertFalse(isPreview, "\(name) is not a preview")
                 let (defaults, cleanup) = try scratchDefaults()
                 defer { cleanup() }
-                // The environment says clean.
-                let forced = AtticScrollEdgeLab(defaults: defaults, environment: ["ATTIC_UI_TEST_SCROLL_EDGES": "clean"], isPreview: isPreview)
-                XCTAssertEqual(forced.style, .systemSoft, "\(name): the environment cannot choose Clean cut")
+                // The environment says soft.
+                let forced = AtticScrollEdgeLab(defaults: defaults, environment: ["ATTIC_UI_TEST_SCROLL_EDGES": "soft"], isPreview: isPreview)
+                XCTAssertEqual(forced.style, .cleanCut, "\(name): the environment cannot choose the soft edge")
                 XCTAssertFalse(forced.offersChoice, "\(name): no switch")
-                // The defaults say clean.
-                defaults.set(AtticScrollEdgeStyle.cleanCut.rawValue, forKey: AtticScrollEdgeLab.styleKey)
-                XCTAssertEqual(AtticScrollEdgeLab(defaults: defaults, isPreview: isPreview).style, .systemSoft,
-                               "\(name): a stored Clean cut is ignored")
+                // The defaults say soft.
+                defaults.set(AtticScrollEdgeStyle.systemSoft.rawValue, forKey: AtticScrollEdgeLab.styleKey)
+                XCTAssertEqual(AtticScrollEdgeLab(defaults: defaults, isPreview: isPreview).style, .cleanCut,
+                               "\(name): a stored soft edge is ignored")
                 // A choice made in code is not kept.
                 defaults.removeObject(forKey: AtticScrollEdgeLab.styleKey)
-                AtticScrollEdgeLab(defaults: defaults, isPreview: isPreview).style = .cleanCut
+                AtticScrollEdgeLab(defaults: defaults, isPreview: isPreview).style = .systemSoft
                 XCTAssertNil(defaults.string(forKey: AtticScrollEdgeLab.styleKey), "\(name): nothing is kept")
             }
         }
@@ -94,7 +95,7 @@ final class ScrollEdgeTests: XCTestCase {
         XCTAssertTrue(preview.offersChoice)
     }
 
-    // MARK: - The system soft edge on the Tasks lists
+    // MARK: - The system soft edge on the Tasks lists (a preview's choice)
 
     /// Native pockets occupy only resting gaps INSIDE the viewport. The
     /// controls never overlap the scroll view or its clipped native effect.

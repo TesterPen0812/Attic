@@ -114,7 +114,7 @@ final class TasksPageUITests: XCTestCase {
 
     // MARK: - Add bar
 
-    /// The add bar sits in the bottom bar's zone under the system soft edge,
+    /// The add bar sits in the bottom bar's zone under the lists' edges,
     /// and a click needs a hit point on it (CI, 2026-10-01: the lists' bars,
     /// at the pager's level, left the add bar none). Fails with the window's
     /// accessibility hierarchy attached, to see what covers it.

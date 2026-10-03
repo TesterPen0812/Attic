@@ -680,7 +680,7 @@ final class TasksRound12Tests: XCTestCase {
 
     /// The page drawn with a long list scrolled to two places (a hosted
     /// stand-in for the round's UI test, which no runner could make find the
-    /// panel). Clean cut (round 13, a preview's choice): what is drawn under
+    /// panel). Clean cut (the default, owner 2026-10-03): what is drawn under
     /// the tabs and the add bar's band is the same picture at both, whatever
     /// rows lie beneath.
     func testNoRowIsDrawnUnderTheTabsOrTheAddBarsBandWithTheCleanCut() throws {
@@ -690,7 +690,7 @@ final class TasksRound12Tests: XCTestCase {
         XCTAssertLessThan(shares.bottom, 0.004, "rows show through the add bar's band (\(shares.bottom))")
     }
 
-    // The system soft edge (the default, owner 2026-10-01) is checked in
+    // The system soft edge (a preview's choice since 2026-10-03) is checked in
     // `ScrollEdgeTests`: its pockets are drawn by the window server, which a
     // capture in the process does not show.
 

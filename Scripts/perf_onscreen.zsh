@@ -21,7 +21,7 @@
 #   --baseline-env KEY=VALUE, --candidate-env KEY=VALUE
 #                        an extra environment variable for that side's app, so
 #                        one build can be A/B-ed against itself (for instance
-#                        --candidate-env ATTIC_UI_TEST_SCROLL_EDGES=clean).
+#                        --candidate-env ATTIC_UI_TEST_SCROLL_EDGES=soft).
 #                        Repeatable. Only ATTIC_UI_TEST_* keys, and not the
 #                        ones the gate sets itself (_SEED, _META, _META_CLOSE)
 #   --swipe-sign <1|-1>  which horizontal sign is "next page" (1 by default)

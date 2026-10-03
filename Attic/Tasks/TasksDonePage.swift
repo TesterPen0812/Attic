@@ -35,8 +35,8 @@ struct TasksDonePage<Cell: View, Mask: View>: View {
     /// False while the page is kept built but not shown (round 11).
     var drawn = true
     /// How the log meets the floating controls (`TasksPage.edgeStyle`).
-    var edges: AtticScrollEdgeStyle = .systemSoft
-    /// Round 13's clean cut (the system soft edge needs none).
+    var edges: AtticScrollEdgeStyle = .cleanCut
+    /// Clean cut's fade, the default (the system soft edge needs none).
     let mask: Mask
     /// A row the keyboard moved to: brought into the visible area (review 8).
     @Binding var reveal: TasksPageModel.ScrollRequest?

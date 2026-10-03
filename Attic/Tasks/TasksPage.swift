@@ -29,9 +29,10 @@ struct TasksPage: View {
     var chrome = TasksPageChrome()
 
     @Environment(\.atticDesign) private var design
-    /// How the lists meet the floating controls (owner, 2026-10-01: the
-    /// system's soft scroll edge; a preview can switch to round 13's clean
-    /// cut to compare).
+    /// How the lists meet the floating controls: Clean cut, D1's fade
+    /// before the controls (owner, 2026-10-03, reversing D4b's system soft
+    /// edge, which cost GPU and drew the same picture); a preview can switch
+    /// to the system's soft edge to compare.
     @ObservedObject private var scrollEdges = AtticScrollEdgeLab.shared
     @StateObject private var focusTracker = AtticKeyboardFocusTracker()
     /// The rows' keyboard focus. Its `FocusState` is owned by
@@ -175,8 +176,8 @@ struct TasksPage: View {
         // D1: each list ends before the controls. The controls retain their
         // page-level layer and hit points; the lifted card stays above both.
         ZStack(alignment: .top) {
-            // Native soft edges inside the visible viewport, or the
-            // retained Clean cut preview baseline.
+            // Clean cut (D1's fade before the controls, the default), or
+            // the preview-only native soft edges inside the visible viewport.
             pager
             // The controls float over the lists in both, in the page's own
             // layer.
@@ -1274,7 +1275,7 @@ struct TasksPage: View {
         }
     }
 
-    /// Clean cut (round 13, a preview's choice): the viewport's fade, by
+    /// Clean cut (the default since 2026-10-03): the viewport's fade, by
     /// position in the viewport, not per row (owner fix 8, review 9), so an
     /// open quick look is cut line by line as it passes under the tabs and
     /// header, or under the add bar. The system soft edge uses no mask.
