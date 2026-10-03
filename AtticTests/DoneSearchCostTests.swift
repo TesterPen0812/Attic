@@ -259,14 +259,20 @@ final class DoneSearchCostTests: XCTestCase {
             XCTAssertLessThanOrEqual(median, 16, "Done Find key \(key) median exceeds the 16 ms budget")
             XCTAssertLessThanOrEqual(samples.max()!, 16 + 4.3, "sample exceeds the independently measured noise guard")
         }
-        // The results frame is measured and printed, not held to the
-        // keystroke budget: the spec budgets one frame per keystroke, and
-        // this is the frame after the typing pauses, where the first result
-        // rows build cold (CI run 37107829899: 86 to 116 ms). Its regression
-        // gate is the interleaved comparison with the accepted baseline
-        // (`search-show` in Scripts/check_cost_comparison.py), where each
-        // keystroke used to show results itself. A sanity bound only here.
-        XCTAssertLessThan(resultFrames.max()!, 500, "the frame the Done results arrive in: \(resultFrames)")
+        // The frame after the typing pauses, where the first results
+        // arrive (not a keystroke frame, so not the keystroke budget). It
+        // took 86–116 ms on CI (run 37107829899) while it redrew the whole
+        // page twice and built the result rows cold; after the fix it
+        // measured 73.9, 57.0 and 53.8 ms on CI (run 37135232964), and
+        // 17–22 ms against 37–56 ms before on the owner's Mac (local,
+        // optimized, interleaved).
+        // Bound: that CI median plus its measured spread, 57.04 + 20.11 ms,
+        // on the median of the three runs. The no-regression comparison
+        // with the accepted baseline stays (`search-show`,
+        // Scripts/check_cost_comparison.py).
+        let resultsMedian = TasksFrameCostTests.median(resultFrames)
+        print("ATTIC_DONE_RESULTS median_ms=\(resultsMedian) bound_ms=77.15")
+        XCTAssertLessThanOrEqual(resultsMedian, 57.04 + 20.11, "the frame the Done results arrive in: \(resultFrames)")
     }
 
     func testDoneTodaySlicePreservesSnapshotRootsAndOrder() throws {
@@ -345,25 +351,23 @@ final class DoneSearchCostTests: XCTestCase {
     }
 
     func testTheDiskBackedPhase5SeedAlsoFitsTheQueryBudget() throws {
-        let root = FileManager.default.temporaryDirectory.appendingPathComponent("AtticDoneSearch-\(UUID())", isDirectory: true)
-        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
-        defer { try? FileManager.default.removeItem(at: root) }
-        try autoreleasepool {
-            let container = try PersistenceController.makeContainer(cloudSyncEnabled: false, storeDirectory: root)
-            try PerformanceSeed.generate(in: container, root: root, includeDoneHistory: true,
-                                         now: Date(timeIntervalSince1970: 1_800_000_000))
-        }
-        // Three fresh sessions over the one seeded store, as the in-memory
-        // fixture has: the budget holds each query's median across them.
+        // Three sessions, each its own freshly seeded store measured as the
+        // seed leaves it (as the accepted build measured its one session):
+        // the budget holds each query's median across them.
         var byQuery: [String: [Double]] = [:]
         for session in 0..<3 {
-            try measurePhase5Session(session, root: root, into: &byQuery)
+            try measurePhase5Session(session, into: &byQuery)
         }
         Self.assertMediansFitTheBudget(byQuery, "phase5")
     }
 
-    private func measurePhase5Session(_ session: Int, root: URL, into byQuery: inout [String: [Double]]) throws {
+    private func measurePhase5Session(_ session: Int, into byQuery: inout [String: [Double]]) throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("AtticDoneSearch-\(UUID())", isDirectory: true)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
         let container = try PersistenceController.makeContainer(cloudSyncEnabled: false, storeDirectory: root)
+        try PerformanceSeed.generate(in: container, root: root, includeDoneHistory: true,
+                                     now: Date(timeIntervalSince1970: 1_800_000_000))
         let store = TaskStore(container: container)
         let model = TasksPageModel(library: AtticLibrary(tasks: store))
         XCTAssertEqual(store.indexedDoneLogCount(), 5000)
