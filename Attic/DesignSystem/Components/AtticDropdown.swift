@@ -697,9 +697,14 @@ final class AtticDropdownPresenter {
     var takesKeyboard = true
     var contentHasCard = false
     var contentHeight: CGFloat?
+    /// The content's known width (a card's, before the width rule), for
+    /// content whose rows change while open (typing suggestions): the card
+    /// follows it rather than keeping its opening width.
+    var contentWidth: CGFloat?
     /// The open card's width (the width rule's, set as it opens) and
     /// natural height (its content's, which can change while open).
     private var openWidth: CGFloat = 0
+    private var openIdealWidth: CGFloat = 0
     private var naturalHeight: CGFloat = 0
     private var contentKeyHandler: ((NSEvent) -> Bool)?
     var label = ""
@@ -742,11 +747,12 @@ final class AtticDropdownPresenter {
         // Measure the opening width once. Natural content height is observed
         // inside the card, including when its viewport is constrained.
         let fitting = host.fittingSize
-        let ideal = fitting.width - room * 2
+        let ideal = contentWidth ?? (fitting.width - room * 2)
         let height = contentHeight ?? max(0, fitting.height - room * 2)
         let placed = space.place(idealWidth: ideal, height: height, anchor: space.anchor(anchor.bounds, in: anchor), prefer: prefer)
         if contentHasCard || placed.width != ideal.rounded(.up) { stage.width = placed.width }
         openWidth = placed.width
+        openIdealWidth = ideal
         naturalHeight = height
         stage.side = placed.side
         stage.height = placed.heightLimit
@@ -776,19 +782,28 @@ final class AtticDropdownPresenter {
     func update() {
         host?.rootView = root
         // Typing suggestions can gain or lose rows while open. Their known
-        // height avoids another content-measuring pass on every keystroke.
-        if let height = contentHeight { resize(height: height) }
+        // height (and width) avoid another content-measuring pass on every
+        // keystroke.
+        if let height = contentHeight { resize(height: height, width: contentWidth) }
     }
 
     /// The content's natural height changed while open (a filter, a
     /// calendar month, a failure line): the card keeps its side unless that
     /// side can't hold it.
-    private func resize(height: CGFloat) {
-        guard isOpen, height.isFinite, height > 0, abs(height - naturalHeight) > 0.5,
+    private func resize(height: CGFloat, width: CGFloat? = nil) {
+        let widthChanged = width.map { abs($0 - openIdealWidth) > 0.5 } ?? false
+        guard isOpen, height.isFinite, height > 0, abs(height - naturalHeight) > 0.5 || widthChanged,
               let host, let anchor, let space = AtticDropdownSpace(around: anchor) else { return }
         naturalHeight = height
-        let placed = space.place(idealWidth: openWidth, height: height, anchor: space.anchor(anchor.bounds, in: anchor),
+        let placed = space.place(idealWidth: width ?? openWidth, height: height, anchor: space.anchor(anchor.bounds, in: anchor),
                                  prefer: prefer, current: stage.side)
+        if let width {
+            openIdealWidth = width
+            if placed.width != openWidth {
+                openWidth = placed.width
+                stage.width = placed.width
+            }
+        }
         if stage.side != placed.side { stage.side = placed.side }
         if stage.height != placed.heightLimit { stage.height = placed.heightLimit }
         space.show(host, at: placed)
@@ -924,6 +939,7 @@ struct AtticDropdownAnchor: NSViewRepresentable {
     let takesKeyboard: Bool
     let contentHasCard: Bool
     let contentHeight: CGFloat?
+    var contentWidth: CGFloat? = nil
     let design: AtticDesignContext
     let content: () -> AnyView
 
@@ -955,6 +971,7 @@ struct AtticDropdownAnchor: NSViewRepresentable {
         presenter.takesKeyboard = takesKeyboard
         presenter.contentHasCard = contentHasCard
         presenter.contentHeight = contentHeight
+        presenter.contentWidth = contentWidth
         presenter.design = design
         guard isPresented else {
             if presenter.isOpen || presenter.wantsOpen { presenter.close(restoreFocus: true) }
@@ -991,8 +1008,9 @@ extension View {
     /// edge on this view's, on the `prefer` side when there is room. Only
     /// for Attic's own pop-over lists; native menus stay native.
     func atticDropdown<Content: View>(isPresented: Binding<Bool>, prefer: AtticDropdownLayout.Side = .below,
-                                      label: String, takesKeyboard: Bool = true, contentHasCard: Bool = false, contentHeight: CGFloat? = nil, @ViewBuilder content: @escaping () -> Content) -> some View {
-        modifier(AtticDropdownModifier(isPresented: isPresented, prefer: prefer, label: label, takesKeyboard: takesKeyboard, contentHasCard: contentHasCard, contentHeight: contentHeight, card: content))
+                                      label: String, takesKeyboard: Bool = true, contentHasCard: Bool = false, contentHeight: CGFloat? = nil,
+                                      contentWidth: CGFloat? = nil, @ViewBuilder content: @escaping () -> Content) -> some View {
+        modifier(AtticDropdownModifier(isPresented: isPresented, prefer: prefer, label: label, takesKeyboard: takesKeyboard, contentHasCard: contentHasCard, contentHeight: contentHeight, contentWidth: contentWidth, card: content))
     }
 }
 
@@ -1003,6 +1021,7 @@ private struct AtticDropdownModifier<Card: View>: ViewModifier {
     let takesKeyboard: Bool
     let contentHasCard: Bool
     let contentHeight: CGFloat?
+    let contentWidth: CGFloat?
     let card: () -> Card
 
     @Environment(\.atticDesign) private var design
@@ -1012,8 +1031,8 @@ private struct AtticDropdownModifier<Card: View>: ViewModifier {
         // costs nothing (no AppKit view per row).
         content.background {
             if isPresented {
-                AtticDropdownAnchor(isPresented: $isPresented, prefer: prefer, label: label, takesKeyboard: takesKeyboard, contentHasCard: contentHasCard, contentHeight: contentHeight, design: design,
-                                    content: { AnyView(card()) })
+                AtticDropdownAnchor(isPresented: $isPresented, prefer: prefer, label: label, takesKeyboard: takesKeyboard, contentHasCard: contentHasCard, contentHeight: contentHeight, contentWidth: contentWidth,
+                                    design: design, content: { AnyView(card()) })
                     .accessibilityHidden(true)
             }
         }

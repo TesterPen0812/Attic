@@ -561,6 +561,38 @@ final class AtticDropdownTests: XCTestCase {
         XCTAssertFalse(presenter.isOpen, "the automatic suggestions close on that click")
     }
 
+    /// CU review P3: the add bar's suggestions kept their opening width, so
+    /// "#cuqa" then "Create #cuqaz" showed "Create #c…". A list whose rows
+    /// change while it shows follows its known content width.
+    func testTypingSuggestionsFollowTheirRowsWidth() throws {
+        let window = makeWindow()
+        defer { window.close() }
+        let anchor = NSView(frame: CGRect(x: 28, y: 90, width: 60, height: 28))
+        window.contentView?.addSubview(anchor)
+        let presenter = AtticDropdownPresenter()
+        presenter.takesKeyboard = false
+        presenter.contentHasCard = true
+        func show(_ items: [AtticSuggestionList.Item]) {
+            presenter.content = AnyView(AtticSuggestionList(items: items, highlighted: 0) { _ in })
+            presenter.contentHeight = CGFloat(items.count) * AtticDropdownMetrics.rowHeight + AtticDropdownMetrics.inset * 2
+            presenter.contentWidth = AtticSuggestionList.idealWidth(items)
+        }
+        show([.init(id: "cuqa", title: "#cuqa")])
+        presenter.present(from: anchor)
+        defer { presenter.close(restoreFocus: false, immediately: true) }
+        spin(0.1)
+        let host = try XCTUnwrap(presenter.host)
+        XCTAssertEqual(host.contentRect.width, AtticDropdownMetrics.minWidth, accuracy: 1, "a short tag: the minimum")
+        let create: [AtticSuggestionList.Item] = [.init(id: "create-cuqaz", title: "Create #cuqazzzz", systemName: "plus")]
+        show(create)
+        presenter.update()
+        spin(0.1)
+        let wanted = AtticDropdownLayout.width(ideal: AtticSuggestionList.idealWidth(create), available: 296)
+        XCTAssertGreaterThan(wanted, AtticDropdownMetrics.minWidth, "the create row needs more than the minimum")
+        XCTAssertEqual(host.contentRect.width, wanted, accuracy: 1, "the card grew to its row")
+        XCTAssertEqual(presenter.stage.width, wanted)
+    }
+
     private func key(_ characters: String, code: UInt16, flags: NSEvent.ModifierFlags = [], in window: NSWindow) -> NSEvent {
         NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: flags, timestamp: 0,
                         windowNumber: window.windowNumber, context: nil, characters: characters,
