@@ -801,3 +801,23 @@ additive; no token, colour, radius or type style changed.
   the scrolling threshold, without adding edge space while the card fits.
 - Priority picker rows route their displayed ⌥⌘0–3 shortcuts to the pick action
   while the picker is mounted. Menu-item semantics from round 1 are retained.
+
+### Phase 2: E1 dropdown review fixes (Opus, 2026-10-03)
+
+Requested by the Opus review of the dropdown fixes (P2-B1, P3-B2–B4, P3-T1).
+Behaviour only: no token, colour, radius, size or motion preset changed.
+
+- **One placement for every card**: `AtticDropdownLayout.place` (anchor,
+  bounds, preferred side and the open card's current side → frame, side,
+  width and height limit) and `AtticDropdownSpace` (the overlay, the panel
+  less its 12 pt margin, and the host's frame). The presenter, the `/` list,
+  Notes' date and link cards and the title's tag suggestions all use it. An
+  open card keeps its side and flips only when that side can't hold it; a
+  card that opens anew still opens below the caret when there is room.
+- **The title's tag suggestions follow their `#`** as the note scrolls, and
+  wait out of sight while it is under the header.
+- **A measured card's natural height** is its laid-out height plus what any
+  part gave up to fit (`atticDropdownHeightGivenUp`, the tag picker's list),
+  read as one preference value, so a cut-short tag picker settles at once.
+- **VoiceOver**: a dropdown row is "selected" only while it has the list's
+  highlight; a tick is the menu item's mark (`AXMenuItemMarkChar`).
