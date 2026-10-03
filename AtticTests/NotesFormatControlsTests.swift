@@ -420,13 +420,15 @@ final class NotesFormatControlsTests: XCTestCase {
                                                tagEditor: { AnyView(EmptyView()) })
         defer { accessories.invalidate() }
         accessories.tagCounts = { ["launch": 3, "landing": 1] }
+        // The card moves in the scroll's own pass: no run-loop turn (where
+        // a layout pass might re-place it) between the scroll and the checks.
         func scroll(to y: CGFloat) {
             scrollView.contentView.scroll(to: NSPoint(x: 0, y: y))
             scrollView.reflectScrolledClipView(scrollView.contentView)
-            spin()
         }
         scrollView.layoutSubtreeIfNeeded()
         scroll(to: -header)
+        spin()
         window.makeFirstResponder(textView)
         textView.setSelectedRange(NSRange(location: (title as NSString).length, length: 0))
         type("#la", textView)
