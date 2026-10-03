@@ -1838,10 +1838,11 @@ struct AtticSubtaskRow: View {
     }
 
     /// ⇧⌘I and the actions button: the line's commands as a native menu
-    /// (type-select and Return work in it), under the button or the line.
+    /// (type-select and Return work in it), under the button or the line,
+    /// placed as a right-click menu is (its submenus' titles whole).
     private func showActions(in view: NSView?) {
         guard !commands.isEmpty, let view = view ?? anchor.view else { return }
-        AtticNativeMenu.popUp(commands, in: view)
+        AtticNativeMenu.popUpContextMenu(commands, in: view)
     }
 }
 

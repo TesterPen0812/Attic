@@ -1938,14 +1938,16 @@ struct TasksPage: View {
         presentMenu(taskCommands(id, tab: tab), at: TasksRowID(tab: tab, id: id), anchor: anchor)
     }
 
-    /// Opens a native menu under `anchor`, or at the row's title line.
+    /// Opens the row's native menu under `anchor`, or at the row's title
+    /// line, as a context menu (its submenus placed as the right-click
+    /// menu's are, PR prep P3).
     private func presentMenu(_ commands: [AtticMenuCommand], at id: TasksRowID, anchor: NSView?) {
         if let anchor, anchor.window != nil {
-            AtticNativeMenu.popUp(commands, in: anchor)
+            AtticNativeMenu.popUpContextMenu(commands, in: anchor)
         } else if let view = pointer.view, let frame = pointer.frames[id] {
-            AtticNativeMenu.popUp(commands, in: view, at: CGPoint(x: frame.minX + AtticLayout.textX, y: frame.minY + AtticLayout.rowPitch))
+            AtticNativeMenu.popUpContextMenu(commands, in: view, at: CGPoint(x: frame.minX + AtticLayout.textX, y: frame.minY + AtticLayout.rowPitch))
         } else if let view = pointer.view {
-            AtticNativeMenu.popUp(commands, in: view, at: CGPoint(x: AtticLayout.textX, y: listTop))
+            AtticNativeMenu.popUpContextMenu(commands, in: view, at: CGPoint(x: AtticLayout.textX, y: listTop))
         }
     }
 

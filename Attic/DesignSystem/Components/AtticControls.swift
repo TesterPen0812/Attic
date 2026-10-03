@@ -1367,6 +1367,30 @@ enum AtticNativeMenu {
             menu.popUp(positioning: nil, at: location, in: view)
         }
     }
+
+    /// Opens the menu as the system opens a right-click menu, with its top
+    /// left at `point` in `view` (under its bottom-left corner by default):
+    /// a row's actions (⇧⌘I, the row's ⋯, VoiceOver's Show actions). The
+    /// pop-up style above keeps a menu beside its button and, short of
+    /// room, squeezes a submenu's titles to fragments (CU recheck 3, P3:
+    /// More's Open Files…, Move Up and Move Down showed as "…"); a context
+    /// menu places its submenus as the right-click menu does, titles whole.
+    static func popUpContextMenu(_ commands: [AtticMenuCommand], in view: NSView, at point: CGPoint? = nil) {
+        let menu = make(commands)
+        menu.appearance = view.window?.effectiveAppearance
+        let location = point ?? CGPoint(x: 0, y: view.isFlipped ? view.bounds.maxY + 4 : -4)
+        DispatchQueue.main.async {
+            guard let window = view.window else { return }
+            guard let event = NSEvent.mouseEvent(with: .rightMouseDown, location: view.convert(location, to: nil),
+                                                 modifierFlags: [], timestamp: ProcessInfo.processInfo.systemUptime,
+                                                 windowNumber: window.windowNumber, context: nil, eventNumber: 0,
+                                                 clickCount: 1, pressure: 1) else {
+                menu.popUp(positioning: nil, at: location, in: view)
+                return
+            }
+            NSMenu.popUpContextMenu(menu, with: event, for: view)
+        }
+    }
 }
 
 /// Runs a native menu item's command.
