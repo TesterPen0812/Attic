@@ -422,7 +422,15 @@ struct AtticAddBar: View {
         return focused
     }
 
+    #if DEBUG
+    /// Hosted regression counter, matching PanelHeader's scroll-frame seam.
+    static var bodyEvaluations = 0
+    #endif
+
     var body: some View {
+        #if DEBUG
+        let _ = Self.bodyEvaluations += 1
+        #endif
         let m = AtticAddBarMetrics.self
         let height = AtticControlSize.addBarHeight
         let radius = AtticRadius.control(height: height)

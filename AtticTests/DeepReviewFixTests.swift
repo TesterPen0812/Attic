@@ -91,14 +91,9 @@ final class DeepReviewFixTests: XCTestCase {
         XCTAssertFalse(hosted.model.rows(for: .now).isEmpty)
     }
 
-    // MARK: - P2-02: the pockets cover the whole control regions
+    // MARK: - D1: viewport clears every visible control
 
-    /// Under the system soft edge: the top pocket runs from the panel's top
-    /// edge past the tabs' line and Find's field to the resting row; the
-    /// bottom pocket covers the add bar and, while it shows, the strip
-    /// above it, and shrinks back when the strip goes. The same system
-    /// effect throughout, and nothing of Attic's own is blurred.
-    func testThePocketsCoverTheTabsFindTheAddBarAndTheStrip() throws {
+    func testTheViewportTracksFindTheStripSelectionAndPasteOffer() throws {
         useSoftEdge()
         let hosted = try Hosted(height: 520, long: true)
         defer { hosted.close() }
@@ -107,35 +102,46 @@ final class DeepReviewFixTests: XCTestCase {
         let layout = layout(hosted)
         let tabsTop = layout.headerBottom + AtticLayout.pageTabsTop
         let bottomInset = max(AtticSpacing.panelMargin, layout.chromeInsets.bottom)
-        func pockets() -> (top: CGFloat, bottom: CGFloat) {
-            let frames = ScrollEdgeTests.pockets(in: list).map(\.frame)
-            let top = frames.filter { $0.minY < 1 }.map(\.height).max() ?? 0
-            let bottom = frames.filter { $0.minY >= 1 }.map(\.height).max() ?? 0
-            return (top, bottom)
-        }
-
-        // Find's field, centred on the tabs' line, is inside the top pocket.
-        let findBottom = tabsTop + AtticLayout.pageTabsHeight / 2 + AtticControlSize.smallHeight / 2
-        XCTAssertGreaterThanOrEqual(pockets().top, findBottom, "the top pocket covers the header, the tabs and Find")
-        XCTAssertEqual(pockets().top, TasksViewport.listTop(tabsTop: tabsTop), accuracy: 0.5, "and runs to the resting row")
-
         let idle = TasksViewport.bottomMargin(bottomInset: bottomInset)
-        XCTAssertEqual(pockets().bottom, idle, accuracy: 0.5, "idle, the bottom pocket is the add bar's zone")
+        func frame() -> CGRect {
+            hosted.window.contentView?.layoutSubtreeIfNeeded()
+            return list.convert(list.bounds, to: hosted.window.contentView)
+        }
+        let resting = frame()
+        XCTAssertEqual(resting.minY, TasksViewport.controlsBottom(tabsTop: tabsTop), accuracy: 0.5)
+        XCTAssertEqual(resting.maxY, hosted.height - idle, accuracy: 0.5)
+        let pocketHeights = ScrollEdgeTests.pockets(in: list).map(\.frame.height).sorted()
 
-        // A draft shows the strip over the bar: the pocket grows to cover it.
+        hosted.press("f", keyCode: 3, modifiers: .command)
+        XCTAssertTrue(hosted.searchFieldShown)
+        XCTAssertEqual(frame().minY, resting.minY, accuracy: 0.5, "Find has the same taller control boundary")
+        hosted.press("\u{1B}", keyCode: 53)
+
         hosted.model.addBar = TaskAddBarText(text: "Pay rent tomorrow #home !!")
         hosted.spin(0.8)
         let strip = AtticPickerMetrics.stripToBar + AtticControlSize.smallHeight
-        XCTAssertEqual(pockets().bottom, idle + strip, accuracy: 0.5, "with the strip, the bottom pocket covers it too")
-        XCTAssertEqual(TasksBottomEdgeBar.height(stack: AtticControlSize.addBarHeight + strip, minimum: idle), idle + strip)
-        XCTAssertEqual(TasksBottomEdgeBar.height(stack: AtticControlSize.addBarHeight + AtticPickerMetrics.stripToBar, minimum: idle),
-                       idle, "idle, the hidden strip's gap is not covered")
-
-        // The draft cleared, the strip goes and the pocket shrinks back.
+        XCTAssertEqual(frame().maxY, resting.maxY - strip, accuracy: 0.5)
+        XCTAssertEqual(ScrollEdgeTests.pockets(in: list).map(\.frame.height).sorted(), pocketHeights,
+                       "the native fade stays small; the viewport moves above the strip")
         hosted.model.addBarState.clearDraft()
         hosted.spin(0.8)
-        XCTAssertEqual(pockets().bottom, idle, accuracy: 0.5, "and shrinks back with it")
-        XCTAssertTrue(ScrollEdgeTests.blurredLayers(in: try XCTUnwrap(list.documentView?.layer)).isEmpty, "no row is blurred by Attic")
+        XCTAssertEqual(frame().maxY, resting.maxY, accuracy: 0.5)
+
+        let ids = hosted.model.rows(for: .now).prefix(2).map(\.id)
+        hosted.model.selectOnly(ids[0])
+        hosted.model.selectCopies(ids)
+        hosted.spin(0.8)
+        XCTAssertLessThan(frame().maxY, resting.maxY - 20, "the selection bar is excluded too")
+        hosted.model.clearSelection()
+        hosted.spin(0.8)
+        XCTAssertEqual(frame().maxY, resting.maxY, accuracy: 0.5)
+        hosted.model.pasteOffer = TaskPasteOffer("Milk\nEggs\nBread")
+        hosted.spin(0.8)
+        XCTAssertLessThan(frame().maxY, resting.maxY - 20, "the paste offer is excluded too")
+        hosted.model.dismissPasteOffer()
+        hosted.spin(0.8)
+        XCTAssertEqual(frame().maxY, resting.maxY, accuracy: 0.5)
+        XCTAssertTrue(ScrollEdgeTests.blurredLayers(in: try XCTUnwrap(list.documentView?.layer)).isEmpty)
     }
 
     // MARK: - P2-03: one Open Files command

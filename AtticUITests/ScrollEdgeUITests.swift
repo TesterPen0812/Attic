@@ -98,6 +98,134 @@ final class ScrollEdgeUITests: XCTestCase {
         app.typeKey(.escape, modifierFlags: [])
     }
 
+    /// Window-server pixels: scrolling changes row ink in the body, but
+    /// must change virtually no ink behind either the tabs or strip pills.
+    func testRowsDisappearBeforeTheTabsAndMetadataPills() throws {
+        for (surface, mode) in [("solid", "light"), ("glass", "light"), ("glass", "dark")] {
+            let app = launchPixelFixture(surface: surface, mode: mode, edge: "soft")
+            defer { app.terminate() }
+            let panel = app.dialogs.containing(.button, identifier: "panel-pin-button").firstMatch
+            let field = app.descendants(matching: .any).matching(identifier: "AtticTokenField").firstMatch
+            XCTAssertTrue(field.waitForExistence(timeout: 5))
+            XCTAssertTrue(field.isHittable)
+            field.click()
+            app.typeText("Water plants tomorrow #home !!")
+            let date = app.buttons["composer-date"]
+            XCTAssertTrue(date.waitForExistence(timeout: 5))
+            XCTAssertTrue(app.buttons["composer-tag"].isHittable)
+            XCTAssertTrue(app.buttons["composer-priority"].isHittable)
+            let middle = panel.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.52))
+            middle.hover()
+            RunLoop.current.run(until: Date().addingTimeInterval(1))
+            let tabs = app.buttons["tasks-page-now"].frame.union(app.buttons["tasks-page-backlog"].frame)
+                .union(app.buttons["tasks-page-done"].frame)
+            let pills = date.frame.union(app.buttons["composer-tag"].frame).union(app.buttons["composer-priority"].frame)
+            let before = try bitmap(panel)
+            save(panel.screenshot(), name: "d1-\(surface)-\(mode)-controls-reference")
+            for identifier in ["tasks-page-now", "tasks-page-backlog", "tasks-page-done", "panel-pin-button", "panel-section-picker"] {
+                XCTAssertTrue(app.descendants(matching: .any).matching(identifier: identifier).firstMatch.isHittable,
+                              "\(identifier) retains a hit point")
+            }
+            let body = CGRect(x: panel.frame.minX + 75, y: tabs.maxY + 25,
+                              width: panel.frame.width - 110, height: pills.minY - tabs.maxY - 50)
+            // One sign advances this list regardless of natural scrolling.
+            var moved = false
+            for delta in [CGFloat(-170), 340] {
+                middle.scroll(byDeltaX: 0, deltaY: delta)
+                RunLoop.current.run(until: Date().addingTimeInterval(1))
+                let after = try bitmap(panel)
+                let movement = changedFraction(before, after, in: body, panel: panel.frame)
+                guard movement > 0.02 else { continue }
+                moved = true
+                XCTAssertLessThan(changedFraction(before, after, in: tabs, panel: panel.frame), 0.003,
+                                  "\(surface) \(mode): row ink behind tabs labels")
+                XCTAssertLessThan(changedFraction(before, after, in: pills, panel: panel.frame), 0.003,
+                                  "\(surface) \(mode): row ink behind metadata pills")
+                save(panel.screenshot(), name: "d1-\(surface)-\(mode)-controls-clear")
+            }
+            XCTAssertTrue(moved, "positive control: scrolling visibly changed row ink in the body")
+        }
+    }
+
+    /// Clean cut is the unfaded reference, available only in a strict
+    /// preview test identity. No empty capture can pass this comparison.
+    func testTheFirstRowAtRestMatchesTheUnfadedCleanReference() throws {
+        var reference: NSBitmapImageRep?
+        var referenceRect: CGRect?
+        for edge in ["clean", "soft"] {
+            let app = launchPixelFixture(surface: "glass", mode: "light", edge: edge)
+            let panel = app.dialogs.containing(.button, identifier: "panel-pin-button").firstMatch
+            let first = app.descendants(matching: .any).matching(NSPredicate(format: "label BEGINSWITH %@", "Finalize launch checklist,")).firstMatch
+            XCTAssertTrue(first.waitForExistence(timeout: 5))
+            panel.coordinate(withNormalizedOffset: CGVector(dx: 0.95, dy: 0.55)).hover()
+            RunLoop.current.run(until: Date().addingTimeInterval(1))
+            let rect = first.frame.insetBy(dx: 55, dy: 1)
+            let image = try bitmap(panel)
+            XCTAssertGreaterThan(darkPixels(image, in: rect, panel: panel.frame), 80, "a real resting row was rendered")
+            if let reference, let referenceRect {
+                XCTAssertEqual(rect.minY - panel.frame.minY, referenceRect.minY, accuracy: 0.5)
+                XCTAssertLessThan(changedFraction(reference, image, in: rect, panel: panel.frame), 0.003,
+                                  "native soft edge does not fade the first row at rest")
+            } else {
+                reference = image
+                referenceRect = rect.offsetBy(dx: -panel.frame.minX, dy: -panel.frame.minY)
+            }
+            save(panel.screenshot(), name: "d1-at-rest-\(edge)")
+            app.terminate()
+        }
+    }
+
+    private func launchPixelFixture(surface: String, mode: String, edge: String) -> XCUIApplication {
+        let app = XCUIApplication()
+        app.launchEnvironment["ATTIC_UI_TESTING"] = "1"
+        app.launchEnvironment["ATTIC_UI_TEST_SEED"] = "long"
+        app.launchEnvironment["ATTIC_UI_TEST_SCROLL_EDGES"] = edge
+        app.launchArguments += ["-appearancePreference", mode, "-panelSurfaceStyle", surface]
+        app.launch()
+        XCTAssertTrue(app.buttons["panel-pin-button"].waitForExistence(timeout: 8))
+        XCTAssertTrue(app.buttons["tasks-page-now"].waitForExistence(timeout: 5))
+        return app
+    }
+
+    private func bitmap(_ panel: XCUIElement) throws -> NSBitmapImageRep {
+        try XCTUnwrap(NSBitmapImageRep(data: panel.screenshot().pngRepresentation))
+    }
+
+    private func sample(_ image: NSBitmapImageRep, in rect: CGRect, panel: CGRect,
+                        _ visit: (Int, Int, NSColor) -> Void) -> Int {
+        let area = rect.offsetBy(dx: -panel.minX, dy: -panel.minY).intersection(CGRect(origin: .zero, size: panel.size))
+        guard !area.isNull, !area.isEmpty else { return 0 }
+        let scale = CGFloat(image.pixelsWide) / panel.width
+        var total = 0
+        for y in stride(from: max(0, Int(area.minY * scale)), to: min(Int(area.maxY * scale), image.pixelsHigh), by: 2) {
+            for x in stride(from: max(0, Int(area.minX * scale)), to: min(Int(area.maxX * scale), image.pixelsWide), by: 2) {
+                guard let color = image.colorAt(x: x, y: y)?.usingColorSpace(.sRGB) else { continue }
+                total += 1
+                visit(x, y, color)
+            }
+        }
+        return total
+    }
+
+    private func darkPixels(_ image: NSBitmapImageRep, in rect: CGRect, panel: CGRect) -> Int {
+        var ink = 0
+        _ = sample(image, in: rect, panel: panel) { _, _, color in
+            if max(color.redComponent, color.greenComponent, color.blueComponent) < 0.65 { ink += 1 }
+        }
+        return ink
+    }
+
+    private func changedFraction(_ a: NSBitmapImageRep, _ b: NSBitmapImageRep, in rect: CGRect, panel: CGRect) -> Double {
+        var changed = 0
+        let total = sample(b, in: rect, panel: panel) { x, y, color in
+            guard let other = a.colorAt(x: x, y: y)?.usingColorSpace(.sRGB) else { return }
+            if max(abs(color.redComponent - other.redComponent), abs(color.greenComponent - other.greenComponent),
+                   abs(color.blueComponent - other.blueComponent)) > 0.05 { changed += 1 }
+        }
+        XCTAssertGreaterThan(total, 100, "a nonempty pixel sample")
+        return Double(changed) / Double(max(total, 1))
+    }
+
     private func waitFor(timeout: TimeInterval = 5, _ condition: () -> Bool) -> Bool {
         let deadline = Date().addingTimeInterval(timeout)
         while Date() < deadline, !condition() { RunLoop.current.run(until: Date().addingTimeInterval(0.1)) }

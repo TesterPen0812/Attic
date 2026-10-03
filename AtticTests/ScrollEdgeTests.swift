@@ -6,7 +6,7 @@ import XCTest
 /// The lists' edges under the floating controls (owner, 2026-10-01): the
 /// system's soft scroll edge by default, round 13's clean cut as a
 /// preview-only comparison, and nothing left of the per-control softening
-/// (no content re-rendered to blur it, no mask under the system edge).
+/// (no content re-rendered to blur it).
 @MainActor
 final class ScrollEdgeTests: XCTestCase {
     private var saved: AtticScrollEdgeStyle?
@@ -96,29 +96,34 @@ final class ScrollEdgeTests: XCTestCase {
 
     // MARK: - The system soft edge on the Tasks lists
 
-    /// Under the system soft edge, the shown list's scroll view has the
-    /// system's pockets (AppKit's scroll edge effect views) at its top and
-    /// bottom, as tall as the tabs' bar (to the resting row) and the add
-    /// bar's zone; the rows rest where they always did; nothing masks the
-    /// list and no row is blurred by Attic.
-    func testTheShownListHasTheSystemsEdgeEffectUnderTheBars() throws {
+    /// Native pockets occupy only resting gaps INSIDE the viewport. The
+    /// controls never overlap the scroll view or its clipped native effect.
+    func testTheNativeEdgesEndBeforeTheControlsAndLeaveTheFirstRowAtRest() throws {
         use(.systemSoft)
         let hosted = try Hosted(height: 520, long: true)
         defer { hosted.close() }
         let list = try shownList(hosted)
         let layout = PanelPageLayout(cornerSize: 52, panelSize: CGSize(width: AtticLayout.panelSize.width, height: 520))
-        let listTop = TasksViewport.listTop(tabsTop: layout.headerBottom + AtticLayout.pageTabsTop)
-        let bottomMargin = TasksViewport.bottomMargin(bottomInset: max(AtticSpacing.panelMargin, layout.chromeInsets.bottom))
-        XCTAssertEqual(list.contentInsets.top, listTop, accuracy: 0.5, "the first row rests where it always did")
-        XCTAssertEqual(list.contentInsets.bottom, bottomMargin, accuracy: 0.5)
+        let tabsTop = layout.headerBottom + AtticLayout.pageTabsTop
+        let listTop = TasksViewport.listTop(tabsTop: tabsTop)
+        let top = TasksViewport.controlsBottom(tabsTop: tabsTop)
+        let content = try XCTUnwrap(hosted.window.contentView)
+        let frame = list.convert(list.bounds, to: content)
+        XCTAssertEqual(frame.minY, top, accuracy: 0.5)
+        XCTAssertEqual(list.contentInsets.top, listTop - top, accuracy: 0.5)
+        let first = try XCTUnwrap(hosted.model.rows(for: .now).first?.id)
+        XCTAssertEqual(try XCTUnwrap(hosted.pointer.frames[TasksRowID(tab: .now, id: first)]).minY, listTop, accuracy: 0.5,
+                       "the first row keeps its resting place beyond the native fade")
+        let topPocket = try XCTUnwrap(Self.pockets(in: list).first { $0.frame.minY < 1 })
+        XCTAssertEqual(topPocket.frame.maxY, listTop - top, accuracy: 0.5,
+                       "resting row ink starts beyond the pocket's clear boundary")
         list.contentView.scroll(to: CGPoint(x: 0, y: 400))
         list.reflectScrolledClipView(list.contentView)
         hosted.spin(0.5)
         let pockets = Self.pockets(in: list).map(\.frame.height).sorted()
-        XCTAssertEqual(pockets.count, 2, "a pocket at the top and at the bottom (\(pockets))")
-        XCTAssertEqual(pockets.last ?? 0, listTop, accuracy: 0.5, "the top pocket runs to the resting row")
-        XCTAssertEqual(pockets.first ?? 0, bottomMargin, accuracy: 0.5, "the bottom pocket is the add bar's zone")
-        XCTAssertNil(Self.maskedAncestor(of: list, below: hosted.window.contentView), "no mask over the list")
+        XCTAssertEqual(pockets.count, 2)
+        XCTAssertEqual(pockets.first ?? 0, listTop - top, accuracy: 0.5)
+        XCTAssertEqual(pockets.last ?? 0, AtticLayout.contentToAddBar, accuracy: 0.5)
         XCTAssertTrue(Self.blurredLayers(in: try XCTUnwrap(list.documentView?.layer)).isEmpty, "no row is blurred by Attic")
     }
 

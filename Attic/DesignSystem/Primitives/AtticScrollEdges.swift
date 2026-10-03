@@ -1,37 +1,18 @@
 import SwiftUI
 
-// MARK: - Scroll edges under floating controls (owner, 2026-10-01)
+// MARK: - Scroll edges before controls (D1 / D4b, 2026-10-02)
 
-/// How a list meets the floating controls at its top and bottom edges.
+/// Native soft edges, inside each list's visible viewport. Tasks excludes
+/// the header and the entire measured bottom control stack from that
+/// viewport, then clips the native pocket before the excluded space.
+/// Small drawing marker bars occupy only the empty resting gaps inside
+/// the viewport: no row ink can reach a control, and the first/last rows
+/// rest beyond the native fade. Clean cut retains the earlier mask as a
+/// preview-only A/B baseline.
 ///
-/// - **System soft edge** (the default, and the only one outside previews):
-///   macOS 26's own scroll edge effect, soft style. The controls' zones are
-///   the list's bars (`safeAreaBar`, `AtticScrollEdgeBar`), so SwiftUI gives
-///   its scroll view a pocket at each edge (AppKit's `NSScrollPocket`): what
-///   scrolls under a bar is progressively blurred and faded toward the
-///   panel's edge (a variable blur). The window server draws it; Attic
-///   re-renders nothing. The pocket is its bar's height, and its fade is a
-///   straight ramp over that height (measured in-process, 2026-10-02: the
-///   pocket's backdrop is masked by a linear gradient from clear at the
-///   bar's inner edge to 0.85 at the panel's edge, reaching about 10 pt
-///   past the bar while content is under it). A control near the bar's
-///   inner edge, such as the tabs' line, sits where the fade is weakest.
-/// - **Clean cut** (round 13, preview builds only, to compare): no bars and
-///   no system effect; the list's own mask cuts rows cleanly at the
-///   controls' bands. The controls float over the list in both.
-///
-/// What the SDK offers (Xcode 27, macOS 27 SDK): SwiftUI's
-/// `scrollEdgeEffectStyle(_:for:)` (`.automatic`, `.soft`, `.hard`),
-/// `scrollEdgeEffectHidden(_:for:)` and `safeAreaBar(edge:alignment:spacing:)`;
-/// AppKit's `NSScrollEdgeEffectStyle` only through
-/// `NSTitlebarAccessoryViewController` and
-/// `NSSplitViewItemAccessoryViewController.preferredScrollEdgeEffectStyle`
-/// (a titled window or a split view; the panel is a borderless `NSPanel`).
-/// `NSScrollView` has no public edge-effect property, so an AppKit scroll
-/// view (the note editor) cannot take it, and neither does SwiftUI's
-/// `TextEditor`. A pocket appears only for a SwiftUI `ScrollView` under a
-/// bar that draws something: a clear, hidden or zero-opacity bar gets none,
-/// and neither do `safeAreaInset` or `contentMargins`.
+/// macOS 27 off-screen probe: `.soft` on a bare padded ScrollView produces
+/// no NSScrollPocket. A drawing `safeAreaBar` is still needed to activate
+/// the native effect; Attic adds no blur or per-scroll SwiftUI state.
 enum AtticScrollEdgeStyle: String, CaseIterable, Sendable {
     case systemSoft
     case cleanCut
@@ -88,28 +69,11 @@ final class AtticScrollEdgeLab: ObservableObject {
     }
 }
 
-/// A list's bar under floating controls (`safeAreaBar` content): it marks
-/// the controls' zone, so the list's scroll view gets the system's edge
-/// effect there, and the controls themselves float over the list in the
-/// page's own layer.
-///
-/// Where the bars go, and what did not work (CI, 2026-10-01). Making the
-/// controls themselves the bar did not work: SwiftUI hosts a bar's content in
-/// a separate AppKit container, XCUITest found no hit point on the add bar's
-/// text view, and typing cost about 1.5 ms more per keystroke. Marker bars on
-/// the pager, with the controls floating over it, did not work either: the
-/// same hit point was still missing. What works is a marker bar on each list
-/// (`tasksListEdges`), the controls floating over the pager as before; the
-/// add bar has a hit point and every UI test passes (CI run 36910820304). The
-/// exact obstruction at the pager's level is an inference, not established.
-///
-/// Why a faint fill: SwiftUI makes a bar's pocket only for a bar that draws
-/// something (measured: a clear, hidden or zero-opacity bar gets none), so
-/// the bar draws an imperceptible one, opacity 0.001. That rests on
-/// undocumented SwiftUI behaviour, a compatibility risk: `ScrollEdgeTests`
-/// checks that the pockets exist (their structure), not how they look, so an
-/// SDK that stops treating the fill as content fails that test only if the
-/// pockets vanish, and a change in appearance needs the on-screen captures.
+/// Activates Apple's native edge in an empty gap inside the viewport.
+/// The tiny fill remains necessary: a clear bar produces no pocket on the
+/// installed SDK/runtime. This is a compatibility dependency; the hosted
+/// tests assert native pockets, while CI checks actual rendered row ink.
+/// Controls are hosted separately, preserving their native hit points.
 struct AtticScrollEdgeBar: View {
     let height: CGFloat
 
@@ -123,8 +87,7 @@ struct AtticScrollEdgeBar: View {
 }
 
 extension View {
-    /// A list's top and bottom edges: the system's soft scroll edge effect
-    /// under its bars, or (clean cut) none, its own mask doing the cut.
+    /// Native soft edges, or no system effect for the Clean cut baseline.
     @ViewBuilder
     func atticScrollEdgeEffect(_ style: AtticScrollEdgeStyle) -> some View {
         switch style {
