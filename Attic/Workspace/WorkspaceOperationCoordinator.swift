@@ -404,14 +404,21 @@ final class WorkspaceOperationCoordinator {
                     after.first { $0.owner == token.owner }?.replicas.first { $0.physicalID == old.physicalID }?.fields["content"] != old.fields["content"]
                 }
             }
-            if !changedContents.isEmpty { try validatePreservedOpaqueContent(context, before: before, contents: [:]) }
+            if !changedContents.isEmpty {
+                // The bridge already fingerprinted these staged rows in this
+                // unsuspended transaction. Reuse their content guards instead
+                // of fingerprinting every large derived text field again.
+                let contentGuards = Dictionary(uniqueKeysWithValues: after.filter { $0.owner.entity == .note }
+                    .flatMap(\.replicas).compactMap { replica in replica.fields["content"].map { (replica.physicalID, $0) } })
+                try validatePreservedOpaqueContent(context, before: before, contents: [:], contentGuards: contentGuards)
+            }
             let changes = context.insertedModelsArray + context.changedModelsArray
             guard let admission = ownership.tryAcquire(try admissionIDs(changes, before: before), kind: .admission) else { return .conflict }
             defer { admission.release() }
             let previous = before.filter { writes.contains($0.owner) }
             let physicalIDs = Dictionary(uniqueKeysWithValues: previous.map { ($0.owner, Set($0.replicas.map(\.physicalID))) })
             let stagedTokens = Dictionary(uniqueKeysWithValues: before.map { ($0.owner, $0) })
-            let stagedModels = try WorkspaceModelToken.stagedModels(owners: writes, before: stagedTokens, in: context)
+            let stagedModels = inserted.isEmpty ? [] : try WorkspaceModelToken.stagedModels(owners: writes, before: stagedTokens, in: context)
             do {
                 try gatedSave(context, before: previous, using: writer)
                 // Existing rows keep their physical identifiers through save.
@@ -734,7 +741,8 @@ final class WorkspaceOperationCoordinator {
         return contents
     }
     private func validatePreservedOpaqueContent(_ context: ModelContext, before: [WorkspaceModelToken],
-                                                contents: [PersistentIdentifier: Data]) throws {
+                                                contents: [PersistentIdentifier: Data],
+                                                contentGuards: [PersistentIdentifier: Data] = [:]) throws {
         let notes = before.filter { $0.owner.entity == .note }
         let inserted = Set(context.insertedModelsArray.map(\.persistentModelID))
         for row in context.changedModelsArray.compactMap({ $0 as? NoteItem }) where !inserted.contains(row.persistentModelID) {
@@ -746,7 +754,8 @@ final class WorkspaceOperationCoordinator {
             let content = contents[row.persistentModelID]
             // Metadata preserves opaque bytes without decoding them. Prepared
             // documents have already had capability validation off this path.
-            if (try WorkspaceModelFields.fingerprint(row))["content"] == contentData, row.contentFormat == format { continue }
+            let currentContent = try contentGuards[row.persistentModelID] ?? WorkspaceModelFields.fingerprint(row)["content"]
+            if currentContent == contentData, row.contentFormat == format { continue }
             let supported = format == 0 && digest == "nil" || format == NoteDocument.currentFormat && (admittedNoteKinds[digest] != nil || content.map {
                 cachedAdmission($0) != nil || NoteContentCodec.decode($0).isEditable
             } == true)

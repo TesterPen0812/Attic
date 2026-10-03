@@ -1435,7 +1435,9 @@ final class TaskStore: ObservableObject {
             // kept (see `removeAttachment`).
             let timestamp = now()
             let shownCopy = TaskReplicaSnapshot(current)
-            for replica in try storedTasks(matching: ownerID) {
+            let replicas = try storedTasks(matching: ownerID)
+            WorkspaceLegacyBridge.prepareMutations(replicas, in: context)
+            for replica in replicas {
                 let stamp = replica === current || TaskReplicaSnapshot(replica) == shownCopy
                 let shown = try Self.attachmentLists(of: replica).shown
                 replica.imageReferencesData = try Self.encodedAttachments(shown + imported)

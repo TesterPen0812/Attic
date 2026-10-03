@@ -247,7 +247,10 @@ enum WorkspaceLegacyBridge {
                     state.scopes[scope] = WorkspaceScopeToken(scope: scope, members: members.sorted { $0.owner.id.uuidString < $1.owner.id.uuidString })
                 }
             }
-            if state.rootEntities.contains(owner.entity) {
+            if state.rootEntities.contains(owner.entity),
+               state.rootFamilies[owner]?.map(\.physicalID) != token.replicas.map(\.physicalID) {
+                // An in-place save preserves the existing family instances.
+                // Rebuild weak roots only for physical inserts or removals.
                 state.rootFamilies[owner] = token.replicas.isEmpty ? nil : token.replicas.map { RootRow(source.model(for: $0.physicalID)) }
             }
         }
@@ -277,6 +280,23 @@ enum WorkspaceLegacyBridge {
                 let family = Dictionary((resident + existing.filter { WorkspaceOperationCoordinator.owner($0) == owner })
                     .map { ($0.persistentModelID, $0) }, uniquingKeysWith: { first, _ in first }).values
                 state.baseline.merge(try WorkspaceModelToken.capture(owners: [owner], models: Array(family))) { saved, _ in saved }
+            }
+            // An early capture freezes the visible row before its family
+            // fetch can refresh values. A weak, unpresented replica may not
+            // have been resident then. Complete only physical IDs known at
+            // presentation open from the supplied, still-unstaged family;
+            // never admit an externally inserted replica into that baseline.
+            for owner in owners {
+                guard let original = state.baseline[owner], let roots = state.rootFamilies[owner] else { continue }
+                let known = Set(roots.map(\.physicalID))
+                let captured = Set(original.replicas.map(\.physicalID))
+                let additional = existing.filter {
+                    WorkspaceOperationCoordinator.owner($0) == owner && known.contains($0.persistentModelID) && !captured.contains($0.persistentModelID)
+                }
+                if !additional.isEmpty, let extra = try WorkspaceModelToken.capture(owners: [owner], models: additional)[owner] {
+                    state.baseline[owner] = WorkspaceModelToken(owner: owner,
+                        replicas: (original.replicas + extra.replicas).sorted { String(describing: $0.physicalID) < String(describing: $1.physicalID) })
+                }
             }
             state.capturedOwners.formUnion(owners)
             try state.coordinator.ledger.observe(owners.compactMap { state.baseline[$0] })
@@ -331,6 +351,14 @@ enum WorkspaceLegacyBridge {
                 source.insertedModelsArray.contains { $0 === row }
             }) { before[owner] = WorkspaceModelToken(owner: owner, replicas: []) }
             else { throw WorkspaceFoundationError.unknown }
+        }
+        for owner in writes {
+            if let roots = state.rootFamilies[owner],
+               !Set(roots.map(\.physicalID)).isSubset(of: Set(before[owner]?.replicas.map(\.physicalID) ?? [])) {
+                // A partial early capture is not a complete logical-family
+                // guard. The mutation site must supply its unstaged replicas.
+                throw WorkspaceFoundationError.conflict
+            }
         }
         let after = try WorkspaceModelToken.capture(owners: writes,
             models: WorkspaceModelToken.stagedModels(owners: writes, before: before, in: source))

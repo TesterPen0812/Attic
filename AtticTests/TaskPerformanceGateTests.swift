@@ -232,6 +232,34 @@ private final class PFFootprintSampler: @unchecked Sendable {
     deinit { timer.cancel() }
 }
 
+// Diagnostic observers are installed only by the paired probe. Both archives
+// run the same callbacks; validation and the paired tolerance stay unchanged.
+@MainActor
+private final class PFSaveDiagnostic {
+    private let container: ModelContainer
+    private var observers: [NSObjectProtocol] = []
+    private var saveStart: UInt64?
+    private(set) var saveMilliseconds: Double = 0
+    init(_ container: ModelContainer) {
+        self.container = container
+        observers.append(NotificationCenter.default.addObserver(forName: ModelContext.willSave, object: nil, queue: nil) { [weak self] notification in
+            MainActor.assumeIsolated {
+                guard let self, (notification.object as? ModelContext)?.container === self.container else { return }
+                self.saveStart = DispatchTime.now().uptimeNanoseconds
+            }
+        })
+        observers.append(NotificationCenter.default.addObserver(forName: ModelContext.didSave, object: nil, queue: nil) { [weak self] notification in
+            MainActor.assumeIsolated {
+                guard let self, (notification.object as? ModelContext)?.container === self.container, let start = self.saveStart else { return }
+                self.saveMilliseconds += Double(DispatchTime.now().uptimeNanoseconds - start) / 1_000_000
+                self.saveStart = nil
+            }
+        })
+    }
+    func reset() { saveStart = nil; saveMilliseconds = 0 }
+    func stop() { observers.forEach(NotificationCenter.default.removeObserver); observers.removeAll() }
+}
+
 // BEGIN PAIRED PHASE 2 PERF PROBE
 // This probe also runs from an archive of d77ec80 on the SAME runner. The
 // workflow copies this file into that archive; it never touches phase-2's
@@ -423,34 +451,49 @@ extension TaskPerformanceGateTests {
             _ = try notes.noteMutationPreflight(bigNote.id, format: .document)
             let link = try XCTUnwrap(library.links.link(.init(.task, head.id), to: .init(.note, bigNote.id), kind: .reference))
             var samples: [String: [Double]] = [:]
+            var diagnostics: [String: [(Date, Double)]] = [:]
+            let saveDiagnostic = PFSaveDiagnostic(container)
+            defer { saveDiagnostic.stop() }
+            func measured(_ operation: String, _ body: () throws -> Void) rethrows -> Double {
+                let timestamp = Date()
+                saveDiagnostic.reset()
+                let duration = try pfMilliseconds(body).1
+                diagnostics[operation, default: []].append((timestamp, saveDiagnostic.saveMilliseconds))
+                return duration
+            }
             var smallRevision = smallNote.revisionID!, bigRevision = bigNote.revisionID!
             for i in 0..<200 {
-                samples["TOGGLE", default: []].append(pfMilliseconds {
+                samples["TOGGLE", default: []].append(measured("TOGGLE") {
                     XCTAssertEqual(library.updateTask(head.id, status: i.isMultiple(of: 2) ? .done : .todo), .applied)
-                }.1)
-                samples["RENAME", default: []].append(pfMilliseconds {
+                })
+                samples["RENAME", default: []].append(measured("RENAME") {
                     XCTAssertEqual(library.updateTask(head.id, title: "Renamed \(i)"), .applied)
-                }.1)
-                samples["LINK_PAIR", default: []].append(pfMilliseconds {
+                })
+                samples["LINK_PAIR", default: []].append(measured("LINK_PAIR") {
                     XCTAssertTrue(library.links.unlink(link.id)); XCTAssertTrue(library.links.restoreLink(link.id))
-                }.1)
+                })
                 var smallNext = small; smallNext.blocks[0] = .text("Small \(i)")
                 let smallPrepared = try PreparedNoteDocument(smallNext)
-                samples["SMALL_AUTOSAVE", default: []].append(try pfMilliseconds {
+                samples["SMALL_AUTOSAVE", default: []].append(try measured("SMALL_AUTOSAVE") {
                     smallRevision = try notes.saveDocument(noteID: smallNote.id, document: smallNext,
                         baseRevisionID: smallRevision, staged: [], prepared: smallPrepared).get()
-                }.1)
+                })
                 var bigNext = big; bigNext.blocks[0] = .text("Big \(i)")
                 let bigPrepared = try PreparedNoteDocument(bigNext)
-                samples["BIG_AUTOSAVE", default: []].append(try pfMilliseconds {
+                samples["BIG_AUTOSAVE", default: []].append(try measured("BIG_AUTOSAVE") {
                     bigRevision = try notes.saveDocument(noteID: bigNote.id, document: bigNext,
                         baseRevisionID: bigRevision, staged: [], prepared: bigPrepared).get()
-                }.1)
+                })
             }
             for (operation, values) in samples {
                 XCTAssertEqual(values.count, 200)
                 for q in 0..<5 {
-                    results["\(populated ? "POPULATED" : "EMPTY")_\(operation)_Q\(q + 1)_MS"] = PFSamples(values: Array(values[q * 40..<(q + 1) * 40]))
+                    let key = "\(populated ? "POPULATED" : "EMPTY")_\(operation)_Q\(q + 1)_MS"
+                    let quintile = Array(values[q * 40..<(q + 1) * 40])
+                    results[key] = PFSamples(values: quintile)
+                    let index = q * 40 + quintile.firstIndex(of: quintile.max()!)!
+                    let diagnostic = diagnostics[operation]![index]
+                    print("PF5_MAX_DIAGNOSTIC key=\(key) iteration=\(index) utc=\(diagnostic.0.ISO8601Format()) utc_epoch_ms=\(Int64(diagnostic.0.timeIntervalSince1970 * 1_000)) total_ms=\(values[index]) save_ms=\(diagnostic.1)")
                 }
             }
         }
