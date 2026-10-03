@@ -801,8 +801,7 @@ final class NotesPageController: ObservableObject {
         engine.canPasteFragment = { [weak self, weak session] in
             guard let self, let session else { return false }
             return self.active === session && !self.isLibraryPresented && !session.isImporting
-                && self.canCommit(session)
-                && (!session.isPersisted || self.store.note(withID: session.noteID)?.revisionID == session.baseRevisionID)
+                && !session.isReadOnly
         }
         engine.onFragmentAdmission = { [weak self, weak session] proposed, copied in
             guard let self, let session else { return String(localized: "The note is no longer open.") }

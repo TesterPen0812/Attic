@@ -1637,8 +1637,11 @@ final class NoteEditorEngine: NSObject, NSTextViewDelegate, NSTextStorageDelegat
     /// current after every payload has been verified off the main actor.
     func pasteDurably(fragmentData data: Data, at selection: NSRange) async -> Bool {
         guard !isReadOnly, activity == .idle, rangeIsInStorage(selection),
-              canPasteFragment?() != false,
-              case let .editable(decoded) = NoteContentCodec.decode(data, context: .fragment) else { return false }
+              canPasteFragment?() != false else {
+            onNotice?(String(localized: "The note or selection changed. Paste again at the new selection."))
+            return false
+        }
+        guard case let .editable(decoded) = NoteContentCodec.decode(data, context: .fragment) else { return false }
         let destination = noteID
         let before = document()
         let view = textView
