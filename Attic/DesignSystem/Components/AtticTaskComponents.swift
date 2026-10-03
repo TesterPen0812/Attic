@@ -172,8 +172,44 @@ enum AtticTextInput {
 
     /// A command reached by a key (a menu's key equivalent included) while
     /// a field has the keyboard: it belongs to the field, not the command.
+    ///
+    /// A command the person chose in an open menu is not such a key, even
+    /// when the event current while it runs is a key down (Return or
+    /// Space choosing the highlighted item, or the key that opened the
+    /// menu) and an editable text view is first responder somewhere: on
+    /// macOS 27 a context menu carries its own text field (Ask Siri), and
+    /// the composer can stay first responder under a menu. Only the
+    /// command's own key equivalent can still belong to a typing field
+    /// (PR prep, P2: the menus' Open Files… did nothing on the owner's Mac
+    /// while ⌘Return worked).
     @MainActor static var ownsCurrentKey: Bool {
-        NSApp.currentEvent?.type == .keyDown && hasKeyboard
+        owns(NSApp.currentEvent, menuChoice: menuChoice, hasKeyboard: { hasKeyboard })
+    }
+
+    /// What a menu item the person chose is running: its key equivalent
+    /// (`.some(nil)` for an item without one). Nil outside a menu choice.
+    @MainActor private(set) static var menuChoice: KeyboardShortcut?? = nil
+
+    /// Runs a menu item's command as a choice made in its menu
+    /// (`AtticMenuItems`, `AtticNativeMenu`).
+    @MainActor static func choosing(_ keyEquivalent: KeyboardShortcut?, _ action: () -> Void) {
+        let outer = menuChoice
+        menuChoice = .some(keyEquivalent)
+        defer { menuChoice = outer }
+        action()
+    }
+
+    /// The rule, without AppKit state (tests): a key down while a field
+    /// has the keyboard belongs to the field, unless a menu choice is
+    /// running and the key is not that item's own key equivalent.
+    static func owns(_ event: NSEvent?, menuChoice: KeyboardShortcut??, hasKeyboard: () -> Bool) -> Bool {
+        guard let event, event.type == .keyDown else { return false }
+        if case .some(let keyEquivalent) = menuChoice {
+            guard let keyEquivalent,
+                  AtticTaskShortcut.matches(keyEquivalent, characters: event.charactersIgnoringModifiers,
+                                            keyCode: event.keyCode, modifiers: event.modifierFlags) else { return false }
+        }
+        return hasKeyboard()
     }
 }
 

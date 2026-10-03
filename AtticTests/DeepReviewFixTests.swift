@@ -195,6 +195,100 @@ final class DeepReviewFixTests: XCTestCase {
         XCTAssertNil(hosted.model.editingTitleID, "⌘Return is not Return: no title is edited")
     }
 
+    // MARK: - PR prep P2: a menu's choice is not a typing field's key
+
+    private func keyEvent(_ characters: String, keyCode: UInt16, modifiers: NSEvent.ModifierFlags = [],
+                          type: NSEvent.EventType = .keyDown) throws -> NSEvent {
+        try XCTUnwrap(NSEvent.keyEvent(with: type, location: .zero, modifierFlags: modifiers,
+                                       timestamp: ProcessInfo.processInfo.systemUptime, windowNumber: 0, context: nil,
+                                       characters: characters, charactersIgnoringModifiers: characters,
+                                       isARepeat: false, keyCode: keyCode))
+    }
+
+    /// The rule: outside a menu choice, a key down while a field has the
+    /// keyboard is the field's. A choice made in a menu is not, unless the
+    /// key is that item's own key equivalent.
+    func testOnlyAnItemsOwnKeyEquivalentBelongsToATypingField() throws {
+        let plainReturn = try keyEvent("\r", keyCode: 36)
+        let commandReturn = try keyEvent("\r", keyCode: 36, modifiers: .command)
+        let openPage: KeyboardShortcut?? = .some(AtticTaskShortcut.openPage)
+        XCTAssertTrue(AtticTextInput.owns(plainReturn, menuChoice: nil, hasKeyboard: { true }),
+                      "a key outside any menu stays the typing field's")
+        XCTAssertFalse(AtticTextInput.owns(plainReturn, menuChoice: openPage, hasKeyboard: { true }),
+                       "the Return that chose Open Files… in its menu is the menu's")
+        XCTAssertFalse(AtticTextInput.owns(commandReturn, menuChoice: .some(nil), hasKeyboard: { true }),
+                       "an item without a key equivalent, chosen, is never a field's key")
+        XCTAssertTrue(AtticTextInput.owns(commandReturn, menuChoice: openPage, hasKeyboard: { true }),
+                      "the item's own ⌘Return while a field types stays the field's")
+        XCTAssertFalse(AtticTextInput.owns(commandReturn, menuChoice: openPage, hasKeyboard: { false }))
+        XCTAssertFalse(AtticTextInput.owns(try keyEvent("\r", keyCode: 36, type: .keyUp), menuChoice: nil, hasKeyboard: { true }))
+        XCTAssertFalse(AtticTextInput.owns(nil, menuChoice: nil, hasKeyboard: { true }))
+    }
+
+    /// The on-screen failure (CU recheck 3): More › Open Files… chosen with
+    /// Return in the right-click menu and in ⇧⌘I's menu, while something
+    /// has the keyboard (on macOS 27 the context menu's own Ask Siri field;
+    /// the composer under a menu), opened nothing, while ⌘Return did. Here
+    /// the Return is the current event and an open pop-over has the
+    /// keyboard; each menu's Open Files… must open the row's files, and a
+    /// real ⌘Return key equivalent must still leave a typing field alone.
+    func testOpenFilesChosenWithReturnOpensWhileSomethingHasTheKeyboard() throws {
+        let hosted = try Hosted(height: 520)
+        defer { hosted.close() }
+        var opened: [UUID] = []
+        hosted.model.services.openPage = { opened.append($0) }
+        let row = try XCTUnwrap(hosted.model.rows(for: .now).first { $0.model.title == "Book dentist" }?.id)
+
+        let keyboardOwner = NSPanel(contentRect: CGRect(x: -6_000, y: -6_000, width: 40, height: 40),
+                                    styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
+        keyboardOwner.isReleasedWhenClosed = false
+        keyboardOwner.orderFront(nil)
+        AtticTextInput.notePopover(keyboardOwner)
+        defer { keyboardOwner.orderOut(nil); keyboardOwner.close() }
+        XCTAssertTrue(AtticTextInput.hasKeyboard, "an open pop-over has the keyboard")
+
+        /// Makes `event` the app's current event without delivering it, as
+        /// the key that chose a menu item is while the item's command runs.
+        func makeCurrent(_ event: NSEvent) {
+            NSApp.postEvent(event, atStart: true)
+            _ = NSApp.nextEvent(matching: .any, until: Date(), inMode: .default, dequeue: true)
+        }
+        func chooseOpenFiles(in menu: NSMenu) throws {
+            menu.update()
+            let more = try XCTUnwrap(menu.items.first { $0.title == "More" }?.submenu, "with More")
+            more.update()
+            more.performActionForItem(at: try XCTUnwrap(more.items.firstIndex { $0.title.hasPrefix("Open Files") }))
+            hosted.spin(0.3)
+        }
+
+        // The right-click menu.
+        let frame = try XCTUnwrap(hosted.pointer.frames[TasksRowID(tab: .now, id: row)])
+        let point = CGPoint(x: frame.minX + 110, y: hosted.height - (frame.minY + 16))
+        let press = try XCTUnwrap(NSEvent.mouseEvent(with: .rightMouseDown, location: point, modifierFlags: [],
+                                                     timestamp: ProcessInfo.processInfo.systemUptime,
+                                                     windowNumber: hosted.window.windowNumber, context: nil,
+                                                     eventNumber: 3, clickCount: 1, pressure: 1))
+        let contextMenu = try XCTUnwrap(hosted.window.contentView?.menu(for: press))
+        makeCurrent(try keyEvent("\r", keyCode: 36))
+        XCTAssertEqual(NSApp.currentEvent?.type, .keyDown, "the Return is the current event")
+        try chooseOpenFiles(in: contextMenu)
+        XCTAssertEqual(opened, [row], "the right-click menu's Open Files…, chosen with Return, opens the row's files")
+
+        // ⇧⌘I's menu (the same commands as an NSMenu), on a Later row.
+        opened = []
+        hosted.go(to: .backlog)
+        let later = try XCTUnwrap(hosted.model.rows(for: .backlog).first?.id, "Later lists a task")
+        makeCurrent(try keyEvent("\r", keyCode: 36))
+        try chooseOpenFiles(in: AtticNativeMenu.make(hosted.page.taskCommands(later, tab: .backlog)))
+        XCTAssertEqual(opened, [later], "⇧⌘I's Open Files…, chosen with Return, opens them too")
+
+        // The item's own ⌘Return while something types stays with it.
+        opened = []
+        makeCurrent(try keyEvent("\r", keyCode: 36, modifiers: .command))
+        try chooseOpenFiles(in: AtticNativeMenu.make(hosted.page.taskCommands(later, tab: .backlog)))
+        XCTAssertEqual(opened, [], "a typing field keeps its own ⌘Return")
+    }
+
     func testOpenFilesPresentationWaitsForTheDefaultRunLoopMode() async throws {
         let hosted = try Hosted(height: 520)
         defer { hosted.close() }

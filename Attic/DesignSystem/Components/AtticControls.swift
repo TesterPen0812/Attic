@@ -1225,12 +1225,12 @@ struct AtticMenuItems: View {
             .disabled(command.isDisabled)
         } else if let state = command.state, state != .mixed {
             // A toggle draws the native tick.
-            Toggle(isOn: Binding(get: { state == .on }, set: { _ in command.action() })) { label(command) }
+            Toggle(isOn: Binding(get: { state == .on }, set: { _ in choose(command) })) { label(command) }
                 .disabled(command.isDisabled)
                 .modifier(AtticMenuShortcut(shortcut: command.menuShortcut))
                 .modifier(AtticMenuBadge(detail: command.menuBadge))
         } else {
-            Button(role: command.isDestructive ? .destructive : nil, action: command.action) {
+            Button(role: command.isDestructive ? .destructive : nil, action: { choose(command) }) {
                 if command.state == .mixed {
                     // Some of the targets have it: a dash.
                     SwiftUI.Label(command.title, systemImage: "minus")
@@ -1242,6 +1242,12 @@ struct AtticMenuItems: View {
             .modifier(AtticMenuShortcut(shortcut: command.menuShortcut))
             .modifier(AtticMenuBadge(detail: command.menuBadge))
         }
+    }
+
+    /// A chosen item: its command runs as a menu choice, so a field under
+    /// the menu never takes the Return or click that chose it.
+    private func choose(_ command: AtticMenuCommand) {
+        AtticTextInput.choosing(command.menuShortcut, command.action)
     }
 
     @ViewBuilder
@@ -1306,7 +1312,7 @@ enum AtticNativeMenu {
         } else {
             item.target = AtticMenuTarget.shared
             item.action = #selector(AtticMenuTarget.runCommand(_:))
-            item.representedObject = AtticMenuTarget.Box(command.action)
+            item.representedObject = AtticMenuTarget.Box(command.action, keyEquivalent: command.menuShortcut)
         }
         switch command.state {
         case .on?: item.state = .on
@@ -1370,13 +1376,19 @@ final class AtticMenuTarget: NSObject {
 
     final class Box {
         let action: () -> Void
-        init(_ action: @escaping () -> Void) { self.action = action }
+        let keyEquivalent: KeyboardShortcut?
+        init(_ action: @escaping () -> Void, keyEquivalent: KeyboardShortcut? = nil) {
+            self.action = action
+            self.keyEquivalent = keyEquivalent
+        }
     }
 
     /// Not `perform(_:)`: that is NSObject's `performSelector:`, which the
     /// selector resolved to, so a chosen item ran nothing (round 10, CI run 2).
+    /// The command runs as a menu choice (`AtticTextInput.choosing`).
     @objc func runCommand(_ item: NSMenuItem) {
-        (item.representedObject as? Box)?.action()
+        guard let box = item.representedObject as? Box else { return }
+        AtticTextInput.choosing(box.keyEquivalent, box.action)
     }
 }
 

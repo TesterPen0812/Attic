@@ -1,4 +1,5 @@
 import AppKit
+import os
 import SwiftUI
 import UniformTypeIdentifiers
 
@@ -1550,12 +1551,21 @@ struct TasksPage: View {
     /// NSMenu's nested tracking loop; it does not mean the menu has closed.
     /// Present in the default mode, after AppKit finishes tracking and
     /// restores the source window's responder and ordering state.
+    ///
+    /// A menu's choice runs through `AtticTextInput.choosing`, so the
+    /// Return that chose Open Files… is never mistaken for a typing field's
+    /// key (PR prep, P2). The queued block does not wake a sleeping run
+    /// loop by itself (`CFRunLoopPerformBlock`), so the loop is woken.
     private func openFiles(_ id: UUID) {
-        guard !AtticTextInput.ownsCurrentKey else { return }
+        guard !AtticTextInput.ownsCurrentKey else {
+            SubtaskPanelController.log.notice("Open Files \(id, privacy: .public) refused: the key belongs to a typing field")
+            return
+        }
         pointer.endInvocation()
         RunLoop.main.perform(inModes: [.default]) { [model] in
             MainActor.assumeIsolated { model.openPage(id) }
         }
+        CFRunLoopWakeUp(CFRunLoopGetMain())
     }
 
     /// A key's or VoiceOver's command on the row's targets, with its
