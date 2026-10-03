@@ -1,9 +1,12 @@
 #!/usr/bin/env python3
-"""Block frame/row regressions beyond the spread of three interleaved runs.
+"""Block frame/row regressions beyond the baseline's own spread.
 
-The 16 ms input/query budget lives in DoneSearchCostTests. This comparison
-uses the existing observational frame/row probes and derives its tolerance
-from their measured within-build range, plus 0.2 ms for printed rounding.
+Three interleaved samples each of the baseline and the candidate build. A
+metric passes when the candidate's median is at most the baseline's median
+plus the baseline's range across its three samples, plus 0.2 ms for printed
+rounding. Only the baseline's range counts: a noisier candidate must not
+widen its own allowance. The 16 ms input/query budgets live in
+DoneSearchCostTests (macos-ci.yml runs both).
 """
 import json
 import re
@@ -35,7 +38,7 @@ def main(directory):
     for metric in samples["baseline"][0]:
         before = [sample[metric] for sample in samples["baseline"]]
         after = [sample[metric] for sample in samples["candidate"]]
-        tolerance = max(max(before) - min(before), max(after) - min(after)) + 0.2
+        tolerance = max(before) - min(before) + 0.2
         passed = statistics.median(after) <= statistics.median(before) + tolerance
         report[metric] = dict(before_ms=before, after_ms=after, noise_ms=tolerance, passed=passed)
     (directory / "cost-comparison.json").write_text(json.dumps(report, indent=2) + "\n")
