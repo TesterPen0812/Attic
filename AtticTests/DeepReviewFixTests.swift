@@ -189,6 +189,35 @@ final class DeepReviewFixTests: XCTestCase {
         XCTAssertNil(hosted.model.editingTitleID, "⌘Return is not Return: no title is edited")
     }
 
+    func testOpenFilesPresentationWaitsForTheDefaultRunLoopMode() async throws {
+        let hosted = try Hosted(height: 520)
+        defer { hosted.close() }
+        let row = try XCTUnwrap(hosted.model.rows(for: .now).first?.id)
+        let command = try XCTUnwrap(AtticMenuCommand.command(for: AtticTaskShortcut.openPage,
+                                                            in: hosted.page.taskCommands(row, tab: .now)))
+        var openedMode: CFRunLoopMode?
+        let opened = expectation(description: "Open Files is delivered")
+        hosted.model.services.openPage = { _ in
+            openedMode = CFRunLoopCopyCurrentMode(CFRunLoopGetMain())
+            opened.fulfill()
+        }
+        // Enter the native tracking mode from a run-loop source, not from
+        // a main-dispatch callback (which forbids nested queue servicing).
+        let invoke = Timer(timeInterval: 0.01, repeats: false) { _ in
+            MainActor.assumeIsolated {
+                command.action()
+                let endTracking = Timer(timeInterval: 0.1, repeats: false) { _ in CFRunLoopStop(CFRunLoopGetMain()) }
+                RunLoop.main.add(endTracking, forMode: .eventTracking)
+                RunLoop.main.run(mode: .eventTracking, before: Date().addingTimeInterval(2))
+                endTracking.invalidate()
+            }
+        }
+        RunLoop.main.add(invoke, forMode: .default)
+        await fulfillment(of: [opened], timeout: 3)
+        invoke.invalidate()
+        XCTAssertEqual(openedMode, CFRunLoopMode.defaultMode, "presentation belongs to the default loop, after native menu tracking")
+    }
+
     /// Posts key presses while a menu tracks: each from a timer in the
     /// common modes (menu tracking is not the default mode), with an Esc at
     /// the end so a menu that ignores them cannot hang the run.

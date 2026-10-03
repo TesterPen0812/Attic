@@ -8,6 +8,11 @@ on:
       - feature/canvas-ink
   workflow_dispatch:
     inputs:
+      phase1_stability_only:
+        description: Run only the Phase 1 native-menu and repeated UI regression checks
+        required: false
+        default: false
+        type: boolean
       run_iphone:
         description: Run the deferred iPhone build-for-testing lane
         required: false
@@ -33,7 +38,42 @@ env:
   PERF_REFERENCE_COMMIT: fb450820f5ccab289a050de3cf0695958786a465
 
 jobs:
+  phase1-stability:
+    name: Phase 1 native menu and UI stability (10 repetitions)
+    if: github.ref == 'refs/heads/redesign/p1-glass'
+    runs-on: macos-26
+    timeout-minutes: 40
+    env:
+      DEVELOPER_DIR: /Applications/Xcode_26.6.app/Contents/Developer
+    steps:
+      - uses: actions/checkout@v5
+      - name: Run each regression ten times in fresh test processes
+        run: |
+          Scripts/xcodebuild_locked.sh \
+            -project Attic.xcodeproj -scheme AtticUI -configuration Local \
+            -destination 'platform=macOS' \
+            -derivedDataPath "$RUNNER_TEMP/AtticPhase1Stability" \
+            -resultBundlePath "$RUNNER_TEMP/AtticPhase1Stability.xcresult" \
+            CODE_SIGNING_ALLOWED=NO \
+            SWIFT_OPTIMIZATION_LEVEL=-O SWIFT_COMPILATION_MODE=wholemodule ENABLE_DEBUG_DYLIB=NO \
+            ATTIC_MACOS_BUNDLE_IDENTIFIER=com.taha.Attic.ui.phase1stability \
+            -parallel-testing-enabled NO \
+            -test-iterations 10 -test-repetition-relaunch-enabled YES \
+            -only-testing:AtticUITests/AtticUITests/testMainPanelIdleRetainsTaskDraftThenHidesCleanEditor \
+            -only-testing:AtticUITests/AtticKeyWindowUITests/testAnExplicitOpenFocusesTheAddBarWithoutARing \
+            -only-testing:AtticUITests/TasksPanelUITests/testNativeContextMenuReturnOpensFilesWhileTheComposerHasFocus \
+            -only-testing:AtticUITests/TasksPanelUITests/testNativeContextMenuAfterFindOpensFilesWithRealAutoHide \
+            test
+      - name: Upload repeated UI results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: phase1-stability-${{ github.sha }}
+          path: ${{ runner.temp }}/AtticPhase1Stability.xcresult
+          retention-days: 14
+
   macos:
+    if: ${{ !inputs.phase1_stability_only }}
     name: Build, test, and analyze Attic for macOS
     runs-on: macos-26
     timeout-minutes: 180
@@ -322,6 +362,7 @@ jobs:
           test "$FINAL_STATE" = success
 
   performance:
+    if: ${{ !inputs.phase1_stability_only }}
     name: Observe seeded performance on a fresh macOS runner
     runs-on: macos-26
     timeout-minutes: 180
@@ -407,6 +448,7 @@ jobs:
           fi
 
   appearance:
+    if: ${{ !inputs.phase1_stability_only }}
     name: Design system appearance matrix (${{ matrix.shard }} of 4)
     runs-on: macos-26
     timeout-minutes: 45

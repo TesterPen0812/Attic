@@ -1528,17 +1528,16 @@ struct TasksPage: View {
         )
     }
 
-    /// Open Files… (deep review P2-03): one command for ⌘Return, the row's
-    /// right-click menu, ⇧⌘I's menu, the quick look and VoiceOver. A key
-    /// that belongs to a field typing never runs it. It opens on the next
-    /// turn: a menu runs its command while it still tracks, and the right-
-    /// click menu's Open Files… opened nothing that way while ⌘Return and
-    /// ⇧⌘I's did; on the next turn the menu has closed, and every route
-    /// opens the files panel the way ⌘Return does.
+    /// One command for all routes. A main-queue block can run inside
+    /// NSMenu's nested tracking loop; it does not mean the menu has closed.
+    /// Present in the default mode, after AppKit finishes tracking and
+    /// restores the source window's responder and ordering state.
     private func openFiles(_ id: UUID) {
         guard !AtticTextInput.ownsCurrentKey else { return }
         pointer.endInvocation()
-        DispatchQueue.main.async { [model] in model.openPage(id) }
+        RunLoop.main.perform(inModes: [.default]) { [model] in
+            MainActor.assumeIsolated { model.openPage(id) }
+        }
     }
 
     /// A key's or VoiceOver's command on the row's targets, with its

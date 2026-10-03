@@ -15,6 +15,10 @@ final class TasksPanelUITests: XCTestCase {
         app = XCUIApplication()
         app.launchEnvironment["ATTIC_UI_TESTING"] = "1"
         app.launchEnvironment["ATTIC_UI_TEST_SEED"] = "demo"
+        if name.contains("testNativeContextMenuAfterFind") {
+            app.launchEnvironment["ATTIC_UI_TEST_HOVER_MONITOR"] = "1"
+            app.launchEnvironment["ATTIC_UI_TEST_PINNED"] = "1"
+        }
         app.launch()
         app.activate()
         XCTAssertTrue(app.buttons["panel-pin-button"].waitForExistence(timeout: 5))
@@ -296,6 +300,65 @@ final class TasksPanelUITests: XCTestCase {
         chooseOpenFiles("⇧⌘I")
         XCTAssertTrue(transient.waitForExistence(timeout: 3), "⇧⌘I's Open Files… opens it too")
         dismissFilesPanel(transient)
+    }
+
+    /// Unlike the mouse-only case, Return selects the native submenu item
+    /// while the composer remains first responder underneath the NSMenu.
+    /// This was the real-app route that silently rejected Open Files.
+    func testNativeContextMenuReturnOpensFilesWhileTheComposerHasFocus() throws {
+        XCTAssertTrue(addBar.waitForExistence(timeout: 10))
+        addBar.click()
+        addBar.typeText("Keep this draft")
+        XCTAssertEqual(addBar.value(forKey: "hasKeyboardFocus") as? Bool, true)
+        XCTAssertEqual(addBar.value as? String, "Keep this draft")
+
+        row("Book dentist").coordinate(withNormalizedOffset: .zero).withOffset(CGVector(dx: 90, dy: 16)).rightClick()
+        XCTAssertTrue(openMenuItem("More").waitForExistence(timeout: 5))
+        // From no highlighted item: Up selects Delete, Up selects More,
+        // Right enters its submenu, and Return chooses Open Files.
+        app.typeKey(.upArrow, modifierFlags: [])
+        app.typeKey(.upArrow, modifierFlags: [])
+        app.typeKey(.rightArrow, modifierFlags: [])
+        XCTAssertTrue(openMenuItem("Open Files…").waitForExistence(timeout: 5))
+        app.typeKey(.return, modifierFlags: [])
+        XCTAssertTrue(openMenuItem("More").waitForNonExistence(timeout: 5), "the native context menu closes")
+        let transient = element("subtask-panel-")
+        XCTAssertTrue(transient.waitForExistence(timeout: 10), "Return on the native More › Open Files… shows Attachments")
+        XCTAssertTrue(element("add-attachment-").waitForExistence(timeout: 5), "the panel is on Attachments")
+        XCTAssertTrue(app.staticTexts["No attachments yet"].exists)
+        XCTAssertEqual(addBar.value as? String, "Keep this draft", "the menu's Return did not submit the composer")
+    }
+
+    /// The ordinary app's auto-hide is active, the composer is clean, and
+    /// Find has rebuilt this row before the native submenu is selected.
+    func testNativeContextMenuAfterFindOpensFilesWithRealAutoHide() throws {
+        app.typeKey("f", modifierFlags: .command)
+        let search = app.textFields["tasks-find"]
+        XCTAssertTrue(search.waitForExistence(timeout: 5))
+        search.typeText("dentist")
+        XCTAssertTrue(row("Book dentist").waitForExistence(timeout: 5))
+        search.typeKey("a", modifierFlags: .command)
+        search.typeKey(.delete, modifierFlags: [])
+        app.typeKey(.escape, modifierFlags: [])
+        XCTAssertTrue(search.waitForNonExistence(timeout: 5))
+        XCTAssertTrue(row("Book dentist").wait(for: \.isHittable, toEqual: true, timeout: 5))
+        XCTAssertTrue(pin.isSelected)
+        pin.click()
+        XCTAssertTrue(pin.wait(for: \.isSelected, toEqual: false, timeout: 5))
+        // All pointer actions stay in the row or its tracked menu. No draft,
+        // test-only keep-visible grace, or pin protects the command.
+        row("Book dentist").coordinate(withNormalizedOffset: .zero).withOffset(CGVector(dx: 90, dy: 16)).rightClick()
+        let more = openMenuItem("More")
+        XCTAssertTrue(more.waitForExistence(timeout: 5))
+        more.hover()
+        let openFiles = openMenuItem("Open Files…")
+        XCTAssertTrue(openFiles.waitForExistence(timeout: 5))
+        openFiles.hover()
+        app.typeKey(.return, modifierFlags: [])
+        let transient = element("subtask-panel-")
+        XCTAssertTrue(transient.waitForExistence(timeout: 10), "native Open Files after Find and with real auto-hide shows Attachments")
+        XCTAssertTrue(element("add-attachment-").waitForExistence(timeout: 5))
+        XCTAssertTrue(app.staticTexts["No attachments yet"].exists)
     }
 
     // MARK: - A page kept built behind another

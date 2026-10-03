@@ -602,6 +602,7 @@ final class SubtaskPanelController: NSObject, ObservableObject {
         } ?? false
         let refocusEntry = entryFocusEngaged(for: familyID)
         let retainedView = panelViews.view(for: familyID)
+        let filesOnly = panelViews.isFilesOnly(familyID)
         let surface = pinnedSurfaces.removeValue(forKey: familyID)
         lifecycle.unpin(familyID)
         if mainPanelVisible, !evictionBusy {
@@ -609,6 +610,7 @@ final class SubtaskPanelController: NSObject, ObservableObject {
             lifecycle.openTransient(familyID)
             lifecycle.detachTransient()
             // The same window stays up, so it keeps the view it showed.
+            if filesOnly { panelViews.setFilesOnly(familyID) }
             panelViews.set(retainedView, for: familyID)
             transientPanel = surface?.window
             transientHost = surface?.host
@@ -661,6 +663,7 @@ final class SubtaskPanelController: NSObject, ObservableObject {
         transientFamilyID = nil
         pinnedFamilyIDs = []
         uiState.setInteractionLock(.subtaskComposer, isActive: false)
+        uiState.setInteractionLock(.taskFiles, isActive: false)
         if let transientWas { releaseFamilyInteractionState(transientWas) }
         for familyID in released { releaseFamilyInteractionState(familyID) }
     }
@@ -712,6 +715,12 @@ final class SubtaskPanelController: NSObject, ObservableObject {
         var presented = lifecycle.pinnedFamilyIDs
         if let transient = lifecycle.transientFamilyID { presented.insert(transient) }
         panelViews.retain(presented)
+        // A native submenu can close with the pointer outside both windows.
+        // Files have no entry focus or draft: keep the deliberately opened
+        // transient alive until outside-click/explicit dismissal or pinning.
+        uiState.setInteractionLock(.taskFiles, isActive:
+            lifecycle.transientFamilyID.map { panelViews.isFilesOnly($0) } ?? false
+        )
         syncComposerLock()
         updateOutsideClickMonitoring()
         syncPointerPassthroughMonitoring()
