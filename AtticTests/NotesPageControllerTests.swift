@@ -129,6 +129,70 @@ final class NotesPageControllerTests: XCTestCase {
         XCTAssertEqual(Set(session.engine.tags), ["picker", "external"])
     }
 
+    private func waitForDeadlineWrite(_ journal: CountingDeadlineJournal, count: Int = 1) async throws {
+        for _ in 0..<200 {
+            if journal.writeCount >= count { return }
+            try await Task.sleep(for: .milliseconds(5))
+        }
+        XCTFail("The durability deadline did not checkpoint")
+    }
+
+    func testIdleFailedStoreDoesNotRearmItsDurabilityDeadline() async throws {
+        var attempts = 0
+        let failingStore = try makeTestNoteStore(persist: { _ in
+            attempts += 1
+            throw PersistenceGate.Failure()
+        }, attachmentFileStore: makeTestAttachmentFileStore())
+        let journal = CountingDeadlineJournal(directory: directory)
+        let controller = NotesPageController(store: failingStore, journal: journal,
+            saveDelay: .seconds(60), durabilityDelay: .milliseconds(40))
+        await controller.startAndWait()
+        let session = try XCTUnwrap(controller.active)
+        type("One edit", into: session)
+        try await waitForDeadlineWrite(journal)
+        await controller.waitForRecoveryWork()
+        let firstAttempts = attempts, firstWrites = journal.writeCount
+        XCTAssertGreaterThan(firstAttempts, 0)
+        XCTAssertEqual(firstWrites, 1)
+        try await Task.sleep(for: .milliseconds(240))
+        await controller.waitForRecoveryWork()
+        XCTAssertLessThanOrEqual(attempts - firstAttempts, 1)
+        XCTAssertEqual(journal.writeCount, firstWrites)
+        XCTAssertTrue(NoteSessionPolicy.hasPendingWork(session.state))
+        // A later keystroke must still arm a new deadline.
+        type(" again", into: session)
+        try await waitForDeadlineWrite(journal, count: firstWrites + 1)
+        await controller.waitForRecoveryWork()
+        XCTAssertGreaterThan(attempts, firstAttempts)
+        XCTAssertEqual(journal.writeCount, firstWrites + 1)
+    }
+
+    func testIdleConflictDoesNotRearmItsDurabilityDeadline() async throws {
+        let journal = CountingDeadlineJournal(directory: directory)
+        let controller = NotesPageController(store: store, journal: journal,
+            saveDelay: .seconds(60), durabilityDelay: .milliseconds(40))
+        let id = UUID()
+        guard case let .success((_, revision)) = store.createDocumentNote(id: id,
+            document: NoteDocument(blocks: [.text("Original")])) else { return XCTFail("fixture") }
+        await XCTAssertTrueAsync(await controller.openDurably(noteID: id))
+        let session = try XCTUnwrap(controller.active)
+        type("One edit", into: session)
+        guard case .success = store.saveDocument(noteID: id,
+            document: NoteDocument(blocks: [.text("External")]), baseRevisionID: revision) else { return XCTFail("fixture") }
+        XCTAssertFalse(controller.save(session))
+        XCTAssertEqual(session.state, .conflict(.changed))
+        try await waitForDeadlineWrite(journal)
+        await controller.waitForRecoveryWork()
+        let firstWrites = journal.writeCount
+        XCTAssertEqual(firstWrites, 1)
+        let saves = gate.saveCount
+        try await Task.sleep(for: .milliseconds(240))
+        await controller.waitForRecoveryWork()
+        XCTAssertLessThanOrEqual(journal.writeCount - firstWrites, 1)
+        XCTAssertEqual(gate.saveCount, saves)
+        XCTAssertEqual(session.state, .conflict(.changed))
+    }
+
     func testContinuousTypingReachesTheProductionDiskJournalWithoutAPause() async throws {
         let controller = NotesPageController(store: store, journal: NoteDraftJournal(directory: directory))
         await controller.startAndWait()
@@ -2781,4 +2845,22 @@ private actor SuspendedRecoveryDecoder {
         while !started { await Task.yield() }
     }
     func resume(fail: Bool) { continuation?.resume(returning: fail); continuation = nil }
+}
+
+@MainActor
+private final class CountingDeadlineJournal: NoteDraftJournaling {
+    let base: NoteDraftJournal
+    private(set) var writeCount = 0
+    init(directory: URL) { base = NoteDraftJournal(directory: directory) }
+    var requiresAsyncIO: Bool { true }
+    func writeDurably(_ entry: NoteDraftJournalEntry, staged: [StagedNoteAttachment],
+                      replacing claim: NoteRecoveryClaim?) async throws -> NoteRecoveryClaim {
+        writeCount += 1
+        return try await base.writeDurably(entry, staged: staged, replacing: claim)
+    }
+    func retireDurably(noteID: UUID, claim: NoteRecoveryClaim?, saved: NoteRecoverySavedState?) async throws {
+        try await base.retireDurably(noteID: noteID, claim: claim, saved: saved)
+    }
+    func recoveryEntries() throws -> [NoteDraftRecoveryEntry] { try base.recoveryEntries() }
+    func readRecoveryEntries() async throws -> [NoteDraftRecoveryEntry] { try await base.readRecoveryEntries() }
 }

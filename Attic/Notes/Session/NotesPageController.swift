@@ -1119,10 +1119,13 @@ final class NotesPageController: ObservableObject {
         session.durabilityTask = Task { @MainActor [weak self, weak session] in
             do { try await Task.sleep(for: delay) } catch { return }
             guard let self, let session, !Task.isCancelled else { return }
+            let generation = session.editGeneration
             await self.runDurabilityDeadline(session)
             guard !Task.isCancelled else { return }
             session.durabilityTask = nil
-            self.scheduleDurabilityDeadline(session)
+            // Pending work can stay pending after a failure or conflict.
+            // Only edits made during this attempt justify another deadline.
+            if session.editGeneration != generation { self.scheduleDurabilityDeadline(session) }
         }
     }
 
