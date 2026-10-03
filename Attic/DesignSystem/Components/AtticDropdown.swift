@@ -153,6 +153,44 @@ extension View {
     }
 }
 
+extension View {
+    /// Tab and Shift-Tab in a card with a field and a list: the keyboard
+    /// moves between the two and never leaves the card, as in a native
+    /// menu. The list is a stop only under Full Keyboard Access; otherwise
+    /// Tab keeps the caret in the field. The card takes Tab before the
+    /// field's editor does (`atticDropdownRegisterKeys`): left to the
+    /// window's key-view loop, Tab from the field gave the keyboard to the
+    /// card's host view, which cleared SwiftUI's focus, so the rows were
+    /// never reached and Space pressed nothing (CI, Full Keyboard Access).
+    func atticDropdownTabs(field: FocusState<Bool>.Binding, list: FocusState<Bool>.Binding) -> some View {
+        modifier(AtticDropdownTabs(field: field, list: list))
+    }
+}
+
+private struct AtticDropdownTabs: ViewModifier {
+    var field: FocusState<Bool>.Binding
+    var list: FocusState<Bool>.Binding
+    @Environment(\.atticDropdownRegisterKeys) private var registerKeys
+
+    func body(content: Content) -> some View {
+        content
+            .onAppear {
+                let field = field, list = list
+                registerKeys { event in
+                    guard event.keyCode == 48,
+                          event.modifierFlags.intersection([.command, .option, .control]).isEmpty else { return false }
+                    if list.wrappedValue {
+                        field.wrappedValue = true
+                    } else if NSApp.isFullKeyboardAccessEnabled {
+                        list.wrappedValue = true
+                    }
+                    return true
+                }
+            }
+            .onDisappear { registerKeys(nil) }
+    }
+}
+
 private struct AtticDropdownListFocus: ViewModifier {
     var focus: FocusState<Bool>.Binding
     @Binding var highlighted: Int?

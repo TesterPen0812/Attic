@@ -653,8 +653,18 @@ final class AtticDropdownTests: XCTestCase {
         XCTAssertEqual(toggled, [], "and pressed no row")
         let host = try XCTUnwrap(presenter.host)
         let row = try XCTUnwrap(accessibilityElements(host).compactMap { $0 as? AtticDropdownMenuItem.ItemView }.first { $0.accessibilityLabel() == "#home" })
-        let frame = row.convert(row.bounds, to: nil)
-        let point = CGPoint(x: frame.midX, y: frame.midY)
+        // Where VoiceOver and the pointer find the row (screen points).
+        let screen = row.accessibilityFrame()
+        let point = window.convertPoint(fromScreen: CGPoint(x: screen.midX, y: screen.midY))
+        XCTAssertTrue(host.convert(host.contentRect, to: nil).contains(point), "the row is inside the card: \(screen)")
+        // Tab in the field keeps the caret there in this mode (the rows are
+        // a stop only under Full Keyboard Access).
+        deliver([NSEvent.EventType.keyDown, .keyUp].map { type in
+            NSEvent.keyEvent(with: type, location: .zero, modifierFlags: [], timestamp: ProcessInfo.processInfo.systemUptime,
+                             windowNumber: window.windowNumber, context: nil, characters: "\t",
+                             charactersIgnoringModifiers: "\t", isARepeat: false, keyCode: 48)!
+        })
+        XCTAssertIdentical(AtticDropdownPresenter.owner(of: window.firstResponder), field, "Tab keeps the keyboard in the field")
         deliver([NSEvent.EventType.leftMouseDown, .leftMouseUp].map { type in
             NSEvent.mouseEvent(with: type, location: point, modifierFlags: [], timestamp: ProcessInfo.processInfo.systemUptime,
                                windowNumber: window.windowNumber, context: nil, eventNumber: 1, clickCount: 1,
@@ -662,6 +672,40 @@ final class AtticDropdownTests: XCTestCase {
         })
         XCTAssertEqual(toggled, ["home"], "the click toggled the row")
         XCTAssertIdentical(AtticDropdownPresenter.owner(of: window.firstResponder), field, "the field keeps the keyboard")
+    }
+
+    /// Tab in a card's field stays in the card. Left to the window's
+    /// key-view loop it gave the keyboard to the card's host view, which
+    /// cleared SwiftUI's focus (so under Full Keyboard Access the rows were
+    /// never reached and Space pressed nothing). In the default mode the
+    /// field keeps the caret. The key goes to the field's editor as the
+    /// window would deliver it.
+    func testTabInATagFieldKeepsTheKeyboardInTheCard() throws {
+        let window = makeWindow()
+        defer { window.close() }
+        let anchor = NSView(frame: CGRect(x: 20, y: 300, width: 60, height: 28))
+        window.contentView?.addSubview(anchor)
+        for picker in ["tags", "move"] {
+            let presenter = AtticDropdownPresenter()
+            presenter.design = AtticDesignContext(reduceMotion: true)
+            presenter.content = picker == "tags"
+                ? AnyView(TaskTagPickerView(allTags: ["design", "home"], state: { _ in .off }, onToggle: { _ in }, onCreate: { _, _ in true }))
+                : AnyView(TaskMovePickerView(choices: [.init(id: UUID(), title: "Alpha", detail: nil)], onChoose: { _ in }))
+            presenter.present(from: anchor)
+            spin(0.3)
+            let editor = try XCTUnwrap(window.firstResponder as? NSTextView, picker)
+            let field = try XCTUnwrap(editor.delegate as? NSTextField)
+            for flags: NSEvent.ModifierFlags in [[], .shift] {
+                // As the app delivers it: the open card's key monitor, then
+                // the first responder.
+                let tab = key("\t", code: 48, flags: flags, in: window)
+                if presenter.handleKey(tab) != nil { editor.keyDown(with: tab) }
+                spin(0.2)
+                XCTAssertIdentical(AtticDropdownPresenter.owner(of: window.firstResponder), field,
+                                   "\(picker): Tab \(flags) keeps the caret in the field (\(String(describing: window.firstResponder)))")
+            }
+            presenter.close(restoreFocus: false, immediately: true)
+        }
     }
 
     /// A view that counts the clicks that reach it.
@@ -749,7 +793,8 @@ final class AtticDropdownTests: XCTestCase {
         let afterTab = window.firstResponder as? NSView
         XCTAssertFalse((afterTab as? NSTextView)?.isFieldEditor == true, "Tab left the field")
         XCTAssertTrue(afterTab?.isDescendant(of: host) == true, "the keyboard is still in the card")
-        XCTAssertEqual(selected(host), ["#design"], "Tab reached the rows: the first is highlighted, and only it is selected")
+        XCTAssertEqual(selected(host), ["#design"], "Tab reached the rows: the first is highlighted, and only it is selected"
+                       + " (first responder \(String(describing: window.firstResponder)))")
         press(" ", 49)
         XCTAssertEqual(toggled, ["design"], "Space pressed the row Tab reached")
         XCTAssertTrue(presenter.isOpen, "toggling a tag keeps the card open")

@@ -149,6 +149,7 @@ struct TaskTagPickerView: View {
             onListHighlight: $highlighted
         )
         .atticDropdownFocus($fieldFocused, when: focusField)
+        .atticDropdownTabs(field: $fieldFocused, list: $listFocused)
         // Typing highlights the first match; an empty field (as after a new
         // tag saved) highlights nothing, so another Return does nothing
         // rather than toggle a tag (round 5, F5).
@@ -218,6 +219,7 @@ struct TaskMovePickerView: View {
             onListHighlight: $highlighted
         )
         .atticDropdownFocus($fieldFocused)
+        .atticDropdownTabs(field: $fieldFocused, list: $listFocused)
         // Typing highlights the first match, so Return chooses it.
         .onChange(of: query) { _, now in highlighted = now.isEmpty || Self.filter(choices, query: now).isEmpty ? nil : 0 }
         .onKeyPress(phases: .down) { press in
