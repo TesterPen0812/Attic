@@ -876,7 +876,10 @@ final class TasksPageUITests: XCTestCase {
         let field = app.descendants(matching: .textField)
             .matching(NSPredicate(format: "label == %@", "Find or add a tag")).firstMatch
         XCTAssertTrue(field.waitForExistence(timeout: 3), "the tag picker opens with its field")
-        field.click()
+        // Through the pointer, as the dropdown's rows are clicked: a measured
+        // card keeps its content in a scroll view, and XCUITest's own click
+        // first tries to scroll that view.
+        clickDropdownRow(field)
         field.typeText("gardn")
         field.typeKey(.delete, modifierFlags: [])
         field.typeKey(.delete, modifierFlags: [])

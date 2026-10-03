@@ -331,26 +331,29 @@ struct AtticTagPicker: View {
     @Environment(\.atticDropdownHeight) private var cardHeight
 
     var body: some View {
+        let m = AtticDropdownMetrics.self
+        let shown = tags.count + (create == nil ? 0 : 1)
+        let room = Self.visibleRows(tagCount: listRows ?? shown)
+        // A height that holds while typing filters the list, so the card
+        // never jumps. Only a list longer than that scrolls: rows that fit
+        // are plain rows (nothing to scroll, for the pointer, the keyboard
+        // or the UI tests).
+        let normalHeight = CGFloat(room) * m.rowHeight
+        let listHeight = min(normalHeight, cardHeight.map { max(0, $0 - m.inset * 2 - m.fieldHeight - m.fieldGap) } ?? normalHeight)
         VStack(alignment: .leading, spacing: 0) {
             AtticDropdownField(text: $query, placeholder: String(localized: "Find or add a tag"),
                                systemName: "magnifyingglass", focus: fieldFocused)
-                .padding(.bottom, AtticDropdownMetrics.fieldGap)
-            let shown = tags.count + (create == nil ? 0 : 1)
-            let room = Self.visibleRows(tagCount: listRows ?? shown)
-            // A height that holds while typing filters the list, so the card
-            // never jumps. Only a list longer than that scrolls: rows that
-            // fit are plain rows (nothing to scroll, for the pointer, the
-            // keyboard or the UI tests).
-            let normalHeight = CGFloat(room) * AtticDropdownMetrics.rowHeight
-            let listHeight = min(normalHeight, cardHeight.map { max(0, $0 - AtticDropdownMetrics.inset * 2
-                                                                     - AtticDropdownMetrics.fieldHeight - AtticDropdownMetrics.fieldGap) } ?? normalHeight)
+                .padding(.bottom, m.fieldGap)
             if shown <= room && listHeight == normalHeight {
                 rows
-                    .frame(height: CGFloat(room) * AtticDropdownMetrics.rowHeight, alignment: .top)
+                    .frame(height: normalHeight, alignment: .top)
             } else {
                 AtticDropdownViewport(height: listHeight) { rows }
             }
         }
+        // In a card cut short the list keeps the field and shortens; the
+        // card still measures its natural height: the list's full room.
+        .atticDropdownHeightGivenUp(normalHeight - listHeight)
         .accessibilityElement(children: .contain)
         .accessibilityLabel(String(localized: "Tags"))
     }

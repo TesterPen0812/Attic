@@ -254,16 +254,10 @@ jobs:
           # The runner has no person at it: unit tests may make a window key
           # and let AppKit resolve targetless menu actions for real.
           TEST_RUNNER_ATTIC_KEY_WINDOW_TESTS: "1"
-          TEST_RUNNER_ATTIC_FULL_KEYBOARD_ACCESS_TESTS: "1"
         run: |
-          # Enable AppKit Full Keyboard Access before the host starts. This
-          # changes only this disposable CI runner and restores its setting.
-          if old_keyboard_mode=$(defaults read -g AppleKeyboardUIMode 2>/dev/null); then
-            trap 'defaults write -g AppleKeyboardUIMode -int "$old_keyboard_mode"' EXIT
-          else
-            trap 'defaults delete -g AppleKeyboardUIMode >/dev/null 2>&1 || true' EXIT
-          fi
-          defaults write -g AppleKeyboardUIMode -int 3
+          # The bundle runs in the default keyboard mode, as most people use
+          # it: Tab-order tests expect rows and fields, not every button.
+          # Full Keyboard Access has its own step below.
           rm -rf "$RUNNER_TEMP/AtticUnitTests.xcresult"
           xcodebuild \
             -project Attic.xcodeproj \
@@ -276,6 +270,40 @@ jobs:
             -only-testing:AtticTests \
             -skip-testing:AtticTests/DoneSearchCostTests \
             test
+
+      - name: Run Full Keyboard Access unit tests
+        id: fka_tests
+        continue-on-error: true
+        timeout-minutes: 10
+        env:
+          TEST_RUNNER_ATTIC_KEY_WINDOW_TESTS: "1"
+          TEST_RUNNER_ATTIC_FULL_KEYBOARD_ACCESS_TESTS: "1"
+        run: |
+          # Enable AppKit Full Keyboard Access before the host starts, for
+          # the tests written for it only. This changes only this disposable
+          # CI runner and restores its setting.
+          if old_keyboard_mode=$(defaults read -g AppleKeyboardUIMode 2>/dev/null); then
+            trap 'defaults write -g AppleKeyboardUIMode -int "$old_keyboard_mode"' EXIT
+          else
+            trap 'defaults delete -g AppleKeyboardUIMode >/dev/null 2>&1 || true' EXIT
+          fi
+          defaults write -g AppleKeyboardUIMode -int 3
+          rm -rf "$RUNNER_TEMP/AtticFullKeyboardAccessTests.xcresult"
+          xcodebuild \
+            -project Attic.xcodeproj \
+            -scheme Attic \
+            -configuration Local \
+            -destination 'platform=macOS' \
+            -derivedDataPath "$RUNNER_TEMP/AtticUnitTests" \
+            -resultBundlePath "$RUNNER_TEMP/AtticFullKeyboardAccessTests.xcresult" \
+            CODE_SIGNING_ALLOWED=NO \
+            -only-testing:AtticTests/AtticDropdownTests/testTheTagPickerWorksFromTheKeyboardWithFullKeyboardAccess \
+            test-without-building
+          # It must have run, not skipped.
+          summary=$(xcrun xcresulttool get test-results summary \
+            --path "$RUNNER_TEMP/AtticFullKeyboardAccessTests.xcresult" --format json)
+          echo "$summary"
+          python3 -c 'import json, sys; s = json.load(sys.stdin); sys.exit(0 if s.get("passedTests") == 1 and s.get("skippedTests", 0) == 0 else 1)' <<<"$summary"
 
       - name: Print macOS unit-test summary
         if: always()
@@ -292,6 +320,15 @@ jobs:
         with:
           name: macos-unit-test-results-${{ github.sha }}
           path: ${{ runner.temp }}/AtticUnitTests.xcresult
+          if-no-files-found: ignore
+          retention-days: 7
+
+      - name: Upload Full Keyboard Access test results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: macos-full-keyboard-access-results-${{ github.sha }}
+          path: ${{ runner.temp }}/AtticFullKeyboardAccessTests.xcresult
           if-no-files-found: ignore
           retention-days: 7
 
@@ -429,6 +466,7 @@ jobs:
           MAC_BUILD: ${{ steps.mac_build.outcome }}
           STRICT_BUILD: ${{ steps.strict_build.outcome }}
           UNIT_TESTS: ${{ steps.unit_tests.outcome }}
+          FKA_TESTS: ${{ steps.fka_tests.outcome }}
           UI_TESTS: ${{ steps.ui_tests.outcome }}
           PERF_UI_TESTS: ${{ steps.perf_ui_tests.outcome }}
           ANALYZER: ${{ steps.analyzer.outcome }}
@@ -439,18 +477,18 @@ jobs:
             mac-build "$MAC_BUILD" \
             strict-concurrency "$STRICT_BUILD" \
             unit-tests "$UNIT_TESTS" \
+            full-keyboard-access "$FKA_TESTS" \
             ui-tests "$UI_TESTS" \
             performance-ui-tests "$PERF_UI_TESTS" \
             analyzer "$ANALYZER" \
             final-worktree "$FINAL_STATE"
-          if [ "$PERF_UI_TESTS" != success ]; then
-            echo "::warning::Performance UI metrics are observational until the signed lane passes on macos-26"
-          fi
           test "$PROJECT_VERIFY" = success
           test "$MAC_BUILD" = success
           test "$STRICT_BUILD" = success
           test "$UNIT_TESTS" = success
+          test "$FKA_TESTS" = success
           test "$UI_TESTS" = success
+          test "$PERF_UI_TESTS" = success
           test "$ANALYZER" = success
           test "$FINAL_STATE" = success
 
@@ -488,8 +526,8 @@ jobs:
           python3 Scripts/interleave_performance.py \
             "$RUNNER_TEMP/AtticPerfReference" . "$RUNNER_TEMP/AtticPerfFirst" --pairs 6
 
-      # Runner variance needs observed macos-26 jobs before comparison can
-      # block. Confirmation must repeat the same primary measure.
+      # Confirmation must repeat the same primary measure before a
+      # performance regression fails the required lane.
       - name: Report and confirm seeded preview comparison
         id: perf_compare
         if: steps.perf_probe.outcome == 'success'
@@ -526,7 +564,7 @@ jobs:
           if-no-files-found: ignore
           retention-days: 14
 
-      - name: Report observational lane outcome
+      - name: Require seeded performance lane success
         if: always()
         env:
           PERF_XCODE: ${{ steps.perf_xcode.outcome }}
@@ -536,9 +574,9 @@ jobs:
           echo "Xcode 26 toolchain: $PERF_XCODE"
           echo "Seeded probe: $PERF_PROBE"
           echo "Comparison and confirmation: $PERF_COMPARE"
-          if [ "$PERF_XCODE" != success ] || [ "$PERF_PROBE" != success ] || [ "$PERF_COMPARE" = failure ]; then
-            echo "::warning::Performance lane requires macos-26 investigation before promotion to a blocking gate"
-          fi
+          test "$PERF_XCODE" = success
+          test "$PERF_PROBE" = success
+          test "$PERF_COMPARE" = success
 
   appearance:
     if: ${{ !inputs.phase1_stability_only }}
