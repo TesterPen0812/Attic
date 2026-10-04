@@ -161,7 +161,10 @@ or type style changed.
 - `AtticScrollEdgeLab` ignores former preview defaults and environment
   overrides and offers no A/B switch. Stored preferences are left intact.
   Tasks, Done, the Notes editor and All notes use Clean cut with the D1
-  control fade. The dormant native primitive remains explicitly testable.
+  control fade. A7 also disables the native edge in every E1 dropdown list
+  and rejects former soft choices injected in code. A source guard rejects
+  any surface or card enabling native scroll edges; hosted list and card
+  tests assert no native pockets.
   This supersedes the preview exception in the earlier entry below.
 
 ### Clean cut by default (owner, 2026-10-03)

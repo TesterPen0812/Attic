@@ -547,10 +547,16 @@ struct AtticDropdownSpace {
             }
             candidate = current.superview
         }
-        guard let content = view.window?.contentView else { return nil }
-        parent = content
-        let visible = bounding.map { content.convert($0.visibleRect, from: $0) } ?? content.bounds
-        bounds = AtticDropdownLayout.topDown(visible, in: content).insetBy(dx: margin, dy: margin)
+        guard let content = view.window?.contentView, let commonParent = content.superview else { return nil }
+        // Standalone SwiftUI pages use NSHostingView as the window's content
+        // view. An overlay must be its sibling: inserting another host under
+        // it is unsupported and emits a SwiftUI runtime issue (whose XCTest
+        // symbolication can stall a keystroke for seconds).
+        // Keep placement bounded by the content, not the window's chrome.
+        parent = commonParent
+        let visible = bounding.map { commonParent.convert($0.visibleRect, from: $0) }
+            ?? commonParent.convert(content.bounds, from: content)
+        bounds = AtticDropdownLayout.topDown(visible, in: commonParent).insetBy(dx: margin, dy: margin)
     }
 
     /// `rect` in `view`, top-down in this space.
@@ -879,6 +885,8 @@ final class AtticDropdownPresenter {
     private var monitors: [Any] = []
     private var resignObserver: NSObjectProtocol?
     private var removal: DispatchWorkItem?
+    private var updateScheduled = false
+    private var pendingClose: DispatchWorkItem?
 
     init() {}
 
@@ -953,6 +961,40 @@ final class AtticDropdownPresenter {
         if let height = contentHeight { resize(height: height, width: contentWidth) }
     }
 
+    /// Representable callbacks run inside SwiftUI's update. Resizing the
+    /// card publishes stage geometry, so coalesce it onto the next turn.
+    func updateAfterViewUpdate() {
+        // A true binding can arrive again before the false binding's close.
+        // Keep this host and its monitors alive for the newer presentation.
+        pendingClose?.cancel()
+        pendingClose = nil
+        host?.isInteractive = true
+        guard !updateScheduled else { return }
+        updateScheduled = true
+        DispatchQueue.main.async { [weak self] in
+            guard let self else { return }
+            self.updateScheduled = false
+            guard self.isOpen, self.pendingClose == nil else { return }
+            if AtticOverlayHierarchy.isInLayoutPass { self.updateAfterViewUpdate(); return }
+            self.update()
+        }
+    }
+
+    /// Dismantling an anchor also runs inside SwiftUI's update. Stop native
+    /// interaction now; publish the leave animation after that update ends.
+    func closeAfterViewUpdate() {
+        wantsOpen = false
+        host?.isInteractive = false
+        guard pendingClose == nil else { return }
+        let work = DispatchWorkItem { [self] in
+            pendingClose = nil
+            if AtticOverlayHierarchy.isInLayoutPass { closeAfterViewUpdate(); return }
+            close(restoreFocus: true)
+        }
+        pendingClose = work
+        DispatchQueue.main.async(execute: work)
+    }
+
     /// The content's natural height changed while open (a filter, a
     /// calendar month, a failure line): the card keeps its side unless that
     /// side can't hold it.
@@ -998,6 +1040,8 @@ final class AtticDropdownPresenter {
 
     /// Closes the card (the binding went false, or the anchor went away).
     func close(restoreFocus: Bool, immediately: Bool = false) {
+        pendingClose?.cancel()
+        pendingClose = nil
         wantsOpen = false
         guard isOpen, let host else { return }
         isOpen = false
@@ -1161,12 +1205,12 @@ struct AtticDropdownAnchor: NSViewRepresentable {
         presenter.contentWidth = contentWidth
         presenter.design = design
         guard isPresented else {
-            if presenter.isOpen || presenter.wantsOpen { presenter.close(restoreFocus: true) }
+            if presenter.isOpen || presenter.wantsOpen { presenter.closeAfterViewUpdate() }
             return
         }
         presenter.content = content()
         if presenter.isOpen {
-            presenter.update()
+            presenter.updateAfterViewUpdate()
         } else if !presenter.wantsOpen {
             presenter.wantsOpen = true
             view.onWindow = { [weak view, weak presenter] in
@@ -1186,7 +1230,8 @@ struct AtticDropdownAnchor: NSViewRepresentable {
     /// itself went away: the card leaves with its motion and the keyboard
     /// goes back (its host removes itself, whatever happens to this anchor).
     static func dismantleNSView(_ view: AnchorView, coordinator: AtticDropdownPresenter) {
-        coordinator.close(restoreFocus: true)
+        view.onWindow = nil
+        coordinator.closeAfterViewUpdate()
     }
 }
 
@@ -1285,7 +1330,7 @@ struct AtticDropdownHighlightKey: PreferenceKey {
 
 /// Known-height lists that fit stay plain. Cards measured as they change keep
 /// their scroll container across height changes to preserve editing state.
-/// The system soft edge reveals overflow; the keyboard's highlighted row is brought wholly into view.
+/// Scrolling stops at a clean edge; the keyboard's highlighted row is brought wholly into view.
 struct AtticDropdownViewport<Content: View>: View {
     var height: CGFloat?
     var highlighted: String? = nil
@@ -1297,9 +1342,7 @@ struct AtticDropdownViewport<Content: View>: View {
             ScrollViewReader { proxy in
                 ScrollView(.vertical) { content }
                     .scrollIndicators(.never)
-                    .safeAreaBar(edge: .top, spacing: 0) { Color.clear.frame(height: height == nil ? 0 : AtticDropdownMetrics.scrollEdgeInset).accessibilityHidden(true) }
-                    .safeAreaBar(edge: .bottom, spacing: 0) { Color.clear.frame(height: height == nil ? 0 : AtticDropdownMetrics.scrollEdgeInset).accessibilityHidden(true) }
-                    .scrollEdgeEffectStyle(.soft, for: .vertical)
+                    .scrollEdgeEffectHidden(true, for: .all)
                     .frame(height: height)
                     .fixedSize(horizontal: false, vertical: height == nil)
                     .onAppear { if let highlighted { proxy.scrollTo(highlighted) } }

@@ -261,12 +261,14 @@ final class AtticDropdownTests: XCTestCase {
             (view as? NSScrollView).map { [$0] } ?? view.subviews.flatMap { scrolls($0) }
         }
         let scroll = try XCTUnwrap(scrolls(host).first)
+        XCTAssertTrue(ScrollEdgeTests.pockets(in: scroll).isEmpty, "E1 cards use Clean cut")
         XCTAssertGreaterThan(scroll.documentView?.bounds.height ?? 0, scroll.contentView.bounds.height)
         let before = scroll.contentView.bounds.origin.y
         model.move(-1) // wraps from the first row to Mono
         host.layoutSubtreeIfNeeded()
         spin(0.2)
         XCTAssertGreaterThan(scroll.contentView.bounds.origin.y, before, "the keyboard scrolls to Mono")
+        XCTAssertTrue(ScrollEdgeTests.pockets(in: scroll).isEmpty, "scrolling an E1 card cannot enable native edges")
         let document = try XCTUnwrap(scroll.documentView)
         XCTAssertGreaterThanOrEqual(scroll.contentView.bounds.maxY, document.bounds.maxY - 1,
                                     "the last row is wholly visible")
@@ -342,6 +344,42 @@ final class AtticDropdownTests: XCTestCase {
         RunLoop.main.run(until: Date().addingTimeInterval(seconds))
     }
 
+    func testDeferredCloseThenOpenInTheSameTurnKeepsTheCardInteractive() throws {
+        let window = makeWindow()
+        defer { window.close() }
+        let anchor = NSView(frame: NSRect(x: 20, y: 40, width: 60, height: 28))
+        window.contentView?.addSubview(anchor)
+        let presenter = AtticDropdownPresenter()
+        presenter.takesKeyboard = false
+        presenter.contentHeight = 52
+        presenter.content = AnyView(AtticDropdownRow(title: "First") {})
+        presenter.present(from: anchor)
+        defer { presenter.close(restoreFocus: false, immediately: true) }
+        let host = try XCTUnwrap(presenter.host)
+        var dismissals = 0
+        presenter.onDismiss = { dismissals += 1 }
+
+        presenter.closeAfterViewUpdate()
+        XCTAssertFalse(host.isInteractive, "a requested close stops interaction immediately")
+        // This is the open branch of updateNSView, before the queued close runs.
+        presenter.content = AnyView(AtticDropdownRow(title: "Reopened") {})
+        presenter.updateAfterViewUpdate()
+        spin(0.1)
+        XCTAssertTrue(presenter.isOpen, "the older close cannot cancel the newer presentation")
+        XCTAssertIdentical(presenter.host, host, "reopening keeps the existing card")
+        XCTAssertTrue(host.isInteractive, "reopening restores hit testing")
+        XCTAssertEqual(dismissals, 0)
+
+        // Another close in this turn must still work; cancellation must not
+        // leave the presenter stuck ignoring later close requests.
+        presenter.closeAfterViewUpdate()
+        presenter.updateAfterViewUpdate()
+        presenter.closeAfterViewUpdate()
+        spin(0.1)
+        XCTAssertFalse(presenter.isOpen)
+        XCTAssertFalse(host.isInteractive)
+    }
+
     final class Opener: ObservableObject {
         @Published var isOpen = false
         @Published var query = ""
@@ -363,9 +401,13 @@ final class AtticDropdownTests: XCTestCase {
     /// The control that opens the dropdown: the only view that observes it.
     struct Opening: View {
         @ObservedObject var opener: Opener
+        var takesKeyboard = true
+        var hasKnownSize = false
         var body: some View {
             Color.clear.frame(width: 60, height: 28)
-                .atticDropdown(isPresented: $opener.isOpen, label: "Tags") {
+                .atticDropdown(isPresented: $opener.isOpen, label: "Tags", takesKeyboard: takesKeyboard,
+                               contentHeight: hasKnownSize ? (opener.query.isEmpty ? 116 : 52) : nil,
+                               contentWidth: hasKnownSize ? (opener.query.isEmpty ? 144 : 220) : nil) {
                     ForEach(["launch", "home", "work"].filter { opener.query.isEmpty || $0.contains(opener.query) }, id: \.self) { tag in
                         AtticDropdownRow(title: "#" + tag, check: .off) {}
                     }
@@ -387,6 +429,7 @@ final class AtticDropdownTests: XCTestCase {
         window.contentView?.addSubview(host)
         host.layoutSubtreeIfNeeded()
         spin()
+        let overlay = window.contentView?.superview
         let before = counter.behind
         opener.isOpen = true
         // Polled, as the close is: after a heavy suite the main queue can
@@ -396,7 +439,7 @@ final class AtticDropdownTests: XCTestCase {
         spin(0.1)
         XCTAssertTrue(AtticDropdownPresenter.isAnyOpen, "it opened")
         XCTAssertTrue(AtticTextInput.isPopoverOpen, "the page's keys stand aside")
-        let card = window.contentView?.subviews.compactMap { $0 as? AtticOverlayHostingView }.first
+        let card = overlay?.subviews.compactMap { $0 as? AtticOverlayHostingView }.first
         XCTAssertNotNil(card, "the card is in the overlay layer")
         XCTAssertEqual(card?.accessibilityRole(), .menu, "VoiceOver hears a menu")
         if let card {
@@ -413,11 +456,53 @@ final class AtticDropdownTests: XCTestCase {
         // machine runs the cleanup late).
         let deadline = Date().addingTimeInterval(3)
         repeat { spin(0.1) } while Date() < deadline
-            && !(window.contentView?.subviews.compactMap { $0 as? AtticOverlayHostingView }.isEmpty ?? true)
+            && !(overlay?.subviews.compactMap { $0 as? AtticOverlayHostingView }.isEmpty ?? true)
         XCTAssertFalse(AtticDropdownPresenter.isAnyOpen, "it closed")
         XCTAssertEqual(counter.behind, before, "the page behind was never re-rendered")
-        XCTAssertTrue(window.contentView?.subviews.compactMap { $0 as? AtticOverlayHostingView }.isEmpty ?? false,
+        XCTAssertTrue(overlay?.subviews.compactMap { $0 as? AtticOverlayHostingView }.isEmpty ?? false,
                       "the card left the overlay after its leave motion")
+    }
+
+    func testStandaloneHostingRootPresentsSuggestionsAsASibling() throws {
+        let window = makeWindow()
+        defer { window.close() }
+        let opener = Opener()
+        let counter = Counter()
+        let host = NSHostingView(rootView: VStack(spacing: 0) {
+            Behind(counter: counter)
+            Opening(opener: opener, takesKeyboard: false, hasKnownSize: true)
+        }.atticDesign(AtticDesignContext()))
+        window.contentView = host
+        host.layoutSubtreeIfNeeded()
+        spin()
+        let parent = try XCTUnwrap(host.superview)
+        let before = counter.behind
+        let diagnostics = captureErrorOutput {
+            opener.isOpen = true
+            let deadline = Date().addingTimeInterval(3)
+            var card: AtticOverlayHostingView?
+            repeat {
+                spin()
+                card = parent.subviews.compactMap { $0 as? AtticOverlayHostingView }.first
+            } while card == nil && Date() < deadline
+            guard let shown = card else { XCTFail("the suggestion did not open"); return }
+            XCTAssertIdentical(shown.superview, parent)
+            XCTAssertFalse(shown.isDescendant(of: host), "a suggestion must never join SwiftUI's managed hierarchy")
+            let frame = host.convert(shown.contentRect, from: shown)
+            XCTAssertGreaterThanOrEqual(frame.minX, AtticDropdownMetrics.panelMargin - 0.5)
+            XCTAssertLessThanOrEqual(frame.maxX, host.bounds.width - AtticDropdownMetrics.panelMargin + 0.5)
+            opener.query = "ho"
+            spin(0.1)
+            XCTAssertEqual(shown.contentRect.width, 220, accuracy: 1, "known-width suggestions still grow")
+            XCTAssertEqual(counter.behind, before, "opening and filtering leave the page behind alone")
+            opener.isOpen = false
+            let closing = Date().addingTimeInterval(3)
+            repeat { spin() } while shown.superview != nil && Date() < closing
+            XCTAssertNil(shown.superview)
+        }
+        XCTAssertFalse(diagnostics.contains("as a subview of NSHostingView is not supported"), diagnostics)
+        XCTAssertFalse(diagnostics.contains("Publishing changes from within view updates"), diagnostics)
+        XCTAssertFalse(window.isKeyWindow, "this regression needs no key window")
     }
 
     /// What the test host writes to its error output while `body` runs

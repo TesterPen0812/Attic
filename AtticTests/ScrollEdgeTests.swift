@@ -3,8 +3,8 @@ import SwiftUI
 import XCTest
 @testable import Attic
 
-/// Clean cut in every app identity (owner, overnight A1). Native soft-edge
-/// geometry remains exercised through explicit test injection only.
+/// Clean cut in every app identity and card (owner, A7). Former soft-edge
+/// choices must never enable a native effect, even when injected in code.
 @MainActor
 final class ScrollEdgeTests: XCTestCase {
     private var saved: AtticScrollEdgeStyle?
@@ -18,6 +18,21 @@ final class ScrollEdgeTests: XCTestCase {
     private func use(_ style: AtticScrollEdgeStyle) {
         if saved == nil { saved = AtticScrollEdgeLab.shared.style }
         AtticScrollEdgeLab.shared.style = style
+    }
+
+    func testNoSurfaceOrCardEnablesANativeScrollEdge() throws {
+        let root = URL(fileURLWithPath: #filePath).deletingLastPathComponent()
+            .deletingLastPathComponent().appendingPathComponent("Attic")
+        let files = try XCTUnwrap(FileManager.default.enumerator(at: root, includingPropertiesForKeys: nil))
+            .compactMap { $0 as? URL }.filter { $0.pathExtension == "swift" }
+        XCTAssertGreaterThan(files.count, 50, "the guard must inspect the product sources")
+        let enabling = try NSRegularExpression(pattern:
+            #"\bscrollEdgeEffectStyle\s*\(|\bscrollEdgeEffectHidden\s*\((?!\s*true\b)"#)
+        for file in files {
+            let source = try String(contentsOf: file, encoding: .utf8)
+            XCTAssertNil(enabling.firstMatch(in: source, range: NSRange(source.startIndex..., in: source)),
+                         "\(file.path): native scroll edges must remain disabled, including E1 cards")
+        }
     }
 
     // MARK: - The switch
@@ -49,7 +64,8 @@ final class ScrollEdgeTests: XCTestCase {
                        "ignore the old preference without changing user defaults")
         defaults.removeObject(forKey: AtticScrollEdgeLab.styleKey)
         let lab = AtticScrollEdgeLab(defaults: defaults, isPreview: true)
-        lab.style = .systemSoft // Isolated geometry tests can exercise the dormant primitive.
+        lab.style = .systemSoft
+        XCTAssertEqual(lab.style, .cleanCut, "even an injected former choice stays disabled")
         XCTAssertNil(defaults.string(forKey: AtticScrollEdgeLab.styleKey), "no choice is persisted")
     }
 
@@ -96,11 +112,11 @@ final class ScrollEdgeTests: XCTestCase {
         XCTAssertFalse(preview.offersChoice)
     }
 
-    // MARK: - Dormant system soft-edge geometry (explicit test injection)
+    // MARK: - Former soft choices cannot enable native geometry
 
-    /// Native pockets occupy only resting gaps INSIDE the viewport. The
-    /// controls never overlap the scroll view or its clipped native effect.
-    func testTheNativeEdgesEndBeforeTheControlsAndLeaveTheFirstRowAtRest() throws {
+    /// A former soft choice leaves the first row in its Clean cut place
+    /// and must not enable native pockets.
+    func testAFormerSoftChoiceLeavesTheFirstRowAtRestWithoutNativeEdges() throws {
         use(.systemSoft)
         let hosted = try Hosted(height: 520, long: true)
         defer { hosted.close() }
@@ -108,24 +124,18 @@ final class ScrollEdgeTests: XCTestCase {
         let layout = PanelPageLayout(cornerSize: 52, panelSize: CGSize(width: AtticLayout.panelSize.width, height: 520))
         let tabsTop = layout.headerBottom + AtticLayout.pageTabsTop
         let listTop = TasksViewport.listTop(tabsTop: tabsTop)
-        let top = TasksViewport.controlsBottom(tabsTop: tabsTop)
         let content = try XCTUnwrap(hosted.window.contentView)
         let frame = list.convert(list.bounds, to: content)
-        XCTAssertEqual(frame.minY, top, accuracy: 0.5)
-        XCTAssertEqual(list.contentInsets.top, listTop - top, accuracy: 0.5)
+        XCTAssertEqual(frame.minY, 0, accuracy: 0.5)
+        XCTAssertEqual(list.contentInsets.top, listTop, accuracy: 0.5)
         let first = try XCTUnwrap(hosted.model.rows(for: .now).first?.id)
         XCTAssertEqual(try XCTUnwrap(hosted.pointer.frames[TasksRowID(tab: .now, id: first)]).minY, listTop, accuracy: 0.5,
-                       "the first row keeps its resting place beyond the native fade")
-        let topPocket = try XCTUnwrap(Self.pockets(in: list).first { $0.frame.minY < 1 })
-        XCTAssertEqual(topPocket.frame.maxY, listTop - top, accuracy: 0.5,
-                       "resting row ink starts beyond the pocket's clear boundary")
+                       "the first row keeps its Clean cut resting place")
+        XCTAssertTrue(Self.pockets(in: list).isEmpty, "a former soft choice cannot enable native edges")
         list.contentView.scroll(to: CGPoint(x: 0, y: 400))
         list.reflectScrolledClipView(list.contentView)
         hosted.spin(0.5)
-        let pockets = Self.pockets(in: list).map(\.frame.height).sorted()
-        XCTAssertEqual(pockets.count, 2)
-        XCTAssertEqual(pockets.first ?? 0, listTop - top, accuracy: 0.5)
-        XCTAssertEqual(pockets.last ?? 0, AtticLayout.contentToAddBar, accuracy: 0.5)
+        XCTAssertTrue(Self.pockets(in: list).isEmpty, "scrolling cannot enable native edges")
         XCTAssertTrue(Self.blurredLayers(in: try XCTUnwrap(list.documentView?.layer)).isEmpty, "no row is blurred by Attic")
     }
 
@@ -146,8 +156,8 @@ final class ScrollEdgeTests: XCTestCase {
         XCTAssertTrue(Self.blurredLayers(in: try XCTUnwrap(list.documentView?.layer)).isEmpty, "no row is blurred by Attic")
     }
 
-    /// Done's log takes the same edges as Now and Later.
-    func testDoneHasTheSystemsEdgeEffectToo() throws {
+    /// Done's log also ignores a former soft choice injected in code.
+    func testDoneHasNoNativeEdgeEvenWithAFormerSoftChoice() throws {
         use(.systemSoft)
         let hosted = try Hosted(height: 520, long: true)
         defer { hosted.close() }
@@ -156,7 +166,7 @@ final class ScrollEdgeTests: XCTestCase {
         list.contentView.scroll(to: CGPoint(x: 0, y: 200))
         list.reflectScrolledClipView(list.contentView)
         hosted.spin(0.5)
-        XCTAssertEqual(Self.pockets(in: list).count, 2)
+        XCTAssertTrue(Self.pockets(in: list).isEmpty)
     }
 
     /// The tabs still work under the lists' top bar: a tab click switches
@@ -172,8 +182,8 @@ final class ScrollEdgeTests: XCTestCase {
         XCTAssertEqual(hosted.shownPage(), 0)
     }
 
-    /// The A/B switch changes viewport coordinates, not the person's place.
-    func testThePreviewSwitchKeepsTheScrolledPlace() throws {
+    /// A former A/B choice cannot change the person's scrolled place.
+    func testAFormerPreviewChoiceKeepsTheScrolledPlace() throws {
         use(.systemSoft)
         let hosted = try Hosted(height: 520, long: true)
         defer { hosted.close() }
