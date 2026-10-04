@@ -383,7 +383,7 @@ final class Hosted {
     final class Focus { var addBar = false }
     let focus = Focus()
 
-    init(height: CGFloat, addBarFocused: Bool = false, long: Bool = false) throws {
+    init(height: CGFloat, addBarFocused: Bool = false, long: Bool = false, keyWindow: Bool = true) throws {
         focus.addBar = addBarFocused
         self.height = height
         let container = try PersistenceController.makeContainer(inMemory: true, cloudSyncEnabled: false)
@@ -400,7 +400,7 @@ final class Hosted {
         window.isReleasedWhenClosed = false
         window.contentView = NSHostingView(rootView: page.atticDesign(AtticDesignContext(mode: .light)).frame(width: size.width, height: size.height))
         window.orderFront(nil)
-        window.makeKey()
+        if keyWindow { window.makeKey() }
         spin(1)
     }
 

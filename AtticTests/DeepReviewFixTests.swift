@@ -4,8 +4,8 @@ import XCTest
 @testable import Attic
 
 /// Phase 1's deep review, the UI fix round: Find from far down a list
-/// (P2-01), the soft edge's pockets over the whole control regions
-/// (P2-02, a preview's choice since Clean cut became the default), one Open Files command for every route (P2-03), a visible
+/// (P2-01), Clean cut's D1 fade over the whole control regions
+/// (P2-02, owner A7: no native soft edges), one Open Files command for every route (P2-03), a visible
 /// keyboard focus at every Tab stop (P2-04), the composer strip's values
 /// in full (P3-01) and the pager's test-only settle (code review). Each is
 /// driven the way a person drives it where the hosted page allows: real
@@ -20,9 +20,9 @@ final class DeepReviewFixTests: XCTestCase {
         try await super.tearDown()
     }
 
-    private func useSoftEdge() {
+    private func useCleanCut() {
         if savedEdge == nil { savedEdge = AtticScrollEdgeLab.shared.style }
-        AtticScrollEdgeLab.shared.style = .systemSoft
+        AtticScrollEdgeLab.shared.style = .cleanCut
     }
 
     private func layout(_ hosted: Hosted) -> PanelPageLayout {
@@ -94,9 +94,10 @@ final class DeepReviewFixTests: XCTestCase {
     // MARK: - D1: viewport clears every visible control
 
     func testTheViewportTracksFindTheStripSelectionAndPasteOffer() throws {
-        useSoftEdge()
-        let hosted = try Hosted(height: 520, long: true)
+        useCleanCut()
+        let hosted = try Hosted(height: 520, long: true, keyWindow: false)
         defer { hosted.close() }
+        XCTAssertFalse(hosted.window.isKeyWindow)
         let list = try shownList(hosted)
         scrollToEnd(list, hosted)
         let layout = layout(hosted)
@@ -108,39 +109,79 @@ final class DeepReviewFixTests: XCTestCase {
             return list.convert(list.bounds, to: hosted.window.contentView)
         }
         let resting = frame()
-        XCTAssertEqual(resting.minY, TasksViewport.controlsBottom(tabsTop: tabsTop), accuracy: 0.5)
-        XCTAssertEqual(resting.maxY, hosted.height - idle, accuracy: 0.5)
-        let pocketHeights = ScrollEdgeTests.pockets(in: list).map(\.frame.height).sorted()
+        XCTAssertEqual(resting.minY, 0, accuracy: 0.5)
+        XCTAssertEqual(resting.maxY, hosted.height, accuracy: 0.5)
+        XCTAssertEqual(list.contentInsets.top, TasksViewport.listTop(tabsTop: tabsTop), accuracy: 0.5)
+        // Clean cut keeps a full viewport. D1 hides row ink under the
+        // controls instead of resizing the native scroll view. Compare two
+        // actual scroll positions in each state, with visible body movement
+        // as a positive control so an empty capture cannot pass.
+        func assertClear(bottom: CGFloat, state: String) throws {
+            let content = try XCTUnwrap(hosted.window.contentView)
+            func capture(_ y: CGFloat) throws -> NSBitmapImageRep {
+                list.contentView.scroll(to: CGPoint(x: 0, y: y))
+                list.reflectScrolledClipView(list.contentView)
+                hosted.spin(0.5)
+                content.layoutSubtreeIfNeeded()
+                let image = try XCTUnwrap(content.bitmapImageRepForCachingDisplay(in: content.bounds))
+                content.cacheDisplay(in: content.bounds, to: image)
+                return image
+            }
+            let first = try capture(260), second = try capture(1_300)
+            let scale = CGFloat(first.pixelsWide) / content.bounds.width
+            func difference(top: CGFloat, bottom: CGFloat) -> Double {
+                var changed = 0, total = 0
+                for y in Int(top * scale)..<min(Int(bottom * scale), first.pixelsHigh, second.pixelsHigh) {
+                    for x in 0..<first.pixelsWide {
+                        guard let a = first.colorAt(x: x, y: y)?.usingColorSpace(.sRGB),
+                              let b = second.colorAt(x: x, y: y)?.usingColorSpace(.sRGB) else { continue }
+                        total += 1
+                        if max(abs(a.redComponent - b.redComponent), abs(a.greenComponent - b.greenComponent),
+                               abs(a.blueComponent - b.blueComponent)) > 0.03 { changed += 1 }
+                    }
+                }
+                return total == 0 ? 1 : Double(changed) / Double(total)
+            }
+            XCTAssertGreaterThan(difference(top: TasksViewport.listTop(tabsTop: tabsTop) + 30, bottom: bottom - 30), 0.02,
+                                 "\(state): rows actually moved between captures")
+            XCTAssertLessThan(difference(top: 0, bottom: TasksViewport.controlsBottom(tabsTop: tabsTop)), 0.004,
+                              "\(state): no row ink under the header, tabs or Find")
+            XCTAssertLessThan(difference(top: bottom, bottom: hosted.height), 0.004,
+                              "\(state): no row ink under the bottom controls")
+            XCTAssertTrue(ScrollEdgeTests.pockets(in: list).isEmpty, "\(state): no native edge")
+            XCTAssertEqual(frame(), resting, "\(state): controls change D1's mask, not the viewport")
+        }
+        try assertClear(bottom: hosted.height - idle, state: "idle")
 
-        hosted.press("f", keyCode: 3, modifiers: .command)
+        hosted.model.setSearchQuery(" ", for: .now)
+        hosted.spin(0.8)
         XCTAssertTrue(hosted.searchFieldShown)
-        XCTAssertEqual(frame().minY, resting.minY, accuracy: 0.5, "Find has the same taller control boundary")
-        hosted.press("\u{1B}", keyCode: 53)
+        try assertClear(bottom: hosted.height - idle, state: "Find")
+        hosted.model.setSearchQuery("", for: .now)
 
         hosted.model.addBar = TaskAddBarText(text: "Pay rent tomorrow #home !!")
         hosted.spin(0.8)
         let strip = AtticPickerMetrics.stripToBar + AtticControlSize.smallHeight
-        XCTAssertEqual(frame().maxY, resting.maxY - strip, accuracy: 0.5)
-        XCTAssertEqual(ScrollEdgeTests.pockets(in: list).map(\.frame.height).sorted(), pocketHeights,
-                       "the native fade stays small; the viewport moves above the strip")
+        try assertClear(bottom: hosted.height - idle - strip, state: "metadata strip")
         hosted.model.addBarState.clearDraft()
         hosted.spin(0.8)
-        XCTAssertEqual(frame().maxY, resting.maxY, accuracy: 0.5)
+        try assertClear(bottom: hosted.height - idle, state: "strip cleared")
 
         let ids = hosted.model.rows(for: .now).prefix(2).map(\.id)
         hosted.model.selectOnly(ids[0])
         hosted.model.selectCopies(ids)
         hosted.spin(0.8)
-        XCTAssertLessThan(frame().maxY, resting.maxY - 20, "the selection bar is excluded too")
+        let bar = AtticSpacing.s8 + AtticControlSize.smallHeight + AtticControlSize.capsuleInset * 2
+        try assertClear(bottom: hosted.height - idle - bar, state: "selection")
         hosted.model.clearSelection()
         hosted.spin(0.8)
-        XCTAssertEqual(frame().maxY, resting.maxY, accuracy: 0.5)
+        try assertClear(bottom: hosted.height - idle, state: "selection cleared")
         hosted.model.pasteOffer = TaskPasteOffer("Milk\nEggs\nBread")
         hosted.spin(0.8)
-        XCTAssertLessThan(frame().maxY, resting.maxY - 20, "the paste offer is excluded too")
+        try assertClear(bottom: hosted.height - idle - bar, state: "paste offer")
         hosted.model.dismissPasteOffer()
         hosted.spin(0.8)
-        XCTAssertEqual(frame().maxY, resting.maxY, accuracy: 0.5)
+        try assertClear(bottom: hosted.height - idle, state: "paste offer cleared")
         XCTAssertTrue(ScrollEdgeTests.blurredLayers(in: try XCTUnwrap(list.documentView?.layer)).isEmpty)
     }
 
