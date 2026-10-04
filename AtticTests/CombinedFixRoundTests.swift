@@ -575,6 +575,68 @@ final class CombinedFixRoundTests: XCTestCase {
 
     // MARK: - Fix round 2 (GPT-6.1 review of 6aaec55)
 
+    func testTagReservesDoNotInvalidateTextKitInsideLayout() throws {
+        let engine = NoteEditorEngine(noteID: UUID(), document: NoteDocument(blocks: [.text("A3 repaint"), .text("Body stays visible.")]))
+        let (scroll, text) = engine.makeView()
+        scroll.frame = NSRect(x: 0, y: 0, width: 320, height: 520)
+        text.frame.size.width = 320
+        let accessories = NoteTitleAccessories(engine: engine, textView: text, scrollView: scroll,
+            chrome: NotesPageChrome(), design: AtticDesignContext(controls: .craft), headerBottom: 60,
+            isUntouched: { false }, tagEditor: { AnyView(EmptyView()) })
+        defer { accessories.invalidate() }
+        accessories.layout()
+        spin()
+        let before = engine.style.tagLineHeight
+        engine.setTagsFromPicker(["a3new"])
+        AtticOverlayHierarchy.layoutPass {
+            accessories.layout()
+            XCTAssertEqual(engine.style.tagLineHeight, before, "TextKit must finish its viewport before tag spacing restyles its title")
+        }
+        spin()
+        XCTAssertGreaterThan(engine.style.tagLineHeight, before)
+        let added = engine.style.tagLineHeight
+        engine.setTagsFromPicker([])
+        AtticOverlayHierarchy.layoutPass {
+            accessories.layout()
+            XCTAssertEqual(engine.style.tagLineHeight, added)
+        }
+        spin()
+        XCTAssertEqual(engine.style.tagLineHeight, 0)
+        XCTAssertEqual(engine.textStorage.string, "A3 repaint\nBody stays visible.")
+        XCTAssertNotNil(engine.rect(for: NSRange(location: 12, length: 4)))
+    }
+
+    func testImportedFilesRenderTheirAvailableBytesOnFirstInsertion() throws {
+        for slash in [false, true] {
+            let engine = NoteEditorEngine(noteID: UUID(), document: NoteDocument(blocks: [.text("A3 import"), .text("Body")]))
+            let (_, text) = engine.makeView()
+            text.setSelectedRange(NSRange(location: engine.textStorage.length, length: 0))
+            let bytes = Data("A3 file fixture".utf8)
+            let payload = StagedNoteAttachment(id: UUID(), filename: "A3.txt", contentTypeIdentifier: "public.plain-text",
+                byteCount: Int64(bytes.count), digest: NotePayloadDigest.sha256(bytes), data: bytes)
+            let item = NoteImportedObject(staged: payload, pixelSize: nil)
+            if slash {
+                var request: NoteSlashFileRequest?
+                engine.onSlashFileRequest = { request = $0 }
+                type("\n/file", into: text)
+                XCTAssertTrue(engine.acceptSlashItem(.imageOrFile))
+                XCTAssertTrue(engine.commitSlashObject(item, for: try XCTUnwrap(request)))
+            } else {
+                engine.beginImageImport()
+                XCTAssertTrue(engine.insertImportedObjects([item]))
+            }
+            let location = (engine.textStorage.string as NSString).range(of: String(NoteDocument.objectCharacter)).location
+            let object = try XCTUnwrap(engine.object(at: location) as? NoteFileAttachment)
+            let face = try XCTUnwrap(engine.objectFace(for: object))
+            let renderer = NoteObjectRenderer(design: engine.objectDesign)
+            renderer.columnWidth = { engine.objectColumnWidth }
+            let expected = renderer.fileCard(face)
+            XCTAssertFalse(object.originalMissing)
+            XCTAssertEqual(object.renderedImage?.tiffRepresentation, expected.tiffRepresentation,
+                "The first tile must show the available size, not the pre-staging Original missing face")
+        }
+    }
+
     private func waitUntil(_ condition: () -> Bool, timeout: TimeInterval = 3) async {
         let deadline = Date().addingTimeInterval(timeout)
         while !condition(), Date() < deadline { try? await Task.sleep(for: .milliseconds(20)) }

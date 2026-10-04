@@ -426,8 +426,25 @@ final class NoteEditorEngine: NSObject, NSTextViewDelegate, NSTextStorageDelegat
 
     /// Room under the title for the tag line and at the end of its lines for
     /// the note menu. Attributes only (never an Undo step).
+    private var pendingTitleReserves: (tagLine: CGFloat, trailing: CGFloat)?
+    private var titleReservesScheduled = false
+
     func setTitleReserves(tagLine: CGFloat, trailing: CGFloat) {
-        guard style.tagLineHeight != tagLine || style.titleTrailingReserve != trailing else { return }
+        guard style.tagLineHeight != tagLine || style.titleTrailingReserve != trailing else {
+            pendingTitleReserves = nil
+            return
+        }
+        // The title accessories measure from NSTextView.layout. Restyling
+        // here would invalidate the viewport fragments that AppKit has
+        // just laid out, leaving their layers blank after a tag change.
+        // Coalesce the latest geometry and apply it outside every layout
+        // pass, including a nested run-loop callback.
+        if AtticOverlayHierarchy.isInLayoutPass {
+            pendingTitleReserves = (tagLine, trailing)
+            scheduleTitleReserves()
+            return
+        }
+        pendingTitleReserves = nil
         style.tagLineHeight = tagLine
         style.titleTrailingReserve = trailing
         let title = titleParagraphRange
@@ -439,6 +456,17 @@ final class NoteEditorEngine: NSObject, NSTextViewDelegate, NSTextStorageDelegat
         invalidateLayout(title)
         if let textView, paragraphRange(at: textView.selectedRange().location).location == 0 {
             textView.typingAttributes = style.titleAttributes
+        }
+    }
+
+    private func scheduleTitleReserves() {
+        guard !titleReservesScheduled else { return }
+        titleReservesScheduled = true
+        DispatchQueue.main.async { [weak self] in
+            guard let self else { return }
+            self.titleReservesScheduled = false
+            guard let pending = self.pendingTitleReserves else { return }
+            self.setTitleReserves(tagLine: pending.tagLine, trailing: pending.trailing)
         }
     }
 
@@ -967,7 +995,6 @@ final class NoteEditorEngine: NSObject, NSTextViewDelegate, NSTextStorageDelegat
                 let file = NoteFileAttachment(attachmentID: item.staged?.id, filename: item.filename,
                     contentTypeIdentifier: item.contentTypeIdentifier, byteCount: item.byteCount,
                     importFailure: item.failure, extras: item.staged?.identityExtras ?? [:])
-                renderer.apply(to: file, today: today)
                 insertion.append(NoteTextCodec.attachmentString(file, attributes: style.bodyAttributes))
             }
         }
@@ -3132,7 +3159,6 @@ extension NoteEditorEngine {
             let file = NoteFileAttachment(attachmentID: item.staged?.id, filename: item.filename,
                 contentTypeIdentifier: item.contentTypeIdentifier, byteCount: item.byteCount,
                 importFailure: item.failure, extras: item.staged?.identityExtras ?? [:])
-            renderer.apply(to: file, today: today)
             replacement.append(NoteTextCodec.attachmentString(file, attributes: style.bodyAttributes))
         }
         replacement.append(NSAttributedString(string: "\n", attributes: style.bodyAttributes))
