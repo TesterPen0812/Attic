@@ -4,7 +4,7 @@ import XCTest
 @testable import Attic
 
 /// Phase 1's deep review, the UI fix round: Find from far down a list
-/// (P2-01), Clean cut's D1 fade over the whole control regions
+/// (P2-01), Clean cut's fade over the control regions (A15 replaced D1)
 /// (P2-02, owner A7: no native soft edges), one Open Files command for every route (P2-03), a visible
 /// keyboard focus at every Tab stop (P2-04), the composer strip's values
 /// in full (P3-01) and the pager's test-only settle (code review). Each is
@@ -91,7 +91,7 @@ final class DeepReviewFixTests: XCTestCase {
         XCTAssertFalse(hosted.model.rows(for: .now).isEmpty)
     }
 
-    // MARK: - D1: viewport clears every visible control
+    // MARK: - A15 (was D1): rows pass faintly under every visible control
 
     func testTheViewportTracksFindTheStripSelectionAndPasteOffer() throws {
         useCleanCut()
@@ -112,8 +112,8 @@ final class DeepReviewFixTests: XCTestCase {
         XCTAssertEqual(resting.minY, 0, accuracy: 0.5)
         XCTAssertEqual(resting.maxY, hosted.height, accuracy: 0.5)
         XCTAssertEqual(list.contentInsets.top, TasksViewport.listTop(tabsTop: tabsTop), accuracy: 0.5)
-        // Clean cut keeps a full viewport. D1 hides row ink under the
-        // controls instead of resizing the native scroll view. Compare two
+        // Clean cut keeps a full viewport. The A15 mask fades row ink under
+        // the controls instead of resizing the native scroll view. Compare two
         // actual scroll positions in each state, with visible body movement
         // as a positive control so an empty capture cannot pass.
         func assertClear(bottom: CGFloat, state: String) throws {
@@ -129,27 +129,38 @@ final class DeepReviewFixTests: XCTestCase {
             }
             let first = try capture(260), second = try capture(1_300)
             let scale = CGFloat(first.pixelsWide) / content.bounds.width
-            func difference(top: CGFloat, bottom: CGFloat) -> Double {
+            func difference(top: CGFloat, bottom: CGFloat, threshold: CGFloat = 0.03) -> Double {
                 var changed = 0, total = 0
                 for y in Int(top * scale)..<min(Int(bottom * scale), first.pixelsHigh, second.pixelsHigh) {
                     for x in 0..<first.pixelsWide {
                         guard let a = first.colorAt(x: x, y: y)?.usingColorSpace(.sRGB),
                               let b = second.colorAt(x: x, y: y)?.usingColorSpace(.sRGB) else { continue }
                         total += 1
-                        if max(abs(a.redComponent - b.redComponent), abs(a.greenComponent - b.greenComponent),
-                               abs(a.blueComponent - b.blueComponent)) > 0.03 { changed += 1 }
+                        // Over white: a near-transparent pixel whose colour
+                        // flips (white at 0.4 % alpha against clear, seen in
+                        // the add bar's band) is not ink.
+                        let (p, q) = (a.alphaComponent, b.alphaComponent)
+                        func over(_ c: CGFloat, _ alpha: CGFloat) -> CGFloat { c * alpha + 1 - alpha }
+                        if max(abs(over(a.redComponent, p) - over(b.redComponent, q)), abs(over(a.greenComponent, p) - over(b.greenComponent, q)),
+                               abs(over(a.blueComponent, p) - over(b.blueComponent, q))) > threshold { changed += 1 }
                     }
                 }
                 return total == 0 ? 1 : Double(changed) / Double(total)
             }
             XCTAssertGreaterThan(difference(top: TasksViewport.listTop(tabsTop: tabsTop) + 30, bottom: bottom - 30), 0.02,
                                  "\(state): rows actually moved between captures")
-            XCTAssertLessThan(difference(top: 0, bottom: TasksViewport.controlsBottom(tabsTop: tabsTop)), 0.004,
-                              "\(state): no row ink under the header, tabs or Find")
-            XCTAssertLessThan(difference(top: bottom, bottom: hosted.height), 0.004,
-                              "\(state): no row ink under the bottom controls")
+            // A15 (owner, 2026-10-04): rows pass under the header, the
+            // tabs and the bottom controls, faintly: some ink changes there,
+            // but never at a readable strength.
+            let labelsBottom = tabsTop + AtticLayout.pageTabsHeight
+            XCTAssertGreaterThan(difference(top: 0, bottom: labelsBottom), 0.0005,
+                                 "\(state): rows pass faintly under the header and tabs")
+            XCTAssertLessThan(difference(top: 0, bottom: labelsBottom, threshold: 0.35), 0.002,
+                              "\(state): never readable under the header and tabs")
+            XCTAssertLessThan(difference(top: bottom, bottom: hosted.height, threshold: 0.35), 0.002,
+                              "\(state): never readable under the bottom controls")
             XCTAssertTrue(ScrollEdgeTests.pockets(in: list).isEmpty, "\(state): no native edge")
-            XCTAssertEqual(frame(), resting, "\(state): controls change D1's mask, not the viewport")
+            XCTAssertEqual(frame(), resting, "\(state): controls change the mask, not the viewport")
         }
         try assertClear(bottom: hosted.height - idle, state: "idle")
 

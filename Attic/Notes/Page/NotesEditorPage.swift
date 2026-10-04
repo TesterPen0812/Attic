@@ -225,10 +225,12 @@ struct NotesEditorPage: View {
                                         noteStore.tagCounts
                                     })
                 .id(ObjectIdentifier(session.engine))
-                // D1, as on Tasks (CU P2-02): the text fades out before the
-                // header's controls and the bottom row, so it never reads
-                // under a label. Clean cut: no native soft edge here.
-                .atticControlsFade(restTop: topInset, bottomControls: bottomControls)
+                // A15, as on Tasks: the text runs under the header's
+                // controls and the bottom row, faintly visible as it fades;
+                // full at the title's and the last line's resting places.
+                // No native soft edge here.
+                .atticScrollUnderFade(topBand: layout.headerBottom, restTop: topInset,
+                                      bottomBand: bottomControls, restBottom: bottomInset)
                 .accessibilityIdentifier("note-editor")
                 .accessibilitySortPriority(3)
                 .transition(slide(from: Self.noteEdge))

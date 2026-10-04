@@ -326,12 +326,14 @@ final class TasksRound3Tests: XCTestCase {
         XCTAssertEqual(TasksViewport.bottomClearance(stackHeight: 36 + 8 + 28, bottomInset: 24), 112, "the strip adds its room")
         XCTAssertEqual(TasksViewport.bottomClearance(stackHeight: 0, bottomInset: 12), 64, "never less than the bar")
         let stops = TasksViewport.maskStops(height: 520, tabsTop: 80, listTop: 110, bottomStack: 60)
-        XCTAssertEqual(stops.first?.opacity, 0, "nothing shows through the header")
+        // A15 (owner, 2026-10-04): rows scroll under the header and fade.
+        XCTAssertEqual(stops.first?.opacity ?? 0, AtticScrollUnderFade.edgeOpacity, accuracy: 0.001, "faint at the panel's top")
         XCTAssertEqual(stops.first { $0.location >= 110.0 / 520 - 0.0001 }?.opacity, 1, "fully there from the first row's rest")
         XCTAssertLessThan(stops.last?.opacity ?? 1, 0.5, "receding under the add bar")
         XCTAssertEqual(stops.map(\.location), stops.map(\.location).sorted(), "stops in order")
         let underTabs = stops.filter { $0.location > 80.0 / 520 && $0.location <= 96.0 / 520 + 0.0001 }
-        XCTAssertTrue(underTabs.allSatisfy { $0.opacity == 0 }, "scrolled text is gone under the tabs (round 12 keeps the round-11 rule)")
+        XCTAssertTrue(underTabs.allSatisfy { $0.opacity > 0 && $0.opacity <= AtticScrollUnderFade.controlsEdge + 0.001 },
+                      "scrolled text shows faintly under the tabs (A15 replaces the round-11 rule)")
     }
 
     // MARK: - The quiet open ring (owner fix 1, review 12)

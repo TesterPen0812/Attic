@@ -29,10 +29,9 @@ struct TasksPage: View {
     var chrome = TasksPageChrome()
 
     @Environment(\.atticDesign) private var design
-    /// How the lists meet the floating controls: Clean cut, D1's fade
-    /// before the controls (owner, 2026-10-03, reversing D4b's system soft
-    /// edge, which cost GPU and drew the same picture); a preview can switch
-    /// to the system's soft edge to compare.
+    /// How the lists meet the floating controls: Clean cut with the
+    /// scroll-under fade (A15, owner 2026-10-04, replacing D1's fade before
+    /// the controls); the native soft edge stays off everywhere.
     @ObservedObject private var scrollEdges = AtticScrollEdgeLab.shared
     @StateObject private var focusTracker = AtticKeyboardFocusTracker()
     /// The subtask lines' and strip buttons' own focus, reached by the
@@ -178,11 +177,12 @@ struct TasksPage: View {
 
     /// The page, its overlays, its keys and its monitors.
     private var frame: some View {
-        // D1: each list ends before the controls. The controls retain their
-        // page-level layer and hit points; the lifted card stays above both.
+        // A15: each list runs under the controls and fades there. The
+        // controls retain their page-level layer and hit points; the lifted
+        // card stays above both.
         ZStack(alignment: .top) {
-            // Clean cut (D1's fade before the controls, the default), or
-            // the preview-only native soft edges inside the visible viewport.
+            // Clean cut with the scroll-under fade (A15). The native soft
+            // edge stays off.
             pager
             // The controls float over the lists in both, in the page's own
             // layer.
@@ -1425,8 +1425,9 @@ struct TasksPage: View {
 
     /// Clean cut (the default since 2026-10-03): the viewport's fade, by
     /// position in the viewport, not per row (owner fix 8, review 9), so an
-    /// open quick look is cut line by line as it passes under the tabs and
-    /// header, or under the add bar. The system soft edge uses no mask.
+    /// open quick look fades line by line as it passes under the tabs and
+    /// header, or under the add bar (A15: the scroll-under fade). The system
+    /// soft edge uses no mask.
     private var viewportMask: some View {
         TasksViewportMask(stack: bottomStack, tabsTop: tabsTop, listTop: listTop, bottomInset: bottomInset)
     }
@@ -4165,60 +4166,16 @@ enum TasksViewport {
         return .bottom(min(max((visible - room - height) / (visible - height), 0), 1))
     }
 
-    /// A row's opacity at `depth` (0 open, 1 fully under) into an edge zone:
-    /// the edge veil's eased ramp scaled so its 65 % maximum is all of it.
-    static func edgeOpacity(atDepth depth: Double) -> Double {
-        1 - AtticEdgeBlur.veil(at: depth) / AtticEdgeBlur.maximumVeil
-    }
-
-    /// The length of the softened edge where a row meets a fixed band.
-    static let softEdge: CGFloat = 6
-
-    /// The fade by position in the viewport: nothing over the header or
-    /// under the tabs (so they stay readable over scrolled text), fully
-    /// there from the first row's resting place down to the
-    /// bottom zone, and receding under the bottom stack.
+    /// The fade by position in the viewport (A15, owner 2026-10-04: the
+    /// scroll-under fade replaces D1's "nothing under the controls"): rows
+    /// run under the header, the tabs line and the bottom stack, faintly
+    /// visible there (`AtticScrollUnderFade`), and rise along an eased ramp
+    /// to full at the first row's resting place under the tabs and at the
+    /// last row's, `contentToAddBar` above the bottom stack. Static
+    /// geometry: it changes only with the bottom stack's (delayed) height.
     static func maskStops(height: CGFloat, tabsTop: CGFloat, listTop: CGFloat, bottomStack: CGFloat) -> [(location: CGFloat, opacity: Double)] {
-        guard height > 0 else { return [(0, 1), (1, 1)] }
-        let tabsBottom = tabsTop + AtticLayout.pageTabsHeight
-        // Round 13 (the hands-on review: faint title fragments hung just
-        // under the tabs and just above the add bar): a row scrolled past
-        // an edge is cut cleanly at the fixed band, with only a short
-        // softening inside the list's own viewport (`softEdge`, the edge
-        // veil's eased ramp). The round-12 ramps were 10 and 28 pt long and
-        // left half-faded rows readable in them.
-        let barTop = max(height - bottomStack, listTop)
-        let fadeStart = max(barTop - softEdge, listTop)
-        // Round 11 (the owner: rows scrolled under "Now Later Done" stayed
-        // readable and clashed with the labels): nothing shows under the
-        // tabs at all. Round 12: the rows come back along the edge veil's
-        // own eased ramp (`AtticEdgeBlur.veilStops`, taken to full so it
-        // ends in nothing rather than at its 65 % of a surface veil), now
-        // only in the last `softEdge` before their resting place.
-        let gap = max(0, listTop - tabsBottom)
-        let clear = max(tabsBottom + gap * 0.25, listTop - softEdge)
-        var points: [(CGFloat, Double)] = [(0, 0), (clear, 0)]
-        // Rising ramp, depth 1 at `clear` and 0 at the list's top.
-        for stop in AtticEdgeBlur.veilStops.reversed() where stop.location < 1 {
-            points.append((listTop - (listTop - clear) * CGFloat(stop.location), edgeOpacity(atDepth: stop.location)))
-        }
-        points.append((listTop, 1))
-        points.append((fadeStart, 1))
-        // Falling ramp, depth 0 at `fadeStart` and 1 at the bar's top.
-        for stop in AtticEdgeBlur.veilStops where stop.location > 0 && stop.location < 1 {
-            points.append((fadeStart + (barTop - fadeStart) * CGFloat(stop.location), edgeOpacity(atDepth: stop.location)))
-        }
-        points.append((barTop, 0))
-        points.append((height, 0))
-        var result: [(location: CGFloat, opacity: Double)] = []
-        var last: CGFloat = -1
-        for (y, opacity) in points {
-            let location = min(max(y / height, 0), 1)
-            guard location > last || result.isEmpty else { continue }
-            result.append((location, opacity))
-            last = location
-        }
-        return result
+        AtticScrollUnderFade.stops(height: height, topBand: tabsTop + AtticLayout.pageTabsHeight, restTop: listTop,
+                                   bottomBand: bottomStack, restBottom: bottomStack + AtticLayout.contentToAddBar)
     }
 }
 
