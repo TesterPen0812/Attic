@@ -255,10 +255,16 @@ extension TaskPerformanceGateTests {
         let baseline = PFFootprintSampler.cleanBaseline()
         let sampler = PFFootprintSampler(baseline: baseline)
         let bytes = 32 * 1_048_576
-        let allocation = try XCTUnwrap(malloc(bytes))
+        // malloc can reuse dirty pages retained by its large-allocation cache:
+        // even pressure relief need not return them, so F0 already counts them.
+        // A fresh VM mapping makes the positive control add new dirty pages.
+        let allocation = try XCTUnwrap(mmap(nil, bytes, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANON, -1, 0))
+        XCTAssertNotEqual(allocation, MAP_FAILED)
+        guard allocation != MAP_FAILED else { return }
         memset(allocation, 0xA5, bytes)
         let held = sampler.finish()
-        free(allocation)
+        XCTAssertEqual(allocation.load(as: UInt8.self), 0xA5)
+        XCTAssertEqual(munmap(allocation, bytes), 0)
         XCTAssertGreaterThanOrEqual(held.growth, 30)
         let released = PFFootprintSampler(baseline: baseline).finish()
         XCTAssertLessThan(released.growth, 30, "the next sample must not keep the freed 32 MiB allocation")
@@ -268,12 +274,15 @@ extension TaskPerformanceGateTests {
         let baseline = PFFootprintSampler.cleanBaseline()
         let first = PFFootprintSampler(baseline: baseline)
         let bytes = 32 * 1_048_576
-        let allocation = try XCTUnwrap(malloc(bytes))
-        defer { free(allocation) }
+        let allocation = try XCTUnwrap(mmap(nil, bytes, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANON, -1, 0))
+        XCTAssertNotEqual(allocation, MAP_FAILED)
+        guard allocation != MAP_FAILED else { return }
+        defer { XCTAssertEqual(munmap(allocation, bytes), 0) }
         memset(allocation, 0xA5, bytes)
         XCTAssertGreaterThanOrEqual(first.finish().growth, 30)
         let second = PFFootprintSampler(baseline: baseline).finish()
         XCTAssertGreaterThanOrEqual(second.growth, 30, "unchanged F0 must expose memory retained from the first window")
+        XCTAssertEqual(allocation.load(as: UInt8.self), 0xA5)
     }
 }
 
