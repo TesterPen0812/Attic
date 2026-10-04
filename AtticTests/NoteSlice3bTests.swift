@@ -90,6 +90,16 @@ final class NoteSlice3bTests: XCTestCase {
         }
         XCTFail("Timed out waiting for import state")
     }
+    /// A pending `/` Image or File… request in the active note, as the
+    /// page's open panel would carry it.
+    private func slashTicket(_ controller: NotesPageController) throws -> NoteSlashFileTicket {
+        let session = try XCTUnwrap(controller.active)
+        let engine = session.engine
+        let target = NoteSlashSession(noteID: engine.noteID,
+                                      range: NSRange(location: engine.textStorage.length, length: 0), query: "image")
+        return NoteSlashFileTicket(sessionID: session.id, request: engine.requestSlashFile(for: target))
+    }
+
     private func staged(_ name: String = "plan.pdf") -> StagedNoteAttachment {
         let data = Data("file bytes".utf8)
         return StagedNoteAttachment(id: UUID(), filename: name, contentTypeIdentifier: "com.adobe.pdf",
@@ -374,8 +384,8 @@ final class NoteSlice3bTests: XCTestCase {
             return XCTFail("create")
         }
         let item = staged()
-        let directory = FileManager.default.temporaryDirectory.appendingPathComponent("Attic3bJournal-\(UUID().uuidString)")
-        defer { try? FileManager.default.removeItem(at: directory) }
+        let directory = ownedTemporaryDirectory(prefix: "Attic3bJournal")
+
         let journal = NoteDraftJournal(directory: directory)
         var entry = NoteDraftJournalEntry(noteID: noteID, isPersisted: true, baseRevisionID: revision,
             content: try NoteContentCodec.encode(original), selectionLocation: 0, selectionLength: 0,
@@ -396,8 +406,8 @@ final class NoteSlice3bTests: XCTestCase {
     }
 
     func testCancelledAndInterruptedStagingFilesAreCollected() async throws {
-        let directory = FileManager.default.temporaryDirectory.appendingPathComponent("Attic3bCleanup-\(UUID().uuidString)")
-        defer { try? FileManager.default.removeItem(at: directory) }
+        let directory = ownedTemporaryDirectory(prefix: "Attic3bCleanup")
+
         let journal = NoteDraftJournal(directory: directory)
         let noteID = UUID()
         let item = staged()
@@ -424,8 +434,8 @@ final class NoteSlice3bTests: XCTestCase {
         let original = NoteDocument(blocks: [.text("Plan"), .text("body")])
         let noteID = UUID()
         guard case .success = store.createDocumentNote(id: noteID, document: original) else { return XCTFail("create") }
-        let directory = FileManager.default.temporaryDirectory.appendingPathComponent("Attic3bHide-\(UUID().uuidString)")
-        defer { try? FileManager.default.removeItem(at: directory) }
+        let directory = ownedTemporaryDirectory(prefix: "Attic3bHide")
+
         let image = staged("photo.png")
         let controller = NotesPageController(store: store, journal: NoteDraftJournal(directory: directory),
             saveDelay: .seconds(60), pauseVersionDelay: .seconds(600), imageLoader: { _ in
@@ -451,8 +461,8 @@ final class NoteSlice3bTests: XCTestCase {
         guard case .success = store.createDocumentNote(id: id, document: NoteDocument(blocks: [.text("Plan"), .text("body")])) else {
             return XCTFail("fixture")
         }
-        let directory = FileManager.default.temporaryDirectory.appendingPathComponent("AtticR1-\(UUID().uuidString)")
-        defer { try? FileManager.default.removeItem(at: directory) }
+        let directory = ownedTemporaryDirectory(prefix: "AtticR1")
+
         let journal = NoteDraftJournal(directory: directory)
         let loader = TwoSourceLoader(first: try stagedImage(), second: try stagedImage())
         let controller = NotesPageController(store: store, journal: journal, saveDelay: .seconds(60),
@@ -489,8 +499,8 @@ final class NoteSlice3bTests: XCTestCase {
 
     func testR1FailedCancellationKeepsPendingCheckpointAndBatch() async throws {
         let store = try makeTestNoteStore(attachmentFileStore: makeTestAttachmentFileStore())
-        let directory = FileManager.default.temporaryDirectory.appendingPathComponent("AtticR1Cancel-\(UUID().uuidString)")
-        defer { try? FileManager.default.removeItem(at: directory) }
+        let directory = ownedTemporaryDirectory(prefix: "AtticR1Cancel")
+
         let journal = OnDemandFailingJournal(NoteDraftJournal(directory: directory))
         let loader = TwoSourceLoader(first: try stagedImage(), second: try stagedImage())
         let controller = NotesPageController(store: store, journal: journal, saveDelay: .seconds(60),
@@ -514,8 +524,8 @@ final class NoteSlice3bTests: XCTestCase {
         guard case .success = store.createDocumentNote(id: id, document: NoteDocument(blocks: [.text("Plan")])) else {
             return XCTFail()
         }
-        let directory = FileManager.default.temporaryDirectory.appendingPathComponent("AtticR1First-\(UUID().uuidString)")
-        defer { try? FileManager.default.removeItem(at: directory) }
+        let directory = ownedTemporaryDirectory(prefix: "AtticR1First")
+
         let journal = NoteDraftJournal(directory: directory)
         let loader = FirstSuspendedLoader(try stagedImage())
         let controller = NotesPageController(store: store, journal: journal, imageLoader: { await loader.load($0) })
@@ -540,8 +550,8 @@ final class NoteSlice3bTests: XCTestCase {
         guard case .success = store.createDocumentNote(id: id, document: NoteDocument(blocks: [.text("Stored")])) else {
             return XCTFail("fixture")
         }
-        let directory = FileManager.default.temporaryDirectory.appendingPathComponent("AtticF1-\(UUID().uuidString)")
-        defer { try? FileManager.default.removeItem(at: directory) }
+        let directory = ownedTemporaryDirectory(prefix: "AtticF1")
+
         let stagedDirectory = directory.appendingPathComponent("staged", isDirectory: true)
         try FileManager.default.createDirectory(at: stagedDirectory, withIntermediateDirectories: true)
         let checkpoint = directory.appendingPathComponent("\(id.uuidString).json")
@@ -576,8 +586,8 @@ final class NoteSlice3bTests: XCTestCase {
         let encoder = JSONEncoder()
         encoder.dateEncodingStrategy = .iso8601
         // A claim the caller holds for some other checkpoint.
-        let scratch = FileManager.default.temporaryDirectory.appendingPathComponent("AtticForeignClaim-\(UUID().uuidString)")
-        defer { try? FileManager.default.removeItem(at: scratch) }
+        let scratch = ownedTemporaryDirectory(prefix: "AtticForeignClaim")
+
         let foreignClaim = try await NoteDraftJournal(directory: scratch).writeDurably(NoteDraftJournalEntry(noteID: UUID(),
             isPersisted: false, baseRevisionID: nil, content: try NoteContentCodec.encode(.blank),
             selectionLocation: 0, selectionLength: 0, staged: [], savedAt: Date()), staged: [])
@@ -586,8 +596,8 @@ final class NoteSlice3bTests: XCTestCase {
             let id = UUID(), item = staged()
             let stored = NoteDocument(blocks: [.text("Stored")])
             guard case .success = store.createDocumentNote(id: id, document: stored) else { return XCTFail("fixture") }
-            let directory = FileManager.default.temporaryDirectory.appendingPathComponent("AtticOwnership-\(UUID().uuidString)")
-            defer { try? FileManager.default.removeItem(at: directory) }
+            let directory = ownedTemporaryDirectory(prefix: "AtticOwnership")
+
             let stagedDirectory = directory.appendingPathComponent("staged", isDirectory: true)
             try FileManager.default.createDirectory(at: stagedDirectory, withIntermediateDirectories: true)
             let checkpoint = directory.appendingPathComponent("\(id.uuidString).json")
@@ -675,8 +685,8 @@ final class NoteSlice3bTests: XCTestCase {
         guard case .success = store.createDocumentNote(id: id, document: NoteDocument(blocks: [.text("Stored")])) else {
             return XCTFail("fixture")
         }
-        let directory = FileManager.default.temporaryDirectory.appendingPathComponent("AtticImportOwnership-\(UUID().uuidString)")
-        defer { try? FileManager.default.removeItem(at: directory) }
+        let directory = ownedTemporaryDirectory(prefix: "AtticImportOwnership")
+
         try FileManager.default.createDirectory(at: directory.appendingPathComponent("staged"),
             withIntermediateDirectories: true)
         let checkpoint = directory.appendingPathComponent("\(id.uuidString).json")
@@ -713,8 +723,8 @@ final class NoteSlice3bTests: XCTestCase {
         guard case .success = store.createDocumentNote(id: id, document: NoteDocument(blocks: [.text("Stored")])) else {
             return XCTFail("fixture")
         }
-        let directory = FileManager.default.temporaryDirectory.appendingPathComponent("AtticUnreadableContent-\(UUID().uuidString)")
-        defer { try? FileManager.default.removeItem(at: directory) }
+        let directory = ownedTemporaryDirectory(prefix: "AtticUnreadableContent")
+
         try FileManager.default.createDirectory(at: directory.appendingPathComponent("staged"),
             withIntermediateDirectories: true)
         let checkpoint = directory.appendingPathComponent("\(id.uuidString).json")
@@ -746,8 +756,8 @@ final class NoteSlice3bTests: XCTestCase {
 
     func testR2RecoveryCopyIncludesPendingAcceptedTextBytesAndUnfinishedSource() async throws {
         let store = try makeTestNoteStore(attachmentFileStore: makeTestAttachmentFileStore())
-        let directory = FileManager.default.temporaryDirectory.appendingPathComponent("AtticR2-\(UUID().uuidString)")
-        defer { try? FileManager.default.removeItem(at: directory) }
+        let directory = ownedTemporaryDirectory(prefix: "AtticR2")
+
         let journal = OnDemandFailingJournal(NoteDraftJournal(directory: directory))
         let first = try stagedImage()
         let loader = TwoSourceLoader(first: first, second: try stagedImage())
@@ -824,8 +834,8 @@ final class NoteSlice3bTests: XCTestCase {
         guard case .success = store.createDocumentNote(id: id, document: original, staged: [item]) else {
             return XCTFail("fixture")
         }
-        let directory = FileManager.default.temporaryDirectory.appendingPathComponent("AtticR4-\(UUID().uuidString)")
-        defer { try? FileManager.default.removeItem(at: directory) }
+        let directory = ownedTemporaryDirectory(prefix: "AtticR4")
+
         let controller = NotesPageController(store: store, journal: NoteDraftJournal(directory: directory))
         await XCTAssertTrueAsync(await controller.openDurably(noteID: id))
         let session = try XCTUnwrap(controller.active)
@@ -912,7 +922,7 @@ final class NoteSlice3bTests: XCTestCase {
         let afterPaste = await reads.count
         XCTAssertEqual(afterPaste, 0)
         XCTAssertEqual(controller.active?.engine.document().blocks.filter { $0.importFailure != nil }.count, 2)
-        controller.importSlashImage(source)
+        controller.importSlashImage(source, for: try slashTicket(controller))
         let afterSlash = await reads.count
         XCTAssertEqual(afterSlash, 0)
         let retryID = try XCTUnwrap(doc.blocks.last?.id)
@@ -944,8 +954,8 @@ final class NoteSlice3bTests: XCTestCase {
         let candidate = StagedNoteAttachment(id: UUID(), filename: "next.pdf", contentTypeIdentifier: "com.adobe.pdf",
             byteCount: 3 * 1024 * 1024, digest: "", data: Data())
         XCTAssertNotNil(controller.importAdmissionFailure(candidate, in: try XCTUnwrap(controller.active)))
-        let source = FileManager.default.temporaryDirectory.appendingPathComponent("AtticR6-\(UUID().uuidString).png")
-        defer { try? FileManager.default.removeItem(at: source) }
+        let source = try ownedTemporaryFile(named: "source.png", prefix: "AtticR6")
+
         FileManager.default.createFile(atPath: source.path, contents: Data())
         let handle = try FileHandle(forWritingTo: source)
         try handle.truncate(atOffset: 3 * 1024 * 1024)
@@ -953,7 +963,7 @@ final class NoteSlice3bTests: XCTestCase {
         XCTAssertNotNil(controller.sourceAdmissionFailure(source, in: try XCTUnwrap(controller.active)).1)
         controller.importFiles([source])
         try await waitFor { controller.active?.isImporting == false }
-        controller.importSlashImage(source)
+        controller.importSlashImage(source, for: try slashTicket(controller))
         let retryID = try XCTUnwrap(doc.blocks.last?.id)
         let retried = await controller.retryFailedFile(retryID, with: source)
         XCTAssertFalse(retried)
@@ -1428,8 +1438,8 @@ final class NoteSlice3bTests: XCTestCase {
         XCTAssertLessThanOrEqual(attachment.displaySize(columnWidth: NotePrint.columnWidth).height,
             NotePrint.pageHeight * 0.82 + 1)
         XCTAssertEqual(doc.blocks[2].widthFraction, 1, "print sizing never rewrites the note")
-        let pdfURL = FileManager.default.temporaryDirectory.appendingPathComponent("AtticR10-\(UUID().uuidString).pdf")
-        defer { try? FileManager.default.removeItem(at: pdfURL) }
+        let pdfURL = try ownedTemporaryFile(named: "source.pdf", prefix: "AtticR10")
+
         let operation = NotePrint.operation(for: view)
         operation.showsPrintPanel = false
         operation.showsProgressPanel = false
@@ -1470,8 +1480,8 @@ final class NoteSlice3bTests: XCTestCase {
         let gate = PersistenceGate()
         let store = try makeTestNoteStore(persist: { [gate] in try gate.save($0) },
             attachmentFileStore: makeTestAttachmentFileStore())
-        let directory = FileManager.default.temporaryDirectory.appendingPathComponent("AtticProbeA-\(UUID().uuidString)")
-        defer { try? FileManager.default.removeItem(at: directory) }
+        let directory = ownedTemporaryDirectory(prefix: "AtticProbeA")
+
         let controller = NotesPageController(store: store, journal: NoteDraftJournal(directory: directory),
             saveDelay: .seconds(60), pauseVersionDelay: .seconds(600))
         await controller.startAndWait()
@@ -1496,8 +1506,8 @@ final class NoteSlice3bTests: XCTestCase {
         guard case .success = store.createDocumentNote(id: id, document: NoteDocument(blocks: [.text("Plan")])) else {
             return XCTFail("fixture")
         }
-        let directory = FileManager.default.temporaryDirectory.appendingPathComponent("AtticProbeB-\(UUID().uuidString)")
-        defer { try? FileManager.default.removeItem(at: directory) }
+        let directory = ownedTemporaryDirectory(prefix: "AtticProbeB")
+
         let image = try stagedImage()
         let controller = NotesPageController(store: store, journal: NoteDraftJournal(directory: directory),
             imageLoader: { _ in (image, CGSize(width: 8, height: 8)) })
@@ -1521,8 +1531,8 @@ final class NoteSlice3bTests: XCTestCase {
         guard case .success = store.createDocumentNote(id: id, document: NoteDocument(blocks: [.text("Stored")])) else {
             return XCTFail("fixture")
         }
-        let directory = FileManager.default.temporaryDirectory.appendingPathComponent("AtticProbeC-\(UUID().uuidString)")
-        defer { try? FileManager.default.removeItem(at: directory) }
+        let directory = ownedTemporaryDirectory(prefix: "AtticProbeC")
+
         let orphan = NoteDocument(blocks: [.text("Unadopted draft"), .image(attachmentID: UUID())])
         try await NoteDraftJournal(directory: directory).writeDurably(NoteDraftJournalEntry(noteID: id, isPersisted: true,
             baseRevisionID: nil, content: try NoteContentCodec.encode(orphan), selectionLocation: 0,
@@ -1663,8 +1673,8 @@ extension NoteSlice3bTests {
         enum Damage: CaseIterable { case absent, nilPayload, corrupt, different }
         for deleted in [false, true] {
             for damage in Damage.allCases {
-                let root = FileManager.default.temporaryDirectory.appendingPathComponent("A1-\(UUID())")
-                defer { try? FileManager.default.removeItem(at: root) }
+                let root = ownedTemporaryDirectory(prefix: "A1")
+
                 let store = try makeTestNoteStore(attachmentFileStore: makeTestAttachmentFileStore())
                 let id = UUID(), item = staged()
                 let document = NoteDocument(blocks: [.text("Handoff"), .file(attachmentID: item.id,
@@ -1700,8 +1710,8 @@ extension NoteSlice3bTests {
     }
 
     func testA1ByteOwnershipInvariantEnumeratesJournalMutations() async throws {
-        let root = FileManager.default.temporaryDirectory.appendingPathComponent("A1Invariant-\(UUID())")
-        defer { try? FileManager.default.removeItem(at: root) }
+        let root = ownedTemporaryDirectory(prefix: "A1Invariant")
+
         let id = UUID(), item = staged(), document = NoteDocument(blocks: [.text("Owner")])
         let journal = NoteDraftJournal(directory: root)
         let entry = try recoveryEntry(id, document: document, item: item, revision: nil)
@@ -1840,8 +1850,8 @@ extension NoteSlice3bTests {
         XCTAssertEqual(block.extras["contentDigest"]?.stringValue, item.digest)
         for row in try store.attachmentRows(forNoteID: session.noteID) { store.modelContext.delete(row) }
         try store.modelContext.save(); store.refresh()
-        let source = FileManager.default.temporaryDirectory.appendingPathComponent("A4-\(UUID()).pdf")
-        defer { try? FileManager.default.removeItem(at: source) }
+        let source = try ownedTemporaryFile(named: "source.pdf", prefix: "A4")
+
         try Data("wrong original".utf8).write(to: source)
         let wrong = await session.engine.perform(.locateAt(source), objectID: block.id!)
         XCTAssertFalse(wrong); XCTAssertTrue(try store.attachmentRows(forNoteID: session.noteID).isEmpty)
@@ -1875,8 +1885,8 @@ extension NoteSlice3bTests {
         for row in try store.attachmentRows(forNoteID: id) { store.modelContext.delete(row) }
         try store.modelContext.save(); store.refresh()
         let controller = NotesPageController(store: store, journal: nil); XCTAssertTrue(controller.open(noteID: id))
-        let session = try XCTUnwrap(controller.active), source = FileManager.default.temporaryDirectory.appendingPathComponent("A4Legacy-\(UUID()).pdf")
-        defer { try? FileManager.default.removeItem(at: source) }
+        let session = try XCTUnwrap(controller.active), source = try ownedTemporaryFile(named: "source.pdf", prefix: "A4Legacy")
+
         try item.data.write(to: source)
         let locate = await session.engine.perform(.locateAt(source), objectID: document.blocks[1].id!)
         XCTAssertFalse(locate)
@@ -1887,8 +1897,8 @@ extension NoteSlice3bTests {
     }
 
     func testA5ConfirmedQuarantinePreservesUnknownBytesAcrossFailureRestartAndNewCheckpoint() async throws {
-        let root = FileManager.default.temporaryDirectory.appendingPathComponent("A5-\(UUID())"), id = UUID()
-        defer { try? FileManager.default.removeItem(at: root) }
+        let root = ownedTemporaryDirectory(prefix: "A5"), id = UUID()
+
         try FileManager.default.createDirectory(at: root.appendingPathComponent("staged"), withIntermediateDirectories: true)
         let raw = Data("{damaged".utf8), unknown = Data("unknown recovery original".utf8)
         try raw.write(to: root.appendingPathComponent("\(id.uuidString).json"))
@@ -1942,8 +1952,8 @@ extension NoteSlice3bTests {
         XCTAssertTrue(view.textStorage!.attributes(at: 9, effectiveRange: nil).keys.contains(.noteMark(.bold)))
         let objects = (0..<view.textStorage!.length).compactMap { view.textStorage!.attribute(.attachment, at: $0, effectiveRange: nil) as? NoteObjectAttachment }
         XCTAssertTrue(objects.contains { $0 is NoteImageAttachment }); XCTAssertTrue(objects.contains { $0 is NoteChecklistAttachment })
-        let path = FileManager.default.temporaryDirectory.appendingPathComponent("A6-\(UUID()).pdf")
-        defer { try? FileManager.default.removeItem(at: path) }
+        let path = try ownedTemporaryFile(named: "source.pdf", prefix: "A6")
+
         let op = NotePrint.operation(for: view); op.showsPrintPanel = false; op.showsProgressPanel = false
         op.printInfo.jobDisposition = .save; op.printInfo.dictionary()[NSPrintInfo.AttributeKey.jobSavingURL] = path
         XCTAssertTrue(op.run())
@@ -1963,8 +1973,8 @@ extension NoteSlice3bTests {
     }
 
     func testA7ProductionControllerLargeImportRealJournalHashesOffMainWhileTyping() async throws {
-        let root = FileManager.default.temporaryDirectory.appendingPathComponent("A7-\(UUID())")
-        defer { try? FileManager.default.removeItem(at: root); NotePayloadDigest.observe(nil) }
+        let root = ownedTemporaryDirectory(prefix: "A7")
+        defer { NotePayloadDigest.observe(nil) }
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
         let sources = (0..<3).map { root.appendingPathComponent("large\($0).pdf") }
         for source in sources { try Data(repeating: 0x42, count: 12 * 1024 * 1024).write(to: source) }
@@ -2056,8 +2066,8 @@ extension NoteSlice3bTests {
 @MainActor
 extension NoteSlice3bTests {
     func testDamagedRecoveryDiscoveryIncludesUnknownFilenamesAndRejectsStaleConfirmation() async throws {
-        let root = FileManager.default.temporaryDirectory.appendingPathComponent("UnknownRecovery-\(UUID())")
-        defer { try? FileManager.default.removeItem(at: root) }
+        let root = ownedTemporaryDirectory(prefix: "UnknownRecovery")
+
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
         let file = root.appendingPathComponent("corrupt.json")
         try Data("broken".utf8).write(to: file)
@@ -2096,6 +2106,7 @@ extension NoteSlice3bTests {
                 for character in "/ima" { view.insertText(String(character), replacementRange: NSRange(location: NSNotFound, length: 0)) }
                 XCTAssertTrue(engine.acceptSlashItem(.imageOrFile))
             }
+            let slashRequest = engine.pendingSlashFile
             let before = engine.document(), undo = engine.history.canUndo
             let at = NSRange(location: engine.textStorage.length, length: 0)
             let imported = NoteImportedObject(staged: item, pixelSize: nil)
@@ -2106,7 +2117,7 @@ extension NoteSlice3bTests {
                 accepted = engine.performEdit(at, with: NoteTextCodec.attachmentString(object, attributes: [:]), name: "Direct")
             case .image: accepted = engine.insertImage(item, pixelSize: CGSize(width: 8, height: 8))
             case .batch: engine.beginImageImport(); accepted = engine.insertImportedObjects([imported])
-            case .slash: accepted = engine.commitSlashObject(imported)
+            case .slash: accepted = engine.commitSlashObject(imported, for: try XCTUnwrap(slashRequest))
             case .retry: accepted = engine.replaceFailedFile(try XCTUnwrap(engine.objects().first?.0.objectID), with: imported)
             case .privatePaste:
                 let block = NoteBlock.file(attachmentID: item.id, filename: item.filename, contentTypeIdentifier: item.contentTypeIdentifier, byteCount: item.byteCount)
@@ -2175,8 +2186,8 @@ private final class CancellationBarrierJournal: NoteDraftJournaling {
 @MainActor
 extension NoteSlice3bTests {
     func testCancelledLoaderCannotRecreatePendingRecoveryWhileCancellationIsCommitting() async throws {
-        let root = FileManager.default.temporaryDirectory.appendingPathComponent("CancelFence-\(UUID())")
-        defer { try? FileManager.default.removeItem(at: root) }
+        let root = ownedTemporaryDirectory(prefix: "CancelFence")
+
         let journal = CancellationBarrierJournal(directory: root)
         let loader = FirstSuspendedLoader(try stagedImage())
         let store = try makeTestNoteStore(attachmentFileStore: makeTestAttachmentFileStore())
@@ -2214,8 +2225,8 @@ extension NoteSlice3bTests {
 @MainActor
 extension NoteSlice3bTests {
     func testRecoveryInventoryIsReadyForRecentlyDeletedBeforeNotesPageIsOpened() async throws {
-        let root = FileManager.default.temporaryDirectory.appendingPathComponent("RetentionStartup-\(UUID())")
-        defer { try? FileManager.default.removeItem(at: root) }
+        let root = ownedTemporaryDirectory(prefix: "RetentionStartup")
+
         let store = try makeTestNoteStore(attachmentFileStore: makeTestAttachmentFileStore())
         let note = try XCTUnwrap(store.create(title: "Meeting notes", body: "Agenda"))
         let id = note.id
@@ -2280,8 +2291,8 @@ private final class PendingWriteJournal: NoteDraftJournaling {
 extension NoteSlice3bTests {
     func testReviewerRemovedStagedImageStrandsCheckpoint() async throws {
         for removalByUndo in [false, true] {
-            let root = FileManager.default.temporaryDirectory.appendingPathComponent("M1Import-\(UUID())")
-            defer { try? FileManager.default.removeItem(at: root) }
+            let root = ownedTemporaryDirectory(prefix: "M1Import")
+
             let store = try makeTestNoteStore(attachmentFileStore: makeTestAttachmentFileStore())
             let id = UUID(), y = try stagedImage()
             guard case .success = store.createDocumentNote(id: id, document: NoteDocument(blocks: [.text("Saved")])) else { return XCTFail() }
@@ -2314,8 +2325,8 @@ extension NoteSlice3bTests {
     }
 
     func testRemovedStagedImageAfterStoreFailureHasNoStuckState() async throws {
-        let root = FileManager.default.temporaryDirectory.appendingPathComponent("M1Failure-\(UUID())")
-        defer { try? FileManager.default.removeItem(at: root) }
+        let root = ownedTemporaryDirectory(prefix: "M1Failure")
+
         let gate = PersistenceGate(), id = UUID(), y = try stagedImage()
         let store = try makeTestNoteStore(persist: { try gate.save($0) }, attachmentFileStore: makeTestAttachmentFileStore())
         guard case .success = store.createDocumentNote(id: id, document: NoteDocument(blocks: [.text("Saved")])) else { return XCTFail() }
@@ -2338,8 +2349,8 @@ extension NoteSlice3bTests {
     }
 
     func testReviewerDeletingAnUnopenedNoteLeavesNoFailureNotice() async throws {
-        let root = FileManager.default.temporaryDirectory.appendingPathComponent("M2Delete-\(UUID())")
-        defer { try? FileManager.default.removeItem(at: root) }
+        let root = ownedTemporaryDirectory(prefix: "M2Delete")
+
         let store = try makeTestNoteStore(attachmentFileStore: makeTestAttachmentFileStore())
         let controller = NotesPageController(store: store, journal: NoteDraftJournal(directory: root))
         await controller.startAndWait()
@@ -2354,8 +2365,8 @@ extension NoteSlice3bTests {
     }
 
     func testHideAndSwitchAcceptQueuedCheckpointAndQuitWaitsForWrite() async throws {
-        let root = FileManager.default.temporaryDirectory.appendingPathComponent("M2Leave-\(UUID())")
-        defer { try? FileManager.default.removeItem(at: root) }
+        let root = ownedTemporaryDirectory(prefix: "M2Leave")
+
         let journal = PendingWriteJournal(directory: root), loader = FirstSuspendedLoader(try stagedImage())
         let store = try makeTestNoteStore(attachmentFileStore: makeTestAttachmentFileStore())
         let controller = NotesPageController(store: store, journal: journal, saveDelay: .seconds(60), imageLoader: { await loader.load($0) })
@@ -2382,8 +2393,8 @@ extension NoteSlice3bTests {
     func testEveryUserOperationRespondsUnderPendingIOAndRetryHasNoStuckState() async throws {
         enum Operation: CaseIterable { case open, switchPage, hide, quit, delete, undo, redo, keepAsNew, save }
         for operation in Operation.allCases {
-            let root = FileManager.default.temporaryDirectory.appendingPathComponent("Bounded-\(UUID())")
-            defer { try? FileManager.default.removeItem(at: root) }
+            let root = ownedTemporaryDirectory(prefix: "Bounded")
+
             let journal = PendingWriteJournal(directory: root), gate = PersistenceGate()
             let store = try makeTestNoteStore(persist: { try gate.save($0) }, attachmentFileStore: makeTestAttachmentFileStore())
             let id = UUID(), other = UUID()
@@ -2436,8 +2447,8 @@ extension NoteSlice3bTests {
     }
 
     func testDamagedRecoveryDetailsTolerateUnreadableEntriesAndPreserveOtherWarnings() async throws {
-        let root = FileManager.default.temporaryDirectory.appendingPathComponent("Unreadable-\(UUID())")
-        defer { try? FileManager.default.removeItem(at: root) }
+        let root = ownedTemporaryDirectory(prefix: "Unreadable")
+
         let id = UUID()
         // A directory deterministically fails Data(contentsOf:) even when the
         // test runner has elevated permissions. It represents unreadable I/O.
@@ -2515,10 +2526,10 @@ extension NoteSlice3bTests {
         for row in try store.attachmentRows(forNoteID: session.noteID) { store.modelContext.delete(row) }
         try store.modelContext.save(); store.refresh()
         await store.waitForAttachmentReconciliation()
-        let path = FileManager.default.temporaryDirectory.appendingPathComponent("StalePlacement-\(UUID()).pdf")
+        let path = try ownedTemporaryFile(named: "source.pdf", prefix: "StalePlacement")
         try item.data.write(to: path)
         let barrier = LocateReadBarrier()
-        defer { barrier.resume(); NotePayloadDigest.observe(nil); try? FileManager.default.removeItem(at: path) }
+        defer { barrier.resume(); NotePayloadDigest.observe(nil) }
         NotePayloadDigest.observe { barrier.observe(main: $0, bytes: $1) }
         let locate = Task { @MainActor in await session.engine.perform(.locateAt(path), objectID: block.id!) }
         try await waitFor { barrier.started }
@@ -2531,8 +2542,8 @@ extension NoteSlice3bTests {
     }
 
     func testKeepAsNewSurfacesFailedRecoveryDiscard() async throws {
-        let root = FileManager.default.temporaryDirectory.appendingPathComponent("KeepNewDiscard-\(UUID())")
-        defer { try? FileManager.default.removeItem(at: root) }
+        let root = ownedTemporaryDirectory(prefix: "KeepNewDiscard")
+
         let store = try makeTestNoteStore(attachmentFileStore: makeTestAttachmentFileStore())
         let id = UUID()
         guard case .success = store.createDocumentNote(id: id, document: NoteDocument(blocks: [.text("Saved")])) else { return XCTFail() }
@@ -2553,8 +2564,8 @@ extension NoteSlice3bTests {
     }
 
     func testLiveCopyAndKeepAsNewSurviveVerifiedByteCacheEviction() async throws {
-        let root = FileManager.default.temporaryDirectory.appendingPathComponent("LargeLiveCopy-\(UUID())")
-        defer { try? FileManager.default.removeItem(at: root) }
+        let root = ownedTemporaryDirectory(prefix: "LargeLiveCopy")
+
         let store = try makeTestNoteStore(attachmentFileStore: makeTestAttachmentFileStore())
         let source = UUID(), dest = UUID(), items = (0..<3).map { stagedSized("\($0).pdf", bytes: 12 * 1_024 * 1_024) }
         let document = NoteDocument(blocks: [.text("Large live note")] + items.map {
@@ -2585,8 +2596,8 @@ extension NoteSlice3bTests {
 @MainActor
 extension NoteSlice3bTests {
     func testOpeningDuringPendingStartupIOGivesBoundedGuidanceAndRetries() async throws {
-        let root = FileManager.default.temporaryDirectory.appendingPathComponent("PendingStartup-\(UUID())")
-        defer { try? FileManager.default.removeItem(at: root) }
+        let root = ownedTemporaryDirectory(prefix: "PendingStartup")
+
         let journal = PendingWriteJournal(directory: root); journal.blockRead = true
         let store = try makeTestNoteStore(attachmentFileStore: makeTestAttachmentFileStore()), id = UUID()
         guard case .success = store.createDocumentNote(id: id, document: NoteDocument(blocks: [.text("Open me")])) else { return XCTFail() }
@@ -2609,8 +2620,8 @@ extension NoteSlice3bTests {
 @MainActor
 extension NoteSlice3bTests {
     func testDurableLeaveRefusesFailedQueuedCheckpointAndRetryCanSucceed() async throws {
-        let root = FileManager.default.temporaryDirectory.appendingPathComponent("QueuedFailure-\(UUID())")
-        defer { try? FileManager.default.removeItem(at: root) }
+        let root = ownedTemporaryDirectory(prefix: "QueuedFailure")
+
         let journal = PendingWriteJournal(directory: root), gate = PersistenceGate()
         let store = try makeTestNoteStore(persist: { try gate.save($0) }, attachmentFileStore: makeTestAttachmentFileStore())
         let controller = NotesPageController(store: store, journal: journal, saveDelay: .seconds(60))
@@ -2634,8 +2645,8 @@ extension NoteSlice3bTests {
 extension NoteSlice3bTests {
     func testReviewerUnrelatedDamagedCheckpointDoesNotBlockDeletion() async throws {
         for damagedName in ["\(UUID().uuidString).json", "unknown.json"] {
-            let root = FileManager.default.temporaryDirectory.appendingPathComponent("N1-\(UUID())")
-            defer { try? FileManager.default.removeItem(at: root) }
+            let root = ownedTemporaryDirectory(prefix: "N1")
+
             try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
             try Data("damaged".utf8).write(to: root.appendingPathComponent(damagedName))
             let journal = NoteDraftJournal(directory: root)
@@ -2654,8 +2665,8 @@ extension NoteSlice3bTests {
 
     func testDamagedCheckpointForDeletedNoteRefusesWithExplanation() async throws {
         for unreadable in [false, true] {
-            let root = FileManager.default.temporaryDirectory.appendingPathComponent("N1Own-\(UUID())")
-            defer { try? FileManager.default.removeItem(at: root) }
+            let root = ownedTemporaryDirectory(prefix: "N1Own")
+
             let store = try makeTestNoteStore(attachmentFileStore: makeTestAttachmentFileStore())
             let note = try XCTUnwrap(store.create(title: "Keep me", body: "Saved"))
             let file = root.appendingPathComponent("\(note.id.uuidString).json")
@@ -2672,8 +2683,8 @@ extension NoteSlice3bTests {
     }
 
     func testRetirementProofExpiresWhenSameNoteWritesAnotherCheckpoint() async throws {
-        let root = FileManager.default.temporaryDirectory.appendingPathComponent("N1Rewrite-\(UUID())")
-        defer { try? FileManager.default.removeItem(at: root) }
+        let root = ownedTemporaryDirectory(prefix: "N1Rewrite")
+
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
         try Data("damaged".utf8).write(to: root.appendingPathComponent("unknown.json"))
         let journal = PendingWriteJournal(directory: root), gate = PersistenceGate()
@@ -2714,9 +2725,9 @@ extension NoteSlice3bTests {
                   case .success = store.createDocumentNote(id: dest, document: NoteDocument(blocks: [.text("Destination")])) else { return XCTFail() }
             let importOwner = try XCTUnwrap(store.create(title: "Panel import"))
             let suite = "R1-\(UUID())", defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
-            let root = FileManager.default.temporaryDirectory.appendingPathComponent("R1-\(UUID())")
+            let root = ownedTemporaryDirectory(prefix: "R1")
             try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
-            defer { defaults.removePersistentDomain(forName: suite); try? FileManager.default.removeItem(at: root) }
+            defer { defaults.removePersistentDomain(forName: suite) }
             let url = root.appendingPathComponent("import.txt")
             try Data("New file".utf8).write(to: url)
             defaults.set(source.uuidString, forKey: "notes.lastViewedNote.v2")
@@ -2757,9 +2768,9 @@ extension NoteSlice3bTests {
             .file(attachmentID: $0.id, filename: $0.filename, contentTypeIdentifier: $0.contentTypeIdentifier, byteCount: $0.byteCount)
         })
         guard case .success = store.createDocumentNote(id: id, document: document, staged: items) else { return XCTFail() }
-        let root = FileManager.default.temporaryDirectory.appendingPathComponent("R1Locate-\(UUID())")
+        let root = ownedTemporaryDirectory(prefix: "R1Locate")
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
-        defer { try? FileManager.default.removeItem(at: root) }
+
         let url = root.appendingPathComponent(items[1].filename)
         try items[1].data.write(to: url)
         for item in items { await XCTAssertNotNilAsync(await store.verifiedAttachmentBytes(item.id)) }
@@ -2884,8 +2895,8 @@ extension NoteSlice3bTests {
 extension NoteSlice3bTests {
     func testDurableDeleteReportsItsOwnOutcomeWhenUnrelatedQueuedRecoveryFails() async throws {
         for failure in ["unrelated", "retirement", "delete save"] {
-            let root = FileManager.default.temporaryDirectory.appendingPathComponent("R3-\(UUID())")
-            defer { try? FileManager.default.removeItem(at: root) }
+            let root = ownedTemporaryDirectory(prefix: "R3")
+
             let journal = PendingWriteJournal(directory: root), gate = PersistenceGate()
             let store = try makeTestNoteStore(persist: { try gate.save($0) }, attachmentFileStore: makeTestAttachmentFileStore())
             let id = UUID(), other = UUID(), document = NoteDocument(blocks: [.text("Delete me")])
@@ -2924,8 +2935,8 @@ extension NoteSlice3bTests {
     }
 
     func testSlowSuccessfulUndoDoesNotInviteRetryAndPendingWarningDrains() async throws {
-        let root = FileManager.default.temporaryDirectory.appendingPathComponent("SlowSuccess-\(UUID())")
-        defer { try? FileManager.default.removeItem(at: root) }
+        let root = ownedTemporaryDirectory(prefix: "SlowSuccess")
+
         let journal = PendingWriteJournal(directory: root)
         var savesBeforeFailure: Int?
         let store = try makeTestNoteStore(persist: { context in
@@ -2959,8 +2970,8 @@ extension NoteSlice3bTests {
     }
 
     func testDeleteToastUndoRechecksItsStepAfterSuspendedWait() async throws {
-        let root = FileManager.default.temporaryDirectory.appendingPathComponent("ToastStep-\(UUID())")
-        defer { try? FileManager.default.removeItem(at: root) }
+        let root = ownedTemporaryDirectory(prefix: "ToastStep")
+
         let journal = PendingWriteJournal(directory: root), gate = PersistenceGate()
         let store = try makeTestNoteStore(persist: { try gate.save($0) }, attachmentFileStore: makeTestAttachmentFileStore())
         let note = try XCTUnwrap(store.create(title: "Deleted", body: "Saved"))
@@ -2990,8 +3001,8 @@ extension NoteSlice3bTests {
     }
 
     func testSavingWarningClearsWhenAnotherSessionsWriteFinishes() async throws {
-        let root = FileManager.default.temporaryDirectory.appendingPathComponent("WarningDrain-\(UUID())")
-        defer { try? FileManager.default.removeItem(at: root) }
+        let root = ownedTemporaryDirectory(prefix: "WarningDrain")
+
         let journal = PendingWriteJournal(directory: root), gate = PersistenceGate()
         let store = try makeTestNoteStore(persist: { try gate.save($0) }, attachmentFileStore: makeTestAttachmentFileStore())
         let ids = [UUID(), UUID()]
@@ -3067,12 +3078,12 @@ extension NoteSlice3bTests {
     }
 
     func testRetentionProviderDecodesEveryDocumentOwnerOffMain() async throws {
-        let root = FileManager.default.temporaryDirectory.appendingPathComponent("RetentionExternal-\(UUID())")
+        let root = ownedTemporaryDirectory(prefix: "RetentionExternal")
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
-        defer { try? FileManager.default.removeItem(at: root) }
+
         let files = makeTestAttachmentFileStore(rootURL: root.appendingPathComponent("files"))
         let container = try PersistenceController.makeContainer(cloudSyncEnabled: false, storeDirectory: root)
-        let store = NoteStore(container: container, attachmentFileStore: files), item = staged(), id = UUID()
+        let store = trackAttachmentReconciliation(of: NoteStore(container: container, attachmentFileStore: files)), item = staged(), id = UUID()
         await store.waitForAttachmentReconciliation()
         let document = NoteDocument(blocks: [.text("Owner"), .text(String(repeating: "Large external document. ", count: 16_384)), .file(attachmentID: item.id, filename: item.filename,
             contentTypeIdentifier: item.contentTypeIdentifier, byteCount: item.byteCount)])
@@ -3218,5 +3229,313 @@ private final class AllPayloadReadBarrier: @unchecked Sendable {
     }
     func resume() {
         condition.lock(); released = true; condition.broadcast(); condition.unlock()
+    }
+}
+
+@MainActor
+private final class DeferredPasteBytes: NoteImageProviding {
+    let payloads: [UUID: StagedNoteAttachment]
+    private(set) var readCount = 0
+    init(_ payloads: [UUID: StagedNoteAttachment]) { self.payloads = payloads }
+    func fileURL(forAttachment id: UUID) async -> URL? { nil }
+    func filename(forAttachment id: UUID) -> String? { payloads[id]?.filename }
+    func imageBytes(forAttachment id: UUID) -> StagedNoteAttachment? { nil }
+    func verifiedBytes(forAttachment id: UUID) async -> StagedNoteAttachment? {
+        readCount += 1
+        try? await Task.sleep(for: .milliseconds(80))
+        return payloads[id]
+    }
+}
+
+@MainActor
+extension NoteSlice3bTests {
+    func testPrivatePasteIntoChangedElsewhereBehavesLikeTypingAndKeepsTheConflict() async throws {
+        let store = try makeTestNoteStore(attachmentFileStore: makeTestAttachmentFileStore())
+        let original = NoteDocument(blocks: [.text("Title"), .text("Original")])
+        let id = UUID()
+        guard case let .success((_, revision)) = store.createDocumentNote(id: id, document: original) else { return XCTFail() }
+        let controller = NotesPageController(store: store,
+            journal: NoteDraftJournal(directory: ownedTemporaryDirectory(prefix: "AtticConflictPaste")), saveDelay: .seconds(60))
+        await XCTAssertTrueAsync(await controller.openDurably(noteID: id))
+        let session = try XCTUnwrap(controller.active), engine = session.engine
+        XCTAssertTrue(engine.performEdit(NSRange(location: engine.textStorage.length, length: 0),
+                                         with: NSAttributedString(string: " local"), name: "Typing"))
+        let external = NoteDocument(blocks: [.text("External")])
+        guard case .success = store.saveDocument(noteID: id, document: external, baseRevisionID: revision) else { return XCTFail() }
+        XCTAssertFalse(controller.save(session))
+        XCTAssertEqual(session.state, .conflict(.changed))
+        XCTAssertTrue(engine.performEdit(NSRange(location: engine.textStorage.length, length: 0),
+                                         with: NSAttributedString(string: " typed"), name: "Typing"))
+        let fragment = try NoteContentCodec.encode(NoteDocument(blocks: [.text(" pasted")]), context: .fragment)
+        let before = engine.document()
+        await XCTAssertTrueAsync(await engine.pasteDurably(fragmentData: fragment,
+            at: NSRange(location: engine.textStorage.length, length: 0)))
+        XCTAssertEqual(engine.textStorage.string, "Title\nOriginal local typed pasted")
+        XCTAssertEqual(session.state, .conflict(.changed))
+        XCTAssertTrue(engine.history.undo())
+        XCTAssertEqual(engine.document(), before)
+        XCTAssertTrue(engine.history.redo())
+        await XCTAssertTrueAsync(await controller.preserveAllDurably())
+        XCTAssertEqual(store.loadDocument(noteID: id)?.content.document, external)
+    }
+
+    func testPrivatePasteKeepsTheLiveMarkedTextGuardBeforeActivityNotification() async throws {
+        let store = try makeTestNoteStore(attachmentFileStore: makeTestAttachmentFileStore())
+        let controller = NotesPageController(store: store, journal: nil, saveDelay: .seconds(60))
+        await controller.startAndWait()
+        let engine = try XCTUnwrap(controller.active).engine
+        let (_, view) = engine.makeView()
+        // AppKit's live composition state must gate paste even before the
+        // engine receives the text-change activity notification.
+        view.delegate = nil
+        view.setMarkedText("中", selectedRange: NSRange(location: 1, length: 0),
+                           replacementRange: NSRange(location: 0, length: 0))
+        view.delegate = engine
+        XCTAssertTrue(view.hasMarkedText())
+        XCTAssertEqual(engine.activity, .idle)
+        let before = engine.document()
+        let fragment = try NoteContentCodec.encode(NoteDocument(blocks: [.text("Pasted")]), context: .fragment)
+        await XCTAssertFalseAsync(await engine.pasteDurably(fragmentData: fragment,
+            at: NSRange(location: engine.textStorage.length, length: 0)))
+        XCTAssertEqual(engine.document(), before)
+        XCTAssertTrue(view.hasMarkedText())
+        XCTAssertEqual(controller.active?.notice, "The note or selection changed. Paste again at the new selection.")
+        view.unmarkText()
+    }
+
+    func testIneligiblePrivatePastePostsTheExistingRefusalNoticeWithoutMutation() async throws {
+        let engine = NoteEditorEngine(noteID: UUID(), document: NoteDocument(blocks: [.text("Before")]))
+        engine.canPasteFragment = { false }
+        var notice: String?
+        engine.onNotice = { notice = $0 }
+        let fragment = try NoteContentCodec.encode(NoteDocument(blocks: [.text("Pasted")]), context: .fragment)
+        let before = engine.document()
+        await XCTAssertFalseAsync(await engine.pasteDurably(fragmentData: fragment,
+            at: NSRange(location: engine.textStorage.length, length: 0)))
+        XCTAssertEqual(notice, "The note or selection changed. Paste again at the new selection.")
+        XCTAssertEqual(engine.document(), before)
+        XCTAssertFalse(engine.history.canUndo)
+    }
+
+    func testSameNotePrivatePasteReusesAttachmentIDsWithoutReadingAvailableOrMissingPayloads() async throws {
+        let item = staged()
+        for payloadAvailable in [true, false] {
+            let provider = DeferredPasteBytes(payloadAvailable ? [item.id: item] : [:])
+            let engine = NoteEditorEngine(noteID: UUID(), document: NoteDocument(blocks: [.text("Title"),
+                .file(attachmentID: item.id, filename: item.filename,
+                      contentTypeIdentifier: item.contentTypeIdentifier, byteCount: item.byteCount)]), imageProvider: provider)
+            let before = engine.document()
+            let fragment = engine.fragment(for: NSRange(location: 6, length: engine.textStorage.length - 6))
+            let bytes = try NoteContentCodec.encode(fragment, context: .fragment)
+            await XCTAssertTrueAsync(await engine.pasteDurably(fragmentData: bytes,
+                at: NSRange(location: engine.textStorage.length, length: 0)))
+            XCTAssertEqual(provider.readCount, 0, "same-note paste must not read or hash payloads")
+            XCTAssertEqual(engine.document().attachmentIDs, [item.id, item.id])
+            XCTAssertEqual(Set(engine.document().objectIDs).count, 2, "new placement identity, same attachment")
+            XCTAssertTrue(engine.staged.isEmpty)
+            XCTAssertTrue(engine.history.undo())
+            XCTAssertEqual(engine.document(), before)
+            XCTAssertTrue(engine.history.redo())
+            XCTAssertEqual(engine.document().attachmentIDs, [item.id, item.id])
+        }
+    }
+
+    func testPrivatePasteReadsAllPayloadsAfterDiskRelaunchAndCacheEvictionAsOneUndoStep() async throws {
+        let root = ownedTemporaryDirectory(prefix: "AtticPasteRelaunch")
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        let files = makeTestAttachmentFileStore(rootURL: root.appendingPathComponent("files"))
+        func openStore() throws -> NoteStore {
+            trackAttachmentReconciliation(of: NoteStore(
+                container: try PersistenceController.makeContainer(cloudSyncEnabled: false, storeDirectory: root),
+                attachmentFileStore: files))
+        }
+        let item = staged(), image = try stagedImage(), sourceID = UUID(), destID = UUID()
+        let sourceDocument = NoteDocument(blocks: [.text("Source"), .text("Copied text"),
+            .file(attachmentID: item.id, filename: item.filename, contentTypeIdentifier: item.contentTypeIdentifier, byteCount: item.byteCount),
+            .image(attachmentID: image.id)])
+        let fragment: Data = try {
+            let original = try openStore()
+            guard case .success = original.createDocumentNote(id: sourceID, document: sourceDocument, staged: [item, image]),
+                  case .success = original.createDocumentNote(id: destID, document: NoteDocument(blocks: [.text("Destination"), .text("Before")])) else {
+                throw NSError(domain: "fixture", code: 1)
+            }
+            let source = NoteEditorEngine(noteID: sourceID, document: sourceDocument)
+            let board = NSPasteboard.withUniqueName()
+            XCTAssertTrue(source.writeSelection(NSRange(location: 7, length: source.textStorage.length - 7), to: board,
+                                                types: [NoteEditorEngine.fragmentType]))
+            return try XCTUnwrap(board.data(forType: NoteEditorEngine.fragmentType))
+        }()
+        let reopened = try openStore()
+        let controller = NotesPageController(store: reopened, journal: nil, saveDelay: .seconds(60))
+        await controller.startAndWait()
+        await XCTAssertTrueAsync(await controller.openDurably(noteID: destID))
+        let target = try XCTUnwrap(controller.active).engine
+        reopened.clearVerifiedAttachmentCache()
+        XCTAssertNil(controller.attachmentBytes(forAttachment: item.id))
+        let before = target.document()
+        await XCTAssertTrueAsync(await target.pasteDurably(fragmentData: fragment,
+            at: NSRange(location: target.textStorage.length, length: 0)))
+        let pasted = target.document()
+        XCTAssertTrue(NoteTextExport.plainText(pasted).contains("Copied text"))
+        XCTAssertEqual(pasted.attachmentIDs.count, 2)
+        for id in pasted.attachmentIDs {
+            let copy = try XCTUnwrap(target.staged[id])
+            XCTAssertEqual(copy.data, copy.filename == item.filename ? item.data : image.data)
+        }
+        XCTAssertTrue(Set(pasted.attachmentIDs).isDisjoint(with: [item.id, image.id]))
+        XCTAssertTrue(target.history.undo())
+        XCTAssertEqual(target.document(), before)
+        XCTAssertFalse(target.history.canUndo, "the complete paste has one Undo step")
+        XCTAssertTrue(target.history.redo())
+        XCTAssertEqual(target.document(), pasted)
+        await XCTAssertTrueAsync(await controller.preserveAllDurably())
+        XCTAssertEqual(reopened.loadDocument(noteID: destID)?.content.document, pasted)
+    }
+
+    func testUnavailablePrivatePasteRefusesTextAndEveryObjectWithoutStagingOrUndo() async throws {
+        let item = staged(), missing = staged("missing.pdf")
+        let provider = DeferredPasteBytes([item.id: item])
+        let target = NoteEditorEngine(noteID: UUID(), document: NoteDocument(blocks: [.text("Destination"), .text("Original")]),
+                                      imageProvider: provider)
+        let fragment = NoteDocument(blocks: [.text("Some text"),
+            .file(attachmentID: item.id, filename: item.filename, contentTypeIdentifier: item.contentTypeIdentifier, byteCount: item.byteCount),
+            .file(attachmentID: missing.id, filename: missing.filename, contentTypeIdentifier: missing.contentTypeIdentifier, byteCount: missing.byteCount)])
+        let bytes = try NoteContentCodec.encode(fragment, context: .fragment), before = target.document()
+        await XCTAssertFalseAsync(await target.pasteDurably(fragmentData: bytes, at: NSRange(location: 12, length: 8)))
+        XCTAssertEqual(target.document(), before)
+        XCTAssertTrue(target.staged.isEmpty)
+        XCTAssertFalse(target.history.canUndo)
+        XCTAssertFalse(target.paste(fragmentData: bytes, at: NSRange(location: 12, length: 8)), "cache-only callers also refuse the whole fragment")
+        XCTAssertEqual(target.document(), before)
+    }
+
+    func testPrivatePasteRevalidatesSelectionAndDestinationAfterPayloadIO() async throws {
+        let item = staged()
+        let fragment = NoteDocument(blocks: [.text("Copied"),
+            .file(attachmentID: item.id, filename: item.filename, contentTypeIdentifier: item.contentTypeIdentifier, byteCount: item.byteCount)])
+        let bytes = try NoteContentCodec.encode(fragment, context: .fragment)
+        // A resolver that succeeds after suspension makes the stale-destination
+        // guard, rather than unavailable bytes, responsible for refusing.
+        let successful = DeferredPasteBytes([item.id: item])
+        for change in 0..<3 {
+            let target = NoteEditorEngine(noteID: UUID(), document: NoteDocument(blocks: [.text("Destination"), .text("Original")]),
+                                          imageProvider: successful)
+            let (_, view) = target.makeView()
+            let range = NSRange(location: target.textStorage.length, length: 0)
+            view.setSelectedRange(range)
+            let before = target.document()
+            var current = true
+            target.canPasteFragment = { current }
+            let paste = Task { await target.pasteDurably(fragmentData: bytes, at: range) }
+            try await Task.sleep(for: .milliseconds(20))
+            if change == 0 { view.setSelectedRange(NSRange(location: 0, length: 0)) }
+            if change == 1 { current = false }
+            if change == 2 { _ = target.performEdit(NSRange(location: 0, length: 0), with: NSAttributedString(string: "New "), name: "Typing") }
+            await XCTAssertFalseAsync(await paste.value)
+            if change < 2 { XCTAssertEqual(target.document(), before); XCTAssertFalse(target.history.canUndo) }
+            XCTAssertTrue(target.staged.isEmpty)
+            XCTAssertFalse(target.document().attachmentIDs.contains(item.id))
+        }
+    }
+}
+
+@MainActor
+extension NoteSlice3bTests {
+    func testMissingAttachmentRowsExposeReadOnlyRecoveryTextAndExportWithoutReplacingItsOwner() async throws {
+        let root = ownedTemporaryDirectory(prefix: "AtticReadableRecovery")
+        let store = try makeTestNoteStore(attachmentFileStore: makeTestAttachmentFileStore(rootURL: root.appendingPathComponent("files")))
+        let id = UUID(), missingID = UUID(), known = staged()
+        guard case .success = store.createDocumentNote(id: id, document: NoteDocument(blocks: [.text("Stored")])) else { return XCTFail() }
+        var draft = NoteDocument(blocks: [.text("Unique recovered text"), .text("Readable body"), .image(attachmentID: missingID),
+            .file(attachmentID: known.id, filename: known.filename, contentTypeIdentifier: known.contentTypeIdentifier, byteCount: known.byteCount)])
+        draft.refreshRequiredCapabilities()
+        let directory = root.appendingPathComponent("journal")
+        let entry = NoteDraftJournalEntry(noteID: id, isPersisted: true, baseRevisionID: nil,
+            content: try NoteContentCodec.encode(draft), selectionLocation: 0, selectionLength: 0,
+            staged: [.init(id: known.id, filename: known.filename, contentTypeIdentifier: known.contentTypeIdentifier,
+                           byteCount: known.byteCount, digest: known.digest)], savedAt: Date())
+        let claim = try await NoteDraftJournal(directory: directory).writeDurably(entry, staged: [known])
+        let checkpointURL = directory.appendingPathComponent("\(id.uuidString).json")
+        let checkpointBytes = try Data(contentsOf: checkpointURL)
+        let controller = NotesPageController(store: store, journal: NoteDraftJournal(directory: directory), saveDelay: .seconds(60))
+        await controller.startAndWait()
+        let recovery = try XCTUnwrap(controller.active)
+        XCTAssertEqual(recovery.recoverySourceNoteID, id)
+        XCTAssertNotEqual(recovery.noteID, id, "the recovery row remains separately reachable from its saved owner")
+        XCTAssertTrue(recovery.isReadOnly); XCTAssertTrue(recovery.engine.isReadOnly)
+        XCTAssertEqual(recovery.engine.document(), draft)
+        XCTAssertFalse(controller.hasAttachmentBytes(missingID), "the missing placement remains a placeholder")
+        let board = NSPasteboard.withUniqueName()
+        controller.copyActiveText(to: board)
+        XCTAssertTrue(board.string(forType: .string)?.contains("Readable body") == true)
+        XCTAssertTrue(controller.canSaveRecoveryCopy(recovery))
+        let export = root.appendingPathComponent("export")
+        controller.recoveryCopyDestination = { _ in export }
+        await XCTAssertTrueAsync(await controller.saveRecoveryCopy())
+        XCTAssertTrue(try String(contentsOf: export.appendingPathComponent(NoteRecoveryCopy.markdownFile), encoding: .utf8).contains("Readable body"))
+        XCTAssertEqual(NoteContentCodec.decode(try Data(contentsOf: export.appendingPathComponent(NoteRecoveryCopy.noteFile))).document, draft)
+        let decoder = JSONDecoder(); decoder.dateDecodingStrategy = .iso8601
+        let manifest = try decoder.decode(NoteRecoveryCopy.Manifest.self, from: Data(contentsOf: export.appendingPathComponent(NoteRecoveryCopy.manifestFile)))
+        XCTAssertEqual(manifest.noteID, id)
+        XCTAssertEqual(manifest.unavailableImageIDs, [missingID])
+        XCTAssertFalse(controller.save(recovery)); XCTAssertFalse(controller.keepAsNewNote())
+        await XCTAssertTrueAsync(await controller.preserveDurably(recovery))
+        await XCTAssertTrueAsync(await controller.openDurably(noteID: id))
+        XCTAssertEqual(controller.active?.engine.document().title, "Stored")
+        XCTAssertTrue(controller.openFailedDraft(sessionID: recovery.id))
+        XCTAssertTrue(controller.active === recovery)
+        XCTAssertEqual(try Data(contentsOf: checkpointURL), checkpointBytes)
+        XCTAssertEqual(try Data(contentsOf: directory.appendingPathComponent("staged/\(known.id.uuidString)")), known.data)
+        let reread = try await NoteDraftJournal(directory: directory).readRecoveryEntries()
+        guard case let .valid(_, _, retainedClaim) = try XCTUnwrap(reread.first) else { return XCTFail() }
+        XCTAssertEqual(retainedClaim, claim)
+        XCTAssertEqual(store.note(withID: id)?.title, "Stored")
+    }
+}
+
+@MainActor
+extension NoteSlice3bTests {
+    func testJournalReleasesFormerLiveStagingOwnersAcrossRepeatedImportLifetimes() async throws {
+        let directory = ownedTemporaryDirectory(prefix: "AtticCurrentOwners")
+        let journal = NoteDraftJournal(directory: directory)
+        var live: Set<UUID> = []
+        journal.liveReferencedIDs = { live }
+        for _ in 0..<3 {
+            let item = staged(), id = UUID()
+            let document = NoteDocument(blocks: [.text("Draft"), .file(attachmentID: item.id, filename: item.filename,
+                contentTypeIdentifier: item.contentTypeIdentifier, byteCount: item.byteCount)])
+            let entry = NoteDraftJournalEntry(noteID: id, isPersisted: false, baseRevisionID: nil,
+                content: try NoteContentCodec.encode(document), selectionLocation: 0, selectionLength: 0,
+                staged: [.init(id: item.id, filename: item.filename, contentTypeIdentifier: item.contentTypeIdentifier,
+                               byteCount: item.byteCount, digest: item.digest)], savedAt: Date())
+            live = [item.id]
+            let claim = try await journal.writeDurably(entry, staged: [item])
+            try await journal.discardOwnedDurably(noteID: id, claim: claim)
+            let path = directory.appendingPathComponent("staged/\(item.id.uuidString)")
+            XCTAssertTrue(FileManager.default.fileExists(atPath: path.path), "live Undo/import/session ownership retains staging")
+            live = []
+            _ = try await journal.readRecoveryEntries()
+            XCTAssertFalse(FileManager.default.fileExists(atPath: path.path), "released owners do not accumulate for the process lifetime")
+        }
+    }
+
+    func testUnknownJournalOrLiveOwnershipStillPreventsStagingCollection() async throws {
+        let directory = ownedTemporaryDirectory(prefix: "AtticUnknownOwners")
+        let journal = NoteDraftJournal(directory: directory), item = staged(), id = UUID()
+        journal.liveReferencedIDs = { [item.id] }
+        let entry = NoteDraftJournalEntry(noteID: id, isPersisted: false, baseRevisionID: nil,
+            content: try NoteContentCodec.encode(NoteDocument(blocks: [.text("Draft")])), selectionLocation: 0, selectionLength: 0,
+            staged: [.init(id: item.id, filename: item.filename, contentTypeIdentifier: item.contentTypeIdentifier,
+                           byteCount: item.byteCount, digest: item.digest)], savedAt: Date())
+        let claim = try await journal.writeDurably(entry, staged: [item])
+        try await journal.discardOwnedDurably(noteID: id, claim: claim)
+        let file = directory.appendingPathComponent("staged/\(item.id.uuidString)")
+        try Data("unreadable".utf8).write(to: directory.appendingPathComponent("unknown.json"))
+        journal.liveReferencedIDs = { [] }
+        _ = try await journal.readRecoveryEntries()
+        XCTAssertEqual(try Data(contentsOf: file), item.data, "unknown journal ownership remains conservative")
+        journal.liveReferencedIDs = { throw NSError(domain: "unreadable live owners", code: 1) }
+        do { _ = try await journal.readRecoveryEntries(); XCTFail("unknown owner snapshot must refuse collection") } catch {}
+        XCTAssertEqual(try Data(contentsOf: file), item.data)
     }
 }

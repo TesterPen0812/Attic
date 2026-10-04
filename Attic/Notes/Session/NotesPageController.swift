@@ -3,16 +3,28 @@ import Combine
 import CryptoKit
 import UniformTypeIdentifiers
 
-/// Whether the Notes page uses the new editor. Internal: a defaults key,
-/// on by default only in the Phase 2 preview identity. A note already in
-/// the new format always opens in the new editor, whatever this says.
+/// Whether the Notes page uses the new editor. Internal: the
+/// `AtticUseNewNotesEditor` default, when set, decides (either way);
+/// otherwise the new editor is on in every preview identity
+/// (`com.taha.Attic.preview.<name>`: "Attic Preview" is
+/// `com.taha.Attic.preview.main`) and off elsewhere. A note already in the
+/// new format always opens in the new editor, whatever this says.
+///
+/// The official `com.taha.Attic` identity keeps the legacy editor by
+/// default for now: switching it is decided at Phase 2's pull request.
 enum NotesEditorSetting {
     static let defaultsKey = "AtticUseNewNotesEditor"
-    static let previewBundlePrefix = "com.taha.Attic.preview.notes"
+    static let previewBundlePrefix = "com.taha.Attic.preview."
 
     static func isEnabled(defaults: UserDefaults = .standard, bundleIdentifier: String? = Bundle.main.bundleIdentifier) -> Bool {
         if defaults.object(forKey: defaultsKey) != nil { return defaults.bool(forKey: defaultsKey) }
-        return bundleIdentifier?.hasPrefix(previewBundlePrefix) ?? false
+        return isPreviewIdentity(bundleIdentifier)
+    }
+
+    /// A strict preview identity: the preview prefix and a name after it.
+    static func isPreviewIdentity(_ bundleIdentifier: String?) -> Bool {
+        guard let bundleIdentifier, bundleIdentifier.hasPrefix(previewBundlePrefix) else { return false }
+        return bundleIdentifier.count > previewBundlePrefix.count
     }
 }
 
@@ -82,6 +94,9 @@ final class NoteSession: ObservableObject, Identifiable {
     fileprivate(set) var baseTags: [String] = []
     @Published private(set) var engine: NoteEditorEngine
     let readOnlyReason: NoteReadOnlyReason?
+    /// A readable checkpoint with unavailable placements. Its display ID is
+    /// separate from the original owner; it can never replace that saved note.
+    let recoverySourceNoteID: UUID?
     @Published fileprivate(set) var state: State {
         didSet {
             engine.setWritingToolsAvailable(NoteSessionPolicy.writingToolsAvailable(state,
@@ -100,6 +115,7 @@ final class NoteSession: ObservableObject, Identifiable {
     fileprivate var cancellingImport = false
     fileprivate var refusedWritingToolsSinceSave = false
     fileprivate var saveTask: Task<Void, Never>?
+    fileprivate var durabilityTask: Task<Void, Never>?
     fileprivate var pauseTask: Task<Void, Never>?
     /// The recovery checkpoint this session wrote or adopted. Only its
     /// holder may replace or retire a checkpoint holding unsaved work.
@@ -109,7 +125,8 @@ final class NoteSession: ObservableObject, Identifiable {
     fileprivate var verifiedDocumentAttachments: [UUID: StagedNoteAttachment] = [:]
 
     fileprivate init(noteID: UUID, isPersisted: Bool, baseRevisionID: UUID?, engine: NoteEditorEngine,
-                     readOnlyReason: NoteReadOnlyReason?) {
+                     readOnlyReason: NoteReadOnlyReason?, recoverySourceNoteID: UUID? = nil) {
+        self.recoverySourceNoteID = recoverySourceNoteID
         self.noteID = noteID
         self.isPersisted = isPersisted
         self.baseRevisionID = baseRevisionID
@@ -129,7 +146,7 @@ final class NoteSession: ObservableObject, Identifiable {
         engine = replacement
     }
 
-    var isReadOnly: Bool { readOnlyReason != nil }
+    var isReadOnly: Bool { readOnlyReason != nil || recoverySourceNoteID != nil }
     var isConflict: Bool { if case .conflict = state { true } else { false } }
     var isImporting: Bool { importBatch != nil }
     var importProgress: NoteImportProgress? {
@@ -153,8 +170,10 @@ final class NoteSession: ObservableObject, Identifiable {
 /// preserving notes, independent of views.
 ///
 /// Contracts (critique finding 1; spec § Reliability):
-/// - text is saved within `saveDelay` (300 ms) of the last edit, and on
-///   hide, quit, page switch and navigation;
+/// - text is saved within `saveDelay` (300 ms) of the last edit; continuous
+///   typing gets an independent five-second durability deadline using the
+///   same prepared save path (or an owned checkpoint when writes are gated);
+/// - hide, quit, page switch and navigation save or checkpoint pending work;
 /// - before any navigation the draft is saved or checkpointed; if both fail
 ///   the session stays, marked "Only in memory", and navigation is refused;
 /// - recovered drafts reopen before the normal opening rule;
@@ -185,9 +204,11 @@ final class NotesPageController: ObservableObject {
     let journal: NoteDraftJournaling?
     private let defaults: UserDefaults?
     private let saveDelay: Duration
+    private let durabilityDelay: Duration
     private let pauseVersionDelay: Duration
     private let now: () -> Date
     let imageLoader: @Sendable (URL) async -> (StagedNoteAttachment, CGSize?)?
+    private let decodeRecoveryDocument: @Sendable (Data) async -> NoteDocument?
     private let prepareDocument: @Sendable (NoteDocument) async -> PreparedNoteDocument?
     private var cache: [UUID: NoteSession] = [:]
     private var recency: [UUID] = []
@@ -424,22 +445,27 @@ final class NotesPageController: ObservableObject {
     private static func viewStateKey(_ id: UUID) -> String { "notes.viewState.\(id.uuidString)" }
 
     init(store: NoteStore, journal: NoteDraftJournaling?, defaults: UserDefaults? = nil,
-         saveDelay: Duration = .milliseconds(300), pauseVersionDelay: Duration = .seconds(120),
+         saveDelay: Duration = .milliseconds(300), durabilityDelay: Duration = .seconds(5), pauseVersionDelay: Duration = .seconds(120),
          now: @escaping () -> Date = Date.init,
          imageLoader: @escaping @Sendable (URL) async -> (StagedNoteAttachment, CGSize?)? = { url in
              await NotesPageController.loadImageFile(url)
          },
          prepareDocument: @escaping @Sendable (NoteDocument) async -> PreparedNoteDocument? = { document in
              await Task.detached { try? PreparedNoteDocument(document) }.value
+         },
+         decodeRecoveryDocument: @escaping @Sendable (Data) async -> NoteDocument? = { bytes in
+             await Task.detached(priority: .userInitiated) { NoteContentCodec.decode(bytes).document }.value
          }) {
         self.store = store
         self.journal = journal
         self.defaults = defaults
         self.saveDelay = saveDelay
+        self.durabilityDelay = durabilityDelay
         self.pauseVersionDelay = pauseVersionDelay
         self.now = now
         self.imageLoader = imageLoader
         self.prepareDocument = prepareDocument
+        self.decodeRecoveryDocument = decodeRecoveryDocument
         if let diskJournal = journal as? NoteDraftJournal {
             diskJournal.liveReferencedIDs = { [weak self] in
                 Set(self?.cache.values.flatMap { Array($0.engine.staged.keys) + (self?.liveAttachmentIDs(in: $0) ?? []) } ?? [])
@@ -799,6 +825,12 @@ final class NotesPageController: ObservableObject {
             guard let self, let session else { return String(localized: "The note is no longer open.") }
             return self.importAdmissionFailure(payload, in: session)
         }
+        engine.canPasteFragment = { [weak self, weak session] in
+            guard let self, let session else { return false }
+            return self.active === session && !self.isLibraryPresented && !session.isImporting
+                && !session.isReadOnly
+                && session.engine.textView?.hasMarkedText() != true
+        }
         engine.onFragmentAdmission = { [weak self, weak session] proposed, copied in
             guard let self, let session else { return String(localized: "The note is no longer open.") }
             return self.attachmentAdmissionFailure(proposed: proposed, additions: copied, in: session)
@@ -856,6 +888,7 @@ final class NotesPageController: ObservableObject {
         }) {
             recency.removeAll { $0 == evict }
             cache[evict]?.saveTask?.cancel()
+            cache[evict]?.durabilityTask?.cancel()
             cache[evict]?.pauseTask?.cancel()
             cache[evict]?.engine.detachView()
             cache[evict] = nil
@@ -972,6 +1005,9 @@ final class NotesPageController: ObservableObject {
     /// Save, else checkpoint, else keep in memory and say so.
     @discardableResult
     func preserve(_ session: NoteSession, allowQueued: Bool = false) -> Bool {
+        // This session already has a durable checkpoint, owned by its source.
+        // Navigation must neither overwrite it nor adopt its missing payloads.
+        if session.recoverySourceNoteID != nil { return true }
         session.saveTask?.cancel()
         session.engine.refreshCompositionActivity()
         if session.isImporting { return checkpoint(session, silent: true, allowQueued: allowQueued) }
@@ -1077,7 +1113,8 @@ final class NotesPageController: ObservableObject {
 
     /// All paths that replace a stored document or rekey a draft use this gate.
     private func canCommit(_ session: NoteSession, resolvingConflict: Bool = false) -> Bool {
-        NoteSessionPolicy.canWriteStore(resolvingConflict ? .dirty : session.state,
+        guard session.recoverySourceNoteID == nil else { return false }
+        return NoteSessionPolicy.canWriteStore(resolvingConflict ? .dirty : session.state,
             activity: session.engine.activity,
             hasMarkedText: session.engine.textView?.hasMarkedText() == true)
     }
@@ -1089,6 +1126,7 @@ final class NotesPageController: ObservableObject {
         session.lastEditAt = now()
         updateWritingToolsAvailability(for: session)
         scheduleSave(session)
+        scheduleDurabilityDeadline(session)
     }
 
     private func scheduleSave(_ session: NoteSession) {
@@ -1101,6 +1139,29 @@ final class NotesPageController: ObservableObject {
         }
     }
 
+    /// Typing may reset the coalescing timer, but never this session's deadline.
+    private func scheduleDurabilityDeadline(_ session: NoteSession) {
+        guard session.durabilityTask == nil, NoteSessionPolicy.hasPendingWork(session.state) else { return }
+        let delay = durabilityDelay
+        session.durabilityTask = Task { @MainActor [weak self, weak session] in
+            do { try await Task.sleep(for: delay) } catch { return }
+            guard let self, let session, !Task.isCancelled else { return }
+            let generation = session.editGeneration
+            await self.runDurabilityDeadline(session)
+            guard !Task.isCancelled else { return }
+            session.durabilityTask = nil
+            // Pending work can stay pending after a failure or conflict.
+            // Only edits made during this attempt justify another deadline.
+            if session.editGeneration != generation { self.scheduleDurabilityDeadline(session) }
+        }
+    }
+
+    func runDurabilityDeadline(_ session: NoteSession) async {
+        await runDueSaveWork(session, isDeadline: true)
+        await waitForRecoveryWork()
+        checkpointKeys[session.id] = nil
+    }
+
     /// The timer body is separate so the lifecycle matrix can fire it without
     /// wall-clock waits; production still waits for the coalescing delay.
     func runDueSave(_ session: NoteSession) async {
@@ -1109,7 +1170,7 @@ final class NotesPageController: ObservableObject {
         checkpointKeys[session.id] = nil
     }
 
-    private func runDueSaveWork(_ session: NoteSession) async {
+    private func runDueSaveWork(_ session: NoteSession, isDeadline: Bool = false) async {
         session.engine.refreshCompositionActivity()
         if session.isImporting { _ = checkpoint(session, silent: true); return }
         if NoteSessionPolicy.dueSaveAction(session.state, activity: session.engine.activity,
@@ -1119,13 +1180,19 @@ final class NotesPageController: ObservableObject {
         }
         let generation = session.editGeneration
         let noteID = session.noteID
+        let engine = session.engine
+        let baseRevisionID = session.baseRevisionID
+        let tags = session.engine.tags
         let document = session.engine.document()
         let staged = session.engine.stagedAttachments(for: document)
         let prepared = await prepareDocument(document)
-        guard !Task.isCancelled, generation == session.editGeneration, noteID == session.noteID else { return }
+        guard !Task.isCancelled, noteID == session.noteID, engine === session.engine,
+              baseRevisionID == session.baseRevisionID,
+              isDeadline || generation == session.editGeneration else { return }
         if session.isImporting { _ = checkpoint(session, silent: true); return }
         guard let prepared else { _ = preserve(session); return }
-        if !save(session, snapshot: document, stagedSnapshot: staged, prepared: prepared) {
+        if !save(session, snapshot: document, stagedSnapshot: staged, prepared: prepared,
+                 tagsSnapshot: tags, retainingNewerEdits: generation != session.editGeneration) {
             _ = preserve(session)
         }
     }
@@ -1134,7 +1201,8 @@ final class NotesPageController: ObservableObject {
     /// content is not written (and counts as saved).
     @discardableResult
     func save(_ session: NoteSession, snapshot: NoteDocument? = nil,
-              stagedSnapshot: [StagedNoteAttachment]? = nil, prepared: PreparedNoteDocument? = nil) -> Bool {
+              stagedSnapshot: [StagedNoteAttachment]? = nil, prepared: PreparedNoteDocument? = nil,
+              tagsSnapshot: [String]? = nil, retainingNewerEdits: Bool = false) -> Bool {
         guard !session.isImporting else { return checkpoint(session, silent: true) }
         guard canCommit(session) else { return false }
         guard NoteSessionPolicy.hasPendingWork(session.state) else { return true }
@@ -1142,10 +1210,10 @@ final class NotesPageController: ObservableObject {
         let engine = session.engine
         let document = snapshot ?? engine.document()
         let staged = stagedSnapshot ?? engine.stagedAttachments(for: document)
-        let tags = session.engine.tags
+        let tags = tagsSnapshot ?? session.engine.tags
         if !session.isPersisted {
             guard !document.isEmpty || !document.objectIDs.isEmpty || !tags.isEmpty else {
-                session.state = .untouched
+                session.state = retainingNewerEdits ? .dirty : .untouched
                 return true
             }
             switch store.createDocumentNote(id: session.noteID, document: document, staged: staged,
@@ -1154,7 +1222,7 @@ final class NotesPageController: ObservableObject {
                 session.isPersisted = true
                 session.baseRevisionID = revisionID
                 session.baseTags = tags
-                didSave(session, staged: staged)
+                didSave(session, staged: staged, retainingNewerEdits: retainingNewerEdits)
                 remember(noteID)
                 return true
             case .failure(.noteMissing):
@@ -1167,14 +1235,14 @@ final class NotesPageController: ObservableObject {
                 return false
             }
         }
-        let pendingTags = session.pendingTags
+        let pendingTags = tags == session.baseTags ? nil : tags
         switch store.saveDocument(noteID: session.noteID, document: document,
                                   baseRevisionID: session.baseRevisionID, staged: staged, prepared: prepared,
                                   tags: pendingTags) {
         case let .success(revisionID):
             session.baseRevisionID = revisionID
             if let pendingTags { session.baseTags = pendingTags }
-            didSave(session, staged: staged)
+            didSave(session, staged: staged, retainingNewerEdits: retainingNewerEdits)
             return true
         case .failure(.noteMissing):
             session.state = .conflict(.deleted)
@@ -1254,9 +1322,14 @@ final class NotesPageController: ObservableObject {
         return true
     }
 
-    private func didSave(_ session: NoteSession, staged: [StagedNoteAttachment]) {
+    private func didSave(_ session: NoteSession, staged: [StagedNoteAttachment], retainingNewerEdits: Bool = false) {
         captureViewState(session)
-        session.state = .clean
+        session.state = retainingNewerEdits ? .dirty : .clean
+        if retainingNewerEdits { scheduleSave(session) }
+        if !retainingNewerEdits {
+            session.durabilityTask?.cancel()
+            session.durabilityTask = nil
+        }
         session.refusedWritingToolsSinceSave = false
         updateWritingToolsAvailability(for: session)
         for item in staged { session.verifiedDocumentAttachments[item.id] = item }
@@ -1265,7 +1338,7 @@ final class NotesPageController: ObservableObject {
             session.verifiedDocumentAttachments = session.verifiedDocumentAttachments.filter { liveIDs.contains($0.key) }
         }
         session.engine.forgetStaged(Set(staged.map(\.id)))
-        clearRecoveryCopy(for: session)
+        if !retainingNewerEdits { clearRecoveryCopy(for: session) }
         schedulePauseVersion(session)
     }
 
@@ -1294,11 +1367,30 @@ final class NotesPageController: ObservableObject {
             queueRecoveryWork { [weak self, weak session] in
                 guard let self else { return }
                 do {
-                    let document = self.store.loadDocument(noteID: noteID)?.content.document
+                    let note = self.store.note(withID: noteID)
+                    let bytes = note?.content
+                    let format = note?.contentFormat
+                    let revisionID = note?.revisionID
+                    let tags = note?.tags ?? []
+                    let claim = session?.recoveryClaim
+                    let document: NoteDocument?
+                    if note?.usesDocumentFormat == true {
+                        guard let bytes, let decoded = await self.decodeRecoveryDocument(bytes) else {
+                            throw DamagedNoteRecovery()
+                        }
+                        document = decoded
+                    } else { document = nil }
                     let attachments = await self.durableAttachmentsAsync(in: document ?? .blank)
-                    let saved = document.map { NoteRecoverySavedState(document: $0,
-                        tags: self.store.note(withID: noteID)?.tags ?? [], attachments: attachments) }
-                    try await journal.retireDurably(noteID: noteID, claim: session?.recoveryClaim, saved: saved)
+                    // Decoding and byte verification suspend. Never release recovery
+                    // using a proof of a store or ownership state that has since changed.
+                    let current = self.store.note(withID: noteID)
+                    guard current?.contentFormat == format, current?.revisionID == revisionID,
+                          current?.content == bytes, (current?.tags ?? []) == tags,
+                          session?.recoveryClaim == claim, session?.isImporting != true else {
+                        throw DamagedNoteRecovery()
+                    }
+                    let saved = document.map { NoteRecoverySavedState(document: $0, tags: tags, attachments: attachments) }
+                    try await journal.retireDurably(noteID: noteID, claim: claim, saved: saved)
                     self.retiredNoteIDs.insert(noteID)
                     session?.recoveryClaim = nil
                     if session?.notice == "Saved, but an old recovery copy could not be cleared." { session?.notice = nil }
@@ -1348,9 +1440,10 @@ final class NotesPageController: ObservableObject {
     }
 
     /// Copy Text from the slot: the draft as plain text.
-    func copyActiveText() {
+    func copyActiveText() { copyActiveText(to: .general) }
+
+    func copyActiveText(to pasteboard: NSPasteboard) {
         guard let active else { return }
-        let pasteboard = NSPasteboard.general
         pasteboard.clearContents()
         pasteboard.setString(active.engine.plainText, forType: .string)
     }
@@ -1426,7 +1519,7 @@ final class NotesPageController: ObservableObject {
         // throws and the failure is said.
         let content = try NoteContentCodec.encode(document)
         return NoteRecoverySnapshot(
-            noteID: session.noteID, title: NoteStore.normalizedTitle(document.title), content: content,
+            noteID: session.recoverySourceNoteID ?? session.noteID, title: NoteStore.normalizedTitle(document.title), content: content,
             markdown: NoteMarkdownExport.markdown(document) { names[$0] },
             tags: session.engine.tags, reason: reason, savedAt: now(),
             attachments: attachments, unavailableAttachmentIDs: unavailable, pendingImport: pending)
@@ -1548,7 +1641,22 @@ final class NotesPageController: ObservableObject {
             let available = Set(staged.map(\.id))
                 .union(((try? store.attachmentRows(forNoteID: entry.noteID)) ?? []).map(\.id))
             guard Set(document.attachmentIDs).isSubset(of: available) else {
-                recoveryWarnings.append("Recovery copy for \(entry.noteID.uuidString) refers to an image that is missing from both the checkpoint and the note store.")
+                let message = "Some attachments are unavailable. Copy Text or Save Recovery Copy to recover this draft; the original checkpoint and saved note are kept unchanged."
+                recoveryWarnings.append(message)
+                let displayID = UUID()
+                let recovery = NoteSession(noteID: displayID, isPersisted: false, baseRevisionID: nil,
+                    engine: makeEngine(noteID: displayID, document: document, readOnly: true, staged: staged,
+                                       tags: entry.tags ?? storedTags), readOnlyReason: nil,
+                    recoverySourceNoteID: entry.noteID)
+                recovery.recoveryClaim = claim
+                recovery.baseTags = entry.tags ?? storedTags
+                recovery.state = .notSaved(message)
+                recovery.selection = NSRange(location: entry.selectionLocation, length: entry.selectionLength)
+                recovery.scrollOffset = CGFloat(entry.scrollOffset ?? 0)
+                wire(recovery)
+                cache[displayID] = recovery
+                touch(displayID)
+                newestRecovered = recovery
                 continue
             }
             if let pending = entry.pendingImport,
@@ -2029,7 +2137,7 @@ extension NotesPageController: NoteImageProviding {
     }
 
     func verifiedBytes(forAttachment id: UUID) async -> StagedNoteAttachment? {
-        if let staged = cache.values.lazy.compactMap({ $0.engine.staged[id] }).first { return staged.payloadIsVerified ? staged : nil }
+        if let live = attachmentBytes(forAttachment: id) { return live.payloadIsVerified ? live : nil }
         return await store.verifiedAttachmentBytes(id)
     }
 
@@ -2291,6 +2399,7 @@ extension NotesPageController {
         }
         if let session {
             session.saveTask?.cancel()
+            session.durabilityTask?.cancel()
             session.pauseTask?.cancel()
             cache[noteID] = nil
         }

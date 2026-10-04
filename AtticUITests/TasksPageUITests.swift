@@ -114,6 +114,23 @@ final class TasksPageUITests: XCTestCase {
 
     // MARK: - Add bar
 
+    /// The add bar sits in the bottom bar's zone under the lists' edges,
+    /// and a click needs a hit point on it (CI, 2026-10-01: the lists' bars,
+    /// at the pager's level, left the add bar none). Fails with the window's
+    /// accessibility hierarchy attached, to see what covers it.
+    func testTheAddBarHasAHitPointUnderTheSystemSoftEdge() throws {
+        continueAfterFailure = true
+        XCTAssertTrue(addBar.waitForExistence(timeout: 5))
+        let hittable = addBar.isHittable
+        if !hittable {
+            let attachment = XCTAttachment(string: window.debugDescription)
+            attachment.name = "window hierarchy"
+            attachment.lifetime = .keepAlways
+            add(attachment)
+        }
+        XCTAssertTrue(hittable, "the add bar has a hit point: \(addBar.frame)")
+    }
+
     func testTheAddBarUnderstandsShorthandAndKeepsFocusForTheNextTask() throws {
         XCTAssertTrue(addBar.waitForExistence(timeout: 5))
         addBar.click()
@@ -421,7 +438,43 @@ final class TasksPageUITests: XCTestCase {
 
     // MARK: - Round 3: date, tags and priority without the shorthand
 
-    private func menuItem(_ title: String) -> XCUIElement { app.menuItems[title] }
+    /// AppKit appends a native badge to the accessibility title with ", ".
+    /// Keep the command boundary so Delete cannot match Delete 3 Tasks.
+    private func menuItems(_ title: String) -> XCUIElementQuery {
+        app.menuItems.matching(NSPredicate(format: "title == %@ OR title BEGINSWITH %@", title, title + ", "))
+    }
+
+    private func menuItem(_ title: String) -> XCUIElement { menuItems(title).firstMatch }
+
+    /// E1 exposes AXMenuItem for VoiceOver, but is a custom overlay rather
+    /// than NSMenu. Its pointer path must not ask XCUITest to enter native
+    /// menu tracking and wait for a menu-open notification.
+    private func clickDropdownRow(_ item: XCUIElement) {
+        let viewport = app.scrollViews.containing(NSPredicate(format: "label == %@", item.label)).firstMatch
+        if viewport.exists {
+            var wheelSign: CGFloat = 1
+            for _ in 0..<6 {
+                let target = item.frame
+                let visible = viewport.frame
+                if visible.contains(CGPoint(x: target.midX, y: target.midY)) { break }
+                let delta: CGFloat = target.midY > visible.midY ? 160 : -160
+                viewport.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5))
+                    .scroll(byDeltaX: 0, deltaY: delta * wheelSign)
+                RunLoop.current.run(until: Date().addingTimeInterval(0.15))
+                let moved = item.frame.midY
+                // macOS/Xcode scroll direction varies; observe travel rather
+                // than assuming the runner's natural-scroll preference.
+                if abs(moved - target.midY) < 0.5 || abs(moved - visible.midY) > abs(target.midY - visible.midY) {
+                    wheelSign *= -1
+                }
+            }
+            XCTAssertTrue(viewport.frame.contains(CGPoint(x: item.frame.midX, y: item.frame.midY)),
+                          "the dropdown action is inside its scrolling viewport")
+        }
+        XCTAssertGreaterThan(item.frame.width, 0, "the dropdown row has a rendered hit frame")
+        XCTAssertGreaterThan(item.frame.height, 0)
+        item.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).click()
+    }
 
     /// The strip over the add bar (owner fix 5 A2; round 6, item 18): it
     /// shows with a draft; each button shows what the task will get, picked
@@ -437,26 +490,27 @@ final class TasksPageUITests: XCTestCase {
         addBar.typeText("Water the ferns")
         XCTAssertTrue(date.waitForExistence(timeout: 3), "the strip shows with the first keystroke")
         date.click()
-        let tomorrow = app.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", "Tomorrow")).firstMatch
+        let tomorrow = app.menuItems.matching(NSPredicate(format: "label BEGINSWITH %@", "Tomorrow")).firstMatch
         XCTAssertTrue(tomorrow.waitForExistence(timeout: 3), "the date picker opens")
-        tomorrow.click()
+        clickDropdownRow(tomorrow)
         waitFor((date.value as? String) == "Tomorrow", "the Date button shows the pick: \(String(describing: date.value))")
         XCTAssertEqual(addBar.value as? String, "Water the ferns", "picking never inserts text")
         XCTAssertTrue(window.buttons["composer-date-clear"].exists, "a set button has its ×")
 
         tag.click()
-        let launch = app.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", "#launch")).firstMatch
+        let launch = app.menuItems.matching(NSPredicate(format: "label BEGINSWITH %@", "#launch")).firstMatch
         XCTAssertTrue(launch.waitForExistence(timeout: 3), "the Tag button opens the tag list (it types no #)")
-        launch.click()
+        clickDropdownRow(launch)
         waitFor((tag.value as? String) == "launch", "the Tag button shows the tag: \(String(describing: tag.value))")
         app.typeKey(.escape, modifierFlags: [])
         XCTAssertEqual(addBar.value as? String, "Water the ferns")
 
         priority.click()
-        let high = app.buttons.matching(NSPredicate(format: "label CONTAINS %@", "High")).firstMatch
-        XCTAssertTrue(high.waitForExistence(timeout: 3), "Priority offers No Priority, Medium and High")
-        XCTAssertFalse(app.buttons.matching(NSPredicate(format: "label == %@", "Low")).firstMatch.exists, "no Low")
-        high.click()
+        let high = app.menuItems.matching(NSPredicate(format: "label CONTAINS %@", "High")).firstMatch
+        XCTAssertTrue(high.waitForExistence(timeout: 3), "Priority offers all four")
+        XCTAssertTrue(app.menuItems.matching(NSPredicate(format: "label CONTAINS %@", "Low")).firstMatch.exists,
+                      "Low is offered (follow-up part 2)")
+        clickDropdownRow(high)
         waitFor((priority.value as? String) == "High", "the Priority button shows High")
 
         // Each × takes its button's value, over the bottom stack's band
@@ -468,12 +522,12 @@ final class TasksPageUITests: XCTestCase {
         // And back, for the task.
         tag.click()
         XCTAssertTrue(launch.waitForExistence(timeout: 3))
-        launch.click()
+        clickDropdownRow(launch)
         waitFor((tag.value as? String) == "launch", "the tag again")
         app.typeKey(.escape, modifierFlags: [])
         priority.click()
         XCTAssertTrue(high.waitForExistence(timeout: 3))
-        high.click()
+        clickDropdownRow(high)
         waitFor((priority.value as? String) == "High", "High again")
 
         // A typed piece shows on its button too; the × clears it, words and all.
@@ -507,9 +561,9 @@ final class TasksPageUITests: XCTestCase {
         let priority = window.buttons["composer-priority"]
         XCTAssertTrue(priority.waitForExistence(timeout: 3))
         priority.click()
-        let high = app.buttons.matching(NSPredicate(format: "label CONTAINS %@", "High")).firstMatch
+        let high = app.menuItems.matching(NSPredicate(format: "label CONTAINS %@", "High")).firstMatch
         XCTAssertTrue(high.waitForExistence(timeout: 3))
-        high.click()
+        clickDropdownRow(high)
         waitFor((priority.value as? String) == "High", "picked High")
         addBar.click()
         addBar.typeKey(.rightArrow, modifierFlags: .command)
@@ -539,7 +593,8 @@ final class TasksPageUITests: XCTestCase {
         barButton("Set priority of 2 tasks").click()
         let high = app.menuItems.matching(NSPredicate(format: "title BEGINSWITH %@", "High")).firstMatch
         XCTAssertTrue(high.waitForExistence(timeout: 3), "its priority menu opens")
-        XCTAssertFalse(app.menuItems.matching(NSPredicate(format: "title == %@", "Low")).firstMatch.exists, "no Low")
+        XCTAssertTrue(app.menuItems.matching(NSPredicate(format: "title BEGINSWITH %@", "Low")).firstMatch.exists,
+                      "Low is offered to a mixed selection (follow-up part 2)")
         high.click()
         waitFor(label("Call the plumber").contains("high priority") && label("Email beta testers").contains("high priority"),
                 "the bar set both to High")
@@ -550,13 +605,83 @@ final class TasksPageUITests: XCTestCase {
         waitFor(row("Call the plumber").exists && row("Email beta testers").exists, "⌘Z brings them back")
     }
 
+    // MARK: - Deep review P2-04: the keyboard always shows
+
+    /// Tab through the page as a person does, reading the window's pixels
+    /// against a capture taken before the first Tab: every one of Now's
+    /// rows shows the keyboard's ring when Tab reaches it, one ring at a
+    /// time, and the keyboard never rests where nothing shows it, except as
+    /// it leaves the add bar for the window's own key loop (deep review
+    /// P2-04: a row Tab reached drew nothing while Return edited it, and
+    /// Tab went on into the hidden rows of the pages kept beside Now).
+    func testEveryTabStopShowsWhereTheKeyboardIs() throws {
+        let titles = ["Finalize launch checklist", "Ship appearance PR", "Email beta testers", "Book dentist", "Call the plumber"]
+        // The pointer over the header, so no row is hovered.
+        window.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.01)).hover()
+        RunLoop.current.run(until: Date().addingTimeInterval(0.5))
+        let origin = window.frame.origin
+        func local(_ frame: CGRect) -> CGRect { frame.offsetBy(dx: -origin.x, dy: -origin.y) }
+        let rows = titles.map { local(row($0).frame) }
+        let bar = local(addBar.frame).insetBy(dx: -12, dy: -48)
+        let before = try windowBitmap()
+        var stops: [String] = []
+        var previous = "add bar"
+        for _ in 0..<(titles.count + 4) {
+            app.typeKey(XCUIKeyboardKey.tab, modifierFlags: [])
+            RunLoop.current.run(until: Date().addingTimeInterval(0.4))
+            var stop: String
+            if (addBar.value(forKey: "hasKeyboardFocus") as? Bool) == true {
+                stop = "add bar"
+            } else {
+                let after = try windowBitmap()
+                let lit = titles.indices.filter { changedPixels(before, after, in: rows[$0], excluding: nil) > 30 }
+                XCTAssertLessThanOrEqual(lit.count, 1, "one ring at a time (\(lit.map { titles[$0] }))")
+                if let index = lit.first {
+                    stop = titles[index]
+                } else {
+                    let window = CGRect(origin: .zero, size: self.window.frame.size)
+                    stop = changedPixels(before, after, in: window, excluding: bar) > 30 ? "control" : "nothing"
+                }
+            }
+            stops.append(stop)
+            if stop == "nothing" {
+                XCTAssertEqual(previous, "add bar", "the keyboard rests where nothing shows it only on leaving the add bar (\(stops))")
+            }
+            previous = stop
+        }
+        XCTAssertEqual(Set(stops.filter { titles.contains($0) }), Set(titles), "Tab shows the ring on each of Now's rows (\(stops))")
+    }
+
+    private func windowBitmap() throws -> NSBitmapImageRep {
+        try XCTUnwrap(NSBitmapImageRep(data: window.screenshot().pngRepresentation))
+    }
+
+    /// How many sampled pixels (every other one) differ inside `rect`
+    /// (window points, top-left origin), leaving out `excluding`.
+    private func changedPixels(_ a: NSBitmapImageRep, _ b: NSBitmapImageRep, in rect: CGRect, excluding: CGRect?) -> Int {
+        let scale = CGFloat(a.pixelsWide) / window.frame.width
+        let area = rect.intersection(CGRect(origin: .zero, size: window.frame.size))
+        guard !area.isNull, !area.isEmpty else { return 0 }
+        var count = 0
+        for y in stride(from: Int(area.minY * scale), to: min(Int(area.maxY * scale), a.pixelsHigh, b.pixelsHigh), by: 2) {
+            for x in stride(from: Int(area.minX * scale), to: min(Int(area.maxX * scale), a.pixelsWide, b.pixelsWide), by: 2) {
+                if let excluding, excluding.contains(CGPoint(x: CGFloat(x) / scale, y: CGFloat(y) / scale)) { continue }
+                guard let p = a.colorAt(x: x, y: y)?.usingColorSpace(.sRGB),
+                      let q = b.colorAt(x: x, y: y)?.usingColorSpace(.sRGB) else { continue }
+                if max(abs(p.redComponent - q.redComponent), abs(p.greenComponent - q.greenComponent),
+                       abs(p.blueComponent - q.blueComponent)) > 0.08 { count += 1 }
+            }
+        }
+        return count
+    }
+
     // MARK: - Round 10: full control
 
     /// A menu item on screen with this title: an open pop-up or context
     /// menu's, never the menu bar's own (those have no size until opened).
     private func openItem(_ title: String) -> XCUIElement {
-        let items = app.menuItems.matching(NSPredicate(format: "title == %@", title)).allElementsBoundByIndex
-        return items.first { $0.frame.width > 0 && $0.frame.height > 0 } ?? app.menuItems[title]
+        let items = menuItems(title).allElementsBoundByIndex
+        return items.first { $0.frame.width > 0 && $0.frame.height > 0 } ?? menuItem(title)
     }
 
     /// Waits until the row stops moving (a page's slide has ended).
@@ -581,16 +706,23 @@ final class TasksPageUITests: XCTestCase {
     func testShiftCommandIOpensTheTasksActions() throws {
         select("Email beta testers")
         app.typeKey("i", modifierFlags: [.command, .shift])
-        let moveDown = menuItem("Move Down")
-        XCTAssertTrue(moveDown.waitForExistence(timeout: 3), "⇧⌘I opens the task's actions")
+        let more = menuItem("More")
+        XCTAssertTrue(more.waitForExistence(timeout: 3), "⇧⌘I opens the task's actions")
         for title in ["Complete", "Start Working", "Edit Title", "Date", "Tags", "Priority", "Move to Later",
-                      "Add Subtask", "Move Up", "Copy", "Duplicate", "Delete"] {
+                      "Add Subtask", "Copy", "Duplicate", "More", "Delete"] {
             XCTAssertTrue(menuItem(title).exists, "the menu offers \(title)")
         }
         XCTAssertLessThan(row("Email beta testers").frame.minY, row("Book dentist").frame.minY, "above Book dentist at first")
+        // The rarer file and reorder commands sit under More (follow-up
+        // part 2, L5).
+        openItem("More").hover()
+        XCTAssertTrue(openItem("Move Down").waitForExistence(timeout: 3), "More holds Move Down")
+        waitFor(openItem("Move Down").frame.width > 0, "More's submenu opens")
+        XCTAssertTrue(openItem("Open Files…").exists && openItem("Move Up").exists, "and Open Files… and Move Up")
         openItem("Move Down").click()
         waitFor(!menuItem("Move Down").exists, "the menu closes")
-        waitFor(row("Email beta testers").frame.minY > row("Book dentist").frame.minY, "Move Down moved it one place down")
+        waitFor(row("Email beta testers").exists && row("Email beta testers").frame.minY > row("Book dentist").frame.minY,
+                "Move Down moved it one place down")
         select("Email beta testers")
         app.typeKey("i", modifierFlags: [.command, .shift])
         XCTAssertTrue(menuItem("Duplicate").waitForExistence(timeout: 3))
@@ -710,9 +842,9 @@ final class TasksPageUITests: XCTestCase {
         // The date sits at the row's right end, on the title line.
         let row = row("Book dentist")
         row.coordinate(withNormalizedOffset: .zero).withOffset(CGVector(dx: row.frame.width - 50, dy: 17)).click()
-        let remove = app.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", "Remove date")).firstMatch
+        let remove = app.menuItems.matching(NSPredicate(format: "label BEGINSWITH %@", "Remove date")).firstMatch
         XCTAssertTrue(remove.waitForExistence(timeout: 3), "the picker offers Remove date")
-        remove.click()
+        clickDropdownRow(remove)
         waitFor(!label("Book dentist").contains("due"), "the date is removed")
         let toast = window.descendants(matching: .any).matching(NSPredicate(format: "label == %@", "Date removed")).firstMatch
         XCTAssertTrue(toast.waitForExistence(timeout: 3), "with an Undo toast")
@@ -744,7 +876,10 @@ final class TasksPageUITests: XCTestCase {
         let field = app.descendants(matching: .textField)
             .matching(NSPredicate(format: "label == %@", "Find or add a tag")).firstMatch
         XCTAssertTrue(field.waitForExistence(timeout: 3), "the tag picker opens with its field")
-        field.click()
+        // Through the pointer, as the dropdown's rows are clicked: a measured
+        // card keeps its content in a scroll view, and XCUITest's own click
+        // first tries to scroll that view.
+        clickDropdownRow(field)
         field.typeText("gardn")
         field.typeKey(.delete, modifierFlags: [])
         field.typeKey(.delete, modifierFlags: [])
@@ -756,6 +891,32 @@ final class TasksPageUITests: XCTestCase {
         XCTAssertTrue(label("Call the plumber").contains(", to do"), "Space in the field did not complete it")
         app.typeKey(.escape, modifierFlags: [])
         XCTAssertTrue(row("Call the plumber").exists)
+    }
+
+    func testTagFieldEscReturnsFocusAndOutsideClickDismisses() throws {
+        XCTAssertTrue(addBar.waitForExistence(timeout: 5))
+        addBar.click()
+        addBar.typeText("Dropdown focus")
+        let tags = window.buttons["composer-tag"]
+        XCTAssertTrue(tags.waitForExistence(timeout: 3))
+        tags.click()
+        let field = app.textFields.matching(NSPredicate(format: "label == %@", "Find or add a tag")).firstMatch
+        XCTAssertTrue(field.waitForExistence(timeout: 3))
+        field.typeText("ho")
+        XCTAssertEqual(field.value as? String, "ho", "the tag field is actually editing")
+        app.typeKey(.escape, modifierFlags: [])
+        waitFor(!field.exists, "Esc dismisses the tag picker")
+        app.typeText(" continued")
+        waitFor((addBar.value as? String) == "Dropdown focus continued", "Esc returned typing to the draft")
+
+        tags.click()
+        XCTAssertTrue(field.waitForExistence(timeout: 3))
+        field.typeText("ho")
+        XCTAssertEqual(field.value as? String, "ho")
+        tab("now").click()
+        waitFor(!field.exists, "a click outside dismisses the editing picker")
+        XCTAssertEqual(addBar.value as? String, "Dropdown focus continued", "dismissal preserves the draft")
+        XCTAssertTrue(row("Book dentist").exists)
     }
 
     /// The row's keys a person might press while the keyboard is somewhere
@@ -775,7 +936,7 @@ final class TasksPageUITests: XCTestCase {
     func testKeysPressedInTheDatePickerNeverReachTheRow() throws {
         let row = row("Book dentist")
         row.coordinate(withNormalizedOffset: .zero).withOffset(CGVector(dx: row.frame.width - 50, dy: 17)).click()
-        let remove = app.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", "Remove date")).firstMatch
+        let remove = app.menuItems.matching(NSPredicate(format: "label BEGINSWITH %@", "Remove date")).firstMatch
         XCTAssertTrue(remove.waitForExistence(timeout: 3), "the date picker opens")
         pressRowKeys()
         XCTAssertTrue(self.row("Book dentist").exists, "the task is still there")
@@ -793,7 +954,7 @@ final class TasksPageUITests: XCTestCase {
         XCTAssertTrue(addBar.waitForExistence(timeout: 5))
         addBar.click()
         addBar.typeText("Buy #la")
-        let suggestion = app.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", "#launch")).firstMatch
+        let suggestion = app.menuItems.matching(NSPredicate(format: "label BEGINSWITH %@", "#launch")).firstMatch
         XCTAssertTrue(suggestion.waitForExistence(timeout: 3), "the suggestions show")
         // The first Backspace may turn the recognised "#la" back into text
         // (a chip's Backspace deletes nothing); either way the keys stay in
@@ -846,8 +1007,9 @@ final class TasksPageUITests: XCTestCase {
         XCTAssertTrue(row("Pay rent").exists, "still in the Done log")
     }
 
-    /// The tag popover points at the tags that were clicked (round 5, the
-    /// owner's item 3), not the middle of the row.
+    /// The tag list opens from the tags that were clicked (round 5, the
+    /// owner's item 3), not the middle of the row: the dropdown's left edge
+    /// is on the tags (E1's width rule).
     func testTheTagPopoverOpensFromTheClickedTags() throws {
         row("Call the plumber").rightClick()
         XCTAssertTrue(menuItem("Tags").waitForExistence(timeout: 3))
@@ -861,13 +1023,15 @@ final class TasksPageUITests: XCTestCase {
         let tagPoint = CGPoint(x: rowFrame.minX + 44 + 16, y: rowFrame.maxY - 14)
         row("Call the plumber").coordinate(withNormalizedOffset: .zero)
             .withOffset(CGVector(dx: tagPoint.x - rowFrame.minX, dy: tagPoint.y - rowFrame.minY)).click()
-        let popover = app.popovers.firstMatch
-        XCTAssertTrue(popover.waitForExistence(timeout: 3), "the tag picker opens")
-        // Centred on the tags it came from (a popover centres on its anchor
-        // unless a screen edge pushes it), not on the row's middle.
-        XCTAssertLessThan(abs(popover.frame.midX - tagPoint.x), 40,
-                          "popover \(popover.frame) points at the tags near \(tagPoint), not the row \(rowFrame)")
+        let field = app.descendants(matching: .textField)
+            .matching(NSPredicate(format: "label == %@", "Find or add a tag")).firstMatch
+        XCTAssertTrue(field.waitForExistence(timeout: 3), "the tag picker opens")
+        // The card's left edge sits on the tags (its field 10 pt in), not
+        // centred on the row.
+        XCTAssertLessThan(abs(field.frame.minX - (rowFrame.minX + 44 + 10)), 16,
+                          "the list \(field.frame) opens from the tags near \(tagPoint), not the row \(rowFrame)")
         app.typeKey(.escape, modifierFlags: [])
+        waitFor(!field.exists, "Esc closes it")
     }
 
     /// Waits until `element` has stopped moving (a page sliding in).
@@ -951,6 +1115,19 @@ final class TasksPageUITests: XCTestCase {
 
     private func waitForPage(_ page: String, _ message: String, file: StaticString = #filePath, line: UInt = #line) {
         waitFor(tab(page).isSelected && isOnScreen(landmark(page)), message, file: file, line: line)
+        if !(tab(page).isSelected && isOnScreen(landmark(page))) {
+            // Part 2 CI: a Done → Later click twice left Done shown. Keep
+            // the tabs' frames, the window's and the app's state for the
+            // next look.
+            let state = XCTAttachment(string: """
+                app state: \(app.state.rawValue); window: \(window.exists ? "\(window.frame)" : "gone")
+                \(["now", "backlog", "done"].map { "\($0): \(tab($0).frame) selected=\(tab($0).isSelected)" }.joined(separator: "\n"))
+                \(window.debugDescription)
+                """)
+            state.name = "tabs-on-failure"
+            state.lifetime = .keepAlways
+            add(state)
+        }
         for other in ["now", "backlog", "done"] where other != page {
             XCTAssertFalse(isOnScreen(landmark(other)), "\(message): \(other) is not shown", file: file, line: line)
         }
@@ -962,10 +1139,13 @@ final class TasksPageUITests: XCTestCase {
         let pages = ["now", "backlog", "done"]
         for from in pages {
             for to in pages where to != from {
+                // The frames clicked, kept for a failure (part 2 CI).
+                let start = "\(tab(from).frame) in \(window.frame)"
                 tab(from).click()
-                waitForPage(from, "on \(from)")
+                waitForPage(from, "on \(from) (clicked \(start))")
+                let target = "\(tab(to).frame) in \(window.frame)"
                 tab(to).click()
-                waitForPage(to, "a click on \(to) from \(from) lands on \(to)")
+                waitForPage(to, "a click on \(to) from \(from) lands on \(to) (clicked \(target))")
             }
         }
     }

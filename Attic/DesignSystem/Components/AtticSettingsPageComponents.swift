@@ -51,6 +51,9 @@ enum AtticSettingsRowMetrics {
     static let searchHeight: CGFloat = 32
     static let searchIconSize: CGFloat = 12.5
     static let searchPadding: CGFloat = 10
+    /// A selected Recently Deleted row's fill, inset from the card's edges
+    /// and from its neighbours' (control audit item 11).
+    static let selectionInset: CGFloat = 4
 }
 
 // MARK: - Page body
@@ -141,6 +144,9 @@ struct AtticActionRow: View {
     var actionSystemName: String?
     var actionIdentifier: String?
     var actionHelp: String?
+    /// A second button before the first (Recently Deleted's selection:
+    /// Restore, then Delete Permanently…).
+    var secondary: AtticRowAction? = nil
     let action: () -> Void
 
     @State private var probeID = UUID()
@@ -157,6 +163,12 @@ struct AtticActionRow: View {
                 AtticText(verbatim: title, style: .rowSingle, ink: .body)
             }
             Spacer(minLength: AtticSettingsMetrics.rowTrailingMinGap)
+            if let secondary {
+                AtticRaisedButton(systemName: nil, title: "\(secondary.title)", height: m.actionHeight, action: secondary.action)
+                    .help(secondary.help ?? secondary.title)
+                    .atticIdentifier(secondary.identifier)
+                    .fixedSize()
+            }
             AtticRaisedButton(systemName: actionSystemName, title: "\(actionTitle)", height: m.actionHeight, action: action)
                 .help(actionHelp ?? actionTitle)
                 .atticIdentifier(actionIdentifier)
@@ -183,6 +195,14 @@ struct AtticActionRow: View {
             text
         }
     }
+}
+
+/// A row's extra button (`AtticActionRow.secondary`).
+struct AtticRowAction {
+    let title: String
+    var identifier: String?
+    var help: String?
+    let action: () -> Void
 }
 
 /// A single line inside a group card with no control: a state ("Listening
@@ -290,12 +310,25 @@ struct AtticDeletedItemRow: View {
     let title: String
     let detail: String
     var restoreIdentifier: String?
+    /// Selected (control audit item 11): the list's selection fill, and
+    /// VoiceOver hears "selected".
+    var isSelected = false
+    /// A click on the row, not its button, with the modifiers held (⌘ adds
+    /// or removes it, ⇧ selects a run).
+    var onSelect: ((NSEvent.ModifierFlags) -> Void)? = nil
+    /// Its commands (Restore, Delete Permanently…), built only when the
+    /// right-click menu opens; also its VoiceOver actions.
+    var commands: (() -> [AtticMenuCommand])? = nil
+    /// VoiceOver's Select or Deselect.
+    var onToggleSelection: (() -> Void)? = nil
     let onRestore: () -> Void
 
+    @Environment(\.atticDesign) private var design
     @State private var probeID = UUID()
 
     var body: some View {
         let m = AtticSettingsRowMetrics.self
+        let fillHeight = AtticLayout.groupedRowTall - m.selectionInset * 2
         HStack(spacing: m.iconGap) {
             AtticIcon(systemName: systemName, size: m.iconSize, weight: AtticIconWeight.outline, ink: .icon)
                 .frame(width: m.iconSlot)
@@ -308,7 +341,8 @@ struct AtticDeletedItemRow: View {
             // not exposed, so VoiceOver never read the detail.
             .accessibilityElement(children: .ignore)
             .accessibilityLabel("\(kind): \(title), \(detail)")
-            .accessibilityAddTraits(.isStaticText)
+            .accessibilityValue(isSelected ? String(localized: "selected") : "")
+            .accessibilityAddTraits(isSelected ? [.isStaticText, .isSelected] : .isStaticText)
             Spacer(minLength: AtticSettingsMetrics.rowTrailingMinGap)
             AtticRaisedButton(systemName: nil, title: "Restore", height: m.actionHeight, action: onRestore)
                 .fixedSize()
@@ -319,8 +353,32 @@ struct AtticDeletedItemRow: View {
         .padding(.leading, AtticLayout.groupedRowTextInset)
         .padding(.trailing, m.actionTrailing)
         .frame(height: AtticLayout.groupedRowTall)
+        .background {
+            if isSelected {
+                RoundedRectangle(cornerRadius: AtticRadius.control(height: fillHeight), style: .continuous)
+                    .fill(design.tokens.selected.color)
+                    .padding(m.selectionInset)
+            }
+        }
+        .contentShape(Rectangle())
+        .onTapGesture { onSelect?(NSEvent.modifierFlags) }
+        .contextMenu {
+            if let commands { AtticMenuItems(building: commands) }
+        }
         .accessibilityElement(children: .contain)
         .accessibilityAction(named: Text("Restore")) { onRestore() }
+        .accessibilityActions {
+            if let onToggleSelection {
+                Button(isSelected ? String(localized: "Deselect") : String(localized: "Select"), action: onToggleSelection)
+            }
+            if let commands {
+                // The same list as the right-click menu, counted when it
+                // acts on the selection ("Restore 3 Items").
+                ForEach(commands().filter { !$0.isDisabled && $0.children.isEmpty && !$0.isHeader && $0.title != "Restore" }) { command in
+                    Button(command.title, action: command.action)
+                }
+            }
+        }
         .atticControlProbe(
             "Grouped row", id: probeID,
             expectedSize: CGSize(width: 0, height: AtticLayout.groupedRowTall),

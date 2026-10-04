@@ -16,13 +16,12 @@ final class SchemaMigrationTests: XCTestCase {
     private var root: URL!
 
     override func setUp() async throws {
-        root = FileManager.default.temporaryDirectory
-            .appendingPathComponent("AtticSchemaMigration-\(UUID().uuidString)", isDirectory: true)
+        root = ownedTemporaryDirectory(prefix: "AtticSchemaMigration")
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
     }
 
     override func tearDown() async throws {
-        if let root { try? FileManager.default.removeItem(at: root) }
+
     }
 
     // MARK: - Registration
@@ -160,7 +159,7 @@ final class SchemaMigrationTests: XCTestCase {
         let container = try openThroughAppContainer(copyOf: fixture, in: "cleanup-copy")
         let rowsBefore = try rowCounts(in: container)
         let tasks = TaskStore(container: container, taskImageFiles: TaskImageFiles(rootURL: fixture.taskFilesRoot))
-        let notes = NoteStore(container: container, attachmentFileStore: AttachmentFileStore(rootURL: fixture.noteFilesRoot))
+        let notes = trackAttachmentReconciliation(of: NoteStore(container: container, attachmentFileStore: AttachmentFileStore(rootURL: fixture.noteFilesRoot)))
         let canvases = CanvasStore(container: container)
         let library = AtticLibrary(tasks: tasks, notes: notes, canvases: canvases)
         let cleanup = DailyCleanupService(
@@ -364,7 +363,7 @@ final class SchemaMigrationTests: XCTestCase {
         let fileURL = try await tasks.taskImageFiles.verifiedURL(for: fixture.taskFile)
         XCTAssertNotNil(fileURL, "task files on disk are untouched")
 
-        let notes = NoteStore(container: container, attachmentFileStore: AttachmentFileStore(rootURL: fixture.noteFilesRoot))
+        let notes = trackAttachmentReconciliation(of: NoteStore(container: container, attachmentFileStore: AttachmentFileStore(rootURL: fixture.noteFilesRoot)))
         XCTAssertEqual(notes.notes.map(\.id), [fixture.noteID])
         XCTAssertEqual(notes.attachments(for: fixture.noteID).count, 2)
 

@@ -109,6 +109,53 @@ final class NoteDocumentStoreTests: XCTestCase {
                        "known bytes must not be decoded again on each save")
     }
 
+    func testBatchAttachmentAdmissionDecodesTheBaseOnlyOnce() throws {
+        let base = NoteDocument(blocks: (0..<5_000).map { .text("Line \($0)") })
+        let (id, _) = try create(base)
+        try store.reloadPresentation() // A cold proof, as after import/reload.
+        let before = store.documentReplicaDecodeCount
+        var candidate = base
+        var staged: [StagedNoteAttachment] = []
+        var milliseconds: [Double] = []
+        for _ in 0..<8 {
+            let item = stagedImage()
+            staged.append(item)
+            candidate.blocks.append(.image(attachmentID: item.id))
+            let start = DispatchTime.now().uptimeNanoseconds
+            XCTAssertNil(store.attachmentAdmissionFailure(noteID: id, document: candidate, staged: staged))
+            milliseconds.append(Double(DispatchTime.now().uptimeNanoseconds - start) / 1_000_000)
+            XCTAssertEqual(store.documentReplicaDecodeCount, before + 1,
+                           "Admission reuses one exact-byte proof for the complete batch")
+        }
+        print("NOTE_ADMISSION_5000_LINES_COLD_MS=\(milliseconds[0]) WARM_BATCH_7_MS=\(milliseconds.dropFirst().reduce(0, +))")
+    }
+
+    func testAttachmentAdmissionProofInvalidatesForBytesRevisionAndReload() throws {
+        let (id, _) = try create(document("Draft"))
+        let missing = NoteBlock.file(attachmentID: UUID(), filename: "missing.pdf",
+                                    contentTypeIdentifier: "com.adobe.pdf", byteCount: 4)
+        let imported = NoteDocument(blocks: [.text("Draft"), missing])
+        let row = try XCTUnwrap(store.note(withID: id))
+        row.content = try NoteContentCodec.encode(imported) // Same revision, different bytes.
+        let before = store.documentReplicaDecodeCount
+        XCTAssertNil(store.attachmentAdmissionFailure(noteID: id, document: imported, staged: []),
+                     "A missing original keeps its exact placement after invalidating the old proof")
+        XCTAssertEqual(store.documentReplicaDecodeCount, before + 1)
+        row.revisionID = UUID()
+        XCTAssertNil(store.attachmentAdmissionFailure(noteID: id, document: imported, staged: []))
+        XCTAssertEqual(store.documentReplicaDecodeCount, before + 2)
+        try store.modelContext.save()
+        try store.reloadPresentation()
+        XCTAssertNil(store.attachmentAdmissionFailure(noteID: id, document: imported, staged: []))
+        XCTAssertEqual(store.documentReplicaDecodeCount, before + 3)
+        let current = try XCTUnwrap(store.note(withID: id))
+        let corrupt = Data("not JSON".utf8)
+        current.content = corrupt
+        XCTAssertNotNil(store.attachmentAdmissionFailure(noteID: id, document: imported, staged: []))
+        XCTAssertEqual(store.documentReplicaDecodeCount, before + 4)
+        XCTAssertEqual(current.content, corrupt, "Admission never repairs or overwrites corrupt bytes")
+    }
+
     func testAttachmentBaseProofInvalidatesWhenBytesChangeWithoutARevisionChange() throws {
         let (id, revision) = try create(document("Draft"))
         let missing = NoteBlock.file(attachmentID: UUID(), filename: "missing.pdf",
@@ -646,6 +693,87 @@ final class NoteDocumentStoreTests: XCTestCase {
         guard case .failure(.versionMissing) = store.restoreVersion(UUID(), noteID: id) else { return XCTFail() }
     }
 
+    func testAgentWritesAndProposalsPreserveTheOrderedPlainChecklistInventory() throws {
+        var first = NoteBlock.checklist("Pay rent", checked: true)
+        first.extras = ["owner": .string("person")]
+        let second = NoteBlock.checklist("Call bank")
+        let base = NoteDocument(blocks: [.text("Bills"), first, .text("Between"), second])
+        let (id, _) = try create(base)
+        let token = try XCTUnwrap(store.note(withID: id)?.revisionToken)
+        var flattened = base; flattened.blocks[1] = .text("Pay rent")
+        var duplicate = base; var extra = first; extra.id = UUID(); duplicate.blocks.append(extra)
+        var reordered = base; reordered.blocks.swapAt(1, 3)
+        var renamed = base; renamed.blocks[1].text = "Different"
+        var changedMetadata = base; changedMetadata.blocks[1].extras = [:]
+        for proposed in [flattened, duplicate, reordered, renamed, changedMetadata] {
+            for disposition in [NoteAgentWriteDisposition.direct, .proposal] {
+                guard case .failure = store.agentWrite(noteID: id, baseRevisionToken: token,
+                    document: proposed, agentName: "Agent", disposition: disposition) else {
+                    return XCTFail("lossy checklist accepted")
+                }
+                XCTAssertEqual(store.loadDocument(noteID: id)?.content.document, base)
+                XCTAssertTrue(store.pendingEdits(noteID: id).isEmpty)
+            }
+        }
+        for body in ["Pay rent\nBetween\n- [ ] Call bank",
+                     "- [x] Pay rent\nBetween\n- [ ] Call bank\n- [x] Pay rent"] {
+            XCTAssertThrowsError(try NoteAgentTextParser.document(title: "Bills", body: body, base: base))
+        }
+        var checked = base; checked.blocks[1].checked = false; checked.blocks[3].checked = true
+        let parsed = try NoteAgentTextParser.document(title: "Bills", body: "- [ ] Pay rent\nBetween\n- [x] Call bank", base: base)
+        XCTAssertEqual(parsed, checked)
+        guard case .success(.pending) = store.agentWrite(noteID: id, baseRevisionToken: token,
+            document: parsed, agentName: "Agent", disposition: .proposal) else { return XCTFail("checked proposal") }
+        XCTAssertEqual(store.applyPendingEdits(noteID: id), 1)
+        XCTAssertEqual(store.loadDocument(noteID: id)?.content.document, checked)
+        let currentToken = try XCTUnwrap(store.note(withID: id)?.revisionToken)
+        guard case .success = store.agentWrite(noteID: id, baseRevisionToken: currentToken,
+            document: base, agentName: "Agent", disposition: .direct) else { return XCTFail("checked direct") }
+        XCTAssertEqual(store.loadDocument(noteID: id)?.content.document, base)
+    }
+
+    func testAgentChecklistRemovalAndAdditionKeepRemainingItemsForDirectWritesAndProposals() throws {
+        for disposition in [NoteAgentWriteDisposition.direct, .proposal] {
+            for protectedRemoval in [false, true] {
+                var first = NoteBlock.checklist("Remove me")
+                if protectedRemoval { first.extras = ["owner": .string("person")] }
+                var kept = NoteBlock.checklist("Keep me", checked: true)
+                kept.marks = [NoteMark(.bold, offset: 0, length: 4)]
+                var base = NoteDocument(blocks: [.text("Title"), first, kept])
+                base.refreshRequiredCapabilities()
+                let (id, _) = try create(base)
+                var token = try XCTUnwrap(store.note(withID: id)?.revisionToken)
+                let body = "- [x] Keep me\n- [ ] New item"
+                if protectedRemoval {
+                    XCTAssertThrowsError(try NoteAgentTextParser.document(title: "Title", body: body, base: base)) {
+                        XCTAssertEqual($0 as? NoteAgentTextError, .unsafeChecklist)
+                    }
+                    XCTAssertEqual(store.loadDocument(noteID: id)?.content.document, base)
+                    XCTAssertEqual(store.note(withID: id)?.revisionToken, token)
+                    XCTAssertTrue(store.pendingEdits(noteID: id).isEmpty)
+                    // Deleting the metadata-bearing item outright is still safe.
+                    let removed = try NoteAgentTextParser.document(title: "Title", body: "- [x] Keep me", base: base)
+                    var expected = base
+                    expected.blocks.remove(at: 1)
+                    expected.refreshRequiredCapabilities()
+                    XCTAssertEqual(removed, expected)
+                    guard case .success = store.agentWrite(noteID: id, baseRevisionToken: token,
+                        document: removed, agentName: "Agent", disposition: disposition) else { return XCTFail("checklist deletion refused") }
+                    if disposition == .proposal { XCTAssertEqual(store.applyPendingEdits(noteID: id), 1) }
+                    XCTAssertEqual(store.loadDocument(noteID: id)?.content.document, removed)
+                    token = try XCTUnwrap(store.note(withID: id)?.revisionToken)
+                    base = removed
+                }
+                let parsed = try NoteAgentTextParser.document(title: "Title", body: body, base: base)
+                XCTAssertEqual(parsed.blocks[1], kept)
+                guard case .success = store.agentWrite(noteID: id, baseRevisionToken: token,
+                    document: parsed, agentName: "Agent", disposition: disposition) else { return XCTFail("safe checklist edit refused") }
+                if disposition == .proposal { XCTAssertEqual(store.applyPendingEdits(noteID: id), 1) }
+                XCTAssertEqual(store.loadDocument(noteID: id)?.content.document, parsed)
+            }
+        }
+    }
+
     // MARK: Agent writes (requirement 5)
 
     func testAgentWriteNeedsAnExistingNoteAndItsCurrentRevision() throws {
@@ -795,12 +923,12 @@ final class NoteDocumentStoreTests: XCTestCase {
     }
 
     func testPendingProposalAndBaseSurvivePersistentRestart() throws {
-        let directory = FileManager.default.temporaryDirectory.appendingPathComponent("AtticProposal-\(UUID().uuidString)")
-        defer { try? FileManager.default.removeItem(at: directory) }
+        let directory = ownedTemporaryDirectory(prefix: "AtticProposal")
+
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         let firstContainer = try PersistenceController.makeContainer(inMemory: false, cloudSyncEnabled: false,
                                                                       storeDirectory: directory)
-        let first = NoteStore(container: firstContainer, attachmentFileStore: makeTestAttachmentFileStore())
+        let first = trackAttachmentReconciliation(of: NoteStore(container: firstContainer, attachmentFileStore: makeTestAttachmentFileStore()))
         guard case let .success((id, _)) = first.createDocumentNote(id: UUID(), document: document("Base")) else {
             return XCTFail()
         }
@@ -809,7 +937,7 @@ final class NoteDocumentStoreTests: XCTestCase {
             document: document("Proposal"), agentName: "Agent", disposition: .proposal) else { return XCTFail() }
         let secondContainer = try PersistenceController.makeContainer(inMemory: false, cloudSyncEnabled: false,
                                                                        storeDirectory: directory)
-        let second = NoteStore(container: secondContainer, attachmentFileStore: makeTestAttachmentFileStore())
+        let second = trackAttachmentReconciliation(of: NoteStore(container: secondContainer, attachmentFileStore: makeTestAttachmentFileStore()))
         let edit = try XCTUnwrap(second.pendingEdits(noteID: id).first)
         XCTAssertEqual(second.note(withID: id)?.title, "Base")
         XCTAssertEqual(second.versions(noteID: id).first(where: { $0.id == edit.baseVersionID })?.title, "Base")

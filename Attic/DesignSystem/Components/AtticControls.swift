@@ -21,15 +21,20 @@ extension EnvironmentValues {
 /// animate; interactive glass adds the system's own press response).
 struct AtticRaisedButtonStyle: ButtonStyle {
     var cornerRadius: CGFloat
+    /// L3: the flat corner surface instead of the raised material.
+    var flat = false
+    var isSelected = false
 
     func makeBody(configuration: Configuration) -> some View {
-        AtticRaisedButtonBody(configuration: configuration, cornerRadius: cornerRadius)
+        AtticRaisedButtonBody(configuration: configuration, cornerRadius: cornerRadius, flat: flat, isSelected: isSelected)
     }
 }
 
 private struct AtticRaisedButtonBody: View {
     let configuration: ButtonStyleConfiguration
     let cornerRadius: CGFloat
+    var flat = false
+    var isSelected = false
 
     @Environment(\.isEnabled) private var isEnabled
     @Environment(\.isFocused) private var isFocused
@@ -42,9 +47,17 @@ private struct AtticRaisedButtonBody: View {
             isPressed: configuration.isPressed, isFocused: isFocused
         ).state
         let shape = RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
-        configuration.label
-            .environment(\.atticControlState, state)
-            .atticRaisedMaterial(cornerRadius: cornerRadius, state: state, interactive: state != .disabled)
+        Group {
+            if flat {
+                configuration.label
+                    .environment(\.atticControlState, state)
+                    .atticFlatSurface(cornerRadius: cornerRadius, state: state, isSelected: isSelected)
+            } else {
+                configuration.label
+                    .environment(\.atticControlState, state)
+                    .atticRaisedMaterial(cornerRadius: cornerRadius, state: state, interactive: state != .disabled)
+            }
+        }
             .atticFocusRing(state == .focused, cornerRadius: cornerRadius)
             .contentShape(shape)
             .onHover { hovered = $0 }
@@ -71,13 +84,18 @@ struct AtticRaisedButton: View {
     /// The header's glyphs (Phase 0's qualities): the strong ink at regular
     /// weight, level with the page button's current page.
     var emphasisedGlyph = false
+    /// L3: the header's flat corner surface (one fill, one hairline, no
+    /// inner chip); a selected toggle takes the selected chip's fill whole.
+    var flat = false
     let action: () -> Void
 
     @State private var probeID = UUID()
 
     /// Icon only. `label` is what VoiceOver and the tooltip say.
     init(systemName: String, label: String.LocalizationValue, size: CGSize = AtticControlSize.panelButton, help: String? = nil,
-         isSelected: Bool = false, glyphOffsetY: CGFloat = 0, emphasisedGlyph: Bool = false, action: @escaping () -> Void) {
+         isSelected: Bool = false, glyphOffsetY: CGFloat = 0, emphasisedGlyph: Bool = false, flat: Bool = false,
+         action: @escaping () -> Void) {
+        self.flat = flat
         self.systemName = systemName
         self.title = nil
         self.accessibilityLabel = String(localized: label)
@@ -108,12 +126,12 @@ struct AtticRaisedButton: View {
                 .padding(.horizontal, title == nil ? 0 : AtticRaisedButtonMetrics.labelPadding)
                 .frame(width: title == nil ? size.width : nil, height: size.height)
                 .background {
-                    if isSelected {
+                    if isSelected, !flat {
                         AtticSelectedChip(outerHeight: size.height)
                     }
                 }
         }
-        .buttonStyle(AtticRaisedButtonStyle(cornerRadius: radius))
+        .buttonStyle(AtticRaisedButtonStyle(cornerRadius: radius, flat: flat, isSelected: isSelected))
         .focusEffectDisabled()
         .help(help ?? accessibilityLabel)
         .accessibilityLabel(accessibilityLabel)
@@ -210,6 +228,9 @@ struct AtticPageButton<Page: Hashable>: View {
     var pinnedOpen: Bool?
     /// The pointer arrived: the caller can build the other pages early.
     var onApproach: () -> Void = {}
+    /// L3: the flat corner surface; the current page's glyph sits on it
+    /// with no inner chip (open, the chip still marks it among the others).
+    var flat = false
 
     @Environment(\.atticDesign) private var design
     @Environment(\.atticCapture) private var capture
@@ -242,7 +263,9 @@ struct AtticPageButton<Page: Hashable>: View {
                     ZStack {
                         let shape = RoundedRectangle(cornerRadius: chipRadius, style: .continuous)
                         let accent = design.tokens.pageChipAccent
-                        if isSelected, let accent {
+                        if isSelected, flat, !open {
+                            // L3: shut, the glyph sits on the flat surface.
+                        } else if isSelected, let accent {
                             // Phase 0's Light palettes: the current page in the accent.
                             shape.fill(accent.fill.color)
                             shape.inset(by: M.accentStrokeWidth / 2).stroke(accent.stroke.color, lineWidth: M.accentStrokeWidth)
@@ -279,7 +302,7 @@ struct AtticPageButton<Page: Hashable>: View {
         }
         .padding(M.inset)
         .frame(height: size)
-        .atticRaisedMaterial(cornerRadius: radius, interactive: false)
+        .modifier(AtticPageButtonSurface(flat: flat, cornerRadius: radius, hovered: hovering))
         .atticFocusRing(capture == nil && focused && keyboardFocusVisible, cornerRadius: radius)
         .contentShape(RoundedRectangle(cornerRadius: radius, style: .continuous))
         .onHover { inside in
@@ -317,6 +340,24 @@ struct AtticPageButton<Page: Hashable>: View {
     }
 }
 
+/// The page button's surface: the raised material, or L3's flat one. Live
+/// glass is interactive (owner, 2026-10-02): a click on any of its pages
+/// gets the system's press response, as the pin's does. The pages' own
+/// buttons still take the click: the interactive glass only responds to it.
+private struct AtticPageButtonSurface: ViewModifier {
+    let flat: Bool
+    let cornerRadius: CGFloat
+    let hovered: Bool
+
+    func body(content: Content) -> some View {
+        if flat {
+            content.atticFlatSurface(cornerRadius: cornerRadius)
+        } else {
+            content.atticRaisedMaterial(cornerRadius: cornerRadius, interactive: true)
+        }
+    }
+}
+
 // MARK: - Add bar
 
 /// The add bar: one raised field, 36 tall, radius 15. The send button
@@ -336,7 +377,13 @@ struct AtticAddBar: View {
     }
 
     let placeholder: String
-    @Binding var text: String
+    /// Display state is a snapshot from the owning view. Keeping the edit
+    /// binding out of DynamicProperty avoids invalidating the whole bar on
+    /// scroll layout passes that poll bindings without changing the text.
+    private let text: String
+    // Binding itself conforms to DynamicProperty even without @Binding;
+    // capture it in a closure so only the actual field owns that property.
+    private let fieldText: () -> Binding<String>
     let onSubmit: () -> Void
     /// The leading glyph: `plus` for adding, `magnifyingglass` when the bar
     /// searches (the Done log).
@@ -359,7 +406,8 @@ struct AtticAddBar: View {
 
     init(placeholder: String.LocalizationValue, text: Binding<String>, onSubmit: @escaping () -> Void) {
         self.placeholder = String(localized: placeholder)
-        self._text = text
+        self.text = text.wrappedValue
+        self.fieldText = { text }
         self.onSubmit = onSubmit
     }
 
@@ -368,7 +416,8 @@ struct AtticAddBar: View {
     init(placeholder: String, text: Binding<String>, systemImage: String = "plus", showsSend: Bool = true,
          tokens: Tokens?, onSubmit: @escaping () -> Void) {
         self.placeholder = placeholder
-        self._text = text
+        self.text = text.wrappedValue
+        self.fieldText = { text }
         self.systemImage = systemImage
         self.showsSend = showsSend
         self.tokens = tokens
@@ -382,7 +431,15 @@ struct AtticAddBar: View {
         return focused
     }
 
+    #if DEBUG
+    /// Hosted regression counter, matching PanelHeader's scroll-frame seam.
+    static var bodyEvaluations = 0
+    #endif
+
     var body: some View {
+        #if DEBUG
+        let _ = Self.bodyEvaluations += 1
+        #endif
         let m = AtticAddBarMetrics.self
         let height = AtticControlSize.addBarHeight
         let radius = AtticRadius.control(height: height)
@@ -407,6 +464,7 @@ struct AtticAddBar: View {
                     sendButton(radius: radius)
                         .opacity(shown ? 1 : 0)
                         .offset(y: shown || design.reduceMotion ? 0 : AtticMotionPreset.popover.rise)
+                        .scaleEffect(shown ? 1 : AtticMotionPreset.popover.hiddenScale(reduceMotion: design.reduceMotion))
                         .allowsHitTesting(shown)
                         .disabled(!shown)
                         .accessibilityHidden(!shown)
@@ -421,7 +479,7 @@ struct AtticAddBar: View {
         .atticRaisedMaterial(cornerRadius: radius, state: state == .hover ? .rest : state, interactive: false)
         .atticFocusRing(state == .focused, cornerRadius: radius)
         .onHover { hovered = $0 }
-        .animation(AtticMotionPreset.popover.animation(reduceMotion: design.reduceMotion), value: hasText)
+        .animation(AtticMotionPreset.popover.animation(reduceMotion: design.reduceMotion, showing: hasText), value: hasText)
         .atticControlProbe("Add bar", id: probeID, expectedSize: nil, radius: radius, expectedRadius: 15)
     }
 
@@ -429,7 +487,7 @@ struct AtticAddBar: View {
     private func field(disabled: Bool) -> some View {
         if capture == nil, let tokens {
             AtticTokenField(
-                text: $text,
+                text: fieldText(),
                 chips: tokens.chips,
                 isFocused: tokens.isFocused,
                 accessibilityLabel: placeholder,
@@ -463,7 +521,7 @@ struct AtticAddBar: View {
         } else {
             TextField(
                 "",
-                text: $text,
+                text: fieldText(),
                 prompt: Text(verbatim: placeholder).foregroundStyle(design.tokens.color(disabled ? .disabledText : .placeholder))
             )
             .textFieldStyle(.plain)
@@ -508,6 +566,7 @@ struct AtticTabsSearchField: View {
     let placeholder: String
     @Binding var text: String
     var isFocused: Binding<Bool>?
+    var nativeInputIdentifier: String? = nil
     /// Esc, or a click on the "Esc" hint: the search ends.
     let onEscape: () -> Void
 
@@ -525,7 +584,14 @@ struct AtticTabsSearchField: View {
                 .frame(width: AtticControlSize.statusCircle)
                 .padding(.leading, AtticLayout.circleX - AtticLayout.rowHighlightInset)
             Group {
-                if capture == nil {
+                if capture == nil, let nativeInputIdentifier {
+                    AtticNativeSearchInput(text: $text, placeholder: placeholder,
+                        identifier: nativeInputIdentifier, isFocused: isFocused,
+                        color: NSColor(tokens.color(.heading)), placeholderColor: NSColor(tokens.color(.helper)),
+                        onEscape: onEscape)
+                        .background(AtticFieldClaimProbe(claim: claim, placeholder: placeholder,
+                            wanted: { isFocused?.wrappedValue == true }).accessibilityHidden(true))
+                } else if capture == nil {
                     TextField("", text: $text, prompt: Text(verbatim: placeholder).foregroundStyle(tokens.color(.helper)))
                         .textFieldStyle(.plain)
                         .font(AtticTextStyle.listBody.font)
@@ -558,7 +624,17 @@ struct AtticTabsSearchField: View {
         .frame(height: height)
         .background(RoundedRectangle(cornerRadius: AtticRadius.control(height: height), style: .continuous).fill(tokens.recessed.color))
         .contentShape(Rectangle())
-        .onTapGesture { focused = true }
+        .onTapGesture {
+            // The native field has no SwiftUI focus of its own: a click on
+            // the magnifier or the padding gives its AppKit field the
+            // keyboard directly (review P3).
+            if nativeInputIdentifier != nil, capture == nil {
+                if isFocused?.wrappedValue != true { isFocused?.wrappedValue = true }
+                takeKeyboard()
+            } else {
+                focused = true
+            }
+        }
         .onAppear {
             // Once the field is in the window (a focus set as it appears is
             // lost, and the click that opened it ends after this): the
@@ -876,7 +952,7 @@ struct AtticSelectionBar: View {
                     AtticMenuButton(systemName: action.systemName, label: action.label, commands: menu)
                 } else if let popover = action.popover {
                     AtticSmallButton(systemName: action.systemName, label: action.label, action: action.handler)
-                        .atticPopover(isPresented: popover.isPresented, arrowEdge: .top) { popover.content() }
+                        .atticDropdown(isPresented: popover.isPresented, prefer: .above, label: String(localized: action.label)) { popover.content() }
                 } else {
                     AtticSmallButton(systemName: action.systemName, label: action.label, action: action.handler)
                 }
@@ -977,6 +1053,39 @@ struct AtticMenuCommand: Identifiable {
         return command
     }
 
+    /// Bare keys belong to the list, and are reference hints in a menu.
+    /// NSMenu's tracking loop matches key equivalents internally, bypassing
+    /// performKeyEquivalent and local event monitors. Return must therefore
+    /// never be registered as Edit Title's native menu equivalent.
+    var menuShortcut: KeyboardShortcut? {
+        guard let shortcut, !shortcut.modifiers.intersection([.command, .control, .option]).isEmpty else { return nil }
+        return shortcut
+    }
+
+    var menuBadge: String? {
+        let hint = menuShortcut == nil ? shortcut.map(Self.shortcutHint) : nil
+        let parts = [detail, hint].compactMap { $0 }
+        return parts.isEmpty ? nil : parts.joined(separator: " · ")
+    }
+
+    private static func shortcutHint(_ shortcut: KeyboardShortcut) -> String {
+        let key: String
+        switch shortcut.key {
+        case .return: key = "↩"
+        case .space: key = String(localized: "Space")
+        case .delete: key = "⌫"
+        case .deleteForward: key = "⌦"
+        case .upArrow: key = "↑"
+        case .downArrow: key = "↓"
+        case .leftArrow: key = "←"
+        case .rightArrow: key = "→"
+        case .escape: key = "⎋"
+        case .tab: key = "⇥"
+        default: key = String(shortcut.key.character).uppercased()
+        }
+        return (shortcut.modifiers.contains(.shift) ? "⇧" : "") + key
+    }
+
     /// A section's heading: starts a section, titled.
     static func header(_ title: String) -> AtticMenuCommand {
         var command = AtticMenuCommand(verbatim: title, startsSection: true) {}
@@ -1026,8 +1135,15 @@ struct AtticMenuCommand: Identifiable {
     /// and takes the key. A command that is disabled right now (Move Up on
     /// the first subtask) still takes its key and does nothing, so the key
     /// never falls through to the list and moves the main task instead.
+    /// ⇧⌘I opens the line's whole menu (`showActions`, control audit item
+    /// 5), as it does a task row's.
     static func performSubtaskKey(key: KeyEquivalent, characters: String, modifiers: EventModifiers,
-                                  in commands: [AtticMenuCommand]) -> KeyPress.Result {
+                                  in commands: [AtticMenuCommand], showActions: (() -> Void)? = nil) -> KeyPress.Result {
+        if let showActions, !commands.isEmpty,
+           AtticTaskKeys.command(key: key, characters: characters, modifiers: modifiers, listCommands: true) == .showActions {
+            showActions()
+            return .handled
+        }
         guard let command = command(key: key, characters: characters, modifiers: modifiers,
                                     in: commands, includingDisabled: true) else { return .ignored }
         if !command.isDisabled { command.action() }
@@ -1132,12 +1248,12 @@ struct AtticMenuItems: View {
             .disabled(command.isDisabled)
         } else if let state = command.state, state != .mixed {
             // A toggle draws the native tick.
-            Toggle(isOn: Binding(get: { state == .on }, set: { _ in command.action() })) { label(command) }
+            Toggle(isOn: Binding(get: { state == .on }, set: { _ in choose(command) })) { label(command) }
                 .disabled(command.isDisabled)
-                .modifier(AtticMenuShortcut(shortcut: command.shortcut))
-                .modifier(AtticMenuBadge(detail: command.detail))
+                .modifier(AtticMenuShortcut(shortcut: command.menuShortcut))
+                .modifier(AtticMenuBadge(detail: command.menuBadge))
         } else {
-            Button(role: command.isDestructive ? .destructive : nil, action: command.action) {
+            Button(role: command.isDestructive ? .destructive : nil, action: { choose(command) }) {
                 if command.state == .mixed {
                     // Some of the targets have it: a dash.
                     SwiftUI.Label(command.title, systemImage: "minus")
@@ -1146,9 +1262,15 @@ struct AtticMenuItems: View {
                 }
             }
             .disabled(command.isDisabled)
-            .modifier(AtticMenuShortcut(shortcut: command.shortcut))
-            .modifier(AtticMenuBadge(detail: command.detail))
+            .modifier(AtticMenuShortcut(shortcut: command.menuShortcut))
+            .modifier(AtticMenuBadge(detail: command.menuBadge))
         }
+    }
+
+    /// A chosen item: its command runs as a menu choice, so a field under
+    /// the menu never takes the Return or click that chose it.
+    private func choose(_ command: AtticMenuCommand) {
+        AtticTextInput.choosing(command.menuShortcut, command.action)
     }
 
     @ViewBuilder
@@ -1204,6 +1326,7 @@ enum AtticNativeMenu {
 
     private static func item(_ command: AtticMenuCommand) -> NSMenuItem {
         let item = NSMenuItem(title: command.title, action: nil, keyEquivalent: "")
+        item.keyEquivalentModifierMask = []
         if let systemImage = command.systemImage, command.state != .mixed {
             item.image = NSImage(systemSymbolName: systemImage, accessibilityDescription: nil)
         }
@@ -1212,7 +1335,7 @@ enum AtticNativeMenu {
         } else {
             item.target = AtticMenuTarget.shared
             item.action = #selector(AtticMenuTarget.runCommand(_:))
-            item.representedObject = AtticMenuTarget.Box(command.action)
+            item.representedObject = AtticMenuTarget.Box(command.action, keyEquivalent: command.menuShortcut)
         }
         switch command.state {
         case .on?: item.state = .on
@@ -1220,11 +1343,11 @@ enum AtticNativeMenu {
         case .off?, nil: item.state = .off
         }
         item.isEnabled = !command.isDisabled
-        if let shortcut = command.shortcut, let key = keyEquivalent(shortcut.key) {
+        if let shortcut = command.menuShortcut, let key = keyEquivalent(shortcut.key) {
             item.keyEquivalent = key
             item.keyEquivalentModifierMask = modifiers(shortcut.modifiers)
         }
-        if let detail = command.detail { item.badge = NSMenuItemBadge(string: detail) }
+        if let detail = command.menuBadge { item.badge = NSMenuItemBadge(string: detail) }
         if let identifier = command.identifier {
             item.identifier = NSUserInterfaceItemIdentifier(identifier)
             item.setAccessibilityIdentifier(identifier)
@@ -1281,6 +1404,30 @@ enum AtticNativeMenu {
             menu.popUp(positioning: nil, at: location, in: view)
         }
     }
+
+    /// Opens the menu as the system opens a right-click menu, with its top
+    /// left at `point` in `view` (under its bottom-left corner by default):
+    /// a row's actions (⇧⌘I, the row's ⋯, VoiceOver's Show actions). The
+    /// pop-up style above keeps a menu beside its button and, short of
+    /// room, squeezes a submenu's titles to fragments (CU recheck 3, P3:
+    /// More's Open Files…, Move Up and Move Down showed as "…"); a context
+    /// menu places its submenus as the right-click menu does, titles whole.
+    static func popUpContextMenu(_ commands: [AtticMenuCommand], in view: NSView, at point: CGPoint? = nil) {
+        let menu = make(commands)
+        menu.appearance = view.window?.effectiveAppearance
+        let location = point ?? CGPoint(x: 0, y: view.isFlipped ? view.bounds.maxY + 4 : -4)
+        DispatchQueue.main.async {
+            guard let window = view.window else { return }
+            guard let event = NSEvent.mouseEvent(with: .rightMouseDown, location: view.convert(location, to: nil),
+                                                 modifierFlags: [], timestamp: ProcessInfo.processInfo.systemUptime,
+                                                 windowNumber: window.windowNumber, context: nil, eventNumber: 0,
+                                                 clickCount: 1, pressure: 1) else {
+                menu.popUp(positioning: nil, at: location, in: view)
+                return
+            }
+            NSMenu.popUpContextMenu(menu, with: event, for: view)
+        }
+    }
 }
 
 /// Runs a native menu item's command.
@@ -1290,13 +1437,19 @@ final class AtticMenuTarget: NSObject {
 
     final class Box {
         let action: () -> Void
-        init(_ action: @escaping () -> Void) { self.action = action }
+        let keyEquivalent: KeyboardShortcut?
+        init(_ action: @escaping () -> Void, keyEquivalent: KeyboardShortcut? = nil) {
+            self.action = action
+            self.keyEquivalent = keyEquivalent
+        }
     }
 
     /// Not `perform(_:)`: that is NSObject's `performSelector:`, which the
     /// selector resolved to, so a chosen item ran nothing (round 10, CI run 2).
+    /// The command runs as a menu choice (`AtticTextInput.choosing`).
     @objc func runCommand(_ item: NSMenuItem) {
-        (item.representedObject as? Box)?.action()
+        guard let box = item.representedObject as? Box else { return }
+        AtticTextInput.choosing(box.keyEquivalent, box.action)
     }
 }
 
@@ -1334,16 +1487,44 @@ struct AtticMenuButton: View {
     let systemName: String
     let label: String.LocalizationValue
     let commands: () -> [AtticMenuCommand]
+    /// The anchor, when a key opens the same menu (follow-up part 2: ⌥⌘V
+    /// opens View Options under its button).
+    var holder: AtticMenuAnchor.Holder? = nil
+    /// A small accent dot at the glyph's top trailing corner: the menu's
+    /// choices hide something (an active filter).
+    var showsDot = false
+    /// What VoiceOver reads as the button's value (the current choice).
+    var value: String? = nil
 
-    @State private var anchor = AtticMenuAnchor.Holder()
+    @State private var ownAnchor = AtticMenuAnchor.Holder()
 
     var body: some View {
+        let anchor = holder ?? ownAnchor
         AtticSmallButton(systemName: systemName, label: label) {
             guard let view = anchor.view else { return }
             AtticNativeMenu.popUp(commands(), in: view)
         }
+        .overlay(alignment: .topTrailing) {
+            if showsDot { AtticMenuButtonDot().allowsHitTesting(false) }
+        }
         .background(AtticMenuAnchor(holder: anchor).accessibilityHidden(true))
         .accessibilityHint(String(localized: "Opens a menu"))
+        .accessibilityValue(value ?? "")
+    }
+}
+
+/// The menu button's dot: 5 pt in the accent, 6 pt in from the control's
+/// top trailing corner, on the glyph's corner.
+private struct AtticMenuButtonDot: View {
+    @Environment(\.atticDesign) private var design
+
+    var body: some View {
+        Circle()
+            .fill(design.tokens.color(.accent))
+            .frame(width: AtticMenuButtonMetrics.dotSize, height: AtticMenuButtonMetrics.dotSize)
+            .padding(.top, AtticMenuButtonMetrics.dotInset)
+            .padding(.trailing, AtticMenuButtonMetrics.dotInset)
+            .accessibilityHidden(true)
     }
 }
 
@@ -1402,6 +1583,9 @@ struct AtticPopoverRow: View {
     var detail: String?
     /// The list's keyboard selection is on this row.
     var isHighlighted = false
+    /// Keeps the icon column when this row has no icon, so a list of rows
+    /// where only one is ticked stays aligned.
+    var reservesIconSlot = false
     let action: () -> Void
 
     @Environment(\.atticDesign) private var design
@@ -1410,11 +1594,13 @@ struct AtticPopoverRow: View {
     @State private var hovered = false
     @State private var probeID = UUID()
 
-    init(systemName: String?, title: String, detail: String? = nil, isHighlighted: Bool = false, action: @escaping () -> Void) {
+    init(systemName: String?, title: String, detail: String? = nil, isHighlighted: Bool = false,
+         reservesIconSlot: Bool = false, action: @escaping () -> Void) {
         self.systemName = systemName
         self.title = title
         self.detail = detail
         self.isHighlighted = isHighlighted
+        self.reservesIconSlot = reservesIconSlot
         self.action = action
     }
 
@@ -1435,6 +1621,8 @@ struct AtticPopoverRow: View {
                 if let systemName {
                     AtticIcon(systemName: systemName, size: m.rowIconSize, ink: state == .disabled ? .disabledIcon : .icon)
                         .frame(width: m.rowIconSlot)
+                } else if reservesIconSlot {
+                    Color.clear.frame(width: m.rowIconSlot, height: 1).accessibilityHidden(true)
                 }
                 AtticText(verbatim: title, style: .menuRow, ink: state == .disabled ? .disabledText : .body, truncates: true)
                 Spacer(minLength: m.trailingMinGap)
@@ -1472,4 +1660,88 @@ struct AtticPopover<Content: View>: View {
 /// A quiet grouping gap inside a pop-over (space, not a line).
 struct AtticPopoverGap: View {
     var body: some View { Color.clear.frame(height: AtticPopoverMetrics.groupGap).accessibilityHidden(true) }
+}
+
+/// Literal native edits do not change the field's allocated geometry or
+/// invalidate the surrounding task page. External replacements still update.
+private struct AtticNativeSearchInput: NSViewRepresentable {
+    @Binding var text: String
+    let placeholder: String
+    let identifier: String
+    let isFocused: Binding<Bool>?
+    let color: NSColor
+    let placeholderColor: NSColor
+    let onEscape: () -> Void
+
+    final class Field: NSTextField {
+        /// The field took the keyboard (a click back into it, ⌘F, Search).
+        var onFocus: (() -> Void)?
+        override var intrinsicContentSize: NSSize { NSSize(width: NSView.noIntrinsicMetric, height: 18) }
+        // The font and single-line height are fixed; typing changes neither.
+        override func invalidateIntrinsicContentSize() {}
+
+        /// Focus counts from the moment the field has the keyboard, not
+        /// from its first edit (`controlTextDidBeginEditing`): ↓ after a
+        /// click back into the field reaches the results (review P3).
+        override func becomeFirstResponder() -> Bool {
+            let became = super.becomeFirstResponder()
+            if became { onFocus?() }
+            return became
+        }
+    }
+
+    func sizeThatFits(_ proposal: ProposedViewSize, nsView: Field, context: Context) -> CGSize? {
+        CGSize(width: proposal.width ?? 200, height: 18)
+    }
+
+    func makeCoordinator() -> Coordinator { Coordinator(self) }
+    func makeNSView(context: Context) -> Field {
+        let field = Field()
+        field.isBordered = false
+        field.isBezeled = false
+        field.drawsBackground = false
+        field.isEditable = true
+        field.isSelectable = true
+        field.focusRingType = .none
+        field.cell?.usesSingleLineMode = true
+        field.cell?.isScrollable = true
+        field.delegate = context.coordinator
+        field.setAccessibilityLabel(placeholder)
+        field.setAccessibilityIdentifier(identifier)
+        return field
+    }
+
+    func updateNSView(_ field: Field, context: Context) {
+        context.coordinator.owner = self
+        let coordinator = context.coordinator
+        field.onFocus = { [weak coordinator] in
+            guard let owner = coordinator?.owner, owner.isFocused?.wrappedValue != true else { return }
+            owner.isFocused?.wrappedValue = true
+        }
+        field.font = AtticTextStyle.listBody.nsFont
+        field.textColor = color
+        field.placeholderAttributedString = NSAttributedString(string: placeholder,
+            attributes: [.font: AtticTextStyle.listBody.nsFont, .foregroundColor: placeholderColor])
+        if field.stringValue != text { field.stringValue = text }
+    }
+
+    final class Coordinator: NSObject, NSTextFieldDelegate {
+        var owner: AtticNativeSearchInput
+        init(_ owner: AtticNativeSearchInput) { self.owner = owner }
+        func controlTextDidChange(_ notification: Notification) {
+            guard let field = notification.object as? NSTextField else { return }
+            owner.text = field.stringValue
+        }
+        func controlTextDidBeginEditing(_ notification: Notification) {
+            if owner.isFocused?.wrappedValue != true { owner.isFocused?.wrappedValue = true }
+        }
+        func controlTextDidEndEditing(_ notification: Notification) {
+            if owner.isFocused?.wrappedValue == true { owner.isFocused?.wrappedValue = false }
+        }
+        func control(_ control: NSControl, textView: NSTextView, doCommandBy commandSelector: Selector) -> Bool {
+            guard commandSelector == #selector(NSResponder.cancelOperation(_:)) else { return false }
+            owner.onEscape()
+            return true
+        }
+    }
 }

@@ -302,6 +302,33 @@ final class TasksRound3StoreTests: XCTestCase {
         XCTAssertEqual(all.map(\.completedAt), all.map(\.completedAt).sorted { ($0 ?? .distantPast) > ($1 ?? .distantPast) })
     }
 
+    /// An explicit reveal reaches as far into the Done log as it did with
+    /// 80-row pages (GPT-6.1's PR prep review, P3): the oldest of 9,000
+    /// logged tasks lies past the 8,040 rows that 200 of today's 40-row
+    /// pages would reach, and well inside the kept 16,080.
+    func testShowRevealsTheOldestOfNineThousandLoggedTasks() throws {
+        XCTAssertEqual(TasksPageModel.doneRevealReach, 80 + 200 * 80, "the reach before the 40-row pages, in rows")
+        XCTAssertLessThan(TasksPageModel.doneLogPageSize + 200 * TasksPageModel.doneLogPageSize, 9_000,
+                          "the fixture lies past what 200 browsing pages reach")
+        let context = ModelContext(store.container)
+        var oldest: UUID?
+        for index in 0..<9_000 {
+            let completed = clock.value.addingTimeInterval(-Double(index + 1) * 600)
+            let task = TaskItem(title: "Logged \(index)", status: .done, createdAt: completed, updatedAt: completed,
+                                completedAt: completed)
+            task.doneLoggedAt = completed
+            context.insert(task)
+            oldest = task.id
+        }
+        try context.save()
+        store.refresh()
+        let id = try XCTUnwrap(oldest)
+        XCTAssertEqual(model.show(id), .shown)
+        XCTAssertNil(model.pendingReveal)
+        XCTAssertEqual(model.doneLogTasks.last?.id, id, "the log loaded to its oldest task, in order")
+        XCTAssertEqual(model.selection, [id])
+    }
+
     func testAFailedDoneLogReadKeepsWhatLoadedAndOffersRetry() throws {
         var ids: [UUID] = []
         for index in 0..<(TasksPageModel.doneLogPageSize + 5) {
@@ -411,7 +438,7 @@ final class PanelLifecycleTests: XCTestCase {
         defer { defaults.removePersistentDomain(forName: suite) }
         let container = try PersistenceController.makeContainer(inMemory: true, cloudSyncEnabled: false)
         let store = TaskStore(container: container)
-        let notes = NoteStore(container: container, attachmentFileStore: makeTestAttachmentFileStore())
+        let notes = trackAttachmentReconciliation(of: NoteStore(container: container, attachmentFileStore: makeTestAttachmentFileStore()))
         let state = PanelUIState()
         let controller = AtticPanelController(
             store: store, noteStore: notes,

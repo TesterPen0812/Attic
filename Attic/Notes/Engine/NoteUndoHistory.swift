@@ -27,6 +27,7 @@ final class NoteUndoHistory {
     struct ParagraphState: Equatable {
         var style: NoteParagraphStyle
         var indent: Int
+        var block: NoteBlock? = nil
     }
     final class Op {
         fileprivate(set) var range: NSRange
@@ -43,6 +44,7 @@ final class NoteUndoHistory {
         fileprivate(set) var tagDelta: (tag: String, adds: Bool, changesTags: Bool)?
         fileprivate var tagPickerDelta: (adds: [String], removes: [String])?
         fileprivate var paragraphStyleSnapshot: (location: Int, before: ParagraphState, after: ParagraphState)?
+        fileprivate var emptyParagraphSnapshot: (before: NoteBlock?, after: NoteBlock?)?
         fileprivate var typingMarkSnapshot: (kind: NoteMark.Kind, before: Bool, after: Bool)?
 
         fileprivate init(range: NSRange, current: NSAttributedString, other: NSAttributedString, name: String, group: Int) {
@@ -65,6 +67,7 @@ final class NoteUndoHistory {
         var coalesceInto: Op?
         var pre: NSAttributedString?
         var post: NSAttributedString?
+        var emptyParagraphBefore: NoteBlock? = nil
     }
 
     let storage: NSTextStorage
@@ -79,6 +82,8 @@ final class NoteUndoHistory {
     var onTagFlip: ((_ tag: String, _ add: Bool, _ changesTags: Bool, _ range: NSRange) -> Void)?
     var onTagPickerDelta: ((_ adds: [String], _ removes: [String]) -> Void)?
     var onParagraphStyleSnapshot: ((Int, ParagraphState) -> Void)?
+    var emptyParagraphState: (() -> NoteBlock?)?
+    var onEmptyParagraphSnapshot: ((NoteBlock?) -> Void)?
     var onTypingMarkSnapshot: ((NoteMark.Kind, Bool) -> Void)?
 
     var canPrepareWorkspaceCommand: Bool { !isChangeInFlight && composition == nil && (canReplay?() ?? true) }
@@ -166,7 +171,8 @@ final class NoteUndoHistory {
                                        (tag: String, adds: Bool, changesTags: Bool)?,
                                        (adds: [String], removes: [String])?,
                                        (location: Int, before: ParagraphState, after: ParagraphState)?,
-                                       (kind: NoteMark.Kind, before: Bool, after: Bool)?)
+                                       (kind: NoteMark.Kind, before: Bool, after: Bool)?,
+                                       (before: NoteBlock?, after: NoteBlock?)?)
         fileprivate let undo: [Saved]
         fileprivate let redo: [Saved]
         fileprivate let workspace: UndoRoute.Checkpoint?
@@ -175,7 +181,7 @@ final class NoteUndoHistory {
     func checkpoint() -> Checkpoint {
         open = nil
         func copy(_ ops: [Op]) -> [Checkpoint.Saved] {
-            ops.map { ($0, $0.range, $0.current, $0.other, $0.isInert, $0.tagDelta, $0.tagPickerDelta, $0.paragraphStyleSnapshot, $0.typingMarkSnapshot) }
+            ops.map { ($0, $0.range, $0.current, $0.other, $0.isInert, $0.tagDelta, $0.tagPickerDelta, $0.paragraphStyleSnapshot, $0.typingMarkSnapshot, $0.emptyParagraphSnapshot) }
         }
         return Checkpoint(undo: copy(undoOps), redo: copy(redoOps), workspace: workspace?.checkpoint())
     }
@@ -184,7 +190,7 @@ final class NoteUndoHistory {
     /// is now (the caller restored the text first).
     func rewind(to checkpoint: Checkpoint) {
         func restore(_ saved: [Checkpoint.Saved]) -> [Op] {
-            saved.map { op, range, current, other, inert, tagDelta, tagPickerDelta, paragraphStyleSnapshot, typingMarkSnapshot in
+            saved.map { op, range, current, other, inert, tagDelta, tagPickerDelta, paragraphStyleSnapshot, typingMarkSnapshot, emptyParagraphSnapshot in
                 op.range = range
                 op.current = current
                 op.other = other
@@ -193,6 +199,7 @@ final class NoteUndoHistory {
                 op.tagPickerDelta = tagPickerDelta
                 op.paragraphStyleSnapshot = paragraphStyleSnapshot
                 op.typingMarkSnapshot = typingMarkSnapshot
+                op.emptyParagraphSnapshot = emptyParagraphSnapshot
                 return op
             }
         }
@@ -238,7 +245,8 @@ final class NoteUndoHistory {
         for (index, range) in sorted {
             let newLength = strings.map { ($0[index] as NSString).length } ?? range.length
             var entry = Pending(range: range, old: storage.attributedSubstring(from: range),
-                                newRange: NSRange(location: range.location + delta, length: newLength))
+                                newRange: NSRange(location: range.location + delta, length: newLength),
+                                emptyParagraphBefore: emptyParagraphState?())
             if ranges.count == 1, groupID == nil, let op = open, !op.isInert,
                range.location <= NSMaxRange(op.range), NSMaxRange(range) >= op.range.location {
                 entry.coalesceInto = op
@@ -291,12 +299,22 @@ final class NoteUndoHistory {
                                                                            length: endBefore + delta - start))
                 }
                 op.range = NSRange(location: start, length: endBefore + delta - start)
+                updateEmptyParagraphSnapshot(op, before: entry.emptyParagraphBefore)
             } else {
                 let op = Op(range: entry.newRange, current: now, other: entry.old, name: name, group: groupID ?? nextOwnGroup())
+                updateEmptyParagraphSnapshot(op, before: entry.emptyParagraphBefore)
                 append(op)
                 open = (pending.count == 1 && groupID == nil) ? op : nil
             }
         }
+    }
+
+    private func updateEmptyParagraphSnapshot(_ op: Op, before captured: NoteBlock?) {
+        let before: NoteBlock?
+        if let snapshot = op.emptyParagraphSnapshot { before = snapshot.before }
+        else { before = captured }
+        let after = emptyParagraphState?()
+        op.emptyParagraphSnapshot = before == after ? nil : (before, after)
     }
 
     private func nextOwnGroup() -> Int {
@@ -322,7 +340,7 @@ final class NoteUndoHistory {
 
     /// A character edit that did not pass through `willChange` (marked text,
     /// a direct storage edit). `newRange` is in post-edit coordinates.
-    func captureUnrecorded(newRange: NSRange, delta: Int) {
+    func captureUnrecorded(newRange: NSRange, delta: Int, emptyParagraphBefore: NoteBlock? = nil) {
         guard !isReplaying else { return }
         // A change announced through the delegate is final as soon as the
         // storage holds it: NSTextView sends no textDidChange for marked text.
@@ -353,7 +371,8 @@ final class NoteUndoHistory {
             rebase(editAt: preRange, newLength: newRange.length)
             return
         }
-        pending = [Pending(range: preRange, old: old, newRange: newRange, coalesceInto: coalesce)]
+        pending = [Pending(range: preRange, old: old, newRange: newRange, coalesceInto: coalesce,
+                           emptyParagraphBefore: emptyParagraphBefore)]
         if let op = coalesce {
             // Inside the open step: its recorded old text already covers this.
             pending[0].pre = nil
@@ -367,6 +386,7 @@ final class NoteUndoHistory {
                                                                        length: op.range.length + delta))
             }
             op.range = NSRange(location: op.range.location, length: op.range.length + delta)
+            updateEmptyParagraphSnapshot(op, before: emptyParagraphBefore)
             pending.removeAll()
             return
         }
@@ -444,6 +464,7 @@ final class NoteUndoHistory {
         var tags: [String] = []
         var paragraphs: [Int: ParagraphState] = [:]
         var typingMarks: Set<NoteMark.Kind> = []
+        var emptyParagraph: NoteBlock?
     }
     var readReplayMetadata: (() -> ReplayMetadata)?
     var installReplayMetadata: ((ReplayMetadata) -> Void)?
@@ -468,6 +489,7 @@ final class NoteUndoHistory {
         let picker: (adds: [String], removes: [String])?
         let paragraph: (location: Int, before: ParagraphState, after: ParagraphState)?
         let mark: (kind: NoteMark.Kind, before: Bool, after: Bool)?
+        let emptyParagraph: (before: NoteBlock?, after: NoteBlock?)?
 
         init(_ op: Op, flipped: Bool = false) {
             range = NSRange(location: op.range.location, length: flipped ? op.other.length : op.range.length)
@@ -478,6 +500,7 @@ final class NoteUndoHistory {
             picker = op.tagPickerDelta.map { flipped ? ($0.removes, $0.adds) : $0 }
             paragraph = op.paragraphStyleSnapshot.map { flipped ? ($0.location, $0.after, $0.before) : $0 }
             mark = op.typingMarkSnapshot.map { flipped ? ($0.kind, $0.after, $0.before) : $0 }
+            emptyParagraph = op.emptyParagraphSnapshot.map { flipped ? ($0.after, $0.before) : $0 }
         }
 
         func stillMatches(_ op: Op) -> Bool {
@@ -488,11 +511,14 @@ final class NoteUndoHistory {
                 && picker?.removes == other.picker?.removes && paragraph?.location == other.paragraph?.location
                 && paragraph?.before == other.paragraph?.before && paragraph?.after == other.paragraph?.after
                 && mark?.kind == other.mark?.kind && mark?.before == other.mark?.before && mark?.after == other.mark?.after
+                && emptyParagraph?.before == other.emptyParagraph?.before && emptyParagraph?.after == other.emptyParagraph?.after
+                && (emptyParagraph == nil) == (other.emptyParagraph == nil)
         }
 
         func install(on op: Op) {
             op.range = range; op.current = current; op.other = other; op.isInert = inert
             op.tagDelta = tag; op.tagPickerDelta = picker; op.paragraphStyleSnapshot = paragraph; op.typingMarkSnapshot = mark
+            op.emptyParagraphSnapshot = emptyParagraph
         }
     }
 
@@ -557,7 +583,7 @@ final class NoteUndoHistory {
                 candidate.replaceCharacters(in: op.range, with: op.other)
                 selection = NSRange(location: NSMaxRange(after.range), length: 0)
             }
-            if before.tag != nil || before.picker != nil || before.paragraph != nil || before.mark != nil {
+            if before.tag != nil || before.picker != nil || before.paragraph != nil || before.mark != nil || before.emptyParagraph != nil {
                 guard var state = metadata, installReplayMetadata != nil else { return nil }
                 var tags = Set(state.tags)
                 if let delta = before.picker {
@@ -574,10 +600,22 @@ final class NoteUndoHistory {
                     guard current == paragraph.after else { return nil }
                     if paragraph.before == .init(style: .body, indent: 0) { state.paragraphs.removeValue(forKey: paragraph.location) }
                     else { state.paragraphs[paragraph.location] = paragraph.before }
+                    if paragraph.location == candidate.length, let empty = state.emptyParagraph {
+                        var block = paragraph.before.block ?? empty
+                        block.style = paragraph.before.style.storageName ?? (block.style == "body" ? "body" : nil)
+                        block.level = paragraph.before.style.level
+                        block.indent = paragraph.before.indent > 0 ? paragraph.before.indent : (block.indent == 0 ? 0 : nil)
+                        state.emptyParagraph = block
+                    }
                 }
                 if let mark = before.mark {
                     guard state.typingMarks.contains(mark.kind) == mark.after else { return nil }
                     if mark.before { state.typingMarks.insert(mark.kind) } else { state.typingMarks.remove(mark.kind) }
+                }
+                if let empty = before.emptyParagraph {
+                    guard state.emptyParagraph == empty.after else { return nil }
+                    state.emptyParagraph = empty.before
+                    state.paragraphs.removeValue(forKey: original.length)
                 }
                 metadata = state
             }
@@ -614,6 +652,7 @@ final class NoteUndoHistory {
                 if let delta = before.picker { onTagPickerDelta?(delta.adds, delta.removes) }
                 if let state = before.paragraph { onParagraphStyleSnapshot?(state.location, state.before) }
                 if let state = before.mark { onTypingMarkSnapshot?(state.kind, state.before) }
+                if let state = before.emptyParagraph { onEmptyParagraphSnapshot?(state.before) }
                 if let delta = before.tag { onTagFlip?(delta.tag, delta.adds, delta.changesTags, after.range) }
             }
             textView?.setSelectedRange(prepared.selection)
@@ -716,6 +755,10 @@ final class NoteUndoHistory {
         if let delta = op.tagDelta {
             op.tagDelta = (delta.tag, !delta.adds, delta.changesTags)
             onTagFlip?(delta.tag, delta.adds, delta.changesTags, op.range)
+        }
+        if let snapshot = op.emptyParagraphSnapshot {
+            op.emptyParagraphSnapshot = (snapshot.after, snapshot.before)
+            onEmptyParagraphSnapshot?(snapshot.before)
         }
         onReplay?(op.range)
         return true

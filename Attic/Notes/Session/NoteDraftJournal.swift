@@ -262,6 +262,11 @@ private final class NoteOperationRecoveryBarrier: @unchecked Sendable {
     }
 }
 
+private struct NoteLiveReferenceSnapshot: Sendable {
+    let version: UInt64
+    let ids: Set<UUID>
+}
+
 private actor NoteDraftJournalIO {
     nonisolated let operationBarrier = NoteOperationRecoveryBarrier()
     private var operationReconciled = false
@@ -269,7 +274,12 @@ private actor NoteDraftJournalIO {
     private let fileManagerFactory: @Sendable () -> FileManager
     private lazy var fileManager = fileManagerFactory()
     private var liveReferences = Set<UUID>()
-    func retain(_ ids: Set<UUID>) { liveReferences.formUnion(ids) }
+    private var liveReferenceVersion: UInt64 = 0
+    private func installLiveReferences(_ snapshot: NoteLiveReferenceSnapshot) {
+        guard snapshot.version >= liveReferenceVersion else { return }
+        liveReferenceVersion = snapshot.version
+        liveReferences = snapshot.ids
+    }
 
     init(directory: URL, fileManagerFactory: @escaping @Sendable () -> FileManager) {
         self.directory = directory
@@ -335,7 +345,9 @@ private actor NoteDraftJournalIO {
     }
 
     func write(_ entry: NoteDraftJournalEntry, staged: [StagedNoteAttachment],
-               replacing claim: NoteRecoveryClaim?, cancellingPending: Bool = false) throws -> NoteRecoveryClaim {
+               replacing claim: NoteRecoveryClaim?, cancellingPending: Bool = false,
+               live: NoteLiveReferenceSnapshot) throws -> NoteRecoveryClaim {
+        installLiveReferences(live)
         let previous = ownership(of: url(for: entry.noteID))
         guard previous.mayRelease(claim: claim, saved: { nil }, discarding: true) else {
             throw NoteDraftJournalError.unknownOwnership
@@ -386,7 +398,8 @@ private actor NoteDraftJournalIO {
 
     /// If the file cannot be unlinked, an empty retired marker replaces it,
     /// so it can never come back as unsaved work.
-    func retire(noteID: UUID, claim: NoteRecoveryClaim?, saved: NoteRecoverySavedState?) throws {
+    func retire(noteID: UUID, claim: NoteRecoveryClaim?, saved: NoteRecoverySavedState?, live: NoteLiveReferenceSnapshot) throws {
+        installLiveReferences(live)
         let file = url(for: noteID)
         let state = ownership(of: file)
         if case .absent = state { return }
@@ -394,7 +407,8 @@ private actor NoteDraftJournalIO {
         try unlinkReleasedCheckpoint(noteID: noteID)
     }
 
-    func discardOwned(noteID: UUID, claim: NoteRecoveryClaim) throws {
+    func discardOwned(noteID: UUID, claim: NoteRecoveryClaim, live: NoteLiveReferenceSnapshot) throws {
+        installLiveReferences(live)
         guard ownership(of: url(for: noteID)).mayRelease(claim: claim, saved: { nil }, discarding: true) else {
             throw NoteDraftJournalError.unknownOwnership
         }
@@ -467,7 +481,8 @@ private actor NoteDraftJournalIO {
             stagedDigests: staged, unreadableItems: unreadable.sorted())
     }
 
-    func archiveDamaged(_ confirmation: NoteDamagedRecoveryConfirmation, to destination: URL?, resolving: Bool) throws -> URL {
+    func archiveDamaged(_ confirmation: NoteDamagedRecoveryConfirmation, to destination: URL?, resolving: Bool, live: NoteLiveReferenceSnapshot) throws -> URL {
+        installLiveReferences(live)
         guard URL(fileURLWithPath: confirmation.checkpointFilename).lastPathComponent == confirmation.checkpointFilename,
               confirmation.checkpointFilename.hasSuffix(".json") else { throw NoteDraftJournalError.unknownOwnership }
         let checkpoint = directory.appendingPathComponent(confirmation.checkpointFilename)
@@ -535,7 +550,8 @@ private actor NoteDraftJournalIO {
         return archive
     }
 
-    func recoveryEntries(collectRetired: Bool = true, offering: Bool = true) throws -> [NoteDraftRecoveryEntry] {
+    func recoveryEntries(collectRetired: Bool = true, offering: Bool = true, live: NoteLiveReferenceSnapshot? = nil) throws -> [NoteDraftRecoveryEntry] {
+        if let live { installLiveReferences(live) }
         if offering && !operationReconciled {
             do {
                 let pending = try fileManager.contentsOfDirectory(at: operationsDirectory, includingPropertiesForKeys: nil)
@@ -614,7 +630,18 @@ final class NoteDraftJournal: NoteDraftJournaling {
     nonisolated private let io: NoteDraftJournalIO
     var inventoryChanged: (([NoteDraftRecoveryEntry]) -> Void)?
     private var cached: [NoteDraftRecoveryEntry]?
-    private func cacheInventory(_ entries: [NoteDraftRecoveryEntry]) {
+    private var liveReferenceVersion: UInt64 = 0
+    private var cachedVersion: UInt64 = 0
+
+    private func liveSnapshot() throws -> NoteLiveReferenceSnapshot {
+        let ids = try liveReferencedIDs()
+        liveReferenceVersion &+= 1
+        return .init(version: liveReferenceVersion, ids: ids)
+    }
+
+    private func publish(_ entries: [NoteDraftRecoveryEntry], for snapshot: NoteLiveReferenceSnapshot) {
+        guard snapshot.version >= cachedVersion else { return }
+        cachedVersion = snapshot.version
         cached = entries
         inventoryChanged?(entries)
     }
@@ -645,41 +672,44 @@ final class NoteDraftJournal: NoteDraftJournaling {
         return cached
     }
     func readRecoveryEntries() async throws -> [NoteDraftRecoveryEntry] {
-        try await io.retain(liveReferencedIDs())
-        let entries = try await io.recoveryEntries()
-        // Offers omit checkpoints held by pending publication. They are not
-        // proof of owner absence; only complete inventories update the holds.
-        cached = entries
+        let snapshot = try liveSnapshot()
+        let entries = try await io.recoveryEntries(live: snapshot)
+        // Filtered offers cannot release complete-inventory ownership, and an
+        // older actor completion must not replace a newer cached inventory.
+        if snapshot.version >= cachedVersion {
+            cachedVersion = snapshot.version
+            cached = entries
+        }
         return entries
     }
     func writeDurably(_ entry: NoteDraftJournalEntry, staged: [StagedNoteAttachment], replacing: NoteRecoveryClaim? = nil) async throws -> NoteRecoveryClaim {
-        try await io.retain(liveReferencedIDs())
-        let claim = try await io.write(entry, staged: staged, replacing: replacing)
-        cacheInventory(try await io.recoveryEntries(collectRetired: false, offering: false))
+        let snapshot = try liveSnapshot()
+        let claim = try await io.write(entry, staged: staged, replacing: replacing, live: snapshot)
+        publish(try await io.recoveryEntries(collectRetired: false, offering: false, live: snapshot), for: snapshot)
         return claim
     }
     func cancelPendingDurably(_ entry: NoteDraftJournalEntry, staged: [StagedNoteAttachment], replacing claim: NoteRecoveryClaim?) async throws -> NoteRecoveryClaim {
-        try await io.retain(liveReferencedIDs())
-        let updated = try await io.write(entry, staged: staged, replacing: claim, cancellingPending: true)
-        cacheInventory(try await io.recoveryEntries(collectRetired: false, offering: false))
+        let snapshot = try liveSnapshot()
+        let updated = try await io.write(entry, staged: staged, replacing: claim, cancellingPending: true, live: snapshot)
+        publish(try await io.recoveryEntries(collectRetired: false, offering: false, live: snapshot), for: snapshot)
         return updated
     }
     func retireDurably(noteID: UUID, claim: NoteRecoveryClaim?, saved: NoteRecoverySavedState?) async throws {
-        try await io.retain(liveReferencedIDs())
-        try await io.retire(noteID: noteID, claim: claim, saved: saved)
-        cacheInventory(try await io.recoveryEntries(collectRetired: false, offering: false))
+        let snapshot = try liveSnapshot()
+        try await io.retire(noteID: noteID, claim: claim, saved: saved, live: snapshot)
+        publish(try await io.recoveryEntries(collectRetired: false, offering: false, live: snapshot), for: snapshot)
     }
     func discardOwnedDurably(noteID: UUID, claim: NoteRecoveryClaim) async throws {
-        try await io.retain(liveReferencedIDs())
-        try await io.discardOwned(noteID: noteID, claim: claim)
-        cacheInventory(try await io.recoveryEntries(collectRetired: false, offering: false))
+        let snapshot = try liveSnapshot()
+        try await io.discardOwned(noteID: noteID, claim: claim, live: snapshot)
+        publish(try await io.recoveryEntries(collectRetired: false, offering: false, live: snapshot), for: snapshot)
     }
     func listDamagedDurably() async throws -> [NoteDamagedRecoveryDetails] { try await io.listDamaged() }
     func damagedDetailsDurably(noteID: UUID) async throws -> NoteDamagedRecoveryDetails { try await io.damagedDetails(noteID: noteID) }
     func archiveDamagedDurably(_ confirmation: NoteDamagedRecoveryConfirmation, to destination: URL?, resolving: Bool) async throws -> URL {
-        try await io.retain(liveReferencedIDs())
-        let archive = try await io.archiveDamaged(confirmation, to: destination, resolving: resolving)
-        cacheInventory(try await io.recoveryEntries(collectRetired: false, offering: false))
+        let snapshot = try liveSnapshot()
+        let archive = try await io.archiveDamaged(confirmation, to: destination, resolving: resolving, live: snapshot)
+        publish(try await io.recoveryEntries(collectRetired: false, offering: false, live: snapshot), for: snapshot)
         return archive
     }
 }

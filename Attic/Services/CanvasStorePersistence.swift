@@ -11,6 +11,7 @@ extension CanvasStore {
     func discardPendingChanges(after error: Error) {
         let failureMessage = error.localizedDescription
         context.rollback()
+        tagInventoryDidRefresh()
         do {
             let warning = try reloadCanvas()
             lastErrorMessage = warning.map {
@@ -55,12 +56,14 @@ extension CanvasStore {
             return .failed(lastErrorMessage ?? preparationError)
         }
 
+        tagInventoryWillSave(context)
         do {
             #if os(macOS)
             try PerformanceSignposts.storeSave { try Self.persistSharedStoreContext(context, using: persist) }
             #else
             try Self.persistSharedStoreContext(context, using: persist)
             #endif
+            tagInventoryDidSave()
             if CanvasCloudInfrastructurePolicy.isEnabled {
                 cloudSyncProtection.noteLocalSave()
                 reconcileProtectedCloudSyncActivity(for: .exportData)
@@ -94,6 +97,7 @@ extension CanvasStore {
 
     private func rollBackFailedSave(restoringSelection previousSelection: UUID?) {
         context.rollback()
+        tagInventoryDidRefresh()
         if let previousSelection, selectedCanvasID != previousSelection {
             selectedCanvasID = previousSelection
         }
@@ -106,6 +110,7 @@ extension CanvasStore {
     private func reloadCanvas(
         reusing cachedPresentation: CanvasPresentationSnapshot?
     ) throws -> String? {
+        defer { if cachedPresentation == nil { tagInventoryDidRefresh() } }
         let freshContext = try makeFreshContext()
         let presentation = try resolveCanvasPresentation(
             using: freshContext,

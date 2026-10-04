@@ -10,6 +10,7 @@ final class AtticUITests: XCTestCase {
         app.launchEnvironment["ATTIC_UI_TESTING"] = "1"
         if name.contains("testMainPanelIdle") {
             app.launchEnvironment["ATTIC_UI_TEST_HOVER_MONITOR"] = "1"
+            app.launchEnvironment["ATTIC_UI_TEST_PINNED"] = "1"
         }
         if name.contains("RecentlyDeleted") {
             // A deleted task (with a subtask) and a deleted note in the
@@ -43,6 +44,12 @@ final class AtticUITests: XCTestCase {
     /// the right side of the default 1024pt CI display. Move Settings into the
     /// clear work area before interacting with controls that otherwise exist
     /// but are correctly reported as not hittable behind that panel.
+    /// An entry of an open Settings pop-up row's list (Attic's own pop-over,
+    /// round 13; its entries are buttons labelled with the choice).
+    private func popUpChoice(_ title: String) -> XCUIElement {
+        app.descendants(matching: .any).matching(NSPredicate(format: "label == %@", title)).firstMatch
+    }
+
     private func openSettings(section identifier: String) -> XCUIElement {
         app.typeKey(",", modifierFlags: .command)
         let settings = app.windows["Attic Settings"]
@@ -337,11 +344,26 @@ final class AtticUITests: XCTestCase {
         app.descendants(matching: .any).matching(identifier: "AtticTokenField").firstMatch
     }
 
+    private func waitForValue(_ value: String, in field: XCUIElement,
+                              file: StaticString = #filePath, line: UInt = #line) {
+        let matches = NSPredicate { _, _ in field.exists && field.value as? String == value }
+        XCTAssertEqual(XCTWaiter.wait(for: [XCTNSPredicateExpectation(predicate: matches, object: nil)], timeout: 10), .completed,
+                       "the editor has the expected value", file: file, line: line)
+    }
+
     func testMainPanelIdleRetainsTaskDraftThenHidesCleanEditor() throws {
         let field = addBar
-        XCTAssertTrue(field.waitForExistence(timeout: 3))
+        // Cold accessibility startup can outlast the explicit-open grace.
+        // Set up under the real pin, then test idle behavior unpinned.
+        XCTAssertTrue(field.waitForExistence(timeout: 10))
+        XCTAssertTrue(field.wait(for: \.isHittable, toEqual: true, timeout: 10))
         field.click()
         field.typeText("Keep this unfinished draft")
+        waitForValue("Keep this unfinished draft", in: field)
+        let pin = app.buttons["panel-pin-button"]
+        XCTAssertTrue(pin.isSelected)
+        pin.click()
+        XCTAssertTrue(pin.wait(for: \.isSelected, toEqual: false, timeout: 5))
         let outside = app.dialogs.firstMatch.coordinate(withNormalizedOffset: .zero)
             .withOffset(CGVector(dx: -100, dy: 220))
         outside.hover()
@@ -352,6 +374,7 @@ final class AtticUITests: XCTestCase {
         field.click()
         field.typeKey("a", modifierFlags: .command)
         field.typeKey(.delete, modifierFlags: [])
+        waitForValue("", in: field)
         outside.hover()
         XCTAssertTrue(field.waitForNonExistence(timeout: 8), "A clean idle main entry must stop acting as a pin")
     }
@@ -366,6 +389,16 @@ final class AtticUITests: XCTestCase {
         XCTAssertTrue(body.waitForExistence(timeout: 3))
         body.click()
         body.typeText("An autosaved note can rest.")
+        waitForValue("An autosaved note can rest.", in: body)
+        let pin = app.buttons["panel-pin-button"]
+        XCTAssertTrue(pin.isSelected)
+        pin.click()
+        XCTAssertTrue(pin.wait(for: \.isSelected, toEqual: false, timeout: 5))
+        body.click()
+        let focused = NSPredicate { _, _ in
+            body.exists && (body.value(forKey: "hasKeyboardFocus") as? Bool) == true
+        }
+        XCTAssertEqual(XCTWaiter.wait(for: [XCTNSPredicateExpectation(predicate: focused, object: nil)], timeout: 5), .completed)
         app.dialogs.firstMatch.coordinate(withNormalizedOffset: .zero)
             .withOffset(CGVector(dx: -100, dy: 220)).hover()
         XCTAssertTrue(body.waitForNonExistence(timeout: 8), "Autosaved Notes focus must not permanently pin the main panel")
@@ -425,7 +458,7 @@ final class AtticUITests: XCTestCase {
         func choose(_ title: String, in popUp: XCUIElement) {
             reveal(popUp)
             popUp.click()
-            let item = app.menuItems[title]
+            let item = popUpChoice(title)
             XCTAssertTrue(item.waitForExistence(timeout: 3), "the pop-up offers \(title)")
             item.click()
             waitFor("\(popUp.label) shows \(title)") { (popUp.value as? String) == title }
@@ -543,14 +576,14 @@ final class AtticUITests: XCTestCase {
             reveal(surface)
             surface.click()
             waitFor("Every surface stays available in \(scheme)") {
-                ["Solid", "Glass", "Frosted"].allSatisfy { self.app.menuItems[$0].exists }
+                ["Solid", "Glass", "Frosted"].allSatisfy { self.popUpChoice($0).exists }
             }
             app.typeKey(.escape, modifierFlags: [])
         }
         for style in ["Frosted", "Solid", "Glass"] {
             reveal(surface)
             surface.click()
-            let item = app.menuItems[style]
+            let item = popUpChoice(style)
             XCTAssertTrue(item.waitForExistence(timeout: 3))
             item.click()
             waitFor("Surface selection must settle on \(style)") { (surface.value as? String) == style }

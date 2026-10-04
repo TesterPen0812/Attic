@@ -98,6 +98,16 @@ enum AtticTaskShortcut {
     static let copy = KeyboardShortcut("c", modifiers: .command)
     static let duplicate = KeyboardShortcut("d", modifiers: .command)
     static let actions = KeyboardShortcut("i", modifiers: [.command, .shift])
+    /// Priority (follow-up part 2): ⌥⌘0 No Priority, ⌥⌘1 Low, ⌥⌘2 Medium,
+    /// ⌥⌘3 High.
+    static let priorityNone = KeyboardShortcut("0", modifiers: [.command, .option])
+    static let priorityLow = KeyboardShortcut("1", modifiers: [.command, .option])
+    static let priorityMedium = KeyboardShortcut("2", modifiers: [.command, .option])
+    static let priorityHigh = KeyboardShortcut("3", modifiers: [.command, .option])
+    static let priorities = [priorityNone, priorityLow, priorityMedium, priorityHigh]
+
+    /// The number row's key codes (ANSI), 0 to 9.
+    private static let digitKeyCodes: [Int: UInt16] = [0: 29, 1: 18, 2: 19, 3: 20, 4: 21, 5: 23, 6: 22, 7: 26, 8: 28, 9: 25]
 
     /// Whether a key press is `shortcut` (letters by their character, so
     /// any layout's C is ⌘C).
@@ -110,7 +120,11 @@ enum AtticTaskShortcut {
         case .return: return keyCode == 36 || keyCode == 76
         case .delete: return keyCode == 51
         case .space: return keyCode == 49
-        default: return characters?.lowercased() == String(shortcut.key.character)
+        default:
+            // The digits by their key too: ⌥ changes what a digit types on
+            // some layouts, and the number row's keys are the same keys.
+            if let digit = shortcut.key.character.wholeNumberValue, let code = digitKeyCodes[digit], keyCode == code { return true }
+            return characters?.lowercased() == String(shortcut.key.character)
         }
     }
 }
@@ -136,7 +150,7 @@ enum AtticTextInput {
     /// An Attic pop-over is on screen: its keys are its own, whichever
     /// window AppKit delivers them to.
     @MainActor static var isPopoverOpen: Bool {
-        popoverWindows.allObjects.contains { $0.isVisible }
+        AtticDropdownPresenter.isAnyOpen || popoverWindows.allObjects.contains { $0.isVisible }
     }
 
     static func isTyping(_ responder: NSResponder?) -> Bool {
@@ -158,8 +172,51 @@ enum AtticTextInput {
 
     /// A command reached by a key (a menu's key equivalent included) while
     /// a field has the keyboard: it belongs to the field, not the command.
+    ///
+    /// A command the person chose in an open menu is not such a key, even
+    /// when the event current while it runs is a key down (Return or
+    /// Space choosing the highlighted item, or the key that opened the
+    /// menu) and an editable text view is first responder somewhere: on
+    /// macOS 27 a context menu carries its own text field (Ask Siri), and
+    /// the composer can stay first responder under a menu. Only the
+    /// command's own key equivalent can still belong to a typing field
+    /// (PR prep, P2: the menus' Open Files… did nothing on the owner's Mac
+    /// while ⌘Return worked).
     @MainActor static var ownsCurrentKey: Bool {
-        NSApp.currentEvent?.type == .keyDown && hasKeyboard
+        owns(NSApp.currentEvent, menuChoice: menuChoice, hasKeyboard: { hasKeyboard })
+    }
+
+    /// What a menu item the person chose is running: its key equivalent
+    /// (`.some(nil)` for an item without one). Nil outside a menu choice.
+    @MainActor private(set) static var menuChoice: KeyboardShortcut?? = nil
+
+    /// Runs a menu item's command as a choice made in its menu
+    /// (`AtticMenuItems`, `AtticNativeMenu`).
+    @MainActor static func choosing(_ keyEquivalent: KeyboardShortcut?, _ action: () -> Void) {
+        let outer = menuChoice
+        menuChoice = .some(keyEquivalent)
+        defer { menuChoice = outer }
+        action()
+    }
+
+    /// Runs a key's command that a typing field passed on to the selection
+    /// (`TasksPage.typingFieldPasses`): as a menu choice without a key
+    /// equivalent, the key is not the field's while it runs.
+    @MainActor static func passingToSelection(_ action: () -> Void) {
+        choosing(nil, action)
+    }
+
+    /// The rule, without AppKit state (tests): a key down while a field
+    /// has the keyboard belongs to the field, unless a menu choice is
+    /// running and the key is not that item's own key equivalent.
+    static func owns(_ event: NSEvent?, menuChoice: KeyboardShortcut??, hasKeyboard: () -> Bool) -> Bool {
+        guard let event, event.type == .keyDown else { return false }
+        if case .some(let keyEquivalent) = menuChoice {
+            guard let keyEquivalent,
+                  AtticTaskShortcut.matches(keyEquivalent, characters: event.charactersIgnoringModifiers,
+                                            keyCode: event.keyCode, modifiers: event.modifierFlags) else { return false }
+        }
+        return hasKeyboard()
     }
 }
 
@@ -314,6 +371,18 @@ struct AtticRowFocus {
         self.isActive = isActive
         isFocused = isActive() && binding.wrappedValue == id
     }
+
+    /// With the list's own record of which row has the keyboard: a lazy
+    /// list's cell that reads the focus state reads it as it was when the
+    /// list was built (the Tasks page, deep review P2-04), so the list
+    /// keeps a copy and says whether this row has it.
+    init(binding: FocusState<AtticRowFocusID?>.Binding, id: AtticRowFocusID, isFocused: Bool,
+         isActive: @escaping () -> Bool = { true }) {
+        self.binding = binding
+        self.id = id
+        self.isActive = isActive
+        self.isFocused = isFocused
+    }
 }
 
 /// The same keys as `AtticTaskFocusModifier`, with focus held by the list.
@@ -356,6 +425,9 @@ struct AtticTitleEditing {
     var tokens: Tokens? = nil
     /// VoiceOver's name for the field ("Title", "New subtask of …").
     var accessibilityLabel = String(localized: "Title")
+    /// Shown in the empty plain field ("Add subtask…" on the new-subtask
+    /// line, round 13); nil shows nothing, as a title editor never empties.
+    var placeholder: String? = nil
 
     struct Tokens {
         var chips: [AtticTokenChip]
@@ -417,7 +489,8 @@ struct AtticRowTitleEditor: View {
             .onChange(of: tokenFocused) { _, now in lost(now) { tokenFocused = true } }
             .onChange(of: editing.text.wrappedValue) { _, _ in finished = false }
         } else {
-            TextField("", text: editing.text)
+            TextField("", text: editing.text,
+                      prompt: editing.placeholder.map { Text($0).foregroundStyle(design.tokens.color(.placeholder)) })
                 .textFieldStyle(.plain)
                 .font(AtticTextStyle.rowTitle.font)
                 .foregroundStyle(design.tokens.color(.heading))
@@ -842,7 +915,8 @@ enum AtticPageArrows {
 /// Direction A's page tabs under the header ("Now · Later · Done"), in
 /// place of a page title and the page pill. Phase 0's qualities
 /// (2026-09-26): quiet text labels, no chips: 11.5 pt medium, the selected
-/// page semibold in the strong ink (owner, 2026-09-27), the others in the
+/// page semibold in the strong ink (owner, 2026-09-27) with a 2 pt
+/// underline in the same ink (L1, option B, 2026-09-30), the others in the
 /// secondary grey, a hovered one in the task text's ink. Each label keeps
 /// its semibold width, so nothing shifts when the selection moves.
 ///
@@ -870,6 +944,7 @@ struct AtticPageTabs<Page: Hashable>: View {
     @Environment(\.atticKeyboardFocusVisible) private var keyboardFocusVisible
     @FocusState private var focused: Bool
     @State private var hoveredPage: Page?
+    @Namespace private var underline
 
     var body: some View {
         let m = AtticPageTabsMetrics.self
@@ -905,6 +980,19 @@ struct AtticPageTabs<Page: Hashable>: View {
                 }
                 .buttonStyle(.plain)
                 .focusable(false)
+                // L1: the active page's underline, which travels to the
+                // next label as the tab changes (a swipe's live tab too).
+                .overlay(alignment: .bottom) {
+                    if isSelected {
+                        Rectangle()
+                            .fill(design.tokens.color(.heading))
+                            .frame(height: m.underlineHeight)
+                            .matchedGeometryEffect(id: "underline", in: underline)
+                            .offset(y: m.underlineHeight + m.underlineGap)
+                            .allowsHitTesting(false)
+                            .accessibilityHidden(true)
+                    }
+                }
                 .onHover { inside in
                     if inside { hoveredPage = item.page } else if hoveredPage == item.page { hoveredPage = nil }
                 }
@@ -913,6 +1001,8 @@ struct AtticPageTabs<Page: Hashable>: View {
                 .accessibilityAddTraits(isSelected ? [.isSelected, .isButton] : .isButton)
             }
         }
+        // Reduced animations: the underline moves at once.
+        .animation(design.reduceMotion ? nil : AtticMotionPreset.slide.animation(reduceMotion: false), value: selected)
         .focusable(capture == nil)
         .focused($focused)
         .focusEffectDisabled()
@@ -1011,8 +1101,9 @@ struct AtticTaskRowModel: Identifiable, Sendable, Equatable {
 }
 
 /// The priority mark after a task's title (Direction A): High "!!" in the
-/// orange mark colour, Medium "!" in the secondary grey, Low and None
-/// nothing. Done rows show none.
+/// orange mark colour, Medium "!" in the secondary grey, Low "↓" in the
+/// same grey (follow-up part 2, option A: Low reads as "lower", never as a
+/// warning), None nothing. Done rows show none.
 struct AtticPriorityMark: View {
     let priority: AtticPriority
     var disabled = false
@@ -1027,7 +1118,11 @@ struct AtticPriorityMark: View {
             AtticText(verbatim: "!", style: .priorityMark, ink: disabled ? .disabledText : .helper)
                 .fixedSize()
                 .accessibilityHidden(true)
-        case .low, .none:
+        case .low:
+            AtticText(verbatim: "↓", style: .priorityMark, ink: disabled ? .disabledText : .helper)
+                .fixedSize()
+                .accessibilityHidden(true)
+        case .none:
             EmptyView()
         }
     }
@@ -1041,6 +1136,13 @@ struct AtticPriorityMark: View {
 /// focusable: a focused row draws the 2 pt accent ring and answers the
 /// task keys (`AtticTaskKeys`).
 struct AtticTaskRow: View {
+    /// Whether the row shows its actions button: for the keyboard's row
+    /// (and the gallery's focused state), never for the pointer's hover,
+    /// which only tints the row.
+    nonisolated static func showsActionsButton(forced: AtticControlState?, keyboardFocused: Bool) -> Bool {
+        forced == .focused || keyboardFocused
+    }
+
     /// The row's own coordinate space, for its controls' frames.
     static let space = NamedCoordinateSpace.named("AtticTaskRow")
 
@@ -1091,6 +1193,9 @@ struct AtticTaskRow: View {
         let pitch = twoLine ? AtticLayout.detailRowPitch : AtticLayout.rowPitch
         let fill: AtticRGBA? = if state == .pressed {
             tokens.pressed
+        } else if isSelected, showsFocusRing {
+            // L2: the keyboard's row takes the lighter fill under its line.
+            tokens.hover
         } else if isSelected {
             tokens.selected
         } else if state == .hover {
@@ -1153,9 +1258,11 @@ struct AtticTaskRow: View {
                     Spacer(minLength: m.trailingMinGap)
                     trailing(disabled: disabled)
                     if let onActions, capture == nil, !disabled, titleEditing == nil,
-                       forced == .hover || forced == .focused || hovered || showsFocusRing {
-                        // Calm at rest: only for the row the pointer or the
-                        // keyboard is on; the date steps aside for it.
+                       AtticTaskRow.showsActionsButton(forced: forced, keyboardFocused: showsFocusRing) {
+                        // Only for the row the keyboard is on (the date steps
+                        // aside for it). Hover is a soft tint only (owner,
+                        // 2026-10-01: rows "perked up" as the pointer passed);
+                        // the pointer has the row's right-click menu.
                         AtticRowActionsButton(action: onActions)
                             .padding(.leading, AtticRowActionsMetrics.gap)
                             .transition(.opacity)
@@ -1163,7 +1270,7 @@ struct AtticTaskRow: View {
                 }
                 .frame(height: m.titleLineHeight)
                 .animation(design.reduceMotion ? nil : AtticMotionPreset.hover.animation(reduceMotion: false),
-                           value: hovered || showsFocusRing)
+                           value: showsFocusRing)
                 if twoLine {
                     // The tag popover points at the tags that were clicked
                     // (round 5), not the middle of the line.
@@ -1185,7 +1292,7 @@ struct AtticTaskRow: View {
                 if !twoLine || model.tags.isEmpty {
                     Color.clear.frame(width: 1, height: 1)
                         .padding(.leading, AtticLayout.textX)
-                        .atticPopover(isPresented: tagsPresented(twoLine: false), arrowEdge: .bottom) { meta?.tagPicker() }
+                        .atticDropdown(isPresented: tagsPresented(twoLine: false), label: String(localized: "Tags")) { meta?.tagPicker() }
                 }
             }
         }
@@ -1195,15 +1302,19 @@ struct AtticTaskRow: View {
         .padding(.top, m.pitchTopInset)
         .overlay(alignment: .top) {
             if showsFocusRing {
-                Color.clear
-                    .frame(height: highlightHeight)
-                    .atticFocusRing(true, cornerRadius: AtticRadius.highlight)
-                    .padding(.horizontal, AtticLayout.rowHighlightInset)
-                    .padding(.top, m.pitchTopInset)
+                // L2: one 1 pt line on the highlight's own edge (the ring
+                // draws outside the shape it is given: a shape one line
+                // width inside puts the line exactly on the edge).
+                let line = AtticRingMetrics.rowLineWidth
+                AtticFocusRing(cornerRadius: AtticRadius.highlight - line, gap: 0, width: line)
+                    .frame(height: highlightHeight - line * 2)
+                    .padding(.horizontal, AtticLayout.rowHighlightInset + line)
+                    .padding(.top, m.pitchTopInset + line)
             }
         }
         .contentShape(Rectangle())
-        .onHover { hovered = $0 }
+        // (A preview's `ATTIC_UI_TEST_HOVER=off` never tints: an A/B switch.)
+        .onHover { hovered = $0 && AtticPreviewOverrides.current.rowHoverTints }
         .onTapGesture { if isEnabled { (onSelect ?? actions.openPage)() } }
         .atticTaskFocus($focused, enabled: isEnabled, actions: actions, listCommands: true,
                         live: capture == nil, external: focus, answersKeys: titleEditing == nil)
@@ -1255,7 +1366,7 @@ struct AtticTaskRow: View {
                 .help(String(localized: "Change the date"))
                 .accessibilityLabel(String(localized: "Due \(due.text)"))
                 .accessibilityHint(String(localized: "Changes the date"))
-                .atticPopover(isPresented: meta.datePresented, arrowEdge: .bottom) { meta.datePicker() }
+                .atticDropdown(isPresented: meta.datePresented, label: String(localized: "Date")) { meta.datePicker() }
             } else {
                 AtticDueText(due: due, disabled: disabled)
                     .fixedSize()
@@ -1263,7 +1374,7 @@ struct AtticTaskRow: View {
         } else if let meta, capture == nil {
             // No date yet: "Pick a Date…" opens the picker from here.
             Color.clear.frame(width: 1, height: 1)
-                .atticPopover(isPresented: meta.datePresented, arrowEdge: .bottom) { meta.datePicker() }
+                .atticDropdown(isPresented: meta.datePresented, label: String(localized: "Date")) { meta.datePicker() }
         }
     }
 
@@ -1475,7 +1586,7 @@ private struct AtticDetailsTags: View {
             .focusEffectDisabled()
             .onHover { hovered = $0 }
             .atticRowControl()
-            .atticPopover(isPresented: popover?.isPresented ?? .constant(false), arrowEdge: .bottom) { popover?.content() }
+            .atticDropdown(isPresented: popover?.isPresented ?? .constant(false), label: String(localized: "Tags")) { popover?.content() }
             .help(tags.map { "#" + $0 }.joined(separator: " "))
             .accessibilityLabel(String(localized: "Tags: \(tags.joined(separator: ", "))"))
             .accessibilityHint(String(localized: "Changes the tags"))
@@ -1665,10 +1776,15 @@ struct AtticSubtaskRow: View {
     /// Told when the line gains or loses the keyboard (round 10b), so the
     /// page knows a shortcut is not about the main task.
     var onFocusChange: (Bool) -> Void = { _ in }
+    /// A pop-over the page opens from this line (Move to Task…, control
+    /// audit item 5), pointing at it.
+    var popover: AtticAnchoredPopover? = nil
 
     @Environment(\.atticCapture) private var capture
     @Environment(\.atticKeyboardFocusVisible) private var keyboardFocusVisible
     @FocusState private var focused: Bool
+    @State private var hovered = false
+    @State private var anchor = AtticMenuAnchor.Holder()
 
     var body: some View {
         let m = AtticSubtaskMetrics.self
@@ -1687,6 +1803,12 @@ struct AtticSubtaskRow: View {
                 AtticText(verbatim: subtask.title, style: .listBody, ink: subtask.isDone ? .helper : .body, strikethrough: subtask.isDone, truncates: true)
             }
             Spacer(minLength: 0)
+            if managed, renaming == nil, hovered || (focused && keyboardFocusVisible) {
+                // The main row's quiet actions button (control audit item
+                // 5): only while the pointer or the keyboard is on the line.
+                AtticRowActionsButton { view in showActions(in: view) }
+                    .transition(.opacity)
+            }
         }
         .frame(height: AtticLayout.subtaskPitch)
         .background(alignment: .leading) {
@@ -1697,10 +1819,16 @@ struct AtticSubtaskRow: View {
                     .padding(.vertical, 2)
             }
         }
+        .background(alignment: .bottomLeading) {
+            if managed { AtticMenuAnchor(holder: anchor).frame(width: 1, height: 1).accessibilityHidden(true) }
+        }
         .contentShape(Rectangle())
-        .modifier(AtticSubtaskCommands(commands: managed && renaming == nil ? commands : [], focused: $focused))
+        .modifier(AtticSubtaskCommands(commands: managed && renaming == nil ? commands : [], focused: $focused,
+                                       showActions: { showActions(in: nil) }))
+        .onHover { inside in if managed, hovered != inside { hovered = inside } }
         .onChange(of: focused) { _, now in onFocusChange(now) }
         .onDisappear { if focused { onFocusChange(false) } }
+        .atticDropdown(isPresented: popover?.isPresented ?? .constant(false), label: String(localized: "Move to Task")) { popover?.content() }
         .accessibilityElement(children: renaming == nil ? .combine : .contain)
         .accessibilityLabel(subtask.title)
         .accessibilityValue(subtask.isDone ? String(localized: "done") : String(localized: "to do"))
@@ -1715,12 +1843,22 @@ struct AtticSubtaskRow: View {
             }
         }
     }
+
+    /// ⇧⌘I and the actions button: the line's commands as a native menu
+    /// (type-select and Return work in it), under the button or the line,
+    /// placed as a right-click menu is (its submenus' titles whole).
+    private func showActions(in view: NSView?) {
+        guard !commands.isEmpty, let view = view ?? anchor.view else { return }
+        AtticNativeMenu.popUpContextMenu(commands, in: view)
+    }
 }
 
-/// A managed subtask's focus, keys and right-click menu (round 10).
+/// A managed subtask's focus, keys and right-click menu (round 10; ⇧⌘I
+/// opens the same menu, control audit item 5).
 private struct AtticSubtaskCommands: ViewModifier {
     let commands: [AtticMenuCommand]
     var focused: FocusState<Bool>.Binding
+    let showActions: () -> Void
 
     func body(content: Content) -> some View {
         if commands.isEmpty {
@@ -1736,7 +1874,7 @@ private struct AtticSubtaskCommands: ViewModifier {
                 .onKeyPress(phases: .down) { press in
                     guard !AtticTextInput.hasKeyboard else { return .ignored }
                     return AtticMenuCommand.performSubtaskKey(key: press.key, characters: press.characters,
-                                                              modifiers: press.modifiers, in: commands)
+                                                              modifiers: press.modifiers, in: commands, showActions: showActions)
                 }
                 .contextMenu { AtticMenuItems(commands: commands) }
         }
@@ -1761,6 +1899,8 @@ struct AtticQuickLook: View {
     /// title field in place of "Add subtask". Return adds it and keeps the
     /// field for the next one; Esc stops.
     var newSubtask: AtticTitleEditing? = nil
+    /// A pop-over open from one subtask's line (Move to Task…).
+    var popover: (id: UUID, popover: AtticAnchoredPopover)? = nil
 
     @Environment(\.atticCapture) private var capture
     @Environment(\.atticDesign) private var design
@@ -1770,7 +1910,8 @@ struct AtticQuickLook: View {
             ForEach(subtasks) { subtask in
                 AtticSubtaskRow(subtask: subtask, onToggle: { onToggle(subtask) }, commands: commands(subtask),
                                 renaming: renaming?.id == subtask.id ? renaming?.editing : nil,
-                                onFocusChange: { onFocusChange(subtask.id, $0) })
+                                onFocusChange: { onFocusChange(subtask.id, $0) },
+                                popover: popover?.id == subtask.id ? popover?.popover : nil)
             }
             if let newSubtask, capture == nil {
                 HStack(spacing: AtticSubtaskMetrics.titleGap) {
@@ -1927,7 +2068,7 @@ struct AtticTaskCard: View {
                 .padding(.leading, m.expandedLeading)
                 .padding(.trailing, m.expandedTrailing)
                 .padding(.bottom, m.expandedBottom)
-                .transition(.opacity)
+                .transition(AtticMotionPreset.expand.transition(reduceMotion: design.reduceMotion, edge: nil, anchor: .top))
             }
         }
         .background {

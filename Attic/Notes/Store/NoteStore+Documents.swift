@@ -770,7 +770,16 @@ extension NoteStore {
     func attachmentAdmissionFailure(noteID: UUID, document: NoteDocument,
                                     staged: [StagedNoteAttachment], metadataOnlyIDs: Set<UUID> = []) -> String? {
         do {
-            let base = note(withID: noteID)?.content.flatMap { NoteContentCodec.decode($0).document }
+            let base: NoteDocument?
+            if let main = note(withID: noteID) {
+                let preflight = try noteMutationPreflight(noteID, format: .document)
+                guard preflight.replicas.contains(where: { $0 === main }),
+                      let cached = documentReplicaCapabilityCache[ObjectIdentifier(main)], cached.editable,
+                      cached.revisionID == main.revisionID, cached.content == main.content else {
+                    throw NoteDocumentStoreError.readOnly
+                }
+                base = NoteDocument(blocks: cached.attachmentBlocks)
+            } else { base = nil } // A never-saved draft has no committed placements.
             _ = try attachmentStagePlan(staged, referencedBy: document, noteID: noteID,
                                         previouslyReferencedBy: base, metadataOnlyIDs: metadataOnlyIDs)
             return nil

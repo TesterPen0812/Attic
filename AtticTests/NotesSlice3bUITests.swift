@@ -303,8 +303,8 @@ final class NotesSlice3bUITests: XCTestCase {
     // MARK: Damaged recovery exit
 
     func testDiscardingDamagedRecoveryNeedsExplicitConfirmationAndPassesItsToken() async throws {
-        let root = FileManager.default.temporaryDirectory.appendingPathComponent("S3BUI-\(UUID())"), id = UUID()
-        defer { try? FileManager.default.removeItem(at: root) }
+        let root = ownedTemporaryDirectory(prefix: "S3BUI"), id = UUID()
+
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
         let checkpoint = root.appendingPathComponent("\(id.uuidString).json")
         try Data("{damaged".utf8).write(to: checkpoint)
@@ -432,10 +432,9 @@ final class NotesSlice3bUITests: XCTestCase {
 
     // MARK: Off-screen renders for the owner's first look
 
-    /// Writes the new faces, Light and Dark, to the temporary directory's
-    /// `s3b-shots` (read by the report's capture step). Nothing on screen.
+    /// Renders the new faces off screen; evidence is retained in xcresult.
     func testRenderTheObjectFacesOffScreen() throws {
-        let folder = FileManager.default.temporaryDirectory.appendingPathComponent("s3b-shots", isDirectory: true)
+        let folder = ownedTemporaryDirectory(prefix: "s3b-shots")
         try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
         let faces: [(String, AtticNoteObjectFace)] = [
             ("file-ready", .init(kind: .file, name: "pricing-v2.pdf", detail: "1.2 MB", systemImage: "doc.richtext")),
@@ -457,6 +456,10 @@ final class NotesSlice3bUITests: XCTestCase {
                 let data = try XCTUnwrap(NSBitmapImageRep(data: try XCTUnwrap(image.tiffRepresentation))?
                     .representation(using: .png, properties: [:]))
                 try data.write(to: folder.appendingPathComponent("\(name)-\(suffix).png"))
+                let attachment = XCTAttachment(data: data, uniformTypeIdentifier: "public.png")
+                attachment.name = "\(name)-\(suffix).png"
+                attachment.lifetime = .keepAlways
+                add(attachment)
             }
             for (name, face) in faces { try write(AtticNoteFileCard(face: face, width: 264), name) }
             let failed = AtticNoteObjectFace(kind: .image, name: "photo.png", detail: "Preview unavailable", tone: .quiet,
@@ -505,8 +508,8 @@ final class NotesSlice3bUITests: XCTestCase {
     /// step restores; a step already taken by ⌘Z is done; a step another
     /// action buried, with the note still deleted, cannot be retried.
     func testTheDeleteToastsUndoMapsTheLibrarysOutcomes() async throws {
-        let directory = FileManager.default.temporaryDirectory.appendingPathComponent("S3BToast-\(UUID())")
-        defer { try? FileManager.default.removeItem(at: directory) }
+        let directory = ownedTemporaryDirectory(prefix: "S3BToast")
+
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         let store = try makeTestNoteStore(attachmentFileStore: makeTestAttachmentFileStore())
         let first = UUID(), second = UUID()

@@ -170,6 +170,31 @@ struct AtticEmptyLine: View {
     }
 }
 
+/// A list view that hides tasks says so (follow-up part 2, item 6): a quiet
+/// line at the top of the list ("Due or overdue · by due date") with the way
+/// back ("Show All") at its end. One row's pitch, its text on the tab labels'
+/// line; VoiceOver reads the summary, then the button.
+struct AtticViewLine: View {
+    let summary: String
+    let actionTitle: String
+    let action: () -> Void
+
+    var body: some View {
+        HStack(spacing: AtticSpacing.s8) {
+            AtticText(verbatim: summary, style: .rowMeta, ink: .helper, truncates: true)
+                .help(summary)
+                .layoutPriority(-1)
+            Spacer(minLength: 0)
+            AtticQuietAction(systemName: nil, title: actionTitle, emphasised: true, action: action)
+                .padding(.trailing, AtticLayout.rowHighlightInset + AtticTaskRowMetrics.dateInset - AtticQuietActionMetrics.horizontalPadding)
+        }
+        .frame(height: AtticLayout.rowPitch)
+        .padding(.leading, AtticLayout.pageTabsX)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .accessibilityElement(children: .contain)
+    }
+}
+
 /// A problem is never hidden: "Not saved · Retry" in the warning colour,
 /// shown in place of the quiet state, with the next step as a button.
 struct AtticErrorLine: View {
@@ -383,7 +408,9 @@ struct AtticReorderLift<Content: View>: View {
             .background {
                 ZStack {
                     AtticOutsideShadow(shape: shape, color: tokens.dragShadow, spec: AtticShadows.reorder)
-                    shape.fill(tokens.popoverFill.color)
+                    // Opaque (owner, 2026-10-01): the panel's own colour,
+                    // so nothing shows through the card being moved.
+                    shape.fill(AtticReorderLiftModifier.fill(design: design).color)
                     shape.inset(by: AtticHairline.innerRim / 2).stroke(tokens.popoverInnerRim.color, lineWidth: AtticHairline.innerRim)
                     shape.stroke(tokens.popoverOuterRim.color, lineWidth: AtticHairline.width)
                 }
@@ -586,6 +613,12 @@ private struct AtticStatusDetailButton: View {
 struct AtticReorderLiftModifier: ViewModifier {
     let lifted: Bool
 
+    /// The lifted card's fill: the panel's base colour, fully opaque.
+    static func fill(design: AtticDesignContext) -> AtticRGBA {
+        let model = design.tokens.panel
+        return model.washColor.withAlpha(model.tintOpacity(at: 0.5)).over(model.base).withAlpha(1)
+    }
+
     @Environment(\.atticDesign) private var design
 
     func body(content: Content) -> some View {
@@ -597,7 +630,9 @@ struct AtticReorderLiftModifier: ViewModifier {
                 if lifted {
                 ZStack {
                     AtticOutsideShadow(shape: shape, color: tokens.dragShadow, spec: AtticShadows.reorder)
-                    shape.fill(tokens.popoverFill.color)
+                    // Opaque (owner, 2026-10-01): the panel's own colour,
+                    // so nothing shows through the card being moved.
+                    shape.fill(AtticReorderLiftModifier.fill(design: design).color)
                     shape.inset(by: AtticHairline.innerRim / 2).stroke(tokens.popoverInnerRim.color, lineWidth: AtticHairline.innerRim)
                     shape.stroke(tokens.popoverOuterRim.color, lineWidth: AtticHairline.width)
                 }

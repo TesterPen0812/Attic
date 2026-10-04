@@ -52,8 +52,36 @@ struct TasksScrollKeeper: NSViewRepresentable {
         scroll.reflectScrolledClipView(clip)
     }
 
+    /// Scrolls `scroll` to its top, where the first row rests.
+    @MainActor
+    static func scrollToTop(_ scroll: NSScrollView) {
+        scroll.layoutSubtreeIfNeeded()
+        let clip = scroll.contentView
+        var origin = clip.bounds.origin
+        origin.y = -clip.contentInsets.top
+        guard abs(origin.y - clip.bounds.origin.y) > 0.5 else { return }
+        clip.scroll(to: origin)
+        scroll.reflectScrolledClipView(clip)
+    }
+
     static func dismantleNSView(_ view: KeeperView, coordinator: ()) {
         view.stopObserving()
+    }
+
+    /// Thin overlay scrollers whatever the system's "Show scroll bars"
+    /// setting (owner, 2026-10-01): AppKit shows them only while the list
+    /// scrolls. `hidden` while a page swipe may be under way.
+    /// (A preview's `ATTIC_UI_TEST_SCROLLERS=system` leaves them to the
+    /// system, round 13's way: an A/B switch.)
+    @MainActor
+    static func styleScrollers(of scroll: NSScrollView, hidden: Bool,
+                               overrides: AtticPreviewOverrides = .current) {
+        guard overrides.stylesScrollers else { return }
+        if scroll.scrollerStyle != .overlay { scroll.scrollerStyle = .overlay }
+        if scroll.hasHorizontalScroller { scroll.hasHorizontalScroller = false }
+        guard let scroller = scroll.verticalScroller else { return }
+        if scroller.controlSize != .small { scroller.controlSize = .small }
+        if scroller.isHidden != hidden { scroller.isHidden = hidden }
     }
 
     final class KeeperView: NSView {
@@ -86,9 +114,35 @@ struct TasksScrollKeeper: NSViewRepresentable {
             applyDrawn()
             proxies?.scrollViews[tab] = scroll
             observe(scroll.contentView)
+            // After `observe`, which starts from a clean slate.
+            keepOverlayScrollers(scroll)
             restoring = true
             // Once the list has laid out its rows (the next turn).
             DispatchQueue.main.async { [weak self] in self?.restore() }
+        }
+
+        private var styleObserver: NSObjectProtocol?
+
+        /// Overlay scrollers now, when the system sets them back (AppKit
+        /// restyles every scroll view when the "Show scroll bars" setting
+        /// changes), and as the list scrolls (`record`).
+        private func keepOverlayScrollers(_ scroll: NSScrollView) {
+            TasksScrollKeeper.styleScrollers(of: scroll, hidden: proxies?.scrollersHidden ?? false)
+            if styleObserver == nil {
+                styleObserver = NotificationCenter.default.addObserver(
+                    forName: NSScroller.preferredScrollerStyleDidChangeNotification, object: nil, queue: .main
+                ) { [weak self] _ in
+                    // After AppKit's own restyling, which it may defer.
+                    for delay in [0.0, 0.25] {
+                        DispatchQueue.main.asyncAfter(deadline: .now() + delay) {
+                            MainActor.assumeIsolated {
+                                guard let self, let scroll = self.enclosingScrollView else { return }
+                                TasksScrollKeeper.styleScrollers(of: scroll, hidden: self.proxies?.scrollersHidden ?? false)
+                            }
+                        }
+                    }
+                }
+            }
         }
 
         private func observe(_ clip: NSClipView) {
@@ -107,9 +161,14 @@ struct TasksScrollKeeper: NSViewRepresentable {
             if let observer { NotificationCenter.default.removeObserver(observer) }
             observer = nil
             observedClip = nil
+            if let styleObserver { NotificationCenter.default.removeObserver(styleObserver) }
+            styleObserver = nil
         }
 
         private func record() {
+            if let scroll = enclosingScrollView, scroll.scrollerStyle != .overlay {
+                TasksScrollKeeper.styleScrollers(of: scroll, hidden: proxies?.scrollersHidden ?? false)
+            }
             guard !restoring, let clip = observedClip, let model else { return }
             model.scrollOffsets[tab] = clip.bounds.origin.y
         }

@@ -1,3 +1,4 @@
+import Combine
 import Foundation
 import SwiftUI
 
@@ -32,6 +33,7 @@ final class NotesLibraryModel: ObservableObject {
     @Published private(set) var matches: Set<UUID>?
     /// The query `matches` answers.
     @Published private(set) var matchedQuery = ""
+    @Published private(set) var matchedRevision: UInt64?
     @Published private(set) var searchState: SearchState = .idle
     /// A search running long enough to show that it is running.
     @Published private(set) var showsLoading = false
@@ -47,7 +49,15 @@ final class NotesLibraryModel: ObservableObject {
     private let calendar: Calendar
     private var searchTask: Task<Void, Never>?
     private var loadingTask: Task<Void, Never>?
+    private weak var observedStore: NoteStore?
+    private var storeSubscription: AnyCancellable?
+    private var presentationSubscription: AnyCancellable?
+    private var storeRevision: UInt64 = 0
+    private var searchGeneration: UInt64 = 0
     private var cache: (key: RowsKey, groups: [Group])?
+    /// Each stored note's preview body, read from its document once per
+    /// saved revision (a row rebuild decodes only the notes that changed).
+    private var bodies: [UUID: (revision: Int64, revisionID: UUID?, body: NoteRowSummary.Body)] = [:]
 
     private struct RowsKey: Equatable {
         let revision: UInt64
@@ -57,11 +67,40 @@ final class NotesLibraryModel: ObservableObject {
         let day: Int
     }
 
-    init(search: @escaping (String) async throws -> Set<UUID>, now: @escaping () -> Date = Date.init,
+    init(search: @escaping (String) async throws -> Set<UUID>, store: NoteStore? = nil, controller: NotesPageController? = nil, now: @escaping () -> Date = Date.init,
          calendar: Calendar = .autoupdatingCurrent) {
         self.search = search
         self.now = now
         self.calendar = calendar
+        if let store { observeStore(store) }
+        // Every exit route publishes here, including corner New Note and
+        // Duplicate. Clear synchronously before hidden-editor autosaves.
+        if let controller {
+            presentationSubscription = controller.$isLibraryPresented.sink { [weak self] shown in
+                if !shown { self?.clearSearch() }
+            }
+        }
+    }
+
+    private func observeStore(_ store: NoteStore) {
+        guard observedStore !== store else { return }
+        observedStore = store
+        storeRevision = store.revision
+        storeSubscription = store.$revision.sink { [weak self] revision in
+            guard let self, revision != self.storeRevision else { return }
+            self.storeRevision = revision
+            self.cache = nil
+            if self.isSearching { self.scheduleSearch() }
+        }
+        if isSearching { scheduleSearch() }
+    }
+
+    func waitForSearch() async {
+        var generation: UInt64
+        repeat {
+            generation = searchGeneration
+            await searchTask?.value
+        } while generation != searchGeneration
     }
 
     var isSearching: Bool { !query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
@@ -73,11 +112,14 @@ final class NotesLibraryModel: ObservableObject {
 
     private func scheduleSearch(immediately: Bool = false) {
         searchTask?.cancel()
+        searchGeneration &+= 1
+        let generation = searchGeneration, revision = storeRevision
         let text = query.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !text.isEmpty else {
             loadingTask?.cancel()
             matches = nil
             matchedQuery = ""
+            matchedRevision = nil
             searchState = .idle
             showsLoading = false
             return
@@ -96,7 +138,9 @@ final class NotesLibraryModel: ObservableObject {
             guard !Task.isCancelled else { return }
             do {
                 let found = try await run(text)
-                guard !Task.isCancelled, let self else { return }
+                guard !Task.isCancelled, let self, self.searchGeneration == generation,
+                      self.storeRevision == revision,
+                      self.query.trimmingCharacters(in: .whitespacesAndNewlines) == text else { return }
                 // A highlight on a row the results no longer show goes.
                 if let highlighted = self.highlightedID, !found.contains(highlighted),
                    self.failedDraftText(highlighted)?.localizedStandardContains(text) != true {
@@ -104,9 +148,12 @@ final class NotesLibraryModel: ObservableObject {
                 }
                 self.matches = found
                 self.matchedQuery = text
+                self.matchedRevision = revision
                 self.searchState = .idle
             } catch {
-                guard !Task.isCancelled, let self else { return }
+                guard !Task.isCancelled, let self, self.searchGeneration == generation,
+                      self.storeRevision == revision,
+                      self.query.trimmingCharacters(in: .whitespacesAndNewlines) == text else { return }
                 self.searchState = .failed(error.localizedDescription)
             }
             self?.loadingTask?.cancel()
@@ -121,6 +168,7 @@ final class NotesLibraryModel: ObservableObject {
     /// while searching. Drafts that were never saved (a failed first save)
     /// lead the list with their warning.
     func groups(store: NoteStore, drafts: [NoteSession]) -> [Group] {
+        observeStore(store)
         let attention = Set(drafts.map(\.noteID))
         let unsaved = drafts.filter { store.note(withID: $0.noteID) == nil }
         let searching = isSearching
@@ -152,6 +200,11 @@ final class NotesLibraryModel: ObservableObject {
                 else if note.updatedAt >= today { todayRows.append(model) }
                 else if note.updatedAt >= weekStart { week.append(model) }
                 else { earlier.append(model) }
+            }
+            // Deleted notes' bodies go (the full list was just built).
+            if bodies.count > notes.count {
+                let shown = Set(notes.map(\.id))
+                bodies = bodies.filter { shown.contains($0.key) }
             }
             result = [
                 Group(id: "pinned", title: String(localized: "Pinned"), rows: pinned),
@@ -204,13 +257,22 @@ final class NotesLibraryModel: ObservableObject {
     }
 
     private func row(_ note: NoteItem, store: NoteStore, attention: Set<UUID>) -> AtticNoteRowModel {
-        let summary = NoteRowSummary(note: note, attachments: store.attachments(for: note.id))
+        let summary = NoteRowSummary(note: note, attachments: store.attachments(for: note.id), body: body(of: note))
         let time = Self.time(note.updatedAt, now: now(), calendar: calendar)
         return AtticNoteRowModel(
             id: note.id, title: summary.title, time: time, needsAttention: attention.contains(note.id),
             preview: summary.preview, checklist: summary.checklist, images: summary.images, files: summary.files,
             spoken: summary.spoken(time: time, needsAttention: attention.contains(note.id))
         )
+    }
+
+    private func body(of note: NoteItem) -> NoteRowSummary.Body {
+        // A legacy note's text is read as is (no decode, nothing to keep).
+        guard note.usesDocumentFormat else { return NoteRowSummary.body(of: note) }
+        if let kept = bodies[note.id], kept.revision == note.revision, kept.revisionID == note.revisionID { return kept.body }
+        let body = NoteRowSummary.body(of: note)
+        bodies[note.id] = (note.revision, note.revisionID, body)
+        return body
     }
 
     private func draftRow(_ session: NoteSession) -> AtticNoteRowModel {
@@ -240,9 +302,15 @@ final class NotesLibraryModel: ObservableObject {
     }
 }
 
-/// What a row says about a note, from its derived text (cheap: no document
-/// decode). A note with only images or files takes its first file's name as
-/// its title and says "1 file" or "2 images".
+/// What a row says about a note. A note with only images or files takes its
+/// first file's name as its title and says "1 file" or "2 images".
+///
+/// The preview is the note's text without its formatting, read from the
+/// blocks' kinds and styles (a heading, a list item, a quote, Mono) and
+/// never by stripping patterns from the text: `__init__` in Mono, a URL
+/// with `/__v1__/` or a paragraph that starts with "- " read as typed
+/// (review P3, `d5e2c0d`). Emphasis is a mark beside the text, so the text
+/// has none to strip.
 struct NoteRowSummary: Equatable {
     var title: String
     var preview: String
@@ -255,10 +323,81 @@ struct NoteRowSummary: Equatable {
             && lhs.checklist?.done == rhs.checklist?.done && lhs.checklist?.total == rhs.checklist?.total
     }
 
+    /// One body line as a row reads it.
+    struct Line: Equatable {
+        enum Kind: Equatable { case text, listItem, checklist(checked: Bool), object }
+        let text: String
+        let kind: Kind
+
+        /// A block's line: its text with no marker (the style says what it
+        /// is); images, files, dividers and unsupported blocks are objects.
+        init(_ block: NoteBlock) {
+            switch block.kind {
+            case .text:
+                text = block.displayText.trimmingCharacters(in: .whitespaces)
+                kind = block.style == "bullet" || block.style == "number" ? .listItem : .text
+            case .checklist:
+                text = block.displayText.trimmingCharacters(in: .whitespaces)
+                kind = .checklist(checked: block.checked)
+            case .image, .file, .divider, .opaque:
+                text = ""
+                kind = .object
+            }
+        }
+
+        /// A line of text with no document behind it (a legacy note, or
+        /// stored bytes this build cannot read): as written, apart from the
+        /// derived text's object lines and `[ ]` / `[x]` checklist lines.
+        init(plain line: String) {
+            let trimmed = line.trimmingCharacters(in: .whitespaces)
+            if trimmed == "[Image]" || trimmed.hasPrefix("[File: ") || trimmed == "[Unsupported content]" {
+                text = ""
+                kind = .object
+            } else if trimmed.hasPrefix("[ ] ") || trimmed.hasPrefix("[x] ") {
+                text = String(trimmed.dropFirst(4))
+                kind = .checklist(checked: trimmed.hasPrefix("[x] "))
+            } else {
+                text = trimmed
+                kind = .text
+            }
+        }
+    }
+
+    /// What the preview and the checklist count take from the body: the
+    /// first parts (about one line's worth) and the counts over the whole
+    /// note. Small; the library keeps one per note revision.
+    struct Body {
+        private(set) var parts: [(text: String, isListItem: Bool)] = []
+        private(set) var done = 0
+        private(set) var total = 0
+
+        init(_ lines: some Sequence<Line>) {
+            var length = 0
+            for line in lines {
+                if case let .checklist(checked) = line.kind {
+                    total += 1
+                    if checked { done += 1 }
+                }
+                guard line.kind != .object, !line.text.isEmpty, length <= 160 else { continue }
+                let isListItem = switch line.kind { case .listItem, .checklist: true; default: false }
+                parts.append((line.text, isListItem))
+                length += line.text.count + 1
+            }
+        }
+    }
+
+    /// The body of a stored note: its document's blocks; a legacy note's
+    /// (or an unreadable document's) text as written.
     @MainActor
-    init(note: NoteItem, attachments: [NoteAttachment]) {
-        var lines = note.plainText.components(separatedBy: "\n")
-        if !lines.isEmpty { lines.removeFirst() }
+    static func body(of note: NoteItem) -> Body {
+        if note.usesDocumentFormat, let data = note.content, let document = NoteContentCodec.decode(data).document {
+            return Body(document.blocks.dropFirst().lazy.map(Line.init))
+        }
+        return Body(note.plainText.components(separatedBy: "\n").dropFirst().lazy.map { Line(plain: $0) })
+    }
+
+    @MainActor
+    init(note: NoteItem, attachments: [NoteAttachment], body: Body? = nil) {
         var images = 0
         var files = 0
         if note.usesDocumentFormat {
@@ -272,42 +411,21 @@ struct NoteRowSummary: Equatable {
         let firstFile = note.usesDocumentFormat ? (note.firstFileName
             ?? attachments.sorted { $0.sortIndex < $1.sortIndex }.first?.originalFilename)
             : attachments.sorted { $0.sortIndex < $1.sortIndex }.first?.originalFilename
-        self.init(title: note.title, bodyLines: lines, images: images, files: files, firstFile: firstFile)
+        self.init(title: note.title, body: body ?? Self.body(of: note), images: images, files: files, firstFile: firstFile)
     }
 
     @MainActor
     init(document: NoteDocument, filename: (UUID) -> String?) {
-        let lines = document.blocks.dropFirst().map(NoteTextExport.plainLine)
         let images = document.blocks.filter { $0.kind == .image }.count
         let files = document.blocks.filter { $0.kind == .file }.count
         let firstFile = document.blocks.first { $0.kind == .file }?.filename
             ?? document.blocks.first { $0.kind == .image }?.attachmentID.flatMap(filename)
-        self.init(title: document.title, bodyLines: lines, images: images, files: files, firstFile: firstFile)
+        self.init(title: document.title, body: Body(document.blocks.dropFirst().lazy.map(Line.init)),
+                  images: images, files: files, firstFile: firstFile)
     }
 
-    private init(title: String, bodyLines: [String], images: Int, files: Int, firstFile: String?) {
-        var done = 0
-        var total = 0
-        var previewParts: [String] = []
-        var listLike = false
-        // Counts read the whole note; only the preview stops early (it
-        // shows one line).
-        var previewLength = 0
-        for line in bodyLines {
-            let trimmed = line.trimmingCharacters(in: .whitespaces)
-            if trimmed.isEmpty || trimmed == "[Image]" || trimmed.hasPrefix("[File: ")
-                || trimmed == "[Unsupported content]" { continue }
-            let isChecklist = trimmed.hasPrefix("[ ] ") || trimmed.hasPrefix("[x] ")
-            if isChecklist {
-                total += 1
-                if trimmed.hasPrefix("[x] ") { done += 1 }
-            }
-            guard previewLength <= 160 else { continue }
-            if isChecklist, previewParts.isEmpty { listLike = true }
-            let part = isChecklist ? String(trimmed.dropFirst(4)) : trimmed
-            previewParts.append(part)
-            previewLength += part.count + 1
-        }
+    private init(title: String, body: Body, images: Int, files: Int, firstFile: String?) {
+        let previewParts = body.parts
         let cleanTitle = title.trimmingCharacters(in: .whitespacesAndNewlines)
         let fileOnly = cleanTitle.isEmpty && previewParts.isEmpty && images + files > 0
         self.title = !cleanTitle.isEmpty ? cleanTitle
@@ -317,9 +435,15 @@ struct NoteRowSummary: Equatable {
                          images > 0 ? (images == 1 ? String(localized: "1 image") : String(localized: "\(images) images")) : nil]
             preview = parts.compactMap { $0 }.joined(separator: ", ")
         } else {
-            preview = previewParts.joined(separator: listLike ? ", " : " ")
+            // A list reads as "Oat milk, Lemons, Rice"; other lines run on.
+            var joined = ""
+            for (index, part) in previewParts.enumerated() {
+                if index > 0 { joined += previewParts[index - 1].isListItem && part.isListItem ? ", " : " " }
+                joined += part.text
+            }
+            preview = joined
         }
-        checklist = total > 0 ? (done, total) : nil
+        checklist = body.total > 0 ? (body.done, body.total) : nil
         self.images = images
         self.files = files
     }

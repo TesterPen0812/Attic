@@ -43,6 +43,30 @@ final class NotesSlice2EngineTests: XCTestCase {
 
     // MARK: Title hashtags
 
+    /// The new editor is the default in every strict preview identity
+    /// (the owner's "Attic Preview" is `com.taha.Attic.preview.main`), not
+    /// only `…preview.notes*`; the official identity keeps the legacy
+    /// editor until Phase 2's pull request; the default, when set, decides.
+    func testTheNewEditorIsTheDefaultInEveryPreviewIdentity() throws {
+        let suite = "NotesEditorSettingTests.\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        for identity in ["com.taha.Attic.preview.main", "com.taha.Attic.preview.cureview", "com.taha.Attic.preview.notes",
+                         "com.taha.Attic.preview.notes-e1", "com.taha.Attic.preview.5268758"] {
+            XCTAssertTrue(NotesEditorSetting.isEnabled(defaults: defaults, bundleIdentifier: identity), identity)
+        }
+        for identity in ["com.taha.Attic", "com.taha.Attic.preview", "com.taha.Attic.preview.", "com.taha.Attic.previewer.main",
+                         "com.taha.Attic.UnitTestHost", "com.taha.Attic.perf.ui", "com.emanueledipietro.Attic"] {
+            XCTAssertFalse(NotesEditorSetting.isEnabled(defaults: defaults, bundleIdentifier: identity), identity)
+        }
+        XCTAssertFalse(NotesEditorSetting.isEnabled(defaults: defaults, bundleIdentifier: nil))
+        // The default overrides the identity, both ways.
+        defaults.set(false, forKey: NotesEditorSetting.defaultsKey)
+        XCTAssertFalse(NotesEditorSetting.isEnabled(defaults: defaults, bundleIdentifier: "com.taha.Attic.preview.main"))
+        defaults.set(true, forKey: NotesEditorSetting.defaultsKey)
+        XCTAssertTrue(NotesEditorSetting.isEnabled(defaults: defaults, bundleIdentifier: "com.taha.Attic"))
+    }
+
     func testSpaceAfterAHashtagInTheTitleTakesTheTagAsOneUndoStep() async {
         let (engine, textView) = makeEngine(NoteDocument(blocks: [.text("Pricing")]))
         var tagChanges = 0
@@ -218,13 +242,13 @@ final class NotesSlice2ControllerTests: XCTestCase {
         gate = PersistenceGate()
         store = try makeTestNoteStore(persist: { [gate] in try gate!.save($0) },
                                       attachmentFileStore: makeTestAttachmentFileStore())
-        directory = FileManager.default.temporaryDirectory.appendingPathComponent("AtticSlice2-\(UUID().uuidString)")
+        directory = ownedTemporaryDirectory(prefix: "AtticSlice2")
         suiteName = "AtticSlice2-\(UUID().uuidString)"
         defaults = UserDefaults(suiteName: suiteName)
     }
 
     override func tearDown() async throws {
-        try? FileManager.default.removeItem(at: directory)
+
         defaults.removePersistentDomain(forName: suiteName)
     }
 
@@ -553,6 +577,93 @@ final class NotesLibraryModelTests: XCTestCase {
         return NotesLibraryModel(search: search, now: { [unowned self] in self.now }, calendar: calendar)
     }
 
+    func testHiddenLibraryAutosavesDoNotRunSearchAfterAnyDismissalRoute() async throws {
+        enum Exit: CaseIterable { case dismiss, newNote, duplicate, openNote, failedDraft }
+        for route in Exit.allCases {
+            let controller = NotesPageController(store: store, journal: nil, saveDelay: .seconds(60))
+            await controller.startAndWait()
+            let initial = try XCTUnwrap(controller.active)
+            _ = initial.engine.performEdit(NSRange(location: 0, length: 0),
+                                          with: NSAttributedString(string: "quartz"), name: "Typing")
+            XCTAssertTrue(controller.save(initial))
+            var searches = 0
+            let library = NotesLibraryModel(search: { _ in searches += 1; return [] },
+                                            store: store, controller: controller)
+            XCTAssertTrue(controller.showLibrary())
+            library.query = "quartz"
+            await library.waitForSearch()
+            XCTAssertEqual(searches, 1)
+            switch route {
+            case .dismiss: controller.dismissLibrary()
+            case .newNote: XCTAssertTrue(controller.requestNewNote())
+            case .duplicate: XCTAssertTrue(controller.duplicateNote(noteID: initial.noteID))
+            case .openNote: await XCTAssertTrueAsync(await controller.openDurably(noteID: initial.noteID)); controller.dismissLibrary()
+            case .failedDraft: XCTAssertTrue(controller.openFailedDraft(sessionID: initial.id))
+            }
+            XCTAssertFalse(controller.isLibraryPresented)
+            XCTAssertEqual(library.query, "", "\(route) must end the search")
+            let target = try XCTUnwrap(controller.active)
+            for _ in 0..<3 {
+                _ = target.engine.performEdit(NSRange(location: target.engine.textStorage.length, length: 0),
+                                              with: NSAttributedString(string: " edit"), name: "Typing")
+                await controller.runDueSave(target)
+                await library.waitForSearch()
+            }
+            XCTAssertEqual(searches, 1, "autosaves with the library hidden must do no full-library search")
+        }
+    }
+
+    func testWarmedTagInventoryDoesNotRereadTheLibraryWhileTypingOrSavingText() throws {
+        for index in 0..<1_000 {
+            let note = NoteItem(title: "Unrelated \(index)")
+            note.tagsRaw = AtticTag.encode(["shared", index % 2 == 0 ? "even" : "odd"])
+            store.modelContext.insert(note)
+        }
+        XCTAssertTrue(store.commitStagedChanges()); store.refresh()
+        guard case let .success((id, revision)) = store.createDocumentNote(id: UUID(),
+            document: NoteDocument(blocks: [.text("Target")]), tags: ["target"]) else { return XCTFail() }
+        let counts = store.tagCounts
+        XCTAssertEqual(counts["shared"], 1_000)
+        let builds = store.tagInventoryBuildCount, reads = store.tagInventoryNoteReadCount
+        for index in 0..<200 {
+            _ = AtticTagSuggestion.make(typed: index % 2 == 0 ? "sh" : "ev", counts: store.tagCounts, excluding: ["target"])
+        }
+        XCTAssertEqual(store.tagInventoryBuildCount, builds)
+        XCTAssertEqual(store.tagInventoryNoteReadCount, reads, "caret changes read no note properties")
+        guard case .success = store.saveDocument(noteID: id, document: NoteDocument(blocks: [.text("Updated text")]),
+                                                baseRevisionID: revision) else { return XCTFail() }
+        XCTAssertEqual(store.tagCounts, counts)
+        XCTAssertEqual(store.tagInventoryBuildCount, builds, "ordinary content saves retain the inventory")
+        XCTAssertEqual(store.tagInventoryNoteReadCount, reads)
+        let legacy = try XCTUnwrap(store.notes.first { !$0.usesDocumentFormat })
+        XCTAssertTrue(store.update(legacy, body: "Only text changed"))
+        XCTAssertEqual(store.tagCounts, counts)
+        XCTAssertEqual(store.tagInventoryBuildCount, builds, "even equal tag assignments during legacy saves are warm")
+    }
+
+    func testTagInventoryInvalidatesForTagsMembershipExternalRefreshAndRollback() throws {
+        let gate = PersistenceGate()
+        let tracked = try makeTestNoteStore(persist: { try gate.save($0) }, attachmentFileStore: makeTestAttachmentFileStore())
+        guard case let .success((id, _)) = tracked.createDocumentNote(id: UUID(), document: NoteDocument(blocks: [.text("A")]), tags: ["old"]) else { return XCTFail() }
+        XCTAssertEqual(tracked.tagCounts, ["old": 1])
+        XCTAssertTrue(tracked.setTags(["new"], for: try XCTUnwrap(tracked.note(withID: id))))
+        XCTAssertEqual(tracked.tagCounts, ["new": 1])
+        guard case let .success((second, _)) = tracked.createDocumentNote(id: UUID(), document: NoteDocument(blocks: [.text("B")]), tags: ["new"]) else { return XCTFail() }
+        XCTAssertEqual(tracked.tagCounts, ["new": 2])
+        XCTAssertTrue(tracked.delete(try XCTUnwrap(tracked.note(withID: second))))
+        XCTAssertEqual(tracked.tagCounts, ["new": 1])
+        XCTAssertTrue(tracked.restoreDeleted(noteID: second))
+        XCTAssertEqual(tracked.tagCounts, ["new": 2])
+        let external = ModelContext(tracked.container)
+        let rows = try external.fetch(FetchDescriptor<NoteItem>())
+        for row in rows where row.id == id { row.tagsRaw = AtticTag.encode(["external"]) }
+        try external.save(); tracked.refresh()
+        XCTAssertEqual(tracked.tagCounts, ["new": 1, "external": 1])
+        gate.shouldFail = true
+        XCTAssertFalse(tracked.setTags(["failed"], for: try XCTUnwrap(tracked.note(withID: id))))
+        XCTAssertEqual(tracked.tagCounts, ["new": 1, "external": 1], "rollback invalidates without publishing failed tags")
+    }
+
     func testRowsFallIntoPinnedTodayThisWeekAndEarlier() async throws {
         _ = try create("Today", daysAgo: 0)
         _ = try create("Monday", daysAgo: 2)
@@ -612,6 +723,72 @@ final class NotesLibraryModelTests: XCTestCase {
         XCTAssertEqual(found, [title, body])
     }
 
+    func testActiveSearchRerunsAfterAgentEditsAndNoteMembershipChanges() async throws {
+        let old = try create("quartz", daysAgo: 0), other = try create("Other", daysAgo: 0)
+        let model = NotesLibraryModel(search: { [store] text in try await store!.searchNoteIDs(matching: text) }, store: store)
+        model.query = "quartz"
+        await model.waitForSearch()
+        XCTAssertEqual(model.matches, [old])
+        func write(_ id: UUID, _ title: String) throws {
+            let token = try XCTUnwrap(store.note(withID: id)?.revisionToken)
+            guard case .success = store.agentWrite(noteID: id, baseRevisionToken: token,
+                document: NoteDocument(blocks: [.text(title)]), agentName: "Agent", disposition: .direct) else { return XCTFail() }
+        }
+        try write(other, "quartz arrived")
+        await model.waitForSearch()
+        XCTAssertEqual(model.matches, [old, other])
+        try write(old, "No longer matches")
+        await model.waitForSearch()
+        XCTAssertEqual(model.matches, [other])
+        XCTAssertEqual(model.groups(store: store, drafts: []).flatMap { $0.rows.map(\.id) }, [other])
+        let added = try create("new quartz", daysAgo: 0)
+        await model.waitForSearch(); XCTAssertEqual(model.matches, [other, added])
+        XCTAssertTrue(store.delete(try XCTUnwrap(store.note(withID: other))))
+        await model.waitForSearch(); XCTAssertEqual(model.matches, [added])
+        XCTAssertEqual(model.matchedRevision, store.revision)
+    }
+
+    func testActiveSearchRerunsWhenAnAttachmentFilenameChanges() async throws {
+        let bytes = Data("payload".utf8)
+        let file = StagedNoteAttachment(id: UUID(), filename: "plain.pdf", contentTypeIdentifier: "com.adobe.pdf",
+            byteCount: Int64(bytes.count), digest: NotePayloadDigest.sha256(bytes), data: bytes)
+        guard case let .success((id, _)) = store.createDocumentNote(id: UUID(),
+            document: NoteDocument(blocks: [.text("Files"), .file(attachmentID: file.id, filename: file.filename,
+                contentTypeIdentifier: file.contentTypeIdentifier, byteCount: file.byteCount)]), staged: [file]) else { return XCTFail() }
+        let model = NotesLibraryModel(search: { [store] text in try await store!.searchNoteIDs(matching: text) }, store: store)
+        model.query = "quartz"; await model.waitForSearch(); XCTAssertEqual(model.matches, [])
+        let row = try XCTUnwrap(store.attachmentRows(forNoteID: id).first)
+        row.originalFilename = "quartz.pdf"; XCTAssertTrue(store.commitStagedChanges())
+        await model.waitForSearch(); XCTAssertEqual(model.matches, [id])
+        row.originalFilename = "plain.pdf"; XCTAssertTrue(store.commitStagedChanges())
+        await model.waitForSearch(); XCTAssertEqual(model.matches, [])
+    }
+
+    func testOldSearchCompletionsCannotReplaceANewerStoreRevisionOrQuery() async throws {
+        let old = try create("old", daysAgo: 0), new = try create("new", daysAgo: 0)
+        var requests: [CheckedContinuation<Set<UUID>, Error>] = []
+        let model = NotesLibraryModel(search: { _ in
+            try await withCheckedThrowingContinuation { requests.append($0) }
+        }, store: store)
+        func waitForRequests(_ count: Int) async throws {
+            for _ in 0..<100 {
+                if requests.count >= count { return }
+                try await Task.sleep(for: .milliseconds(10))
+            }
+            XCTFail("search did not start")
+        }
+        model.query = "quartz"; try await waitForRequests(1)
+        _ = try create("Another", daysAgo: 0); try await waitForRequests(2)
+        requests[1].resume(returning: [new]); await model.waitForSearch()
+        let revision = model.matchedRevision
+        requests[0].resume(returning: [old])
+        try await Task.sleep(for: .milliseconds(20))
+        XCTAssertEqual(model.matches, [new]); XCTAssertEqual(model.matchedRevision, revision)
+        model.query = "granite"; try await waitForRequests(3)
+        model.clearSearch(); requests[2].resume(returning: [old]); await model.waitForSearch()
+        XCTAssertNil(model.matches); XCTAssertNil(model.matchedRevision); XCTAssertEqual(model.matchedQuery, "")
+    }
+
     func testTimesReadAsTimeWeekdayOrDay() async {
         var calendar = Calendar(identifier: .gregorian)
         calendar.timeZone = TimeZone(identifier: "UTC")!
@@ -645,11 +822,11 @@ final class NotesSlice2MigrationTests: XCTestCase {
 
     override func setUp() async throws {
         store = try makeTestNoteStore(attachmentFileStore: makeTestAttachmentFileStore())
-        directory = FileManager.default.temporaryDirectory.appendingPathComponent("AtticSlice2Migration-\(UUID().uuidString)")
+        directory = ownedTemporaryDirectory(prefix: "AtticSlice2Migration")
     }
 
     override func tearDown() async throws {
-        try? FileManager.default.removeItem(at: directory)
+
     }
 
     private func png() throws -> Data {

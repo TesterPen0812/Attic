@@ -217,12 +217,26 @@ final class AtticPanel: NSPanel {
         onUnhandledEscape?()
     }
 
+    /// The presses that make an inactive panel key and still act.
+    nonisolated static func takesFirstPress(_ type: NSEvent.EventType) -> Bool {
+        type == .leftMouseDown || type == .rightMouseDown || type == .otherMouseDown
+    }
+
     override func resignKey() {
         cancelTrackpadSwipe()
         super.resignKey()
     }
 
     override func sendEvent(_ event: NSEvent) {
+        // One click both activates the panel and acts (owner, 2026-10-01):
+        // the panel becomes key before AppKit sees the press, so the press
+        // is never spent on activation, whatever view is under it (SwiftUI's
+        // own views in a list do not accept the first mouse). The panel is
+        // non-activating, so Attic stays where it is.
+        if Self.takesFirstPress(event.type), !isKeyWindow, canBecomeKey, isVisible,
+           visibleContentFrame.contains(convertPoint(toScreen: event.locationInWindow)) {
+            makeKey()
+        }
         guard event.type == .scrollWheel else {
             if [.magnify, .beginGesture, .leftMouseDown, .rightMouseDown, .otherMouseDown, .keyDown, .flagsChanged].contains(event.type) {
                 cancelTrackpadSwipe()
@@ -327,7 +341,8 @@ final class AtticPanel: NSPanel {
                 deltaY: trackerDelta.y,
                 phase: trackerPhase,
                 isPrecise: event.hasPreciseScrollingDeltas,
-                isDirectionInvertedFromDevice: event.isDirectionInvertedFromDevice
+                isDirectionInvertedFromDevice: event.isDirectionInvertedFromDevice,
+                time: event.timestamp
             ),
             dockedCorner: trackpadDismissCorner,
             towardDockedSide: route == .hide || swipeStartedInLibrary
@@ -1006,11 +1021,53 @@ final class AtticPanelContentContainer: NSView {
         CATransaction.commit()
     }
 
+    /// Under Reduced motion a swipe fades the panel instead of moving it.
+    func resetReducedFade() {
+        guard let layer = motionView.layer, layer.opacity != 1 else { return }
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        layer.removeAnimation(forKey: Self.fadeAnimationKey)
+        layer.opacity = 1
+        CATransaction.commit()
+    }
+
+    private static let fadeAnimationKey = "AtticPanelReducedFade"
+
     func setCollapseProgress(
         _ progress: CGFloat, corner: ScreenCorner, reduceMotion: Bool,
-        duration: TimeInterval = 0, completion: (() -> Void)? = nil
+        duration: TimeInterval = 0, spring: AtticMotionSpring? = nil, fades: Bool = false,
+        completion: (() -> Void)? = nil
     ) {
         guard let layer = motionView.layer else { completion?(); return }
+        if reduceMotion {
+            // No travel: the pull and a swipe's close or spring-back fade
+            // (a live pull dims toward `reducedMinimumOpacity`).
+            // An instant collapse (an ordinary hide under Reduced) changes
+            // nothing: only a live pull dims.
+            let target: Float = fades ? (progress >= 1 ? 0 : 1)
+                : progress >= 1 ? 1 : Float(PanelCollapseGeometry.reducedOpacity(progress: progress))
+            let from = layer.presentation()?.opacity ?? layer.opacity
+            CATransaction.begin()
+            CATransaction.setDisableActions(true)
+            layer.removeAnimation(forKey: Self.fadeAnimationKey)
+            layer.transform = CATransform3DIdentity
+            layer.opacity = target
+            if fades, duration > 0, from != target {
+                let animation = CABasicAnimation(keyPath: "opacity")
+                animation.fromValue = from
+                animation.toValue = target
+                animation.duration = duration
+                animation.timingFunction = CAMediaTimingFunction(name: .easeOut)
+                CATransaction.setCompletionBlock(completion)
+                layer.add(animation, forKey: Self.fadeAnimationKey)
+                CATransaction.commit()
+            } else {
+                CATransaction.commit()
+                completion?()
+            }
+            return
+        }
+        if layer.opacity != 1 { resetReducedFade() }
         let from = presentationTransform
         let target = CATransform3DMakeAffineTransform(PanelCollapseGeometry.transform(
             progress: progress, visibleBounds: hostingView.frame,
@@ -1025,11 +1082,21 @@ final class AtticPanelContentContainer: NSView {
         layer.removeAnimation(forKey: Self.collapseAnimationKey)
         layer.transform = target
         if duration > 0, !reduceMotion, !CATransform3DEqualToTransform(from, target) {
-            let animation = CABasicAnimation(keyPath: "transform")
+            let animation: CABasicAnimation
+            if let spring {
+                // The feel's spring (a swipe's spring-back): it settles in
+                // its own time.
+                let springAnimation = CASpringAnimation(perceptualDuration: spring.response, bounce: spring.bounce)
+                springAnimation.duration = springAnimation.settlingDuration
+                animation = springAnimation
+            } else {
+                animation = CABasicAnimation(keyPath: "transform")
+                animation.duration = duration
+                animation.timingFunction = CAMediaTimingFunction(controlPoints: 0.22, 0.8, 0.28, 1)
+            }
+            animation.keyPath = "transform"
             animation.fromValue = NSValue(caTransform3D: from)
             animation.toValue = NSValue(caTransform3D: target)
-            animation.duration = duration
-            animation.timingFunction = CAMediaTimingFunction(controlPoints: 0.22, 0.8, 0.28, 1)
             CATransaction.setCompletionBlock(completion)
             layer.add(animation, forKey: Self.collapseAnimationKey)
             CATransaction.commit()
@@ -1121,8 +1188,22 @@ final class AtticPanelHostingView: NSHostingView<AtticPanelView> {
     override func viewWillMove(toWindow newWindow: NSWindow?) {
         if newWindow == nil {
             cancelActiveInteraction(reason: .lostWindow)
+        } else {
+            // This panel adds/removes native editors and SwiftUI controls.
+            // Let AppKit maintain that dynamic key loop. With the default
+            // static mode SwiftUI eagerly rebuilds its focus proxies from
+            // preferencesDidChange inside layout; the CU import hang was
+            // sampled indefinitely walking responder ancestry there.
+            newWindow?.autorecalculatesKeyViewLoop = true
         }
         super.viewWillMove(toWindow: newWindow)
+    }
+
+    /// The page's SwiftUI update runs in this pass (a page's controls are
+    /// made and dismantled here): overlay hierarchy changes from it wait
+    /// for the next turn (`AtticOverlayHierarchy`, P1-01 hypothesis).
+    override func layout() {
+        AtticOverlayHierarchy.layoutPass { super.layout() }
     }
 
     override func hitTest(_ point: NSPoint) -> NSView? {
@@ -1163,21 +1244,6 @@ final class AtticPanelHostingView: NSHostingView<AtticPanelView> {
 
     override func acceptsFirstMouse(for event: NSEvent?) -> Bool {
         true
-    }
-
-    func isChromeControlPoint(_ windowPoint: CGPoint) -> Bool {
-        let point = AtticPanelCoordinateSpace.policyPoint(
-            fromHostingPoint: convert(windowPoint, from: nil), in: bounds, isFlipped: isFlipped
-        )
-        let insets = PanelGeometry.chromeInsets(cornerSize: panelCornerRadius, panelSize: bounds.size)
-        let topControlsY = bounds.maxY - insets.top - AtticStyle.controlHitSize
-        let pinRect = CGRect(x: bounds.minX + insets.leading, y: topControlsY,
-                             width: AtticStyle.controlHitSize, height: AtticStyle.controlHitSize)
-        let modeRect = CGRect(x: bounds.maxX - insets.trailing - chromeInteractionState.modeDockWidth,
-                              y: topControlsY, width: chromeInteractionState.modeDockWidth,
-                              height: AtticStyle.controlHitSize)
-        return pinRect.contains(point) || modeRect.contains(point)
-            || point.y < bounds.minY + insets.bottom + chromeInteractionState.bottomControlsHeight
     }
 
     override func mouseDown(with event: NSEvent) {

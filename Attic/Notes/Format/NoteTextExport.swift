@@ -89,6 +89,7 @@ enum NoteAgentTextError: LocalizedError, Equatable {
     case unknownFile(String)
     case unknownBlock(String)
     case lossyFormatting
+    case unsafeChecklist
 
     var errorDescription: String? {
         switch self {
@@ -98,6 +99,8 @@ enum NoteAgentTextError: LocalizedError, Equatable {
             "The file \(reference) is not in this note. Keep file lines exactly as get_note returned them."
         case let .unknownBlock(reference):
             "The block \(reference) is not in this note. Keep unsupported-content lines exactly as returned."
+        case .unsafeChecklist:
+            "This edit would flatten, duplicate, reorder, or change an existing checklist item. Keep remaining checklist lines unchanged except for their checked states; add or remove complete checklist lines."
         case .lossyFormatting:
             "This note contains paragraph structure or inline marks that the agent text format cannot safely preserve during this edit. Keep styled blocks unchanged, change only plain text or checklist checked states, or edit the note in Attic."
         }
@@ -105,10 +108,52 @@ enum NoteAgentTextError: LocalizedError, Equatable {
 }
 
 /// The agent wire format has no mark offsets or complete paragraph metadata.
-/// A rich document can round-trip intact blocks, plain-text edits, and
-/// checkbox flips only when all other block fields are preserved.
+/// Surviving rich blocks retain their fields; plain text and checklist
+/// checked states may change, and whole checklist lines may be added or removed.
 enum NoteAgentTextSafety {
     static func validate(base: NoteDocument, proposed: NoteDocument) throws {
+        // Whole checklist lines may be added or removed. Surviving base
+        // items retain their identity and metadata exactly, in base order;
+        // the wire format supports only their checked-state changes.
+        let baseItems = base.blocks.filter { $0.kind == .checklist }
+        let proposedItems = proposed.blocks.filter { $0.kind == .checklist }
+        let baseIDs = Set(baseItems.compactMap(\.id))
+        let remainingIDs = Set(proposedItems.compactMap(\.id))
+        let unchecked: (NoteBlock) -> NoteBlock = { block in
+            var item = block; item.checked = false; return item
+        }
+        let survivors = proposedItems.filter { $0.id.map(baseIDs.contains) == true }
+        let expected = baseItems.filter { $0.id.map(remainingIDs.contains) == true }
+        guard survivors.map(unchecked) == expected.map(unchecked) else { throw NoteAgentTextError.unsafeChecklist }
+        let addedItems = proposedItems.filter { $0.id.map(baseIDs.contains) != true }
+        for item in addedItems {
+            // A second wire copy gets a fresh ID during parsing. That must
+            // not disguise duplication of an existing checklist line.
+            guard !baseItems.contains(where: {
+                NoteTextExport.agentLine(unchecked($0), index: 1) == NoteTextExport.agentLine(unchecked(item), index: 1)
+            }) else { throw NoteAgentTextError.unsafeChecklist }
+        }
+        for item in baseItems {
+            guard !proposed.blocks.contains(where: { block in
+                if let id = item.id, block.id == id, block.kind != .checklist { return true }
+                return item.id.map(remainingIDs.contains) != true && !item.displayText.isEmpty
+                    && block.kind == .text && block.displayText == item.displayText && !base.blocks.contains(block)
+            }) else { throw NoteAgentTextError.unsafeChecklist }
+        }
+        // A wire rename becomes removal plus insertion because the text no
+        // longer matches. Do not let that silently discard hidden checklist
+        // metadata. Whole-item deletion remains allowed; replacements must
+        // preserve the removed items' metadata once each.
+        if !addedItems.isEmpty {
+            var replacements = addedItems
+            for item in baseItems where item.id.map(remainingIDs.contains) != true
+                && (item.indent != nil || !item.marks.isEmpty || !item.extras.isEmpty) {
+                guard let index = replacements.firstIndex(where: {
+                    $0.indent == item.indent && $0.marks == item.marks && $0.extras == item.extras
+                }) else { throw NoteAgentTextError.unsafeChecklist }
+                replacements.remove(at: index)
+            }
+        }
         let rich = base.blocks.contains {
             $0.style != nil || $0.level != nil || $0.indent != nil || !$0.marks.isEmpty
                 || $0.kind == .divider
@@ -122,16 +167,16 @@ enum NoteAgentTextSafety {
             }
             guard attachments(base) == attachments(proposed) else { throw NoteAgentTextError.lossyFormatting }
             let dates: (NoteDocument) -> [NoteInline] = { document in
-                document.blocks.flatMap(\.inlines)
+                document.blocks.filter { $0.kind != .checklist }.flatMap(\.inlines)
             }
             guard dates(base) == dates(proposed) else { throw NoteAgentTextError.lossyFormatting }
             return
         }
-        guard base.blocks.count == proposed.blocks.count else { throw NoteAgentTextError.lossyFormatting }
-        for (old, new) in zip(base.blocks, proposed.blocks) {
-            var checkedCopy = old
-            if old.kind == .checklist { checkedCopy.checked = new.checked }
-            if checkedCopy == new { continue }
+        let oldBlocks = base.blocks.filter { $0.kind != .checklist }
+        let newBlocks = proposed.blocks.filter { $0.kind != .checklist }
+        guard oldBlocks.count == newBlocks.count else { throw NoteAgentTextError.lossyFormatting }
+        for (old, new) in zip(oldBlocks, newBlocks) {
+            if old == new { continue }
             // An ordinary text block can change alongside rich blocks only
             // when every other field, including object IDs, survives.
             if old.kind == .text, old.style == nil, old.level == nil,

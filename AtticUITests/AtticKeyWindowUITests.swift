@@ -29,31 +29,31 @@ final class AtticKeyWindowUITests: XCTestCase {
     /// typed right away lands there. (`ATTIC_UI_TEST_HOVER_MONITOR` opens
     /// the panel the way quick capture does.)
     func testAnExplicitOpenFocusesTheAddBarWithoutARing() throws {
+        continueAfterFailure = false
         app = XCUIApplication()
         app.launchEnvironment["ATTIC_UI_TESTING"] = "1"
         app.launchEnvironment["ATTIC_UI_TEST_HOVER_MONITOR"] = "1"
+        // Hold the real pin through cold accessibility startup and capture.
+        // Pinning neither assigns input focus nor draws its ring: the
+        // launch's explicit reveal must still give the add bar the keyboard.
+        app.launchEnvironment["ATTIC_UI_TEST_PINNED"] = "1"
         app.launchArguments += ["-appearancePreference", "light", "-panelSurfaceStyle", "solid"]
         app.launch()
         app.activate()
         let addBar = app.descendants(matching: .any).matching(identifier: "AtticTokenField").firstMatch
-        XCTAssertTrue(addBar.waitForExistence(timeout: 5))
-        let deadline = Date().addingTimeInterval(3)
-        while Date() < deadline, (addBar.value(forKey: "hasKeyboardFocus") as? Bool) != true {
-            RunLoop.current.run(until: Date().addingTimeInterval(0.1))
+        let focused = NSPredicate { _, _ in
+            addBar.exists && addBar.isHittable && (addBar.value(forKey: "hasKeyboardFocus") as? Bool) == true
         }
-        XCTAssertEqual(addBar.value(forKey: "hasKeyboardFocus") as? Bool, true, "the add bar has the keyboard on open")
+        XCTAssertEqual(XCTWaiter.wait(for: [XCTNSPredicateExpectation(predicate: focused, object: nil)], timeout: 10), .completed,
+                       "the explicit open shows a hittable add bar with the keyboard")
 
-        // Captured now, judged after typing: the pixel count takes seconds
-        // on CI, and an idle quick capture with the pointer away rightly
-        // hides after its grace (`MainPanelAutoHidePolicy`), so the text
-        // must be typed while the person would still be typing (round 10:
-        // the panel hid before the text arrived since round 8).
-        let image = addBar.screenshot().image
         app.typeText("Typed on open")
         let typed = NSPredicate(format: "value CONTAINS %@", "Typed on open")
-        XCTAssertEqual(XCTWaiter.wait(for: [expectation(for: typed, evaluatedWith: addBar)], timeout: 3), .completed,
+        XCTAssertEqual(XCTWaiter.wait(for: [expectation(for: typed, evaluatedWith: addBar)], timeout: 10), .completed,
                        "what is typed on open lands in the add bar")
+        XCTAssertEqual(addBar.value(forKey: "hasKeyboardFocus") as? Bool, true, "and the add bar keeps the keyboard")
 
+        let image = addBar.screenshot().image
         attach(image, name: "add-bar-on-open")
         XCTAssertLessThan(try accentFraction(image), 0.002, "no focus ring on open")
     }

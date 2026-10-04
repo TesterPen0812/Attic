@@ -14,12 +14,12 @@ final class TaskAttachmentDropTests: XCTestCase {
     private var root: URL!
 
     override func setUp() async throws {
-        root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        root = ownedTemporaryDirectory(prefix: "TaskAttachmentDropTests")
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
     }
 
     override func tearDown() async throws {
-        try? FileManager.default.removeItem(at: root)
+
     }
 
     // MARK: - Helpers

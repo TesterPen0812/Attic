@@ -68,7 +68,7 @@ struct TaskDatePickerView: View {
         .focusable()
         .focused($focused)
         .focusEffectDisabled()
-        .onAppear { focused = true }
+        .atticDropdownFocus($focused)
         .onKeyPress(phases: .down) { press in key(press, highlight: highlight, quick: quick) }
         .accessibilityElement(children: .contain)
         .accessibilityLabel(String(localized: "Choose a date"))
@@ -107,8 +107,10 @@ struct TaskDatePickerView: View {
     }
 }
 
-/// The tag list with its state (the query, the keyboard highlight). `state`
-/// says how many of the targets have a tag.
+/// The Tasks tag list: every tag, ticked as `state` says (how many of the
+/// targets have it), filtered by what is typed, with "New tag “#…”" for a
+/// name no tag has. The card, its highlight and keys are the shared
+/// `AtticTagPickerCard` (Notes' ⋯ → Tags… uses the same one).
 struct TaskTagPickerView: View {
     let allTags: [String]
     let state: (String) -> AtticCheckState
@@ -120,55 +122,67 @@ struct TaskTagPickerView: View {
     /// Opened by "New Tag…": the field has the keyboard at once.
     var focusField = true
 
+    var body: some View {
+        AtticTagPickerCard(rows: { query in
+            let lowered = query.trimmingCharacters(in: .whitespaces).lowercased().replacingOccurrences(of: "#", with: "")
+            let filtered = lowered.isEmpty ? allTags : allTags.filter { $0.lowercased().contains(lowered) }
+            let create = AtticTag.normalize(lowered).flatMap { name in allTags.contains { $0.lowercased() == name.lowercased() } ? nil : name }
+            return (filtered.map { AtticTagPicker.Tag(name: $0, state: state($0)) }, create)
+        }, listRows: allTags.count, onToggle: onToggle, onCreate: onCreate, focusField: focusField)
+    }
+}
+
+/// Move to Task… (control audit item 5): the task list with its state (the
+/// query, the keyboard highlight), as `TaskTagPickerView` is the tag list's.
+/// `choices` are read once when it opens; typing filters them.
+struct TaskMovePickerView: View {
+    let choices: [AtticTaskPicker.Choice]
+    let onChoose: (UUID) -> Void
+
     @State private var query = ""
     @State private var highlighted: Int?
     @FocusState private var fieldFocused: Bool
+    @FocusState private var listFocused: Bool
+
+    /// What `query` leaves, in list order (tests read it).
+    static func filter(_ choices: [AtticTaskPicker.Choice], query: String) -> [AtticTaskPicker.Choice] {
+        let needle = query.trimmingCharacters(in: .whitespaces)
+        return needle.isEmpty ? choices : choices.filter { $0.title.localizedStandardContains(needle) }
+    }
 
     var body: some View {
-        let lowered = query.trimmingCharacters(in: .whitespaces).lowercased().replacingOccurrences(of: "#", with: "")
-        let filtered = lowered.isEmpty ? allTags : allTags.filter { $0.lowercased().contains(lowered) }
-        let create = AtticTag.normalize(lowered).flatMap { name in allTags.contains { $0.lowercased() == name.lowercased() } ? nil : name }
-        AtticTagPicker(
+        let filtered = Self.filter(choices, query: query)
+        AtticTaskPicker(
             query: $query,
-            tags: filtered.map { AtticTagPicker.Tag(name: $0, state: state($0)) },
-            create: create,
+            choices: filtered,
             highlighted: highlighted,
-            onToggle: onToggle,
-            onCreate: { name in
-                let clear = { query = "" }
-                if onCreate(name, clear) { clear() }
-            },
+            onChoose: onChoose,
             fieldFocused: $fieldFocused,
             onHover: { index, inside in
                 let next = AtticListHighlight.hovered(index, inside: inside, current: highlighted)
                 if next != highlighted { highlighted = next }
-            }
+            },
+            listFocus: $listFocused,
+            onListHighlight: $highlighted
         )
-        .onAppear { if focusField { fieldFocused = true } }
-        // Typing highlights the first match; an empty field (as after a new
-        // tag saved) highlights nothing, so another Return does nothing
-        // rather than toggle a tag (round 5, F5).
-        .onChange(of: query) { _, _ in highlighted = lowered.isEmpty || (filtered.isEmpty && create == nil) ? nil : 0 }
+        .atticDropdownFocus($fieldFocused)
+        .atticDropdownTabs(field: $fieldFocused, list: $listFocused)
+        // Typing highlights the first match, so Return chooses it.
+        .onChange(of: query) { _, now in highlighted = now.isEmpty || Self.filter(choices, query: now).isEmpty ? nil : 0 }
         .onKeyPress(phases: .down) { press in
-            let count = filtered.count + (create == nil ? 0 : 1)
             switch press.key {
             case .downArrow:
-                guard count > 0 else { return .ignored }
-                highlighted = min((highlighted ?? -1) + 1, count - 1)
+                guard !filtered.isEmpty else { return .ignored }
+                highlighted = min((highlighted ?? -1) + 1, filtered.count - 1)
                 return .handled
             case .upArrow:
-                guard count > 0 else { return .ignored }
-                highlighted = max((highlighted ?? count) - 1, 0)
+                guard !filtered.isEmpty else { return .ignored }
+                highlighted = max((highlighted ?? filtered.count) - 1, 0)
                 return .handled
-            case .return:
-                if let highlighted, highlighted < filtered.count {
-                    onToggle(filtered[highlighted])
-                } else if let create {
-                    let clear = { query = "" }
-                    if onCreate(create, clear) { clear() }
-                } else {
-                    return .ignored
-                }
+            case .return, .space:
+                if press.key == .space, !listFocused { return .ignored }
+                guard let highlighted, filtered.indices.contains(highlighted) else { return .ignored }
+                onChoose(filtered[highlighted].id)
                 return .handled
             default:
                 return .ignored
@@ -177,9 +191,8 @@ struct TaskTagPickerView: View {
     }
 }
 
-/// Priority as a short list (the strip's Priority): None, ! Medium,
-/// !! High. A task that already has the legacy Low keeps it representable
-/// (review 17): it shows, ticked, until another is chosen.
+/// Priority as a short list (the strip's Priority): No Priority, ↓ Low,
+/// ! Medium, !! High (follow-up part 2: all four, everywhere).
 struct TaskPriorityPickerView: View {
     let current: TaskPriority?
     let onPick: (TaskPriority) -> Void
@@ -187,32 +200,45 @@ struct TaskPriorityPickerView: View {
     @State private var highlighted: Int?
     @FocusState private var focused: Bool
 
-    private var options: [TaskPriority] {
-        TaskPriority.choices(keeping: current.map { [$0] } ?? [])
-    }
+    @Environment(\.atticDropdownRegisterKeys) private var registerKeys
+
+    private var options: [TaskPriority] { TaskPriority.choices }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             ForEach(Array(options.enumerated()), id: \.element) { index, priority in
-                AtticChoiceRow(title: priority.pickerTitle, detail: nil,
-                               check: current == priority || (current == nil && priority == .none) ? .on : .off,
-                               isHighlighted: highlighted == index, titleInk: .body,
-                               onHover: { inside in
-                                   let next = AtticListHighlight.hovered(index, inside: inside, current: highlighted)
-                                   if next != highlighted { highlighted = next }
-                               }) { onPick(priority) }
+                // Its ⌥⌘ key on every row: real commands, learned here (p2-24).
+                AtticDropdownRow(title: priority.choiceTitle,
+                                 check: current == priority || (current == nil && priority == .none) ? .on : .off,
+                                 mark: TaskRowPresentation.priority(priority),
+                                 detail: priority.shortcutHint,
+                                 isHighlighted: highlighted == index,
+                                 onHover: { inside in
+                                     let next = AtticListHighlight.hovered(index, inside: inside, current: highlighted)
+                                     if next != highlighted { highlighted = next }
+                                 }, position: index + 1, itemCount: options.count) { onPick(priority) }
             }
         }
-        .frame(width: AtticPickerMetrics.tagWidth - 40)
         .focusable()
         .focused($focused)
         .focusEffectDisabled()
-        .onAppear { focused = true }
+        .atticDropdownFocus($focused)
+        .onAppear {
+            registerKeys { event in
+                guard event.modifierFlags.intersection([.command, .option, .control, .shift]) == [.command, .option],
+                      let priority = options.first(where: { String($0.shortcut.key.character) == event.charactersIgnoringModifiers }) else { return false }
+                onPick(priority)
+                return true
+            }
+        }
+        .onDisappear { registerKeys(nil) }
+        .accessibilityElement(children: .contain)
+        .accessibilityLabel(String(localized: "Priority"))
         .onKeyPress(phases: .down) { press in
             switch press.key {
             case .downArrow: highlighted = min((highlighted ?? -1) + 1, options.count - 1); return .handled
             case .upArrow: highlighted = max((highlighted ?? options.count) - 1, 0); return .handled
-            case .return:
+            case .return, .space:
                 guard let highlighted else { return .ignored }
                 onPick(options[highlighted])
                 return .handled
@@ -224,13 +250,19 @@ struct TaskPriorityPickerView: View {
 
 extension TaskPriority {
     /// What every priority menu offers (the row menu, the strip, the bulk
-    /// bar, the details panel; owner item 19): No Priority, Medium and
-    /// High. Low has no mark, so it looked like none; it shows only while
-    /// every target already has it (ticked until changed), so it is never
-    /// offered as a new value, not even to the rest of a mixed selection
-    /// (round 7, R6). The model, storage and agents keep it.
-    static func choices(keeping current: some Sequence<TaskPriority>) -> [TaskPriority] {
-        Set(current) == [.low] ? [.none, .low, .medium, .high] : [.none, .medium, .high]
+    /// bar, the details panel): all four (follow-up part 2, option A). Low
+    /// was hidden while it had no mark (round 7, R6); it now shows as a
+    /// grey ↓, so it is offered to every task and selection again.
+    static let choices: [TaskPriority] = [.none, .low, .medium, .high]
+
+    /// Its key in every priority menu (⌥⌘0–3).
+    var shortcut: KeyboardShortcut {
+        switch self {
+        case .none: AtticTaskShortcut.priorityNone
+        case .low: AtticTaskShortcut.priorityLow
+        case .medium: AtticTaskShortcut.priorityMedium
+        case .high: AtticTaskShortcut.priorityHigh
+        }
     }
 
     /// The toast's wording: "High priority", "Priority removed".
@@ -243,25 +275,55 @@ extension TaskPriority {
         }
     }
 
-    /// The strip's wording: "No Priority", "!  Medium", "!!  High".
+    /// The strip's wording: "No Priority", "↓  Low", "!  Medium", "!!  High".
     var pickerTitle: String {
         switch self {
         case .none: String(localized: "No Priority")
-        case .low: String(localized: "Low")
+        case .low: String(localized: "↓  Low")
         case .medium: String(localized: "!  Medium")
         case .high: String(localized: "!!  High")
         }
     }
 
-    var mark: String? {
+    /// The priority picker's name (p2-24): "None", "Low", "Medium", "High".
+    var choiceTitle: String {
         switch self {
-        case .medium: "!"
-        case .high: "!!"
-        case .none, .low: nil
+        case .none: String(localized: "None")
+        case .low: String(localized: "Low")
+        case .medium: String(localized: "Medium")
+        case .high: String(localized: "High")
         }
     }
 
-    /// The shorthand the add bar inserts for it.
+    /// Its key as the picker's rows show it: "⌥⌘0" to "⌥⌘3".
+    var shortcutHint: String {
+        let key = shortcut.key.character
+        return "⌥⌘" + String(key).uppercased()
+    }
+
+    /// The plain name ("Low", "Medium", "High"; "No Priority").
+    var detailTitle: String {
+        switch self {
+        case .none: String(localized: "No Priority")
+        case .low: String(localized: "Low")
+        case .medium: String(localized: "Medium")
+        case .high: String(localized: "High")
+        }
+    }
+
+    var mark: String? {
+        switch self {
+        case .low: "↓"
+        case .medium: "!"
+        case .high: "!!"
+        case .none: nil
+        }
+    }
+
+    /// The shorthand the add bar inserts for it. Low has none: no typed
+    /// mark is both easy to type and never part of ordinary words (`↓`
+    /// needs a special character, `!low` or `p4` collide with titles); the
+    /// strip's Priority and ⌥⌘1 set it.
     var shorthand: String? {
         switch self {
         case .medium: "!"

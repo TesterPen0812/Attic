@@ -185,7 +185,7 @@ struct AtticPanelView: View {
                 primaryInputFocus: $isQuickEntryFocused,
                 isCurrent: page == currentPage
             )
-            .transition(.opacity)
+            .transition(pageTransition)
         case .canvas:
             CanvasPageHost(
                 canvasSession: canvasSession,
@@ -195,7 +195,7 @@ struct AtticPanelView: View {
                 headerControlRects: headerControlRects,
                 headerBottom: PanelHeaderLayout.bottom(chromeInsets: chromeInsets)
             )
-            .transition(.opacity)
+            .transition(pageTransition)
         case .notes:
             NotesPageHost(
                 noteStore: noteStore,
@@ -204,7 +204,7 @@ struct AtticPanelView: View {
                 layout: pageLayout,
                 hasRestoredSession: hasRestoredNoteSession
             )
-            .transition(.opacity)
+            .transition(pageTransition)
         }
     }
 
@@ -306,7 +306,8 @@ struct AtticPanelView: View {
                 tintLength: settings.panelTintLength,
                 hapticsEnabled: settings.panelHapticsEnabled,
                 animations: settings.animations,
-                controls: PanelKeyTreatment.controls(isPanelKey: uiState.isPanelKey, surface: settings.panelSurfaceStyle)
+                controls: PanelKeyTreatment.controls(isPanelKey: uiState.isPanelKey, surface: settings.panelSurfaceStyle),
+                motion: settings.motionTuning
             )
             // Native menus (context menus, pop-ups) follow Attic's chosen
             // appearance, not only the Mac's.
@@ -380,6 +381,13 @@ struct AtticPanelView: View {
             }
         }
         withAnimation(AtticMotionPreset.pageSwitch.animation(reduceMotion: reduceMotion || settings.animations == .reduced)) { selection() }
+    }
+
+    /// Pages crossfade in every feel: they hold AppKit scroll views, which
+    /// a SwiftUI scale would not carry (`AtticMotionPreset.scaleWeight`).
+    private var pageTransition: AnyTransition {
+        AtticMotionPreset.pageSwitch.transition(reduceMotion: reduceMotion || settings.animations == .reduced,
+                                                edge: nil, anchor: .top)
     }
 
     /// Pages with their own bottom controls (the Tasks add bar) report their

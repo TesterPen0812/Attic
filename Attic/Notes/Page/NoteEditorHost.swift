@@ -23,10 +23,30 @@ final class NotesPageChrome: ObservableObject {
     /// The open panel for Insert › Image or File…, the `/` row (one file),
     /// or a failed object's Retry and Locate… (one file, for that object).
     enum FileRequest: Equatable {
-        case insert, slash
+        case insert
+        /// The `/` row's request, with the session it was made in: its
+        /// completion goes to that request only (review P2, `8008974`).
+        case slash(NoteSlashFileTicket)
         case retry(UUID), locate(UUID)
     }
-    @Published var fileRequest: FileRequest?
+    @Published var fileRequest: FileRequest? {
+        didSet { if let fileRequest { presentedFileRequest = fileRequest } }
+    }
+    /// What the open panel on screen was opened for. SwiftUI sets the
+    /// presentation binding to false (clearing `fileRequest`) before it
+    /// calls the importer's completion, so the completion reads this (CU
+    /// P3-01: a `/` Image or File… pick was taken for a plain Insert and
+    /// left `/image` or `/file` in the text).
+    private(set) var presentedFileRequest: FileRequest?
+
+    /// The open panel finished: what it was opened for, once.
+    func takeFileRequest() -> FileRequest? {
+        defer {
+            presentedFileRequest = nil
+            if fileRequest != nil { fileRequest = nil }
+        }
+        return presentedFileRequest ?? fileRequest
+    }
 
     /// The note menu's commands for the note on screen (built by the page).
     var menuCommands: () -> [AtticMenuCommand] = { [] }
@@ -68,7 +88,13 @@ final class NoteTitleAccessories {
     private let menuHost: NSHostingView<AnyView>
     private let tagHost: NSHostingView<AnyView>
     /// The suggestions under a `#word` being typed in the title.
-    private let suggestionHost: NSHostingView<AnyView>
+    private let suggestionHost: AtticOverlayHostingView
+    /// The shown list's natural size (its widest row, its rows' height),
+    /// the `#` it hangs from, and where it is (nil while hidden): it keeps
+    /// its side while it shows.
+    private var suggestionSize = CGSize.zero
+    private var suggestionHash: Int?
+    private var suggestionPlacement: AtticDropdownLayout.Placement?
     private var suggestions: [AtticTagSuggestion] = []
     /// The row ↑ ↓ are on; nil until they move (Return then takes the
     /// typed word, as Space does), or the typed word's own existing tag.
@@ -104,12 +130,15 @@ final class NoteTitleAccessories {
         self.tagEditor = tagEditor
         menuHost = NSHostingView(rootView: AnyView(EmptyView()))
         tagHost = NSHostingView(rootView: AnyView(EmptyView()))
-        suggestionHost = NSHostingView(rootView: AnyView(EmptyView()))
+        suggestionHost = AtticOverlayHostingView(rootView: AnyView(EmptyView()))
         suggestionHost.isHidden = true
+        suggestionHost.contentInset = AtticDropdownMetrics.shadowRoom
+        suggestionHost.isInteractive = true
+        suggestionHost.menuLabel = String(localized: "Tag suggestions")
         for host in [tagHost, menuHost, suggestionHost] {
             host.translatesAutoresizingMaskIntoConstraints = true
             host.autoresizingMask = []
-            textView.addSubview(host)
+            AtticOverlayHierarchy.attach(host, to: textView)
         }
         textView.accessoryViews = [tagHost, menuHost, suggestionHost]
         textView.suggestionCommand = { [weak self] selector in self?.handleSuggestionKey(selector) ?? false }
@@ -125,7 +154,11 @@ final class NoteTitleAccessories {
         clip.postsBoundsChangedNotifications = true
         boundsObserver = NotificationCenter.default.addObserver(forName: NSView.boundsDidChangeNotification, object: clip,
                                                                 queue: .main) { [weak self] _ in
-            MainActor.assumeIsolated { self?.updateHeaderTitle() }
+            MainActor.assumeIsolated {
+                self?.updateHeaderTitle()
+                // Can run inside a layout pass (the clip settling).
+                AtticOverlayHierarchy.layoutPass { self?.followSuggestions() }
+            }
         }
     }
 
@@ -137,9 +170,7 @@ final class NoteTitleAccessories {
         textView?.onLayout = nil
         textView?.suggestionCommand = nil
         textView?.accessoryViews = []
-        menuHost.removeFromSuperview()
-        tagHost.removeFromSuperview()
-        suggestionHost.removeFromSuperview()
+        for host in [menuHost, tagHost, suggestionHost] { AtticOverlayHierarchy.remove(host) }
         if chrome.accessories === self {
             chrome.accessories = nil
             // Dismantling runs inside a SwiftUI update: publish afterwards.
@@ -233,28 +264,57 @@ final class NoteTitleAccessories {
             highlightedSuggestion = list.firstIndex { !$0.isNew && $0.name == active.tag }
         }
         suggestions = list
-        let m = AtticNoteMetrics.self
-        let room = m.suggestionShadowRoom
-        let height = CGFloat(list.count) * AtticControlSize.smallHeight + AtticPopoverMetrics.padding * 2
-        let width = m.suggestionWidth
-        // The rows' text starts on the hashtag's `#`.
-        let textInset = AtticPopoverMetrics.padding + AtticPopoverMetrics.rowPadding
-        var x = hashRect.minX - textInset
-        x = min(x, textView.bounds.width - width - 8)
-        x = max(x, 8)
-        let frame = NSRect(x: x - room, y: hashRect.maxY + m.suggestionGap - room,
-                           width: width + room * 2, height: height + room * 2)
-        if suggestionHost.frame != frame { suggestionHost.frame = frame }
-        renderSuggestions()
+        let m = AtticDropdownMetrics.self
+        let titles = list.map { $0.isNew ? String(localized: "New tag “#\($0.name)”") : "#" + $0.name }
+        let ideal = zip(titles, list).map { title, suggestion in
+            m.inset * 2 + m.rowPadding * 2 + AtticTextStyle.dropdownRow.measuredWidth(title)
+                + (suggestion.isNew ? 0 : m.detailGap + AtticTextStyle.shortcut.measuredWidth("\(suggestion.count)"))
+        }.max() ?? m.minWidth
+        suggestionSize = CGSize(width: ideal, height: CGFloat(list.count) * m.rowHeight + m.inset * 2)
+        suggestionHash = active.range.location
+        placeSuggestions(hashRect: hashRect, render: true)
+    }
+
+    /// The note scrolled: the suggestions follow their `#` (P3-B4). Only
+    /// the host's frame moves; the list is rebuilt only if its room
+    /// changes. Nothing runs while no suggestions show.
+    private func followSuggestions() {
+        guard suggestionPlacement != nil, let hash = suggestionHash,
+              let hashRect = engine.rect(for: NSRange(location: hash, length: 1)) else { return }
+        placeSuggestions(hashRect: hashRect, render: false)
+    }
+
+    /// Places the list under (or over) the `#` with the shared placement,
+    /// keeping its side while it shows. While the `#` is scrolled out of the
+    /// note's visible part the list waits out of sight.
+    private func placeSuggestions(hashRect: NSRect, render: Bool) {
+        guard let textView, let scrollView, let space = AtticDropdownSpace(around: textView, bounding: textView) else { return }
+        // The clip less the header and bottom insets, in the text's terms.
+        let insets = scrollView.contentInsets
+        let clip = textView.convert(scrollView.contentView.bounds, from: scrollView.contentView)
+        let readable = NSRect(x: clip.minX, y: clip.minY + insets.top, width: clip.width,
+                              height: max(0, clip.height - insets.top - insets.bottom))
+        guard readable.contains(NSPoint(x: hashRect.midX, y: hashRect.midY)) else {
+            suggestionHost.isHidden = true
+            return
+        }
+        let placed = space.place(idealWidth: suggestionSize.width, height: suggestionSize.height,
+                                 anchor: space.anchor(hashRect, in: textView), prefer: .below, current: suggestionPlacement?.side)
+        let resized = placed.heightLimit != suggestionPlacement?.heightLimit || placed.width != suggestionPlacement?.width
+        suggestionPlacement = placed
+        space.show(suggestionHost, at: placed)
+        if render || resized { renderSuggestions() }
         suggestionHost.isHidden = false
     }
 
     private func renderSuggestions() {
-        let room = AtticNoteMetrics.suggestionShadowRoom
+        let room = AtticDropdownMetrics.shadowRoom
         suggestionHost.rootView = AnyView(
             AtticTagSuggestionList(suggestions: suggestions, highlighted: highlightedSuggestion ?? -1) { [weak self] index in
                 self?.pickSuggestion(index)
             }
+            .environment(\.atticDropdownHeight, suggestionPlacement?.heightLimit)
+            .environment(\.atticDropdownWidth, suggestionPlacement?.width)
             .padding(room)
             .atticDesign(design)
         )
@@ -265,6 +325,8 @@ final class NoteTitleAccessories {
         suggestionHost.isHidden = true
         suggestions = []
         highlightedSuggestion = nil
+        suggestionHash = nil
+        suggestionPlacement = nil
     }
 
     private func pickSuggestion(_ index: Int) {
@@ -366,9 +428,11 @@ private struct NoteMenuButtonRoot: View {
     var body: some View {
         AtticNoteMenuButton(isOpen: chrome.isMenuOpen, action: action)
             .accessibilityIdentifier("notes-menu-button")
-            .popover(isPresented: Binding(get: { chrome.tagEditor == .menu },
-                                          set: { if !$0, chrome.tagEditor == .menu { chrome.tagEditor = nil } }),
-                     arrowEdge: .bottom) { tagEditor() }
+            // The E1 tag picker, as in Tasks (CU P2-03), in the panel's
+            // overlay layer.
+            .atticDropdown(isPresented: Binding(get: { chrome.tagEditor == .menu },
+                                                set: { if !$0, chrome.tagEditor == .menu { chrome.tagEditor = nil } }),
+                           label: String(localized: "Tags")) { tagEditor() }
     }
 }
 
@@ -381,9 +445,9 @@ private struct NoteTagLineRoot: View {
         AtticNoteTagLine(tags: tags) { _ in chrome.tagEditor = .tags }
             .frame(maxWidth: .infinity, alignment: .leading)
             .accessibilityIdentifier("notes-tag-line")
-            .popover(isPresented: Binding(get: { chrome.tagEditor == .tags },
-                                          set: { if !$0, chrome.tagEditor == .tags { chrome.tagEditor = nil } }),
-                     arrowEdge: .bottom) { tagEditor() }
+            .atticDropdown(isPresented: Binding(get: { chrome.tagEditor == .tags },
+                                                set: { if !$0, chrome.tagEditor == .tags { chrome.tagEditor = nil } }),
+                           label: String(localized: "Tags")) { tagEditor() }
     }
 }
 
@@ -437,7 +501,9 @@ struct NoteEditorRepresentable: NSViewRepresentable {
         let chrome = chrome
         controls.requestFormatPopover = { [weak chrome] keyboard in chrome?.openFormatPopover(keyboard: keyboard) }
         controls.closeFormatPopover = { [weak chrome] in chrome?.isFormatPopoverOpen = false }
-        controls.requestFile = { [weak chrome] fromSlash in chrome?.fileRequest = fromSlash ? .slash : .insert }
+        controls.requestFile = { [weak chrome, sessionID = session.id] slash in
+            chrome?.fileRequest = slash.map { .slash(NoteSlashFileTicket(sessionID: sessionID, request: $0)) } ?? .insert
+        }
         context.coordinator.controls = controls
         chrome.controls = controls
         let objects = NoteObjectControls(engine: engine, textView: textView)

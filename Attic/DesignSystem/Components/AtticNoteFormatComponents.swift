@@ -253,46 +253,66 @@ struct AtticDateCalendar: View {
     @Environment(\.atticDesign) private var design
 
     var body: some View {
-        let cell = AtticNoteFormatMetrics.calendarCell
+        let d = AtticDropdownMetrics.self
         let days = Self.grid(for: month, calendar: calendar)
-        VStack(alignment: .leading, spacing: 2) {
-            HStack {
-                AtticText(verbatim: month.formatted(.dateTime.month(.wide).year()), style: .panelHeading, ink: .heading)
-                Spacer()
-                AtticSmallButton(systemName: "chevron.left", label: "Previous month") { onMonth(-1) }
-                AtticSmallButton(systemName: "chevron.right", label: "Next month") { onMonth(1) }
+        VStack(alignment: .leading, spacing: 0) {
+            HStack(spacing: 0) {
+                AtticText(verbatim: month.formatted(.dateTime.month(.wide).year()), style: .dropdownHeading, ink: .heading)
+                    .accessibilityAddTraits(.isHeader)
+                Spacer(minLength: d.detailGap)
+                monthButton(-1, systemName: "chevron.left", label: String(localized: "Previous month"))
+                monthButton(1, systemName: "chevron.right", label: String(localized: "Next month"))
             }
-            .padding(.leading, 6)
+            .padding(.leading, d.rowPadding)
+            .frame(height: d.monthHeaderHeight)
             HStack(spacing: 0) {
                 ForEach(Array(Self.weekdaySymbols(calendar).enumerated()), id: \.offset) { _, symbol in
-                    AtticText(verbatim: symbol, style: .shortcut, ink: .helper)
-                        .frame(width: cell, height: 20)
+                    AtticText(verbatim: symbol, style: .tag, ink: .helper)
+                        .frame(width: d.monthCellWidth, height: d.weekdayHeight)
                 }
             }
+            .accessibilityHidden(true)
             ForEach(0..<(days.count / 7), id: \.self) { row in
                 HStack(spacing: 0) {
                     ForEach(0..<7, id: \.self) { column in
-                        dayCell(days[row * 7 + column], cell: cell)
+                        dayCell(days[row * 7 + column])
                     }
                 }
             }
         }
+        .frame(width: d.monthCellWidth * 7)
     }
 
-    private func dayCell(_ day: Date, cell: CGFloat) -> some View {
+    private func monthButton(_ step: Int, systemName: String, label: String) -> some View {
+        let d = AtticDropdownMetrics.self
+        return Button { onMonth(step) } label: {
+            AtticIcon(systemName: systemName, size: d.monthChevron, weight: .semibold, ink: .icon)
+                .frame(width: d.monthButton, height: d.monthButton)
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .focusEffectDisabled()
+        .atticOwnFocusRing(.circle(diameter: d.monthButton))
+        .help(label)
+        .accessibilityLabel(label)
+    }
+
+    private func dayCell(_ day: Date) -> some View {
+        let d = AtticDropdownMetrics.self
         let inMonth = calendar.isDate(day, equalTo: month, toGranularity: .month)
         let isToday = calendar.isDate(day, inSameDayAs: today)
         let isSelected = selected.map { calendar.isDate(day, inSameDayAs: $0) } ?? false
         let tokens = design.tokens
         return Button { onPick(day) } label: {
             Text("\(calendar.component(.day, from: day))")
-                .font(AtticTextStyle.menuRow.font)
+                .font(AtticTextStyle.listBody.font.weight(isToday && !isSelected ? .semibold : .regular))
                 .monospacedDigit()
                 .foregroundStyle((isSelected ? tokens.ink(.onInverse) : tokens.ink(inMonth ? .body : .helper)).color)
-                .frame(width: cell - 4, height: cell - 4)
+                .frame(width: d.monthDisc, height: d.monthDisc)
                 .background(Circle().fill((isSelected ? tokens.ink(.inverseFill) : .clear).color))
-                .overlay(Circle().strokeBorder((isToday && !isSelected ? tokens.ink(.heading) : .clear).color, lineWidth: 1))
-                .frame(width: cell, height: cell)
+                .overlay(Circle().strokeBorder((isToday && !isSelected ? tokens.ink(.heading) : .clear).color,
+                                               lineWidth: AtticPickerMetrics.todayRing))
+                .frame(width: d.monthCellWidth, height: d.monthCellHeight)
                 .contentShape(Rectangle())
         }
         .buttonStyle(AtticUndimmedButtonStyle())

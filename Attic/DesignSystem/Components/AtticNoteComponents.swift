@@ -379,126 +379,6 @@ struct AtticNoteGroupHeading: View {
     }
 }
 
-// MARK: - Tag editor
-
-/// The note's tag editor (⋯ → Tags…, or a click on a tag): "Find or add a
-/// tag", then every tag with its count, ticked when the note has it. A
-/// click adds or removes; typing filters; Return adds what was typed (a new
-/// tag when none matches). Follows Phase 1's tag list (to be unified with
-/// `AtticTagPicker` when Phase 1's final round is merged).
-struct AtticNoteTagList: View {
-    struct Tag: Identifiable, Equatable {
-        let name: String
-        let count: Int
-        let isOn: Bool
-        var id: String { name }
-    }
-
-    @Binding var query: String
-    let tags: [Tag]
-    /// The typed tag when it is not an existing one ("New tag “#…”").
-    var create: String?
-    let onToggle: (String) -> Void
-    let onCreate: (String) -> Void
-    var fieldFocused: FocusState<Bool>.Binding
-
-    @Environment(\.atticDesign) private var design
-
-    enum SubmitAction: Equatable { case toggle(String), create(String) }
-
-    /// Return in the field acts only on what was typed: the tag with exactly
-    /// that name, or a new tag. An empty field, or a partial word, does
-    /// nothing (it never toggles whichever tag happens to be first).
-    static func submitAction(query: String, tags: [Tag], create: String?) -> SubmitAction? {
-        guard let typed = AtticTag.normalize(query) else { return nil }
-        if tags.contains(where: { $0.name == typed }) { return .toggle(typed) }
-        if let create, create == typed { return .create(create) }
-        return nil
-    }
-
-    var body: some View {
-        let m = AtticNoteMetrics.self
-        VStack(alignment: .leading, spacing: 0) {
-            TextField("", text: $query, prompt: Text(String(localized: "Find or add a tag")))
-                .textFieldStyle(.plain)
-                .font(AtticTextStyle.menuRow.font)
-                .focused(fieldFocused)
-                .padding(.horizontal, AtticPopoverMetrics.rowPadding)
-                .frame(height: AtticControlSize.smallHeight)
-                .background(RoundedRectangle(cornerRadius: AtticRadius.control(height: AtticControlSize.smallHeight), style: .continuous)
-                    .fill(design.tokens.recessed.color))
-                .padding(.bottom, AtticPopoverMetrics.groupGap)
-                .onSubmit {
-                    switch Self.submitAction(query: query, tags: tags, create: create) {
-                    case let .toggle(name): onToggle(name)
-                    case let .create(name): onCreate(name)
-                    case nil: break
-                    }
-                }
-                .accessibilityLabel(String(localized: "Find or add a tag"))
-            ScrollView(.vertical) {
-                VStack(alignment: .leading, spacing: 0) {
-                    ForEach(tags) { tag in
-                        AtticNoteTagChoice(title: "#" + tag.name, detail: "\(tag.count)", isOn: tag.isOn) { onToggle(tag.name) }
-                    }
-                    if let create {
-                        AtticNoteTagChoice(title: String(localized: "New tag “#\(create)”"), detail: nil, isOn: false,
-                                           systemName: "plus") { onCreate(create) }
-                    }
-                    if tags.isEmpty, create == nil {
-                        AtticText(verbatim: String(localized: "No tags yet"), style: .menuRow, ink: .helper)
-                            .padding(.horizontal, AtticPopoverMetrics.rowPadding)
-                            .frame(height: AtticControlSize.smallHeight)
-                    }
-                }
-            }
-            .frame(maxHeight: m.tagEditorMaxListHeight)
-            .fixedSize(horizontal: false, vertical: true)
-            .scrollIndicators(.automatic)
-        }
-        .padding(AtticPopoverMetrics.padding)
-        .frame(width: m.tagEditorWidth)
-    }
-}
-
-private struct AtticNoteTagChoice: View {
-    let title: String
-    let detail: String?
-    let isOn: Bool
-    var systemName: String?
-    let action: () -> Void
-
-    @Environment(\.atticDesign) private var design
-    @State private var hovered = false
-
-    var body: some View {
-        let m = AtticPopoverMetrics.self
-        let height = AtticControlSize.smallHeight
-        let radius = AtticRadius.control(height: height)
-        Button(action: action) {
-            HStack(spacing: m.rowGap) {
-                AtticIcon(systemName: systemName ?? "checkmark", size: m.rowIconSize, weight: .medium, ink: .glyph)
-                    .opacity(systemName != nil || isOn ? 1 : 0)
-                    .frame(width: m.rowIconSlot)
-                AtticText(verbatim: title, style: .menuRow, ink: .body, truncates: true)
-                Spacer(minLength: m.trailingMinGap)
-                if let detail {
-                    AtticText(verbatim: detail, style: .shortcut, ink: .helper)
-                }
-            }
-            .padding(.horizontal, m.rowPadding)
-            .frame(height: height)
-            .background(RoundedRectangle(cornerRadius: radius, style: .continuous).fill((hovered ? design.tokens.selected : .clear).color))
-            .contentShape(Rectangle())
-        }
-        .buttonStyle(AtticUndimmedButtonStyle())
-        .focusEffectDisabled()
-        .onHover { hovered = $0 }
-        .accessibilityLabel(title)
-        .accessibilityAddTraits(isOn ? [.isButton, .isSelected] : .isButton)
-    }
-}
-
 // MARK: - Tag suggestions
 
 /// One suggestion while a `#word` is typed in a note's title (p2-01 #3):
@@ -528,8 +408,7 @@ struct AtticTagSuggestion: Equatable, Identifiable {
     }
 }
 
-/// The suggestions under a title hashtag: a raised list (the pop-over's
-/// surface, 28 pt rows) with the keyboard's row highlighted. Space takes
+/// The suggestions under a title hashtag: the E1 card and its 32 pt rows with the keyboard's row highlighted. Space takes
 /// the typed word; Return or Tab the highlighted row; Esc keeps the text.
 struct AtticTagSuggestionList: View {
     let suggestions: [AtticTagSuggestion]
@@ -537,12 +416,11 @@ struct AtticTagSuggestionList: View {
     let onPick: (Int) -> Void
 
     var body: some View {
-        AtticPopover(width: AtticNoteMetrics.suggestionWidth) {
+        AtticDropdownCard() {
             ForEach(Array(suggestions.enumerated()), id: \.element.id) { index, suggestion in
-                AtticPopoverRow(systemName: nil,
-                                title: suggestion.isNew ? String(localized: "New tag “#\(suggestion.name)”") : "#" + suggestion.name,
+                AtticDropdownRow(title: suggestion.isNew ? String(localized: "New tag “#\(suggestion.name)”") : "#" + suggestion.name,
                                 detail: suggestion.isNew ? nil : "\(suggestion.count)",
-                                isHighlighted: index == highlighted) { onPick(index) }
+                                isHighlighted: index == highlighted, position: index + 1, itemCount: suggestions.count) { onPick(index) }
             }
         }
         .accessibilityElement(children: .contain)

@@ -23,9 +23,11 @@ import SwiftUI
 //   never carry it to a second page.
 // - The tab follows the page live: it changes as the page crosses halfway.
 // - Momentum is ignored. On release the page goes to the neighbour if it
-//   travelled more than a quarter of a page or was flicked, else back; a
-//   critically damped spring starting at the fingers' speed takes it there
-//   (`AtticMotionPreset.release`), so it never passes the page.
+//   travelled more than a quarter of a page or was flicked, else back; the
+//   pager's own spring starting at the fingers' speed takes it there
+//   (`TasksPagerSpring`, the feel's slide): critically damped in Calm, so
+//   it never passes the page, and with a small settle bounce in the
+//   livelier feels, capped at a fiftieth of a page, never toward a second.
 // - A mouse wheel (or anything without trackpad phases) turns one page per
 //   burst of horizontal scrolling, however long the burst.
 // - A tab, a key, ⌘1–3, `show`, Search and a reveal go straight to their
@@ -290,7 +292,8 @@ final class TasksPagerMotion: ObservableObject {
             }
             return
         }
-        // The slide: the pager's own critically damped spring, stepped on
+        // The slide: the pager's own spring (critically damped in Calm, a
+        // capped settle bounce in the livelier feels), stepped on
         // the display's refresh with plain assignments (SwiftUI's animations
         // moved what it draws but not the lists' AppKit scroll views: the
         // page shown was left where the fingers had it, CI runs 2 and 3).
@@ -300,9 +303,12 @@ final class TasksPagerMotion: ObservableObject {
         // move begins, so the build never eats the slide's first frames.
         fadingOut = nil
         fade = 1
+        // The feel's navigation spring (the Motion Lab); a UI test's slowed
+        // settle stays critically damped.
         let duration = Self.settleOverride ?? AtticMotionPreset.slide.duration
+        let bounce = Self.settleOverride == nil ? AtticMotionPreset.slide.bounce : 0
         let spring = TasksPagerSpring(from: position, to: target, speed: width > 0 ? velocity / width : 0,
-                                      duration: duration)
+                                      duration: duration, bounce: bounce)
         var start: CFTimeInterval?
         var last: CFTimeInterval?
         var frames = 0
@@ -336,43 +342,136 @@ final class TasksPagerMotion: ObservableObject {
         trace = String(format: "reach=%.2f lead=%.2f page=%.0f", reach, lead, position)
     }
 
-    /// UI tests may slow the settle to watch it (DEBUG only).
-    static let settleOverride: Double? = {
+    /// UI tests may slow the settle to watch it (DEBUG only): a strict
+    /// preview identity launched for UI testing, nothing else.
+    static let settleOverride: Double? = resolveSettleOverride(environment: ProcessInfo.processInfo.environment,
+                                                               bundleIdentifier: Bundle.main.bundleIdentifier)
+
+    /// The settle durations a test may ask for, in seconds.
+    nonisolated static let settleOverrideRange: ClosedRange<Double> = 0.05...10
+
+    /// `ATTIC_UI_TEST_PAGER_SETTLE` (seconds), honoured only in a DEBUG build
+    /// of a strict preview identity (`com.taha.Attic.preview.` and a name)
+    /// launched with `ATTIC_UI_TESTING=1`, and only as a finite duration in
+    /// `settleOverrideRange` (code review: every DEBUG process read it, the
+    /// official identity included, and took any number).
+    nonisolated static func resolveSettleOverride(environment: [String: String], bundleIdentifier: String?) -> Double? {
         #if DEBUG
-        ProcessInfo.processInfo.environment["ATTIC_UI_TEST_PAGER_SETTLE"].flatMap(Double.init)
+        guard environment["ATTIC_UI_TESTING"] == "1", AtticPreviewOverrides.isPreviewIdentity(bundleIdentifier),
+              let raw = environment["ATTIC_UI_TEST_PAGER_SETTLE"], let seconds = Double(raw), seconds.isFinite,
+              settleOverrideRange.contains(seconds) else { return nil }
+        return seconds
         #else
-        nil
+        return nil
         #endif
-    }()
+    }
 }
 
-/// A critically damped spring from `from` to `to` (pages) over about
-/// `duration`, starting at `speed` pages per second toward `to`, capped
-/// below the speed that would carry it past `to`: it never overshoots.
+/// The pager's settle: a spring from `from` to `to` (pages) over about
+/// `duration` (SwiftUI's perceptual duration) with SwiftUI's `bounce`,
+/// starting at `speed` pages per second toward `to`. Critically damped
+/// (`bounce` 0, Calm), it never passes the page: the fingers' speed is
+/// capped below the speed that would carry it past. With a bounce (the
+/// Motion Lab's feels) it may land with a small settle past the page, but
+/// never more than `maxOvershoot` of a page: the bounce is capped so that
+/// even at rest it overshoots no more, and the fingers' speed is capped so
+/// that a flick adds none beyond it. It never travels on toward a second
+/// page.
 struct TasksPagerSpring: Equatable {
+    /// The most a settle may pass its page, in pages (7 pt of a 360 pt page).
+    static let maxOvershoot: CGFloat = 0.02
+
     let from: CGFloat
     let to: CGFloat
     let omega: CGFloat
+    /// The damping ratio: 1 is critically damped (no bounce).
+    let zeta: CGFloat
     let velocity: CGFloat
 
-    init(from: CGFloat, to: CGFloat, speed: CGFloat, duration: Double) {
+    init(from: CGFloat, to: CGFloat, speed: CGFloat, duration: Double, bounce: Double = 0) {
         self.from = from
         self.to = to
-        omega = 2 * .pi / CGFloat(max(duration, 0.01))
+        let omega = 2 * .pi / CGFloat(max(duration, 0.01))
+        self.omega = omega
+        // SwiftUI's bounce b is a damping ratio of 1 - b; the ratio is kept
+        // at or above the one whose free overshoot is `maxOvershoot`.
         let offset = from - to
-        // Toward `to` is against the offset; at most 0.9 ω |offset|, where
-        // a critically damped spring would start to pass its target.
-        let limit = 0.9 * omega * abs(offset)
-        let toward = min(max(speed.isFinite ? speed : 0, 0), limit)
-        velocity = offset == 0 ? 0 : (offset > 0 ? -toward : toward)
+        let wanted = 1 - CGFloat(min(max(bounce.isFinite ? bounce : 0, 0), 0.9))
+        zeta = wanted >= 1 ? 1 : min(1, max(wanted, Self.dampingFloor(offset: offset)))
+        let toward = max(speed.isFinite ? speed : 0, 0)
+        let capped: CGFloat
+        if zeta >= 1 {
+            // At most 0.9 ω |offset|, where a critically damped spring
+            // would start to pass its target.
+            capped = min(toward, 0.9 * omega * abs(offset))
+        } else {
+            capped = Self.cappedSpeed(toward, offset: offset, omega: omega, zeta: zeta)
+        }
+        velocity = offset == 0 ? 0 : (offset > 0 ? -capped : capped)
+    }
+
+    /// The damping ratio whose free overshoot, starting `offset` pages
+    /// away, is `maxOvershoot` (a spring passes its target by
+    /// exp(-ζπ / √(1 - ζ²)) of the way it came).
+    static func dampingFloor(offset: CGFloat) -> CGFloat {
+        let ratio = min(maxOvershoot / max(abs(offset), 0.000_001), 0.999)
+        let log = CGFloat(Foundation.log(Double(ratio)))
+        return -log / (CGFloat.pi * CGFloat.pi + log * log).squareRoot()
     }
 
     /// The position `time` seconds in, or nil once it has come to rest.
     func value(at time: TimeInterval) -> CGFloat? {
         let t = CGFloat(max(time, 0))
-        let offset = from - to
-        let x = (offset + (velocity + omega * offset) * t) * exp(-omega * t)
-        return abs(x) < 0.0005 && t > 0 ? nil : to + x
+        let x = Self.offset(at: t, offset: from - to, velocity: velocity, omega: omega, zeta: zeta)
+        return Self.isAtRest(at: t, offset: from - to, velocity: velocity, omega: omega, zeta: zeta, x: x) ? nil : to + x
+    }
+
+    /// Where the spring is, relative to its target, `t` seconds in, having
+    /// started `offset` away at `velocity` (pages per second).
+    static func offset(at t: CGFloat, offset: CGFloat, velocity: CGFloat, omega: CGFloat, zeta: CGFloat) -> CGFloat {
+        if zeta >= 1 {
+            return (offset + (velocity + omega * offset) * t) * exp(-omega * t)
+        }
+        let damped = omega * (1 - zeta * zeta).squareRoot()
+        let b = (velocity + zeta * omega * offset) / damped
+        return exp(-zeta * omega * t) * (offset * cos(damped * t) + b * sin(damped * t))
+    }
+
+    private static func isAtRest(at t: CGFloat, offset: CGFloat, velocity: CGFloat, omega: CGFloat, zeta: CGFloat,
+                                 x: CGFloat) -> Bool {
+        guard t > 0 else { return false }
+        if zeta >= 1 { return abs(x) < 0.0005 }
+        // The oscillation's envelope, so a crossing is never taken for rest.
+        let damped = omega * (1 - zeta * zeta).squareRoot()
+        let b = (velocity + zeta * omega * offset) / damped
+        return exp(-zeta * omega * t) * (offset * offset + b * b).squareRoot() < 0.0005
+    }
+
+    /// The largest speed toward the target, up to `speed`, whose settle
+    /// passes the target by at most `maxOvershoot` (found once, on
+    /// release: a bisection over the first swing, sampled).
+    private static func cappedSpeed(_ speed: CGFloat, offset: CGFloat, omega: CGFloat, zeta: CGFloat) -> CGFloat {
+        guard offset != 0, speed > 0 else { return 0 }
+        func overshoot(_ toward: CGFloat) -> CGFloat {
+            let velocity = offset > 0 ? -toward : toward
+            let damped = omega * (1 - zeta * zeta).squareRoot()
+            // Past the target is the side opposite the start.
+            let horizon = 2 * .pi / damped
+            var worst: CGFloat = 0
+            for step in 1...160 {
+                let x = Self.offset(at: horizon * CGFloat(step) / 160, offset: offset, velocity: velocity, omega: omega, zeta: zeta)
+                worst = max(worst, offset > 0 ? -x : x)
+            }
+            return worst
+        }
+        if overshoot(speed) <= maxOvershoot { return speed }
+        var low: CGFloat = 0
+        var high = speed
+        for _ in 0..<24 {
+            let middle = (low + high) / 2
+            if overshoot(middle) <= maxOvershoot { low = middle } else { high = middle }
+        }
+        return low
     }
 }
 
@@ -564,6 +663,8 @@ final class TasksPagerSwipe {
         var time: TimeInterval
         /// Points (a trackpad, a Magic Mouse), not lines (a wheel).
         var precise = true
+        /// Natural scrolling (the content follows the fingers).
+        var inverted = false
     }
 
     enum Motion: Equatable {
@@ -601,6 +702,9 @@ final class TasksPagerSwipe {
         /// Not the pager's (begun elsewhere, during a drag, or on another
         /// page of the shell).
         case foreign
+        /// Toward the panel's edge past the last page that way: the panel's
+        /// swipe to close takes it (owner, 2026-10-01).
+        case closing
     }
 
     /// A swipe turns the page past a quarter of a page (the brief: ~25 %).
@@ -633,6 +737,10 @@ final class TasksPagerSwipe {
     /// Called when another way chooses a page during a swipe or a burst
     /// (the page is then brought to the model's tab).
     var onCancel: (() -> Void)?
+    /// The corner the panel lives in: a swipe toward that edge with no page
+    /// left that way is the panel's (the shell keeps it current; none, as
+    /// in a gallery, leaves it to the pager).
+    var closeCorner: () -> ScreenCorner? = { nil }
 
     private(set) var axis: Axis?
     /// The page the swipe started on.
@@ -745,6 +853,14 @@ final class TasksPagerSwipe {
                 axis = .vertical
                 return .pass
             }
+            // A fresh gesture toward the panel's edge with no page left that
+            // way: it is the panel's pull to close, never a rubber band.
+            if let corner = closeCorner(),
+               Self.closesPanel(dx: sample.dx, dy: sample.dy, inverted: sample.inverted, shown: shown, count: count, corner: corner) {
+                axis = .closing
+                ownsMomentum = false
+                return .pass
+            }
             axis = .horizontal
             origin = shown
             // A settle still moving: the swipe takes the page from where it
@@ -760,7 +876,7 @@ final class TasksPagerSwipe {
             return move(sample)
         case .turned?, .cancelled?:
             return .consume
-        case .vertical?, .foreign?, nil:
+        case .vertical?, .foreign?, .closing?, nil:
             return .pass
         }
     }
@@ -806,10 +922,25 @@ final class TasksPagerSwipe {
         case .turned?, .cancelled?:
             ownsMomentum = true
             return .pass
-        case .undecided?, .vertical?, .foreign?, nil:
+        case .undecided?, .vertical?, .foreign?, .closing?, nil:
             ownsMomentum = false
             return .pass
         }
+    }
+
+    /// Whether a swipe that begins with (`dx`, `dy`) on page `shown` is the
+    /// panel's pull to close: the fingers move toward the edge of the screen
+    /// the panel lives on, and the page that way does not exist (the swipe
+    /// would only rubber-band).
+    nonisolated static func closesPanel(dx: CGFloat, dy: CGFloat, inverted: Bool, shown: Int, count: Int,
+                                        corner: ScreenCorner) -> Bool {
+        guard dx != 0, PanelTrackpadDismissTracker.isTowardDockedSide(
+            deltaX: dx, deltaY: dy, isDirectionInvertedFromDevice: inverted, dockedCorner: corner
+        ) else { return false }
+        // `travel -= dx`: a positive dx heads for the page before.
+        let heading = dx > 0 ? -1 : 1
+        let next = shown + heading
+        return next < 0 || next >= count
     }
 
     /// The fingers' speed at `time`, points per second toward the next
@@ -924,7 +1055,8 @@ extension TasksPagerSwipe.Sample {
         }
         self.init(phase: phase, momentum: !event.momentumPhase.isEmpty,
                   dx: event.scrollingDeltaX, dy: event.scrollingDeltaY,
-                  time: event.timestamp, precise: event.hasPreciseScrollingDeltas)
+                  time: event.timestamp, precise: event.hasPreciseScrollingDeltas,
+                  inverted: event.isDirectionInvertedFromDevice)
     }
 }
 

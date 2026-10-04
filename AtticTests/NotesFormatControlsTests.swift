@@ -353,6 +353,109 @@ final class NotesFormatControlsTests: XCTestCase {
         XCTAssertFalse(controls.slashModel.shown, "Space closes the list")
     }
 
+    func testFullSlashListFlipsAboveALowCaretAndOpensBelowAHighCaret() throws {
+        // Real editor + controls: this catches the old Notes-only placement
+        // path, which truncated rows before trying the full list above.
+        let (lowControls, lowEngine, lowText) = make(NoteDocument(blocks: [.text("Title")] + (0..<14).map { _ in .text("Line") }))
+        lowText.setSelectedRange(NSRange(location: lowEngine.textStorage.length, length: 0))
+        type("\n/", lowText)
+        XCTAssertTrue(lowControls.slashModel.shown)
+        XCTAssertTrue(lowControls.slashModel.above)
+        XCTAssertNil(lowControls.slashModel.viewportHeight, "all nine rows fit above the low caret")
+
+        let (highControls, highEngine, highText) = make(NoteDocument(blocks: [.text("Title"), .text("")]))
+        highText.setSelectedRange(NSRange(location: highEngine.textStorage.length, length: 0))
+        type("/", highText)
+        XCTAssertTrue(highControls.slashModel.shown)
+        XCTAssertFalse(highControls.slashModel.above)
+        XCTAssertNil(highControls.slashModel.viewportHeight, "all nine rows fit below the high caret")
+    }
+
+    /// P3-B3: the `/` list keeps its side while typing filters it; a list
+    /// that opens anew takes its side afresh.
+    func testTheSlashListKeepsItsSideWhileFiltering() throws {
+        let (controls, engine, textView) = make(NoteDocument(blocks: [.text("Title")] + (0..<12).map { _ in .text("Line") }))
+        textView.setSelectedRange(NSRange(location: engine.textStorage.length, length: 0))
+        type("\n/", textView)
+        XCTAssertTrue(controls.slashModel.shown)
+        XCTAssertTrue(controls.slashModel.above, "the full list opens above the low caret")
+        let slash = try XCTUnwrap(engine.rect(for: NSRange(location: engine.textStorage.length - 1, length: 1)))
+        let d = AtticDropdownMetrics.self
+        let below = textView.visibleRect.maxY - d.panelMargin - (slash.maxY + d.anchorGap)
+        XCTAssertGreaterThanOrEqual(below, d.rowHeight + d.inset * 2, "one row would fit below the caret")
+        type("hea", textView)
+        XCTAssertEqual(controls.slashModel.items.map(\.kind), [.heading], "the engine filters")
+        XCTAssertTrue(controls.slashModel.above, "the filtered list keeps its side")
+        XCTAssertNil(controls.slashModel.viewportHeight)
+        XCTAssertTrue(controls.handleCommand(#selector(NSResponder.cancelOperation(_:))))
+        XCTAssertFalse(controls.slashModel.shown)
+        // A new list high in the note opens below its caret.
+        textView.setSelectedRange(NSRange(location: ("Title\nLine" as NSString).length, length: 0))
+        type("\n/", textView)
+        XCTAssertTrue(controls.slashModel.shown)
+        XCTAssertFalse(controls.slashModel.above, "a list that opens anew takes its side afresh")
+    }
+
+    /// P3-B4: the title's tag suggestions follow their `#` as the note
+    /// scrolls (they lived in the text view before the overlay), and wait
+    /// out of sight while the `#` is scrolled under the header.
+    func testTitleTagSuggestionsFollowTheHashtagAsTheNoteScrolls() throws {
+        let title = "Launch plan "
+        let engine = NoteEditorEngine(noteID: UUID(), document: NoteDocument(blocks: [.text(title)] + (0..<40).map { _ in .text("Line") }),
+                                      readOnly: false)
+        let (scrollView, textView) = engine.makeView()
+        scrollView.frame = NSRect(x: 0, y: 0, width: 320, height: 500)
+        scrollView.automaticallyAdjustsContentInsets = false
+        let header: CGFloat = 60
+        scrollView.contentInsets = NSEdgeInsets(top: header, left: 0, bottom: 0, right: 0)
+        // Room above the title, so the note can scroll a little with the
+        // title still in view.
+        textView.textContainerInset = NSSize(width: 28, height: 100)
+        let window = NSWindow(contentRect: scrollView.frame, styleMask: [.titled], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        window.contentView = scrollView
+        windows.append(window)
+        let accessories = NoteTitleAccessories(engine: engine, textView: textView, scrollView: scrollView, chrome: NotesPageChrome(),
+                                               design: .default, headerBottom: header, isUntouched: { false },
+                                               tagEditor: { AnyView(EmptyView()) })
+        defer { accessories.invalidate() }
+        accessories.tagCounts = { ["launch": 3, "landing": 1] }
+        // The card moves in the scroll's own pass: no run-loop turn (where
+        // a layout pass might re-place it) between the scroll and the checks.
+        func scroll(to y: CGFloat) {
+            scrollView.contentView.scroll(to: NSPoint(x: 0, y: y))
+            scrollView.reflectScrolledClipView(scrollView.contentView)
+        }
+        scrollView.layoutSubtreeIfNeeded()
+        scroll(to: -header)
+        spin()
+        window.makeFirstResponder(textView)
+        textView.setSelectedRange(NSRange(location: (title as NSString).length, length: 0))
+        type("#la", textView)
+        func hosts(_ view: NSView) -> [AtticOverlayHostingView] {
+            ((view as? AtticOverlayHostingView).map { [$0] } ?? []) + view.subviews.flatMap { hosts($0) }
+        }
+        settle { hosts(scrollView).contains { $0.menuLabel == "Tag suggestions" && !$0.isHidden } }
+        let host = try XCTUnwrap(hosts(scrollView).first { $0.menuLabel == "Tag suggestions" })
+        XCTAssertFalse(host.isHidden, "the suggestions show")
+        let hash = try XCTUnwrap(engine.rect(for: NSRange(location: (title as NSString).length, length: 1)))
+        /// The card's top, against the `#`'s bottom, in the text's terms.
+        func gap() -> CGFloat { textView.convert(host.contentRect, from: host).minY - hash.maxY }
+        XCTAssertEqual(gap(), AtticDropdownMetrics.anchorGap, accuracy: 1, "the card hangs from the #")
+        let before = host.frame
+        scroll(to: -header + 40)
+        XCTAssertFalse(host.isHidden)
+        XCTAssertEqual(host.frame.minX, before.minX)
+        XCTAssertNotEqual(host.frame, before, "the card moved with the note")
+        XCTAssertEqual(gap(), AtticDropdownMetrics.anchorGap, accuracy: 1, "and still hangs from the #")
+        scroll(to: 200)
+        XCTAssertTrue(host.isHidden, "the # is under the header: the card waits out of sight")
+        scroll(to: -header)
+        XCTAssertFalse(host.isHidden, "the # is back")
+        XCTAssertEqual(gap(), AtticDropdownMetrics.anchorGap, accuracy: 1)
+        XCTAssertEqual(host.frame, before)
+    }
+
     func testSlashRowsShowTheirTypingShortcuts() {
         XCTAssertEqual(NoteCommandCatalog.slashHint(.checklist), "-[]")
         XCTAssertEqual(NoteCommandCatalog.slashHint(.heading), "#")
@@ -403,13 +506,15 @@ final class NotesFormatControlsTests: XCTestCase {
     func testSlashImageAsksForAFileAndCancelLeavesTheCommand() {
         let (controls, engine, textView) = make()
         var asked: Bool?
-        controls.requestFile = { asked = $0 }
+        var request: NoteSlashFileRequest?
+        controls.requestFile = { asked = $0 != nil; request = $0 }
         textView.setSelectedRange(NSRange(location: (textView.string as NSString).length, length: 0))
         type("\n/ima", textView)
         XCTAssertEqual(controls.slashModel.items.map(\.kind), [.imageOrFile])
         XCTAssertTrue(controls.handleCommand(#selector(NSResponder.insertNewline(_:))))
         XCTAssertEqual(asked, true, "the open panel, for the / row")
-        engine.cancelSlashFile()
+        request?.cancel()
+        XCTAssertNil(engine.pendingSlashFile)
         XCTAssertTrue(textView.string.hasSuffix("/ima"))
         find("Image or File…", in: controls.router.menuCommands(from: .noteMenu))?.action()
         XCTAssertEqual(asked, false, "Insert › Image or File… asks too")
@@ -444,6 +549,76 @@ final class NotesFormatControlsTests: XCTestCase {
         controls.cardModel.onRemoveLink?()
         XCTAssertTrue(engine.document().blocks[1].marks.isEmpty)
         XCTAssertEqual(engine.history.undoActionName, "Remove Link")
+    }
+
+    func testLinkValidationGrowthUpdatesBoundsAndBottomActionsAtCompactSize() throws {
+        let attribute = NSAccessibility.Attribute(rawValue: "AXEnhancedUserInterface")
+        let previous = NSApp.accessibilityAttributeValue(attribute)
+        NSApp.accessibilitySetValue(true, forAttribute: attribute)
+        defer { NSApp.accessibilitySetValue(previous, forAttribute: attribute) }
+        let (controls, engine, textView) = make()
+        let window = try XCTUnwrap(textView.window)
+        window.setContentSize(CGSize(width: 320, height: 240))
+        window.contentView?.layoutSubtreeIfNeeded()
+        let target = range("free tier", textView)
+        controls.router.run(.link("https://example.com"), from: .linkPopover, selection: target)
+        textView.setSelectedRange(target)
+        controls.router.run(.mark(.link), from: .shortcut)
+        settle { controls.cardHasKeyboard }
+        let host = try XCTUnwrap(window.contentView?.subviews.compactMap { $0 as? AtticOverlayHostingView }.first { $0.acceptsKeyboard && $0.isInteractive })
+        let before = host.contentRect.size
+        controls.cardModel.linkText = "https://"
+        controls.cardModel.submitLink()
+        settle { host.contentRect.height > before.height }
+        XCTAssertNotNil(controls.cardModel.linkError)
+        XCTAssertGreaterThan(host.contentRect.height, before.height)
+        XCTAssertEqual(host.contentRect.width, before.width, accuracy: 1)
+        let placed = textView.convert(host.contentRect, from: host)
+        XCTAssertGreaterThanOrEqual(placed.minY, textView.visibleRect.minY + 11)
+        XCTAssertLessThanOrEqual(placed.maxY, textView.visibleRect.maxY - 11)
+        func elements(_ root: AnyObject) -> [AnyObject] {
+            let children = (root.accessibilityChildren?() ?? nil) ?? []
+            return [root] + children.flatMap { elements($0 as AnyObject) }
+        }
+        func action(_ identifier: String) throws -> AnyObject {
+            try XCTUnwrap(elements(host).first { ($0.accessibilityIdentifier?() ?? nil) == identifier })
+        }
+        for identifier in ["notes-link-remove", "notes-link-apply"] {
+            let button = try action(identifier)
+            let frame: NSRect = button.accessibilityFrame!()
+            let local = host.convert(window.convertFromScreen(frame), from: nil)
+            let center = CGPoint(x: local.midX, y: local.midY)
+            XCTAssertTrue(host.contentRect.contains(center), "\(identifier) is inside the updated interactive bounds")
+            XCTAssertNotNil(host.hitTest(host.convert(center, to: host.superview)))
+        }
+        // Force the error card to overflow, then bring its bottom actions
+        // into view through the real scroll container.
+        window.setContentSize(CGSize(width: 320, height: 160))
+        window.contentView?.layoutSubtreeIfNeeded()
+        textView.onLayout?()
+        settle { controls.cardModel.viewportHeight != nil }
+        XCTAssertNotNil(controls.cardModel.viewportHeight)
+        func scrolls(_ view: NSView) -> [NSScrollView] {
+            (view as? NSScrollView).map { [$0] } ?? view.subviews.flatMap { scrolls($0) }
+        }
+        settle { !scrolls(host).isEmpty }
+        let scroll = try XCTUnwrap(scrolls(host).first)
+        let document = try XCTUnwrap(scroll.documentView)
+        document.scrollToVisible(CGRect(x: 0, y: document.bounds.maxY - 1, width: 1, height: 1))
+        spin()
+        controls.cardModel.linkText = "example.org"
+        spin()
+        for identifier in ["notes-link-remove", "notes-link-apply"] {
+            let button = try action(identifier)
+            let frame: NSRect = button.accessibilityFrame!()
+            let local = host.convert(window.convertFromScreen(frame), from: nil)
+            let center = CGPoint(x: local.midX, y: local.midY)
+            XCTAssertTrue(host.contentRect.contains(center), "\(identifier) is reachable after scrolling")
+            XCTAssertNotNil(host.hitTest(host.convert(center, to: host.superview)))
+        }
+        XCTAssertTrue(try action("notes-link-apply").accessibilityPerformPress?() == true)
+        XCTAssertFalse(controls.isCardOpen)
+        XCTAssertEqual(engine.document().blocks[1].marks.first?.url, "https://example.org")
     }
 
     func testEditLinkAtACaretUpdatesTheWholeLinkAndAStaleTargetCancelsQuietly() throws {

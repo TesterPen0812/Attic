@@ -25,6 +25,10 @@ enum AtticRingMetrics {
     static let gap: CGFloat = 2
     /// How far the ring's outer edge sits outside the shape.
     static var outset: CGFloat { width + gap }
+    /// L2 (option A, owner 2026-09-30): a task row the keyboard is on
+    /// draws one 1 pt line on its highlight's own edge (no gap), over the
+    /// lighter hover fill, in place of the 2 pt ring 2 pt outside.
+    static let rowLineWidth: CGFloat = 1
     /// The drop-target outline, drawn inside the selection shape.
     static let dropOutlineWidth: CGFloat = 1.5
 }
@@ -48,6 +52,11 @@ enum AtticShadows {
     static let carry = AtticShadowSpec(radius: 10, y: 6)
     /// A row lifted straight up for reordering: lower than a carry.
     static let reorder = AtticShadowSpec(radius: 8, y: 3, alphaScale: 0.8)
+    /// Attic's own dropdowns (E1, p2-25): D's drop shadow, CSS
+    /// `0 12px 32px` and `0 2px 6px` (a SwiftUI radius is half a CSS blur),
+    /// in `dropdownShadow` and `dropdownContactShadow`.
+    static let dropdown = AtticShadowSpec(radius: 16, y: 12)
+    static let dropdownContact = AtticShadowSpec(radius: 3, y: 2)
 }
 
 /// Hairlines of raised surfaces over content (menus, pop-overs, toasts, drag cards).
@@ -143,6 +152,18 @@ enum AtticTaskRowMetrics {
 }
 
 /// Quiet text actions inside content ("Add subtask", "Open page").
+/// L3's flat corner buttons (`AtticFlatSurface`).
+enum AtticFlatSurfaceMetrics {
+    static let hairline: CGFloat = 1
+}
+
+/// The menu button's dot (follow-up part 2, item 6: View Options while a
+/// filter hides tasks).
+enum AtticMenuButtonMetrics {
+    static let dotSize: CGFloat = 5
+    static let dotInset: CGFloat = 6
+}
+
 enum AtticQuietActionMetrics {
     static let height: CGFloat = 24
     static let horizontalPadding: CGFloat = 6
@@ -237,6 +258,11 @@ enum AtticPageTabsMetrics {
     static let focusRadius: CGFloat = 6
     static let focusOutset: CGFloat = 4
     static let hitOutset: CGFloat = 6
+    /// L1 (option B, owner 2026-09-30): a 2 pt line in the heading ink
+    /// under the active label, as wide as its text, its top 1 pt below the
+    /// labels' 16 pt line.
+    static let underlineHeight: CGFloat = 2
+    static let underlineGap: CGFloat = 1
 }
 
 /// The row's priority mark ("!!" High, "!" Medium) after the title.
@@ -294,6 +320,58 @@ enum AtticPopoverMetrics {
     static let trailingMinGap: CGFloat = 16
     /// A quiet grouping gap between sections (space, never a line).
     static let groupGap: CGFloat = 6
+}
+
+/// Attic's own dropdowns, the E1 family (owner, 2026-10-02; mockups p2-25
+/// E1, p2-24 D, p2-23): the `/` list, the date card (Notes and Tasks), the
+/// tag and priority pickers, Aa and the link card. A solid card (no blur)
+/// with one hairline and D's shadow, 20 pt corners; rows 32 pt, touching,
+/// 10 pt in from the edge, so the 10 pt pill nests in the 20 pt corner.
+/// Every value of the look is here, so it is tuned in one place.
+enum AtticDropdownMetrics {
+    static let cornerRadius: CGFloat = 20
+    /// Rows and fields sit this far in from the card's edge.
+    static let inset: CGFloat = 10
+    static let rowHeight: CGFloat = 32
+    static let rowPadding: CGFloat = 10
+    /// The pill: the whole row, concentric with the corner (20 - 10).
+    static let highlightRadius: CGFloat = 10
+    /// Native soft scroll edges overlap this small inset in cramped lists.
+    static let scrollEdgeInset: CGFloat = 6
+    static let iconSize: CGFloat = 14
+    static let iconSlot: CGFloat = 18
+    /// Between a row's columns (check, mark, icon, name).
+    static let columnGap: CGFloat = 10
+    static let checkSize: CGFloat = 11
+    static let checkSlot: CGFloat = 12
+    /// A priority's mark (↓, !, !!).
+    static let markSlot: CGFloat = 16
+    /// The least room before a trailing detail (⌥⌘2, 2 Oct).
+    static let detailGap: CGFloat = 16
+    /// A field (Find or add a tag, the date, the link): a row's height and
+    /// pill; the gap under it.
+    static let fieldHeight: CGFloat = 32
+    static let fieldGap: CGFloat = 4
+    /// A quiet gap between groups (space, never a line).
+    static let groupGap: CGFloat = 6
+    /// The width rule (p2-23): fits its content, never under 144 pt, never
+    /// past the panel's 12 pt margin.
+    static let minWidth: CGFloat = 144
+    static let panelMargin: CGFloat = 12
+    /// From the anchor (the caret's line, a strip button) to the card.
+    static let anchorGap: CGFloat = 6
+    /// Room around the card for its shadow (12 down plus a 32 pt blur).
+    static let shadowRoom: CGFloat = 44
+    /// The month (the date card): 30 x 28 cells, a 26 pt day disc.
+    static let monthCellWidth: CGFloat = 30
+    static let monthCellHeight: CGFloat = 28
+    static let monthDisc: CGFloat = 26
+    static let monthHeaderHeight: CGFloat = 30
+    static let monthButton: CGFloat = 24
+    static let monthChevron: CGFloat = 11
+    static let weekdayHeight: CGFloat = 20
+    /// How long a closing card stays in the overlay for its leave motion.
+    static let leaveCleanup: TimeInterval = 0.3
 }
 
 /// The title that opens a native menu (a note's or a page's title).
@@ -499,9 +577,6 @@ enum AtticNoteMetrics {
     /// The "Esc" hint at the end of the search field.
     static let searchHintPadding: CGFloat = 10
     static let searchTextX: CGFloat = 36
-    /// The list's top edge fade (the Tasks lists' 16 pt before Phase 1
-    /// round 12 moved them to a veil).
-    static let listTopFade: CGFloat = 16
     static let rowTextX: CGFloat = 16
     /// The ⋯ at the end of a row's title line (in the time's place).
     static let rowActionsGlyphSize: CGFloat = 14
@@ -513,9 +588,6 @@ enum AtticNoteMetrics {
     static let suggestionWidth: CGFloat = 220
     static let suggestionGap: CGFloat = 6
     static let suggestionShadowRoom: CGFloat = 10
-    /// The tag editor: 240 wide, at most 8 rows before it scrolls.
-    static let tagEditorWidth: CGFloat = 240
-    static let tagEditorMaxListHeight: CGFloat = 8 * 28
 }
 
 /// Notes' format controls (Phase 2 slice 3, mockups p2-16 D and p2-03):
@@ -536,15 +608,11 @@ enum AtticNoteFormatMetrics {
     /// toggles, groups spread to the edges, rows 8 apart.
     static let popoverToggleWidth: CGFloat = 32
     static let popoverWidth: CGFloat = 300
-    static let popoverPadding: CGFloat = 10
     static let popoverRowGap: CGFloat = 8
     static let popoverGroupGap: CGFloat = 10
     static let styleChipPadding: CGFloat = 5
     /// The `/` list, the date card and the link card, 6 below the line.
-    static let slashWidth: CGFloat = 256
     static let slashMaxVisibleRows = 9
-    static let dateCardWidth: CGFloat = 236
-    static let calendarCell: CGFloat = 28
     static let linkCardWidth: CGFloat = 272
     static let cardGap: CGFloat = 6
     /// Room around a floating control for its shadow.
@@ -593,9 +661,9 @@ enum AtticNoteObjectMetrics {
     static let carryHeight: CGFloat = 44
 }
 
-/// The pickers of owner fix 5 (v17): the date picker, the tag list, the
-/// composer strip and the suggestions over the add bar. The date grid is
-/// v17-lib's: 28 pt columns, 26 pt rows, a 24 pt day disc, today ringed.
+/// The pickers of owner fix 5 (v17): the composer strip, the suggestions
+/// over the add bar and Move to Task…. The date and tag pickers' card, rows
+/// and month are the dropdown family's (`AtticDropdownMetrics`).
 enum AtticPickerMetrics {
     static let rowGap: CGFloat = 8
     /// Between two lit rows' fills (round 5, the owner saw two adjacent tag
@@ -604,20 +672,14 @@ enum AtticPickerMetrics {
     static let checkSize: CGFloat = 10
     static let checkSlot: CGFloat = 12
     static let dividerGap: CGFloat = 4
-    static let dateWidth: CGFloat = 212
-    static let tagWidth: CGFloat = 200
-    static let tagListMaxHeight: CGFloat = 196
+    /// Seven 32 pt dropdown rows before the tag list scrolls.
+    static let tagListMaxHeight: CGFloat = 224
+    /// Move to Task… (control audit item 5): wider than the tag list, for
+    /// task titles and where each is listed; seven rows before it scrolls.
+    static let taskWidth: CGFloat = 260
+    static let taskListMaxHeight: CGFloat = 196
     static let suggestionWidth: CGFloat = 220
-    static let monthHeaderHeight: CGFloat = 26
-    static let monthButton: CGFloat = 20
-    static let chevronSize: CGFloat = 10
-    static let weekdayHeight: CGFloat = 18
-    static let dayCell: CGFloat = 28
-    static let dayRow: CGFloat = 26
-    static let dayDisc: CGFloat = 24
     static let todayRing: CGFloat = 1.2
-    static let gridInset: CGFloat = 4
-    static let gridBottom: CGFloat = 2
     /// The strip's buttons 4 apart (v19, so two filled pills never touch),
     /// 8 above the bar.
     static let stripSpacing: CGFloat = 4
@@ -632,4 +694,11 @@ enum AtticPickerMetrics {
     static let stripClearSize: CGFloat = 14
     static let stripClearGlyph: CGFloat = 8
     static let stripValueTrailing: CGFloat = 7
+    /// Short of room (deep review P3-01), a set button's inner gaps close
+    /// up before its value is cut short: 3 from the icon to the value and
+    /// from the value to the ×, 4 after the × (9 pt a button). The 9 pt
+    /// before the icon stay, so the first icon keeps the circles' line.
+    static let stripCompactIconGap: CGFloat = 3
+    static let stripCompactClearGap: CGFloat = 3
+    static let stripCompactValueTrailing: CGFloat = 4
 }

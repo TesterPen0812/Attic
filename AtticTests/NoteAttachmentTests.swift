@@ -33,7 +33,7 @@ final class NoteAttachmentTests: XCTestCase {
     @MainActor
     func testPromisedFileReceiverRetainsInitiatingNoteAfterEditorSwitch() async throws {
         let directory = try makeDirectory()
-        defer { try? FileManager.default.removeItem(at: directory) }
+
         let source = try write(Data("promised".utf8), named: "promise.txt", in: directory)
         let store = try makeTestNoteStore(attachmentFileStore: makeTestAttachmentFileStore())
         let first = try XCTUnwrap(store.create(body: "First"))
@@ -74,7 +74,7 @@ final class NoteAttachmentTests: XCTestCase {
     @MainActor
     func testMissingAttachmentReportsRecoveryAndLocateRejectsDifferentContents() async throws {
         let directory = try makeDirectory()
-        defer { try? FileManager.default.removeItem(at: directory) }
+
         let source = try write(Data("original".utf8), named: "original.txt", in: directory)
         let other = try write(Data("different".utf8), named: "other.txt", in: directory)
         let container = try PersistenceController.makeContainer(inMemory: true)
@@ -88,7 +88,7 @@ final class NoteAttachmentTests: XCTestCase {
         context.insert(note)
         context.insert(attachment)
         try context.save()
-        let store = NoteStore(container: container, attachmentFileStore: makeTestAttachmentFileStore())
+        let store = trackAttachmentReconciliation(of: NoteStore(container: container, attachmentFileStore: makeTestAttachmentFileStore()))
         let visible = try XCTUnwrap(store.attachments(for: note.id).first)
         let missing = await store.materializedURL(for: visible)
         XCTAssertNil(missing)
@@ -108,7 +108,7 @@ final class NoteAttachmentTests: XCTestCase {
     @MainActor
     func testLocateRejectsChangedMetadataInFreshContextBeforeRestoringPayload() async throws {
         let directory = try makeDirectory()
-        defer { try? FileManager.default.removeItem(at: directory) }
+
         let original = Data("original".utf8)
         let source = try write(original, named: "original.txt", in: directory)
         let container = try PersistenceController.makeContainer(inMemory: true)
@@ -121,7 +121,7 @@ final class NoteAttachmentTests: XCTestCase {
         context.insert(note)
         context.insert(attachment)
         try context.save()
-        let store = NoteStore(container: container, attachmentFileStore: makeTestAttachmentFileStore())
+        let store = trackAttachmentReconciliation(of: NoteStore(container: container, attachmentFileStore: makeTestAttachmentFileStore()))
         let stale = try XCTUnwrap(store.attachments(for: note.id).first)
         let previousDigest = stale.contentDigest
 
@@ -154,7 +154,7 @@ final class NoteAttachmentTests: XCTestCase {
     @MainActor
     func testAttachmentMutationsUpdateOwningNoteRecency() async throws {
         let directory = try makeDirectory()
-        defer { try? FileManager.default.removeItem(at: directory) }
+
         let source = try write(Data("recency".utf8), named: "recency.txt", in: directory)
         let clock = MutableNow(Date(timeIntervalSince1970: 100))
         let store = try makeTestNoteStore(now: { clock.value }, attachmentFileStore: makeTestAttachmentFileStore())
@@ -248,7 +248,7 @@ final class NoteAttachmentTests: XCTestCase {
     @MainActor
     func testOpenHandsOutADisposableReadOnlyCopyNotThePrivateMaterialization() async throws {
         let directory = try makeDirectory()
-        defer { try? FileManager.default.removeItem(at: directory) }
+
         let payload = Data("editable contents".utf8)
         let source = try write(payload, named: "original.txt", in: directory)
         let attachmentRoot = directory.appendingPathComponent("Attachments", isDirectory: true)
@@ -266,7 +266,7 @@ final class NoteAttachmentTests: XCTestCase {
         let copyURL = try NoteAttachmentActions.openableCopy(
             of: privateURL, named: attachment.originalFilename
         )
-        defer { try? FileManager.default.removeItem(at: copyURL.deletingLastPathComponent()) }
+        registerTemporaryProductDirectory(copyURL.deletingLastPathComponent(), parentName: "AtticNoteExports")
         XCTAssertNotEqual(copyURL.standardizedFileURL, privateURL.standardizedFileURL)
         XCTAssertFalse(
             copyURL.standardizedFileURL.path.hasPrefix(attachmentRoot.standardizedFileURL.path),
@@ -336,7 +336,7 @@ final class NoteAttachmentTests: XCTestCase {
         pasteboard.setData(try makePNGData(), forType: .png)
 
         XCTAssertTrue(view.handleAttachmentPasteboard(pasteboard))
-        defer { cleanup.forEach { try? FileManager.default.removeItem(at: $0) } }
+        cleanup.forEach { registerTemporaryProductDirectory($0, prefix: "AtticNotePaste") }
         XCTAssertEqual(delivered.count, 1)
         XCTAssertEqual(delivered.first?.lastPathComponent, "Pasted image.png")
         XCTAssertEqual(cleanup.count, 1)
@@ -352,8 +352,7 @@ final class NoteAttachmentTests: XCTestCase {
     }
 
     private func makeDirectory() throws -> URL {
-        let url = FileManager.default.temporaryDirectory
-            .appendingPathComponent("AtticAttachmentTests-\(UUID().uuidString)", isDirectory: true)
+        let url = ownedTemporaryDirectory(prefix: "AtticAttachmentTests")
         try FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)
         return url
     }
@@ -394,7 +393,7 @@ final class NoteAttachmentTests: XCTestCase {
     @MainActor
     func testDroppingAnAttachmentOnItselfLeavesTheOrderAlone() async throws {
         let directory = try makeDirectory()
-        defer { try? FileManager.default.removeItem(at: directory) }
+
         let names = ["a.txt", "b.txt", "c.txt"]
         let sources = try names.map { try write(Data($0.utf8), named: $0, in: directory) }
         let fileStore = AttachmentFileStore(rootURL: directory.appendingPathComponent("owned"))
@@ -430,7 +429,7 @@ final class NoteAttachmentTests: XCTestCase {
 
     func testImportPreservesFinderOrderAndDuplicateFilenames() async throws {
         let directory = try makeDirectory()
-        defer { try? FileManager.default.removeItem(at: directory) }
+
         let sourceA = try write(Data("first".utf8), named: "same.txt", in: directory)
         let secondDirectory = directory.appendingPathComponent("second", isDirectory: true)
         try FileManager.default.createDirectory(at: secondDirectory, withIntermediateDirectories: true)
@@ -462,7 +461,7 @@ final class NoteAttachmentTests: XCTestCase {
 
     func testImportReportsProgressAfterEveryCompletedFile() async throws {
         let directory = try makeDirectory()
-        defer { try? FileManager.default.removeItem(at: directory) }
+
         let sources = try (0..<3).map { index in
             try write(Data("file-\(index)".utf8), named: "\(index).txt", in: directory)
         }
@@ -493,7 +492,7 @@ final class NoteAttachmentTests: XCTestCase {
 
     func testImportRejectsDirectoriesAndSymbolicLinks() async throws {
         let directory = try makeDirectory()
-        defer { try? FileManager.default.removeItem(at: directory) }
+
         let folder = directory.appendingPathComponent("folder", isDirectory: true)
         try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
         let source = try write(Data("safe".utf8), named: "safe.txt", in: directory)
@@ -518,7 +517,7 @@ final class NoteAttachmentTests: XCTestCase {
 
     func testImportEnforcesPerFileAggregateAndCountLimits() async throws {
         let directory = try makeDirectory()
-        defer { try? FileManager.default.removeItem(at: directory) }
+
         let fileStore = AttachmentFileStore(rootURL: directory.appendingPathComponent("owned"))
         let source = try write(Data("small".utf8), named: "small.txt", in: directory)
 
@@ -546,11 +545,12 @@ final class NoteAttachmentTests: XCTestCase {
             XCTAssertEqual(error, .noteTooLarge)
         }
 
-        let oversized = try write(
-            Data(repeating: 7, count: Int(AttachmentLimits.maxBytesPerAttachment + 1)),
-            named: "oversized.bin",
-            in: directory
-        )
+        // Only file length is inspected before rejection. A sparse fixture
+        // preserves the 15 MiB + 1 boundary without allocating that payload.
+        let oversized = try write(Data(), named: "oversized.bin", in: directory)
+        let oversizedHandle = try FileHandle(forWritingTo: oversized)
+        defer { try? oversizedHandle.close() }
+        try oversizedHandle.truncate(atOffset: UInt64(AttachmentLimits.maxBytesPerAttachment + 1))
         do {
             _ = try await fileStore.importFiles([oversized], baseSortIndex: 0, existingCount: 0, existingBytes: 0)
             XCTFail("The per-file limit must be enforced")
@@ -561,7 +561,7 @@ final class NoteAttachmentTests: XCTestCase {
 
     func testCancelledImportDoesNotCreateOwnedFiles() async throws {
         let directory = try makeDirectory()
-        defer { try? FileManager.default.removeItem(at: directory) }
+
         let source = try write(Data("cancelled".utf8), named: "cancelled.txt", in: directory)
         let fileStore = AttachmentFileStore(rootURL: directory.appendingPathComponent("owned"))
         let task = Task { try await fileStore.importFiles([source], baseSortIndex: 0, existingCount: 0, existingBytes: 0) }
@@ -580,7 +580,7 @@ final class NoteAttachmentTests: XCTestCase {
 
     func testMixedBatchFailureRollsBackEarlierMaterializations() async throws {
         let directory = try makeDirectory()
-        defer { try? FileManager.default.removeItem(at: directory) }
+
         let valid = try write(Data("valid".utf8), named: "valid.txt", in: directory)
         let missing = directory.appendingPathComponent("missing.txt")
         let fileStore = AttachmentFileStore(rootURL: directory.appendingPathComponent("owned"))
@@ -608,7 +608,7 @@ final class NoteAttachmentTests: XCTestCase {
 
     func testReconcileRemovesOnlyUnreferencedMaterializations() async throws {
         let directory = try makeDirectory()
-        defer { try? FileManager.default.removeItem(at: directory) }
+
         let source = try write(Data("kept".utf8), named: "kept.txt", in: directory)
         let fileStore = AttachmentFileStore(rootURL: directory.appendingPathComponent("owned"))
         let imported = try await fileStore.importFiles(
@@ -637,7 +637,7 @@ final class NoteAttachmentTests: XCTestCase {
 
     func testMetadataReconciliationDoesNotRequirePayloadForValidFile() async throws {
         let directory = try makeDirectory()
-        defer { try? FileManager.default.removeItem(at: directory) }
+
         let source = try write(Data("already-valid".utf8), named: "valid.txt", in: directory)
         let fileStore = AttachmentFileStore(
             rootURL: directory.appendingPathComponent("owned", isDirectory: true)
@@ -665,7 +665,7 @@ final class NoteAttachmentTests: XCTestCase {
 
     func testOnDemandAccessRepairsSameSizeContentCorruption() async throws {
         let directory = try makeDirectory()
-        defer { try? FileManager.default.removeItem(at: directory) }
+
         let payload = Data("original".utf8)
         let source = try write(payload, named: "valid.txt", in: directory)
         let fileStore = AttachmentFileStore(
@@ -696,7 +696,7 @@ final class NoteAttachmentTests: XCTestCase {
 
     func testMalformedReplicaDoesNotAbortValidRepairOrOrphanCleanup() async throws {
         let directory = try makeDirectory()
-        defer { try? FileManager.default.removeItem(at: directory) }
+
         let root = directory.appendingPathComponent("owned", isDirectory: true)
         let fileStore = AttachmentFileStore(rootURL: root)
         let payload = Data("repair-me".utf8)
@@ -804,7 +804,7 @@ final class NoteAttachmentTests: XCTestCase {
 
     func testSourceCanDisappearAfterImportAndMissingMaterializationIsRebuilt() async throws {
         let directory = try makeDirectory()
-        defer { try? FileManager.default.removeItem(at: directory) }
+
         let source = try write(Data("independent".utf8), named: "note.txt", in: directory)
         let fileStore = AttachmentFileStore(rootURL: directory.appendingPathComponent("owned"))
         let imported = try await fileStore.importFiles([source], baseSortIndex: 0, existingCount: 0, existingBytes: 0)
@@ -827,7 +827,6 @@ final class NoteAttachmentTests: XCTestCase {
 
     func testMaterializedPathConfinesUntrustedFilenameToAttachmentDirectory() async throws {
         let directory = try makeDirectory()
-        defer { try? FileManager.default.removeItem(at: directory) }
 
         let payload = Data("confined".utf8)
         let source = try write(payload, named: "source.txt", in: directory)
@@ -879,7 +878,7 @@ final class NoteAttachmentTests: XCTestCase {
         XCTAssertFalse(NoteAttachmentPasteboardRouter.prefersAttachments(pasteboardValue))
 
         let directory = try makeDirectory()
-        defer { try? FileManager.default.removeItem(at: directory) }
+
         let source = try write(Data("drop".utf8), named: "drop.txt", in: directory)
         pasteboardValue.clearContents()
         XCTAssertTrue(pasteboardValue.writeObjects([source as NSURL]))
@@ -894,7 +893,7 @@ final class NoteAttachmentTests: XCTestCase {
     @MainActor
     func testAttachmentOnlyNotePersistsAndOrdersAttachments() async throws {
         let directory = try makeDirectory()
-        defer { try? FileManager.default.removeItem(at: directory) }
+
         let sourceA = try write(Data("A".utf8), named: "a.txt", in: directory)
         let sourceB = try write(Data("B".utf8), named: "b.txt", in: directory)
         let fileStore = AttachmentFileStore(rootURL: directory.appendingPathComponent("owned"))
@@ -913,7 +912,7 @@ final class NoteAttachmentTests: XCTestCase {
     @MainActor
     func testDraftAdoptsAttachmentOnlyNoteWithoutLosingEditorSession() async throws {
         let directory = try makeDirectory()
-        defer { try? FileManager.default.removeItem(at: directory) }
+
         let source = try write(Data("image-payload".utf8), named: "reference.png", in: directory)
         let fileStore = AttachmentFileStore(rootURL: directory.appendingPathComponent("owned"))
         let store = try makeTestNoteStore(attachmentFileStore: fileStore)
@@ -945,7 +944,7 @@ final class NoteAttachmentTests: XCTestCase {
     @MainActor
     func testBlankDraftAttachmentCompletionPreservesTypingMadeAfterImportInitiation() async throws {
         let directory = try makeDirectory()
-        defer { try? FileManager.default.removeItem(at: directory) }
+
         let source = try write(
             Data("slow-import".utf8),
             named: "reference.txt",
@@ -989,7 +988,7 @@ final class NoteAttachmentTests: XCTestCase {
     @MainActor
     func testBlankDraftAttachmentCompletionUsesAutosavedOriginInsteadOfSplittingNote() async throws {
         let directory = try makeDirectory()
-        defer { try? FileManager.default.removeItem(at: directory) }
+
         let source = try write(Data("attachment".utf8), named: "autosave.txt", in: directory)
         let store = try makeTestNoteStore(
             attachmentFileStore: AttachmentFileStore(
@@ -1025,7 +1024,7 @@ final class NoteAttachmentTests: XCTestCase {
     @MainActor
     func testAutosaveWhileBlankImportIsSuspendedUsesReservedOrigin() async throws {
         let directory = try makeDirectory()
-        defer { try? FileManager.default.removeItem(at: directory) }
+
         let source = try write(Data("attachment".utf8), named: "autosave.txt", in: directory)
         let importer = ControlledNoteAttachmentImporter()
         let store = try makeTestNoteStore(
@@ -1070,17 +1069,17 @@ final class NoteAttachmentTests: XCTestCase {
     @MainActor
     func testExternalDeletionOfAutosavedBlankOriginWinsOverSuspendedImport() async throws {
         let directory = try makeDirectory()
-        defer { try? FileManager.default.removeItem(at: directory) }
+
         let source = try write(Data("attachment".utf8), named: "deleted.txt", in: directory)
         let importer = ControlledNoteAttachmentImporter()
         let container = try PersistenceController.makeContainer(inMemory: true)
-        let store = NoteStore(
+        let store = trackAttachmentReconciliation(of: NoteStore(
             container: container,
             attachmentFileStore: AttachmentFileStore(
                 rootURL: directory.appendingPathComponent("owned")
             ),
             attachmentImporter: importer
-        )
+        ))
         let draft = NoteDraftController(noteStore: store, autosaveDelay: .seconds(60))
 
         XCTAssertTrue(draft.beginNew())
@@ -1119,17 +1118,17 @@ final class NoteAttachmentTests: XCTestCase {
     @MainActor
     func testSuspendedImportRevalidatesExternalAttachmentsBeforeAssigningSortOrder() async throws {
         let directory = try makeDirectory()
-        defer { try? FileManager.default.removeItem(at: directory) }
+
         let source = try write(Data("incoming".utf8), named: "incoming.txt", in: directory)
         let importer = ControlledNoteAttachmentImporter()
         let container = try PersistenceController.makeContainer(inMemory: true)
-        let store = NoteStore(
+        let store = trackAttachmentReconciliation(of: NoteStore(
             container: container,
             attachmentFileStore: AttachmentFileStore(
                 rootURL: directory.appendingPathComponent("owned")
             ),
             attachmentImporter: importer
-        )
+        ))
         let draft = NoteDraftController(noteStore: store, autosaveDelay: .seconds(60))
         let origin = try XCTUnwrap(store.create(body: "Origin"))
 
@@ -1169,13 +1168,13 @@ final class NoteAttachmentTests: XCTestCase {
     @MainActor
     func testPersistedImportRefreshFailureKeepsReservedDraftAndAttachmentVisible() async throws {
         let directory = try makeDirectory()
-        defer { try? FileManager.default.removeItem(at: directory) }
+
         let source = try write(Data("attachment".utf8), named: "saved.txt", in: directory)
         let importer = ControlledNoteAttachmentImporter()
         let container = try PersistenceController.makeContainer(inMemory: true)
         let persistence = PersistenceGate()
         let freshContexts = FreshNoteContextGate(container: container)
-        let store = NoteStore(
+        let store = trackAttachmentReconciliation(of: NoteStore(
             container: container,
             persist: persistence.save,
             attachmentFileStore: AttachmentFileStore(
@@ -1183,7 +1182,7 @@ final class NoteAttachmentTests: XCTestCase {
             ),
             attachmentImporter: importer,
             makeFreshContext: freshContexts.makeContext
-        )
+        ))
         let draft = NoteDraftController(noteStore: store, autosaveDelay: .seconds(60))
 
         XCTAssertTrue(draft.beginNew())
@@ -1227,7 +1226,7 @@ final class NoteAttachmentTests: XCTestCase {
     @MainActor
     func testAutosaveAfterBlankImportPersistsBeforeDraftCompletionReusesReservedOrigin() async throws {
         let directory = try makeDirectory()
-        defer { try? FileManager.default.removeItem(at: directory) }
+
         let source = try write(Data("attachment".utf8), named: "completed.txt", in: directory)
         let store = try makeTestNoteStore(
             attachmentFileStore: AttachmentFileStore(
@@ -1260,7 +1259,7 @@ final class NoteAttachmentTests: XCTestCase {
     @MainActor
     func testBlankDraftAttachmentCompletionCannotStealNewerBlankSession() async throws {
         let directory = try makeDirectory()
-        defer { try? FileManager.default.removeItem(at: directory) }
+
         let source = try write(Data("attachment".utf8), named: "origin.txt", in: directory)
         let importer = ControlledNoteAttachmentImporter()
         let store = try makeTestNoteStore(
@@ -1308,7 +1307,7 @@ final class NoteAttachmentTests: XCTestCase {
     @MainActor
     func testInFlightBlankImportPersistsToOriginAfterSwitchAndKeepsProgressSessionBound() async throws {
         let directory = try makeDirectory()
-        defer { try? FileManager.default.removeItem(at: directory) }
+
         let sourceA = try write(Data("first".utf8), named: "first.txt", in: directory)
         let sourceB = try write(Data("second".utf8), named: "second.txt", in: directory)
         let importer = ControlledNoteAttachmentImporter()
@@ -1366,7 +1365,7 @@ final class NoteAttachmentTests: XCTestCase {
     @MainActor
     func testSwitchedEditorKeepsSessionLabelledImportCancellationVisible() async throws {
         let directory = try makeDirectory()
-        defer { try? FileManager.default.removeItem(at: directory) }
+
         let sourceA = try write(Data("first".utf8), named: "first.txt", in: directory)
         let sourceB = try write(Data("second".utf8), named: "second.txt", in: directory)
         let importer = ControlledNoteAttachmentImporter()
@@ -1421,7 +1420,7 @@ final class NoteAttachmentTests: XCTestCase {
     @MainActor
     func testDeletingOriginWhileImportIsInFlightReturnsOriginUnavailable() async throws {
         let directory = try makeDirectory()
-        defer { try? FileManager.default.removeItem(at: directory) }
+
         let source = try write(Data("deleted".utf8), named: "deleted.txt", in: directory)
         let importer = ControlledNoteAttachmentImporter()
         let store = try makeTestNoteStore(
@@ -1459,7 +1458,7 @@ final class NoteAttachmentTests: XCTestCase {
     @MainActor
     func testCancellingInFlightBlankImportReturnsCancelledWithoutRows() async throws {
         let directory = try makeDirectory()
-        defer { try? FileManager.default.removeItem(at: directory) }
+
         let source = try write(Data("cancel".utf8), named: "cancel.txt", in: directory)
         let importer = ControlledNoteAttachmentImporter()
         let store = try makeTestNoteStore(
@@ -1495,11 +1494,11 @@ final class NoteAttachmentTests: XCTestCase {
     @MainActor
     func testAttachmentsSurviveStoreRecreationAndMaterializeAgain() async throws {
         let directory = try makeDirectory()
-        defer { try? FileManager.default.removeItem(at: directory) }
+
         let source = try write(Data("relaunch".utf8), named: "relaunch.txt", in: directory)
         let fileStore = AttachmentFileStore(rootURL: directory.appendingPathComponent("owned"))
         let container = try PersistenceController.makeContainer(inMemory: true)
-        let firstStore = NoteStore(container: container, attachmentFileStore: fileStore)
+        let firstStore = trackAttachmentReconciliation(of: NoteStore(container: container, attachmentFileStore: fileStore))
 
         let outcome = await firstStore.importAttachments(
             makeStoreImportRequest(from: [source])
@@ -1510,7 +1509,7 @@ final class NoteAttachmentTests: XCTestCase {
         let firstURL = try XCTUnwrap(firstURLValue)
         try FileManager.default.removeItem(at: firstURL.deletingLastPathComponent())
 
-        let relaunchedStore = NoteStore(container: container, attachmentFileStore: fileStore)
+        let relaunchedStore = trackAttachmentReconciliation(of: NoteStore(container: container, attachmentFileStore: fileStore))
         let relaunchedAttachment = try XCTUnwrap(relaunchedStore.attachments(for: noteID).first)
         let rebuiltURLValue = await relaunchedStore.materializedURL(for: relaunchedAttachment)
         let rebuiltURL = try XCTUnwrap(rebuiltURLValue)
@@ -1520,7 +1519,7 @@ final class NoteAttachmentTests: XCTestCase {
     @MainActor
     func testFailedAttachmentSaveRollsBackNoteRowsAndOwnedFiles() async throws {
         let directory = try makeDirectory()
-        defer { try? FileManager.default.removeItem(at: directory) }
+
         let source = try write(Data("rollback".utf8), named: "rollback.txt", in: directory)
         let fileStore = AttachmentFileStore(rootURL: directory.appendingPathComponent("owned"))
         let gate = PersistenceGate()
@@ -1556,10 +1555,10 @@ final class NoteAttachmentTests: XCTestCase {
         context.insert(NoteAttachment(id: attachmentID, noteID: noteID, originalFilename: "r.txt", byteCount: Int64(payload.count), sortIndex: 0, contentDigest: "0".repeated(64), createdAt: created, payload: payload))
         context.insert(NoteAttachment(id: attachmentID, noteID: noteID, originalFilename: "r.txt", byteCount: Int64(payload.count), sortIndex: 0, contentDigest: "0".repeated(64), createdAt: created, payload: payload))
         try context.save()
-        let store = NoteStore(
+        let store = trackAttachmentReconciliation(of: NoteStore(
             container: container,
             attachmentFileStore: makeTestAttachmentFileStore()
-        )
+        ))
         let visible = try XCTUnwrap(store.attachments(for: noteID).first)
 
         // Removal is soft: every replica is marked, and the purge after 30
@@ -1576,7 +1575,7 @@ final class NoteAttachmentTests: XCTestCase {
     @MainActor
     func testStaleRequestForARemovedAttachmentIsRefusedWithoutDeletingItsFile() async throws {
         let directory = try makeDirectory()
-        defer { try? FileManager.default.removeItem(at: directory) }
+
         let source = try write(Data("removed".utf8), named: "removed.txt", in: directory)
         let fileStore = AttachmentFileStore(rootURL: directory.appendingPathComponent("owned"))
         let store = try makeTestNoteStore(attachmentFileStore: fileStore)
@@ -1603,7 +1602,7 @@ final class NoteAttachmentTests: XCTestCase {
     @MainActor
     func testRemovedAttachmentWithoutStoredBytesSurvivesAStaleRequestAndComesBackDisplayable() async throws {
         let directory = try makeDirectory()
-        defer { try? FileManager.default.removeItem(at: directory) }
+
         let fileStore = AttachmentFileStore(rootURL: directory.appendingPathComponent("owned"))
         let bytes = Data("the only copy".utf8)
         let digest = SHA256.hash(data: bytes).map { String(format: "%02x", $0) }.joined()
@@ -1619,7 +1618,7 @@ final class NoteAttachmentTests: XCTestCase {
         seed.insert(NoteAttachment(id: attachmentID, noteID: noteID, originalFilename: "only.txt",
                                    byteCount: Int64(bytes.count), sortIndex: 0, contentDigest: digest, payload: nil))
         try seed.save()
-        let store = NoteStore(container: container, attachmentFileStore: fileStore)
+        let store = trackAttachmentReconciliation(of: NoteStore(container: container, attachmentFileStore: fileStore))
         let attachment = try XCTUnwrap(store.attachments(for: noteID).first)
         let shown = await store.materializedURL(for: attachment)
         XCTAssertEqual(shown, file)
@@ -1641,7 +1640,7 @@ final class NoteAttachmentTests: XCTestCase {
     @MainActor
     func testRestoringARemovedAttachmentReconcilesItsFileAgain() async throws {
         let directory = try makeDirectory()
-        defer { try? FileManager.default.removeItem(at: directory) }
+
         let source = try write(Data("restore me".utf8), named: "restore.txt", in: directory)
         let fileStore = AttachmentFileStore(rootURL: directory.appendingPathComponent("owned"))
         let store = try makeTestNoteStore(attachmentFileStore: fileStore)
@@ -1690,10 +1689,10 @@ final class NoteAttachmentTests: XCTestCase {
         ))
         try context.save()
 
-        let store = NoteStore(
+        let store = trackAttachmentReconciliation(of: NoteStore(
             container: container,
             attachmentFileStore: makeTestAttachmentFileStore()
-        )
+        ))
         let visible = try XCTUnwrap(
             store.attachmentsByNoteID.values.flatMap { $0 }.first
         )
@@ -1720,10 +1719,10 @@ final class NoteAttachmentTests: XCTestCase {
         context.insert(NoteAttachment(noteID: noteID, originalFilename: "one.txt", byteCount: 0, sortIndex: 0, contentDigest: "0".repeated(64)))
         context.insert(NoteAttachment(noteID: noteID, originalFilename: "two.txt", byteCount: 0, sortIndex: 1, contentDigest: "1".repeated(64)))
         try context.save()
-        let store = NoteStore(
+        let store = trackAttachmentReconciliation(of: NoteStore(
             container: container,
             attachmentFileStore: makeTestAttachmentFileStore()
-        )
+        ))
         let note = try XCTUnwrap(store.notes.first)
 
         XCTAssertTrue(store.delete(note))

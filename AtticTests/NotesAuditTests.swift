@@ -19,13 +19,13 @@ final class NotesAuditTests: XCTestCase {
         gate = PersistenceGate()
         store = try makeTestNoteStore(persist: { [gate] in try gate!.save($0) },
                                       attachmentFileStore: makeTestAttachmentFileStore())
-        directory = FileManager.default.temporaryDirectory.appendingPathComponent("AtticAudit-\(UUID().uuidString)")
+        directory = ownedTemporaryDirectory(prefix: "AtticAudit")
         suiteName = "AtticAudit-\(UUID().uuidString)"
         defaults = UserDefaults(suiteName: suiteName)
     }
 
     override func tearDown() async throws {
-        try? FileManager.default.removeItem(at: directory)
+
         defaults.removePersistentDomain(forName: suiteName)
     }
 

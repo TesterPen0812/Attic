@@ -18,7 +18,7 @@ extension TasksPageModel {
     }
 
     /// The library's tags, most used first.
-    var allTags: [String] { library.tags.counts().map(\.name) }
+    var allTags: [String] { library.tags.names }
 
     func dueDay(of id: UUID) -> DueDay? { store.listedTask(withID: id)?.dueDay }
 

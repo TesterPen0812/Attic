@@ -1,35 +1,6 @@
 import AppKit
 import SwiftUI
 
-/// A SwiftUI host laid over the note's text. It never takes the keyboard
-/// from the text on a click (its text fields still can), and only its
-/// content's rectangle answers the pointer (the shadow room around it is
-/// click-through).
-final class NoteOverlayHostingView: NSHostingView<AnyView> {
-    /// The content's inset from the host's edges (the shadow room).
-    var contentInset: CGFloat = AtticNoteFormatMetrics.shadowRoom
-    var isInteractive = false
-    /// The date and link cards hold a text field that takes the keyboard.
-    var acceptsKeyboard = false
-
-    required init(rootView: AnyView) {
-        super.init(rootView: rootView)
-        translatesAutoresizingMaskIntoConstraints = true
-        autoresizingMask = []
-    }
-
-    @MainActor @preconcurrency required dynamic init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
-
-    override var acceptsFirstResponder: Bool { acceptsKeyboard }
-
-    override func hitTest(_ point: NSPoint) -> NSView? {
-        guard isInteractive, !isHidden else { return nil }
-        let local = convert(point, from: superview)
-        guard bounds.insetBy(dx: contentInset, dy: contentInset).contains(local) else { return nil }
-        return super.hitTest(point)
-    }
-}
-
 /// Which "/" rows, date card and hint a new draft has earned: the first
 /// three new drafts show "Type / for lists, checklists and more".
 @MainActor
@@ -78,11 +49,11 @@ final class NoteFormatControls: NSObject {
     let cardModel = NoteFormatCardModel()
     private weak var textView: NoteEditorTextView?
     private weak var scrollView: NSScrollView?
-    private let barHost: NoteOverlayHostingView
-    private let slashHost: NoteOverlayHostingView
-    private let cardHost: NoteOverlayHostingView
-    private let hintHost: NoteOverlayHostingView
-    private let addressHost: NoteOverlayHostingView
+    private let barHost: AtticOverlayHostingView
+    private let slashHost: AtticOverlayHostingView
+    private let cardHost: AtticOverlayHostingView
+    private let hintHost: AtticOverlayHostingView
+    private let addressHost: AtticOverlayHostingView
     private(set) var design: AtticDesignContext
     private let noteID: UUID
     private let isNewDraft: Bool
@@ -90,8 +61,9 @@ final class NoteFormatControls: NSObject {
     /// ⌃Tab or ⌘T without a bar, and Aa's own button: the page's pop-over.
     var requestFormatPopover: ((_ keyboard: Bool) -> Void)?
     var closeFormatPopover: (() -> Void)?
-    /// Image or File…: the page's open panel (one image for `/`).
-    var requestFile: ((_ fromSlash: Bool) -> Void)?
+    /// Image or File…: the page's open panel. `slash` is the `/` row's
+    /// request (one file, replacing its command); nil for Insert.
+    var requestFile: ((_ slash: NoteSlashFileRequest?) -> Void)?
     /// A `/` row was taken (tests: the list runs the engine's commands).
     var onSlashPick: ((NoteSlashItem.Kind) -> Void)?
     /// Aa is open: its toggles follow the selection too.
@@ -132,17 +104,22 @@ final class NoteFormatControls: NSObject {
         self.design = design
         self.noteID = noteID
         self.isNewDraft = isNewDraft
-        barHost = NoteOverlayHostingView(rootView: AnyView(EmptyView()))
-        slashHost = NoteOverlayHostingView(rootView: AnyView(EmptyView()))
-        cardHost = NoteOverlayHostingView(rootView: AnyView(EmptyView()))
-        hintHost = NoteOverlayHostingView(rootView: AnyView(EmptyView()))
-        addressHost = NoteOverlayHostingView(rootView: AnyView(EmptyView()))
+        barHost = AtticOverlayHostingView(rootView: AnyView(EmptyView()))
+        slashHost = AtticOverlayHostingView(rootView: AnyView(EmptyView()))
+        cardHost = AtticOverlayHostingView(rootView: AnyView(EmptyView()))
+        hintHost = AtticOverlayHostingView(rootView: AnyView(EmptyView()))
+        addressHost = AtticOverlayHostingView(rootView: AnyView(EmptyView()))
         super.init()
         formatModel.router = router
         hintHost.contentInset = 0
         cardHost.acceptsKeyboard = true
+        // The `/` list and the cards are dropdowns: their room is the card's
+        // shadow's, and VoiceOver hears a menu.
+        slashHost.contentInset = AtticDropdownMetrics.shadowRoom
+        slashHost.menuLabel = String(localized: "Insert")
+        cardHost.contentInset = AtticDropdownMetrics.shadowRoom
         hintHost.isHidden = true
-        textView.addSubview(hintHost)
+        AtticOverlayHierarchy.attach(hintHost, to: textView)
         for host in [barHost, slashHost, cardHost, addressHost] { host.isHidden = true }
         rebuildRoots()
         wire()
@@ -159,7 +136,7 @@ final class NoteFormatControls: NSObject {
             self?.returnKeyboardFromBar()
         }
         router.requestDate = { [weak self] in self?.openDateCard(fromSlash: false) }
-        router.requestFile = { [weak self] in self?.requestFile?(false) }
+        router.requestFile = { [weak self] in self?.requestFile?(nil) }
         formatModel.willRequestLink = { [weak self] in
             if self?.isFormatPopoverOpen == true { self?.closeFormatPopover?() }
         }
@@ -171,7 +148,7 @@ final class NoteFormatControls: NSObject {
 
         engine.onSlashSessionChange = { [weak self] session in self?.slashSessionChanged(session) }
         engine.onSlashDateRequest = { [weak self] in self?.openDateCard(fromSlash: true) }
-        engine.onSlashFileRequest = { [weak self] in self?.requestFile?(true) }
+        engine.onSlashFileRequest = { [weak self] request in self?.requestFile?(request) }
         engine.onLinkRequest = { [weak self] target in self?.openLinkCard(target: target) }
         previousActivity = engine.onActivityChanged
         engine.onActivityChanged = { [weak self] old, new in
@@ -195,9 +172,11 @@ final class NoteFormatControls: NSObject {
         ) { [weak self] _ in MainActor.assumeIsolated { self?.selectionDidChange() } }
         let clip = scrollView.contentView
         clip.postsBoundsChangedNotifications = true
+        // A bounds change can come from inside a layout pass (the clip
+        // settling): its placement counts as layout.
         boundsObserver = NotificationCenter.default.addObserver(
             forName: NSView.boundsDidChangeNotification, object: clip, queue: .main
-        ) { [weak self] _ in MainActor.assumeIsolated { self?.layoutDidChange() } }
+        ) { [weak self] _ in MainActor.assumeIsolated { AtticOverlayHierarchy.layoutPass { self?.layoutDidChange() } } }
         keyMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
             self?.handleKey(event) == true ? nil : event
         }
@@ -229,7 +208,7 @@ final class NoteFormatControls: NSObject {
         if engine.pendingSlashDate != nil { engine.cancelSlashDate() }
         textView?.onLayout = previousLayout
         textView?.contextMenuProvider = nil
-        for host in [hintHost, barHost, slashHost, cardHost, addressHost] { host.removeFromSuperview() }
+        for host in [hintHost, barHost, slashHost, cardHost, addressHost] { AtticOverlayHierarchy.remove(host) }
         if Self.active === self { Self.active = nil }
     }
 
@@ -246,7 +225,13 @@ final class NoteFormatControls: NSObject {
         formatModel.highlightSwatch = AtticColorTokens.resolve(design).tagFill
         barHost.rootView = AnyView(NoteFormatBarView(model: formatModel).atticDesign(design))
         slashHost.rootView = AnyView(NoteSlashListView(model: slashModel).atticDesign(design))
-        cardHost.rootView = AnyView(NoteFormatCardView(model: cardModel).atticDesign(design))
+        cardHost.rootView = AnyView(NoteFormatCardView(model: cardModel)
+            .environment(\.atticDropdownContentHeightChanged, { [weak self] height in
+                guard let self, self.cardModel.card != nil, abs(height - self.cardSize.height) > 0.5 else { return }
+                self.cardSize.height = height
+                self.placeCard()
+            })
+            .atticDesign(design))
         hintHost.rootView = AnyView(NoteSlashHintView().atticDesign(design))
     }
 
@@ -398,20 +383,6 @@ final class NoteFormatControls: NSObject {
         return NSRect(x: visible.minX, y: top, width: visible.width, height: max(0, bottom - top))
     }
 
-    /// Below the anchor line, else above it; with room on neither side, the
-    /// roomier one, and the height it can have there.
-    private func floatingPlacement(anchorTop: CGFloat, anchorBottom: CGFloat, height: CGFloat)
-        -> (y: CGFloat, height: CGFloat) {
-        let area = usableRect(overBottomRow: true)
-        let gap = AtticNoteFormatMetrics.cardGap
-        let roomBelow = area.maxY - (anchorBottom + gap)
-        let roomAbove = (anchorTop - gap) - area.minY
-        if height <= roomBelow { return (anchorBottom + gap, height) }
-        if height <= roomAbove { return (anchorTop - gap - height, height) }
-        if roomBelow >= roomAbove { return (anchorBottom + gap, max(0, roomBelow)) }
-        return (area.minY, max(0, roomAbove))
-    }
-
     /// The panel's overlay layer (above the page, moving with the panel,
     /// hit-tested first), or a plain window's content view.
     private var overlayParent: NSView? {
@@ -424,12 +395,12 @@ final class NoteFormatControls: NSObject {
     }
 
     /// Lists and cards float over the whole page (above the bottom row), in
-    /// the page's root view, placed from text-view coordinates.
-    private func placeOverlay(_ host: NoteOverlayHostingView, rect: NSRect) {
+    /// the page's root view, placed from text-view coordinates. Placing runs
+    /// in the text's layout pass: a host joins its parent only after it
+    /// (`AtticOverlayHierarchy`).
+    private func placeOverlay(_ host: AtticOverlayHostingView, rect: NSRect) {
         guard let textView, let parent = overlayParent else { return }
-        if host.superview !== parent { parent.addSubview(host, positioned: .above, relativeTo: nil) }
-        let frame = parent.convert(rect, from: textView).integral
-        if host.frame != frame { host.frame = frame }
+        AtticOverlayHierarchy.place(host, in: parent, frame: parent.convert(rect, from: textView).integral)
     }
 
     /// Above the selection's first line, or under its last when there is no
@@ -604,6 +575,9 @@ final class NoteFormatControls: NSObject {
         }
         NoteSlashHintPolicy.learned()
         hideBar()
+        // A list that opens anew takes its side afresh; while it shows,
+        // filtering keeps the side it has.
+        if !slashModel.shown { slashPlacement = nil }
         slashModel.show(session.items)
         placeSlashList()
         slashHost.isInteractive = true
@@ -618,23 +592,36 @@ final class NoteFormatControls: NSObject {
         returnKeyboardFromBar()
     }
 
+    /// The open `/` list's and card's places (nil while closed): each keeps
+    /// its side while it shows.
+    private var slashPlacement: AtticDropdownLayout.Placement?
+    private var cardPlacement: AtticDropdownLayout.Placement?
+
+    /// The shared placement (`AtticDropdownSpace`) for a card anchored at
+    /// `anchor` in the text view: in the panel's overlay, within the panel
+    /// less its margin (the text view's visible part outside a panel).
+    private func placeDropdown(_ host: AtticOverlayHostingView, idealWidth: CGFloat, height: CGFloat, anchor: NSRect,
+                               current: AtticDropdownLayout.Placement?) -> AtticDropdownLayout.Placement? {
+        guard let textView, let space = AtticDropdownSpace(around: textView, bounding: textView) else { return nil }
+        let placed = space.place(idealWidth: idealWidth, height: height, anchor: space.anchor(anchor, in: textView),
+                                 prefer: .below, current: current?.side)
+        space.show(host, at: placed)
+        return placed
+    }
+
     private func placeSlashList() {
-        guard let textView, let session = engine.slashSession,
+        guard let session = engine.slashSession,
               let anchor = engine.rect(for: NSRange(location: session.range.location, length: 1)) else { return }
-        let m = AtticNoteFormatMetrics.self
-        let room = m.shadowRoom
-        let row = AtticControlSize.smallHeight
-        let padding = AtticPopoverMetrics.padding * 2
-        let wanted = CGFloat(min(slashModel.items.count, m.slashMaxVisibleRows)) * row + padding
-        let place = floatingPlacement(anchorTop: anchor.minY, anchorBottom: anchor.maxY, height: wanted)
-        let rows = max(3, min(slashModel.items.count, Int((place.height - padding) / row)))
-        if slashModel.maxVisibleRows != rows { slashModel.maxVisibleRows = rows }
-        let height = CGFloat(min(slashModel.items.count, rows)) * row + padding
-        let y = place.y < anchor.minY ? anchor.minY - m.cardGap - height : place.y
-        let textInset = AtticPopoverMetrics.padding + AtticPopoverMetrics.rowPadding + AtticPopoverMetrics.rowIconSlot
-            + AtticPopoverMetrics.rowGap
-        let x = max(m.barEdgeMargin, min(anchor.minX - textInset, textView.bounds.width - m.slashWidth - m.barEdgeMargin))
-        placeOverlay(slashHost, rect: NSRect(x: x - room, y: y - room, width: m.slashWidth + room * 2, height: height + room * 2))
+        let d = AtticDropdownMetrics.self
+        let wanted = CGFloat(slashModel.items.count) * d.rowHeight + d.inset * 2
+        guard let placed = placeDropdown(slashHost, idealWidth: AtticDropdownLayout.listWidth(titles: slashModel.items.map(\.title),
+                                                                                               match: session.query),
+                                         height: wanted, anchor: anchor, current: slashPlacement) else { return }
+        slashPlacement = placed
+        if slashModel.viewportHeight != placed.heightLimit { slashModel.viewportHeight = placed.heightLimit }
+        if slashModel.width != placed.width { slashModel.width = placed.width }
+        if slashModel.query != session.query { slashModel.query = session.query }
+        if slashModel.above != (placed.side == .above) { slashModel.above = placed.side == .above }
     }
 
     // MARK: Cards (date, link)
@@ -645,6 +632,8 @@ final class NoteFormatControls: NSObject {
         cardFromSlash = fromSlash
         cardSelection = selection
         cardAnchor = fromSlash ? engine.pendingSlashDate?.range : NSRange(location: selection.location, length: 0)
+        cardModel.viewportHeight = nil
+        cardModel.viewportWidth = nil
         cardModel.openDate(fromSlash: fromSlash, today: Date())
         presentCard()
     }
@@ -658,6 +647,8 @@ final class NoteFormatControls: NSObject {
         linkTarget = target
         cardSelection = target.selection
         cardAnchor = target.range
+        cardModel.viewportHeight = nil
+        cardModel.viewportWidth = nil
         cardModel.openLink(url: target.url)
         presentCard()
     }
@@ -666,12 +657,13 @@ final class NoteFormatControls: NSObject {
 
     private var cardSize = NSSize.zero
 
-    /// The card's size, measured from its content once as it opens.
+    /// Measure the opening width; the card reports subsequent natural heights.
     private func presentCard() {
-        let room = AtticNoteFormatMetrics.shadowRoom
+        let room = AtticDropdownMetrics.shadowRoom
         let measure = NSHostingView(rootView: NoteFormatCardView(model: cardModel).atticDesign(design))
         let fitting = measure.fittingSize
         cardSize = NSSize(width: max(0, fitting.width - room * 2), height: max(0, fitting.height - room * 2))
+        cardPlacement = nil
         placeCard()
         cardHost.isInteractive = true
         cardHost.isHidden = false
@@ -681,22 +673,18 @@ final class NoteFormatControls: NSObject {
     }
 
     private func placeCard() {
-        guard let textView, let anchorRange = cardAnchor, engine.textStorage.length > 0 else { return }
-        let m = AtticNoteFormatMetrics.self
+        guard let anchorRange = cardAnchor, engine.textStorage.length > 0 else { return }
         let length = engine.textStorage.length
         let start = min(anchorRange.location, length - 1)
         let end = min(max(start, NSMaxRange(anchorRange) - 1), length - 1)
         guard let first = engine.rect(for: NSRange(location: start, length: 1)) ?? caretRect(),
               let last = engine.rect(for: NSRange(location: end, length: 1)) ?? caretRect() else { return }
-        let room = m.shadowRoom
-        let place = floatingPlacement(anchorTop: first.minY, anchorBottom: last.maxY, height: cardSize.height)
-        // A card never shrinks: without room it covers the text rather than the page's edge.
-        let area = usableRect(overBottomRow: true)
-        let y = place.height < cardSize.height ? max(area.minY, area.maxY - cardSize.height) : place.y
-        let x = max(m.barEdgeMargin, min(first.minX - AtticPopoverMetrics.padding - AtticPopoverMetrics.rowPadding,
-                                         textView.bounds.width - cardSize.width - m.barEdgeMargin))
-        placeOverlay(cardHost, rect: NSRect(x: x - room, y: y - room, width: cardSize.width + room * 2,
-                                            height: cardSize.height + room * 2))
+        guard let placed = placeDropdown(cardHost, idealWidth: cardSize.width, height: cardSize.height,
+                                         anchor: first.union(last), current: cardPlacement) else { return }
+        cardPlacement = placed
+        if cardModel.viewportWidth != placed.width { cardModel.viewportWidth = placed.width }
+        if cardModel.viewportHeight != placed.heightLimit { cardModel.viewportHeight = placed.heightLimit }
+        if cardModel.above != (placed.side == .above) { cardModel.above = placed.side == .above }
     }
 
     /// The field may not exist until SwiftUI's next pass: a few turns, then
@@ -732,8 +720,7 @@ final class NoteFormatControls: NSObject {
             mouseMonitor = NSEvent.addLocalMonitorForEvents(matching: [.leftMouseDown, .rightMouseDown]) { [weak self] event in
                 guard let self, self.cardModel.card != nil, event.window === self.cardHost.window else { return event }
                 let point = self.cardHost.convert(event.locationInWindow, from: nil)
-                let inside = self.cardHost.bounds.insetBy(dx: AtticNoteFormatMetrics.shadowRoom,
-                                                          dy: AtticNoteFormatMetrics.shadowRoom).contains(point)
+                let inside = self.cardHost.contentRect.contains(point)
                 if !inside { self.cancelCard(refocus: false) }
                 return event
             }

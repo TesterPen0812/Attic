@@ -25,7 +25,7 @@ final class SettingsPhase1Tests: XCTestCase {
         let clock = MutableNow(start)
         let container = try PersistenceController.makeContainer(inMemory: true)
         let tasks = TaskStore(container: container, now: { clock.value })
-        let notes = NoteStore(container: container, now: { clock.value }, attachmentFileStore: makeTestAttachmentFileStore())
+        let notes = trackAttachmentReconciliation(of: NoteStore(container: container, now: { clock.value }, attachmentFileStore: makeTestAttachmentFileStore()))
         let canvases = CanvasStore(container: container, now: { clock.value })
         let library = AtticLibrary(tasks: tasks, notes: notes, canvases: canvases)
         return Fixture(clock: clock, container: container, tasks: tasks, notes: notes, canvases: canvases, library: library)
@@ -261,8 +261,8 @@ final class SettingsPhase1Tests: XCTestCase {
     }
 
     func testRemovedTaskFilesAreListedUnderTheirTaskAndComeBack() async throws {
-        let root = FileManager.default.temporaryDirectory.appendingPathComponent("AtticSettingsRD-\(UUID().uuidString)")
-        defer { try? FileManager.default.removeItem(at: root) }
+        let root = ownedTemporaryDirectory(prefix: "AtticSettingsRD")
+
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
         let source = root.appendingPathComponent("brief.txt")
         try Data("brief".utf8).write(to: source)
@@ -307,7 +307,7 @@ final class SettingsPhase1Tests: XCTestCase {
         seed.insert(attachment)
         try seed.save()
         let tasks = TaskStore(container: container)
-        let notes = NoteStore(container: container, attachmentFileStore: makeTestAttachmentFileStore())
+        let notes = trackAttachmentReconciliation(of: NoteStore(container: container, attachmentFileStore: makeTestAttachmentFileStore()))
         let library = AtticLibrary(tasks: tasks, notes: notes)
         XCTAssertTrue(notes.removeAttachment(try XCTUnwrap(notes.attachments(for: note.id).first)))
 
@@ -370,13 +370,15 @@ final class SettingsPhase1Tests: XCTestCase {
         XCTAssertEqual(Set(result.keys), [
             "appearance", "palette", "surface", "tint", "tint_length", "reveal_corner", "reveal_delay",
             "hide_delay", "corner_size", "panel_width", "haptics", "animations", "launch_at_login",
-            "quick_capture", "quick_capture_shortcut"
+            "quick_capture", "quick_capture_shortcut",
+            // Control audit item 10: the hover rule, and the displays it can name (read only).
+            "reveal_on_hover", "reveal_modifier", "reveal_displays", "reveal_display_ids", "displays"
         ])
         XCTAssertEqual(result["quick_capture"] as? Bool, true)
         XCTAssertEqual(result["quick_capture_shortcut"] as? String, "⌃⌥Space", "reported, read only")
         XCTAssertEqual(result["corner_size"] as? Double, 52)
         XCTAssertEqual(result["haptics"] as? Bool, true)
-        XCTAssertEqual(result["animations"] as? String, "full")
+        XCTAssertEqual(result["animations"] as? String, "lively")
         XCTAssertEqual(result["launch_at_login"] as? Bool, true, "reported, read only")
         XCTAssertThrowsError(try tools.call(name: "get_settings", arguments: ["palette": "amethyst"]))
     }
@@ -390,7 +392,7 @@ final class SettingsPhase1Tests: XCTestCase {
             "corner_size": 28, "panel_width": 360, "haptics": false, "animations": "reduced"
         ]))
         XCTAssertEqual(settings.animations, .reduced)
-        settings.animations = .full
+        settings.animations = .lively
         XCTAssertEqual(settings.appearance, .dark)
         XCTAssertEqual(settings.panelTheme, .seaGlass)
         XCTAssertEqual(settings.panelSurfaceStyle, .frosted)

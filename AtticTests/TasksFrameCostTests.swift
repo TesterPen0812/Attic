@@ -28,7 +28,10 @@ final class TasksFrameCostTests: XCTestCase {
     func testMeasuresWhatEachInteractionCostsTheMainThread() throws {
         let host = try FrameCostHost()
         hosted = host
-        var report: [String] = []
+        // The Motion Lab: the feel measured (ATTIC_MOTION_FEEL, else the default).
+        let feel = MotionFeelUnderTest.apply()
+        defer { MotionFeelUnderTest.restore() }
+        var report: [String] = ["feel=\(feel)"]
         // Profiling seam: one scenario, repeated (ATTIC_FRAME_COST_LOOP).
         if let loop = ProcessInfo.processInfo.environment["ATTIC_FRAME_COST_LOOP"] {
             let ids = host.model.rows(for: .now).prefix(6).map(\.id)
@@ -123,8 +126,22 @@ final class TasksFrameCostTests: XCTestCase {
         host.place(.done)
         host.model.beginSearch()
         host.spin(0.6)
-        let searchFrames = host.type("task 12", focusAddBar: false)
+        // No settling wait after the last key: the 75 ms idle publication
+        // must still be pending, so the frame timed next is the one that
+        // publishes the query and shows its results (GPT-6.1's PR prep
+        // review, P2: the wait used to publish them unmeasured).
+        let searchFrames = host.type("task 12", focusAddBar: false, settle: false)
+        // The keystroke frames no longer publish the query (it waits for
+        // 75 ms idle): the frame the results arrive in is its own entry.
+        // `pending=no` means the results already arrived inside one of the
+        // keystroke frames above (and count in their maximum).
+        let pending = host.model.doneSearch != host.model.doneSearchInput.text
+        XCTAssertTrue(pending, "the results frame must publish the query, not repeat a published one")
+        let resultsFrame = host.frame { host.model.flushDoneSearchInput() }
+        XCTAssertEqual(host.model.doneSearch, "task 12")
+        host.spin(0.3)
         report.append("search-keystroke " + Self.stats(searchFrames) + " typed=\(host.model.doneSearch.count)")
+        report.append(String(format: "search-results %.1fms pending=%@", resultsFrame, pending ? "yes" : "no"))
         host.model.doneSearch = ""
         host.place(.now)
 
@@ -286,7 +303,9 @@ final class FrameCostHost {
     }
 
     /// Types `text` into the add bar, one key a frame.
-    func type(_ text: String, focusAddBar: Bool = true) -> [Double] {
+    /// `settle` false returns at once after the last key, before any idle
+    /// work (Done's 75 ms query publication) can run.
+    func type(_ text: String, focusAddBar: Bool = true, settle: Bool = true) -> [Double] {
         if focusAddBar {
             focus.addBar = true
             // The binding is not observed: the page reads it on its next redraw.
@@ -307,7 +326,7 @@ final class FrameCostHost {
                 Hosted.pumpEvents()
             })
         }
-        spin(0.3)
+        if settle { spin(0.3) }
         return frames
     }
 }

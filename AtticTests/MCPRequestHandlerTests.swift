@@ -137,7 +137,7 @@ final class MCPRequestHandlerTests: XCTestCase {
             // Phase 0 adds Recently Deleted, tag and link tools; the original
             // four keep their names.
             ["create_task", "delete_item", "delete_task", "duplicate_task", "link", "list_deleted", "list_tags",
-             "list_tasks", "restore_item", "update_tags", "update_task"]
+             "list_tasks", "move_subtask", "restore_item", "restore_items", "update_tags", "update_task"]
         )
         let listTool = try XCTUnwrap(tools.first { $0["name"] as? String == "list_tasks" })
         let annotations = try XCTUnwrap(listTool["annotations"] as? [String: Any])
@@ -285,7 +285,7 @@ final class MCPRequestHandlerTests: XCTestCase {
         XCTAssertEqual(
             names.sorted(),
             ["create_note", "create_task", "delete_item", "delete_note", "delete_task", "duplicate_task", "link", "list_deleted",
-             "list_notes", "list_tags", "list_tasks", "restore_item", "update_note", "update_tags", "update_task"]
+             "list_notes", "list_tags", "list_tasks", "move_subtask", "restore_item", "restore_items", "update_note", "update_tags", "update_task"]
         )
     }
 
@@ -366,6 +366,93 @@ final class MCPRequestHandlerTests: XCTestCase {
         XCTAssertTrue(try noteToolError(handler, ["id": UUID().uuidString, "base_revision": "initial", "body": "x"])
             .hasPrefix("No note exists"))
         XCTAssertEqual(noteStore.note(withID: note.id)?.body, "old")
+    }
+
+    func testUpdateNoteCanAddAndRemoveChecklistLinesInPlainAndRichNotes() throws {
+        for rich in [false, true] {
+            for removing in [false, true] {
+                let (noteStore, handler) = try makeNoteHandler()
+                var paragraph = NoteBlock.text("Keep this paragraph")
+                if rich { paragraph.style = "heading"; paragraph.level = 2 }
+                var kept = NoteBlock.checklist("Keep this item", checked: true)
+                kept.extras = ["owner": .string("person")]
+                let removed = NoteBlock.checklist("Remove this item")
+                let base = NoteDocument(blocks: [.text("Title"), paragraph, kept] + (removing ? [removed] : []))
+                guard case let .success((id, _)) = noteStore.createDocumentNote(id: UUID(), document: base) else { return XCTFail() }
+                var lines = NoteTextExport.agentBody(base).components(separatedBy: "\n")
+                if removing { lines.removeLast() } else { lines.append("- [ ] Buy milk") }
+                let token = try XCTUnwrap(noteStore.note(withID: id)?.revisionToken)
+                let payload = try callNoteTool(handler, "update_note", ["id": id.uuidString,
+                    "base_revision": token, "body": lines.joined(separator: "\n")])
+                XCTAssertEqual(payload["status"] as? String, "applied")
+                let document = try XCTUnwrap(noteStore.loadDocument(noteID: id)?.content.document)
+                XCTAssertEqual(document.blocks.prefix(3), base.blocks.prefix(3), "kept metadata and IDs survive")
+                XCTAssertEqual(document.blocks.filter { $0.kind == .checklist }.map(\.text),
+                               removing ? ["Keep this item"] : ["Keep this item", "Buy milk"])
+            }
+        }
+    }
+
+    func testUpdateNoteRejectsFlattenedDuplicatedAndReorderedChecklistLinesWithAccurateMessage() throws {
+        let message = "This edit would flatten, duplicate, reorder, or change an existing checklist item. Keep remaining checklist lines unchanged except for their checked states; add or remove complete checklist lines."
+        for rich in [false, true] {
+            let (noteStore, handler) = try makeNoteHandler()
+            var paragraph = NoteBlock.text("Keep paragraph")
+            if rich { paragraph.style = "heading"; paragraph.level = 2 }
+            var base = NoteDocument(blocks: [.text("Title"), paragraph, .checklist("First"), .checklist("Second")])
+            base.refreshRequiredCapabilities()
+            guard case let .success((id, _)) = noteStore.createDocumentNote(id: UUID(), document: base) else { return XCTFail() }
+            let prefix = NoteTextExport.agentLine(paragraph, index: 1) + "\n"
+            let token = try XCTUnwrap(noteStore.note(withID: id)?.revisionToken)
+            for body in ["First\n- [ ] Second", "- [ ] First\n- [ ] Second\n- [ ] First", "- [ ] Second\n- [ ] First"] {
+                XCTAssertEqual(try noteToolError(handler, ["id": id.uuidString, "base_revision": token, "body": prefix + body]), message)
+                XCTAssertEqual(noteStore.loadDocument(noteID: id)?.content.document, base)
+            }
+        }
+    }
+
+    func testUpdateNoteWithAnEmptyChecklistItemCanAddOrEditBlankParagraphs() throws {
+        for body in ["- [ ] Milk\n- [ ] \nParagraph\n\nNew paragraph",
+                     "- [ ] Milk\n- [ ] \n",
+                     "- [ ] Milk\n\nParagraph",
+                     "- [ ] Milk\n- [ ] \nParagraph\nMilk"] {
+            let (noteStore, handler) = try makeNoteHandler()
+            let base = NoteDocument(blocks: [.text("Title"), .checklist("Milk"),
+                                             .checklist(""), .text("Paragraph")])
+            guard case let .success((id, _)) = noteStore.createDocumentNote(id: UUID(), document: base) else { return XCTFail() }
+            let token = try XCTUnwrap(noteStore.note(withID: id)?.revisionToken)
+            let payload = try callNoteTool(handler, "update_note", ["id": id.uuidString,
+                "base_revision": token, "body": body])
+            XCTAssertEqual(payload["status"] as? String, "applied")
+            let document = try XCTUnwrap(noteStore.loadDocument(noteID: id)?.content.document)
+            XCTAssertEqual(NoteTextExport.agentBody(document), body)
+            XCTAssertEqual(document.blocks[1], base.blocks[1])
+            if body.contains("- [ ] \n") { XCTAssertEqual(document.blocks[2], base.blocks[2]) }
+            XCTAssertNotEqual(noteStore.note(withID: id)?.revisionToken, token)
+        }
+    }
+
+    func testUpdateNoteRejectsChecklistRenamesThatLoseNestingMarksOrExtras() throws {
+        let message = "This edit would flatten, duplicate, reorder, or change an existing checklist item. Keep remaining checklist lines unchanged except for their checked states; add or remove complete checklist lines."
+        var nested = NoteBlock.checklist("Oat"); nested.indent = 1
+        var bold = NoteBlock.checklist("Oat"); bold.marks = [NoteMark(.bold, offset: 0, length: 3)]
+        var struck = NoteBlock.checklist("Oat"); struck.marks = [NoteMark(.strikethrough, offset: 0, length: 3)]
+        var extra = NoteBlock.checklist("Oat"); extra.extras = ["owner": .string("person")]
+        for item in [nested, bold, struck, extra] {
+            let (noteStore, handler) = try makeNoteHandler()
+            var base = NoteDocument(blocks: [.text("Title"), item])
+            base.refreshRequiredCapabilities()
+            guard case let .success((id, _)) = noteStore.createDocumentNote(id: UUID(), document: base) else { return XCTFail() }
+            let token = try XCTUnwrap(noteStore.note(withID: id)?.revisionToken)
+            XCTAssertEqual(try noteToolError(handler, ["id": id.uuidString,
+                "base_revision": token, "body": "- [ ] Oat milk 2L"]), message)
+            XCTAssertEqual(noteStore.loadDocument(noteID: id)?.content.document, base)
+            XCTAssertEqual(noteStore.note(withID: id)?.revisionToken, token)
+            let deleted = try callNoteTool(handler, "update_note", ["id": id.uuidString,
+                "base_revision": token, "body": ""])
+            XCTAssertEqual(deleted["status"] as? String, "applied", "whole-item deletion remains allowed")
+            XCTAssertEqual(noteStore.loadDocument(noteID: id)?.content.document?.blocks, [.text("Title")])
+        }
     }
 
     func testUpdateNoteInTheNewFormatKeepsObjectsAndWaitsWhileTheNoteIsOpen() throws {
@@ -488,7 +575,7 @@ final class MCPRequestHandlerTests: XCTestCase {
         calendar.timeZone = TimeZone(identifier: "Europe/Rome")!
         let now = calendar.date(from: DateComponents(year: 2026, month: 9, day: 24, hour: 10))!
         // Every store shares the task store's container, as in the app.
-        let noteStore = NoteStore(container: store.container, attachmentFileStore: makeTestAttachmentFileStore())
+        let noteStore = trackAttachmentReconciliation(of: NoteStore(container: store.container, attachmentFileStore: makeTestAttachmentFileStore()))
         let library = AtticLibrary(tasks: store, notes: noteStore, canvases: CanvasStore(container: store.container))
         let handler = MCPRequestHandler(
             tools: AgentTaskTools(
@@ -722,7 +809,12 @@ final class MCPRequestHandlerTests: XCTestCase {
 
     func testListTagsAndUpdateTagsRenameAndMerge() throws {
         let (library, handler) = try makeLibraryHandler()
-        let first = try XCTUnwrap(store.create(title: "One"))
+        XCTAssertEqual(try callNoteTool(handler, "list_tags", [:])["count"] as? Int, 0, "warm before MCP mutations")
+        let created = try callNoteTool(handler, "create_task", ["title": "One", "tags": ["#Work"]])
+        let createdTask = try XCTUnwrap(created["task"] as? [String: Any])
+        let firstID = try XCTUnwrap((createdTask["id"] as? String).flatMap(UUID.init(uuidString:)))
+        let first = try XCTUnwrap(store.task(withID: firstID))
+        XCTAssertEqual(library.notes?.tagCounts, ["work": 1], "MCP creation reaches Notes suggestions")
         let second = try XCTUnwrap(store.create(title: "Two"))
         let note = try XCTUnwrap(library.notes?.create(title: "Note"))
         XCTAssertTrue(library.setTags(["work", "urgent"], on: AtticItemRef(.task, first.id)))
@@ -734,6 +826,10 @@ final class MCPRequestHandlerTests: XCTestCase {
         let tags = try XCTUnwrap(listed["tags"] as? [[String: Any]])
         XCTAssertEqual(tags.first?["name"] as? String, "work")
         XCTAssertEqual(tags.first?["count"] as? Int, 2)
+        _ = try callNoteTool(handler, "update_task", ["id": first.id.uuidString, "tags": ["work", "urgent", "mcp-only"]])
+        XCTAssertEqual(library.notes?.tagCounts["mcp-only"], 1, "MCP update invalidates the warmed shared inventory")
+        _ = try callNoteTool(handler, "update_task", ["id": first.id.uuidString, "tags": ["work", "urgent"]])
+        XCTAssertNil(library.notes?.tagCounts["mcp-only"], "last use removal invalidates too")
 
         let renamed = try callNoteTool(handler, "update_tags", ["action": "rename", "from": "urgent", "to": "Now"])
         XCTAssertEqual(renamed["tag"] as? String, "now")

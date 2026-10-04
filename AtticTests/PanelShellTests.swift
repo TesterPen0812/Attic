@@ -174,7 +174,7 @@ final class PanelShellTests: XCTestCase {
         defer { defaults.removePersistentDomain(forName: suite) }
         let container = try PersistenceController.makeContainer(inMemory: true, cloudSyncEnabled: false)
         let store = TaskStore(container: container)
-        let notes = NoteStore(container: container, attachmentFileStore: makeTestAttachmentFileStore())
+        let notes = trackAttachmentReconciliation(of: NoteStore(container: container, attachmentFileStore: makeTestAttachmentFileStore()))
         let state = PanelUIState()
         let controller = AtticPanelController(
             store: store, noteStore: notes,
@@ -221,7 +221,7 @@ final class PanelShellTests: XCTestCase {
         defer { defaults.removePersistentDomain(forName: suite) }
         let container = try PersistenceController.makeContainer(inMemory: true, cloudSyncEnabled: false)
         let store = TaskStore(container: container)
-        let notes = NoteStore(container: container, attachmentFileStore: makeTestAttachmentFileStore())
+        let notes = trackAttachmentReconciliation(of: NoteStore(container: container, attachmentFileStore: makeTestAttachmentFileStore()))
         let state = PanelUIState()
         let controller = AtticPanelController(
             store: store, noteStore: notes,
@@ -252,7 +252,7 @@ final class PanelShellTests: XCTestCase {
         defer { defaults.removePersistentDomain(forName: suite) }
         let container = try PersistenceController.makeContainer(inMemory: true, cloudSyncEnabled: false)
         let store = TaskStore(container: container)
-        let notes = NoteStore(container: container, attachmentFileStore: makeTestAttachmentFileStore())
+        let notes = trackAttachmentReconciliation(of: NoteStore(container: container, attachmentFileStore: makeTestAttachmentFileStore()))
         let controller = AtticPanelController(
             store: store, noteStore: notes,
             canvasSession: CanvasSession(store: CanvasStore(container: container)),

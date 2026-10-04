@@ -242,6 +242,10 @@ struct TaskEditableState: Equatable {
     /// its completion, so an undo puts it back with the state.
     let completedFromRaw: String?
     let completedFromOrder: Int64?
+    /// The main task a subtask belongs to (nil for a main task): Move to
+    /// Task… and Make Standalone Task change it (control audit item 5), so
+    /// their undo puts it back like any other field.
+    let parentID: UUID?
 
     init(_ task: TaskItem) {
         id = task.id
@@ -254,6 +258,7 @@ struct TaskEditableState: Equatable {
         dueDayRaw = task.dueDayRaw
         completedFromRaw = task.completedFromRaw
         completedFromOrder = task.completedFromOrder
+        parentID = task.parentID
     }
 }
 
@@ -371,6 +376,11 @@ final class TaskStore: ObservableObject {
         guard let task = task(withID: taskID) else { return nil }
         return familyOwner(of: task)
     }
+    /// Wired by AtticLibrary to the shared tag inventory. No store scans on save.
+    var tagInventoryWillSave: (ModelContext) -> Void = { _ in }
+    var tagInventoryDidSave: () -> Void = {}
+    var tagInventoryDidRefresh: () -> Void = {}
+
     @Published private(set) var revision: UInt64 = 0
     @Published private(set) var cloudSyncStatus = CloudSyncStatus()
     /// The command layer built over this store (the app has one), so a page
@@ -1217,14 +1227,30 @@ final class TaskStore: ObservableObject {
             }
             winners[state.id] = winner
         }
-
-        struct Completion: Equatable {
-            let statusRaw: String
-            let completedAt: Date?
-            let fromRaw: String?
-            let fromOrder: Int64?
-        }
+        // A step that puts a task back under a main task (undoing Make
+        // Standalone Task, or either side of Move to Task…) applies only
+        // while that main task can still hold it: live, a main task, not
+        // finished while the subtask is open, and the task itself has no
+        // subtasks of its own (one level). "Open" is decided on the state
+        // each copy will have once the step has run: a copy whose
+        // completion the step does not move keeps its own. Checked before
+        // anything is written, so a refusal leaves the context untouched.
         let doneRaw = TaskStatus.done.rawValue
+        for state in target {
+            guard let from = expectedByID[state.id], from.parentID != state.parentID,
+                  let newParentID = state.parentID, let winner = winners[state.id],
+                  winner.parentID == from.parentID, let replicas = groups[state.id] else { continue }
+            let was = Self.completionKey(from), becomes = Self.completionKey(state)
+            let winnerHoldsWas = Self.completionKey(winner) == was
+            let staysOpen = replicas.filter { $0.parentID == from.parentID }.contains { replica in
+                let moves = was != becomes && winnerHoldsWas && Self.completionKey(replica) == was
+                return (moves ? state.statusRaw : replica.statusRaw) != doneRaw
+            }
+            guard try canHoldSubtask(state.id, under: newParentID, isOpen: staysOpen) else {
+                return .obsolete("Its main task is no longer available, so this step can’t be undone.")
+            }
+        }
+
         let timestamp = now()
         var wroteAny = false
         var conflicted = false
@@ -1255,15 +1281,14 @@ final class TaskStore: ObservableObject {
             }
             field({ $0.title }, from.title, state.title) { $0.title = state.title }
             field({ $0.priorityRaw }, from.priorityRaw, state.priorityRaw) { $0.priorityRaw = state.priorityRaw }
-            field({ Completion(statusRaw: $0.statusRaw, completedAt: $0.completedAt, fromRaw: $0.completedFromRaw, fromOrder: $0.completedFromOrder) },
-                  Completion(statusRaw: from.statusRaw, completedAt: from.completedAt, fromRaw: from.completedFromRaw, fromOrder: from.completedFromOrder),
-                  Completion(statusRaw: state.statusRaw, completedAt: state.completedAt, fromRaw: state.completedFromRaw, fromOrder: state.completedFromOrder)) {
+            field({ Self.completionKey($0) }, Self.completionKey(from), Self.completionKey(state)) {
                 $0.statusRaw = state.statusRaw
                 $0.completedAt = state.completedAt
                 $0.completedFromRaw = state.completedFromRaw
                 $0.completedFromOrder = state.completedFromOrder
             }
             field({ $0.manualOrder }, from.manualOrder, state.manualOrder) { $0.manualOrder = state.manualOrder }
+            field({ $0.parentID }, from.parentID, state.parentID) { $0.parentID = state.parentID }
             field({ $0.dueDayRaw }, from.dueDayRaw, state.dueDayRaw) { $0.dueDayRaw = state.dueDayRaw }
             let fromTags = Set(AtticTag.decode(from.tagsRaw))
             let toTags = Set(AtticTag.decode(state.tagsRaw))
@@ -1801,6 +1826,41 @@ final class TaskStore: ObservableObject {
         }
         tasks.removeAll { deletedIDs.contains($0.id) }
         return save(owner: owner)
+    }
+
+    /// The ids of the subtasks a delete of the main task `parentID` would take
+    /// along with it right now: every subtask with a copy that is not in
+    /// Recently Deleted, the Done log included, whichever copy is shown. This
+    /// is the same reading `deletionFamily` makes, for callers that must know
+    /// the family before they delete.
+    func liveSubtaskIDs(of parentID: UUID) throws -> Set<UUID> {
+        let linked = try context.fetch(FetchDescriptor<TaskItem>(
+            predicate: #Predicate { $0.parentID == parentID && $0.deletedAt == nil }
+        ))
+        return Set(linked.map(\.id))
+    }
+
+    /// The tasks each delete recorded, for the deletes rooted at `ids` that are
+    /// in Recently Deleted right now (the root and every subtask that went
+    /// with it, whichever replica says so). Read before a restore clears the
+    /// record, or after a delete wrote it, so an undo step can remember what
+    /// it owns. A root with no record is left out.
+    func recordedDeletionMembers(ofRoots ids: [UUID]) -> [UUID: Set<UUID>] {
+        (try? deletionRecords(ofRoots: ids)) ?? [:]
+    }
+
+    /// The same read, but an unreadable store throws instead of looking like
+    /// "no record": a history restore must tell the two apart.
+    func deletionRecords(ofRoots ids: [UUID]) throws -> [UUID: Set<UUID>] {
+        guard !ids.isEmpty else { return [:] }
+        let rows = try context.fetch(FetchDescriptor<TaskItem>(
+            predicate: #Predicate { ids.contains($0.id) && $0.deletedAt != nil }
+        ))
+        var result: [UUID: Set<UUID>] = [:]
+        for row in rows where row.deletionRootID == row.id {
+            result[row.id, default: [row.id]].formUnion(row.deletionMembers)
+        }
+        return result
     }
 
     /// The rows one delete of `task` hides: every replica of the task and,
@@ -2388,6 +2448,90 @@ final class TaskStore: ObservableObject {
         }
     }
 
+    /// A compact title index, retained with the store that owns the panel.
+    /// Reload already resolves every replica; copy only searchable/order fields
+    /// there, not on the Find binding's keystroke. Models stay page-sized.
+    private struct DoneSearchEntry {
+        let id: UUID
+        let title: String
+        let completed: Date
+        let created: Date
+
+        init(_ task: TaskItem) {
+            id = task.id
+            title = task.title
+            completed = task.completedAt ?? task.updatedAt
+            created = task.createdAt
+        }
+    }
+
+    private var doneSearchEntries: [DoneSearchEntry] = []
+    private var doneSearchMatches: (query: String, locale: String, ids: [UUID])?
+
+    private func indexDoneSearch(_ winners: [TaskItem], replacing ids: Set<UUID>? = nil) {
+        updateDoneSearch(winners.filter {
+            $0.doneLoggedAt != nil && $0.deletedAt == nil && $0.parentID == nil
+        }.map(DoneSearchEntry.init), replacing: ids)
+    }
+
+    private func updateDoneSearch(_ entries: [DoneSearchEntry], replacing ids: Set<UUID>? = nil) {
+        if let ids {
+            guard !entries.isEmpty || doneSearchEntries.contains(where: { ids.contains($0.id) }) else { return }
+            doneSearchEntries.removeAll { ids.contains($0.id) }
+        }
+        else { doneSearchEntries.removeAll(keepingCapacity: true) }
+        doneSearchEntries += entries
+        doneSearchEntries.sort {
+            if $0.completed != $1.completed { return $0.completed > $1.completed }
+            if $0.created != $1.created { return $0.created > $1.created }
+            return $0.id.uuidString < $1.id.uuidString
+        }
+        doneSearchMatches = nil
+    }
+
+    private func doneSearchIDs(matching query: String) -> [UUID] {
+        let query = query.trimmingCharacters(in: .whitespacesAndNewlines)
+        let locale = Locale.current.identifier
+        if let cached = doneSearchMatches, cached.query == query, cached.locale == locale { return cached.ids }
+        // Keep the exact localized matching semantics, including diacritics;
+        // folding to a different comparison would subtly change results.
+        let ids = doneSearchEntries.compactMap {
+            query.isEmpty || $0.title.localizedStandardContains(query) ? $0.id : nil
+        }
+        doneSearchMatches = (query, locale, ids)
+        return ids
+    }
+
+    func indexedDoneLogCount(matching query: String = "") -> Int {
+        query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            ? doneSearchEntries.count : doneSearchIDs(matching: query).count
+    }
+
+    /// The panel's logical cursor walks matching canonical IDs. Only this
+    /// page is hydrated; no SQL string predicate or full-log count on typing.
+    /// The raw physical cursor above remains available to command clients.
+    func indexedDoneLogPage(from cursor: DoneLogCursor = DoneLogCursor(), limit: Int,
+                            matching query: String = "") -> DoneLogPage {
+        let ids = doneSearchIDs(matching: query)
+        let start = min(cursor.rowOffset, ids.count)
+        let end = min(start + max(0, limit), ids.count)
+        let pageIDs = Array(ids[start..<end])
+        do {
+            let rows = try readDoneLog(FetchDescriptor<TaskItem>(predicate: #Predicate { pageIDs.contains($0.id) }))
+            let winners = Self.canonicalReplicas(from: rows).filter {
+                $0.doneLoggedAt != nil && $0.deletedAt == nil && $0.parentID == nil
+            }
+            // The index already holds the canonical completion order;
+            // avoid comparing hydrated model properties again per page.
+            let byID = Dictionary(uniqueKeysWithValues: winners.map { ($0.id, $0) })
+            return DoneLogPage(tasks: pageIDs.compactMap { byID[$0] },
+                               next: DoneLogCursor(rowOffset: end), hasMore: end < ids.count)
+        } catch {
+            report(error.localizedDescription, owner: nil)
+            return DoneLogPage(tasks: [], next: cursor, hasMore: true, failure: error.localizedDescription)
+        }
+    }
+
     /// The Done log's order: most recently finished first (the shown
     /// replica's completion time), then newest created, then id.
     static func doneLogOrder(_ lhs: TaskItem, _ rhs: TaskItem) -> Bool {
@@ -2506,6 +2650,20 @@ final class TaskStore: ObservableObject {
             .sorted { ($0.completedAt ?? $0.createdAt) < ($1.completedAt ?? $1.createdAt) }
     }
 
+    /// A listed task's subtasks: a shown family's from the lists, a
+    /// Done-log family's from the log. A Done-log family that cannot be
+    /// read is reported and throws, so an export never goes out without
+    /// its subtasks.
+    func readListedSubtasks(of parentID: UUID) throws -> [TaskItem] {
+        if task(withID: parentID) != nil { return subtasks(of: parentID) }
+        do {
+            return try readDoneLogSubtasks(of: parentID)
+        } catch {
+            report(error.localizedDescription, owner: nil)
+            throw error
+        }
+    }
+
     /// Both reads of a Done-log family go through here, so tests can make
     /// either fail (`doneFamilyReadsToSkipBeforeFailing`).
     private func readDoneFamily(_ descriptor: FetchDescriptor<TaskItem>) throws -> [TaskItem] {
@@ -2569,6 +2727,18 @@ final class TaskStore: ObservableObject {
                 guard let logged = listedTask(withID: taskID) else {
                     throw TaskEditRefusal("The task is no longer in the Done log.")
                 }
+                // Match live reopening: any nondeleted completed parent
+                // replica blocks a child-only restore, before any mutation.
+                if let parentID = logged.parentID {
+                    let doneRaw = TaskStatus.done.rawValue
+                    var doneParents = FetchDescriptor<TaskItem>(predicate: #Predicate {
+                        $0.id == parentID && $0.statusRaw == doneRaw && $0.deletedAt == nil
+                    })
+                    doneParents.fetchLimit = 1
+                    if try !context.fetch(doneParents).isEmpty {
+                        throw TaskEditRefusal("Reopen the main task before reopening a subtask.")
+                    }
+                }
                 let replicas = try storedTasks(matching: taskID)
                 let order = try nextManualOrder(status: .todo, updatedAt: timestamp)
                 let shownCopy = TaskContentSnapshot(logged)
@@ -2599,6 +2769,38 @@ final class TaskStore: ObservableObject {
             try reloadTasks()
         } catch {
             report("Restored, but the list could not be refreshed: \(error.localizedDescription)", owner: nil)
+        }
+        return true
+    }
+
+    /// An agent edit that returns an archived task and its family to the
+    /// live lists. Validate and stage every requested field before one save;
+    /// failure rolls back archive membership and the edit together.
+    @discardableResult
+    func restoreAndUpdateTask(
+        _ id: UUID,
+        title: String? = nil,
+        priority: TaskPriority? = nil,
+        status: TaskStatus,
+        tags: [String]? = nil,
+        dueDay: DueDay?? = nil
+    ) -> Bool {
+        do {
+            guard let logged = listedTask(withID: id), logged.doneLoggedAt != nil, status != .done else {
+                throw TaskEditRefusal("The task must be in the Done log and reopen to an unfinished state.")
+            }
+            _ = try stageUpdate(logged, title: title, priority: priority, status: status,
+                                tags: tags, dueDay: dueDay)
+            try returnFamiliesFromDoneLog([logged.parentID ?? id])
+        } catch {
+            context.rollback()
+            try? reloadTasks()
+            report(error, owner: nil)
+            return false
+        }
+        guard save(owner: nil) else { return false }
+        do { try reloadTasks() } catch {
+            report("Updated, but the list could not be refreshed: \(error.localizedDescription)", owner: nil)
         }
         return true
     }
@@ -2988,6 +3190,183 @@ final class TaskStore: ObservableObject {
         return save(owner: owner)
     }
 
+    // MARK: - Control audit item 5: Move to Task… and Make Standalone Task
+
+    /// Where a subtask can go: every unfinished main task listed in Now and
+    /// Later, except its own (in list order: Now's, then Later's). A main
+    /// task that is itself a stray link (shown as a root) is left out.
+    func moveTargets(forSubtask id: UUID) -> [TaskItem] {
+        guard let task = task(withID: id), let parentID = task.parentID, parent(of: task) != nil else { return [] }
+        return [TaskStatus.inProgress, .todo, .backlog].flatMap { status in
+            orderedTasks(for: status).filter { $0.parentID == nil && $0.id != parentID && $0.id != id }
+        }
+    }
+
+    /// The tasks `reparentSubtask(_:to:)` may write, read before it runs so
+    /// an undo step can record them: the subtask, and the group it joins
+    /// (its new family, or the main tasks of the state it takes), whose
+    /// orders a placement can re-space.
+    func reparentScope(of id: UUID, to newParentID: UUID?) -> [UUID] {
+        guard let task = task(withID: id), let parent = parent(of: task) else { return [id] }
+        if let newParentID {
+            return [id] + subtasks(of: newParentID).map(\.id)
+        }
+        let status = Self.standaloneStatus(of: task, parent: parent)
+        return [id] + orderedTasks(for: status).filter { $0.parentID == nil || self.parent(of: $0) == nil }.map(\.id)
+    }
+
+    /// The state a subtask has once it is a task of its own: its own, except
+    /// that an open subtask of a Later task stays in Later with it.
+    private static func standaloneStatus(of task: TaskItem, parent: TaskItem) -> TaskStatus {
+        task.status != .done && parent.status == .backlog ? .backlog : task.status
+    }
+
+    /// Moves a subtask to another main task (`newParentID`), or makes it a
+    /// main task of its own (nil), in one save on every replica (control
+    /// audit item 5). It keeps its id, title, state, priority, tags, date
+    /// and its own files; the files attached to its old main task stay
+    /// there. Moved, it goes to the end of its new family's open (or done)
+    /// subtasks. Made standalone, it goes right below its old main task
+    /// when they share a state group, else to the top of its group; an open
+    /// subtask of a Later task stays in Later.
+    ///
+    /// Refused (nothing written, not retryable): a task that is not a
+    /// subtask, a destination that is not an unfinished main task, a task
+    /// that has subtasks of its own (one level), or copies that disagree
+    /// about where the subtask belongs.
+    @discardableResult
+    func reparentSubtask(_ id: UUID, to newParentID: UUID?) -> Bool {
+        guard let task = tasks.first(where: { $0.id == id }), let oldParentID = task.parentID,
+              let oldParent = parent(of: task) else {
+            report("Only a subtask can move to another task or become a task of its own.", owner: nil, retryable: false)
+            return false
+        }
+        if newParentID == oldParentID { return true }
+        let owner = oldParentID
+        let timestamp = now()
+        // A refusal is decided before anything is written: only a failure
+        // after the first write needs the list reloaded.
+        var wrote = false
+        do {
+            WorkspaceLegacyBridge.captureBeforeMutation(task, in: context)
+            let replicas = try storedTasks(matching: id)
+            WorkspaceLegacyBridge.prepareMutations(replicas, in: context)
+            guard Set(replicas.map(\.parentID)).count == 1 else {
+                throw TaskEditRefusal("This subtask’s copies disagree about where it belongs. Refresh and try again.")
+            }
+            // Which copies agree with the shown one is decided here, before
+            // anything is written: a re-spacing below rewrites this subtask's
+            // order on every copy, which would make a stale copy look like it
+            // agreed.
+            let shown = TaskContentSnapshot(task)
+            let agreeing = Set(replicas.filter { $0 === task || TaskContentSnapshot($0) == shown }.map(\.persistentModelID))
+            var status = task.status
+            var order: Int64?
+            if let newParentID {
+                // The destination must be an unfinished main task on every
+                // copy, whatever state the subtask is in.
+                guard try canHoldSubtask(id, under: newParentID, isOpen: true) else {
+                    throw TaskEditRefusal("A subtask can only move to an unfinished main task.")
+                }
+                let group = subtasks(of: newParentID).filter { ($0.status == .done) == (task.status == .done) }
+                let placed = group + [task]
+                order = sparseManualOrder(at: placed.count - 1, in: placed)
+                if order == nil {
+                    wrote = true
+                    try assignSpacedManualOrders(to: placed, updatedAt: timestamp)
+                    order = Self.manualOrderStride
+                }
+            } else {
+                status = Self.standaloneStatus(of: task, parent: oldParent)
+                // A promotion that changes the state (an open subtask of a
+                // Later task stays in Later) writes it on every copy, so the
+                // copies must agree about it first. One that keeps the state
+                // writes placement only.
+                if status != task.status {
+                    let shownCompletion = Self.completionKey(task)
+                    guard replicas.allSatisfy({ Self.completionKey($0) == shownCompletion }) else {
+                        throw TaskEditRefusal("This subtask’s copies disagree about whether it is finished. Refresh and try again.")
+                    }
+                }
+                let group = orderedTasks(for: status).filter { $0.parentID == nil || parent(of: $0) == nil }
+                if oldParent.status == status, let index = group.firstIndex(where: { $0.id == oldParentID }) {
+                    var placed = group
+                    placed.insert(task, at: index + 1)
+                    order = sparseManualOrder(at: index + 1, in: placed)
+                    if order == nil {
+                        // The gap below the old main task is used up: re-space
+                        // the group around the insertion point rather than
+                        // dropping the task at the top of it.
+                        wrote = true
+                        try assignSpacedManualOrders(to: placed, updatedAt: timestamp)
+                        order = Int64(placed.count - (index + 1)) * Self.manualOrderStride
+                    }
+                }
+                if order == nil {
+                    wrote = true
+                    order = try nextManualOrder(status: status, excluding: id, updatedAt: timestamp)
+                }
+            }
+            wrote = true
+            // Decided once, before any copy is written: the shown copy is one
+            // of the replicas, so reading `task.status` inside the loop would
+            // change its answer for the copies after it.
+            let changesStatus = status != task.status
+            // Parent and placement only: a copy's own state (completion,
+            // title, tags…) is never written by a move, and a field that
+            // already holds its value is left alone.
+            for replica in replicas {
+                if replica.parentID != newParentID { replica.parentID = newParentID }
+                if changesStatus, replica.status != status { replica.status = status }
+                if replica.manualOrder != order { replica.manualOrder = order }
+                if replica.listOrderVersion != TaskItem.currentListOrderVersion {
+                    replica.listOrderVersion = TaskItem.currentListOrderVersion
+                }
+                if agreeing.contains(replica.persistentModelID) { replica.updatedAt = timestamp }
+            }
+        } catch {
+            context.rollback()
+            if wrote { try? reloadTasks() }
+            report(error, owner: owner)
+            return false
+        }
+        return save(owner: owner)
+    }
+
+    /// A task's state of completion, as one comparable value.
+    private struct CompletionKey: Equatable {
+        let statusRaw: String
+        let completedAt: Date?
+        let fromRaw: String?
+        let fromOrder: Int64?
+    }
+
+    private static func completionKey(_ task: TaskItem) -> CompletionKey {
+        CompletionKey(statusRaw: task.statusRaw, completedAt: task.completedAt,
+                      fromRaw: task.completedFromRaw, fromOrder: task.completedFromOrder)
+    }
+
+    private static func completionKey(_ state: TaskEditableState) -> CompletionKey {
+        CompletionKey(statusRaw: state.statusRaw, completedAt: state.completedAt,
+                      fromRaw: state.completedFromRaw, fromOrder: state.completedFromOrder)
+    }
+
+    /// Whether `parentID` can hold `childID` as a subtask: a different task,
+    /// live on every copy (not in Recently Deleted or the Done log), a main
+    /// task, unfinished on every copy while the subtask is open; and the
+    /// child has no subtasks of its own, so the hierarchy stays one level
+    /// deep.
+    private func canHoldSubtask(_ childID: UUID, under parentID: UUID, isOpen: Bool) throws -> Bool {
+        guard parentID != childID, let shownParent = task(withID: parentID), shownParent.parentID == nil else { return false }
+        let doneRaw = TaskStatus.done.rawValue
+        let parents = try context.fetch(FetchDescriptor<TaskItem>(predicate: #Predicate { $0.id == parentID }))
+        guard !parents.isEmpty, parents.allSatisfy({ $0.parentID == nil && $0.deletedAt == nil && $0.doneLoggedAt == nil }),
+              !isOpen || parents.allSatisfy({ $0.statusRaw != doneRaw }) else { return false }
+        var children = FetchDescriptor<TaskItem>(predicate: #Predicate { $0.parentID == childID && $0.deletedAt == nil })
+        children.fetchLimit = 1
+        return try context.fetch(children).isEmpty
+    }
+
     func orderedTasks(for status: TaskStatus) -> [TaskItem] {
         let raw = status.rawValue
         return tasks
@@ -3013,6 +3392,19 @@ final class TaskStore: ObservableObject {
     /// Whether the family has any child, without materializing the list.
     func hasSubtasks(_ parentID: UUID) -> Bool {
         familyIndex.hasChildren(parentID)
+    }
+
+    private var doneTodayCache: (revision: UInt64, tasks: [TaskItem])?
+
+    /// Done needs only its unlogged finished roots. Building every Now/Later
+    /// section and sort key for this slice dominated the first cold query.
+    /// Preserve exactly the snapshot's root validation and section ordering.
+    func doneTodayTasks() -> [TaskItem] {
+        if let doneTodayCache, doneTodayCache.revision == revision { return doneTodayCache.tasks }
+        let done = tasks.filter { $0.statusRaw == TaskStatus.done.rawValue && parent(of: $0) == nil }
+            .map(SectionSortKey.init).sorted(by: SectionSortKey.comesBefore).map(\.task)
+        doneTodayCache = (revision, done)
+        return done
     }
 
     /// Memoized per revision: SwiftUI evaluates view bodies far more often
@@ -3174,6 +3566,7 @@ final class TaskStore: ObservableObject {
     /// operation that asked for it; a success clears any notice outright.
     @discardableResult
     private func save(owner: UUID? = nil) -> Bool {
+        tagInventoryWillSave(context)
         do {
             let changedRows = (context.insertedModelsArray + context.changedModelsArray).compactMap { $0 as? TaskItem }
             let removedRows = context.deletedModelsArray.contains { $0 is TaskItem }
@@ -3182,6 +3575,9 @@ final class TaskStore: ObservableObject {
             #if ATTIC_OPERATION_CRASH_TESTS
             let writeStart = ContinuousClock.now
             #endif
+            let changedIDs = Set((context.insertedModelsArray + context.changedModelsArray + context.deletedModelsArray)
+                .compactMap { ($0 as? TaskItem)?.id })
+            let deleted = Set(context.deletedModelsArray.map(\.persistentModelID))
             #if os(macOS)
             try PerformanceSignposts.storeSave { try Self.persistStoreContext(context, using: persist, history: commandLibrary != nil) }
             #else
@@ -3205,8 +3601,30 @@ final class TaskStore: ObservableObject {
             #if ATTIC_OPERATION_CRASH_TESTS
             onSaveTiming?("presentation", presentationStart.duration(to: .now))
             #endif
+            tagInventoryDidSave()
+            // Publish the revision only after the index sees the durable
+            // change. Undo/Redo use the same save path; failed saves rebuild
+            // from the rolled-back context below. The changed rows are read
+            // after the save is durable (review P3): a failed read must
+            // never roll back a save that succeeded; it rebuilds the index
+            // from a fresh read instead.
+            var indexReadFailed = false
+            if !changedIDs.isEmpty {
+                let ids = Array(changedIDs)
+                do {
+                    let changedRows = try context.fetch(
+                        FetchDescriptor<TaskItem>(predicate: #Predicate { ids.contains($0.id) }))
+                    let changedEntries = Self.canonicalReplicas(from: changedRows.filter { !deleted.contains($0.persistentModelID) })
+                        .filter { $0.doneLoggedAt != nil && $0.deletedAt == nil && $0.parentID == nil }
+                        .map(DoneSearchEntry.init)
+                    updateDoneSearch(changedEntries, replacing: changedIDs)
+                } catch {
+                    indexReadFailed = true
+                }
+            }
             revision &+= 1
             familyIndexCache?.revision = revision
+            if indexReadFailed { refresh() }
             #if !ATTIC_LOCAL_ONLY
             cloudSyncProtection.noteLocalSave()
             reconcileProtectedCloudSyncActivity(for: .exportData)
@@ -3219,6 +3637,7 @@ final class TaskStore: ObservableObject {
             }
             let saveError = error.localizedDescription
             context.rollback()
+            tagInventoryDidRefresh()
             do {
                 try reloadTasks()
                 report(saveError, owner: owner)
@@ -3229,13 +3648,33 @@ final class TaskStore: ObservableObject {
         }
     }
 
+    #if DEBUG
+    /// Test seam for a failed presentation refresh after a durable save.
+    var listRefreshFailures = 0
+    #endif
+
     private func reloadTasks(using initialContext: ModelContext? = nil) throws {
+        defer { tagInventoryDidRefresh() }
+        #if DEBUG
+        if listRefreshFailures > 0 {
+            listRefreshFailures -= 1
+            throw NSError(domain: "TaskStoreTestRefresh", code: 1,
+                          userInfo: [NSLocalizedDescriptionKey: "Injected list refresh failure"])
+        }
+        #endif
         let refreshedContext = initialContext ?? Self.makeStoreContext(container)
         let fetched = try refreshedContext.fetch(FetchDescriptor<TaskItem>())
         try WorkspaceLegacyBridge.establishScopeBaseline(refreshedContext, roots: fetched, entities: [.task])
         let unique = Self.canonicalReplicas(from: fetched)
         context = refreshedContext
-        tasks = unique.filter { $0.deletedAt == nil && $0.doneLoggedAt == nil }
+        // Deduplicate first, then hide: the replica presentation would show
+        // decides whether the logical task is in Recently Deleted or the Done
+        // log, exactly as it decides every other field.
+        let winners = unique
+        indexDoneSearch(winners)
+        tasks = winners.filter {
+            $0.deletedAt == nil && $0.doneLoggedAt == nil
+        }
         revision &+= 1
         familyIndexCache = nil
     }
@@ -3513,21 +3952,27 @@ final class TaskStore: ObservableObject {
     }
 
     /// Re-spaces a group's orders in its current display order. Every
-    /// replica takes its row's order; only copies that agreed with the
-    /// shown one take the new time.
+    /// replica takes its row's order, and is written only if that changes it;
+    /// only copies that agreed with the shown one take the new time.
     private func assignSpacedManualOrders(
         to orderedGroup: [TaskItem],
         updatedAt: Date
     ) throws {
         let groups = try storedTaskGroups(matching: Set(orderedGroup.map(\.id)))
+        WorkspaceLegacyBridge.prepareMutations(groups.values.flatMap { $0 }, in: context)
         for (index, item) in orderedGroup.enumerated() {
             let order = Int64(orderedGroup.count - index) * Self.manualOrderStride
             let shown = TaskContentSnapshot(item)
             for replica in groups[item.id] ?? [] {
                 let agrees = replica === item || TaskContentSnapshot(replica) == shown
-                replica.manualOrder = order
-                replica.listOrderVersion = TaskItem.currentListOrderVersion
-                if agrees { replica.updatedAt = updatedAt }
+                var changed = false
+                if replica.manualOrder != order { replica.manualOrder = order; changed = true }
+                if replica.listOrderVersion != TaskItem.currentListOrderVersion {
+                    replica.listOrderVersion = TaskItem.currentListOrderVersion
+                    changed = true
+                }
+                // A copy that already holds its order is not written at all.
+                if changed, agrees { replica.updatedAt = updatedAt }
             }
         }
     }

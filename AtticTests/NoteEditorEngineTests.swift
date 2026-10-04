@@ -721,6 +721,68 @@ final class NoteEditorEngineTests: XCTestCase {
         XCTAssertNil(engine.document().blocks[1].style)
     }
 
+    func testFinalEmptyParagraphMetadataSurvivesSaveReopenTypingAndUndoRedo() throws {
+        for (name, level, indent) in [("bullet", nil, 2), ("number", nil, 1), ("heading", 3, nil),
+                                      ("quote", nil, 2), ("mono", nil, nil), ("body", nil, nil)] as [(String, Int?, Int?)] {
+            var empty = NoteBlock.text("")
+            empty.style = name; empty.level = level; empty.indent = indent
+            empty.id = UUID(); empty.extras = ["future": .string("kept")]
+            var original = NoteDocument(blocks: [.text("T"), empty]); original.refreshRequiredCapabilities()
+            let saved = try NoteContentCodec.encode(original)
+            let loaded = try XCTUnwrap(NoteContentCodec.decode(saved).document)
+            let (engine, view) = makeEngine(loaded)
+            XCTAssertEqual(engine.document(), loaded, name)
+            view.setSelectedRange(NSRange(location: engine.textStorage.length, length: 0))
+            type("A", view)
+            var written = empty; written.text = "A"
+            XCTAssertEqual(engine.document().blocks.last, written, name)
+            let typed = engine.document()
+            let again = try XCTUnwrap(NoteContentCodec.decode(try NoteContentCodec.encode(typed)).document)
+            XCTAssertEqual(makeEngine(again).0.document(), typed, name)
+            XCTAssertTrue(engine.history.undo())
+            XCTAssertEqual(engine.document(), loaded, "Undo restores empty metadata: \(name)")
+            XCTAssertTrue(engine.history.redo())
+            XCTAssertEqual(engine.document(), typed, name)
+        }
+    }
+
+    func testReopenedEmptyParagraphFormattingAndIndentAreUndoableWithoutLosingMetadata() throws {
+        var empty = NoteBlock.text(""); empty.style = "bullet"; empty.indent = 1
+        empty.id = UUID(); empty.extras = ["future": .string("kept")]
+        var original = NoteDocument(blocks: [.text("T"), empty]); original.refreshRequiredCapabilities()
+        let (engine, view) = makeEngine(original)
+        view.setSelectedRange(NSRange(location: engine.textStorage.length, length: 0))
+        XCTAssertTrue(engine.perform(.indent))
+        XCTAssertEqual(engine.document().blocks.last?.indent, 2)
+        XCTAssertTrue(engine.history.undo()); XCTAssertEqual(engine.document(), original)
+        XCTAssertTrue(engine.history.redo()); XCTAssertEqual(engine.document().blocks.last?.indent, 2)
+        XCTAssertTrue(engine.perform(.paragraph(.heading(2))))
+        XCTAssertEqual(engine.document().blocks.last?.style, "heading")
+        XCTAssertEqual(engine.document().blocks.last?.id, empty.id)
+        XCTAssertTrue(engine.history.undo()); XCTAssertEqual(engine.document().blocks.last?.style, "bullet")
+        XCTAssertEqual(engine.document().blocks.last?.indent, 2)
+        XCTAssertTrue(engine.history.redo()); XCTAssertEqual(engine.document().blocks.last?.level, 2)
+        type("Hello", view)
+        XCTAssertEqual(engine.document().blocks.last?.extras, empty.extras)
+        XCTAssertTrue(engine.history.undo())
+        XCTAssertEqual(engine.document().blocks.last?.level, 2)
+        XCTAssertEqual(engine.document().blocks.last?.text, "")
+    }
+
+    func testFinalEmptyParagraphFollowsEarlierEditsAndDisappearsWhenItsSeparatorIsRemoved() {
+        var empty = NoteBlock.text(""); empty.style = "number"; empty.indent = 1
+        let (engine, view) = makeEngine(NoteDocument(blocks: [.text("T"), .text("Before"), empty]))
+        let original = engine.document()
+        view.setSelectedRange(NSRange(location: 0, length: 0))
+        type("More ", view)
+        XCTAssertEqual(engine.document().blocks.last, empty)
+        XCTAssertTrue(engine.history.undo()); XCTAssertEqual(engine.document(), original)
+        let end = engine.textStorage.length
+        XCTAssertTrue(engine.performEdit(NSRange(location: end - 1, length: 1), with: NSAttributedString(), name: "Delete"))
+        XCTAssertEqual(engine.document().blocks.count, 2)
+        XCTAssertTrue(engine.history.undo()); XCTAssertEqual(engine.document(), original)
+    }
+
     func testTagPickerEditIsAnEditorUndoStep() {
         let (engine, _) = makeEngine(NoteDocument(blocks: [.text("T"), .text("Body")]))
         engine.setTagsFromPicker(["work"])
@@ -791,6 +853,8 @@ final class NoteEditorEngineTests: XCTestCase {
         XCTAssertEqual(fragment.blocks.first?.marks, heading.marks)
         XCTAssertEqual(fragment.blocks.first?.inlines.count, 1)
         let (target, _) = makeEngine(NoteDocument(blocks: [.text("Other"), .text("")]))
+        let provider = StubImages(bytes: [image.attachmentID!: Data([9, 9])])
+        target.imageProvider = provider
         XCTAssertTrue(target.paste(fragmentData: bytes, at: NSRange(location: 6, length: 0)))
         XCTAssertTrue(target.document().blocks.contains { $0.style == "heading" && !$0.marks.isEmpty })
         let partial = NSPasteboard.withUniqueName()
@@ -820,13 +884,15 @@ final class NoteEditorEngineTests: XCTestCase {
         XCTAssertFalse(engine.acceptSlashItem(.date))
         view.setSelectedRange(NSRange(location: engine.textStorage.length, length: 0))
         type(" /im", view)
+        var request: NoteSlashFileRequest?
+        engine.onSlashFileRequest = { request = $0 }
         XCTAssertTrue(engine.acceptSlashItem(.imageOrFile))
         let image = StagedNoteAttachment(id: UUID(), filename: "x.png", contentTypeIdentifier: "public.png",
                                          byteCount: 0, digest: "", data: Data())
         XCTAssertTrue(engine.performEdit(NSRange(location: 2, length: 0),
                                          with: NSAttributedString(string: "before "), name: "Edit"))
         let before = engine.textStorage.string
-        XCTAssertFalse(engine.commitSlashImage(image, pixelSize: nil))
+        XCTAssertFalse(engine.commitSlashImage(image, pixelSize: nil, for: try XCTUnwrap(request)))
         XCTAssertEqual(engine.textStorage.string, before)
     }
 
@@ -1268,6 +1334,6 @@ private final class StubImages: NoteImageProviding {
     func filename(forAttachment id: UUID) -> String? { bytes[id] == nil ? nil : "shot.png" }
     func imageBytes(forAttachment id: UUID) -> StagedNoteAttachment? {
         bytes[id].map { StagedNoteAttachment(id: id, filename: "shot.png", contentTypeIdentifier: "public.png",
-                                             byteCount: Int64($0.count), digest: "d", data: $0) }
+                                             byteCount: Int64($0.count), digest: NotePayloadDigest.sha256($0), data: $0) }
     }
 }

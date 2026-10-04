@@ -37,6 +37,49 @@ final class WorkspaceCommitTests: XCTestCase {
     private var baseOwners: Set<WorkspaceOwner> {
         [WorkspaceOwner(entity: .task, id: taskID), WorkspaceOwner(entity: .note, id: noteID)]
     }
+
+    func testCombinedSubtaskMoveUsesPlainGateAndUpdatesMembership() throws {
+        let tasks = TaskStore(container: container)
+        let destination = try XCTUnwrap(tasks.create(title: "Destination"))
+        let child = try XCTUnwrap(tasks.create(title: "Child", parentID: taskID))
+        coordinator.validationCounters = .init()
+        XCTAssertTrue(tasks.reparentSubtask(child.id, to: destination.id))
+        XCTAssertEqual(coordinator.validationCounters, .init(fastValidations: 1, slowValidations: 0, freshContexts: 0))
+        XCTAssertEqual(tasks.subtasks(of: destination.id).map(\.id), [child.id])
+        XCTAssertTrue(tasks.subtasks(of: taskID).isEmpty)
+        XCTAssertEqual(try coordinator.freshContext().fetchCount(FetchDescriptor<OperationReceipt>()), 0)
+    }
+
+    func testCombinedSubtaskMoveRefusesForeignEditWithoutOverwritingIt() throws {
+        let tasks = TaskStore(container: container)
+        let destination = try XCTUnwrap(tasks.create(title: "Destination"))
+        let child = try XCTUnwrap(tasks.create(title: "Child", parentID: taskID))
+        let foreign = ModelContext(container), id = child.id
+        let changed = try XCTUnwrap(foreign.fetch(FetchDescriptor<TaskItem>(predicate: #Predicate { $0.id == id })).first)
+        changed.title = "Foreign title"
+        try foreign.save()
+        XCTAssertFalse(tasks.reparentSubtask(id, to: destination.id))
+        XCTAssertEqual(tasks.task(withID: id)?.title, "Foreign title")
+        XCTAssertEqual(tasks.task(withID: id)?.parentID, taskID)
+        XCTAssertFalse(try XCTUnwrap(tasks.task(withID: id)?.modelContext).hasChanges)
+    }
+
+    func testCombinedTagRenameUsesJournaledMixedGateAndPublishesInventory() throws {
+        let tasks = TaskStore(container: container)
+        let notes = NoteStore(container: container,
+            attachmentFileStore: AttachmentFileStore(rootURL: root.appendingPathComponent("TagFiles")))
+        let library = AtticLibrary(tasks: tasks, notes: notes)
+        XCTAssertTrue(tasks.update(try XCTUnwrap(tasks.task(withID: taskID)), tags: ["before"]))
+        XCTAssertTrue(notes.setTags(["before"], for: try XCTUnwrap(notes.note(withID: noteID))))
+        XCTAssertEqual(library.tags.countsByName["before"], 2)
+        let receiptCount = try coordinator.freshContext().fetchCount(FetchDescriptor<OperationReceipt>())
+        XCTAssertNotNil(library.tags.rename("before", to: "after"))
+        XCTAssertEqual(library.tags.countsByName["after"], 2)
+        XCTAssertNil(library.tags.countsByName["before"])
+        XCTAssertEqual(tasks.task(withID: taskID)?.tags, ["after"])
+        XCTAssertEqual(notes.note(withID: noteID)?.tags, ["after"])
+        XCTAssertEqual(try coordinator.freshContext().fetchCount(FetchDescriptor<OperationReceipt>()), receiptCount + 1)
+    }
     private func conversion(failAfter: Int? = nil,
                             preDraft: NoteDraftJournalEntry? = nil, checkpointClaim: NoteRecoveryClaim? = nil,
                             publication: WorkspaceOperationCoordinator.Publication = .init()) async throws -> (WorkspaceOperationCoordinator.Outcome, UUID) {
@@ -1453,6 +1496,28 @@ final class WorkspaceTextReplayTests: XCTestCase {
         XCTAssertEqual(prepared.metadata?.tags, ["before"]); XCTAssertEqual(prepared.document, before)
         XCTAssertEqual(engine.tags, ["after"]); XCTAssertEqual(engine.document(), before)
         XCTAssertTrue(adapter.installReplay(prepared)); XCTAssertEqual(engine.tags, ["before"])
+    }
+
+    func testCombinedPreparedReplayPreservesTrailingParagraphMetadata() throws {
+        var empty = NoteBlock.text("")
+        empty.style = "bullet"; empty.indent = 2
+        empty.extras = ["future": .string("kept")]
+        var original = NoteDocument(blocks: [.text("T"), empty])
+        original.refreshRequiredCapabilities()
+        let engine = NoteEditorEngine(noteID: UUID(), document: original)
+        let (_, view) = engine.makeView()
+        view.setSelectedRange(NSRange(location: engine.textStorage.length, length: 0))
+        view.insertText("A", replacementRange: view.selectedRange())
+        let typed = engine.document(), adapter = engine.history
+        let undo = try XCTUnwrap(adapter.prepareReplay(adapter.undoOps.reversed().map { $0 }))
+        XCTAssertEqual(undo.document, original)
+        XCTAssertEqual(engine.document(), typed, "Preparation leaves the live editor untouched")
+        XCTAssertTrue(adapter.installReplay(undo))
+        XCTAssertEqual(engine.document(), original)
+        let redo = try XCTUnwrap(adapter.prepareReplay(adapter.undoOps))
+        XCTAssertEqual(redo.document, typed)
+        XCTAssertTrue(adapter.installReplay(redo))
+        XCTAssertEqual(engine.document(), typed)
     }
 
     func testH2AStalePayloadOrProtectedActivityRefusesTheWholePreparation() {

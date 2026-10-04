@@ -117,7 +117,7 @@ final class NoteEditorEngine: NSObject, NSTextViewDelegate, NSTextStorageDelegat
     var onCaretChange: (() -> Void)?
     var onSlashSessionChange: ((NoteSlashSession?) -> Void)?
     var onSlashDateRequest: (() -> Void)?
-    var onSlashFileRequest: (() -> Void)?
+    var onSlashFileRequest: ((NoteSlashFileRequest) -> Void)?
     var onLinkRequest: ((NoteLinkTarget) -> Void)?
     var onRetryImportObject: ((UUID) -> Void)?
     var onLocateObject: ((UUID) -> Void)?
@@ -128,10 +128,14 @@ final class NoteEditorEngine: NSObject, NSTextViewDelegate, NSTextStorageDelegat
     /// The controller checks the complete proposed document before a private
     /// fragment can stage bytes or make an Undo entry.
     var onFragmentAdmission: ((NoteDocument, [StagedNoteAttachment]) -> String?)?
+    var canPasteFragment: (() -> Bool)?
     private var pendingLinkTarget: NoteLinkTarget?
     private var activeSlashSession: NoteSlashSession?
     private var slashDateRequest: NoteSlashSession?
-    private var pendingSlashFile: NoteSlashSession?
+    /// The `/` Image or File… request the open panel or the loading answers.
+    /// Only that request's completion may commit or cancel it.
+    private(set) var pendingSlashFile: NoteSlashFileRequest?
+    private var slashFileGeneration: UInt64 = 0
     private var pendingParagraphStyle: (location: Int, state: NoteUndoHistory.ParagraphState)?
 
     fileprivate func notifyTagsChanged() {
@@ -174,6 +178,7 @@ final class NoteEditorEngine: NSObject, NSTextViewDelegate, NSTextStorageDelegat
     var isWritingToolsBlocked: Bool { writingToolsBlocked }
     var writingToolsRefusalReason: String?
     private var writingToolsSnapshot: NSAttributedString?
+    private var writingToolsEmptyParagraph: NoteBlock?
     private var writingToolsHistory: NoteUndoHistory.Checkpoint?
     private var writingToolsImportTarget: (anchor: Int, replacementLength: Int, isBoundary: Bool)?
     private var pendingImportEdit: (range: NSRange, replacementLength: Int)?
@@ -229,6 +234,8 @@ final class NoteEditorEngine: NSObject, NSTextViewDelegate, NSTextStorageDelegat
         renderer.faceProvider = { [weak self] object in self?.objectFace(for: object) }
         renderer.columnWidth = { [weak self] in self?.objectColumnWidth ?? 300 }
         textStorage.setAttributedString(NoteTextCodec.attributedString(from: document, style: style))
+        if document.blocks.count > 1, let last = document.blocks.last,
+           last.kind == .text, last.text.isEmpty { restoreEmptyParagraph(last) }
         textStorage.delegate = self
         renderObjects(in: NSRange(location: 0, length: textStorage.length))
         history.onReplay = { [weak self] range in self?.didReplay(range) }
@@ -243,24 +250,29 @@ final class NoteEditorEngine: NSObject, NSTextViewDelegate, NSTextStorageDelegat
             self.setTags(Array(current))
         }
         history.onParagraphStyleSnapshot = { [weak self] location, state in
-            self?.setPendingParagraphStyle(state.style, indent: state.indent, at: location)
+            self?.setPendingParagraphStyle(state.style, indent: state.indent, at: location, metadata: state.block)
         }
+        history.emptyParagraphState = { [weak self] in self?.emptyParagraphBlock() }
+        history.onEmptyParagraphSnapshot = { [weak self] block in self?.restoreEmptyParagraph(block) }
         history.onTypingMarkSnapshot = { [weak self] kind, enabled in self?.setTypingMark(kind, enabled: enabled) }
         history.readReplayMetadata = { [weak self] in
             guard let self else { return .init() }
             return .init(tags: self.tags,
                 paragraphs: self.pendingParagraphStyle.map { [$0.location: $0.state] } ?? [:],
-                typingMarks: Set(NoteMark.Kind.allCases.filter { self.textView?.typingAttributes[.noteMark($0)] != nil }))
+                typingMarks: Set(NoteMark.Kind.allCases.filter { self.textView?.typingAttributes[.noteMark($0)] != nil }),
+                emptyParagraph: self.emptyParagraphBlock())
         }
         history.installReplayMetadata = { [weak self] metadata in
             guard let self else { return }
             let tagsChanged = self.tags != metadata.tags
             self.tags = metadata.tags
             if let paragraph = metadata.paragraphs.first {
-                self.setPendingParagraphStyle(paragraph.value.style, indent: paragraph.value.indent, at: paragraph.key, notifying: false)
+                self.setPendingParagraphStyle(paragraph.value.style, indent: paragraph.value.indent, at: paragraph.key, metadata: paragraph.value.block, notifying: false)
             } else {
+                self.pendingParagraphStyle = nil
                 self.setPendingParagraphStyle(.body, at: self.pendingParagraphStyle?.location ?? 0, notifying: false)
             }
+            if let block = metadata.emptyParagraph { self.restoreEmptyParagraph(block) }
             for kind in NoteMark.Kind.allCases { self.setTypingMark(kind, enabled: metadata.typingMarks.contains(kind)) }
             if tagsChanged { self.notifyTagsChanged() }
         }
@@ -269,9 +281,12 @@ final class NoteEditorEngine: NSObject, NSTextViewDelegate, NSTextStorageDelegat
             var document = NoteTextCodec.document(from: storage, template: self.template)
             if let paragraph = metadata.paragraphs[storage.length],
                let last = document.blocks.indices.last, document.blocks[last].kind == .text, document.blocks[last].text.isEmpty {
-                document.blocks[last].style = paragraph.style.storageName
-                document.blocks[last].level = paragraph.style.level
-                document.blocks[last].indent = paragraph.indent > 0 ? paragraph.indent : nil
+                document.blocks[last] = self.block(for: paragraph)
+                document.refreshRequiredCapabilities()
+            }
+            if let empty = metadata.emptyParagraph,
+               let last = document.blocks.indices.last, document.blocks[last].kind == .text, document.blocks[last].text.isEmpty {
+                document.blocks[last] = empty
                 document.refreshRequiredCapabilities()
             }
             return document.isWritableByThisBuild ? document : nil
@@ -302,9 +317,7 @@ final class NoteEditorEngine: NSObject, NSTextViewDelegate, NSTextStorageDelegat
         if let pending = pendingParagraphStyle, pending.location == textStorage.length,
            let last = result.blocks.indices.last, result.blocks[last].kind == .text,
            result.blocks[last].text.isEmpty {
-            result.blocks[last].style = pending.state.style.storageName
-            result.blocks[last].level = pending.state.style.level
-            result.blocks[last].indent = pending.state.indent > 0 ? pending.state.indent : nil
+            result.blocks[last] = block(for: pending.state)
             result.refreshRequiredCapabilities()
         }
         let string = textStorage.string as NSString
@@ -319,7 +332,13 @@ final class NoteEditorEngine: NSObject, NSTextViewDelegate, NSTextStorageDelegat
     /// the starting document, never an in-place rewrite that bypassed the guard.
     func checkpointDocument() -> NoteDocument {
         if activity == .writingToolsRefused, let writingToolsSnapshot {
-            return NoteTextCodec.document(from: writingToolsSnapshot, template: template)
+            var result = NoteTextCodec.document(from: writingToolsSnapshot, template: template)
+            if let empty = writingToolsEmptyParagraph, let last = result.blocks.indices.last,
+               result.blocks[last].kind == .text, result.blocks[last].text.isEmpty {
+                result.blocks[last] = empty
+                result.refreshRequiredCapabilities()
+            }
+            return result
         }
         return document()
     }
@@ -445,8 +464,25 @@ final class NoteEditorEngine: NSObject, NSTextViewDelegate, NSTextStorageDelegat
 
     /// Room under the title for the tag line and at the end of its lines for
     /// the note menu. Attributes only (never an Undo step).
+    private var pendingTitleReserves: (tagLine: CGFloat, trailing: CGFloat)?
+    private var titleReservesScheduled = false
+
     func setTitleReserves(tagLine: CGFloat, trailing: CGFloat) {
-        guard style.tagLineHeight != tagLine || style.titleTrailingReserve != trailing else { return }
+        guard style.tagLineHeight != tagLine || style.titleTrailingReserve != trailing else {
+            pendingTitleReserves = nil
+            return
+        }
+        // The title accessories measure from NSTextView.layout. Restyling
+        // here would invalidate the viewport fragments that AppKit has
+        // just laid out, leaving their layers blank after a tag change.
+        // Coalesce the latest geometry and apply it outside every layout
+        // pass, including a nested run-loop callback.
+        if AtticOverlayHierarchy.isInLayoutPass {
+            pendingTitleReserves = (tagLine, trailing)
+            scheduleTitleReserves()
+            return
+        }
+        pendingTitleReserves = nil
         style.tagLineHeight = tagLine
         style.titleTrailingReserve = trailing
         let title = titleParagraphRange
@@ -458,6 +494,17 @@ final class NoteEditorEngine: NSObject, NSTextViewDelegate, NSTextStorageDelegat
         invalidateLayout(title)
         if let textView, paragraphRange(at: textView.selectedRange().location).location == 0 {
             textView.typingAttributes = style.titleAttributes
+        }
+    }
+
+    private func scheduleTitleReserves() {
+        guard !titleReservesScheduled else { return }
+        titleReservesScheduled = true
+        DispatchQueue.main.async { [weak self] in
+            guard let self else { return }
+            self.titleReservesScheduled = false
+            guard let pending = self.pendingTitleReserves else { return }
+            self.setTitleReserves(tagLine: pending.tagLine, trailing: pending.trailing)
         }
     }
 
@@ -779,7 +826,14 @@ final class NoteEditorEngine: NSObject, NSTextViewDelegate, NSTextStorageDelegat
     func attributes(forParagraphAt location: Int) -> [NSAttributedString.Key: Any] {
         let paragraph = paragraphRange(at: location)
         if let pending = pendingParagraphStyle, pending.location == paragraph.location {
-            return style.paragraphAttributes(style: pending.state.style.storageName, level: pending.state.style.level, indent: pending.state.indent)
+            var attributes = style.paragraphAttributes(style: pending.state.style.storageName, level: pending.state.style.level, indent: pending.state.indent)
+            if let block = pending.state.block {
+                if let name = block.style { attributes[.noteBlockStyle] = name }
+                if let indent = block.indent { attributes[.noteBlockIndent] = indent }
+                if let id = block.id { attributes[.noteBlockID] = id }
+                if !block.extras.isEmpty { attributes[.noteBlockExtras] = NoteBlockExtras(block.extras) }
+            }
+            return attributes
         }
         guard paragraph.location > 0, paragraph.location < textStorage.length else { return style.titleAttributes }
         let attributes = textStorage.attributes(at: paragraph.location, effectiveRange: nil)
@@ -979,7 +1033,6 @@ final class NoteEditorEngine: NSObject, NSTextViewDelegate, NSTextStorageDelegat
                 let file = NoteFileAttachment(attachmentID: item.staged?.id, filename: item.filename,
                     contentTypeIdentifier: item.contentTypeIdentifier, byteCount: item.byteCount,
                     importFailure: item.failure, extras: item.staged?.identityExtras ?? [:])
-                renderer.apply(to: file, today: today)
                 insertion.append(NoteTextCodec.attachmentString(file, attributes: style.bodyAttributes))
             }
         }
@@ -1246,8 +1299,8 @@ final class NoteEditorEngine: NSObject, NSTextViewDelegate, NSTextStorageDelegat
                selection != NSRange(location: NSMaxRange(session.range), length: 0) { slashSession = nil }
             if let session = pendingSlashDate,
                selection != NSRange(location: NSMaxRange(session.range), length: 0) { pendingSlashDate = nil }
-            if let session = pendingSlashFile,
-               selection != NSRange(location: NSMaxRange(session.range), length: 0) { pendingSlashFile = nil }
+            if let request = pendingSlashFile,
+               selection != NSRange(location: NSMaxRange(request.target.range), length: 0) { pendingSlashFile = nil }
             if let target = pendingLinkTarget, selection != target.selection { pendingLinkTarget = nil }
         }
         if !history.isChangeInFlight, let open = history.openStep,
@@ -1316,6 +1369,7 @@ final class NoteEditorEngine: NSObject, NSTextViewDelegate, NSTextStorageDelegat
     func writingToolsWillBegin() {
         guard !isWritingToolsSessionActive else { return }
         writingToolsSnapshot = NSAttributedString(attributedString: textStorage)
+        writingToolsEmptyParagraph = emptyParagraphBlock()
         writingToolsHistory = history.checkpoint()
         writingToolsImportTarget = currentImportTarget
         writingToolsObjectsBefore = Set(objectIDs())
@@ -1357,6 +1411,7 @@ final class NoteEditorEngine: NSObject, NSTextViewDelegate, NSTextStorageDelegat
             }
             restoringWritingToolsSnapshot = false
             if let checkpoint = writingToolsHistory { history.rewind(to: checkpoint) }
+            restoreEmptyParagraph(writingToolsEmptyParagraph)
             if let target = writingToolsImportTarget {
                 restoreImageImport(anchor: target.anchor, replacementLength: target.replacementLength,
                     isBoundary: target.isBoundary)
@@ -1371,6 +1426,7 @@ final class NoteEditorEngine: NSObject, NSTextViewDelegate, NSTextStorageDelegat
             onTextChange?()
         }
         writingToolsHistory = nil
+        writingToolsEmptyParagraph = nil
         writingToolsImportTarget = nil
         writingToolsBlocked = false
         writingToolsRefusalReason = nil
@@ -1386,6 +1442,22 @@ final class NoteEditorEngine: NSObject, NSTextViewDelegate, NSTextStorageDelegat
     func textStorage(_ textStorage: NSTextStorage, didProcessEditing editedMask: NSTextStorageEditActions,
                      range editedRange: NSRange, changeInLength delta: Int) {
         guard editedMask.contains(.editedCharacters) else { return }
+        // An edit that empties the note or fills an empty one (an Undo, a
+        // paste, an agent's change included): "Title" comes or goes.
+        if textStorage.length == 0 || textStorage.length == delta { textView?.updatePlaceholder() }
+        let emptyBefore = pendingParagraphStyle.flatMap { pending in
+            pending.location == textStorage.length - delta ? block(for: pending.state) : nil
+        }
+        if let pending = pendingParagraphStyle, editedRange.location < pending.location {
+            let oldEnd = NSMaxRange(editedRange) - delta
+            if oldEnd <= pending.location {
+                pendingParagraphStyle?.location += delta
+            } else { pendingParagraphStyle = nil }
+        }
+        if pendingParagraphStyle?.location == textStorage.length, textStorage.length > 0,
+           (textStorage.string as NSString).character(at: textStorage.length - 1) != 0x0A {
+            pendingParagraphStyle = nil // Its paragraph separator was removed.
+        }
         if let activeSlashSession, editedRange.location < activeSlashSession.range.location {
             slashSession = nil
         }
@@ -1421,6 +1493,12 @@ final class NoteEditorEngine: NSObject, NSTextViewDelegate, NSTextStorageDelegat
             if let name = pending.state.style.storageName { textStorage.addAttribute(.noteBlockStyle, value: name, range: range) }
             if let level = pending.state.style.level { textStorage.addAttribute(.noteBlockLevel, value: level, range: range) }
             if pending.state.indent > 0 { textStorage.addAttribute(.noteBlockIndent, value: pending.state.indent, range: range) }
+            if let metadata = pending.state.block {
+                if let name = metadata.style { textStorage.addAttribute(.noteBlockStyle, value: name, range: range) }
+                if let indent = metadata.indent { textStorage.addAttribute(.noteBlockIndent, value: indent, range: range) }
+                if let id = metadata.id { textStorage.addAttribute(.noteBlockID, value: id, range: range) }
+                if !metadata.extras.isEmpty { textStorage.addAttribute(.noteBlockExtras, value: NoteBlockExtras(metadata.extras), range: range) }
+            }
             pendingParagraphStyle = nil
         }
         // A selected-range deletion, cut, or replacement can remove the box
@@ -1508,7 +1586,7 @@ final class NoteEditorEngine: NSObject, NSTextViewDelegate, NSTextStorageDelegat
                                newLength: editedRange.length)
             }
         } else {
-            history.captureUnrecorded(newRange: editedRange, delta: delta)
+            history.captureUnrecorded(newRange: editedRange, delta: delta, emptyParagraphBefore: emptyBefore)
         }
         let start = DispatchTime.now().uptimeNanoseconds
         restyle(paragraphs(around: editedRange))
@@ -1560,7 +1638,7 @@ final class NoteEditorEngine: NSObject, NSTextViewDelegate, NSTextStorageDelegat
     /// is a new object with a new ID. An image from another note is copied
     /// into a new staged attachment for this note (committed with the text
     /// or never).
-    func preparePaste(_ fragment: NoteDocument) -> (document: NoteDocument, copied: [StagedNoteAttachment]) {
+    private func preparePaste(_ fragment: NoteDocument, resolved: [UUID: StagedNoteAttachment]? = nil) -> (document: NoteDocument, copied: [StagedNoteAttachment])? {
         let sameNote = fragment.extras["sourceNoteID"]?.stringValue.flatMap(UUID.init(uuidString:)) == noteID
         var present = Set(objectIDs())
         var result = fragment
@@ -1594,15 +1672,15 @@ final class NoteEditorEngine: NSObject, NSTextViewDelegate, NSTextStorageDelegat
                 // retained while any version or text shows it).
                 if sameNote {
                     block.id = fresh(block.id)
-                } else if var copy = imageProvider?.attachmentBytes(forAttachment: attachmentID) {
+                } else if var copy = resolved?[attachmentID] ?? imageProvider?.attachmentBytes(forAttachment: attachmentID), copy.payloadIsVerified {
                     let newID = UUID()
                     copy = copy.copying(id: newID)
                     copied.append(copy)
                     block.attachmentID = newID
                     block.id = fresh(nil)
                 } else {
-                    onNotice?(String(localized: "An attachment couldn’t be copied, so it was left out."))
-                    continue
+                    onNotice?(String(localized: "An attachment couldn’t be read. Nothing was pasted."))
+                    return nil
                 }
             case .text, .opaque:
                 break
@@ -1622,7 +1700,49 @@ final class NoteEditorEngine: NSObject, NSTextViewDelegate, NSTextStorageDelegat
     func paste(fragmentData data: Data, at selection: NSRange) -> Bool {
         guard !isReadOnly, rangeIsInStorage(selection),
               case let .editable(decoded) = NoteContentCodec.decode(data, context: .fragment) else { return false }
-        let prepared = preparePaste(decoded)
+        return insertFragment(decoded, at: selection)
+    }
+
+    /// Resolve the whole private fragment before staging bytes or creating an
+    /// Undo entry. The captured note, document, view and caret must still be
+    /// current after every payload has been verified off the main actor.
+    func pasteDurably(fragmentData data: Data, at selection: NSRange) async -> Bool {
+        guard !isReadOnly, activity == .idle, rangeIsInStorage(selection),
+              canPasteFragment?() != false else {
+            onNotice?(String(localized: "The note or selection changed. Paste again at the new selection."))
+            return false
+        }
+        guard case let .editable(decoded) = NoteContentCodec.decode(data, context: .fragment) else { return false }
+        let destination = noteID
+        let before = document()
+        let view = textView
+        let viewSelection = view?.selectedRange()
+        var resolved: [UUID: StagedNoteAttachment] = [:]
+        let sameNote = decoded.extras["sourceNoteID"]?.stringValue.flatMap(UUID.init(uuidString:)) == noteID
+        for id in sameNote ? Set<UUID>() : Set(decoded.attachmentIDs) {
+            let payload: StagedNoteAttachment?
+            if let live = staged[id] { payload = live }
+            else { payload = await imageProvider?.verifiedBytes(forAttachment: id) }
+            guard let payload, payload.id == id, payload.payloadIsVerified else {
+                onNotice?(String(localized: "An attachment couldn’t be read. Nothing was pasted."))
+                return false
+            }
+            resolved[id] = payload
+        }
+        guard !Task.isCancelled, noteID == destination, activity == .idle,
+              textView === view, view?.selectedRange() == viewSelection,
+              canPasteFragment?() != false, document() == before,
+              rangeIsInStorage(selection) else {
+            onNotice?(String(localized: "The note or selection changed. Paste again at the new selection."))
+            return false
+        }
+        return insertFragment(decoded, at: selection, resolved: resolved)
+    }
+
+    private func insertFragment(_ decoded: NoteDocument, at selection: NSRange,
+                                resolved: [UUID: StagedNoteAttachment]? = nil) -> Bool {
+        guard !isReadOnly, activity == .idle, rangeIsInStorage(selection),
+              let prepared = preparePaste(decoded, resolved: resolved) else { return false }
         let fragment = prepared.document
         guard !fragment.blocks.isEmpty else { return false }
         let pasted = NoteTextCodec.attributedString(from: fragment, style: style, firstBlockIsTitle: false)
@@ -2437,7 +2557,8 @@ extension NoteEditorEngine {
                 let oldDepth = pendingParagraphStyle?.location == line.location ? pendingParagraphStyle!.state.indent : (indentAt(line.location) ?? 0)
                 let newDepth = [.bullet, .number, .checklist, .quote].contains(styleValue) ? oldDepth : 0
                 history.recordParagraphStyleChange(location: line.location,
-                    before: .init(style: before, indent: oldDepth), after: .init(style: styleValue, indent: newDepth))
+                    before: pendingParagraphStyle?.state ?? .init(style: before, indent: oldDepth),
+                    after: .init(style: styleValue, indent: newDepth, block: pendingParagraphStyle?.state.block))
                 setPendingParagraphStyle(styleValue, indent: newDepth, at: line.location)
                 continue
             }
@@ -2458,8 +2579,43 @@ extension NoteEditorEngine {
         return true
     }
 
-    private func setPendingParagraphStyle(_ value: NoteParagraphStyle, indent: Int = 0, at location: Int, notifying: Bool = true) {
-        pendingParagraphStyle = value == .body ? nil : (location, .init(style: value, indent: indent))
+    private func block(for state: NoteUndoHistory.ParagraphState) -> NoteBlock {
+        var block = state.block ?? .text("")
+        block.style = state.style.storageName ?? (block.style == "body" ? "body" : nil)
+        block.level = state.style.level
+        block.indent = state.indent > 0 ? state.indent : (block.indent == 0 ? 0 : nil)
+        return block
+    }
+
+    private func emptyParagraphBlock() -> NoteBlock? {
+        guard let pending = pendingParagraphStyle, pending.location == textStorage.length,
+              textStorage.length > 0,
+              (textStorage.string as NSString).character(at: textStorage.length - 1) == 0x0A else { return nil }
+        return block(for: pending.state)
+    }
+
+    private func restoreEmptyParagraph(_ block: NoteBlock?) {
+        if let block {
+            let paragraph: NoteParagraphStyle = switch block.style {
+            case "heading": .heading(block.level ?? 2)
+            case "bullet": .bullet
+            case "number": .number
+            case "quote": .quote
+            case "mono": .mono
+            default: .body
+            }
+            pendingParagraphStyle = (textStorage.length, .init(style: paragraph, indent: block.indent ?? 0, block: block))
+        } else { pendingParagraphStyle = nil }
+        documentCache = nil
+        textView?.typingAttributes = attributes(forParagraphAt: textView?.selectedRange().location ?? textStorage.length)
+    }
+
+    private func setPendingParagraphStyle(_ value: NoteParagraphStyle, indent: Int = 0, at location: Int, metadata: NoteBlock? = nil, notifying: Bool = true) {
+        var block = metadata ?? pendingParagraphStyle?.state.block
+        block?.style = value.storageName
+        block?.level = value.level
+        block?.indent = indent > 0 ? indent : nil
+        pendingParagraphStyle = value == .body && block == nil ? nil : (location, .init(style: value, indent: indent, block: block))
         documentCache = nil
         var typing = style.paragraphAttributes(style: value.storageName, level: value.level, indent: indent)
         if let name = value.storageName { typing[.noteBlockStyle] = name }
@@ -2485,7 +2641,8 @@ extension NoteEditorEngine {
             let range = NSRange(location: line.location, length: line.length + (hasBreak ? 1 : 0))
             if range.length == 0 {
                 history.recordParagraphStyleChange(location: line.location,
-                    before: .init(style: paragraphStyle, indent: old), after: .init(style: paragraphStyle, indent: new))
+                    before: pendingParagraphStyle?.state ?? .init(style: paragraphStyle, indent: old),
+                    after: .init(style: paragraphStyle, indent: new, block: pendingParagraphStyle?.state.block))
                 setPendingParagraphStyle(paragraphStyle, indent: new, at: line.location)
                 changed = true
                 continue
@@ -2569,6 +2726,27 @@ struct NoteSlashItem: Hashable, Identifiable {
         }
     }
     static let all = Kind.allCases.map(NoteSlashItem.init(kind:))
+}
+
+/// One `/` Image or File… request: the engine it was made in, the command
+/// it captured and its generation there. Equal only to itself, so a late
+/// completion can never be taken for a newer request (review P2, `8008974`).
+@MainActor
+final class NoteSlashFileRequest: Equatable {
+    private(set) weak var engine: NoteEditorEngine?
+    let target: NoteSlashSession
+    let generation: UInt64
+
+    init(engine: NoteEditorEngine, target: NoteSlashSession, generation: UInt64) {
+        self.engine = engine
+        self.target = target
+        self.generation = generation
+    }
+
+    /// Cancels this request in its engine, never a newer one.
+    func cancel() { engine?.cancelSlashFile(self) }
+
+    nonisolated static func == (lhs: NoteSlashFileRequest, rhs: NoteSlashFileRequest) -> Bool { lhs === rhs }
 }
 
 struct NoteSlashSession {
@@ -2774,8 +2952,9 @@ extension NoteEditorEngine {
             onSlashDateRequest?()
             return true
         case .imageOrFile:
-            pendingSlashFile = session
-            onSlashFileRequest?()
+            // Made before the call: optional chaining would skip it.
+            let request = requestSlashFile(for: session)
+            onSlashFileRequest?(request)
             return true
         default:
             history.beginGroup()
@@ -2809,7 +2988,25 @@ extension NoteEditorEngine {
     }
 
     func cancelSlashDate() { pendingSlashDate = nil }
-    func cancelSlashFile() { pendingSlashFile = nil }
+    /// A new `/` Image or File… request for `target`: it supersedes any
+    /// older one, whose late completion then commits nothing.
+    func requestSlashFile(for target: NoteSlashSession) -> NoteSlashFileRequest {
+        slashFileGeneration &+= 1
+        let request = NoteSlashFileRequest(engine: self, target: target, generation: slashFileGeneration)
+        pendingSlashFile = request
+        return request
+    }
+
+    /// `request` is still the one waiting for its file: made here, and no
+    /// newer request or cancellation since.
+    func isPending(_ request: NoteSlashFileRequest) -> Bool {
+        request.engine === self && pendingSlashFile?.generation == request.generation
+    }
+
+    /// Cancels `request` only: a newer request stays pending.
+    func cancelSlashFile(_ request: NoteSlashFileRequest) {
+        if isPending(request) { pendingSlashFile = nil }
+    }
     func dismissSlashSession() { slashSession = nil }
 }
 
@@ -2971,13 +3168,17 @@ extension NoteEditorEngine {
     /// The image importer calls this only after a slash Image or File request
     /// has produced a staged image. Cancel leaves the literal command intact.
     @discardableResult
-    func commitSlashImage(_ item: StagedNoteAttachment, pixelSize: CGSize?) -> Bool {
-        commitSlashObject(NoteImportedObject(staged: item, pixelSize: pixelSize))
+    func commitSlashImage(_ item: StagedNoteAttachment, pixelSize: CGSize?, for request: NoteSlashFileRequest) -> Bool {
+        commitSlashObject(NoteImportedObject(staged: item, pixelSize: pixelSize), for: request)
     }
 
+    /// Replaces `request`'s captured command with the object. A request that
+    /// is no longer pending (cancelled, or superseded by a newer `/` Image
+    /// or File…) commits nothing and leaves the newer request alone.
     @discardableResult
-    func commitSlashObject(_ item: NoteImportedObject) -> Bool {
-        guard let session = pendingSlashFile else { return false }
+    func commitSlashObject(_ item: NoteImportedObject, for request: NoteSlashFileRequest) -> Bool {
+        guard isPending(request) else { return false }
+        let session = request.target
         if let staged = item.staged, let reason = onImportAdmission?(staged) {
             onNotice?(reason)
             return false
@@ -2996,7 +3197,6 @@ extension NoteEditorEngine {
             let file = NoteFileAttachment(attachmentID: item.staged?.id, filename: item.filename,
                 contentTypeIdentifier: item.contentTypeIdentifier, byteCount: item.byteCount,
                 importFailure: item.failure, extras: item.staged?.identityExtras ?? [:])
-            renderer.apply(to: file, today: today)
             replacement.append(NoteTextCodec.attachmentString(file, attributes: style.bodyAttributes))
         }
         replacement.append(NSAttributedString(string: "\n", attributes: style.bodyAttributes))

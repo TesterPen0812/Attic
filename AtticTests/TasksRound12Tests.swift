@@ -344,7 +344,7 @@ final class TasksRound12Tests: XCTestCase {
         let container = try PersistenceController.makeContainer(inMemory: true, cloudSyncEnabled: false)
         try TasksPagePreview.seedDemo(in: container)
         let store = TaskStore(container: container)
-        let notes = NoteStore(container: container, attachmentFileStore: makeTestAttachmentFileStore())
+        let notes = trackAttachmentReconciliation(of: NoteStore(container: container, attachmentFileStore: makeTestAttachmentFileStore()))
         let state = PanelUIState()
         state.updatePanelSize(CGSize(width: 340, height: 560))
         state.loadPageContent()
@@ -547,11 +547,14 @@ final class TasksRound12Tests: XCTestCase {
     /// ("#laun..."), the date gives way after it, and a short tag is not
     /// padded.
     func testTheStripKeepsAMeaningfulTagPrefix() throws {
-        let iconAndPaddings: CGFloat = 55
         for width in [296.0, 280.0, 264.0] {
             let pills = try stripPills(date: "Wed 14 Oct", tag: "#launch-checklist +1", priority: "!!", width: width)
             XCTAssertEqual(pills.count, 3, "three pills at \(width): \(pills)")
             guard pills.count == 3 else { continue }
+            // A set pill's icon, gaps and ×: the priority pill less its
+            // "!!" (the usual 55, or 46 once the strip closes up its gaps,
+            // deep review P3-01).
+            let iconAndPaddings = pills[2] - AtticTextStyle.priorityMark.measuredWidth("!!")
             XCTAssertGreaterThanOrEqual(pills[1] - iconAndPaddings, 30, "the tag shows a prefix, not '#', at \(width): \(pills)")
             XCTAssertLessThanOrEqual(pills.reduce(0, +) + 8, width + 1, "the strip fits \(width): \(pills)")
         }
@@ -677,9 +680,27 @@ final class TasksRound12Tests: XCTestCase {
 
     /// The page drawn with a long list scrolled to two places (a hosted
     /// stand-in for the round's UI test, which no runner could make find the
-    /// panel): what is drawn under the tabs and the add bar's band is the
-    /// same picture at both, whatever rows lie beneath.
-    func testNoRowIsDrawnUnderTheTabsOrTheAddBarsBand() throws {
+    /// panel). Clean cut (the default, owner 2026-10-03): what is drawn under
+    /// the tabs and the add bar's band is the same picture at both, whatever
+    /// rows lie beneath.
+    func testNoRowIsDrawnUnderTheTabsOrTheAddBarsBandWithTheCleanCut() throws {
+        let shares = try bandShares(.cleanCut)
+        XCTAssertGreaterThan(shares.moved, 0.02, "the long list scrolled between the captures (\(shares.moved))")
+        XCTAssertLessThan(shares.top, 0.004, "rows show through the tabs' line (\(shares.top))")
+        XCTAssertLessThan(shares.bottom, 0.004, "rows show through the add bar's band (\(shares.bottom))")
+    }
+
+    // The system soft edge (a preview's choice since 2026-10-03) is checked in
+    // `ScrollEdgeTests`: its pockets are drawn by the window server, which a
+    // capture in the process does not show.
+
+    /// How much of the list's middle, the tabs' line (to a quarter of the
+    /// gap under it) and the add bar's band differ between two scroll places.
+    private func bandShares(_ style: AtticScrollEdgeStyle) throws -> (moved: Double, top: Double, bottom: Double) {
+        let lab = AtticScrollEdgeLab.shared
+        let saved = lab.style
+        lab.style = style
+        defer { lab.style = saved }
         let height: CGFloat = 520
         let hosted = try Hosted(height: height, long: true)
         defer { hosted.close() }
@@ -721,14 +742,10 @@ final class TasksRound12Tests: XCTestCase {
         let barTop = height - bottomInset - AtticControlSize.addBarHeight
         // The list itself moved, or the bands prove nothing.
         let moved = try share(first, second, from: tabsBottom + 40, to: barTop - 40)
-        XCTAssertGreaterThan(moved, 0.02, "the long list scrolled between the captures (\(moved))")
         // The tabs' line, and the gap under it down to where the rows start their
         // ramp back (a quarter of the way to the resting place).
         let clear = tabsBottom + (TasksViewport.listTop(tabsTop: tabsTop) - tabsBottom) * 0.25 - 1
-        let top = try share(first, second, from: tabsTop, to: clear)
-        XCTAssertLessThan(top, 0.004, "rows show through the tabs' line (\(top))")
-        let bottom = try share(first, second, from: barTop - 4, to: height)
-        XCTAssertLessThan(bottom, 0.004, "rows show through the add bar's band (\(bottom))")
+        return (moved, try share(first, second, from: tabsTop, to: clear), try share(first, second, from: barTop - 4, to: height))
     }
 
     // MARK: - Hidden Done reads nothing
