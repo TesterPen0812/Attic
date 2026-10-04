@@ -88,6 +88,28 @@ final class NotesFormatUITests: XCTestCase {
         waitFor(noteValue == "Pricing\nMost people only!", "typing went on in the note (\(noteValue))")
     }
 
+    /// OD-7 / P2-A12-1: ⌃Tab leaves the text for All notes, Aa and New note,
+    /// and the fourth stop is the text again, caret where it was, so typing
+    /// goes into the note; ⌃⇧Tab does the same the other way round.
+    func testControlTabGoesRoundTheFooterAndBackIntoTheTextBothWays() {
+        app.typeText("Pricing\nBody")
+        app.typeKey(.leftArrow, modifierFlags: [])
+        app.typeKey(.leftArrow, modifierFlags: [])
+        func goRound(_ flags: XCUIElement.KeyModifierFlags) {
+            for _ in 0..<4 {
+                app.typeKey(.tab, modifierFlags: flags)
+                // SwiftUI moves its focus a turn after the key.
+                RunLoop.current.run(until: Date().addingTimeInterval(0.3))
+            }
+        }
+        goRound(.control)
+        app.typeText("!")
+        waitFor(noteValue == "Pricing\nBo!dy", "⌃Tab ×4 came back into the text, caret kept (\(noteValue))")
+        goRound([.control, .shift])
+        app.typeText("?")
+        waitFor(noteValue == "Pricing\nBo!?dy", "⌃⇧Tab ×4 came back into the text, caret kept (\(noteValue))")
+    }
+
     func testCommandTOpensAaWhichStylesTheCaretParagraph() {
         app.typeText("Pricing\nBefore launch")
         app.typeKey("t", modifierFlags: .command)

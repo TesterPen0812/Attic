@@ -76,6 +76,42 @@ final class NotesPageChrome: ObservableObject {
     }
 
     func focusText() { accessories?.focusText() }
+
+    /// The keyboard back into the text from a bottom-row control (⌃Tab round
+    /// the footer, OD-7), with the caret and selection it had. The control's
+    /// `FocusState` is cleared in the same turn, and SwiftUI answers that
+    /// clear on its own schedule by resigning whatever it believes has the
+    /// keyboard, which left the panel as first responder when the text was
+    /// focused in the same turn (P2-A12-1). So the text is focused again,
+    /// a frame at a time, until it has held the keyboard for two frames
+    /// after SwiftUI's update (at most `maxFrames`), and a later move out of
+    /// the text (`cancelKeyboardReturn`) ends the loop.
+    func returnKeyboardToText(maxFrames: Int = 8) {
+        guard let accessories else { return }
+        returnTicket &+= 1
+        let ticket = returnTicket
+        let selection = accessories.textSelection
+        func settle(frame: Int, held: Int) {
+            guard ticket == returnTicket else { return }
+            var held = held
+            if accessories.textHasKeyboard {
+                held += 1
+            } else {
+                held = 0
+                accessories.focusText()
+            }
+            if let selection, accessories.textSelection != selection { accessories.textSelection = selection }
+            guard held < 2, frame < maxFrames else { return }
+            DispatchQueue.main.async { settle(frame: frame + 1, held: held) }
+        }
+        accessories.focusText()
+        if let selection { accessories.textSelection = selection }
+        DispatchQueue.main.async { settle(frame: 1, held: 0) }
+    }
+
+    /// The keyboard went somewhere else on purpose: stop restoring the text.
+    func cancelKeyboardReturn() { returnTicket &+= 1 }
+    private var returnTicket = 0
 }
 
 /// The two views that sit on the title's lines inside the text view: the ⋯
@@ -119,6 +155,18 @@ final class NoteTitleAccessories {
     private let tagEditor: () -> AnyView
 
     var hasTags: Bool { !engine.tags.isEmpty }
+
+    /// The text has the keyboard: it is the window's first responder.
+    var textHasKeyboard: Bool {
+        guard let textView else { return false }
+        return textView.window?.firstResponder === textView
+    }
+
+    /// The caret and selection, kept by the text while a control has the keyboard.
+    var textSelection: NSRange? {
+        get { textView?.selectedRange() }
+        set { if let newValue { textView?.setSelectedRange(newValue) } }
+    }
 
     init(engine: NoteEditorEngine, textView: NoteEditorTextView, scrollView: NSScrollView, chrome: NotesPageChrome,
          design: AtticDesignContext, headerBottom: CGFloat, isUntouched: @escaping () -> Bool,

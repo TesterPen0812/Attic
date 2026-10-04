@@ -332,9 +332,10 @@ struct NotesEditorPage: View {
             bottomFocus = nil
             pendingStop = nil
             bottomStops = false
-            chrome.focusText()
+            chrome.returnKeyboardToText()
             return
         }
+        chrome.cancelKeyboardReturn()
         if bottomStops {
             bottomFocus = stop
         } else {
