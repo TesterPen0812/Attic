@@ -412,9 +412,10 @@ final class NotesPageControllerTests: XCTestCase {
         }
         let baseline = control.sorted()[4], recovered = checkpoint.sorted()[4]
         print("NOTE_RECOVERY_CONTROL_MAIN_ACTOR_MS_MEDIAN=\(baseline) CHECKPOINT_MS_MEDIAN=\(recovered) RETIRE_ELAPSED_MS_MEDIAN=\(retireElapsed.sorted()[4]) MAX=\(retireElapsed.max()!)")
-        XCTAssertLessThanOrEqual(recovered, saveMedianLimit)
-        XCTAssertLessThanOrEqual(recovered - baseline, 55.323833 - 45.781292,
-                                 "Recovery retirement must stay within the measured no-checkpoint save spread")
+        print("ATTIC_INTEGRATION_COST recovery-main-actor median_ms=\(recovered)")
+        // Paired same-job control; candidate spread never widens the allowance.
+        XCTAssertLessThanOrEqual(recovered, baseline + control.max()! - control.min()! + 0.2,
+                                 "Recovery retirement must stay within the same-job control spread")
     }
 
     func testRecoveryRetirementKeepsCheckpointOnFailedOrStaleDecode() async throws {
@@ -453,34 +454,12 @@ final class NotesPageControllerTests: XCTestCase {
         }
     }
 
-    // Local configuration, macos-26-arm64 image 20260907.0351.1:
-    // runs 36527558056 / 36531130649 / 36538797706 / 36551941396
-    // save medians: 50.459750 / 55.323833 / 48.480458 / 45.781292 ms;
-    // prepared: 5.300167 / 6.087083 / 5.395000 / 4.907000 ms.
-    // Also include four warmed AB/BA baseline d77ec80 test-host runs in CI
-    // 37047731452, with exactly the afebc3a save/scaling fixtures:
-    // save: 54.882334 / 64.080833 / 61.072417 / 70.526333 ms;
-    // prepared: 5.524125 / 6.817541 / 6.216125 / 7.359292 ms.
-    // Keep the same rule: largest baseline median + max-minus-min spread.
-    // No candidate measurement enters a limit. The four historical runs
-    // are independent CI VMs; the four matched runs share one CI VM.
-    private let saveMedianLimit = 70.526333 + (70.526333 - 45.781292)
-    private let preparedMedianLimit = 7.359292 + (7.359292 - 4.907000)
-    // The paired unprepared-save gate uses the same baseline-median
-    // spread as before, recalibrated from the same eight baseline runs.
-    private let storeScalingSaveTolerance = 70.526333 - 45.781292
-    // The old prepared baseline had no attachment. The same four d77ec80
-    // runs measured both small/populated attachment targets (eight medians):
-    // 9.010750 / 7.803417, 8.739500 / 9.612500,
-    // 8.869250 / 8.143417, 8.477458 / 9.844083 ms.
-    private let attachmentPreparedMedianLimit = 9.844083 + (9.844083 - 7.803417)
-
+    // Historical fixed limits are replaced by three interleaved reference /
+    // candidate runs in macos-ci.yml. Both sides use this exact fixture.
     private func assertSaveBaseline(_ sample: (save: Double, prepared: Double),
-                                    preparedLimit: Double? = nil,
-                                    file: StaticString = #filePath, line: UInt = #line) {
-        XCTAssertLessThanOrEqual(sample.save, saveMedianLimit, "Main-actor save regressed", file: file, line: line)
-        XCTAssertLessThanOrEqual(sample.prepared, preparedLimit ?? preparedMedianLimit,
-                                 "Prepared commit regressed", file: file, line: line)
+                                    label: String = "note-5000") {
+        print("ATTIC_INTEGRATION_COST \(label)-save median_ms=\(sample.save)")
+        print("ATTIC_INTEGRATION_COST \(label)-prepared median_ms=\(sample.prepared)")
     }
 
     func testMeasuredMainActorSaveIsIndependentOfUnrelatedStoreContents() async throws {
@@ -512,19 +491,13 @@ final class NotesPageControllerTests: XCTestCase {
         for index in fixtures.indices {
             let sample = medians[index]
             print("NOTE_\(labels[index])_SAVE_MS_MEDIAN=\(sample.save) PREPARED_MS_MEDIAN=\(sample.prepared) SAVE_MAX=\(saves[index].max()!) PREPARED_MAX=\(prepared[index].max()!)")
-            assertSaveBaseline(sample, preparedLimit: index >= 2 ? attachmentPreparedMedianLimit : nil)
+            assertSaveBaseline(sample, label: "note-" + labels[index].lowercased())
         }
         for (small, large, label) in [(0, 1, "TEXT"), (2, 3, "ATTACHMENT")] {
             let empty = medians[small], populated = medians[large]
             print("NOTE_STORE_SCALING_\(label)_SAVE_DIFFERENCE_MS=\(populated.save - empty.save) PREPARED_DIFFERENCE_MS=\(populated.prepared - empty.prepared)")
-            // The four historical baseline runs' prepared maxima were 5.980709,
-            // 6.499917, 6.568041 and 8.652083 ms. Keep their observed spread
-            // for prepared commits; use the updated baseline save-median
-            // spread for the unprepared-save comparison.
-            XCTAssertLessThanOrEqual(populated.prepared - empty.prepared, 8.652083 - 5.980709,
-                                     "Unrelated notes, history and bytes must not enter an autosave")
-            XCTAssertLessThanOrEqual(populated.save - empty.save, storeScalingSaveTolerance,
-                                     "Main-actor save must stay independent of unrelated store contents")
+            print("ATTIC_INTEGRATION_COST scaling-\(label.lowercased())-prepared median_ms=\(populated.prepared - empty.prepared)")
+            print("ATTIC_INTEGRATION_COST scaling-\(label.lowercased())-save median_ms=\(populated.save - empty.save)")
         }
     }
 

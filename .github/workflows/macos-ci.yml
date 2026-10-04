@@ -1,3 +1,4 @@
+# Dispatch lane=fast for build, strict build, analyzer and unit tests; full is the default milestone workflow.
 name: Attic CI
 
 on:
@@ -8,6 +9,12 @@ on:
       - feature/canvas-ink
   workflow_dispatch:
     inputs:
+      lane:
+        description: Verification scope (full for milestones, fast between milestones)
+        required: false
+        default: full
+        type: choice
+        options: [full, fast]
       run_iphone:
         description: Run the deferred iPhone build-for-testing lane
         required: false
@@ -37,8 +44,10 @@ env:
   COST_BASELINE_COMMIT: 3eee023e537717fbc42538a0a563643880f586eb
   # The Done search query samples compare against the last accepted build
   # with the Done search index (redesign/p1-glass at dab5d2f, CI run
-  # 37121778773): the slowest sample is held to no regression there, and
+  # 37121778773): query medians compare with its same-job samples, and
   # each query's median to the 16 ms budget (owner, 2026-10-03).
+  # New relative gates use A10 before these test-only repairs, with identical fixtures.
+  INTEGRATION_COST_REFERENCE_COMMIT: cb95a0e7ba164ca3c15927b9eb1e9ee7ea90f9b2
   DONE_SEARCH_BASELINE_COMMIT: dab5d2fb74b081529b0053797aca1af591b06e8b
 
 jobs:
@@ -161,6 +170,7 @@ jobs:
 
       - name: Run Full Keyboard Access unit tests
         id: fka_tests
+        if: inputs.lane != 'fast'
         continue-on-error: true
         timeout-minutes: 10
         env:
@@ -221,13 +231,13 @@ jobs:
           retention-days: 7
 
       - name: Compare baseline and Fix 2 save gates on this runner
-        if: inputs.compare_note_save_gates
+        if: inputs.compare_note_save_gates && inputs.lane != 'fast'
         timeout-minutes: 20
         run: |
           python3 Scripts/compare_note_save_gates.py "$RUNNER_TEMP/NoteSaveGateComparison" --unsigned
 
       - name: Upload baseline and Fix 2 save-gate evidence
-        if: always() && inputs.compare_note_save_gates
+        if: always() && inputs.compare_note_save_gates && inputs.lane != 'fast'
         uses: actions/upload-artifact@v4
         with:
           name: note-save-gate-comparison-${{ github.sha }}
@@ -240,6 +250,7 @@ jobs:
 
       - name: Run macOS UI tests
         id: ui_tests
+        if: inputs.lane != 'fast'
         continue-on-error: true
         timeout-minutes: 40
         run: |
@@ -288,6 +299,7 @@ jobs:
 
       - name: Run seeded macOS performance UI tests
         id: perf_ui_tests
+        if: inputs.lane != 'fast'
         continue-on-error: true
         timeout-minutes: 45
         run: |
@@ -350,6 +362,7 @@ jobs:
       - name: Require established macOS verifications
         if: always()
         env:
+          LANE: ${{ inputs.lane }}
           PROJECT_VERIFY: ${{ steps.project_verify.outcome }}
           MAC_BUILD: ${{ steps.mac_build.outcome }}
           STRICT_BUILD: ${{ steps.strict_build.outcome }}
@@ -374,14 +387,15 @@ jobs:
           test "$MAC_BUILD" = success
           test "$STRICT_BUILD" = success
           test "$UNIT_TESTS" = success
-          test "$FKA_TESTS" = success
-          test "$UI_TESTS" = success
-          test "$PERF_UI_TESTS" = success
+          if [ "$LANE" != fast ]; then test "$FKA_TESTS" = success; fi
+          if [ "$LANE" != fast ]; then test "$UI_TESTS" = success; fi
+          if [ "$LANE" != fast ]; then test "$PERF_UI_TESTS" = success; fi
           test "$ANALYZER" = success
           test "$FINAL_STATE" = success
 
 
   costs:
+    if: ${{ inputs.lane != 'fast' }}
     name: Optimized frame, row and Done search cost gates
     runs-on: macos-26
     timeout-minutes: 90
@@ -408,24 +422,32 @@ jobs:
           xcodebuild -version | head -n 1 | grep -Eq '^Xcode 26\.'
           git merge-base --is-ancestor "$COST_BASELINE_COMMIT" HEAD
           git merge-base --is-ancestor "$DONE_SEARCH_BASELINE_COMMIT" HEAD
+          git merge-base --is-ancestor "$INTEGRATION_COST_REFERENCE_COMMIT" HEAD
           mkdir -p "$RUNNER_TEMP/AtticCosts"
 
       - name: Verify cost gate plumbing
-        run: python3 -m unittest discover -s Scripts -p test_cost_gate_plumbing.py -v
+        run: python3 -m unittest discover -s Scripts -p 'test_*cost*.py' -v
 
       - name: Build optimized baseline and candidate test hosts
         id: cost_builds
         run: |
           git worktree add --detach "$RUNNER_TEMP/AtticCostBaseline" "$COST_BASELINE_COMMIT"
           git worktree add --detach "$RUNNER_TEMP/AtticDoneSearchBaseline" "$DONE_SEARCH_BASELINE_COMMIT"
+          git worktree add --detach "$RUNNER_TEMP/AtticIntegrationCostReference" "$INTEGRATION_COST_REFERENCE_COMMIT"
+          # Test-only overlay: identical measurement code, pinned reference app.
+          for fixture in DoneSearchCostTests NotesPageControllerTests TaskPerformanceGateTests TasksKeystrokeCostTests NoteSlice3bTests; do
+            cp "AtticTests/$fixture.swift" "$RUNNER_TEMP/AtticIntegrationCostReference/AtticTests/$fixture.swift"
+          done
+          git -C "$RUNNER_TEMP/AtticIntegrationCostReference" diff --exit-code -- Attic Attic.xcodeproj
           # Retain the historical fixtures and all measurements. Adapt only
           # their absolute timing assertions to the shared OD-6 policy.
           python3 Scripts/prepare_cost_reference.py "$RUNNER_TEMP/AtticCostBaseline" frame-row
           python3 Scripts/prepare_cost_reference.py "$RUNNER_TEMP/AtticDoneSearchBaseline" done
-          for name in baseline candidate donebase; do
+          for name in baseline candidate donebase integrationbase; do
             source="$GITHUB_WORKSPACE"
             if [ "$name" = baseline ]; then source="$RUNNER_TEMP/AtticCostBaseline"; fi
             if [ "$name" = donebase ]; then source="$RUNNER_TEMP/AtticDoneSearchBaseline"; fi
+            if [ "$name" = integrationbase ]; then source="$RUNNER_TEMP/AtticIntegrationCostReference"; fi
             # shellcheck disable=SC2086
             (cd "$source" && xcodebuild build-for-testing \
               -project Attic.xcodeproj -scheme Attic -configuration Local -destination 'platform=macOS' \
@@ -457,10 +479,47 @@ jobs:
             done
           done
 
+      - name: Record interleaved integration reference and candidate costs
+        run: |
+          for sample in 1 2 3; do
+            for side in baseline candidate; do
+              source="$GITHUB_WORKSPACE"
+              build=candidate
+              rendered=()
+              if [ "$side" = baseline ]; then
+                source="$RUNNER_TEMP/AtticIntegrationCostReference"
+                build=integrationbase
+                if [ "$sample" = 1 ]; then
+                  rendered=(-only-testing:AtticTests/DoneSearchCostTests/testRenderedFindKeystrokeMediansFitTheInputBudget)
+                fi
+              fi
+              # Reference collects timings only (OD-6); functional assertions remain.
+              reference_only=0
+              if [ "$side" = baseline ]; then reference_only=1; fi
+              # shellcheck disable=SC2086
+              (cd "$source" && TEST_RUNNER_ATTIC_COST_REFERENCE_ONLY="$reference_only" xcodebuild test-without-building \
+                -project Attic.xcodeproj -scheme Attic -configuration Local -destination 'platform=macOS' \
+                -derivedDataPath "$RUNNER_TEMP/AtticCost-$build" $COST_FLAGS \
+                -resultBundlePath "$RUNNER_TEMP/AtticCosts/integration-$side-$sample.xcresult" \
+                -parallel-testing-enabled NO \
+                -only-testing:AtticTests/NotesPageControllerTests/testMeasuredMainActorSaveOnFiveThousandLineNote \
+                -only-testing:AtticTests/NotesPageControllerTests/testMeasuredMainActorSaveIsIndependentOfUnrelatedStoreContents \
+                -only-testing:AtticTests/NotesPageControllerTests/testCheckpointRetirementKeepsMainActorWithinSaveTolerance \
+                -only-testing:AtticTests/NoteSlice3bTests/testR9AccessibilityValidationStaysResponsiveWithStoredPayloadsAndActiveImport \
+                -only-testing:AtticTests/TaskPerformanceGateTests/testFamilySummaryPassAtSixThousandTasksIsMilliseconds \
+                -only-testing:AtticTests/TaskPerformanceGateTests/testStatusToggleAtSixThousandTasksStaysBounded \
+                -only-testing:AtticTests/TasksKeystrokeCostTests/testTheFirstKeystrokeCostsAboutWhatTheOthersDo \
+                "${rendered[@]}") \
+                > "$RUNNER_TEMP/AtticCosts/integration-$side-$sample.log" 2>&1 \
+                || { tail -n 100 "$RUNNER_TEMP/AtticCosts/integration-$side-$sample.log"; exit 1; }
+              grep -E 'ATTIC_INTEGRATION_COST|ATTIC_DONE_RESULTS|ATTIC_DONE_KEY' "$RUNNER_TEMP/AtticCosts/integration-$side-$sample.log"
+            done
+          done
+
       - name: Done search query samples of the accepted baseline
         run: |
           # Three runs of the accepted build's query fixtures, for the
-          # slowest-sample comparison below. OD-6 disables only the
+          # median comparison below. OD-6 disables only the
           # reference's absolute timing assertions; correctness still gates.
           for sample in 1 2 3; do
             # shellcheck disable=SC2086
@@ -491,7 +550,11 @@ jobs:
             || { tail -n 120 "$RUNNER_TEMP/AtticCosts/done-search.log"; exit 1; }
           grep -E 'ATTIC_DONE_SEARCH|ATTIC_PHASE5_DONE|ATTIC_DONE_QUERY_MEDIAN|ATTIC_DONE_INPUT|ATTIC_DONE_RESULTS' "$RUNNER_TEMP/AtticCosts/done-search.log"
 
-      - name: Compare the slowest Done search query sample with the baseline
+      - name: Compare integration and Done results-frame medians
+        if: always() && steps.cost_builds.outcome == 'success'
+        run: python3 Scripts/check_integration_costs.py "$RUNNER_TEMP/AtticCosts"
+
+      - name: Compare Done search query medians with the baseline
         if: always() && steps.cost_builds.outcome == 'success'
         run: python3 Scripts/check_done_search_costs.py "$RUNNER_TEMP/AtticCosts"
 
@@ -523,6 +586,7 @@ jobs:
           retention-days: 14
 
   performance:
+    if: ${{ inputs.lane != 'fast' }}
     name: Observe seeded performance on a fresh macOS runner
     runs-on: macos-26
     timeout-minutes: 180
@@ -608,6 +672,7 @@ jobs:
           test "$PERF_COMPARE" = success
 
   appearance:
+    if: ${{ inputs.lane != 'fast' }}
     name: Design system appearance matrix (${{ matrix.shard }} of 4)
     runs-on: macos-26
     timeout-minutes: 45
@@ -665,7 +730,7 @@ jobs:
 
   iphone:
     name: Build Attic for iPhone Simulator
-    if: ${{ github.event_name == 'workflow_dispatch' && inputs.run_iphone }}
+    if: ${{ github.event_name == 'workflow_dispatch' && inputs.run_iphone && inputs.lane != 'fast' }}
     runs-on: macos-26
     timeout-minutes: 45
     env:

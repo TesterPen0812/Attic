@@ -2,11 +2,8 @@ import SwiftData
 import XCTest
 @testable import Attic
 
-/// Reproducible scaling gates for the task model. Each test measures the
-/// hot path the audits timed and also asserts an absolute bound, so a
-/// regression back to the O(n²) shapes fails the test rather than only
-/// shifting a metric. Bounds are generous for CI machines; the recorded
-/// medians live in Docs/Fable51FullRepair.md.
+/// Scaling costs compare three interleaved runs with the same-job reference
+/// in macos-ci.yml. Functional invariants and paired memoization gates stay.
 @MainActor
 final class TaskPerformanceGateTests: XCTestCase {
     private func seedStore(parents: Int, childrenPerParent: Int, attachmentsPerTask: Int = 0) throws -> TaskStore {
@@ -81,7 +78,7 @@ final class TaskPerformanceGateTests: XCTestCase {
             }
         }
         XCTAssertEqual(checksum, 5_000 * 9)
-        XCTAssertLessThan(median, 25, "family lookups must stay near-constant per row (median \(median) ms)")
+        print("ATTIC_INTEGRATION_COST family-summary median_ms=\(median)")
         measure(metrics: [XCTClockMetric()]) {
             for parent in parents { _ = store.subtasks(of: parent.id).count }
         }
@@ -108,7 +105,7 @@ final class TaskPerformanceGateTests: XCTestCase {
             lookup += ms { _ = store.subtasks(of: child.parentID!) }
         }
         print("PERFGATE toggle=\(toggle / 7) snapshot=\(snapshot / 7) lookup=\(lookup / 7)")
-        XCTAssertLessThan(median, 120, "a single toggle must not rescan or refetch the whole store (median \(median) ms)")
+        print("ATTIC_INTEGRATION_COST status-toggle median_ms=\(median)")
     }
 
     /// The audit measured 12.8 ms per 300-row × 6-read pass with a fresh

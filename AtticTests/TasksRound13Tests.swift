@@ -230,6 +230,34 @@ final class TasksRound13Tests: XCTestCase {
 
     // MARK: - Bug 1: ⌘Z after a task-menu change
 
+    /// Synthetic typing goes to the key window's first responder. A requested
+    /// SwiftUI focus binding does not prove its deferred AppKit focus landed.
+    /// Find the actual composer and establish the same state a click gives it.
+    private func focusComposer(in hosted: Hosted) throws {
+        func composers(in view: NSView) -> [AtticTokenTextView] {
+            if let text = view as? AtticTokenTextView,
+               text.owner?.parent.accessibilityLabel == hosted.model.addPlaceholder,
+               !text.isHiddenOrHasHiddenAncestor { return [text] }
+            return view.subviews.flatMap { composers(in: $0) }
+        }
+        print("ROUND13_COMPOSER_FOCUS requested=\(hosted.focus.addBar) key=\(hosted.window.isKeyWindow) responder=\(String(describing: hosted.window.firstResponder))")
+        hosted.focus.addBar = true
+        let content = try XCTUnwrap(hosted.window.contentView)
+        let deadline = Date().addingTimeInterval(2)
+        var fields = composers(in: content)
+        while fields.isEmpty, Date() < deadline {
+            content.layoutSubtreeIfNeeded()
+            hosted.spin(0.01)
+            fields = composers(in: content)
+        }
+        XCTAssertEqual(fields.count, 1, "one live composer is ready")
+        let composer = try XCTUnwrap(fields.first)
+        hosted.window.makeKey()
+        XCTAssertTrue(hosted.window.makeFirstResponder(composer))
+        XCTAssertTrue(hosted.window.isKeyWindow)
+        XCTAssertTrue(hosted.window.firstResponder === composer)
+    }
+
     private func priority(of id: UUID, _ hosted: Hosted) -> TaskPriority? {
         hosted.store.listedTask(withID: id)?.priority
     }
@@ -245,6 +273,7 @@ final class TasksRound13Tests: XCTestCase {
         let model = hosted.model
         let row = try XCTUnwrap(model.rows(for: .now).first { hosted.store.listedTask(withID: $0.id)?.priority != .high })
         let original = try XCTUnwrap(priority(of: row.id, hosted))
+        try focusComposer(in: hosted)
         XCTAssertTrue(hosted.window.firstResponder is AtticTokenTextView, "the composer has the keyboard")
         hosted.press("a", keyCode: 0)
         hosted.press("b", keyCode: 11)
@@ -270,7 +299,9 @@ final class TasksRound13Tests: XCTestCase {
         hosted.spin(1)
         let model = hosted.model
         let row = try XCTUnwrap(model.rows(for: .now).first { hosted.store.listedTask(withID: $0.id)?.priority != .high })
+        try focusComposer(in: hosted)
         hosted.press("a", keyCode: 0)
+        XCTAssertEqual(model.addBar.text, "a")
         model.setPriority(.high, for: [row.id])
         hosted.spin(0.3)
         hosted.press("b", keyCode: 11)
@@ -286,11 +317,14 @@ final class TasksRound13Tests: XCTestCase {
         hosted.spin(1)
         let model = hosted.model
         let row = try XCTUnwrap(model.rows(for: .now).first { hosted.store.listedTask(withID: $0.id)?.priority != .high })
+        try focusComposer(in: hosted)
         hosted.press("a", keyCode: 0)
+        XCTAssertEqual(model.addBar.text, "a", "the real key reached the composer before the menu change")
         model.setPriority(.high, for: [row.id])
         hosted.spin(0.3)
         hosted.press("z", keyCode: 6, modifiers: .command)
         XCTAssertNotEqual(priority(of: row.id, hosted), .high)
+        XCTAssertEqual(model.addBar.text, "a", "claimed Undo preserved the draft")
         hosted.press("z", keyCode: 6, modifiers: [.command, .shift])
         XCTAssertEqual(priority(of: row.id, hosted), .high, "⇧⌘Z redid the menu change")
         XCTAssertEqual(model.addBar.text, "a")
