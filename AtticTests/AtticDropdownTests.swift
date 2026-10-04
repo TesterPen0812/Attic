@@ -261,12 +261,14 @@ final class AtticDropdownTests: XCTestCase {
             (view as? NSScrollView).map { [$0] } ?? view.subviews.flatMap { scrolls($0) }
         }
         let scroll = try XCTUnwrap(scrolls(host).first)
+        XCTAssertTrue(ScrollEdgeTests.pockets(in: scroll).isEmpty, "E1 cards use Clean cut")
         XCTAssertGreaterThan(scroll.documentView?.bounds.height ?? 0, scroll.contentView.bounds.height)
         let before = scroll.contentView.bounds.origin.y
         model.move(-1) // wraps from the first row to Mono
         host.layoutSubtreeIfNeeded()
         spin(0.2)
         XCTAssertGreaterThan(scroll.contentView.bounds.origin.y, before, "the keyboard scrolls to Mono")
+        XCTAssertTrue(ScrollEdgeTests.pockets(in: scroll).isEmpty, "scrolling an E1 card cannot enable native edges")
         let document = try XCTUnwrap(scroll.documentView)
         XCTAssertGreaterThanOrEqual(scroll.contentView.bounds.maxY, document.bounds.maxY - 1,
                                     "the last row is wholly visible")
@@ -340,6 +342,42 @@ final class AtticDropdownTests: XCTestCase {
 
     private func spin(_ seconds: TimeInterval = 0.05) {
         RunLoop.main.run(until: Date().addingTimeInterval(seconds))
+    }
+
+    func testDeferredCloseThenOpenInTheSameTurnKeepsTheCardInteractive() throws {
+        let window = makeWindow()
+        defer { window.close() }
+        let anchor = NSView(frame: NSRect(x: 20, y: 40, width: 60, height: 28))
+        window.contentView?.addSubview(anchor)
+        let presenter = AtticDropdownPresenter()
+        presenter.takesKeyboard = false
+        presenter.contentHeight = 52
+        presenter.content = AnyView(AtticDropdownRow(title: "First") {})
+        presenter.present(from: anchor)
+        defer { presenter.close(restoreFocus: false, immediately: true) }
+        let host = try XCTUnwrap(presenter.host)
+        var dismissals = 0
+        presenter.onDismiss = { dismissals += 1 }
+
+        presenter.closeAfterViewUpdate()
+        XCTAssertFalse(host.isInteractive, "a requested close stops interaction immediately")
+        // This is the open branch of updateNSView, before the queued close runs.
+        presenter.content = AnyView(AtticDropdownRow(title: "Reopened") {})
+        presenter.updateAfterViewUpdate()
+        spin(0.1)
+        XCTAssertTrue(presenter.isOpen, "the older close cannot cancel the newer presentation")
+        XCTAssertIdentical(presenter.host, host, "reopening keeps the existing card")
+        XCTAssertTrue(host.isInteractive, "reopening restores hit testing")
+        XCTAssertEqual(dismissals, 0)
+
+        // Another close in this turn must still work; cancellation must not
+        // leave the presenter stuck ignoring later close requests.
+        presenter.closeAfterViewUpdate()
+        presenter.updateAfterViewUpdate()
+        presenter.closeAfterViewUpdate()
+        spin(0.1)
+        XCTAssertFalse(presenter.isOpen)
+        XCTAssertFalse(host.isInteractive)
     }
 
     final class Opener: ObservableObject {

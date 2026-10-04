@@ -327,6 +327,47 @@ final class TagTests: XCTestCase {
         print("ATTIC_SHARED_TAG_COST rows=2001 requests=200 build_delta=0 fetch_delta=0 row_read_delta=0 content_save_rebuilds=0")
     }
 
+    func testFailedInventoryFetchRetriesOnlyAfterInvalidation() throws {
+        let container = try PersistenceController.makeContainer(inMemory: true)
+        let context = ModelContext(container)
+        let task = TaskItem(title: "Tagged task")
+        task.tags = ["home"]
+        context.insert(task)
+        try context.save()
+        var attempts = 0
+        var shouldFail = true
+        let service = TagService(container: container, fetchTaggedTasks: { context in
+            attempts += 1
+            if shouldFail { throw TagServiceError.invalidTag("fetch unavailable") }
+            return try context.fetch(FetchDescriptor<TaskItem>(predicate: #Predicate { $0.tagsRaw != "" }))
+        })
+
+        XCTAssertTrue(service.names.isEmpty)
+        XCTAssertNotNil(service.lastErrorMessage)
+        for _ in 0..<20 {
+            XCTAssertTrue(service.countsByName.isEmpty)
+            XCTAssertTrue(service.counts().isEmpty)
+            XCTAssertTrue(service.names.isEmpty)
+        }
+        XCTAssertEqual(attempts, 1, "failed reads must not fetch again on each keystroke")
+        service.invalidateInventory()
+        XCTAssertTrue(service.names.isEmpty)
+        XCTAssertEqual(attempts, 2, "one retry per explicit refresh, even if it still fails")
+
+        shouldFail = false
+        XCTAssertTrue(service.names.isEmpty, "recovery waits for invalidation")
+        task.tags = ["work"]
+        service.invalidate(in: context)
+        try context.save()
+        service.publishInventoryChange()
+        XCTAssertEqual(service.countsByName, ["work": 1], "a saved tag edit permits recovery")
+        XCTAssertEqual(service.names, ["work"])
+        XCTAssertEqual(attempts, 3)
+        let fetches = service.inventoryFetchCount
+        _ = service.counts()
+        XCTAssertEqual(service.inventoryFetchCount, fetches, "successful recovery stays cached")
+    }
+
     func testDivergentReplicaWinnerChangeInvalidatesEvenOnContentEdit() throws {
         let library = try makeLibrary()
         let seed = ModelContext(library.tasks.container)

@@ -57,6 +57,7 @@ final class TagService {
         let divergent: Set<AtticItemRef>
     }
     private var inventory: Inventory?
+    private var inventoryBuildFailed = false
     private var needsPublication = false
     let inventoryChanges = PassthroughSubject<Void, Never>()
     private(set) var inventoryBuildCount = 0
@@ -70,6 +71,12 @@ final class TagService {
     /// Divergent replicas can change the winning tag set through a content
     /// edit, so those identities also invalidate when any replica changes.
     func invalidate(in context: ModelContext) {
+        // Failed builds have no row metadata to compare. The next save
+        // invalidation permits one fresh attempt, just like a refresh.
+        if inventoryBuildFailed {
+            invalidateInventory(publish: false)
+            return
+        }
         guard let inventory else { return }
         func state(_ model: any PersistentModel) -> (AtticItemRef, RowState)? {
             switch model {
@@ -106,12 +113,14 @@ final class TagService {
 
     func invalidateInventory(publish: Bool = true) {
         inventory = nil
+        inventoryBuildFailed = false
         needsPublication = true
         if publish { publishInventoryChange() }
     }
 
     private let container: ModelContainer
     private let persist: (ModelContext) throws -> Void
+    private let fetchTaggedTasks: (ModelContext) throws -> [TaskItem]
     /// Replaces the item stores' contexts after a successful change.
     var afterChange: () -> Void
     private(set) var lastErrorMessage: String?
@@ -119,10 +128,14 @@ final class TagService {
     init(
         container: ModelContainer,
         persist: @escaping (ModelContext) throws -> Void = { try $0.save() },
+        fetchTaggedTasks: @escaping (ModelContext) throws -> [TaskItem] = {
+            try $0.fetch(FetchDescriptor<TaskItem>(predicate: #Predicate { $0.tagsRaw != "" }))
+        },
         afterChange: @escaping () -> Void = {}
     ) {
         self.container = container
         self.persist = persist
+        self.fetchTaggedTasks = fetchTaggedTasks
         self.afterChange = afterChange
     }
 
@@ -130,6 +143,7 @@ final class TagService {
     /// used first.
     func counts() -> [TagCount] {
         if let inventory { return inventory.counts }
+        guard !inventoryBuildFailed else { return [] }
         do {
             var rows: [PersistentIdentifier: RowState] = [:]
             var divergent = Set<AtticItemRef>()
@@ -145,6 +159,7 @@ final class TagService {
             inventoryBuildCount += 1
             return counts
         } catch {
+            inventoryBuildFailed = true
             lastErrorMessage = error.localizedDescription
             return []
         }
@@ -293,9 +308,8 @@ final class TagService {
             if !tags.isEmpty { result[ref] = tags }
         }
 
-        let taskIDs = Array(Set(try fetch(FetchDescriptor<TaskItem>(
-            predicate: #Predicate { $0.tagsRaw != "" }
-        )).map(\.id)))
+        inventoryFetchCount += 1
+        let taskIDs = Array(Set(try fetchTaggedTasks(context).map(\.id)))
         if !taskIDs.isEmpty {
             let rows = try fetch(FetchDescriptor<TaskItem>(predicate: #Predicate { taskIDs.contains($0.id) }))
             for task in rows { remember(task.persistentModelID, AtticItemRef(.task, task.id), task.tagsRaw, task.deletedAt != nil) }

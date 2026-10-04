@@ -886,7 +886,7 @@ final class AtticDropdownPresenter {
     private var resignObserver: NSObjectProtocol?
     private var removal: DispatchWorkItem?
     private var updateScheduled = false
-    private var closeScheduled = false
+    private var pendingClose: DispatchWorkItem?
 
     init() {}
 
@@ -964,12 +964,17 @@ final class AtticDropdownPresenter {
     /// Representable callbacks run inside SwiftUI's update. Resizing the
     /// card publishes stage geometry, so coalesce it onto the next turn.
     func updateAfterViewUpdate() {
+        // A true binding can arrive again before the false binding's close.
+        // Keep this host and its monitors alive for the newer presentation.
+        pendingClose?.cancel()
+        pendingClose = nil
+        host?.isInteractive = true
         guard !updateScheduled else { return }
         updateScheduled = true
         DispatchQueue.main.async { [weak self] in
             guard let self else { return }
             self.updateScheduled = false
-            guard self.isOpen, !self.closeScheduled else { return }
+            guard self.isOpen, self.pendingClose == nil else { return }
             if AtticOverlayHierarchy.isInLayoutPass { self.updateAfterViewUpdate(); return }
             self.update()
         }
@@ -980,13 +985,14 @@ final class AtticDropdownPresenter {
     func closeAfterViewUpdate() {
         wantsOpen = false
         host?.isInteractive = false
-        guard !closeScheduled else { return }
-        closeScheduled = true
-        DispatchQueue.main.async { [self] in
-            closeScheduled = false
+        guard pendingClose == nil else { return }
+        let work = DispatchWorkItem { [self] in
+            pendingClose = nil
             if AtticOverlayHierarchy.isInLayoutPass { closeAfterViewUpdate(); return }
             close(restoreFocus: true)
         }
+        pendingClose = work
+        DispatchQueue.main.async(execute: work)
     }
 
     /// The content's natural height changed while open (a filter, a
@@ -1034,6 +1040,8 @@ final class AtticDropdownPresenter {
 
     /// Closes the card (the binding went false, or the anchor went away).
     func close(restoreFocus: Bool, immediately: Bool = false) {
+        pendingClose?.cancel()
+        pendingClose = nil
         wantsOpen = false
         guard isOpen, let host else { return }
         isOpen = false
@@ -1322,7 +1330,7 @@ struct AtticDropdownHighlightKey: PreferenceKey {
 
 /// Known-height lists that fit stay plain. Cards measured as they change keep
 /// their scroll container across height changes to preserve editing state.
-/// The system soft edge reveals overflow; the keyboard's highlighted row is brought wholly into view.
+/// Scrolling stops at a clean edge; the keyboard's highlighted row is brought wholly into view.
 struct AtticDropdownViewport<Content: View>: View {
     var height: CGFloat?
     var highlighted: String? = nil
@@ -1334,9 +1342,7 @@ struct AtticDropdownViewport<Content: View>: View {
             ScrollViewReader { proxy in
                 ScrollView(.vertical) { content }
                     .scrollIndicators(.never)
-                    .safeAreaBar(edge: .top, spacing: 0) { Color.clear.frame(height: height == nil ? 0 : AtticDropdownMetrics.scrollEdgeInset).accessibilityHidden(true) }
-                    .safeAreaBar(edge: .bottom, spacing: 0) { Color.clear.frame(height: height == nil ? 0 : AtticDropdownMetrics.scrollEdgeInset).accessibilityHidden(true) }
-                    .scrollEdgeEffectStyle(.soft, for: .vertical)
+                    .scrollEdgeEffectHidden(true, for: .all)
                     .frame(height: height)
                     .fixedSize(horizontal: false, vertical: height == nil)
                     .onAppear { if let highlighted { proxy.scrollTo(highlighted) } }

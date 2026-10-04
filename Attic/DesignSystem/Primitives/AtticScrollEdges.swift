@@ -5,9 +5,8 @@ import SwiftUI
 /// Tasks and Done use Clean cut with D1's fade before fixed controls.
 /// The owner disabled the native soft edge everywhere (overnight A1,
 /// 2026-10-04), including saved preview choices and environment overrides.
-/// The soft-edge primitive remains for explicit isolated geometry tests;
-/// no app setting offers it. Notes editor and All notes also keep D1 with
-/// no native soft effect.
+/// Former soft-edge choices also resolve to Clean cut. Notes editor,
+/// All notes and E1 cards use clean edges too.
 enum AtticScrollEdgeStyle: String, CaseIterable, Sendable {
     case systemSoft
     case cleanCut
@@ -23,14 +22,18 @@ enum AtticScrollEdgeStyle: String, CaseIterable, Sendable {
 
 /// The app's edge policy: always initialize to Clean cut, without reading
 /// or rewriting a former preview A/B preference. No identity offers the
-/// switch. Tests can explicitly exercise the dormant native primitive.
+/// switch. Even a choice injected in code stays on Clean cut.
 @MainActor
 final class AtticScrollEdgeLab: ObservableObject {
     static let shared = AtticScrollEdgeLab(defaults: .standard,
                                            environment: ProcessInfo.processInfo.environment,
                                            isPreview: AtticPreviewOverrides.isPreviewIdentity(Bundle.main.bundleIdentifier))
 
-    @Published var style: AtticScrollEdgeStyle = .cleanCut
+    @Published private var resolvedStyle: AtticScrollEdgeStyle = .cleanCut
+    var style: AtticScrollEdgeStyle {
+        get { resolvedStyle }
+        set { resolvedStyle = .cleanCut }
+    }
     let offersChoice = false
     static let styleKey = "AtticScrollEdgeStyle"
 
@@ -55,13 +58,9 @@ struct AtticScrollEdgeBar: View {
 }
 
 extension View {
-    /// No system effect (Clean cut, the default), or native soft edges.
-    @ViewBuilder
+    /// Native effects stay hidden, including legacy geometry test injection.
     func atticScrollEdgeEffect(_ style: AtticScrollEdgeStyle) -> some View {
-        switch style {
-        case .systemSoft: scrollEdgeEffectStyle(.soft, for: .vertical)
-        case .cleanCut: scrollEdgeEffectHidden(true, for: .all)
-        }
+        scrollEdgeEffectHidden(true, for: .all)
     }
 }
 
