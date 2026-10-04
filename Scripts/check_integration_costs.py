@@ -13,7 +13,7 @@ import statistics
 import sys
 from pathlib import Path
 
-METRICS = {"family-summary", "status-toggle", "first-keystroke", "recovery-main-actor", "attachment-upkeep"}
+METRICS = {"family-summary", "status-toggle", "first-keystroke", "recovery-main-actor", "recovery-overhead", "attachment-upkeep"}
 METRICS |= {f"note-{label}-{kind}" for label in
             ("5000", "empty", "populated", "empty_attachment", "populated_attachment")
             for kind in ("save", "prepared")}

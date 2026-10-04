@@ -413,9 +413,10 @@ final class NotesPageControllerTests: XCTestCase {
         let baseline = control.sorted()[4], recovered = checkpoint.sorted()[4]
         print("NOTE_RECOVERY_CONTROL_MAIN_ACTOR_MS_MEDIAN=\(baseline) CHECKPOINT_MS_MEDIAN=\(recovered) RETIRE_ELAPSED_MS_MEDIAN=\(retireElapsed.sorted()[4]) MAX=\(retireElapsed.max()!)")
         print("ATTIC_INTEGRATION_COST recovery-main-actor median_ms=\(recovered)")
-        // Paired same-job control; candidate spread never widens the allowance.
-        XCTAssertLessThanOrEqual(recovered, baseline + control.max()! - control.min()! + 0.2,
-                                 "Recovery retirement must stay within the same-job control spread")
+        // OD-6: reference runs collect timings, never gate on their own timing
+        // comparison. CI compares this paired overhead with the reference
+        // build's overhead medians/range, alongside the total recovered cost.
+        print("ATTIC_INTEGRATION_COST recovery-overhead median_ms=\(recovered - baseline)")
     }
 
     func testRecoveryRetirementKeepsCheckpointOnFailedOrStaleDecode() async throws {
