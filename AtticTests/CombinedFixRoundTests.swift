@@ -770,6 +770,48 @@ final class CombinedFixRoundTests: XCTestCase {
         XCTAssertNil(view.superview)
     }
 
+    /// Controls can be constructed by the panel's SwiftUI update inside
+    /// layout. Their first attachment must obey the same rule as placement.
+    func testOverlayConstructionDuringLayoutDefersEveryInitialAttachment() throws {
+        let engine = NoteEditorEngine(noteID: UUID(), document: NoteDocument(blocks: [.text("Title"), .text("Body")]))
+        let (scroll, text) = engine.makeView()
+        let chrome = NotesPageChrome()
+        var title: NoteTitleAccessories!
+        var format: NoteFormatControls!
+        var objects: NoteObjectControls!
+        let before = Set(text.subviews.map(ObjectIdentifier.init))
+        AtticOverlayHierarchy.layoutPass {
+            title = NoteTitleAccessories(engine: engine, textView: text, scrollView: scroll, chrome: chrome,
+                design: .default, headerBottom: 40, isUntouched: { false }, tagEditor: { AnyView(EmptyView()) })
+            format = NoteFormatControls(engine: engine, textView: text, scrollView: scroll,
+                design: .default, noteID: engine.noteID, isNewDraft: false)
+            objects = NoteObjectControls(engine: engine, textView: text)
+            XCTAssertEqual(Set(text.subviews.map(ObjectIdentifier.init)), before,
+                           "no overlay attaches during construction in layout")
+            // A nested run loop must not make the scheduled flush mutate layout.
+            AtticOverlayHierarchy.flush()
+            XCTAssertEqual(Set(text.subviews.map(ObjectIdentifier.init)), before,
+                           "a flush during layout must also wait")
+        }
+        let menu = try XCTUnwrap(text.accessoryViews.first)
+        let positioned = NSRect(x: 20, y: 25, width: 30, height: 35)
+        menu.frame = positioned
+        AtticOverlayHierarchy.flush()
+        XCTAssertEqual(text.subviews.filter { !before.contains(ObjectIdentifier($0)) }.count, 6,
+                       "three title accessories, hint, selection ring and drop line")
+        XCTAssertTrue(text.accessoryViews.allSatisfy { $0.superview === text })
+        XCTAssertEqual(menu.frame, positioned, "initial attachment preserves geometry computed while waiting")
+        AtticOverlayHierarchy.layoutPass {
+            objects.invalidate()
+            format.invalidate()
+            title.invalidate()
+            XCTAssertEqual(text.subviews.filter { !before.contains(ObjectIdentifier($0)) }.count, 6,
+                           "dismantling waits too")
+        }
+        AtticOverlayHierarchy.flush()
+        XCTAssertEqual(Set(text.subviews.map(ObjectIdentifier.init)), before)
+    }
+
     /// P1-01 hypothesis, on the Notes page: while the note's text lays out
     /// (where the bar, the `/` list and the cards are placed), no hosting
     /// view joins or leaves a parent. The `/` list is made to need its

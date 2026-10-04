@@ -5,6 +5,14 @@ Every later change is recorded here: what changed, why, and who asked.
 
 ## Phase 2
 
+### Overnight A1 overlay construction review (2026-10-04)
+- Overlay hierarchy deferral also covers initial title accessories, slash
+  hint and object-control attachment during panel layout. Initial joins
+  preserve geometry calculated while waiting; a flush reached through a
+  nested run loop waits until the outer layout pass ends. The freeze cause
+  remains a hypothesis for the separate on-screen check.
+
+
 ### Combined app fix round 2 (redesign/p2-fix2)
 
 Requested by GPT-6.1's review of the combined fix round (2026-10-03). No

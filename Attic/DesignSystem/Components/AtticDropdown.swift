@@ -608,13 +608,28 @@ enum AtticOverlayHierarchy {
         /// Leave the parent (otherwise join `parent`).
         var leaves = false
         weak var parent: NSView?
-        var frame: NSRect = .zero
+        var frame: NSRect?
     }
     private static var pending: [ObjectIdentifier: Change] = [:]
     private static var isScheduled = false
 
     /// Changes waiting for the next turn (tests).
     static var pendingCount: Int { pending.count }
+
+    /// First attachment of a control built during SwiftUI layout. Its
+    /// geometry can still be computed while it waits; do not restore the
+    /// initial (often zero) frame when it finally joins the text view.
+    static func attach(_ view: NSView, to parent: NSView) {
+        let id = ObjectIdentifier(view)
+        if view.superview === parent { pending[id] = nil; return }
+        guard isInLayoutPass else {
+            pending[id] = nil
+            parent.addSubview(view, positioned: .above, relativeTo: nil)
+            return
+        }
+        pending[id] = Change(view: view, parent: parent)
+        schedule()
+    }
 
     /// Puts `view` at `frame` in `parent`, above its siblings.
     static func place(_ view: NSView, in parent: NSView, frame: NSRect) {
@@ -663,6 +678,9 @@ enum AtticOverlayHierarchy {
     /// Applies what waited (the next turn; tests may call it).
     static func flush() {
         isScheduled = false
+        // AppKit may run a nested loop while laying out. An async callback
+        // is not by itself evidence that the outer layout pass has ended.
+        guard !isInLayoutPass else { schedule(); return }
         let changes = pending
         pending = [:]
         for change in changes.values {
@@ -670,7 +688,7 @@ enum AtticOverlayHierarchy {
             if change.leaves {
                 if view.superview != nil { view.removeFromSuperview() }
             } else if let parent = change.parent {
-                if view.frame != change.frame { view.frame = change.frame }
+                if let frame = change.frame, view.frame != frame { view.frame = frame }
                 if view.superview !== parent { parent.addSubview(view, positioned: .above, relativeTo: nil) }
             }
         }

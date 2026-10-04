@@ -119,7 +119,7 @@ final class NoteFormatControls: NSObject {
         slashHost.menuLabel = String(localized: "Insert")
         cardHost.contentInset = AtticDropdownMetrics.shadowRoom
         hintHost.isHidden = true
-        textView.addSubview(hintHost)
+        AtticOverlayHierarchy.attach(hintHost, to: textView)
         for host in [barHost, slashHost, cardHost, addressHost] { host.isHidden = true }
         rebuildRoots()
         wire()

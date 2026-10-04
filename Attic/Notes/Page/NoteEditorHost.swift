@@ -138,7 +138,7 @@ final class NoteTitleAccessories {
         for host in [tagHost, menuHost, suggestionHost] {
             host.translatesAutoresizingMaskIntoConstraints = true
             host.autoresizingMask = []
-            textView.addSubview(host)
+            AtticOverlayHierarchy.attach(host, to: textView)
         }
         textView.accessoryViews = [tagHost, menuHost, suggestionHost]
         textView.suggestionCommand = { [weak self] selector in self?.handleSuggestionKey(selector) ?? false }

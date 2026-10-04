@@ -41,8 +41,8 @@ final class NoteObjectControls: NSObject, NoteObjectInteraction {
         super.init()
         selectionView.isHidden = true
         dropView.isHidden = true
-        textView.addSubview(selectionView)
-        textView.addSubview(dropView)
+        AtticOverlayHierarchy.attach(selectionView, to: textView)
+        AtticOverlayHierarchy.attach(dropView, to: textView)
         selectionView.onResize = { [weak self] width, finished in self?.resize(toWidth: width, finished: finished) }
         textView.objectInteraction = self
         engine.onRetryImportObject = { [weak self] id in self?.requestSource?(.retry(id)) }
