@@ -3958,6 +3958,7 @@ final class TaskStore: ObservableObject {
         to orderedGroup: [TaskItem],
         updatedAt: Date
     ) throws {
+        WorkspaceLegacyBridge.captureBeforeMutations(orderedGroup, in: context)
         let groups = try storedTaskGroups(matching: Set(orderedGroup.map(\.id)))
         WorkspaceLegacyBridge.prepareMutations(groups.values.flatMap { $0 }, in: context)
         for (index, item) in orderedGroup.enumerated() {

@@ -80,6 +80,29 @@ final class WorkspaceCommitTests: XCTestCase {
         XCTAssertEqual(notes.note(withID: noteID)?.tags, ["after"])
         XCTAssertEqual(try coordinator.freshContext().fetchCount(FetchDescriptor<OperationReceipt>()), receiptCount + 1)
     }
+
+    func testCombinedRespacingRefusesAChangedPresentedDestinationFamily() throws {
+        let seed = coordinator.freshContext()
+        let next = TaskItem(title: "Next", manualOrder: 9)
+        next.listOrderVersion = TaskItem.currentListOrderVersion
+        seed.insert(next)
+        let id = taskID!
+        let parent = try XCTUnwrap(seed.fetch(FetchDescriptor<TaskItem>(predicate: #Predicate { $0.id == id })).first)
+        parent.manualOrder = 10
+        parent.listOrderVersion = TaskItem.currentListOrderVersion
+        try seed.save()
+        let tasks = TaskStore(container: container)
+        let child = try XCTUnwrap(tasks.create(title: "Child", parentID: taskID))
+        let foreign = ModelContext(container), nextID = next.id
+        try XCTUnwrap(foreign.fetch(FetchDescriptor<TaskItem>(predicate: #Predicate { $0.id == nextID })).first).title = "Foreign next"
+        try foreign.save()
+        XCTAssertFalse(tasks.reparentSubtask(child.id, to: nil), "A one-unit gap requires guarded re-spacing")
+        let fresh = coordinator.freshContext()
+        let rows = try fresh.fetch(FetchDescriptor<TaskItem>())
+        XCTAssertEqual(rows.first { $0.id == nextID }?.title, "Foreign next")
+        XCTAssertEqual(rows.first { $0.id == nextID }?.manualOrder, 9)
+        XCTAssertEqual(rows.first { $0.id == child.id }?.parentID, taskID)
+    }
     private func conversion(failAfter: Int? = nil,
                             preDraft: NoteDraftJournalEntry? = nil, checkpointClaim: NoteRecoveryClaim? = nil,
                             publication: WorkspaceOperationCoordinator.Publication = .init()) async throws -> (WorkspaceOperationCoordinator.Outcome, UUID) {
