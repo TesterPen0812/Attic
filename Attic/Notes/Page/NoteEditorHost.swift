@@ -23,7 +23,10 @@ final class NotesPageChrome: ObservableObject {
     /// The open panel for Insert › Image or File…, the `/` row (one file),
     /// or a failed object's Retry and Locate… (one file, for that object).
     enum FileRequest: Equatable {
-        case insert, slash
+        case insert
+        /// The `/` row's request, with the session it was made in: its
+        /// completion goes to that request only (review P2, `8008974`).
+        case slash(NoteSlashFileTicket)
         case retry(UUID), locate(UUID)
     }
     @Published var fileRequest: FileRequest? {
@@ -135,7 +138,7 @@ final class NoteTitleAccessories {
         for host in [tagHost, menuHost, suggestionHost] {
             host.translatesAutoresizingMaskIntoConstraints = true
             host.autoresizingMask = []
-            textView.addSubview(host)
+            AtticOverlayHierarchy.attach(host, to: textView)
         }
         textView.accessoryViews = [tagHost, menuHost, suggestionHost]
         textView.suggestionCommand = { [weak self] selector in self?.handleSuggestionKey(selector) ?? false }
@@ -153,7 +156,8 @@ final class NoteTitleAccessories {
                                                                 queue: .main) { [weak self] _ in
             MainActor.assumeIsolated {
                 self?.updateHeaderTitle()
-                self?.followSuggestions()
+                // Can run inside a layout pass (the clip settling).
+                AtticOverlayHierarchy.layoutPass { self?.followSuggestions() }
             }
         }
     }
@@ -166,9 +170,7 @@ final class NoteTitleAccessories {
         textView?.onLayout = nil
         textView?.suggestionCommand = nil
         textView?.accessoryViews = []
-        menuHost.removeFromSuperview()
-        tagHost.removeFromSuperview()
-        suggestionHost.removeFromSuperview()
+        for host in [menuHost, tagHost, suggestionHost] { AtticOverlayHierarchy.remove(host) }
         if chrome.accessories === self {
             chrome.accessories = nil
             // Dismantling runs inside a SwiftUI update: publish afterwards.
@@ -499,7 +501,9 @@ struct NoteEditorRepresentable: NSViewRepresentable {
         let chrome = chrome
         controls.requestFormatPopover = { [weak chrome] keyboard in chrome?.openFormatPopover(keyboard: keyboard) }
         controls.closeFormatPopover = { [weak chrome] in chrome?.isFormatPopoverOpen = false }
-        controls.requestFile = { [weak chrome] fromSlash in chrome?.fileRequest = fromSlash ? .slash : .insert }
+        controls.requestFile = { [weak chrome, sessionID = session.id] slash in
+            chrome?.fileRequest = slash.map { .slash(NoteSlashFileTicket(sessionID: sessionID, request: $0)) } ?? .insert
+        }
         context.coordinator.controls = controls
         chrome.controls = controls
         let objects = NoteObjectControls(engine: engine, textView: textView)

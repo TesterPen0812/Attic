@@ -413,13 +413,16 @@ struct AtticTagPicker: View {
 // MARK: - Tag picker card (Tasks and Notes)
 
 /// The tag picker with its state: the query, the one highlight and the
-/// keys (the E1 keyboard model). Typing filters and highlights the first
-/// row (an empty field highlights nothing, so Return does nothing); ↑ ↓
-/// move the highlight, the pointer moves it too; Return presses it (a tag
-/// toggles, "New tag" adds); with Full Keyboard Access the rows are one Tab
-/// stop and Space presses the highlight there; Esc is the card's (it
-/// closes). The caller says which rows a query shows: Tasks lists every
-/// tag; Notes lists its own tags with their counts.
+/// keys (the E1 keyboard model). Typing filters and highlights only what
+/// was typed: the tag with exactly that name, else "New tag" for it (never
+/// another tag; an empty field highlights nothing, so Return does
+/// nothing); ↑ ↓ move the highlight, the pointer moves it too; Return
+/// presses it (a tag toggles, "New tag" adds); with Full Keyboard Access
+/// the rows are one Tab stop and Space presses the highlight there; Esc is
+/// the card's (it closes). The highlight is the row's identity, so it stays
+/// on its tag when a toggle reorders the rows. The caller says which rows a
+/// query shows: Tasks lists every tag; Notes lists its own tags first, with
+/// their counts.
 struct AtticTagPickerCard: View {
     /// The rows for what is typed, in order, and the name "New tag “#…”"
     /// would add (nil when the typed name is a tag already, or empty).
@@ -434,7 +437,7 @@ struct AtticTagPickerCard: View {
     var focusField = true
 
     @State private var query = ""
-    @State private var highlighted: Int?
+    @State private var highlight: AtticTagPickerHighlight?
     @FocusState private var fieldFocused: Bool
     @FocusState private var listFocused: Bool
 
@@ -442,7 +445,12 @@ struct AtticTagPickerCard: View {
         let shown = rows(query)
         let filtered = shown.tags
         let create = shown.create
-        let typedNothing = query.trimmingCharacters(in: .whitespaces).replacingOccurrences(of: "#", with: "").isEmpty
+        // The row the highlight is on now: found again by identity after
+        // every change of the rows (a toggle moves the note's own tags up).
+        let highlighted = highlight?.index(in: filtered, create: create)
+        let highlightIndex = Binding<Int?>(
+            get: { highlighted },
+            set: { highlight = AtticTagPickerHighlight.at($0, in: filtered, create: create) })
         AtticTagPicker(
             query: $query,
             tags: filtered,
@@ -456,33 +464,34 @@ struct AtticTagPickerCard: View {
             fieldFocused: $fieldFocused,
             onHover: { index, inside in
                 let next = AtticListHighlight.hovered(index, inside: inside, current: highlighted)
-                if next != highlighted { highlighted = next }
+                if next != highlighted { highlightIndex.wrappedValue = next }
             },
             listRows: listRows,
             listFocus: $listFocused,
-            onListHighlight: $highlighted
+            onListHighlight: highlightIndex
         )
         .atticDropdownFocus($fieldFocused, when: focusField)
         .atticDropdownTabs(field: $fieldFocused, list: $listFocused)
-        // Typing highlights the tag with exactly the typed name, else the
-        // first match (Notes lists the note's own tags first: "launch" must
-        // not light "launch-october"); an empty field (as after a new tag
-        // saved) highlights nothing, so another Return does nothing rather
-        // than toggle a tag (round 5, F5).
-        .onChange(of: query) { _, _ in
-            highlighted = typedNothing || (filtered.isEmpty && create == nil) ? nil
-                : Self.exactMatch(query, in: filtered) ?? 0
+        // Typing highlights only what was typed (one rule for Tasks and
+        // Notes): the exact tag, else "New tag" for the typed name. A
+        // prefix never lights the first match ("launch" must not light
+        // "launch-october", listed first in Notes), and an empty field (as
+        // after a new tag saved) lights nothing, so another Return does
+        // nothing rather than toggle a tag (round 5, F5).
+        .onChange(of: query) { _, now in
+            let typed = rows(now)
+            highlight = AtticTagPickerHighlight.typed(now, in: typed.tags, create: typed.create)
         }
         .onKeyPress(phases: .down) { press in
             let count = filtered.count + (create == nil ? 0 : 1)
             switch press.key {
             case .downArrow:
                 guard count > 0 else { return .ignored }
-                highlighted = min((highlighted ?? -1) + 1, count - 1)
+                highlightIndex.wrappedValue = min((highlighted ?? -1) + 1, count - 1)
                 return .handled
             case .upArrow:
                 guard count > 0 else { return .ignored }
-                highlighted = max((highlighted ?? count) - 1, 0)
+                highlightIndex.wrappedValue = max((highlighted ?? count) - 1, 0)
                 return .handled
             case .return, .space:
                 // Space presses the highlighted row only while the rows have
@@ -506,9 +515,44 @@ struct AtticTagPickerCard: View {
 
 extension AtticTagPickerCard {
     /// The row whose tag is exactly the typed name (`#` and case aside).
-    static func exactMatch(_ query: String, in tags: [AtticTagPicker.Tag]) -> Int? {
+    nonisolated static func exactMatch(_ query: String, in tags: [AtticTagPicker.Tag]) -> Int? {
         guard let typed = AtticTag.normalize(query)?.lowercased() else { return nil }
         return tags.firstIndex { $0.name.lowercased() == typed }
+    }
+}
+
+/// The tag picker's one highlight, kept as the row's identity (a tag's
+/// name, or the "New tag" row) rather than its position: a toggle can
+/// reorder the rows (Notes lists the note's own tags first), and Return or
+/// Space must press the tag that was highlighted, never the one that slid
+/// into its place (review P2, `bdadf46`).
+enum AtticTagPickerHighlight: Hashable {
+    case tag(String)
+    case create
+
+    /// Its row among `tags` (the "New tag" row follows them); nil when the
+    /// rows no longer show it.
+    func index(in tags: [AtticTagPicker.Tag], create: String?) -> Int? {
+        switch self {
+        case let .tag(name): tags.firstIndex { $0.name == name }
+        case .create: create == nil ? nil : tags.count
+        }
+    }
+
+    /// The row at `index` (the arrows, the pointer, the list's Tab stop).
+    static func at(_ index: Int?, in tags: [AtticTagPicker.Tag], create: String?) -> Self? {
+        guard let index, index >= 0 else { return nil }
+        if index < tags.count { return .tag(tags[index].name) }
+        return index == tags.count && create != nil ? .create : nil
+    }
+
+    /// What typing `query` highlights: the tag with exactly the typed name
+    /// (`#` and case aside), else "New tag" for it; nothing for an empty
+    /// field or a name that cannot be a tag. Never another tag, so Return
+    /// acts only on what was typed or highlighted.
+    static func typed(_ query: String, in tags: [AtticTagPicker.Tag], create: String?) -> Self? {
+        if let exact = AtticTagPickerCard.exactMatch(query, in: tags) { return .tag(tags[exact].name) }
+        return create == nil ? nil : .create
     }
 }
 

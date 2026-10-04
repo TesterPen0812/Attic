@@ -566,11 +566,132 @@ struct AtticDropdownSpace {
     }
 
     /// Puts a card's host (the card and its shadow room) where `placement`
-    /// says, in the overlay.
+    /// says, in the overlay (joining it outside AppKit's layout pass:
+    /// `AtticOverlayHierarchy`).
     func show(_ host: NSView, at placement: AtticDropdownLayout.Placement, room: CGFloat = AtticDropdownMetrics.shadowRoom) {
         let frame = AtticDropdownLayout.topDown(placement.frame.insetBy(dx: -room, dy: -room), in: parent).integral
-        if host.frame != frame { host.frame = frame }
-        if host.superview !== parent { parent.addSubview(host, positioned: .above, relativeTo: nil) }
+        AtticOverlayHierarchy.place(host, in: parent, frame: frame)
+    }
+}
+
+// MARK: - Overlay hierarchy
+
+/// Overlay views (Notes' bar, `/` list, cards, hint and object ring, the
+/// title's tag suggestions, every dropdown card) join, change or leave
+/// their parent only outside AppKit's layout pass.
+///
+/// P1-01 (the freeze: every main-thread sample in `NSHostingView.layout →
+/// FocusBridge.updateDefaultKeyViewLoop`) is suspected to come from hosting
+/// views joining or leaving the window while it lays out: the text's layout
+/// places the overlays, and a SwiftUI update inside the panel's layout can
+/// dismantle them. This is a hypothesis until the on-screen check
+/// reproduces the freeze or fails to. Inside a layout pass a host already
+/// in its parent still moves at once (no one-frame jump); a change of
+/// parent waits for the next run-loop turn, coalesced per view (the latest
+/// request wins) and skipped when by then there is nothing to change.
+@MainActor
+enum AtticOverlayHierarchy {
+    /// Attic's views in a layout pass (or in a callback that can run in
+    /// one, such as a scroll's bounds change) mark it here.
+    private(set) static var layoutDepth = 0
+    static var isInLayoutPass: Bool { layoutDepth > 0 }
+
+    /// Runs `body` as part of a layout pass.
+    static func layoutPass<T>(_ body: () throws -> T) rethrows -> T {
+        layoutDepth += 1
+        defer { layoutDepth -= 1 }
+        return try body()
+    }
+
+    private struct Change {
+        weak var view: NSView?
+        /// Leave the parent (otherwise join `parent`).
+        var leaves = false
+        weak var parent: NSView?
+        var frame: NSRect?
+    }
+    private static var pending: [ObjectIdentifier: Change] = [:]
+    private static var isScheduled = false
+
+    /// Changes waiting for the next turn (tests).
+    static var pendingCount: Int { pending.count }
+
+    /// First attachment of a control built during SwiftUI layout. Its
+    /// geometry can still be computed while it waits; do not restore the
+    /// initial (often zero) frame when it finally joins the text view.
+    static func attach(_ view: NSView, to parent: NSView) {
+        let id = ObjectIdentifier(view)
+        if view.superview === parent { pending[id] = nil; return }
+        guard isInLayoutPass else {
+            pending[id] = nil
+            parent.addSubview(view, positioned: .above, relativeTo: nil)
+            return
+        }
+        pending[id] = Change(view: view, parent: parent)
+        schedule()
+    }
+
+    /// Puts `view` at `frame` in `parent`, above its siblings.
+    static func place(_ view: NSView, in parent: NSView, frame: NSRect) {
+        let id = ObjectIdentifier(view)
+        if view.superview === parent {
+            pending[id] = nil
+            if view.frame != frame { view.frame = frame }
+            return
+        }
+        guard isInLayoutPass else {
+            pending[id] = nil
+            if view.frame != frame { view.frame = frame }
+            parent.addSubview(view, positioned: .above, relativeTo: nil)
+            return
+        }
+        // While it waits in another parent it keeps its place on screen.
+        if let current = view.superview, current.window != nil, current.window === parent.window {
+            let interim = current.convert(frame, from: parent)
+            if view.frame != interim { view.frame = interim }
+        }
+        pending[id] = Change(view: view, parent: parent, frame: frame)
+        schedule()
+    }
+
+    /// Takes `view` out of its parent. In a layout pass it is hidden now
+    /// and leaves on the next turn.
+    static func remove(_ view: NSView) {
+        let id = ObjectIdentifier(view)
+        guard isInLayoutPass else {
+            pending[id] = nil
+            view.removeFromSuperview()
+            return
+        }
+        guard view.superview != nil || pending[id] != nil else { return }
+        if !view.isHidden { view.isHidden = true }
+        pending[id] = Change(view: view, leaves: true)
+        schedule()
+    }
+
+    private static func schedule() {
+        guard !isScheduled else { return }
+        isScheduled = true
+        DispatchQueue.main.async { flush() }
+    }
+
+    /// Applies what waited (the next turn; tests may call it).
+    static func flush() {
+        isScheduled = false
+        // AppKit may run a nested loop while laying out. An async callback
+        // is not by itself evidence that the outer layout pass has ended.
+        guard !isInLayoutPass else { schedule(); return }
+        let changes = pending
+        pending = [:]
+        for change in changes.values {
+            guard let view = change.view else { continue }
+            if change.leaves {
+                if view.superview != nil { view.removeFromSuperview() }
+            } else if let parent = change.parent {
+                if let frame = change.frame, view.frame != frame { view.frame = frame }
+                if view.superview !== parent { parent.addSubview(view, positioned: .above, relativeTo: nil) }
+            }
+        }
     }
 }
 
@@ -594,6 +715,12 @@ final class AtticOverlayHostingView: NSHostingView<AnyView> {
     }
 
     @MainActor @preconcurrency required dynamic init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
+
+    /// Its SwiftUI update (a card's size, a nested card closing) is part of
+    /// the layout pass: overlay hierarchy changes from it wait.
+    override func layout() {
+        AtticOverlayHierarchy.layoutPass { super.layout() }
+    }
 
     override var acceptsFirstResponder: Bool { acceptsKeyboard }
 
@@ -772,7 +899,7 @@ final class AtticDropdownPresenter {
         guard !isOpen, let window = anchor.window, let space = AtticDropdownSpace(around: anchor) else { return }
         removal?.cancel()
         removal = nil
-        host?.removeFromSuperview()
+        if let host { AtticOverlayHierarchy.remove(host) }
         self.anchor = anchor
         let room = AtticDropdownMetrics.shadowRoom
         stage.shown = false
@@ -892,13 +1019,13 @@ final class AtticDropdownPresenter {
         }
         previousResponder = nil
         if immediately {
-            host.removeFromSuperview()
+            AtticOverlayHierarchy.remove(host)
             self.host = nil
             return
         }
         stage.shown = false
         let work = DispatchWorkItem { [weak self, weak host] in
-            host?.removeFromSuperview()
+            if let host { AtticOverlayHierarchy.remove(host) }
             if let self, self.host === host { self.host = nil }
         }
         removal = work

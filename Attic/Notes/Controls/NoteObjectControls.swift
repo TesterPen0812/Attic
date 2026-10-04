@@ -41,8 +41,8 @@ final class NoteObjectControls: NSObject, NoteObjectInteraction {
         super.init()
         selectionView.isHidden = true
         dropView.isHidden = true
-        textView.addSubview(selectionView)
-        textView.addSubview(dropView)
+        AtticOverlayHierarchy.attach(selectionView, to: textView)
+        AtticOverlayHierarchy.attach(dropView, to: textView)
         selectionView.onResize = { [weak self] width, finished in self?.resize(toWidth: width, finished: finished) }
         textView.objectInteraction = self
         engine.onRetryImportObject = { [weak self] id in self?.requestSource?(.retry(id)) }
@@ -66,8 +66,8 @@ final class NoteObjectControls: NSObject, NoteObjectInteraction {
         if textView?.objectInteraction === self { textView?.objectInteraction = nil }
         engine.onRetryImportObject = nil
         engine.onLocateObject = nil
-        selectionView.removeFromSuperview()
-        dropView.removeFromSuperview()
+        AtticOverlayHierarchy.remove(selectionView)
+        AtticOverlayHierarchy.remove(dropView)
     }
 
     /// The accent follows the look (a change of palette, not a keystroke).

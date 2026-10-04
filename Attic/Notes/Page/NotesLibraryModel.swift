@@ -55,6 +55,9 @@ final class NotesLibraryModel: ObservableObject {
     private var storeRevision: UInt64 = 0
     private var searchGeneration: UInt64 = 0
     private var cache: (key: RowsKey, groups: [Group])?
+    /// Each stored note's preview body, read from its document once per
+    /// saved revision (a row rebuild decodes only the notes that changed).
+    private var bodies: [UUID: (revision: Int64, revisionID: UUID?, body: NoteRowSummary.Body)] = [:]
 
     private struct RowsKey: Equatable {
         let revision: UInt64
@@ -198,6 +201,11 @@ final class NotesLibraryModel: ObservableObject {
                 else if note.updatedAt >= weekStart { week.append(model) }
                 else { earlier.append(model) }
             }
+            // Deleted notes' bodies go (the full list was just built).
+            if bodies.count > notes.count {
+                let shown = Set(notes.map(\.id))
+                bodies = bodies.filter { shown.contains($0.key) }
+            }
             result = [
                 Group(id: "pinned", title: String(localized: "Pinned"), rows: pinned),
                 Group(id: "today", title: String(localized: "Today"), rows: todayRows),
@@ -249,13 +257,22 @@ final class NotesLibraryModel: ObservableObject {
     }
 
     private func row(_ note: NoteItem, store: NoteStore, attention: Set<UUID>) -> AtticNoteRowModel {
-        let summary = NoteRowSummary(note: note, attachments: store.attachments(for: note.id))
+        let summary = NoteRowSummary(note: note, attachments: store.attachments(for: note.id), body: body(of: note))
         let time = Self.time(note.updatedAt, now: now(), calendar: calendar)
         return AtticNoteRowModel(
             id: note.id, title: summary.title, time: time, needsAttention: attention.contains(note.id),
             preview: summary.preview, checklist: summary.checklist, images: summary.images, files: summary.files,
             spoken: summary.spoken(time: time, needsAttention: attention.contains(note.id))
         )
+    }
+
+    private func body(of note: NoteItem) -> NoteRowSummary.Body {
+        // A legacy note's text is read as is (no decode, nothing to keep).
+        guard note.usesDocumentFormat else { return NoteRowSummary.body(of: note) }
+        if let kept = bodies[note.id], kept.revision == note.revision, kept.revisionID == note.revisionID { return kept.body }
+        let body = NoteRowSummary.body(of: note)
+        bodies[note.id] = (note.revision, note.revisionID, body)
+        return body
     }
 
     private func draftRow(_ session: NoteSession) -> AtticNoteRowModel {
@@ -285,9 +302,15 @@ final class NotesLibraryModel: ObservableObject {
     }
 }
 
-/// What a row says about a note, from its derived text (cheap: no document
-/// decode). A note with only images or files takes its first file's name as
-/// its title and says "1 file" or "2 images".
+/// What a row says about a note. A note with only images or files takes its
+/// first file's name as its title and says "1 file" or "2 images".
+///
+/// The preview is the note's text without its formatting, read from the
+/// blocks' kinds and styles (a heading, a list item, a quote, Mono) and
+/// never by stripping patterns from the text: `__init__` in Mono, a URL
+/// with `/__v1__/` or a paragraph that starts with "- " read as typed
+/// (review P3, `d5e2c0d`). Emphasis is a mark beside the text, so the text
+/// has none to strip.
 struct NoteRowSummary: Equatable {
     var title: String
     var preview: String
@@ -300,10 +323,81 @@ struct NoteRowSummary: Equatable {
             && lhs.checklist?.done == rhs.checklist?.done && lhs.checklist?.total == rhs.checklist?.total
     }
 
+    /// One body line as a row reads it.
+    struct Line: Equatable {
+        enum Kind: Equatable { case text, listItem, checklist(checked: Bool), object }
+        let text: String
+        let kind: Kind
+
+        /// A block's line: its text with no marker (the style says what it
+        /// is); images, files, dividers and unsupported blocks are objects.
+        init(_ block: NoteBlock) {
+            switch block.kind {
+            case .text:
+                text = block.displayText.trimmingCharacters(in: .whitespaces)
+                kind = block.style == "bullet" || block.style == "number" ? .listItem : .text
+            case .checklist:
+                text = block.displayText.trimmingCharacters(in: .whitespaces)
+                kind = .checklist(checked: block.checked)
+            case .image, .file, .divider, .opaque:
+                text = ""
+                kind = .object
+            }
+        }
+
+        /// A line of text with no document behind it (a legacy note, or
+        /// stored bytes this build cannot read): as written, apart from the
+        /// derived text's object lines and `[ ]` / `[x]` checklist lines.
+        init(plain line: String) {
+            let trimmed = line.trimmingCharacters(in: .whitespaces)
+            if trimmed == "[Image]" || trimmed.hasPrefix("[File: ") || trimmed == "[Unsupported content]" {
+                text = ""
+                kind = .object
+            } else if trimmed.hasPrefix("[ ] ") || trimmed.hasPrefix("[x] ") {
+                text = String(trimmed.dropFirst(4))
+                kind = .checklist(checked: trimmed.hasPrefix("[x] "))
+            } else {
+                text = trimmed
+                kind = .text
+            }
+        }
+    }
+
+    /// What the preview and the checklist count take from the body: the
+    /// first parts (about one line's worth) and the counts over the whole
+    /// note. Small; the library keeps one per note revision.
+    struct Body {
+        private(set) var parts: [(text: String, isListItem: Bool)] = []
+        private(set) var done = 0
+        private(set) var total = 0
+
+        init(_ lines: some Sequence<Line>) {
+            var length = 0
+            for line in lines {
+                if case let .checklist(checked) = line.kind {
+                    total += 1
+                    if checked { done += 1 }
+                }
+                guard line.kind != .object, !line.text.isEmpty, length <= 160 else { continue }
+                let isListItem = switch line.kind { case .listItem, .checklist: true; default: false }
+                parts.append((line.text, isListItem))
+                length += line.text.count + 1
+            }
+        }
+    }
+
+    /// The body of a stored note: its document's blocks; a legacy note's
+    /// (or an unreadable document's) text as written.
     @MainActor
-    init(note: NoteItem, attachments: [NoteAttachment]) {
-        var lines = note.plainText.components(separatedBy: "\n")
-        if !lines.isEmpty { lines.removeFirst() }
+    static func body(of note: NoteItem) -> Body {
+        if note.usesDocumentFormat, let data = note.content, let document = NoteContentCodec.decode(data).document {
+            return Body(document.blocks.dropFirst().lazy.map(Line.init))
+        }
+        return Body(note.plainText.components(separatedBy: "\n").dropFirst().lazy.map { Line(plain: $0) })
+    }
+
+    @MainActor
+    init(note: NoteItem, attachments: [NoteAttachment], body: Body? = nil) {
         var images = 0
         var files = 0
         if note.usesDocumentFormat {
@@ -317,44 +411,21 @@ struct NoteRowSummary: Equatable {
         let firstFile = note.usesDocumentFormat ? (note.firstFileName
             ?? attachments.sorted { $0.sortIndex < $1.sortIndex }.first?.originalFilename)
             : attachments.sorted { $0.sortIndex < $1.sortIndex }.first?.originalFilename
-        self.init(title: note.title, bodyLines: lines, images: images, files: files, firstFile: firstFile)
+        self.init(title: note.title, body: body ?? Self.body(of: note), images: images, files: files, firstFile: firstFile)
     }
 
     @MainActor
     init(document: NoteDocument, filename: (UUID) -> String?) {
-        let lines = document.blocks.dropFirst().map(NoteTextExport.plainLine)
         let images = document.blocks.filter { $0.kind == .image }.count
         let files = document.blocks.filter { $0.kind == .file }.count
         let firstFile = document.blocks.first { $0.kind == .file }?.filename
             ?? document.blocks.first { $0.kind == .image }?.attachmentID.flatMap(filename)
-        self.init(title: document.title, bodyLines: lines, images: images, files: files, firstFile: firstFile)
+        self.init(title: document.title, body: Body(document.blocks.dropFirst().lazy.map(Line.init)),
+                  images: images, files: files, firstFile: firstFile)
     }
 
-    private init(title: String, bodyLines: [String], images: Int, files: Int, firstFile: String?) {
-        var done = 0
-        var total = 0
-        var previewParts: [(text: String, isListItem: Bool)] = []
-        // Counts read the whole note; only the preview stops early (it
-        // shows one line).
-        var previewLength = 0
-        for line in bodyLines {
-            let trimmed = line.trimmingCharacters(in: .whitespaces)
-            if trimmed.isEmpty || trimmed == "[Image]" || trimmed.hasPrefix("[File: ")
-                || trimmed == "[Unsupported content]" || Self.isDivider(trimmed) { continue }
-            let isChecklist = trimmed.hasPrefix("[ ] ") || trimmed.hasPrefix("[x] ")
-            if isChecklist {
-                total += 1
-                if trimmed.hasPrefix("[x] ") { done += 1 }
-            }
-            guard previewLength <= 160 else { continue }
-            // Clean text (CU P3-02): no heading hashes, list or quote
-            // markers, or emphasis marks.
-            let (part, isListItem) = isChecklist ? (Self.plainInline(String(trimmed.dropFirst(4))), true)
-                : Self.previewText(trimmed)
-            guard !part.isEmpty else { continue }
-            previewParts.append((part, isListItem))
-            previewLength += part.count + 1
-        }
+    private init(title: String, body: Body, images: Int, files: Int, firstFile: String?) {
+        let previewParts = body.parts
         let cleanTitle = title.trimmingCharacters(in: .whitespacesAndNewlines)
         let fileOnly = cleanTitle.isEmpty && previewParts.isEmpty && images + files > 0
         self.title = !cleanTitle.isEmpty ? cleanTitle
@@ -372,46 +443,9 @@ struct NoteRowSummary: Equatable {
             }
             preview = joined
         }
-        checklist = total > 0 ? (done, total) : nil
+        checklist = body.total > 0 ? (body.done, body.total) : nil
         self.images = images
         self.files = files
-    }
-
-    private static func isDivider(_ line: String) -> Bool {
-        line.count >= 3 && Set(line).count == 1 && ["-", "*", "_"].contains(line.first!)
-    }
-
-    /// A body line without its block marker: `## `, `- `, `* `, `+ `,
-    /// `1. ` or `1) `, `> `; and whether it is a list item.
-    static func previewText(_ line: String) -> (String, Bool) {
-        var text = Substring(line)
-        var isListItem = false
-        if let hashes = text.firstIndex(where: { $0 != "#" }), hashes != text.startIndex,
-           text.distance(from: text.startIndex, to: hashes) <= 6, text[hashes] == " " {
-            text = text[text.index(after: hashes)...]
-        } else if text.hasPrefix("> ") || text == ">" {
-            text = text.dropFirst(min(2, text.count))
-        } else if let marker = text.first, ["-", "*", "+", "•"].contains(marker), text.dropFirst().first == " " {
-            text = text.dropFirst(2)
-            isListItem = true
-        } else if let digitsEnd = text.firstIndex(where: { !$0.isASCII || !$0.isNumber }), digitsEnd != text.startIndex,
-                  [".", ")"].contains(text[digitsEnd]), text[text.index(after: digitsEnd)...].first == " " {
-            text = text[text.index(digitsEnd, offsetBy: 2)...]
-            isListItem = true
-        }
-        if text.hasPrefix("[ ] ") || text.hasPrefix("[x] ") || text.hasPrefix("[X] ") { text = text.dropFirst(4) }
-        return (plainInline(String(text).trimmingCharacters(in: .whitespaces)), isListItem)
-    }
-
-    /// Paired emphasis marks taken out: `**bold**`, `__bold__`, `*it*`,
-    /// `_it_`, `~~struck~~`, `` `code` ``. A lone mark stays.
-    static func plainInline(_ text: String) -> String {
-        guard text.contains(where: { "*_~`".contains($0) }) else { return text }
-        var result = text
-        for pattern in [#"(\*\*|__|~~)(?=\S)(.+?)(?<=\S)\1"#, #"(?<![\w*])([*_])(?=\S)(.+?)(?<=\S)\1(?![\w*])"#, #"(`)(.+?)\1"#] {
-            result = result.replacingOccurrences(of: pattern, with: "$2", options: .regularExpression)
-        }
-        return result
     }
 
     /// "Pricing page, edited 09:40, not saved, 1 of 3 checked, 1 image".

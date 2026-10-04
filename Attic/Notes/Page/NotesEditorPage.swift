@@ -281,8 +281,8 @@ struct NotesEditorPage: View {
         let request = chrome.takeFileRequest()
         let urls: [URL] = if case let .success(urls)? = result { urls } else { [] }
         switch request {
-        case .slash:
-            if let url = urls.first { controller.importSlashImage(url) } else { controller.active?.engine.cancelSlashFile() }
+        case let .slash(ticket):
+            if let url = urls.first { controller.importSlashImage(url, for: ticket) } else { ticket.request.cancel() }
         case .insert, nil:
             if !urls.isEmpty { controller.importFiles(urls) }
         case let .retry(id):

@@ -61,8 +61,9 @@ final class NoteFormatControls: NSObject {
     /// ⌃Tab or ⌘T without a bar, and Aa's own button: the page's pop-over.
     var requestFormatPopover: ((_ keyboard: Bool) -> Void)?
     var closeFormatPopover: (() -> Void)?
-    /// Image or File…: the page's open panel (one image for `/`).
-    var requestFile: ((_ fromSlash: Bool) -> Void)?
+    /// Image or File…: the page's open panel. `slash` is the `/` row's
+    /// request (one file, replacing its command); nil for Insert.
+    var requestFile: ((_ slash: NoteSlashFileRequest?) -> Void)?
     /// A `/` row was taken (tests: the list runs the engine's commands).
     var onSlashPick: ((NoteSlashItem.Kind) -> Void)?
     /// Aa is open: its toggles follow the selection too.
@@ -118,7 +119,7 @@ final class NoteFormatControls: NSObject {
         slashHost.menuLabel = String(localized: "Insert")
         cardHost.contentInset = AtticDropdownMetrics.shadowRoom
         hintHost.isHidden = true
-        textView.addSubview(hintHost)
+        AtticOverlayHierarchy.attach(hintHost, to: textView)
         for host in [barHost, slashHost, cardHost, addressHost] { host.isHidden = true }
         rebuildRoots()
         wire()
@@ -135,7 +136,7 @@ final class NoteFormatControls: NSObject {
             self?.returnKeyboardFromBar()
         }
         router.requestDate = { [weak self] in self?.openDateCard(fromSlash: false) }
-        router.requestFile = { [weak self] in self?.requestFile?(false) }
+        router.requestFile = { [weak self] in self?.requestFile?(nil) }
         formatModel.willRequestLink = { [weak self] in
             if self?.isFormatPopoverOpen == true { self?.closeFormatPopover?() }
         }
@@ -147,7 +148,7 @@ final class NoteFormatControls: NSObject {
 
         engine.onSlashSessionChange = { [weak self] session in self?.slashSessionChanged(session) }
         engine.onSlashDateRequest = { [weak self] in self?.openDateCard(fromSlash: true) }
-        engine.onSlashFileRequest = { [weak self] in self?.requestFile?(true) }
+        engine.onSlashFileRequest = { [weak self] request in self?.requestFile?(request) }
         engine.onLinkRequest = { [weak self] target in self?.openLinkCard(target: target) }
         previousActivity = engine.onActivityChanged
         engine.onActivityChanged = { [weak self] old, new in
@@ -171,9 +172,11 @@ final class NoteFormatControls: NSObject {
         ) { [weak self] _ in MainActor.assumeIsolated { self?.selectionDidChange() } }
         let clip = scrollView.contentView
         clip.postsBoundsChangedNotifications = true
+        // A bounds change can come from inside a layout pass (the clip
+        // settling): its placement counts as layout.
         boundsObserver = NotificationCenter.default.addObserver(
             forName: NSView.boundsDidChangeNotification, object: clip, queue: .main
-        ) { [weak self] _ in MainActor.assumeIsolated { self?.layoutDidChange() } }
+        ) { [weak self] _ in MainActor.assumeIsolated { AtticOverlayHierarchy.layoutPass { self?.layoutDidChange() } } }
         keyMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
             self?.handleKey(event) == true ? nil : event
         }
@@ -205,7 +208,7 @@ final class NoteFormatControls: NSObject {
         if engine.pendingSlashDate != nil { engine.cancelSlashDate() }
         textView?.onLayout = previousLayout
         textView?.contextMenuProvider = nil
-        for host in [hintHost, barHost, slashHost, cardHost, addressHost] { host.removeFromSuperview() }
+        for host in [hintHost, barHost, slashHost, cardHost, addressHost] { AtticOverlayHierarchy.remove(host) }
         if Self.active === self { Self.active = nil }
     }
 
@@ -392,12 +395,12 @@ final class NoteFormatControls: NSObject {
     }
 
     /// Lists and cards float over the whole page (above the bottom row), in
-    /// the page's root view, placed from text-view coordinates.
+    /// the page's root view, placed from text-view coordinates. Placing runs
+    /// in the text's layout pass: a host joins its parent only after it
+    /// (`AtticOverlayHierarchy`).
     private func placeOverlay(_ host: AtticOverlayHostingView, rect: NSRect) {
         guard let textView, let parent = overlayParent else { return }
-        if host.superview !== parent { parent.addSubview(host, positioned: .above, relativeTo: nil) }
-        let frame = parent.convert(rect, from: textView).integral
-        if host.frame != frame { host.frame = frame }
+        AtticOverlayHierarchy.place(host, in: parent, frame: parent.convert(rect, from: textView).integral)
     }
 
     /// Above the selection's first line, or under its last when there is no
