@@ -38,6 +38,8 @@ struct TasksPage: View {
     /// The subtask lines' and strip buttons' own focus, reached by the
     /// page's Tab order (A10). Not observed.
     @State private var focusRequests = AtticFocusRequests()
+    /// The stop Tab last sent the keyboard to, while it settles (not observed).
+    @State private var tabTarget = TasksTabTarget()
     /// The rows' keyboard focus. Its `FocusState` is owned by
     /// `TasksRowFocusOwner`, under the page's body, not by the page: SwiftUI
     /// redraws a focus state's owner whenever a focusable view comes or
@@ -909,6 +911,7 @@ struct TasksPage: View {
 
     private func moveKeyboard(to stop: TasksTabStop, from current: TasksTabStop?, in stops: [TasksTabStop]) {
         let tab = model.tab
+        tabTarget.stop = stop
         switch stop {
         case .find:
             focusedRow = nil
@@ -926,28 +929,48 @@ struct TasksPage: View {
         case let .row(id):
             searchFocused = false
             addBarFocused = false
-            if TasksTabOrder.isListNeighbour(current, of: stop, in: stops) {
-                // The list's own reveal brings it into view as it takes the
-                // keyboard (`onChange(of: focusedRow)`).
+            // From a field, or round the end: the list goes to the row's
+            // place first (a far row of a lazy list is not built yet).
+            if !TasksTabOrder.isListNeighbour(current, of: stop, in: stops),
+               let scroll = listProxies.scrollViews[tab], let place = rowPlace(id, in: tab) {
+                TasksScrollKeeper.centre(place, in: scroll)
+            }
+            settleKeyboard(on: stop, in: tab, attempts: Self.tabSettleAttempts, landed: { focusedID == id }, revealing: id) {
                 setFocus(id)
-            } else {
-                // From a field, or round the end: a far row of a lazy list
-                // may not be built yet. The list goes to its place first, then
-                // the row takes the keyboard.
-                if let scroll = listProxies.scrollViews[tab], let place = rowPlace(id, in: tab) {
-                    TasksScrollKeeper.centre(place, in: scroll)
-                }
-                DispatchQueue.main.async { setFocus(id) }
             }
         case let .subtask(id):
             focusedRow = nil
             searchFocused = false
             addBarFocused = false
-            if let parent = TasksTabOrder.parent(of: id, in: stops), let proxy = listProxies.lists[tab] {
-                revealRow(parent, in: tab, proxy: proxy, animation: nil)
+            let parent = TasksTabOrder.parent(of: id, in: stops)
+            settleKeyboard(on: stop, in: tab, attempts: Self.tabSettleAttempts, landed: { model.focusedSubtaskID == id },
+                           revealing: parent) {
+                focusRequests.focus(AtticSubtaskFocusID(id: id))
             }
-            DispatchQueue.main.async { focusRequests.focus(AtticSubtaskFocusID(id: id)) }
         }
+    }
+
+    /// How many frames Tab's row may take to be built and settle in view.
+    static let tabSettleAttempts = 8
+
+    /// Gives `stop` the keyboard (`focus`) and brings row `revealing` into
+    /// the list's clear part, a frame at a time until the focus has landed
+    /// and the row needs no more scrolling (A10, CI: the list's own reveal
+    /// did not run for a focus the page set, and a row a lazy list had not
+    /// built could not take the keyboard, which then stayed where it was).
+    /// A later Tab, or another page, ends it.
+    private func settleKeyboard(on stop: TasksTabStop, in tab: TasksTab, attempts: Int, landed: @escaping () -> Bool,
+                                revealing row: UUID?, focus: @escaping () -> Void) {
+        tabTarget.stop = stop
+        func attempt(_ left: Int) {
+            guard tabTarget.stop == stop, model.tab == tab, model.isPageShown else { return }
+            if !landed() { focus() }
+            var scrolled = false
+            if let row, let proxy = listProxies.lists[tab] { scrolled = revealRow(row, in: tab, proxy: proxy, animation: nil) }
+            guard left > 1, scrolled || !landed() else { return }
+            DispatchQueue.main.asyncAfter(deadline: .now() + 1.0 / 60) { attempt(left - 1) }
+        }
+        attempt(attempts)
     }
 
     /// Esc with no field typing, wherever the keyboard is in the page (a
@@ -1190,7 +1213,8 @@ struct TasksPage: View {
 
     /// Brings a row into the part of the list nothing covers (keys, a new
     /// task): the page's geometry decides how.
-    private func revealRow(_ id: UUID, in tab: TasksTab, proxy: ScrollViewProxy, animation: Animation?) {
+    @discardableResult
+    private func revealRow(_ id: UUID, in tab: TasksTab, proxy: ScrollViewProxy, animation: Animation?) -> Bool {
         let reveal = TasksViewport.reveal(frame: pointer.frames[TasksRowID(tab: tab, id: id)], height: rowHeight(id, in: tab),
                                           viewport: pointer.view?.bounds.height ?? layout.panelSize.height,
                                           listTop: listTop,
@@ -1199,10 +1223,11 @@ struct TasksPage: View {
                                             : bottomMargin,
                                           bottomClearance: bottomClearance)
         switch reveal {
-        case .none: break
+        case .none: return false
         case .minimal: withAnimation(animation) { scroll(proxy, to: id, in: tab) }
         case let .bottom(fraction): withAnimation(animation) { scroll(proxy, to: id, in: tab, anchor: UnitPoint(x: 0, y: fraction)) }
         }
+        return true
     }
 
     // MARK: - Pages
@@ -4285,6 +4310,12 @@ enum TasksScrollerRule {
 }
 
 // MARK: - Tab order (A10)
+
+/// The stop Tab last sent the keyboard to (`TasksPage.settleKeyboard`).
+@MainActor
+final class TasksTabTarget {
+    var stop: TasksTabStop?
+}
 
 /// One stop of the Tasks page's own Tab order.
 enum TasksTabStop: Hashable {
