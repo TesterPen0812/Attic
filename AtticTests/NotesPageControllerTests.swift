@@ -215,18 +215,23 @@ final class NotesPageControllerTests: XCTestCase {
         type("z", into: session)
         await writeBarrier.release()
         await controller.waitForRecoveryWork()
-        let entries = try await NoteDraftJournal(directory: directory).entriesDurably()
-        let saved = try XCTUnwrap(entries.first)
-        let checkpoint = try XCTUnwrap(NoteContentCodec.decode(saved.0.content).document)
+        // Phase 3 reconciles operation receipts before independent checkpoint
+        // offers. Reopen through the production controller, not a raw journal
+        // service with an unreconciled operation barrier.
+        let reopened = NotesPageController(store: store, journal: NoteDraftJournal(directory: directory),
+                                          saveDelay: .seconds(60))
+        await reopened.startAndWait()
+        // Inventory verifies the disk checkpoint without treating a new
+        // failed recovery save's retained envelope as reconciled UI offers.
+        let entries = try await NoteDraftJournal(directory: directory).inventoryCheckpoints()
+        guard case let .valid(saved, _, _) = try XCTUnwrap(entries.first) else { return XCTFail("checkpoint") }
+        let checkpoint = try XCTUnwrap(NoteContentCodec.decode(saved.content).document)
         XCTAssertEqual(checkpoint.title, String(repeating: "x", count: 60) + "y")
         XCTAssertEqual(session.engine.document().title, checkpoint.title + "z")
         XCTAssertTrue(NoteSessionPolicy.hasPendingWork(session.state))
         // A second deadline, if it starts, is suspended by the preparer while
         // a new controller recovers the exact durable snapshot without a flush.
-        let reopened = NotesPageController(store: store, journal: NoteDraftJournal(directory: directory),
-                                          saveDelay: .seconds(60))
-        await reopened.startAndWait()
-        XCTAssertEqual(reopened.active?.engine.document(), checkpoint)
+        XCTAssertEqual(reopened.active?.engine.document(), checkpoint, reopened.recoveryWarnings.joined(separator: "; "))
         await preparer.release(1)
     }
 
@@ -2906,6 +2911,7 @@ private actor SuspendedRecoveryDecoder {
 @MainActor
 private final class CountingDeadlineJournal: NoteDraftJournaling {
     let base: NoteDraftJournal
+    var workspaceJournal: NoteDraftJournal? { base }
     private(set) var writeCount = 0
     var beforeWrite: (() async -> Void)?
     init(directory: URL) { base = NoteDraftJournal(directory: directory) }

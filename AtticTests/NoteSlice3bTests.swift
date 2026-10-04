@@ -3479,7 +3479,8 @@ extension NoteSlice3bTests {
         XCTAssertEqual(manifest.noteID, id)
         XCTAssertEqual(manifest.unavailableImageIDs, [missingID])
         XCTAssertFalse(controller.save(recovery)); XCTAssertFalse(controller.keepAsNewNote())
-        await XCTAssertTrueAsync(await controller.preserveDurably(recovery))
+        let preservedRecovery = await controller.preserveDurably(recovery)
+        XCTAssertTrue(preservedRecovery, recovery.notice ?? controller.recoveryWarnings.joined(separator: "; "))
         await XCTAssertTrueAsync(await controller.openDurably(noteID: id))
         XCTAssertEqual(controller.active?.engine.document().title, "Stored")
         XCTAssertTrue(controller.openFailedDraft(sessionID: recovery.id))
@@ -3490,6 +3491,13 @@ extension NoteSlice3bTests {
         guard case let .valid(_, _, retainedClaim) = try XCTUnwrap(reread.first) else { return XCTFail() }
         XCTAssertEqual(retainedClaim, claim)
         XCTAssertEqual(store.note(withID: id)?.title, "Stored")
+        // Equal document content is insufficient when another claimed copy
+        // has replaced the source. Navigation must not assert the old claim.
+        var replacement = entry
+        replacement.savedAt = entry.savedAt.addingTimeInterval(1)
+        _ = try await NoteDraftJournal(directory: directory).writeDurably(replacement, staged: [known], replacing: claim)
+        _ = try await controller.journal?.readRecoveryEntries()
+        await XCTAssertFalseAsync(await controller.preserveDurably(recovery))
     }
 }
 

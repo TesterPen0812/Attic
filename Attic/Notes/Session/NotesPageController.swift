@@ -272,6 +272,15 @@ final class NotesPageController: ObservableObject {
         return ok
     }
     private func hasDurableCheckpoint(_ session: NoteSession) -> Bool {
+        if let source = session.recoverySourceNoteID, let claim = session.recoveryClaim {
+            // A read-only recovery row has a separate display ID. Its original
+            // claimed checkpoint, not a new copy under that ID, owns the draft.
+            return (try? journal?.recoveryEntries().contains { item in
+                guard case let .valid(entry, _, current) = item else { return false }
+                return entry.noteID == source && current == claim
+                    && NoteContentCodec.decode(entry.content).document == session.engine.document()
+            }) == true
+        }
         guard session.recoveryClaim != nil, var key = try? journalEntry(for: session,
             document: checkpointDocument(for: session)) else { return false }
         key.savedAt = .distantPast
@@ -466,7 +475,7 @@ final class NotesPageController: ObservableObject {
         self.imageLoader = imageLoader
         self.prepareDocument = prepareDocument
         self.decodeRecoveryDocument = decodeRecoveryDocument
-        if let diskJournal = journal as? NoteDraftJournal {
+        if let diskJournal = journal?.workspaceJournal {
             diskJournal.liveReferencedIDs = { [weak self] in
                 Set(self?.cache.values.flatMap { Array($0.engine.staged.keys) + (self?.liveAttachmentIDs(in: $0) ?? []) } ?? [])
             }
@@ -517,7 +526,7 @@ final class NotesPageController: ObservableObject {
     func refreshRecoveryWarningsAfterResolution() async {
         guard let journal else { return }
         do {
-            if let diskJournal = journal as? NoteDraftJournal,
+            if let diskJournal = journal.workspaceJournal,
                let coordinator = try? WorkspaceLegacyBridge.coordinator(for: store.container), coordinator.journal === diskJournal {
                 try await coordinator.reconcileStartup()
             }
@@ -1552,7 +1561,7 @@ final class NotesPageController: ObservableObject {
             queueRecoveryWork { [weak self] in
                 guard let self else { return }
                 do {
-                    if let diskJournal = journal as? NoteDraftJournal {
+                    if let diskJournal = journal.workspaceJournal {
                         let coordinator = try WorkspaceLegacyBridge.coordinator(for: self.store.container)
                         if coordinator.journal !== diskJournal { try coordinator.adoptJournal(diskJournal) }
                         try await coordinator.finishLaunch()

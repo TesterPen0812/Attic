@@ -288,7 +288,12 @@ final class WorkspaceOperationCoordinator {
     }
 
     func adoptJournal(_ replacement: NoteDraftJournal) throws {
-        guard pending.isEmpty, try journal.operationEnvelopesSynchronously().isEmpty else {
+        // A fresh service over the same files must be able to reconcile an
+        // aborted intent before offering checkpoints. Changing directories
+        // still refuses while the old service owns any operation envelope.
+        let sameDirectory = journal.directory.standardizedFileURL.resolvingSymlinksInPath()
+            == replacement.directory.standardizedFileURL.resolvingSymlinksInPath()
+        guard pending.isEmpty, try sameDirectory || journal.operationEnvelopesSynchronously().isEmpty else {
             throw WorkspaceFoundationError.unknown
         }
         // A legacy recovery file can be unreadable independently of the
@@ -615,7 +620,7 @@ final class WorkspaceOperationCoordinator {
             .note: ["tagsRaw", "pinnedAt", "deletedAt", "deletedAttachmentIDsRaw", "updatedAt"],
             .version: ["createdAt", "reasonRaw"],
             .proposal: ["needsReview", "agentName"],
-            .attachment: ["deletedAt", "updatedAt", "sortIndex", "inlineOffset", "displayWidth", "displayHeight"],
+            .attachment: ["originalFilename", "deletedAt", "updatedAt", "sortIndex", "inlineOffset", "displayWidth", "displayHeight"],
             .board: ["tagsRaw", "updatedAt"]
         ]
         if after.allSatisfy({ token in

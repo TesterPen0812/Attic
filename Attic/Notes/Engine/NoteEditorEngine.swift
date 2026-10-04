@@ -1585,13 +1585,17 @@ final class NoteEditorEngine: NSObject, NSTextViewDelegate, NSTextStorageDelegat
                 history.rebase(editAt: NSRange(location: editedRange.location, length: oldLength),
                                newLength: editedRange.length)
             }
-        } else {
-            history.captureUnrecorded(newRange: editedRange, delta: delta, emptyParagraphBefore: emptyBefore)
         }
         let start = DispatchTime.now().uptimeNanoseconds
         restyle(paragraphs(around: editedRange))
         renderObjects(in: NSIntersectionRange(editedRange, NSRange(location: 0, length: textStorage.length)))
         lastUpkeepMilliseconds = Double(DispatchTime.now().uptimeNanoseconds - start) / 1_000_000
+        // Prepared workspace replay compares attributed payloads exactly.
+        // Capture after native upkeep has installed the paragraph's final
+        // font/list/object attributes, including a newly filled empty block.
+        if !outsideRefusedEdit {
+            history.captureUnrecorded(newRange: editedRange, delta: delta, emptyParagraphBefore: emptyBefore)
+        }
     }
 
     private func didReplay(_ range: NSRange) {

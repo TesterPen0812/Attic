@@ -81,6 +81,56 @@ final class WorkspaceCommitTests: XCTestCase {
         XCTAssertEqual(try coordinator.freshContext().fetchCount(FetchDescriptor<OperationReceipt>()), receiptCount + 1)
     }
 
+    func testCombinedAttachmentRenameKeepsItsPresentedRowAndRefusesForeignChanges() async throws {
+        let bytes = Data("already durable".utf8)
+        let fixture = coordinator.freshContext()
+        let attachment = NoteAttachment(noteID: noteID, originalFilename: "before.txt", byteCount: Int64(bytes.count),
+            sortIndex: 0, contentDigest: NotePayloadDigest.sha256(bytes), payload: bytes)
+        fixture.insert(attachment); try fixture.save()
+        let notes = NoteStore(container: container, attachmentFileStore: makeTestAttachmentFileStore())
+        await notes.waitForAttachmentReconciliation()
+        let row = try XCTUnwrap(notes.attachmentRows(forNoteID: noteID).first), attachmentID = row.id
+        let context = notes.modelContext
+        WorkspacePayloadAccess.counts = [:]
+        row.originalFilename = "after.txt"
+        XCTAssertTrue(notes.commitStagedChanges())
+        XCTAssertTrue(notes.modelContext === context)
+        row.originalFilename = "again.txt"
+        XCTAssertTrue(notes.commitStagedChanges())
+        XCTAssertEqual(try coordinator.freshContext().fetch(FetchDescriptor<NoteAttachment>()).first?.originalFilename, "again.txt")
+        XCTAssertEqual(WorkspacePayloadAccess.counts.values.reduce(0, +), 0)
+        XCTAssertEqual(try coordinator.freshContext().fetchCount(FetchDescriptor<OperationReceipt>()), 0)
+        let foreign = ModelContext(container)
+        try XCTUnwrap(foreign.fetch(FetchDescriptor<NoteAttachment>(predicate: #Predicate { $0.id == attachmentID })).first).originalFilename = "foreign.txt"
+        try foreign.save()
+        row.originalFilename = "stale.txt"
+        XCTAssertFalse(notes.commitStagedChanges())
+        XCTAssertEqual(try coordinator.freshContext().fetch(FetchDescriptor<NoteAttachment>()).first?.originalFilename, "foreign.txt")
+    }
+
+    func testCombinedJournalRebindRetainsUncommittedCopiesAndRefusesAnotherDirectory() async throws {
+        let before = try coordinator.capture(baseOwners)
+        let pre = NoteDraftJournalEntry(noteID: noteID, isPersisted: true, baseRevisionID: nil,
+            content: try NoteContentCodec.encode(original), selectionLocation: 0, selectionLength: 0,
+            staged: [], savedAt: Date())
+        let envelope = try coordinator.newEnvelope(intent: "interrupted fixture", reads: before,
+            writes: baseOwners, preDraft: pre)
+        let claim = try await coordinator.journal.prepareOperation(envelope)
+        let old = coordinator.journal
+        XCTAssertThrowsError(try coordinator.adoptJournal(NoteDraftJournal(directory: root.appendingPathComponent("OtherJournal"))))
+        XCTAssertTrue(coordinator.journal === old)
+        let replacement = NoteDraftJournal(directory: old.directory)
+        try coordinator.adoptJournal(replacement)
+        try await coordinator.finishLaunch()
+        XCTAssertTrue(coordinator.journal === replacement)
+        XCTAssertEqual(coordinator.preOperationRecoveryCopies.map(\.operationID), [envelope.id])
+        XCTAssertEqual(coordinator.preOperationRecoveryCopies.first?.draft, pre)
+        let retained = try await replacement.operationEnvelopes()
+        XCTAssertEqual(retained.count, 1)
+        XCTAssertEqual(retained.first?.1, claim)
+        XCTAssertEqual(try coordinator.freshContext().fetchCount(FetchDescriptor<OperationReceipt>()), 0)
+    }
+
     func testCombinedRespacingRefusesAChangedPresentedDestinationFamily() throws {
         let seed = coordinator.freshContext()
         let next = TaskItem(title: "Next", manualOrder: 9)

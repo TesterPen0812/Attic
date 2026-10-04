@@ -168,6 +168,9 @@ private enum NoteRecoveryOwnership {
 /// the journal's files.
 @MainActor
 protocol NoteDraftJournaling: AnyObject {
+    /// Decorators expose the same disk service so operation reconciliation and
+    /// checkpoint ownership do not silently split into separate journals.
+    var workspaceJournal: NoteDraftJournal? { get }
     var requiresAsyncIO: Bool { get }
     func writeDurably(_ entry: NoteDraftJournalEntry, staged: [StagedNoteAttachment], replacing: NoteRecoveryClaim?) async throws -> NoteRecoveryClaim
     func retireDurably(noteID: UUID, claim: NoteRecoveryClaim?, saved: NoteRecoverySavedState?) async throws
@@ -195,6 +198,7 @@ protocol NoteDraftJournaling: AnyObject {
 }
 
 extension NoteDraftJournaling {
+    var workspaceJournal: NoteDraftJournal? { self as? NoteDraftJournal }
     func cancelPendingDurably(_ entry: NoteDraftJournalEntry, staged: [StagedNoteAttachment], replacing claim: NoteRecoveryClaim?) async throws -> NoteRecoveryClaim {
         try await writeDurably(entry, staged: staged, replacing: claim)
     }
