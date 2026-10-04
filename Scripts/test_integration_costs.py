@@ -1,4 +1,6 @@
 import json
+import contextlib
+import io
 from pathlib import Path
 import tempfile
 import unittest
@@ -38,14 +40,50 @@ class IntegrationCostsTests(unittest.TestCase):
                         log += self.rendered_log(40)
                     (root / f'integration-{side}-{sample}.log').write_text(log)
             (root / 'done-search.log').write_text(self.rendered_log(40))
-            self.assertEqual(main(root), 0)
-            (root / 'done-search.log').write_text(self.rendered_log(41))
-            self.assertEqual(main(root), 1)
+            quantum = ''.join(f'ATTIC_COST_QUANTUM metric={name} quantum_ms=1\n'
+                              for name in ['done-results-frame'] + [f'done-key-{key}' for key in range(len('Finished task 12'))])
+            with contextlib.redirect_stdout(io.StringIO()):
+                self.assertEqual(main(root), 0)
+                (root / 'done-search.log').write_text(self.rendered_log(41) + quantum)
+                self.assertEqual(main(root), 0)
+                (root / 'done-search.log').write_text(self.rendered_log(42) + quantum)
+                self.assertEqual(main(root), 1)
             report = json.loads((root / 'integration-cost-comparison.json').read_text())
             self.assertFalse(report['done-results-frame']['passed'])
+            self.assertEqual(report['done-results-frame']['resolution_ms'], 1)
             (root / 'integration-candidate-2.log').write_text('')
             with self.assertRaises(ValueError):
                 main(root)
+
+    def test_recovery_and_status_gate_chain_uses_three_block_medians(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            measured = {'status-toggle', 'recovery-main-actor', 'recovery-overhead'}
+            for side in ('baseline', 'candidate'):
+                for sample in (1, 2, 3):
+                    values = {name: 40 for name in METRICS}
+                    if side == 'candidate':
+                        values.update({name: 499 if sample == 3 else 41 for name in measured})
+                    log = ''.join(f'ATTIC_INTEGRATION_COST {name} median_ms={value}\n'
+                                  for name, value in values.items())
+                    if side == 'baseline' and sample == 1:
+                        log += self.rendered_log(40)
+                    if side == 'baseline':
+                        log += ''.join(f'ATTIC_COST_SAMPLES metric={name} raw_ms=[40, 40, 41]\n'
+                                       for name in measured)
+                    (root / f'integration-{side}-{sample}.log').write_text(log)
+            (root / 'done-search.log').write_text(self.rendered_log(40))
+            with contextlib.redirect_stdout(io.StringIO()):
+                self.assertEqual(main(root), 0)
+                for sample in (1, 2):
+                    path = root / f'integration-candidate-{sample}.log'
+                    path.write_text(path.read_text().replace('median_ms=41', 'median_ms=42'))
+                self.assertEqual(main(root), 1)
+            report = json.loads((root / 'integration-cost-comparison.json').read_text())
+            for name in measured:
+                self.assertEqual(report[name]['bound_ms'], 41.2)
+                self.assertEqual(report[name]['resolution_ms'], 1)
+                self.assertFalse(report[name]['passed'])
 
 
 if __name__ == '__main__':

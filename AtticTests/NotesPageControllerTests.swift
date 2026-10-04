@@ -413,6 +413,9 @@ final class NotesPageControllerTests: XCTestCase {
         let baseline = control.sorted()[4], recovered = checkpoint.sorted()[4]
         print("NOTE_RECOVERY_CONTROL_MAIN_ACTOR_MS_MEDIAN=\(baseline) CHECKPOINT_MS_MEDIAN=\(recovered) RETIRE_ELAPSED_MS_MEDIAN=\(retireElapsed.sorted()[4]) MAX=\(retireElapsed.max()!)")
         print("ATTIC_INTEGRATION_COST recovery-main-actor median_ms=\(recovered)")
+        print("ATTIC_COST_SAMPLES metric=recovery-main-actor raw_ms=\(checkpoint)")
+        let overheadSamples = zip(checkpoint, control).map { $0 - $1 }
+        print("ATTIC_COST_SAMPLES metric=recovery-overhead raw_ms=\(overheadSamples)")
         // OD-6: reference runs collect timings, never gate on their own timing
         // comparison. CI compares this paired overhead with the reference
         // build's overhead medians/range, alongside the total recovered cost.
@@ -493,12 +496,18 @@ final class NotesPageControllerTests: XCTestCase {
             let sample = medians[index]
             print("NOTE_\(labels[index])_SAVE_MS_MEDIAN=\(sample.save) PREPARED_MS_MEDIAN=\(sample.prepared) SAVE_MAX=\(saves[index].max()!) PREPARED_MAX=\(prepared[index].max()!)")
             assertSaveBaseline(sample, label: "note-" + labels[index].lowercased())
+            print("ATTIC_COST_SAMPLES metric=note-\(labels[index].lowercased())-save raw_ms=\(saves[index])")
+            print("ATTIC_COST_SAMPLES metric=note-\(labels[index].lowercased())-prepared raw_ms=\(prepared[index])")
         }
         for (small, large, label) in [(0, 1, "TEXT"), (2, 3, "ATTACHMENT")] {
             let empty = medians[small], populated = medians[large]
             print("NOTE_STORE_SCALING_\(label)_SAVE_DIFFERENCE_MS=\(populated.save - empty.save) PREPARED_DIFFERENCE_MS=\(populated.prepared - empty.prepared)")
             print("ATTIC_INTEGRATION_COST scaling-\(label.lowercased())-prepared median_ms=\(populated.prepared - empty.prepared)")
             print("ATTIC_INTEGRATION_COST scaling-\(label.lowercased())-save median_ms=\(populated.save - empty.save)")
+            let saveDifferences = zip(saves[large], saves[small]).map { $0 - $1 }
+            let preparedDifferences = zip(prepared[large], prepared[small]).map { $0 - $1 }
+            print("ATTIC_COST_SAMPLES metric=scaling-\(label.lowercased())-save raw_ms=\(saveDifferences)")
+            print("ATTIC_COST_SAMPLES metric=scaling-\(label.lowercased())-prepared raw_ms=\(preparedDifferences)")
         }
     }
 
@@ -641,6 +650,8 @@ final class NotesPageControllerTests: XCTestCase {
         let preparedSorted = preparedCommitMilliseconds.sorted()
         let combinedSorted = combinedMilliseconds.sorted()
         if report {
+            print("ATTIC_COST_SAMPLES metric=note-5000-save raw_ms=\(milliseconds)")
+            print("ATTIC_COST_SAMPLES metric=note-5000-prepared raw_ms=\(preparedCommitMilliseconds)")
             print("NOTE_SAVE_5000_LINES_MS_MEDIAN=\(sorted[sorted.count / 2])")
             print("NOTE_SAVE_5000_LINES_MS_MAX=\(sorted.last ?? 0)")
             print("NOTE_EXTRACT_5000_LINES_MS_MEDIAN=\(extractionSorted[extractionSorted.count / 2])")

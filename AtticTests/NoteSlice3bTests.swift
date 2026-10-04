@@ -1410,6 +1410,7 @@ final class NoteSlice3bTests: XCTestCase {
             upkeep.append(session.engine.lastUpkeepMilliseconds)
         }
         print("ATTIC_INTEGRATION_COST attachment-upkeep median_ms=\(TasksFrameCostTests.median(upkeep))")
+        print("ATTIC_COST_SAMPLES metric=attachment-upkeep raw_ms=\(upkeep)")
         controller.cancelActiveImport()
     }
 

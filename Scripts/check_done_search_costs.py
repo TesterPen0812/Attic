@@ -2,15 +2,17 @@
 """Compare every Done query's median with same-job reference samples.
 
 The spec's candidate 16 ms median budgets remain in DoneSearchCostTests.
-Individual spikes no longer gate: median <= reference median + reference
-range + 0.2 ms. Keep the historical reference's measurement boundaries.
+Individual spikes no longer gate: median <= reference median +
+max(reference range, measured resolution) + 0.2 ms (OD-9).
+Keep the historical reference's measurement boundaries.
 """
 import json
 import re
-import statistics
 import sys
 from collections import defaultdict
 from pathlib import Path
+
+from cost_resolution import compare, fixture_quantum
 
 MEMORY = re.compile(r"ATTIC_DONE_SEARCH session=(\d+) query=(.*?) page/group/count_ms=.* total_ms=([\d.]+)")
 PHASE5 = re.compile(r"ATTIC_PHASE5_DONE (?:session=(\d+) )?query=(.*?) legacy_page_count_lower_bound_ms=.* indexed_page_group_count_ms=([\d.]+)")
@@ -36,11 +38,11 @@ def merge(parts):
 
 
 def main(directory):
-    candidate = (directory / "done-search.log").read_text()
+    candidate_text = (directory / "done-search.log").read_text()
     baselines = [(directory / f"done-search-baseline-{i}.log").read_text() for i in (1, 2, 3)]
     fixtures = {
-        "memory": (samples(candidate, MEMORY), samples(baselines[0], MEMORY)),
-        "phase5": (samples(candidate, PHASE5),
+        "memory": (samples(candidate_text, MEMORY), samples(baselines[0], MEMORY)),
+        "phase5": (samples(candidate_text, PHASE5),
                    merge(samples(text, PHASE5, session_offset=i) for i, text in enumerate(baselines))),
     }
     report = {}
@@ -58,9 +60,11 @@ def main(directory):
         for query in sorted(before):
             reference = list(before[query].values())
             candidate = list(after[query].values())
-            bound = statistics.median(reference) + max(reference) - min(reference) + 0.2
-            queries[query] = dict(baseline_ms=reference, candidate_ms=candidate, bound_ms=bound,
-                                  passed=statistics.median(candidate) <= bound)
+            comparison = compare(reference, candidate,
+                                 fixture_quantum(baselines + [candidate_text], f"{name}:{query}"))
+            comparison['baseline_ms'] = comparison.pop('before_ms')
+            comparison['candidate_ms'] = comparison.pop('after_ms')
+            queries[query] = comparison
         report[name] = dict(queries=queries, passed=all(row["passed"] for row in queries.values()))
     (directory / "done-search-comparison.json").write_text(json.dumps(report, indent=2) + "\n")
     print(json.dumps(report, indent=2))

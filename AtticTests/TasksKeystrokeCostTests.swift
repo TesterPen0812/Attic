@@ -75,6 +75,7 @@ final class TasksKeystrokeCostTests: XCTestCase {
         }
         // Typical first-key cost, compared with the same-job reference.
         print("ATTIC_INTEGRATION_COST first-keystroke median_ms=\(TasksFrameCostTests.median(first))")
+        print("ATTIC_COST_SAMPLES metric=first-keystroke raw_ms=\(first)")
     }
 
     /// Where the first keystroke's time goes (printed, not asserted).

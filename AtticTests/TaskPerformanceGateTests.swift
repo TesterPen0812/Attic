@@ -27,7 +27,7 @@ final class TaskPerformanceGateTests: XCTestCase {
         return TaskStore(container: container)
     }
 
-    private func medianMilliseconds(iterations: Int = 9, _ body: () -> Void) -> Double {
+    private func medianMilliseconds(iterations: Int = 9, metric: String? = nil, _ body: () -> Void) -> Double {
         var samples: [Double] = []
         for _ in 0..<iterations {
             let start = ContinuousClock.now
@@ -35,6 +35,7 @@ final class TaskPerformanceGateTests: XCTestCase {
             let duration = start.duration(to: .now).components
             samples.append(Double(duration.seconds) * 1_000 + Double(duration.attoseconds) / 1e15)
         }
+        if let metric { print("ATTIC_COST_SAMPLES metric=\(metric) raw_ms=\(samples)") }
         return samples.sorted()[iterations / 2]
     }
 
@@ -70,7 +71,7 @@ final class TaskPerformanceGateTests: XCTestCase {
         let parents = store.tasks.filter { $0.parentID == nil }
         XCTAssertEqual(parents.count, 1_000)
         var checksum = 0
-        let median = medianMilliseconds {
+        let median = medianMilliseconds(metric: "family-summary") {
             for parent in parents {
                 guard store.hasSubtasks(parent.id) else { continue }
                 checksum += store.subtasks(of: parent.id).reduce(0) { $0 + ($1.status == .done ? 1 : 0) }
@@ -97,7 +98,7 @@ final class TaskPerformanceGateTests: XCTestCase {
             let d = start.duration(to: .now).components
             return Double(d.seconds) * 1_000 + Double(d.attoseconds) / 1e15
         }
-        let median = medianMilliseconds(iterations: 7) {
+        let median = medianMilliseconds(iterations: 7, metric: "status-toggle") {
             let child = children[index]
             index += 1
             toggle += ms { XCTAssertTrue(store.setStatus(.done, for: child)) }

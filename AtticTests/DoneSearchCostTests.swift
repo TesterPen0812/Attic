@@ -260,7 +260,8 @@ final class DoneSearchCostTests: XCTestCase {
         }
         // OD-8: unchanged code ranged 30–84 ms across today's CI runs.
         // The old 77.15 ms bound came from one early run. CI now compares
-        // these samples to its reference median + reference range + 0.2 ms.
+        // these samples to reference median + max(reference range, measured
+        // resolution) + 0.2 ms (OD-9). The comparator prints the resolution.
         print("ATTIC_DONE_RESULTS median_ms=\(TasksFrameCostTests.median(resultFrames))")
         // Every sample still has the independent 500 ms sanity ceiling.
         for sample in resultFrames {

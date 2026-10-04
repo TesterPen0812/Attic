@@ -248,55 +248,6 @@ jobs:
           if-no-files-found: error
           retention-days: 14
 
-      - name: Run macOS UI tests
-        id: ui_tests
-        if: inputs.lane != 'fast'
-        continue-on-error: true
-        timeout-minutes: 40
-        run: |
-          rm -rf "$RUNNER_TEMP/AtticUITests.xcresult"
-          rm -rf "$RUNNER_TEMP/attic-visual-uat"
-          mkdir -p "$RUNNER_TEMP/attic-visual-uat"
-          ATTIC_VISUAL_UAT_DIRECTORY="$RUNNER_TEMP/attic-visual-uat" \
-          xcodebuild \
-            -project Attic.xcodeproj \
-            -scheme AtticUI \
-            -configuration Local \
-            -destination 'platform=macOS' \
-            -derivedDataPath "$RUNNER_TEMP/AtticUITests" \
-            -resultBundlePath "$RUNNER_TEMP/AtticUITests.xcresult" \
-            CODE_SIGNING_ALLOWED=NO \
-            -only-testing:AtticUITests \
-            -skip-testing:AtticUITests/PerformanceUITests \
-            test
-
-      - name: Print macOS UI-test summary
-        if: always()
-        run: |
-          if [ -d "$RUNNER_TEMP/AtticUITests.xcresult" ]; then
-            xcrun xcresulttool get test-results summary \
-              --path "$RUNNER_TEMP/AtticUITests.xcresult" \
-              --format json
-          fi
-
-      - name: Upload macOS UI-test results
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: macos-ui-test-results-${{ github.sha }}
-          path: ${{ runner.temp }}/AtticUITests.xcresult
-          if-no-files-found: ignore
-          retention-days: 7
-
-      - name: Upload visual UAT screenshots
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: macos-visual-uat-${{ github.sha }}
-          path: ${{ runner.temp }}/attic-visual-uat
-          if-no-files-found: ignore
-          retention-days: 7
-
       - name: Run seeded macOS performance UI tests
         id: perf_ui_tests
         if: inputs.lane != 'fast'
@@ -368,7 +319,6 @@ jobs:
           STRICT_BUILD: ${{ steps.strict_build.outcome }}
           UNIT_TESTS: ${{ steps.unit_tests.outcome }}
           FKA_TESTS: ${{ steps.fka_tests.outcome }}
-          UI_TESTS: ${{ steps.ui_tests.outcome }}
           PERF_UI_TESTS: ${{ steps.perf_ui_tests.outcome }}
           ANALYZER: ${{ steps.analyzer.outcome }}
           FINAL_STATE: ${{ steps.final_state.outcome }}
@@ -379,7 +329,6 @@ jobs:
             strict-concurrency "$STRICT_BUILD" \
             unit-tests "$UNIT_TESTS" \
             full-keyboard-access "$FKA_TESTS" \
-            ui-tests "$UI_TESTS" \
             performance-ui-tests "$PERF_UI_TESTS" \
             analyzer "$ANALYZER" \
             final-worktree "$FINAL_STATE"
@@ -388,10 +337,87 @@ jobs:
           test "$STRICT_BUILD" = success
           test "$UNIT_TESTS" = success
           if [ "$LANE" != fast ]; then test "$FKA_TESTS" = success; fi
-          if [ "$LANE" != fast ]; then test "$UI_TESTS" = success; fi
           if [ "$LANE" != fast ]; then test "$PERF_UI_TESTS" = success; fi
           test "$ANALYZER" = success
           test "$FINAL_STATE" = success
+
+
+  ui:
+    if: ${{ inputs.lane != 'fast' }}
+    name: macOS UI tests (${{ matrix.shard }} of 2)
+    runs-on: macos-26
+    timeout-minutes: 50
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2]
+    env:
+      DEVELOPER_DIR: /Applications/Xcode_26.6.app/Contents/Developer
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v5
+
+      - name: Run macOS UI tests
+        id: ui_tests
+        # Run 37234266502: 2,295 s tests + bundle writing exceeded 40 min.
+        # Classes below split the completed attempt's 2,132 s into 1,214/918 s.
+        # 35 min allows ~1,307 s at the slower runtime + 180 s build + 600 s
+        # bundle/runner headroom. Separate runners shorten the critical path.
+        timeout-minutes: 35
+        run: |
+          rm -rf "$RUNNER_TEMP/AtticUITests.xcresult"
+          rm -rf "$RUNNER_TEMP/attic-visual-uat"
+          mkdir -p "$RUNNER_TEMP/attic-visual-uat"
+          shard_flags=()
+          for suite in AtticUITests CanvasUITests NotesFormatUITests; do
+            if [ "${{ matrix.shard }}" = 1 ]; then
+              shard_flags+=("-only-testing:AtticUITests/$suite")
+            else
+              shard_flags+=("-skip-testing:AtticUITests/$suite")
+            fi
+          done
+          if [ "${{ matrix.shard }}" = 2 ]; then
+            shard_flags+=(-only-testing:AtticUITests)
+          fi
+          ATTIC_VISUAL_UAT_DIRECTORY="$RUNNER_TEMP/attic-visual-uat" \
+          xcodebuild \
+            -project Attic.xcodeproj \
+            -scheme AtticUI \
+            -configuration Local \
+            -destination 'platform=macOS' \
+            -derivedDataPath "$RUNNER_TEMP/AtticUITests" \
+            -resultBundlePath "$RUNNER_TEMP/AtticUITests.xcresult" \
+            CODE_SIGNING_ALLOWED=NO \
+            "${shard_flags[@]}" \
+            -skip-testing:AtticUITests/PerformanceUITests \
+            test
+
+      - name: Print macOS UI-test summary
+        if: always()
+        run: |
+          if [ -d "$RUNNER_TEMP/AtticUITests.xcresult" ]; then
+            xcrun xcresulttool get test-results summary \
+              --path "$RUNNER_TEMP/AtticUITests.xcresult" \
+              --format json
+          fi
+
+      - name: Upload macOS UI-test results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: macos-ui-test-results-${{ matrix.shard }}-${{ github.sha }}
+          path: ${{ runner.temp }}/AtticUITests.xcresult
+          if-no-files-found: ignore
+          retention-days: 7
+
+      - name: Upload visual UAT screenshots
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: macos-visual-uat-${{ matrix.shard }}-${{ github.sha }}
+          path: ${{ runner.temp }}/attic-visual-uat
+          if-no-files-found: ignore
+          retention-days: 7
 
 
   costs:

@@ -159,6 +159,21 @@ class CostGatePlumbingTests(unittest.TestCase):
             report = json.loads((root / "done-search-comparison.json").read_text())
             self.assertTrue(all(row["passed"] for row in report.values()))
 
+    def test_done_quantum_metadata_allows_one_step_but_blocks_two(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            script = ["python3", str(ROOT / "Scripts/check_done_search_costs.py"), str(root)]
+            for candidate, expected in [(11, 0), (12, 1)]:
+                self.done_logs(root, baseline=10, candidate=candidate)
+                with (root / "done-search.log").open("a") as log:
+                    for fixture in ("memory", "phase5"):
+                        log.write(f"ATTIC_COST_QUANTUM metric={fixture}:F quantum_ms=1\n")
+                self.assertEqual(command(script).returncode, expected)
+                report = json.loads((root / "done-search-comparison.json").read_text())
+                for row in report.values():
+                    self.assertEqual(row['queries']['F']['resolution_ms'], 1)
+                    self.assertEqual(row['queries']['F']['bound_ms'], 11.2)
+
     def test_frame_row_comparator_fails_candidate_regression_and_prints_every_metric(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -177,6 +192,15 @@ class CostGatePlumbingTests(unittest.TestCase):
             report = json.loads((root / "cost-comparison.json").read_text())
             self.assertEqual(len(report), 12)
             self.assertTrue(all(not row["passed"] for row in report.values()))
+            # The documented quantum of this synthetic fixture is 1 ms.
+            quantum = ''.join(f'ATTIC_COST_QUANTUM metric={metric} quantum_ms=1\n' for metric in report)
+            path = root / 'candidate-cost-1.log'
+            path.write_text(path.read_text() + quantum)
+            self.assertEqual(command(script).returncode, 0)
+            for i in (1, 2, 3):
+                path = root / f'candidate-cost-{i}.log'
+                path.write_text(path.read_text().replace('=11ms', '=12ms').replace('+11ms', '+12ms'))
+            self.assertNotEqual(command(script).returncode, 0)
             for i in (1, 2, 3):
                 (root / f"candidate-cost-{i}.log").write_text((root / f"baseline-cost-{i}.log").read_text())
             self.assertEqual(command(script).returncode, 0)
