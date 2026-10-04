@@ -1,12 +1,13 @@
 #!/usr/bin/env python3
 """Exercise OD-6 with real XCTest assertions and the production comparators.
 
-The standalone XCTest executable opens no windows or app host. Synthetic
+The standalone XCTest bundle opens no windows or app host. Synthetic
 timings test failure plumbing, not performance; CI measures the real fixtures.
 """
 import json
 import os
 from pathlib import Path
+import plistlib
 import subprocess
 import tempfile
 import unittest
@@ -23,10 +24,15 @@ class CostGatePlumbingTests(unittest.TestCase):
     def setUpClass(cls):
         cls.scratch = tempfile.TemporaryDirectory(prefix="AtticCostPlumbing-")
         cls.root = Path(cls.scratch.name)
-        cls.probe = cls.root / "budget-probe"
+        cls.probe = cls.root / "BudgetProbe.xctest"
+        executable = cls.probe / "Contents/MacOS/BudgetProbe"
+        executable.parent.mkdir(parents=True)
+        with (cls.probe / "Contents/Info.plist").open("wb") as stream:
+            plistlib.dump(dict(CFBundleExecutable="BudgetProbe", CFBundleIdentifier="com.taha.Attic.cost-plumbing",
+                              CFBundlePackageType="BNDL"), stream)
         source = cls.root / "probe.swift"
         source.write_text('import Foundation\nimport XCTest\n' + policy() + r'''
-final class BudgetProbe: XCTestCase {
+@objc(BudgetProbe) final class BudgetProbe: XCTestCase {
     func testBudget() {
         let env = ProcessInfo.processInfo.environment
         let measured = Double(env["PROBE_MEASURED"]!)!
@@ -40,17 +46,15 @@ final class BudgetProbe: XCTestCase {
         XCTAssertEqual(env["PROBE_CORRECT"], "1")
     }
 }
-let suite = BudgetProbe.defaultTestSuite
-suite.run()
-exit(suite.testRun!.executionCount == 1 && suite.testRun!.totalFailureCount == 0 ? 0 : 1)
 ''')
-        developer = command(["xcode-select", "-p"], check=True).stdout.strip()
-        frameworks = Path(developer) / "Platforms/MacOSX.platform/Developer/Library/Frameworks"
-        libraries = Path(developer) / "Platforms/MacOSX.platform/Developer/usr/lib"
-        built = command(["xcrun", "swiftc", str(source), "-F", str(frameworks),
+        platform = Path(command(["xcrun", "--sdk", "macosx", "--show-sdk-platform-path"], check=True).stdout.strip())
+        sdk = command(["xcrun", "--sdk", "macosx", "--show-sdk-path"], check=True).stdout.strip()
+        frameworks = platform / "Developer/Library/Frameworks"
+        libraries = platform / "Developer/usr/lib"
+        built = command(["xcrun", "swiftc", "-sdk", sdk, "-emit-library", str(source), "-F", str(frameworks),
                          "-I", str(libraries), "-L", str(libraries),
                          "-Xlinker", "-rpath", "-Xlinker", str(frameworks),
-                         "-Xlinker", "-rpath", "-Xlinker", str(libraries), "-o", str(cls.probe)])
+                         "-Xlinker", "-rpath", "-Xlinker", str(libraries), "-o", str(executable)])
         if built.returncode:
             raise RuntimeError(built.stderr)
 
@@ -65,12 +69,17 @@ exit(suite.testRun!.executionCount == 1 && suite.testRun!.totalFailureCount == 0
             env["ATTIC_COST_REFERENCE_ONLY"] = reference
         env.update(PROBE_MEASURED=str(measured), PROBE_BOUND=str(bound),
                    PROBE_STRICT=str(int(strict)), PROBE_CORRECT=str(int(correct)))
-        return command([str(self.probe)], env=env)
+        result = command(["xcrun", "xctest", str(self.probe)], env=env)
+        self.assertIn("Executed 1 test", result.stdout + result.stderr,
+                      "Probe did not execute: " + result.stdout + result.stderr)
+        self.assertIn(result.returncode, (0, 1), result.stdout + result.stderr)
+        return result
 
     def test_candidate_absolute_budgets_fail_and_reference_overages_pass(self):
         for bound, strict in [(16, False), (20.3, False), (77.15, False), (500, True)]:
             with self.subTest(bound=bound):
-                self.assertEqual(self.budget(bound - 1, bound, "0", strict).returncode, 0)
+                passed = self.budget(bound - 1, bound, "0", strict)
+                self.assertEqual(passed.returncode, 0, passed.stdout + passed.stderr)
                 self.assertNotEqual(self.budget(bound + 1, bound, "0", strict).returncode, 0)
                 reference = self.budget(bound + 1, bound, "1", strict)
                 self.assertEqual(reference.returncode, 0, reference.stdout + reference.stderr)
