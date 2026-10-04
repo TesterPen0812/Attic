@@ -10,6 +10,7 @@ on:
         default: false
 permissions:
   contents: read
+  actions: read
 concurrency:
   group: phase3-foundation-${{ github.ref }}
   cancel-in-progress: false
@@ -152,14 +153,33 @@ jobs:
         if: ${{ !cancelled() && !inputs.harness_only }}
         run: python3 Scripts/test_pf_paired_gate.py
       - name: Evaluate paired PF gate
+        env:
+          GH_TOKEN: ${{ github.token }}
         if: ${{ !cancelled() && !inputs.harness_only }}
         shell: /bin/zsh {0}
         run: |
           set -o pipefail
+          # Only this exact candidate SHA can contribute carried row evidence.
+          # Re-evaluate raw samples; never trust a saved PASS flag.
+          mkdir -p .build/pf-history
+          ids=($(gh api --paginate "repos/$GITHUB_REPOSITORY/actions/artifacts?per_page=100" \
+            | jq -s '[.[].artifacts[] | select(.expired == false and (.name | startswith("phase3-pf-samples-" + env.GITHUB_SHA + "-")))] | sort_by(.id) | .[].id')) || exit $?
+          if (( ${#ids[@]} > 2 )); then
+            echo 'INPUT ERROR: more than two prior attempts for this candidate; three-run budget exhausted'
+            exit 3
+          fi
+          history_args=()
+          for id in "${ids[@]}"; do
+            dir=".build/pf-history/$id"
+            mkdir -p "$dir"
+            gh api "repos/$GITHUB_REPOSITORY/actions/artifacts/$id/zip" > "$dir/samples.zip" || exit $?
+            unzip -q "$dir/samples.zip" -d "$dir" || exit $?
+            history_args+=(--prior-run "$dir")
+          done
           gate_status=0
-          python3 Scripts/pf_paired_gate.py --base .build/pf-base.log --candidate .build/pf-candidate.log --base-after .build/pf-base-after.log | tee .build/pf-gate.txt || gate_status=$?
+          python3 Scripts/pf_paired_gate.py "${history_args[@]}" --base .build/pf-base.log --candidate .build/pf-candidate.log --base-after .build/pf-base-after.log | tee .build/pf-gate.txt || gate_status=$?
           if [[ "$gate_status" == 2 ]]; then
-            echo 'UNMEASURABLE: base failed against itself; rerun the failed job once'
+            echo 'UNMEASURABLE: carried rows require another valid run within the three-run budget'
           fi
           exit "$gate_status"
       - name: Run C1-C5 and minimum taskNote format before the full suite
@@ -255,6 +275,16 @@ jobs:
               xcrun xcresulttool get test-results summary --path "$result" --format json
             fi
           done
+      - uses: actions/upload-artifact@v4
+        if: ${{ !cancelled() && !inputs.harness_only }}
+        with:
+          name: phase3-pf-samples-${{ github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            .build/pf-base.log
+            .build/pf-candidate.log
+            .build/pf-base-after.log
+          if-no-files-found: error
+          retention-days: 3
       - uses: actions/upload-artifact@v4
         if: always()
         with:

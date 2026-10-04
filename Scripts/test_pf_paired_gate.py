@@ -41,6 +41,104 @@ class PairedGateTests(unittest.TestCase):
             code = gate.main(args)
         return code, output.getvalue()
 
+    def paired_history(self, attempts):
+        roots = []
+        for index, (base, candidate, after) in enumerate(attempts):
+            root = Path(self.directory.name) / f'run-{index}'
+            root.mkdir(exist_ok=True)
+            for name, run in [('pf-base.log', base), ('pf-candidate.log', candidate), ('pf-base-after.log', after)]:
+                (root / name).write_text(log(run))
+            roots.append(root)
+        args = ['--base', str(roots[-1] / 'pf-base.log'), '--candidate', str(roots[-1] / 'pf-candidate.log'),
+                '--base-after', str(roots[-1] / 'pf-base-after.log')]
+        for root in roots[:-1]:
+            args += ['--prior-run', str(root)]
+        output = io.StringIO()
+        with contextlib.redirect_stdout(output), contextlib.redirect_stderr(output):
+            code = gate.main(args)
+        return code, output.getvalue()
+
+    def test_signed_growth_preserves_bound_arithmetic(self):
+        base, candidate = fixture(), fixture()
+        for run in (base, candidate):
+            run['PF']['EMPTY_OPEN_GROWTH_MB'] = [-25, -24, -23]
+        candidate['PF']['EMPTY_OPEN_GROWTH_MB'] = [-21] * 3
+        code, output = self.run_gate(base, candidate, base)
+        self.assertEqual(code, 0)
+        self.assertIn('| -24.000000000 | -23.000000000 | 2.000000000 | -21.000000000 | -21.000000000 | -21.000000000 | PASS |', output)
+        candidate['PF']['EMPTY_OPEN_GROWTH_MB'] = [-20.999] * 3
+        self.assertEqual(self.run_gate(base, candidate, base)[0], 1)
+
+    def test_one_unmeasurable_row_does_not_hide_valid_failure(self):
+        after, candidate = fixture(), fixture()
+        after['PF1']['EMPTY_AUTOSAVE_5000_MS'] = [6] * 3
+        code, output = self.run_gate(fixture(), candidate, after)
+        self.assertEqual(code, 2)
+        self.assertIn('| PF1_EMPTY_AUTOSAVE_5000_MS | no | yes | — | — |', output)
+        self.assertIn('CARRIED ROWS: PF1_EMPTY_AUTOSAVE_5000_MS', output)
+        candidate['PF']['EMPTY_OPEN_MS'] = [6] * 3
+        code, output = self.run_gate(fixture(), candidate, after)
+        self.assertEqual(code, 1)
+        self.assertIn('| PF_EMPTY_OPEN_MS | yes | no | — | yes |', output)
+
+    def test_carry_forward_later_pass(self):
+        after = fixture()
+        after['PF1']['EMPTY_AUTOSAVE_5000_MS'] = [6] * 3
+        # The current run cannot remeasure a formerly passed row. Its evidence
+        # must survive, while the formerly unmeasurable row is now judged.
+        next_after = fixture()
+        next_after['PF']['EMPTY_OPEN_MS'] = [6] * 3
+        code, output = self.paired_history([(fixture(), fixture(), after), (fixture(), fixture(), next_after)])
+        self.assertEqual(code, 0)
+        self.assertIn('CARRIED ROWS: PF1_EMPTY_AUTOSAVE_5000_MS', output)
+        self.assertIn('CARRIED ROWS: none', output)
+
+    def test_carry_forward_later_failure(self):
+        after, candidate = fixture(), fixture()
+        after['PF1']['EMPTY_AUTOSAVE_5000_MS'] = [6] * 3
+        candidate['PF1']['EMPTY_AUTOSAVE_5000_MS'] = [6] * 3
+        code, output = self.paired_history([(fixture(), candidate, after), (fixture(), candidate, fixture())])
+        self.assertEqual(code, 1)
+        self.assertIn('FAILED ROWS: PF1_EMPTY_AUTOSAVE_5000_MS', output)
+
+    def test_valid_failure_is_sticky_even_after_a_pass(self):
+        candidate = fixture()
+        candidate['PF']['EMPTY_OPEN_MS'] = [6] * 3
+        self.assertEqual(self.paired_history([(fixture(), candidate, fixture()), (fixture(), fixture(), fixture())])[0], 1)
+        self.assertEqual(self.paired_history([(fixture(), fixture(), fixture()), (fixture(), candidate, fixture())])[0], 1)
+
+    def test_all_rows_unmeasurable(self):
+        base, after = fixture(), fixture()
+        for group in ('PF', 'PF1'):
+            for key in base[group]:
+                base[group][key] = [1] * 3
+                after[group][key] = [12 if key.startswith('POPULATED_') else 6] * 3
+        for key in ('SIX_THOUSAND_TOGGLE_MS', 'POPULATED_TOGGLE_MS'):
+            after['PF'][key] = [121] * 3
+        for key in after['PF5']:
+            after['PF5'][key] = [2] * 32 + [12] * 8
+        with contextlib.redirect_stdout(io.StringIO()):
+            rows = gate.evaluate(base, [base], 'test')
+        code, output = self.run_gate(base, fixture(), after)
+        self.assertEqual(code, 2)
+        self.assertIn(f'judged=0 unmeasurable={len(rows)} pass=0 fail=0', output)
+        self.assertIn('FAILED ROWS: none', output)
+
+    def test_ceiling_rows_require_both_base_runs_and_candidate(self):
+        after = fixture()
+        after['PF']['SIX_THOUSAND_TOGGLE_MS'] = [1, 2, 121]
+        for b, a in [(fixture(), after), (after, fixture())]:
+            code, output = self.run_gate(b, fixture(), a)
+            self.assertEqual(code, 2)
+            self.assertIn('| CEILING_SIX_THOUSAND_TOGGLE_MS | no | yes | — | — |', output)
+            self.assertIn('| PF_SIX_THOUSAND_TOGGLE_MS | yes | no | yes | — |', output)
+        candidate = fixture()
+        candidate['PF']['SIX_THOUSAND_TOGGLE_MS'] = [1, 2, 121]
+        self.assertEqual(self.run_gate(fixture(), candidate, fixture())[0], 1)
+
+    def test_carry_forward_budget_and_bad_history_are_input_errors(self):
+        self.assertEqual(self.paired_history([(fixture(), fixture(), fixture())] * 4)[0], 3)
+
     def test_raw_and_github_logs_last_copy(self):
         first, last = fixture(), fixture()
         last['PF']['EMPTY_SAVE_MS'] = [4, 5, 6]

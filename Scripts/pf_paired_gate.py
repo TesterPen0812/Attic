@@ -47,7 +47,7 @@ def validated(values):
     if not isinstance(values, list) or not values:
         raise ValueError('missing sample array')
     if any(isinstance(v, bool) or not isinstance(v, (int, float))
-           or not math.isfinite(v) or v < 0 for v in values):
+           or not math.isfinite(v) for v in values):
         raise ValueError('invalid sample')
     return values
 
@@ -91,8 +91,14 @@ def stalls(values):
     return sum(value > 5 * median(values) for value in values)
 
 
-def evaluate(candidate, references, label):
-    failed = False
+def evaluate(candidate, references, label, eligible=None):
+    results = {}
+    def verdict(row, passed):
+        results[row] = passed
+        if eligible is not None and row not in eligible:
+            return 'UNMEASURABLE'
+        return 'PASS' if passed else 'FAIL'
+
     print(f'\n{label}')
     print('| Metric | Reference median | Reference maximum | Reference spread | Candidate median | Candidate maximum | Bound | Result |')
     print('| --- | ---: | ---: | ---: | ---: | ---: | ---: | --- |')
@@ -107,18 +113,19 @@ def evaluate(candidate, references, label):
             # accepted cost; A/A validity and every other bound stay unchanged.
             limit = bound(pooled) + (4.75 if group == 'PF' and key == 'POPULATED_OPEN_GROWTH_MB' and len(references) == 2 else 0)
             passed = median(actual) <= limit
-            failed |= not passed
+            row = f'{group}_{key}'
+            status = verdict(row, passed)
             numbers = (median(pooled), max(pooled), spread(pooled), median(actual), max(actual), limit)
             print(f'| {group}_{key} | ' + ' | '.join(f'{v:.9f}' for v in numbers)
-                  + f' | {"PASS" if passed else "FAIL"} |')
+                  + f' | {status} |')
     for metric in ('SAVE_MS', 'TOGGLE_MS', 'LINK_MS'):
         empty = [v for ref in references for v in ref['PF'][f'EMPTY_{metric}']]
         full = [v for ref in references for v in ref['PF'][f'POPULATED_{metric}']]
         delta = median(candidate['PF'][f'POPULATED_{metric}']) - median(candidate['PF'][f'EMPTY_{metric}'])
         limit = max(full) - min(empty) + max(spread(full), spread(empty))
         passed = delta <= limit
-        failed |= not passed
-        print(f'SIZE {metric} candidate_delta={delta:.9f} bound={limit:.9f} result={"PASS" if passed else "FAIL"}')
+        status = verdict(f'SIZE_{metric}', passed)
+        print(f'SIZE {metric} candidate_delta={delta:.9f} bound={limit:.9f} result={status}')
     pooled_c = pooled_r = 0
     p = 1 / (1 + len(references))
     for fixture in FIXTURES:
@@ -129,13 +136,17 @@ def evaluate(candidate, references, label):
             pooled_r += r
             tail = binomial_tail(c, c + r, p)
             passed = tail >= 0.001
-            failed |= not passed
-            print(f'STALL {fixture}_{operation} reference={r}/{200 * len(references)} candidate={c}/200 p={p:.12g} p_value={tail:.12g} result={"PASS" if passed else "FAIL"}')
+            status = verdict(f'STALL_{fixture}_{operation}', passed)
+            print(f'STALL {fixture}_{operation} reference={r}/{200 * len(references)} candidate={c}/200 p={p:.12g} p_value={tail:.12g} result={status}')
     tail = binomial_tail(pooled_c, pooled_c + pooled_r, p)
     passed = tail >= 0.001
-    failed |= not passed
-    print(f'STALL POOLED reference={pooled_r}/{2000 * len(references)} candidate={pooled_c}/2000 p={p:.12g} p_value={tail:.12g} result={"PASS" if passed else "FAIL"}')
-    return not failed
+    status = verdict('STALL_POOLED', passed)
+    print(f'STALL POOLED reference={pooled_r}/{2000 * len(references)} candidate={pooled_c}/2000 p={p:.12g} p_value={tail:.12g} result={status}')
+    for key in ('SIX_THOUSAND_TOGGLE_MS', 'POPULATED_TOGGLE_MS'):
+        maximum = max(candidate['PF'][key])
+        status = verdict(f'CEILING_{key}', maximum <= 120)
+        print(f'CEILING {key} maximum={maximum:.9f} limit=120 result={status}')
+    return results
 
 
 def main(argv=None):
@@ -143,38 +154,61 @@ def main(argv=None):
     parser.add_argument('--base', required=True)
     parser.add_argument('--candidate', required=True)
     parser.add_argument('--base-after')
+    parser.add_argument('--prior-run', action='append', default=[], type=Path,
+                        help='Earlier same-candidate run directory containing pf-base.log, '
+                             'pf-candidate.log and pf-base-after.log (at most two, oldest first)')
     try:
         args = parser.parse_args(argv)
     except SystemExit as error:
         return 0 if error.code == 0 else 3
     try:
-        base = parse_log(args.base)
-        candidate = parse_log(args.candidate)
-        after = parse_log(args.base_after) if args.base_after else None
-        runs = [base, candidate] + ([after] if after else [])
-        if any(run[group].keys() != base[group].keys()
-               for run in runs for group in base):
-            raise ValueError('runs have different metric sets')
-        if after and not COLD_KEYS <= base['PF'].keys():
-            raise ValueError('three-run gate requires cold metrics')
+        if len(args.prior_run) > 2 or (args.prior_run and not args.base_after):
+            raise ValueError('carry-forward requires paired runs within the three-run budget')
+        paths = [(root / 'pf-base.log', root / 'pf-candidate.log', root / 'pf-base-after.log')
+                 for root in args.prior_run]
+        paths.append((args.base, args.candidate, args.base_after))
+        attempts = [(parse_log(b), parse_log(c), parse_log(a) if a else None)
+                    for b, c, a in paths]
+        base = attempts[0][0]
+        for b, c, a in attempts:
+            if any(run[group].keys() != base[group].keys()
+                   for run in [b, c] + ([a] if a else []) for group in base):
+                raise ValueError('runs have different metric sets')
+            if a and not COLD_KEYS <= b['PF'].keys():
+                raise ValueError('three-run gate requires cold metrics')
     except (OSError, ValueError, KeyError, TypeError) as error:
         print(f'INPUT ERROR: {error}', file=sys.stderr)
         return 3
-    valid = True
-    if after:
-        valid = evaluate(after, [base], 'A/A B\u2032 against B')
-        valid &= evaluate(base, [after], 'A/A B against B\u2032')
-        for name, run in (('B', base), ('B\u2032', after)):
-            for key in ('SIX_THOUSAND_TOGGLE_MS', 'POPULATED_TOGGLE_MS'):
-                maximum = max(run['PF'][key])
-                passed = maximum <= 120
-                valid &= passed
-                print(f'BASE CEILING {name} {key} maximum={maximum:.9f} limit=120 result={"PASS" if passed else "FAIL"}')
-        print(f'A/A VERDICT: {"VALID" if valid else "UNMEASURABLE"}')
-    else:
-        print('A/A VERDICT: SKIPPED (single reference retro-check)')
-    passed = evaluate(candidate, [base] + ([after] if after else []), 'Candidate against pooled reference')
-    code = 2 if not valid else (0 if passed else 1)
+    passed_rows, failed_rows = set(), set()
+    for number, (base, candidate, after) in enumerate(attempts, 1):
+        print(f'\nRUN {number}')
+        if after:
+            forward = evaluate(after, [base], 'A/A B′ against B')
+            reverse = evaluate(base, [after], 'A/A B against B′')
+            eligible = {row for row in forward if forward[row] and reverse[row]}
+            print(f'A/A VERDICT: {"VALID" if len(eligible) == len(forward) else "PARTIALLY UNMEASURABLE" if eligible else "UNMEASURABLE"}')
+        else:
+            eligible = None
+            print('A/A VERDICT: SKIPPED (single reference retro-check)')
+        results = evaluate(candidate, [base] + ([after] if after else []),
+                           'Candidate against pooled reference (diagnostic until row validity is applied)', eligible)
+        if eligible is None:
+            eligible = set(results)
+        passed_rows.update(row for row in eligible if results[row])
+        failed_rows.update(row for row in eligible if not results[row])
+        carried = set(results) - passed_rows - failed_rows
+        print(f'\nPER-ROW RUN {number}')
+        print('| Row | Judged | Unmeasurable | Pass | Fail |')
+        print('| --- | --- | --- | --- | --- |')
+        for row in sorted(results):
+            judged = row in eligible
+            print(f'| {row} | {"yes" if judged else "no"} | {"no" if judged else "yes"} | '
+                  f'{"yes" if judged and results[row] else "—"} | {"yes" if judged and not results[row] else "—"} |')
+        print(f'ROW SUMMARY RUN {number}: judged={len(eligible)} unmeasurable={len(results) - len(eligible)} '
+              f'pass={sum(results[row] for row in eligible)} fail={sum(not results[row] for row in eligible)}')
+        print('CARRIED ROWS: ' + (', '.join(sorted(carried)) or 'none'))
+        print('FAILED ROWS: ' + (', '.join(sorted(failed_rows)) or 'none'))
+    code = 1 if failed_rows else (2 if carried else 0)
     print(f'GATE: {("PASS", "CANDIDATE FAILURE", "UNMEASURABLE")[code]} exit={code}')
     return code
 
