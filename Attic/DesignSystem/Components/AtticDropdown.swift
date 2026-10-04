@@ -547,10 +547,16 @@ struct AtticDropdownSpace {
             }
             candidate = current.superview
         }
-        guard let content = view.window?.contentView else { return nil }
-        parent = content
-        let visible = bounding.map { content.convert($0.visibleRect, from: $0) } ?? content.bounds
-        bounds = AtticDropdownLayout.topDown(visible, in: content).insetBy(dx: margin, dy: margin)
+        guard let content = view.window?.contentView, let commonParent = content.superview else { return nil }
+        // Standalone SwiftUI pages use NSHostingView as the window's content
+        // view. An overlay must be its sibling: inserting another host under
+        // it is unsupported and emits a SwiftUI runtime issue (whose XCTest
+        // symbolication can stall a keystroke for seconds).
+        // Keep placement bounded by the content, not the window's chrome.
+        parent = commonParent
+        let visible = bounding.map { commonParent.convert($0.visibleRect, from: $0) }
+            ?? commonParent.convert(content.bounds, from: content)
+        bounds = AtticDropdownLayout.topDown(visible, in: commonParent).insetBy(dx: margin, dy: margin)
     }
 
     /// `rect` in `view`, top-down in this space.
@@ -879,6 +885,8 @@ final class AtticDropdownPresenter {
     private var monitors: [Any] = []
     private var resignObserver: NSObjectProtocol?
     private var removal: DispatchWorkItem?
+    private var updateScheduled = false
+    private var closeScheduled = false
 
     init() {}
 
@@ -951,6 +959,34 @@ final class AtticDropdownPresenter {
         // height (and width) avoid another content-measuring pass on every
         // keystroke.
         if let height = contentHeight { resize(height: height, width: contentWidth) }
+    }
+
+    /// Representable callbacks run inside SwiftUI's update. Resizing the
+    /// card publishes stage geometry, so coalesce it onto the next turn.
+    func updateAfterViewUpdate() {
+        guard !updateScheduled else { return }
+        updateScheduled = true
+        DispatchQueue.main.async { [weak self] in
+            guard let self else { return }
+            self.updateScheduled = false
+            guard self.isOpen, !self.closeScheduled else { return }
+            if AtticOverlayHierarchy.isInLayoutPass { self.updateAfterViewUpdate(); return }
+            self.update()
+        }
+    }
+
+    /// Dismantling an anchor also runs inside SwiftUI's update. Stop native
+    /// interaction now; publish the leave animation after that update ends.
+    func closeAfterViewUpdate() {
+        wantsOpen = false
+        host?.isInteractive = false
+        guard !closeScheduled else { return }
+        closeScheduled = true
+        DispatchQueue.main.async { [self] in
+            closeScheduled = false
+            if AtticOverlayHierarchy.isInLayoutPass { closeAfterViewUpdate(); return }
+            close(restoreFocus: true)
+        }
     }
 
     /// The content's natural height changed while open (a filter, a
@@ -1161,12 +1197,12 @@ struct AtticDropdownAnchor: NSViewRepresentable {
         presenter.contentWidth = contentWidth
         presenter.design = design
         guard isPresented else {
-            if presenter.isOpen || presenter.wantsOpen { presenter.close(restoreFocus: true) }
+            if presenter.isOpen || presenter.wantsOpen { presenter.closeAfterViewUpdate() }
             return
         }
         presenter.content = content()
         if presenter.isOpen {
-            presenter.update()
+            presenter.updateAfterViewUpdate()
         } else if !presenter.wantsOpen {
             presenter.wantsOpen = true
             view.onWindow = { [weak view, weak presenter] in
@@ -1186,7 +1222,8 @@ struct AtticDropdownAnchor: NSViewRepresentable {
     /// itself went away: the card leaves with its motion and the keyboard
     /// goes back (its host removes itself, whatever happens to this anchor).
     static func dismantleNSView(_ view: AnchorView, coordinator: AtticDropdownPresenter) {
-        coordinator.close(restoreFocus: true)
+        view.onWindow = nil
+        coordinator.closeAfterViewUpdate()
     }
 }
 

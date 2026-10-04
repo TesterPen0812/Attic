@@ -146,6 +146,7 @@ final class TasksFrameCostTests: XCTestCase {
         host.place(.now)
 
         print("ATTIC_FRAME_COST " + report.joined(separator: " | "))
+        print("ATTIC_FRAME_KEYS text=Call the plumber tomorrow #home raw_ms=\(keys)")
         // Sanity only (see the type's comment).
         XCTAssertLessThan(Self.median(keys), 500)
         XCTAssertEqual(host.model.tab, .now)
