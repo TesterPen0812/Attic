@@ -435,8 +435,9 @@ final class NotesFormatControlsTests: XCTestCase {
         func hosts(_ view: NSView) -> [AtticOverlayHostingView] {
             ((view as? AtticOverlayHostingView).map { [$0] } ?? []) + view.subviews.flatMap { hosts($0) }
         }
-        settle { hosts(scrollView).contains { $0.menuLabel == "Tag suggestions" && !$0.isHidden } }
-        let host = try XCTUnwrap(hosts(scrollView).first { $0.menuLabel == "Tag suggestions" })
+        let overlayParent = try XCTUnwrap(scrollView.superview)
+        settle { hosts(overlayParent).contains { $0.menuLabel == "Tag suggestions" && !$0.isHidden } }
+        let host = try XCTUnwrap(hosts(overlayParent).first { $0.menuLabel == "Tag suggestions" })
         XCTAssertFalse(host.isHidden, "the suggestions show")
         let hash = try XCTUnwrap(engine.rect(for: NSRange(location: (title as NSString).length, length: 1)))
         /// The card's top, against the `#`'s bottom, in the text's terms.
@@ -565,7 +566,8 @@ final class NotesFormatControlsTests: XCTestCase {
         textView.setSelectedRange(target)
         controls.router.run(.mark(.link), from: .shortcut)
         settle { controls.cardHasKeyboard }
-        let host = try XCTUnwrap(window.contentView?.subviews.compactMap { $0 as? AtticOverlayHostingView }.first { $0.acceptsKeyboard && $0.isInteractive })
+        let overlayParent = try XCTUnwrap(window.contentView?.superview)
+        let host = try XCTUnwrap(overlayParent.subviews.compactMap { $0 as? AtticOverlayHostingView }.first { $0.acceptsKeyboard && $0.isInteractive })
         let before = host.contentRect.size
         controls.cardModel.linkText = "https://"
         controls.cardModel.submitLink()

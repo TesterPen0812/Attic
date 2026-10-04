@@ -929,7 +929,8 @@ final class CombinedFixRoundTests: XCTestCase {
         type("\n/", into: textView)
         harness.host.layoutSubtreeIfNeeded()
         spin(0.2)
-        let list = try XCTUnwrap(harness.host.subviews.compactMap { $0 as? AtticOverlayHostingView }.first { $0.menuLabel == "Insert" },
+        let overlayParent = try XCTUnwrap(harness.host.superview)
+        let list = try XCTUnwrap(overlayParent.subviews.compactMap { $0 as? AtticOverlayHostingView }.first { $0.menuLabel == "Insert" },
                                  "the `/` list is in the overlay")
         let parent = try XCTUnwrap(list.superview)
         let frame = list.frame
