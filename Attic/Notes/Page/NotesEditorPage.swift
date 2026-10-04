@@ -31,6 +31,15 @@ struct NotesEditorPage: View {
     @StateObject private var library: NotesLibraryModel
     @StateObject private var damagedRecovery: NoteDamagedRecoveryExit
     @State private var searchFocused = false
+    /// The bottom row's control that has the keyboard after ⌃Tab or ⌃⇧Tab
+    /// left the text (OD-7), and whether its controls are keyboard stops:
+    /// only from then until the keyboard is back in the text, so a click
+    /// never leaves a button holding it.
+    @FocusState private var bottomFocus: NotesKeyboardOrder.Stop?
+    @State private var bottomStops = false
+    /// The stop to focus once the controls have become focusable.
+    @State private var pendingStop: NotesKeyboardOrder.Stop?
+    @State private var keyMonitor: Any?
     @State private var postedToastID: UUID?
     /// The history step the delete toast undoes: the toast answers only
     /// while that step is still the next Undo.
@@ -104,10 +113,32 @@ struct NotesEditorPage: View {
             controller.start()
             controller.present()
             chrome.menuCommands = { noteMenuCommands() }
+            chrome.leaveEditor = { forward in leaveEditor(forward: forward) }
+            if keyMonitor == nil {
+                keyMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { event in
+                    bottomKeyPressed(event) ? nil : event
+                }
+            }
             library.failedDraftText = { [controller, noteStore] id in
                 guard noteStore.note(withID: id) == nil,
                       let draft = controller.failedDrafts.first(where: { $0.noteID == id }) else { return nil }
                 return NoteTextExport.plainText(draft.engine.document())
+            }
+        }
+        .onDisappear {
+            if let keyMonitor { NSEvent.removeMonitor(keyMonitor) }
+            keyMonitor = nil
+        }
+        .onChange(of: bottomFocus) { _, stop in
+            // Back in the text (a click, ⌃Tab round): the buttons stop
+            // being stops.
+            if stop == nil, pendingStop == nil { bottomStops = false }
+        }
+        .onChange(of: bottomStops) { _, on in
+            guard on, let stop = pendingStop else { return }
+            DispatchQueue.main.async {
+                pendingStop = nil
+                bottomFocus = stop
             }
         }
         .onChange(of: design) { _, newValue in controller.update(design: newValue) }
@@ -131,6 +162,9 @@ struct NotesEditorPage: View {
             DispatchQueue.main.async { chrome.focusText() }
         }
         .onChange(of: controller.isLibraryPresented) { _, shown in
+            bottomFocus = nil
+            pendingStop = nil
+            bottomStops = false
             if shown {
                 // Typing searches (the library's own keys): the search
                 // stays quiet on the label line until then.
@@ -237,6 +271,7 @@ struct NotesEditorPage: View {
                     toggleLibrary()
                 }
                 .keyboardShortcut("l", modifiers: [.command, .shift])
+                .modifier(NotesKeyboardStop(stop: .allNotes, enabled: bottomStops, focus: $bottomFocus))
                 .accessibilityIdentifier("notes-all-notes")
                 .accessibilitySortPriority(1)
                 Spacer(minLength: AtticSpacing.s12)
@@ -248,6 +283,7 @@ struct NotesEditorPage: View {
                 Spacer(minLength: AtticSpacing.s12)
                 if showsEditor, controller.active?.isReadOnly == false {
                     formatButton
+                        .modifier(NotesKeyboardStop(stop: .format, enabled: bottomStops, focus: $bottomFocus))
                         .padding(.trailing, AtticSpacing.s8)
                         .transition(.opacity)
                 }
@@ -255,6 +291,7 @@ struct NotesEditorPage: View {
                     newNote()
                 }
                 .keyboardShortcut("n", modifiers: .command)
+                .modifier(NotesKeyboardStop(stop: .newNote, enabled: bottomStops, focus: $bottomFocus))
                 .accessibilityIdentifier("notes-new-note")
             }
             .frame(height: buttonHeight)
@@ -262,7 +299,7 @@ struct NotesEditorPage: View {
     }
 
     /// Aa (mockup p2-16 D): every style and format, with or without a
-    /// selection. ⌘T and ⌃Tab (without a selection bar) open it too.
+    /// selection. ⌘T opens it too.
     private var formatButton: some View {
         AtticRaisedButton(systemName: "textformat", label: "Format", help: String(localized: "Format (⌘T)")) {
             chrome.openFormatPopover(keyboard: false)
@@ -274,6 +311,62 @@ struct NotesEditorPage: View {
                     chrome.isFormatPopoverOpen = false
                 }
             }
+        }
+    }
+
+    // MARK: Keyboard out of the text (OD-7)
+
+    /// The stops in order: the text, then the bottom row's controls.
+    private var keyboardStops: [NotesKeyboardOrder.Stop] {
+        NotesKeyboardOrder.stops(format: showsEditor && controller.active?.isReadOnly == false)
+    }
+
+    /// ⌃Tab or ⌃⇧Tab with no selection bar: the next or previous control.
+    private func leaveEditor(forward: Bool) {
+        guard showsEditor, let stop = NotesKeyboardOrder.next(after: .text, in: keyboardStops, forward: forward) else { return }
+        move(to: stop)
+    }
+
+    private func move(to stop: NotesKeyboardOrder.Stop) {
+        if stop == .text {
+            bottomFocus = nil
+            pendingStop = nil
+            bottomStops = false
+            chrome.focusText()
+            return
+        }
+        if bottomStops {
+            bottomFocus = stop
+        } else {
+            // The controls become focusable first; the focus lands once
+            // they are (`onChange(of: bottomStops)`).
+            pendingStop = stop
+            bottomStops = true
+        }
+    }
+
+    /// While a bottom-row control has the keyboard: Tab, ⇧Tab, ⌃Tab and
+    /// ⌃⇧Tab go round the stops (back into the text after the last), and
+    /// Space or Return presses the control. Read at the key press only.
+    private func bottomKeyPressed(_ event: NSEvent) -> Bool {
+        guard let stop = bottomFocus, showsEditor, event.window?.isKeyWindow == true else { return false }
+        let flags = event.modifierFlags.intersection([.command, .option, .control, .shift])
+        switch event.keyCode {
+        case 48 where !flags.contains(.command) && !flags.contains(.option):
+            guard let next = NotesKeyboardOrder.next(after: stop, in: keyboardStops, forward: !flags.contains(.shift)) else { return false }
+            move(to: next)
+            return true
+        case 49, 36, 76:
+            guard flags.isEmpty else { return false }
+            switch stop {
+            case .allNotes: toggleLibrary()
+            case .format: chrome.openFormatPopover(keyboard: true)
+            case .newNote: newNote()
+            case .text: return false
+            }
+            return true
+        default:
+            return false
         }
     }
 
@@ -803,5 +896,39 @@ private struct NoteProposalComparison: View {
         .padding(20)
         .frame(width: 440, height: 480)
         .accessibilityIdentifier("notes-proposal-comparison")
+    }
+}
+
+// MARK: - Keyboard order (OD-7)
+
+/// The note page's keyboard order once ⌃Tab leaves the text (OD-7): the
+/// text, then the bottom row left to right (All notes, Aa while the note
+/// can be formatted, New note), and round again into the text. Every stop
+/// is drawn: the text's caret, or the control's ring.
+enum NotesKeyboardOrder {
+    enum Stop: Hashable { case text, allNotes, format, newNote }
+
+    static func stops(format: Bool) -> [Stop] {
+        format ? [.text, .allNotes, .format, .newNote] : [.text, .allNotes, .newNote]
+    }
+
+    static func next(after current: Stop, in stops: [Stop], forward: Bool) -> Stop? {
+        guard let index = stops.firstIndex(of: current) else { return stops.first }
+        return stops[(index + (forward ? 1 : stops.count - 1)) % stops.count]
+    }
+}
+
+/// A bottom-row control as a keyboard stop while the keyboard is out of
+/// the text: focusable then (whatever the Mac's keyboard navigation
+/// setting), and drawn with its ring by its own style.
+private struct NotesKeyboardStop: ViewModifier {
+    let stop: NotesKeyboardOrder.Stop
+    let enabled: Bool
+    var focus: FocusState<NotesKeyboardOrder.Stop?>.Binding
+
+    func body(content: Content) -> some View {
+        content
+            .focusable(enabled)
+            .focused(focus, equals: stop)
     }
 }

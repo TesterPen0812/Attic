@@ -20,6 +20,9 @@ final class NotesPageChrome: ObservableObject {
     /// opened it (its keyboard ring shows at once).
     @Published var isFormatPopoverOpen = false
     var formatPopoverByKeyboard = false
+    /// ⌃Tab / ⌃⇧Tab out of the text (OD-7): the page takes the keyboard
+    /// to its next (true) or previous control.
+    var leaveEditor: ((_ forward: Bool) -> Void)?
     /// The open panel for Insert › Image or File…, the `/` row (one file),
     /// or a failed object's Retry and Locate… (one file, for that object).
     enum FileRequest: Equatable {
@@ -500,6 +503,7 @@ struct NoteEditorRepresentable: NSViewRepresentable {
                                           isNewDraft: !session.isPersisted && session.isUntouchedDraft)
         let chrome = chrome
         controls.requestFormatPopover = { [weak chrome] keyboard in chrome?.openFormatPopover(keyboard: keyboard) }
+        controls.leaveEditor = { [weak chrome] forward in chrome?.leaveEditor?(forward) }
         controls.closeFormatPopover = { [weak chrome] in chrome?.isFormatPopoverOpen = false }
         controls.requestFile = { [weak chrome, sessionID = session.id] slash in
             chrome?.fileRequest = slash.map { .slash(NoteSlashFileTicket(sessionID: sessionID, request: $0)) } ?? .insert

@@ -269,12 +269,48 @@ final class NotesFormatControlsTests: XCTestCase {
         XCTAssertNil(controls.formatModel.barKeyboardIndex, "Esc goes back to the text")
         XCTAssertTrue(window.firstResponder === textView, "the text never lost the keyboard")
 
+        // OD-7: without a bar, ⌃Tab and ⌃⇧Tab leave the text for the
+        // page's next and previous control; Aa stays on ⌘T.
         var opened: Bool?
+        var left: [Bool] = []
         controls.requestFormatPopover = { opened = $0 }
+        controls.leaveEditor = { left.append($0) }
         textView.setSelectedRange(NSRange(location: 20, length: 0))
         controls.refresh()
         XCTAssertTrue(controls.handleKey(keyEvent("\t", "\t", keyCode: 48, .control, window: window)))
-        XCTAssertEqual(opened, true, "without a bar, ⌃Tab opens Aa from the keyboard")
+        XCTAssertTrue(controls.handleKey(keyEvent("\u{19}", "\u{19}", keyCode: 48, [.control, .shift], window: window)))
+        XCTAssertEqual(left, [true, false], "⌃Tab leaves forward, ⌃⇧Tab backward")
+        XCTAssertNil(opened, "⌃Tab no longer opens Aa")
+    }
+
+    /// OD-7: Tab in the title moves to the start of the body (making the
+    /// body's first line when there is none); in the body it indents.
+    func testTabInTheTitleMovesToTheBodyAndIndentsInTheBody() throws {
+        let (_, engine, textView) = make()
+        let title = engine.titleParagraphRange
+        textView.setSelectedRange(NSRange(location: 2, length: 0))
+        textView.doCommand(by: #selector(NSResponder.insertTab(_:)))
+        XCTAssertEqual(textView.selectedRange(), NSRange(location: NSMaxRange(title) + 1, length: 0), "Tab in the title: the body's start")
+        XCTAssertEqual(engine.titleParagraphRange, title, "nothing typed into the title")
+        XCTAssertFalse(textView.string.prefix(NSMaxRange(title)).contains("\t"))
+
+        XCTAssertFalse(engine.moveFromTitleToBody(), "in the body Tab is not navigation (it indents)")
+
+        let (_, empty, emptyView) = make(NoteDocument(blocks: [.text("Only a title")]))
+        emptyView.setSelectedRange(NSRange(location: 4, length: 0))
+        emptyView.doCommand(by: #selector(NSResponder.insertTab(_:)))
+        XCTAssertEqual(emptyView.selectedRange().location, empty.titleParagraphRange.length + 1, "a body line to type in")
+        XCTAssertEqual(empty.lineText(at: 0), "Only a title")
+    }
+
+    func testNotesKeyboardOrderGoesRoundTheBottomRowAndBackIntoTheText() {
+        let stops = NotesKeyboardOrder.stops(format: true)
+        XCTAssertEqual(stops, [.text, .allNotes, .format, .newNote])
+        XCTAssertEqual(NotesKeyboardOrder.next(after: .text, in: stops, forward: true), .allNotes, "⌃Tab: the next control")
+        XCTAssertEqual(NotesKeyboardOrder.next(after: .text, in: stops, forward: false), .newNote, "⌃⇧Tab: the previous one")
+        XCTAssertEqual(NotesKeyboardOrder.next(after: .newNote, in: stops, forward: true), .text, "round again into the text")
+        XCTAssertEqual(NotesKeyboardOrder.next(after: .allNotes, in: stops, forward: false), .text)
+        XCTAssertEqual(NotesKeyboardOrder.stops(format: false), [.text, .allNotes, .newNote], "a read-only note has no Aa")
     }
 
     func testListsToggleBackToBodyAndAaWorksOnTheCaretParagraph() {
