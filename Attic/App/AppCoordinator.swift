@@ -871,11 +871,12 @@ final class AppCoordinator: ObservableObject {
         Task { @MainActor [weak self] in
             guard let self else { return }
             do {
-                try await WorkspaceLegacyBridge.coordinator(for: self.store.container).finishLaunch()
-                // Persistent launch files are swept only after registration
-                // and reconciliation; test stores never judge real files.
-                if !self.isRunningTests { await self.store.sweepUnreferencedAttachmentStorage() }
-                self.noteDraft.pages.recoverAtLaunch()
+                try await WorkspaceLegacyBridge.coordinator(for: self.store.container).finishLaunchOfferingRecovery(
+                    offers: { self.noteDraft.pages.recoverAtLaunch() },
+                    sweep: {
+                        // Only registered, reconciled persistent stores judge files.
+                        if !self.isRunningTests { await self.store.sweepUnreferencedAttachmentStorage() }
+                    })
             } catch { self.noteDraft.pages.recoveryStartupFailed(error) }
         }
         if settings.quickCaptureEnabled { newTaskHotKey.register() }

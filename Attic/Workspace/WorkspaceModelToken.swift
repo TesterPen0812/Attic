@@ -115,9 +115,20 @@ struct WorkspaceModelToken: Codable, Equatable, Sendable {
     }
 }
 
-enum WorkspaceFoundationError: Error, Equatable {
+enum WorkspaceFoundationError: Error, Equatable, LocalizedError {
     case unsupportedField(String), conflict, unknown, pendingPublication, writerAlreadyActive
     case invalidIdentity, damagedEnvelope, protectedOwner, preparationFailed
+
+    var errorDescription: String? {
+        switch self {
+        case .protectedOwner, .pendingPublication, .writerAlreadyActive:
+            String(localized: "This item is protected while its changes are being saved. Try again when saving finishes.")
+        case .conflict:
+            String(localized: "This item changed elsewhere. Your edit was not saved. Check the latest version before trying again.")
+        default:
+            String(localized: "The save could not be confirmed. Your work is being kept while Attic checks it.")
+        }
+    }
 }
 
 /// Full values are reserved for explicit snapshots and touched-row patches.

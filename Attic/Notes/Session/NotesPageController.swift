@@ -99,11 +99,31 @@ final class NoteSession: ObservableObject, Identifiable {
     let recoverySourceNoteID: UUID?
     @Published fileprivate(set) var state: State {
         didSet {
+            if case .conflict = state, state != oldValue { invalidateCallbacks() }
             engine.setWritingToolsAvailable(NoteSessionPolicy.writingToolsAvailable(state,
                 activity: engine.activity, refusedSinceLastStoreSave: refusedWritingToolsSinceSave,
                 hasMarkedText: engine.textView?.hasMarkedText() == true))
         }
     }
+    struct CallbackStamp {
+        let noteID: UUID
+        let engineID: ObjectIdentifier
+        let binding: UInt64
+        let draft: UInt64
+        let revision: UUID?
+    }
+    private var bindingGeneration: UInt64 = 0
+    var usesWorkspaceBinding = false
+    var callbackStamp: CallbackStamp {
+        .init(noteID: noteID, engineID: ObjectIdentifier(engine), binding: bindingGeneration,
+              draft: editGeneration, revision: baseRevisionID)
+    }
+    func accepts(_ stamp: CallbackStamp, retainingNewerDraft: Bool = false) -> Bool {
+        stamp.noteID == noteID && stamp.engineID == ObjectIdentifier(engine)
+            && stamp.binding == bindingGeneration && stamp.revision == baseRevisionID
+            && (retainingNewerDraft || stamp.draft == editGeneration)
+    }
+    func invalidateCallbacks() { bindingGeneration &+= 1 }
     fileprivate var editGeneration: UInt64 = 0
     /// Information for the slot (lowest priority), such as a refused change.
     @Published var notice: String?
@@ -136,11 +156,13 @@ final class NoteSession: ObservableObject, Identifiable {
     }
 
     fileprivate func adopt(noteID: UUID) {
+        invalidateCallbacks()
         self.noteID = noteID
         engine.noteID = noteID
     }
 
     fileprivate func replaceEngine(_ replacement: NoteEditorEngine) {
+        invalidateCallbacks()
         engine.detachView()
         verifiedDocumentAttachments.removeAll()
         engine = replacement
@@ -714,6 +736,45 @@ final class NotesPageController: ObservableObject {
         return true
     }
 
+    /// Engine-only entry point: does not present a page, create a note, or
+    /// attach a native view. Registry callers share the controller's cache.
+    func workspaceSession(noteID: UUID) -> NoteSession? {
+        guard let note = store.note(withID: noteID), let session = session(for: note) else { return nil }
+        if cache[noteID] == nil { wire(session); cache[noteID] = session }
+        return session
+    }
+    func refreshWorkspaceSession(_ session: NoteSession) -> NoteSession? {
+        store.refresh()
+        session.invalidateCallbacks()
+        guard let note = store.note(withID: session.noteID) else {
+            session.state = .conflict(.deleted)
+            return session
+        }
+        if NoteSessionPolicy.hasPendingWork(session.state), note.revisionID != session.baseRevisionID {
+            session.state = .conflict(.changed)
+            return session
+        }
+        guard let refreshed = presentSession(session) else { return nil }
+        if refreshed !== session { wire(refreshed); cache[refreshed.noteID] = refreshed }
+        return refreshed
+    }
+    func resumeWorkspaceDurability(_ session: NoteSession) {
+        if NoteSessionPolicy.hasPendingWork(session.state) {
+            scheduleSave(session); scheduleDurabilityDeadline(session)
+        }
+    }
+    func workspaceIsDurable(_ session: NoteSession) -> Bool {
+        hasDurableCheckpoint(session)
+            || (!session.isImporting && !NoteSessionPolicy.hasPendingWork(session.state))
+    }
+    func suspendWorkspace(_ session: NoteSession) {
+        session.saveTask?.cancel(); session.saveTask = nil
+        session.durabilityTask?.cancel(); session.durabilityTask = nil
+        session.pauseTask?.cancel(); session.pauseTask = nil
+        session.importTask?.cancel(); session.importTask = nil
+        session.engine.detachView()
+    }
+
     private func session(for note: NoteItem) -> NoteSession? {
         if let cached = cache[note.id] { return cached }
         let load = store.loadDocument(noteID: note.id)
@@ -891,7 +952,7 @@ final class NotesPageController: ObservableObject {
             let presence: NoteSessionPolicy.Presence = isPageVisible && !isLibraryPresented && active === session
                 ? .onScreen : .background
             // A session still holding a checkpoint claim keeps it reachable.
-            return session.recoveryClaim == nil
+            return !session.usesWorkspaceBinding && session.recoveryClaim == nil
                 && NoteSessionPolicy.canEvict(session.state, activity: session.engine.activity,
                                               hasBatch: session.isImporting, presence: presence)
         }) {
@@ -1053,6 +1114,7 @@ final class NotesPageController: ObservableObject {
                 // replacement and quit wait for the verified checkpoint.
                 let bytes = journalStaged(for: session, document: document)
                 let noteID = session.noteID
+                let stamp = session.callbackStamp
                 queueRecoveryWork { [weak self, session] in
                     guard let self, session.noteID == noteID else { return }
                     if self.checkpointKeys[session.id] == key && session.recoveryClaim != nil { return }
@@ -1061,13 +1123,17 @@ final class NotesPageController: ObservableObject {
                         let claim = try await journal.writeDurably(entry, staged: bytes, replacing: session.recoveryClaim)
                         guard session.noteID == noteID else { return }
                         session.recoveryClaim = claim
+                        guard session.accepts(stamp) else { return }
                         self.checkpointKeys[session.id] = key
                         self.verifiedCheckpointKeys[session.id] = key
                         if session.notice == "Saving recovery data…"
                             || session.notice == "Recovery data is still being saved. Try again when saving finishes." { session.notice = nil }
                         if session.isConflict { return }
                         if !silent { session.state = .notSaved(self.storeMessage()) }
-                    } catch { self.recoveryFailureCount += 1; session.state = .onlyInMemory("Recovery could not be saved: \(error.localizedDescription)") }
+                    } catch {
+                        self.recoveryFailureCount += 1
+                        if session.accepts(stamp) { session.state = .onlyInMemory("Recovery could not be saved: \(error.localizedDescription)") }
+                    }
                 }
                 session.notice = "Saving recovery data…"
                 return allowQueued
@@ -1188,16 +1254,12 @@ final class NotesPageController: ObservableObject {
             return
         }
         let generation = session.editGeneration
-        let noteID = session.noteID
-        let engine = session.engine
-        let baseRevisionID = session.baseRevisionID
+        let stamp = session.callbackStamp
         let tags = session.engine.tags
         let document = session.engine.document()
         let staged = session.engine.stagedAttachments(for: document)
         let prepared = await prepareDocument(document)
-        guard !Task.isCancelled, noteID == session.noteID, engine === session.engine,
-              baseRevisionID == session.baseRevisionID,
-              isDeadline || generation == session.editGeneration else { return }
+        guard !Task.isCancelled, session.accepts(stamp, retainingNewerDraft: isDeadline) else { return }
         if session.isImporting { _ = checkpoint(session, silent: true); return }
         guard let prepared else { _ = preserve(session); return }
         if !save(session, snapshot: document, stagedSnapshot: staged, prepared: prepared,
@@ -1884,6 +1946,7 @@ final class NotesPageController: ObservableObject {
             var loaded: [NoteImportedObject] = []
             for url in urls {
                 guard !Task.isCancelled, session.importBatch?.id == batchID else { return }
+                let stamp = session.callbackStamp
                 let type = UTType(filenameExtension: url.pathExtension) ?? .data
                 let item: NoteImportedObject
                 // Metadata admission happens before either loader opens the
@@ -1896,6 +1959,13 @@ final class NotesPageController: ObservableObject {
                     item = NoteImportedObject(staged: image.copying(id: UUID()), pixelSize: size)
                 } else {
                     item = await Self.loadFile(url, type: type.identifier)
+                }
+                guard !Task.isCancelled, session.importBatch?.id == batchID else { return }
+                if session.usesWorkspaceBinding, !session.accepts(stamp) {
+                    // The pending source/claimed checkpoint stays owned. A late
+                    // loader cannot insert into the new draft or surface.
+                    session.importTask = nil
+                    return
                 }
                 if let payload = item.staged,
                    let failure = self.importAdmissionFailure(payload, in: session, earlier: loaded) {

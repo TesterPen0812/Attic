@@ -19,6 +19,7 @@ final class WorkspaceOperationCoordinator {
     }
 
     let container: ModelContainer
+    lazy var sessions = WorkspaceSessionRegistry.shared(for: self)
     let ledger: WorkspaceCommitLedger
     struct ValidationCounters: Equatable {
         var fastValidations = 0
@@ -167,26 +168,72 @@ final class WorkspaceOperationCoordinator {
         if launchHold != nil { try await finishLaunch() }
     }
 
-    /// Recovery reads occur only when an earlier write is actually held.
-    /// A resolved unknown unlocks the caller's normal exact/ledger validation;
-    /// it never replays the original mutation.
+    /// Offers depend on reconciliation, never on unrelated directory IO.
+    func finishLaunchOfferingRecovery(offers: () -> Void, sweep: () async -> Void) async throws {
+        try await finishLaunch()
+        offers()
+        await sweep()
+    }
+
+    private struct RetryState {
+        var failures: Int = 0
+        var due: TimeInterval = 0
+    }
+    private var compatibilityRetries: [UUID: RetryState] = [:]
+    var retryNow: () -> TimeInterval = { ProcessInfo.processInfo.systemUptime }
+    private(set) var compatibilityRetryAttempts = 0
+    private(set) var compatibilityReceiptFetches = 0
+    private var isRetryingCompatibility = false
+    static let automaticRetryLimit = 4
+
+    private func deferCompatibilityRetry(_ id: UUID) {
+        var state = compatibilityRetries[id] ?? RetryState()
+        state.failures = min(state.failures + 1, 7)
+        state.due = retryNow() + min(60, pow(2, Double(state.failures - 1)))
+        compatibilityRetries[id] = state
+    }
+    private func retryCompatibility(_ id: UUID) {
+        guard let (envelope, claim, _) = pending[id] else { return }
+        compatibilityRetryAttempts += 1
+        isRetryingCompatibility = true
+        defer { isRetryingCompatibility = false }
+        switch receiptTruth(id, digest: claim.digest) {
+        case .committed:
+            do { try finalizeCompatibility(envelope, claim: claim) }
+            catch { deferCompatibilityRetry(id) }
+        case .notCommitted:
+            retainAbortedCompatibility(envelope, claim: claim)
+            releasePending(envelope)
+        default: deferCompatibilityRetry(id)
+        }
+    }
+    /// An explicit recovery action bypasses the schedule for this identity;
+    /// it never re-executes the mutation or releases a still-held owner.
+    @discardableResult
+    func retryHeldWrite(_ id: UUID) -> Bool {
+        guard compatibilityPending.contains(id) else { return false }
+        retryCompatibility(id)
+        return !compatibilityPending.contains(id)
+    }
+    /// The idle path remains two empty checks. Automatic callers visit only
+    /// due entries, with at most four receipt/finalization attempts per save.
+    /// A nil scope is an explicit retry, retained for existing recovery callers.
     func retryHeldWrites(affecting affected: Set<WorkspaceOwner>? = nil) -> Bool {
         if plainUnknown != nil, reconcilePlain() == .unknown { return false }
-        for id in compatibilityPending {
-            guard let (envelope, claim, _) = pending[id] else { continue }
-            switch receiptTruth(id, digest: claim.digest) {
-            case .committed:
-                do { try finalizeCompatibility(envelope, claim: claim) } catch { continue }
-            case .notCommitted:
-                retainAbortedCompatibility(envelope, claim: claim)
-                releasePending(envelope)
-            default: continue
-            }
+        if !compatibilityPending.isEmpty {
+            let now = retryNow()
+            let due = compatibilityPending.filter { affected == nil || (compatibilityRetries[$0]?.due ?? 0) <= now }
+                .sorted {
+                    let left = compatibilityRetries[$0]?.due ?? 0, right = compatibilityRetries[$1]?.due ?? 0
+                    return left == right ? $0.uuidString < $1.uuidString : left < right
+                }
+            for id in due.prefix(Self.automaticRetryLimit) { retryCompatibility(id) }
         }
         return affected.map { $0.isDisjoint(with: heldOwners) } ?? compatibilityPending.isEmpty
     }
     private func releasePending(_ envelope: WorkspaceOperationEnvelope) {
         pending[envelope.id] = nil; publicationStep[envelope.id] = nil; compatibilityPending.remove(envelope.id)
+        compatibilityRetries[envelope.id] = nil
         heldOwners.subtract(Set(envelope.tokens.map(\.owner)).union(envelope.writes))
         journal.suppressPendingOperationClaims(pending.values.compactMap { $0.0.checkpointClaim })
     }
@@ -856,6 +903,7 @@ final class WorkspaceOperationCoordinator {
 
     private func bookkeeping(_ id: UUID, change: (OperationReceipt) -> Void) throws {
         let context = freshContext()
+        if isRetryingCompatibility { compatibilityReceiptFetches += 1 }
         let rows = try context.fetch(FetchDescriptor<OperationReceipt>(predicate: #Predicate { $0.id == id }))
         guard try agreeing(rows), !rows.isEmpty else { throw WorkspaceFoundationError.unknown }
         rows.forEach(change)
@@ -864,6 +912,7 @@ final class WorkspaceOperationCoordinator {
         catch {
             try beforeReconciliationRead?()
             let fresh = freshContext()
+            if isRetryingCompatibility { compatibilityReceiptFetches += 1 }
             let actual = try fresh.fetch(FetchDescriptor<OperationReceipt>(predicate: #Predicate { $0.id == id }))
             guard try actual.map({ try WorkspaceModelFields.read($0) }) == expected else { throw error }
         }
@@ -872,6 +921,7 @@ final class WorkspaceOperationCoordinator {
         do {
             try beforeReconciliationRead?()
             let context = freshContext()
+            if isRetryingCompatibility { compatibilityReceiptFetches += 1 }
             let rows = try context.fetch(FetchDescriptor<OperationReceipt>(predicate: #Predicate { $0.id == id }))
             guard !rows.isEmpty else { return .notCommitted }
             guard try agreeing(rows), rows.allSatisfy({ $0.envelopeDigest == digest }) else { return .unknown }
@@ -1135,7 +1185,7 @@ extension WorkspaceOperationCoordinator {
         guard affected.isDisjoint(with: heldOwners) else { throw WorkspaceFoundationError.unknown }
         let claim = try journal.prepareOperationSynchronously(envelope)
         let result = commitPrepared(envelope, claim: claim, stage: stage, publication: Publication())
-        if result == .unknown { compatibilityPending.insert(envelope.id) }
+        if result == .unknown { compatibilityPending.insert(envelope.id); deferCompatibilityRetry(envelope.id) }
         if result == .notCommitted || result == .conflict {
             retainAbortedCompatibility(envelope, claim: claim)
         }
@@ -1143,6 +1193,7 @@ extension WorkspaceOperationCoordinator {
         compatibilityPending.insert(envelope.id)
         do { try finalizeCompatibility(envelope, claim: claim) }
         catch {
+            deferCompatibilityRetry(envelope.id)
             // Committed model state remains authoritative. Keep this identity
             // so the next real command retries finalization without saving the
             // original mutation again, even after its envelope was released.
@@ -1150,6 +1201,7 @@ extension WorkspaceOperationCoordinator {
     }
     private func finalizeCompatibility(_ envelope: WorkspaceOperationEnvelope, claim: WorkspaceOperationClaim) throws {
         let context = freshContext(), id = envelope.id
+        if isRetryingCompatibility { compatibilityReceiptFetches += 1 }
         let receipts = try context.fetch(FetchDescriptor<OperationReceipt>(predicate: #Predicate { $0.id == id }))
         guard try agreeing(receipts), let receipt = receipts.first else { throw WorkspaceFoundationError.unknown }
         let expected = try JSONDecoder().decode([State].self, from: receipt.resultingTokens)

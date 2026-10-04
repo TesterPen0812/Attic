@@ -34,6 +34,96 @@ final class WorkspaceCommitTests: XCTestCase {
         coordinator = nil; container = nil
         try FileManager.default.removeItem(at: root)
     }
+    func testR1RecoveryOffersAreAvailableWhileSweepIsPaused() async throws {
+        let pre = try recoveryDraft("independent recovery")
+        _ = try await coordinator.journal.writeDurably(pre, staged: [])
+        coordinator.beginLaunchRegistration()
+        var offered = false
+        var sweepContinuation: CheckedContinuation<Void, Never>?
+        let work = Task { @MainActor in
+            try await coordinator.finishLaunchOfferingRecovery(offers: {
+                offered = (try? coordinator.journal.recoveryEntries().isEmpty) == false
+            }, sweep: {
+                await withCheckedContinuation { sweepContinuation = $0 }
+            })
+        }
+        while sweepContinuation == nil { await Task.yield() }
+        XCTAssertTrue(offered)
+        XCTAssertTrue(coordinator.startupReconciled)
+        XCTAssertNil(coordinator.ownership.tryAcquire([noteID], kind: .collection), "offered checkpoint retains its owner")
+        sweepContinuation?.resume()
+        try await work.value
+    }
+
+    func testR3ManyStuckEntriesBoundAutomaticFetchesAndExplicitRetryIsImmediate() throws {
+        let context = coordinator.freshContext()
+        let ids = (0..<25).map { _ in UUID() }
+        for id in ids { context.insert(TaskItem(id: id, title: "before")) }
+        try context.save()
+        var clock: TimeInterval = 100
+        coordinator.retryNow = { clock }
+        coordinator.save = { context in
+            if context.changedModelsArray.contains(where: { $0 is OperationReceipt }) { throw WorkspaceFoundationError.unknown }
+            try context.save()
+        }
+        for id in ids {
+            let owners: Set<WorkspaceOwner> = [.init(entity: .task, id: id)]
+            try coordinator.commitCompatibility(tokens: coordinator.capture(owners), scopes: [], writes: owners,
+                intent: "stuck entry", plain: false, writer: coordinator.save, stage: { context in
+                    try TaskStore.stageUpdate(in: context, taskID: id, title: "committed once", timestamp: Date())
+                })
+        }
+        let tasks = TaskStore(container: container)
+        var reads = 0
+        coordinator.beforeReconciliationRead = { reads += 1 }
+        let attempts = coordinator.compatibilityRetryAttempts
+        let fetches = coordinator.compatibilityReceiptFetches
+        for index in 0..<12 {
+            XCTAssertTrue(tasks.update(try XCTUnwrap(tasks.task(withID: taskID)), title: "disjoint \(index)"))
+        }
+        XCTAssertEqual(reads, 0); XCTAssertEqual(coordinator.compatibilityRetryAttempts, attempts)
+        clock += 1
+        XCTAssertTrue(coordinator.retryHeldWrites(affecting: baseOwners))
+        XCTAssertEqual(reads, 2 * WorkspaceOperationCoordinator.automaticRetryLimit, "truth plus failed bookkeeping reconciliation")
+        XCTAssertEqual(coordinator.compatibilityReceiptFetches - fetches, 4 * WorkspaceOperationCoordinator.automaticRetryLimit)
+        XCTAssertEqual(coordinator.compatibilityRetryAttempts - attempts, WorkspaceOperationCoordinator.automaticRetryLimit)
+        let held = try XCTUnwrap(tasks.task(withID: ids[0]))
+        XCTAssertFalse(tasks.update(held, title: "refused"))
+        XCTAssertEqual(tasks.task(withID: ids[0])?.title, "committed once")
+        XCTAssertFalse(try XCTUnwrap(tasks.task(withID: ids[0])?.modelContext).hasChanges)
+        coordinator.save = { try $0.save() }
+        let receipts = try coordinator.freshContext().fetch(FetchDescriptor<OperationReceipt>())
+        for receipt in receipts { XCTAssertTrue(coordinator.retryHeldWrite(receipt.id), "explicit retry bypasses backoff") }
+        XCTAssertTrue(coordinator.retryHeldWrites())
+        XCTAssertTrue(tasks.update(try XCTUnwrap(tasks.task(withID: ids[0])), title: "after retry"))
+        XCTAssertEqual(try coordinator.freshContext().fetchCount(FetchDescriptor<OperationReceipt>()), ids.count)
+    }
+
+    func testR5DisjointPlainUnknownRefusalRollsBackAndReloadsDurableTruth() throws {
+        let tasks = TaskStore(container: container, persist: { context in
+            try context.save(); throw WorkspaceFoundationError.unknown
+        })
+        let context = coordinator.freshContext(), disjointID = UUID()
+        context.insert(TaskItem(id: disjointID, title: "disjoint durable")); try context.save()
+        tasks.refresh()
+        coordinator.beforeReconciliationRead = { throw WorkspaceFoundationError.unknown }
+        XCTAssertFalse(tasks.update(try XCTUnwrap(tasks.task(withID: taskID)), title: "ambiguous durable"))
+        XCTAssertFalse(tasks.update(try XCTUnwrap(tasks.task(withID: disjointID)), title: "never saved"))
+        XCTAssertEqual(tasks.task(withID: taskID)?.title, "ambiguous durable")
+        XCTAssertEqual(tasks.task(withID: disjointID)?.title, "disjoint durable")
+        XCTAssertFalse(try XCTUnwrap(tasks.task(withID: disjointID)?.modelContext).hasChanges)
+        XCTAssertEqual(try coordinator.freshContext().fetch(FetchDescriptor<TaskItem>()).first { $0.id == disjointID }?.title, "disjoint durable")
+    }
+
+    func testR4RefusalReasonsHaveLocalizedDescriptions() {
+        for error in [WorkspaceFoundationError.protectedOwner, .conflict, .unknown] {
+            XCTAssertEqual(error.localizedDescription, error.errorDescription)
+            XCTAssertFalse(error.localizedDescription.contains("WorkspaceFoundationError"))
+        }
+        XCTAssertNotEqual(WorkspaceFoundationError.protectedOwner.errorDescription, WorkspaceFoundationError.conflict.errorDescription)
+        XCTAssertNotEqual(WorkspaceFoundationError.unknown.errorDescription, WorkspaceFoundationError.conflict.errorDescription)
+    }
+
     private var baseOwners: Set<WorkspaceOwner> {
         [WorkspaceOwner(entity: .task, id: taskID), WorkspaceOwner(entity: .note, id: noteID)]
     }

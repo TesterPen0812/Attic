@@ -1503,7 +1503,7 @@ final class TaskStore: ObservableObject {
         defer { isSweepingAttachmentStorage = false }
         let referencedIDs: Set<UUID>
         do {
-            try await WorkspaceLegacyBridge.coordinator(for: container).finishLaunch()
+            try await WorkspaceLegacyBridge.coordinator(for: container).finishRegisteredLaunch()
             guard importingAttachmentTaskIDs.isEmpty else { return nil }
             referencedIDs = try storedAttachmentIDs(excludingTaskIDs: [])
         } catch {

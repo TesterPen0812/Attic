@@ -531,6 +531,16 @@ final class TaskAttachmentDropTests: XCTestCase {
         storage.appendingPathComponent(reference.id.uuidString)
     }
 
+    func testR2StandaloneSweepDoesNotStartLaunchReconciliation() async throws {
+        let container = try PersistenceController.makeContainer(inMemory: true, cloudSyncEnabled: false)
+        let files = TaskImageFiles(rootURL: root.appendingPathComponent("StandaloneImages"))
+        let store = TaskStore(container: container, taskImageFiles: files)
+        let gate = try WorkspaceLegacyBridge.coordinator(for: container)
+        _ = await store.sweepUnreferencedAttachmentStorage(dropStagingRoot: root.appendingPathComponent("Drops"))
+        XCTAssertFalse(gate.startupReconciled)
+        XCTAssertTrue(gate.launchPruneBatches.isEmpty)
+    }
+
     func testR2FollowupLaunchSweepWaitsForRegistrationAndRetriesARefusedCollection() async throws {
         let files = TaskImageFiles(rootURL: root.appendingPathComponent("TaskImages"))
         let container = try PersistenceController.makeContainer(inMemory: true, cloudSyncEnabled: false)
