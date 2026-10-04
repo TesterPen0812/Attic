@@ -11,7 +11,7 @@ FIXTURES = ('EMPTY', 'POPULATED')
 OPERATIONS = ('TOGGLE', 'RENAME', 'LINK_PAIR', 'SMALL_AUTOSAVE', 'BIG_AUTOSAVE')
 PF_KEYS = {'SIX_THOUSAND_TOGGLE_MS'} | {
     f'{fixture}_{metric}' for fixture in FIXTURES
-    for metric in ('OPEN_MS', 'OPEN_PEAK_MB', 'TOGGLE_MS', 'LINK_MS', 'SAVE_MS')
+    for metric in ('OPEN_MS', 'OPEN_GROWTH_MB', 'TOGGLE_MS', 'LINK_MS', 'SAVE_MS')
 }
 COLD_KEYS = {f'{fixture}_COLD_{operation}_MS' for fixture in FIXTURES
              for operation in ('TOGGLE', 'LINK', 'SAVE')}
@@ -100,11 +100,12 @@ def evaluate(candidate, references, label):
         for key, actual in sorted(candidate[group].items()):
             pooled = [v for ref in references for v in ref[group][key]]
             # Owner acceptance: /Users/taha/Developer/attic-redesign-assets/phase2/
-            # owner-decisions.md, "Decisions, 2026-10-03 ~19:30".
+            # owner-decisions.md, "Decisions, 2026-10-03 ~19:30" and OD-2
+            # ("Orchestrator decisions (owner away, mandate 2026-10-04)").
             # Round 1c measured +4.703247 MiB for duplicate-safe guards.
-            # Only the candidate pooled-reference populated-open peak gets this
+            # Only the candidate pooled-reference populated-open growth gets this
             # accepted cost; A/A validity and every other bound stay unchanged.
-            limit = bound(pooled) + (4.75 if group == 'PF' and key == 'POPULATED_OPEN_PEAK_MB' and len(references) == 2 else 0)
+            limit = bound(pooled) + (4.75 if group == 'PF' and key == 'POPULATED_OPEN_GROWTH_MB' and len(references) == 2 else 0)
             passed = median(actual) <= limit
             failed |= not passed
             numbers = (median(pooled), max(pooled), spread(pooled), median(actual), max(actual), limit)

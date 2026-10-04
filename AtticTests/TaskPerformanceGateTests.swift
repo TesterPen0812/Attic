@@ -1,3 +1,4 @@
+import Darwin
 import SwiftData
 import XCTest
 @testable import Attic
@@ -196,21 +197,16 @@ final class TaskPerformanceGateTests: XCTestCase {
     }
 }
 
-// Process footprint sampled every millisecond during store open and its
-// asynchronous reconciliation. Compare the absolute sampled peak with the
-// identical fixture/base process, including its measured allocation spread.
+// Each open uses the same clean loop baseline, so retained allocations raise
+// later samples. Absolute peaks remain visible in the non-blocking diagnostic.
 private final class PFFootprintSampler: @unchecked Sendable {
     private let lock = NSLock()
+    private let baseline: Double
     private var peak = 0.0
     private var readFailed = false
     private let timer = DispatchSource.makeTimerSource(queue: .global(qos: .userInitiated))
-    init() {
-        sample()
-        timer.setEventHandler { [weak self] in self?.sample() }
-        timer.schedule(deadline: .now(), repeating: .milliseconds(1))
-        timer.resume()
-    }
-    private func sample() {
+
+    static func footprint() -> (megabytes: Double, succeeded: Bool) {
         var info = task_vm_info_data_t()
         var count = mach_msg_type_number_t(MemoryLayout<task_vm_info_data_t>.size / MemoryLayout<integer_t>.size)
         let status = withUnsafeMutablePointer(to: &info) { pointer in
@@ -218,18 +214,67 @@ private final class PFFootprintSampler: @unchecked Sendable {
                 task_info(mach_task_self_, task_flavor_t(TASK_VM_INFO), $0, &count)
             }
         }
-        lock.lock(); defer { lock.unlock() }
-        readFailed = readFailed || status != KERN_SUCCESS
-        peak = max(peak, Double(info.phys_footprint) / 1_048_576)
+        return (Double(info.phys_footprint) / 1_048_576, status == KERN_SUCCESS)
     }
-    func finish() -> Double {
+
+    static func cleanBaseline() -> Double {
+        malloc_zone_pressure_relief(nil, 0)
+        let reading = footprint()
+        XCTAssertTrue(reading.succeeded, "PF3 loop baseline sampling must succeed")
+        return reading.megabytes
+    }
+
+    init(baseline: Double) {
+        self.baseline = baseline
+        malloc_zone_pressure_relief(nil, 0)
+        sample()
+        timer.setEventHandler { [weak self] in self?.sample() }
+        timer.schedule(deadline: .now(), repeating: .milliseconds(1))
+        timer.resume()
+    }
+
+    private func sample() {
+        let reading = Self.footprint()
+        lock.lock(); defer { lock.unlock() }
+        readFailed = readFailed || !reading.succeeded
+        peak = max(peak, reading.megabytes)
+    }
+
+    func finish() -> (growth: Double, absolutePeak: Double) {
         timer.cancel()
         sample()
         lock.lock(); defer { lock.unlock() }
         XCTAssertFalse(readFailed, "PF3 footprint sampling must succeed")
-        return peak
+        return (peak - baseline, peak)
     }
     deinit { timer.cancel() }
+}
+
+extension TaskPerformanceGateTests {
+    func testOpenFootprintSamplerDetectsDirtyAllocationAndRelease() throws {
+        let baseline = PFFootprintSampler.cleanBaseline()
+        let sampler = PFFootprintSampler(baseline: baseline)
+        let bytes = 32 * 1_048_576
+        let allocation = try XCTUnwrap(malloc(bytes))
+        memset(allocation, 0xA5, bytes)
+        let held = sampler.finish()
+        free(allocation)
+        XCTAssertGreaterThanOrEqual(held.growth, 30)
+        let released = PFFootprintSampler(baseline: baseline).finish()
+        XCTAssertLessThan(released.growth, 30, "the next sample must not keep the freed 32 MiB allocation")
+    }
+
+    func testOpenFootprintSamplerDetectsAllocationRetainedAcrossSamples() throws {
+        let baseline = PFFootprintSampler.cleanBaseline()
+        let first = PFFootprintSampler(baseline: baseline)
+        let bytes = 32 * 1_048_576
+        let allocation = try XCTUnwrap(malloc(bytes))
+        defer { free(allocation) }
+        memset(allocation, 0xA5, bytes)
+        XCTAssertGreaterThanOrEqual(first.finish().growth, 30)
+        let second = PFFootprintSampler(baseline: baseline).finish()
+        XCTAssertGreaterThanOrEqual(second.growth, 30, "unchanged F0 must expose memory retained from the first window")
+    }
 }
 
 // Diagnostic observers are installed only by the paired probe. Both archives
@@ -293,42 +338,45 @@ extension TaskPerformanceGateTests {
             let root = FileManager.default.temporaryDirectory.appendingPathComponent("AtticPF-\(UUID())")
             defer { try? FileManager.default.removeItem(at: root) }
             try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
-            let container = try PersistenceController.makeContainer(cloudSyncEnabled: false, storeDirectory: root)
-            let seed = ModelContext(container)
-            let head = TaskItem(title: "Measured head", manualOrder: 0)
-            seed.insert(head)
-            // Keep the active task fixture identical in both size cases.
-            for i in 1..<200 { seed.insert(TaskItem(title: "Task \(i)", manualOrder: Int64(i) * 1_024)) }
+            let headID = UUID(), noteID = UUID(), revision = UUID(), timestamp = Date()
             let document = NoteDocument(blocks: (0..<5_000).map { .text("Line \($0) with ordinary note text") })
-            let prepared = try PreparedNoteDocument(document)
-            let noteID = UUID(), revision = UUID(), timestamp = Date()
-            let note = NoteItem(id: noteID)
-            note.content = prepared.content; note.contentFormat = 1
-            note.title = prepared.title; note.body = prepared.body; note.plainText = prepared.plainText
-            note.revisionID = revision
-            seed.insert(note)
-            if populated {
-                let unrelated = try PreparedNoteDocument(NoteDocument(blocks: [.text(String(repeating: "unrelated ", count: 4_096))]))
-                for i in 0..<240 {
-                    let other = NoteItem(title: "Unrelated \(i)", body: unrelated.body)
-                    other.content = unrelated.content; other.contentFormat = 1
-                    other.plainText = unrelated.plainText; other.revisionID = UUID()
-                    seed.insert(other)
-                    seed.insert(NoteVersion(noteID: other.id, createdAt: timestamp, reason: .leave,
-                        content: unrelated.content, contentFormat: 1, title: other.title, body: other.body,
-                        attachmentIDs: [], sourceRevisionID: other.revisionID))
-                    seed.insert(NotePendingEdit(noteID: other.id, baseRevisionToken: other.revisionToken,
-                        proposedContent: unrelated.content, agentName: "PF seed", createdAt: timestamp))
-                    let bytes = Data(repeating: UInt8(i % 255), count: 128 * 1_024)
-                    seed.insert(NoteAttachment(noteID: other.id, originalFilename: "seed-\(i).bin", byteCount: Int64(bytes.count),
-                        sortIndex: 0, contentDigest: NotePayloadDigest.sha256(bytes), payload: bytes))
+            try autoreleasepool {
+                let container = try PersistenceController.makeContainer(cloudSyncEnabled: false, storeDirectory: root)
+                let seed = ModelContext(container)
+                let head = TaskItem(id: headID, title: "Measured head", manualOrder: 0)
+                seed.insert(head)
+                // Keep the active task fixture identical in both size cases.
+                for i in 1..<200 { seed.insert(TaskItem(title: "Task \(i)", manualOrder: Int64(i) * 1_024)) }
+                let prepared = try PreparedNoteDocument(document)
+                let note = NoteItem(id: noteID)
+                note.content = prepared.content; note.contentFormat = 1
+                note.title = prepared.title; note.body = prepared.body; note.plainText = prepared.plainText
+                note.revisionID = revision
+                seed.insert(note)
+                if populated {
+                    let unrelated = try PreparedNoteDocument(NoteDocument(blocks: [.text(String(repeating: "unrelated ", count: 4_096))]))
+                    for i in 0..<240 {
+                        let other = NoteItem(title: "Unrelated \(i)", body: unrelated.body)
+                        other.content = unrelated.content; other.contentFormat = 1
+                        other.plainText = unrelated.plainText; other.revisionID = UUID()
+                        seed.insert(other)
+                        seed.insert(NoteVersion(noteID: other.id, createdAt: timestamp, reason: .leave,
+                            content: unrelated.content, contentFormat: 1, title: other.title, body: other.body,
+                            attachmentIDs: [], sourceRevisionID: other.revisionID))
+                        seed.insert(NotePendingEdit(noteID: other.id, baseRevisionToken: other.revisionToken,
+                            proposedContent: unrelated.content, agentName: "PF seed", createdAt: timestamp))
+                        let bytes = Data(repeating: UInt8(i % 255), count: 128 * 1_024)
+                        seed.insert(NoteAttachment(noteID: other.id, originalFilename: "seed-\(i).bin", byteCount: Int64(bytes.count),
+                            sortIndex: 0, contentDigest: NotePayloadDigest.sha256(bytes), payload: bytes))
+                    }
                 }
+                try seed.save()
             }
-            try seed.save()
+            let baseline = PFFootprintSampler.cleanBaseline()
             let label = populated ? "POPULATED" : "EMPTY"
-            var opens: [Double] = [], footprints: [Double] = []
+            var opens: [Double] = [], footprints: [Double] = [], absolutePeaks: [Double] = []
             for _ in 0..<7 {
-                let sampler = PFFootprintSampler()
+                let sampler = PFFootprintSampler(baseline: baseline)
                 let ((tasks, notes, library), duration) = try pfMilliseconds {
                     let opened = try PersistenceController.makeContainer(cloudSyncEnabled: false, storeDirectory: root)
                     let tasks = TaskStore(container: opened)
@@ -339,10 +387,15 @@ extension TaskPerformanceGateTests {
                 XCTAssertEqual(tasks.tasks.count, 200)
                 XCTAssertEqual(library.tasks.tasks.count, 200)
                 await notes.waitForAttachmentReconciliation()
-                footprints.append(sampler.finish())
+                let sample = sampler.finish()
+                footprints.append(sample.growth)
+                absolutePeaks.append(sample.absolutePeak)
             }
             results["\(label)_OPEN_MS"] = PFSamples(values: opens)
-            results["\(label)_OPEN_PEAK_MB"] = PFSamples(values: footprints)
+            results["\(label)_OPEN_GROWTH_MB"] = PFSamples(values: footprints)
+            let diagnostic = ["\(label)_F0_MB": [baseline], "\(label)_ABSOLUTE_PEAK_MB": absolutePeaks]
+            try FileHandle.standardOutput.write(contentsOf: Data(("PF_DIAG_OPEN_FOOTPRINT=" + String(decoding: try JSONEncoder().encode(diagnostic), as: UTF8.self) + "\n").utf8))
+            let container = try PersistenceController.makeContainer(cloudSyncEnabled: false, storeDirectory: root)
             let tasks = TaskStore(container: container)
             let notes = NoteStore(container: container, attachmentFileStore: makeTestAttachmentFileStore())
             let library = AtticLibrary(tasks: tasks, notes: notes)
@@ -350,13 +403,13 @@ extension TaskPerformanceGateTests {
             // Match autosave of an already-open note; both bases perform the
             // same capability preflight outside the timed commit.
             _ = try notes.noteMutationPreflight(noteID, format: .document)
-            let source = AtticItemRef(.task, head.id), target = AtticItemRef(.note, noteID)
+            let source = AtticItemRef(.task, headID), target = AtticItemRef(.note, noteID)
             let link = try XCTUnwrap(library.links.link(source, to: target, kind: .reference))
             var toggles: [Double] = [], links: [Double] = [], saves: [Double] = []
             var baseRevision = revision
             for i in 0..<9 {
                 toggles.append(pfMilliseconds {
-                    XCTAssertEqual(library.updateTask(head.id, status: i.isMultiple(of: 2) ? .done : .todo), .applied)
+                    XCTAssertEqual(library.updateTask(headID, status: i.isMultiple(of: 2) ? .done : .todo), .applied)
                 }.1)
                 links.append(pfMilliseconds {
                     XCTAssertTrue(i.isMultiple(of: 2) ? library.links.unlink(link.id) : library.links.restoreLink(link.id))
@@ -383,7 +436,7 @@ extension TaskPerformanceGateTests {
                 await coldNotes.waitForAttachmentReconciliation()
                 _ = try coldNotes.noteMutationPreflight(noteID, format: .document)
                 coldToggles.append(pfMilliseconds {
-                    XCTAssertEqual(coldLibrary.updateTask(head.id, status: i.isMultiple(of: 2) ? .todo : .done), .applied)
+                    XCTAssertEqual(coldLibrary.updateTask(headID, status: i.isMultiple(of: 2) ? .todo : .done), .applied)
                 }.1)
                 coldLinks.append(pfMilliseconds {
                     XCTAssertTrue(i.isMultiple(of: 2) ? coldLibrary.links.unlink(link.id) : coldLibrary.links.restoreLink(link.id))

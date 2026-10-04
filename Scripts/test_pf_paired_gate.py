@@ -76,15 +76,35 @@ class PairedGateTests(unittest.TestCase):
 
     def test_accepted_memory_is_bounded_and_does_not_relax_aa(self):
         candidate = fixture()
-        candidate['PF']['POPULATED_OPEN_PEAK_MB'] = [9.75] * 3
+        candidate['PF']['POPULATED_OPEN_GROWTH_MB'] = [9.75] * 3
         self.assertEqual(self.run_gate(fixture(), candidate, fixture())[0], 0)
-        candidate['PF']['POPULATED_OPEN_PEAK_MB'] = [9.751] * 3
+        candidate['PF']['POPULATED_OPEN_GROWTH_MB'] = [9.751] * 3
         self.assertEqual(self.run_gate(fixture(), candidate, fixture())[0], 1)
-        candidate['PF']['POPULATED_OPEN_PEAK_MB'] = [6] * 3
+        candidate['PF']['POPULATED_OPEN_GROWTH_MB'] = [6] * 3
         self.assertEqual(self.run_gate(fixture(), fixture(), candidate)[0], 2)
         candidate = fixture()
-        candidate['PF']['EMPTY_OPEN_PEAK_MB'] = [5.01] * 3
+        candidate['PF']['EMPTY_OPEN_GROWTH_MB'] = [5.01] * 3
         self.assertEqual(self.run_gate(fixture(), candidate, fixture())[0], 1)
+
+    def test_growth_keys_required_and_diagnostics_ignored(self):
+        run = fixture()
+        self.assertIn('EMPTY_OPEN_GROWTH_MB', gate.PF_KEYS)
+        self.assertIn('POPULATED_OPEN_GROWTH_MB', gate.PF_KEYS)
+        path = Path(self.directory.name) / 'diagnostic'
+        path.write_text(log(run) + 'PF_DIAG_OPEN_FOOTPRINT=not gate JSON\n')
+        self.assertEqual(gate.parse_log(path), run)
+        for fixture_name in gate.FIXTURES:
+            old = fixture()
+            old['PF'][fixture_name + '_OPEN_PEAK_MB'] = old['PF'].pop(fixture_name + '_OPEN_GROWTH_MB')
+            self.assertEqual(self.run_gate(old, run, run)[0], 3)
+
+    def test_five_mib_growth_regression_fails(self):
+        base, candidate = fixture(), fixture()
+        base['PF']['POPULATED_OPEN_GROWTH_MB'] = [2] * 7
+        candidate['PF']['POPULATED_OPEN_GROWTH_MB'] = [7] * 7
+        code, output = self.run_gate(base, candidate, base)
+        self.assertEqual(code, 1)
+        self.assertIn('| PF_POPULATED_OPEN_GROWTH_MB | 2.000000000 | 2.000000000 | 0.000000000 | 7.000000000 | 7.000000000 | 6.750000000 | FAIL |', output)
 
     def test_exit_missing_or_unparsable(self):
         with contextlib.redirect_stderr(io.StringIO()):
