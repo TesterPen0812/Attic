@@ -35,6 +35,9 @@ struct TasksPage: View {
     /// to the system's soft edge to compare.
     @ObservedObject private var scrollEdges = AtticScrollEdgeLab.shared
     @StateObject private var focusTracker = AtticKeyboardFocusTracker()
+    /// The subtask lines' and strip buttons' own focus, reached by the
+    /// page's Tab order (A10). Not observed.
+    @State private var focusRequests = AtticFocusRequests()
     /// The rows' keyboard focus. Its `FocusState` is owned by
     /// `TasksRowFocusOwner`, under the page's body, not by the page: SwiftUI
     /// redraws a focus state's owner whenever a focusable view comes or
@@ -218,6 +221,7 @@ struct TasksPage: View {
         .overlay(alignment: .bottom) { bottomControls }
         .coordinateSpace(Self.space)
         .atticKeyboardFocusTracking(focusTracker)
+        .environment(\.atticFocusRequests, focusRequests)
         .onKeyPress(phases: .down) { press in pageKey(press) }
         .onAppear { pageAppeared() }
         .onDisappear {
@@ -289,6 +293,7 @@ struct TasksPage: View {
             findMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { event in
                 findPressed(event) || viewOptionsPressed(event) || searchEscapePressed(event) || searchDownPressed(event)
                     || editorEscapePressed(event) || pageEscapePressed(event) || undoPressed(event) || taskShortcutPressed(event)
+                    || tabPressed(event)
                     ? nil : event
             }
         }
@@ -355,7 +360,22 @@ struct TasksPage: View {
             if !shown, searchFocused { searchFocused = false }
         }
         .onChange(of: composerPickerOpen) { _, _ in updateTypingLock() }
-        .onChange(of: metaPopover) { _, _ in updateTypingLock() }
+        .onChange(of: metaPopover) { old, new in
+            updateTypingLock()
+            // Move to Task… closed by Esc or a click outside, its subtask
+            // still on the line it was opened from: the keyboard goes back
+            // to that line (A8 P3-A8-1: it went nowhere). The dropdown hands
+            // AppKit's first responder back to the panel; the line's focus is
+            // SwiftUI's own. A choice moves the subtask and the keyboard to
+            // its parent itself.
+            guard let subtask = Self.subtaskToRefocus(closed: old, now: new), let old else { return }
+            DispatchQueue.main.async {
+                guard model.isPageShown, model.tab == old.tab, !AtticTextInput.hasKeyboard,
+                      model.rows(for: old.tab).contains(where: { $0.id == old.id && $0.subtasks.contains { $0.id == subtask } })
+                else { return }
+                focusRequests.focus(AtticSubtaskFocusID(id: subtask))
+            }
+        }
         .onChange(of: selectionPicker) { _, _ in updateTypingLock() }
         // VoiceOver hears how many are selected as the selection grows or
         // shrinks past one (round 10).
@@ -825,6 +845,109 @@ struct TasksPage: View {
             return true
         }
         return false
+    }
+
+    /// Move to Task…'s subtask when its pop-over has just closed (A10).
+    nonisolated static func subtaskToRefocus(closed old: TasksMetaPopover?, now new: TasksMetaPopover?) -> UUID? {
+        guard new == nil, let old, old.kind == .move else { return nil }
+        return old.targets.first
+    }
+
+    // MARK: Tab
+
+    /// Tab and ⇧Tab walk the page's own order (A10, `TasksTabOrder`): the
+    /// panel's key loop is AppKit's (`AtticPanelHostingView`, the import
+    /// freeze), and AppKit's loop took the keyboard to rows out of view, with
+    /// no ring and no scroll, and stopped on nothing. Every stop here is
+    /// drawn: a row scrolls into view and shows its ring as it is reached.
+    /// Asked at the key press only, never during layout. Editors, pickers,
+    /// the add bar's suggestions and an input method keep their own Tab.
+    private func tabPressed(_ event: NSEvent) -> Bool {
+        guard event.type == .keyDown, event.keyCode == 48 else { return false }
+        let modifiers = event.modifierFlags.intersection([.command, .shift, .option, .control])
+        guard modifiers.isEmpty || modifiers == .shift,
+              model.isPageShown, let window = pointer.view?.window, event.window === window, window.isKeyWindow,
+              !AtticTextInput.isPopoverOpen, !Self.isComposing(window.firstResponder),
+              model.editingTitleID == nil, model.newSubtaskParentID == nil, model.renamingSubtaskID == nil,
+              metaPopover == nil, selectionPicker == nil, !composerPickerOpen, drag == nil else { return false }
+        // A field of another kind keeps its Tab; the add bar's suggestion
+        // list takes it (review 15).
+        if AtticTextInput.hasKeyboard, !addBarFocused, !searchFocused { return false }
+        if addBarFocused, TasksAddBar.showsSuggestion(model: model, text: model.addBarState) { return false }
+        let stops = tabStops()
+        let current = currentTabStop(in: stops)
+        guard let next = TasksTabOrder.next(after: current, in: stops, forward: modifiers.isEmpty) else { return false }
+        focusTracker.noteKeyboardNavigation()
+        moveKeyboard(to: next, from: current, in: stops)
+        return true
+    }
+
+    /// The page's stops as drawn now (`TasksTabOrder.stops`).
+    private func tabStops() -> [TasksTabStop] {
+        let tab = model.tab
+        let ids = visibleIDs()
+        var open: [UUID: [UUID]] = [:]
+        if tab != .done, !model.expanded.isEmpty {
+            for row in model.rows(for: tab) where model.expanded.contains(row.id) && row.status != .done {
+                open[row.id] = row.subtasks.map(\.id)
+            }
+        }
+        let draft = !model.addBarState.text.text.trimmingCharacters(in: .whitespaces).isEmpty
+        return TasksTabOrder.stops(find: searchShown, rows: ids.map { ($0, open[$0] ?? []) },
+                                   strip: draft && model.pasteOffer == nil && NSApp.isFullKeyboardAccessEnabled)
+    }
+
+    /// Where the keyboard is among `stops`, if it is on one.
+    private func currentTabStop(in stops: [TasksTabStop]) -> TasksTabStop? {
+        if searchFocused { return .find }
+        if addBarFocused { return .addBar }
+        if let strip = focusRequests.current?.base as? AtticStripFocusID { return .strip(strip) }
+        if let subtask = model.focusedSubtaskID, stops.contains(.subtask(subtask)) { return .subtask(subtask) }
+        if let id = focusedID { return .row(id) }
+        return nil
+    }
+
+    private func moveKeyboard(to stop: TasksTabStop, from current: TasksTabStop?, in stops: [TasksTabStop]) {
+        let tab = model.tab
+        switch stop {
+        case .find:
+            focusedRow = nil
+            addBarFocused = false
+            searchFocused = true
+        case .addBar:
+            focusedRow = nil
+            searchFocused = false
+            addBarFocused = true
+        case let .strip(button):
+            focusedRow = nil
+            searchFocused = false
+            addBarFocused = false
+            DispatchQueue.main.async { focusRequests.focus(button) }
+        case let .row(id):
+            searchFocused = false
+            addBarFocused = false
+            if TasksTabOrder.isListNeighbour(current, of: stop, in: stops) {
+                // The list's own reveal brings it into view as it takes the
+                // keyboard (`onChange(of: focusedRow)`).
+                setFocus(id)
+            } else {
+                // From a field, or round the end: a far row of a lazy list
+                // may not be built yet. The list goes to its place first, then
+                // the row takes the keyboard.
+                if let scroll = listProxies.scrollViews[tab], let place = rowPlace(id, in: tab) {
+                    TasksScrollKeeper.centre(place, in: scroll)
+                }
+                DispatchQueue.main.async { setFocus(id) }
+            }
+        case let .subtask(id):
+            focusedRow = nil
+            searchFocused = false
+            addBarFocused = false
+            if let parent = TasksTabOrder.parent(of: id, in: stops), let proxy = listProxies.lists[tab] {
+                revealRow(parent, in: tab, proxy: proxy, animation: nil)
+            }
+            DispatchQueue.main.async { focusRequests.focus(AtticSubtaskFocusID(id: id)) }
+        }
     }
 
     /// Esc with no field typing, wherever the keyboard is in the page (a
@@ -2828,9 +2951,19 @@ private struct TasksAddBar: View {
     private var hasDraft: Bool { !text.text.text.trimmingCharacters(in: .whitespaces).isEmpty }
 
     private var suggestion: TaskAddBarText.Suggestion? {
-        guard isFocused, let suggestion = text.text.suggestion(parser: model.parser, caret: text.caret, tags: model.cachedTags),
+        guard isFocused else { return nil }
+        return Self.suggestion(model: model, text: text)
+    }
+
+    static func suggestion(model: TasksPageModel, text: TasksAddBarState) -> TaskAddBarText.Suggestion? {
+        guard let suggestion = text.text.suggestion(parser: model.parser, caret: text.caret, tags: model.cachedTags),
               suggestion.range != text.hiddenSuggestion else { return nil }
         return suggestion
+    }
+
+    /// The suggestion list shows over the focused bar (it takes Tab).
+    static func showsSuggestion(model: TasksPageModel, text: TasksAddBarState) -> Bool {
+        suggestion(model: model, text: text) != nil
     }
 
     var body: some View {
@@ -4148,5 +4281,63 @@ enum TasksScrollerRule {
             // A mouse wheel: an ordinary vertical scroll.
             return .show
         }
+    }
+}
+
+// MARK: - Tab order (A10)
+
+/// One stop of the Tasks page's own Tab order.
+enum TasksTabStop: Hashable {
+    case find
+    case row(UUID)
+    case subtask(UUID)
+    case addBar
+    case strip(AtticStripFocusID)
+}
+
+/// The Tasks page's Tab order (A10), restoring Phase 1's: top to bottom as
+/// drawn, every stop visible. Find while it shows on the tabs' line; each
+/// row of the page shown (the filtered rows when a query or a view narrows
+/// it), with the subtask lines of its open quick look under it; the add bar;
+/// then the strip's buttons while a draft shows them and keyboard
+/// navigation is on (buttons are Tab stops on the Mac only then). Tab after
+/// the last stop goes round to the first: never to an unseen stop.
+enum TasksTabOrder {
+    static func stops(find: Bool, rows: [(id: UUID, subtasks: [UUID])], strip: Bool) -> [TasksTabStop] {
+        var stops: [TasksTabStop] = find ? [.find] : []
+        for row in rows {
+            stops.append(.row(row.id))
+            stops.append(contentsOf: row.subtasks.map(TasksTabStop.subtask))
+        }
+        stops.append(.addBar)
+        if strip { stops.append(contentsOf: AtticStripFocusID.all.map(TasksTabStop.strip)) }
+        return stops
+    }
+
+    /// The stop after (or, `forward` false, before) `current`, round the
+    /// ends; from nowhere on the page, the first (or the last).
+    static func next(after current: TasksTabStop?, in stops: [TasksTabStop], forward: Bool) -> TasksTabStop? {
+        guard !stops.isEmpty else { return nil }
+        guard let current, let index = stops.firstIndex(of: current) else { return forward ? stops.first : stops.last }
+        return stops[(index + (forward ? 1 : stops.count - 1)) % stops.count]
+    }
+
+    /// Whether the keyboard moves from a row (or a subtask line) to the
+    /// stop next to it in the list, not round the end and not from a field:
+    /// that row is built and the list's own reveal is enough.
+    static func isListNeighbour(_ current: TasksTabStop?, of stop: TasksTabStop, in stops: [TasksTabStop]) -> Bool {
+        switch current {
+        case .row?, .subtask?: break
+        default: return false
+        }
+        guard let current, let a = stops.firstIndex(of: current), let b = stops.firstIndex(of: stop) else { return false }
+        return abs(a - b) == 1
+    }
+
+    /// The row whose quick look holds subtask `id`.
+    static func parent(of id: UUID, in stops: [TasksTabStop]) -> UUID? {
+        guard let index = stops.firstIndex(of: .subtask(id)) else { return nil }
+        for stop in stops[..<index].reversed() { if case let .row(row) = stop { return row } }
+        return nil
     }
 }

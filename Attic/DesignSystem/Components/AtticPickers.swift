@@ -646,6 +646,15 @@ private struct AtticPickerFieldBackground: View {
 
 // MARK: - Composer strip
 
+/// What a page asks `AtticFocusRequests` for to give a strip button the
+/// keyboard: the button's accessibility identifier (`composer-date`,
+/// `composer-tag`, `composer-priority`).
+struct AtticStripFocusID: Hashable {
+    let identifier: String
+
+    static let all = ["composer-date", "composer-tag", "composer-priority"].map(AtticStripFocusID.init)
+}
+
 /// The labelled buttons above the add bar (owner fix 5 A2, v17a): Date ·
 /// Tag · Priority, 28 tall, 8 above the bar, the first icon on the circles'
 /// line. The host shows it for a non-empty draft and keeps it while one of
@@ -808,6 +817,9 @@ private struct AtticStripButton: View {
     @Environment(\.isEnabled) private var isEnabled
     @State private var hovered = false
     @State private var clearHovered = false
+    /// The button's own keyboard focus (a Tab stop while keyboard
+    /// navigation is on), which a page's Tab order can ask for (A10).
+    @FocusState private var focused: Bool
 
     /// The least the button keeps: its name's minimum; a value's icon and
     /// the first characters of a long one (then "…").
@@ -857,6 +869,8 @@ private struct AtticStripButton: View {
                 .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
+            .focused($focused)
+            .atticFocusRequestTarget(AtticStripFocusID(identifier: identifier), focused: $focused)
             .focusEffectDisabled()
             .atticOwnFocusRing(.rounded(radius: radius, height: height))
             // The whole value, however short the button is.
