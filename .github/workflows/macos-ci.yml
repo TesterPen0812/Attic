@@ -387,6 +387,8 @@ jobs:
     timeout-minutes: 90
     env:
       DEVELOPER_DIR: /Applications/Xcode_26.6.app/Contents/Developer
+      # Candidate commands inherit enforcement; only reference commands opt out.
+      TEST_RUNNER_ATTIC_COST_REFERENCE_ONLY: "0"
       COST_FLAGS: >-
         CODE_SIGNING_ALLOWED=NO SWIFT_OPTIMIZATION_LEVEL=-O SWIFT_COMPILATION_MODE=wholemodule
         ENABLE_DEBUG_DYLIB=NO ENABLE_TESTABILITY=YES ENABLE_HARDENED_RUNTIME=NO
@@ -408,11 +410,18 @@ jobs:
           git merge-base --is-ancestor "$DONE_SEARCH_BASELINE_COMMIT" HEAD
           mkdir -p "$RUNNER_TEMP/AtticCosts"
 
+      - name: Verify cost gate plumbing
+        run: python3 -m unittest discover -s Scripts -p test_cost_gate_plumbing.py -v
+
       - name: Build optimized baseline and candidate test hosts
         id: cost_builds
         run: |
           git worktree add --detach "$RUNNER_TEMP/AtticCostBaseline" "$COST_BASELINE_COMMIT"
           git worktree add --detach "$RUNNER_TEMP/AtticDoneSearchBaseline" "$DONE_SEARCH_BASELINE_COMMIT"
+          # Retain the historical fixtures and all measurements. Adapt only
+          # their absolute timing assertions to the shared OD-6 policy.
+          python3 Scripts/prepare_cost_reference.py "$RUNNER_TEMP/AtticCostBaseline" frame-row
+          python3 Scripts/prepare_cost_reference.py "$RUNNER_TEMP/AtticDoneSearchBaseline" done
           for name in baseline candidate donebase; do
             source="$GITHUB_WORKSPACE"
             if [ "$name" = baseline ]; then source="$RUNNER_TEMP/AtticCostBaseline"; fi
@@ -430,9 +439,13 @@ jobs:
           for sample in 1 2 3; do
             for name in baseline candidate; do
               source="$GITHUB_WORKSPACE"
-              if [ "$name" = baseline ]; then source="$RUNNER_TEMP/AtticCostBaseline"; fi
+              reference_only=0
+              if [ "$name" = baseline ]; then
+                source="$RUNNER_TEMP/AtticCostBaseline"
+                reference_only=1
+              fi
               # shellcheck disable=SC2086
-              (cd "$source" && xcodebuild test-without-building \
+              (cd "$source" && TEST_RUNNER_ATTIC_COST_REFERENCE_ONLY="$reference_only" xcodebuild test-without-building \
                 -project Attic.xcodeproj -scheme Attic -configuration Local -destination 'platform=macOS' \
                 -derivedDataPath "$RUNNER_TEMP/AtticCost-$name" \
                 -resultBundlePath "$RUNNER_TEMP/AtticCosts/$name-cost-$sample.xcresult" $COST_FLAGS \
@@ -440,19 +453,18 @@ jobs:
                 -only-testing:AtticTests/TasksFrameCostTests -only-testing:AtticTests/TasksRowBuildCostTests) \
                 > "$RUNNER_TEMP/AtticCosts/$name-cost-$sample.log" 2>&1 \
                 || { tail -n 80 "$RUNNER_TEMP/AtticCosts/$name-cost-$sample.log"; exit 1; }
-              grep -E 'ATTIC_FRAME_COST|ATTIC_ROW_BUILD' "$RUNNER_TEMP/AtticCosts/$name-cost-$sample.log"
+              grep -E 'ATTIC_FRAME_COST|ATTIC_ROW_BUILD|ATTIC_COST_REFERENCE' "$RUNNER_TEMP/AtticCosts/$name-cost-$sample.log"
             done
           done
 
       - name: Done search query samples of the accepted baseline
         run: |
           # Three runs of the accepted build's query fixtures, for the
-          # slowest-sample comparison below. Preserve its per-sample
-          # assertions as a required check too: a named runner spike fails
-          # this job visibly and may be rerun with --failed.
+          # slowest-sample comparison below. OD-6 disables only the
+          # reference's absolute timing assertions; correctness still gates.
           for sample in 1 2 3; do
             # shellcheck disable=SC2086
-            (cd "$RUNNER_TEMP/AtticDoneSearchBaseline" && xcodebuild test-without-building \
+            (cd "$RUNNER_TEMP/AtticDoneSearchBaseline" && TEST_RUNNER_ATTIC_COST_REFERENCE_ONLY=1 xcodebuild test-without-building \
               -project Attic.xcodeproj -scheme Attic -configuration Local -destination 'platform=macOS' \
               -derivedDataPath "$RUNNER_TEMP/AtticCost-donebase" \
               -resultBundlePath "$RUNNER_TEMP/AtticCosts/done-search-baseline-$sample.xcresult" $COST_FLAGS \
@@ -463,6 +475,7 @@ jobs:
               || { tail -n 120 "$RUNNER_TEMP/AtticCosts/done-search-baseline-$sample.log"; exit 1; }
             grep -q 'ATTIC_DONE_SEARCH session=2 ' "$RUNNER_TEMP/AtticCosts/done-search-baseline-$sample.log"
             grep -q 'ATTIC_PHASE5_DONE query=z ' "$RUNNER_TEMP/AtticCosts/done-search-baseline-$sample.log"
+            grep -E 'ATTIC_DONE_SEARCH|ATTIC_PHASE5_DONE|ATTIC_COST_REFERENCE' "$RUNNER_TEMP/AtticCosts/done-search-baseline-$sample.log"
           done
 
       - name: Done search query, keystroke and results-frame budgets
@@ -479,6 +492,7 @@ jobs:
           grep -E 'ATTIC_DONE_SEARCH|ATTIC_PHASE5_DONE|ATTIC_DONE_QUERY_MEDIAN|ATTIC_DONE_INPUT|ATTIC_DONE_RESULTS' "$RUNNER_TEMP/AtticCosts/done-search.log"
 
       - name: Compare the slowest Done search query sample with the baseline
+        if: always() && steps.cost_builds.outcome == 'success'
         run: python3 Scripts/check_done_search_costs.py "$RUNNER_TEMP/AtticCosts"
 
       # The independent absolute query/input budgets run before comparison,

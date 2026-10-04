@@ -19,7 +19,7 @@ final class DoneSearchCostTests: XCTestCase {
         for (query, values) in samples.sorted(by: { $0.key < $1.key }) {
             let median = TasksFrameCostTests.median(values)
             print("ATTIC_DONE_QUERY_MEDIAN fixture=\(fixture) query=\(query) median_ms=\(median) sessions=\(values.count)")
-            XCTAssertLessThanOrEqual(median, 16, "\(fixture): the median Done query \"\(query)\" exceeds the 16 ms budget",
+            CostBudget.assertLessThanOrEqual(median, 16, "\(fixture): the median Done query \"\(query)\" exceeds the 16 ms budget",
                                      file: file, line: line)
         }
     }
@@ -256,8 +256,8 @@ final class DoneSearchCostTests: XCTestCase {
         for key in runs[0].indices {
             let samples = runs.map { $0[key] }
             let median = TasksFrameCostTests.median(samples)
-            XCTAssertLessThanOrEqual(median, 16, "Done Find key \(key) median exceeds the 16 ms budget")
-            XCTAssertLessThanOrEqual(samples.max()!, 16 + 4.3, "sample exceeds the independently measured noise guard")
+            CostBudget.assertLessThanOrEqual(median, 16, "Done Find key \(key) median exceeds the 16 ms budget")
+            CostBudget.assertLessThanOrEqual(samples.max()!, 16 + 4.3, "sample exceeds the independently measured noise guard")
         }
         // The frame after the typing pauses, where the first results
         // arrive (not a keystroke frame, so not the keystroke budget). It
@@ -272,10 +272,10 @@ final class DoneSearchCostTests: XCTestCase {
         // Scripts/check_cost_comparison.py).
         let resultsMedian = TasksFrameCostTests.median(resultFrames)
         print("ATTIC_DONE_RESULTS median_ms=\(resultsMedian) bound_ms=77.15")
-        XCTAssertLessThanOrEqual(resultsMedian, 57.04 + 20.11, "the frame the Done results arrive in: \(resultFrames)")
+        CostBudget.assertLessThanOrEqual(resultsMedian, 57.04 + 20.11, "the frame the Done results arrive in: \(resultFrames)")
         // The earlier sanity bound on every run stays, so one runaway run
         // can't hide behind a good median.
-        XCTAssertLessThan(resultFrames.max()!, 500, "the frame the Done results arrive in: \(resultFrames)")
+        CostBudget.assertLessThan(resultFrames.max()!, 500, "the frame the Done results arrive in: \(resultFrames)")
     }
 
     func testDoneTodaySlicePreservesSnapshotRootsAndOrder() throws {
