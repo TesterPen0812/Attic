@@ -2495,8 +2495,10 @@ final class TaskStore: ObservableObject {
         if let cached = doneSearchMatches, cached.query == query, cached.locale == locale { return cached.ids }
         // Keep the exact localized matching semantics, including diacritics;
         // folding to a different comparison would subtly change results.
+        // Call NSString's implementation explicitly: in the larger Phase 3
+        // module, -O leaves StringProtocol's generic bridge inside this loop.
         let ids = doneSearchEntries.compactMap {
-            query.isEmpty || $0.title.localizedStandardContains(query) ? $0.id : nil
+            query.isEmpty || ($0.title as NSString).localizedStandardContains(query) ? $0.id : nil
         }
         doneSearchMatches = (query, locale, ids)
         return ids
