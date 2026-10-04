@@ -33,7 +33,7 @@ final class SchemaMigrationTests: XCTestCase {
         for container in [normal, uiTest] {
             let entities = Dictionary(uniqueKeysWithValues: container.schema.entities.map { ($0.name, $0) })
             XCTAssertEqual(Set(entities.keys), [
-                "TaskItem", "NoteItem", "NoteAttachment", "CanvasBoardItem", "CanvasStrokeItem",
+                "TaskItem", "NoteItem", "NoteAttachment", "CanvasBoardItem", "CanvasStrokeItem", "CanvasInkPayloadItem",
                 "CanvasImageItem", "CanvasSemanticObjectItem", "ItemLink", "NoteVersion", "NotePendingEdit",
                 "OperationReceipt", "TaskNoteAssociation", "TaskDeletionPreservation"
             ])

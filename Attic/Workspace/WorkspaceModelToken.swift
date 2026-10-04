@@ -6,7 +6,7 @@ import SwiftData
 /// records expected absence; a failed read throws and cannot produce absence.
 struct WorkspaceOwner: Codable, Hashable, Sendable {
     enum Entity: String, Codable, Sendable {
-        case task, note, attachment, version, proposal, link, association, preservation, receipt, board, stroke, image, semantic
+        case task, note, attachment, version, proposal, link, association, preservation, receipt, board, stroke, inkPayload, image, semantic
     }
     let entity: Entity
     let id: UUID
@@ -25,6 +25,7 @@ struct WorkspaceModelToken: Codable, Equatable, Sendable {
         switch owner.entity {
         case .board: return try capture(owner, rows: context.fetch(FetchDescriptor<CanvasBoardItem>(predicate: #Predicate { $0.id == id })))
         case .stroke: return try capture(owner, rows: context.fetch(FetchDescriptor<CanvasStrokeItem>(predicate: #Predicate { $0.id == id })))
+        case .inkPayload: return try capture(owner, rows: context.fetch(FetchDescriptor<CanvasInkPayloadItem>(predicate: #Predicate { $0.id == id })))
         case .image: return try capture(owner, rows: context.fetch(FetchDescriptor<CanvasImageItem>(predicate: #Predicate { $0.id == id })))
         case .semantic: return try capture(owner, rows: context.fetch(FetchDescriptor<CanvasSemanticObjectItem>(predicate: #Predicate { $0.id == id })))
         case .task: return try capture(owner, rows: context.fetch(FetchDescriptor<TaskItem>(predicate: #Predicate { $0.id == id })))
@@ -66,6 +67,7 @@ struct WorkspaceModelToken: Codable, Equatable, Sendable {
             case .receipt: try collect(context.fetch(FetchDescriptor<OperationReceipt>(predicate: #Predicate { ids.contains($0.id) })))
             case .board: try collect(context.fetch(FetchDescriptor<CanvasBoardItem>(predicate: #Predicate { ids.contains($0.id) })))
             case .stroke: try collect(context.fetch(FetchDescriptor<CanvasStrokeItem>(predicate: #Predicate { ids.contains($0.id) })))
+            case .inkPayload: try collect(context.fetch(FetchDescriptor<CanvasInkPayloadItem>(predicate: #Predicate { ids.contains($0.id) })))
             case .image: try collect(context.fetch(FetchDescriptor<CanvasImageItem>(predicate: #Predicate { ids.contains($0.id) })))
             case .semantic: try collect(context.fetch(FetchDescriptor<CanvasSemanticObjectItem>(predicate: #Predicate { ids.contains($0.id) })))
             }
@@ -401,6 +403,7 @@ enum WorkspaceModelFields {
                 WorkspaceField("payloadVersion", \CanvasStrokeItem.payloadVersion),
                 WorkspaceField("payload", \CanvasStrokeItem.payload),
                 WorkspaceField("binaryPayload", \CanvasStrokeItem.binaryPayload, contentDigest: true),
+                WorkspaceField("binaryRowID", \CanvasStrokeItem.binaryRowID),
                 WorkspaceField("binaryDigest", \CanvasStrokeItem.binaryDigest),
                 WorkspaceField("boundsMinX", \CanvasStrokeItem.boundsMinX),
                 WorkspaceField("boundsMinY", \CanvasStrokeItem.boundsMinY),
@@ -415,6 +418,20 @@ enum WorkspaceModelFields {
                 WorkspaceField("createdAt", \CanvasStrokeItem.createdAt),
                 WorkspaceField("updatedAt", \CanvasStrokeItem.updatedAt),
                 WorkspaceField("deletedAt", \CanvasStrokeItem.deletedAt)
+            ] }, applying: values, fingerprint: fingerprint, keys: keys, copying: source)
+        case let row as CanvasInkPayloadItem:
+            return try record(row, fieldTable(for: row) { [
+                WorkspaceField("id", \CanvasInkPayloadItem.id),
+                WorkspaceField("canvasID", \CanvasInkPayloadItem.canvasID),
+                WorkspaceField("strokeID", \CanvasInkPayloadItem.strokeID),
+                WorkspaceField("bytes", \CanvasInkPayloadItem.bytes, fingerprint: {
+                    Data(SHA256.hash(data: $0.bytes))
+                }),
+                WorkspaceField("mutationVersion", \CanvasInkPayloadItem.mutationVersion),
+                WorkspaceField("tombstoned", \CanvasInkPayloadItem.tombstoned),
+                WorkspaceField("createdAt", \CanvasInkPayloadItem.createdAt),
+                WorkspaceField("updatedAt", \CanvasInkPayloadItem.updatedAt),
+                WorkspaceField("deletedAt", \CanvasInkPayloadItem.deletedAt)
             ] }, applying: values, fingerprint: fingerprint, keys: keys, copying: source)
         case let row as CanvasImageItem:
             return try record(row, fieldTable(for: row) { [

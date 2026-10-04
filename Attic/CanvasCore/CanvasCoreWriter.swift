@@ -3,20 +3,24 @@ import CryptoKit
 import SwiftData
 
 /// Immutable changed-field handles, not a board snapshot or copied originals.
-final class CanvasCoreFields {
+final class CanvasCoreFields: Sendable {
     let values: [String: Data]
     init(_ values: [String: Data]) { self.values = values }
 }
-struct CanvasCorePatch {
+struct CanvasCorePatch: Sendable {
     let owner: WorkspaceOwner
     let canvasID: UUID
     let physicalID: PersistentIdentifier?
     let fields: CanvasCoreFields
     let inserting: Bool
+    let companions: [CanvasCorePatch]
+    // Canonical immutable binary handle. Never serialize it to base64 merely
+    // to move it from the codec to a newly inserted payload row.
+    let insertedPayloadBytes: Data?
     init(owner: WorkspaceOwner, canvasID: UUID, physicalID: PersistentIdentifier? = nil,
-         fields: [String: Data], inserting: Bool = false) {
+         fields: [String: Data], inserting: Bool = false, companions: [CanvasCorePatch] = [], insertedPayloadBytes: Data? = nil) {
         self.owner = owner; self.canvasID = canvasID; self.physicalID = physicalID
-        self.fields = CanvasCoreFields(fields); self.inserting = inserting
+        self.fields = CanvasCoreFields(fields); self.inserting = inserting; self.companions = companions; self.insertedPayloadBytes = insertedPayloadBytes
     }
 }
 
@@ -79,6 +83,10 @@ final class CanvasCoreWriter {
     func perform(name: String, patches: [CanvasCorePatch], origin: String? = nil,
                  cursor nextCursor: Int? = nil) -> WorkspaceOperationCoordinator.Outcome {
         guard pending == nil, !patches.isEmpty else { return pending == nil ? .notCommitted : .unknown }
+        let patches = patches.flatMap { patch in
+            [CanvasCorePatch(owner: patch.owner, canvasID: patch.canvasID, physicalID: patch.physicalID,
+                fields: patch.fields.values, inserting: patch.inserting, insertedPayloadBytes: patch.insertedPayloadBytes)] + patch.companions
+        }
         let owners = Set(patches.map(\.owner))
         let boardGuards = Set(patches.map { WorkspaceOwner(entity: .board, id: $0.canvasID) })
         let reads = owners.union(boardGuards)
@@ -95,6 +103,9 @@ final class CanvasCoreWriter {
                 guard !boards.isEmpty, !CanvasStore.winningBoardReplica(in: boards).tombstoned else { return .conflict }
             }
             for patch in patches {
+                if patch.insertedPayloadBytes != nil && (!patch.inserting || patch.owner.entity != .inkPayload) {
+                    throw CanvasCoreError.conflict
+                }
                 let family = before[patch.owner]!
                 var rows = family.replicas.map { context.model(for: $0.physicalID) }.filter {
                     Self.belongs($0, canvasID: patch.canvasID) && (patch.physicalID == nil || $0.persistentModelID == patch.physicalID)
@@ -108,6 +119,10 @@ final class CanvasCoreWriter {
                     switch patch.owner.entity {
                     case .board: row = CanvasBoardItem(id: patch.owner.id, name: "Untitled canvas")
                     case .stroke: row = CanvasStrokeItem(id: patch.owner.id, canvasID: patch.canvasID, boardGeneration: generation)
+                    case .inkPayload:
+                        let payload = CanvasInkPayloadItem(id: patch.owner.id, canvasID: patch.canvasID)
+                        guard let bytes = patch.insertedPayloadBytes else { throw CanvasCoreError.invalidPayload }
+                        payload.bytes = bytes; row = payload
                     case .semantic:
                         let semantic = CanvasSemanticObjectItem(id: patch.owner.id, canvasID: patch.canvasID)
                         semantic.boardGeneration = generation; row = semantic
@@ -199,6 +214,7 @@ final class CanvasCoreWriter {
         case let row as CanvasBoardItem: row.id == canvasID
         case let row as CanvasStrokeItem: row.canvasID == canvasID
         case let row as CanvasSemanticObjectItem: row.canvasID == canvasID
+        case let row as CanvasInkPayloadItem: row.canvasID == canvasID
         case let row as CanvasImageItem: row.canvasID == canvasID
         default: false
         }
@@ -208,22 +224,47 @@ final class CanvasCoreWriter {
         case let row as CanvasBoardItem: row.mutationVersion
         case let row as CanvasStrokeItem: row.mutationVersion
         case let row as CanvasSemanticObjectItem: row.mutationVersion
+        case let row as CanvasInkPayloadItem: row.mutationVersion
         case let row as CanvasImageItem: row.mutationVersion
         default: Int64.max
         }
     }
-    static func inkPatch(id: CanvasCoreID, ink: CanvasCoreInk) throws -> CanvasCorePatch {
+    /// The measured maximum gesture is the sole exceptional preparation path
+    /// (§3.5). Its immutable samples/IDs remain owned by the caller while the
+    /// codec runs off-main; ordinary 400-point commands stay synchronous.
+    /// No store/context or new command queue crosses the suspension.
+    static func preparedAdmissionCapInkPatch(id: CanvasCoreID, ink: CanvasCoreInk) async throws -> CanvasCorePatch {
+        guard ink.samples.count == CanvasCoreInkCodec.maximumSamples else { throw CanvasCoreError.admission }
+        try Task.checkCancellation()
+        let patch = try await Task.detached(priority: .userInitiated) {
+            try Task.checkCancellation()
+            return try inkPatch(id: id, ink: ink)
+        }.value
+        try Task.checkCancellation()
+        return patch
+    }
+    nonisolated static func inkPatch(id: CanvasCoreID, ink: CanvasCoreInk) throws -> CanvasCorePatch {
         let bytes = try CanvasCoreInkCodec.encode(ink)
-        let xs = ink.samples.map(\.x), ys = ink.samples.map(\.y), radius = ink.width / 2
+        // Separate entity namespaces let the payload reuse the stroke UUID.
+        // Preparing the same failed/ambiguous intent never allocates a new ID.
+        let payloadID = id.objectID
+        let payload = CanvasCorePatch(owner: .init(entity: .inkPayload, id: payloadID), canvasID: id.canvasID,
+            fields: ["strokeID": try WorkspaceModelFields.encode(id.objectID)], inserting: true, insertedPayloadBytes: bytes)
+        var minX = Double.infinity, minY = Double.infinity, maxX = -Double.infinity, maxY = -Double.infinity
+        for sample in ink.samples {
+            minX = min(minX, sample.x); minY = min(minY, sample.y)
+            maxX = max(maxX, sample.x); maxY = max(maxY, sample.y)
+        }
+        let radius = ink.width / 2
         return .init(owner: .init(entity: .stroke, id: id.objectID), canvasID: id.canvasID, fields: [
             "payloadVersion": try WorkspaceModelFields.encode(2),
-            "binaryPayload": try WorkspaceModelFields.encode(Optional(bytes)),
+            "binaryRowID": try WorkspaceModelFields.encode(Optional(payloadID)),
             "binaryDigest": try WorkspaceModelFields.encode(Optional(SHA256.hash(data: bytes).map { String(format: "%02x", $0) }.joined())),
-            "boundsMinX": try WorkspaceModelFields.encode(Optional(xs.min()! - radius)),
-            "boundsMinY": try WorkspaceModelFields.encode(Optional(ys.min()! - radius)),
-            "boundsMaxX": try WorkspaceModelFields.encode(Optional(xs.max()! + radius)),
-            "boundsMaxY": try WorkspaceModelFields.encode(Optional(ys.max()! + radius))
-        ], inserting: true)
+            "boundsMinX": try WorkspaceModelFields.encode(Optional(minX - radius)),
+            "boundsMinY": try WorkspaceModelFields.encode(Optional(minY - radius)),
+            "boundsMaxX": try WorkspaceModelFields.encode(Optional(maxX + radius)),
+            "boundsMaxY": try WorkspaceModelFields.encode(Optional(maxY + radius))
+        ], inserting: true, companions: [payload])
     }
     static func semanticPatch(id: CanvasCoreID, content: CanvasCoreSemanticContract,
                               bounds: CanvasCoreBounds, inserting: Bool) throws -> CanvasCorePatch {

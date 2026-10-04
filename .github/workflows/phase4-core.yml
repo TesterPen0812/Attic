@@ -94,6 +94,7 @@ jobs:
       - name: Measure fixed Phase 2 reference on this runner
         shell: /bin/zsh {0}
         run: |
+          set -euo pipefail
           base="$PWD/.build/pf-base"
           mkdir -p "$base"
           git archive d77ec80ad91930d377bb3a5849c030c4d63c541e | tar -x -C "$base"
@@ -134,6 +135,7 @@ jobs:
       - name: Build and sign the isolated hosted test products
         shell: /bin/zsh {0}
         run: |
+          set -euo pipefail
           F=(SWIFT_OPTIMIZATION_LEVEL=-O SWIFT_COMPILATION_MODE=wholemodule ENABLE_TESTABILITY=YES CODE_SIGNING_ALLOWED=YES CODE_SIGNING_REQUIRED=YES CODE_SIGN_STYLE=Manual CODE_SIGN_IDENTITY=- DEVELOPMENT_TEAM= ENABLE_DEBUG_DYLIB=NO)
           env -u PEEKABOO_MCP_TOKEN -u GITHUB_TOKEN /Users/taha/Developer/attic-redesign-assets/xcodebuild-locked.sh \
             -project Attic.xcodeproj -scheme Attic -configuration Local \
@@ -147,6 +149,7 @@ jobs:
         if: ${{ !cancelled() }}
         shell: /bin/zsh {0}
         run: |
+          set -euo pipefail
           F=(SWIFT_OPTIMIZATION_LEVEL=-O SWIFT_COMPILATION_MODE=wholemodule ENABLE_TESTABILITY=YES CODE_SIGNING_ALLOWED=YES CODE_SIGNING_REQUIRED=YES CODE_SIGN_STYLE=Manual CODE_SIGN_IDENTITY=- DEVELOPMENT_TEAM= ENABLE_DEBUG_DYLIB=NO)
           env -u PEEKABOO_MCP_TOKEN -u GITHUB_TOKEN /Users/taha/Developer/attic-redesign-assets/xcodebuild-locked.sh \
             -project Attic.xcodeproj -scheme Attic -configuration Local \
@@ -166,6 +169,7 @@ jobs:
           TEST_RUNNER_ATTIC_P4_METADATA_SQL_PROOF: "1"
         shell: /bin/zsh {0}
         run: |
+          set -euo pipefail
           F=(SWIFT_OPTIMIZATION_LEVEL=-O SWIFT_COMPILATION_MODE=wholemodule ENABLE_TESTABILITY=YES CODE_SIGNING_ALLOWED=YES CODE_SIGNING_REQUIRED=YES CODE_SIGN_STYLE=Manual CODE_SIGN_IDENTITY=- DEVELOPMENT_TEAM= ENABLE_DEBUG_DYLIB=NO)
           env -u PEEKABOO_MCP_TOKEN -u GITHUB_TOKEN /Users/taha/Developer/attic-redesign-assets/xcodebuild-locked.sh \
             -project Attic.xcodeproj -scheme Attic -configuration Local \
@@ -185,6 +189,7 @@ jobs:
         if: ${{ !cancelled() }}
         shell: /bin/zsh {0}
         run: |
+          set -euo pipefail
           F=(SWIFT_OPTIMIZATION_LEVEL=-O SWIFT_COMPILATION_MODE=wholemodule ENABLE_TESTABILITY=YES CODE_SIGNING_ALLOWED=YES CODE_SIGNING_REQUIRED=YES CODE_SIGN_STYLE=Manual CODE_SIGN_IDENTITY=- DEVELOPMENT_TEAM= ENABLE_DEBUG_DYLIB=NO)
           set -o pipefail
           paired_status=0
@@ -215,6 +220,7 @@ jobs:
         if: ${{ !cancelled() }}
         shell: /bin/zsh {0}
         run: |
+          set -euo pipefail
           base="$PWD/.build/pf-base"
           F=(SWIFT_OPTIMIZATION_LEVEL=-O SWIFT_COMPILATION_MODE=wholemodule ENABLE_TESTABILITY=YES CODE_SIGNING_ALLOWED=YES CODE_SIGNING_REQUIRED=YES CODE_SIGN_STYLE=Manual CODE_SIGN_IDENTITY=- DEVELOPMENT_TEAM= ENABLE_DEBUG_DYLIB=NO)
           for test in testPFFoundationSizeAndProductionPaths testPF1LargeAutosaveAndPreparedCommitAgainstPairedBase testPF5InterleavedSessionSoakAgainstPairedBase; do
@@ -246,6 +252,7 @@ jobs:
         if: ${{ !cancelled() }}
         shell: /bin/zsh {0}
         run: |
+          set -euo pipefail
           set -o pipefail
           gate_status=0
           python3 Scripts/pf_paired_gate.py --base .build/pf-base.log --candidate .build/pf-candidate.log --base-after .build/pf-base-after.log | tee .build/pf-gate.txt || gate_status=$?
@@ -257,6 +264,7 @@ jobs:
         if: ${{ !cancelled() }}
         shell: /bin/zsh {0}
         run: |
+          set -euo pipefail
           F=(SWIFT_OPTIMIZATION_LEVEL=-O SWIFT_COMPILATION_MODE=wholemodule ENABLE_TESTABILITY=YES CODE_SIGNING_ALLOWED=YES CODE_SIGNING_REQUIRED=YES CODE_SIGN_STYLE=Manual CODE_SIGN_IDENTITY=- DEVELOPMENT_TEAM= ENABLE_DEBUG_DYLIB=NO)
           env -u PEEKABOO_MCP_TOKEN -u GITHUB_TOKEN /Users/taha/Developer/attic-redesign-assets/xcodebuild-locked.sh \
             -project Attic.xcodeproj -scheme Attic -configuration Local \
@@ -274,6 +282,7 @@ jobs:
         if: ${{ !cancelled() }}
         shell: /bin/zsh {0}
         run: |
+          set -euo pipefail
           F=(SWIFT_OPTIMIZATION_LEVEL=-O SWIFT_COMPILATION_MODE=wholemodule ENABLE_TESTABILITY=YES CODE_SIGNING_ALLOWED=YES CODE_SIGNING_REQUIRED=YES CODE_SIGN_STYLE=Manual CODE_SIGN_IDENTITY=- DEVELOPMENT_TEAM= ENABLE_DEBUG_DYLIB=NO)
           env -u PEEKABOO_MCP_TOKEN -u GITHUB_TOKEN /Users/taha/Developer/attic-redesign-assets/xcodebuild-locked.sh \
             -project Attic.xcodeproj -scheme Attic -configuration Local \
@@ -289,6 +298,7 @@ jobs:
         if: ${{ !cancelled() }}
         shell: /bin/zsh {0}
         run: |
+          set -euo pipefail
           F=(SWIFT_OPTIMIZATION_LEVEL=-O SWIFT_COMPILATION_MODE=wholemodule ENABLE_TESTABILITY=YES CODE_SIGNING_ALLOWED=YES CODE_SIGNING_REQUIRED=YES CODE_SIGN_STYLE=Manual CODE_SIGN_IDENTITY=- DEVELOPMENT_TEAM= ENABLE_DEBUG_DYLIB=NO)
           env -u PEEKABOO_MCP_TOKEN -u GITHUB_TOKEN /Users/taha/Developer/attic-redesign-assets/xcodebuild-locked.sh \
             -project Attic.xcodeproj -scheme Attic -configuration Local \
@@ -304,6 +314,7 @@ jobs:
         if: ${{ !cancelled() }}
         shell: /bin/zsh {0}
         run: |
+          set -euo pipefail
           F=(SWIFT_OPTIMIZATION_LEVEL=-O SWIFT_COMPILATION_MODE=wholemodule ENABLE_TESTABILITY=YES CODE_SIGNING_ALLOWED=YES CODE_SIGNING_REQUIRED=YES CODE_SIGN_STYLE=Manual CODE_SIGN_IDENTITY=- DEVELOPMENT_TEAM= ENABLE_DEBUG_DYLIB=NO)
           env -u PEEKABOO_MCP_TOKEN -u GITHUB_TOKEN /Users/taha/Developer/attic-redesign-assets/xcodebuild-locked.sh \
             -project Attic.xcodeproj -scheme Attic -configuration Local \
@@ -329,6 +340,7 @@ jobs:
         if: ${{ !cancelled() }}
         shell: /bin/zsh {0}
         run: |
+          set -euo pipefail
           F=(SWIFT_OPTIMIZATION_LEVEL=-O SWIFT_COMPILATION_MODE=wholemodule ENABLE_TESTABILITY=YES CODE_SIGNING_ALLOWED=YES CODE_SIGNING_REQUIRED=YES CODE_SIGN_STYLE=Manual CODE_SIGN_IDENTITY=- DEVELOPMENT_TEAM= ENABLE_DEBUG_DYLIB=NO)
           env -u PEEKABOO_MCP_TOKEN -u GITHUB_TOKEN /Users/taha/Developer/attic-redesign-assets/xcodebuild-locked.sh \
             -project Attic.xcodeproj -scheme Attic -configuration Local \

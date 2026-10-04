@@ -30,6 +30,7 @@ enum PersistenceController {
             NoteAttachment.self,
             CanvasBoardItem.self,
             CanvasStrokeItem.self,
+            CanvasInkPayloadItem.self,
             CanvasImageItem.self,
             CanvasSemanticObjectItem.self,
             ItemLink.self,
@@ -46,6 +47,7 @@ enum PersistenceController {
             NoteItem.self,
             CanvasBoardItem.self,
             CanvasStrokeItem.self,
+            CanvasInkPayloadItem.self,
             CanvasImageItem.self,
             ItemLink.self
         ]

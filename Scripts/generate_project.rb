@@ -104,6 +104,7 @@ shared_mobile_sources = [
   'Models/CanvasBoardItem.swift',
   'Models/CanvasImageItem.swift',
   'Models/CanvasStrokeItem.swift',
+  'Models/CanvasInkPayloadItem.swift',
   'Models/AtticItem.swift',
   'Models/AtticTag.swift',
   'Models/DueDay.swift',

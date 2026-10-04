@@ -36,6 +36,61 @@ private enum P4Legacy {
     }
 }
 
+private enum P4PreviousCandidate {
+@Model
+final class CanvasStrokeItem {
+    /// Logical stroke identity. This deliberately has no SwiftData unique
+    /// constraint because CloudKit cannot enforce one.
+    var id: UUID = UUID()
+    var canvasID: UUID = CanvasBoardItem.logicalBoardID
+    var payloadVersion: Int = 1
+    var payload: Data = Data()
+    // Provisional v2 contract. Existing JSON is canonical and never replaced
+    // by a cache. Spike A's remaining presentation evidence may change these
+    // optional fields before the slice 3 migration/schema freeze.
+    @Attribute(.externalStorage) var binaryPayload: Data? = nil
+    var binaryDigest: String? = nil
+    var boundsMinX: Double? = nil
+    var boundsMinY: Double? = nil
+    var boundsMaxX: Double? = nil
+    var boundsMaxY: Double? = nil
+    var offsetX: Double = 0
+    var offsetY: Double = 0
+    var rankOverride: Int64? = nil
+    var boardGeneration: Int64 = 0
+    var mutationVersion: Int64 = 1
+    var tombstoned: Bool = false
+    var createdAt: Date = Date()
+    var updatedAt: Date = Date()
+    var deletedAt: Date? = nil
+
+    init(
+        id: UUID = UUID(),
+        canvasID: UUID = CanvasBoardItem.logicalBoardID,
+        payloadVersion: Int = 1,
+        payload: Data = Data(),
+        boardGeneration: Int64 = 0,
+        mutationVersion: Int64 = 1,
+        tombstoned: Bool = false,
+        createdAt: Date = Date(),
+        updatedAt: Date? = nil,
+        deletedAt: Date? = nil
+    ) {
+        self.id = id
+        self.canvasID = canvasID
+        self.payloadVersion = payloadVersion
+        self.payload = payload
+        self.boardGeneration = boardGeneration
+        self.mutationVersion = mutationVersion
+        self.tombstoned = tombstoned
+        self.createdAt = createdAt
+        self.updatedAt = updatedAt ?? createdAt
+        self.deletedAt = deletedAt
+    }
+}
+
+}
+
 @MainActor
 final class CanvasCoreStorageTests: XCTestCase {
     func testP4CopiedStoreAdditivePayloadKeepsEveryLegacyByteAndPhysicalWinner() throws {
@@ -68,7 +123,7 @@ final class CanvasCoreStorageTests: XCTestCase {
         }
         try FileManager.default.copyItem(at: original, to: copy)
         try autoreleasepool {
-            let schema = Schema([CanvasBoardItem.self, CanvasStrokeItem.self, CanvasImageItem.self, CanvasSemanticObjectItem.self])
+            let schema = Schema([CanvasBoardItem.self, CanvasStrokeItem.self, CanvasInkPayloadItem.self, CanvasImageItem.self, CanvasSemanticObjectItem.self])
             let container = try ModelContainer(for: schema, configurations: [.init("fixture", schema: schema, url: copy.appendingPathComponent("fixture.store"), cloudKitDatabase: .none)])
             let context = ModelContext(container); context.autosaveEnabled = false
             let rows = try context.fetch(FetchDescriptor<CanvasStrokeItem>())
@@ -79,16 +134,65 @@ final class CanvasCoreStorageTests: XCTestCase {
             let winner = try CanvasStore.winningStrokeReplica(in: rows)
             XCTAssertEqual(try WorkspaceModelFields.encode(winner.persistentModelID), beforeWinnerID)
             XCTAssertTrue(winner.tombstoned); XCTAssertEqual(winner.payload, unknown); XCTAssertEqual(winner.mutationVersion, 4)
+            let legacyMetadata = try CanvasCoreMetadataQuery.strokes(canvasID: board, in: context)
+            XCTAssertEqual(legacyMetadata.count, 4)
+            XCTAssertEqual(Set(legacyMetadata.map(\.physicalURI)).count, 4)
+            XCTAssertEqual(legacyMetadata.map(\.version).sorted(), [1, 2, 3, 4])
+            XCTAssertTrue(legacyMetadata.first { $0.version == 4 }!.tombstoned)
+            XCTAssertTrue(legacyMetadata.allSatisfy { $0.bounds == nil && $0.binaryRowID == nil })
             let new = CanvasStrokeItem(canvasID: board)
             let binary = try CanvasCoreInkCodec.encode(.init(color: "ink", width: 3,
                 samples: (0..<CanvasCoreInkCodec.maximumSamples).map { .init(x: Double($0), y: 0, time: UInt64($0), pressure: nil) }))
-            new.payloadVersion = 2; new.binaryPayload = binary; context.insert(new); try context.save()
+            let payloadRow = CanvasInkPayloadItem(canvasID: board, strokeID: new.id); payloadRow.bytes = binary
+            new.payloadVersion = 2; new.binaryRowID = payloadRow.id
+            context.insert(new); context.insert(payloadRow); try context.save()
             let fresh = ModelContext(container)
-            XCTAssertEqual(try fresh.fetch(FetchDescriptor<CanvasStrokeItem>()).first { $0.id == new.id }?.binaryPayload, binary)
+            XCTAssertNil(try fresh.fetch(FetchDescriptor<CanvasStrokeItem>()).first { $0.id == new.id }?.binaryPayload)
+            XCTAssertEqual(try fresh.fetch(FetchDescriptor<CanvasInkPayloadItem>()).first { $0.id == payloadRow.id }?.bytes, binary)
             XCTAssertEqual(try CanvasCoreInkCodec.decode(binary).samples.count, 81_000)
             XCTAssertEqual(try fresh.fetch(FetchDescriptor<CanvasStrokeItem>()).filter { $0.id == logical }.map(\.payload).filter { $0 == good }.count, 3)
         }
         XCTAssertTrue(FileManager.default.fileExists(atPath: original.appendingPathComponent("fixture.store").path))
+    }
+    func testP4PreviousCandidateStoreRetainsExperimentalBinaryColumnDuringAdditiveMigration() throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("P4Previous-\(UUID())")
+        defer { try? FileManager.default.removeItem(at: root) }
+        let original = root.appendingPathComponent("old"), copy = root.appendingPathComponent("copy")
+        try FileManager.default.createDirectory(at: original, withIntermediateDirectories: true)
+        let board = UUID(), id = UUID(), date = Date(timeIntervalSince1970: 1234)
+        let binary = try CanvasCoreInkCodec.encode(.init(color: "ink", width: 3,
+            samples: [.init(x: 10, y: 20, time: 80_000, pressure: 0.5)]))
+        let inline = Data([255, 17, 9])
+        var physicalID = Data()
+        try autoreleasepool {
+            let schema = Schema([P4PreviousCandidate.CanvasStrokeItem.self])
+            let container = try ModelContainer(for: schema, configurations: [.init("fixture", schema: schema,
+                url: original.appendingPathComponent("fixture.store"), cloudKitDatabase: .none)])
+            let context = ModelContext(container); context.autosaveEnabled = false
+            let row = P4PreviousCandidate.CanvasStrokeItem(id: id, canvasID: board, payloadVersion: 2,
+                payload: inline, mutationVersion: 7, createdAt: date)
+            row.binaryPayload = binary; row.offsetX = 40; row.rankOverride = 8
+            context.insert(row); try context.save()
+            physicalID = try WorkspaceModelFields.encode(row.persistentModelID)
+        }
+        try FileManager.default.copyItem(at: original, to: copy)
+        try autoreleasepool {
+            let schema = Schema([CanvasStrokeItem.self, CanvasInkPayloadItem.self])
+            let container = try ModelContainer(for: schema, configurations: [.init("fixture", schema: schema,
+                url: copy.appendingPathComponent("fixture.store"), cloudKitDatabase: .none)])
+            let context = ModelContext(container); context.autosaveEnabled = false
+            let row = try XCTUnwrap(context.fetch(FetchDescriptor<CanvasStrokeItem>()).first)
+            XCTAssertEqual(try WorkspaceModelFields.encode(row.persistentModelID), physicalID)
+            XCTAssertEqual(row.binaryPayload, binary); XCTAssertEqual(row.payload, inline)
+            XCTAssertEqual(row.id, id); XCTAssertEqual(row.canvasID, board)
+            XCTAssertEqual(row.mutationVersion, 7); XCTAssertEqual(row.createdAt, date)
+            XCTAssertEqual(row.offsetX, 40); XCTAssertEqual(row.rankOverride, 8)
+            XCTAssertNil(row.binaryRowID)
+            XCTAssertEqual(try context.fetchCount(FetchDescriptor<CanvasInkPayloadItem>()), 0)
+            let metadata = try CanvasCoreMetadataQuery.strokes(canvasID: board, in: context)
+            XCTAssertEqual(metadata.count, 1); XCTAssertEqual(metadata.first?.offsetX, 40)
+            XCTAssertEqual(metadata.first?.payloadVersion, 2); XCTAssertEqual(metadata.first?.rank, 8)
+        }
     }
     func testP4MetadataQueryBudgetRestrictedFetchOf20By2000LeavesBodiesUnrequested() throws {
         if ProcessInfo.processInfo.environment["ATTIC_P4_METADATA_SQL_PROOF"] == "1" {
@@ -99,13 +203,22 @@ final class CanvasCoreStorageTests: XCTestCase {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent("P4Metadata-\(UUID())")
         defer { try? FileManager.default.removeItem(at: root) }
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
-        let schema = Schema([CanvasStrokeItem.self])
+        let schema = Schema([CanvasStrokeItem.self, CanvasInkPayloadItem.self])
         let container = try ModelContainer(for: schema, configurations: [.init("fixture", schema: schema, url: root.appendingPathComponent("fixture.store"), cloudKitDatabase: .none)])
         let boards = (0..<20).map { _ in UUID() }
         let seed = ModelContext(container); seed.autosaveEnabled = false
+        let legacy = Data(("{\"version\":1,\"color\":\"ink\",\"width\":3,\"points\":[" +
+            (0..<400).map { "{\"x\":\($0),\"y\":\($0 % 7)}" }.joined(separator: ",") + "]}").utf8)
+        let binary = try CanvasCoreInkCodec.encode(.init(color: "ink", width: 3,
+            samples: (0..<400).map { .init(x: Double($0), y: Double($0 % 7), time: UInt64($0 * 8_000), pressure: nil) }))
         for board in boards { for i in 0..<2_000 {
-            let row = CanvasStrokeItem(canvasID: board, payload: Data(repeating: UInt8(i % 255), count: 64))
-            row.binaryPayload = Data(repeating: 17, count: 4_096)
+            let row = CanvasStrokeItem(canvasID: board, payload: legacy)
+            if i % 2 == 1 {
+                let payloadRow = CanvasInkPayloadItem(canvasID: board, strokeID: row.id)
+                payloadRow.bytes = binary
+                row.payload = Data(); row.payloadVersion = 2; row.binaryRowID = payloadRow.id
+                seed.insert(payloadRow)
+            }
             row.boundsMinX = Double(i); row.boundsMaxX = Double(i + 1); row.boundsMinY = 0; row.boundsMaxY = 1
             seed.insert(row)
         } }
@@ -120,6 +233,8 @@ final class CanvasCoreStorageTests: XCTestCase {
         fflush(stdout)
         XCTAssertEqual(rows.count, 2_000, "P4MetadataQueryBudget")
         XCTAssertTrue(rows.allSatisfy { $0.canvasID == boards[0] && $0.bounds != nil })
+        XCTAssertEqual(Set(rows.map(\.physicalURI)).count, 2_000)
+        XCTAssertEqual(rows.filter { $0.binaryRowID != nil }.count, 1_000)
         XCTAssertEqual(try ModelContext(container).fetchCount(FetchDescriptor<CanvasStrokeItem>()), 40_000)
     }
 }

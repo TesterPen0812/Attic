@@ -13,6 +13,9 @@ final class CanvasStrokeItem {
     // by a cache. Spike A's remaining presentation evidence may change these
     // optional fields before the slice 3 migration/schema freeze.
     @Attribute(.externalStorage) var binaryPayload: Data? = nil
+    // Retain the experimental binaryPayload column for additive compatibility.
+    // New writes use a separate immutable payload row, never this column.
+    var binaryRowID: UUID? = nil
     var binaryDigest: String? = nil
     var boundsMinX: Double? = nil
     var boundsMinY: Double? = nil

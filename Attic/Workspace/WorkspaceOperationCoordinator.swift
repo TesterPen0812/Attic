@@ -607,7 +607,7 @@ final class WorkspaceOperationCoordinator {
         // Canvas ordinary model writes have no new original-file obligation.
         // Image byte imports remain journaled; metadata-only image changes are
         // allowed only when the exact existing byte guards are unchanged.
-        if entities.isSubset(of: [.board, .stroke, .semantic, .image]) {
+        if entities.isSubset(of: [.board, .stroke, .inkPayload, .semantic, .image]) {
             for image in after where image.owner.entity == .image {
                 guard let previous = old[image.owner],
                       previous.replicas.map(\.physicalID) == image.replicas.map(\.physicalID),
@@ -953,6 +953,7 @@ final class WorkspaceOperationCoordinator {
         switch row {
         case let r as CanvasBoardItem: WorkspaceOwner(entity: .board, id: r.id)
         case let r as CanvasStrokeItem: WorkspaceOwner(entity: .stroke, id: r.id)
+        case let r as CanvasInkPayloadItem: WorkspaceOwner(entity: .inkPayload, id: r.id)
         case let r as CanvasImageItem: WorkspaceOwner(entity: .image, id: r.id)
         case let r as CanvasSemanticObjectItem: WorkspaceOwner(entity: .semantic, id: r.id)
         case let r as TaskItem: WorkspaceOwner(entity: .task, id: r.id)

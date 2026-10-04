@@ -28,6 +28,10 @@ final class CanvasCoreWriterTests: XCTestCase {
         return creation
     }
     private func strokeRows() throws -> [CanvasStrokeItem] { try ModelContext(container).fetch(FetchDescriptor<CanvasStrokeItem>()) }
+    private func inkBytes() throws -> Data? {
+        guard let id = try strokeRows().first?.binaryRowID else { return nil }
+        return try ModelContext(container).fetch(FetchDescriptor<CanvasInkPayloadItem>(predicate: #Predicate { $0.id == id })).first?.bytes
+    }
     private func boardRows() throws -> [CanvasBoardItem] { try ModelContext(container).fetch(FetchDescriptor<CanvasBoardItem>()) }
     func testP4CreationBudgetNoEagerRowsAtomicFirstContentAndOneHistoryGroup() throws {
         let creation = CanvasCoreCreation()
@@ -37,6 +41,8 @@ final class CanvasCoreWriterTests: XCTestCase {
         _ = try create(creation)
         XCTAssertEqual(try boardRows().map(\.id), [creation.boardID])
         XCTAssertEqual(try strokeRows().map(\.id), [creation.firstObjectID])
+        XCTAssertEqual(try ModelContext(container).fetchCount(FetchDescriptor<CanvasInkPayloadItem>()), 1)
+        XCTAssertTrue(try strokeRows().allSatisfy { $0.binaryPayload == nil && $0.payload.isEmpty && $0.binaryRowID != nil })
         XCTAssertEqual(writer.counters.saves, 1); XCTAssertEqual(writer.cursor, 1)
         XCTAssertEqual(writer.history.count, 1); XCTAssertEqual(gate.validationCounters.fastValidations, 1)
         XCTAssertEqual(try ModelContext(container).fetch(FetchDescriptor<OperationReceipt>()).count, 0)
@@ -50,6 +56,10 @@ final class CanvasCoreWriterTests: XCTestCase {
         gate.save = { _ in throw CanvasCoreError.conflict }
         XCTAssertEqual(writer.perform(name: "First", patches: patches), .notCommitted)
         XCTAssertEqual(writer.cursor, 0); XCTAssertTrue(try boardRows().isEmpty); XCTAssertTrue(try strokeRows().isEmpty)
+        XCTAssertEqual(try ModelContext(container).fetchCount(FetchDescriptor<CanvasInkPayloadItem>()), 0)
+        let preparedAgain = try creation.firstInk(ink)
+        XCTAssertEqual(preparedAgain.last?.fields.values["binaryRowID"], patches.last?.fields.values["binaryRowID"])
+        XCTAssertEqual(preparedAgain.last?.companions.map(\.owner), patches.last?.companions.map(\.owner))
         gate.save = { try $0.save() }
         XCTAssertEqual(writer.perform(name: "First", patches: patches), .committed)
         XCTAssertEqual(try boardRows().map(\.id), [creation.boardID]); XCTAssertEqual(try strokeRows().map(\.id), [creation.firstObjectID])
@@ -102,12 +112,12 @@ final class CanvasCoreWriterTests: XCTestCase {
         XCTAssertTrue(try strokeRows().filter { $0.id == creation.firstObjectID }.allSatisfy { $0.offsetX == 0 })
     }
     func testP4HistoryBudgetFailedUndoKeepsCursorRedoAndBytes() throws {
-        _ = try create(); let bytes = try XCTUnwrap(strokeRows().first?.binaryPayload)
+        _ = try create(); let bytes = try XCTUnwrap(inkBytes())
         gate.save = { _ in throw CanvasCoreError.conflict }
         XCTAssertEqual(writer.undo(), .notCommitted); XCTAssertEqual(writer.cursor, 1); XCTAssertFalse(writer.canRedo)
-        XCTAssertEqual(try strokeRows().first?.binaryPayload, bytes); XCTAssertFalse(try XCTUnwrap(strokeRows().first).tombstoned)
+        XCTAssertEqual(try inkBytes(), bytes); XCTAssertFalse(try XCTUnwrap(strokeRows().first).tombstoned)
         gate.save = { try $0.save() }; XCTAssertEqual(writer.undo(), .committed); XCTAssertEqual(writer.redo(), .committed)
-        XCTAssertEqual(try strokeRows().first?.binaryPayload, bytes)
+        XCTAssertEqual(try inkBytes(), bytes)
     }
     func testP4HistoryBudgetExternalBarrierHasNoInverseAndLaterLocalUndoStopsAtOrigin() throws {
         let creation = try create(), owner = WorkspaceOwner(entity: .stroke, id: creation.firstObjectID)

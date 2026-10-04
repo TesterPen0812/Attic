@@ -235,7 +235,7 @@ final class WorkspaceCommitLedger {
         "TaskItem": .task, "NoteItem": .note, "NoteAttachment": .attachment, "NoteVersion": .version,
         "NotePendingEdit": .proposal, "ItemLink": .link, "TaskNoteAssociation": .association,
         "TaskDeletionPreservation": .preservation, "OperationReceipt": .receipt, "CanvasBoardItem": .board,
-        "CanvasStrokeItem": .stroke, "CanvasImageItem": .image, "CanvasSemanticObjectItem": .semantic
+        "CanvasStrokeItem": .stroke, "CanvasInkPayloadItem": .inkPayload, "CanvasImageItem": .image, "CanvasSemanticObjectItem": .semantic
     ]
     static func entity(for id: PersistentIdentifier) -> WorkspaceOwner.Entity? { entities[id.entityName] }
     static func supportedEntities(in container: ModelContainer) -> Set<WorkspaceOwner.Entity> {
@@ -254,6 +254,7 @@ final class WorkspaceCommitLedger {
         case "OperationReceipt": return context.registeredModel(for: id) as OperationReceipt?
         case "CanvasBoardItem": return context.registeredModel(for: id) as CanvasBoardItem?
         case "CanvasStrokeItem": return context.registeredModel(for: id) as CanvasStrokeItem?
+        case "CanvasInkPayloadItem": return context.registeredModel(for: id) as CanvasInkPayloadItem?
         case "CanvasImageItem": return context.registeredModel(for: id) as CanvasImageItem?
         case "CanvasSemanticObjectItem": return context.registeredModel(for: id) as CanvasSemanticObjectItem?
         default: return nil

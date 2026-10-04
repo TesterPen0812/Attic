@@ -26,6 +26,7 @@ enum CanvasCoreInkCodec {
         guard colors.contains(ink.color), ink.width.isFinite, ink.width > 0, ink.width <= 64,
               !ink.samples.isEmpty, ink.samples.count <= maximumSamples else { throw CanvasCoreError.admission }
         var bytes = Data([0x41, 0x54, 0x49, 0x4b])
+        bytes.reserveCapacity(24 + ink.samples.count * 12)
         func put<T: FixedWidthInteger>(_ value: T) {
             var little = value.littleEndian; withUnsafeBytes(of: &little) { bytes.append(contentsOf: $0) }
         }

@@ -503,6 +503,7 @@ enum WorkspaceLegacyBridge {
             case "OperationReceipt": entity = .receipt
             case "CanvasBoardItem": entity = .board
             case "CanvasStrokeItem": entity = .stroke
+            case "CanvasInkPayloadItem": entity = .inkPayload
             case "CanvasImageItem": entity = .image
             case "CanvasSemanticObjectItem": entity = .semantic
             default: throw WorkspaceFoundationError.unsupportedField(name)
@@ -522,6 +523,7 @@ enum WorkspaceLegacyBridge {
         try include(OperationReceipt.self, name: "OperationReceipt")
         if includeCanvas {
             try include(CanvasBoardItem.self, name: "CanvasBoardItem")
+            try include(CanvasInkPayloadItem.self, name: "CanvasInkPayloadItem")
             try include(CanvasStrokeItem.self, name: "CanvasStrokeItem"); try include(CanvasImageItem.self, name: "CanvasImageItem")
             try include(CanvasSemanticObjectItem.self, name: "CanvasSemanticObjectItem")
         }
@@ -542,6 +544,7 @@ enum WorkspaceLegacyBridge {
         case .receipt: OperationReceipt(id: UUID(), envelopeDigest: "", affectedIDs: Data(), resultingTokens: Data())
         case .board: CanvasBoardItem()
         case .stroke: CanvasStrokeItem()
+        case .inkPayload: CanvasInkPayloadItem()
         case .image: CanvasImageItem()
         case .semantic: CanvasSemanticObjectItem()
         }
