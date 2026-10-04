@@ -2389,7 +2389,7 @@ extension NoteSlice3bTests {
         journal.release()
         await quit.value
         XCTAssertEqual(quitResult, true,
-            "state=\(session.state) activity=\(session.engine.activity) notice=\(String(describing: session.notice)) warnings=\(controller.recoveryWarnings) claim=\(String(describing: session.recoveryClaim))")
+            "state=\(session.state) activity=\(session.engine.activity) notice=\(String(describing: session.notice)) warnings=\(controller.recoveryWarnings)")
         XCTAssertFalse(try journal.base.entries().isEmpty)
         await loader.release()
         await controller.waitForImportWork()
