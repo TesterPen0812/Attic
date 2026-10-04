@@ -286,11 +286,21 @@ final class TasksRound13Tests: XCTestCase {
         hosted.spin(1)
         let model = hosted.model
         let row = try XCTUnwrap(model.rows(for: .now).first { hosted.store.listedTask(withID: $0.id)?.priority != .high })
+        // The application queue sends keyboard events to the key window, not
+        // necessarily the synthetic event's windowNumber. Earlier hosted tests
+        // can leave another window key; establish the precondition explicitly.
+        print("ROUND13_REDO_FOCUS key=\(hosted.window.isKeyWindow) responder=\(String(describing: hosted.window.firstResponder))")
+        hosted.window.makeKey()
+        let composer = try XCTUnwrap(hosted.window.firstResponder as? AtticTokenTextView)
+        XCTAssertTrue(hosted.window.makeFirstResponder(composer))
+        XCTAssertTrue(hosted.window.isKeyWindow)
         hosted.press("a", keyCode: 0)
+        XCTAssertEqual(model.addBar.text, "a", "the real key reached the composer before the menu change")
         model.setPriority(.high, for: [row.id])
         hosted.spin(0.3)
         hosted.press("z", keyCode: 6, modifiers: .command)
         XCTAssertNotEqual(priority(of: row.id, hosted), .high)
+        XCTAssertEqual(model.addBar.text, "a", "claimed Undo preserved the draft")
         hosted.press("z", keyCode: 6, modifiers: [.command, .shift])
         XCTAssertEqual(priority(of: row.id, hosted), .high, "⇧⌘Z redid the menu change")
         XCTAssertEqual(model.addBar.text, "a")
