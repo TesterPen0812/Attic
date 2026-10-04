@@ -2242,13 +2242,16 @@ final class TaskStore: ObservableObject {
     /// there, not on the Find binding's keystroke. Models stay page-sized.
     private struct DoneSearchEntry {
         let id: UUID
-        let title: String
+        // Bridge once when the index changes, not once per title per key.
+        // NSString uses the same locale-aware matching without repeatedly
+        // allocating/transcoding the Swift strings during a query.
+        let title: NSString
         let completed: Date
         let created: Date
 
         init(_ task: TaskItem) {
             id = task.id
-            title = task.title
+            title = task.title as NSString
             completed = task.completedAt ?? task.updatedAt
             created = task.createdAt
         }

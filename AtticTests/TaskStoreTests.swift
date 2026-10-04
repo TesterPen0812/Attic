@@ -5,6 +5,36 @@ import UniformTypeIdentifiers
 @testable import Attic
 
 final class TaskStoreTests: XCTestCase {
+    @MainActor
+    func testIndexedSearchPreservesUnicodeFoundationMatching() throws {
+        let container = try PersistenceController.makeContainer(inMemory: true, cloudSyncEnabled: false)
+        let context = ModelContext(container)
+        let titles = ["Café", "Cafe\u{301}", "CAFÉ", "İstanbul", "Istanbul", "istanbul", "ıstanbul",
+                      "Straße", "STRASSE", "Μάιος", "ΜΆΙΟΣ", "東京", "東京都", "Résumé", "re\u{301}sume\u{301}",
+                      "👩🏽‍💻", "👨‍👩‍👧‍👦", "Ångström", "angstrom", "foo-bar"]
+        let date = Date(timeIntervalSince1970: 1000)
+        var originals: [(id: UUID, title: String)] = []
+        for title in titles {
+            let task = TaskItem(title: title, status: .done, createdAt: date, updatedAt: date, completedAt: date)
+            task.doneLoggedAt = date
+            context.insert(task)
+            originals.append((task.id, title))
+        }
+        try context.save()
+        let store = TaskStore(container: container)
+        for query in ["", " cafe ", "CAFÉ", "e\u{301}", "é", "i", "İ", "ı", "strasse", "ß", "μαϊοσ", "Μάιο",
+                      "東京", "東京都", "ré", "resume", "🏽", "👩", "👨‍", "Å", "-", "👩🏽‍💻", "\u{301}"] {
+            let trimmed = query.trimmingCharacters(in: .whitespacesAndNewlines)
+            let expected = Set(originals.filter {
+                trimmed.isEmpty || $0.title.localizedStandardContains(trimmed)
+            }.map(\.id))
+            let page = store.indexedDoneLogPage(limit: titles.count, matching: query)
+            XCTAssertNil(page.failure, query)
+            XCTAssertEqual(Set(page.tasks.map(\.id)), expected, query)
+            XCTAssertEqual(store.indexedDoneLogCount(matching: query), expected.count, query)
+        }
+    }
+
     func testTaskPriorityIndicatorColoursKeepEstablishedMapping() {
         assertSameSRGBColor(TaskPriority.none.color, Color.secondary.opacity(0.5))
         assertSameSRGBColor(TaskPriority.low.color, .blue)
