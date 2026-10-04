@@ -1502,7 +1502,11 @@ final class NotesPageControllerTests: XCTestCase {
     func testBothAttachmentPurgeRoutesRespectRecoveryReferences() async throws {
         let journal = NoteDraftJournal(directory: directory)
         let controller = makeController(journal: journal)
-        _ = controller // installs the recovery reference provider on the store
+        // Finish startup before introducing the checkpoints under test. A
+        // startup scan crossing these writes can legitimately adopt their
+        // byte ownership and keep the later purge blocked.
+        await controller.waitForRecoveryWork()
+        defer { withExtendedLifetime(controller) {} } // keep the reference provider installed
         let image = try realImage()
         let legacy = try XCTUnwrap(store.create(title: "Legacy"))
         let removed = NoteAttachment(id: image.id, noteID: legacy.id, originalFilename: image.filename,
