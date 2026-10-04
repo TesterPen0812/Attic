@@ -1188,6 +1188,13 @@ final class AtticPanelHostingView: NSHostingView<AtticPanelView> {
     override func viewWillMove(toWindow newWindow: NSWindow?) {
         if newWindow == nil {
             cancelActiveInteraction(reason: .lostWindow)
+        } else {
+            // This panel adds/removes native editors and SwiftUI controls.
+            // Let AppKit maintain that dynamic key loop. With the default
+            // static mode SwiftUI eagerly rebuilds its focus proxies from
+            // preferencesDidChange inside layout; the CU import hang was
+            // sampled indefinitely walking responder ancestry there.
+            newWindow?.autorecalculatesKeyViewLoop = true
         }
         super.viewWillMove(toWindow: newWindow)
     }

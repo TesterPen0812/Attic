@@ -1685,6 +1685,22 @@ final class PanelGeometryTests: XCTestCase {
     }
 
     @MainActor
+    func testDynamicHostedPanelUsesAutomaticKeyLoopAndKeepsFiniteTraversal() throws {
+        try withHiddenHostedPanel { panel, host in
+            XCTAssertTrue(panel.autorecalculatesKeyViewLoop,
+                          "Dynamic SwiftUI/native controls must use AppKit recalculation rather than SwiftUI's eager layout-time focus walk")
+            panel.recalculateKeyViewLoop()
+            var visited: Set<ObjectIdentifier> = []
+            var current: NSView? = host
+            while let view = current, visited.insert(ObjectIdentifier(view)).inserted {
+                XCTAssertLessThan(visited.count, 1000, "key-view traversal must terminate")
+                if visited.count >= 1000 { break }
+                current = view.nextKeyView
+            }
+        }
+    }
+
+    @MainActor
     private func withHiddenHostedPanel(
         _ body: (AtticPanel, AtticPanelHostingView) throws -> Void
     ) throws {
