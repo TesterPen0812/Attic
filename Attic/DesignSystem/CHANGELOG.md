@@ -156,6 +156,14 @@ Phase 1 (Shell, Tasks and Settings) was built in three streams and integrated
 on `redesign/phase-1`. Every change below is additive: no token, colour, radius
 or type style changed.
 
+### Native soft edge disabled everywhere (owner, overnight A1, 2026-10-04)
+
+- `AtticScrollEdgeLab` ignores former preview defaults and environment
+  overrides and offers no A/B switch. Stored preferences are left intact.
+  Tasks, Done, the Notes editor and All notes use Clean cut with the D1
+  control fade. The dormant native primitive remains explicitly testable.
+  This supersedes the preview exception in the earlier entry below.
+
 ### Clean cut by default (owner, 2026-10-03)
 
 - **`AtticScrollEdgeLab` resolves to `.cleanCut`** for every identity, and

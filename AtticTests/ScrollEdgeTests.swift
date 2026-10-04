@@ -3,10 +3,8 @@ import SwiftUI
 import XCTest
 @testable import Attic
 
-/// The lists' edges under the floating controls: Clean cut by default
-/// (owner, 2026-10-03, reversing D4b), the system's soft scroll edge as a
-/// preview-only comparison, and nothing left of the per-control softening
-/// (no content re-rendered to blur it).
+/// Clean cut in every app identity (owner, overnight A1). Native soft-edge
+/// geometry remains exercised through explicit test injection only.
 @MainActor
 final class ScrollEdgeTests: XCTestCase {
     private var saved: AtticScrollEdgeStyle?
@@ -38,18 +36,21 @@ final class ScrollEdgeTests: XCTestCase {
         XCTAssertEqual(AtticScrollEdgeLab.shared.style, .cleanCut, "the test host, not a preview, draws Clean cut")
     }
 
-    func testAPreviewKeepsItsChoiceAndUITestsCanForceOne() throws {
+    func testAPreviewIgnoresSavedAndEnvironmentSoftEdges() throws {
         let (defaults, cleanup) = try scratchDefaults()
         defer { cleanup() }
+        defaults.set(AtticScrollEdgeStyle.systemSoft.rawValue, forKey: AtticScrollEdgeLab.styleKey)
+        for environment in [[:], ["ATTIC_UI_TEST_SCROLL_EDGES": "soft"], ["ATTIC_UI_TEST_SCROLL_EDGES": "clean"]] {
+            let lab = AtticScrollEdgeLab(defaults: defaults, environment: environment, isPreview: true)
+            XCTAssertEqual(lab.style, .cleanCut, "the owner's native-edge-off policy also covers previews")
+            XCTAssertFalse(lab.offersChoice, "there is no preview switch to re-enable the native effect")
+        }
+        XCTAssertEqual(defaults.string(forKey: AtticScrollEdgeLab.styleKey), "systemSoft",
+                       "ignore the old preference without changing user defaults")
+        defaults.removeObject(forKey: AtticScrollEdgeLab.styleKey)
         let lab = AtticScrollEdgeLab(defaults: defaults, isPreview: true)
-        XCTAssertEqual(lab.style, .cleanCut)
-        lab.style = .systemSoft
-        XCTAssertEqual(AtticScrollEdgeLab(defaults: defaults, isPreview: true).style, .systemSoft, "a preview keeps the owner's choice")
-        XCTAssertEqual(AtticScrollEdgeLab(defaults: defaults, environment: ["ATTIC_UI_TEST_SCROLL_EDGES": "clean"], isPreview: true).style, .cleanCut)
-        let (fresh, freshCleanup) = try scratchDefaults()
-        defer { freshCleanup() }
-        XCTAssertEqual(AtticScrollEdgeLab(defaults: fresh, environment: ["ATTIC_UI_TEST_SCROLL_EDGES": "soft"], isPreview: true).style, .systemSoft)
-        XCTAssertEqual(AtticScrollEdgeStyle.allCases.map(\.title), ["System soft edge", "Clean cut"])
+        lab.style = .systemSoft // Isolated geometry tests can exercise the dormant primitive.
+        XCTAssertNil(defaults.string(forKey: AtticScrollEdgeLab.styleKey), "no choice is persisted")
     }
 
     /// The official identity and every other non-preview one: Clean cut,
@@ -87,15 +88,15 @@ final class ScrollEdgeTests: XCTestCase {
         // the gap the strict predicate closes.
         XCTAssertTrue(AtticMotionLab.isAvailable(bundleIdentifier: "com.taha.Attic.perf.ui", arguments: [AtticMotionLab.argument]))
         XCTAssertTrue(AtticMotionLab.isAvailable(bundleIdentifier: "com.taha.Attic.preview.", arguments: [AtticMotionLab.argument]))
-        // A preview identity is the one that may.
+        // A preview identity also follows the native-edge-off policy.
         XCTAssertTrue(AtticPreviewOverrides.isPreviewIdentity("com.taha.Attic.preview.main"))
         let (defaults, cleanup) = try scratchDefaults()
         defer { cleanup() }
         let preview = AtticScrollEdgeLab(defaults: defaults, isPreview: true)
-        XCTAssertTrue(preview.offersChoice)
+        XCTAssertFalse(preview.offersChoice)
     }
 
-    // MARK: - The system soft edge on the Tasks lists (a preview's choice)
+    // MARK: - Dormant system soft-edge geometry (explicit test injection)
 
     /// Native pockets occupy only resting gaps INSIDE the viewport. The
     /// controls never overlap the scroll view or its clipped native effect.
