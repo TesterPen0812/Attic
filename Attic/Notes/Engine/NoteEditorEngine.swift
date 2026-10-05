@@ -2059,6 +2059,26 @@ extension NoteEditorEngine {
         return true
     }
 
+    /// Tab in the title (OD-7): the caret goes to the start of the body,
+    /// as on a form; a note with no body yet gets its first body line, as
+    /// Return at the title's end gives it. False outside the title (the
+    /// body keeps Tab for indenting).
+    func moveFromTitleToBody() -> Bool {
+        guard let textView, !textView.hasMarkedText() else { return false }
+        let title = titleParagraphRange
+        let selection = textView.selectedRange()
+        guard selection.location <= NSMaxRange(title), NSMaxRange(selection) <= NSMaxRange(title) else { return false }
+        if NSMaxRange(title) < textStorage.length {
+            let body = NSRange(location: NSMaxRange(title) + 1, length: 0)
+            textView.setSelectedRange(body)
+            textView.scrollRangeToVisible(body)
+        } else {
+            textView.setSelectedRange(NSRange(location: NSMaxRange(title), length: 0))
+            textView.insertNewline(nil)
+        }
+        return true
+    }
+
     /// The title's first and last line, in the text view's coordinates
     /// (only the title is laid out). An empty note gives its first line.
     func titleLineRects() -> (first: NSRect, last: NSRect)? {

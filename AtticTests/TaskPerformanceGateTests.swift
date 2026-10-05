@@ -3,11 +3,8 @@ import SwiftData
 import XCTest
 @testable import Attic
 
-/// Reproducible scaling gates for the task model. Each test measures the
-/// hot path the audits timed and also asserts an absolute bound, so a
-/// regression back to the O(n²) shapes fails the test rather than only
-/// shifting a metric. Bounds are generous for CI machines; the recorded
-/// medians live in Docs/Fable51FullRepair.md.
+/// Scaling costs compare three interleaved runs with the same-job reference
+/// in macos-ci.yml. Functional invariants and paired memoization gates stay.
 @MainActor
 final class TaskPerformanceGateTests: XCTestCase {
     private func seedStore(parents: Int, childrenPerParent: Int, attachmentsPerTask: Int = 0) throws -> TaskStore {
@@ -31,7 +28,7 @@ final class TaskPerformanceGateTests: XCTestCase {
         return TaskStore(container: container)
     }
 
-    private func medianMilliseconds(iterations: Int = 9, _ body: () -> Void) -> Double {
+    private func medianMilliseconds(iterations: Int = 9, metric: String? = nil, _ body: () -> Void) -> Double {
         var samples: [Double] = []
         for _ in 0..<iterations {
             let start = ContinuousClock.now
@@ -39,6 +36,7 @@ final class TaskPerformanceGateTests: XCTestCase {
             let duration = start.duration(to: .now).components
             samples.append(Double(duration.seconds) * 1_000 + Double(duration.attoseconds) / 1e15)
         }
+        if let metric { print("ATTIC_COST_SAMPLES metric=\(metric) raw_ms=\(samples)") }
         return samples.sorted()[iterations / 2]
     }
 
@@ -74,7 +72,7 @@ final class TaskPerformanceGateTests: XCTestCase {
         let parents = store.tasks.filter { $0.parentID == nil }
         XCTAssertEqual(parents.count, 1_000)
         var checksum = 0
-        let median = medianMilliseconds {
+        let median = medianMilliseconds(metric: "family-summary") {
             for parent in parents {
                 guard store.hasSubtasks(parent.id) else { continue }
                 checksum += store.subtasks(of: parent.id).reduce(0) { $0 + ($1.status == .done ? 1 : 0) }
@@ -82,7 +80,7 @@ final class TaskPerformanceGateTests: XCTestCase {
             }
         }
         XCTAssertEqual(checksum, 5_000 * 9)
-        XCTAssertLessThan(median, 25, "family lookups must stay near-constant per row (median \(median) ms)")
+        print("ATTIC_INTEGRATION_COST family-summary median_ms=\(median)")
         measure(metrics: [XCTClockMetric()]) {
             for parent in parents { _ = store.subtasks(of: parent.id).count }
         }
@@ -109,7 +107,7 @@ final class TaskPerformanceGateTests: XCTestCase {
             let d = start.duration(to: .now).components
             return Double(d.seconds) * 1_000 + Double(d.attoseconds) / 1e15
         }
-        let median = medianMilliseconds(iterations: 7) {
+        let median = medianMilliseconds(iterations: 7, metric: "status-toggle") {
             let child = children[index]
             index += 1
             toggle += ms { XCTAssertEqual(library.updateTask(child.id, status: .done), .applied) }
@@ -123,6 +121,7 @@ final class TaskPerformanceGateTests: XCTestCase {
         print("PERFGATE writer=\(writer) presentation=\(presentation)")
         #endif
         XCTAssertLessThan(median, 120, "a single toggle must not rescan or refetch the whole store (median \(median) ms)")
+        print("ATTIC_INTEGRATION_COST status-toggle median_ms=\(median)")
     }
 
     /// The audit measured 12.8 ms per 300-row × 6-read pass with a fresh

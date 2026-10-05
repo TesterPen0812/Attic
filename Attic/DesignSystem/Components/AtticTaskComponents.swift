@@ -1828,6 +1828,8 @@ struct AtticSubtaskRow: View {
         .onHover { inside in if managed, hovered != inside { hovered = inside } }
         .onChange(of: focused) { _, now in onFocusChange(now) }
         .onDisappear { if focused { onFocusChange(false) } }
+        // A page's own Tab order reaches the line (A10).
+        .modifier(AtticSubtaskFocusTarget(id: subtask.id, managed: managed, focused: $focused))
         .atticDropdown(isPresented: popover?.isPresented ?? .constant(false), label: String(localized: "Move to Task")) { popover?.content() }
         .accessibilityElement(children: renaming == nil ? .combine : .contain)
         .accessibilityLabel(subtask.title)
@@ -1850,6 +1852,26 @@ struct AtticSubtaskRow: View {
     private func showActions(in view: NSView?) {
         guard !commands.isEmpty, let view = view ?? anchor.view else { return }
         AtticNativeMenu.popUpContextMenu(commands, in: view)
+    }
+}
+
+/// What a page asks `AtticFocusRequests` for to give a subtask line the
+/// keyboard.
+struct AtticSubtaskFocusID: Hashable {
+    let id: UUID
+}
+
+private struct AtticSubtaskFocusTarget: ViewModifier {
+    let id: UUID
+    let managed: Bool
+    var focused: FocusState<Bool>.Binding
+
+    func body(content: Content) -> some View {
+        if managed {
+            content.atticFocusRequestTarget(AtticSubtaskFocusID(id: id), focused: focused)
+        } else {
+            content
+        }
     }
 }
 

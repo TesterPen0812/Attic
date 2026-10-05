@@ -1,8 +1,9 @@
 import AppKit
 import XCTest
 
-/// The lists' edges on screen: Clean cut, D1's fade before the controls
-/// (owner, 2026-10-03, reversing D4b's system soft edge). The soft edge is a
+/// The lists' edges on screen: Clean cut with A15's scroll-under fade (owner,
+/// 2026-10-04, replacing D1's fade before the controls): rows pass under the
+/// controls faintly, never readably. The system soft edge is a
 /// preview identity's choice only, and CI runs the official identity, which
 /// ignores `ATTIC_UI_TEST_SCROLL_EDGES`, so every capture here is Clean cut,
 /// whatever `edge` a fixture names. These captures are the evidence the
@@ -100,9 +101,10 @@ final class ScrollEdgeUITests: XCTestCase {
         app.typeKey(.escape, modifierFlags: [])
     }
 
-    /// Window-server pixels: scrolling changes row ink in the body, but
-    /// must change virtually no ink behind either the tabs or strip pills.
-    func testRowsDisappearBeforeTheTabsAndMetadataPills() throws {
+    /// Window-server pixels (A15, replacing D1): scrolling changes row ink in
+    /// the body, and rows pass under the tabs and the strip pills faintly:
+    /// some ink changes there, never at a readable strength.
+    func testRowsPassFaintlyAndNeverReadablyUnderTheTabsAndMetadataPills() throws {
         for (surface, mode) in [("solid", "light"), ("glass", "light"), ("glass", "dark")] {
             let app = launchPixelFixture(surface: surface, mode: mode, edge: "soft")
             defer { app.terminate() }
@@ -139,11 +141,18 @@ final class ScrollEdgeUITests: XCTestCase {
                 let movement = changedFraction(before, after, in: body, panel: panel.frame)
                 guard movement > 0.02 else { continue }
                 moved = true
-                XCTAssertLessThan(changedFraction(before, after, in: tabs, panel: panel.frame), 0.003,
-                                  "\(surface) \(mode): row ink behind tabs labels")
-                XCTAssertLessThan(changedFraction(before, after, in: pills, panel: panel.frame), 0.003,
-                                  "\(surface) \(mode): row ink behind metadata pills")
-                save(panel.screenshot(), name: "d1-\(surface)-\(mode)-controls-clear")
+                // Faint: the lower bound is what separates this from a clip
+                // (D1's cut), so each control band has its own.
+                XCTAssertGreaterThan(changedFraction(before, after, in: tabs, panel: panel.frame), 0.0005,
+                                     "\(surface) \(mode): rows show faintly under the tabs labels")
+                XCTAssertGreaterThan(changedFraction(before, after, in: pills, panel: panel.frame), 0.0005,
+                                     "\(surface) \(mode): rows show faintly under the metadata pills")
+                // Never readable: no pixel changes by a text-strength step.
+                XCTAssertLessThan(changedFraction(before, after, in: tabs, panel: panel.frame, threshold: 0.35), 0.002,
+                                  "\(surface) \(mode): never readable under the tabs labels")
+                XCTAssertLessThan(changedFraction(before, after, in: pills, panel: panel.frame, threshold: 0.35), 0.002,
+                                  "\(surface) \(mode): never readable under the metadata pills")
+                save(panel.screenshot(), name: "a15-\(surface)-\(mode)-controls-faint")
             }
             XCTAssertTrue(moved, "positive control: scrolling visibly changed row ink in the body")
         }
@@ -217,12 +226,13 @@ final class ScrollEdgeUITests: XCTestCase {
         return ink
     }
 
-    private func changedFraction(_ a: NSBitmapImageRep, _ b: NSBitmapImageRep, in rect: CGRect, panel: CGRect) -> Double {
+    private func changedFraction(_ a: NSBitmapImageRep, _ b: NSBitmapImageRep, in rect: CGRect, panel: CGRect,
+                                 threshold: CGFloat = 0.05) -> Double {
         var changed = 0
         let total = sample(b, in: rect, panel: panel) { x, y, color in
             guard let other = a.colorAt(x: x, y: y)?.usingColorSpace(.sRGB) else { return }
             if max(abs(color.redComponent - other.redComponent), abs(color.greenComponent - other.greenComponent),
-                   abs(color.blueComponent - other.blueComponent)) > 0.05 { changed += 1 }
+                   abs(color.blueComponent - other.blueComponent)) > threshold { changed += 1 }
         }
         XCTAssertGreaterThan(total, 100, "a nonempty pixel sample")
         return Double(changed) / Double(max(total, 1))

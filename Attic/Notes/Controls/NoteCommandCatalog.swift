@@ -224,7 +224,7 @@ enum NoteCommandCatalog {
     }
 
     /// Aa opens with ⌘T (the system's Show Fonts key, which a note has no
-    /// other use for); ⌃Tab reaches the selection bar, or Aa without one.
+    /// other use for); ⌃Tab reaches the selection bar while one shows.
     static let formatPopoverShortcut = KeyboardShortcut("t", modifiers: .command)
 
     // MARK: The / list

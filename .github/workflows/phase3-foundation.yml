@@ -182,6 +182,27 @@ jobs:
             echo 'UNMEASURABLE: carried rows require another valid run within the three-run budget'
           fi
           exit "$gate_status"
+      - name: Measure OD-8 Done frame reference with identical fixtures
+        if: ${{ !cancelled() && !inputs.harness_only }}
+        shell: /bin/zsh {0}
+        env:
+          TEST_RUNNER_ATTIC_COST_REFERENCE_ONLY: "1"
+        run: |
+          set -o pipefail
+          base="$RUNNER_TEMP/AtticP3DoneReference"
+          mkdir -p "$base"
+          git archive cb95a0e7ba164ca3c15927b9eb1e9ee7ea90f9b2 | tar -x -C "$base"
+          cp AtticTests/DoneSearchCostTests.swift "$base/AtticTests/DoneSearchCostTests.swift"
+          F=(CODE_SIGNING_ALLOWED=YES CODE_SIGNING_REQUIRED=YES CODE_SIGN_STYLE=Manual CODE_SIGN_IDENTITY=- DEVELOPMENT_TEAM= ENABLE_DEBUG_DYLIB=NO)
+          /Users/taha/Developer/attic-redesign-assets/xcodebuild-locked.sh \
+            -project "$base/Attic.xcodeproj" -scheme Attic -configuration Local \
+            -destination 'platform=macOS' -derivedDataPath "$RUNNER_TEMP/AtticP3DoneReferenceBuild" \
+            ATTIC_MACOS_UNIT_HOST_PRODUCT_NAME=AtticP3DoneReferenceHost \
+            ATTIC_MACOS_UNIT_HOST_EXECUTABLE_NAME=AtticP3DoneReferenceHost \
+            ATTIC_MACOS_UNIT_HOST_BUNDLE_IDENTIFIER=com.taha.Attic.p3.donereference \
+            "${F[@]}" -parallel-testing-enabled NO \
+            -only-testing:AtticTests/DoneSearchCostTests/testRenderedFindKeystrokeMediansFitTheInputBudget test \
+            | tee .build/done-results-reference.log
       - name: Run C1-C5 and minimum taskNote format before the full suite
         if: ${{ !cancelled() }}
         env:
@@ -237,6 +258,7 @@ jobs:
           TEST_RUNNER_ATTIC_KEY_WINDOW_TESTS: "1"
         shell: /bin/zsh {0}
         run: |
+          set -o pipefail
           F=(CODE_SIGNING_ALLOWED=YES CODE_SIGNING_REQUIRED=YES CODE_SIGN_STYLE=Manual CODE_SIGN_IDENTITY=- DEVELOPMENT_TEAM= ENABLE_DEBUG_DYLIB=NO)
           /Users/taha/Developer/attic-redesign-assets/xcodebuild-locked.sh \
             -project Attic.xcodeproj -scheme Attic -configuration Local \
@@ -250,7 +272,10 @@ jobs:
             "${F[@]}" -only-testing:AtticTests \
             -skip-testing:AtticTests/TaskPerformanceGateTests/testPFFoundationSizeAndProductionPaths \
             -skip-testing:AtticTests/TaskPerformanceGateTests/testPF1LargeAutosaveAndPreparedCommitAgainstPairedBase \
-            -skip-testing:AtticTests/TaskPerformanceGateTests/testPF5InterleavedSessionSoakAgainstPairedBase test-without-building
+            -skip-testing:AtticTests/TaskPerformanceGateTests/testPF5InterleavedSessionSoakAgainstPairedBase test-without-building | tee .build/foundation.log
+      - name: Evaluate OD-8 and OD-9 Done frame gate
+        if: ${{ !cancelled() && !inputs.harness_only }}
+        run: python3 Scripts/check_integration_costs.py --done-only .build
       - name: Inspect host and helper signature contracts
         if: always()
         run: |
@@ -303,4 +328,7 @@ jobs:
             .build/pf-base-after.log
             .build/pf-base-after-phase2.log
             .build/pf-gate.txt
+            .build/done-results-reference.log
+            .build/foundation.log
+            .build/done-results-comparison.json
           retention-days: 3

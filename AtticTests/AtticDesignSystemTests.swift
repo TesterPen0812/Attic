@@ -66,7 +66,8 @@ final class AtticDesignSystemTests: XCTestCase {
         XCTAssertGreaterThan(AtticMotionPreset.popover.bounce, 0, "things that appear land with a bounce")
         XCTAssertGreaterThan(AtticMotionPreset.settle.bounce, 0, "rows settle with a bounce")
         XCTAssertLessThanOrEqual(AtticMotionPreset.slide.bounce, 0.15, "pages bounce no more than snappy")
-        XCTAssertEqual(AtticMotionPreset.pageSwitch.bounce, 0)
+        XCTAssertEqual(AtticMotionPreset.pageSwitch.spring(in: .current), AtticMotionPreset.slide.spring(in: .current),
+                       "a page switch is navigation: the feel's slide")
         XCTAssertNil(AtticMotionPreset.pageSwitch.animation(reduceMotion: true), "Page switch is instant under Reduce Motion")
         XCTAssertNil(AtticMotionPreset.expand.animation(reduceMotion: true), "Card expand is instant under Reduce Motion")
         XCTAssertNotNil(AtticMotionPreset.slide.animation(reduceMotion: true), "Slides crossfade under Reduce Motion")

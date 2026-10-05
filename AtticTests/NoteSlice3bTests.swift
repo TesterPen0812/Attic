@@ -1403,9 +1403,14 @@ final class NoteSlice3bTests: XCTestCase {
         for _ in 0..<3 { XCTAssertEqual(session.engine.accessibilityElements(for: view).count, 7) }
         let elapsed = CFAbsoluteTimeGetCurrent() - start
         XCTAssertLessThan(elapsed, 2.0, "validation must not synchronously hash 98 MiB per traversal")
-        XCTAssertTrue(session.engine.performEdit(NSRange(location: session.engine.textStorage.length, length: 0),
-            with: NSAttributedString(string: "\nmore"), name: "Typing"))
-        XCTAssertLessThan(session.engine.lastUpkeepMilliseconds, 16.7)
+        var upkeep: [Double] = []
+        for _ in 0..<3 {
+            XCTAssertTrue(session.engine.performEdit(NSRange(location: session.engine.textStorage.length, length: 0),
+                with: NSAttributedString(string: "\nmore"), name: "Typing"))
+            upkeep.append(session.engine.lastUpkeepMilliseconds)
+        }
+        print("ATTIC_INTEGRATION_COST attachment-upkeep median_ms=\(TasksFrameCostTests.median(upkeep))")
+        print("ATTIC_COST_SAMPLES metric=attachment-upkeep raw_ms=\(upkeep)")
         controller.cancelActiveImport()
     }
 
@@ -2384,7 +2389,8 @@ extension NoteSlice3bTests {
         XCTAssertNil(quitResult, "quit cannot terminate before the checkpoint write")
         journal.release()
         await quit.value
-        XCTAssertEqual(quitResult, true)
+        XCTAssertEqual(quitResult, true,
+            "state=\(session.state) activity=\(session.engine.activity) notice=\(String(describing: session.notice)) warnings=\(controller.recoveryWarnings)")
         XCTAssertFalse(try journal.base.entries().isEmpty)
         await loader.release()
         await controller.waitForImportWork()

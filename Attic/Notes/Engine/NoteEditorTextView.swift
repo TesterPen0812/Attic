@@ -195,6 +195,10 @@ final class NoteEditorTextView: NSTextView, NSAccessibilityCustomRotorItemSearch
     override func doCommand(by selector: Selector) {
         if !hasMarkedText(), suggestionCommand?(selector) == true { return }
         if !hasMarkedText(), let engine {
+            // OD-7: in the title Tab moves to the body; in the body it
+            // indents (Apple Notes and Pages); ⌃Tab leaves the editor
+            // (`NoteFormatControls.handleKey`).
+            if selector == #selector(insertTab(_:)), engine.moveFromTitleToBody() { return }
             if selector == #selector(insertTab(_:)), engine.perform(.indent) { return }
             if selector == #selector(insertBacktab(_:)), engine.perform(.outdent) { return }
         }

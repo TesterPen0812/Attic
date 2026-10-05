@@ -154,6 +154,8 @@ enum PanelHideRequestResult: Equatable {
 final class AtticPanelController: NSObject, NSWindowDelegate {
     private let panel: AtticPanel
     var isVisibleForPerformanceProbe: Bool { panel.isVisible }
+    /// Whether the panel is on screen (a page switch then animates).
+    var isPanelVisible: Bool { panel.isVisible }
     /// Tests: the panel's window, to send it a swipe as the system does.
     var panelForTesting: AtticPanel { panel }
     private(set) var performanceVisibilityChanges = 0

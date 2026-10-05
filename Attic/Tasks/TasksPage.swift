@@ -29,12 +29,16 @@ struct TasksPage: View {
     var chrome = TasksPageChrome()
 
     @Environment(\.atticDesign) private var design
-    /// How the lists meet the floating controls: Clean cut, D1's fade
-    /// before the controls (owner, 2026-10-03, reversing D4b's system soft
-    /// edge, which cost GPU and drew the same picture); a preview can switch
-    /// to the system's soft edge to compare.
+    /// How the lists meet the floating controls: Clean cut with the
+    /// scroll-under fade (A15, owner 2026-10-04, replacing D1's fade before
+    /// the controls); the native soft edge stays off everywhere.
     @ObservedObject private var scrollEdges = AtticScrollEdgeLab.shared
     @StateObject private var focusTracker = AtticKeyboardFocusTracker()
+    /// The subtask lines' and strip buttons' own focus, reached by the
+    /// page's Tab order (A10). Not observed.
+    @State private var focusRequests = AtticFocusRequests()
+    /// The stop Tab last sent the keyboard to, while it settles (not observed).
+    @State private var tabTarget = TasksTabTarget()
     /// The rows' keyboard focus. Its `FocusState` is owned by
     /// `TasksRowFocusOwner`, under the page's body, not by the page: SwiftUI
     /// redraws a focus state's owner whenever a focusable view comes or
@@ -173,11 +177,12 @@ struct TasksPage: View {
 
     /// The page, its overlays, its keys and its monitors.
     private var frame: some View {
-        // D1: each list ends before the controls. The controls retain their
-        // page-level layer and hit points; the lifted card stays above both.
+        // A15: each list runs under the controls and fades there. The
+        // controls retain their page-level layer and hit points; the lifted
+        // card stays above both.
         ZStack(alignment: .top) {
-            // Clean cut (D1's fade before the controls, the default), or
-            // the preview-only native soft edges inside the visible viewport.
+            // Clean cut with the scroll-under fade (A15). The native soft
+            // edge stays off.
             pager
             // The controls float over the lists in both, in the page's own
             // layer.
@@ -218,6 +223,7 @@ struct TasksPage: View {
         .overlay(alignment: .bottom) { bottomControls }
         .coordinateSpace(Self.space)
         .atticKeyboardFocusTracking(focusTracker)
+        .environment(\.atticFocusRequests, focusRequests)
         .onKeyPress(phases: .down) { press in pageKey(press) }
         .onAppear { pageAppeared() }
         .onDisappear {
@@ -289,6 +295,7 @@ struct TasksPage: View {
             findMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { event in
                 findPressed(event) || viewOptionsPressed(event) || searchEscapePressed(event) || searchDownPressed(event)
                     || editorEscapePressed(event) || pageEscapePressed(event) || undoPressed(event) || taskShortcutPressed(event)
+                    || tabPressed(event)
                     ? nil : event
             }
         }
@@ -355,7 +362,22 @@ struct TasksPage: View {
             if !shown, searchFocused { searchFocused = false }
         }
         .onChange(of: composerPickerOpen) { _, _ in updateTypingLock() }
-        .onChange(of: metaPopover) { _, _ in updateTypingLock() }
+        .onChange(of: metaPopover) { old, new in
+            updateTypingLock()
+            // Move to Task… closed by Esc or a click outside, its subtask
+            // still on the line it was opened from: the keyboard goes back
+            // to that line (A8 P3-A8-1: it went nowhere). The dropdown hands
+            // AppKit's first responder back to the panel; the line's focus is
+            // SwiftUI's own. A choice moves the subtask and the keyboard to
+            // its parent itself.
+            guard let subtask = Self.subtaskToRefocus(closed: old, now: new), let old else { return }
+            DispatchQueue.main.async {
+                guard model.isPageShown, model.tab == old.tab, !AtticTextInput.hasKeyboard,
+                      model.rows(for: old.tab).contains(where: { $0.id == old.id && $0.subtasks.contains { $0.id == subtask } })
+                else { return }
+                focusRequests.focus(AtticSubtaskFocusID(id: subtask))
+            }
+        }
         .onChange(of: selectionPicker) { _, _ in updateTypingLock() }
         // VoiceOver hears how many are selected as the selection grows or
         // shrinks past one (round 10).
@@ -827,6 +849,130 @@ struct TasksPage: View {
         return false
     }
 
+    /// Move to Task…'s subtask when its pop-over has just closed (A10).
+    nonisolated static func subtaskToRefocus(closed old: TasksMetaPopover?, now new: TasksMetaPopover?) -> UUID? {
+        guard new == nil, let old, old.kind == .move else { return nil }
+        return old.targets.first
+    }
+
+    // MARK: Tab
+
+    /// Tab and ⇧Tab walk the page's own order (A10, `TasksTabOrder`): the
+    /// panel's key loop is AppKit's (`AtticPanelHostingView`, the import
+    /// freeze), and AppKit's loop took the keyboard to rows out of view, with
+    /// no ring and no scroll, and stopped on nothing. Every stop here is
+    /// drawn: a row scrolls into view and shows its ring as it is reached.
+    /// Asked at the key press only, never during layout. Editors, pickers,
+    /// the add bar's suggestions and an input method keep their own Tab.
+    private func tabPressed(_ event: NSEvent) -> Bool {
+        guard event.type == .keyDown, event.keyCode == 48 else { return false }
+        let modifiers = event.modifierFlags.intersection([.command, .shift, .option, .control])
+        guard modifiers.isEmpty || modifiers == .shift,
+              model.isPageShown, let window = pointer.view?.window, event.window === window, window.isKeyWindow,
+              !AtticTextInput.isPopoverOpen, !Self.isComposing(window.firstResponder),
+              model.editingTitleID == nil, model.newSubtaskParentID == nil, model.renamingSubtaskID == nil,
+              metaPopover == nil, selectionPicker == nil, !composerPickerOpen, drag == nil else { return false }
+        // A field of another kind keeps its Tab; the add bar's suggestion
+        // list takes it (review 15).
+        if AtticTextInput.hasKeyboard, !addBarFocused, !searchFocused { return false }
+        if addBarFocused, TasksAddBar.showsSuggestion(model: model, text: model.addBarState) { return false }
+        let stops = tabStops()
+        let current = currentTabStop(in: stops)
+        guard let next = TasksTabOrder.next(after: current, in: stops, forward: modifiers.isEmpty) else { return false }
+        focusTracker.noteKeyboardNavigation()
+        moveKeyboard(to: next, from: current, in: stops)
+        return true
+    }
+
+    /// The page's stops as drawn now (`TasksTabOrder.stops`).
+    private func tabStops() -> [TasksTabStop] {
+        let tab = model.tab
+        let ids = visibleIDs()
+        var open: [UUID: [UUID]] = [:]
+        if tab != .done, !model.expanded.isEmpty {
+            for row in model.rows(for: tab) where model.expanded.contains(row.id) && row.status != .done {
+                open[row.id] = row.subtasks.map(\.id)
+            }
+        }
+        let draft = !model.addBarState.text.text.trimmingCharacters(in: .whitespaces).isEmpty
+        return TasksTabOrder.stops(find: searchShown, rows: ids.map { ($0, open[$0] ?? []) },
+                                   strip: draft && model.pasteOffer == nil && NSApp.isFullKeyboardAccessEnabled)
+    }
+
+    /// Where the keyboard is among `stops`, if it is on one.
+    private func currentTabStop(in stops: [TasksTabStop]) -> TasksTabStop? {
+        if searchFocused { return .find }
+        if addBarFocused { return .addBar }
+        if let strip = focusRequests.current?.base as? AtticStripFocusID { return .strip(strip) }
+        if let subtask = model.focusedSubtaskID, stops.contains(.subtask(subtask)) { return .subtask(subtask) }
+        if let id = focusedID { return .row(id) }
+        return nil
+    }
+
+    private func moveKeyboard(to stop: TasksTabStop, from current: TasksTabStop?, in stops: [TasksTabStop]) {
+        let tab = model.tab
+        tabTarget.stop = stop
+        switch stop {
+        case .find:
+            focusedRow = nil
+            addBarFocused = false
+            searchFocused = true
+        case .addBar:
+            focusedRow = nil
+            searchFocused = false
+            addBarFocused = true
+        case let .strip(button):
+            focusedRow = nil
+            searchFocused = false
+            addBarFocused = false
+            DispatchQueue.main.async { focusRequests.focus(button) }
+        case let .row(id):
+            searchFocused = false
+            addBarFocused = false
+            // From a field, or round the end: the list goes to the row's
+            // place first (a far row of a lazy list is not built yet).
+            if !TasksTabOrder.isListNeighbour(current, of: stop, in: stops),
+               let scroll = listProxies.scrollViews[tab], let place = rowPlace(id, in: tab) {
+                TasksScrollKeeper.centre(place, in: scroll)
+            }
+            settleKeyboard(on: stop, in: tab, attempts: Self.tabSettleAttempts, landed: { focusedID == id }, revealing: id) {
+                setFocus(id)
+            }
+        case let .subtask(id):
+            focusedRow = nil
+            searchFocused = false
+            addBarFocused = false
+            let parent = TasksTabOrder.parent(of: id, in: stops)
+            settleKeyboard(on: stop, in: tab, attempts: Self.tabSettleAttempts, landed: { model.focusedSubtaskID == id },
+                           revealing: parent) {
+                focusRequests.focus(AtticSubtaskFocusID(id: id))
+            }
+        }
+    }
+
+    /// How many frames Tab's row may take to be built and settle in view.
+    static let tabSettleAttempts = 8
+
+    /// Gives `stop` the keyboard (`focus`) and brings row `revealing` into
+    /// the list's clear part, a frame at a time until the focus has landed
+    /// and the row needs no more scrolling (A10, CI: the list's own reveal
+    /// did not run for a focus the page set, and a row a lazy list had not
+    /// built could not take the keyboard, which then stayed where it was).
+    /// A later Tab, or another page, ends it.
+    private func settleKeyboard(on stop: TasksTabStop, in tab: TasksTab, attempts: Int, landed: @escaping () -> Bool,
+                                revealing row: UUID?, focus: @escaping () -> Void) {
+        tabTarget.stop = stop
+        func attempt(_ left: Int) {
+            guard tabTarget.stop == stop, model.tab == tab, model.isPageShown else { return }
+            if !landed() { focus() }
+            var scrolled = false
+            if let row, let proxy = listProxies.lists[tab] { scrolled = revealRow(row, in: tab, proxy: proxy, animation: nil) }
+            guard left > 1, scrolled || !landed() else { return }
+            DispatchQueue.main.asyncAfter(deadline: .now() + 1.0 / 60) { attempt(left - 1) }
+        }
+        attempt(attempts)
+    }
+
     /// Esc with no field typing, wherever the keyboard is in the page (a
     /// menu that just closed, a click on the bar or the space under the
     /// rows leaves no row focused, and the list's own key handler never
@@ -1067,7 +1213,8 @@ struct TasksPage: View {
 
     /// Brings a row into the part of the list nothing covers (keys, a new
     /// task): the page's geometry decides how.
-    private func revealRow(_ id: UUID, in tab: TasksTab, proxy: ScrollViewProxy, animation: Animation?) {
+    @discardableResult
+    private func revealRow(_ id: UUID, in tab: TasksTab, proxy: ScrollViewProxy, animation: Animation?) -> Bool {
         let reveal = TasksViewport.reveal(frame: pointer.frames[TasksRowID(tab: tab, id: id)], height: rowHeight(id, in: tab),
                                           viewport: pointer.view?.bounds.height ?? layout.panelSize.height,
                                           listTop: listTop,
@@ -1076,10 +1223,11 @@ struct TasksPage: View {
                                             : bottomMargin,
                                           bottomClearance: bottomClearance)
         switch reveal {
-        case .none: break
+        case .none: return false
         case .minimal: withAnimation(animation) { scroll(proxy, to: id, in: tab) }
         case let .bottom(fraction): withAnimation(animation) { scroll(proxy, to: id, in: tab, anchor: UnitPoint(x: 0, y: fraction)) }
         }
+        return true
     }
 
     // MARK: - Pages
@@ -1277,8 +1425,9 @@ struct TasksPage: View {
 
     /// Clean cut (the default since 2026-10-03): the viewport's fade, by
     /// position in the viewport, not per row (owner fix 8, review 9), so an
-    /// open quick look is cut line by line as it passes under the tabs and
-    /// header, or under the add bar. The system soft edge uses no mask.
+    /// open quick look fades line by line as it passes under the tabs and
+    /// header, or under the add bar (A15: the scroll-under fade). The system
+    /// soft edge uses no mask.
     private var viewportMask: some View {
         TasksViewportMask(stack: bottomStack, tabsTop: tabsTop, listTop: listTop, bottomInset: bottomInset)
     }
@@ -2828,9 +2977,19 @@ private struct TasksAddBar: View {
     private var hasDraft: Bool { !text.text.text.trimmingCharacters(in: .whitespaces).isEmpty }
 
     private var suggestion: TaskAddBarText.Suggestion? {
-        guard isFocused, let suggestion = text.text.suggestion(parser: model.parser, caret: text.caret, tags: model.cachedTags),
+        guard isFocused else { return nil }
+        return Self.suggestion(model: model, text: text)
+    }
+
+    static func suggestion(model: TasksPageModel, text: TasksAddBarState) -> TaskAddBarText.Suggestion? {
+        guard let suggestion = text.text.suggestion(parser: model.parser, caret: text.caret, tags: model.cachedTags),
               suggestion.range != text.hiddenSuggestion else { return nil }
         return suggestion
+    }
+
+    /// The suggestion list shows over the focused bar (it takes Tab).
+    static func showsSuggestion(model: TasksPageModel, text: TasksAddBarState) -> Bool {
+        suggestion(model: model, text: text) != nil
     }
 
     var body: some View {
@@ -4007,60 +4166,16 @@ enum TasksViewport {
         return .bottom(min(max((visible - room - height) / (visible - height), 0), 1))
     }
 
-    /// A row's opacity at `depth` (0 open, 1 fully under) into an edge zone:
-    /// the edge veil's eased ramp scaled so its 65 % maximum is all of it.
-    static func edgeOpacity(atDepth depth: Double) -> Double {
-        1 - AtticEdgeBlur.veil(at: depth) / AtticEdgeBlur.maximumVeil
-    }
-
-    /// The length of the softened edge where a row meets a fixed band.
-    static let softEdge: CGFloat = 6
-
-    /// The fade by position in the viewport: nothing over the header or
-    /// under the tabs (so they stay readable over scrolled text), fully
-    /// there from the first row's resting place down to the
-    /// bottom zone, and receding under the bottom stack.
+    /// The fade by position in the viewport (A15, owner 2026-10-04: the
+    /// scroll-under fade replaces D1's "nothing under the controls"): rows
+    /// run under the header, the tabs line and the bottom stack, faintly
+    /// visible there (`AtticScrollUnderFade`), and rise along an eased ramp
+    /// to full at the first row's resting place under the tabs and at the
+    /// last row's, `contentToAddBar` above the bottom stack. Static
+    /// geometry: it changes only with the bottom stack's (delayed) height.
     static func maskStops(height: CGFloat, tabsTop: CGFloat, listTop: CGFloat, bottomStack: CGFloat) -> [(location: CGFloat, opacity: Double)] {
-        guard height > 0 else { return [(0, 1), (1, 1)] }
-        let tabsBottom = tabsTop + AtticLayout.pageTabsHeight
-        // Round 13 (the hands-on review: faint title fragments hung just
-        // under the tabs and just above the add bar): a row scrolled past
-        // an edge is cut cleanly at the fixed band, with only a short
-        // softening inside the list's own viewport (`softEdge`, the edge
-        // veil's eased ramp). The round-12 ramps were 10 and 28 pt long and
-        // left half-faded rows readable in them.
-        let barTop = max(height - bottomStack, listTop)
-        let fadeStart = max(barTop - softEdge, listTop)
-        // Round 11 (the owner: rows scrolled under "Now Later Done" stayed
-        // readable and clashed with the labels): nothing shows under the
-        // tabs at all. Round 12: the rows come back along the edge veil's
-        // own eased ramp (`AtticEdgeBlur.veilStops`, taken to full so it
-        // ends in nothing rather than at its 65 % of a surface veil), now
-        // only in the last `softEdge` before their resting place.
-        let gap = max(0, listTop - tabsBottom)
-        let clear = max(tabsBottom + gap * 0.25, listTop - softEdge)
-        var points: [(CGFloat, Double)] = [(0, 0), (clear, 0)]
-        // Rising ramp, depth 1 at `clear` and 0 at the list's top.
-        for stop in AtticEdgeBlur.veilStops.reversed() where stop.location < 1 {
-            points.append((listTop - (listTop - clear) * CGFloat(stop.location), edgeOpacity(atDepth: stop.location)))
-        }
-        points.append((listTop, 1))
-        points.append((fadeStart, 1))
-        // Falling ramp, depth 0 at `fadeStart` and 1 at the bar's top.
-        for stop in AtticEdgeBlur.veilStops where stop.location > 0 && stop.location < 1 {
-            points.append((fadeStart + (barTop - fadeStart) * CGFloat(stop.location), edgeOpacity(atDepth: stop.location)))
-        }
-        points.append((barTop, 0))
-        points.append((height, 0))
-        var result: [(location: CGFloat, opacity: Double)] = []
-        var last: CGFloat = -1
-        for (y, opacity) in points {
-            let location = min(max(y / height, 0), 1)
-            guard location > last || result.isEmpty else { continue }
-            result.append((location, opacity))
-            last = location
-        }
-        return result
+        AtticScrollUnderFade.stops(height: height, topBand: tabsTop + AtticLayout.pageTabsHeight, restTop: listTop,
+                                   bottomBand: bottomStack, restBottom: bottomStack + AtticLayout.contentToAddBar)
     }
 }
 
@@ -4148,5 +4263,69 @@ enum TasksScrollerRule {
             // A mouse wheel: an ordinary vertical scroll.
             return .show
         }
+    }
+}
+
+// MARK: - Tab order (A10)
+
+/// The stop Tab last sent the keyboard to (`TasksPage.settleKeyboard`).
+@MainActor
+final class TasksTabTarget {
+    var stop: TasksTabStop?
+}
+
+/// One stop of the Tasks page's own Tab order.
+enum TasksTabStop: Hashable {
+    case find
+    case row(UUID)
+    case subtask(UUID)
+    case addBar
+    case strip(AtticStripFocusID)
+}
+
+/// The Tasks page's Tab order (A10), restoring Phase 1's: top to bottom as
+/// drawn, every stop visible. Find while it shows on the tabs' line; each
+/// row of the page shown (the filtered rows when a query or a view narrows
+/// it), with the subtask lines of its open quick look under it; the add bar;
+/// then the strip's buttons while a draft shows them and keyboard
+/// navigation is on (buttons are Tab stops on the Mac only then). Tab after
+/// the last stop goes round to the first: never to an unseen stop.
+enum TasksTabOrder {
+    static func stops(find: Bool, rows: [(id: UUID, subtasks: [UUID])], strip: Bool) -> [TasksTabStop] {
+        var stops: [TasksTabStop] = find ? [.find] : []
+        for row in rows {
+            stops.append(.row(row.id))
+            stops.append(contentsOf: row.subtasks.map(TasksTabStop.subtask))
+        }
+        stops.append(.addBar)
+        if strip { stops.append(contentsOf: AtticStripFocusID.all.map(TasksTabStop.strip)) }
+        return stops
+    }
+
+    /// The stop after (or, `forward` false, before) `current`, round the
+    /// ends; from nowhere on the page, the first (or the last).
+    static func next(after current: TasksTabStop?, in stops: [TasksTabStop], forward: Bool) -> TasksTabStop? {
+        guard !stops.isEmpty else { return nil }
+        guard let current, let index = stops.firstIndex(of: current) else { return forward ? stops.first : stops.last }
+        return stops[(index + (forward ? 1 : stops.count - 1)) % stops.count]
+    }
+
+    /// Whether the keyboard moves from a row (or a subtask line) to the
+    /// stop next to it in the list, not round the end and not from a field:
+    /// that row is built and the list's own reveal is enough.
+    static func isListNeighbour(_ current: TasksTabStop?, of stop: TasksTabStop, in stops: [TasksTabStop]) -> Bool {
+        switch current {
+        case .row?, .subtask?: break
+        default: return false
+        }
+        guard let current, let a = stops.firstIndex(of: current), let b = stops.firstIndex(of: stop) else { return false }
+        return abs(a - b) == 1
+    }
+
+    /// The row whose quick look holds subtask `id`.
+    static func parent(of id: UUID, in stops: [TasksTabStop]) -> UUID? {
+        guard let index = stops.firstIndex(of: .subtask(id)) else { return nil }
+        for stop in stops[..<index].reversed() { if case let .row(row) = stop { return row } }
+        return nil
     }
 }

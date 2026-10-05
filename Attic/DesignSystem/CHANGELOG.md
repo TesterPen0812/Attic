@@ -5,6 +5,24 @@ Every later change is recorded here: what changed, why, and who asked.
 
 ## Phase 2
 
+### A15 scroll-under fade (redesign/p2-integration, 2026-10-04)
+Owner decision (2026-10-04, option A of the p2-27 draft; it replaces D1's
+"rows fade out before the controls"). No token, colour, radius or size
+changed; how scrolling content meets the fixed controls changed.
+- **`AtticControlsFade` / `atticControlsFade(restTop:bottomControls:)` are
+  replaced by `AtticScrollUnderFade` / `atticScrollUnderFade(topBand:
+  restTop:bottomBand:restBottom:)`**: an opacity mask, static geometry, no
+  blur and no native soft edge. Content runs under the top and bottom
+  controls, faintly visible so the Liquid Glass picks it up: 6 % at the
+  panel's edges, 10 % over the controls' middle, 22 % at their inner edge,
+  then an eased (smoothstep) rise to full at the first and last resting
+  places, which are unchanged and fully opaque.
+- Tasks' lists (Now, Later, Done, Find results) use it through
+  `TasksViewport.maskStops`; the Notes editor and All notes use it directly.
+  All notes now runs its list under the label line (the line floats over it,
+  with a click band as Tasks' tabs band; VoiceOver still reads the line
+  first).
+
 ### Overnight A1 overlay construction review (2026-10-04)
 - Overlay hierarchy deferral also covers initial title accessories, slash
   hint and object-control attachment during panel layout. Initial joins

@@ -61,9 +61,10 @@ final class MotionLabTests: XCTestCase {
         edited.popover = AtticMotionSpring(response: 0.41, bounce: 0.33)
         AtticMotionTuning.current = edited
         XCTAssertEqual(AtticMotionPreset.popover.animation(reduceMotion: false), .spring(duration: 0.41, bounce: 0.33))
-        // A crossfade and hover feedback are the same in every feel.
+        // A page switch is navigation (A20): the feel's slide. Hover
+        // feedback is the same in every feel.
         for feel in AtticMotionFeel.allCases {
-            XCTAssertEqual(AtticMotionPreset.pageSwitch.spring(in: feel.tuning), AtticMotionSpring(response: 0.18, bounce: 0))
+            XCTAssertEqual(AtticMotionPreset.pageSwitch.spring(in: feel.tuning), feel.tuning.slide)
             XCTAssertEqual(AtticMotionPreset.hover.spring(in: feel.tuning), AtticMotionSpring(response: 0.10, bounce: 0))
         }
     }

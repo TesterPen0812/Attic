@@ -279,40 +279,22 @@ extension NoteSlashListView {
 
 // MARK: - Date and link cards
 
-/// The date card (p2-03 #3): type a date ("fri"); Return inserts the
-/// match (today when nothing is typed); a day in the month inserts it; Esc
-/// puts the typed `/date` back.
+/// The date card (owner, 2026-10-05: the shared `AtticDateCard`): typing
+/// after `/date` shows one or two matching days above the month; Return
+/// inserts what is lit (today when nothing is typed); a day in the month
+/// inserts it; Esc puts the typed `/date` back.
 struct NoteDateCardView: View {
     @ObservedObject var model: NoteFormatCardModel
-    @FocusState private var fieldFocused: Bool
-    @Environment(\.atticDesign) private var design
 
     var body: some View {
-        let candidate = model.candidateDate
+        let today = model.today
+        let calendar = model.calendar
         AtticDropdownCard {
-            AtticDropdownField(text: $model.dateText, placeholder: String(localized: "Type a date, like fri"),
-                               focus: $fieldFocused, label: String(localized: "Date"), identifier: "notes-date-field",
-                               onSubmit: { if let candidate { model.onCommitDate?(candidate) } })
-                .onExitCommand { model.onCancel?() }
-            AtticDropdownGap()
-            if let candidate {
-                AtticDropdownRow(title: candidate.formatted(.dateTime.weekday(.wide)),
-                                 detail: candidate.formatted(.dateTime.day().month(.abbreviated)),
-                                 isHighlighted: true, position: 1, itemCount: 1) { model.onCommitDate?(candidate) }
-                    .accessibilityIdentifier("notes-date-suggestion")
-            } else {
-                AtticText(verbatim: String(localized: "No date matches"), style: .dropdownRow, ink: .helper)
-                    .padding(.horizontal, AtticDropdownMetrics.rowPadding)
-                    .frame(height: AtticDropdownMetrics.rowHeight)
-            }
-            AtticDropdownGap(height: AtticDropdownMetrics.fieldGap)
-            AtticDateCalendar(month: model.dateMonth, today: model.today, selected: candidate, calendar: model.calendar,
-                              onPick: { model.onCommitDate?($0) },
-                              onMonth: { delta in
-                                  model.dateMonth = model.calendar.date(byAdding: .month, value: delta, to: model.dateMonth) ?? model.dateMonth
-                              })
+            AtticDateCard(today: today, selected: nil, calendar: calendar, typed: $model.dateText,
+                          parse: { NoteDateQuery.parse($0, today: today, calendar: calendar) },
+                          onPick: { model.onCommitDate?($0) },
+                          onCancel: { model.onCancel?() })
         }
-        .onAppear { fieldFocused = true }
         .accessibilityElement(children: .contain)
         .accessibilityLabel(String(localized: "Insert date"))
         .accessibilityIdentifier("notes-date-card")

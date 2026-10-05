@@ -13,7 +13,7 @@ struct NotesLibraryView: View {
     @ObservedObject var store: NoteStore
     let layout: PanelPageLayout
     let bottomClearance: CGFloat
-    /// The bottom row's top, up from the page's bottom edge (D1).
+    /// The bottom row's top, up from the page's bottom edge (A15's fade).
     var bottomControls: CGFloat = 0
     @Binding var searchFocused: Bool
     let rowCommands: (UUID) -> [AtticMenuCommand]
@@ -38,6 +38,11 @@ struct NotesLibraryView: View {
 
     private var pageEdge: CGFloat { max(0, layout.chromeInsets.leading - AtticSpacing.panelMargin) }
 
+    /// The label line's text top: the tabs' line, as on Tasks.
+    private var labelsTop: CGFloat { layout.headerBottom + AtticLayout.pageTabsTop }
+    /// Where the first row rests: the label line, then 14 (Tasks' `listTop`).
+    private var restTop: CGFloat { labelsTop + AtticLayout.pageTabsHeight + AtticLayout.pageTabsToList }
+
     /// The search holds the label line from when it is opened, and while it
     /// has the keyboard or a query.
     static func searchShown(open: Bool, focused: Bool, query: String) -> Bool { open || focused || !query.isEmpty }
@@ -57,18 +62,27 @@ struct NotesLibraryView: View {
         let groups = model.groups(store: store, drafts: controller.failedDrafts)
         let selected = controller.librarySelectionID
         let shown = Self.searchShown(open: searchOpen, focused: fieldFocused, query: model.query)
-        VStack(alignment: .leading, spacing: 0) {
+        // A15 (owner, 2026-10-04): the rows run under the label line and the
+        // header, faintly, as on Tasks; the line floats over them.
+        ZStack(alignment: .top) {
+            list(groups, selected: selected)
+            // The label line's band owns its clicks, as Tasks' tabs band: a
+            // row scrolled under it is not clickable through it.
+            Color.clear
+                .frame(height: restTop - AtticLayout.pageTabsToList / 2)
+                .frame(maxWidth: .infinity)
+                .contentShape(Rectangle())
+                .onTapGesture {}
+                .accessibilityHidden(true)
             AtticNoteLibraryLine(title: String(localized: "All notes"), placeholder: placeholder, query: $model.query,
                                  searchShown: shown, fieldFocused: $fieldFocused,
                                  onBeginSearch: { beginSearch() }, onEndSearch: endSearch)
                 // Centred on the tabs' line, as on Tasks.
-                .padding(.top, layout.headerBottom + AtticLayout.pageTabsTop
-                    - (AtticControlSize.smallHeight - AtticLayout.pageTabsHeight) / 2)
-                // The list's own top soft edge (D1) is part of this gap.
-                .padding(.bottom, AtticLayout.pageTabsToList
-                    - (AtticControlSize.smallHeight - AtticLayout.pageTabsHeight) / 2 - AtticControlsFade.softEdge)
-            list(groups, selected: selected)
+                .padding(.top, labelsTop - (AtticControlSize.smallHeight - AtticLayout.pageTabsHeight) / 2)
+                // Read before the rows, as when it stood above them.
+                .accessibilitySortPriority(1)
         }
+        .accessibilityElement(children: .contain)
         .padding(.horizontal, pageEdge)
         .background(NotesWindowReader(keys: keys).frame(width: 0, height: 0).accessibilityHidden(true))
         .onAppear {
@@ -287,13 +301,16 @@ struct NotesLibraryView: View {
                 .animation(AtticMotionPreset.settle.springy(reduceMotion: design.reduceMotion),
                            value: model.orderedIDs(groups))
             }
-            .contentMargins(.top, AtticControlsFade.softEdge, for: .scrollContent)
+            .contentMargins(.top, restTop, for: .scrollContent)
             .contentMargins(.bottom, bottomClearance, for: .scrollContent)
+            .contentMargins(.top, restTop, for: .scrollIndicators)
             .scrollIndicators(.automatic)
             .scrollEdgeEffectHidden(true, for: .all)
-            // D1, as on Tasks (CU P2-02): rows fade out under the label line
-            // and before the bottom row, never readable under a control.
-            .atticControlsFade(restTop: AtticControlsFade.softEdge, bottomControls: bottomControls)
+            // A15, as on Tasks: rows run under the label line, the header
+            // and the bottom row, faintly visible as they fade; full at
+            // their resting places. No native soft edge.
+            .atticScrollUnderFade(topBand: labelsTop + AtticLayout.pageTabsHeight, restTop: restTop,
+                                  bottomBand: bottomControls, restBottom: bottomClearance)
             .coordinateSpace(Self.space)
             // Right-click anywhere the rows are not (all of it, with none):
             // the library's history, so Undo never depends on a row.

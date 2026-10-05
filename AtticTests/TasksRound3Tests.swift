@@ -67,30 +67,39 @@ final class TasksRound3Tests: XCTestCase {
         XCTAssertEqual(choices.shorthand(for: day("2027-01-02")), "2 Jan 2027", "another year says so")
     }
 
-    func testTheMonthStartsOnTheLocalesFirstWeekday() {
-        let september = model.dateChoices.month(year: 2026, month: 9)
-        XCTAssertEqual(september.weekdaySymbols, ["M", "T", "W", "T", "F", "S", "S"])
-        XCTAssertEqual(september.days.first?.day, day("2026-08-31"), "1 Sep is a Tuesday: Monday 31 Aug leads")
-        XCTAssertEqual(september.days.count % 7, 0)
-        XCTAssertEqual(september.days.filter(\.inMonth).count, 30)
-        XCTAssertEqual(september.title, "September 2026")
+    func testTheMonthStartsOnTheLocalesFirstWeekday() throws {
+        let card = model.dateChoices.cardCalendar
+        let september = AtticDateMonth(containing: try XCTUnwrap(day("2026-09-21").startDate(in: card)), calendar: card)
+        XCTAssertEqual(september.weekdays, ["M", "T", "W", "T", "F", "S", "S"])
+        XCTAssertEqual(september.cells.first ?? nil, nil, "1 Sep is a Tuesday: Monday's cell is blank, no August day")
+        XCTAssertEqual(september.cells[1].map { DueDay(date: $0, calendar: card) }, day("2026-09-01"))
+        XCTAssertEqual(september.cells.count % 7, 0)
+        XCTAssertEqual(september.cells.compactMap { $0 }.count, 30)
+        XCTAssertEqual(AtticDateCardFormat.monthTitle(september.start, calendar: card), "September 2026")
 
         var sunday = calendar
         sunday.firstWeekday = 1
         let choices = TaskDateChoices(parser: TaskTextParser(calendar: sunday, locale: Locale(identifier: "en_US"), now: { [clock] in clock.value }))
-        let us = choices.month(year: 2026, month: 9)
-        XCTAssertEqual(us.weekdaySymbols.first, "S")
-        XCTAssertEqual(us.days.first?.day, day("2026-08-30"))
+        let us = AtticDateMonth(containing: try XCTUnwrap(day("2026-09-21").startDate(in: choices.cardCalendar)), calendar: choices.cardCalendar)
+        XCTAssertEqual(us.weekdays.first, "S")
+        XCTAssertEqual(us.cells.prefix(2), [nil, nil], "Sunday and Monday lead blank")
     }
 
-    func testMonthsAndKeyboardTravelCrossTheYear() {
-        let choices = model.dateChoices
-        let december = choices.month(year: 2026, month: 12)
-        XCTAssertEqual(choices.month(after: december, by: 1).year, 2027)
-        XCTAssertEqual(choices.month(after: december, by: 1).month, 1)
-        XCTAssertEqual(choices.month(after: choices.month(year: 2027, month: 1), by: -1).month, 12)
-        XCTAssertEqual(choices.day(day("2026-12-31"), movedBy: 1), day("2027-01-01"))
-        XCTAssertEqual(choices.day(day("2026-03-01"), movedBy: -7), day("2026-02-22"))
+    func testMonthsAndKeyboardTravelCrossTheYear() throws {
+        let card = model.dateChoices.cardCalendar
+        func date(_ raw: String) throws -> Date { try XCTUnwrap(day(raw).startDate(in: card)) }
+        var state = AtticDateCardState(start: try date("2026-12-31"))
+        _ = state.apply(.month(1), calendar: card, suggestions: 0, typing: false, hasRemove: false)
+        XCTAssertEqual(state.month(card).start, try date("2027-01-01"))
+        _ = state.apply(.month(-1), calendar: card, suggestions: 0, typing: false, hasRemove: false)
+        XCTAssertEqual(state.month(card).start, try date("2026-12-01"))
+        _ = state.apply(.right, calendar: card, suggestions: 0, typing: false, hasRemove: false) // lights
+        _ = state.apply(.right, calendar: card, suggestions: 0, typing: false, hasRemove: false)
+        XCTAssertEqual(state.cursor, try date("2027-01-01"))
+        var march = AtticDateCardState(start: try date("2026-03-01"))
+        _ = march.apply(.up, calendar: card, suggestions: 0, typing: false, hasRemove: false)
+        _ = march.apply(.up, calendar: card, suggestions: 0, typing: false, hasRemove: false)
+        XCTAssertEqual(march.cursor, try date("2026-02-22"))
     }
 
     // MARK: - The add bar's pieces
@@ -326,12 +335,14 @@ final class TasksRound3Tests: XCTestCase {
         XCTAssertEqual(TasksViewport.bottomClearance(stackHeight: 36 + 8 + 28, bottomInset: 24), 112, "the strip adds its room")
         XCTAssertEqual(TasksViewport.bottomClearance(stackHeight: 0, bottomInset: 12), 64, "never less than the bar")
         let stops = TasksViewport.maskStops(height: 520, tabsTop: 80, listTop: 110, bottomStack: 60)
-        XCTAssertEqual(stops.first?.opacity, 0, "nothing shows through the header")
+        // A15 (owner, 2026-10-04): rows scroll under the header and fade.
+        XCTAssertEqual(stops.first?.opacity ?? 0, AtticScrollUnderFade.edgeOpacity, accuracy: 0.001, "faint at the panel's top")
         XCTAssertEqual(stops.first { $0.location >= 110.0 / 520 - 0.0001 }?.opacity, 1, "fully there from the first row's rest")
         XCTAssertLessThan(stops.last?.opacity ?? 1, 0.5, "receding under the add bar")
         XCTAssertEqual(stops.map(\.location), stops.map(\.location).sorted(), "stops in order")
         let underTabs = stops.filter { $0.location > 80.0 / 520 && $0.location <= 96.0 / 520 + 0.0001 }
-        XCTAssertTrue(underTabs.allSatisfy { $0.opacity == 0 }, "scrolled text is gone under the tabs (round 12 keeps the round-11 rule)")
+        XCTAssertTrue(underTabs.allSatisfy { $0.opacity > 0 && $0.opacity <= AtticScrollUnderFade.controlsEdge + 0.001 },
+                      "scrolled text shows faintly under the tabs (A15 replaces the round-11 rule)")
     }
 
     // MARK: - The quiet open ring (owner fix 1, review 12)

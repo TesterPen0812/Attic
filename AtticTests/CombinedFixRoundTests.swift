@@ -221,9 +221,10 @@ final class CombinedFixRoundTests: XCTestCase {
 
     // MARK: P3-03: the tag picker's create row is never cut short
 
-    /// The card opens at its rows' width; typing "cu2" adds "New tag
-    /// “#cu2”", wider than "#cu2shared": the card grows for it (CU pass 2,
-    /// capture 51: "New tag “#c…" in a half-empty card).
+    /// The card opens at its rows' width; typing "cu2-planning" adds "New
+    /// tag “#cu2-planning”", wider than the card: the card grows for it (CU
+    /// pass 2, capture 51: "New tag “#c…" in a half-empty card). A20: the +
+    /// sits in the check column, so "New tag “#cu2”" alone now fits the card.
     func testTheTagPickerGrowsForItsCreateRow() throws {
         let window = NSWindow(contentRect: NSRect(x: -4000, y: -4000, width: 340, height: 560),
                               styleMask: .borderless, backing: .buffered, defer: false)
@@ -246,11 +247,11 @@ final class CombinedFixRoundTests: XCTestCase {
         XCTAssertGreaterThanOrEqual(opened + 0.5, AtticTagPicker.rowsWidth(tags: tags, create: nil) + m.inset * 2,
                                     "the rows fit as it opens")
         let editor = try XCTUnwrap(window.firstResponder as? NSTextView)
-        editor.insertText("cu2", replacementRange: NSRange(location: NSNotFound, length: 0))
+        editor.insertText("cu2-planning", replacementRange: NSRange(location: NSNotFound, length: 0))
         spin(0.3)
-        let needed = AtticTagPicker.rowsWidth(tags: ["cu2shared"], create: "cu2") + m.inset * 2
+        let needed = AtticTagPicker.rowsWidth(tags: [], create: "cu2-planning") + m.inset * 2
         XCTAssertGreaterThan(needed, opened, "the create row is wider than the card it opened as")
-        XCTAssertGreaterThanOrEqual(presenter.cardWidth + 0.5, needed, "the card grew for “New tag “#cu2””")
+        XCTAssertGreaterThanOrEqual(presenter.cardWidth + 0.5, needed, "the card grew for “New tag “#cu2-planning””")
         let host = try XCTUnwrap(presenter.host)
         XCTAssertEqual(host.contentRect.width, presenter.cardWidth, accuracy: 1)
         // Filtering back to fewer, shorter rows never narrows it while open.
@@ -413,37 +414,34 @@ final class CombinedFixRoundTests: XCTestCase {
         XCTAssertFalse(presenter.isOpen, "Esc closed it")
     }
 
-    // MARK: P2-02: D1 in Notes
+    // MARK: A15 in Notes (replacing P2-02's D1)
 
-    /// The fade's geometry for the Notes page in a 320 × 520 panel: nothing
-    /// shows over the header's controls or under the bottom row; the title's
+    /// The scroll-under fade for the Notes editor in a 320 × 520 panel: the
+    /// text runs faintly under the header's controls and the bottom row
+    /// (never gone, never above the controls'-edge opacity); the title's
     /// resting line and the last resting line are fully there.
-    func testTheNotesFadeEndsBeforeTheControls() {
+    func testTheNotesTextShowsFaintlyUnderTheControls() {
         let size = CGSize(width: 320, height: 520)
         let layout = PanelPageLayout(cornerSize: 52, panelSize: size)
         let restTop = layout.headerBottom + AtticNoteMetrics.titleTopGap
         let bottomControls = layout.chromeInsets.bottom + AtticControlSize.panelButton.height
-        let stops = AtticControlsFade.stops(height: size.height, restTop: restTop, bottomControls: bottomControls)
-        func opacity(at y: CGFloat) -> Double {
-            let location = y / size.height
-            guard let upper = stops.firstIndex(where: { $0.location >= location }) else { return stops.last!.opacity }
-            guard upper > 0 else { return stops[0].opacity }
-            let a = stops[upper - 1], b = stops[upper]
-            let t = b.location > a.location ? Double((location - a.location) / (b.location - a.location)) : 1
-            return a.opacity + (b.opacity - a.opacity) * t
-        }
+        let restBottom = bottomControls + AtticSpacing.s12
+        let stops = AtticScrollUnderFade.stops(height: size.height, topBand: layout.headerBottom, restTop: restTop,
+                                               bottomBand: bottomControls, restBottom: restBottom)
+        func opacity(at y: CGFloat) -> Double { AtticScrollUnderFade.opacity(stops, at: y, height: size.height) }
         for y in stride(from: 0, through: layout.headerBottom, by: 1) {
-            XCTAssertEqual(opacity(at: y), 0, accuracy: 0.001, "nothing under the header's controls at \(y)")
+            XCTAssertGreaterThan(opacity(at: y), 0.04, "faintly there under the header's controls at \(y)")
+            XCTAssertLessThanOrEqual(opacity(at: y), AtticScrollUnderFade.controlsEdge + 0.001, "never readable there at \(y)")
         }
         XCTAssertEqual(opacity(at: restTop), 1, accuracy: 0.001, "the title's resting line is fully there")
         let barTop = size.height - bottomControls
-        let lastRest = size.height - (bottomControls + AtticSpacing.s12)
-        XCTAssertEqual(opacity(at: lastRest), 1, accuracy: 0.001, "the last resting line is fully there")
+        XCTAssertEqual(opacity(at: size.height - restBottom), 1, accuracy: 0.001, "the last resting line is fully there")
         for y in stride(from: barTop, through: size.height, by: 1) {
-            XCTAssertEqual(opacity(at: y), 0, accuracy: 0.001, "nothing under the bottom row at \(y)")
+            XCTAssertGreaterThan(opacity(at: y), 0.04, "faintly there under the bottom row at \(y)")
+            XCTAssertLessThanOrEqual(opacity(at: y), AtticScrollUnderFade.controlsEdge + 0.001, "never readable there at \(y)")
         }
-        XCTAssertGreaterThan(opacity(at: barTop - 3), 0)
-        XCTAssertLessThan(opacity(at: barTop - 3), 1, "a short eased ramp before the bottom row")
+        XCTAssertGreaterThan(opacity(at: barTop - 6), AtticScrollUnderFade.controlsEdge)
+        XCTAssertLessThan(opacity(at: barTop - 6), 1, "an eased fall before the bottom row")
     }
 
     /// The fade reaches the AppKit editor: SwiftUI masks the platform view

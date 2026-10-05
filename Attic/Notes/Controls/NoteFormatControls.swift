@@ -58,8 +58,11 @@ final class NoteFormatControls: NSObject {
     private let noteID: UUID
     private let isNewDraft: Bool
 
-    /// ⌃Tab or ⌘T without a bar, and Aa's own button: the page's pop-over.
+    /// ⌘T, and Aa's own button: the page's pop-over.
     var requestFormatPopover: ((_ keyboard: Bool) -> Void)?
+    /// ⌃Tab (true) or ⌃⇧Tab (false) with no selection bar: the keyboard
+    /// leaves the text for the page's next or previous control (OD-7).
+    var leaveEditor: ((_ forward: Bool) -> Void)?
     var closeFormatPopover: (() -> Void)?
     /// Image or File…: the page's open panel. `slash` is the `/` row's
     /// request (one file, replacing its command); nil for Insert.
@@ -445,13 +448,20 @@ final class NoteFormatControls: NSObject {
         guard let textView, let window = textView.window, event.window === window,
               window.firstResponder === textView, !textView.hasMarkedText() else { return false }
         let flags = event.modifierFlags.intersection([.command, .option, .shift, .control])
-        if event.keyCode == 48, flags == [.control] {
+        // ⌃Tab / ⌃⇧Tab (OD-7): the selection bar, when one shows, is the
+        // next control (⌃Tab again returns to the text); otherwise the
+        // keyboard leaves the editor for the page's next or previous control.
+        // Aa stays on ⌘T and is a stop of its own on the way.
+        if event.keyCode == 48, flags == [.control] || flags == [.control, .shift] {
+            let forward = flags == [.control]
             if formatModel.barKeyboardIndex != nil {
                 exitBarKeyboard()
-            } else if formatModel.barShown {
+            } else if forward, formatModel.barShown {
                 enterBarKeyboard()
+            } else if let leaveEditor {
+                leaveEditor(forward)
             } else {
-                requestFormatPopover?(true)
+                return false
             }
             return true
         }

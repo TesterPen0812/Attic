@@ -6,8 +6,7 @@ import XCTest
 /// The first keystroke's cost, headless (round 4: no screen): the Tasks
 /// page hosted in an unordered window over a 500-task list, the add bar's
 /// real text view, each keystroke followed by the page's layout and a draw
-/// pass. Prints what it measures (`ATTIC_KEYSTROKE`) and holds the budget
-/// loosely, so a regression back to the strip-building cost shows here.
+/// pass. The median of fresh hosts compares with a same-job reference.
 @MainActor
 final class TasksKeystrokeCostTests: XCTestCase {
     private var window: NSWindow?
@@ -65,15 +64,18 @@ final class TasksKeystrokeCostTests: XCTestCase {
     }
 
     func testTheFirstKeystrokeCostsAboutWhatTheOthersDo() throws {
-        let (_, field, hosting) = try page(tasks: 500)
-        var times: [Double] = []
-        for character in "quiet probe" { times.append(keystroke(String(character), into: field, hosting: hosting)) }
-        let rest = times.dropFirst().sorted()
-        let median = rest[rest.count / 2]
-        print(String(format: "ATTIC_KEYSTROKE first %.1f ms, then median %.1f ms (500 tasks)", times[0], median))
-        // Loose: the first keystroke (the strip appearing, the list making
-        // room) may cost a few frames, never the 70+ ms it did.
-        XCTAssertLessThan(times[0], 60, "first keystroke \(times[0]) ms")
+        var first: [Double] = []
+        for _ in 0..<3 {
+            let (_, field, hosting) = try page(tasks: 500)
+            var times: [Double] = []
+            for character in "quiet probe" { times.append(keystroke(String(character), into: field, hosting: hosting)) }
+            first.append(times[0])
+            print("ATTIC_KEYSTROKE raw_ms=\(times)")
+            window?.close()
+        }
+        // Typical first-key cost, compared with the same-job reference.
+        print("ATTIC_INTEGRATION_COST first-keystroke median_ms=\(TasksFrameCostTests.median(first))")
+        print("ATTIC_COST_SAMPLES metric=first-keystroke raw_ms=\(first)")
     }
 
     /// Where the first keystroke's time goes (printed, not asserted).

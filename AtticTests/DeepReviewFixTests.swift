@@ -4,7 +4,7 @@ import XCTest
 @testable import Attic
 
 /// Phase 1's deep review, the UI fix round: Find from far down a list
-/// (P2-01), Clean cut's D1 fade over the whole control regions
+/// (P2-01), Clean cut's fade over the control regions (A15 replaced D1)
 /// (P2-02, owner A7: no native soft edges), one Open Files command for every route (P2-03), a visible
 /// keyboard focus at every Tab stop (P2-04), the composer strip's values
 /// in full (P3-01) and the pager's test-only settle (code review). Each is
@@ -91,7 +91,7 @@ final class DeepReviewFixTests: XCTestCase {
         XCTAssertFalse(hosted.model.rows(for: .now).isEmpty)
     }
 
-    // MARK: - D1: viewport clears every visible control
+    // MARK: - A15 (was D1): rows pass faintly under every visible control
 
     func testTheViewportTracksFindTheStripSelectionAndPasteOffer() throws {
         useCleanCut()
@@ -112,11 +112,11 @@ final class DeepReviewFixTests: XCTestCase {
         XCTAssertEqual(resting.minY, 0, accuracy: 0.5)
         XCTAssertEqual(resting.maxY, hosted.height, accuracy: 0.5)
         XCTAssertEqual(list.contentInsets.top, TasksViewport.listTop(tabsTop: tabsTop), accuracy: 0.5)
-        // Clean cut keeps a full viewport. D1 hides row ink under the
-        // controls instead of resizing the native scroll view. Compare two
+        // Clean cut keeps a full viewport. The A15 mask fades row ink under
+        // the controls instead of resizing the native scroll view. Compare two
         // actual scroll positions in each state, with visible body movement
         // as a positive control so an empty capture cannot pass.
-        func assertClear(bottom: CGFloat, state: String) throws {
+        func assertClear(bottom: CGFloat, state: String, negativeControl: Bool = false) throws {
             let content = try XCTUnwrap(hosted.window.contentView)
             func capture(_ y: CGFloat) throws -> NSBitmapImageRep {
                 list.contentView.scroll(to: CGPoint(x: 0, y: y))
@@ -127,31 +127,64 @@ final class DeepReviewFixTests: XCTestCase {
                 content.cacheDisplay(in: content.bounds, to: image)
                 return image
             }
-            let first = try capture(260), second = try capture(1_300)
+            var first = try capture(260), second = try capture(1_300)
             let scale = CGFloat(first.pixelsWide) / content.bounds.width
-            func difference(top: CGFloat, bottom: CGFloat) -> Double {
+            func difference(top: CGFloat, bottom: CGFloat, threshold: CGFloat = 0.03) -> Double {
                 var changed = 0, total = 0
                 for y in Int(top * scale)..<min(Int(bottom * scale), first.pixelsHigh, second.pixelsHigh) {
                     for x in 0..<first.pixelsWide {
                         guard let a = first.colorAt(x: x, y: y)?.usingColorSpace(.sRGB),
                               let b = second.colorAt(x: x, y: y)?.usingColorSpace(.sRGB) else { continue }
                         total += 1
-                        if max(abs(a.redComponent - b.redComponent), abs(a.greenComponent - b.greenComponent),
-                               abs(a.blueComponent - b.blueComponent)) > 0.03 { changed += 1 }
+                        // Over white: a near-transparent pixel whose colour
+                        // flips (white at 0.4 % alpha against clear, seen in
+                        // the add bar's band) is not ink.
+                        let (p, q) = (a.alphaComponent, b.alphaComponent)
+                        func over(_ c: CGFloat, _ alpha: CGFloat) -> CGFloat { c * alpha + 1 - alpha }
+                        if max(abs(over(a.redComponent, p) - over(b.redComponent, q)), abs(over(a.greenComponent, p) - over(b.greenComponent, q)),
+                               abs(over(a.blueComponent, p) - over(b.blueComponent, q))) > threshold { changed += 1 }
                     }
                 }
                 return total == 0 ? 1 : Double(changed) / Double(total)
             }
             XCTAssertGreaterThan(difference(top: TasksViewport.listTop(tabsTop: tabsTop) + 30, bottom: bottom - 30), 0.02,
                                  "\(state): rows actually moved between captures")
-            XCTAssertLessThan(difference(top: 0, bottom: TasksViewport.controlsBottom(tabsTop: tabsTop)), 0.004,
-                              "\(state): no row ink under the header, tabs or Find")
-            XCTAssertLessThan(difference(top: bottom, bottom: hosted.height), 0.004,
-                              "\(state): no row ink under the bottom controls")
+            // A15 (owner, 2026-10-04): rows pass under the header, the
+            // tabs and the bottom controls, faintly: some ink changes there,
+            // but never at a readable strength.
+            let labelsBottom = tabsTop + AtticLayout.pageTabsHeight
+            XCTAssertGreaterThan(difference(top: 0, bottom: labelsBottom), 0.0005,
+                                 "\(state): rows pass faintly under the header and tabs")
+            XCTAssertLessThan(difference(top: 0, bottom: labelsBottom, threshold: 0.35), 0.002,
+                              "\(state): never readable under the header and tabs")
+            // The bottom controls have their own lower bound (A17): a clip
+            // there would pass every "never readable" check. (This capture
+            // draws no glass backdrop and shows no row ink under the tabs
+            // themselves; `ScrollEdgeUITests` checks the tabs and the pills
+            // in window-server pixels.)
+            XCTAssertGreaterThan(difference(top: bottom, bottom: hosted.height), 0.0005,
+                                 "\(state): rows pass faintly under the bottom controls")
+            XCTAssertLessThan(difference(top: bottom, bottom: hosted.height, threshold: 0.35), 0.002,
+                              "\(state): never readable under the bottom controls")
+            if negativeControl {
+                // Negative control: the same bands clipped (covered by an
+                // opaque view) fail both lower bounds, so they can fail.
+                let covers = [(CGFloat(0), labelsBottom), (bottom, hosted.height)].map { band -> NSView in
+                    let cover = OpaqueCover(frame: NSRect(x: 0, y: content.isFlipped ? band.0 : hosted.height - band.1,
+                                                          width: content.bounds.width, height: band.1 - band.0))
+                    content.addSubview(cover, positioned: .above, relativeTo: nil)
+                    return cover
+                }
+                defer { covers.forEach { $0.removeFromSuperview() } }
+                first = try capture(260)
+                second = try capture(1_300)
+                XCTAssertLessThan(difference(top: 0, bottom: labelsBottom), 0.0005, "\(state): clipped header and tabs fail the lower bound")
+                XCTAssertLessThan(difference(top: bottom, bottom: hosted.height), 0.0005, "\(state): clipped bottom fails the lower bound")
+            }
             XCTAssertTrue(ScrollEdgeTests.pockets(in: list).isEmpty, "\(state): no native edge")
-            XCTAssertEqual(frame(), resting, "\(state): controls change D1's mask, not the viewport")
+            XCTAssertEqual(frame(), resting, "\(state): controls change the mask, not the viewport")
         }
-        try assertClear(bottom: hosted.height - idle, state: "idle")
+        try assertClear(bottom: hosted.height - idle, state: "idle", negativeControl: true)
 
         hosted.model.setSearchQuery(" ", for: .now)
         hosted.spin(0.8)
@@ -398,9 +431,9 @@ final class DeepReviewFixTests: XCTestCase {
     /// does not see change, so the cells' own record is read here; the
     /// pixels are `TasksPageUITests`'s.)
     ///
-    /// The hosted page is alone in its window, so the window's key loop
-    /// passes once through nothing (no view of the page has the keyboard,
-    /// nothing is drawn as focused) before it wraps to the first row.
+    /// A10: the page orders Tab itself (`TasksTabOrder`), so the order no
+    /// longer passes through nothing before it wraps: after the add bar
+    /// comes the first row again.
     func testEveryTabStopIsAVisibleRowOrAField() throws {
         let hosted = try Hosted(height: 520)
         defer { hosted.close() }
@@ -425,7 +458,7 @@ final class DeepReviewFixTests: XCTestCase {
             forward.append(stop())
             check(forward.last!, forward)
         }
-        XCTAssertEqual(forward, now.map(Stop.row) + [.addBar, .none, .row(now[0])],
+        XCTAssertEqual(forward, now.map(Stop.row) + [.addBar, .row(now[0]), .row(now[1])],
                        "Tab: Now's rows, the add bar, then round again (\(forward))")
 
         var backward: [Stop] = []
@@ -435,12 +468,85 @@ final class DeepReviewFixTests: XCTestCase {
             backward.append(stop())
             check(backward.last!, backward)
         }
-        XCTAssertEqual(backward, [.none, .addBar, .row(now[now.count - 1]), .row(now[now.count - 2])],
+        XCTAssertEqual(backward, [.row(now[0]), .addBar, .row(now[now.count - 1]), .row(now[now.count - 2])],
                        "Shift-Tab retraces it, never into a hidden page (\(backward))")
 
         // Return edits the row that shows the keyboard.
         hosted.press("\r", keyCode: 36)
         XCTAssertEqual(hosted.model.editingTitleID, now[now.count - 2], "Return edits the row that shows the keyboard")
+    }
+
+    /// A8 P2-A8-1 (A10): in the combined app Tab reached rows out of view
+    /// (`R12` while rows 1–7 showed), with no ring and no scroll, and a
+    /// filtered list's cycle had blank stops and skipped Find. In a list
+    /// taller than the viewport, and in a filtered one: every stop is Find,
+    /// a row or the add bar, each row the keyboard reaches is drawn with
+    /// its ring inside the part of the list nothing covers, and Tab goes
+    /// round without a blank stop. Run on a panel whose key loop is
+    /// AppKit's, as the combined app's is (the import freeze's fix).
+    func testTabKeepsEveryRowItReachesInViewInALongAndAFilteredList() throws {
+        let hosted = try Hosted(height: 520, addBarFocused: true, long: true)
+        defer { hosted.close() }
+        hosted.window.autorecalculatesKeyViewLoop = true
+        hosted.spin(1)
+        enum Stop: Equatable { case find, row(UUID), addBar, none }
+        func stop() -> Stop {
+            if let row = hosted.pointer.keyboardRow { return .row(row.id) }
+            if hosted.focus.addBar { return .addBar }
+            if AtticTextInput.hasKeyboard { return .find }
+            return .none
+        }
+        // The add bar's top: a row below it is under the controls.
+        let clearBottom = hosted.height - AtticControlSize.addBarHeight - AtticSpacing.panelMargin
+        func checkInView(_ stop: Stop, _ trail: [Stop]) {
+            guard case let .row(id) = stop else { return }
+            hosted.window.contentView?.layoutSubtreeIfNeeded()
+            XCTAssertEqual(hosted.pointer.drawnFocus.map(\.id), [id], "the row Tab reached draws the ring (\(trail.count))")
+            guard let frame = hosted.pointer.frames[TasksRowID(tab: .now, id: id)] else {
+                return XCTFail("the row Tab reached is laid out (\(trail.count))")
+            }
+            XCTAssertGreaterThanOrEqual(frame.minY, 0, "row \(trail.count) is not above the viewport (\(frame))")
+            XCTAssertLessThanOrEqual(frame.maxY, clearBottom + 1, "row \(trail.count) is not under the add bar (\(frame))")
+        }
+        func walk(_ count: Int, shift: Bool = false) -> [Stop] {
+            var trail: [Stop] = []
+            for _ in 0..<count {
+                if shift { hosted.press("\u{19}", keyCode: 48, modifiers: .shift) } else { hosted.press("\t", keyCode: 48) }
+                hosted.spin(0.3)
+                trail.append(stop())
+                checkInView(trail.last!, trail)
+            }
+            return trail
+        }
+
+        // The whole list, taller than the viewport, and round again.
+        XCTAssertTrue(hosted.model.expanded.isEmpty, "no quick look open: rows only")
+        let now = hosted.model.rows(for: .now).map(\.id)
+        let last = try XCTUnwrap(now.last)
+        hosted.window.contentView?.layoutSubtreeIfNeeded()
+        let lastFrame = hosted.pointer.frames[TasksRowID(tab: .now, id: last)]
+        XCTAssertTrue(lastFrame.map { $0.minY > clearBottom } ?? true, "the list is taller than the viewport")
+        let forward = walk(now.count + 2)
+        XCTAssertEqual(forward, now.map(Stop.row) + [.addBar, .row(now[0])], "Tab: every row in order, the add bar, round again")
+        let backward = walk(2, shift: true)
+        XCTAssertEqual(backward, [.addBar, .row(last)], "Shift-Tab from the first row: the add bar, then the last row, in view")
+
+        // Filtered: Find, the matches, the add bar, round again; no blank.
+        hosted.model.setSearchQuery("Errand", for: .now)
+        hosted.spin(0.8)
+        let matches = hosted.model.rows(for: .now).map(\.id)
+        XCTAssertGreaterThan(matches.count, 8, "enough matches to scroll")
+        XCTAssertLessThan(matches.count, now.count)
+        let cycle: [Stop] = [.find] + matches.map(Stop.row) + [.addBar]
+        let filtered = walk(cycle.count + 2)
+        XCTAssertFalse(filtered.contains(.none), "no blank stop (\(filtered))")
+        // Wherever the keyboard was when the list narrowed, each Tab takes
+        // the next stop of Find, the matches in order, the add bar.
+        for (stop, next) in zip(filtered, filtered.dropFirst()) {
+            guard let index = cycle.firstIndex(of: stop) else { XCTFail("\(stop) is not a stop of the filtered page"); continue }
+            XCTAssertEqual(next, cycle[(index + 1) % cycle.count], "Tab after \(stop)")
+        }
+        XCTAssertTrue(filtered.contains(.find), "Find is on the way")
     }
 
     // MARK: - P3-01: the strip's values in full
@@ -525,5 +631,49 @@ final class DeepReviewFixTests: XCTestCase {
         }
         XCTAssertEqual(resolve("0.05"), 0.05)
         XCTAssertEqual(resolve("10"), 10)
+    }
+}
+
+/// A10: the Tasks page's own Tab order and Move to Task's focus return,
+/// as data (the hosted walks are `DeepReviewFixTests`').
+final class TasksTabOrderTests: XCTestCase {
+    func testTheOrderIsFindRowsWithTheirOpenSubtasksTheAddBarThenTheStrip() {
+        let (a, b, c, s1, s2) = (UUID(), UUID(), UUID(), UUID(), UUID())
+        let stops = TasksTabOrder.stops(find: true, rows: [(a, []), (b, [s1, s2]), (c, [])], strip: true)
+        XCTAssertEqual(stops, [.find, .row(a), .row(b), .subtask(s1), .subtask(s2), .row(c), .addBar]
+                       + AtticStripFocusID.all.map(TasksTabStop.strip))
+        XCTAssertEqual(TasksTabOrder.stops(find: false, rows: [(a, [])], strip: false), [.row(a), .addBar],
+                       "no Find while it is hidden, no strip without a draft or keyboard navigation")
+        XCTAssertEqual(TasksTabOrder.next(after: nil, in: stops, forward: true), .find, "from nowhere: the first stop")
+        XCTAssertEqual(TasksTabOrder.next(after: nil, in: stops, forward: false), stops.last)
+        XCTAssertEqual(TasksTabOrder.next(after: .row(b), in: stops, forward: true), .subtask(s1))
+        XCTAssertEqual(TasksTabOrder.next(after: stops.last, in: stops, forward: true), .find, "round the end")
+        XCTAssertEqual(TasksTabOrder.next(after: .find, in: stops, forward: false), stops.last)
+        XCTAssertEqual(TasksTabOrder.next(after: .row(UUID()), in: stops, forward: true), .find, "a stop no longer drawn: start again")
+        XCTAssertNil(TasksTabOrder.next(after: nil, in: [], forward: true))
+        XCTAssertEqual(TasksTabOrder.parent(of: s2, in: stops), b)
+        XCTAssertTrue(TasksTabOrder.isListNeighbour(.row(a), of: .row(b), in: stops))
+        XCTAssertFalse(TasksTabOrder.isListNeighbour(.addBar, of: .row(c), in: stops), "from a field the list goes to the row first")
+        XCTAssertFalse(TasksTabOrder.isListNeighbour(.row(c), of: .row(a), in: stops), "nor round the end")
+    }
+
+    /// A8 P3-A8-1: Esc (or a click outside) closing Move to Task… gives
+    /// the keyboard back to the subtask's line; other pickers keep theirs.
+    func testClosingMoveToTaskGivesTheKeyboardBackToTheSubtask() {
+        let (row, subtask) = (UUID(), UUID())
+        let move = TasksMetaPopover(id: row, tab: .now, kind: .move, targets: [subtask])
+        XCTAssertEqual(TasksPage.subtaskToRefocus(closed: move, now: nil), subtask)
+        XCTAssertNil(TasksPage.subtaskToRefocus(closed: move, now: move), "still open")
+        XCTAssertNil(TasksPage.subtaskToRefocus(closed: TasksMetaPopover(id: row, tab: .now, kind: .date, targets: [row]), now: nil))
+        XCTAssertNil(TasksPage.subtaskToRefocus(closed: nil, now: nil))
+    }
+}
+
+/// A white view that draws itself (a capture by `cacheDisplay` ignores a
+/// layer's background), laid over a band to clip what is under it.
+final class OpaqueCover: NSView {
+    override func draw(_ dirtyRect: NSRect) {
+        NSColor.white.setFill()
+        dirtyRect.fill()
     }
 }
