@@ -22,6 +22,9 @@ struct AtticPanelView: View {
     /// What the Tasks page keeps while another page shows (the add bar's
     /// draft and pending attachments).
     @StateObject private var tasksPageState = TasksPageState()
+    /// Whether the page switcher is open, for the header titles that make
+    /// room for it. Not observed here: only those titles are.
+    @State private var switcherPresence = AtticPageSwitcherPresence()
     @State private var noticeHeight: CGFloat = 0
     @State private var noticeClearance = PanelPageNoticeClearancePreferenceKey.defaultValue
     @State var hasRestoredNoteSession = false
@@ -301,6 +304,7 @@ struct AtticPanelView: View {
             .environment(\.atticPanelUsesSystemAccent, settings.panelTheme.usesSystemAccent)
             .environment(\.atticPanelUsesSystemOpaqueSurface, panelSurfaceTreatment.usesSystemOpaqueSurface)
             .environment(\.atticPanelToasts, toasts)
+            .environment(\.atticPageSwitcherPresence, switcherPresence)
             .tint(panelAccentColor)
             .accentColor(panelAccentColor)
             .atticDesignFromSystem(

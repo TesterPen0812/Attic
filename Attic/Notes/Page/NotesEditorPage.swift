@@ -263,23 +263,23 @@ struct NotesEditorPage: View {
         design.reduceMotion ? .opacity : .move(edge: edge).combined(with: .opacity)
     }
 
-    /// The scrolled-away title, back between the pin and the page button.
+    /// The scrolled-away title, back between the pin and the page button; it
+    /// slides left and truncates while the page switcher is open (OD-11).
     private var headerTitle: some View {
         let progress = chrome.headerTitleProgress
-        let side = layout.chromeInsets.leading + AtticControlSize.headerControl + AtticSpacing.s8
-        return AtticHeaderTitle(title: chrome.headerTitle) { chrome.presentMenu() }
-            .frame(maxWidth: max(0, layout.panelSize.width - side * 2))
-            .fixedSize(horizontal: true, vertical: false)
-            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
-            .padding(.top, layout.chromeInsets.top)
-            .opacity(progress)
-            // It settles into the header as the title passes under it
-            // (scroll-linked, so no animation runs while typing).
-            .offset(y: design.reduceMotion ? 0 : (1 - progress) * -6)
-            .scaleEffect(design.reduceMotion ? 1 : 0.94 + 0.06 * progress, anchor: .top)
-            .allowsHitTesting(progress > 0.5)
-            .accessibilityHidden(progress < 0.5)
-            .accessibilityIdentifier("notes-header-title")
+        return AtticHeaderTitleRoom(chromeInset: layout.chromeInsets.leading, switcherWidth: PanelHeaderLayout.pageSwitchWidth) {
+            AtticHeaderTitle(title: chrome.headerTitle) { chrome.presentMenu() }
+                .opacity(progress)
+                // It settles into the header as the title passes under it
+                // (scroll-linked, so no animation runs while typing).
+                .offset(y: design.reduceMotion ? 0 : (1 - progress) * -6)
+                .scaleEffect(design.reduceMotion ? 1 : 0.94 + 0.06 * progress, anchor: .top)
+                .allowsHitTesting(progress > 0.5)
+                .accessibilityHidden(progress < 0.5)
+                .accessibilityIdentifier("notes-header-title")
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+        .padding(.top, layout.chromeInsets.top)
     }
 
     // MARK: Bottom row

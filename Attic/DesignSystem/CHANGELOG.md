@@ -5,6 +5,20 @@ Every later change is recorded here: what changed, why, and who asked.
 
 ## Phase 2
 
+### A21 header title makes room for the page switcher (redesign/p2-integration, 2026-10-05)
+Owner decision B (Canvas, 2026-10-03), applied to Notes now and shared with
+Canvas later (OD-11). No token, colour, radius or size changed.
+- **New `AtticHeaderTitleRoom` / `AtticHeaderTitleLayout` / `AtticHeaderTitleSlot`
+  (`AtticControls.swift`)**: a header title is centred between the pin and
+  the page button; while the page switcher is open it left-aligns beside the
+  pin and truncates in the space the switcher leaves (8 pt clear), then
+  returns to the centre when it closes. It moves with the `expand` preset;
+  Reduce Motion and Animations: Reduced give the new width at once.
+- **`AtticPageSwitcherPresence`** (environment, owned by the shell): the page
+  button reports whether it is open; only the title wrapper observes it, so
+  the header's own body never re-evaluates (`CornerGlassTests` still holds).
+- The Notes header title uses it; the page switcher itself is unchanged.
+
 ### A15 scroll-under fade (redesign/p2-integration, 2026-10-04)
 Owner decision (2026-10-04, option A of the p2-27 draft; it replaces D1's
 "rows fade out before the controls"). No token, colour, radius or size

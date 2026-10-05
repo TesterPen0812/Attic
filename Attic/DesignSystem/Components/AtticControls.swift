@@ -235,6 +235,7 @@ struct AtticPageButton<Page: Hashable>: View {
     @Environment(\.atticDesign) private var design
     @Environment(\.atticCapture) private var capture
     @Environment(\.atticKeyboardFocusVisible) private var keyboardFocusVisible
+    @Environment(\.atticPageSwitcherPresence) private var presence
     @FocusState private var focused: Bool
     @State private var hovering = false
     @State private var hoveredPage: Page?
@@ -310,6 +311,9 @@ struct AtticPageButton<Page: Hashable>: View {
             if inside { onApproach() } else { hoveredPage = nil }
         }
         .animation(AtticMotionPreset.expand.animation(reduceMotion: design.reduceMotion), value: open)
+        // The header title makes room while it is open (OD-11).
+        .onChange(of: open) { _, isOpen in presence?.set(isOpen) }
+        .onDisappear { presence?.set(false) }
         // A Tab stop like a button: only when keyboard navigation is on,
         // so the panel never opens it by focusing it when revealed.
         .focusable(capture == nil, interactions: .activate)
@@ -354,6 +358,147 @@ private struct AtticPageButtonSurface: ViewModifier {
             content.atticFlatSurface(cornerRadius: cornerRadius)
         } else {
             content.atticRaisedMaterial(cornerRadius: cornerRadius, interactive: true)
+        }
+    }
+}
+
+// MARK: - Header title room (OD-11)
+
+/// Whether the page switcher is open, for the header title that must give
+/// way to it. The page button reports into it; the title reads it. A
+/// reference type in the environment, so the header never re-evaluates when
+/// it flips: only the one title wrapper that observes it does.
+@MainActor
+final class AtticPageSwitcherPresence: ObservableObject {
+    @Published private(set) var isOpen = false
+
+    func set(_ open: Bool) {
+        if isOpen != open { isOpen = open }
+    }
+}
+
+private struct AtticPageSwitcherPresenceKey: EnvironmentKey {
+    static let defaultValue: AtticPageSwitcherPresence? = nil
+}
+
+extension EnvironmentValues {
+    /// The shell's page switcher presence (nil in the gallery and captures,
+    /// where nothing makes room).
+    var atticPageSwitcherPresence: AtticPageSwitcherPresence? {
+        get { self[AtticPageSwitcherPresenceKey.self] }
+        set { self[AtticPageSwitcherPresenceKey.self] = newValue }
+    }
+}
+
+/// Where a header title sits between the pin and the page switcher (owner
+/// decision B for Canvas, reused for Notes, OD-11). Shut, the title is
+/// centred between the two 36 pt buttons. While the switcher is open it
+/// takes the width to its left: the title left-aligns beside the pin and
+/// truncates in what the switcher leaves, so it never sits under it, then
+/// returns to the centre when the switcher closes. Pure geometry in the
+/// panel's x axis, so a test can check it at any title length and width.
+enum AtticHeaderTitleSlot {
+    struct Placement: Equatable {
+        /// The title's left edge, from the panel's left edge.
+        let x: CGFloat
+        let width: CGFloat
+        var maxX: CGFloat { x + width }
+    }
+
+    /// The clear gap kept between the title and either neighbour.
+    static let gap = AtticSpacing.s8
+
+    /// The switcher's open frame, from the panel's left edge.
+    static func switcherFrame(panelWidth: CGFloat, chromeInset: CGFloat, switcherWidth: CGFloat) -> ClosedRange<CGFloat> {
+        let maxX = panelWidth - chromeInset
+        return (maxX - switcherWidth)...maxX
+    }
+
+    static func placement(
+        titleWidth: CGFloat,
+        panelWidth: CGFloat,
+        chromeInset: CGFloat,
+        switcherWidth: CGFloat,
+        switcherOpen: Bool
+    ) -> Placement {
+        let left = chromeInset + AtticControlSize.headerControl + gap
+        let right = switcherOpen
+            ? panelWidth - chromeInset - switcherWidth - gap
+            : panelWidth - left
+        let room = max(0, right - left)
+        let width = min(max(0, titleWidth), room)
+        let x = switcherOpen ? left : left + (room - width) / 2
+        return Placement(x: x, width: width)
+    }
+}
+
+/// Places its one child with `AtticHeaderTitleSlot`: full panel width, the
+/// child's own height. The child is proposed the slot's width, so a long
+/// title truncates there.
+struct AtticHeaderTitleLayout: Layout {
+    var chromeInset: CGFloat
+    var switcherWidth: CGFloat
+    var switcherOpen: Bool
+
+    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
+        CGSize(width: proposal.width ?? 0, height: subviews.first?.sizeThatFits(.unspecified).height ?? 0)
+    }
+
+    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
+        guard let title = subviews.first else { return }
+        let placement = AtticHeaderTitleSlot.placement(
+            titleWidth: title.sizeThatFits(.unspecified).width,
+            panelWidth: bounds.width,
+            chromeInset: chromeInset,
+            switcherWidth: switcherWidth,
+            switcherOpen: switcherOpen
+        )
+        title.place(at: CGPoint(x: bounds.minX + placement.x, y: bounds.minY), anchor: .topLeading,
+                    proposal: ProposedViewSize(width: placement.width, height: bounds.height))
+    }
+}
+
+/// A header title that makes room for the page switcher: it slides left and
+/// truncates while the switcher is open and slides back when it closes, with
+/// the selected motion preset (Reduce Motion and Reduced: no slide, the new
+/// width at once). One behaviour for every page's header title.
+struct AtticHeaderTitleRoom<Content: View>: View {
+    var chromeInset: CGFloat
+    var switcherWidth: CGFloat
+    /// Tests and captures pin the switcher open or shut; nil follows the
+    /// shell's presence.
+    var forcedOpen: Bool?
+    @ViewBuilder var content: () -> Content
+
+    @Environment(\.atticPageSwitcherPresence) private var presence
+
+    var body: some View {
+        if let presence, forcedOpen == nil {
+            Observing(presence: presence, room: self)
+        } else {
+            Placed(room: self, open: forcedOpen ?? false)
+        }
+    }
+
+    private struct Observing: View {
+        @ObservedObject var presence: AtticPageSwitcherPresence
+        let room: AtticHeaderTitleRoom
+
+        var body: some View { Placed(room: room, open: presence.isOpen) }
+    }
+
+    private struct Placed: View {
+        let room: AtticHeaderTitleRoom
+        let open: Bool
+        @Environment(\.atticDesign) private var design
+
+        var body: some View {
+            AtticHeaderTitleLayout(chromeInset: room.chromeInset, switcherWidth: room.switcherWidth, switcherOpen: open) {
+                room.content()
+            }
+            // The switcher's own motion: the title moves with it. Instant
+            // (no animation) in Reduce Motion and Reduced.
+            .animation(AtticMotionPreset.expand.animation(reduceMotion: design.reduceMotion), value: open)
         }
     }
 }
