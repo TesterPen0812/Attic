@@ -187,7 +187,10 @@ final class NotesFormatUITests: XCTestCase {
         // paragraph, rather than the pending typing attributes after choosing.
         app.typeKey(.leftArrow, modifierFlags: [])
         app.typeKey("t", modifierFlags: .command)
-        let option = element("notes-aa-notes-format-" + command)
+        let popover = element("notes-format-popover")
+        require(popover, "Aa opens over the typed paragraph")
+        let prefix = value == "current style" ? "notes-aa-notes-format-" : "notes-format-"
+        let option = popover.descendants(matching: .any)[prefix + command]
         require(option, "Aa exposes the typed paragraph's style")
         waitFor((option.value as? String) == value, "the typed paragraph is " + command)
     }
