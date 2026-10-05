@@ -1090,6 +1090,11 @@ private final class FooterStandIn: NSView {
     override var acceptsFirstResponder: Bool { true }
 }
 
+/// A key-capable panel that does not activate the app (as the real panel).
+private final class ReturnKeyPanel: NSPanel {
+    override var canBecomeKey: Bool { true }
+}
+
 extension NotesFormatControlsTests {
     private struct KeyHarness {
         let chrome: NotesPageChrome
@@ -1113,11 +1118,13 @@ extension NotesFormatControlsTests {
         container.addSubview(scroll)
         let footer = FooterStandIn(frame: NSRect(x: 10, y: 510, width: 100, height: 30))
         container.addSubview(footer)
-        let window = NSWindow(contentRect: container.frame, styleMask: [.titled], backing: .buffered, defer: false)
+        let window = ReturnKeyPanel(contentRect: NSRect(x: -4000, y: -4000, width: 320, height: 560),
+                                    styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
         window.isReleasedWhenClosed = false
         window.contentView = container
         windows.append(window)
-        window.makeKeyAndOrderFront(nil)
+        window.orderFrontRegardless()
+        window.makeKey()
         XCTAssertTrue(window.isKeyWindow, "a key window")
         let chrome = NotesPageChrome()
         let accessories = NoteTitleAccessories(engine: engine, textView: text, scrollView: scroll, chrome: chrome, design: .default,
@@ -1232,7 +1239,8 @@ extension NotesFormatControlsTests {
         h.window.orderOut(nil)
         wait { run.end != nil }
         XCTAssertEqual(run.end, .cancelled, "a hidden panel ends it")
-        h.window.makeKeyAndOrderFront(nil)
+        h.window.orderFrontRegardless()
+        h.window.makeKey()
         h.window.makeFirstResponder(h.footer)
         pause(0.3)
         XCTAssertTrue(h.window.firstResponder === h.footer, "shown again, nothing takes the keyboard from the control")
