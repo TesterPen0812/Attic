@@ -754,7 +754,9 @@ struct AtticTagPicker: View {
                 .id(index)
             }
             if let create {
-                AtticDropdownRow(title: String(localized: "New tag “#\(create)”"), systemName: "plus", check: .off,
+                // The + sits in the check column: it lines up with the
+                // ticks, and the name starts where the tags' names do.
+                AtticDropdownRow(title: String(localized: "New tag “#\(create)”"), check: .off, checkGlyph: "plus",
                                  isHighlighted: highlighted == tags.count, onHover: hover(tags.count), position: tags.count + 1, itemCount: tags.count + 1) {
                     onCreate(create)
                 }
@@ -772,15 +774,15 @@ struct AtticTagPicker: View {
         onHover.map { report in { inside in report(index, inside) } }
     }
 
-    /// The widest row's width (check column, the create row's icon, the
-    /// name), the card's insets excluded: measured from the names, no
-    /// layout pass.
+    /// The widest row's width (check column, then the name; the create
+    /// row's + is in the check column), the card's insets excluded:
+    /// measured from the names, no layout pass.
     static func rowsWidth(tags: [String], create: String?, details: [String] = []) -> CGFloat {
         let m = AtticDropdownMetrics.self
         let style = AtticTextStyle.dropdownRow
         let widestDetail = details.map { AtticTextStyle.shortcut.measuredWidth($0) }.max().map { m.detailGap + $0 } ?? 0
         let widestTag = (tags.map { style.measuredWidth("#" + $0) }.max() ?? 0) + widestDetail
-        let createRow = create.map { m.iconSlot + m.columnGap + style.measuredWidth(String(localized: "New tag “#\($0)”")) } ?? 0
+        let createRow = create.map { style.measuredWidth(String(localized: "New tag “#\($0)”")) } ?? 0
         return ceil(m.rowPadding * 2 + m.checkSlot + m.columnGap + max(widestTag, createRow))
     }
 }

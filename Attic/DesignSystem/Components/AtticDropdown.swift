@@ -262,6 +262,10 @@ struct AtticDropdownRow: View {
     var systemName: String?
     /// nil: no check column.
     var check: AtticCheckState?
+    /// A glyph drawn in the check column of a row that is never ticked
+    /// (the tag picker's "New tag" +), so its name starts where the other
+    /// rows' names do.
+    var checkGlyph: String?
     /// A priority's mark column (`.none` keeps the column empty).
     var mark: AtticPriority?
     var detail: String?
@@ -278,7 +282,8 @@ struct AtticDropdownRow: View {
     @Environment(\.atticDesign) private var design
     @State private var hovered = false
 
-    init(title: String, systemName: String? = nil, check: AtticCheckState? = nil, mark: AtticPriority? = nil,
+    init(title: String, systemName: String? = nil, check: AtticCheckState? = nil, checkGlyph: String? = nil,
+         mark: AtticPriority? = nil,
          detail: String? = nil, match: String? = nil, isHighlighted: Bool = false, titleInk: AtticInk = .body,
          onHover: ((Bool) -> Void)? = nil, position: Int? = nil, itemCount: Int? = nil, scrollID: String? = nil, action: @escaping () -> Void) {
         self.scrollID = scrollID
@@ -287,6 +292,7 @@ struct AtticDropdownRow: View {
         self.title = title
         self.systemName = systemName
         self.check = check
+        self.checkGlyph = checkGlyph
         self.mark = mark
         self.detail = detail
         self.match = match
@@ -315,7 +321,12 @@ struct AtticDropdownRow: View {
                             switch check {
                             case .on: AtticIcon(systemName: "checkmark", size: m.checkSize, weight: .semibold, ink: .glyph)
                             case .mixed: AtticIcon(systemName: "minus", size: m.checkSize, weight: .semibold, ink: .glyph)
-                            case .off: Color.clear
+                            case .off:
+                                if let checkGlyph {
+                                    AtticIcon(systemName: checkGlyph, size: m.checkSize, weight: .semibold, ink: .glyph)
+                                } else {
+                                    Color.clear
+                                }
                             }
                         }
                         .frame(width: m.checkSlot)

@@ -221,9 +221,10 @@ final class CombinedFixRoundTests: XCTestCase {
 
     // MARK: P3-03: the tag picker's create row is never cut short
 
-    /// The card opens at its rows' width; typing "cu2" adds "New tag
-    /// “#cu2”", wider than "#cu2shared": the card grows for it (CU pass 2,
-    /// capture 51: "New tag “#c…" in a half-empty card).
+    /// The card opens at its rows' width; typing "cu2-planning" adds "New
+    /// tag “#cu2-planning”", wider than the card: the card grows for it (CU
+    /// pass 2, capture 51: "New tag “#c…" in a half-empty card). A20: the +
+    /// sits in the check column, so "New tag “#cu2”" alone now fits the card.
     func testTheTagPickerGrowsForItsCreateRow() throws {
         let window = NSWindow(contentRect: NSRect(x: -4000, y: -4000, width: 340, height: 560),
                               styleMask: .borderless, backing: .buffered, defer: false)
@@ -246,11 +247,11 @@ final class CombinedFixRoundTests: XCTestCase {
         XCTAssertGreaterThanOrEqual(opened + 0.5, AtticTagPicker.rowsWidth(tags: tags, create: nil) + m.inset * 2,
                                     "the rows fit as it opens")
         let editor = try XCTUnwrap(window.firstResponder as? NSTextView)
-        editor.insertText("cu2", replacementRange: NSRange(location: NSNotFound, length: 0))
+        editor.insertText("cu2-planning", replacementRange: NSRange(location: NSNotFound, length: 0))
         spin(0.3)
-        let needed = AtticTagPicker.rowsWidth(tags: ["cu2shared"], create: "cu2") + m.inset * 2
+        let needed = AtticTagPicker.rowsWidth(tags: [], create: "cu2-planning") + m.inset * 2
         XCTAssertGreaterThan(needed, opened, "the create row is wider than the card it opened as")
-        XCTAssertGreaterThanOrEqual(presenter.cardWidth + 0.5, needed, "the card grew for “New tag “#cu2””")
+        XCTAssertGreaterThanOrEqual(presenter.cardWidth + 0.5, needed, "the card grew for “New tag “#cu2-planning””")
         let host = try XCTUnwrap(presenter.host)
         XCTAssertEqual(host.contentRect.width, presenter.cardWidth, accuracy: 1)
         // Filtering back to fewer, shorter rows never narrows it while open.
