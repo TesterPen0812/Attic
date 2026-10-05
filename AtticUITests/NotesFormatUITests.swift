@@ -176,6 +176,34 @@ final class NotesFormatUITests: XCTestCase {
         waitFor(noteValue.hasSuffix("Book the venue"), "typing continues on the checklist line")
     }
 
+    /// A22: the owner's exact keys, including typing after slash acceptance.
+    private func checkSlashTyping(_ query: String, command: String, value: String) {
+        app.typeText("Title\n" + query)
+        require(element("notes-slash-list"), "the slash list")
+        app.typeKey(.return, modifierFlags: [])
+        app.typeText("Styled text")
+        waitFor(noteValue.hasSuffix("Styled text") && !noteValue.contains(query), "query replaced, next text typed")
+        // Move within the typed text before reading Aa: inspect the actual
+        // paragraph, rather than the pending typing attributes after choosing.
+        app.typeKey(.leftArrow, modifierFlags: [])
+        app.typeKey("t", modifierFlags: .command)
+        let option = element("notes-aa-notes-format-" + command)
+        require(option, "Aa exposes the typed paragraph's style")
+        waitFor((option.value as? String) == value, "the typed paragraph is " + command)
+    }
+
+    func testSlashHeadingReturnThenTypingProducesHeading() {
+        checkSlashTyping("/heading", command: "heading2", value: "current style")
+    }
+
+    func testSlashQuoteReturnThenTypingProducesQuote() {
+        checkSlashTyping("/quote", command: "quote", value: "on")
+    }
+
+    func testSlashListReturnThenTypingProducesList() {
+        checkSlashTyping("/list", command: "bullet", value: "on")
+    }
+
     func testTypedDateReplacesTheCommand() {
         app.typeText("Pricing\nCall Sam /da")
         require(element("notes-slash-date"), "Date is offered")

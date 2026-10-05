@@ -13,9 +13,9 @@ extension NSAttributedString.Key {
         NSAttributedString.Key("com.taha.attic.note.mark.\(kind.rawValue)")
     }
 
-    /// Attributes that belong to the characters they were read with and are
-    /// never carried into newly typed text.
-    static let noteBookkeeping: Set<NSAttributedString.Key> = [.noteBlockID, .noteBlockExtras, .noteBlockStyle, .noteBlockLevel, .noteBlockIndent]
+    /// Identity and unknown fields belong to their original paragraph. Style,
+    /// heading level and indentation must carry into text typed in that paragraph.
+    static let noteBookkeeping: Set<NSAttributedString.Key> = [.noteBlockID, .noteBlockExtras]
 }
 
 /// A reference box, so a paragraph split can tell that both halves carry the

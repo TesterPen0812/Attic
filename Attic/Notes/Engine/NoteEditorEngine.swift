@@ -789,6 +789,9 @@ final class NoteEditorEngine: NSObject, NSTextViewDelegate, NSTextStorageDelegat
         let paragraph = paragraphRange(at: location)
         if let pending = pendingParagraphStyle, pending.location == paragraph.location {
             var attributes = style.paragraphAttributes(style: pending.state.style.storageName, level: pending.state.style.level, indent: pending.state.indent)
+            attributes[.noteBlockStyle] = pending.state.style.storageName
+            attributes[.noteBlockLevel] = pending.state.style.level
+            if pending.state.indent > 0 { attributes[.noteBlockIndent] = pending.state.indent }
             if let block = pending.state.block {
                 if let name = block.style { attributes[.noteBlockStyle] = name }
                 if let indent = block.indent { attributes[.noteBlockIndent] = indent }
@@ -797,11 +800,16 @@ final class NoteEditorEngine: NSObject, NSTextViewDelegate, NSTextStorageDelegat
             }
             return attributes
         }
-        guard paragraph.location > 0, paragraph.location < textStorage.length else { return style.titleAttributes }
+        guard paragraph.location > 0 else { return style.titleAttributes }
+        guard paragraph.location < textStorage.length else { return style.bodyAttributes }
         let attributes = textStorage.attributes(at: paragraph.location, effectiveRange: nil)
-        return style.paragraphAttributes(style: attributes[.noteBlockStyle] as? String,
-                                         level: attributes[.noteBlockLevel] as? Int,
-                                         indent: attributes[.noteBlockIndent] as? Int)
+        var result = style.paragraphAttributes(style: attributes[.noteBlockStyle] as? String,
+                                              level: attributes[.noteBlockLevel] as? Int,
+                                              indent: attributes[.noteBlockIndent] as? Int)
+        for key in [NSAttributedString.Key.noteBlockStyle, .noteBlockLevel, .noteBlockIndent] {
+            result[key] = attributes[key]
+        }
+        return result
     }
 
     // MARK: Editor commands (each one undo step)
@@ -1080,24 +1088,35 @@ final class NoteEditorEngine: NSObject, NSTextViewDelegate, NSTextStorageDelegat
                 if applied { history.setLastRestoredText(NSAttributedString(string: "---\n", attributes: style.bodyAttributes)) }
                 return applied
             }
-            if let format = paragraphStyle(at: current.location), format == .bullet || format == .number {
+            if case .heading = paragraphStyle(at: current.location) {
+                history.beginGroup()
+                defer { history.endGroup() }
+                let insertion = NSAttributedString(string: "\n", attributes: attributes(forParagraphAt: current.location))
+                guard performEdit(current, with: insertion, name: "New Body Line",
+                                  selection: NSRange(location: current.location + 1, length: 0)) else { return false }
+                return perform(.paragraph(.body))
+            }
+            if let format = paragraphStyle(at: current.location),
+               [.bullet, .number, .quote, .mono].contains(format) {
                 let content = (textStorage.string as NSString).substring(with: line)
-                if content.trimmingCharacters(in: .whitespaces).isEmpty {
+                if format != .mono, content.trimmingCharacters(in: .whitespaces).isEmpty {
                     return perform(.paragraph(.body), selection: current)
                 }
-                let attributes = textStorage.attributes(at: line.location, effectiveRange: nil)
+                let attributes = textView.typingAttributes
+                let depth = indentAt(line.location) ?? 0
                 let insertion = NSAttributedString(string: "\n", attributes: attributes)
                 let finalParagraph = current.location == textStorage.length
                 history.beginGroup()
                 defer { history.endGroup() }
-                guard performEdit(current, with: insertion, name: "Continue List",
+                let name = format == .quote ? "Continue Quote" : (format == .mono ? "Continue Mono" : "Continue List")
+                guard performEdit(current, with: insertion, name: name,
                                   selection: NSRange(location: current.location + 1, length: 0)) else { return false }
                 if finalParagraph {
-                    let depth = indentAt(line.location) ?? 0
                     history.recordParagraphStyleChange(location: current.location + 1,
                         before: .init(style: .body, indent: 0), after: .init(style: format, indent: depth))
                     setPendingParagraphStyle(format, indent: depth, at: current.location + 1)
                 }
+                history.renameLast(name)
                 return true
             }
         }
@@ -1269,14 +1288,36 @@ final class NoteEditorEngine: NSObject, NSTextViewDelegate, NSTextStorageDelegat
            !(selection.length == 0 && selection.location >= open.range.location && selection.location <= NSMaxRange(open.range)) {
             history.breakCoalescing()
         }
-        if selection.length == 0, selection.location > 0, textStorage.length > 0 {
-            let index = min(selection.location - 1, textStorage.length - 1)
-            var attributes = textStorage.attributes(at: index, effectiveRange: nil)
+        let line = lineRange(at: selection.location)
+        if line.length == 0 || line.location == 0 {
+            textView.typingAttributes = attributes(forParagraphAt: selection.location)
+        } else {
+            // At a line's start use that line, never the preceding separator.
+            // A selection inherits its first character's inline marks; a caret
+            // within a line inherits the character immediately before it.
+            let index = selection.length > 0 || selection.location == line.location
+                ? selection.location : selection.location - 1
+            var attributes = textStorage.attributes(at: min(index, textStorage.length - 1), effectiveRange: nil)
             for key in NSAttributedString.Key.noteBookkeeping { attributes[key] = nil }
             attributes[.attachment] = nil
             textView.typingAttributes = attributes
-        } else {
-            textView.typingAttributes = attributes(forParagraphAt: selection.location)
+        }
+        if selection.length == 0, selection.location == line.location, selection.location > 0,
+           userEditDepth > 0 || engineEditDepth > 0 {
+            // Return inherits explicit inline marks from the inserted separator,
+            // while the destination paragraph supplies its block style and font.
+            let previous = textStorage.attributes(at: selection.location - 1, effectiveRange: nil)
+            let marks = Dictionary(uniqueKeysWithValues: NoteMark.Kind.allCases.filter { $0 != .link }.compactMap { kind in
+                previous[.noteMark(kind)].map { (kind, $0) }
+            })
+            var attributes = textView.typingAttributes
+            for (kind, value) in marks { attributes[.noteMark(kind)] = value }
+            attributes[.noteMark(.link)] = nil
+            if !marks.isEmpty {
+                let base = self.attributes(forParagraphAt: selection.location)[.font] as? NSFont ?? style.bodyFont
+                attributes.merge(style.markedAttributes(marks: marks, baseFont: base)) { _, new in new }
+            }
+            textView.typingAttributes = attributes
         }
         onSelectionChange?(selection)
         onCaretChange?()
@@ -2739,9 +2780,15 @@ struct NoteSlashSession {
     var capturedText: NoteCapturedTextTarget { .init(noteID: noteID, range: range, literal: literal) }
     var items: [NoteSlashItem] {
         guard !query.isEmpty else { return NoteSlashItem.all }
-        return NoteSlashItem.all.filter { item in
+        let matches = NoteSlashItem.all.filter { item in
             item.title.localizedStandardContains(query) || item.aliases.contains { $0.localizedStandardContains(query) }
         }
+        // An exact alias wins over a substring: /list means List, rather
+        // than the earlier Checklist row whose name also contains "list".
+        func exact(_ item: NoteSlashItem) -> Bool {
+            ([item.title] + item.aliases).contains { $0.localizedCaseInsensitiveCompare(query) == .orderedSame }
+        }
+        return matches.filter(exact) + matches.filter { !exact($0) }
     }
 }
 
@@ -2836,7 +2883,7 @@ extension NoteEditorEngine {
         let selected = NSRange(location: line.location, length: 0)
         let didFormat = perform(.paragraph(format), selection: selected)
         if prefix == "- [x] ", didFormat { toggleCheckbox(atLineOf: line.location) }
-        textView.setSelectedRange(selected)
+        textView.setSelectedRange(NSRange(location: selected.location + (format == .checklist ? 1 : 0), length: 0))
         return didFormat
     }
 
@@ -2999,7 +3046,7 @@ extension NoteEditorEngine {
     func handleShortcut(_ event: NSEvent) -> Bool {
         guard !isReadOnly, activity == .idle, textView?.hasMarkedText() != true else { return false }
         guard let command = NoteCommandCatalog.command(for: event) else { return false }
-        return perform(command)
+        return NoteCommandRouter(engine: self).run(command, from: .shortcut)
     }
 }
 
