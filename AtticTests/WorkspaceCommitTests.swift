@@ -99,6 +99,34 @@ final class WorkspaceCommitTests: XCTestCase {
         XCTAssertEqual(try coordinator.freshContext().fetchCount(FetchDescriptor<OperationReceipt>()), ids.count)
     }
 
+    func testR3OverlappingSaveRetriesBeforeBackoffAndExplicitRetryDrainsEveryEntry() throws {
+        let context = coordinator.freshContext(), ids = (0..<9).map { _ in UUID() }
+        for id in ids { context.insert(TaskItem(id: id, title: "before")) }
+        try context.save()
+        coordinator.retryNow = { 100 }
+        coordinator.save = { context in
+            if context.changedModelsArray.contains(where: { $0 is OperationReceipt }) { throw WorkspaceFoundationError.unknown }
+            try context.save()
+        }
+        for id in ids {
+            let owners: Set<WorkspaceOwner> = [.init(entity: .task, id: id)]
+            try coordinator.commitCompatibility(tokens: coordinator.capture(owners), scopes: [], writes: owners,
+                intent: "held entry", plain: false, writer: coordinator.save, stage: { context in
+                    try TaskStore.stageUpdate(in: context, taskID: id, title: "once", timestamp: Date())
+                })
+        }
+        coordinator.save = { try $0.save() }
+        let attempts = coordinator.compatibilityRetryAttempts
+        let tasks = TaskStore(container: container)
+        XCTAssertTrue(tasks.update(try XCTUnwrap(tasks.task(withID: ids[0])), title: "after fault cleared"),
+            "an overlapping save retries immediately even before the backoff deadline")
+        XCTAssertEqual(coordinator.compatibilityRetryAttempts - attempts, 1)
+        XCTAssertTrue(coordinator.retryHeldWrites(), "explicit unscoped retry drains more than four held entries")
+        XCTAssertEqual(coordinator.compatibilityRetryAttempts - attempts, ids.count)
+        XCTAssertEqual(try coordinator.freshContext().fetchCount(FetchDescriptor<OperationReceipt>()), ids.count)
+        XCTAssertEqual(tasks.task(withID: ids[0])?.title, "after fault cleared")
+    }
+
     func testR5DisjointPlainUnknownRefusalRollsBackAndReloadsDurableTruth() throws {
         let tasks = TaskStore(container: container, persist: { context in
             try context.save(); throw WorkspaceFoundationError.unknown

@@ -56,6 +56,7 @@ def parse_log(path):
     """Markers can follow raw output or GitHub's job/step/timestamp prefix."""
     found = {}
     raw_pf5 = {}
+    fresh_open = []
     for line in Path(path).read_text().splitlines():
         match = re.search(r'\b(PF|PF1)_REFERENCE_JSON=(.*)', line)
         if match:
@@ -64,6 +65,9 @@ def parse_log(path):
         match = re.search(r'\bPF5_SAMPLES_([A-Z0-9_]+)=(.*)', line)
         if match:
             raw_pf5[match[1]] = match[2]
+        match = re.search(r'\bPF_FRESH_OPEN_SAMPLE_JSON=(.*)', line)
+        if match:
+            fresh_open.append(json.loads(match[1]))
     result = {}
     for name, required in (('PF', PF_KEYS), ('PF1', PF1_KEYS)):
         payload = json.loads(found[name])
@@ -73,6 +77,10 @@ def parse_log(path):
         if name == 'PF' and values.keys() & COLD_KEYS and not COLD_KEYS <= values.keys():
             raise ValueError('incomplete cold metrics')
         result[name] = values
+    if fresh_open:
+        if len(fresh_open) != 7 or len({sample['pid'] for sample in fresh_open}) != 7:
+            raise ValueError('fresh open growth requires seven distinct test-host processes')
+        result['PF']['POPULATED_OPEN_GROWTH_MB'] = validated([sample['growth'] for sample in fresh_open])
     if set(raw_pf5) != PF5_KEYS:
         raise ValueError('missing PF5 quintiles')
     result['PF5'] = {key: validated([float(v) for v in raw.split(',')])
@@ -167,6 +175,11 @@ def main(argv=None):
         paths = [(root / 'pf-base.log', root / 'pf-candidate.log', root / 'pf-base-after.log')
                  for root in args.prior_run]
         paths.append((args.base, args.candidate, args.base_after))
+        for b, c, a in paths:
+            logs = [Path(path).read_text() for path in [b, c] + ([a] if a else [])]
+            fresh = ['PF_FRESH_OPEN_SAMPLE_JSON=' in log for log in logs]
+            if any(fresh) and not all(fresh):
+                raise ValueError('fresh open growth must use matched base/candidate/base-after samples')
         attempts = [(parse_log(b), parse_log(c), parse_log(a) if a else None)
                     for b, c, a in paths]
         base = attempts[0][0]

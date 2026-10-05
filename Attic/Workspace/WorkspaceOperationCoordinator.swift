@@ -216,18 +216,27 @@ final class WorkspaceOperationCoordinator {
         return !compatibilityPending.contains(id)
     }
     /// The idle path remains two empty checks. Automatic callers visit only
-    /// due entries, with at most four receipt/finalization attempts per save.
+    /// due or overlapping entries, with at most four attempts per save.
     /// A nil scope is an explicit retry, retained for existing recovery callers.
     func retryHeldWrites(affecting affected: Set<WorkspaceOwner>? = nil) -> Bool {
         if plainUnknown != nil, reconcilePlain() == .unknown { return false }
         if !compatibilityPending.isEmpty {
             let now = retryNow()
-            let due = compatibilityPending.filter { affected == nil || (compatibilityRetries[$0]?.due ?? 0) <= now }
+            let overlapping = Set(compatibilityPending.filter { id in
+                guard let affected, let envelope = pending[id]?.0 else { return false }
+                return !affected.isDisjoint(with: Set(envelope.tokens.map(\.owner)).union(envelope.writes))
+            })
+            let due = compatibilityPending.filter { id in
+                guard affected != nil else { return true }
+                return overlapping.contains(id) || (compatibilityRetries[id]?.due ?? 0) <= now
+            }
                 .sorted {
+                    let leftOverlaps = overlapping.contains($0), rightOverlaps = overlapping.contains($1)
+                    if leftOverlaps != rightOverlaps { return leftOverlaps }
                     let left = compatibilityRetries[$0]?.due ?? 0, right = compatibilityRetries[$1]?.due ?? 0
                     return left == right ? $0.uuidString < $1.uuidString : left < right
                 }
-            for id in due.prefix(Self.automaticRetryLimit) { retryCompatibility(id) }
+            for id in due.prefix(affected == nil ? due.count : Self.automaticRetryLimit) { retryCompatibility(id) }
         }
         return affected.map { $0.isDisjoint(with: heldOwners) } ?? compatibilityPending.isEmpty
     }

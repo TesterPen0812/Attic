@@ -149,9 +149,20 @@ jobs:
               -only-testing:"AtticTests/NotesPageControllerTests/$test" test-without-building \
               | tee -a .build/pf-base-after-phase2.log || true
           done
+      - name: OD-10 fresh-process fallback for unmeasurable populated open growth
+        if: ${{ !cancelled() && !inputs.harness_only }}
+        run: |
+          python3 Scripts/pf_fresh_open_memory.py \
+            --base .build/pf-base.log --candidate .build/pf-candidate.log --base-after .build/pf-base-after.log \
+            --baseline-project "$RUNNER_TEMP/AtticPFBase/Attic.xcodeproj" \
+            --baseline-dd "$RUNNER_TEMP/AtticPFBaseBuild" \
+            --candidate-project Attic.xcodeproj --candidate-dd .build/dd \
+            --output-dir .build/pf-fresh-open
       - name: Test paired PF gate plumbing
         if: ${{ !cancelled() && !inputs.harness_only }}
-        run: python3 Scripts/test_pf_paired_gate.py
+        run: |
+          python3 Scripts/test_pf_paired_gate.py
+          python3 Scripts/test_pf_fresh_open_memory.py
       - name: Evaluate paired PF gate
         env:
           GH_TOKEN: ${{ github.token }}
@@ -286,6 +297,7 @@ jobs:
             -parallel-testing-enabled NO -test-timeouts-enabled YES \
             -default-test-execution-time-allowance 120 -maximum-test-execution-time-allowance 360 \
             "${F[@]}" -only-testing:AtticTests \
+            -skip-testing:AtticTests/TaskPerformanceGateTests/testPFPopulatedOpenGrowthFreshProcessSample \
             -skip-testing:AtticTests/TaskPerformanceGateTests/testPFFoundationSizeAndProductionPaths \
             -skip-testing:AtticTests/TaskPerformanceGateTests/testPF1LargeAutosaveAndPreparedCommitAgainstPairedBase \
             -skip-testing:AtticTests/TaskPerformanceGateTests/testPF5InterleavedSessionSoakAgainstPairedBase test-without-building | tee .build/foundation.log
@@ -344,6 +356,7 @@ jobs:
             .build/pf-base-after.log
             .build/pf-base-after-phase2.log
             .build/pf-gate.txt
+            .build/pf-fresh-open
             .build/done-results-reference.log
             .build/done-results-candidate.log
             .build/done-results-candidate.xcresult

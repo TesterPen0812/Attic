@@ -124,7 +124,7 @@ final class WorkspaceSessionTests: XCTestCase {
     }
 
     func testLateImportCheckpointAndPublicationResultsDropAfterEditRebindRefreshAndClose() async throws {
-        let page = try page()
+        var page = try page()
         var lease = try page.acquire(surfaceID: UUID())
         for boundary in ["edit", "rebind", "refresh", "close"] {
             let stamps = try (0..<3).map { _ in try XCTUnwrap(page.captureCallback(for: lease)) }
@@ -140,7 +140,7 @@ final class WorkspaceSessionTests: XCTestCase {
                 XCTAssertFalse(page.install(stamp) { XCTFail("stale \\(boundary) result installed") })
                 for step in page.publication(for: stamp, install: { XCTFail("stale publication installed") }).steps { try step(UUID()) }
             }
-            if boundary == "close" { lease = try page.acquire(surfaceID: UUID()) }
+            if boundary == "close" { page = try self.page(); lease = try page.acquire(surfaceID: UUID()) }
             let current = try XCTUnwrap(page.captureCallback(for: lease))
             var installed = false
             XCTAssertTrue(page.install(current) { installed = true })
@@ -148,7 +148,7 @@ final class WorkspaceSessionTests: XCTestCase {
         }
     }
 
-    func testLateWorkspaceImportAfterDraftEditDropsPayloadAndKeepsPendingSource() async throws {
+    func testWorkspaceImportKeepsNewerDraftAndSavesInsertedImage() async throws {
         let barrier = WorkspaceCallbackBarrier()
         let data = try XCTUnwrap(Data(base64Encoded: "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jRZkAAAAASUVORK5CYII="))
         let source = root.appendingPathComponent("source.png")
@@ -167,11 +167,219 @@ final class WorkspaceSessionTests: XCTestCase {
         await barrier.waitUntilStarted()
         try type(" later edit", in: page)
         await barrier.release(); await notes.waitForImportWork()
+        XCTAssertEqual(try XCTUnwrap(page.note).engine.objectIDs().count, 1)
+        XCTAssertTrue(try XCTUnwrap(page.note).engine.plainText.contains("later edit"))
+        XCTAssertFalse(try XCTUnwrap(page.note).isImporting)
+        await notes.runDueSave(try XCTUnwrap(page.note))
+        XCTAssertEqual(notes.store.loadDocument(noteID: noteID)?.content.document, page.note?.engine.document())
+        XCTAssertEqual(page.note?.state, .clean)
+    }
+
+    func testWorkspaceImportHandoffAndCloseCancelBatchAndKeepSource() async throws {
+        for closing in [false, true] {
+            let barrier = WorkspaceCallbackBarrier()
+            let source = root.appendingPathComponent("handoff-\(closing).png")
+            let data = Data([1, 2, 3])
+            try data.write(to: source)
+            let controller = NotesPageController(store: notes.store, journal: coordinator.journal, defaults: nil,
+                saveDelay: .seconds(600), durabilityDelay: .seconds(600), imageLoader: { _ in
+                    await barrier.pause()
+                    return (StagedNoteAttachment(id: UUID(), filename: "source.png", contentTypeIdentifier: "public.png",
+                        byteCount: Int64(data.count), digest: NotePayloadDigest.sha256(data), data: data), nil)
+                })
+            // Give the second iteration a distinct workspace/controller.
+            let task = UUID(), id = UUID(), context = coordinator.freshContext()
+            context.insert(TaskItem(id: task, title: "Import"))
+            let row = NoteItem(id: id); row.taskID = task
+            NoteStore.stageDocumentContent(try PreparedNoteDocument(.init(blocks: [.text("Import body")])),
+                format: 1, on: [row], timestamp: Date(), revision: 0, revisionID: UUID())
+            context.insert(row); try context.save(); controller.store.refresh()
+            let opened = await controller.openDurably(noteID: id)
+            XCTAssertTrue(opened)
+            let page = try coordinator.sessions.session(for: .task(task), notes: controller)
+            let lease = try page.acquire(surfaceID: UUID())
+            controller.importFiles([source])
+            await barrier.waitUntilStarted()
+            if closing {
+                let closed = await page.close(lease)
+                XCTAssertTrue(closed)
+            } else {
+                _ = try page.handoff(from: lease, to: UUID())
+            }
+            await barrier.release()
+            await controller.waitForImportWork(); await controller.waitForRecoveryWork()
+            XCTAssertFalse(try XCTUnwrap(page.note).isImporting)
+            XCTAssertTrue(try XCTUnwrap(page.note).engine.objectIDs().isEmpty)
+            XCTAssertTrue(FileManager.default.fileExists(atPath: source.path))
+            let entries = try await coordinator.journal.readRecoveryEntries()
+            for entry in entries {
+                if case let .valid(draft, _, _) = entry, draft.noteID == id {
+                    XCTAssertNil(draft.pendingImport, "cancellation cannot leave recoverable pending metadata")
+                }
+            }
+        }
+    }
+
+    func testWorkspaceImportBindingMismatchCancelsInsteadOfSticking() async throws {
+        let barrier = WorkspaceCallbackBarrier(), data = Data([1, 2, 3])
+        let source = root.appendingPathComponent("stale.png")
+        try data.write(to: source)
+        notes = NotesPageController(store: notes.store, journal: coordinator.journal, defaults: nil,
+            saveDelay: .seconds(600), durabilityDelay: .seconds(600), imageLoader: { _ in
+                await barrier.pause()
+                return (StagedNoteAttachment(id: UUID(), filename: "stale.png", contentTypeIdentifier: "public.png",
+                    byteCount: Int64(data.count), digest: NotePayloadDigest.sha256(data), data: data), nil)
+            })
+        let opened = await notes.openDurably(noteID: noteID)
+        XCTAssertTrue(opened)
+        let page = try page(); _ = try page.acquire(surfaceID: UUID())
+        notes.importFiles([source]); await barrier.waitUntilStarted()
+        try XCTUnwrap(page.note).invalidateCallbacks()
+        await barrier.release(); await notes.waitForImportWork(); await notes.waitForRecoveryWork()
+        XCTAssertFalse(try XCTUnwrap(page.note).isImporting)
         XCTAssertTrue(try XCTUnwrap(page.note).engine.objectIDs().isEmpty)
-        XCTAssertEqual(page.note?.engine.plainText, "Body later edit")
-        XCTAssertTrue(try XCTUnwrap(page.note).isImporting, "pending source remains owned for recovery/cancellation")
-        let entries = try await coordinator.journal.readRecoveryEntries()
-        XCTAssertFalse(entries.isEmpty)
+        XCTAssertTrue(FileManager.default.fileExists(atPath: source.path))
+    }
+
+    func testOrdinaryNotesCheckpointCompletionAfterEditClearsNoticeAndReportsFailure() async throws {
+        for failing in [false, true] {
+            let id = UUID(), context = coordinator.freshContext()
+            // Separate notes keep the two recovery outcomes independent.
+            let fixture = NoteItem(id: id)
+            NoteStore.stageDocumentContent(try PreparedNoteDocument(.init(blocks: [.text("Body")])),
+                format: 1, on: [fixture], timestamp: Date(), revision: 0, revisionID: UUID())
+            context.insert(fixture); try context.save()
+            let barrier = WorkspaceCallbackBarrier()
+            let journal = WorkspaceBarrierJournal(base: coordinator.journal, barrier: barrier, failWrite: failing)
+            let controller = NotesPageController(store: NoteStore(container: container,
+                persist: { _ in throw WorkspaceFoundationError.unknown }, attachmentFileStore: makeTestAttachmentFileStore()),
+                journal: journal, defaults: nil, saveDelay: .seconds(600), durabilityDelay: .seconds(600))
+            let opened = await controller.openDurably(noteID: id)
+            XCTAssertTrue(opened)
+            let note = try XCTUnwrap(controller.active)
+            note.engine.performEdit(NSRange(location: note.engine.textStorage.length, length: 0),
+                with: NSAttributedString(string: " first"), name: "Typing")
+            _ = controller.preserve(note)
+            await barrier.waitUntilStarted()
+            XCTAssertEqual(note.notice, "Saving recovery data…")
+            note.engine.performEdit(NSRange(location: note.engine.textStorage.length, length: 0),
+                with: NSAttributedString(string: " newer"), name: "Typing")
+            await barrier.release(); await controller.waitForRecoveryWork()
+            XCTAssertNil(note.notice)
+            XCTAssertEqual(note.engine.plainText, "Body first newer")
+            XCTAssertFalse(controller.workspaceIsDurable(note))
+            if failing {
+                if case let .onlyInMemory(reason) = note.state { XCTAssertTrue(reason.contains("Recovery could not be saved")) }
+                else { XCTFail("checkpoint failure must be reported despite the newer draft") }
+            } else {
+                if case .notSaved = note.state {} else { XCTFail("successful recovery reports store failure") }
+                let entries = try await coordinator.journal.readRecoveryEntries()
+                XCTAssertFalse(entries.isEmpty)
+            }
+        }
+    }
+
+    func testNotesOpenRefusesLeasedWorkspaceAndExternalRefreshKeepsOneSession() throws {
+        let page = try page(), note = try XCTUnwrap(page.note), engine = note.engine
+        let lease = try page.acquire(surfaceID: UUID())
+        XCTAssertFalse(notes.open(noteID: noteID))
+        XCTAssertNil(notes.active)
+        let context = coordinator.freshContext()
+        let id = noteID!
+        let rows = try context.fetch(FetchDescriptor<NoteItem>(predicate: #Predicate { $0.id == id }))
+        NoteStore.stageDocumentContent(try PreparedNoteDocument(.init(blocks: [.text("Changed externally")])),
+            format: 1, on: rows, timestamp: Date(), revision: 1, revisionID: UUID())
+        try context.save(); notes.store.refresh()
+        XCTAssertFalse(notes.open(noteID: noteID))
+        XCTAssertTrue(page.note === note); XCTAssertTrue(page.note?.engine === engine)
+        page.externalRefresh(origin: "agent")
+        XCTAssertTrue(page.note === note)
+        XCTAssertTrue(notes.workspaceSession(noteID: noteID) === note)
+        XCTAssertEqual(note.engine.plainText, "Changed externally")
+        XCTAssertEqual(page.activeLease, lease)
+        XCTAssertFalse(notes.openFailedDraft(sessionID: note.id))
+    }
+
+    func testSuspendWorkspaceDoesNotDetachTheActiveNotesEditor() async throws {
+        let barrier = WorkspaceCallbackBarrier(), data = Data([1, 2, 3])
+        let source = root.appendingPathComponent("active.png")
+        try data.write(to: source)
+        notes = NotesPageController(store: notes.store, journal: coordinator.journal, defaults: nil,
+            saveDelay: .seconds(600), durabilityDelay: .seconds(600), imageLoader: { _ in
+                await barrier.pause()
+                return (StagedNoteAttachment(id: UUID(), filename: "active.png", contentTypeIdentifier: "public.png",
+                    byteCount: Int64(data.count), digest: NotePayloadDigest.sha256(data), data: data), nil)
+            })
+        let opened = await notes.openDurably(noteID: noteID)
+        XCTAssertTrue(opened)
+        let note = try XCTUnwrap(notes.active)
+        let (scroll, view) = note.engine.makeView()
+        _ = scroll
+        notes.importFiles([source]); await barrier.waitUntilStarted()
+        notes.suspendWorkspace(note)
+        XCTAssertTrue(note.engine.textView === view)
+        XCTAssertTrue(note.isImporting, "suspending a workspace must not cancel the active Notes page's batch")
+        await barrier.release(); await notes.waitForImportWork(); await notes.waitForRecoveryWork()
+        XCTAssertEqual(note.engine.objectIDs().count, 1)
+        XCTAssertFalse(note.isImporting)
+        note.engine.detachView()
+    }
+
+    func testCleanCloseReleasesRegistryPageAndCachedEngine() async throws {
+        var page: WorkspacePageSession? = try self.page()
+        weak var weakPage = page
+        weak var weakNote = page?.note
+        weak var weakEngine = page?.note?.engine
+        let lease = try XCTUnwrap(page).acquire(surfaceID: UUID())
+        let closed = await page!.close(lease)
+        XCTAssertTrue(closed)
+        XCTAssertFalse(try XCTUnwrap(page?.note).usesWorkspaceBinding)
+        XCTAssertThrowsError(try page!.acquire(surfaceID: UUID()))
+        page = nil
+        XCTAssertNil(weakPage); XCTAssertNil(weakNote); XCTAssertNil(weakEngine)
+        let reopened = try self.page()
+        XCTAssertEqual(reopened.note?.engine.plainText, "Body")
+    }
+
+    func testAliasResolutionFetchesOnlyMatchingReplicasInPopulatedStore() throws {
+        let context = coordinator.freshContext()
+        for _ in 0..<40 {
+            let task = TaskItem(title: "Unrelated"), note = NoteItem()
+            note.taskID = task.id
+            context.insert(task); context.insert(note)
+            context.insert(TaskNoteAssociation(taskID: task.id, noteID: note.id))
+        }
+        // Agreeing duplicates must all participate in the scoped fetch.
+        let duplicate = NoteItem(id: noteID); duplicate.taskID = taskID
+        context.insert(duplicate)
+        context.insert(TaskNoteAssociation(taskID: taskID, noteID: noteID))
+        try context.save(); notes.store.refresh()
+        var fetched: [(Int, Int)] = []
+        coordinator.sessions.didFetchResolutionRows = { fetched.append(($0, $1)) }
+        _ = try page()
+        _ = try coordinator.sessions.session(for: .note(noteID), notes: notes)
+        XCTAssertEqual(fetched.map { $0.0 }, [4, 6])
+        XCTAssertEqual(fetched.map { $0.1 }, [4, 6])
+        duplicate.taskID = UUID(); try context.save()
+        XCTAssertThrowsError(try page(), "divergent replicas still refuse after predicate narrowing")
+    }
+
+    func testOrphanRegistryRebindDropsOldPages() async throws {
+        await notes.store.waitForAttachmentReconciliation()
+        let registry = coordinator.sessions
+        weak var oldPage: WorkspacePageSession?
+        do { let page = try self.page(); oldPage = page }
+        XCTAssertNotNil(oldPage)
+        notes = nil
+        coordinator = nil
+        let replacement = try WorkspaceOperationCoordinator(container: container, journal: NoteDraftJournal(directory: root))
+        registry.rebind(to: replacement)
+        XCTAssertTrue(replacement.sessions === registry)
+        XCTAssertNil(oldPage)
+        let otherNotes = NotesPageController(store: NoteStore(container: container, attachmentFileStore: makeTestAttachmentFileStore()),
+            journal: replacement.journal, defaults: nil)
+        let fresh = try replacement.sessions.session(for: .task(taskID), notes: otherNotes)
+        XCTAssertEqual(fresh.note?.engine.plainText, "Body")
     }
 
     func testPreparedSaveDropsAfterLeaseHandoffWithoutOverwritingDurableBody() async throws {
@@ -209,7 +417,9 @@ final class WorkspaceSessionTests: XCTestCase {
         let entries = try await coordinator.journal.readRecoveryEntries()
         XCTAssertEqual(entries.count, 1, "stale completion retains durable recovery ownership")
         XCTAssertEqual(page.note?.engine.plainText, "Body first")
-        XCTAssertNotEqual(note.notice, nil, "stale callback cannot install its old notice result")
+        XCTAssertNil(note.notice, "completed recovery must clear its saving notice")
+        XCTAssertFalse(notes.workspaceIsDurable(note), "old binding must not verify the current draft")
+        if case .notSaved = note.state {} else { XCTFail("checkpoint success reports the failed store save") }
     }
 
     func testCloseSavesTheDraftBeforeRevokingLeaseAndHiddenIdleDoesNotPoll() async throws {
@@ -271,8 +481,11 @@ final class WorkspaceSessionTests: XCTestCase {
         guard case let .valid(entry, _, _) = entries[0] else { return XCTFail("missing claimed recovery") }
         XCTAssertEqual(NoteContentCodec.decode(entry.content).document?.title, "Body checkpointed")
         XCTAssertNil(coordinator.ownership.tryAcquire([noteID], kind: .collection))
-        XCTAssertEqual(try page.acquire(surfaceID: UUID()), page.activeLease)
-        XCTAssertEqual(page.note?.engine.plainText, "Body checkpointed")
+        let reopened = try self.page()
+        XCTAssertFalse(reopened === page)
+        _ = try reopened.acquire(surfaceID: UUID())
+        XCTAssertTrue(reopened.note === page.note, "protected recovery draft keeps one cached session")
+        XCTAssertEqual(reopened.note?.engine.plainText, "Body checkpointed")
     }
 
     func testExternalRefreshReplacesCleanEngineAndPreservesDirtyDraftBehindABarrier() throws {
@@ -287,6 +500,8 @@ final class WorkspaceSessionTests: XCTestCase {
         page.externalRefresh(origin: "agent")
         XCTAssertFalse(page.install(stale) { XCTFail("stale external result") })
         XCTAssertFalse(page.note?.engine === old)
+        XCTAssertTrue(page.note === notes.workspaceSession(noteID: noteID))
+        XCTAssertTrue(page.note?.engine.history.workspace === page.history)
         XCTAssertEqual(page.note?.engine.plainText, "External")
         XCTAssertFalse(page.history.undo(), "external barrier has no inverse")
         try type(" local draft", in: page)
@@ -400,10 +615,12 @@ private final class WorkspaceBarrierJournal: NoteDraftJournaling {
     let barrier: WorkspaceCallbackBarrier
     var workspaceJournal: NoteDraftJournal? { base }
     var requiresAsyncIO: Bool { true }
-    init(base: NoteDraftJournal, barrier: WorkspaceCallbackBarrier) { self.base = base; self.barrier = barrier }
+    let failWrite: Bool
+    init(base: NoteDraftJournal, barrier: WorkspaceCallbackBarrier, failWrite: Bool = false) { self.base = base; self.barrier = barrier; self.failWrite = failWrite }
     func writeDurably(_ entry: NoteDraftJournalEntry, staged: [StagedNoteAttachment],
                       replacing claim: NoteRecoveryClaim?) async throws -> NoteRecoveryClaim {
         await barrier.pause()
+        if failWrite { throw WorkspaceFoundationError.unknown }
         return try await base.writeDurably(entry, staged: staged, replacing: claim)
     }
     func retireDurably(noteID: UUID, claim: NoteRecoveryClaim?, saved: NoteRecoverySavedState?) async throws {

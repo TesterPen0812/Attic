@@ -330,6 +330,68 @@ extension TaskPerformanceGateTests {
         let value = try body()
         return (value, Double(DispatchTime.now().uptimeNanoseconds - start) / 1_000_000)
     }
+    private func seedPFOpenStore(root: URL, populated: Bool, headID: UUID, noteID: UUID,
+                                 document: NoteDocument, revision: UUID, timestamp: Date) throws {
+        try autoreleasepool {
+            let container = try PersistenceController.makeContainer(cloudSyncEnabled: false, storeDirectory: root)
+            let seed = ModelContext(container)
+            let head = TaskItem(id: headID, title: "Measured head", manualOrder: 0)
+            seed.insert(head)
+            // Keep the active task fixture identical in both size cases.
+            for i in 1..<200 { seed.insert(TaskItem(title: "Task \(i)", manualOrder: Int64(i) * 1_024)) }
+            let prepared = try PreparedNoteDocument(document)
+            let note = NoteItem(id: noteID)
+            note.content = prepared.content; note.contentFormat = 1
+            note.title = prepared.title; note.body = prepared.body; note.plainText = prepared.plainText
+            note.revisionID = revision
+            seed.insert(note)
+            if populated {
+                let unrelated = try PreparedNoteDocument(NoteDocument(blocks: [.text(String(repeating: "unrelated ", count: 4_096))]))
+                for i in 0..<240 {
+                    let other = NoteItem(title: "Unrelated \(i)", body: unrelated.body)
+                    other.content = unrelated.content; other.contentFormat = 1
+                    other.plainText = unrelated.plainText; other.revisionID = UUID()
+                    seed.insert(other)
+                    seed.insert(NoteVersion(noteID: other.id, createdAt: timestamp, reason: .leave,
+                        content: unrelated.content, contentFormat: 1, title: other.title, body: other.body,
+                        attachmentIDs: [], sourceRevisionID: other.revisionID))
+                    seed.insert(NotePendingEdit(noteID: other.id, baseRevisionToken: other.revisionToken,
+                        proposedContent: unrelated.content, agentName: "PF seed", createdAt: timestamp))
+                    let bytes = Data(repeating: UInt8(i % 255), count: 128 * 1_024)
+                    seed.insert(NoteAttachment(noteID: other.id, originalFilename: "seed-\(i).bin", byteCount: Int64(bytes.count),
+                        sortIndex: 0, contentDigest: NotePayloadDigest.sha256(bytes), payload: bytes))
+                }
+            }
+            try seed.save()
+        }
+    }
+
+    /// OD-10: exactly one populated open in a new test-host process. The CI
+    /// fallback collects seven independent processes per build/role, with the
+    /// same fixture and sampler as the original open loop.
+    func testPFPopulatedOpenGrowthFreshProcessSample() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("AtticPFFreshOpen-\(UUID())")
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let document = NoteDocument(blocks: (0..<5_000).map { .text("Line \($0) with ordinary note text") })
+        try seedPFOpenStore(root: root, populated: true, headID: UUID(), noteID: UUID(),
+            document: document, revision: UUID(), timestamp: Date())
+        let baseline = PFFootprintSampler.cleanBaseline()
+        let sampler = PFFootprintSampler(baseline: baseline)
+        let opened = try PersistenceController.makeContainer(cloudSyncEnabled: false, storeDirectory: root)
+        let tasks = TaskStore(container: opened)
+        let notes = NoteStore(container: opened, attachmentFileStore: makeTestAttachmentFileStore())
+        let library = AtticLibrary(tasks: tasks, notes: notes)
+        XCTAssertEqual(tasks.tasks.count, 200)
+        XCTAssertEqual(library.tasks.tasks.count, 200)
+        await notes.waitForAttachmentReconciliation()
+        let sample = sampler.finish()
+        let record: [String: Double] = ["growth": sample.growth, "pid": Double(ProcessInfo.processInfo.processIdentifier),
+            "baseline": baseline, "absolutePeak": sample.absolutePeak]
+        print("PF_FRESH_OPEN_SAMPLE_JSON=" + String(decoding: try JSONEncoder().encode(record), as: UTF8.self))
+        fflush(stdout)
+    }
+
     /// PF2 is measured THROUGH AtticLibrary, including its authoritative undo
     /// and before/after reads. PF3 compares the identical writes with 240
     /// unrelated notes, versions, proposals and attachments (over 60 MiB).
@@ -348,38 +410,8 @@ extension TaskPerformanceGateTests {
             try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
             let headID = UUID(), noteID = UUID(), revision = UUID(), timestamp = Date()
             let document = NoteDocument(blocks: (0..<5_000).map { .text("Line \($0) with ordinary note text") })
-            try autoreleasepool {
-                let container = try PersistenceController.makeContainer(cloudSyncEnabled: false, storeDirectory: root)
-                let seed = ModelContext(container)
-                let head = TaskItem(id: headID, title: "Measured head", manualOrder: 0)
-                seed.insert(head)
-                // Keep the active task fixture identical in both size cases.
-                for i in 1..<200 { seed.insert(TaskItem(title: "Task \(i)", manualOrder: Int64(i) * 1_024)) }
-                let prepared = try PreparedNoteDocument(document)
-                let note = NoteItem(id: noteID)
-                note.content = prepared.content; note.contentFormat = 1
-                note.title = prepared.title; note.body = prepared.body; note.plainText = prepared.plainText
-                note.revisionID = revision
-                seed.insert(note)
-                if populated {
-                    let unrelated = try PreparedNoteDocument(NoteDocument(blocks: [.text(String(repeating: "unrelated ", count: 4_096))]))
-                    for i in 0..<240 {
-                        let other = NoteItem(title: "Unrelated \(i)", body: unrelated.body)
-                        other.content = unrelated.content; other.contentFormat = 1
-                        other.plainText = unrelated.plainText; other.revisionID = UUID()
-                        seed.insert(other)
-                        seed.insert(NoteVersion(noteID: other.id, createdAt: timestamp, reason: .leave,
-                            content: unrelated.content, contentFormat: 1, title: other.title, body: other.body,
-                            attachmentIDs: [], sourceRevisionID: other.revisionID))
-                        seed.insert(NotePendingEdit(noteID: other.id, baseRevisionToken: other.revisionToken,
-                            proposedContent: unrelated.content, agentName: "PF seed", createdAt: timestamp))
-                        let bytes = Data(repeating: UInt8(i % 255), count: 128 * 1_024)
-                        seed.insert(NoteAttachment(noteID: other.id, originalFilename: "seed-\(i).bin", byteCount: Int64(bytes.count),
-                            sortIndex: 0, contentDigest: NotePayloadDigest.sha256(bytes), payload: bytes))
-                    }
-                }
-                try seed.save()
-            }
+            try seedPFOpenStore(root: root, populated: populated, headID: headID, noteID: noteID,
+                document: document, revision: revision, timestamp: timestamp)
             let baseline = PFFootprintSampler.cleanBaseline()
             let label = populated ? "POPULATED" : "EMPTY"
             var opens: [Double] = [], footprints: [Double] = [], absolutePeaks: [Double] = []

@@ -34,7 +34,9 @@ final class WorkspaceSessionRegistry {
         let domain = WorkspacePersistenceDomain(coordinator.container)
         domains = domains.filter { $0.value.value != nil }
         if let existing = domains[domain]?.value {
-            if existing.coordinator == nil { existing.coordinator = coordinator }
+            if existing.coordinator == nil {
+                existing.rebind(to: coordinator)
+            }
             return existing
         }
         let registry = WorkspaceSessionRegistry(coordinator: coordinator, domain: domain)
@@ -45,8 +47,16 @@ final class WorkspaceSessionRegistry {
     private weak var coordinator: WorkspaceOperationCoordinator?
     let domain: WorkspacePersistenceDomain
     private var sessions: [Identity: WorkspacePageSession] = [:]
+    /// Optional diagnostic of rows actually materialized by alias resolution.
+    var didFetchResolutionRows: ((Int, Int) -> Void)?
     private init(coordinator: WorkspaceOperationCoordinator, domain: WorkspacePersistenceDomain) {
         self.coordinator = coordinator; self.domain = domain
+    }
+    /// Shared-domain lookup calls this only after the previous coordinator
+    /// disappears. Never carry pages bound to that coordinator into its successor.
+    func rebind(to coordinator: WorkspaceOperationCoordinator) {
+        sessions.removeAll()
+        self.coordinator = coordinator
     }
 
     /// Resolve every physical alias conservatively. Divergent association
@@ -54,16 +64,26 @@ final class WorkspaceSessionRegistry {
     private func resolve(_ identity: Identity) throws -> (Identity, UUID?) {
         guard let coordinator else { throw WorkspaceFoundationError.protectedOwner }
         let context = coordinator.freshContext()
-        let notes = try context.fetch(FetchDescriptor<NoteItem>())
-        let associations = try context.fetch(FetchDescriptor<TaskNoteAssociation>())
+        var noteRows = 0, associationRows = 0
+        func notes(id: UUID) throws -> [NoteItem] {
+            let rows = try context.fetch(FetchDescriptor<NoteItem>(predicate: #Predicate { $0.id == id }))
+            noteRows += rows.count
+            return rows
+        }
+        func links(noteID: UUID) throws -> [TaskNoteAssociation] {
+            let rows = try context.fetch(FetchDescriptor<TaskNoteAssociation>(predicate: #Predicate { $0.noteID == noteID && $0.detachedAt == nil }))
+            associationRows += rows.count
+            return rows
+        }
+        defer { didFetchResolutionRows?(noteRows, associationRows) }
         let taskID: UUID?
         switch identity {
         case let .task(id): taskID = id
         case let .note(id):
-            let rows = notes.filter { $0.id == id }
+            let rows = try notes(id: id)
             guard !rows.isEmpty else { throw WorkspaceFoundationError.conflict }
-            let links = associations.filter { $0.noteID == id && $0.detachedAt == nil }
-            let owners = Set(rows.compactMap(\.taskID)).union(links.map(\.taskID))
+            let associations = try links(noteID: id)
+            let owners = Set(rows.compactMap(\.taskID)).union(associations.map(\.taskID))
             guard owners.count <= 1, rows.allSatisfy({ $0.taskID == rows[0].taskID }) else {
                 throw WorkspaceFoundationError.conflict
             }
@@ -76,13 +96,16 @@ final class WorkspaceSessionRegistry {
         guard try context.fetchCount(FetchDescriptor<TaskItem>(predicate: #Predicate { $0.id == taskID })) > 0 else {
             throw WorkspaceFoundationError.conflict
         }
-        let own = Set(notes.filter { $0.taskID == taskID }.map(\.id))
-            .union(associations.filter { $0.taskID == taskID && $0.detachedAt == nil }.map(\.noteID))
+        let taskNotes = try context.fetch(FetchDescriptor<NoteItem>(predicate: #Predicate { $0.taskID == taskID }))
+        let taskLinks = try context.fetch(FetchDescriptor<TaskNoteAssociation>(predicate: #Predicate { $0.taskID == taskID && $0.detachedAt == nil }))
+        noteRows += taskNotes.count; associationRows += taskLinks.count
+        let own = Set(taskNotes.map(\.id)).union(taskLinks.map(\.noteID))
         guard own.count <= 1 else { throw WorkspaceFoundationError.conflict }
         if let noteID = own.first {
-            let rows = notes.filter { $0.id == noteID }
+            let rows = try notes(id: noteID)
+            let associations = try links(noteID: noteID)
             guard !rows.isEmpty, rows.allSatisfy({ $0.taskID == nil || $0.taskID == taskID }),
-                  associations.filter({ $0.noteID == noteID && $0.detachedAt == nil }).allSatisfy({ $0.taskID == taskID }) else {
+                  associations.allSatisfy({ $0.taskID == taskID }) else {
                 throw WorkspaceFoundationError.conflict
             }
         }
@@ -103,6 +126,10 @@ final class WorkspaceSessionRegistry {
         }
         let key = Key(domain: domain, workspace: canonical)
         let session = try WorkspacePageSession(key: key, controller: notes, coordinator: coordinator, noteID: noteID)
+        session.onRelease = { [weak self] page in
+            guard self?.sessions[canonical] === page else { return }
+            self?.sessions[canonical] = nil
+        }
         sessions[canonical] = session
         return session
     }
@@ -128,6 +155,8 @@ final class WorkspacePageSession {
     private(set) var activeLease: Lease?
     private var bindingGeneration: UInt64 = 0
     private var closing = false
+    private var released = false
+    fileprivate var onRelease: ((WorkspacePageSession) -> Void)?
 
     fileprivate init(key: WorkspaceSessionRegistry.Key, controller: NotesPageController,
                      coordinator: WorkspaceOperationCoordinator, noteID: UUID?) throws {
@@ -148,11 +177,12 @@ final class WorkspacePageSession {
               history.bind(noteID: noteID) else { throw WorkspaceFoundationError.conflict }
         history.attach(adapter)
         session.usesWorkspaceBinding = true
+        session.workspacePage = self
         note = session
     }
 
     func acquire(surfaceID: UUID) throws -> Lease {
-        guard !closing, controller != nil else { throw WorkspaceFoundationError.protectedOwner }
+        guard !closing, !released, controller != nil else { throw WorkspaceFoundationError.protectedOwner }
         if let activeLease {
             guard activeLease.surfaceID == surfaceID else { throw WorkspaceFoundationError.protectedOwner }
             return activeLease
@@ -177,14 +207,16 @@ final class WorkspacePageSession {
         // The editor/undo/staged bytes stay put. Native hosts attach the same
         // engine after the old host has detached in the page round.
         history.closeGroup()
+        if let note { controller?.cancelWorkspaceImport(note) }
         note?.engine.detachView()
         return bind(surfaceID)
     }
     /// Event-driven invalidation; an external refresh is a named history
     /// barrier and cannot publish an older prepared editor snapshot.
     func externalRefresh(origin: String) {
+        guard !released else { return }
         if let current = note, let refreshed = controller?.refreshWorkspaceSession(current) {
-            if refreshed !== current { history.attach(refreshed.engine.history) }
+            history.attach(refreshed.engine.history)
             refreshed.usesWorkspaceBinding = true
             note = refreshed
         }
@@ -213,6 +245,7 @@ final class WorkspacePageSession {
         closing = true
         defer { closing = false }
         if let note {
+            controller.cancelWorkspaceImport(note)
             guard await controller.preserveDurably(note), activeLease == lease, self.note === note,
                   controller.workspaceIsDurable(note),
                   NoteSessionPolicy.canLeave(note.engine.activity, hasMarkedText: note.engine.textView?.hasMarkedText() == true) else { return false }
@@ -221,6 +254,10 @@ final class WorkspacePageSession {
         bindingGeneration &+= 1
         note?.invalidateCallbacks()
         activeLease = nil
+        if let note { controller.releaseWorkspace(note) }
+        released = true
+        onRelease?(self)
+        onRelease = nil
         return true
     }
     /// A read-only projection for future lifecycle UI and the existing purge
