@@ -953,6 +953,7 @@ private final class ManualFrames: NotesFrameClock {
     private var queue: [@MainActor () -> Void] = []
     var pending: Int { queue.count }
     func nextFrame(_ block: @escaping @MainActor () -> Void) { queue.append(block) }
+    func cancel() { queue.removeAll() }
     /// One display frame: runs what was waiting for it.
     func tick() {
         let due = queue
@@ -1260,5 +1261,71 @@ extension NotesFormatControlsTests {
         XCTAssertEqual(run.end, .cancelled)
         XCTAssertTrue(h.text.hasMarkedText(), "the composition was not disturbed")
         XCTAssertTrue(h.window.firstResponder === h.text)
+    }
+}
+
+// A18: ending the ticket must disarm its clock in the same turn.
+extension NotesFormatControlsTests {
+    func testReturnClockHasNoPendingFrameAsSoonAsItsTicketEnds() {
+        let text = FakeText(), frames = ManualFrames()
+        let run = makeReturn(text, frames)
+        XCTAssertEqual(frames.pending, 0, "constructing a return never starts its clock")
+        run.start()
+        XCTAssertTrue(run.isRunning)
+        XCTAssertEqual(frames.pending, 1)
+        run.cancel()
+        XCTAssertFalse(run.isRunning)
+        XCTAssertEqual(frames.pending, 0, "no frame may remain armed while no re-focus is pending")
+    }
+}
+
+extension NotesFormatControlsTests {
+    func testDisplayClockIsIdleUntilRequestedAndStopsImmediatelyOnCancellation() async throws {
+        let clock = NotesDisplayFrameClock(view: nil)
+        XCTAssertFalse(clock.isRunning, "creating a clock does not schedule work")
+        let text = FakeText()
+        let run = NotesKeyboardReturn(target: text, clock: clock)
+        XCTAssertFalse(clock.isRunning, "creating a return does not schedule work")
+        run.start()
+        XCTAssertTrue(clock.isRunning, "a pending return arms the fallback")
+        run.cancel()
+        XCTAssertFalse(clock.isRunning, "cancellation disarms the fallback in the same turn")
+        try await Task.sleep(for: .milliseconds(150))
+        XCTAssertEqual(run.focusCount, 1)
+        XCTAssertFalse(clock.isRunning)
+    }
+
+    func testDisplayClockStopsItsFallbackBeforeReportingSettlementOrFrameLimit() async {
+        for settled in [true, false] {
+            let clock = NotesDisplayFrameClock(view: nil)
+            let text = FakeText()
+            text.takesKeyboard = settled
+            let run = NotesKeyboardReturn(target: text, clock: clock,
+                pacing: .init(minimumFrames: 1, heldFrames: 1, maximumFrames: 1, maximumSeconds: 1))
+            let ended = expectation(description: settled ? "settled" : "gave up")
+            run.onEnd = { result in
+                XCTAssertEqual(result, settled ? .settled : .gaveUp)
+                XCTAssertFalse(clock.isRunning, "end callbacks must observe an idle clock")
+                ended.fulfill()
+            }
+            run.start()
+            XCTAssertTrue(clock.isRunning)
+            await fulfillment(of: [ended], timeout: 2)
+            XCTAssertFalse(clock.isRunning)
+        }
+    }
+
+    func testDisplayClockCancelsAReplacedFrameWithoutFiringItsCallback() async {
+        let clock = NotesDisplayFrameClock(view: nil)
+        var replacedCalls = 0
+        clock.nextFrame { replacedCalls += 1 }
+        let frame = expectation(description: "replacement fallback")
+        clock.nextFrame {
+            XCTAssertFalse(clock.isRunning, "a frame disarms both sources before calling back")
+            frame.fulfill()
+        }
+        await fulfillment(of: [frame], timeout: 2)
+        XCTAssertEqual(replacedCalls, 0)
+        XCTAssertFalse(clock.isRunning)
     }
 }

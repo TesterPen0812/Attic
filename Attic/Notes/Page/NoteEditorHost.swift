@@ -134,6 +134,8 @@ protocol NotesKeyboardReturnTarget: AnyObject {
 protocol NotesFrameClock: AnyObject {
     /// Runs `block` once, on the next display frame.
     func nextFrame(_ block: @escaping @MainActor () -> Void)
+    /// Disarms any outstanding frame and its fallback immediately.
+    func cancel()
 }
 
 /// ⌃Tab's way back into the text (P2-A12-1, A17): focus the text and put the
@@ -234,6 +236,7 @@ final class NotesKeyboardReturn {
     private func finish(_ result: End) {
         guard end == nil else { return }
         end = result
+        clock.cancel()
         onEnd?(result)
         onEnd = nil
     }
@@ -246,34 +249,45 @@ final class NotesKeyboardReturn {
 final class NotesDisplayFrameClock: NSObject, NotesFrameClock {
     private weak var view: NSView?
     private var link: CADisplayLink?
+    private var fallback: Timer?
     private var pending: (@MainActor () -> Void)?
     private var generation = 0
 
     init(view: NSView?) { self.view = view }
 
+    /// A frame source exists only while the return has a check pending.
+    var isRunning: Bool { pending != nil || link != nil || fallback != nil }
+
     func nextFrame(_ block: @escaping @MainActor () -> Void) {
-        generation &+= 1
+        cancel()
         let ticket = generation
         pending = block
-        link?.invalidate()
-        link = nil
         if let view, let window = view.window, window.isVisible, window.screen != nil {
             let link = view.displayLink(target: self, selector: #selector(frame(_:)))
             link.add(to: .main, forMode: .common)
             self.link = link
         }
-        DispatchQueue.main.asyncAfter(deadline: .now() + .milliseconds(100)) { [weak self] in
+        let fallback = Timer(timeInterval: 0.1, repeats: false) { [weak self] _ in
             MainActor.assumeIsolated { self?.fire(ticket) }
         }
+        self.fallback = fallback
+        RunLoop.main.add(fallback, forMode: .common)
+    }
+
+    func cancel() {
+        generation &+= 1
+        pending = nil
+        link?.invalidate()
+        link = nil
+        fallback?.invalidate()
+        fallback = nil
     }
 
     @objc private func frame(_ link: CADisplayLink) { fire(generation) }
 
     private func fire(_ ticket: Int) {
         guard ticket == generation, let block = pending else { return }
-        pending = nil
-        link?.invalidate()
-        link = nil
+        cancel()
         block()
     }
 }
