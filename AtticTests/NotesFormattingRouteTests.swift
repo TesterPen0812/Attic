@@ -373,6 +373,33 @@ final class NotesFormattingRouteTests: XCTestCase {
         }
     }
 
+    func testChangingChecklistStylePreservesTheTwoLineSelectionAndNextReplacement() {
+        for (surface, commands) in routes {
+            for command in commands {
+                guard case let .paragraph(style) = command else { continue }
+                let label = "\(surface.rawValue)/\(command.title)/twoLines checklist transition"
+                let (engine, view, router) = make(.twoLines)
+                let selectedText = (view.string as NSString).substring(with: view.selectedRange())
+                XCTAssertTrue(router.run(.paragraph(.checklist), from: surface))
+                engine.history.reset()
+                let checklist = engine.document().blocks
+                XCTAssertTrue(run(command, surface: surface, router: router), label)
+                let expectedStyle: NoteParagraphStyle = style == .checklist ? .body : style
+                let selectedAfter = (view.string as NSString).substring(with: view.selectedRange())
+                    .replacingOccurrences(of: String(NoteDocument.objectCharacter), with: "")
+                XCTAssertEqual(selectedAfter, selectedText, "\(label) selected text retained")
+                let formatted = engine.document().blocks
+                type("XYZ", into: view)
+                XCTAssertEqual(engine.document().blocks[1].text, "FXYZond", "\(label) replacement scope")
+                checkTyping(expectedStyle, engine: engine, view: view, label: label)
+                XCTAssertTrue(engine.history.undo())
+                XCTAssertEqual(engine.document().blocks, formatted, "\(label) typing Undo")
+                XCTAssertTrue(engine.history.undo())
+                XCTAssertEqual(engine.document().blocks, checklist, "\(label) command Undo")
+            }
+        }
+    }
+
     func testListAndQuoteToggleOffConsistentlyIncludingFallbackShortcut() {
         for (surface, commands) in routes {
             for command in commands where NoteCommandCatalog.togglesOff(command) {

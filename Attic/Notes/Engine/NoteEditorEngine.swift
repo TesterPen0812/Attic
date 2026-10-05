@@ -2589,6 +2589,7 @@ extension NoteEditorEngine {
             if checklistBox(inParagraphAt: line.location) != nil {
                 replacement.deleteCharacters(in: NSRange(location: 0, length: 1))
                 if line.location < newSelection.location { newSelection.location -= 1 }
+                else if line.location < NSMaxRange(newSelection) { newSelection.length = max(0, newSelection.length - 1) }
             }
             let all = NSRange(location: 0, length: replacement.length)
             replacement.removeAttribute(.noteBlockStyle, range: all)
