@@ -300,6 +300,37 @@ final class WorkspaceSessionTests: XCTestCase {
         XCTAssertFalse(notes.openFailedDraft(sessionID: note.id))
     }
 
+    func testWorkspaceReusesActiveNoteAfterCacheAdmissionEvictsItsEntry() async throws {
+        let opened = await notes.openDurably(noteID: noteID)
+        XCTAssertTrue(opened)
+        notes.present()
+        let context = coordinator.freshContext()
+        var ids: [(UUID, UUID)] = []
+        for index in 0..<8 {
+            let task = UUID(), id = UUID()
+            let fixture = NoteItem(id: id); fixture.taskID = task
+            context.insert(TaskItem(id: task, title: "Cached \(index)"))
+            NoteStore.stageDocumentContent(try PreparedNoteDocument(.init(blocks: [.text("Cached \(index)")])),
+                format: 1, on: [fixture], timestamp: Date(), revision: 0, revisionID: UUID())
+            context.insert(fixture); ids.append((task, id))
+        }
+        try context.save(); notes.store.refresh()
+        // Seven bound notes protect their cache slots. Together with the
+        // visible note they fill the eight-slot cache before the incoming open.
+        for (task, _) in ids.prefix(7) {
+            _ = try coordinator.sessions.session(for: .task(task), notes: notes)
+        }
+        let incoming = try XCTUnwrap(ids.last)
+        let shown = await notes.openDurably(noteID: incoming.1)
+        XCTAssertTrue(shown)
+        let active = try XCTUnwrap(notes.active), engine = active.engine
+        let page = try coordinator.sessions.session(for: .task(incoming.0), notes: notes)
+        XCTAssertTrue(page.note === active)
+        XCTAssertTrue(page.note?.engine === engine)
+        _ = try page.acquire(surfaceID: UUID())
+        XCTAssertFalse(notes.open(noteID: incoming.1))
+    }
+
     func testSuspendWorkspaceDoesNotDetachTheActiveNotesEditor() async throws {
         let barrier = WorkspaceCallbackBarrier(), data = Data([1, 2, 3])
         let source = root.appendingPathComponent("active.png")

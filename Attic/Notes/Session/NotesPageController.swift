@@ -742,7 +742,11 @@ final class NotesPageController: ObservableObject {
     /// Engine-only entry point: does not present a page, create a note, or
     /// attach a native view. Registry callers share the controller's cache.
     func workspaceSession(noteID: UUID) -> NoteSession? {
-        guard let note = store.note(withID: noteID), let session = session(for: note) else { return nil }
+        guard let note = store.note(withID: noteID) else { return nil }
+        // Cache admission can evict a clean incoming note before activate
+        // installs it as active. Reuse that live session rather than split it.
+        let existing = cache[noteID] ?? (active?.noteID == noteID ? active : nil)
+        guard let session = existing ?? session(for: note) else { return nil }
         if cache[noteID] == nil { wire(session); cache[noteID] = session }
         return session
     }

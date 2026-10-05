@@ -2637,7 +2637,10 @@ extension NoteSlice3bTests {
         gate.shouldFail = true; journal.failNextWrite = true
         await XCTAssertFalseAsync(await controller.prepareToLeaveDurably(.hide), "queued acceptance is not a durable pass after write failure")
         XCTAssertTrue(controller.active === session)
-        XCTAssertNotNil(session.notice)
+        XCTAssertNil(session.notice, "a finished recovery write must not leave a saving notice")
+        if case let .onlyInMemory(reason) = session.state {
+            XCTAssertTrue(reason.contains("Recovery could not be saved"), "the failed recovery must be reported")
+        } else { XCTFail("failed checkpoint must report only-in-memory status") }
         await XCTAssertTrueAsync(await controller.prepareToLeaveDurably(.hide), "retry succeeds once checkpoint I/O recovers")
         XCTAssertFalse(try journal.base.entries().isEmpty)
         gate.shouldFail = false
