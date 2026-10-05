@@ -203,6 +203,22 @@ jobs:
             "${F[@]}" -parallel-testing-enabled NO \
             -only-testing:AtticTests/DoneSearchCostTests/testRenderedFindKeystrokeMediansFitTheInputBudget test \
             | tee .build/done-results-reference.log
+      - name: Measure OD-8 Done candidate in the same fresh-process context
+        if: ${{ !cancelled() && !inputs.harness_only }}
+        shell: /bin/zsh {0}
+        run: |
+          set -o pipefail
+          F=(CODE_SIGNING_ALLOWED=YES CODE_SIGNING_REQUIRED=YES CODE_SIGN_STYLE=Manual CODE_SIGN_IDENTITY=- DEVELOPMENT_TEAM= ENABLE_DEBUG_DYLIB=NO)
+          /Users/taha/Developer/attic-redesign-assets/xcodebuild-locked.sh \
+            -project Attic.xcodeproj -scheme Attic -configuration Local \
+            -destination 'platform=macOS' -derivedDataPath .build/dd \
+            -resultBundlePath .build/done-results-candidate.xcresult \
+            ATTIC_MACOS_UNIT_HOST_PRODUCT_NAME=AtticP3CrashHost \
+            ATTIC_MACOS_UNIT_HOST_EXECUTABLE_NAME=AtticP3CrashHost \
+            ATTIC_MACOS_UNIT_HOST_BUNDLE_IDENTIFIER=com.taha.Attic.p3.crashhost \
+            "${F[@]}" -parallel-testing-enabled NO \
+            -only-testing:AtticTests/DoneSearchCostTests/testRenderedFindKeystrokeMediansFitTheInputBudget test-without-building \
+            | tee .build/done-results-candidate.log
       - name: Run C1-C5 and minimum taskNote format before the full suite
         if: ${{ !cancelled() }}
         env:
@@ -295,7 +311,7 @@ jobs:
       - name: Summarize tests
         if: always()
         run: |
-          for result in .build/performance-gate.xcresult .build/commit-gate.xcresult .build/history-gate.xcresult .build/purge-gate.xcresult .build/foundation.xcresult; do
+          for result in .build/performance-gate.xcresult .build/commit-gate.xcresult .build/history-gate.xcresult .build/purge-gate.xcresult .build/foundation.xcresult .build/done-results-candidate.xcresult; do
             if [ -d "$result" ]; then
               xcrun xcresulttool get test-results summary --path "$result" --format json
             fi
@@ -329,6 +345,8 @@ jobs:
             .build/pf-base-after-phase2.log
             .build/pf-gate.txt
             .build/done-results-reference.log
+            .build/done-results-candidate.log
+            .build/done-results-candidate.xcresult
             .build/foundation.log
             .build/done-results-comparison.json
           retention-days: 3

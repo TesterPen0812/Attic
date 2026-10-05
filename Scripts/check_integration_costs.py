@@ -46,7 +46,7 @@ def compare_done(reference, candidate, texts=None):
 
 def done_only(directory):
     report = compare_done((directory / "done-results-reference.log").read_text(),
-                          (directory / "foundation.log").read_text())
+                          (directory / "done-results-candidate.log").read_text())
     (directory / "done-results-comparison.json").write_text(json.dumps(report, indent=2) + "\n")
     print(json.dumps(report, indent=2))
     return 0 if all(row["passed"] for row in report.values()) else 1

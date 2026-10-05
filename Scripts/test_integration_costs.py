@@ -59,7 +59,9 @@ class IntegrationCostsTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             (root / 'done-results-reference.log').write_text(self.rendered_log(40))
-            candidate = root / 'foundation.log'
+            candidate = root / 'done-results-candidate.log'
+            # The full suite is a different process context, never the paired input.
+            (root / 'foundation.log').write_text(self.rendered_log(499))
             with contextlib.redirect_stdout(io.StringIO()):
                 candidate.write_text(self.rendered_log(40))
                 self.assertEqual(done_only(root), 0)
