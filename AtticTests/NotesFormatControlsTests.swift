@@ -631,7 +631,7 @@ final class NotesFormatControlsTests: XCTestCase {
         }
         // Force the error card to overflow, then bring its bottom actions
         // into view through the real scroll container.
-        window.setContentSize(CGSize(width: 320, height: 160))
+        window.setContentSize(CGSize(width: 320, height: 145))
         window.contentView?.layoutSubtreeIfNeeded()
         textView.onLayout?()
         settle { controls.cardModel.viewportHeight != nil }

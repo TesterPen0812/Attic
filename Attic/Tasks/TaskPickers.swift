@@ -1,109 +1,32 @@
 import SwiftUI
 
-/// The date picker with its state (the month shown, the keyboard cursor),
-/// on `TaskDateChoices`: the same for the add bar's strip, a row's date and
-/// the right-click menu's "Pick a Date…".
+/// The date card on `TaskDateChoices` (the shared `AtticDateCard`): the
+/// same for the add bar's strip, a row's date and the right-click menu's
+/// "Pick a Date…". Typed text resolves through the shorthand's parser.
 struct TaskDatePickerView: View {
     let choices: TaskDateChoices
-    /// The task's current day (ticked, filled), if any.
+    /// The task's current day (filled), if any.
     let selected: DueDay?
-    /// A row's picker offers "Remove date" and ticks the current choice.
+    /// A row's card offers "Remove date" when the row has one.
     var forRow = false
     let onPick: (DueDay) -> Void
     var onRemove: () -> Void = {}
 
-    @State private var highlight: TaskDatePickerHighlight?
-    @FocusState private var focused: Bool
+    @State private var typed = ""
 
     var body: some View {
-        let today = choices.today
-        let highlight = self.highlight ?? TaskDatePickerHighlight(cursor: TaskDateCursor(start: selected ?? today))
-        let cursor = highlight.cursor
-        let month = cursor.month(in: choices)
-        let quick = choices.quick
-        // One tick for one day: when Tomorrow and Next week are the same
-        // day (on a Sunday), only the first shows it (review wording).
-        let tickedQuick = quick.first { $0.day == selected }?.id
-        AtticDatePicker(
-            quick: quick.map { item in
-                AtticDatePicker.Quick(id: item.id, title: item.title, detail: choices.detail(for: item.day), isChecked: item.id == tickedQuick)
-            },
-            showsChecks: forRow,
-            monthTitle: month.title,
-            weekdays: month.weekdaySymbols,
-            days: month.days.map { day in
-                AtticDatePicker.Day(
-                    id: day.day.rawValue,
-                    number: "\(day.day.day)",
-                    inMonth: day.inMonth,
-                    isToday: day.day == today,
-                    isSelected: day.day == selected,
-                    isPast: day.day < today,
-                    spoken: spoken(day.day)
-                )
-            },
-            cursor: cursor.isKeyboardActive ? cursor.active.rawValue : nil,
+        let calendar = choices.cardCalendar
+        let parser = choices.parser
+        AtticDateCard(
+            today: choices.today.startDate(in: calendar) ?? parser.now(),
+            selected: selected?.startDate(in: calendar),
+            calendar: calendar,
+            typed: $typed,
+            parse: { parser.parseDueDay($0)?.startDate(in: calendar) },
             removeTitle: forRow && selected != nil ? String(localized: "Remove date") : nil,
-            highlightedRow: highlight.row,
-            onQuick: { id in if let item = quick.first(where: { $0.id == id }) { onPick(item.day) } },
-            onDay: { id in if let day = DueDay(rawValue: id) { onPick(day) } },
-            onMonth: { step in
-                var next = highlight
-                next.cursor.move(months: step, in: choices, byKeyboard: false)
-                self.highlight = next
-            },
-            onRemove: onRemove,
-            onHoverRow: { id, inside in
-                var next = highlight
-                next.hoverRow(id, inside: inside)
-                if next != highlight { self.highlight = next }
-            },
-            onHoverDay: { id, inside in
-                guard let day = DueDay(rawValue: id) else { return }
-                var next = highlight
-                next.hoverDay(day, inside: inside, inShownMonth: month.days.contains { $0.day == day && $0.inMonth })
-                if next != highlight { self.highlight = next }
-            }
+            onPick: { onPick(DueDay(date: $0, calendar: calendar)) },
+            onRemove: onRemove
         )
-        .focusable()
-        .focused($focused)
-        .focusEffectDisabled()
-        .atticDropdownFocus($focused)
-        .onKeyPress(phases: .down) { press in key(press, highlight: highlight, quick: quick) }
-        .accessibilityElement(children: .contain)
-        .accessibilityLabel(String(localized: "Choose a date"))
-    }
-
-    private func key(_ press: KeyPress, highlight start: TaskDatePickerHighlight, quick: [TaskDateChoices.Quick]) -> KeyPress.Result {
-        var next = start
-        switch press.key {
-        case .leftArrow: next.moveByKeyboard { $0.move(days: -1, in: choices) }
-        case .rightArrow: next.moveByKeyboard { $0.move(days: 1, in: choices) }
-        case .upArrow: next.moveByKeyboard { $0.move(days: -7, in: choices) }
-        case .downArrow: next.moveByKeyboard { $0.move(days: 7, in: choices) }
-        case .pageUp: next.moveByKeyboard { $0.move(months: -1, in: choices, byKeyboard: true) }
-        case .pageDown: next.moveByKeyboard { $0.move(months: 1, in: choices, byKeyboard: true) }
-        case .return:
-            // What the person sees highlighted: a quick day's row the
-            // pointer is on, or the cursor's day in the month shown.
-            if let row = start.row {
-                if row == AtticDatePicker.removeID { onRemove() } else if let item = quick.first(where: { $0.id == row }) { onPick(item.day) }
-                return .handled
-            }
-            guard start.cursor.isKeyboardActive else { return .ignored }
-            onPick(start.cursor.active)
-            return .handled
-        default:
-            return .ignored
-        }
-        self.highlight = next
-        return .handled
-    }
-
-    private func spoken(_ day: DueDay) -> String {
-        let calendar = DueDay.storageCalendar(matching: choices.parser.calendar)
-        guard let date = day.startDate(in: calendar) else { return day.rawValue }
-        return TaskRowPresentation.format(date, template: "EEEEdMMMMy", calendar: calendar, locale: choices.parser.locale)
     }
 }
 

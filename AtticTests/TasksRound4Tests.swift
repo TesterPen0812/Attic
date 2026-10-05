@@ -391,19 +391,22 @@ final class TasksRound4Tests: XCTestCase {
 
     // MARK: - Must fix 4: the calendar's month follows its active day
 
-    func testTheCalendarsActiveDayAndMonthMoveTogether() {
-        let choices = model.dateChoices
-        var cursor = TaskDateCursor(start: day("2026-09-21"))
-        cursor.move(days: 1, in: choices)                           // →
-        cursor.move(months: 1, in: choices, byKeyboard: true)       // Page Down
-        XCTAssertEqual(cursor.active, day("2026-10-22"), "Return picks the day shown, in October")
-        XCTAssertEqual(cursor.month(in: choices).month, 10)
-        var clamp = TaskDateCursor(start: day("2027-01-31"))
-        clamp.move(months: 1, in: choices, byKeyboard: false)       // the chevron
-        XCTAssertEqual(clamp.active, day("2027-02-28"), "clamped to February's length")
-        XCTAssertFalse(clamp.isKeyboardActive, "a click on the chevron draws no keyboard cursor")
-        clamp.move(days: -60, in: choices)
-        XCTAssertEqual(clamp.month(in: choices).month, 12, "arrows past the month's edge show the new month")
+    func testTheCalendarsActiveDayAndMonthMoveTogether() throws {
+        let card = model.dateChoices.cardCalendar
+        func date(_ raw: String) throws -> Date { try XCTUnwrap(day(raw).startDate(in: card)) }
+        var cursor = AtticDateCardState(start: try date("2026-09-21"))
+        func press(_ key: AtticDateCardKey) { _ = cursor.apply(key, calendar: card, suggestions: 0, typing: false, hasRemove: false) }
+        press(.right)                                               // lights 21 Sep
+        press(.right)                                               // →
+        press(.month(1))                                            // ⌘]
+        XCTAssertEqual(cursor.cursor, try date("2026-10-22"), "Return picks the day shown, in October")
+        XCTAssertEqual(cursor.month(card).start, try date("2026-10-01"))
+        var clamp = AtticDateCardState(start: try date("2027-01-31"))
+        _ = clamp.apply(.month(1), calendar: card, suggestions: 0, typing: false, hasRemove: false) // the chevron
+        XCTAssertEqual(clamp.cursor, try date("2027-02-28"), "clamped to February's length")
+        XCTAssertNil(clamp.lit, "a click on the chevron lights no day")
+        for _ in 0..<10 { _ = clamp.apply(.up, calendar: card, suggestions: 0, typing: false, hasRemove: false) }
+        XCTAssertEqual(clamp.month(card).start, try date("2026-12-01"), "arrows past the month's edge show the new month")
     }
 
     // MARK: - Must fix 6: show reveals its destination, or waits

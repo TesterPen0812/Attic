@@ -490,8 +490,11 @@ final class TasksPageUITests: XCTestCase {
         addBar.typeText("Water the ferns")
         XCTAssertTrue(date.waitForExistence(timeout: 3), "the strip shows with the first keystroke")
         date.click()
+        // The card is the month (no quick rows); typing suggests a day.
+        XCTAssertTrue(window.buttons["Today"].waitForExistence(timeout: 3), "the date card opens")
+        app.typeText("tom")
         let tomorrow = app.menuItems.matching(NSPredicate(format: "label BEGINSWITH %@", "Tomorrow")).firstMatch
-        XCTAssertTrue(tomorrow.waitForExistence(timeout: 3), "the date picker opens")
+        XCTAssertTrue(tomorrow.waitForExistence(timeout: 3), "typing suggests Tomorrow")
         clickDropdownRow(tomorrow)
         waitFor((date.value as? String) == "Tomorrow", "the Date button shows the pick: \(String(describing: date.value))")
         XCTAssertEqual(addBar.value as? String, "Water the ferns", "picking never inserts text")

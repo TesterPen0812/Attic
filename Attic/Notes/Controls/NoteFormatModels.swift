@@ -187,12 +187,9 @@ final class NoteFormatCardModel: ObservableObject {
     @Published var viewportWidth: CGFloat?
     /// The card opened above its text (no room below).
     @Published var above = false
-    @Published var dateText = "" {
-        didSet {
-            if let parsed = parsedDate { dateMonth = parsed }
-        }
-    }
-    @Published var dateMonth = Date()
+    /// What was typed into the date card after `/date` (the card has no
+    /// field: its suggestions show it).
+    @Published var dateText = ""
     @Published var linkText = ""
     @Published var linkError: String?
     var today = Date()
@@ -203,14 +200,19 @@ final class NoteFormatCardModel: ObservableObject {
     var onRemoveLink: (() -> Void)?
     var onCancel: (() -> Void)?
 
-    var parsedDate: Date? { NoteDateQuery.parse(dateText, today: today, calendar: calendar) }
-    /// What Return inserts: the typed date, or today when nothing is typed.
-    var candidateDate: Date? { dateText.trimmingCharacters(in: .whitespaces).isEmpty ? calendar.startOfDay(for: today) : parsedDate }
+    /// What Return inserts: the first suggestion for what was typed, or
+    /// today when nothing is typed.
+    var candidateDate: Date? {
+        guard !dateText.trimmingCharacters(in: .whitespaces).isEmpty else { return calendar.startOfDay(for: today) }
+        let today = today, calendar = calendar
+        return AtticDateSuggestions.make(dateText, today: today, calendar: calendar) {
+            NoteDateQuery.parse($0, today: today, calendar: calendar)
+        }.first?.date
+    }
 
     func openDate(fromSlash: Bool, today: Date) {
         self.today = today
         dateText = ""
-        dateMonth = today
         card = .date(fromSlash: fromSlash)
     }
 

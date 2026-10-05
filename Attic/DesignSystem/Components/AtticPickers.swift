@@ -135,161 +135,536 @@ struct AtticPickerDivider: View {
     }
 }
 
-// MARK: - Date picker
+// MARK: - Date card
 
-/// The one date picker (owner fix 5, v17 A3/C2): the quick days with the
-/// day each resolves to, then the month. Weeks start on the locale's first
-/// weekday; today is ringed, the chosen day filled; days before today are
-/// quiet but can still be picked. ← → ↑ ↓ move a keyboard cursor through
-/// the days, Page Up / Page Down change the month, Return picks, Esc
-/// closes (the host returns the keyboard to where it came from).
-struct AtticDatePicker: View {
-    struct Quick: Identifiable {
-        let id: String
-        let title: String
-        let detail: String
-        var isChecked = false
+/// A suggestion for what was typed into the date card ("Tomorrow · Tue",
+/// "Friday · 9 Oct").
+struct AtticDateSuggestion: Equatable, Identifiable {
+    let id: Int
+    let title: String
+    let detail: String
+    let date: Date
+    /// The typed text the title starts with, emboldened ("Fri" of Friday).
+    var match: String?
+}
+
+enum AtticDateSuggestions {
+    /// One or two days for what was typed, none when nothing is: the named
+    /// days the text starts ("t": Today, Tomorrow; "fri": Friday), then
+    /// what the host's parser reads in it ("9 oct", "in 3 days"). Each resolves through `parse`,
+    /// the same parser that reads typed dates elsewhere.
+    static func make(_ typed: String, today: Date, calendar: Calendar, parse: (String) -> Date?) -> [AtticDateSuggestion] {
+        let query = typed.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        guard !query.isEmpty else { return [] }
+        let start = calendar.startOfDay(for: today)
+        var named: [(phrase: String, title: String)] = [
+            ("today", String(localized: "Today")),
+            ("tomorrow", String(localized: "Tomorrow")),
+            ("next week", String(localized: "Next week")),
+        ]
+        var english = Calendar(identifier: .gregorian)
+        english.locale = Locale(identifier: "en_US_POSIX")
+        let local = calendar.weekdaySymbols
+        for (index, word) in english.weekdaySymbols.enumerated() {
+            let title = local.indices.contains(index) ? local[index] : word.capitalized
+            named.append((word.lowercased(), title))
+            if title.lowercased() != word.lowercased() { named.append((title.lowercased(), title)) }
+        }
+        var found: [(title: String, date: Date, match: String?)] = []
+        func add(_ title: String, _ date: Date, match: String?) {
+            let day = calendar.startOfDay(for: date)
+            guard !found.contains(where: { calendar.isDate($0.date, inSameDayAs: day) }) else { return }
+            found.append((title, day, match))
+        }
+        // The named days the text starts first, then what the parser reads.
+        for phrase in named where phrase.phrase.hasPrefix(query) {
+            guard found.count < 2 else { break }
+            if let date = resolve(phrase.phrase, start: start, parse: parse) { add(phrase.title, date, match: typed) }
+        }
+        if found.count < 2, let parsed = parse(query) {
+            add(title(for: parsed, start: start, calendar: calendar), parsed, match: nil)
+        }
+        return found.prefix(2).enumerated().map { index, item in
+            AtticDateSuggestion(id: index, title: item.title, detail: detail(for: item.date, start: start, calendar: calendar),
+                                date: item.date, match: item.match?.trimmingCharacters(in: .whitespaces))
+        }
     }
 
-    struct Day: Identifiable, Equatable {
-        let id: String
-        let number: String
-        let inMonth: Bool
-        let isToday: Bool
-        let isSelected: Bool
-        let isPast: Bool
-        /// Spoken: "Thursday 1 October".
-        let spoken: String
+    private static func resolve(_ phrase: String, start: Date, parse: (String) -> Date?) -> Date? {
+        phrase == "today" ? start : parse(phrase)
     }
 
-    let quick: [Quick]
-    /// Shows a check column (the row's picker ticks the current day).
-    var showsChecks = false
-    let monthTitle: String
+    /// A typed date's name: Today, Tomorrow, or its weekday.
+    private static func title(for date: Date, start: Date, calendar: Calendar) -> String {
+        switch calendar.dateComponents([.day], from: start, to: calendar.startOfDay(for: date)).day {
+        case 0: String(localized: "Today")
+        case 1: String(localized: "Tomorrow")
+        default: date.formatted(AtticDateCardFormat.style(calendar).weekday(.wide))
+        }
+    }
+
+    /// Today and tomorrow say their weekday ("Tue"); further days their
+    /// date ("9 Oct", with the year when it is not this year's).
+    static func detail(for date: Date, start: Date, calendar: Calendar) -> String {
+        let style = AtticDateCardFormat.style(calendar)
+        let offset = calendar.dateComponents([.day], from: start, to: calendar.startOfDay(for: date)).day ?? 0
+        if (0...1).contains(offset) { return date.formatted(style.weekday(.abbreviated)) }
+        let sameYear = calendar.component(.year, from: date) == calendar.component(.year, from: start)
+        return sameYear ? date.formatted(style.day().month(.abbreviated)) : date.formatted(style.day().month(.abbreviated).year())
+    }
+}
+
+enum AtticDateCardFormat {
+    /// The calendar's own locale, time zone and calendar.
+    static func style(_ calendar: Calendar) -> Date.FormatStyle {
+        Date.FormatStyle(date: .omitted, time: .omitted, locale: calendar.locale ?? .current, calendar: calendar,
+                         timeZone: calendar.timeZone)
+    }
+
+    /// "October 2026".
+    static func monthTitle(_ month: Date, calendar: Calendar) -> String {
+        month.formatted(style(calendar).month(.wide).year())
+    }
+
+    /// VoiceOver's name for a day: "Friday 9 October".
+    static func spoken(_ day: Date, calendar: Calendar) -> String {
+        day.formatted(style(calendar).weekday(.wide).day().month(.wide))
+    }
+}
+
+/// The month as the card lays it out: whole weeks from the locale's first
+/// weekday, with no day from another month (draft A, "Quiet month").
+struct AtticDateMonth: Equatable {
+    let start: Date
+    /// Seven per week; nil where another month's day would be.
+    let cells: [Date?]
+    /// The weekday initials in column order ("M T W T F S S").
     let weekdays: [String]
-    let days: [Day]
-    /// The cursor's day (id) when it is the highlight (the keyboard moved
-    /// it, or the pointer is on that day).
-    var cursor: String?
-    /// "Remove date" (a row that has a date).
+
+    init(containing day: Date, calendar: Calendar) {
+        let first = calendar.dateInterval(of: .month, for: day)?.start ?? calendar.startOfDay(for: day)
+        start = first
+        let lead = (calendar.component(.weekday, from: first) - calendar.firstWeekday + 7) % 7
+        let count = calendar.range(of: .day, in: .month, for: first)?.count ?? 30
+        var cells: [Date?] = Array(repeating: nil, count: lead)
+        cells += (0..<count).map { calendar.date(byAdding: .day, value: $0, to: first) }
+        while cells.count % 7 != 0 { cells.append(nil) }
+        self.cells = cells
+        let symbols = calendar.veryShortStandaloneWeekdaySymbols
+        weekdays = (0..<7).map { symbols[(calendar.firstWeekday - 1 + $0) % 7] }
+    }
+
+    var weeks: Int { cells.count / 7 }
+}
+
+/// A key the date card answers, from the presenter's key monitor (an
+/// `NSEvent`, ahead of AppKit's menu equivalents and the key-view loop) or
+/// from SwiftUI (`KeyPress`, where no presenter routes keys).
+enum AtticDateCardKey: Equatable {
+    case left, right, up, down, pick, tab(back: Bool), today, month(Int), delete, cancel, text(String)
+
+    init?(_ event: NSEvent) {
+        let flags = event.modifierFlags.intersection([.command, .option, .control])
+        switch (event.keyCode, flags) {
+        case (123, []): self = .left
+        case (124, []): self = .right
+        case (126, []): self = .up
+        case (125, []): self = .down
+        case (36, []), (76, []): self = .pick
+        case (48, []): self = .tab(back: event.modifierFlags.contains(.shift))
+        case (17, [.option]): self = .today
+        case (33, [.command]), (116, []): self = .month(-1)
+        case (30, [.command]), (121, []): self = .month(1)
+        case (51, []): self = .delete
+        default:
+            guard flags.isEmpty, let text = event.characters, Self.isTyping(text) else { return nil }
+            self = .text(text)
+        }
+    }
+
+    init?(_ press: KeyPress) {
+        let flags = press.modifiers.intersection([.command, .option, .control])
+        switch press.key {
+        case .leftArrow where flags.isEmpty: self = .left
+        case .rightArrow where flags.isEmpty: self = .right
+        case .upArrow where flags.isEmpty: self = .up
+        case .downArrow where flags.isEmpty: self = .down
+        case .return where flags.isEmpty: self = .pick
+        case .tab where flags.isEmpty: self = .tab(back: press.modifiers.contains(.shift))
+        case .escape: self = .cancel
+        case .pageUp: self = .month(-1)
+        case .pageDown: self = .month(1)
+        case .delete where flags.isEmpty: self = .delete
+        default:
+            if flags == .command, press.key.character == "[" { self = .month(-1); return }
+            if flags == .command, press.key.character == "]" { self = .month(1); return }
+            if flags == .option, press.key.character == "t" || press.characters == "†" { self = .today; return }
+            if press.characters == "\u{19}" { self = .tab(back: true); return }
+            guard flags.isEmpty, Self.isTyping(press.characters) else { return nil }
+            self = .text(press.characters)
+        }
+    }
+
+    /// Letters, digits, spaces and the date punctuation ("9/10", "+3").
+    private static func isTyping(_ text: String) -> Bool {
+        !text.isEmpty && text.unicodeScalars.allSatisfy { scalar in
+            CharacterSet.alphanumerics.contains(scalar) || " /.-+,".unicodeScalars.contains(scalar)
+        }
+    }
+}
+
+/// The date card's one highlight and the day it is on (owner, 2026-10-05):
+/// the arrows move it through the grid, the pointer moves the same one,
+/// Tab reaches Today (and Remove date), Return picks what is lit. The month
+/// shown is always the cursor's, so what Return picks is on screen. Pure:
+/// tested directly.
+struct AtticDateCardState: Equatable {
+    enum Spot: Equatable {
+        case day, today, remove
+        case suggestion(Int)
+    }
+
+    /// What a key asks the card to do.
+    enum Outcome: Equatable {
+        case pick(Date), today, remove, suggestion(Int)
+        /// Handled; nothing to pick.
+        case nothing
+    }
+
+    /// The active day: the grid's highlight when `lit` is `.day`.
+    private(set) var cursor: Date
+    /// Nothing is lit as the card opens.
+    private(set) var lit: Spot?
+
+    init(start: Date) { cursor = start }
+
+    func month(_ calendar: Calendar) -> AtticDateMonth { AtticDateMonth(containing: cursor, calendar: calendar) }
+
+    /// Answers a navigation key (typing is the card's own); nil when the
+    /// key is not the card's.
+    mutating func apply(_ key: AtticDateCardKey, calendar: Calendar, suggestions: Int, typing: Bool, hasRemove: Bool) -> Outcome? {
+        switch key {
+        case .left: arrow(-1, calendar)
+        case .right: arrow(1, calendar)
+        case .up:
+            if case let .suggestion(index)? = lit { lit = .suggestion(max(0, index - 1)) } else { arrow(-7, calendar) }
+        case .down:
+            if case let .suggestion(index)? = lit { lit = index + 1 < suggestions ? .suggestion(index + 1) : .day } else { arrow(7, calendar) }
+        case let .month(step):
+            cursor = calendar.date(byAdding: .month, value: step, to: cursor) ?? cursor
+        case let .tab(back):
+            var order: [Spot] = (0..<suggestions).map { .suggestion($0) } + [.day, .today]
+            if hasRemove { order.append(.remove) }
+            let at = order.firstIndex(of: lit ?? .day) ?? 0
+            lit = order[(at + (back ? order.count - 1 : 1)) % order.count]
+        case .today:
+            return .today
+        case .pick:
+            switch lit {
+            case .day?: return .pick(cursor)
+            case .today?: return .today
+            case .remove?: return .remove
+            case let .suggestion(index)?: return .suggestion(index)
+            case nil:
+                if suggestions > 0 { return .suggestion(0) }
+                return typing ? Outcome.nothing : .pick(cursor)
+            }
+        case .delete, .cancel, .text:
+            return nil
+        }
+        return Outcome.nothing
+    }
+
+    /// An arrow lights the cursor where it is first, then moves it.
+    private mutating func arrow(_ days: Int, _ calendar: Calendar) {
+        if lit == .day {
+            cursor = calendar.date(byAdding: .day, value: days, to: cursor) ?? cursor
+        } else {
+            lit = .day
+        }
+    }
+
+    /// The pointer entered or left a day: the highlight follows it, as a
+    /// menu's does.
+    mutating func hoverDay(_ day: Date, inside: Bool, calendar: Calendar) {
+        if inside {
+            cursor = day
+            lit = .day
+        } else if lit == .day, calendar.isDate(cursor, inSameDayAs: day) {
+            lit = nil
+        }
+    }
+
+    /// The pointer entered or left Today, Remove date or a suggestion.
+    mutating func hover(_ spot: Spot, inside: Bool) {
+        if inside { lit = spot } else if lit == spot { lit = nil }
+    }
+
+    /// What was typed changed: its first suggestion takes the highlight and
+    /// the month turns to it; with none, a suggestion's highlight goes.
+    mutating func typed(suggestions: [AtticDateSuggestion]) {
+        if let first = suggestions.first {
+            cursor = first.date
+            lit = .suggestion(0)
+        } else if case .suggestion? = lit {
+            lit = nil
+        }
+    }
+
+    func isLit(_ day: Date, calendar: Calendar) -> Bool {
+        lit == .day && calendar.isDate(cursor, inSameDayAs: day)
+    }
+}
+
+/// The one date card (owner, 2026-10-05, p2-30 draft 2 on p2-29 draft A):
+/// the month header ("October 2026", a small Today, ‹ ›), then the quiet
+/// month: a light weekday row, no other months' days, rounded-square marks
+/// (the chosen day filled, today alone ringed, the highlight the row
+/// pill). Typing shows one or two suggestions above the month until the
+/// text is cleared. Keys: arrows move the highlight, Return picks, Tab or
+/// ⌥T reach Today, ⌘[ ⌘] (and Page Up/Down) turn the month, Esc closes.
+/// Tasks (the add bar, a row) and Notes (`/date`) use it alike.
+struct AtticDateCard: View {
+    let today: Date
+    let selected: Date?
+    /// With the locale's first weekday and the locale set.
+    let calendar: Calendar
+    @Binding var typed: String
+    /// Reads typed text ("fri", "9 oct").
+    var parse: (String) -> Date? = { _ in nil }
+    /// "Remove date" under the month (a task row that has a date).
     var removeTitle: String?
-    /// The quick day's row (its id, or `removeID`) the pointer is on: the
-    /// one highlight then, never with the cursor (round 5).
-    var highlightedRow: String? = nil
-    let onQuick: (String) -> Void
-    let onDay: (String) -> Void
-    let onMonth: (Int) -> Void
+    let onPick: (Date) -> Void
     var onRemove: () -> Void = {}
-    /// The pointer entered (true) or left a row (a quick id, `removeID`).
-    var onHoverRow: ((_ id: String, _ inside: Bool) -> Void)? = nil
-    /// The pointer entered (true) or left a day (its id).
-    var onHoverDay: ((_ id: String, _ inside: Bool) -> Void)? = nil
+    /// Esc where no presenter closes the card (Notes).
+    var onCancel: (() -> Void)?
 
-    /// "Remove date"'s row id for `highlightedRow` and `onHoverRow`.
-    static let removeID = "attic.date.remove"
-
+    @State private var state: AtticDateCardState?
+    @FocusState private var focused: Bool
     @Environment(\.atticDesign) private var design
+    @Environment(\.atticDropdownRegisterKeys) private var registerKeys
+
+    private var current: AtticDateCardState { state ?? AtticDateCardState(start: calendar.startOfDay(for: selected ?? today)) }
+    private var suggestions: [AtticDateSuggestion] { AtticDateSuggestions.make(typed, today: today, calendar: calendar, parse: parse) }
 
     var body: some View {
         let d = AtticDropdownMetrics.self
+        let state = current
+        let month = state.month(calendar)
+        let typing = !typed.trimmingCharacters(in: .whitespaces).isEmpty
+        let suggestions = typing ? self.suggestions : []
         VStack(alignment: .leading, spacing: 0) {
-            ForEach(Array(quick.enumerated()), id: \.element.id) { index, item in
-                AtticDropdownRow(title: item.title, check: showsChecks ? (item.isChecked ? .on : .off) : nil,
-                                 detail: item.detail, isHighlighted: highlightedRow == item.id, onHover: hoverRow(item.id),
-                                 position: index + 1, itemCount: quick.count + (removeTitle == nil ? 0 : 1)) {
-                    onQuick(item.id)
-                }
+            if typing {
+                suggestionRows(suggestions, state: state)
+                AtticDropdownGap(height: d.fieldGap)
             }
-            AtticDropdownGap(height: d.fieldGap)
+            header(month, state: state)
             HStack(spacing: 0) {
-                AtticText(verbatim: monthTitle, style: .dropdownHeading, ink: .heading)
-                    .accessibilityAddTraits(.isHeader)
-                Spacer(minLength: d.detailGap)
-                monthButton(-1, systemName: "chevron.left", label: String(localized: "Previous month"))
-                monthButton(1, systemName: "chevron.right", label: String(localized: "Next month"))
-            }
-            .padding(.leading, d.rowPadding)
-            .frame(height: d.monthHeaderHeight)
-            HStack(spacing: 0) {
-                ForEach(Array(weekdays.enumerated()), id: \.offset) { _, symbol in
-                    AtticText(verbatim: symbol, style: .tag, ink: .helper)
+                ForEach(Array(month.weekdays.enumerated()), id: \.offset) { _, symbol in
+                    AtticText(verbatim: symbol, style: .dropdownWeekday, ink: .helper)
                         .frame(width: d.monthCellWidth, height: d.weekdayHeight)
                 }
             }
+            .padding(.horizontal, d.monthGridInset)
             .accessibilityHidden(true)
-            LazyVGrid(columns: Array(repeating: GridItem(.fixed(d.monthCellWidth), spacing: 0), count: 7), spacing: 0) {
-                ForEach(days) { day in
-                    dayCell(day)
+            VStack(spacing: 0) {
+                ForEach(0..<month.weeks, id: \.self) { week in
+                    HStack(spacing: 0) {
+                        ForEach(0..<7, id: \.self) { column in
+                            if let day = month.cells[week * 7 + column] {
+                                dayCell(day, state: state)
+                            } else {
+                                Color.clear.frame(width: d.monthCellWidth, height: d.monthCellHeight).accessibilityHidden(true)
+                            }
+                        }
+                    }
                 }
             }
+            .padding(.horizontal, d.monthGridInset)
+            .padding(.bottom, d.monthGridBottom)
             if let removeTitle {
-                AtticDropdownGap(height: d.fieldGap)
-                AtticDropdownRow(title: removeTitle, check: showsChecks ? .off : nil,
-                                 isHighlighted: highlightedRow == Self.removeID, onHover: hoverRow(Self.removeID), position: quick.count + 1,
-                                 itemCount: quick.count + 1, action: onRemove)
+                AtticDropdownRow(title: removeTitle, isHighlighted: state.lit == .remove,
+                                 onHover: { inside in update { $0.hover(.remove, inside: inside) } }, action: onRemove)
             }
         }
-        .frame(width: d.monthCellWidth * 7)
-    }
-
-    private func hoverRow(_ id: String) -> ((Bool) -> Void)? {
-        onHoverRow.map { report in { inside in report(id, inside) } }
-    }
-
-    private func monthButton(_ step: Int, systemName: String, label: String) -> some View {
-        Button { onMonth(step) } label: {
-            AtticIcon(systemName: systemName, size: AtticDropdownMetrics.monthChevron, weight: .semibold, ink: .icon)
-                .frame(width: AtticDropdownMetrics.monthButton, height: AtticDropdownMetrics.monthButton)
-                .contentShape(Rectangle())
-        }
-        .buttonStyle(.plain)
+        .frame(width: d.monthCellWidth * 7 + d.monthGridInset * 2)
+        .focusable()
+        .focused($focused)
         .focusEffectDisabled()
-        .atticOwnFocusRing(.circle(diameter: AtticDropdownMetrics.monthButton))
-        .help(label)
-        .accessibilityLabel(label)
+        .atticDropdownFocus($focused)
+        .onKeyPress(phases: .down) { press in
+            guard let key = AtticDateCardKey(press) else { return .ignored }
+            return handle(key) ? .handled : .ignored
+        }
+        .onAppear { registerKeys { event in AtticDateCardKey(event).map { handle($0) } ?? false } }
+        .onDisappear { registerKeys(nil) }
+        .onChange(of: typed) { _, _ in
+            let found = self.suggestions
+            update { $0.typed(suggestions: found) }
+        }
+        .accessibilityElement(children: .contain)
+        .accessibilityLabel(String(localized: "Choose a date"))
     }
 
-    private func dayCell(_ day: Day) -> some View {
-        let m = AtticPickerMetrics.self
+    private func update(_ change: (inout AtticDateCardState) -> Void) {
+        var next = current
+        change(&next)
+        if next != state { state = next }
+    }
+
+    /// Answers a key; false leaves it to the presenter (Esc) or the window.
+    private func handle(_ key: AtticDateCardKey) -> Bool {
+        switch key {
+        case let .text(text):
+            if typed.isEmpty, text.trimmingCharacters(in: .whitespaces).isEmpty { return true }
+            typed += text
+            return true
+        case .delete:
+            guard !typed.isEmpty else { return false }
+            typed.removeLast()
+            return true
+        case .cancel:
+            guard let onCancel else { return false }
+            onCancel()
+            return true
+        default:
+            let typing = !typed.trimmingCharacters(in: .whitespaces).isEmpty
+            let suggestions = typing ? self.suggestions : []
+            var next = current
+            guard let outcome = next.apply(key, calendar: calendar, suggestions: suggestions.count, typing: typing,
+                                           hasRemove: removeTitle != nil) else { return false }
+            if next != state { state = next }
+            switch outcome {
+            case let .pick(day): onPick(day)
+            case .today: onPick(calendar.startOfDay(for: today))
+            case .remove: if removeTitle != nil { onRemove() }
+            case let .suggestion(index): if suggestions.indices.contains(index) { onPick(suggestions[index].date) }
+            case .nothing: break
+            }
+            return true
+        }
+    }
+
+    @ViewBuilder
+    private func suggestionRows(_ suggestions: [AtticDateSuggestion], state: AtticDateCardState) -> some View {
+        if suggestions.isEmpty {
+            AtticText(verbatim: String(localized: "No date matches"), style: .dropdownRow, ink: .helper)
+                .padding(.horizontal, AtticDropdownMetrics.rowPadding)
+                .frame(height: AtticDropdownMetrics.rowHeight)
+        } else {
+            ForEach(suggestions) { suggestion in
+                AtticDropdownRow(title: suggestion.title, detail: suggestion.detail, match: suggestion.match,
+                                 isHighlighted: state.lit == .suggestion(suggestion.id),
+                                 onHover: { inside in update { $0.hover(.suggestion(suggestion.id), inside: inside) } },
+                                 position: suggestion.id + 1, itemCount: suggestions.count,
+                                 scrollID: "attic.date.suggestion.\(suggestion.id)") {
+                    onPick(suggestion.date)
+                }
+                .accessibilityIdentifier("date-suggestion")
+            }
+        }
+    }
+
+    private func header(_ month: AtticDateMonth, state: AtticDateCardState) -> some View {
+        let d = AtticDropdownMetrics.self
+        return HStack(spacing: 0) {
+            AtticText(verbatim: AtticDateCardFormat.monthTitle(month.start, calendar: calendar), style: .dropdownHeading, ink: .heading)
+                .accessibilityAddTraits(.isHeader)
+            Spacer(minLength: d.detailGap)
+            todayButton(lit: state.lit == .today)
+            Color.clear.frame(width: d.monthTodayGap, height: 1)
+            monthButton(-1, systemName: "chevron.left", label: String(localized: "Previous month"))
+            monthButton(1, systemName: "chevron.right", label: String(localized: "Next month"))
+        }
+        .padding(.leading, d.rowPadding)
+        .padding(.trailing, d.monthHeaderTrailing)
+        .padding(.top, d.monthHeaderTop)
+        .frame(height: d.monthHeaderHeight + d.monthHeaderTop)
+    }
+
+    private func todayButton(lit: Bool) -> some View {
         let d = AtticDropdownMetrics.self
         let tokens = design.tokens
-        let ink: AtticInk = day.isSelected ? .onInverse : ((!day.inMonth || day.isPast) ? .helper : .body)
-        return Button { onDay(day.id) } label: {
-            ZStack {
-                if day.isSelected {
-                    Circle().fill(tokens.color(.inverseFill))
-                } else if cursor == day.id {
-                    Circle().fill(tokens.dropdownHighlight.color)
-                }
-                if day.isToday, !day.isSelected {
-                    Circle().strokeBorder(tokens.color(.heading), lineWidth: m.todayRing)
-                }
-                AtticText(verbatim: day.number, style: day.isToday ? .rowTitleActive : .listBody, ink: ink)
-                    .monospacedDigit()
-            }
-            .frame(width: d.monthDisc, height: d.monthDisc)
-            .frame(width: d.monthCellWidth, height: d.monthCellHeight)
-            .contentShape(Rectangle())
+        let shape = RoundedRectangle(cornerRadius: d.todayRadius, style: .continuous)
+        return Button { onPick(calendar.startOfDay(for: today)) } label: {
+            AtticText(verbatim: String(localized: "Today"), style: .shortcut, ink: .body)
+                .fixedSize()
+                .padding(.horizontal, d.todayPadding)
+                .frame(height: d.todayHeight)
+                .background(shape.fill(tokens.dropdownHighlight.color))
+                .overlay(shape.strokeBorder((lit ? tokens.ink(.heading) : .clear).color, lineWidth: AtticPickerMetrics.todayRing))
+                .contentShape(shape)
         }
         .buttonStyle(AtticUndimmedButtonStyle())
+        .focusable(false)
         .focusEffectDisabled()
-        .atticOwnFocusRing(.circle(diameter: d.monthDisc))
-        .id(day.id)
-        .preference(key: AtticDropdownHighlightKey.self, value: cursor == day.id ? day.id : nil)
-        // The pointer moves the cursor, as it moves a menu's highlight.
         .onContinuousHover { phase in
             switch phase {
             case .active:
                 guard AtticListHighlight.isPointerMove(NSApp.currentEvent) else { return }
-                onHoverDay?(day.id, true)
+                if current.lit != .today { update { $0.hover(.today, inside: true) } }
             case .ended:
-                onHoverDay?(day.id, false)
+                update { $0.hover(.today, inside: false) }
             }
         }
-        .accessibilityLabel(day.spoken)
-        .accessibilityAddTraits(day.isSelected ? [.isSelected, .isButton] : .isButton)
-        .accessibilityValue(day.isToday ? String(localized: "today") : "")
+        .help(String(localized: "Today (⌥T)"))
+        .accessibilityLabel(String(localized: "Today"))
+        .accessibilityValue(AtticDateCardFormat.spoken(today, calendar: calendar))
     }
+
+    private func monthButton(_ step: Int, systemName: String, label: String) -> some View {
+        let d = AtticDropdownMetrics.self
+        return Button { update { _ = $0.apply(.month(step), calendar: calendar, suggestions: 0, typing: false, hasRemove: false) } } label: {
+            AtticIcon(systemName: systemName, size: d.monthChevron, weight: .regular, ink: .icon)
+                .frame(width: d.monthButton, height: d.monthHeaderHeight)
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .focusable(false)
+        .focusEffectDisabled()
+        .help(label)
+        .accessibilityLabel(label)
+    }
+
+    private func dayCell(_ day: Date, state: AtticDateCardState) -> some View {
+        let d = AtticDropdownMetrics.self
+        let tokens = design.tokens
+        let isSelected = selected.map { calendar.isDate(day, inSameDayAs: $0) } ?? false
+        let isToday = calendar.isDate(day, inSameDayAs: today)
+        let lit = state.isLit(day, calendar: calendar)
+        let shape = RoundedRectangle(cornerRadius: d.monthMarkRadius, style: .continuous)
+        let fill: AtticRGBA = isSelected ? tokens.ink(.inverseFill) : (lit ? tokens.dropdownHighlight : .clear)
+        let spokenState = [isToday ? String(localized: "today") : nil, isSelected ? String(localized: "chosen") : nil].compactMap { $0 }
+        return Button { onPick(day) } label: {
+            AtticText(verbatim: "\(calendar.component(.day, from: day))", style: .dropdownDay, ink: isSelected ? .onInverse : .body)
+                .frame(width: d.monthMark, height: d.monthMark)
+                .background(shape.fill(fill.color))
+                .overlay(shape.strokeBorder((isToday && !isSelected ? tokens.ink(.heading) : .clear).color,
+                                            lineWidth: AtticPickerMetrics.todayRing))
+                .frame(width: d.monthCellWidth, height: d.monthCellHeight)
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(AtticUndimmedButtonStyle())
+        .focusable(false)
+        .focusEffectDisabled()
+        .preference(key: AtticDropdownHighlightKey.self, value: lit ? Self.dayID(day) : nil)
+        .id(Self.dayID(day))
+        // The pointer moves the highlight, as it moves a menu's.
+        .onContinuousHover { phase in
+            switch phase {
+            case .active:
+                guard AtticListHighlight.isPointerMove(NSApp.currentEvent), !current.isLit(day, calendar: calendar) else { return }
+                update { $0.hoverDay(day, inside: true, calendar: calendar) }
+            case .ended:
+                update { $0.hoverDay(day, inside: false, calendar: calendar) }
+            }
+        }
+        .accessibilityLabel(AtticDateCardFormat.spoken(day, calendar: calendar))
+        .accessibilityAddTraits(isSelected ? [.isButton, .isSelected] : .isButton)
+        .accessibilityValue(spokenState.joined(separator: ", "))
+    }
+
+    private static func dayID(_ day: Date) -> String { "attic.date.\(Int(day.timeIntervalSinceReferenceDate))" }
 }
 
 // MARK: - Tag picker

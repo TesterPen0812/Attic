@@ -24,8 +24,9 @@ final class AtticDropdownTests: XCTestCase {
     func testTheSlashListIsAsWideAsItsLongestNameAndShrinksToTheMinimum() {
         let all = NoteSlashItem.Kind.allCases.map { NoteSlashItem(kind: $0) }
         let full = AtticDropdownLayout.listWidth(titles: all.map(\.title))
-        // p2-24 D measured 165 pt for the nine rows (Numbered List).
-        XCTAssertEqual(full, 165, accuracy: 4, "the nine rows fit Numbered List")
+        // The Compact rows (13 pt names, 9 pt padding) measure 145 pt for the
+        // nine (Numbered List); p2-24 D's 14 pt rows measured 165.
+        XCTAssertEqual(full, 145, accuracy: 4, "the nine rows fit Numbered List")
         XCTAssertTrue(all.contains { $0.kind == .mono }, "Mono is in the list")
         let date = AtticDropdownLayout.listWidth(titles: ["Date"], match: "da")
         XCTAssertEqual(AtticDropdownLayout.width(ideal: date, available: 296), 144, "“/da” leaves Date at the minimum")
@@ -309,9 +310,9 @@ final class AtticDropdownTests: XCTestCase {
         XCTAssertEqual(light.dropdownContactShadow, .black(0.05))
         XCTAssertEqual(dark.dropdownContactShadow, .black(0.24))
         let m = AtticDropdownMetrics.self
-        XCTAssertEqual(m.cornerRadius - m.inset, m.highlightRadius, "the pill nests in the corner")
-        XCTAssertEqual(m.rowHeight, 32)
-        XCTAssertEqual(AtticTextStyle.dropdownRow.spec.size, 14)
+        XCTAssertLessThan(m.highlightRadius, m.cornerRadius - m.inset + 1, "the pill sits inside the corner")
+        XCTAssertEqual(m.rowHeight, 28, "the Compact size (p2-28)")
+        XCTAssertEqual(AtticTextStyle.dropdownRow.spec.size, 13)
         // Increase Contrast steps the edge up (the existing rule).
         let contrast = AtticDesignContext(mode: .light, increaseContrast: true).tokens
         XCTAssertGreaterThan(contrast.popoverOuterRim.alpha, light.popoverOuterRim.alpha)
@@ -999,7 +1000,7 @@ final class AtticDropdownTests: XCTestCase {
             VStack(spacing: 0) {
                 TaskTagPickerView(allTags: (0..<7).map { "tag\($0)" }, state: { _ in .off },
                                   onToggle: { _ in }, onCreate: { _, _ in false })
-                if model.failed { Text("Save failed; Retry").frame(height: 80) }
+                if model.failed { Text("Save failed; Retry").frame(height: 120) }
             }
             // The real row picker clears its failure only when it leaves.
             .onDisappear { model.failed = false }
@@ -1107,7 +1108,8 @@ final class AtticDropdownTests: XCTestCase {
         NSApp.accessibilitySetValue(true, forAttribute: attribute)
         defer { NSApp.accessibilitySetValue(previous, forAttribute: attribute) }
         let window = makeWindow()
-        window.setContentSize(CGSize(width: 320, height: 420))
+        // Room above the anchor for five weeks of the Compact card, not six.
+        window.setContentSize(CGSize(width: 320, height: 295))
         defer { window.close() }
         let anchor = NSView(frame: CGRect(x: 40, y: 40, width: 60, height: 28))
         window.contentView?.addSubview(anchor)
@@ -1142,7 +1144,7 @@ final class AtticDropdownTests: XCTestCase {
         XCTAssertGreaterThan(host.contentRect.height, four.height + AtticDropdownMetrics.monthCellHeight)
         let inWindow = host.convert(host.contentRect, to: nil)
         XCTAssertGreaterThanOrEqual(inWindow.minY, 12)
-        XCTAssertLessThanOrEqual(inWindow.maxY, 408)
+        XCTAssertLessThanOrEqual(inWindow.maxY, 283)
         func scrolls(_ view: NSView) -> [NSScrollView] {
             (view as? NSScrollView).map { [$0] } ?? view.subviews.flatMap { scrolls($0) }
         }
@@ -1150,8 +1152,9 @@ final class AtticDropdownTests: XCTestCase {
         let document = try XCTUnwrap(scroll.documentView)
         document.scrollToVisible(CGRect(x: 0, y: document.bounds.maxY - 1, width: 1, height: 1))
         spin(0.2)
-        let last = DueDay(rawValue: "2021-06-06")!
-        let label = TaskRowPresentation.format(try XCTUnwrap(last.startDate(in: calendar)), template: "EEEEdMMMMy", calendar: calendar, locale: choices.parser.locale)
+        // The month shows no other month's days: 31 May is its last.
+        let last = DueDay(rawValue: "2021-05-31")!
+        let label = AtticDateCardFormat.spoken(try XCTUnwrap(last.startDate(in: calendar)), calendar: choices.cardCalendar)
         let day = try XCTUnwrap(accessibilityElements(host).first { ($0.accessibilityLabel?() ?? nil) == label })
         let frame: NSRect = day.accessibilityFrame!()
         let local = host.convert(window.convertFromScreen(frame), from: nil)
@@ -1166,6 +1169,67 @@ final class AtticDropdownTests: XCTestCase {
         spin(0.2)
         XCTAssertNil(presenter.stage.height)
         XCTAssertEqual(host.contentRect.height, four.height + AtticDropdownMetrics.monthCellHeight, accuracy: 1)
+    }
+
+    /// The date card on screen (owner, 2026-10-05): no quick rows; the
+    /// chosen day and today told apart to VoiceOver; typing shows the
+    /// suggestions above the month and clearing removes them; Return picks
+    /// the lit suggestion.
+    func testTheDateCardMarksTodayAndTheChosenDayAndSuggestsWhatIsTyped() throws {
+        let attribute = NSAccessibility.Attribute(rawValue: "AXEnhancedUserInterface")
+        let previous = NSApp.accessibilityAttributeValue(attribute)
+        NSApp.accessibilitySetValue(true, forAttribute: attribute)
+        defer { NSApp.accessibilitySetValue(previous, forAttribute: attribute) }
+        let window = makeWindow()
+        defer { window.close() }
+        let anchor = NSView(frame: CGRect(x: 40, y: 300, width: 60, height: 28))
+        window.contentView?.addSubview(anchor)
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = TimeZone(secondsFromGMT: 0)!
+        calendar.firstWeekday = 2
+        let monday = try XCTUnwrap(calendar.date(from: DateComponents(year: 2026, month: 10, day: 5, hour: 9)))
+        let choices = TaskDateChoices(parser: TaskTextParser(calendar: calendar, locale: Locale(identifier: "en_GB"), now: { monday }))
+        var picked: DueDay?
+        let presenter = AtticDropdownPresenter()
+        presenter.design = AtticDesignContext(reduceMotion: true)
+        presenter.content = AnyView(TaskDatePickerView(choices: choices, selected: DueDay(rawValue: "2026-10-09"), forRow: true,
+                                                       onPick: { picked = $0 }))
+        presenter.present(from: anchor)
+        defer { presenter.close(restoreFocus: false, immediately: true) }
+        spin(0.2)
+        let host = try XCTUnwrap(presenter.host)
+        func element(_ label: String) -> AnyObject? {
+            accessibilityElements(host).first { ($0.accessibilityLabel?() ?? nil) == label }
+        }
+        func value(_ label: String) -> String? {
+            // SwiftUI's node answers the protocol's accessibilityValue().
+            (element(label) as? NSObject)?.perform(Selector(("accessibilityValue")))?.takeUnretainedValue() as? String
+        }
+        XCTAssertNil(element("Tomorrow, Tue"), "no quick rows")
+        XCTAssertEqual(value("Monday 5 October"), "today")
+        XCTAssertEqual(value("Friday 9 October"), "chosen")
+        XCTAssertNil(element("Thursday 1 November"), "no other month's days")
+        XCTAssertNotNil(element("Remove date"), "a row's existing route to remove its date stays")
+        let resting = host.contentRect.height
+
+        func key(_ characters: String, _ keyCode: UInt16) {
+            let event = NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: [], timestamp: 0,
+                                         windowNumber: window.windowNumber, context: nil, characters: characters,
+                                         charactersIgnoringModifiers: characters, isARepeat: false, keyCode: keyCode)!
+            XCTAssertNil(presenter.handleKey(event), "the card takes \(characters.debugDescription)")
+            spin(0.1)
+        }
+        key("t", 17)
+        XCTAssertNotNil(element("Today, Mon"), "typing suggests")
+        XCTAssertNotNil(element("Tomorrow, Tue"))
+        XCTAssertEqual(host.contentRect.height, resting + 2 * AtticDropdownMetrics.rowHeight + AtticDropdownMetrics.fieldGap, accuracy: 1)
+        key("\u{7f}", 51)
+        XCTAssertNil(element("Today, Mon"), "cleared, the suggestions go")
+        XCTAssertEqual(host.contentRect.height, resting, accuracy: 1, "and the card is draft 2 again")
+        for (character, code) in [("t", UInt16(17)), ("o", 31), ("m", 46)] { key(character, code) }
+        XCTAssertNotNil(element("Tomorrow, Tue"))
+        key("\r", 36)
+        XCTAssertEqual(picked, DueDay(rawValue: "2026-10-06"), "Return picks the lit suggestion")
     }
 
     // MARK: Timings (no regression against the components it replaced)
@@ -1401,5 +1465,182 @@ final class AtticDropdownTests: XCTestCase {
         defer { window.close() }
         gate(measureDropdownCosts(in: window, rounds: 5, readAccessibility: true), label: "_AX",
              accepted: Self.acceptedRatiosWithAccessibility)
+    }
+}
+
+/// The date card's model (owner, 2026-10-05: p2-30 draft 2 on p2-29 draft
+/// A): the quiet month, the one highlight and its keys, and what typing
+/// suggests. Pure.
+final class AtticDateCardTests: XCTestCase {
+    private var calendar: Calendar {
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = TimeZone(secondsFromGMT: 0)!
+        calendar.locale = Locale(identifier: "en_GB")
+        calendar.firstWeekday = 2
+        return calendar
+    }
+
+    private func date(_ year: Int, _ month: Int, _ day: Int) -> Date {
+        calendar.date(from: DateComponents(year: year, month: month, day: day))!
+    }
+
+    /// Monday 5 October 2026, as in the drafts.
+    private var today: Date { date(2026, 10, 5) }
+
+    private func parse(_ text: String) -> Date? {
+        NoteDateQuery.parse(text, today: today, calendar: calendar, locale: Locale(identifier: "en_GB"))
+    }
+
+    func testTheMonthShowsNoOtherMonthsDays() {
+        let october = AtticDateMonth(containing: date(2026, 10, 9), calendar: calendar)
+        XCTAssertEqual(october.weekdays, ["M", "T", "W", "T", "F", "S", "S"])
+        XCTAssertEqual(october.cells.prefix(3), [nil, nil, nil], "1 Oct is a Thursday: three blank cells lead")
+        XCTAssertEqual(october.cells[3], date(2026, 10, 1))
+        XCTAssertEqual(october.cells.compactMap { $0 }.count, 31)
+        XCTAssertEqual(october.cells.count % 7, 0)
+        XCTAssertEqual(october.weeks, 5)
+        XCTAssertNil(october.cells.last ?? nil, "1 November is not shown")
+        XCTAssertEqual(AtticDateCardFormat.monthTitle(october.start, calendar: calendar), "October 2026")
+        XCTAssertEqual(AtticDateCardFormat.spoken(date(2026, 10, 9), calendar: calendar), "Friday 9 October")
+        var sunday = calendar
+        sunday.firstWeekday = 1
+        let us = AtticDateMonth(containing: date(2026, 10, 1), calendar: sunday)
+        XCTAssertEqual(us.weekdays.first, "S")
+        XCTAssertEqual(us.cells.prefix(5).filter { $0 == nil }.count, 4)
+    }
+
+    func testArrowsLightTheCursorFirstThenMoveItAndTheMonthFollows() {
+        var state = AtticDateCardState(start: today)
+        XCTAssertNil(state.lit, "nothing is lit as the card opens")
+        func press(_ key: AtticDateCardKey) -> AtticDateCardState.Outcome? {
+            state.apply(key, calendar: calendar, suggestions: 0, typing: false, hasRemove: false)
+        }
+        XCTAssertEqual(press(.right), .nothing)
+        XCTAssertEqual(state.lit, .day)
+        XCTAssertEqual(state.cursor, today, "the first arrow lights the day, never skips it")
+        _ = press(.right)
+        _ = press(.down)
+        XCTAssertEqual(state.cursor, date(2026, 10, 13))
+        _ = press(.up)
+        _ = press(.left)
+        XCTAssertEqual(state.cursor, today)
+        for _ in 0..<5 { _ = press(.down) }
+        XCTAssertEqual(state.cursor, date(2026, 11, 9))
+        XCTAssertEqual(state.month(calendar).start, date(2026, 11, 1), "the month shown is the cursor's")
+        XCTAssertEqual(press(.pick), .pick(date(2026, 11, 9)), "Return picks the day lit")
+    }
+
+    func testCommandBracketsTurnTheMonthClampedToItsLength() {
+        var state = AtticDateCardState(start: date(2027, 1, 31))
+        _ = state.apply(.month(1), calendar: calendar, suggestions: 0, typing: false, hasRemove: false)
+        XCTAssertEqual(state.cursor, date(2027, 2, 28))
+        XCTAssertNil(state.lit, "turning the month lights nothing")
+        _ = state.apply(.month(-2), calendar: calendar, suggestions: 0, typing: false, hasRemove: false)
+        XCTAssertEqual(state.month(calendar).start, date(2026, 12, 1), "across the year")
+        XCTAssertEqual(AtticDateCardKey(keyEvent("[", keyCode: 33, flags: .command)), .month(-1))
+        XCTAssertEqual(AtticDateCardKey(keyEvent("]", keyCode: 30, flags: .command)), .month(1))
+        XCTAssertEqual(AtticDateCardKey(keyEvent("†", keyCode: 17, flags: .option)), .today)
+        XCTAssertEqual(AtticDateCardKey(keyEvent("\t", keyCode: 48, flags: [])), .tab(back: false))
+        XCTAssertEqual(AtticDateCardKey(keyEvent("f", keyCode: 3, flags: [])), .text("f"))
+        XCTAssertNil(AtticDateCardKey(keyEvent("\u{1b}", keyCode: 53, flags: [])), "Esc stays the presenter's")
+    }
+
+    func testTabReachesTodayAndRemoveAndReturnPicksThem() {
+        var state = AtticDateCardState(start: today)
+        func press(_ key: AtticDateCardKey, remove: Bool = true) -> AtticDateCardState.Outcome? {
+            state.apply(key, calendar: calendar, suggestions: 0, typing: false, hasRemove: remove)
+        }
+        _ = press(.tab(back: false))
+        XCTAssertEqual(state.lit, .today, "one Tab reaches Today")
+        XCTAssertEqual(press(.pick), .today)
+        _ = press(.tab(back: false))
+        XCTAssertEqual(state.lit, .remove)
+        XCTAssertEqual(press(.pick), .remove)
+        _ = press(.tab(back: false))
+        XCTAssertEqual(state.lit, .day, "Tab comes round to the grid")
+        _ = press(.tab(back: true))
+        XCTAssertEqual(state.lit, .remove, "Shift-Tab goes back")
+        XCTAssertEqual(press(.today), .today, "⌥T picks today from anywhere")
+        var fresh = AtticDateCardState(start: date(2026, 10, 9))
+        XCTAssertEqual(fresh.apply(.pick, calendar: calendar, suggestions: 0, typing: false, hasRemove: false), .pick(date(2026, 10, 9)),
+                       "Return with nothing lit picks the chosen day (today in a fresh card)")
+    }
+
+    func testThePointerMovesTheSameOneHighlight() {
+        var state = AtticDateCardState(start: today)
+        _ = state.apply(.down, calendar: calendar, suggestions: 0, typing: false, hasRemove: false)
+        state.hover(.today, inside: true)
+        XCTAssertEqual(state.lit, .today, "the pointer on Today takes the highlight from the day")
+        XCTAssertFalse(state.isLit(today, calendar: calendar))
+        state.hoverDay(date(2026, 10, 9), inside: true, calendar: calendar)
+        XCTAssertTrue(state.isLit(date(2026, 10, 9), calendar: calendar))
+        XCTAssertEqual(state.lit, .day)
+        state.hover(.today, inside: false)
+        XCTAssertEqual(state.lit, .day, "leaving Today after the pointer moved on clears nothing")
+        state.hoverDay(date(2026, 10, 9), inside: false, calendar: calendar)
+        XCTAssertNil(state.lit)
+        XCTAssertEqual(state.cursor, date(2026, 10, 9), "the next arrow starts where the pointer was")
+    }
+
+    func testTypingSuggestsOneOrTwoDaysAndClearingRemovesThem() {
+        func suggest(_ text: String) -> [AtticDateSuggestion] {
+            AtticDateSuggestions.make(text, today: today, calendar: calendar, parse: parse)
+        }
+        XCTAssertEqual(suggest(""), [])
+        XCTAssertEqual(suggest("  "), [])
+        let t = suggest("t")
+        XCTAssertEqual(t.map(\.title), ["Today", "Tomorrow"])
+        XCTAssertEqual(t.map(\.detail), ["Mon", "Tue"])
+        let fri = suggest("fri")
+        XCTAssertEqual(fri.map(\.title), ["Friday"])
+        XCTAssertEqual(fri.first?.detail, "9 Oct")
+        XCTAssertEqual(fri.first?.date, date(2026, 10, 9))
+        XCTAssertEqual(fri.first?.match, "fri", "the typed part is emboldened")
+        XCTAssertEqual(suggest("tom").map(\.title), ["Tomorrow"])
+        XCTAssertEqual(suggest("in 3 days").map(\.title), ["Thursday"])
+        XCTAssertEqual(suggest("xyz"), [], "no match: none")
+
+        var state = AtticDateCardState(start: today)
+        state.typed(suggestions: fri)
+        XCTAssertEqual(state.lit, .suggestion(0), "the first suggestion is lit")
+        XCTAssertEqual(state.month(calendar).start, date(2026, 10, 1))
+        XCTAssertEqual(state.apply(.pick, calendar: calendar, suggestions: 1, typing: true, hasRemove: false), .suggestion(0))
+        _ = state.apply(.down, calendar: calendar, suggestions: 1, typing: true, hasRemove: false)
+        XCTAssertEqual(state.lit, .day, "↓ past the last suggestion reaches the grid, on its day")
+        XCTAssertTrue(state.isLit(date(2026, 10, 9), calendar: calendar))
+        state.typed(suggestions: t)
+        XCTAssertEqual(state.lit, .suggestion(0))
+        _ = state.apply(.down, calendar: calendar, suggestions: 2, typing: true, hasRemove: false)
+        XCTAssertEqual(state.lit, .suggestion(1))
+        state.typed(suggestions: [])
+        XCTAssertNil(state.lit, "cleared, the suggestions and their highlight go")
+        XCTAssertEqual(state.apply(.pick, calendar: calendar, suggestions: 0, typing: true, hasRemove: false), .nothing,
+                       "typed text that matches nothing picks nothing")
+    }
+
+    func testTheCompactSizeTokens() {
+        let m = AtticDropdownMetrics.self
+        XCTAssertEqual(m.rowHeight, 28)
+        XCTAssertEqual(m.cornerRadius, 16)
+        XCTAssertEqual(m.inset, 6)
+        XCTAssertEqual(m.rowPadding, 9)
+        XCTAssertEqual(m.highlightRadius, 8)
+        XCTAssertEqual(m.cornerRadius - m.inset, m.highlightRadius + 2, "the pill sits inside the corner")
+        XCTAssertEqual(m.fieldHeight, 26)
+        XCTAssertEqual(m.minWidth, 144, "the width rule is unchanged")
+        XCTAssertEqual(m.panelMargin, 12)
+        XCTAssertEqual(AtticTextStyle.dropdownRow.spec.size, 13)
+        XCTAssertEqual(AtticTextStyle.dropdownHeading.spec.size, 13)
+        XCTAssertEqual(AtticTextStyle.dropdownDay.spec.size, 12.5)
+        XCTAssertEqual(AtticTextStyle.dropdownWeekday.spec.size, 10)
+        XCTAssertEqual(m.monthMark, 25)
+        XCTAssertEqual(m.monthMarkRadius, 7)
+        XCTAssertEqual(AtticPickerMetrics.tagListMaxHeight, 7 * m.rowHeight, "seven rows before the tag list scrolls")
+        XCTAssertEqual(m.monthCellWidth * 7 + m.monthGridInset * 2 + m.inset * 2, 221, accuracy: 1, "draft 2's 222 pt card")
+    }
+
+    private func keyEvent(_ characters: String, keyCode: UInt16, flags: NSEvent.ModifierFlags) -> NSEvent {
+        NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: flags, timestamp: 0, windowNumber: 0, context: nil,
+                         characters: characters, charactersIgnoringModifiers: characters, isARepeat: false, keyCode: keyCode)!
     }
 }
