@@ -119,22 +119,69 @@ class PairedGateTests(unittest.TestCase):
             after['PF5'][key] = [2] * 32 + [12] * 8
         with contextlib.redirect_stdout(io.StringIO()):
             rows = gate.evaluate(base, [base], 'test')
-        code, output = self.run_gate(base, fixture(), after)
+        candidate = fixture()
+        for key in ('SIX_THOUSAND_TOGGLE_MS', 'POPULATED_TOGGLE_MS'):
+            candidate['PF'][key] = [1, 2, 121]
+        code, output = self.run_gate(base, candidate, after)
         self.assertEqual(code, 2)
         self.assertIn(f'judged=0 unmeasurable={len(rows)} pass=0 fail=0', output)
         self.assertIn('FAILED ROWS: none', output)
 
-    def test_ceiling_rows_require_both_base_runs_and_candidate(self):
-        after = fixture()
-        after['PF']['SIX_THOUSAND_TOGGLE_MS'] = [1, 2, 121]
-        for b, a in [(fixture(), after), (after, fixture())]:
-            code, output = self.run_gate(b, fixture(), a)
-            self.assertEqual(code, 2)
-            self.assertIn('| CEILING_SIX_THOUSAND_TOGGLE_MS | no | yes | — | — |', output)
-            self.assertIn('| PF_SIX_THOUSAND_TOGGLE_MS | yes | no | yes | — |', output)
-        candidate = fixture()
-        candidate['PF']['SIX_THOUSAND_TOGGLE_MS'] = [1, 2, 121]
-        self.assertEqual(self.run_gate(fixture(), candidate, fixture())[0], 1)
+    def test_ceiling_candidate_at_limit_passes_regardless_of_bases(self):
+        for key in ('SIX_THOUSAND_TOGGLE_MS', 'POPULATED_TOGGLE_MS'):
+            for b, a in ((120, 120), (121, 120), (120, 121), (121, 121)):
+                with self.subTest(key=key, base=b, after=a):
+                    base, candidate, after = fixture(), fixture(), fixture()
+                    base['PF'][key] = [1, 2, b]
+                    after['PF'][key] = [1, 2, a]
+                    candidate['PF'][key] = [1, 2, 120]
+                    code, output = self.run_gate(base, candidate, after)
+                    self.assertEqual(code, 0)
+                    self.assertIn(f'CEILING {key} maximum=120.000000000 limit=120 result=PASS', output)
+                    self.assertIn(f'| CEILING_{key} | yes | no | yes | — |', output)
+                    for role, maximum in (('B', b), ('B′', a)):
+                        status = 'PASS' if maximum <= 120 else 'FAIL'
+                        self.assertIn(f'BASE CEILING {key} role={role} maximum={maximum:.9f} limit=120 result={status} (diagnostic)', output)
+
+    def test_ceiling_candidate_breach_with_either_base_over_is_carried(self):
+        for key in ('SIX_THOUSAND_TOGGLE_MS', 'POPULATED_TOGGLE_MS'):
+            for b, a in ((121, 120), (120, 121), (121, 121)):
+                with self.subTest(key=key, base=b, after=a):
+                    base, candidate, after = fixture(), fixture(), fixture()
+                    base['PF'][key] = [1, 2, b]
+                    after['PF'][key] = [1, 2, a]
+                    candidate['PF'][key] = [1, 2, 120.001]
+                    code, output = self.run_gate(base, candidate, after)
+                    self.assertEqual(code, 2)
+                    self.assertIn(f'| CEILING_{key} | no | yes | — | — |', output)
+                    self.assertIn(f'CARRIED ROWS: CEILING_{key}', output)
+                    self.assertIn('FAILED ROWS: none', output)
+
+    def test_ceiling_candidate_breach_with_both_bases_at_limit_fails(self):
+        for key in ('SIX_THOUSAND_TOGGLE_MS', 'POPULATED_TOGGLE_MS'):
+            with self.subTest(key=key):
+                base, candidate = fixture(), fixture()
+                base['PF'][key] = [1, 2, 120]
+                candidate['PF'][key] = [1, 2, 120.001]
+                code, output = self.run_gate(base, candidate, base)
+                self.assertEqual(code, 1)
+                self.assertIn(f'| CEILING_{key} | yes | no | — | yes |', output)
+                self.assertIn(f'FAILED ROWS: CEILING_{key}', output)
+
+    def test_ceiling_carry_forward_and_sticky_failure(self):
+        for key in ('SIX_THOUSAND_TOGGLE_MS', 'POPULATED_TOGGLE_MS'):
+            with self.subTest(key=key):
+                base, over, passing = fixture(), fixture(), fixture()
+                base['PF'][key] = [1, 2, 120]
+                over['PF'][key] = [1, 2, 121]
+                passing['PF'][key] = [1, 2, 120]
+                unmeasurable = (over, over, base)
+                passed = (over, passing, base)
+                failed = (base, over, base)
+                self.assertEqual(self.paired_history([unmeasurable, passed])[0], 0)
+                self.assertEqual(self.paired_history([unmeasurable, failed])[0], 1)
+                self.assertEqual(self.paired_history([failed, passed])[0], 1)
+                self.assertEqual(self.paired_history([passed, failed])[0], 1)
 
     def test_carry_forward_budget_and_bad_history_are_input_errors(self):
         self.assertEqual(self.paired_history([(fixture(), fixture(), fixture())] * 4)[0], 3)
@@ -163,14 +210,14 @@ class PairedGateTests(unittest.TestCase):
         changed['PF1']['EMPTY_AUTOSAVE_5000_MS'] = [6, 6, 6]
         self.assertEqual(self.run_gate(fixture(), changed, fixture())[0], 1)
 
-    def test_exit_unmeasurable_bidirectional_and_ceiling(self):
+    def test_exit_unmeasurable_bidirectional(self):
         after = fixture()
         after['PF1']['EMPTY_AUTOSAVE_5000_MS'] = [6, 6, 6]
         self.assertEqual(self.run_gate(fixture(), fixture(), after)[0], 2)
         self.assertEqual(self.run_gate(after, fixture(), fixture())[0], 2)
         base = fixture()
         base['PF']['SIX_THOUSAND_TOGGLE_MS'] = [1, 2, 121]
-        self.assertEqual(self.run_gate(base, fixture(), base)[0], 2)
+        self.assertEqual(self.run_gate(base, fixture(), base)[0], 0)
 
     def test_accepted_memory_is_bounded_and_does_not_relax_aa(self):
         candidate = fixture()
