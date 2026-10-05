@@ -945,3 +945,312 @@ final class NotesFormatControlsTests: XCTestCase {
         XCTContext.runActivity(named: report) { _ in }
     }
 }
+
+// MARK: - A17: the keyboard's way back into the text (fake text, fake frames)
+
+@MainActor
+private final class ManualFrames: NotesFrameClock {
+    private var queue: [@MainActor () -> Void] = []
+    var pending: Int { queue.count }
+    func nextFrame(_ block: @escaping @MainActor () -> Void) { queue.append(block) }
+    /// One display frame: runs what was waiting for it.
+    func tick() {
+        let due = queue
+        queue.removeAll()
+        due.forEach { $0() }
+    }
+}
+
+@MainActor
+private final class FakeText: NotesKeyboardReturnTarget {
+    var canTakeKeyboard = true
+    var textHasKeyboard = false
+    var textHasMarkedText = false
+    var textSelection: NSRange? = NSRange(location: 3, length: 0)
+    var focusCount = 0
+    var takesKeyboard = true
+    func focusText() {
+        focusCount += 1
+        if takesKeyboard { textHasKeyboard = true }
+    }
+}
+
+extension NotesFormatControlsTests {
+    private func makeReturn(_ text: FakeText, _ frames: ManualFrames, pacing: NotesKeyboardReturn.Pacing = .init(),
+                            uptime: @escaping () -> TimeInterval = { 0 }) -> NotesKeyboardReturn {
+        NotesKeyboardReturn(target: text, clock: frames, pacing: pacing, uptime: uptime)
+    }
+
+    /// A17 P2: the return waits out SwiftUI's late focus update. The text is
+    /// first responder for two frames, then SwiftUI resigns it on the third:
+    /// the run focuses it again, and settles only after it has held the
+    /// keyboard for three frames in a row, never before six frames.
+    func testReturnToTextSurvivesALateResignAndSettlesOnlyAfterItHeldTheKeyboard() {
+        let text = FakeText(), frames = ManualFrames()
+        let run = makeReturn(text, frames)
+        run.start()
+        XCTAssertTrue(text.textHasKeyboard, "focused at once")
+        for frame in 1...8 {
+            if frame == 3 { text.textHasKeyboard = false }   // SwiftUI's update
+            frames.tick()
+            if frame < 6 { XCTAssertNil(run.end, "frame \(frame): still watching (two quiet frames are not enough)") }
+        }
+        XCTAssertEqual(run.end, .settled)
+        XCTAssertTrue(text.textHasKeyboard, "the text kept the keyboard")
+        XCTAssertEqual(text.focusCount, 2, "focused at the start and once after the resign")
+        XCTAssertEqual(text.textSelection, NSRange(location: 3, length: 0), "caret kept")
+        XCTAssertEqual(frames.pending, 0, "nothing scheduled after settling")
+    }
+
+    func testReturnToTextIsBoundedByFramesAndByTime() {
+        let stubborn = FakeText()
+        stubborn.takesKeyboard = false
+        let frames = ManualFrames()
+        let run = makeReturn(stubborn, frames, pacing: .init(minimumFrames: 6, heldFrames: 3, maximumFrames: 10, maximumSeconds: 100))
+        run.start()
+        var ticks = 0
+        while frames.pending > 0, ticks < 100 { frames.tick(); ticks += 1 }
+        XCTAssertEqual(run.end, .gaveUp)
+        XCTAssertEqual(ticks, 10, "ten frames, then it stops")
+        XCTAssertEqual(stubborn.focusCount, 11)
+
+        var clockNow: TimeInterval = 0
+        let late = makeReturn(stubborn, frames, pacing: .init(minimumFrames: 6, heldFrames: 3, maximumFrames: 1000, maximumSeconds: 1),
+                              uptime: { clockNow })
+        late.start()
+        clockNow = 0.5
+        frames.tick()
+        XCTAssertNil(late.end)
+        clockNow = 1.2
+        frames.tick()
+        XCTAssertEqual(late.end, .gaveUp, "time bounds it even when frames are slow")
+        XCTAssertEqual(frames.pending, 0)
+    }
+
+    /// A17 P2: each way the keyboard (or the note) goes elsewhere ends the
+    /// run, and nothing after it focuses the text again.
+    func testEveryCancellationEndsTheReturnBeforeAnotherAttempt() {
+        func scenario(_ name: String, _ interfere: (FakeText, NotesKeyboardReturn) -> Void) {
+            let text = FakeText(), frames = ManualFrames()
+            let run = makeReturn(text, frames)
+            run.start()
+            frames.tick()
+            interfere(text, run)
+            let focused = text.focusCount
+            frames.tick()
+            frames.tick()
+            XCTAssertEqual(run.end, .cancelled, name)
+            XCTAssertEqual(text.focusCount, focused, "\(name): no attempt after it")
+            XCTAssertEqual(frames.pending, 0, name)
+        }
+        scenario("a click or a later ⌃Tab (cancel)") { text, run in text.textHasKeyboard = false; run.cancel() }
+        scenario("a caret move") { text, _ in text.textHasKeyboard = true; text.textSelection = NSRange(location: 1, length: 0) }
+        scenario("typing") { text, _ in text.textHasKeyboard = true; text.textSelection = NSRange(location: 4, length: 0) }
+        scenario("a note switch or the editor dismantled") { text, _ in text.textHasKeyboard = false; text.canTakeKeyboard = false }
+        scenario("the panel hiding") { text, _ in text.textHasKeyboard = false; text.canTakeKeyboard = false }
+        scenario("composition starting") { text, _ in text.textHasKeyboard = false; text.textHasMarkedText = true }
+    }
+
+    func testReturnNeverStartsInsideCompositionOrAHiddenPanel() {
+        let composing = FakeText(), frames = ManualFrames()
+        composing.textHasMarkedText = true
+        let first = makeReturn(composing, frames)
+        first.start()
+        XCTAssertEqual(first.end, .cancelled)
+        XCTAssertEqual(composing.focusCount, 0)
+        let hidden = FakeText()
+        hidden.canTakeKeyboard = false
+        let second = makeReturn(hidden, frames)
+        second.start()
+        XCTAssertEqual(second.end, .cancelled)
+        XCTAssertEqual(hidden.focusCount, 0)
+        XCTAssertEqual(frames.pending, 0)
+    }
+
+    func testReturnPutsTheCaretBackOnlyWhenItFocusesAndNeverOverTheUsersMove() {
+        let text = FakeText(), frames = ManualFrames()
+        text.textSelection = NSRange(location: 5, length: 2)
+        let run = makeReturn(text, frames)
+        run.start()
+        text.textHasKeyboard = false
+        text.textSelection = NSRange(location: 0, length: 0)    // the text view's selection reset by the loss
+        frames.tick()
+        XCTAssertEqual(text.textSelection, NSRange(location: 5, length: 2), "refocusing restores the caret and selection")
+        frames.tick()
+        text.textSelection = NSRange(location: 6, length: 0)    // the user
+        frames.tick()
+        XCTAssertEqual(text.textSelection, NSRange(location: 6, length: 0), "the user's move is never undone")
+        XCTAssertEqual(run.end, .cancelled)
+    }
+}
+
+// MARK: - A17: the keyboard's way back into the text, on a key window (CI only)
+
+private final class FooterStandIn: NSView {
+    override var acceptsFirstResponder: Bool { true }
+}
+
+extension NotesFormatControlsTests {
+    private struct KeyHarness {
+        let chrome: NotesPageChrome
+        let accessories: NoteTitleAccessories
+        let text: NoteEditorTextView
+        let footer: FooterStandIn
+        let window: NSWindow
+    }
+
+    /// A key window holding the note's text, its title accessories and a view
+    /// standing in for the last control of the bottom row, with the caret at 5
+    /// and the keyboard on the stand-in (⌃Tab's fourth press is about to come).
+    private func keyHarness() throws -> KeyHarness {
+        guard ProcessInfo.processInfo.environment["ATTIC_KEY_WINDOW_TESTS"] == "1" else {
+            throw XCTSkip("CI only: the return needs a key window, which locally would take the keyboard")
+        }
+        let engine = NoteEditorEngine(noteID: UUID(), document: NoteDocument(blocks: [.text("Pricing"), .text("Body of the note")]))
+        let (scroll, text) = engine.makeView()
+        scroll.frame = NSRect(x: 0, y: 0, width: 320, height: 500)
+        let container = NSView(frame: NSRect(x: 0, y: 0, width: 320, height: 560))
+        container.addSubview(scroll)
+        let footer = FooterStandIn(frame: NSRect(x: 10, y: 510, width: 100, height: 30))
+        container.addSubview(footer)
+        let window = NSWindow(contentRect: container.frame, styleMask: [.titled], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        window.contentView = container
+        windows.append(window)
+        window.makeKeyAndOrderFront(nil)
+        XCTAssertTrue(window.isKeyWindow, "a key window")
+        let chrome = NotesPageChrome()
+        let accessories = NoteTitleAccessories(engine: engine, textView: text, scrollView: scroll, chrome: chrome, design: .default,
+                                               headerBottom: 40, isUntouched: { false }, tagEditor: { AnyView(EmptyView()) })
+        window.makeFirstResponder(text)
+        text.setSelectedRange(NSRange(location: 5, length: 0))
+        XCTAssertTrue(window.makeFirstResponder(footer))
+        return KeyHarness(chrome: chrome, accessories: accessories, text: text, footer: footer, window: window)
+    }
+
+    private func wait(_ seconds: TimeInterval = 3, until condition: () -> Bool) {
+        let deadline = Date().addingTimeInterval(seconds)
+        while Date() < deadline, !condition() { RunLoop.main.run(until: Date().addingTimeInterval(0.01)) }
+    }
+
+    private func pause(_ seconds: TimeInterval = 0.5) { RunLoop.main.run(until: Date().addingTimeInterval(seconds)) }
+
+    /// A17 P2 (late focus update): SwiftUI takes the keyboard back after the
+    /// text had it, on a later frame; the return gets it back, waits until it
+    /// stayed, and typing right after the round trip lands at the caret.
+    func testTheReturnSurvivesSwiftUIsLateFocusUpdateAndTypingRightAfterLandsAtTheCaret() throws {
+        let h = try keyHarness()
+        defer { h.accessories.invalidate() }
+        h.chrome.returnKeyboardToText()
+        let run = try XCTUnwrap(h.chrome.keyboardReturn)
+        for delay in [0.03, 0.07] {
+            DispatchQueue.main.asyncAfter(deadline: .now() + delay) { _ = h.window.makeFirstResponder(h.footer) }
+        }
+        wait { run.end != nil }
+        XCTAssertEqual(run.end, .settled)
+        XCTAssertTrue(h.window.firstResponder === h.text, "the text has the keyboard after SwiftUI's updates")
+        XCTAssertEqual(h.text.selectedRange(), NSRange(location: 5, length: 0), "caret kept")
+        h.text.insertText("!", replacementRange: NSRange(location: NSNotFound, length: 0))
+        XCTAssertEqual(h.text.string, "Prici!ng\nBody of the note", "typing right after the round trip landed at the caret")
+        XCTAssertNil(h.chrome.keyboardReturn, "the ticket is spent")
+    }
+
+    /// A17 P2 (cancellation): a click on another control. The monitor sees
+    /// the mouse-down, and the keyboard stays where the user put it.
+    func testAClickDuringTheReturnCancelsItAndTheKeyboardStaysWhereTheUserPutIt() throws {
+        let h = try keyHarness()
+        defer { h.accessories.invalidate() }
+        h.chrome.returnKeyboardToText()
+        let run = try XCTUnwrap(h.chrome.keyboardReturn)
+        let click = try XCTUnwrap(NSEvent.mouseEvent(with: .leftMouseDown, location: NSPoint(x: 250, y: 545), modifierFlags: [],
+                                                     timestamp: ProcessInfo.processInfo.systemUptime, windowNumber: h.window.windowNumber,
+                                                     context: nil, eventNumber: 1, clickCount: 1, pressure: 1))
+        NSApp.sendEvent(click)
+        XCTAssertEqual(run.end, .cancelled, "the click ended the return")
+        XCTAssertTrue(h.window.makeFirstResponder(h.footer), "the click's target took the keyboard")
+        pause()
+        XCTAssertTrue(h.window.firstResponder === h.footer, "and the return did not take it back")
+    }
+
+    /// A17 P2: a caret move or typing during the return is the user's, and is
+    /// never undone by a later attempt.
+    func testACaretMoveOrTypingDuringTheReturnCancelsItAndKeepsTheUsersCaret() throws {
+        let h = try keyHarness()
+        defer { h.accessories.invalidate() }
+        h.chrome.returnKeyboardToText()
+        let run = try XCTUnwrap(h.chrome.keyboardReturn)
+        XCTAssertTrue(h.window.firstResponder === h.text)
+        h.text.setSelectedRange(NSRange(location: 2, length: 0))
+        wait { run.end != nil }
+        XCTAssertEqual(run.end, .cancelled)
+        h.window.makeFirstResponder(h.footer)
+        pause(0.3)
+        XCTAssertEqual(h.text.selectedRange(), NSRange(location: 2, length: 0), "the caret the user chose")
+        XCTAssertTrue(h.window.firstResponder === h.footer, "no attempt after the cancellation")
+
+        // Typing, the same way.
+        h.window.makeFirstResponder(h.text)
+        h.text.setSelectedRange(NSRange(location: 5, length: 0))
+        h.window.makeFirstResponder(h.footer)
+        h.chrome.returnKeyboardToText()
+        let typing = try XCTUnwrap(h.chrome.keyboardReturn)
+        h.text.insertText("x", replacementRange: NSRange(location: NSNotFound, length: 0))
+        wait { typing.end != nil }
+        XCTAssertEqual(typing.end, .cancelled)
+        XCTAssertEqual(h.text.selectedRange(), NSRange(location: 6, length: 0), "after what was typed")
+    }
+
+    /// A17 P2: the note is replaced or the editor dismantled (`invalidate`),
+    /// the page moves to another note (`cancelKeyboardReturn`).
+    func testANoteSwitchOrDismantlingCancelsTheReturn() throws {
+        let h = try keyHarness()
+        h.chrome.returnKeyboardToText()
+        let dismantled = try XCTUnwrap(h.chrome.keyboardReturn)
+        h.accessories.invalidate()
+        XCTAssertEqual(dismantled.end, .cancelled, "dismantling the editor ended it")
+        h.window.makeFirstResponder(h.footer)
+        pause(0.3)
+        XCTAssertTrue(h.window.firstResponder === h.footer)
+
+        let again = try keyHarness()
+        defer { again.accessories.invalidate() }
+        again.chrome.returnKeyboardToText()
+        let switched = try XCTUnwrap(again.chrome.keyboardReturn)
+        again.chrome.cancelKeyboardReturn()
+        XCTAssertEqual(switched.end, .cancelled, "the page's note switch ended it")
+        again.window.makeFirstResponder(again.footer)
+        pause(0.3)
+        XCTAssertTrue(again.window.firstResponder === again.footer)
+    }
+
+    /// A17 P2: the panel hides during the return.
+    func testThePanelHidingCancelsTheReturn() throws {
+        let h = try keyHarness()
+        defer { h.accessories.invalidate() }
+        h.chrome.returnKeyboardToText()
+        let run = try XCTUnwrap(h.chrome.keyboardReturn)
+        h.window.orderOut(nil)
+        wait { run.end != nil }
+        XCTAssertEqual(run.end, .cancelled, "a hidden panel ends it")
+        h.window.makeKeyAndOrderFront(nil)
+        h.window.makeFirstResponder(h.footer)
+        pause(0.3)
+        XCTAssertTrue(h.window.firstResponder === h.footer, "shown again, nothing takes the keyboard from the control")
+    }
+
+    /// A17 P2: an input method starts composing during the return; the
+    /// composition is left alone.
+    func testCompositionStartingDuringTheReturnCancelsItAndKeepsTheMarkedText() throws {
+        let h = try keyHarness()
+        defer { h.accessories.invalidate() }
+        h.chrome.returnKeyboardToText()
+        let run = try XCTUnwrap(h.chrome.keyboardReturn)
+        h.text.setMarkedText("é", selectedRange: NSRange(location: 1, length: 0),
+                             replacementRange: NSRange(location: NSNotFound, length: 0))
+        XCTAssertTrue(h.text.hasMarkedText())
+        wait { run.end != nil }
+        XCTAssertEqual(run.end, .cancelled)
+        XCTAssertTrue(h.text.hasMarkedText(), "the composition was not disturbed")
+        XCTAssertTrue(h.window.firstResponder === h.text)
+    }
+}

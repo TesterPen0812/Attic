@@ -116,7 +116,7 @@ final class DeepReviewFixTests: XCTestCase {
         // the controls instead of resizing the native scroll view. Compare two
         // actual scroll positions in each state, with visible body movement
         // as a positive control so an empty capture cannot pass.
-        func assertClear(bottom: CGFloat, state: String) throws {
+        func assertClear(bottom: CGFloat, state: String, negativeControl: Bool = false) throws {
             let content = try XCTUnwrap(hosted.window.contentView)
             func capture(_ y: CGFloat) throws -> NSBitmapImageRep {
                 list.contentView.scroll(to: CGPoint(x: 0, y: y))
@@ -127,7 +127,7 @@ final class DeepReviewFixTests: XCTestCase {
                 content.cacheDisplay(in: content.bounds, to: image)
                 return image
             }
-            let first = try capture(260), second = try capture(1_300)
+            var first = try capture(260), second = try capture(1_300)
             let scale = CGFloat(first.pixelsWide) / content.bounds.width
             func difference(top: CGFloat, bottom: CGFloat, threshold: CGFloat = 0.03) -> Double {
                 var changed = 0, total = 0
@@ -157,12 +157,34 @@ final class DeepReviewFixTests: XCTestCase {
                                  "\(state): rows pass faintly under the header and tabs")
             XCTAssertLessThan(difference(top: 0, bottom: labelsBottom, threshold: 0.35), 0.002,
                               "\(state): never readable under the header and tabs")
+            // The bottom controls have their own lower bound (A17): a clip
+            // there would pass every "never readable" check. (This capture
+            // draws no glass backdrop and shows no row ink under the tabs
+            // themselves; `ScrollEdgeUITests` checks the tabs and the pills
+            // in window-server pixels.)
+            XCTAssertGreaterThan(difference(top: bottom, bottom: hosted.height), 0.0005,
+                                 "\(state): rows pass faintly under the bottom controls")
             XCTAssertLessThan(difference(top: bottom, bottom: hosted.height, threshold: 0.35), 0.002,
                               "\(state): never readable under the bottom controls")
+            if negativeControl {
+                // Negative control: the same bands clipped (covered by an
+                // opaque view) fail both lower bounds, so they can fail.
+                let covers = [(CGFloat(0), labelsBottom), (bottom, hosted.height)].map { band -> NSView in
+                    let cover = OpaqueCover(frame: NSRect(x: 0, y: content.isFlipped ? band.0 : hosted.height - band.1,
+                                                          width: content.bounds.width, height: band.1 - band.0))
+                    content.addSubview(cover, positioned: .above, relativeTo: nil)
+                    return cover
+                }
+                defer { covers.forEach { $0.removeFromSuperview() } }
+                first = try capture(260)
+                second = try capture(1_300)
+                XCTAssertLessThan(difference(top: 0, bottom: labelsBottom), 0.0005, "\(state): clipped header and tabs fail the lower bound")
+                XCTAssertLessThan(difference(top: bottom, bottom: hosted.height), 0.0005, "\(state): clipped bottom fails the lower bound")
+            }
             XCTAssertTrue(ScrollEdgeTests.pockets(in: list).isEmpty, "\(state): no native edge")
             XCTAssertEqual(frame(), resting, "\(state): controls change the mask, not the viewport")
         }
-        try assertClear(bottom: hosted.height - idle, state: "idle")
+        try assertClear(bottom: hosted.height - idle, state: "idle", negativeControl: true)
 
         hosted.model.setSearchQuery(" ", for: .now)
         hosted.spin(0.8)
@@ -644,5 +666,14 @@ final class TasksTabOrderTests: XCTestCase {
         XCTAssertNil(TasksPage.subtaskToRefocus(closed: move, now: move), "still open")
         XCTAssertNil(TasksPage.subtaskToRefocus(closed: TasksMetaPopover(id: row, tab: .now, kind: .date, targets: [row]), now: nil))
         XCTAssertNil(TasksPage.subtaskToRefocus(closed: nil, now: nil))
+    }
+}
+
+/// A white view that draws itself (a capture by `cacheDisplay` ignores a
+/// layer's background), laid over a band to clip what is under it.
+final class OpaqueCover: NSView {
+    override func draw(_ dirtyRect: NSRect) {
+        NSColor.white.setFill()
+        dirtyRect.fill()
     }
 }

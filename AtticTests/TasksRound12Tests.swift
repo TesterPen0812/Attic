@@ -691,6 +691,14 @@ final class TasksRound12Tests: XCTestCase {
         XCTAssertGreaterThan(shares.moved, 0.02, "the long list scrolled between the captures (\(shares.moved))")
         XCTAssertLessThan(shares.strongTop, 0.002, "never readable under the tabs' line (\(shares.strongTop))")
         XCTAssertLessThan(shares.strongBottom, 0.002, "never readable under the add bar's band (\(shares.strongBottom))")
+        // The other half (A17): rows do show faintly under the add bar, or a
+        // clip there would pass the checks above. (This capture draws no glass
+        // backdrop and no row ink under the tabs; `ScrollEdgeUITests` has the
+        // tabs in window-server pixels.)
+        XCTAssertGreaterThan(shares.bottom, 0.0005, "rows show faintly under the add bar's band (\(shares.bottom))")
+        // Negative control: the same band clipped fails the lower bound.
+        let clipped = try bandShares(.cleanCut, clipBands: true)
+        XCTAssertLessThan(clipped.bottom, 0.0005, "a clipped add bar's band fails the lower bound (\(clipped.bottom))")
     }
 
     // The system soft edge (a preview's choice since 2026-10-03) is checked in
@@ -699,7 +707,7 @@ final class TasksRound12Tests: XCTestCase {
 
     /// How much of the list's middle, the tabs' line (to a quarter of the
     /// gap under it) and the add bar's band differ between two scroll places.
-    private func bandShares(_ style: AtticScrollEdgeStyle) throws
+    private func bandShares(_ style: AtticScrollEdgeStyle, clipBands: Bool = false) throws
         -> (moved: Double, top: Double, bottom: Double, strongTop: Double, strongBottom: Double) {
         let lab = AtticScrollEdgeLab.shared
         let saved = lab.style
@@ -741,13 +749,24 @@ final class TasksRound12Tests: XCTestCase {
             }
             return total == 0 ? 1 : Double(differing) / Double(total)
         }
-        let first = try capture(scrolledTo: 260)
-        let second = try capture(scrolledTo: 1_300)
         let layout = PanelPageLayout(cornerSize: 52, panelSize: CGSize(width: AtticLayout.panelSize.width, height: height))
         let tabsTop = layout.headerBottom + AtticLayout.pageTabsTop
         let tabsBottom = tabsTop + AtticLayout.pageTabsHeight
         let bottomInset = max(AtticSpacing.panelMargin, layout.chromeInsets.bottom)
         let barTop = height - bottomInset - AtticControlSize.addBarHeight
+        // The negative control: the bands covered by an opaque view.
+        var covers: [NSView] = []
+        if clipBands {
+            covers = [(tabsTop, TasksViewport.listTop(tabsTop: tabsTop)), (barTop - 4, height)].map { band in
+                let cover = OpaqueCover(frame: NSRect(x: 0, y: content.isFlipped ? band.0 : height - band.1,
+                                                      width: content.bounds.width, height: band.1 - band.0))
+                content.addSubview(cover, positioned: .above, relativeTo: nil)
+                return cover
+            }
+        }
+        defer { covers.forEach { $0.removeFromSuperview() } }
+        let first = try capture(scrolledTo: 260)
+        let second = try capture(scrolledTo: 1_300)
         // The list itself moved, or the bands prove nothing.
         let moved = try share(first, second, from: tabsBottom + 40, to: barTop - 40)
         // The tabs' line, and the gap under it down to where the rows start their

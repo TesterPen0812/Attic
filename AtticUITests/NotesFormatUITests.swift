@@ -88,26 +88,64 @@ final class NotesFormatUITests: XCTestCase {
         waitFor(noteValue == "Pricing\nMost people only!", "typing went on in the note (\(noteValue))")
     }
 
-    /// OD-7 / P2-A12-1: ⌃Tab leaves the text for All notes, Aa and New note,
-    /// and the fourth stop is the text again, caret where it was, so typing
-    /// goes into the note; ⌃⇧Tab does the same the other way round.
+    /// OD-7 / P2-A12-1 / A17: ⌃Tab leaves the text for All notes, Aa and New
+    /// note, and the fourth stop is the text again, caret where it was, so
+    /// typing goes into the note; ⌃⇧Tab does the same the other way round.
+    /// The fourth press is followed by typing at once (no wait): SwiftUI's late
+    /// focus update must not drop the keys.
     func testControlTabGoesRoundTheFooterAndBackIntoTheTextBothWays() {
         app.typeText("Pricing\nBody")
         app.typeKey(.leftArrow, modifierFlags: [])
         app.typeKey(.leftArrow, modifierFlags: [])
         func goRound(_ flags: XCUIElement.KeyModifierFlags) {
-            for _ in 0..<4 {
+            for stop in 0..<4 {
                 app.typeKey(.tab, modifierFlags: flags)
-                // SwiftUI moves its focus a turn after the key.
-                RunLoop.current.run(until: Date().addingTimeInterval(0.3))
+                // SwiftUI moves its focus a turn after the key; the last
+                // press, back into the text, is not waited for.
+                if stop < 3 { RunLoop.current.run(until: Date().addingTimeInterval(0.3)) }
             }
         }
         goRound(.control)
         app.typeText("!")
-        waitFor(noteValue == "Pricing\nBo!dy", "⌃Tab ×4 came back into the text, caret kept (\(noteValue))")
+        waitFor(noteValue == "Pricing\nBo!dy", "⌃Tab ×4 came back into the text, caret kept, typing at once (\(noteValue))")
         goRound([.control, .shift])
         app.typeText("?")
-        waitFor(noteValue == "Pricing\nBo!?dy", "⌃⇧Tab ×4 came back into the text, caret kept (\(noteValue))")
+        waitFor(noteValue == "Pricing\nBo!?dy", "⌃⇧Tab ×4 came back into the text, caret kept, typing at once (\(noteValue))")
+    }
+
+    /// A17: a caret move straight after the round trip is the user's, and the
+    /// return never puts the caret back where it was.
+    func testACaretMoveRightAfterTheRoundTripIsNotUndone() {
+        app.typeText("Pricing\nBody")
+        app.typeKey(.leftArrow, modifierFlags: [])
+        app.typeKey(.leftArrow, modifierFlags: [])
+        for stop in 0..<4 {
+            app.typeKey(.tab, modifierFlags: .control)
+            if stop < 3 { RunLoop.current.run(until: Date().addingTimeInterval(0.3)) }
+        }
+        app.typeKey(.leftArrow, modifierFlags: [])
+        app.typeText("!")
+        waitFor(noteValue == "Pricing\nB!ody", "the caret the user moved to kept (\(noteValue))")
+        RunLoop.current.run(until: Date().addingTimeInterval(1))
+        app.typeText("?")
+        waitFor(noteValue == "Pricing\nB!?ody", "and nothing moved it afterwards (\(noteValue))")
+    }
+
+    /// A17: a click on another control while the keyboard is on its way back
+    /// takes the keyboard there, and the text does not take it again.
+    func testAClickOnAnotherControlRightAfterTheRoundTripKeepsTheKeyboardThere() {
+        app.typeText("Pricing\nBody")
+        for stop in 0..<4 {
+            app.typeKey(.tab, modifierFlags: .control)
+            if stop < 3 { RunLoop.current.run(until: Date().addingTimeInterval(0.3)) }
+        }
+        let allNotes = element("notes-all-notes")
+        require(allNotes, "All notes")
+        allNotes.click()
+        RunLoop.current.run(until: Date().addingTimeInterval(1))
+        waitFor(element("notes-library").exists, "All notes opened")
+        RunLoop.current.run(until: Date().addingTimeInterval(1))
+        XCTAssertTrue(element("notes-library").exists, "and the note's text did not take the page back")
     }
 
     func testCommandTOpensAaWhichStylesTheCaretParagraph() {

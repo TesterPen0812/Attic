@@ -126,6 +126,7 @@ struct NotesEditorPage: View {
             }
         }
         .onDisappear {
+            chrome.cancelKeyboardReturn()
             if let keyMonitor { NSEvent.removeMonitor(keyMonitor) }
             keyMonitor = nil
         }
@@ -144,6 +145,8 @@ struct NotesEditorPage: View {
         .onChange(of: design) { _, newValue in controller.update(design: newValue) }
         .onChange(of: controller.legacyNoteID) { _, id in openLegacy(id) }
         .onChange(of: controller.active?.id) { _, opened in
+            // Another note: the keyboard return belonged to the last one.
+            chrome.cancelKeyboardReturn()
             chrome.tagEditor = nil
             // Opening or starting a note ends the delete's Undo toast: ⌘Z
             // belongs to the note's own text again. (Deleting the open note
@@ -162,6 +165,7 @@ struct NotesEditorPage: View {
             DispatchQueue.main.async { chrome.focusText() }
         }
         .onChange(of: controller.isLibraryPresented) { _, shown in
+            chrome.cancelKeyboardReturn()
             bottomFocus = nil
             pendingStop = nil
             bottomStops = false

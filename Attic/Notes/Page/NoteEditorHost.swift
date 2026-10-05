@@ -82,36 +82,200 @@ final class NotesPageChrome: ObservableObject {
     /// `FocusState` is cleared in the same turn, and SwiftUI answers that
     /// clear on its own schedule by resigning whatever it believes has the
     /// keyboard, which left the panel as first responder when the text was
-    /// focused in the same turn (P2-A12-1). So the text is focused again,
-    /// a frame at a time, until it has held the keyboard for two frames
-    /// after SwiftUI's update (at most `maxFrames`), and a later move out of
-    /// the text (`cancelKeyboardReturn`) ends the loop.
-    func returnKeyboardToText(maxFrames: Int = 8) {
+    /// focused in the same turn (P2-A12-1). So the text is focused again on
+    /// display frames until it has stayed first responder through SwiftUI's
+    /// update (`NotesKeyboardReturn`). The run is one ticket: a click, a
+    /// caret move or typing, a note switch, the editor going away, the panel
+    /// hiding, composition starting, or a later move out of the text
+    /// (`cancelKeyboardReturn`) invalidates it, and it is checked before
+    /// every attempt.
+    func returnKeyboardToText(pacing: NotesKeyboardReturn.Pacing = .init(), clock: NotesFrameClock? = nil) {
+        cancelKeyboardReturn()
         guard let accessories else { return }
-        returnTicket &+= 1
-        let ticket = returnTicket
-        let selection = accessories.textSelection
-        func settle(frame: Int, held: Int) {
-            guard ticket == returnTicket else { return }
-            var held = held
-            if accessories.textHasKeyboard {
-                held += 1
-            } else {
-                held = 0
-                accessories.focusText()
-            }
-            if let selection, accessories.textSelection != selection { accessories.textSelection = selection }
-            guard held < 2, frame < maxFrames else { return }
-            DispatchQueue.main.async { settle(frame: frame + 1, held: held) }
+        let run = NotesKeyboardReturn(target: accessories, clock: clock ?? accessories.frameClock, pacing: pacing)
+        keyboardReturn = run
+        // A click anywhere (another control, the text, the panel's background)
+        // is the user taking the keyboard somewhere on purpose.
+        returnPointerMonitor = NSEvent.addLocalMonitorForEvents(matching: [.leftMouseDown, .rightMouseDown, .otherMouseDown]) { [weak run] event in
+            MainActor.assumeIsolated { run?.cancel() }
+            return event
         }
-        accessories.focusText()
-        if let selection { accessories.textSelection = selection }
-        DispatchQueue.main.async { settle(frame: 1, held: 0) }
+        run.onEnd = { [weak self, weak run] _ in
+            guard let self, let run, self.keyboardReturn === run else { return }
+            self.keyboardReturn = nil
+            if let monitor = self.returnPointerMonitor { NSEvent.removeMonitor(monitor) }
+            self.returnPointerMonitor = nil
+        }
+        run.start()
     }
 
     /// The keyboard went somewhere else on purpose: stop restoring the text.
-    func cancelKeyboardReturn() { returnTicket &+= 1 }
-    private var returnTicket = 0
+    func cancelKeyboardReturn() { keyboardReturn?.cancel() }
+
+    /// The return on its way, if any (tests read how it ended).
+    private(set) var keyboardReturn: NotesKeyboardReturn?
+    private var returnPointerMonitor: Any?
+}
+
+/// What the keyboard return needs to know of, and do to, the text on screen.
+@MainActor
+protocol NotesKeyboardReturnTarget: AnyObject {
+    /// The text is still the page's note and its panel is visible and key.
+    var canTakeKeyboard: Bool { get }
+    var textHasKeyboard: Bool { get }
+    /// An input method is composing in the text.
+    var textHasMarkedText: Bool { get }
+    var textSelection: NSRange? { get set }
+    func focusText()
+}
+
+/// Display frames for the keyboard return (a fake in tests).
+@MainActor
+protocol NotesFrameClock: AnyObject {
+    /// Runs `block` once, on the next display frame.
+    func nextFrame(_ block: @escaping @MainActor () -> Void)
+}
+
+/// ⌃Tab's way back into the text (P2-A12-1, A17): focus the text and put the
+/// caret back, then look at the next display frames, focusing again whenever
+/// SwiftUI's late focus update takes the keyboard away, and stop once the text
+/// has held it for `heldFrames` frames in a row after at least `minimumFrames`
+/// (SwiftUI's update has landed by then). Bounded by frames and by time. The
+/// run is cancelled, never merely out-waited, by anything that moves the
+/// keyboard on purpose: it stops before any attempt if the note, the window
+/// or the user's input changed since the last one.
+@MainActor
+final class NotesKeyboardReturn {
+    struct Pacing: Equatable {
+        var minimumFrames = 6
+        var heldFrames = 3
+        var maximumFrames = 30
+        var maximumSeconds: TimeInterval = 1
+    }
+
+    enum End: Equatable {
+        /// The text held the keyboard through SwiftUI's update.
+        case settled
+        /// Frames or time ran out (the text may still have the keyboard).
+        case gaveUp
+        /// The user, the note or the panel moved on.
+        case cancelled
+    }
+
+    private let target: NotesKeyboardReturnTarget
+    private let clock: NotesFrameClock
+    private let pacing: Pacing
+    private let uptime: () -> TimeInterval
+    private var expected: NSRange?
+    private var frames = 0
+    private var held = 0
+    private var startedAt: TimeInterval = 0
+    private(set) var end: End?
+    /// Called once, when the run ends in any way.
+    var onEnd: ((End) -> Void)?
+    /// How many times the run focused the text (tests).
+    private(set) var focusCount = 0
+
+    var isRunning: Bool { end == nil && started }
+    private var started = false
+
+    init(target: NotesKeyboardReturnTarget, clock: NotesFrameClock, pacing: Pacing = .init(),
+         uptime: @escaping () -> TimeInterval = { ProcessInfo.processInfo.systemUptime }) {
+        self.target = target
+        self.clock = clock
+        self.pacing = pacing
+        self.uptime = uptime
+    }
+
+    func start() {
+        guard !started, end == nil else { return }
+        started = true
+        startedAt = uptime()
+        guard allowed else { return finish(.cancelled) }
+        expected = target.textSelection
+        focus()
+        schedule()
+    }
+
+    func cancel() { finish(.cancelled) }
+
+    /// Still the same note, window and composition: nothing has moved the
+    /// keyboard on purpose since the last check.
+    private var allowed: Bool { target.canTakeKeyboard && !target.textHasMarkedText }
+
+    private func focus() {
+        focusCount += 1
+        target.focusText()
+        if let expected, target.textSelection != expected { target.textSelection = expected }
+    }
+
+    private func schedule() {
+        clock.nextFrame { [weak self] in self?.step() }
+    }
+
+    private func step() {
+        guard end == nil else { return }
+        guard allowed else { return finish(.cancelled) }
+        frames += 1
+        if target.textHasKeyboard {
+            // The text has the keyboard with the caret somewhere we did not
+            // put it: the user typed or moved it, and it is theirs again.
+            if let expected, let current = target.textSelection, current != expected { return finish(.cancelled) }
+            held += 1
+        } else {
+            held = 0
+            focus()
+        }
+        if frames >= pacing.minimumFrames, held >= pacing.heldFrames { return finish(.settled) }
+        if frames >= pacing.maximumFrames || uptime() - startedAt >= pacing.maximumSeconds { return finish(.gaveUp) }
+        schedule()
+    }
+
+    private func finish(_ result: End) {
+        guard end == nil else { return }
+        end = result
+        onEnd?(result)
+        onEnd = nil
+    }
+}
+
+/// One display frame at a time, from a display link while the view is on
+/// screen; a short timer stands in when the panel gets no frames (hidden), so
+/// a run always reaches its next check and ends by its own bound.
+@MainActor
+final class NotesDisplayFrameClock: NSObject, NotesFrameClock {
+    private weak var view: NSView?
+    private var link: CADisplayLink?
+    private var pending: (@MainActor () -> Void)?
+    private var generation = 0
+
+    init(view: NSView?) { self.view = view }
+
+    func nextFrame(_ block: @escaping @MainActor () -> Void) {
+        generation &+= 1
+        let ticket = generation
+        pending = block
+        link?.invalidate()
+        link = nil
+        if let view, let window = view.window, window.isVisible, window.screen != nil {
+            let link = view.displayLink(target: self, selector: #selector(frame(_:)))
+            link.add(to: .main, forMode: .common)
+            self.link = link
+        }
+        DispatchQueue.main.asyncAfter(deadline: .now() + .milliseconds(100)) { [weak self] in
+            MainActor.assumeIsolated { self?.fire(ticket) }
+        }
+    }
+
+    @objc private func frame(_ link: CADisplayLink) { fire(generation) }
+
+    private func fire(_ ticket: Int) {
+        guard ticket == generation, let block = pending else { return }
+        pending = nil
+        link?.invalidate()
+        link = nil
+        block()
+    }
 }
 
 /// The two views that sit on the title's lines inside the text view: the ⋯
@@ -119,7 +283,7 @@ final class NotesPageChrome: ObservableObject {
 /// subviews of the text view, so they scroll with the text natively; the
 /// engine keeps the title's lines clear of them.
 @MainActor
-final class NoteTitleAccessories {
+final class NoteTitleAccessories: NotesKeyboardReturnTarget {
     private let engine: NoteEditorEngine
     private weak var textView: NoteEditorTextView?
     private weak var scrollView: NSScrollView?
@@ -168,6 +332,19 @@ final class NoteTitleAccessories {
         set { if let newValue { textView?.setSelectedRange(newValue) } }
     }
 
+    /// An input method is composing in the text.
+    var textHasMarkedText: Bool { textView?.hasMarkedText() ?? false }
+
+    /// This is still the note on screen (not dismantled, not replaced) and
+    /// its panel is visible and key.
+    var canTakeKeyboard: Bool {
+        guard chrome.accessories === self, let window = textView?.window else { return false }
+        return window.isVisible && window.isKeyWindow
+    }
+
+    /// Display frames of the text's screen.
+    var frameClock: NotesFrameClock { NotesDisplayFrameClock(view: textView) }
+
     init(engine: NoteEditorEngine, textView: NoteEditorTextView, scrollView: NSScrollView, chrome: NotesPageChrome,
          design: AtticDesignContext, headerBottom: CGFloat, isUntouched: @escaping () -> Bool,
          tagEditor: @escaping () -> AnyView) {
@@ -214,6 +391,9 @@ final class NoteTitleAccessories {
     }
 
     func invalidate() {
+        // Dismantled or replaced (a note switch): a keyboard return on its
+        // way belongs to the old text.
+        if chrome.accessories === self { chrome.cancelKeyboardReturn() }
         if let boundsObserver { NotificationCenter.default.removeObserver(boundsObserver) }
         boundsObserver = nil
         engine.onTagsDisplayChange = nil
