@@ -2174,6 +2174,21 @@ final class CanvasAccessibilityTests: XCTestCase {
         XCTAssertNotNil(view.cursorForMove(at: CGPoint(x: 240, y: 180)))
     }
 
+    /// The owner's crash (2026-10-05, the page-switch slide): a control rect
+    /// outside the board intersects to CGRect.null, and addCursorRect throws
+    /// on it. Only real, non-empty rects may reach AppKit.
+    @MainActor
+    func testCursorRectsSkipControlsOutsideTheBoard() throws {
+        let session = CanvasSession(store: try makeTestCanvasStore())
+        let view = CanvasNSView(frame: CGRect(x: 0, y: 0, width: 480, height: 360))
+        CanvasNSViewRepresentable(session: session, selectionAccentColor: .systemBlue, clearReadabilityEnabled: false)
+            .configure(view)
+        view.excludedControlRects = [CGRect(x: 900, y: 900, width: 40, height: 40), CGRect(x: 10, y: 10, width: 40, height: 40)]
+        let rects = view.pointerCursorRects().map(\.0)
+        XCTAssertEqual(rects.count, 2, "the board and the one control that overlaps it")
+        XCTAssertTrue(rects.allSatisfy { !$0.isNull && !$0.isEmpty && $0.width.isFinite })
+    }
+
     @MainActor
     func testRetryFailedImageDecodesRequeuesEveryVisibleFailure() async throws {
         let session = CanvasSession(store: try makeTestCanvasStore())
