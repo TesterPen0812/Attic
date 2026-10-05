@@ -1,4 +1,5 @@
 import Combine
+import SwiftUI
 import Foundation
 
 /// Independent reasons that make hover-driven auto-hide unsafe. Presentation
@@ -250,6 +251,23 @@ final class PanelUIState: ObservableObject {
     func cancelSubtaskEntry(for parentID: UUID) {
         deactivateSubtaskEntry(for: parentID)
         subtaskDrafts[parentID] = nil
+    }
+
+    /// The last page switch. Not published: the pages' transitions read it
+    /// as they run (a page leaving was last drawn before the switch, so its
+    /// own copy of where to go would be stale).
+    private(set) var lastPageSwitch: PanelPageSwitch?
+
+    /// The one way the shell switches page (A20): every route makes the
+    /// switch with `motion` (and `alongside` in the same transaction), and
+    /// records it for the pages' transitions.
+    func switchPage(to section: PanelSection, motion: PanelPageMotion, alongside: () -> Void = {}) {
+        guard selectedSection != section else { return }
+        lastPageSwitch = PanelPageSwitch(from: PanelPage(selectedSection), to: PanelPage(section), motion: motion)
+        withAnimation(motion.animation) {
+            selectSection(section)
+            alongside()
+        }
     }
 
     func selectSection(_ section: PanelSection) {

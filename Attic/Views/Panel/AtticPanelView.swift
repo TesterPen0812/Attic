@@ -102,6 +102,10 @@ struct AtticPanelView: View {
                         pageHost(page)
                             .modifier(PanelPageVisibility(
                                 isCurrent: page == currentPage,
+                                // A page kept built rests on its side of the
+                                // current one, so it travels in from there.
+                                restingOffset: pageMotion.travels
+                                    ? page.side(from: currentPage) * panelSize.width : 0,
                                 // Canvas has single-key tool shortcuts (V, P, E);
                                 // hidden, they must not fire. Tasks has none
                                 // outside its menus, and disabling it would
@@ -185,7 +189,7 @@ struct AtticPanelView: View {
                 primaryInputFocus: $isQuickEntryFocused,
                 isCurrent: page == currentPage
             )
-            .transition(pageTransition)
+            .transition(pageTransition(.tasks))
         case .canvas:
             CanvasPageHost(
                 canvasSession: canvasSession,
@@ -195,7 +199,7 @@ struct AtticPanelView: View {
                 headerControlRects: headerControlRects,
                 headerBottom: PanelHeaderLayout.bottom(chromeInsets: chromeInsets)
             )
-            .transition(pageTransition)
+            .transition(pageTransition(.canvas))
         case .notes:
             NotesPageHost(
                 noteStore: noteStore,
@@ -204,7 +208,7 @@ struct AtticPanelView: View {
                 layout: pageLayout,
                 hasRestoredSession: hasRestoredNoteSession
             )
-            .transition(pageTransition)
+            .transition(pageTransition(.notes))
         }
     }
 
@@ -373,21 +377,29 @@ struct AtticPanelView: View {
         if uiState.selectedSection.isCanvas {
             canvasSession.interruptActiveInteraction()
         }
-        let selection = {
-            uiState.selectSection(section)
+        uiState.switchPage(to: section, motion: pageMotion) {
             if section.isNotes {
                 noteDraft.pages.present()
                 openMostRecentNoteIfNeeded()
             }
         }
-        withAnimation(AtticMotionPreset.pageSwitch.animation(reduceMotion: reduceMotion || settings.animations == .reduced)) { selection() }
     }
 
-    /// Pages crossfade in every feel: they hold AppKit scroll views, which
-    /// a SwiftUI scale would not carry (`AtticMotionPreset.scaleWeight`).
-    private var pageTransition: AnyTransition {
-        AtticMotionPreset.pageSwitch.transition(reduceMotion: reduceMotion || settings.animations == .reduced,
-                                                edge: nil, anchor: .top)
+    /// The motion every page switch uses (A20): the feel's navigation
+    /// spring, sideways; instant under Reduce Motion or Animations: Reduced.
+    private var pageMotion: PanelPageMotion {
+        PanelPageMotion.current(reduceMotion: reduceMotion || settings.animations == .reduced)
+    }
+
+    /// A page built or released by a switch (Notes every time, Tasks and
+    /// Canvas on a first visit) travels as a kept page does: in from its
+    /// side of the page left, out to its side of the new one. It reads the
+    /// switch as it runs (`PanelUIState.lastPageSwitch`). Pages never
+    /// scale: they hold AppKit scroll views, which a SwiftUI scale would
+    /// not carry (`AtticMotionPreset.scaleWeight`); an offset moves them.
+    private func pageTransition(_ page: PanelPage) -> AnyTransition {
+        .modifier(active: PanelPageTravel(page: page, uiState: uiState, width: panelSize.width, isAway: true),
+                  identity: PanelPageTravel(page: page, uiState: uiState, width: panelSize.width, isAway: false))
     }
 
     /// Pages with their own bottom controls (the Tasks add bar) report their
@@ -455,11 +467,14 @@ extension EnvironmentValues {
 
 private struct PanelPageVisibility: ViewModifier {
     let isCurrent: Bool
+    /// Where the page rests while hidden (0 when it is current).
+    let restingOffset: CGFloat
     let disablesWhenHidden: Bool
 
     func body(content: Content) -> some View {
         content
             .environment(\.atticPanelPageIsCurrent, isCurrent)
+            .offset(x: isCurrent ? 0 : restingOffset)
             .opacity(isCurrent ? 1 : 0)
             .allowsHitTesting(isCurrent)
             .disabled(disablesWhenHidden && !isCurrent)
@@ -468,6 +483,24 @@ private struct PanelPageVisibility: ViewModifier {
             .transformPreference(PanelPageNoticeClearancePreferenceKey.self) { value in
                 if !isCurrent { value = 0 }
             }
+    }
+}
+
+/// A page coming in or going out with a switch: away, it rests on its side
+/// of the switch's other page (`PanelPageSwitch.restingSide`), transparent.
+/// It holds the shell's state without observing it and reads the switch
+/// when SwiftUI applies it, so a page leaving goes the way of the switch
+/// that removes it, not the one that brought it.
+private struct PanelPageTravel: ViewModifier {
+    let page: PanelPage
+    let uiState: PanelUIState
+    let width: CGFloat
+    let isAway: Bool
+
+    func body(content: Content) -> some View {
+        content
+            .offset(x: isAway ? (uiState.lastPageSwitch?.restingSide(of: page) ?? 0) * width : 0)
+            .opacity(isAway ? 0 : 1)
     }
 }
 

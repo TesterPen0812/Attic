@@ -41,6 +41,11 @@ struct NotesEditorPage: View {
     @State private var pendingStop: NotesKeyboardOrder.Stop?
     @State private var keyMonitor: Any?
     @State private var postedToastID: UUID?
+    /// Whether this page has shown a note yet. The note that the page
+    /// opens on arrives without a slide: the page switch moves the page
+    /// (A20; before, the first visit's session start slid it in springily,
+    /// so only that visit looked sprung).
+    @State private var hasShownNote = false
     /// The history step the delete toast undoes: the toast answers only
     /// while that step is still the next Undo.
     @State private var postedToastStep: UUID?
@@ -70,6 +75,12 @@ struct NotesEditorPage: View {
     /// the bottom-left corner shows the stack, then points back at the note.
     static let libraryEdge: Edge = .leading
     static let noteEdge: Edge = .trailing
+
+    /// The springy slide for a new or another note; nil for the note the
+    /// page opens on (its session starting, at once or after recovery).
+    static func noteSlideAnimation(hasShownNote: Bool, reduceMotion: Bool) -> Animation? {
+        hasShownNote ? AtticMotionPreset.slide.springy(reduceMotion: reduceMotion) : nil
+    }
 
     static func libraryButtonGlyph(libraryShown: Bool) -> String {
         libraryShown ? "chevron.right" : "rectangle.stack"
@@ -107,8 +118,13 @@ struct NotesEditorPage: View {
         // another note (keystrokes are never held back: the text view takes
         // the keyboard at once, and nothing here animates per keystroke).
         .animation(AtticMotionPreset.slide.springy(reduceMotion: design.reduceMotion), value: controller.isLibraryPresented)
-        .animation(AtticMotionPreset.slide.springy(reduceMotion: design.reduceMotion), value: controller.active?.id)
+        .animation(Self.noteSlideAnimation(hasShownNote: hasShownNote, reduceMotion: design.reduceMotion),
+                   value: controller.active?.id)
+        .onChange(of: controller.active?.id) { _, id in
+            if id != nil { hasShownNote = true }
+        }
         .onAppear {
+            hasShownNote = controller.active != nil
             controller.update(design: design)
             controller.start()
             controller.present()

@@ -10,6 +10,75 @@ import XCTest
 final class PanelShellTests: XCTestCase {
     // MARK: Pages and the header
 
+    /// A20: every switch, the first and every later one, between every pair
+    /// of pages, uses the feel's spring with the pages travelling sideways.
+    /// Before, the shell crossfaded for 180 ms whatever the feel, and only
+    /// the first visit to Notes looked sprung (the editor's own slide for
+    /// the note its session started on).
+    func testEveryPageSwitchUsesTheFeelsMotionEveryTime() throws {
+        let saved = AtticMotionTuning.current
+        defer { AtticMotionTuning.current = saved }
+        for feel in [AtticAnimationLevel.lively, .subtle] {
+            AtticMotionTuning.current = feel.feel.tuning
+            let ui = PanelUIState()
+            ui.loadPageContent()
+            XCTAssertEqual(PanelPage(ui.selectedSection), .tasks)
+            let route: [PanelPage] = [.notes, .tasks, .notes, .tasks, .canvas, .tasks, .canvas, .notes, .canvas, .notes, .tasks]
+            var used: [PanelPageSwitch] = []
+            for page in route {
+                ui.switchPage(to: page.section, motion: .current(reduceMotion: false))
+                used.append(try XCTUnwrap(ui.lastPageSwitch))
+            }
+            XCTAssertEqual(used.map(\.to), route)
+            let spring = feel.feel.tuning.slide
+            XCTAssertGreaterThan(spring.bounce, 0, "\(feel): never a plain fade")
+            for (index, record) in used.enumerated() {
+                XCTAssertEqual(record.motion, PanelPageMotion(spring: spring), "\(feel) switch \(index) to \(record.to)")
+                XCTAssertEqual(record.motion.animation, .spring(duration: spring.response, bounce: spring.bounce))
+                XCTAssertNotEqual(record.motion.animation, .spring(duration: 0.18, bounce: 0), "the old crossfade")
+            }
+            // First and repeated visits to Notes are the same switch.
+            XCTAssertEqual(used[0], used[2])
+            XCTAssertEqual(used[1], used[3])
+            // Sideways in page order: in from its side of the page left, out
+            // to its side of the new one.
+            XCTAssertEqual(used[0].restingSide(of: .notes), 1, "Tasks → Notes: Notes comes in from the right")
+            XCTAssertEqual(used[0].restingSide(of: .tasks), -1, "Tasks goes out to the left")
+            XCTAssertEqual(used[1].restingSide(of: .notes), 1, "Notes → Tasks: Notes goes out to the right")
+            XCTAssertEqual(used[1].restingSide(of: .tasks), -1, "Tasks comes in from the left")
+            XCTAssertEqual(used[7].restingSide(of: .notes), -1, "Canvas → Notes: Notes comes in from the left")
+            XCTAssertEqual(used[8].restingSide(of: .notes), -1, "Notes → Canvas: Notes goes out to the left")
+            XCTAssertEqual(used[8].restingSide(of: .canvas), 1)
+            // A kept page rests on its side of the current page.
+            XCTAssertEqual(PanelPage.canvas.side(from: .tasks), 1)
+            XCTAssertEqual(PanelPage.tasks.side(from: .canvas), -1)
+            XCTAssertEqual(PanelPage.notes.side(from: .notes), 0)
+        }
+        // Reduce Motion and Animations: Reduced keep their instant switch.
+        AtticMotionTuning.current = .lively
+        let ui = PanelUIState()
+        ui.loadPageContent()
+        ui.switchPage(to: .notes, motion: .current(reduceMotion: true))
+        XCTAssertEqual(ui.lastPageSwitch?.motion, .instant)
+        XCTAssertNil(ui.lastPageSwitch?.motion.animation)
+        XCTAssertEqual(ui.lastPageSwitch?.restingSide(of: .notes), 0, "no travel")
+        XCTAssertNil(AtticMotionPreset.pageSwitch.animation(reduceMotion: true))
+        // The cause: the Notes editor's springy slide no longer plays for the
+        // note the page opens on, only for a new or another note.
+        XCTAssertNil(NotesEditorPage.noteSlideAnimation(hasShownNote: false, reduceMotion: false))
+        XCTAssertEqual(NotesEditorPage.noteSlideAnimation(hasShownNote: true, reduceMotion: false),
+                       AtticMotionPreset.slide.springy(reduceMotion: false))
+    }
+
+    /// A20: the "New tag" row's + sits in the check column, so its name
+    /// starts where the tags' names do and the card is no wider for it.
+    func testTheNewTagRowsPlusSitsInTheCheckColumn() {
+        let m = AtticDropdownMetrics.self
+        let name = String(localized: "New tag “#plan”")
+        XCTAssertEqual(AtticTagPicker.rowsWidth(tags: [], create: "plan"),
+                       ceil(m.rowPadding * 2 + m.checkSlot + m.columnGap + AtticTextStyle.dropdownRow.measuredWidth(name)))
+    }
+
     func testSectionsMapToThreePagesAndTasksAlwaysOpensOnNow() {
         XCTAssertEqual(PanelPage(.tasks), .tasks)
         XCTAssertEqual(PanelPage(.backlog), .tasks, "Backlog is part of the Tasks page")

@@ -296,7 +296,11 @@ final class CornerHoverMonitor {
                 guard noteDraft.close() else { return .unsavedNote }
             }
             PerformanceSignposts.beginPageSwitch()
-            uiState.selectSection(targetSection)
+            // The shell's one switch (A20): sprung like any other while the
+            // panel shows, at once before a reveal from hidden.
+            let motion = panelController.isPanelVisible
+                ? PanelPageMotion.current(reduceMotion: AtticMotionPreference.reducesMotion) : .instant
+            uiState.switchPage(to: targetSection, motion: motion)
         }
 
         guard openComposer else { return nil }

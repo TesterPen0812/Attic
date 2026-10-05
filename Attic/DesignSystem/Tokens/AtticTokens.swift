@@ -359,7 +359,9 @@ enum AtticTextStyle: String, CaseIterable, Sendable {
 /// macOS Reduce Motion both set `design.reduceMotion`, which swaps every
 /// preset for its fallback, whatever the feel.
 enum AtticMotionPreset: String, CaseIterable, Sendable {
-    /// Switch page: 180 ms crossfade. Reduce Motion: instant.
+    /// Switch page: the feel's navigation spring (as `slide`), every time,
+    /// the pages travelling sideways as they crossfade (`PanelPageMotion`).
+    /// Reduce Motion: instant.
     case pageSwitch
     /// Now, Backlog and Done; note and All notes: a firm slide. RM: crossfade.
     case slide
@@ -383,13 +385,13 @@ enum AtticMotionPreset: String, CaseIterable, Sendable {
     /// Hover and press feedback.
     case hover
 
-    /// The spring this preset uses under `tuning`. A crossfade and hover
-    /// feedback are the same in every feel.
+    /// The spring this preset uses under `tuning`. Hover feedback is the
+    /// same in every feel; a page switch is navigation, so it takes the
+    /// feel's slide (A20: it was a 180 ms crossfade whatever the feel).
     func spring(in tuning: AtticMotionTuning) -> AtticMotionSpring {
         switch self {
-        case .pageSwitch: AtticMotionSpring(response: 0.18, bounce: 0)
         case .hover: AtticMotionSpring(response: 0.10, bounce: 0)
-        case .slide: tuning.slide
+        case .slide, .pageSwitch: tuning.slide
         case .expand: tuning.expand
         case .doneSlide: tuning.doneSlide
         case .popover: tuning.popover
