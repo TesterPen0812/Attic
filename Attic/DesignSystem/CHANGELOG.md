@@ -18,6 +18,12 @@ Canvas later (OD-11). No token, colour, radius or size changed.
   button reports whether it is open; only the title wrapper observes it, so
   the header's own body never re-evaluates (`CornerGlassTests` still holds).
 - The Notes header title uses it; the page switcher itself is unchanged.
+- **Uneven glass buttons fixed** (owner, `p2-33`): `AtticControlGroup`'s
+  `GlassEffectContainer(spacing:)` was 12 pt, wider than the 8 pt between
+  Notes' Aa and New note, so the system blended their facing edges and each
+  button's two sides had different curvature. The merge distance is now 0
+  (`AtticControlShape.mergeDistance`) and every control draws one explicit
+  symmetric continuous rounded rectangle (`AtticControlShape.shape`).
 
 ### A15 scroll-under fade (redesign/p2-integration, 2026-10-04)
 Owner decision (2026-10-04, option A of the p2-27 draft; it replaces D1's

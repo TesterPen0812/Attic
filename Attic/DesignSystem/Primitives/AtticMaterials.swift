@@ -196,7 +196,7 @@ struct AtticRaisedMaterialModifier: ViewModifier {
     @Environment(\.atticCapture) private var capture
 
     func body(content: Content) -> some View {
-        let shape = RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+        let shape = AtticControlShape.shape(cornerRadius: cornerRadius)
         if capture == nil, design.effectiveControls == .liquidGlass {
             let tokens = design.tokens
             content
@@ -216,6 +216,21 @@ struct AtticRaisedMaterialModifier: ViewModifier {
         } else {
             content.background(AtticRaisedBackground(cornerRadius: cornerRadius, state: state))
         }
+    }
+}
+
+/// The one shape of Attic's controls: a continuous rounded rectangle with
+/// the same radius on all four corners, set explicitly so no control takes
+/// the system's default or container-concentric glass shape near the panel's
+/// corner. The pin, the page button, the bottom-row buttons, the add bar and
+/// the selection bar all draw it (`AtticRadius.control(height:)`).
+enum AtticControlShape {
+    /// How close two glass controls may be before the system blends them
+    /// (`GlassEffectContainer(spacing:)`): never.
+    static let mergeDistance: CGFloat = 0
+
+    static func shape(cornerRadius: CGFloat) -> RoundedRectangle {
+        RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
     }
 }
 
@@ -271,8 +286,15 @@ extension View {
 /// Controls that float together (the header's pin and page switch): live
 /// Liquid Glass shares one `GlassEffectContainer`, so neighbouring glass
 /// renders and blends as one material. A plain group otherwise.
+///
+/// Its `spacing` is the distance at which neighbouring glass shapes begin to
+/// flow into each other. Attic's controls are separate buttons and must keep
+/// their own shapes, so it is 0: with the old 12 pt, two buttons 8 pt apart
+/// (Notes' Aa and New note) pulled their facing edges toward each other and
+/// the left and right sides of each button had different curvature
+/// (owner, 2026-10-05, `mockups/p2-33-owner-uneven-buttons.png`).
 struct AtticControlGroup<Content: View>: View {
-    var spacing: CGFloat = AtticSpacing.betweenControls
+    var spacing: CGFloat = AtticControlShape.mergeDistance
     @ViewBuilder let content: Content
 
     @Environment(\.atticDesign) private var design

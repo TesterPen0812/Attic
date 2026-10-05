@@ -150,3 +150,58 @@ final class AtticHeaderTitleRoomTests: XCTestCase {
         XCTAssertFalse(presence.isOpen)
     }
 }
+
+/// Owner, 2026-10-05 (`p2-33-owner-uneven-buttons.png`): the Notes bottom-right
+/// glass buttons had a left and a right side with different curvature. The
+/// cause was the shared glass container's merge distance (12 pt) reaching the
+/// 8 pt gap between the buttons, so the system blended their facing edges.
+/// Every control has one explicit, symmetric shape, and a group never blends
+/// its buttons.
+@MainActor
+final class AtticControlShapeTests: XCTestCase {
+    /// Heights of the controls that draw the shared shape: the pin, the page
+    /// button and the bottom-row buttons (36), the add bar (36) and the
+    /// selection bar.
+    private let heights: [CGFloat] = [AtticControlSize.headerControl, AtticControlSize.panelButton.height, AtticControlSize.addBarHeight]
+
+    func testControlShapeIsSymmetricOnAllFourCorners() {
+        for height in heights {
+            for width in [height, height * 2, height * 4] {
+                let radius = AtticRadius.control(height: height)
+                let rect = CGRect(x: 0, y: 0, width: width, height: height)
+                let shape = AtticControlShape.shape(cornerRadius: radius)
+                XCTAssertEqual(shape.cornerSize.width, shape.cornerSize.height, "one radius")
+                XCTAssertEqual(shape.style, .continuous)
+                let path = shape.path(in: rect)
+                var x: CGFloat = 0.25
+                while x < width / 2 {
+                    var y: CGFloat = 0.25
+                    while y < height / 2 {
+                        let inside = path.contains(CGPoint(x: x, y: y))
+                        for p in [CGPoint(x: width - x, y: y), CGPoint(x: x, y: height - y), CGPoint(x: width - x, y: height - y)] {
+                            XCTAssertEqual(path.contains(p), inside, "height \(height) width \(width) at \(x),\(y)")
+                        }
+                        y += 0.5
+                    }
+                    x += 0.5
+                }
+            }
+        }
+    }
+
+    func testBottomRowButtonsDrawTheCornerButtonsShape() {
+        // The pin, the page button, All notes, Aa and New note are all
+        // `headerControl` tall and take the same radius.
+        let corner = AtticRadius.control(height: AtticControlSize.headerControl)
+        XCTAssertEqual(AtticRadius.control(height: AtticControlSize.panelButton.height), corner)
+        XCTAssertEqual(AtticControlSize.panelButton.width, AtticControlSize.panelButton.height)
+    }
+
+    func testAGroupNeverBlendsItsButtons() {
+        // The smallest gap between two glass buttons in a group: Notes' Aa
+        // and New note, 8 pt. The merge distance must stay below it.
+        let smallestGap = AtticSpacing.s8
+        XCTAssertLessThan(AtticControlShape.mergeDistance, smallestGap)
+        XCTAssertLessThan(AtticControlShape.mergeDistance, AtticSpacing.betweenControls)
+    }
+}
