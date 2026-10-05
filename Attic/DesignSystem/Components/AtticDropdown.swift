@@ -9,8 +9,8 @@ import SwiftUI
 // link card. Native menus (right-click, ⋯, the menu bar) stay native.
 //
 // - `AtticDropdownCard`: the solid card (no blur), one hairline, D's shadow,
-//   20 pt corners, rows 10 pt in.
-// - `AtticDropdownRow`: a 32 pt row, touching its neighbours; the pill is the
+//   16 pt corners, rows 6 pt in (the Compact size, p2-28).
+// - `AtticDropdownRow`: a 28 pt row, touching its neighbours; the pill is the
 //   whole row. One highlight per list, which the keyboard and the pointer
 //   share (`onHover` moves the list's).
 // - `AtticDropdownField`: the card's field (Find or add a tag, the date).
@@ -48,7 +48,7 @@ struct AtticDropdownSurface: View {
     }
 }
 
-/// The card: its rows or fields 10 pt in, on `AtticDropdownSurface`. With
+/// The card: its rows or fields 6 pt in, on `AtticDropdownSurface`. With
 /// no `width` it is as wide as its content, never under 144 pt; the
 /// presenter caps it at the panel's margin (`AtticDropdownLayout.width`).
 struct AtticDropdownCard<Content: View>: View {
@@ -250,9 +250,9 @@ struct AtticDropdownGap: View {
     var body: some View { Color.clear.frame(height: height).accessibilityHidden(true) }
 }
 
-/// One row of a dropdown (p2-24 D): 32 pt, touching; an optional check
-/// column, a priority's mark, a 14 pt icon in an 18 pt slot, the 14 pt
-/// name and a short trailing detail (⌥⌘2, 2 Oct). Never a hint column.
+/// One row of a dropdown (p2-24 D, Compact size): 28 pt, touching; an
+/// optional check column, a priority's mark, a 13 pt icon in a 16 pt slot,
+/// the 13 pt name and a short trailing detail (⌥⌘2, 2 Oct). Never a hint column.
 ///
 /// One highlight (fix 1): a list with a keyboard highlight owns it and the
 /// pointer moves it (`onHover`), as in a native menu; with no `onHover` the

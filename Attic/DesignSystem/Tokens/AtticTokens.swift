@@ -225,9 +225,10 @@ enum AtticTextStyle: String, CaseIterable, Sendable {
     // 13 pt text (empty states, the add bar, subtasks, the Done search).
     case rowTitleActive, listBody
     case controlLabel, chipLabel, menuRow, shortcut, toast, tag, count, dropLabel
-    // Attic's own dropdowns (E1, p2-24 D): 14 pt names (the note body's
-    // size, SF Pro) and the date card's month title.
-    case dropdownRow, dropdownHeading
+    // Attic's own dropdowns (E1, p2-24 D; Compact size, p2-28): 13 pt
+    // names (SF Pro), the date card's month title, its days and its light
+    // weekday row.
+    case dropdownRow, dropdownHeading, dropdownDay, dropdownWeekday
     // Settings
     case pageTitle, sectionHeading, sidebarHeading, sidebarRow, groupLabel, groupValue
     case settingsHelper, settingsHint, tileLabel, tileLabelSelected, rowSingle
@@ -268,8 +269,11 @@ enum AtticTextStyle: String, CaseIterable, Sendable {
         case .panelHeading: Spec(size: 13, weight: .semibold, italic: false, monospacedDigits: false)
         case .body, .rowTitle, .listBody, .menuRow, .toast, .sidebarRow: Spec(size: 13, weight: .regular, italic: false, monospacedDigits: false)
         case .rowTitleActive: Spec(size: 13, weight: .medium, italic: false, monospacedDigits: false)
-        case .noteBody, .dropdownRow: Spec(size: 14, weight: .regular, italic: false, monospacedDigits: false)
-        case .dropdownHeading: Spec(size: 14, weight: .semibold, italic: false, monospacedDigits: false)
+        case .noteBody: Spec(size: 14, weight: .regular, italic: false, monospacedDigits: false)
+        case .dropdownRow: Spec(size: 13, weight: .regular, italic: false, monospacedDigits: false)
+        case .dropdownHeading: Spec(size: 13, weight: .semibold, italic: false, monospacedDigits: false)
+        case .dropdownDay: Spec(size: 12.5, weight: .regular, italic: false, monospacedDigits: true)
+        case .dropdownWeekday: Spec(size: 10, weight: .medium, italic: false, monospacedDigits: false)
         case .rowMeta, .helper: Spec(size: 11.5, weight: .regular, italic: false, monospacedDigits: false)
         case .count: Spec(size: 11.5, weight: .regular, italic: false, monospacedDigits: true)
         case .rowMetaEmphasis: Spec(size: 11.5, weight: .medium, italic: false, monospacedDigits: false)
