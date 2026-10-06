@@ -21,6 +21,11 @@ struct PanelPageLayout: Equatable {
     /// The bottom of the header, measured from the panel's top edge. Content
     /// that scrolls starts below it and fades as it passes under it.
     var headerBottom: CGFloat { PanelHeaderLayout.bottom(chromeInsets: chromeInsets) }
+    /// The scroll-under fade's bands at the panel's top and bottom edges
+    /// (owner, 2026-10-06): from the edge to the middle of the header's
+    /// controls, and of the bottom row.
+    var scrollEdgeFadeTop: CGFloat { chromeInsets.top + AtticControlSize.panelButton.height / 2 }
+    var scrollEdgeFadeBottom: CGFloat { chromeInsets.bottom + AtticControlSize.panelButton.height / 2 }
 
     init(cornerSize: CGFloat, panelSize: CGSize) {
         self.cornerSize = cornerSize

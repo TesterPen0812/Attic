@@ -249,7 +249,10 @@ struct NotesEditorPage: View {
                 .id(ObjectIdentifier(session.engine))
                 // The text runs under the header's glass controls and the
                 // bottom row at full strength (owner, 2026-10-06: no fade
-                // behind glass). No native soft edge here.
+                // behind glass), dissolving only into the panel's own top and
+                // bottom edges. No native soft edge here.
+                .atticScrollUnderFade(plainText: [], topEdge: layout.scrollEdgeFadeTop,
+                                      bottomEdge: layout.scrollEdgeFadeBottom)
                 .accessibilityIdentifier("note-editor")
                 .accessibilitySortPriority(3)
                 .transition(slide(from: Self.noteEdge))

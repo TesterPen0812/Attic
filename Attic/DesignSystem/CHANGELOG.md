@@ -5,6 +5,14 @@ Every later change is recorded here: what changed, why, and who asked.
 
 ## Phase 2
 
+### A29 round 4: content dissolves into the panel's edges; Aa answers at once (2026-10-06)
+- **`atticScrollUnderFade(plainText:topEdge:bottomEdge:)`**: content eases
+  from `edgeFloor` (0.10) at the panel's top and bottom edges to full at the
+  middle of the header's controls and of the bottom row
+  (`PanelPageLayout.scrollEdgeFadeTop/Bottom`); still none behind glass.
+- **`AtticFormatRowGrowth.leading/trailing`**: the glass's two edges travel
+  on their own clocks (both together still available).
+
 ### A29 round 3: no fade behind glass; the format row on the app's springs (2026-10-06)
 Owner decisions of 2026-10-06 ~09:50. No colour, size or glass changed.
 - **`AtticScrollUnderFade` / `atticScrollUnderFade(plainText:)`**: content

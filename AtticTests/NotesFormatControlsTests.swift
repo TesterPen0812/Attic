@@ -850,18 +850,22 @@ final class NotesFormatControlsTests: XCTestCase {
         for feel in AtticMotionFeel.allCases {
             let tuning = feel.tuning
             let plan = NoteFormatMotion.Plan(tuning)
-            XCTAssertEqual(plan.openGrow.response, tuning.expand.response, "\(feel): the glass is expand")
-            XCTAssertEqual(plan.openGrow.bounce, tuning.expand.bounce)
+            XCTAssertEqual(plan.openLeading.response, tuning.expand.response, "\(feel): the glass is expand")
+            XCTAssertEqual(plan.openLeading.bounce, tuning.expand.bounce)
+            XCTAssertEqual(plan.openTrailing.response, tuning.expand.response)
+            XCTAssertEqual(plan.openLeading.delay, 0, "\(feel): Aa answers the click at once")
             XCTAssertEqual(plan.closeGrow.response, tuning.expand.response)
             XCTAssertEqual(plan.openControls.response, tuning.popover.response, "\(feel): the controls come as a bar")
             XCTAssertEqual(plan.comeBack.response, tuning.popover.response)
-            XCTAssertGreaterThan(plan.openControls.delay, plan.openGrow.delay, "\(feel): controls after the glass starts")
-            XCTAssertGreaterThan(plan.openGrow.delay, 0, "\(feel): neighbours first")
+            XCTAssertGreaterThan(plan.openControls.delay, plan.openTrailing.delay, "\(feel): controls once the glass is wide")
+            XCTAssertGreaterThan(plan.openTrailing.delay, 0, "\(feel): New note first on its side")
             XCTAssertGreaterThan(plan.closeGrow.delay, 0, "\(feel): controls first when closing")
 
             func visible(_ value: Double) -> Double { min(1, max(0, value)) }
-            func check(_ t: Double, grow: Double, allShows: Double, rightShows: Double, _ phase: String) {
-                let extent = AtticFormatRowGrowth(source: aa, rowWidth: row, grow: grow, sourceSymbol: "textformat").extent
+            func check(_ t: Double, leading: Double, trailing: Double, allShows: Double, rightShows: Double,
+                       statusShows: Double, _ phase: String) {
+                let extent = AtticFormatRowGrowth(source: aa, rowWidth: row, leading: leading, trailing: trailing,
+                                                  sourceSymbol: "textformat").extent
                 let glass = (minX: extent.minX, maxX: extent.minX + extent.width)
                 // A neighbour still showing keeps clear of the glass's edge: New
                 // note by 6 pt (it rests 8 from Aa), the status by 20, All notes by 24.
@@ -872,7 +876,7 @@ final class NotesFormatControlsTests: XCTestCase {
                     XCTAssertLessThanOrEqual(rightShows, 0.03, "\(feel) \(phase) \(t)s: the glass reaches New note")
                 }
                 if overlaps(status, clear: 20) {
-                    XCTAssertLessThanOrEqual(rightShows, 0.05, "\(feel) \(phase) \(t)s: the glass reaches the status")
+                    XCTAssertLessThanOrEqual(statusShows, 0.05, "\(feel) \(phase) \(t)s: the glass reaches the status")
                 }
                 if overlaps(allNotes, clear: 24) {
                     XCTAssertLessThanOrEqual(allShows, 0.03, "\(feel) \(phase) \(t)s: the glass reaches All notes")
@@ -881,13 +885,17 @@ final class NotesFormatControlsTests: XCTestCase {
             for step in 0...1500 {
                 let t = Double(step) / 1000
                 // Opening: each neighbour fades, then its glass is taken away.
-                check(t, grow: plan.openGrow.value(at: t),
-                      allShows: t >= plan.allNotesSettles ? 0 : visible(1 - plan.leave.value(at: t)),
-                      rightShows: t >= plan.newNoteSettles ? 0 : visible(1 - plan.leave.value(at: t)), "opening")
+                // (The status, plain text, is hidden as the row opens.)
+                check(t, leading: plan.openLeading.value(at: t), trailing: plan.openTrailing.value(at: t),
+                      allShows: t >= plan.allNotesSettles ? 0 : visible(1 - plan.allNotesLeave.value(at: t)),
+                      rightShows: t >= plan.newNoteSettles ? 0 : visible(1 - plan.leave.value(at: t)),
+                      statusShows: 0, "opening")
                 // Closing: each comes back on its own clock.
-                check(t, grow: 1 - plan.closeGrow.value(at: t),
+                let back = 1 - plan.closeGrow.value(at: t)
+                let newNoteBack = visible(plan.comeBack.value(at: t - plan.newNoteReturns))
+                check(t, leading: back, trailing: back,
                       allShows: visible(plan.comeBack.value(at: t - plan.allNotesReturns)),
-                      rightShows: visible(plan.comeBack.value(at: t - plan.newNoteReturns)), "closing")
+                      rightShows: newNoteBack, statusShows: newNoteBack, "closing")
             }
         }
 
@@ -898,7 +906,7 @@ final class NotesFormatControlsTests: XCTestCase {
         XCTAssertEqual(end.extent.minX, 0); XCTAssertEqual(end.extent.width, row)
         XCTAssertEqual(end.sourceGlyphOpacity, 0)
         XCTAssertEqual(NoteFormatRowChannels.open,
-                       NoteFormatRowChannels(grow: 1, controls: 1, allNotes: 1, newNoteAndStatus: 1),
+                       NoteFormatRowChannels(leading: 1, trailing: 1, controls: 1, allNotes: 1, newNoteAndStatus: 1),
                        "open, the controls are fully drawn")
     }
 

@@ -205,9 +205,12 @@ struct AtticFormatRowSurface<Content: View>: View, Animatable {
     @ViewBuilder let content: Content
     @State private var probeID = UUID()
 
-    var animatableData: CGFloat {
-        get { growth?.grow ?? 1 }
-        set { growth?.grow = newValue }
+    var animatableData: AnimatablePair<CGFloat, CGFloat> {
+        get { AnimatablePair(growth?.leading ?? 1, growth?.trailing ?? 1) }
+        set {
+            growth?.leading = newValue.first
+            growth?.trailing = newValue.second
+        }
     }
 
     var body: some View {
@@ -249,24 +252,39 @@ struct AtticFormatRowSurface<Content: View>: View, Animatable {
 
 /// Where the format row's glass is while it grows out of a button (p2-37
 /// draft 1): the button's frame and the row's width in the row's own space,
-/// and how far it has grown (0 the button, 1 the row; a spring may pass
-/// either end a little).
+/// and how far each edge has travelled (0 the button's edge, 1 the row's; a
+/// spring may pass either end a little). The edges move on their own
+/// clocks, so the glass can answer the click at once on the open side
+/// while the other side waits for a neighbour to clear (A29 round 4).
 struct AtticFormatRowGrowth: Equatable {
     var source: CGRect
     var rowWidth: CGFloat
-    var grow: CGFloat
+    var leading: CGFloat
+    var trailing: CGFloat
     var sourceSymbol: String
 
-    /// The glass's horizontal span: each edge travels from the button's to
-    /// the row's in step.
+    init(source: CGRect, rowWidth: CGFloat, leading: CGFloat, trailing: CGFloat, sourceSymbol: String) {
+        self.source = source
+        self.rowWidth = rowWidth
+        self.leading = leading
+        self.trailing = trailing
+        self.sourceSymbol = sourceSymbol
+    }
+
+    /// Both edges together.
+    init(source: CGRect, rowWidth: CGFloat, grow: CGFloat, sourceSymbol: String) {
+        self.init(source: source, rowWidth: rowWidth, leading: grow, trailing: grow, sourceSymbol: sourceSymbol)
+    }
+
+    /// The glass's horizontal span.
     var extent: (minX: CGFloat, width: CGFloat) {
-        let minX = source.minX + (0 - source.minX) * grow
-        let maxX = source.maxX + (rowWidth - source.maxX) * grow
+        let minX = source.minX + (0 - source.minX) * leading
+        let maxX = source.maxX + (rowWidth - source.maxX) * trailing
         return (minX, max(0, maxX - minX))
     }
 
     /// The button's glyph on the glass: gone by a third of the way.
-    var sourceGlyphOpacity: Double { Double(1 - min(1, max(0, grow * 3))) }
+    var sourceGlyphOpacity: Double { Double(1 - min(1, max(0, max(leading, trailing) * 3))) }
 }
 
 /// The short upright line between the format row's groups.

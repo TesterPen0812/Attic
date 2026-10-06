@@ -78,9 +78,16 @@ enum NoteFormatMotion {
     struct Plan: Equatable {
         /// A neighbour leaving, and how long its fade takes.
         let leave: Spring
+        /// All notes leaving: the glass's leading edge sets off at the click
+        /// and reaches it sooner than a leave lasts, so it goes in under half
+        /// the glass's own spring (and never slower than a leave).
+        let allNotesLeave: Spring
         /// A neighbour coming back.
         let comeBack: Spring
-        let openGrow: Spring
+        /// The glass's leading edge answers the click at once; the trailing
+        /// edge (New note's side, 8 pt away) waits one leave for New note.
+        let openLeading: Spring
+        let openTrailing: Spring
         let openControls: Spring
         let closeControls: Spring
         let closeGrow: Spring
@@ -98,14 +105,16 @@ enum NoteFormatMotion {
             leave = Spring(response: leaving, bounce: tuck ? 0 : tuning.popover.bounce)
             comeBack = Spring(tuning.popover)
             let expand = tuning.expand.response
-            openGrow = Spring(delay: leaving, tuning.expand)
-            openControls = Spring(delay: leaving + 0.55 * expand, tuning.popover)
+            openLeading = Spring(delay: 0, tuning.expand)
+            openTrailing = Spring(delay: leaving, tuning.expand)
+            openControls = Spring(delay: max(0.55 * expand, leaving + 0.3 * expand), tuning.popover)
             closeControls = leave
             closeGrow = Spring(delay: 0.8 * leaving, tuning.expand)
             allNotesReturns = closeGrow.delay + 0.35 * expand
             newNoteReturns = closeGrow.delay + 0.9 * expand
             newNoteSettles = leaving
-            allNotesSettles = 1.3 * leaving
+            allNotesLeave = Spring(response: min(leaving, 0.4 * expand))
+            allNotesSettles = 0.75 * allNotesLeave.response
         }
 
         /// The plan in the feel in use now.
@@ -302,6 +311,10 @@ struct NoteFormatRowSwitch<Row: View>: View {
     @State private var motionToken = 0
     @State private var allNotesGone = false
     @State private var newNoteGone = false
+    @State private var statusHidden = false
+    /// The row's surface is in the tree, dormant (no glass, nothing drawn)
+    /// while closed, so opening animates it on the very next frame.
+    @State private var surfaceMounted = false
 
     var body: some View {
         ZStack(alignment: .leading) {
@@ -314,18 +327,24 @@ struct NoteFormatRowSwitch<Row: View>: View {
                                                                       newNoteAndStatus: channels.newNoteAndStatus,
                                                                       allNotesGone: allNotesGone,
                                                                       newNoteAndStatusGone: newNoteGone,
+                                                                      statusHidden: statusHidden,
                                                                       sourceHidden: away))
                 .environment(\.noteFormatRowGeometry, geometry)
                 .disabled(phase == .open)
                 .allowsHitTesting(!away)
                 .accessibilityHidden(away)
-            if phase != .closed, let model = shownModel {
+            if let model = shownModel ?? model() {
+                let dormant = phase == .closed
                 NoteFormatRowView(model: model,
-                                  growth: AtticFormatRowGrowth(source: source, rowWidth: width, grow: channels.grow,
+                                  growth: AtticFormatRowGrowth(source: source, rowWidth: width,
+                                                               leading: channels.leading, trailing: channels.trailing,
                                                                sourceSymbol: NoteFormatRowSource.symbol),
                                   controlsOpacity: channels.controls) { state.close() }
-                    .allowsHitTesting(state.isOpen)
-                    .accessibilityHidden(!state.isOpen)
+                    .environment(\.atticControlGone, dormant)
+                    .allowsHitTesting(!dormant && state.isOpen)
+                    .accessibilityHidden(dormant || !state.isOpen)
+                    .onAppear { surfaceMounted = true }
+                    .onDisappear { surfaceMounted = false }
             }
         }
         .coordinateSpace(.named(NoteFormatMotion.rowSpace))
@@ -341,6 +360,7 @@ struct NoteFormatRowSwitch<Row: View>: View {
             source = sourceFrame
             phase = .open
             channels = .open
+            statusHidden = true
         }
     }
 
@@ -362,22 +382,31 @@ struct NoteFormatRowSwitch<Row: View>: View {
                 channels = .open
                 allNotesGone = true
                 newNoteGone = true
+                statusHidden = true
             }
             return
         }
         if phase == .closed {
-            // Aa's glass becomes the row's where Aa stands, on this frame;
-            // it starts to grow on the next (a view must be on screen before
-            // it can animate from where it is).
+            // Aa's glass becomes the row's where Aa stands, in this frame,
+            // and its leading edge moves on the next. The surface is already
+            // in the tree (dormant), so it animates from where it is; only if
+            // it was not yet mounted does the motion wait one turn for it.
             motionToken += 1
+            let mounted = surfaceMounted
             instantly {
                 shownModel = model
                 source = sourceFrame
-                channels.grow = 0
+                channels.leading = 0
+                channels.trailing = 0
                 channels.controls = 0
+                statusHidden = true
                 phase = .moving
             }
-            DispatchQueue.main.async { if state.isOpen { runOpen(fromAa: true) } }
+            if mounted {
+                runOpen(fromAa: true)
+            } else {
+                DispatchQueue.main.async { if state.isOpen { runOpen(fromAa: true) } }
+            }
         } else {
             runOpen(fromAa: false)
         }
@@ -394,21 +423,23 @@ struct NoteFormatRowSwitch<Row: View>: View {
         let plan = NoteFormatMotion.Plan.current
         // Interrupting a close: whatever has come back leaves at once, and
         // the glass waits for it only if something was showing.
-        let showing = channels.newNoteAndStatus < 1 || channels.allNotes < 1
-        let glassDelay = fromAa || showing ? plan.openGrow.delay : 0
+        let newNoteShowing = channels.newNoteAndStatus < 1 || !newNoteGone
+        let trailingDelay = fromAa || newNoteShowing ? plan.openTrailing.delay : 0
+        if !statusHidden { instantly { statusHidden = true } }
         if channels.newNoteAndStatus < 1 || !newNoteGone {
             withAnimation(plan.leave.undelayed) { channels.newNoteAndStatus = 1 }
             after(plan.newNoteSettles, token: token) { instantly { newNoteGone = true } }
         }
         if channels.allNotes < 1 || !allNotesGone {
-            withAnimation(plan.leave.undelayed) { channels.allNotes = 1 }
+            withAnimation(plan.allNotesLeave.undelayed) { channels.allNotes = 1 }
             after(plan.allNotesSettles, token: token) { instantly { allNotesGone = true } }
         }
-        withAnimation(plan.openControls.undelayed.delay(glassDelay + plan.openControls.delay - plan.openGrow.delay)) {
+        withAnimation(plan.openControls.undelayed.delay(plan.openControls.delay - plan.openTrailing.delay + trailingDelay)) {
             channels.controls = 1
         }
-        withAnimation(plan.openGrow.undelayed.delay(glassDelay), completionCriteria: .logicallyComplete) {
-            channels.grow = 1
+        withAnimation(plan.openLeading.undelayed) { channels.leading = 1 }
+        withAnimation(plan.openTrailing.undelayed.delay(trailingDelay), completionCriteria: .logicallyComplete) {
+            channels.trailing = 1
         } completion: {
             if state.isOpen, phase == .moving { instantly { phase = .open } }
         }
@@ -422,6 +453,7 @@ struct NoteFormatRowSwitch<Row: View>: View {
                 channels = .closed
                 allNotesGone = false
                 newNoteGone = false
+                statusHidden = false
                 shownModel = nil
             }
             return
@@ -442,17 +474,22 @@ struct NoteFormatRowSwitch<Row: View>: View {
         }
         if channels.newNoteAndStatus > 0 {
             after(plan.newNoteReturns, token: token) {
-                returnNeighbour(token: token, gone: $newNoteGone, spring: plan.comeBack) { channels.newNoteAndStatus = 0 }
+                returnNeighbour(token: token, gone: $newNoteGone, spring: plan.comeBack) {
+                    channels.newNoteAndStatus = 0
+                    statusHidden = false
+                }
             }
         }
         withAnimation(plan.closeGrow.animation, completionCriteria: .logicallyComplete) {
-            channels.grow = 0
+            channels.leading = 0
+            channels.trailing = 0
         } completion: {
             guard !state.isOpen, phase == .moving else { return }
             // Aa takes its glass back; a neighbour still due keeps its clock.
             instantly {
                 phase = .closed
-                channels.grow = 0
+                channels.leading = 0
+                channels.trailing = 0
                 channels.controls = 0
                 shownModel = nil
             }
@@ -501,8 +538,10 @@ enum NoteFormatRowPhase: Equatable {
 /// The format row's motion channels, each 0 (the bottom row) to 1 (the
 /// format row), driven by `NoteFormatMotion`'s springs.
 struct NoteFormatRowChannels: Equatable {
-    /// Aa's glass from Aa (0) to the whole row (1).
-    var grow: CGFloat
+    /// Aa's glass's leading edge, from Aa's (0) to the row's (1).
+    var leading: CGFloat
+    /// The trailing edge (New note's side).
+    var trailing: CGFloat
     /// The row's controls.
     var controls: Double
     /// All notes gone.
@@ -510,8 +549,8 @@ struct NoteFormatRowChannels: Equatable {
     /// New note and the note's status gone.
     var newNoteAndStatus: Double
 
-    static let closed = NoteFormatRowChannels(grow: 0, controls: 0, allNotes: 0, newNoteAndStatus: 0)
-    static let open = NoteFormatRowChannels(grow: 1, controls: 1, allNotes: 1, newNoteAndStatus: 1)
+    static let closed = NoteFormatRowChannels(leading: 0, trailing: 0, controls: 0, allNotes: 0, newNoteAndStatus: 0)
+    static let open = NoteFormatRowChannels(leading: 1, trailing: 1, controls: 1, allNotes: 1, newNoteAndStatus: 1)
 }
 
 /// What the bottom row's pieces read while the format row comes and goes.
@@ -521,6 +560,9 @@ struct NoteFormatRowStage: Equatable {
     /// Gone and settled: no glass left at all (`atticControlGone`).
     var allNotesGone = false
     var newNoteAndStatusGone = false
+    /// The status (plain text, under where the glass's leading edge goes
+    /// first) is hidden at once as the row opens.
+    var statusHidden = false
     /// Aa's glass is the format row's for now: Aa itself is not drawn.
     var sourceHidden = false
 }
@@ -568,7 +610,7 @@ private struct NoteFormatRowLeaving: ViewModifier {
         content
             .environment(\.atticControlAway, away)
             .environment(\.atticControlGone, gone)
-            .opacity(neighbour == .status && away ? 0 : 1)
+            .opacity(neighbour == .status && stage.statusHidden ? 0 : 1)
     }
 }
 

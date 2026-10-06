@@ -182,7 +182,8 @@ struct TasksPage: View {
         // card stays above both.
         ZStack(alignment: .top) {
             // Clean cut with the scroll-under fade (A15). The native soft
-            // edge stays off.
+            // edge stays off. Round 4 (owner): the rows dissolve into the
+            // panel's top and bottom edges, once for the whole pager.
             pager
             // The controls float over the lists in both, in the page's own
             // layer.
@@ -1429,7 +1430,8 @@ struct TasksPage: View {
     /// header, or under the add bar (A15: the scroll-under fade). The system
     /// soft edge uses no mask.
     private var viewportMask: some View {
-        TasksViewportMask(tabsTop: tabsTop)
+        TasksViewportMask(tabsTop: tabsTop, topEdge: layout.scrollEdgeFadeTop,
+                          bottomEdge: bottomInset + AtticControlSize.panelButton.height / 2)
     }
 
     // MARK: - Row
@@ -3950,11 +3952,14 @@ final class TasksBottomStackHeight: ObservableObject {
 /// header and the bottom stack are glass (owner, 2026-10-06).
 private struct TasksViewportMask: View {
     let tabsTop: CGFloat
+    var topEdge: CGFloat = 0
+    var bottomEdge: CGFloat = 0
 
     var body: some View {
         GeometryReader { proxy in
             LinearGradient(
-                stops: TasksViewport.maskStops(height: proxy.size.height, tabsTop: tabsTop)
+                stops: TasksViewport.maskStops(height: proxy.size.height, tabsTop: tabsTop,
+                                               topEdge: topEdge, bottomEdge: bottomEdge)
                     .map { Gradient.Stop(color: .black.opacity($0.opacity), location: $0.location) },
                 startPoint: .top, endPoint: .bottom
             )
@@ -4169,8 +4174,12 @@ enum TasksViewport {
     /// only behind the Now · Later · Done line, plain text with no glass of
     /// its own, back to full a few points either side
     /// (`AtticScrollUnderFade`). Static geometry.
-    static func maskStops(height: CGFloat, tabsTop: CGFloat) -> [(location: CGFloat, opacity: Double)] {
-        AtticScrollUnderFade.stops(height: height, plainText: [tabsTop...(tabsTop + AtticLayout.pageTabsHeight)])
+    /// Round 4: rows also dissolve into the panel's top and bottom edges
+    /// (`topEdge`, `bottomEdge`; 0 for none).
+    static func maskStops(height: CGFloat, tabsTop: CGFloat,
+                          topEdge: CGFloat = 0, bottomEdge: CGFloat = 0) -> [(location: CGFloat, opacity: Double)] {
+        AtticScrollUnderFade.stops(height: height, plainText: [tabsTop...(tabsTop + AtticLayout.pageTabsHeight)],
+                                   topEdge: topEdge, bottomEdge: bottomEdge)
     }
 }
 

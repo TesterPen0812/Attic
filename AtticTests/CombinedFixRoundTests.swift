@@ -431,6 +431,25 @@ final class CombinedFixRoundTests: XCTestCase {
         XCTAssertEqual(opacity(86 + AtticScrollUnderFade.textRamp), 1, accuracy: 0.001)
         XCTAssertEqual(opacity(20), 1, accuracy: 0.001, "whole under the header's glass")
         XCTAssertEqual(opacity(500), 1, accuracy: 0.001, "whole under the bottom row's glass")
+
+        // Round 4 (owner): content dissolves into the panel's own edges, from
+        // faint at the edge to full at the middle of the header's controls
+        // and of the bottom row; under the rest of the glass it is whole.
+        let size = CGSize(width: 320, height: 520)
+        let layout = PanelPageLayout(cornerSize: 52, panelSize: size)
+        let top = layout.scrollEdgeFadeTop, bottom = layout.scrollEdgeFadeBottom
+        let edged = AtticScrollUnderFade.stops(height: 520, plainText: [], topEdge: top, bottomEdge: bottom)
+        func edgeOpacity(_ y: CGFloat) -> Double { AtticScrollUnderFade.opacity(edged, at: y, height: 520) }
+        XCTAssertEqual(edgeOpacity(0), AtticScrollUnderFade.edgeFloor, accuracy: 0.001, "all but gone at the panel's top edge")
+        XCTAssertEqual(edgeOpacity(520), AtticScrollUnderFade.edgeFloor, accuracy: 0.001, "and at its bottom edge")
+        XCTAssertEqual(edgeOpacity(top), 1, accuracy: 0.001, "whole from the header controls' middle")
+        XCTAssertEqual(edgeOpacity(520 - bottom), 1, accuracy: 0.001, "and to the bottom row's middle")
+        XCTAssertLessThan(top, layout.headerBottom, "a short band: within the header")
+        let ramp = stride(from: CGFloat(0), through: top, by: 1).map(edgeOpacity)
+        XCTAssertEqual(ramp, ramp.sorted(), "rising from the edge")
+        for y in stride(from: top, through: 520 - bottom, by: 4) {
+            XCTAssertEqual(edgeOpacity(y), 1, accuracy: 0.001, "whole at \(y)")
+        }
     }
 
     /// The fade reaches the AppKit editor: SwiftUI masks the platform view
