@@ -38,7 +38,7 @@ struct NotesPageHost: View {
             } else if let taskID = displayedTaskID {
                 TaskNotePageContainer(taskID: taskID, tasks: taskStore, controller: noteDraft.pages,
                                       noteStore: noteStore, layout: layout) {
-                    uiState.openTaskNoteID = nil
+                    closeTaskNoteRoute(taskID)
                 }
                 .id("\(taskID)-\(taskRouteGeneration)")
             } else if usesNewEditor {
@@ -73,6 +73,13 @@ struct NotesPageHost: View {
             if previous != nil, previous?.lease == nil { taskRouteGeneration &+= 1 }
             presentedTaskID = requested
         }
+    }
+
+    /// A late Back completion belongs to its original route. A newer open
+    /// request must survive even when both await the same durable close.
+    func closeTaskNoteRoute(_ taskID: UUID) {
+        guard uiState.openTaskNoteID == taskID else { return }
+        uiState.openTaskNoteID = nil
     }
 
     /// The old page opened a new-format note: show it in the new editor

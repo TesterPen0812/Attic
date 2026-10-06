@@ -149,8 +149,9 @@ final class TaskNoteComposedHostTests: XCTestCase {
         let uiState = PanelUIState()
         uiState.loadPageContent(); uiState.selectSection(.notes); uiState.openTaskNoteID = a
         let hosting = sectionHosting()
-        hosting.rootView = AnyView(NotesPageHost(noteStore: notes.store, taskStore: tasks, noteDraft: draft,
-            uiState: uiState, layout: PanelPageLayout(cornerSize: 52, panelSize: panel), hasRestoredSession: true))
+        let page = NotesPageHost(noteStore: notes.store, taskStore: tasks, noteDraft: draft,
+            uiState: uiState, layout: PanelPageLayout(cornerSize: 52, panelSize: panel), hasRestoredSession: true)
+        hosting.rootView = AnyView(page)
         func mounted(_ id: UUID) async throws -> TaskNotePresenter {
             for _ in 0..<100 {
                 hosting.view.layoutSubtreeIfNeeded()
@@ -167,6 +168,9 @@ final class TaskNoteComposedHostTests: XCTestCase {
         uiState.openTaskNoteID = b
         let second = try await mounted(b)
         XCTAssertNil(first.lease)
+        page.closeTaskNoteRoute(a)
+        XCTAssertEqual(uiState.openTaskNoteID, b, "A's late Back callback must preserve the newer B route")
+        XCTAssertTrue(notes.taskNotePresenter === second)
         uiState.openTaskNoteID = a
         let returned = try await mounted(a)
         XCTAssertNil(second.lease)
@@ -183,7 +187,7 @@ final class TaskNoteComposedHostTests: XCTestCase {
         XCTAssertNotNil(returned.host.scrollView.window, "the recoverable field remains on its surface")
         XCTAssertEqual(returned.model.titleEdit.text, "Conflicting draft")
         returned.model.cancelTitle()
-        uiState.openTaskNoteID = nil
+        page.closeTaskNoteRoute(a)
         for _ in 0..<100 {
             if notes.taskNotePresenter == nil { break }
             try await Task.sleep(for: .milliseconds(10))
