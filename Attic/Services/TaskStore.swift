@@ -3664,6 +3664,9 @@ final class TaskStore: ObservableObject {
                 return false
             }
             let saveError = error.localizedDescription
+            #if DEBUG
+            TaskNoteCaptureScript.trace("task save refused: \(String(describing: error))")
+            #endif
             context.rollback()
             tagInventoryDidRefresh()
             do {
