@@ -34,9 +34,10 @@ enum NoteFormatMotion {
         let response: Double
         var bounce: Double = 0
 
-        var animation: Animation {
-            .spring(response: response, dampingFraction: 1 - bounce).delay(delay)
-        }
+        var animation: Animation { undelayed.delay(delay) }
+
+        /// The spring alone (the caller starts it at `delay`).
+        var undelayed: Animation { .spring(response: response, dampingFraction: 1 - bounce) }
 
         /// The spring's progress `t` seconds after it was asked to start
         /// (0 before its delay, settling on 1), as SwiftUI runs it.
@@ -56,26 +57,29 @@ enum NoteFormatMotion {
     /// own clocks so that only the one glass ever moves across the row and
     /// it never passes over a control that is still showing: New note and
     /// the note's status (in the glass's way at once) go first, so the glass
-    /// waits 80 ms for them; All notes goes while the glass is on its way and
-    /// is gone before the glass's edge reaches it, even in the narrowest
+    /// waits 120 ms for them; All notes goes at the same time and is gone long
+    /// before the glass's edge reaches it, even in the narrowest
     /// panel. Closing reverses it: the controls go, the glass returns into
     /// Aa, and each neighbour comes back once the glass has cleared its place.
     enum Open {
-        static let grow = Spring(delay: 0.08, response: 0.42, bounce: 0.12)
-        static let controls = Spring(delay: 0.08 + 0.23, response: 0.2)
-        static let newNoteAndStatus = Spring(delay: 0, response: 0.14)
-        static let allNotes = Spring(delay: 0.10, response: 0.14)
+        static let grow = Spring(delay: 0.12, response: 0.42, bounce: 0.12)
+        static let controls = Spring(delay: 0.12 + 0.23, response: 0.2)
+        static let newNoteAndStatus = Spring(delay: 0, response: 0.12)
+        static let allNotes = Spring(delay: 0, response: 0.14)
     }
+
+    /// When a leaving neighbour's glass is taken away altogether (its fade
+    /// is over, and an identity glass would otherwise keep a faint rim).
+    static let newNoteSettles = 0.12
+    static let allNotesSettles = 0.16
 
     enum Close {
         static let controls = Spring(delay: 0, response: 0.14)
         static let grow = Spring(delay: 0.11, response: 0.38, bounce: 0.08)
-        static let allNotes = Spring(delay: 0.16, response: 0.2)
-        static let newNoteAndStatus = Spring(delay: 0.30, response: 0.2)
+        static let allNotes = Spring(delay: 0.22, response: 0.2)
+        static let newNoteAndStatus = Spring(delay: 0.40, response: 0.2)
     }
 
-    /// A leaving neighbour shrinks this far as it fades, in place.
-    static let leavingScale: CGFloat = 0.8
 }
 
 // MARK: - Selection bar
@@ -247,8 +251,8 @@ struct NoteFormatRowView: View {
 /// wide. They are the glass's content, so nothing is drawn under it. ✕ or
 /// Esc runs it back into Aa (`NoteFormatMotion.Close`). Animations: Reduced
 /// and Reduce Motion swap at once. While either is on its way out it is
-/// hidden from VoiceOver and the pointer, and once open only the row is in
-/// the tree. The motion is this view's own state: the page and the note
+/// hidden from VoiceOver and the pointer, and once open the bottom row is
+/// disabled. The motion is this view's own state: the page and the note
 /// never redraw for it.
 struct NoteFormatRowSwitch<Row: View>: View {
     @ObservedObject var state: NoteFormatRowState
@@ -263,19 +267,27 @@ struct NoteFormatRowSwitch<Row: View>: View {
     @State private var geometry = NoteFormatRowGeometry()
     @State private var source: CGRect = .zero
     @State private var width: CGFloat = 0
+    /// The current motion; pending neighbour changes of older ones lapse.
+    @State private var motionToken = 0
+    @State private var allNotesGone = false
+    @State private var newNoteGone = false
 
     var body: some View {
         ZStack(alignment: .leading) {
-            if phase != .open {
-                let away = phase != .closed
-                row
-                    .environment(\.noteFormatRowStage, NoteFormatRowStage(allNotes: channels.allNotes,
-                                                                          newNoteAndStatus: channels.newNoteAndStatus,
-                                                                          sourceHidden: away))
-                    .environment(\.noteFormatRowGeometry, geometry)
-                    .allowsHitTesting(!away)
-                    .accessibilityHidden(away)
-            }
+            // Always in the tree (mounting it again as the row closes
+            // stalled the first frames of the motion, A29 round 2); while the
+            // row is open it is away, disabled and out of the keyboard loop.
+            let away = phase != .closed
+            row
+                .environment(\.noteFormatRowStage, NoteFormatRowStage(allNotes: channels.allNotes,
+                                                                      newNoteAndStatus: channels.newNoteAndStatus,
+                                                                      allNotesGone: allNotesGone,
+                                                                      newNoteAndStatusGone: newNoteGone,
+                                                                      sourceHidden: away))
+                .environment(\.noteFormatRowGeometry, geometry)
+                .disabled(phase == .open)
+                .allowsHitTesting(!away)
+                .accessibilityHidden(away)
             if phase != .closed, let model = shownModel {
                 NoteFormatRowView(model: model,
                                   growth: AtticFormatRowGrowth(source: source, rowWidth: width, grow: channels.grow,
@@ -311,11 +323,14 @@ struct NoteFormatRowSwitch<Row: View>: View {
     private func open() {
         guard let model = model() else { return }
         if design.reduceMotion {
+            motionToken += 1
             instantly {
                 shownModel = model
                 source = sourceFrame
                 phase = .open
                 channels = .open
+                allNotesGone = true
+                newNoteGone = true
             }
             return
         }
@@ -323,24 +338,45 @@ struct NoteFormatRowSwitch<Row: View>: View {
             // Aa's glass becomes the row's where Aa stands, on this frame;
             // it starts to grow on the next (a view must be on screen before
             // it can animate from where it is).
+            motionToken += 1
             instantly {
                 shownModel = model
                 source = sourceFrame
-                channels = .closed
+                channels.grow = 0
+                channels.controls = 0
                 phase = .moving
             }
-            DispatchQueue.main.async { if state.isOpen { runOpen() } }
+            DispatchQueue.main.async { if state.isOpen { runOpen(fromAa: true) } }
         } else {
-            runOpen()
+            runOpen(fromAa: false)
         }
     }
 
-    private func runOpen() {
+    /// The neighbours' glass changes at the moment it should: an animation
+    /// delay is not honoured by glass turning to or from the identity glass
+    /// (it either jumped at once or lingered as a faint ring, A29 round 2),
+    /// so each neighbour is sent away or back on its own clock with an
+    /// undelayed animation. A newer motion cancels what is still pending.
+    private func runOpen(fromAa: Bool) {
+        motionToken += 1
+        let token = motionToken
         let motion = NoteFormatMotion.Open.self
-        withAnimation(motion.newNoteAndStatus.animation) { channels.newNoteAndStatus = 1 }
-        withAnimation(motion.allNotes.animation) { channels.allNotes = 1 }
-        withAnimation(motion.controls.animation) { channels.controls = 1 }
-        withAnimation(motion.grow.animation, completionCriteria: .logicallyComplete) {
+        // Interrupting a close: whatever has come back leaves at once, and
+        // the glass waits for it only if something was showing.
+        let showing = channels.newNoteAndStatus < 1 || channels.allNotes < 1
+        let glassDelay = fromAa || showing ? motion.grow.delay : 0
+        if channels.newNoteAndStatus < 1 || !newNoteGone {
+            withAnimation(motion.newNoteAndStatus.undelayed) { channels.newNoteAndStatus = 1 }
+            after(NoteFormatMotion.newNoteSettles, token: token) { instantly { newNoteGone = true } }
+        }
+        if channels.allNotes < 1 || !allNotesGone {
+            withAnimation(motion.allNotes.undelayed) { channels.allNotes = 1 }
+            after(NoteFormatMotion.allNotesSettles, token: token) { instantly { allNotesGone = true } }
+        }
+        withAnimation(motion.controls.undelayed.delay(glassDelay + motion.controls.delay - motion.grow.delay)) {
+            channels.controls = 1
+        }
+        withAnimation(motion.grow.undelayed.delay(glassDelay), completionCriteria: .logicallyComplete) {
             channels.grow = 1
         } completion: {
             if state.isOpen, phase == .moving { instantly { phase = .open } }
@@ -349,37 +385,70 @@ struct NoteFormatRowSwitch<Row: View>: View {
 
     private func close() {
         if design.reduceMotion || phase == .closed {
+            motionToken += 1
             instantly {
                 phase = .closed
                 channels = .closed
+                allNotesGone = false
+                newNoteGone = false
                 shownModel = nil
             }
             return
         }
-        if phase == .open {
-            // The bottom row comes back into the tree, still away, and
-            // returns on the next frame.
-            instantly { phase = .moving }
-            DispatchQueue.main.async { if !state.isOpen { runClose() } }
-        } else {
-            runClose()
-        }
+        if phase == .open { instantly { phase = .moving } }
+        runClose()
     }
 
     private func runClose() {
+        motionToken += 1
+        let token = motionToken
         let motion = NoteFormatMotion.Close.self
         withAnimation(motion.controls.animation) { channels.controls = 0 }
-        withAnimation(motion.allNotes.animation) { channels.allNotes = 0 }
-        withAnimation(motion.newNoteAndStatus.animation) { channels.newNoteAndStatus = 0 }
+        if channels.allNotes > 0 {
+            after(motion.allNotes.delay, token: token) {
+                returnNeighbour(token: token, gone: $allNotesGone) { channels.allNotes = 0 }
+            }
+        }
+        if channels.newNoteAndStatus > 0 {
+            after(motion.newNoteAndStatus.delay, token: token) {
+                returnNeighbour(token: token, gone: $newNoteGone) { channels.newNoteAndStatus = 0 }
+            }
+        }
         withAnimation(motion.grow.animation, completionCriteria: .logicallyComplete) {
             channels.grow = 0
         } completion: {
             guard !state.isOpen, phase == .moving else { return }
+            // Aa takes its glass back; a neighbour still due keeps its clock.
             instantly {
                 phase = .closed
-                channels = .closed
+                channels.grow = 0
+                channels.controls = 0
                 shownModel = nil
             }
+        }
+    }
+
+    /// A neighbour comes back: its glass returns (as the identity glass,
+    /// so nothing shows yet) and, on the next turn, materialises and its
+    /// glyph fades in.
+    private func returnNeighbour(token: Int, gone: Binding<Bool>, _ change: @escaping () -> Void) {
+        let spring = NoteFormatMotion.Close.allNotes.undelayed
+        if gone.wrappedValue {
+            instantly { gone.wrappedValue = false }
+            DispatchQueue.main.async {
+                guard motionToken == token else { return }
+                withAnimation(spring, change)
+            }
+        } else {
+            withAnimation(spring, change)
+        }
+    }
+
+    /// Runs `work` after `delay` unless a newer motion has started.
+    private func after(_ delay: Double, token: Int, _ work: @escaping () -> Void) {
+        guard delay > 0 else { work(); return }
+        DispatchQueue.main.asyncAfter(deadline: .now() + delay) {
+            if motionToken == token { work() }
         }
     }
 
@@ -391,7 +460,8 @@ struct NoteFormatRowSwitch<Row: View>: View {
 }
 
 /// Where the format row is: the bottom row alone, the two on their way
-/// (opening or closing), or the row alone.
+/// (opening or closing), or the row alone (the bottom row still in the
+/// tree, away and disabled).
 enum NoteFormatRowPhase: Equatable {
     case closed, moving, open
 }
@@ -416,6 +486,9 @@ struct NoteFormatRowChannels: Equatable {
 struct NoteFormatRowStage: Equatable {
     var allNotes: Double = 0
     var newNoteAndStatus: Double = 0
+    /// Gone and settled: no glass left at all (`atticControlGone`).
+    var allNotesGone = false
+    var newNoteAndStatusGone = false
     /// Aa's glass is the format row's for now: Aa itself is not drawn.
     var sourceHidden = false
 }
@@ -445,8 +518,10 @@ extension EnvironmentValues {
     }
 }
 
-/// A bottom-row control that makes way for the format row: it fades and
-/// shrinks a little where it stands (it never travels), on its own clock.
+/// A bottom-row control that makes way for the format row: it fades where
+/// it stands (it never travels), on its own clock. Its glass and glyph go
+/// through `atticControlAway` (glass in a container ignores an outside
+/// opacity); the status is plain text and fades.
 enum NoteFormatRowNeighbour {
     case allNotes, status, newNote
 }
@@ -456,11 +531,12 @@ private struct NoteFormatRowLeaving: ViewModifier {
     @Environment(\.noteFormatRowStage) private var stage
 
     func body(content: Content) -> some View {
-        let gone = neighbour == .allNotes ? stage.allNotes : stage.newNoteAndStatus
-        let scale = neighbour == .status ? 1 : 1 - (1 - NoteFormatMotion.leavingScale) * CGFloat(gone)
+        let away = (neighbour == .allNotes ? stage.allNotes : stage.newNoteAndStatus) >= 0.5
+        let gone = neighbour == .allNotes ? stage.allNotesGone : stage.newNoteAndStatusGone
         content
-            .opacity(1 - gone)
-            .scaleEffect(scale)
+            .environment(\.atticControlAway, away)
+            .environment(\.atticControlGone, gone)
+            .opacity(neighbour == .status && away ? 0 : 1)
     }
 }
 
@@ -474,7 +550,8 @@ struct NoteFormatRowSource: ViewModifier {
 
     func body(content: Content) -> some View {
         content
-            .opacity(stage.sourceHidden ? 0 : 1)
+            .environment(\.atticControlAway, stage.sourceHidden)
+            .environment(\.atticControlGone, stage.sourceHidden)
             .onGeometryChange(for: CGRect.self) { $0.frame(in: .named(NoteFormatMotion.rowSpace)) } action: { frame in
                 geometry?.source = frame
             }

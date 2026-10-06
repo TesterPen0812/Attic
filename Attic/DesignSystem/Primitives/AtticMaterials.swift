@@ -194,29 +194,68 @@ struct AtticRaisedMaterialModifier: ViewModifier {
 
     @Environment(\.atticDesign) private var design
     @Environment(\.atticCapture) private var capture
+    @Environment(\.atticControlAway) private var away
+    @Environment(\.atticControlGone) private var gone
 
     func body(content: Content) -> some View {
         let shape = AtticControlShape.shape(cornerRadius: cornerRadius)
-        if capture == nil, design.effectiveControls == .liquidGlass {
+        if gone {
+            // Away and settled: no glass at all, so not even the faint rim
+            // an identity glass keeps while it fades stays in the group.
+            content.opacity(0)
+        } else if capture == nil, design.effectiveControls == .liquidGlass {
             let tokens = design.tokens
+            let glass: Glass = away ? .identity : (interactive ? .regular.interactive() : .regular)
             content
                 .background {
                     if let fill = AtticGlassStateFill.fill(for: state, tokens: tokens) {
                         shape.fill(fill.color)
                     }
                 }
-                .glassEffect(interactive ? .regular.interactive() : .regular, in: shape)
+                // Inside the glass: a glass container draws its members
+                // itself and ignores an opacity set on them from outside.
+                .opacity(away ? 0 : 1)
+                .glassEffect(glass, in: shape)
                 .overlay {
                     if design.increaseContrast {
                         shape.inset(by: AtticHairline.widthIncreased / 2)
                             .stroke(AtticGlassModel.contrastEdge(dark: design.mode == .dark).color, lineWidth: AtticHairline.widthIncreased)
+                            .opacity(away ? 0 : 1)
                             .allowsHitTesting(false)
                     }
                 }
         } else {
             content.background(AtticRaisedBackground(cornerRadius: cornerRadius, state: state))
+                .opacity(away ? 0 : 1)
         }
     }
+}
+
+private struct AtticControlAwayKey: EnvironmentKey {
+    static let defaultValue = false
+}
+
+extension EnvironmentValues {
+    /// The raised controls below are away: their glass becomes the identity
+    /// glass and their content fades, in the transaction's animation. A
+    /// glass container ignores a plain `.opacity` on its members (A29 round
+    /// 2: the bottom row's buttons stayed drawn under the growing format
+    /// row), so a control that must fade out of a glass group uses this.
+    var atticControlAway: Bool {
+        get { self[AtticControlAwayKey.self] }
+        set { self[AtticControlAwayKey.self] = newValue }
+    }
+
+    /// Away and settled: the control draws no glass at all (set without
+    /// animation once its fade is over, and cleared before it returns).
+    var atticControlGone: Bool {
+        get { self[AtticControlGoneKey.self] }
+        set { self[AtticControlGoneKey.self] = newValue }
+    }
+}
+
+private struct AtticControlGoneKey: EnvironmentKey {
+    static let defaultValue = false
 }
 
 /// The one shape of Attic's controls: a continuous rounded rectangle with

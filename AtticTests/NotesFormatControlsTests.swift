@@ -856,21 +856,22 @@ final class NotesFormatControlsTests: XCTestCase {
         let aa = CGRect(x: 208, y: 0, width: 36, height: 36)
         let allNotes = (minX: CGFloat(0), maxX: CGFloat(36)), newNote = (minX: CGFloat(252), maxX: CGFloat(288))
         let status = (minX: CGFloat(62), maxX: CGFloat(182))
-        func shrunk(_ span: (minX: CGFloat, maxX: CGFloat), _ gone: Double) -> (minX: CGFloat, maxX: CGFloat) {
-            let inset = (span.maxX - span.minX) * (1 - NoteFormatMotion.leavingScale) * CGFloat(gone) / 2
-            return (span.minX + inset, span.maxX - inset)
-        }
+        func shrunk(_ span: (minX: CGFloat, maxX: CGFloat), _ gone: Double) -> (minX: CGFloat, maxX: CGFloat) { span }
         func check(_ t: Double, grow: Double, allGone: Double, rightGone: Double, _ phase: String) {
             let extent = AtticFormatRowGrowth(source: aa, rowWidth: row, grow: grow, sourceSymbol: "textformat").extent
             let glass = (minX: extent.minX, maxX: extent.minX + extent.width)
-            func overlaps(_ span: (minX: CGFloat, maxX: CGFloat)) -> Bool { glass.minX < span.maxX && glass.maxX > span.minX }
-            if overlaps(shrunk(newNote, rightGone)) {
+            // A neighbour still showing keeps clear of the glass's edge: New
+            // note by 6 pt (it rests 8 from Aa), the status by 20, All notes by 24.
+            func overlaps(_ span: (minX: CGFloat, maxX: CGFloat), clear: CGFloat) -> Bool {
+                glass.minX - clear < span.maxX && glass.maxX + clear > span.minX
+            }
+            if overlaps(shrunk(newNote, rightGone), clear: 6) {
                 XCTAssertLessThanOrEqual(1 - rightGone, 0.03, "\(phase) \(t)s: the glass reaches New note while it shows")
             }
-            if overlaps(status) {
+            if overlaps(status, clear: 20) {
                 XCTAssertLessThanOrEqual(1 - rightGone, 0.05, "\(phase) \(t)s: the glass reaches the status while it shows")
             }
-            if overlaps(shrunk(allNotes, allGone)) {
+            if overlaps(shrunk(allNotes, allGone), clear: 24) {
                 XCTAssertLessThanOrEqual(1 - allGone, 0.03, "\(phase) \(t)s: the glass reaches All notes while it shows")
             }
         }
@@ -894,21 +895,28 @@ final class NotesFormatControlsTests: XCTestCase {
     }
 
     /// Animations: Reduced and Reduce Motion swap the rows at once; with
-    /// motion, the bottom row stays (hidden) while the glass grows.
+    /// motion, the bottom row stays live in the tree (away) while the glass
+    /// grows. Open, it is disabled, out of the pointer and keyboard.
     func testReduceMotionSwapsTheFormatRowAtOnce() {
-        final class Count { var appeared = 0, disappeared = 0 }
-        func host(reduceMotion: Bool) -> (NoteFormatRowState, Count) {
+        final class Seen { var enabled = true, away = false }
+        struct Probe: View {
+            let seen: Seen
+            @Environment(\.isEnabled) private var isEnabled
+            @Environment(\.noteFormatRowStage) private var stage
+            var body: some View {
+                seen.enabled = isEnabled
+                seen.away = stage.sourceHidden
+                return Color.clear.frame(width: 288, height: 36)
+            }
+        }
+        func host(reduceMotion: Bool) -> (NoteFormatRowState, Seen) {
             let (controls, _, _) = make()
             let state = NoteFormatRowState()
-            let count = Count()
+            let seen = Seen()
             var design = AtticDesignContext(mode: .light)
             design.reduceMotion = reduceMotion
-            let view = NoteFormatRowSwitch(state: state, model: { controls.formatModel }) {
-                Color.clear.frame(width: 288, height: 36)
-                    .onAppear { count.appeared += 1 }
-                    .onDisappear { count.disappeared += 1 }
-            }
-            .environment(\.atticDesign, design)
+            let view = NoteFormatRowSwitch(state: state, model: { controls.formatModel }) { Probe(seen: seen) }
+                .environment(\.atticDesign, design)
             let hosting = NSHostingView(rootView: view)
             hosting.frame = NSRect(x: 0, y: 0, width: 288, height: 36)
             let window = NSWindow(contentRect: hosting.frame, styleMask: [.borderless], backing: .buffered, defer: false)
@@ -916,25 +924,28 @@ final class NotesFormatControlsTests: XCTestCase {
             window.contentView = hosting
             windows.append(window)
             hosting.layoutSubtreeIfNeeded()
-            return (state, count)
+            return (state, seen)
         }
         func settle() { RunLoop.main.run(until: Date().addingTimeInterval(0.05)) }
 
-        let (reduced, reducedCount) = host(reduceMotion: true)
+        let (reduced, reducedSeen) = host(reduceMotion: true)
         settle()
-        XCTAssertEqual(reducedCount.appeared, 1)
+        XCTAssertTrue(reducedSeen.enabled)
         reduced.open(keyboard: false)
         settle()
-        XCTAssertEqual(reducedCount.disappeared, 1, "the bottom row is gone at once")
+        XCTAssertFalse(reducedSeen.enabled, "the row is open at once")
+        XCTAssertTrue(reducedSeen.away)
         reduced.close()
         settle()
-        XCTAssertEqual(reducedCount.appeared, 2, "and back at once")
+        XCTAssertTrue(reducedSeen.enabled, "and back at once")
+        XCTAssertFalse(reducedSeen.away)
 
-        let (moving, movingCount) = host(reduceMotion: false)
+        let (moving, movingSeen) = host(reduceMotion: false)
         settle()
         moving.open(keyboard: false)
         settle()
-        XCTAssertEqual(movingCount.disappeared, 0, "with motion it stays while the glass grows")
+        XCTAssertTrue(movingSeen.away, "with motion Aa's glass is the row's")
+        XCTAssertTrue(movingSeen.enabled, "and the bottom row is still on its way out")
     }
 
     /// ⌃Tab reaches the open row; ← → Tab ⇧Tab move round it, Return
