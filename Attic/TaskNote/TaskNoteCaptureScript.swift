@@ -38,11 +38,22 @@ enum TaskNoteCaptureScript {
                          walk(NSApp.mainMenu, "")
                          log("before ⌘F key=\(host.textView.window?.isKeyWindow == true)", host)
                      }),
-                     (0.2, { post("f", keyCode: 3, flags: .command) }),
+                     // A synthetic ⌘F also matches the shell's ⇧⌘F button in
+                     // SwiftUI (a real ⌘F does not: CU 03-fifty-find-attempt),
+                     // so the seam hands the event to the writing's key path.
+                     (0.2, {
+                         if let window = host.textView.window,
+                            let event = NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: .command,
+                                                         timestamp: ProcessInfo.processInfo.systemUptime,
+                                                         windowNumber: window.windowNumber, context: nil, characters: "f",
+                                                         charactersIgnoringModifiers: "f", isARepeat: false, keyCode: 3) {
+                             trace("writing handled ⌘F=\(host.textView.performKeyEquivalent(with: event))")
+                         }
+                     }),
                      (0.4, { log("after ⌘F bar=\(host.scrollView.isFindBarVisible)", host) }),
                      (0.8, { type("Line 40") }),
                      (0.6, { post("\r", keyCode: 36) }),
-                     (0.6, { post("g", keyCode: 5, flags: .command) }),
+                     (0.6, { host.textFinder.performAction(.nextMatch) }),
                      (0.8, { log("find bar visible=\(host.scrollView.isFindBarVisible)", host) })]
         case "reorder":
             steps = [(2.0, { model.newSubtaskText = "CU order row"; _ = model.commitNewSubtask() }),
