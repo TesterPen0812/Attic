@@ -14,6 +14,10 @@ radius or size changed.
   resting places), and the button's glyph rides on it for the first third.
   Nil or fully grown, it draws exactly as before.
 - **`AtticFormatRowSurface.contentOpacity`**: the controls' own fade.
+- **`atticControlAway` / `atticControlGone`** (environment, round 2): a
+  raised control fades out of a glass group (the identity glass, its content
+  faded inside the glass), then drops its glass altogether. A glass container
+  ignores a plain `.opacity` on its members. Unset, nothing changes.
 
 ### A25 Notes format row replaces Aa's pop-over (redesign/p2-integration, 2026-10-06)
 Owner decision OD-14 (`mockups/p2-36-format-no-panel-drafts.png`, draft 1
