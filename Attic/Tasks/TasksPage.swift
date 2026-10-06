@@ -1151,6 +1151,9 @@ struct TasksPage: View {
         guard pageShown, !popoverOpen, let pageWindow, event.window === pageWindow, pageWindow.isKeyWindow,
               event.modifierFlags.intersection([.command, .shift, .option, .control]) == .command,
               event.charactersIgnoringModifiers?.lowercased() == "f" else { return false }
+        // A note's writing with the keyboard (a task's note over Notes) owns
+        // ⌘F for its own Find.
+        if pageWindow.firstResponder is NoteEditorTextView { return false }
         return true
     }
 
