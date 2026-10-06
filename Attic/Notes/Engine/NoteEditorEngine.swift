@@ -157,8 +157,14 @@ final class NoteEditorEngine: NSObject, NSTextViewDelegate, NSTextStorageDelegat
     func unstageImported(_ id: UUID) { staged[id] = nil }
 
     // Guard state.
-    var userEditDepth = 0
-    private var engineEditDepth = 0
+    var userEditDepth = 0 { didSet { clearNewlineEditIfIdle() } }
+    private var engineEditDepth = 0 { didSet { clearNewlineEditIfIdle() } }
+    /// True while the edit in flight inserted exactly one line break (Return),
+    /// so only Return carries inline marks onto the next line.
+    private var newlineEditInFlight = false
+    private func clearNewlineEditIfIdle() {
+        if userEditDepth == 0 && engineEditDepth == 0 { newlineEditInFlight = false }
+    }
     private(set) var isWritingToolsSessionActive = false
     private(set) var writingToolsBeganInView = false
     private(set) var activity: Activity = .idle
@@ -1068,6 +1074,11 @@ final class NoteEditorEngine: NSObject, NSTextViewDelegate, NSTextStorageDelegat
 
     // MARK: Keys with object rules
 
+    private func isMonoParagraph(at location: Int) -> Bool {
+        guard location < textStorage.length else { return false }
+        return paragraphStyle(at: location) == .mono
+    }
+
     /// Return on a checklist line continues the list; on an empty checklist
     /// line it ends the list (the box goes).
     func handleNewline() -> Bool {
@@ -1091,6 +1102,13 @@ final class NoteEditorEngine: NSObject, NSTextViewDelegate, NSTextStorageDelegat
             if case .heading = paragraphStyle(at: current.location) {
                 history.beginGroup()
                 defer { history.endGroup() }
+                if current.location == line.location, line.length > 0 {
+                    // Return at a heading's start adds an empty Body line above;
+                    // the heading keeps its text and style.
+                    let blank = NSAttributedString(string: "\n", attributes: style.bodyAttributes)
+                    return performEdit(current, with: blank, name: "New Body Line",
+                                       selection: NSRange(location: current.location + 1, length: 0))
+                }
                 let insertion = NSAttributedString(string: "\n", attributes: attributes(forParagraphAt: current.location))
                 guard performEdit(current, with: insertion, name: "New Body Line",
                                   selection: NSRange(location: current.location + 1, length: 0)) else { return false }
@@ -1099,7 +1117,10 @@ final class NoteEditorEngine: NSObject, NSTextViewDelegate, NSTextStorageDelegat
             if let format = paragraphStyle(at: current.location),
                [.bullet, .number, .quote, .mono].contains(format) {
                 let content = (textStorage.string as NSString).substring(with: line)
-                if format != .mono, content.trimmingCharacters(in: .whitespaces).isEmpty {
+                if content.trimmingCharacters(in: .whitespaces).isEmpty,
+                   format != .mono || !isMonoParagraph(at: NSMaxRange(line) + 1) {
+                    // An empty list or quote line ends the block; an empty Mono
+                    // line does too unless more code follows (a blank code line).
                     return perform(.paragraph(.body), selection: current)
                 }
                 let attributes = textView.typingAttributes
@@ -1246,6 +1267,7 @@ final class NoteEditorEngine: NSObject, NSTextViewDelegate, NSTextStorageDelegat
                   replacementStrings: [String]?) -> Bool {
         let ranges = affectedRanges.map(\.rangeValue)
         guard allowsChange(ranges: ranges) else { return false }
+        newlineEditInFlight = replacementStrings == ["\n"]
         history.willChange(ranges: ranges, strings: replacementStrings)
         if ranges.count == 1 {
             pendingImportEdit = (ranges[0], replacementStrings?.first?.utf16.count ?? 0)
@@ -1303,7 +1325,7 @@ final class NoteEditorEngine: NSObject, NSTextViewDelegate, NSTextStorageDelegat
             textView.typingAttributes = attributes
         }
         if selection.length == 0, selection.location == line.location, selection.location > 0,
-           userEditDepth > 0 || engineEditDepth > 0 {
+           newlineEditInFlight, userEditDepth > 0 || engineEditDepth > 0 {
             // Return inherits explicit inline marks from the inserted separator,
             // while the destination paragraph supplies its block style and font.
             let previous = textStorage.attributes(at: selection.location - 1, effectiveRange: nil)
@@ -1783,7 +1805,19 @@ final class NoteEditorEngine: NSObject, NSTextViewDelegate, NSTextStorageDelegat
         let normalized = LegacyNoteMigration.normalizeLineBreaks(text).0
             .replacingOccurrences(of: String(NoteDocument.objectCharacter), with: "")
         guard !normalized.isEmpty else { return false }
-        let attributed = NSAttributedString(string: normalized, attributes: attributes(forParagraphAt: selection.location))
+        // The destination's block style belongs to the first pasted paragraph
+        // only; later lines are Body (never extra checklist/heading/quote lines).
+        let destination = attributes(forParagraphAt: selection.location)
+        let attributed = NSMutableAttributedString()
+        let pasted = normalized as NSString
+        let firstBreak = pasted.range(of: "\n")
+        if firstBreak.location == NSNotFound {
+            attributed.append(NSAttributedString(string: normalized, attributes: destination))
+        } else {
+            let head = NSRange(location: 0, length: NSMaxRange(firstBreak))
+            attributed.append(NSAttributedString(string: pasted.substring(with: head), attributes: destination))
+            attributed.append(NSAttributedString(string: pasted.substring(from: head.length), attributes: style.bodyAttributes))
+        }
         history.beginGroup()
         defer { history.endGroup() }
         guard performEdit(selection, with: attributed, name: String(localized: "Paste"),

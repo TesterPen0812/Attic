@@ -505,4 +505,118 @@ final class NotesFormattingRouteTests: XCTestCase {
             }
         }
     }
+
+    // MARK: A24 review fixes
+
+    private func headingEngine(caret: Int) -> (NoteEditorEngine, NoteEditorTextView) {
+        let engine = NoteEditorEngine(noteID: UUID(), document: NoteDocument(blocks: [.text("T"), .text("Plan")]))
+        let (_, view) = engine.makeView()
+        XCTAssertTrue(engine.perform(.paragraph(.heading(2)), selection: NSRange(location: 2, length: 0)))
+        engine.history.reset()
+        view.setSelectedRange(NSRange(location: caret, length: 0))
+        return (engine, view)
+    }
+
+    func testReturnAtHeadingStartAddsABodyLineAboveAndKeepsTheHeading() {
+        let (engine, view) = headingEngine(caret: 2)
+        view.insertNewline(nil)
+        let blocks = engine.document().blocks
+        XCTAssertEqual(blocks.map(\.text), ["T", "", "Plan"])
+        XCTAssertNil(blocks[1].style)
+        XCTAssertEqual(blocks[2].style, "heading")
+        XCTAssertEqual(view.selectedRange().location, 3, "the caret stays before the heading text")
+        XCTAssertEqual(engine.paragraphStyle(at: 3), .heading(2))
+        XCTAssertEqual(engine.paragraphStyle(at: 2), .body)
+        XCTAssertTrue(engine.history.undo())
+        XCTAssertEqual(engine.document().blocks.map(\.text), ["T", "Plan"])
+        XCTAssertEqual(engine.document().blocks[1].style, "heading")
+    }
+
+    func testReturnInTheMiddleOfAHeadingSplitsIntoHeadingAndBody() {
+        let (engine, view) = headingEngine(caret: 4)
+        view.insertNewline(nil)
+        let blocks = engine.document().blocks
+        XCTAssertEqual(blocks.map(\.text), ["T", "Pl", "an"])
+        XCTAssertEqual(blocks[1].style, "heading")
+        XCTAssertNil(blocks[2].style)
+        XCTAssertEqual(view.selectedRange().location, 5)
+    }
+
+    func testReturnAtTheEndOfAHeadingStartsABodyLine() {
+        let (engine, view) = headingEngine(caret: 6)
+        view.insertNewline(nil)
+        let blocks = engine.document().blocks
+        XCTAssertEqual(blocks.map(\.text), ["T", "Plan", ""])
+        XCTAssertEqual(blocks[1].style, "heading")
+        XCTAssertNil(blocks[2].style)
+        XCTAssertEqual(engine.paragraphStyle(at: view.selectedRange().location), .body)
+    }
+
+    /// Reloads `engine`'s document into a fresh engine, as a save and reopen does.
+    private func reloaded(_ engine: NoteEditorEngine) -> NoteDocument {
+        NoteEditorEngine(noteID: UUID(), document: engine.document()).document()
+    }
+
+    func testMultiLinePlainPasteIntoAChecklistItemKeepsOnlyTheFirstLineAChecklistItem() {
+        let engine = NoteEditorEngine(noteID: UUID(), document: NoteDocument(blocks: [.text("T"), .checklist("Item")]))
+        _ = engine.makeView()
+        XCTAssertTrue(engine.pastePlainText("a\nb\nc", at: NSRange(location: 7, length: 0)))
+        for document in [engine.document(), reloaded(engine)] {
+            XCTAssertEqual(document.blocks.map(\.text), ["T", "Itema", "b", "c"])
+            XCTAssertEqual(document.blocks.map(\.kind), [.text, .checklist, .text, .text])
+            XCTAssertNil(document.blocks[2].style)
+            XCTAssertNil(document.blocks[3].style)
+            let markdown = NoteMarkdownExport.markdown(document)
+            XCTAssertEqual(markdown.components(separatedBy: "- [ ]").count - 1, 1, markdown)
+        }
+        XCTAssertTrue(engine.history.undo())
+        XCTAssertEqual(engine.document().blocks.map(\.text), ["T", "Item"])
+    }
+
+    func testMultiLinePlainPasteIntoHeadingQuoteAndBulletStylesOnlyTheFirstParagraph() {
+        for style in ["heading", "quote", "bullet"] {
+            let engine = NoteEditorEngine(noteID: UUID(), document: NoteDocument(blocks: [.text("T"), .text("Plan", style: style)]))
+            _ = engine.makeView()
+            XCTAssertTrue(engine.pastePlainText("x\ny\nz", at: NSRange(location: 6, length: 0)), style)
+            for document in [engine.document(), reloaded(engine)] {
+                XCTAssertEqual(document.blocks.map(\.text), ["T", "Planx", "y", "z"], style)
+                XCTAssertEqual(document.blocks[1].style, style)
+                XCTAssertNil(document.blocks[2].style, style)
+                XCTAssertNil(document.blocks[3].style, style)
+            }
+        }
+    }
+
+    func testReturnOnAnEmptyMonoLineExitsUnlessMoreCodeFollows() {
+        let engine = NoteEditorEngine(noteID: UUID(), document: NoteDocument(blocks: [.text("T"), .text("code", style: "mono")]))
+        let (_, view) = engine.makeView()
+        view.setSelectedRange(NSRange(location: 6, length: 0))
+        view.insertNewline(nil)
+        XCTAssertEqual(engine.document().blocks.map(\.style), [nil, "mono", "mono"], "the first Return continues the code")
+        view.insertNewline(nil)
+        XCTAssertEqual(engine.document().blocks.map(\.text), ["T", "code", ""])
+        XCTAssertEqual(engine.paragraphStyle(at: view.selectedRange().location), .body, "an empty Mono line exits on Return")
+
+        let inner = NoteEditorEngine(noteID: UUID(), document: NoteDocument(blocks:
+            [.text("T"), .text("a", style: "mono"), .text("", style: "mono"), .text("b", style: "mono")]))
+        let (_, innerView) = inner.makeView()
+        innerView.setSelectedRange(NSRange(location: 4, length: 0))
+        innerView.insertNewline(nil)
+        XCTAssertEqual(inner.document().blocks.map(\.style), [nil, "mono", "mono", "mono", "mono"],
+                       "a blank line inside code stays code")
+    }
+
+    func testBoldTypedOnTheLineBreakDoesNotCarryOntoLaterLinesAfterOtherEdits() {
+        let engine = NoteEditorEngine(noteID: UUID(), document: NoteDocument(blocks: [.text("T"), .text("one"), .text("two")]))
+        let (_, view) = engine.makeView()
+        view.setSelectedRange(NSRange(location: 5, length: 0))
+        XCTAssertTrue(engine.perform(.mark(.bold)))
+        view.insertNewline(nil)
+        XCTAssertNotNil(view.typingAttributes[.noteMark(.bold)], "Return still carries bold onto the new line")
+        // Moving to the start of the plain line by an edit that is not Return.
+        view.setSelectedRange(NSRange(location: 7, length: 0))
+        view.insertText("x", replacementRange: NSRange(location: NSNotFound, length: 0))
+        view.deleteBackward(nil)
+        XCTAssertNil(view.typingAttributes[.noteMark(.bold)], "a backspace at a line start does not inherit bold")
+    }
 }
