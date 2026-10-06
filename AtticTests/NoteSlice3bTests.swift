@@ -1402,7 +1402,7 @@ final class NoteSlice3bTests: XCTestCase {
         let start = CFAbsoluteTimeGetCurrent()
         for _ in 0..<3 { XCTAssertEqual(session.engine.accessibilityElements(for: view).count, 7) }
         let elapsed = CFAbsoluteTimeGetCurrent() - start
-        XCTAssertLessThan(elapsed, 2.0, "validation must not synchronously hash 98 MiB per traversal")
+        CostBudget.assertLessThan(elapsed, 2.0, "validation must not synchronously hash 98 MiB per traversal")
         var upkeep: [Double] = []
         for _ in 0..<3 {
             XCTAssertTrue(session.engine.performEdit(NSRange(location: session.engine.textStorage.length, length: 0),

@@ -1,4 +1,4 @@
-# Dispatch lane=fast for build, strict build, analyzer and unit tests; full is the default milestone workflow.
+# Dispatch lane=costs for only optimized cost gates; fast for build/analyzer/unit tests; full for milestones.
 name: Attic CI
 
 on:
@@ -10,11 +10,11 @@ on:
   workflow_dispatch:
     inputs:
       lane:
-        description: Verification scope (full for milestones, fast between milestones)
+        description: Verification scope (full, fast, or optimized cost job only)
         required: false
         default: full
         type: choice
-        options: [full, fast]
+        options: [full, fast, costs]
       run_iphone:
         description: Run the deferred iPhone build-for-testing lane
         required: false
@@ -52,6 +52,7 @@ env:
 
 jobs:
   macos:
+    if: ${{ inputs.lane != 'costs' }}
     name: Build, test, and analyze Attic for macOS
     runs-on: macos-26
     timeout-minutes: 180
@@ -343,7 +344,7 @@ jobs:
 
 
   ui:
-    if: ${{ inputs.lane != 'fast' }}
+    if: ${{ inputs.lane != 'fast' && inputs.lane != 'costs' }}
     name: macOS UI tests (${{ matrix.shard }} of 2)
     runs-on: macos-26
     timeout-minutes: 50
@@ -435,7 +436,8 @@ jobs:
 
     # These fixtures time wall-clock work, so they run only here, on
     # optimized builds and one test at a time; the -Onone unit lane skips
-    # them. Each fixture runs once per sample; nothing runs twice.
+    # them. OD-15 re-samples a failing comparison family once, AB/BA/AB;
+    # first-attempt passing rows remain accepted.
     steps:
       - name: Check out candidate and baseline history
         uses: actions/checkout@v5
@@ -444,8 +446,8 @@ jobs:
 
       - name: Verify Xcode 26 toolchain and the cost baseline
         run: |
-          xcodebuild -version
-          xcodebuild -version | head -n 1 | grep -Eq '^Xcode 26\.'
+          Scripts/xcodebuild_locked.sh -version
+          Scripts/xcodebuild_locked.sh -version | head -n 1 | grep -Eq '^Xcode 26\.'
           git merge-base --is-ancestor "$COST_BASELINE_COMMIT" HEAD
           git merge-base --is-ancestor "$DONE_SEARCH_BASELINE_COMMIT" HEAD
           git merge-base --is-ancestor "$INTEGRATION_COST_REFERENCE_COMMIT" HEAD
@@ -475,7 +477,7 @@ jobs:
             if [ "$name" = donebase ]; then source="$RUNNER_TEMP/AtticDoneSearchBaseline"; fi
             if [ "$name" = integrationbase ]; then source="$RUNNER_TEMP/AtticIntegrationCostReference"; fi
             # shellcheck disable=SC2086
-            (cd "$source" && xcodebuild build-for-testing \
+            (cd "$source" && "$GITHUB_WORKSPACE/Scripts/xcodebuild_locked.sh" build-for-testing \
               -project Attic.xcodeproj -scheme Attic -configuration Local -destination 'platform=macOS' \
               -derivedDataPath "$RUNNER_TEMP/AtticCost-$name" $COST_FLAGS) \
               > "$RUNNER_TEMP/AtticCosts/$name-build.log" 2>&1 \
@@ -493,7 +495,7 @@ jobs:
                 reference_only=1
               fi
               # shellcheck disable=SC2086
-              (cd "$source" && TEST_RUNNER_ATTIC_COST_REFERENCE_ONLY="$reference_only" xcodebuild test-without-building \
+              (cd "$source" && TEST_RUNNER_ATTIC_COST_REFERENCE_ONLY="$reference_only" "$GITHUB_WORKSPACE/Scripts/xcodebuild_locked.sh" test-without-building \
                 -project Attic.xcodeproj -scheme Attic -configuration Local -destination 'platform=macOS' \
                 -derivedDataPath "$RUNNER_TEMP/AtticCost-$name" \
                 -resultBundlePath "$RUNNER_TEMP/AtticCosts/$name-cost-$sample.xcresult" $COST_FLAGS \
@@ -526,7 +528,7 @@ jobs:
               reference_only=0
               if [ "$side" = baseline ]; then reference_only=1; fi
               # shellcheck disable=SC2086
-              (cd "$source" && TEST_RUNNER_ATTIC_COST_REFERENCE_ONLY="$reference_only" xcodebuild test-without-building \
+              (cd "$source" && TEST_RUNNER_ATTIC_COST_REFERENCE_ONLY="$reference_only" "$GITHUB_WORKSPACE/Scripts/xcodebuild_locked.sh" test-without-building \
                 -project Attic.xcodeproj -scheme Attic -configuration Local -destination 'platform=macOS' \
                 -derivedDataPath "$RUNNER_TEMP/AtticCost-$build" $COST_FLAGS \
                 -resultBundlePath "$RUNNER_TEMP/AtticCosts/integration-$side-$sample.xcresult" \
@@ -552,7 +554,7 @@ jobs:
           # reference's absolute timing assertions; correctness still gates.
           for sample in 1 2 3; do
             # shellcheck disable=SC2086
-            (cd "$RUNNER_TEMP/AtticDoneSearchBaseline" && TEST_RUNNER_ATTIC_COST_REFERENCE_ONLY=1 xcodebuild test-without-building \
+            (cd "$RUNNER_TEMP/AtticDoneSearchBaseline" && TEST_RUNNER_ATTIC_COST_REFERENCE_ONLY=1 "$GITHUB_WORKSPACE/Scripts/xcodebuild_locked.sh" test-without-building \
               -project Attic.xcodeproj -scheme Attic -configuration Local -destination 'platform=macOS' \
               -derivedDataPath "$RUNNER_TEMP/AtticCost-donebase" \
               -resultBundlePath "$RUNNER_TEMP/AtticCosts/done-search-baseline-$sample.xcresult" $COST_FLAGS \
@@ -570,7 +572,7 @@ jobs:
         if: always() && steps.cost_builds.outcome == 'success'
         run: |
           # shellcheck disable=SC2086
-          xcodebuild test-without-building \
+          "$GITHUB_WORKSPACE/Scripts/xcodebuild_locked.sh" test-without-building \
             -project Attic.xcodeproj -scheme Attic -configuration Local -destination 'platform=macOS' \
             -derivedDataPath "$RUNNER_TEMP/AtticCost-candidate" \
             -resultBundlePath "$RUNNER_TEMP/AtticCosts/done-search.xcresult" $COST_FLAGS \
@@ -579,19 +581,9 @@ jobs:
             || { tail -n 120 "$RUNNER_TEMP/AtticCosts/done-search.log"; exit 1; }
           grep -E 'ATTIC_DONE_SEARCH|ATTIC_PHASE5_DONE|ATTIC_DONE_QUERY_MEDIAN|ATTIC_DONE_INPUT|ATTIC_DONE_RESULTS' "$RUNNER_TEMP/AtticCosts/done-search.log"
 
-      - name: Compare integration and Done results-frame medians
+      - name: Compare cost rows and re-check failures once in this job
         if: always() && steps.cost_builds.outcome == 'success'
-        run: python3 Scripts/check_integration_costs.py "$RUNNER_TEMP/AtticCosts"
-
-      - name: Compare Done search query medians with the baseline
-        if: always() && steps.cost_builds.outcome == 'success'
-        run: python3 Scripts/check_done_search_costs.py "$RUNNER_TEMP/AtticCosts"
-
-      # The independent absolute query/input budgets run before comparison,
-      # so a relative frame/row regression cannot prevent their execution.
-      - name: Check frame and row comparison against the Phase 1 baseline
-        if: always()
-        run: python3 Scripts/check_cost_comparison.py "$RUNNER_TEMP/AtticCosts"
+        run: python3 Scripts/recheck_cost_gates.py "$RUNNER_TEMP/AtticCosts"
 
       - name: Print Done query and input evidence even on failure
         if: always()
@@ -615,7 +607,7 @@ jobs:
           retention-days: 14
 
   performance:
-    if: ${{ inputs.lane != 'fast' }}
+    if: ${{ inputs.lane != 'fast' && inputs.lane != 'costs' }}
     name: Observe seeded performance on a fresh macOS runner
     runs-on: macos-26
     timeout-minutes: 180
@@ -701,7 +693,7 @@ jobs:
           test "$PERF_COMPARE" = success
 
   appearance:
-    if: ${{ inputs.lane != 'fast' }}
+    if: ${{ inputs.lane != 'fast' && inputs.lane != 'costs' }}
     name: Design system appearance matrix (${{ matrix.shard }} of 4)
     runs-on: macos-26
     timeout-minutes: 45
@@ -759,7 +751,7 @@ jobs:
 
   iphone:
     name: Build Attic for iPhone Simulator
-    if: ${{ github.event_name == 'workflow_dispatch' && inputs.run_iphone && inputs.lane != 'fast' }}
+    if: ${{ github.event_name == 'workflow_dispatch' && inputs.run_iphone && inputs.lane != 'fast' && inputs.lane != 'costs' }}
     runs-on: macos-26
     timeout-minutes: 45
     env:

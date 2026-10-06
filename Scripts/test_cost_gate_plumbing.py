@@ -77,7 +77,7 @@ class CostGatePlumbingTests(unittest.TestCase):
         return result
 
     def test_candidate_absolute_budgets_fail_and_reference_overages_pass(self):
-        for bound, strict in [(16, False), (500, True)]:
+        for bound, strict in [(16, False), (500, True), (2, True)]:
             with self.subTest(bound=bound):
                 passed = self.budget(bound - 1, bound, "0", strict)
                 self.assertEqual(passed.returncode, 0, passed.stdout + passed.stderr)

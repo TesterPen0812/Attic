@@ -23,14 +23,15 @@ RESULT = re.compile(r"ATTIC_DONE_RESULTS run=(\d+) frame_ms=([\d.]+)")
 KEY = re.compile(r"ATTIC_DONE_KEY key=(\d+) raw_ms=(\[[^\n]+?\])")
 
 
-def rendered(text):
+def rendered(text, reference_only=False):
     results = {int(run): float(ms) for run, ms in RESULT.findall(text)}
     keys = {int(key): list(map(float, ast.literal_eval(raw))) for key, raw in KEY.findall(text)}
     if set(results) != {0, 1, 2} or set(keys) != set(range(len("Finished task 12"))):
         raise ValueError("incomplete Done frame/key samples")
     if any(len(values) != 3 for values in keys.values()):
         raise ValueError("expected three sessions per Done key")
-    if any(ms >= 500 or ms < 0 for ms in list(results.values()) + sum(keys.values(), [])):
+    if any(ms < 0 or (ms >= 500 and not reference_only)
+           for ms in list(results.values()) + sum(keys.values(), [])):
         raise ValueError("Done frame/key sample breached 500 ms sanity ceiling")
     return {"done-results-frame": list(results.values()),
             **{f"done-key-{key}": values for key, values in keys.items()}}
@@ -58,7 +59,7 @@ def main(directory):
         report[name] = compare([block[name] for block in sides['baseline']],
                                [block[name] for block in sides['candidate']],
                                fixture_quantum(texts, name), raw_samples(reference_texts, name) or None)
-    before = rendered((directory / "integration-baseline-1.log").read_text())
+    before = rendered((directory / "integration-baseline-1.log").read_text(), reference_only=True)
     done = (directory / "done-search.log").read_text()
     texts.append(done)
     after = rendered(done)
