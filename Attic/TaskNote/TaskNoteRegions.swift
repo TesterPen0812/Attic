@@ -175,35 +175,57 @@ struct TaskNoteSubtasksBlock: View {
     @FocusState private var focus: TaskNotePageModel.Region?
 
     var body: some View {
+        blockShape
+            .onHover(perform: pointerMoved)
+            .onChange(of: focus, focusMoved)
+            .onChange(of: model.focusRequestCount, focusRequested)
+            .accessibilityElement(children: .contain)
+            .accessibilityLabel(spokenGroup)
+            .accessibilityIdentifier("task-note-subtasks")
+    }
+
+    /// The block's shape (`p3-19` column 2): radius 17, the recessed fill.
+    private var blockShape: some View {
+        let shape = RoundedRectangle(cornerRadius: TaskNoteMetrics.blockRadius, style: .continuous)
+        let fill: Color = design.tokens.recessed.color
+        return content
+            .padding(.horizontal, TaskNoteMetrics.blockPadding)
+            .background(shape.fill(fill))
+            .clipShape(shape)
+    }
+
+    private var content: some View {
         VStack(alignment: .leading, spacing: 0) {
             header
-            if !model.isFolded {
-                VStack(alignment: .leading, spacing: 0) {
-                    list
-                    addRow
-                }
-                .padding(.bottom, TaskNoteMetrics.blockBottomPadding)
-                .transition(design.reduceMotion ? .identity : .opacity.combined(with: .move(edge: .top)))
-            }
+            if !model.isFolded { rowsAndAdd }
         }
-        .padding(.horizontal, TaskNoteMetrics.blockPadding)
-        .background(RoundedRectangle(cornerRadius: TaskNoteMetrics.blockRadius, style: .continuous)
-            .fill(design.tokens.recessed.color))
-        .clipShape(RoundedRectangle(cornerRadius: TaskNoteMetrics.blockRadius, style: .continuous))
-        .onHover { model.setPointerInside($0) }
-        .onChange(of: focus) { _, region in
-            model.setFocusInside(region == .list || region == .add)
+    }
+
+    private var rowsAndAdd: some View {
+        let transition: AnyTransition = design.reduceMotion ? .identity : .opacity.combined(with: .move(edge: .top))
+        return VStack(alignment: .leading, spacing: 0) {
+            list
+            addRow
         }
-        .onChange(of: model.focusRequestCount) { _, _ in
-            guard let region = model.focusRequest else { return }
-            switch region {
-            case .list, .add: focus = region
-            case .title, .writing: focus = nil
-            }
+        .padding(.bottom, TaskNoteMetrics.blockBottomPadding)
+        .transition(transition)
+    }
+
+    private func pointerMoved(_ inside: Bool) { model.setPointerInside(inside) }
+
+    private func focusMoved(_ old: TaskNotePageModel.Region?, _ new: TaskNotePageModel.Region?) {
+        let inside: Bool = new == TaskNotePageModel.Region.list || new == TaskNotePageModel.Region.add
+        model.setFocusInside(inside)
+    }
+
+    private func focusRequested(_ old: UInt64, _ new: UInt64) { followFocusRequest() }
+
+    private func followFocusRequest() {
+        guard let region = model.focusRequest else { return }
+        switch region {
+        case .list, .add: focus = region
+        case .title, .writing: focus = nil
         }
-        .accessibilityElement(children: .contain)
-        .accessibilityLabel(spokenGroup)
-        .accessibilityIdentifier("task-note-subtasks")
     }
 
     // MARK: Header
@@ -250,55 +272,87 @@ struct TaskNoteSubtasksBlock: View {
     }
 
     private func rowView(_ row: TaskNotePageModel.Row) -> some View {
-        let ringed = keyboardFocusVisible && focus == .list && model.focusedRowID == row.id && model.renamingID == nil
-        return HStack(spacing: AtticSubtaskMetrics.titleGap) {
-            Button { model.toggle(row.id) } label: {
-                AtticSubtaskCheckbox(isDone: row.isDone)
-                    .frame(width: AtticSubtaskMetrics.hitSize, height: AtticSubtaskMetrics.hitSize)
-                    .contentShape(Rectangle())
-            }
-            .buttonStyle(.plain)
-            .focusable(false)
-            .padding(.horizontal, -(AtticSubtaskMetrics.hitSize - AtticControlSize.subtaskCheckbox) / 2)
-            if model.renamingID == row.id {
-                AtticRowTitleEditor(editing: AtticTitleEditing(
-                    text: $model.renameText,
-                    commit: {
-                        let saved = model.commitRename(undoManager: undoManager)
-                        if saved { focus = .list }
-                        return saved
-                    },
-                    cancel: { model.cancelRename(undoManager: undoManager); focus = .list },
-                    accessibilityLabel: String(localized: "Rename subtask")))
-            } else {
-                // Done rows are quiet, without a strikethrough (the mockups).
-                AtticText(verbatim: row.title, style: .listBody, ink: row.isDone ? .helper : .body, truncates: true)
-            }
+        let ringed: Bool = keyboardFocusVisible && focus == TaskNotePageModel.Region.list
+            && model.focusedRowID == row.id && model.renamingID == nil
+        let value: String = row.isDone ? String(localized: "completed") : String(localized: "not completed")
+        return rowLine(row)
+            .frame(height: TaskNoteMetrics.rowHeight)
+            .background(alignment: .leading) { rowRing(ringed) }
+            .contentShape(Rectangle())
+            .onTapGesture { select(row.id) }
+            .id(row.id)
+            .accessibilityElement(children: .combine)
+            .accessibilityLabel(row.title)
+            .accessibilityAddTraits(.isToggle)
+            .accessibilityValue(value)
+            .accessibilityAction { model.toggle(row.id) }
+            .accessibilityAction(named: Text("Rename")) { model.beginRename(row.id) }
+            .accessibilityAction(named: Text("Delete Subtask")) { model.delete(row.id) }
+            .accessibilityIdentifier("task-note-subtask-row")
+    }
+
+    private func rowLine(_ row: TaskNotePageModel.Row) -> some View {
+        HStack(spacing: AtticSubtaskMetrics.titleGap) {
+            checkbox(row)
+            rowTitle(row)
             Spacer(minLength: 0)
         }
-        .frame(height: TaskNoteMetrics.rowHeight)
-        .background(alignment: .leading) {
-            if ringed {
-                Color.clear
-                    .atticFocusRing(true, cornerRadius: AtticRadius.control(height: TaskNoteMetrics.rowHeight - 4))
-                    .padding(.horizontal, -6)
-                    .padding(.vertical, 2)
-            }
+    }
+
+    private func checkbox(_ row: TaskNotePageModel.Row) -> some View {
+        let inset: CGFloat = -(AtticSubtaskMetrics.hitSize - AtticControlSize.subtaskCheckbox) / 2
+        return Button { model.toggle(row.id) } label: {
+            AtticSubtaskCheckbox(isDone: row.isDone)
+                .frame(width: AtticSubtaskMetrics.hitSize, height: AtticSubtaskMetrics.hitSize)
+                .contentShape(Rectangle())
         }
-        .contentShape(Rectangle())
-        .onTapGesture {
-            model.focusedRowID = row.id
-            focus = .list
+        .buttonStyle(.plain)
+        .focusable(false)
+        .padding(.horizontal, inset)
+    }
+
+    @ViewBuilder
+    private func rowTitle(_ row: TaskNotePageModel.Row) -> some View {
+        if model.renamingID == row.id {
+            AtticRowTitleEditor(editing: renameEditing)
+        } else {
+            // Done rows are quiet, without a strikethrough (the mockups).
+            AtticText(verbatim: row.title, style: .listBody, ink: row.isDone ? .helper : .body, truncates: true)
         }
-        .id(row.id)
-        .accessibilityElement(children: .combine)
-        .accessibilityLabel(row.title)
-        .accessibilityAddTraits(.isToggle)
-        .accessibilityValue(row.isDone ? String(localized: "completed") : String(localized: "not completed"))
-        .accessibilityAction { model.toggle(row.id) }
-        .accessibilityAction(named: Text("Rename")) { model.beginRename(row.id) }
-        .accessibilityAction(named: Text("Delete Subtask")) { model.delete(row.id) }
-        .accessibilityIdentifier("task-note-subtask-row")
+    }
+
+    private var renameEditing: AtticTitleEditing {
+        AtticTitleEditing(
+            text: $model.renameText,
+            commit: { commitRename() },
+            cancel: { cancelRename() },
+            accessibilityLabel: String(localized: "Rename subtask"))
+    }
+
+    private func commitRename() -> Bool {
+        let saved = model.commitRename(undoManager: undoManager)
+        if saved { focus = .list }
+        return saved
+    }
+
+    private func cancelRename() {
+        model.cancelRename(undoManager: undoManager)
+        focus = .list
+    }
+
+    @ViewBuilder
+    private func rowRing(_ ringed: Bool) -> some View {
+        if ringed {
+            Color.clear
+                .atticFocusRing(true, cornerRadius: AtticRadius.control(height: TaskNoteMetrics.rowHeight - 4))
+                .padding(.horizontal, -6)
+                .padding(.vertical, 2)
+        }
+    }
+
+    private func select(_ id: UUID) {
+        model.focusedRowID = id
+        focus = .list
     }
 
     private func listKey(_ press: KeyPress) -> KeyPress.Result {
