@@ -3168,11 +3168,21 @@ final class TaskStore: ObservableObject {
     /// them in one order.
     @discardableResult
     func moveSubtask(taskID: UUID, by offset: Int) -> Bool {
-        guard let task = tasks.first(where: { $0.id == taskID }), let parentID = task.parentID else { return false }
+        guard let task = tasks.first(where: { $0.id == taskID }), let parentID = task.parentID else {
+            #if DEBUG
+            TaskNoteCaptureScript.trace("move: not in tasks (\(tasks.count) tasks; family index has it: \(self.task(withID: taskID) != nil))")
+            #endif
+            return false
+        }
         // Among the siblings in the same state (open ones, or done ones):
         // the family lists open subtasks first.
         var siblings = subtasks(of: parentID).filter { ($0.status == .done) == (task.status == .done) }
-        guard let index = siblings.firstIndex(where: { $0.id == taskID }) else { return false }
+        guard let index = siblings.firstIndex(where: { $0.id == taskID }) else {
+            #if DEBUG
+            TaskNoteCaptureScript.trace("move: not among \(siblings.count) siblings")
+            #endif
+            return false
+        }
         let destination = index + offset
         guard siblings.indices.contains(destination) else { return true }
         let owner = familyOwner(of: task)
