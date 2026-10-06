@@ -26,7 +26,9 @@ enum TaskNoteCaptureScript {
                      (0.8, { log("tab", host) })]
         case "find":
             steps = [(2.0, { model.focusWriting(atTop: true) }),
-                     (0.6, { post("f", keyCode: 3, flags: .command) }),
+                     (0.4, { log("before ⌘F key=\(host.textView.window?.isKeyWindow == true)", host) }),
+                     (0.2, { post("f", keyCode: 3, flags: .command) }),
+                     (0.4, { log("after ⌘F bar=\(host.scrollView.isFindBarVisible)", host) }),
                      (0.8, { type("Line 40") }),
                      (0.6, { post("\r", keyCode: 36) }),
                      (0.6, { post("g", keyCode: 5, flags: .command) }),
