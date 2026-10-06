@@ -474,9 +474,7 @@ jobs:
           git worktree add --detach "$RUNNER_TEMP/AtticDoneSearchBaseline" "$DONE_SEARCH_BASELINE_COMMIT"
           git worktree add --detach "$RUNNER_TEMP/AtticIntegrationCostReference" "$INTEGRATION_COST_REFERENCE_COMMIT"
           # Test-only overlay: identical measurement code, pinned reference app.
-          for fixture in DoneSearchCostTests NotesPageControllerTests TaskPerformanceGateTests TasksKeystrokeCostTests NoteSlice3bTests; do
-            cp "AtticTests/$fixture.swift" "$RUNNER_TEMP/AtticIntegrationCostReference/AtticTests/$fixture.swift"
-          done
+          python3 Scripts/prepare_integration_cost_reference.py "$RUNNER_TEMP/AtticIntegrationCostReference"
           git -C "$RUNNER_TEMP/AtticIntegrationCostReference" diff --exit-code -- Attic Attic.xcodeproj
           # Retain the historical fixtures and all measurements. Adapt only
           # their absolute timing assertions to the shared OD-6 policy.

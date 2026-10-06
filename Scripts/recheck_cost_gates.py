@@ -82,7 +82,7 @@ class Sampler:
             extra = [f'ATTIC_MACOS_UNIT_HOST_PRODUCT_NAME={name}', f'ATTIC_MACOS_UNIT_HOST_EXECUTABLE_NAME={name}',
                      f'ATTIC_MACOS_UNIT_HOST_BUNDLE_IDENTIFIER=com.taha.Attic.p3.{bundle}']
         env = dict(os.environ, TEST_RUNNER_ATTIC_COST_REFERENCE_ONLY='1' if side == 'baseline' else '0')
-        log = directory / filename
+        log = directory.resolve() / filename
         args = [str(ROOT / 'Scripts/xcodebuild-locked.sh'), 'test-without-building',
                 '-project', 'Attic.xcodeproj', '-scheme', 'Attic', '-configuration', 'Local',
                 '-destination', 'platform=macOS', '-derivedDataPath', str(derived),

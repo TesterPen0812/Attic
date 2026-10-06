@@ -1036,7 +1036,8 @@ final class TaskStore: ObservableObject {
         // replica; everything else each replica holds stays its own, so a
         // divergent copy never loses a value the edit did not touch
         // (deferred replica safety, Phase 1). Only copies that agreed with
-        // the shown one take the new time, so the shown copy stays shown.
+        // the shown one take the new time. Never move their clock backwards:
+        // an imported future timestamp must not promote a divergent older copy.
         let shown = TaskContentSnapshot(task)
         let agreeing = Set(replicas.filter { $0 === task || (TaskContentSnapshot($0) == shown && $0.deletedAt == task.deletedAt) }
             .map(\.persistentModelID))
@@ -1056,7 +1057,7 @@ final class TaskStore: ObservableObject {
             }
             if tagsChanged { replica.tagsRaw = destinationTagsRaw }
             if dueChanged { replica.dueDayRaw = destinationDueDayRaw }
-            if agreeing.contains(replica.persistentModelID) { replica.updatedAt = timestamp }
+            if agreeing.contains(replica.persistentModelID) { replica.updatedAt = max(replica.updatedAt, timestamp) }
         }
         return true
     }
@@ -1320,7 +1321,7 @@ final class TaskStore: ObservableObject {
             WorkspaceLegacyBridge.prepareMutations(replicas, in: context)
             for replica in replicas {
                 edits.forEach { $0(replica) }
-                if agreeing.contains(replica.persistentModelID) { replica.updatedAt = timestamp }
+                if agreeing.contains(replica.persistentModelID) { replica.updatedAt = max(replica.updatedAt, timestamp) }
             }
             if winner.doneLoggedAt != nil, winner.statusRaw != doneRaw {
                 returningFamilies.insert(winner.parentID ?? winner.id)
@@ -1475,7 +1476,7 @@ final class TaskStore: ObservableObject {
                 let stamp = replica === current || TaskReplicaSnapshot(replica) == shownCopy
                 let shown = try Self.attachmentLists(of: replica).shown
                 replica.imageReferencesData = try Self.encodedAttachments(shown + imported)
-                if stamp { replica.updatedAt = timestamp }
+                if stamp { replica.updatedAt = max(replica.updatedAt, timestamp) }
             }
             guard save(owner: errorOwner) else {
                 await taskImageFiles.remove(imported); return nil
@@ -1586,7 +1587,7 @@ final class TaskStore: ObservableObject {
                 replica.imageReferencesData = kept.isEmpty && replica.imageReferencesData == nil
                     ? nil : try Self.encodedAttachments(kept)
                 replica.removedAttachmentsData = try Self.encodedAttachments(removedList)
-                if stamp { replica.updatedAt = timestamp }
+                if stamp { replica.updatedAt = max(replica.updatedAt, timestamp) }
             }
         } catch {
             context.rollback()
@@ -1660,7 +1661,7 @@ final class TaskStore: ObservableObject {
                 let remaining = lists.removed.filter { $0.reference.id != attachmentID }
                 replica.imageReferencesData = try Self.encodedAttachments(shown)
                 replica.removedAttachmentsData = remaining.isEmpty ? nil : try Self.encodedAttachments(remaining)
-                if stamp { replica.updatedAt = timestamp }
+                if stamp { replica.updatedAt = max(replica.updatedAt, timestamp) }
             }
         } catch {
             context.rollback()
@@ -2756,7 +2757,7 @@ final class TaskStore: ObservableObject {
                     replica.completedFromOrder = nil
                     replica.manualOrder = order
                     replica.listOrderVersion = TaskItem.currentListOrderVersion
-                    if agreeing.contains(replica.persistentModelID) { replica.updatedAt = timestamp }
+                    if agreeing.contains(replica.persistentModelID) { replica.updatedAt = max(replica.updatedAt, timestamp) }
                 }
                 returning.insert(logged.parentID ?? taskID)
             }
@@ -2871,7 +2872,7 @@ final class TaskStore: ObservableObject {
                         replica.manualOrder = order
                         replica.listOrderVersion = TaskItem.currentListOrderVersion
                     }
-                    if agrees { replica.updatedAt = timestamp }
+                    if agrees { replica.updatedAt = max(replica.updatedAt, timestamp) }
                 }
             }
             for id in taskIDs {
@@ -3031,7 +3032,7 @@ final class TaskStore: ObservableObject {
                 replica.completedFromOrder = replica.manualOrder
                 replica.status = .done
                 replica.completedAt = timestamp
-                if agrees { replica.updatedAt = timestamp }
+                if agrees { replica.updatedAt = max(replica.updatedAt, timestamp) }
             }
         }
         _ = try stageUpdate(task, status: .done, allowingUnfinishedSubtasks: true, at: timestamp)
@@ -3173,7 +3174,7 @@ final class TaskStore: ObservableObject {
                     let agrees = replica === task || TaskContentSnapshot(replica) == shown
                     replica.manualOrder = order
                     replica.listOrderVersion = TaskItem.currentListOrderVersion
-                    if agrees { replica.updatedAt = timestamp }
+                    if agrees { replica.updatedAt = max(replica.updatedAt, timestamp) }
                 }
             } else {
                 try assignSpacedManualOrders(to: siblings, updatedAt: timestamp)
@@ -3319,7 +3320,7 @@ final class TaskStore: ObservableObject {
                 if replica.listOrderVersion != TaskItem.currentListOrderVersion {
                     replica.listOrderVersion = TaskItem.currentListOrderVersion
                 }
-                if agreeing.contains(replica.persistentModelID) { replica.updatedAt = timestamp }
+                if agreeing.contains(replica.persistentModelID) { replica.updatedAt = max(replica.updatedAt, timestamp) }
             }
         } catch {
             context.rollback()
@@ -3532,7 +3533,7 @@ final class TaskStore: ObservableObject {
                     let agrees = replica === task || TaskContentSnapshot(replica) == shown
                     replica.manualOrder = sparseOrder
                     replica.listOrderVersion = TaskItem.currentListOrderVersion
-                    if agrees { replica.updatedAt = timestamp }
+                    if agrees { replica.updatedAt = max(replica.updatedAt, timestamp) }
                 }
             } else {
                 // Legacy stores can have missing or tightly packed values. Pay the
@@ -4032,7 +4033,7 @@ final class TaskStore: ObservableObject {
                     changed = true
                 }
                 // A copy that already holds its order is not written at all.
-                if changed, agrees { replica.updatedAt = updatedAt }
+                if changed, agrees { replica.updatedAt = max(replica.updatedAt, updatedAt) }
             }
         }
     }

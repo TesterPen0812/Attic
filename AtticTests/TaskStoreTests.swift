@@ -445,6 +445,31 @@ final class TaskStoreTests: XCTestCase {
     }
 
     @MainActor
+    func testFutureDatedPresentedReplicaKeepsItsClockAndDivergenceThroughEditAndUndo() throws {
+        let timestamp = Date(timeIntervalSince1970: 1_700_000_000)
+        let future = timestamp.addingTimeInterval(86_400)
+        let store = try makeTestStore(now: { timestamp })
+        let library = AtticLibrary(tasks: store)
+        let id = UUID(), seed = ModelContext(store.container)
+        seed.insert(TaskItem(id: id, title: "Shown", status: .todo, createdAt: timestamp, updatedAt: future))
+        seed.insert(TaskItem(id: id, title: "Divergent", status: .done, createdAt: timestamp,
+                             updatedAt: future.addingTimeInterval(-60), completedAt: timestamp))
+        try seed.save()
+        store.refresh()
+        XCTAssertTrue(library.updateTask(id, title: "Edited").isApplied)
+        XCTAssertEqual(store.task(withID: id)?.title, "Edited")
+        XCTAssertEqual(store.tasks.first(where: { $0.id == id })?.updatedAt, future)
+        XCTAssertTrue(library.undo(in: .tasks).isApplied)
+        XCTAssertEqual(store.task(withID: id)?.title, "Shown")
+        let rows = try ModelContext(store.container).fetch(FetchDescriptor<TaskItem>(predicate: #Predicate { $0.id == id }))
+        XCTAssertEqual(Set(rows.map(\.statusRaw)), [TaskStatus.todo.rawValue, TaskStatus.done.rawValue])
+        XCTAssertEqual(rows.first(where: { $0.status == .done })?.completedAt, timestamp)
+        XCTAssertTrue(library.updateTask(id, status: .done).isApplied)
+        XCTAssertEqual(store.task(withID: id)?.updatedAt, future)
+        XCTAssertEqual(store.task(withID: id)?.completedAt, timestamp, "completion records the actual clock")
+    }
+
+    @MainActor
     func testRefreshSeesChangesSavedByAnotherModelContext() throws {
         let container = try PersistenceController.makeContainer(inMemory: true)
         let store = TaskStore(container: container)

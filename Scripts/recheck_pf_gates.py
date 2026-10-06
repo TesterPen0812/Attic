@@ -41,6 +41,7 @@ def evaluate(directory):
 
 class Sampler:
     def __call__(self, directory):
+        directory = directory.resolve()
         directory.mkdir(parents=True)
         temp = Path(os.environ['RUNNER_TEMP'])
         flags = shlex.split(os.environ['PF_COST_FLAGS'])
