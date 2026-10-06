@@ -26,7 +26,18 @@ enum TaskNoteCaptureScript {
                      (0.8, { log("tab", host) })]
         case "find":
             steps = [(2.0, { model.focusWriting(atTop: true) }),
-                     (0.4, { log("before ⌘F key=\(host.textView.window?.isKeyWindow == true)", host) }),
+                     (0.4, {
+                         func walk(_ menu: NSMenu?, _ path: String) {
+                             for item in menu?.items ?? [] {
+                                 if item.keyEquivalent.lowercased() == "f" {
+                                     trace("menu \(path)/\(item.title) mods=\(item.keyEquivalentModifierMask.rawValue) action=\(item.action.map(NSStringFromSelector) ?? "nil")")
+                                 }
+                                 walk(item.submenu, path + "/" + item.title)
+                             }
+                         }
+                         walk(NSApp.mainMenu, "")
+                         log("before ⌘F key=\(host.textView.window?.isKeyWindow == true)", host)
+                     }),
                      (0.2, { post("f", keyCode: 3, flags: .command) }),
                      (0.4, { log("after ⌘F bar=\(host.scrollView.isFindBarVisible)", host) }),
                      (0.8, { type("Line 40") }),

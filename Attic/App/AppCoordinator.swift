@@ -1012,6 +1012,9 @@ final class AppCoordinator: ObservableObject {
     }
 
     func showSearch() {
+        #if DEBUG
+        TaskNoteCaptureScript.trace("showSearch \(Thread.callStackSymbols.prefix(8).joined(separator: " | "))")
+        #endif
         // The panel takes the keyboard, but not for the add bar: a late add
         // bar focus request would take it back from the search field.
         guard hoverMonitor.revealProgrammatically(section: .tasks, focusesAddBar: false) == .shown else { return }
