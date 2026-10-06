@@ -287,7 +287,7 @@ final class DoneSearchCostTests: XCTestCase {
             let median = TasksFrameCostTests.median(samples)
             CostBudget.assertLessThanOrEqual(median, 16, "Done Find key \(key) median exceeds the 16 ms budget")
             print("ATTIC_DONE_KEY key=\(key) raw_ms=\(samples)")
-            XCTAssertLessThan(samples.max()!, 500, "runaway Done input frame")
+            CostBudget.assertLessThan(samples.max()!, 500, "runaway Done input frame")
         }
         // OD-8: unchanged code ranged 30–84 ms across today's CI runs.
         // The old 77.15 ms bound came from one early run. CI now compares
@@ -296,7 +296,7 @@ final class DoneSearchCostTests: XCTestCase {
         print("ATTIC_DONE_RESULTS median_ms=\(TasksFrameCostTests.median(resultFrames))")
         // Every sample still has the independent 500 ms sanity ceiling.
         for sample in resultFrames {
-            XCTAssertLessThan(sample, 500, "the frame the Done results arrive in: \(resultFrames)")
+            CostBudget.assertLessThan(sample, 500, "the frame the Done results arrive in: \(resultFrames)")
         }
 
     }

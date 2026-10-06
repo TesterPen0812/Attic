@@ -324,7 +324,13 @@ final class NotesPageController: ObservableObject {
     func prepareToLeaveDurably(_ reason: LeaveReason) async -> Bool {
         // Quit must prove all cached drafts durable before the shell releases them.
         if reason == .quit {
-            guard await preserveAllDurably() else { return false }
+            guard await awaitRecoveryForUser(), await preserveAllDurably() else { return false }
+            // Re-check the live proofs synchronously. Running preserveAll
+            // again would queue a redundant checkpoint (preserveDurably
+            // retires its scheduling key), whose completion races the import
+            // producer's key retirement. No actor suspension separates this
+            // proof from leaving, so newer work still refuses termination.
+            return prepareToLeave(reason, usingVerifiedCheckpoints: true)
         }
         let wasVisible = isPageVisible
         let result = await performAfterRecovery(requireDrainedRecovery: reason == .quit) { prepareToLeave(reason) }
@@ -1060,10 +1066,16 @@ final class NotesPageController: ObservableObject {
     /// The single boundary used by note navigation, the shell, hide and quit.
     @discardableResult
     func prepareToLeave(_ reason: LeaveReason) -> Bool {
+        prepareToLeave(reason, usingVerifiedCheckpoints: false)
+    }
+
+    private func prepareToLeave(_ reason: LeaveReason, usingVerifiedCheckpoints: Bool) -> Bool {
         if let active, !canLeaveComposition(in: active) { return false }
         if legacyNoteID != nil, !leaveLegacyNote(reason) { return false }
         let retainsSession = reason == .hide || reason == .pageSwitch
-        if reason == .hide || reason == .quit {
+        if usingVerifiedCheckpoints {
+            guard recoveryWork == nil, cache.values.allSatisfy({ workspaceIsDurable($0) }) else { return false }
+        } else if reason == .hide || reason == .quit {
             guard preserveAll(allowQueued: retainsSession) else { return false }
         } else if let session = active {
             captureViewState(session)

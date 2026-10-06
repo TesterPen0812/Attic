@@ -1402,7 +1402,7 @@ final class NoteSlice3bTests: XCTestCase {
         let start = CFAbsoluteTimeGetCurrent()
         for _ in 0..<3 { XCTAssertEqual(session.engine.accessibilityElements(for: view).count, 7) }
         let elapsed = CFAbsoluteTimeGetCurrent() - start
-        XCTAssertLessThan(elapsed, 2.0, "validation must not synchronously hash 98 MiB per traversal")
+        CostBudget.assertLessThan(elapsed, 2.0, "validation must not synchronously hash 98 MiB per traversal")
         var upkeep: [Double] = []
         for _ in 0..<3 {
             XCTAssertTrue(session.engine.performEdit(NSRange(location: session.engine.textStorage.length, length: 0),
@@ -2261,6 +2261,7 @@ private final class PendingWriteJournal: NoteDraftJournaling {
     private(set) var readStarted = false
     private var readContinuation: CheckedContinuation<Void, Never>?
     private(set) var writeStarted = false
+    private(set) var writeCount = 0
     private var continuation: CheckedContinuation<Void, Never>?
     init(directory: URL) { base = NoteDraftJournal(directory: directory) }
     var requiresAsyncIO: Bool { true }
@@ -2272,6 +2273,7 @@ private final class PendingWriteJournal: NoteDraftJournaling {
     }
     func listDamagedDurably() async throws -> [NoteDamagedRecoveryDetails] { try await base.listDamagedDurably() }
     func writeDurably(_ entry: NoteDraftJournalEntry, staged: [StagedNoteAttachment], replacing claim: NoteRecoveryClaim?) async throws -> NoteRecoveryClaim {
+        writeCount += 1
         if blockWrites {
             writeStarted = true
             await withCheckedContinuation { continuation = $0 }
@@ -2370,6 +2372,60 @@ extension NoteSlice3bTests {
     }
 
     func testHideAndSwitchAcceptQueuedCheckpointAndQuitWaitsForWrite() async throws {
+        try await pendingCheckpointQuit(warmSessions: 0)
+    }
+
+    func testQuitUsesVerifiedCheckpointWithoutQueueingAnotherWrite() async throws {
+        let root = ownedTemporaryDirectory(prefix: "VerifiedQuit")
+        let journal = PendingWriteJournal(directory: root), loader = FirstSuspendedLoader(try stagedImage())
+        let store = try makeTestNoteStore(attachmentFileStore: makeTestAttachmentFileStore())
+        let controller = NotesPageController(store: store, journal: journal, saveDelay: .seconds(60), imageLoader: { await loader.load($0) })
+        await controller.startAndWait()
+        let session = try XCTUnwrap(controller.active)
+        XCTAssertTrue(session.engine.performEdit(NSRange(location: 0, length: 0), with: NSAttributedString(string: "Pending"), name: "Typing"))
+        controller.importFiles([URL(fileURLWithPath: "/tmp/pending.png")])
+        for _ in 0..<100 {
+            if await loader.started { break }
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        let started = await loader.started
+        XCTAssertTrue(started)
+        await controller.waitForRecoveryWork()
+        let before = journal.writeCount
+        let quit = await controller.prepareToLeaveDurably(.quit)
+        XCTAssertTrue(quit)
+        XCTAssertEqual(journal.writeCount, before + 1, "quit verifies once; it must not queue a second preservation write")
+        XCTAssertFalse(try journal.base.entries().isEmpty)
+        await loader.release()
+        await controller.waitForImportWork()
+    }
+
+    func testQuitStillWaitsForRecoveryWhenThereAreNoPendingDrafts() async throws {
+        let journal = PendingWriteJournal(directory: ownedTemporaryDirectory(prefix: "CleanQuit"))
+        journal.blockRead = true
+        let controller = NotesPageController(store: try makeTestNoteStore(attachmentFileStore: makeTestAttachmentFileStore()), journal: journal)
+        controller.start()
+        try await waitFor { journal.readStarted }
+        var result: Bool?
+        let quit = Task { @MainActor in result = await controller.prepareToLeaveDurably(.quit) }
+        try await Task.sleep(for: .milliseconds(30))
+        XCTAssertNil(result)
+        journal.releaseRead()
+        await quit.value
+        XCTAssertEqual(result, true)
+    }
+
+    func testPendingCheckpointQuitWithAndWithoutClosedWarmTaskNotes() async throws {
+        let iterations = Int(ProcessInfo.processInfo.environment["ATTIC_CHECKPOINT_STRESS_ITERATIONS"] ?? "12") ?? 12
+        for iteration in 0..<iterations {
+            for warmSessions in [0, 8] {
+                try await pendingCheckpointQuit(warmSessions: warmSessions)
+                print("CHECKPOINT_QUIT iteration=\(iteration) warm=\(warmSessions) passed")
+            }
+        }
+    }
+
+    private func pendingCheckpointQuit(warmSessions: Int) async throws {
         let root = ownedTemporaryDirectory(prefix: "M2Leave")
 
         let journal = PendingWriteJournal(directory: root), loader = FirstSuspendedLoader(try stagedImage())
@@ -2377,6 +2433,25 @@ extension NoteSlice3bTests {
         let controller = NotesPageController(store: store, journal: journal, saveDelay: .seconds(60), imageLoader: { await loader.load($0) })
         await controller.startAndWait()
         let session = try XCTUnwrap(controller.active)
+        let coordinator = try WorkspaceLegacyBridge.coordinator(for: store.container)
+        for _ in 0..<warmSessions {
+            let taskID = UUID(), noteID = UUID()
+            guard case .success = store.createDocumentNote(id: noteID, document: .init(blocks: [.text("Warm body")])) else { return XCTFail() }
+            let seed = coordinator.freshContext()
+            seed.insert(TaskItem(id: taskID, title: "Warm head"))
+            let note = try XCTUnwrap(seed.fetch(FetchDescriptor<NoteItem>(predicate: #Predicate { $0.id == noteID })).first)
+            note.taskID = taskID
+            seed.insert(TaskNoteAssociation(taskID: taskID, noteID: noteID))
+            try seed.save()
+            store.refresh()
+            let page = try coordinator.sessions.session(for: .task(taskID), notes: controller)
+            let lease = try page.acquire(surfaceID: UUID())
+            let noteSession = try XCTUnwrap(page.note)
+            let closed = await page.close(lease)
+            XCTAssertTrue(closed)
+            XCTAssertTrue(controller.workspaceSession(noteID: noteID) === noteSession, "closed task notes really stay warm")
+        }
+        XCTAssertTrue(controller.active === session)
         XCTAssertTrue(session.engine.performEdit(NSRange(location: 0, length: 0), with: NSAttributedString(string: "Pending"), name: "Typing"))
         journal.blockWrites = true
         controller.importFiles([URL(fileURLWithPath: "/tmp/pending.png")])

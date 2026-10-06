@@ -120,7 +120,7 @@ final class TaskPerformanceGateTests: XCTestCase {
         let presentation = (phases["presentation"] ?? 0) / 7
         print("PERFGATE writer=\(writer) presentation=\(presentation)")
         #endif
-        XCTAssertLessThan(median, 120, "a single toggle must not rescan or refetch the whole store (median \(median) ms)")
+        CostBudget.assertLessThan(median, 120, "a single toggle must not rescan or refetch the whole store (median \(median) ms)")
         print("ATTIC_INTEGRATION_COST status-toggle median_ms=\(median)")
     }
 
@@ -403,7 +403,7 @@ extension TaskPerformanceGateTests {
         results["SIX_THOUSAND_TOGGLE_MS"] = PFSamples(values: (0..<7).map { i in
             pfMilliseconds { XCTAssertEqual(largeLibrary.updateTask(children[i].id, status: .done), .applied) }.1
         })
-        XCTAssertLessThanOrEqual(results["SIX_THOUSAND_TOGGLE_MS"]!.maximum, 120)
+        CostBudget.assertLessThanOrEqual(results["SIX_THOUSAND_TOGGLE_MS"]!.maximum, 120)
         for populated in [false, true] {
             let root = FileManager.default.temporaryDirectory.appendingPathComponent("AtticPF-\(UUID())")
             defer { try? FileManager.default.removeItem(at: root) }
@@ -501,7 +501,7 @@ extension TaskPerformanceGateTests {
         }
         fflush(stdout)
         try FileHandle.standardOutput.write(contentsOf: Data(("PF_REFERENCE_JSON=" + String(decoding: try JSONEncoder().encode(results), as: UTF8.self) + "\n").utf8))
-        XCTAssertLessThanOrEqual(results["POPULATED_TOGGLE_MS"]!.maximum, 120)
+        CostBudget.assertLessThanOrEqual(results["POPULATED_TOGGLE_MS"]!.maximum, 120)
     }
     /// The base archive runs this identical 200-iteration session in one
     /// process. Export matching quintiles and raw samples for the paired

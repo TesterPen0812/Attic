@@ -2006,13 +2006,7 @@ final class TaskStore: ObservableObject {
             report(error.localizedDescription, owner: nil)
             return false
         }
-        guard save(owner: nil) else { return false }
-        do {
-            try reloadTasks()
-        } catch {
-            report("Restored, but the list could not be refreshed: \(error.localizedDescription)", owner: nil)
-        }
-        return true
+        return save(owner: nil, presentationFailure: "Restored, but the list could not be refreshed")
     }
 
     private func stageRestoration(taskIDs: [UUID]) throws {
@@ -2774,13 +2768,7 @@ final class TaskStore: ObservableObject {
             return false
         }
         guard context.hasChanges else { return true }
-        guard save(owner: nil) else { return false }
-        do {
-            try reloadTasks()
-        } catch {
-            report("Restored, but the list could not be refreshed: \(error.localizedDescription)", owner: nil)
-        }
-        return true
+        return save(owner: nil, presentationFailure: "Restored, but the list could not be refreshed")
     }
 
     /// An agent edit that returns an archived task and its family to the
@@ -2808,11 +2796,7 @@ final class TaskStore: ObservableObject {
             report(error, owner: nil)
             return false
         }
-        guard save(owner: nil) else { return false }
-        do { try reloadTasks() } catch {
-            report("Updated, but the list could not be refreshed: \(error.localizedDescription)", owner: nil)
-        }
-        return true
+        return save(owner: nil, presentationFailure: "Updated, but the list could not be refreshed")
     }
 
     /// Puts a family that `restoreToNow` brought back into the Done log
@@ -2827,9 +2811,7 @@ final class TaskStore: ObservableObject {
             report(error.localizedDescription, owner: nil)
             return false
         }
-        guard save(owner: nil) else { return false }
-        do { try reloadTasks() } catch { report(error.localizedDescription, owner: nil) }
-        return true
+        return save(owner: nil)
     }
 
     /// `returnToDoneLog` without saving. False (nothing written) when a row
@@ -2934,11 +2916,7 @@ final class TaskStore: ObservableObject {
             return false
         }
         guard context.hasChanges else { return true }
-        guard save(owner: owner) else { return false }
-        if !returning.isEmpty {
-            do { try reloadTasks() } catch { report("Reopened, but the list could not be refreshed: \(error.localizedDescription)", owner: owner) }
-        }
-        return true
+        return save(owner: owner, presentationFailure: "Reopened, but the list could not be refreshed")
     }
 
     /// The editable fields of a task and its subtasks wherever they are
@@ -2984,8 +2962,7 @@ final class TaskStore: ObservableObject {
             return .failed
         }
         guard context.hasChanges else { return .applied }
-        guard save(owner: nil) else { return .failed }
-        do { try reloadTasks() } catch { report("Undone, but the list could not be refreshed: \(error.localizedDescription)", owner: nil) }
+        guard save(owner: nil, presentationFailure: "Undone, but the list could not be refreshed") else { return .failed }
         return .applied
     }
 
@@ -3585,10 +3562,9 @@ final class TaskStore: ObservableObject {
     /// `owner` is the surface a failed save belongs to, decided by the
     /// operation that asked for it; a success clears any notice outright.
     @discardableResult
-    private func save(owner: UUID? = nil) -> Bool {
+    private func save(owner: UUID? = nil, presentationFailure: String = "Saved, but presentation is still updating") -> Bool {
         tagInventoryWillSave(context)
         do {
-            let changedRows = (context.insertedModelsArray + context.changedModelsArray).compactMap { $0 as? TaskItem }
             let removedRows = context.deletedModelsArray.contains { $0 is TaskItem }
             let candidateIDs = try WorkspaceLegacyBridge.coordinator(for: container).taskReferenceIDs(
                 (context.insertedModelsArray + context.changedModelsArray).compactMap { $0 as? TaskItem })
@@ -3609,14 +3585,18 @@ final class TaskStore: ObservableObject {
             let presentationStart = ContinuousClock.now
             #endif
             if try WorkspaceLegacyBridge.wasPlainCommit(in: context) {
-                if let index = familyIndexCache, !removedRows,
-                   changedRows.allSatisfy({ $0.deletedAt == nil && $0.doneLoggedAt == nil }), index.canRebind(changedRows) {
-                    index.rebind(changedRows.filter { index.byID[$0.id]?.persistentModelID == $0.persistentModelID }, revision: revision &+ 1)
-                } else { familyIndexCache = nil }
-                errorNotice = nil
+                do {
+                    try publishPlainCommit(changedIDs, removedRows: removedRows)
+                    errorNotice = nil
+                } catch {
+                    // Durability already succeeded. A presentation read must
+                    // not turn that save into a rollback or a reported refusal.
+                    familyIndexCache = nil
+                    report("\(presentationFailure): \(error.localizedDescription)", owner: owner)
+                }
             } else {
                 do { try reloadTasks(); errorNotice = nil }
-                catch { report("Saved, but presentation is still updating: \(error.localizedDescription)", owner: owner) }
+                catch { report("\(presentationFailure): \(error.localizedDescription)", owner: owner) }
             }
             #if ATTIC_OPERATION_CRASH_TESTS
             onSaveTiming?("presentation", presentationStart.duration(to: .now))
@@ -3685,6 +3665,30 @@ final class TaskStore: ObservableObject {
     /// Test seam for a failed presentation refresh after a durable save.
     var listRefreshFailures = 0
     #endif
+
+    /// Plain saves can materialize a different instance of a physical row.
+    /// Publish the complete confirmed logical family to BOTH list and index,
+    /// choosing the presentation winner again (never deduplicating mutations).
+    /// Stable families replace only changed slots; membership changes refresh.
+    private func publishPlainCommit(_ changedIDs: Set<UUID>, removedRows: Bool) throws {
+        let ids = Array(changedIDs)
+        let confirmed = try WorkspaceLegacyBridge.confirmedTaskReplicas(changedIDs, in: context)
+            ?? context.fetch(FetchDescriptor<TaskItem>(predicate: #Predicate { ids.contains($0.id) }))
+        let winners = Self.canonicalReplicas(from: confirmed)
+        let index = familyIndex
+        guard !removedRows, Set(winners.map(\.id)) == changedIDs,
+              winners.allSatisfy({ $0.deletedAt == nil && $0.doneLoggedAt == nil }), index.canRebind(winners) else {
+            try reloadTasks()
+            return
+        }
+        for row in winners {
+            if let position = index.positions[row.id], tasks[position] !== row {
+                tasks[position] = row
+            }
+        }
+        index.rebind(winners, revision: revision &+ 1)
+        familyIndexCache = index
+    }
 
     private func reloadTasks(using initialContext: ModelContext? = nil) throws {
         defer { tagInventoryDidRefresh() }

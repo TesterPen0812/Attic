@@ -15,12 +15,23 @@ concurrency:
   group: phase3-foundation-${{ github.ref }}
   cancel-in-progress: false
 jobs:
+  costs:
+    if: ${{ !inputs.harness_only }}
+    uses: ./.github/workflows/macos-ci.yml
+    with:
+      lane: costs
   foundation:
     runs-on: macos-26
     timeout-minutes: 90
     env:
       DEVELOPER_DIR: /Applications/Xcode_26.6.app/Contents/Developer
       BUNDLE_FROZEN: "true"
+      COST_FLAGS: >-
+        CODE_SIGNING_ALLOWED=YES CODE_SIGNING_REQUIRED=YES CODE_SIGN_STYLE=Manual
+        CODE_SIGN_IDENTITY=- DEVELOPMENT_TEAM= ENABLE_DEBUG_DYLIB=NO
+      PF_COST_FLAGS: >-
+        CODE_SIGNING_ALLOWED=YES CODE_SIGNING_REQUIRED=YES CODE_SIGN_STYLE=Manual
+        CODE_SIGN_IDENTITY=- DEVELOPMENT_TEAM= ENABLE_DEBUG_DYLIB=NO
     steps:
       - uses: actions/checkout@v5
         with:
@@ -40,12 +51,15 @@ jobs:
         if: ${{ !inputs.harness_only }}
         shell: /bin/zsh {0}
         run: |
+          set -o pipefail
           base="$RUNNER_TEMP/AtticPFBase"
           mkdir -p "$base"
           git archive d77ec80ad91930d377bb3a5849c030c4d63c541e | tar -x -C "$base"
           cp AtticTests/TaskPerformanceGateTests.swift "$base/AtticTests/TaskPerformanceGateTests.swift"
+          python3 Scripts/prepare_cost_reference.py "$base" frame-row
+          python3 Scripts/prepare_pf_reference.py "$base"
           F=(CODE_SIGNING_ALLOWED=YES CODE_SIGNING_REQUIRED=YES CODE_SIGN_STYLE=Manual CODE_SIGN_IDENTITY=- DEVELOPMENT_TEAM= ENABLE_DEBUG_DYLIB=NO)
-          /Users/taha/Developer/attic-redesign-assets/xcodebuild-locked.sh \
+          TEST_RUNNER_ATTIC_COST_REFERENCE_ONLY=1 /Users/taha/Developer/attic-redesign-assets/xcodebuild-locked.sh \
             -project "$base/Attic.xcodeproj" -scheme Attic -configuration Local \
             -destination 'platform=macOS' -derivedDataPath "$RUNNER_TEMP/AtticPFBaseBuild" \
             ATTIC_MACOS_UNIT_HOST_PRODUCT_NAME=AtticP3PFBaseHost \
@@ -53,9 +67,9 @@ jobs:
             ATTIC_MACOS_UNIT_HOST_BUNDLE_IDENTIFIER=com.taha.Attic.p3.pfbase \
             "${F[@]}" -parallel-testing-enabled NO \
             -only-testing:AtticTests/TaskPerformanceGateTests/testPFFoundationSizeAndProductionPaths test \
-            | tee .build/pf-base.log || true
+            | tee .build/pf-base.log
           for test in testPF1LargeAutosaveAndPreparedCommitAgainstPairedBase testPF5InterleavedSessionSoakAgainstPairedBase; do
-            /Users/taha/Developer/attic-redesign-assets/xcodebuild-locked.sh \
+            TEST_RUNNER_ATTIC_COST_REFERENCE_ONLY=1 /Users/taha/Developer/attic-redesign-assets/xcodebuild-locked.sh \
               -project "$base/Attic.xcodeproj" -scheme Attic -configuration Local \
               -destination 'platform=macOS' -derivedDataPath "$RUNNER_TEMP/AtticPFBaseBuild" \
               ATTIC_MACOS_UNIT_HOST_PRODUCT_NAME=AtticP3PFBaseHost \
@@ -63,11 +77,11 @@ jobs:
               ATTIC_MACOS_UNIT_HOST_BUNDLE_IDENTIFIER=com.taha.Attic.p3.pfbase \
               "${F[@]}" -parallel-testing-enabled NO \
               -only-testing:"AtticTests/TaskPerformanceGateTests/$test" test-without-building \
-              | tee -a .build/pf-base.log || true
+              | tee -a .build/pf-base.log
           done
           echo 'TEST_RUNNER_ATTIC_PF_REQUIRE_REFERENCE=1' >> "$GITHUB_ENV"
           for test in testMeasuredMainActorSaveOnFiveThousandLineNote testMeasuredMainActorSaveIsIndependentOfUnrelatedStoreContents; do
-            /Users/taha/Developer/attic-redesign-assets/xcodebuild-locked.sh \
+            TEST_RUNNER_ATTIC_COST_REFERENCE_ONLY=1 /Users/taha/Developer/attic-redesign-assets/xcodebuild-locked.sh \
               -project "$base/Attic.xcodeproj" -scheme Attic -configuration Local \
               -destination 'platform=macOS' -derivedDataPath "$RUNNER_TEMP/AtticPFBaseBuild" \
               ATTIC_MACOS_UNIT_HOST_PRODUCT_NAME=AtticP3PFBaseHost \
@@ -75,7 +89,7 @@ jobs:
               ATTIC_MACOS_UNIT_HOST_BUNDLE_IDENTIFIER=com.taha.Attic.p3.pfbase \
               "${F[@]}" -parallel-testing-enabled NO \
               -only-testing:"AtticTests/NotesPageControllerTests/$test" test-without-building \
-              | tee -a .build/pf-base-phase2.log || true
+              | tee -a .build/pf-base-phase2.log
           done
       - name: Build and sign the isolated hosted test products
         shell: /bin/zsh {0}
@@ -125,10 +139,11 @@ jobs:
         if: ${{ !cancelled() && !inputs.harness_only }}
         shell: /bin/zsh {0}
         run: |
+          set -o pipefail
           base="$RUNNER_TEMP/AtticPFBase"
           F=(CODE_SIGNING_ALLOWED=YES CODE_SIGNING_REQUIRED=YES CODE_SIGN_STYLE=Manual CODE_SIGN_IDENTITY=- DEVELOPMENT_TEAM= ENABLE_DEBUG_DYLIB=NO)
           for test in testPFFoundationSizeAndProductionPaths testPF1LargeAutosaveAndPreparedCommitAgainstPairedBase testPF5InterleavedSessionSoakAgainstPairedBase; do
-            /Users/taha/Developer/attic-redesign-assets/xcodebuild-locked.sh \
+            TEST_RUNNER_ATTIC_COST_REFERENCE_ONLY=1 /Users/taha/Developer/attic-redesign-assets/xcodebuild-locked.sh \
               -project "$base/Attic.xcodeproj" -scheme Attic -configuration Local \
               -destination 'platform=macOS' -derivedDataPath "$RUNNER_TEMP/AtticPFBaseBuild" \
               ATTIC_MACOS_UNIT_HOST_PRODUCT_NAME=AtticP3PFBaseHost \
@@ -136,10 +151,10 @@ jobs:
               ATTIC_MACOS_UNIT_HOST_BUNDLE_IDENTIFIER=com.taha.Attic.p3.pfbase \
               "${F[@]}" -parallel-testing-enabled NO \
               -only-testing:"AtticTests/TaskPerformanceGateTests/$test" test-without-building \
-              | tee -a .build/pf-base-after.log || true
+              | tee -a .build/pf-base-after.log
           done
           for test in testMeasuredMainActorSaveOnFiveThousandLineNote testMeasuredMainActorSaveIsIndependentOfUnrelatedStoreContents; do
-            /Users/taha/Developer/attic-redesign-assets/xcodebuild-locked.sh \
+            TEST_RUNNER_ATTIC_COST_REFERENCE_ONLY=1 /Users/taha/Developer/attic-redesign-assets/xcodebuild-locked.sh \
               -project "$base/Attic.xcodeproj" -scheme Attic -configuration Local \
               -destination 'platform=macOS' -derivedDataPath "$RUNNER_TEMP/AtticPFBaseBuild" \
               ATTIC_MACOS_UNIT_HOST_PRODUCT_NAME=AtticP3PFBaseHost \
@@ -147,7 +162,7 @@ jobs:
               ATTIC_MACOS_UNIT_HOST_BUNDLE_IDENTIFIER=com.taha.Attic.p3.pfbase \
               "${F[@]}" -parallel-testing-enabled NO \
               -only-testing:"AtticTests/NotesPageControllerTests/$test" test-without-building \
-              | tee -a .build/pf-base-after-phase2.log || true
+              | tee -a .build/pf-base-after-phase2.log
           done
       - name: OD-10 fresh-process fallback for unmeasurable populated open growth
         if: ${{ !cancelled() && !inputs.harness_only }}
@@ -163,6 +178,8 @@ jobs:
         run: |
           python3 Scripts/test_pf_paired_gate.py
           python3 Scripts/test_pf_fresh_open_memory.py
+          python3 Scripts/test_pf_recheck.py
+          python3 Scripts/test_cost_recheck.py
       - name: Evaluate paired PF gate
         env:
           GH_TOKEN: ${{ github.token }}
@@ -175,8 +192,8 @@ jobs:
           mkdir -p .build/pf-history
           ids=($(gh api --paginate "repos/$GITHUB_REPOSITORY/actions/artifacts?per_page=100" \
             | jq -s '[.[].artifacts[] | select(.expired == false and (.name | startswith("phase3-pf-samples-" + env.GITHUB_SHA + "-")))] | sort_by(.id) | .[].id')) || exit $?
-          if (( ${#ids[@]} > 2 )); then
-            echo 'INPUT ERROR: more than two prior attempts for this candidate; three-run budget exhausted'
+          if (( ${#ids[@]} > 1 )); then
+            echo 'INPUT ERROR: more than one prior attempt for this candidate; two-run budget exhausted'
             exit 3
           fi
           history_args=()
@@ -188,9 +205,9 @@ jobs:
             history_args+=(--prior-run "$dir")
           done
           gate_status=0
-          python3 Scripts/pf_paired_gate.py "${history_args[@]}" --base .build/pf-base.log --candidate .build/pf-candidate.log --base-after .build/pf-base-after.log | tee .build/pf-gate.txt || gate_status=$?
+          python3 Scripts/recheck_pf_gates.py .build "${history_args[@]}" | tee .build/pf-gate.txt || gate_status=$?
           if [[ "$gate_status" == 2 ]]; then
-            echo 'UNMEASURABLE: carried rows require another valid run within the three-run budget'
+            echo 'UNMEASURABLE: carried rows require another valid run within the two-run budget'
           fi
           exit "$gate_status"
       - name: Measure OD-8 Done frame reference with identical fixtures
@@ -303,7 +320,7 @@ jobs:
             -skip-testing:AtticTests/TaskPerformanceGateTests/testPF5InterleavedSessionSoakAgainstPairedBase test-without-building | tee .build/foundation.log
       - name: Evaluate OD-8 and OD-9 Done frame gate
         if: ${{ !cancelled() && !inputs.harness_only }}
-        run: python3 Scripts/check_integration_costs.py --done-only .build
+        run: python3 Scripts/recheck_cost_gates.py --done-only .build
       - name: Inspect host and helper signature contracts
         if: always()
         run: |
@@ -336,6 +353,7 @@ jobs:
             .build/pf-base.log
             .build/pf-candidate.log
             .build/pf-base-after.log
+            .build/pf-recheck/pf-*.log
           if-no-files-found: error
           retention-days: 3
       - uses: actions/upload-artifact@v4
@@ -362,4 +380,10 @@ jobs:
             .build/done-results-candidate.xcresult
             .build/foundation.log
             .build/done-results-comparison.json
+            .build/cost-gate-attempts.json
+            .build/cost-gate-summary.md
+            .build/recheck
+            .build/pf-recheck
+            .build/pf-gate-attempts.json
+            .build/pf-comparison.txt
           retention-days: 3

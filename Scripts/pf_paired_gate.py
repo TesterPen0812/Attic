@@ -157,6 +157,30 @@ def evaluate(candidate, references, label, eligible=None):
     return results
 
 
+def evaluate_attempt(base, candidate, after):
+    if after:
+        forward = evaluate(after, [base], 'A/A B′ against B')
+        reverse = evaluate(base, [after], 'A/A B against B′')
+        eligible = {row for row in forward if forward[row] and reverse[row]}
+        print(f'A/A VERDICT: {"VALID" if len(eligible) == len(forward) else "PARTIALLY UNMEASURABLE" if eligible else "UNMEASURABLE"}')
+        # OD-12: a candidate ceiling pass is independent of base validity.
+        # A breach stays unmeasurable unless both bases meet the ceiling.
+        for key in ('SIX_THOUSAND_TOGGLE_MS', 'POPULATED_TOGGLE_MS'):
+            for role, run in (('B', base), ('B′', after)):
+                maximum = max(run['PF'][key])
+                print(f'BASE CEILING {key} role={role} maximum={maximum:.9f} limit=120 result={"PASS" if maximum <= 120 else "FAIL"} (diagnostic)')
+            if max(candidate['PF'][key]) <= 120:
+                eligible.add(f'CEILING_{key}')
+    else:
+        eligible = None
+        print('A/A VERDICT: SKIPPED (single reference retro-check)')
+    results = evaluate(candidate, [base] + ([after] if after else []),
+                       'Candidate against pooled reference (diagnostic until row validity is applied)', eligible)
+    if eligible is None:
+        eligible = set(results)
+    return results, eligible
+
+
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--base', required=True)
@@ -195,26 +219,7 @@ def main(argv=None):
     passed_rows, failed_rows = set(), set()
     for number, (base, candidate, after) in enumerate(attempts, 1):
         print(f'\nRUN {number}')
-        if after:
-            forward = evaluate(after, [base], 'A/A B′ against B')
-            reverse = evaluate(base, [after], 'A/A B against B′')
-            eligible = {row for row in forward if forward[row] and reverse[row]}
-            print(f'A/A VERDICT: {"VALID" if len(eligible) == len(forward) else "PARTIALLY UNMEASURABLE" if eligible else "UNMEASURABLE"}')
-            # OD-12: a candidate ceiling pass is independent of base validity.
-            # A breach stays unmeasurable unless both bases meet the ceiling.
-            for key in ('SIX_THOUSAND_TOGGLE_MS', 'POPULATED_TOGGLE_MS'):
-                for role, run in (('B', base), ('B′', after)):
-                    maximum = max(run['PF'][key])
-                    print(f'BASE CEILING {key} role={role} maximum={maximum:.9f} limit=120 result={"PASS" if maximum <= 120 else "FAIL"} (diagnostic)')
-                if max(candidate['PF'][key]) <= 120:
-                    eligible.add(f'CEILING_{key}')
-        else:
-            eligible = None
-            print('A/A VERDICT: SKIPPED (single reference retro-check)')
-        results = evaluate(candidate, [base] + ([after] if after else []),
-                           'Candidate against pooled reference (diagnostic until row validity is applied)', eligible)
-        if eligible is None:
-            eligible = set(results)
+        results, eligible = evaluate_attempt(base, candidate, after)
         passed_rows.update(row for row in eligible if results[row])
         failed_rows.update(row for row in eligible if not results[row])
         carried = set(results) - passed_rows - failed_rows
