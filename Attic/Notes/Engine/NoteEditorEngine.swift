@@ -432,6 +432,7 @@ final class NoteEditorEngine: NSObject, NSTextViewDelegate, NSTextStorageDelegat
     /// A text view bound to this note's storage (TextKit 2). Only one view
     /// at a time: making a new one detaches the old.
     func makeView() -> (NSScrollView, NoteEditorTextView) {
+        keepsComposedViewportWarm = false
         let textView = makeTextView()
         let scrollView = NSScrollView(frame: textView.frame)
         scrollView.hasVerticalScroller = true

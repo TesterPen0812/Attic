@@ -30,6 +30,8 @@ final class TaskNotePresenter: ObservableObject {
     @Published private(set) var engineGeneration: UInt64 = 0
     private var engineObservation: AnyCancellable?
     private var hasMounted = false
+    private var closeWork: Task<Bool, Never>?
+    var isClosing: Bool { closeWork != nil }
     /// Rings in the head and the block only while the keyboard drives.
     private static let focusTracker = AtticKeyboardFocusTracker()
 
@@ -130,9 +132,19 @@ final class TaskNotePresenter: ObservableObject {
     /// Back: preserves durably first, then lets go of the lease. Refused
     /// (composition in progress, a save that has not landed) keeps the page.
     func close() async -> Bool {
+        if let closeWork { return await closeWork.value }
         guard let lease else { return true }
+        guard model.resolveFieldDrafts() else { return false }
+        let work = Task { @MainActor in await self.finishClose(lease) }
+        closeWork = work
+        let closed = await work.value
+        closeWork = nil
+        return closed
+    }
+
+    private func finishClose(_ lease: WorkspacePageSession.Lease) async -> Bool {
         model.releaseHold()
-        guard await page.close(lease) else { return false }
+        guard await page.close(lease, resolvingFields: { self.model.resolveFieldDrafts() }) else { return false }
         self.lease = nil
         engineObservation = nil
         model.suspend()
@@ -411,6 +423,13 @@ struct TaskNotePageContainer: View {
 }
 
 extension NotesPageController {
+    /// Route handoff uses Back's durable boundary, including field resolution.
+    /// The caller keeps the old page mounted until this succeeds.
+    func prepareTaskNoteRoute(_ taskID: UUID?) async -> Bool {
+        guard let presenter = taskNotePresenter, presenter.taskID != taskID || presenter.isClosing else { return true }
+        return await presenter.close()
+    }
+
     /// The rebuilt section container resumes its navigation owner's lease.
     /// A different workspace still cannot steal that lease or its draft.
     func openTaskNote(taskID: UUID, tasks: TaskStore, library: AtticLibrary,

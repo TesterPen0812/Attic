@@ -3585,6 +3585,7 @@ final class TaskStore: ObservableObject {
             onSaveTiming?("writer", writeStart.duration(to: .now))
             let presentationStart = ContinuousClock.now
             #endif
+            var presentationReadFailed = false
             if try WorkspaceLegacyBridge.wasPlainCommit(in: context) {
                 do {
                     try publishPlainCommit(changedIDs, removedRows: removedRows)
@@ -3593,6 +3594,7 @@ final class TaskStore: ObservableObject {
                     // Durability already succeeded. A presentation read must
                     // not turn that save into a rollback or a reported refusal.
                     familyIndexCache = nil
+                    presentationReadFailed = true
                     report("\(presentationFailure): \(error.localizedDescription)", owner: owner)
                 }
             } else {
@@ -3638,7 +3640,7 @@ final class TaskStore: ObservableObject {
             }
             revision &+= 1
             familyIndexCache?.revision = revision
-            if indexReadFailed { refresh() }
+            if indexReadFailed || presentationReadFailed { refresh() }
             #if !ATTIC_LOCAL_ONLY
             cloudSyncProtection.noteLocalSave()
             reconcileProtectedCloudSyncActivity(for: .exportData)

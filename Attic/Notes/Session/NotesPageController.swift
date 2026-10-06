@@ -1073,7 +1073,8 @@ final class NotesPageController: ObservableObject {
     }
 
     private func prepareToLeave(_ reason: LeaveReason, usingVerifiedCheckpoints: Bool) -> Bool {
-        let visibleSession = taskNotePresenter?.session ?? active
+        let leavesSurface = reason == .hide || reason == .pageSwitch || reason == .quit
+        let visibleSession = leavesSurface ? (taskNotePresenter?.session ?? active) : active
         if let visibleSession, !canLeaveComposition(in: visibleSession) { return false }
         if legacyNoteID != nil, !leaveLegacyNote(reason) { return false }
         let retainsSession = reason == .hide || reason == .pageSwitch

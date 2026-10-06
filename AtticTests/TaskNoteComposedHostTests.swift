@@ -42,7 +42,7 @@ final class TaskNoteComposedHostTests: XCTestCase {
 
     private func mountTaskPage(_ taskID: UUID, in hosting: NSHostingController<AnyView>) async throws -> TaskNotePresenter {
         hosting.rootView = AnyView(TaskNotePageContainer(taskID: taskID, tasks: tasks, controller: notes,
-            noteStore: notes.store, layout: PanelPageLayout(cornerSize: 52, panelSize: panel), onClose: {}))
+            noteStore: notes.store, layout: PanelPageLayout(cornerSize: 52, panelSize: panel), onClose: {}).id(UUID()))
         hosting.view.layoutSubtreeIfNeeded()
         hosting.view.displayIfNeeded()
         for _ in 0..<30 {
@@ -139,6 +139,274 @@ final class TaskNoteComposedHostTests: XCTestCase {
         guard case let .valid(entry, _, _) = try XCTUnwrap(entries.first) else { return XCTFail("missing checkpoint") }
         XCTAssertEqual(NoteContentCodec.decode(entry.content).document?.blocks.dropFirst().map(\.text).joined(separator: "\n"), expected)
         XCTAssertTrue(notes.workspaceIsDurable(session))
+    }
+
+    func testNotesPageHostChangesTheRequestedRouteAndKeepsARefusedSurface() async throws {
+        let a = try seed(.boundary), b = try XCTUnwrap(tasks.create(title: "Task B")).id
+        let draft = NoteDraftController(noteStore: notes.store)
+        notes = draft.pages
+        notes.attachUndoRoute(library.undo)
+        let uiState = PanelUIState()
+        uiState.loadPageContent(); uiState.selectSection(.notes); uiState.openTaskNoteID = a
+        let hosting = sectionHosting()
+        hosting.rootView = AnyView(NotesPageHost(noteStore: notes.store, taskStore: tasks, noteDraft: draft,
+            uiState: uiState, layout: PanelPageLayout(cornerSize: 52, panelSize: panel), hasRestoredSession: true))
+        func mounted(_ id: UUID) async throws -> TaskNotePresenter {
+            for _ in 0..<100 {
+                hosting.view.layoutSubtreeIfNeeded()
+                if let current = notes.taskNotePresenter, current.taskID == id,
+                   current.host.scrollView.window === hosting.view.window {
+                    presenters.append(current)
+                    return current
+                }
+                try await Task.sleep(for: .milliseconds(10))
+            }
+            throw TaskNotePresenter.OpenError.unavailable
+        }
+        let first = try await mounted(a)
+        uiState.openTaskNoteID = b
+        let second = try await mounted(b)
+        XCTAssertNil(first.lease)
+        uiState.openTaskNoteID = a
+        let returned = try await mounted(a)
+        XCTAssertNil(second.lease)
+        returned.model.beginEditingTitle()
+        returned.model.titleEdit.text = "Conflicting draft"
+        XCTAssertTrue(library.updateTask(a, title: "Newer title").isApplied)
+        uiState.openTaskNoteID = b
+        for _ in 0..<100 {
+            if uiState.openTaskNoteID == a { break }
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        XCTAssertEqual(uiState.openTaskNoteID, a, "a refused navigation restores the requested route")
+        XCTAssertTrue(notes.taskNotePresenter === returned)
+        XCTAssertNotNil(returned.host.scrollView.window, "the recoverable field remains on its surface")
+        XCTAssertEqual(returned.model.titleEdit.text, "Conflicting draft")
+        returned.model.cancelTitle()
+        uiState.openTaskNoteID = nil
+        for _ in 0..<100 {
+            if notes.taskNotePresenter == nil { break }
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        XCTAssertNil(notes.taskNotePresenter)
+        XCTAssertNil(returned.lease)
+    }
+
+    func testOrdinaryNoteNavigationChecksTheActiveCompositionWhileATaskNoteIsBound() async throws {
+        let id = try seed(.boundary)
+        XCTAssertTrue(notes.newNote())
+        let active = try XCTUnwrap(notes.active)
+        let (_, view) = active.engine.makeView()
+        let presenter = try await mountTaskPage(id, in: sectionHosting())
+        view.setMarkedText("中", selectedRange: NSRange(location: 1, length: 0),
+            replacementRange: NSRange(location: NSNotFound, length: 0))
+        for reason: NotesPageController.LeaveReason in [.openNote, .newNote, .library, .exitToOldPage] {
+            XCTAssertFalse(notes.prepareToLeave(reason), "navigation must check the ordinary session being replaced")
+        }
+        view.unmarkText()
+        XCTAssertNotNil(presenter.lease)
+    }
+
+    func testOrdinaryNavigationRecordsActiveLeaveVersionWithoutTouchingBoundComposition() async throws {
+        let id = try seed(.boundary)
+        XCTAssertTrue(notes.newNote())
+        let active = try XCTUnwrap(notes.active)
+        let (_, view) = active.engine.makeView()
+        type("Ordinary note", into: view)
+        let durable = await notes.preserveAllDurably()
+        XCTAssertTrue(durable)
+        let presenter = try await mountTaskPage(id, in: sectionHosting())
+        presenter.host.textView.setMarkedText("中", selectedRange: NSRange(location: 1, length: 0),
+            replacementRange: NSRange(location: NSNotFound, length: 0))
+        XCTAssertTrue(notes.prepareToLeave(.library), "the bound task is not leaving for an ordinary Notes navigation")
+        XCTAssertTrue(notes.store.versions(noteID: active.noteID).contains { $0.title == "Ordinary note" })
+        XCTAssertTrue(presenter.host.textView.hasMarkedText())
+        presenter.host.textView.unmarkText()
+    }
+
+    func testRouteChangesFromAToBToAAndToNoTaskReleaseEachOldLease() async throws {
+        let a = try seed(.boundary)
+        let b = try XCTUnwrap(tasks.create(title: "Task B")).id
+        let hosting = sectionHosting()
+        let first = try await mountTaskPage(a, in: hosting)
+        let changed = await notes.prepareTaskNoteRoute(b)
+        XCTAssertTrue(changed)
+        let second = try await mountTaskPage(b, in: hosting)
+        XCTAssertNil(first.lease)
+        XCTAssertFalse(try XCTUnwrap(first.session).usesWorkspaceBinding)
+        XCTAssertEqual(second.taskID, b)
+        let back = await notes.prepareTaskNoteRoute(a)
+        XCTAssertTrue(back)
+        let reopened = try await mountTaskPage(a, in: hosting)
+        XCTAssertNil(second.lease)
+        XCTAssertNotEqual(first.lease, reopened.lease)
+        XCTAssertEqual(reopened.taskID, a)
+        let left = await notes.prepareTaskNoteRoute(nil)
+        XCTAssertTrue(left)
+        XCTAssertNil(reopened.lease)
+        XCTAssertNil(notes.taskNotePresenter)
+    }
+
+    func testRouteChangeWhileCheckpointPendingWaitsAndCommitsFieldsBeforeRelease() async throws {
+        let a = try seed(.boundary), barrier = TaskNoteCheckpointBarrier()
+        let b = try XCTUnwrap(tasks.create(title: "Task B")).id
+        notes = NotesPageController(store: NoteStore(container: container,
+            persist: { _ in throw WorkspaceFoundationError.unknown }, attachmentFileStore: makeTestAttachmentFileStore()),
+            journal: TaskNoteCheckpointJournal(base: coordinator.journal, barrier: barrier), defaults: nil,
+            saveDelay: .seconds(600), durabilityDelay: .seconds(600))
+        notes.attachUndoRoute(library.undo)
+        let hosting = sectionHosting(), first = try await mountTaskPage(a, in: hosting)
+        type(" pending", into: first.host.textView)
+        let expected = first.host.engine.textStorage.string
+        let route = Task { @MainActor in await notes.prepareTaskNoteRoute(b) }
+        await barrier.waitUntilStarted()
+        XCTAssertNotNil(first.lease, "A stays mounted and owns its draft while durability is pending")
+        XCTAssertTrue(notes.taskNotePresenter === first)
+        // Another native field can begin while the close awaits IO.
+        first.model.newSubtaskText = "Entered during checkpoint"
+        let repeatedClose = Task { @MainActor in await first.close() }
+        await barrier.release()
+        let result = await route.value, repeated = await repeatedClose.value
+        XCTAssertTrue(result)
+        XCTAssertTrue(repeated, "overlapping route/Back requests share one close")
+        XCTAssertNil(first.lease)
+        XCTAssertTrue(tasks.subtasks(of: a).contains { $0.title == "Entered during checkpoint" })
+        let second = try await mountTaskPage(b, in: hosting)
+        XCTAssertEqual(second.taskID, b)
+        let entries = try await coordinator.journal.readRecoveryEntries()
+        guard case let .valid(entry, _, _) = try XCTUnwrap(entries.first) else { return XCTFail("missing checkpoint") }
+        XCTAssertEqual(NoteContentCodec.decode(entry.content).document?.blocks.dropFirst().map(\.text).joined(separator: "\n"), expected)
+    }
+
+    func testRouteReversalToAWhileItsCloseIsPendingReacquiresAAfterDurability() async throws {
+        let a = try seed(.boundary), barrier = TaskNoteCheckpointBarrier()
+        let b = try XCTUnwrap(tasks.create(title: "Task B")).id
+        notes = NotesPageController(store: NoteStore(container: container,
+            persist: { _ in throw WorkspaceFoundationError.unknown }, attachmentFileStore: makeTestAttachmentFileStore()),
+            journal: TaskNoteCheckpointJournal(base: coordinator.journal, barrier: barrier), defaults: nil,
+            saveDelay: .seconds(600), durabilityDelay: .seconds(600))
+        notes.attachUndoRoute(library.undo)
+        let hosting = sectionHosting(), first = try await mountTaskPage(a, in: hosting)
+        type(" pending", into: first.host.textView)
+        let body = first.host.engine.textStorage.string, oldLease = first.lease
+        let outgoing = Task { @MainActor in await notes.prepareTaskNoteRoute(b) }
+        await barrier.waitUntilStarted()
+        var reversed = false
+        let incoming = Task { @MainActor in
+            let result = await notes.prepareTaskNoteRoute(a)
+            reversed = true
+            return result
+        }
+        await Task.yield()
+        XCTAssertFalse(reversed, "the newest A route must await A's already-started close")
+        await barrier.release()
+        let left = await outgoing.value, returned = await incoming.value
+        XCTAssertTrue(left); XCTAssertTrue(returned)
+        let reopened = try await mountTaskPage(a, in: hosting)
+        XCTAssertNil(first.lease)
+        XCTAssertNotEqual(reopened.lease, oldLease)
+        XCTAssertEqual(reopened.host.engine.textStorage.string, body)
+    }
+
+    func testRouteChangeRefusesCompositionAndCanRetry() async throws {
+        let a = try seed(.boundary), b = try XCTUnwrap(tasks.create(title: "Task B")).id
+        let hosting = sectionHosting(), first = try await mountTaskPage(a, in: hosting)
+        first.host.textView.setMarkedText("中", selectedRange: NSRange(location: 1, length: 0),
+            replacementRange: NSRange(location: NSNotFound, length: 0))
+        let refused = await notes.prepareTaskNoteRoute(b)
+        XCTAssertFalse(refused)
+        XCTAssertNotNil(first.lease)
+        XCTAssertTrue(notes.taskNotePresenter === first)
+        first.host.textView.unmarkText()
+        let retried = await notes.prepareTaskNoteRoute(b)
+        XCTAssertTrue(retried)
+        let second = try await mountTaskPage(b, in: hosting)
+        XCTAssertEqual(second.taskID, b)
+    }
+
+    func testCloseCommitsFieldsAndReviewerSequenceReopensWithoutStaleDraftWarmOrCold() async throws {
+        for cold in [false, true] {
+            let id = try seed(.boundary), presenter = try open(id), model = presenter.model
+            let row = try XCTUnwrap(model.rows.first)
+            model.beginEditingTitle()
+            model.titleEdit.text = "Draft X"
+            model.beginRename(row.id)
+            model.renameText = "Renamed on navigation"
+            model.newSubtaskText = "Added on navigation"
+            let closed = await presenter.close()
+            XCTAssertTrue(closed)
+            XCTAssertEqual(tasks.task(withID: id)?.title, "Draft X")
+            XCTAssertEqual(tasks.task(withID: row.id)?.title, "Renamed on navigation")
+            XCTAssertTrue(tasks.subtasks(of: id).contains { $0.title == "Added on navigation" })
+            XCTAssertFalse(model.isEditingTitle)
+            XCTAssertNil(model.renamingID)
+            XCTAssertTrue(model.newSubtaskText.isEmpty)
+            XCTAssertNil(model.undoTitleDraft())
+            XCTAssertNil(model.undoRenameDraft())
+            XCTAssertTrue(library.updateTask(id, title: "Y").isApplied)
+            if cold { presenter.session?.taskNotePresentation = nil }
+            let reopened = try open(id)
+            XCTAssertEqual(reopened.model.head.title, "Y")
+            XCTAssertFalse(reopened.model.isEditingTitle)
+            XCTAssertTrue(reopened.model.commitTitle())
+            XCTAssertEqual(tasks.task(withID: id)?.title, "Y", "Return after reopen never revives Draft X")
+        }
+    }
+
+    func testConflictingTitleAndRenameKeepNewerValueDraftAndUndoAndRefuseClose() async throws {
+        let id = try seed(.boundary), presenter = try open(id), model = presenter.model
+        model.beginEditingTitle()
+        model.titleEdited(NSRange(location: 0, length: 0), replacement: "Draft ")
+        model.titleEdit.text = "Draft " + model.head.title
+        XCTAssertTrue(library.updateTask(id, title: "Newer title").isApplied)
+        XCTAssertFalse(model.commitTitle())
+        let closed = await presenter.close()
+        XCTAssertFalse(closed)
+        XCTAssertNotNil(presenter.lease)
+        XCTAssertTrue(model.isEditingTitle)
+        XCTAssertEqual(tasks.task(withID: id)?.title, "Newer title")
+        XCTAssertNotNil(model.failure)
+        XCTAssertNotNil(model.undoTitleDraft(), "conflict retains the field's original Undo")
+        model.cancelTitle()
+        let row = try XCTUnwrap(model.rows.first)
+        model.beginRename(row.id)
+        model.renameEdited(NSRange(location: 0, length: 0), replacement: "Draft ")
+        model.renameText = "Draft " + row.title
+        XCTAssertTrue(library.updateTask(row.id, title: "Newer subtask").isApplied)
+        XCTAssertFalse(model.commitRename())
+        let renameClosed = await presenter.close()
+        XCTAssertFalse(renameClosed)
+        XCTAssertEqual(tasks.task(withID: row.id)?.title, "Newer subtask")
+        XCTAssertEqual(model.renameText, "Draft " + row.title)
+        XCTAssertNotNil(model.undoRenameDraft())
+        model.cancelRename()
+        let resolved = await presenter.close()
+        XCTAssertTrue(resolved, "explicit cancellation lets navigation keep the newer values")
+    }
+
+    func testUnchangedFieldDraftDoesNotRestoreItsBaseOverExternalChanges() throws {
+        let id = try seed(.boundary), model = try open(id).model
+        model.beginEditingTitle()
+        XCTAssertTrue(library.updateTask(id, title: "Newer title").isApplied)
+        XCTAssertTrue(model.commitTitle())
+        XCTAssertEqual(tasks.task(withID: id)?.title, "Newer title")
+        let row = try XCTUnwrap(model.rows.first)
+        model.beginRename(row.id)
+        XCTAssertTrue(library.updateTask(row.id, title: "Newer subtask").isApplied)
+        XCTAssertTrue(model.commitRename())
+        XCTAssertEqual(tasks.task(withID: row.id)?.title, "Newer subtask")
+    }
+
+    func testPlainNotesViewAfterComposedUseDoesNotRetainItsDetachedLayoutManager() async throws {
+        let id = try seed(.boundary), presenter = try open(id)
+        let engine = presenter.host.engine
+        let closed = await presenter.close()
+        XCTAssertTrue(closed)
+        let (_, plain) = engine.makeView()
+        let manager = try XCTUnwrap(plain.textLayoutManager)
+        engine.detachView()
+        XCTAssertNil(manager.textContentManager)
+        XCTAssertFalse(engine.keepsComposedViewportWarm)
     }
 
     func testJustUncheckedBoundarySubtaskMovesUpAfterNoOpPurgeAndUndoes() throws {

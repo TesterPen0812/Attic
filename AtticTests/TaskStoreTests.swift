@@ -6,6 +6,23 @@ import UniformTypeIdentifiers
 
 final class TaskStoreTests: XCTestCase {
     @MainActor
+    func testFailedPlainCommitPublicationReloadsAfterRevisionWithoutUndoingDurableSave() throws {
+        let store = try makeTestStore()
+        let task = try XCTUnwrap(store.create(title: "Parent"))
+        _ = store.purgeDeleted(before: .distantPast)
+        let revision = store.revision
+        store.listRefreshFailures = 1
+        // Soft deletion leaves the presented membership and forces fallback reload.
+        XCTAssertTrue(store.delete(task))
+        XCTAssertGreaterThan(store.revision, revision)
+        XCTAssertEqual(store.listRefreshFailures, 0)
+        XCTAssertFalse(store.tasks.contains { $0.id == task.id })
+        XCTAssertNil(store.task(withID: task.id))
+        let saved = try ModelContext(store.container).fetch(FetchDescriptor<TaskItem>())
+        XCTAssertNotNil(saved.first { $0.id == task.id }?.deletedAt, "presentation failure cannot roll back durable deletion")
+    }
+
+    @MainActor
     func testFailedPlainCommitAfterContextReplacementRollsBackBothReaders() throws {
         let gate = PersistenceGate()
         let store = try makeTestStore(persist: gate.save)

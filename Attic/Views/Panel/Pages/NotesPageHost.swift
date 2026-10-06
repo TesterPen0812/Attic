@@ -10,6 +10,11 @@ struct NotesPageHost: View {
     /// False until the shell has restored the last note session.
     let hasRestoredSession: Bool
 
+    @State private var presentedTaskID: UUID?
+    @State private var taskRouteGeneration = 0
+    // A remounted section still shows its retained owner during a handoff.
+    private var displayedTaskID: UUID? { presentedTaskID ?? noteDraft.pages.taskNotePresenter?.taskID }
+
     private var horizontalInset: CGFloat { layout.contentInsets.leading }
 
     /// The Phase 2 editor hosts the page when the internal switch is on, or
@@ -30,12 +35,12 @@ struct NotesPageHost: View {
         Group {
             if !hasRestoredSession {
                 ProgressView("Restoring draft…")
-            } else if let taskID = uiState.openTaskNoteID {
+            } else if let taskID = displayedTaskID {
                 TaskNotePageContainer(taskID: taskID, tasks: taskStore, controller: noteDraft.pages,
                                       noteStore: noteStore, layout: layout) {
                     uiState.openTaskNoteID = nil
                 }
-                .id(taskID)
+                .id("\(taskID)-\(taskRouteGeneration)")
             } else if usesNewEditor {
                 NotesEditorPage(controller: noteDraft.pages, noteStore: noteStore, noteDraft: noteDraft,
                                 uiState: uiState, layout: layout,
@@ -55,6 +60,18 @@ struct NotesPageHost: View {
                     bottomContentInset: layout.contentInsets.bottom
                 )
             }
+        }
+        .task(id: uiState.openTaskNoteID) {
+            let requested = uiState.openTaskNoteID
+            let previous = noteDraft.pages.taskNotePresenter
+            let previousID = displayedTaskID
+            guard await noteDraft.pages.prepareTaskNoteRoute(requested) else {
+                if !Task.isCancelled { uiState.openTaskNoteID = previousID }
+                return
+            }
+            guard !Task.isCancelled else { return }
+            if previous != nil, previous?.lease == nil { taskRouteGeneration &+= 1 }
+            presentedTaskID = requested
         }
     }
 

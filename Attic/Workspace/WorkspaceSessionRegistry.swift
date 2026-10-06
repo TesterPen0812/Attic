@@ -237,7 +237,7 @@ final class WorkspacePageSession {
     func publication(for stamp: CallbackStamp, install apply: @escaping () -> Void) -> WorkspaceOperationCoordinator.Publication {
         .init(steps: [{ [weak self] _ in _ = self?.install(stamp, apply) }])
     }
-    func close(_ lease: Lease) async -> Bool {
+    func close(_ lease: Lease, resolvingFields: () -> Bool = { true }) async -> Bool {
         guard let controller, !closing, activeLease == lease, history.pendingCommandID == nil, history.pendingReplayID == nil else { return false }
         if let note {
             guard NoteSessionPolicy.canLeave(note.engine.activity, hasMarkedText: note.engine.textView?.hasMarkedText() == true) else { return false }
@@ -249,8 +249,11 @@ final class WorkspacePageSession {
             guard await controller.preserveDurably(note), activeLease == lease, self.note === note,
                   controller.workspaceIsDurable(note),
                   NoteSessionPolicy.canLeave(note.engine.activity, hasMarkedText: note.engine.textView?.hasMarkedText() == true) else { return false }
-            controller.suspendWorkspace(note)
         }
+        // Resolve any native field entered while the checkpoint was awaited.
+        // No suspension separates this boundary from revoking the lease.
+        guard resolvingFields() else { return false }
+        if let note { controller.suspendWorkspace(note) }
         bindingGeneration &+= 1
         note?.invalidateCallbacks()
         activeLease = nil

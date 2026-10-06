@@ -77,8 +77,10 @@ final class TaskNotePageModel: ObservableObject {
     /// refused commit keeps both, with the typed text.
     private(set) var renameHistory = TaskDraftHistory()
     private var renameField: WorkspaceFieldUndo?
+    private var renameBase: String?
     private(set) var titleHistory = TaskDraftHistory()
     private var titleField: WorkspaceFieldUndo?
+    private var titleBase: (title: String, priority: TaskPriority, dueDay: DueDay?)?
     /// The title editor's whole selection (its draft history only).
     var titleEditSelection: NSRange?
     /// Reduce Motion: the held rows settle at once (review P2-4).
@@ -312,9 +314,11 @@ final class TaskNotePageModel: ObservableObject {
     }
 
     func beginRename(_ id: UUID, undoManager: UndoManager? = nil) {
-        guard let row = rows.first(where: { $0.id == id }) else { return }
+        guard rows.contains(where: { $0.id == id }), let task = store.task(withID: id) else { return }
         if renamingID != nil, renamingID != id { cancelRename() }
-        renameEdit = TaskAddBarText(text: row.title)
+        guard renamingID != id else { return }
+        renameBase = task.title
+        renameEdit = TaskAddBarText(text: task.title)
         renameHistory.reset()
         renameField = WorkspaceFieldUndo(manager: undoManager ?? UndoManager())
         renamingID = id
@@ -344,9 +348,12 @@ final class TaskNotePageModel: ObservableObject {
     func commitRename() -> Bool {
         guard let id = renamingID else { return true }
         let title = renameText.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard let task = store.task(withID: id), !title.isEmpty, title != task.title else {
+        guard let task = store.task(withID: id), !title.isEmpty, title != task.title, title != renameBase else {
             cancelRename()
             return true
+        }
+        guard task.title == renameBase else {
+            return report(CommandFailure(String(localized: "This subtask changed elsewhere. Your rename draft is kept; press Esc to keep the newer title.")))
         }
         let outcome = fieldCommit(renameField) { [library, historyID] in
             library.updateTask(id, title: title, in: historyID)
@@ -358,6 +365,7 @@ final class TaskNotePageModel: ObservableObject {
         clearFailure()
         renameHistory.reset()
         renameField = nil
+        renameBase = nil
         renamingID = nil
         return true
     }
@@ -366,6 +374,7 @@ final class TaskNotePageModel: ObservableObject {
         renameField?.cancel()
         renameField = nil
         renameHistory.reset()
+        renameBase = nil
         renamingID = nil
     }
 
@@ -413,6 +422,7 @@ final class TaskNotePageModel: ObservableObject {
 
     func beginEditingTitle(undoManager: UndoManager? = nil) {
         guard let task = store.task(withID: taskID), !isEditingTitle else { return }
+        titleBase = (task.title, task.priority, task.dueDay)
         titleHistory.reset()
         titleField = WorkspaceFieldUndo(manager: undoManager ?? UndoManager())
         titleEditSelection = nil
@@ -469,7 +479,13 @@ final class TaskNotePageModel: ObservableObject {
         let parts = titleEdit.parts(parser: parser)
         let title = TaskDraftBuilder.collapsed(parts.title)
         let tags = AtticTag.normalizedSet(task.tags + parts.tags)
-        let newTitle: String? = !title.isEmpty && title != task.title ? title : nil
+        let editsTitle = !title.isEmpty && title != titleBase?.title
+        guard (!editsTitle || task.title == titleBase?.title || title == task.title),
+              (parts.priority == nil || task.priority == titleBase?.priority || parts.priority == task.priority),
+              (parts.dueDay == nil || task.dueDay == titleBase?.dueDay || parts.dueDay == task.dueDay) else {
+            return report(CommandFailure(String(localized: "This task changed elsewhere. Your title draft is kept; press Esc to keep the newer values.")))
+        }
+        let newTitle: String? = editsTitle && title != task.title ? title : nil
         let newTags: [String]? = Set(tags.map { $0.lowercased() }) != Set(task.tags.map { $0.lowercased() }) ? tags : nil
         let newDay: DueDay?? = parts.dueDay.flatMap { $0 != task.dueDay ? .some($0) : nil }
         let newPriority: TaskPriority? = parts.priority.flatMap { $0 != task.priority ? $0 : nil }
@@ -488,6 +504,7 @@ final class TaskNotePageModel: ObservableObject {
         clearFailure()
         titleHistory.reset()
         titleField = nil
+        titleBase = nil
         isEditingTitle = false
         requestFocus(.list)
         return true
@@ -497,7 +514,16 @@ final class TaskNotePageModel: ObservableObject {
         titleField?.cancel()
         titleField = nil
         titleHistory.reset()
+        titleBase = nil
         isEditingTitle = false
+    }
+
+    /// Navigation commits native fields before relinquishing the workspace.
+    /// Conflicts and save refusals keep the surface and its field Undo alive.
+    func resolveFieldDrafts() -> Bool {
+        guard commitTitle(), commitRename() else { return false }
+        if !newSubtaskText.isEmpty, !commitNewSubtask() { return false }
+        return true
     }
 
     // MARK: Focus routing (§ 7)
