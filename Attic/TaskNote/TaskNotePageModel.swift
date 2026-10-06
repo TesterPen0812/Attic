@@ -572,9 +572,6 @@ final class TaskNotePageModel: ObservableObject {
 
     @discardableResult
     private func report(_ failure: CommandFailure, retry: (() -> Void)? = nil) -> Bool {
-        #if DEBUG
-        TaskNoteCaptureScript.trace("model failure \(failure.message) at \(Thread.callStackSymbols.dropFirst().prefix(4).joined(separator: " | "))")
-        #endif
         self.failure = Failure(message: failure.message, canRetry: failure.canRetry && retry != nil)
         self.retry = failure.canRetry ? retry : nil
         return false
