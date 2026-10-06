@@ -126,7 +126,8 @@ class Sampler:
                         filename = f'{side}-cost-{sample}.log'
                     else:
                         build = 'integrationbase' if side == 'baseline' else 'candidate'
-                        tests = INTEGRATION_TESTS + ([RENDERED] if sample == 1 and family == 'integration' else [])
+                        tests = (INTEGRATION_TESTS[:-1] if family == 'integration-headless' else
+                                 INTEGRATION_TESTS + ([RENDERED] if sample == 1 else []))
                         filename = f'integration-{side}-{sample}.log'
                     text = self.run(directory, side, build, tests, filename)
                     if family == 'integration' and side == 'candidate' and sample == 1:

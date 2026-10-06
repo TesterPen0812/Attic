@@ -47,7 +47,7 @@ class DerivedCostsTests(unittest.TestCase):
             calls = []
             def run(directory, side, build, tests, filename):
                 calls.append(side)
-                self.assertEqual(tests, INTEGRATION_TESTS)
+                self.assertEqual(tests, INTEGRATION_TESTS[:-1])
                 return ''
             with patch.object(sampler, 'run', run):
                 sampler('integration-headless', Path(tmp) / 'retry')

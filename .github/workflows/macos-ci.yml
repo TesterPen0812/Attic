@@ -536,6 +536,10 @@ jobs:
               source="$GITHUB_WORKSPACE"
               build=candidate
               rendered=()
+              keystroke=()
+              if [ "${{ inputs.headless_costs }}" != true ]; then
+                keystroke=(-only-testing:AtticTests/TasksKeystrokeCostTests/testTheFirstKeystrokeCostsAboutWhatTheOthersDo)
+              fi
               if [ "$side" = baseline ]; then
                 source="$RUNNER_TEMP/AtticIntegrationCostReference"
                 build=integrationbase
@@ -558,7 +562,7 @@ jobs:
                 -only-testing:AtticTests/NoteSlice3bTests/testR9AccessibilityValidationStaysResponsiveWithStoredPayloadsAndActiveImport \
                 -only-testing:AtticTests/TaskPerformanceGateTests/testFamilySummaryPassAtSixThousandTasksIsMilliseconds \
                 -only-testing:AtticTests/TaskPerformanceGateTests/testStatusToggleAtSixThousandTasksStaysBounded \
-                -only-testing:AtticTests/TasksKeystrokeCostTests/testTheFirstKeystrokeCostsAboutWhatTheOthersDo \
+                "${keystroke[@]}" \
                 "${rendered[@]}") \
                 > "$RUNNER_TEMP/AtticCosts/integration-$side-$sample.log" 2>&1 \
                 || { tail -n 100 "$RUNNER_TEMP/AtticCosts/integration-$side-$sample.log"; exit 1; }

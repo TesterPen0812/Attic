@@ -76,6 +76,7 @@ def done_only(directory):
 
 
 def main(directory, include_rendered=True):
+    metrics = METRICS if include_rendered else METRICS - {"first-keystroke"}
     report = {}
     sides = {}
     texts = []
@@ -89,8 +90,8 @@ def main(directory, include_rendered=True):
                 reference_texts.append(text)
             found = COST.findall(text)
             values = {name: float(ms) for name, ms in found}
-            if set(values) != METRICS or len(found) != len(METRICS):
-                raise ValueError(f"{side}-{sample}: expected every metric exactly once; missing {METRICS - set(values)}")
+            if not metrics <= set(values) or set(values) - METRICS or len(found) != len(values):
+                raise ValueError(f"{side}-{sample}: expected every metric exactly once; missing {metrics - set(values)}")
             control = CONTROL.findall(text)
             if len(control) != 1:
                 raise ValueError(f'{side}-{sample}: expected one recovery control median')
@@ -98,12 +99,12 @@ def main(directory, include_rendered=True):
             blocks.append(values)
         sides[side] = blocks
     components = {}
-    for name in sorted((METRICS - DERIVED.keys()) | {'recovery-control'}):
+    for name in sorted((metrics - DERIVED.keys()) | {'recovery-control'}):
         calibration = control_samples(reference_texts) if name == 'recovery-control' else raw_samples(reference_texts, name)
         components[name] = compare([block[name] for block in sides['baseline']],
                                    [block[name] for block in sides['candidate']],
                                    fixture_quantum(texts, name), calibration or None)
-        if name in METRICS:
+        if name in metrics:
             report[name] = components[name]
     for name, parts in sorted(DERIVED.items()):
         report[name] = compare_derived([block[name] for block in sides['baseline']],
