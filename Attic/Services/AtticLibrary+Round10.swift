@@ -102,7 +102,12 @@ extension AtticLibrary {
             guard let task = tasks.task(withID: id), let parentID = task.parentID else { return nil }
             let family = tasks.subtasks(of: parentID).map(\.id)
             let before = family.compactMap(tasks.editableState(of:))
-            guard tasks.moveSubtask(taskID: id, by: offset) else { return nil }
+            guard tasks.moveSubtask(taskID: id, by: offset) else {
+                #if DEBUG
+                TaskNoteCaptureScript.trace("store refused subtask move")
+                #endif
+                return nil
+            }
             succeeded = true
             let after = family.compactMap(tasks.editableState(of:))
             subtaskOrderChanges.send(parentID)
