@@ -5,6 +5,15 @@ Every later change is recorded here: what changed, why, and who asked.
 
 ## Phase 2
 
+### A28 Aa grows into the format row (redesign/p2-format-motion, 2026-10-06)
+Owner pick: mockup p2-37 draft 1. Motion only; no token, colour or size changed.
+- **`AtticFormatRowSurface.drawsGlass`** (default true): the bottom row's
+  switch passes false and draws the one glass that grows from Aa's frame to
+  the bar's.
+- The switch's springs are the draft's (glass 0.42 s / 0.12, back 0.38 s /
+  0.08 after 110 ms; controls in after 230 ms, out at once); Reduce Motion
+  and Animations: Reduced swap at once.
+
 ### A25 Notes format row replaces Aa's pop-over (redesign/p2-integration, 2026-10-06)
 Owner decision OD-14 (`mockups/p2-36-format-no-panel-drafts.png`, draft 1
 plus draft 7's hint). No colour, radius or size token changed.

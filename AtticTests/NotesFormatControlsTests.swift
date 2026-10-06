@@ -774,6 +774,51 @@ final class NotesFormatControlsTests: XCTestCase {
         XCTAssertFalse(controls.isHintVisible)
     }
 
+    // MARK: The format row's motion (A28, mockup p2-37 draft 1)
+
+    /// Aa's glass grows with a 0.42 s, 0.12 bounce spring; closing, the
+    /// controls go first (0.14 s) and 110 ms later the glass shrinks back
+    /// (0.38 s, 0.08 bounce). The controls fade in 230 ms after Aa starts.
+    /// Reduce Motion (and Animations: Reduced) gives none.
+    func testTheFormatRowGrowsOutOfAaWithTheDraftsSprings() {
+        XCTAssertEqual(NoteFormatMotion.growAnimation(opening: true, reduceMotion: false),
+                       .spring(duration: 0.42, bounce: 0.12))
+        XCTAssertEqual(NoteFormatMotion.growAnimation(opening: false, reduceMotion: false),
+                       .spring(duration: 0.38, bounce: 0.08).delay(0.11))
+        XCTAssertEqual(NoteFormatMotion.controlsAnimation(opening: true, reduceMotion: false),
+                       .spring(duration: 0.2, bounce: 0).delay(0.23))
+        XCTAssertEqual(NoteFormatMotion.controlsAnimation(opening: false, reduceMotion: false),
+                       .spring(duration: 0.14, bounce: 0))
+        for opening in [true, false] {
+            XCTAssertNil(NoteFormatMotion.growAnimation(opening: opening, reduceMotion: true), "swaps at once")
+            XCTAssertNil(NoteFormatMotion.controlsAnimation(opening: opening, reduceMotion: true), "swaps at once")
+        }
+    }
+
+    /// New note goes as soon as the glass moves, All notes when it reaches
+    /// them (about half way); both end at half size, 10 pt towards Aa. Aa's
+    /// label is gone after the first third.
+    func testNeighboursStepAsideAsTheGlassPassesThem() {
+        typealias M = NoteFormatMotion
+        XCTAssertEqual(M.steppedAside(.right, grow: 0), 0)
+        XCTAssertEqual(M.steppedAside(.right, grow: 0.32), 1, accuracy: 1e-9)
+        XCTAssertEqual(M.steppedAside(.left, grow: 0.5), 0)
+        XCTAssertEqual(M.steppedAside(.left, grow: 0.88), 1, accuracy: 1e-9)
+        XCTAssertGreaterThan(M.steppedAside(.right, grow: 0.1), M.steppedAside(.left, grow: 0.1))
+        XCTAssertEqual(M.steppedAside(.right, grow: 1.05), 1, "the bounce never overshoots it")
+        XCTAssertEqual(M.offset(.right, progress: 1), -10)
+        XCTAssertEqual(M.offset(.left, progress: 1), 10)
+        XCTAssertEqual(M.scale(.right, progress: 1), 0.5)
+        XCTAssertEqual(M.scale(.left, progress: 0), 1)
+        XCTAssertEqual(M.aaLabelOpacity(grow: 0), 1)
+        XCTAssertEqual(M.aaLabelOpacity(grow: 1.0 / 3.0), 0, accuracy: 1e-9)
+        let aa = CGRect(x: 100, y: 4, width: 36, height: 32)
+        let shut = M.glassExtent(aa: aa, rowWidth: 300, grow: 0)
+        XCTAssertEqual(shut.leading, 100); XCTAssertEqual(shut.trailing, 136)
+        let open = M.glassExtent(aa: aa, rowWidth: 300, grow: 1)
+        XCTAssertEqual(open.leading, 0); XCTAssertEqual(open.trailing, 300)
+    }
+
     // MARK: The format row (OD-14)
 
     /// Opening and closing the row changes nothing the page observes, so

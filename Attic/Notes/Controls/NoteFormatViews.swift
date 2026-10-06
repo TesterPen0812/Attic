@@ -23,6 +23,156 @@ enum NoteFormatMotion {
     static func animation(reduceMotion: Bool) -> Animation? {
         AtticMotionPreset.popover.springy(reduceMotion: reduceMotion)
     }
+
+    // MARK: Aa grows into the format row (A28, mockup p2-37 draft 1)
+
+    /// The glass: Aa's glass stretches into the bar (0.42 s, bounce 0.12) and,
+    /// closing, shrinks back into Aa 110 ms after the controls went (0.38 s,
+    /// bounce 0.08). Reduce Motion (and Animations: Reduced): none, at once.
+    static func growAnimation(opening: Bool, reduceMotion: Bool) -> Animation? {
+        if reduceMotion { return nil }
+        return opening ? .spring(duration: 0.42, bounce: 0.12)
+                       : .spring(duration: 0.38, bounce: 0.08).delay(0.11)
+    }
+
+    /// The bar's controls: they fade in 230 ms after Aa starts, once the
+    /// glass is wide, and out at once (0.14 s) when closing.
+    static func controlsAnimation(opening: Bool, reduceMotion: Bool) -> Animation? {
+        if reduceMotion { return nil }
+        return opening ? .spring(duration: 0.2, bounce: 0).delay(0.23)
+                       : .spring(duration: 0.14, bounce: 0)
+    }
+
+    /// How long the pieces that are leaving stay mounted after a change
+    /// (the longest of their animations, with its delay, and a margin).
+    static let rowLingerAfterOpening: Duration = .milliseconds(650)
+    static let barLingerAfterClosing: Duration = .milliseconds(300)
+
+    enum Side { case left, right, middle }
+
+    static func clamp(_ value: CGFloat) -> CGFloat { min(1, max(0, value)) }
+
+    /// How far a bottom-row control has stepped aside, 0 (in place) to 1
+    /// (gone), for the glass's growth `grow` (0 shut, 1 open, a little over
+    /// while it bounces). New note (right) goes as soon as the glass starts
+    /// moving; All notes (left) about half way, when the glass reaches it;
+    /// whatever sits between them goes with Aa's label.
+    static func steppedAside(_ side: Side, grow: CGFloat) -> CGFloat {
+        switch side {
+        case .right: clamp((grow - 0.02) / 0.30)
+        case .left: clamp((grow - 0.5) / 0.38)
+        case .middle: clamp(grow * 3)
+        }
+    }
+
+    /// Aa's label fades out in the first third of the growth.
+    static func aaLabelOpacity(grow: CGFloat) -> CGFloat { 1 - clamp(grow * 3) }
+
+    /// The glass's horizontal extent: Aa's, grown to the whole row.
+    static func glassExtent(aa: CGRect, rowWidth: CGFloat, grow: CGFloat) -> (leading: CGFloat, trailing: CGFloat) {
+        (aa.minX + (0 - aa.minX) * grow, aa.maxX + (rowWidth - aa.maxX) * grow)
+    }
+
+    /// What a control that steps aside shows at `progress` (0 to 1): half
+    /// size, 10 pt towards Aa, faded.
+    static func offset(_ side: Side, progress: CGFloat) -> CGFloat {
+        switch side {
+        case .right: -10 * progress
+        case .left: 10 * progress
+        case .middle: 0
+        }
+    }
+    static func scale(_ side: Side, progress: CGFloat) -> CGFloat { side == .middle ? 1 : 1 - 0.5 * progress }
+}
+
+/// The glass's growth (0 Aa, 1 the whole bar) and the bar's controls (0
+/// hidden, 1 shown), as animated numbers the bottom row's pieces read.
+/// The stage's coordinate space: Aa reports its frame in it.
+private let noteFormatStageSpace = "noteFormatRowStage"
+
+private struct NoteFormatGrowKey: EnvironmentKey { static let defaultValue: CGFloat = 0 }
+private struct NoteFormatControlsKey: EnvironmentKey { static let defaultValue: CGFloat = 0 }
+private struct NoteFormatOpenKey: EnvironmentKey { static let defaultValue = false }
+
+extension EnvironmentValues {
+    fileprivate var noteFormatGrow: CGFloat {
+        get { self[NoteFormatGrowKey.self] }
+        set { self[NoteFormatGrowKey.self] = newValue }
+    }
+    fileprivate var noteFormatControls: CGFloat {
+        get { self[NoteFormatControlsKey.self] }
+        set { self[NoteFormatControlsKey.self] = newValue }
+    }
+    fileprivate var noteFormatOpen: Bool {
+        get { self[NoteFormatOpenKey.self] }
+        set { self[NoteFormatOpenKey.self] = newValue }
+    }
+}
+
+/// Carries one animated number into the environment: SwiftUI interpolates
+/// `value` through the spring, so everything below reads the spring's own
+/// curve (the glass's growth drives the neighbours' timing).
+private struct NoteFormatChannel: ViewModifier, Animatable {
+    var value: CGFloat
+    let key: WritableKeyPath<EnvironmentValues, CGFloat>
+
+    var animatableData: CGFloat {
+        get { value }
+        set { value = newValue }
+    }
+
+    func body(content: Content) -> some View { content.environment(key, value) }
+}
+
+extension View {
+    /// A bottom-row control that steps aside as Aa's glass grows into the
+    /// format row (All notes, the status, New note).
+    func noteFormatStepsAside(_ side: NoteFormatMotion.Side) -> some View {
+        modifier(NoteFormatStepAside(side: side))
+    }
+
+    /// Aa itself: it reports where it is, and while the glass morphs the
+    /// morphing glass stands in for it.
+    func noteFormatMorphSource() -> some View {
+        modifier(NoteFormatMorphSource())
+    }
+}
+
+private struct NoteFormatStepAside: ViewModifier {
+    let side: NoteFormatMotion.Side
+    @Environment(\.noteFormatGrow) private var grow
+
+    func body(content: Content) -> some View {
+        let k = NoteFormatMotion.steppedAside(side, grow: grow)
+        content
+            .scaleEffect(NoteFormatMotion.scale(side, progress: k))
+            .offset(x: NoteFormatMotion.offset(side, progress: k))
+            .opacity(1 - k)
+    }
+}
+
+private struct NoteFormatAaFrameKey: PreferenceKey {
+    static let defaultValue: CGRect = .zero
+    static func reduce(value: inout CGRect, nextValue: () -> CGRect) {
+        let next = nextValue()
+        if next.width > 0 { value = next }
+    }
+}
+
+private struct NoteFormatMorphSource: ViewModifier {
+    @Environment(\.noteFormatGrow) private var grow
+    @Environment(\.noteFormatOpen) private var open
+
+    func body(content: Content) -> some View {
+        content
+            .opacity(open || grow != 0 ? 0 : 1)
+            .background {
+                GeometryReader { proxy in
+                    Color.clear.preference(key: NoteFormatAaFrameKey.self,
+                                           value: proxy.frame(in: .named(noteFormatStageSpace)))
+                }
+            }
+    }
 }
 
 // MARK: - Selection bar
@@ -121,6 +271,9 @@ struct NoteFormatToggle: View {
 /// or Space press, Esc closes); the text keeps the caret throughout.
 struct NoteFormatRowView: View {
     @ObservedObject var model: NoteFormatModel
+    /// The row draws its own glass (the gallery); the bottom row's switch
+    /// supplies the one glass that grows out of Aa instead.
+    var drawsGlass = true
     let onClose: () -> Void
 
     /// The row's width (the bottom row's).
@@ -143,7 +296,7 @@ struct NoteFormatRowView: View {
         let focus = model.rowKeyboardIndex
         let lists = NoteCommandCatalog.lists
         let indents = NoteCommandCatalog.indents
-        return AtticFormatRowSurface {
+        return AtticFormatRowSurface(drawsGlass: drawsGlass) {
             NoteFormatStylePill(model: model, isKeyboardFocused: focus == 0)
             AtticFormatSeparator()
             AtticFormatGroup {
@@ -183,8 +336,11 @@ struct NoteFormatRowView: View {
 
 /// The bottom row or, while Aa's format row is open, the format row in
 /// its place (they take turns in one place; nothing floats over the note).
-/// The swap uses the pop-over preset in the chosen feel; Animations:
-/// Reduced and Reduce Motion swap at once.
+/// Aa's glass grows into the row (A28, mockup p2-37 draft 1): one glass
+/// shape stretches from Aa's frame to the bar's, New note and All notes
+/// shrink towards it as it passes, and the bar's controls fade in once it
+/// is wide; closing reverses it. Animations: Reduced and Reduce Motion
+/// swap at once.
 struct NoteFormatRowSwitch<Row: View>: View {
     @ObservedObject var state: NoteFormatRowState
     /// The format model of the note on screen (read as the row opens).
@@ -192,18 +348,112 @@ struct NoteFormatRowSwitch<Row: View>: View {
     @ViewBuilder let row: Row
 
     @Environment(\.atticDesign) private var design
+    /// The bottom row stays mounted while it steps aside, the bar while it
+    /// fades; shut or open and still, only one of them is.
+    @State private var rowLingers = false
+    @State private var barLingers = false
+    @State private var lingering: Task<Void, Never>?
+
+    var body: some View {
+        let open = state.isOpen
+        let reduce = design.reduceMotion
+        NoteFormatRowStage(open: open, showsRow: !open || rowLingers, showsBar: open || barLingers,
+                           model: model, row: row, onClose: { state.close() })
+            .modifier(NoteFormatChannel(value: open ? 1 : 0, key: \.noteFormatControls))
+            .animation(NoteFormatMotion.controlsAnimation(opening: open, reduceMotion: reduce), value: open)
+            .modifier(NoteFormatChannel(value: open ? 1 : 0, key: \.noteFormatGrow))
+            .animation(NoteFormatMotion.growAnimation(opening: open, reduceMotion: reduce), value: open)
+            .onChange(of: open) { _, nowOpen in settle(opening: nowOpen, reduceMotion: reduce) }
+    }
+
+    /// Unmounts what has left once its animation is over.
+    private func settle(opening: Bool, reduceMotion: Bool) {
+        lingering?.cancel()
+        guard !reduceMotion else {
+            rowLingers = false
+            barLingers = false
+            return
+        }
+        if opening { rowLingers = true; barLingers = false } else { barLingers = true; rowLingers = false }
+        lingering = Task { @MainActor in
+            try? await Task.sleep(for: opening ? NoteFormatMotion.rowLingerAfterOpening
+                                                : NoteFormatMotion.barLingerAfterClosing)
+            guard !Task.isCancelled else { return }
+            if opening { rowLingers = false } else { barLingers = false }
+        }
+    }
+}
+
+/// The pieces of the bottom row and the format row, one over the other:
+/// the bottom row, the one glass between Aa's frame and the bar's, the
+/// bar's controls.
+private struct NoteFormatRowStage<Row: View>: View {
+    let open: Bool
+    let showsRow: Bool
+    let showsBar: Bool
+    let model: () -> NoteFormatModel?
+    let row: Row
+    let onClose: () -> Void
+
+    @Environment(\.noteFormatGrow) private var grow
+    @Environment(\.noteFormatControls) private var controls
+    @State private var aa: CGRect = .zero
+    @State private var size: CGSize = .zero
 
     var body: some View {
         ZStack {
-            if state.isOpen, let model = model() {
-                NoteFormatRowView(model: model) { state.close() }
-                    .transition(NoteFormatMotion.transition(reduceMotion: design.reduceMotion, from: .bottom))
-            } else {
+            if showsRow {
                 row
-                    .transition(design.reduceMotion ? .identity : .opacity)
+                    // They leave: no touches, nothing for VoiceOver.
+                    .allowsHitTesting(!open)
+                    .accessibilityHidden(open)
+            }
+            if showsBar, let model = model() {
+                NoteFormatRowView(model: model, drawsGlass: false, onClose: onClose)
+                    .opacity(controls)
+                    .allowsHitTesting(open)
+                    .accessibilityHidden(!open)
             }
         }
-        .animation(design.reduceMotion ? nil : NoteFormatMotion.animation(reduceMotion: false), value: state.isOpen)
+        .environment(\.noteFormatOpen, open)
+        .coordinateSpace(name: noteFormatStageSpace)
+        // Behind the row and the bar, and no part of the layout: the glass
+        // may bounce past the row's edge.
+        .background { glass }
+        .onPreferenceChange(NoteFormatAaFrameKey.self) { new in
+            if new.width > 0, new != aa { aa = new }
+        }
+        .onGeometryChange(for: CGSize.self) { $0.size } action: { new in
+            if abs(new.width - size.width) > 0.5 || abs(new.height - size.height) > 0.5 { size = new }
+        }
+    }
+
+    /// The one glass shape and Aa's label on it. It is Aa's frame while the
+    /// row is shut (then Aa's own button shows instead), the bar's frame
+    /// when open.
+    @ViewBuilder
+    private var glass: some View {
+        if aa.width > 0, size.width > 0, open || grow != 0 {
+            let extent = NoteFormatMotion.glassExtent(aa: aa, rowWidth: size.width, grow: grow)
+            let height = aa.height
+            let radius = AtticRadius.control(height: height)
+            // Offsets are from the stage's centre, where this empty anchor sits.
+            let centreX = (extent.leading + extent.trailing) / 2 - size.width / 2
+            let centreY = aa.midY - size.height / 2
+            Color.clear
+                .frame(width: max(0, extent.trailing - extent.leading), height: height)
+                .atticRaisedMaterial(cornerRadius: radius, interactive: false)
+                .overlay {
+                    AtticIcon(systemName: "textformat", size: AtticControlSize.raisedGlyph,
+                              weight: AtticIconWeight.outline, ink: .icon)
+                        .opacity(NoteFormatMotion.aaLabelOpacity(grow: grow))
+                        // Aa's label stays where Aa was.
+                        .offset(x: aa.midX - (extent.leading + extent.trailing) / 2)
+                }
+                .offset(x: centreX, y: centreY)
+                .allowsHitTesting(false)
+                .accessibilityHidden(true)
+        }
     }
 }
 

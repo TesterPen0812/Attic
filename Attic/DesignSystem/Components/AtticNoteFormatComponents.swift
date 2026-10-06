@@ -191,17 +191,25 @@ struct AtticFormatStyleFace: View {
 /// the row and as tall as its buttons, its controls in a 4 pt inset.
 struct AtticFormatRowSurface<Content: View>: View {
     var height: CGFloat = AtticControlSize.panelButton.height
+    /// The surface draws its glass. The bottom row's switch passes false: it
+    /// draws the one glass that grows out of Aa (A28) and puts the controls on it.
+    var drawsGlass = true
     @ViewBuilder let content: Content
     @State private var probeID = UUID()
 
     var body: some View {
         let radius = AtticRadius.control(height: height)
-        HStack(spacing: 0) { content }
+        let row = HStack(spacing: 0) { content }
             .padding(.horizontal, AtticControlSize.capsuleInset)
             .frame(maxWidth: .infinity)
             .frame(height: height)
-            .atticRaisedMaterial(cornerRadius: radius, interactive: false)
-            .atticControlProbe("Format row", id: probeID, expectedSize: nil, radius: radius, expectedRadius: 15)
+        if drawsGlass {
+            row
+                .atticRaisedMaterial(cornerRadius: radius, interactive: false)
+                .atticControlProbe("Format row", id: probeID, expectedSize: nil, radius: radius, expectedRadius: 15)
+        } else {
+            row
+        }
     }
 }
 

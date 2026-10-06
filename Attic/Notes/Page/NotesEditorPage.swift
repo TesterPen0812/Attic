@@ -302,12 +302,14 @@ struct NotesEditorPage: View {
                     toggleLibrary()
                 }
                 .keyboardShortcut("l", modifiers: [.command, .shift])
+                .noteFormatStepsAside(.left)
                 .modifier(NotesKeyboardStop(stop: .allNotes, enabled: bottomStops, focus: $bottomFocus))
                 .accessibilityIdentifier("notes-all-notes")
                 .accessibilitySortPriority(1)
                 Spacer(minLength: AtticSpacing.s12)
                 if !controller.isLibraryPresented, let session = controller.active {
                     NoteStatusSlot(controller: controller, store: noteStore, session: session, damaged: damagedRecovery)
+                        .noteFormatStepsAside(.middle)
                         .accessibilitySortPriority(2)
                         .transition(.opacity)
                 }
@@ -322,6 +324,7 @@ struct NotesEditorPage: View {
                     newNote()
                 }
                 .keyboardShortcut("n", modifiers: .command)
+                .noteFormatStepsAside(.right)
                 .modifier(NotesKeyboardStop(stop: .newNote, enabled: bottomStops, focus: $bottomFocus))
                 .accessibilityIdentifier("notes-new-note")
             }
@@ -335,6 +338,7 @@ struct NotesEditorPage: View {
         AtticRaisedButton(systemName: "textformat", label: "Format", help: String(localized: "Format (⌘T)")) {
             chrome.openFormatBar(keyboard: false)
         }
+        .noteFormatMorphSource()
         .accessibilityIdentifier("notes-format-button")
     }
 
