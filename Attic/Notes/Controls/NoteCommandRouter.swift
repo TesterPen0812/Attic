@@ -2,7 +2,7 @@ import AppKit
 import SwiftUI
 
 /// The UI's single route into the engine's command layer. The selection bar,
-/// Aa, the `/` list, ⋯ › Insert and Format, the right-click menu, the menu
+/// Aa's format row, the `/` list, ⋯ › Insert and Format, the right-click menu, the menu
 /// bar and the shortcuts all call `run(_:from:)` or `insert(_:from:)`; each
 /// ends in `NoteEditorEngine.perform`, which validates, makes one history
 /// step and keeps the selection. The router adds one presentation policy:
@@ -14,7 +14,7 @@ final class NoteCommandRouter {
     var requestDate: (() -> Void)?
     /// Insert › Image or File… (the page's open panel).
     var requestFile: (() -> Void)?
-    /// After any command: the bar and Aa re-read their states.
+    /// After any command: the bar and the format row re-read their states.
     var onChange: (() -> Void)?
     /// Every command that ran, with the surface it came from (tests).
     var onRun: ((NoteFormatCommand, NoteCommandSurface) -> Void)?
@@ -50,7 +50,7 @@ final class NoteCommandRouter {
         engine.validate(command, selection: selection ?? self.selection)
     }
 
-    /// Why most commands are dimmed right now, for Aa's footer and VoiceOver
+    /// Why most commands are dimmed right now, for VoiceOver
     /// hints (nil when formatting is available).
     func disabledReason(selection: NSRange? = nil) -> String? {
         let selection = selection ?? self.selection

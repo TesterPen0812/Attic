@@ -1,15 +1,14 @@
 import SwiftUI
 
 extension View {
-    /// Applies a shortcut when there is one (Aa's toggles answer their keys
-    /// while the pop-over has the keyboard).
+    /// Applies a shortcut when there is one.
     @ViewBuilder
     func noteShortcut(_ shortcut: KeyboardShortcut?) -> some View {
         if let shortcut { keyboardShortcut(shortcut) } else { self }
     }
 }
 
-/// The springy entrance the bar, Aa and the `/` list share: a fade, a 4 pt
+/// The springy entrance the bar, the format row and the `/` list share: a fade, a 4 pt
 /// rise and a slight grow from the anchored edge; a plain fade under
 /// Reduce Motion.
 enum NoteFormatMotion {
@@ -28,8 +27,9 @@ enum NoteFormatMotion {
 
 // MARK: - Selection bar
 
-/// The bar over a text selection (mockup p2-16 D): the style menu, B I U S,
-/// link and highlight, bulleted list and checklist, each showing its state.
+/// The bar over a text selection (mockup p2-16 D, as p2-36 draws it): the
+/// style menu, B I U S, link, highlight and inline code, each showing its
+/// state.
 struct NoteFormatBarView: View {
     @ObservedObject var model: NoteFormatModel
     @Environment(\.atticDesign) private var design
@@ -61,10 +61,6 @@ struct NoteFormatBarView: View {
             .accessibilityIdentifier("notes-format-bar-style")
             AtticFormatGroup { toggles(NoteCommandCatalog.barMarks, startingAt: 1) }
             AtticFormatGroup { toggles(NoteCommandCatalog.barInline, startingAt: 1 + NoteCommandCatalog.barMarks.count) }
-            AtticFormatGroup {
-                toggles(NoteCommandCatalog.barLists,
-                        startingAt: 1 + NoteCommandCatalog.barMarks.count + NoteCommandCatalog.barInline.count)
-            }
         }
         .accessibilityElement(children: .contain)
         .accessibilityLabel(String(localized: "Format bar"))
@@ -87,6 +83,8 @@ struct NoteFormatToggle: View {
     let surface: NoteCommandSurface
     let width: CGFloat
     var isKeyboardFocused = false
+    /// An action (outdent, indent): no on/off value.
+    var announcesState = true
 
     var body: some View {
         let snapshot = model.snapshot
@@ -102,7 +100,7 @@ struct NoteFormatToggle: View {
                 AtticFormatToggle(systemName: NoteCommandCatalog.symbol(command), value: snapshot.value(command),
                                   label: label, help: NoteFormatModel.help(command), width: width,
                                   isKeyboardFocused: isKeyboardFocused, disabledReason: snapshot.disabledReason,
-                                  action: run)
+                                  announcesState: announcesState, action: run)
             }
         }
         .disabled(!snapshot.isEnabled(command))
@@ -112,112 +110,191 @@ struct NoteFormatToggle: View {
     private func run() { model.run(command, from: surface) }
 }
 
-// MARK: - Aa
+// MARK: - The format row (OD-14)
 
-/// Aa's pop-over (mockup p2-16 B and D): every style and format, working
-/// on the selection or the caret's paragraph. ← → ↑ ↓ move, Return or
-/// Space press, Esc closes; each toggle also answers its own shortcut.
-struct NoteFormatPopoverView: View {
+/// Aa's format row (p2-36 draft 1): the bottom row itself, turned into one
+/// row of paragraph formatting while it is open. The caret line's style as
+/// a pill (its list holds Title … Mono, each in its own style), then
+/// Bulleted, Numbered, Checklist and Quote showing which applies, outdent
+/// and indent, and ✕. Nothing floats over the note; marks stay on the
+/// selection bar. ⌘T or ⌃Tab put the keyboard on it (← → Tab move, Return
+/// or Space press, Esc closes); the text keeps the caret throughout.
+struct NoteFormatRowView: View {
     @ObservedObject var model: NoteFormatModel
-    /// Opened from the keyboard (⌘T, ⌃Tab): the ring shows at once.
-    var openedByKeyboard = false
     let onClose: () -> Void
 
-    @Environment(\.atticDesign) private var design
-    @FocusState private var focused: Bool
+    /// The row's width (the bottom row's).
+    @State private var width: CGFloat = 0
 
     var body: some View {
+        // A long style name ("Subheading") in a narrow panel: 24 pt cells.
         let m = AtticNoteFormatMetrics.self
-        let snapshot = model.snapshot
-        VStack(alignment: .leading, spacing: m.popoverRowGap) {
-            HStack(spacing: 2) {
-                ForEach(Array(NoteCommandCatalog.styles.enumerated()), id: \.offset) { column, command in
-                    AtticFormatStyleChip(kind: chipKind(command), title: command.title,
-                                         isOn: snapshot.value(command) == .on,
-                                         isKeyboardFocused: isFocused(row: 0, column: column),
-                                         disabledReason: snapshot.disabledReason) {
-                        model.run(command, from: .formatPopover)
-                    }
-                    .disabled(!snapshot.isEnabled(command))
-                    .noteShortcut(NoteCommandCatalog.keyboardShortcut(command))
-                    .help(NoteFormatModel.help(command))
-                    .accessibilityIdentifier("notes-aa-" + NoteCommandRouter.identifier(command))
-                }
+        let roomy = width == 0 || Self.minimumWidth(snapshot: model.snapshot, toggleWidth: m.rowToggleWidth) <= width
+        row(toggleWidth: roomy ? m.rowToggleWidth : m.rowCompactToggleWidth)
+            .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { new in
+                if abs(new - width) > 0.5 { width = new }
             }
-            row(1, groups: [NoteCommandCatalog.marks, NoteCommandCatalog.inline])
-            row(2, groups: [NoteCommandCatalog.lists, NoteCommandCatalog.indents])
-            if let reason = snapshot.disabledReason {
-                AtticText(verbatim: reason, style: .helper, ink: .helper)
-                    .fixedSize(horizontal: false, vertical: true)
-                    .padding(.horizontal, 4)
-                    .accessibilityIdentifier("notes-aa-reason")
-            }
-        }
-        // The dropdown card's inset is Aa's padding.
-        .frame(width: m.popoverWidth - AtticDropdownMetrics.inset * 2)
-        .focusable()
-        .focusEffectDisabled()
-        .focused($focused)
-        .atticDropdownFocus($focused)
-        .onAppear {
-            model.popoverKeyboardIndex = openedByKeyboard ? currentStyleIndex : nil
-        }
-        .onDisappear { model.popoverKeyboardIndex = nil }
-        .onKeyPress(keys: [.leftArrow, .rightArrow, .upArrow, .downArrow, .tab]) { press in
-            let start = model.popoverKeyboardIndex ?? currentStyleIndex
-            if model.popoverKeyboardIndex == nil {
-                model.popoverKeyboardIndex = start
-                return .handled
-            }
-            let key: KeyEquivalent = press.key == .tab
-                ? (press.modifiers.contains(.shift) ? .leftArrow : .rightArrow) : press.key
-            model.popoverKeyboardIndex = NoteFormatPopoverGrid.move(start, by: key)
-            return .handled
-        }
-        .onKeyPress(keys: [.return, .space]) { _ in
-            guard let index = model.popoverKeyboardIndex, let command = NoteFormatPopoverGrid.command(at: index),
-                  snapshot.isEnabled(command) else { return .ignored }
-            model.run(command, from: .formatPopover)
-            return .handled
-        }
-        .onKeyPress(.escape) {
-            // Used up here: Esc closes Aa and nothing behind it.
-            onClose()
-            return .handled
-        }
-        .onExitCommand { onClose() }
         .accessibilityElement(children: .contain)
         .accessibilityLabel(String(localized: "Format"))
-        .accessibilityIdentifier("notes-format-popover")
+        .accessibilityIdentifier("notes-format-row")
     }
 
-    private var currentStyleIndex: NoteGridIndex {
-        let column = NoteCommandCatalog.styles.firstIndex { model.snapshot.value($0) == .on } ?? 3
-        return NoteGridIndex(row: 0, column: column)
-    }
-
-    private func isFocused(row: Int, column: Int) -> Bool {
-        model.popoverKeyboardIndex == NoteGridIndex(row: row, column: column)
-    }
-
-    private func row(_ row: Int, groups: [[NoteFormatCommand]]) -> some View {
-        HStack(spacing: 0) {
-            ForEach(Array(groups.enumerated()), id: \.offset) { groupIndex, group in
-                if groupIndex > 0 { Spacer(minLength: AtticNoteFormatMetrics.popoverGroupGap) }
-                let start = groups.prefix(groupIndex).reduce(0) { $0 + $1.count }
-                AtticFormatGroup {
-                    ForEach(Array(group.enumerated()), id: \.offset) { offset, command in
-                        NoteFormatToggle(model: model, command: command, surface: .formatPopover,
-                                         width: AtticNoteFormatMetrics.popoverToggleWidth,
-                                         isKeyboardFocused: isFocused(row: row, column: start + offset))
-                            .noteShortcut(NoteCommandCatalog.keyboardShortcut(command))
-                    }
+    private func row(toggleWidth: CGFloat) -> some View {
+        let focus = model.rowKeyboardIndex
+        let lists = NoteCommandCatalog.lists
+        let indents = NoteCommandCatalog.indents
+        return AtticFormatRowSurface {
+            NoteFormatStylePill(model: model, isKeyboardFocused: focus == 0)
+            AtticFormatSeparator()
+            AtticFormatGroup {
+                ForEach(Array(lists.enumerated()), id: \.offset) { offset, command in
+                    NoteFormatToggle(model: model, command: command, surface: .formatBar, width: toggleWidth,
+                                     isKeyboardFocused: focus == 1 + offset)
                 }
+            }
+            AtticFormatSeparator()
+            AtticFormatGroup {
+                ForEach(Array(indents.enumerated()), id: \.offset) { offset, command in
+                    NoteFormatToggle(model: model, command: command, surface: .formatBar, width: toggleWidth,
+                                     isKeyboardFocused: focus == 1 + lists.count + offset, announcesState: false)
+                }
+            }
+            Spacer(minLength: 0)
+            AtticFormatToggle(systemName: "xmark", value: .off, label: String(localized: "Close Format"),
+                              help: String(localized: "Close (Esc)"), width: toggleWidth,
+                              isKeyboardFocused: focus == NoteFormatRowItem.all.count - 1, announcesState: false,
+                              action: onClose)
+                .accessibilityIdentifier("notes-format-row-close")
+        }
+    }
+
+    /// What the row needs before its flexible gap: the inset, the pill, two
+    /// lines and the cells.
+    static func minimumWidth(snapshot: NoteFormatSnapshot, toggleWidth: CGFloat) -> CGFloat {
+        let m = AtticNoteFormatMetrics.self
+        let label = ceil((NoteCommandCatalog.styleName(snapshot.paragraph) as NSString)
+            .size(withAttributes: [.font: AtticTextStyle.controlLabel.nsFont]).width)
+        let pill = label + 4 + m.barStyleChevron + 2 + m.barStylePadding * 2
+        let separators = 2 * (1 + m.rowSeparatorPadding * 2)
+        let cells = CGFloat(NoteFormatRowItem.all.count - 1) * toggleWidth
+        return ceil(AtticControlSize.capsuleInset * 2 + pill + separators + cells)
+    }
+}
+
+/// The bottom row or, while Aa's format row is open, the format row in
+/// its place (they take turns in one place; nothing floats over the note).
+/// The swap uses the pop-over preset in the chosen feel; Animations:
+/// Reduced and Reduce Motion swap at once.
+struct NoteFormatRowSwitch<Row: View>: View {
+    @ObservedObject var state: NoteFormatRowState
+    /// The format model of the note on screen (read as the row opens).
+    let model: () -> NoteFormatModel?
+    @ViewBuilder let row: Row
+
+    @Environment(\.atticDesign) private var design
+
+    var body: some View {
+        ZStack {
+            if state.isOpen, let model = model() {
+                NoteFormatRowView(model: model) { state.close() }
+                    .transition(NoteFormatMotion.transition(reduceMotion: design.reduceMotion, from: .bottom))
+            } else {
+                row
+                    .transition(design.reduceMotion ? .identity : .opacity)
+            }
+        }
+        .animation(design.reduceMotion ? nil : NoteFormatMotion.animation(reduceMotion: false), value: state.isOpen)
+    }
+}
+
+/// The format row's style pill ("List ⌄"): it opens the style list (E1).
+struct NoteFormatStylePill: View {
+    @ObservedObject var model: NoteFormatModel
+    var isKeyboardFocused = false
+
+    var body: some View {
+        let snapshot = model.snapshot
+        let name = NoteCommandCatalog.styleName(snapshot.paragraph)
+        let enabled = NoteCommandCatalog.styles.contains { snapshot.isEnabled($0) }
+        Button { model.rowStyleListOpen = true } label: {
+            AtticFormatStyleFace(title: name, isKeyboardFocused: isKeyboardFocused, isEnabled: enabled)
+        }
+        .buttonStyle(AtticUndimmedButtonStyle())
+        .focusEffectDisabled()
+        .disabled(!enabled)
+        .help(String(localized: "Style"))
+        .accessibilityLabel(String(localized: "Style"))
+        .accessibilityValue(name)
+        .accessibilityAddTraits(.isButton)
+        .accessibilityIdentifier("notes-format-row-style")
+        .atticDropdown(isPresented: $model.rowStyleListOpen, prefer: .above, label: String(localized: "Style"),
+                       contentHeight: AtticDropdownMetrics.inset * 2
+                           + AtticDropdownMetrics.rowHeight * CGFloat(NoteCommandCatalog.styles.count)) {
+            NoteFormatStyleListView(model: model)
+        }
+    }
+}
+
+/// The style list (E1 at the Compact size): Title, Heading, Subheading,
+/// Body and Mono, each in its own style, the current one ticked. ↑ ↓ move,
+/// Return or Space choose, Esc closes.
+struct NoteFormatStyleListView: View {
+    @ObservedObject var model: NoteFormatModel
+
+    @State private var highlighted: Int?
+    @FocusState private var focused: Bool
+
+    private var styles: [NoteFormatCommand] { NoteCommandCatalog.styles }
+
+    var body: some View {
+        let snapshot = model.snapshot
+        VStack(alignment: .leading, spacing: 0) {
+            ForEach(Array(styles.enumerated()), id: \.offset) { index, command in
+                AtticDropdownRow(title: command.title,
+                                 check: snapshot.value(command) == .on ? .on : .off,
+                                 isHighlighted: highlighted == index,
+                                 titleInk: snapshot.isEnabled(command) ? .heading : .disabledText,
+                                 titleFont: NoteFormatStyleListView.kind(command).font,
+                                 onHover: { inside in
+                                     let next = AtticListHighlight.hovered(index, inside: inside, current: highlighted)
+                                     if next != highlighted { highlighted = next }
+                                 }, position: index + 1, itemCount: styles.count) { pick(command) }
+                    .accessibilityIdentifier("notes-format-row-" + NoteCommandRouter.identifier(command))
+            }
+        }
+        .focusable()
+        .focused($focused)
+        .focusEffectDisabled()
+        .atticDropdownFocus($focused)
+        .onAppear {
+            highlighted = styles.firstIndex { snapshot.value($0) == .on }
+        }
+        .accessibilityElement(children: .contain)
+        .accessibilityLabel(String(localized: "Style"))
+        .accessibilityIdentifier("notes-format-style-list")
+        .onKeyPress(phases: .down) { press in
+            switch press.key {
+            case .downArrow: highlighted = min((highlighted ?? -1) + 1, styles.count - 1); return .handled
+            case .upArrow: highlighted = max((highlighted ?? styles.count) - 1, 0); return .handled
+            case .return, .space:
+                guard let highlighted else { return .ignored }
+                pick(styles[highlighted])
+                return .handled
+            case .escape:
+                model.rowStyleListOpen = false
+                return .handled
+            default: return .ignored
             }
         }
     }
 
-    private func chipKind(_ command: NoteFormatCommand) -> AtticFormatStyleChip.Kind {
+    private func pick(_ command: NoteFormatCommand) {
+        guard model.snapshot.isEnabled(command) else { NSSound.beep(); return }
+        model.rowStyleListOpen = false
+        model.run(command, from: .formatBar)
+    }
+
+    static func kind(_ command: NoteFormatCommand) -> AtticFormatStyleKind {
         switch command {
         case .paragraph(.heading(1)): .title
         case .paragraph(.heading(2)): .heading
@@ -366,11 +443,21 @@ struct NoteFormatCardView: View {
     }
 }
 
-/// "Type / for lists, checklists and more" on a new draft's empty body line
-/// (the first three drafts).
+/// Draft 7's hint (OD-14): "Type / for headings, lists, quotes…" on an
+/// empty body line with the caret in it, faint, gone with the first
+/// keystroke. Drawn only; VoiceOver hears it as the text's help.
 struct NoteSlashHintView: View {
+    static let text = String(localized: "Type / for headings, lists, quotes…")
+
+    @Environment(\.atticDesign) private var design
+
     var body: some View {
-        AtticText(verbatim: String(localized: "Type / for lists, checklists and more"), style: .noteBody, ink: .placeholder)
+        let size = AtticTextStyle.noteBody.nsFont.pointSize
+        (Text(String(localized: "Type "))
+            + Text(verbatim: "/").font(.system(size: size - 0.5, design: .monospaced))
+            + Text(String(localized: " for headings, lists, quotes…")))
+            .font(AtticTextStyle.noteBody.font)
+            .foregroundStyle(design.tokens.color(.placeholder))
             .fixedSize()
             .allowsHitTesting(false)
             .accessibilityHidden(true)

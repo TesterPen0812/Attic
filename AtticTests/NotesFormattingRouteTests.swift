@@ -43,7 +43,7 @@ final class NotesFormattingRouteTests: XCTestCase {
     private func run(_ command: NoteFormatCommand, surface: NoteCommandSurface,
                      router: NoteCommandRouter) -> Bool {
         switch surface {
-        case .selectionBar, .formatPopover:
+        case .selectionBar, .formatBar:
             let model = NoteFormatModel(); model.router = router
             model.run(command, from: surface)
             return true
@@ -69,8 +69,8 @@ final class NotesFormattingRouteTests: XCTestCase {
     }
 
     private var routes: [(NoteCommandSurface, [NoteFormatCommand])] {
-        [(.selectionBar, NoteCommandCatalog.styles + NoteCommandCatalog.barMarks + NoteCommandCatalog.barInline + NoteCommandCatalog.barLists),
-         (.formatPopover, NoteFormatPopoverGrid.rows.flatMap { $0 }),
+        [(.selectionBar, NoteCommandCatalog.styles + NoteCommandCatalog.barMarks + NoteCommandCatalog.barInline),
+         (.formatBar, NoteCommandCatalog.styles + NoteCommandCatalog.lists + NoteCommandCatalog.indents),
          (.noteMenu, NoteCommandCatalog.formatSections.flatMap { $0 }),
          (.contextMenu, NoteCommandCatalog.formatSections.flatMap { $0 }),
          (.menuBar, NoteCommandCatalog.formatSections.flatMap { $0 }),
@@ -496,7 +496,7 @@ final class NotesFormattingRouteTests: XCTestCase {
         for style: NoteParagraphStyle in [.bullet, .number, .checklist, .quote] {
             for state: State in [.empty, .lastEmpty] {
                 let (engine, view, router) = make(state)
-                XCTAssertTrue(router.run(.paragraph(style), from: .formatPopover))
+                XCTAssertTrue(router.run(.paragraph(style), from: .formatBar))
                 let styled = engine.document().blocks
                 view.insertNewline(nil)
                 XCTAssertEqual(engine.paragraphStyle(at: view.selectedRange().location), .body, "\(style)/\(state)")

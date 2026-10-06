@@ -6,7 +6,7 @@ import SwiftUI
 /// the same `NoteFormatCommand` through `NoteCommandRouter`; the surface is
 /// recorded only so tests can prove it.
 enum NoteCommandSurface: String, CaseIterable, Sendable {
-    case selectionBar, formatPopover, slashList, noteMenu, contextMenu, menuBar, shortcut, linkPopover
+    case selectionBar, formatBar, slashList, noteMenu, contextMenu, menuBar, shortcut, linkPopover
 }
 
 /// The Insert menu's three rows (⋯ › Insert, right-click, the menu bar).
@@ -32,7 +32,7 @@ enum NoteInsertAction: String, CaseIterable, Sendable {
 }
 
 /// The one list of Notes formatting commands the UI shows: the selection
-/// bar, the Aa pop-over, ⋯ › Format, the right-click menu, the menu bar and
+/// bar, Aa's format row, ⋯ › Format, the right-click menu, the menu bar and
 /// the keyboard shortcuts all read their rows, order and keys from here, and
 /// the engine (`NoteEditorEngine.validate` / `perform`) decides what each
 /// one does. Nothing here keeps a second list of behaviour.
@@ -52,15 +52,10 @@ enum NoteCommandCatalog {
     static let indents: [NoteFormatCommand] = [.outdent, .indent]
     static let lineActions: [NoteFormatCommand] = [.toggleChecklist, .moveUp, .moveDown]
 
-    /// The selection bar (mockup p2-16 D): style, B I U S, link, highlight,
-    /// bulleted list, checklist. The rest is one click away in Aa.
+    /// The selection bar (mockup p2-16 D as p2-36 draws it): style, B I U
+    /// S, link, highlight, inline code. The lists are on the format row.
     static let barMarks: [NoteFormatCommand] = marks
-    static let barInline: [NoteFormatCommand] = [.mark(.link), .mark(.highlight)]
-    static let barLists: [NoteFormatCommand] = [.paragraph(.bullet), .paragraph(.checklist)]
-
-    /// Aa's rows: styles; B I U S | link, highlight, code; lists | indents.
-    static let popoverMarkRow: [[NoteFormatCommand]] = [marks, inline]
-    static let popoverListRow: [[NoteFormatCommand]] = [lists, indents]
+    static let barInline: [NoteFormatCommand] = inline
 
     /// ⋯ › Format and every other Format menu, in sections.
     static let formatSections: [[NoteFormatCommand]] = [
@@ -86,7 +81,7 @@ enum NoteCommandCatalog {
         }
     }
 
-    /// The short name on Aa's style chips and the bar's style menu.
+    /// The short name on the style controls (the selection bar, the format row).
     static func styleName(_ style: NoteParagraphStyle?) -> String {
         guard let style else { return String(localized: "Style") }
         return switch style {
@@ -102,7 +97,7 @@ enum NoteCommandCatalog {
         }
     }
 
-    /// Glyphs for the bar and Aa (SF Symbols; the engine's names are the
+    /// Glyphs for the bar and the format row (SF Symbols; the engine's names are the
     /// menus' images).
     static func symbol(_ command: NoteFormatCommand) -> String {
         switch command {
@@ -223,9 +218,10 @@ enum NoteCommandCatalog {
         return flags
     }
 
-    /// Aa opens with ⌘T (the system's Show Fonts key, which a note has no
-    /// other use for); ⌃Tab reaches the selection bar while one shows.
-    static let formatPopoverShortcut = KeyboardShortcut("t", modifiers: .command)
+    /// Aa's format row opens with ⌘T (the system's Show Fonts key, which a
+    /// note has no other use for); ⌃Tab reaches the selection bar while one
+    /// shows, or the format row while it is open.
+    static let formatBarShortcut = KeyboardShortcut("t", modifiers: .command)
 
     // MARK: The / list
 

@@ -164,6 +164,8 @@ struct NotesEditorPage: View {
             // Another note: the keyboard return belonged to the last one.
             chrome.cancelKeyboardReturn()
             chrome.tagEditor = nil
+            // The format row belongs to the note it was opened on.
+            chrome.closeFormatBar()
             // Opening or starting a note ends the delete's Undo toast: ⌘Z
             // belongs to the note's own text again. (Deleting the open note
             // leaves no note on screen, and its toast stays.)
@@ -182,6 +184,7 @@ struct NotesEditorPage: View {
         }
         .onChange(of: controller.isLibraryPresented) { _, shown in
             chrome.cancelKeyboardReturn()
+            if shown { chrome.closeFormatBar() }
             bottomFocus = nil
             pendingStop = nil
             bottomStops = false
@@ -203,10 +206,6 @@ struct NotesEditorPage: View {
             finishFileRequest(result)
         } onCancellation: {
             finishFileRequest(nil)
-        }
-        .onChange(of: chrome.isFormatPopoverOpen) { _, open in
-            chrome.controls?.isFormatPopoverOpen = open
-            if !open { DispatchQueue.main.async { chrome.focusText() } }
         }
         .preference(key: PanelPageNoticeClearancePreferenceKey.self, value: noticeClearance)
         // A group, so its identifier never replaces its controls' own.
@@ -284,8 +283,18 @@ struct NotesEditorPage: View {
 
     // MARK: Bottom row
 
+    /// The bottom row; while Aa's format row is open, the format row in its
+    /// place (OD-14: All notes, Aa and New note step aside).
     private var bottomRow: some View {
         AtticControlGroup {
+            NoteFormatRowSwitch(state: chrome.formatRow, model: { [weak chrome] in chrome?.controls?.formatModel }) {
+                bottomButtons
+            }
+        }
+    }
+
+    private var bottomButtons: some View {
+        Group {
             HStack(spacing: 0) {
                 AtticRaisedButton(systemName: Self.libraryButtonGlyph(libraryShown: controller.isLibraryPresented),
                                   label: controller.isLibraryPresented ? "Back" : "All notes",
@@ -320,20 +329,13 @@ struct NotesEditorPage: View {
         }
     }
 
-    /// Aa (mockup p2-16 D): every style and format, with or without a
-    /// selection. ⌘T opens it too.
+    /// Aa (OD-14, p2-36 draft 1): the bottom row turns into the format row
+    /// in place, until ✕ or Esc. ⌘T opens it too.
     private var formatButton: some View {
         AtticRaisedButton(systemName: "textformat", label: "Format", help: String(localized: "Format (⌘T)")) {
-            chrome.openFormatPopover(keyboard: false)
+            chrome.openFormatBar(keyboard: false)
         }
         .accessibilityIdentifier("notes-format-button")
-        .atticDropdown(isPresented: $chrome.isFormatPopoverOpen, prefer: .above, label: String(localized: "Format")) {
-            if let controls = chrome.controls {
-                NoteFormatPopoverView(model: controls.formatModel, openedByKeyboard: chrome.formatPopoverByKeyboard) {
-                    chrome.isFormatPopoverOpen = false
-                }
-            }
-        }
     }
 
     // MARK: Keyboard out of the text (OD-7)
@@ -383,7 +385,9 @@ struct NotesEditorPage: View {
             guard flags.isEmpty else { return false }
             switch stop {
             case .allNotes: toggleLibrary()
-            case .format: chrome.openFormatPopover(keyboard: true)
+            case .format:
+                move(to: .text)
+                chrome.openFormatBar(keyboard: true)
             case .newNote: newNote()
             case .text: return false
             }
@@ -442,8 +446,8 @@ struct NotesEditorPage: View {
                 .disabled(!showsEditor || !controller.canSaveRecoveryCopy(controller.active))
             Button("") { showLibrary(focusSearch: true) }
                 .keyboardShortcut("f", modifiers: [.command, .shift])
-            Button("") { chrome.openFormatPopover(keyboard: true) }
-                .keyboardShortcut(NoteCommandCatalog.formatPopoverShortcut)
+            Button("") { chrome.openFormatBar(keyboard: true) }
+                .keyboardShortcut(NoteCommandCatalog.formatBarShortcut)
                 .disabled(!showsEditor || controller.active?.isReadOnly != false)
         }
         .frame(width: 0, height: 0)

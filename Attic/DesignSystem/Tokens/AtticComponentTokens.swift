@@ -620,13 +620,12 @@ enum AtticNoteFormatMetrics {
     /// From the selection's line to the bar, and from the panel's edge.
     static let barGap: CGFloat = 6
     static let barEdgeMargin: CGFloat = 4
-    /// Aa's pop-over: 300 wide (the five style chips in one row), 32 pt
-    /// toggles, groups spread to the edges, rows 8 apart.
-    static let popoverToggleWidth: CGFloat = 32
-    static let popoverWidth: CGFloat = 300
-    static let popoverRowGap: CGFloat = 8
-    static let popoverGroupGap: CGFloat = 10
-    static let styleChipPadding: CGFloat = 5
+    /// The format row (OD-14): 28 pt cells, 24 when a long style name
+    /// would not fit the panel; 16 pt upright lines 4 from their groups.
+    static let rowToggleWidth: CGFloat = 28
+    static let rowCompactToggleWidth: CGFloat = 24
+    static let rowSeparatorHeight: CGFloat = 16
+    static let rowSeparatorPadding: CGFloat = 4
     /// The `/` list, the date card and the link card, 6 below the line.
     static let slashMaxVisibleRows = 9
     static let linkCardWidth: CGFloat = 272

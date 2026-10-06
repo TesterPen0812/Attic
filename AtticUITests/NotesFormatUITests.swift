@@ -148,15 +148,20 @@ final class NotesFormatUITests: XCTestCase {
         XCTAssertTrue(element("notes-library").exists, "and the note's text did not take the page back")
     }
 
-    func testCommandTOpensAaWhichStylesTheCaretParagraph() {
+    func testCommandTOpensTheFormatRowWhichStylesTheCaretParagraph() {
         app.typeText("Pricing\nBefore launch")
         app.typeKey("t", modifierFlags: .command)
-        let heading = element("notes-aa-notes-format-heading2")
-        require(heading, "Aa opens with ⌘T")
+        let pill = element("notes-format-row-style")
+        require(pill, "⌘T turns the bottom row into the format row")
+        XCTAssertFalse(element("notes-new-note").exists, "New note steps aside")
+        pill.click()
+        let heading = element("notes-format-row-notes-format-heading2")
+        require(heading, "the style list")
         heading.click()
-        waitFor((element("notes-aa-notes-format-heading2").value as? String) == "current style", "Heading is current")
+        waitFor((element("notes-format-row-style").value as? String) == "Heading", "Heading is current")
         app.typeKey(.escape, modifierFlags: [])
-        waitFor(!element("notes-format-popover").exists, "Esc closes Aa")
+        waitFor(!element("notes-format-row").exists, "Esc closes the format row")
+        require(element("notes-new-note"), "and the bottom row is back")
         app.typeText(" soon")
         waitFor(noteValue == "Pricing\nBefore launch soon", "the keyboard is back in the note (\(noteValue))")
     }
@@ -187,12 +192,15 @@ final class NotesFormatUITests: XCTestCase {
         // paragraph, rather than the pending typing attributes after choosing.
         app.typeKey(.leftArrow, modifierFlags: [])
         app.typeKey("t", modifierFlags: .command)
-        let popover = element("notes-format-popover")
-        require(popover, "Aa opens over the typed paragraph")
-        let prefix = value == "current style" ? "notes-aa-notes-format-" : "notes-format-"
-        let option = popover.descendants(matching: .any)[prefix + command]
-        require(option, "Aa exposes the typed paragraph's style")
-        waitFor((option.value as? String) == value, "the typed paragraph is " + command)
+        let row = element("notes-format-row")
+        require(row, "the format row opens over the typed paragraph")
+        if value == "current style" {
+            waitFor((element("notes-format-row-style").value as? String) == "Heading", "the typed paragraph is " + command)
+        } else {
+            let option = row.descendants(matching: .any)["notes-format-" + command]
+            require(option, "the row exposes the typed paragraph's list type")
+            waitFor((option.value as? String) == value, "the typed paragraph is " + command)
+        }
     }
 
     func testSlashHeadingReturnThenTypingProducesHeading() {

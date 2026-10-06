@@ -118,7 +118,7 @@ enum NoteFormatCaptureScene {
             }
         case "aa":
             textView.setSelectedRange(NSRange(location: range(of: "Keep pricing", in: textView).location, length: 0))
-            chrome.openFormatPopover(keyboard: false)
+            chrome.openFormatBar(keyboard: false)
         case "slash":
             textView.insertNewline(nil)
             textView.insertNewline(nil)

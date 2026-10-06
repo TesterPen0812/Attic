@@ -1,42 +1,16 @@
 import AppKit
 import SwiftUI
 
-/// Which "/" rows, date card and hint a new draft has earned: the first
-/// three new drafts show "Type / for lists, checklists and more".
-@MainActor
-enum NoteSlashHintPolicy {
-    static let draftLimit = 3
-    static let countKey = "notes.slashHint.draftCount"
-    static var defaults: UserDefaults = .standard
-    private static var granted = Set<UUID>()
-
-    /// Whether this draft shows the hint; the first look at a new draft
-    /// uses up one of the three.
-    static func shows(noteID: UUID, isNewDraft: Bool) -> Bool {
-        if granted.contains(noteID) { return true }
-        guard isNewDraft, defaults.integer(forKey: countKey) < draftLimit else { return false }
-        granted.insert(noteID)
-        defaults.set(defaults.integer(forKey: countKey) + 1, forKey: countKey)
-        return true
-    }
-
-    /// Typing "/" once is enough: the hint is not shown again.
-    static func learned() {
-        defaults.set(draftLimit, forKey: countKey)
-    }
-
-    static func resetForTesting() { granted = [] }
-}
-
 /// The formatting and insertion UI laid over one note's text view: the
 /// selection bar, the `/` list, the date and link cards, the link address
-/// on hover, the one-time hint, the right-click rows and the keys that
+/// on hover, the empty-line hint, the right-click rows and the keys that
 /// reach them. Everything runs through `router` (one command layer). Built
 /// per appearance with the text view and invalidated with it.
 ///
 /// Performance: typing with nothing shown costs one range check per
 /// selection change; the state snapshot is read once per run-loop turn and
-/// only while the bar or Aa shows; nothing here re-renders the editor.
+/// only while the bar or the format row shows; nothing here re-renders
+/// the editor.
 @MainActor
 final class NoteFormatControls: NSObject {
     /// The controls of the note the menu bar's Insert and Format act on.
@@ -56,22 +30,29 @@ final class NoteFormatControls: NSObject {
     private let addressHost: AtticOverlayHostingView
     private(set) var design: AtticDesignContext
     private let noteID: UUID
-    private let isNewDraft: Bool
 
-    /// ⌘T, and Aa's own button: the page's pop-over.
-    var requestFormatPopover: ((_ keyboard: Bool) -> Void)?
+    /// ⌘T, and Aa's own button: the page's format row.
+    var requestFormatBar: ((_ keyboard: Bool) -> Void)?
     /// ⌃Tab (true) or ⌃⇧Tab (false) with no selection bar: the keyboard
     /// leaves the text for the page's next or previous control (OD-7).
     var leaveEditor: ((_ forward: Bool) -> Void)?
-    var closeFormatPopover: (() -> Void)?
+    var closeFormatBar: (() -> Void)?
     /// Image or File…: the page's open panel. `slash` is the `/` row's
     /// request (one file, replacing its command); nil for Insert.
     var requestFile: ((_ slash: NoteSlashFileRequest?) -> Void)?
     /// A `/` row was taken (tests: the list runs the engine's commands).
     var onSlashPick: ((NoteSlashItem.Kind) -> Void)?
-    /// Aa is open: its toggles follow the selection too.
-    var isFormatPopoverOpen = false {
-        didSet { if isFormatPopoverOpen { refreshSnapshot() } }
+    /// The format row is open (OD-14): its toggles follow the caret's line.
+    var isFormatBarOpen = false {
+        didSet {
+            guard isFormatBarOpen != oldValue else { return }
+            if isFormatBarOpen {
+                refreshSnapshot()
+            } else {
+                formatModel.rowKeyboardIndex = nil
+                if formatModel.rowStyleListOpen { formatModel.rowStyleListOpen = false }
+            }
+        }
     }
 
     private var selectionObserver: NSObjectProtocol?
@@ -91,13 +72,14 @@ final class NoteFormatControls: NSObject {
     private var cardAnchor: NSRange?
     private var hoverURL: String?
     private var hoverWork: DispatchWorkItem?
-    private var hintEligible = false
     private var hintShown = false
     private var barWidth: CGFloat = 0
     /// Diagnostic: how many times the state was read (never while typing
     /// with nothing shown).
     private(set) var snapshotCount = 0
 
+    /// `isNewDraft` is no longer read: the empty-line hint (OD-14) shows on
+    /// every note, not only on the first new drafts.
     init(engine: NoteEditorEngine, textView: NoteEditorTextView, scrollView: NSScrollView,
          design: AtticDesignContext, noteID: UUID, isNewDraft: Bool) {
         self.engine = engine
@@ -106,7 +88,6 @@ final class NoteFormatControls: NSObject {
         self.scrollView = scrollView
         self.design = design
         self.noteID = noteID
-        self.isNewDraft = isNewDraft
         barHost = AtticOverlayHostingView(rootView: AnyView(EmptyView()))
         slashHost = AtticOverlayHostingView(rootView: AnyView(EmptyView()))
         cardHost = AtticOverlayHostingView(rootView: AnyView(EmptyView()))
@@ -140,9 +121,6 @@ final class NoteFormatControls: NSObject {
         }
         router.requestDate = { [weak self] in self?.openDateCard(fromSlash: false) }
         router.requestFile = { [weak self] in self?.requestFile?(nil) }
-        formatModel.willRequestLink = { [weak self] in
-            if self?.isFormatPopoverOpen == true { self?.closeFormatPopover?() }
-        }
         slashModel.onPick = { [weak self] kind in self?.pickSlash(kind) }
         cardModel.onCommitDate = { [weak self] date in self?.commitDate(date) }
         cardModel.onCommitLink = { [weak self] url in self?.commitLink(url) ?? false }
@@ -187,7 +165,6 @@ final class NoteFormatControls: NSObject {
                                   owner: self, userInfo: nil)
         textView.addTrackingArea(area)
         trackingArea = area
-        hintEligible = NoteSlashHintPolicy.shows(noteID: noteID, isNewDraft: isNewDraft)
     }
 
     func invalidate() {
@@ -258,10 +235,12 @@ final class NoteFormatControls: NSObject {
         // Typing with nothing shown: one range check.
         let current = selection
         if current.length == 0, !formatModel.barShown, !slashModel.shown, cardModel.card == nil,
-           !isFormatPopoverOpen, engine.slashSession == nil, !hintEligible {
+           !isFormatBarOpen, engine.slashSession == nil, !hintShown, !caretOnEmptyLine(current) {
             dismissedSelection = nil
             return
         }
+        // The first keystroke on the hint's line: gone before the text draws.
+        if hintShown, !caretOnEmptyLine(current) { hideHint() }
         if dismissedSelection != nil, dismissedSelection != current { dismissedSelection = nil }
         scheduleRefresh()
     }
@@ -284,8 +263,8 @@ final class NoteFormatControls: NSObject {
         let current = selection
         let focused = textView.window?.firstResponder === textView || barOwnsKeyboard
         let allowsBar = current.length > 0 && focused && !textView.hasMarkedText() && engine.activity == .idle
-            && cardModel.card == nil && dismissedSelection != current && !slashModel.shown && !isFormatPopoverOpen
-        if allowsBar || isFormatPopoverOpen {
+            && cardModel.card == nil && dismissedSelection != current && !slashModel.shown
+        if allowsBar || isFormatBarOpen {
             snapshotCount += 1
             let snapshot = NoteFormatSnapshot.make(router: router, selection: current)
             formatModel.setSnapshot(snapshot)
@@ -310,7 +289,7 @@ final class NoteFormatControls: NSObject {
         if formatModel.barShown { placeBar() }
         if slashModel.shown { placeSlashList() }
         if cardModel.card != nil { placeCard() }
-        if hintEligible { updateHint() }
+        if hintShown { updateHint() }
         if !addressHost.isHidden { hideAddress() }
     }
 
@@ -451,13 +430,19 @@ final class NoteFormatControls: NSObject {
         // ⌃Tab / ⌃⇧Tab (OD-7): the selection bar, when one shows, is the
         // next control (⌃Tab again returns to the text); otherwise the
         // keyboard leaves the editor for the page's next or previous control.
-        // Aa stays on ⌘T and is a stop of its own on the way.
+        // Aa stays on ⌘T and is a stop of its own on the way. While the
+        // format row is open (its row has no other controls), ⌃Tab goes
+        // between the text and the row.
         if event.keyCode == 48, flags == [.control] || flags == [.control, .shift] {
             let forward = flags == [.control]
             if formatModel.barKeyboardIndex != nil {
                 exitBarKeyboard()
             } else if forward, formatModel.barShown {
                 enterBarKeyboard()
+            } else if formatModel.rowKeyboardIndex != nil {
+                exitRowKeyboard()
+            } else if isFormatBarOpen {
+                enterRowKeyboard(at: forward ? 0 : NoteFormatRowItem.all.count - 1)
             } else if let leaveEditor {
                 leaveEditor(forward)
             } else {
@@ -466,6 +451,7 @@ final class NoteFormatControls: NSObject {
             return true
         }
         if formatModel.barKeyboardIndex != nil { return handleBarKey(event, flags: flags) }
+        if formatModel.rowKeyboardIndex != nil { return handleRowKey(event, flags: flags) }
         guard flags.contains(.command), let command = NoteCommandCatalog.command(for: event) else { return false }
         router.run(command, from: .shortcut)
         return true
@@ -473,27 +459,99 @@ final class NoteFormatControls: NSObject {
 
     /// Esc closes the innermost open thing and is used up there, so it can
     /// never also reach the panel's "nothing left to close" (which hides the
-    /// panel): Aa's pop-over (its own window), then a date or link card
-    /// (its field has the keyboard). The bar, the bar's keyboard mode and
-    /// the `/` list take Esc in the text view's own command path. Returns
-    /// nil when Esc isn't this chain's.
+    /// panel): the format row's style list, then a date or link card (its
+    /// field has the keyboard), then the format row itself, unless the
+    /// selection bar, its keyboard mode or the `/` list shows: those take
+    /// Esc in the text view's own command path first. Returns nil when Esc
+    /// isn't this chain's.
     func closeInnermostOnEscape(_ event: NSEvent) -> Bool? {
         let flags = event.modifierFlags.intersection([.command, .option, .shift, .control])
         guard event.type == .keyDown, flags.isEmpty, let window = textView?.window else { return nil }
         // An input method keeps its Esc wherever the keyboard is.
         if let editor = (event.window ?? window).firstResponder as? NSTextView, editor.hasMarkedText() { return nil }
-        if isFormatPopoverOpen {
-            // Whichever window has the key: Aa's pop-over, or the panel when
-            // the pop-over didn't take it (the note's text would otherwise
-            // have nothing left to close and hide the panel).
-            closeFormatPopover?()
+        if formatModel.rowStyleListOpen {
+            formatModel.rowStyleListOpen = false
             return true
         }
         if cardModel.card != nil, event.window === window {
             cancelCard()
             return true
         }
+        if isFormatBarOpen, !formatModel.barShown, formatModel.barKeyboardIndex == nil, !slashModel.shown {
+            // The row closes and the keyboard is the text's again (the note's
+            // text would otherwise have nothing left to close and hide the
+            // panel).
+            closeFormatBar?()
+            return true
+        }
         return nil
+    }
+
+    // MARK: The format row's keyboard (OD-14)
+
+    /// ⌘T or ⌃Tab: the keyboard's ring on one of the row's controls; the
+    /// text keeps the caret (and the keys, read here first).
+    func enterRowKeyboard(at index: Int = 0) {
+        guard isFormatBarOpen else { return }
+        exitBarKeyboard()
+        formatModel.rowKeyboardIndex = max(0, min(index, NoteFormatRowItem.all.count - 1))
+        announceRowItem()
+    }
+
+    func exitRowKeyboard() {
+        formatModel.rowKeyboardIndex = nil
+    }
+
+    private func handleRowKey(_ event: NSEvent, flags: NSEvent.ModifierFlags) -> Bool {
+        guard let index = formatModel.rowKeyboardIndex else { return false }
+        switch event.keyCode {
+        case 123 where flags.isEmpty: formatModel.rowKeyboardIndex = NoteFormatRowItem.step(index, forward: false)
+        case 124 where flags.isEmpty: formatModel.rowKeyboardIndex = NoteFormatRowItem.step(index, forward: true)
+        case 48 where flags.isEmpty || flags == [.shift]:
+            formatModel.rowKeyboardIndex = NoteFormatRowItem.step(index, forward: !flags.contains(.shift))
+        case 36, 76, 49:
+            guard flags.isEmpty else { exitRowKeyboard(); return false }
+            pressRowItem(NoteFormatRowItem.all[index])
+            return true
+        default:
+            // Anything else is writing: the ring goes, the key reaches the text.
+            exitRowKeyboard()
+            return false
+        }
+        announceRowItem()
+        return true
+    }
+
+    func pressRowItem(_ item: NoteFormatRowItem) {
+        switch item {
+        case .style:
+            guard NoteCommandCatalog.styles.contains(where: { formatModel.snapshot.isEnabled($0) }) else { NSSound.beep(); return }
+            formatModel.rowStyleListOpen = true
+        case let .command(command):
+            guard formatModel.snapshot.isEnabled(command) else { NSSound.beep(); return }
+            formatModel.run(command, from: .formatBar)
+            announceRowItem()
+        case .close:
+            closeFormatBar?()
+        }
+    }
+
+    private func announceRowItem() {
+        guard let index = formatModel.rowKeyboardIndex, let textView else { return }
+        let text: String
+        switch NoteFormatRowItem.all[index] {
+        case .style:
+            text = String(localized: "Style, \(NoteCommandCatalog.styleName(formatModel.snapshot.paragraph))")
+        case let .command(command):
+            let title = NoteCommandCatalog.menuTitle(command).replacingOccurrences(of: "…", with: "")
+            text = NoteCommandCatalog.lists.contains(command)
+                ? "\(title), \(AtticFormatValue.spokenValue(formatModel.snapshot.value(command)))" : title
+        case .close:
+            text = String(localized: "Close Format")
+        }
+        NSAccessibility.post(element: textView, notification: .announcementRequested, userInfo: [
+            .announcement: text, .priority: NSAccessibilityPriorityLevel.high.rawValue
+        ])
     }
 
     func enterBarKeyboard() {
@@ -583,7 +641,6 @@ final class NoteFormatControls: NSObject {
             scheduleRefresh()
             return
         }
-        NoteSlashHintPolicy.learned()
         hideBar()
         // A list that opens anew takes its side afresh; while it shows,
         // filtering keeps the side it has.
@@ -911,30 +968,49 @@ final class NoteFormatControls: NSObject {
         addressHost.isHidden = true
     }
 
-    // MARK: One-time hint
+    // MARK: Empty-line hint (OD-14, p2-36 draft 7)
 
-    private func updateHint() {
-        guard hintEligible, let textView else { return }
+    /// The caret sits on an empty line of the body (never the title's): two
+    /// character reads, cheap enough for every selection change.
+    func caretOnEmptyLine(_ range: NSRange) -> Bool {
+        guard range.length == 0 else { return false }
         let string = engine.textStorage.string as NSString
-        let titleEnd = string.range(of: "\n").location
-        let bodyEmpty = titleEnd != NSNotFound && titleEnd == string.length - 1
-        let caretOnBody = bodyEmpty && selection.length == 0 && selection.location == string.length
-        let show = caretOnBody && !textView.hasMarkedText() && engine.slashSession == nil && cardModel.card == nil
+        let location = range.location
+        guard location > 0, location <= string.length, Self.isLineBreak(string.character(at: location - 1)) else { return false }
+        return location == string.length || Self.isLineBreak(string.character(at: location))
+    }
+
+    private static func isLineBreak(_ character: unichar) -> Bool {
+        character == 0x0A || character == 0x0D || character == 0x2029 || character == 0x2028
+    }
+
+    /// The hint shows on an empty Body line with the caret in it (a line
+    /// already given a style, or a list item, keeps its own look), never
+    /// during a composition, the `/` list or a card.
+    private func updateHint() {
+        guard let textView else { return }
+        let current = selection
+        let show = !engine.isReadOnly && caretOnEmptyLine(current) && engine.paragraphStyle(at: current.location) == .body
+            && !textView.hasMarkedText() && engine.slashSession == nil && cardModel.card == nil
         if show, let rect = caretRect() {
             let size = hintHost.fittingSize
             let frame = NSRect(x: rect.minX, y: rect.minY + (rect.height - size.height) / 2, width: size.width, height: size.height).integral
             if hintHost.frame != frame { hintHost.frame = frame }
-            hintHost.isHidden = false
-            hintShown = true
+            if !hintShown {
+                hintHost.isHidden = false
+                hintShown = true
+                // A hint, not content: VoiceOver reads it after the text.
+                textView.setAccessibilityHelp(NoteSlashHintView.text)
+            }
         } else if hintShown {
-            hintHost.isHidden = true
-            hintShown = false
+            hideHint()
         }
-        if !bodyEmpty, string.length > (titleEnd == NSNotFound ? string.length : titleEnd + 1) {
-            // The body has text: the hint's job on this draft is done.
-            hintEligible = false
-            hintHost.isHidden = true
-        }
+    }
+
+    private func hideHint() {
+        hintHost.isHidden = true
+        hintShown = false
+        textView?.setAccessibilityHelp(nil)
     }
 
     var isHintVisible: Bool { !hintHost.isHidden }

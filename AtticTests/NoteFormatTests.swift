@@ -298,7 +298,7 @@ final class NotesShortcutMetadataTests: XCTestCase {
     func testOwnerShortcutsAreSharedByEveryFormatMenuAndHaveNoNotesCollisions() {
         let engine = NoteEditorEngine(noteID: UUID(), document: NoteDocument(blocks: [.text("Title"), .text("Body")]))
         let router = NoteCommandRouter(engine: engine)
-        for surface: NoteCommandSurface in [.noteMenu, .contextMenu, .menuBar, .formatPopover, .selectionBar] {
+        for surface: NoteCommandSurface in [.noteMenu, .contextMenu, .menuBar, .formatBar, .selectionBar] {
             let menu = router.formatMenuCommands(from: surface)
             let expected: [(String, KeyEquivalent, EventModifiers)] = [
                 ("Quote", "4", [.command, .option]), ("Mono", "5", [.command, .option]),

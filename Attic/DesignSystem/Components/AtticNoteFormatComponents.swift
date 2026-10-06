@@ -33,6 +33,8 @@ struct AtticFormatToggle<Face: View>: View {
     var isKeyboardFocused = false
     /// Said by VoiceOver while the control is dimmed.
     var disabledReason: String?
+    /// An action rather than a toggle (indent, close): no on/off value.
+    var announcesState = true
     let action: () -> Void
     @ViewBuilder let face: (AtticInk) -> Face
 
@@ -55,9 +57,9 @@ struct AtticFormatToggle<Face: View>: View {
         .onHover { hovered = $0 }
         .help(help ?? label)
         .accessibilityLabel(label)
-        .accessibilityValue(value.spoken)
+        .accessibilityValue(announcesState ? value.spoken : "")
         .accessibilityHint(isEnabled ? "" : (disabledReason ?? ""))
-        .accessibilityAddTraits(value == .on ? [.isButton, .isSelected] : .isButton)
+        .accessibilityAddTraits(announcesState && value == .on ? [.isButton, .isSelected] : .isButton)
     }
 
 }
@@ -66,9 +68,9 @@ extension AtticFormatToggle where Face == AtticIcon {
     /// A glyph toggle (B, I, a list).
     init(systemName: String, value: Value, label: String, help: String? = nil,
          width: CGFloat = AtticNoteFormatMetrics.barToggleWidth, isKeyboardFocused: Bool = false,
-         disabledReason: String? = nil, action: @escaping () -> Void) {
+         disabledReason: String? = nil, announcesState: Bool = true, action: @escaping () -> Void) {
         self.init(value: value, label: label, help: help, width: width, isKeyboardFocused: isKeyboardFocused,
-                  disabledReason: disabledReason, action: action) { ink in
+                  disabledReason: disabledReason, announcesState: announcesState, action: action) { ink in
             AtticIcon(systemName: systemName, size: AtticSmallControlMetrics.iconSize, weight: .regular, ink: ink)
         }
     }
@@ -182,56 +184,52 @@ struct AtticFormatStyleFace: View {
     }
 }
 
-// MARK: - Aa
+// MARK: - The format row (OD-14, p2-36 draft 1)
 
-/// One of Aa's style chips (Title, Heading, Subheading, Body, Mono), each
-/// written in a hint of its own style; the current one sits on the chip.
-struct AtticFormatStyleChip: View {
-    enum Kind { case title, heading, subheading, body, mono }
-
-    let kind: Kind
-    let title: String
-    let isOn: Bool
-    var isKeyboardFocused = false
-    var disabledReason: String?
-    let action: () -> Void
-
-    @Environment(\.atticDesign) private var design
-    @Environment(\.isEnabled) private var isEnabled
-    @State private var hovered = false
+/// The bottom row turned into a one-row format bar: the bottom row's own
+/// Liquid Glass (the drawn recipe under Reduce Transparency), as wide as
+/// the row and as tall as its buttons, its controls in a 4 pt inset.
+struct AtticFormatRowSurface<Content: View>: View {
+    var height: CGFloat = AtticControlSize.panelButton.height
+    @ViewBuilder let content: Content
+    @State private var probeID = UUID()
 
     var body: some View {
-        let height = AtticControlSize.smallHeight
         let radius = AtticRadius.control(height: height)
-        let fill: AtticRGBA = isOn ? design.tokens.chipSelected : (hovered && isEnabled ? design.tokens.chipHover : .clear)
-        Button(action: action) {
-            Text(title)
-                .font(font)
-                .foregroundStyle(design.tokens.ink(isEnabled ? .heading : .disabledText).color)
-                .lineLimit(1)
-                .fixedSize()
-                .padding(.horizontal, AtticNoteFormatMetrics.styleChipPadding)
-                .frame(maxWidth: .infinity)
-                .frame(height: height)
-                .background(RoundedRectangle(cornerRadius: radius, style: .continuous).fill(fill.color))
-                .contentShape(RoundedRectangle(cornerRadius: radius, style: .continuous))
-        }
-        .buttonStyle(AtticUndimmedButtonStyle())
-        .focusEffectDisabled()
-        .atticFocusRing(isKeyboardFocused, cornerRadius: radius)
-        .onHover { hovered = $0 }
-        .accessibilityLabel(title)
-        .accessibilityValue(isOn ? String(localized: "current style") : "")
-        .accessibilityHint(isEnabled ? "" : (disabledReason ?? ""))
-        .accessibilityAddTraits(isOn ? [.isButton, .isSelected] : .isButton)
+        HStack(spacing: 0) { content }
+            .padding(.horizontal, AtticControlSize.capsuleInset)
+            .frame(maxWidth: .infinity)
+            .frame(height: height)
+            .atticRaisedMaterial(cornerRadius: radius, interactive: false)
+            .atticControlProbe("Format row", id: probeID, expectedSize: nil, radius: radius, expectedRadius: 15)
     }
+}
 
-    private var font: Font {
-        switch kind {
-        case .title: .system(size: 13, weight: .bold, design: .rounded)
-        case .heading: .system(size: 13, weight: .semibold, design: .rounded)
-        case .subheading: .system(size: 12, weight: .semibold, design: .rounded)
-        case .body: .system(size: 13, weight: .regular, design: .rounded)
+/// The short upright line between the format row's groups.
+struct AtticFormatSeparator: View {
+    @Environment(\.atticDesign) private var design
+
+    var body: some View {
+        let m = AtticNoteFormatMetrics.self
+        Rectangle()
+            .fill(design.tokens.divider.color)
+            .frame(width: 1, height: m.rowSeparatorHeight)
+            .padding(.horizontal, m.rowSeparatorPadding)
+            .accessibilityHidden(true)
+    }
+}
+
+/// A paragraph style as the style list draws it: each name in a hint of
+/// its own style (Title … Mono).
+enum AtticFormatStyleKind {
+    case title, heading, subheading, body, mono
+
+    var font: Font {
+        switch self {
+        case .title: .system(size: 15, weight: .bold)
+        case .heading: .system(size: 14, weight: .semibold)
+        case .subheading: .system(size: 13.5, weight: .semibold)
+        case .body: .system(size: 13, weight: .regular)
         case .mono: .system(size: 12, weight: .regular, design: .monospaced)
         }
     }

@@ -16,10 +16,10 @@ final class NotesPageChrome: ObservableObject {
     /// The tag editor is open, from the tag line or from the menu button.
     @Published var tagEditor: TagEditorAnchor?
 
-    /// Aa's pop-over is open; `formatPopoverByKeyboard` when ⌘T or ⌃Tab
-    /// opened it (its keyboard ring shows at once).
-    @Published var isFormatPopoverOpen = false
-    var formatPopoverByKeyboard = false
+    /// Aa's format row (OD-14). Its own object, not a published value
+    /// here: opening or closing it redraws the bottom row alone, never the
+    /// page or the note (`NoteFormatRowSwitch`).
+    let formatRow = NoteFormatRowState()
     /// ⌃Tab / ⌃⇧Tab out of the text (OD-7): the page takes the keyboard
     /// to its next (true) or previous control.
     var leaveEditor: ((_ forward: Bool) -> Void)?
@@ -59,9 +59,29 @@ final class NotesPageChrome: ObservableObject {
     /// The images and files of the note on screen (ring, drop, menus).
     fileprivate(set) weak var objectControls: NoteObjectControls?
 
-    func openFormatPopover(keyboard: Bool) {
-        formatPopoverByKeyboard = keyboard
-        if !isFormatPopoverOpen { isFormatPopoverOpen = true }
+    init() {
+        formatRow.onChange = { [weak self] open, keyboard in self?.formatRowChanged(open: open, keyboard: keyboard) }
+    }
+
+    /// Aa, ⌘T, or Return on Aa's keyboard stop: the bottom row becomes the
+    /// format row. From the keyboard, its ring shows on the style at once.
+    func openFormatBar(keyboard: Bool) {
+        guard controls != nil else { return }
+        formatRow.open(keyboard: keyboard)
+    }
+
+    func closeFormatBar() { formatRow.close() }
+
+    private func formatRowChanged(open: Bool, keyboard: Bool) {
+        controls?.isFormatBarOpen = open
+        if open {
+            guard keyboard else { return }
+            if controls?.hasKeyboard == false { returnKeyboardToText() }
+            controls?.enterRowKeyboard()
+        } else {
+            // ✕ or Esc: the keyboard is the text's, where the caret was.
+            DispatchQueue.main.async { [weak self] in self?.focusText() }
+        }
     }
 
     /// ⇧⌘I, the ⋯ and the header title: the note's native menu, under the
@@ -744,14 +764,15 @@ struct NoteEditorRepresentable: NSViewRepresentable {
                                           noteID: session.noteID,
                                           isNewDraft: !session.isPersisted && session.isUntouchedDraft)
         let chrome = chrome
-        controls.requestFormatPopover = { [weak chrome] keyboard in chrome?.openFormatPopover(keyboard: keyboard) }
+        controls.requestFormatBar = { [weak chrome] keyboard in chrome?.openFormatBar(keyboard: keyboard) }
         controls.leaveEditor = { [weak chrome] forward in chrome?.leaveEditor?(forward) }
-        controls.closeFormatPopover = { [weak chrome] in chrome?.isFormatPopoverOpen = false }
+        controls.closeFormatBar = { [weak chrome] in chrome?.closeFormatBar() }
         controls.requestFile = { [weak chrome, sessionID = session.id] slash in
             chrome?.fileRequest = slash.map { .slash(NoteSlashFileTicket(sessionID: sessionID, request: $0)) } ?? .insert
         }
         context.coordinator.controls = controls
         chrome.controls = controls
+        controls.isFormatBarOpen = chrome.formatRow.isOpen
         let objects = NoteObjectControls(engine: engine, textView: textView)
         objects.requestSource = { [weak chrome] request in
             switch request {

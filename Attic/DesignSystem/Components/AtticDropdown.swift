@@ -276,6 +276,8 @@ struct AtticDropdownRow: View {
     var itemCount: Int?
     var isHighlighted = false
     var titleInk: AtticInk = .body
+    /// The name in its own font (the style list: each style in its style).
+    var titleFont: Font?
     var onHover: ((Bool) -> Void)?
     let action: () -> Void
 
@@ -285,7 +287,7 @@ struct AtticDropdownRow: View {
     init(title: String, systemName: String? = nil, check: AtticCheckState? = nil, checkGlyph: String? = nil,
          mark: AtticPriority? = nil,
          detail: String? = nil, match: String? = nil, isHighlighted: Bool = false, titleInk: AtticInk = .body,
-         onHover: ((Bool) -> Void)? = nil, position: Int? = nil, itemCount: Int? = nil, scrollID: String? = nil, action: @escaping () -> Void) {
+         titleFont: Font? = nil, onHover: ((Bool) -> Void)? = nil, position: Int? = nil, itemCount: Int? = nil, scrollID: String? = nil, action: @escaping () -> Void) {
         self.scrollID = scrollID
         self.position = position
         self.itemCount = itemCount
@@ -298,6 +300,7 @@ struct AtticDropdownRow: View {
         self.match = match
         self.isHighlighted = isHighlighted
         self.titleInk = titleInk
+        self.titleFont = titleFont
         self.onHover = onHover
         self.action = action
     }
@@ -385,7 +388,13 @@ struct AtticDropdownRow: View {
 
     @ViewBuilder
     private var name: some View {
-        if let match, !match.isEmpty, let range = title.range(of: match, options: [.caseInsensitive, .diacriticInsensitive]) {
+        if let titleFont {
+            Text(title)
+                .font(titleFont)
+                .foregroundStyle(design.tokens.color(titleInk))
+                .lineLimit(1)
+                .fixedSize()
+        } else if let match, !match.isEmpty, let range = title.range(of: match, options: [.caseInsensitive, .diacriticInsensitive]) {
             Text(Self.emboldened(title, range: range))
                 .font(AtticTextStyle.dropdownRow.font)
                 .foregroundStyle(design.tokens.color(titleInk))

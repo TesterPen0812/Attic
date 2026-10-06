@@ -2,7 +2,7 @@ import AppKit
 import SwiftUI
 
 /// What every format command is at the selection (enabled, on/off/mixed),
-/// read once from the engine for the bar and Aa. Only the selected
+/// read once from the engine for the bar and the format row. Only the selected
 /// paragraphs are inspected (`NoteEditorEngine.validate`).
 struct NoteFormatSnapshot: Equatable {
     var paragraph: NoteParagraphStyle?
@@ -11,7 +11,7 @@ struct NoteFormatSnapshot: Equatable {
 
     static let empty = NoteFormatSnapshot()
 
-    /// The commands the bar and Aa show.
+    /// The commands the bar and the format row show.
     static let shownCommands: [NoteFormatCommand] = {
         var seen = Set<NoteFormatCommand>()
         return (NoteCommandCatalog.styles + NoteCommandCatalog.marks + NoteCommandCatalog.inline
@@ -49,46 +49,26 @@ enum NoteFormatBarItem: Hashable {
     case command(NoteFormatCommand)
 
     static let all: [NoteFormatBarItem] = [.style]
-        + (NoteCommandCatalog.barMarks + NoteCommandCatalog.barInline + NoteCommandCatalog.barLists).map { .command($0) }
+        + (NoteCommandCatalog.barMarks + NoteCommandCatalog.barInline).map { .command($0) }
 }
 
-struct NoteGridIndex: Equatable {
-    var row: Int
-    var column: Int
-}
+/// The format row's controls in keyboard order (OD-14, p2-36 draft 1):
+/// the style, the four list types, outdent and indent, then close.
+enum NoteFormatRowItem: Hashable {
+    case style
+    case command(NoteFormatCommand)
+    case close
 
-/// Aa's controls, row by row (← → within and across rows, ↑ ↓ between).
-enum NoteFormatPopoverGrid {
-    static let rows: [[NoteFormatCommand]] = [
-        NoteCommandCatalog.styles,
-        NoteCommandCatalog.marks + NoteCommandCatalog.inline,
-        NoteCommandCatalog.lists + NoteCommandCatalog.indents
-    ]
+    static let all: [NoteFormatRowItem] = [.style]
+        + (NoteCommandCatalog.lists + NoteCommandCatalog.indents).map { .command($0) } + [.close]
 
-    static func move(_ index: NoteGridIndex, by key: KeyEquivalent) -> NoteGridIndex {
-        var row = index.row
-        var column = index.column
-        switch key {
-        case .leftArrow:
-            if column > 0 { column -= 1 } else if row > 0 { row -= 1; column = rows[row].count - 1 }
-        case .rightArrow:
-            if column < rows[row].count - 1 { column += 1 } else if row < rows.count - 1 { row += 1; column = 0 }
-        case .upArrow:
-            if row > 0 { row -= 1; column = min(column, rows[row].count - 1) }
-        case .downArrow:
-            if row < rows.count - 1 { row += 1; column = min(column, rows[row].count - 1) }
-        default: break
-        }
-        return NoteGridIndex(row: row, column: column)
-    }
-
-    static func command(at index: NoteGridIndex) -> NoteFormatCommand? {
-        guard rows.indices.contains(index.row), rows[index.row].indices.contains(index.column) else { return nil }
-        return rows[index.row][index.column]
+    /// The index after `index`, `forward` or back, round the row.
+    static func step(_ index: Int, forward: Bool) -> Int {
+        (index + (forward ? 1 : all.count - 1)) % all.count
     }
 }
 
-/// The state the selection bar and Aa draw. Published only when a value
+/// The state the selection bar and the format row draw. Published only when a value
 /// changes, and never while typing with nothing shown.
 @MainActor
 final class NoteFormatModel: ObservableObject {
@@ -99,14 +79,16 @@ final class NoteFormatModel: ObservableObject {
     @Published var barBelow = false
     /// The keyboard's position in the bar (⌃Tab), or nil.
     @Published var barKeyboardIndex: Int?
-    /// The keyboard's position in Aa, once an arrow key has moved it.
-    @Published var popoverKeyboardIndex: NoteGridIndex?
+    /// The keyboard's position in the format row (⌘T, ⌃Tab), or nil.
+    @Published var rowKeyboardIndex: Int?
+    /// The format row's style list is open.
+    @Published var rowStyleListOpen = false
     /// The note's highlight colour, for the highlight toggle's swatch.
     @Published var highlightSwatch: AtticRGBA = .clear
 
     weak var router: NoteCommandRouter?
-    /// Opens the link card (the bar's and Aa's link toggle go through the
-    /// engine's link request; this closes Aa first).
+    /// Before the link card opens (the bar's link toggle goes through the
+    /// engine's link request).
     var willRequestLink: (() -> Void)?
 
     func setSnapshot(_ value: NoteFormatSnapshot) {
@@ -134,6 +116,30 @@ final class NoteFormatModel: ObservableObject {
         let title = NoteCommandCatalog.menuTitle(command).replacingOccurrences(of: "…", with: "")
         guard let shortcut = NoteCommandCatalog.shortcutLabel(command) else { return title }
         return "\(title) \(shortcut)"
+    }
+}
+
+/// Whether Aa's format row is open (OD-14). Only the bottom row observes
+/// it, so opening and closing never redraw the page or the note.
+@MainActor
+final class NoteFormatRowState: ObservableObject {
+    @Published private(set) var isOpen = false
+    /// ⌘T or a keyboard stop opened it: the ring shows at once.
+    private(set) var openedByKeyboard = false
+    /// Told after every change (open, opened from the keyboard).
+    var onChange: ((_ open: Bool, _ keyboard: Bool) -> Void)?
+
+    func open(keyboard: Bool) {
+        openedByKeyboard = keyboard
+        if !isOpen { isOpen = true }
+        onChange?(true, keyboard)
+    }
+
+    func close() {
+        guard isOpen else { return }
+        isOpen = false
+        openedByKeyboard = false
+        onChange?(false, false)
     }
 }
 

@@ -1,4 +1,5 @@
 import AppKit
+import Combine
 import SwiftUI
 import XCTest
 @testable import Attic
@@ -15,8 +16,6 @@ final class NotesFormatControlsTests: XCTestCase {
     override func setUp() async throws {
         let suite = "NotesFormatControlsTests.\(UUID().uuidString)"
         defaultsSuite = suite
-        NoteSlashHintPolicy.defaults = UserDefaults(suiteName: suite)!
-        NoteSlashHintPolicy.resetForTesting()
     }
 
     override func tearDown() async throws {
@@ -25,7 +24,6 @@ final class NotesFormatControlsTests: XCTestCase {
         windows.forEach { $0.close() }
         windows.removeAll()
         if let defaultsSuite { UserDefaults.standard.removePersistentDomain(forName: defaultsSuite) }
-        NoteSlashHintPolicy.defaults = .standard
     }
 
     private static let sample = NoteDocument(blocks: [
@@ -106,13 +104,13 @@ final class NotesFormatControlsTests: XCTestCase {
     func testEverySurfaceRunsTheSameBoldCommandWithTheSameResult() throws {
         var results: [NoteCommandSurface: [NoteMark.Kind]] = [:]
         var routes: [NoteCommandSurface: NoteFormatCommand] = [:]
-        for surface: NoteCommandSurface in [.selectionBar, .formatPopover, .noteMenu, .contextMenu, .menuBar, .shortcut] {
+        for surface: NoteCommandSurface in [.selectionBar, .formatBar, .noteMenu, .contextMenu, .menuBar, .shortcut] {
             let (controls, engine, textView) = make()
             controls.router.onRun = { command, from in routes[from] = command }
             let target = range("most people", textView)
             textView.setSelectedRange(target)
             switch surface {
-            case .selectionBar, .formatPopover:
+            case .selectionBar, .formatBar:
                 controls.formatModel.run(.mark(.bold), from: surface)
             case .noteMenu:
                 find("Bold", in: controls.router.menuCommands(from: .noteMenu))?.action()
@@ -273,7 +271,7 @@ final class NotesFormatControlsTests: XCTestCase {
         // page's next and previous control; Aa stays on ⌘T.
         var opened: Bool?
         var left: [Bool] = []
-        controls.requestFormatPopover = { opened = $0 }
+        controls.requestFormatBar = { opened = $0 }
         controls.leaveEditor = { left.append($0) }
         textView.setSelectedRange(NSRange(location: 20, length: 0))
         controls.refresh()
@@ -316,14 +314,14 @@ final class NotesFormatControlsTests: XCTestCase {
     func testListsToggleBackToBodyAndAaWorksOnTheCaretParagraph() {
         let (controls, engine, textView) = make()
         textView.setSelectedRange(NSRange(location: range("Annual", textView).location + 2, length: 0))
-        controls.formatModel.run(.paragraph(.bullet), from: .formatPopover)
+        controls.formatModel.run(.paragraph(.bullet), from: .formatBar)
         XCTAssertEqual(engine.document().blocks[3].style, "bullet")
         controls.refreshSnapshot()
         XCTAssertEqual(controls.formatModel.snapshot.value(.paragraph(.bullet)), .on)
         XCTAssertEqual(controls.formatModel.snapshot.paragraph, .bullet, "the bar's style control says List")
         controls.formatModel.run(.paragraph(.bullet), from: .selectionBar)
         XCTAssertNil(engine.document().blocks[3].style, "choosing an on list returns it to Body")
-        controls.formatModel.run(.paragraph(.heading(2)), from: .formatPopover)
+        controls.formatModel.run(.paragraph(.heading(2)), from: .formatBar)
         XCTAssertEqual(engine.document().blocks[3].style, "heading")
         controls.refreshSnapshot()
         XCTAssertEqual(controls.formatModel.snapshot.paragraph, .heading(2))
@@ -351,12 +349,21 @@ final class NotesFormatControlsTests: XCTestCase {
         XCTAssertEqual(controls.snapshotCount, before, "no state read, no bar work per keystroke")
     }
 
-    func testPopoverGridMovesAcrossRows() {
-        let start = NoteGridIndex(row: 0, column: 4)
-        XCTAssertEqual(NoteFormatPopoverGrid.move(start, by: .rightArrow), NoteGridIndex(row: 1, column: 0))
-        XCTAssertEqual(NoteFormatPopoverGrid.move(NoteGridIndex(row: 1, column: 6), by: .downArrow), NoteGridIndex(row: 2, column: 5))
-        XCTAssertEqual(NoteFormatPopoverGrid.move(NoteGridIndex(row: 1, column: 0), by: .leftArrow), NoteGridIndex(row: 0, column: 4))
-        XCTAssertEqual(NoteFormatPopoverGrid.command(at: NoteGridIndex(row: 1, column: 4)), .mark(.link))
+    /// OD-14: the format row holds the style, the four list types, outdent
+    /// and indent, and ✕, round in that order; the selection bar keeps the
+    /// marks (decision D), inline code included, and no list.
+    func testTheFormatRowAndTheSelectionBarHoldWhatTheDraftShows() {
+        XCTAssertEqual(NoteFormatRowItem.all, [.style, .command(.paragraph(.bullet)), .command(.paragraph(.number)),
+                                               .command(.paragraph(.checklist)), .command(.paragraph(.quote)),
+                                               .command(.outdent), .command(.indent), .close])
+        XCTAssertEqual(NoteFormatRowItem.step(7, forward: true), 0, "round again from ✕ to the style")
+        XCTAssertEqual(NoteFormatRowItem.step(0, forward: false), 7)
+        XCTAssertEqual(NoteFormatBarItem.all, [.style, .command(.mark(.bold)), .command(.mark(.italic)),
+                                               .command(.mark(.underline)), .command(.mark(.strikethrough)),
+                                               .command(.mark(.link)), .command(.mark(.highlight)), .command(.mark(.code))])
+        XCTAssertLessThanOrEqual(NoteFormatControls.barWidth(styleName: "Subheading"), 320 - 8, "the bar fits the panel")
+        XCTAssertLessThanOrEqual(NoteFormatRowView.minimumWidth(snapshot: .empty, toggleWidth: AtticNoteFormatMetrics.rowToggleWidth),
+                                 288, "the row fits a 320 pt panel's bottom row with 28 pt cells")
     }
 
     // MARK: The / list
@@ -719,26 +726,141 @@ final class NotesFormatControlsTests: XCTestCase {
 
     // MARK: Hint and dates
 
-    func testTheHintShowsOnTheFirstThreeNewDraftsOnly() {
-        var shown: [Bool] = []
-        for _ in 0..<4 {
-            let (controls, _, textView) = make(NoteDocument(blocks: [.text("")]), isNewDraft: true)
-            type("Launch sync\n", textView)
-            controls.refresh()
-            shown.append(controls.isHintVisible)
-        }
-        XCTAssertEqual(shown, [true, true, true, false])
+    /// Draft 7's hint: an empty body line with the caret in it, every
+    /// note; gone with the first keystroke; never on a line with text, the
+    /// title, a styled empty line or a read-only note. VoiceOver hears it as
+    /// the text's help, never as content.
+    func testTheHintShowsOnAnEmptyBodyLineAndGoesWithTheFirstKeystroke() {
+        let (controls, _, textView) = make()
+        textView.setSelectedRange(NSRange(location: (textView.string as NSString).length, length: 0))
+        controls.refresh()
+        XCTAssertFalse(controls.isHintVisible, "a line with text")
+        type("\n", textView)
+        controls.refresh()
+        XCTAssertTrue(controls.isHintVisible, "an empty body line")
+        XCTAssertEqual(textView.accessibilityHelp(), NoteSlashHintView.text)
+        XCTAssertFalse(textView.string.contains("Type /"), "never content")
+        type("a", textView)
+        XCTAssertFalse(controls.isHintVisible, "the first keystroke hides it at once")
+        XCTAssertNil(textView.accessibilityHelp())
+        type("\n", textView)
+        controls.refresh()
+        XCTAssertTrue(controls.isHintVisible, "on the next empty line again")
+        controls.formatModel.run(.paragraph(.bullet), from: .formatBar)
+        controls.refresh()
+        XCTAssertFalse(controls.isHintVisible, "an empty list item keeps its own look")
+        textView.setSelectedRange(NSRange(location: 3, length: 0))
+        controls.refresh()
+        XCTAssertFalse(controls.isHintVisible, "the title")
+
+        let (empty, _, emptyView) = make(NoteDocument(blocks: [.text("")]))
+        type("Plan\n", emptyView)
+        empty.refresh()
+        XCTAssertTrue(empty.isHintVisible, "any note, not only new drafts")
+
+        let (readOnly, _, readOnlyView) = make(NoteDocument(blocks: [.text("Plan"), .text("")]), readOnly: true)
+        readOnlyView.setSelectedRange(NSRange(location: (readOnlyView.string as NSString).length, length: 0))
+        readOnly.refresh()
+        XCTAssertFalse(readOnly.isHintVisible, "read only")
     }
 
-    func testTypingSlashRetiresTheHint() {
-        let (controls, _, textView) = make(NoteDocument(blocks: [.text("")]), isNewDraft: true)
+    func testTypingSlashHidesTheHint() {
+        let (controls, _, textView) = make(NoteDocument(blocks: [.text("")]))
         type("Plan\n", textView)
         controls.refresh()
         XCTAssertTrue(controls.isHintVisible)
         type("/", textView)
         controls.refresh()
         XCTAssertFalse(controls.isHintVisible)
-        XCTAssertFalse(NoteSlashHintPolicy.shows(noteID: UUID(), isNewDraft: true), "learned: no more hints")
+    }
+
+    // MARK: The format row (OD-14)
+
+    /// Opening and closing the row changes nothing the page observes, so
+    /// the page and the note are not redrawn; only the bottom row's switch
+    /// sees it.
+    func testOpeningTheFormatRowDoesNotRedrawThePageOrTheNote() {
+        let chrome = NotesPageChrome()
+        var pageChanges = 0
+        let page = chrome.objectWillChange.sink { _ in pageChanges += 1 }
+        var rowChanges = 0
+        let row = chrome.formatRow.objectWillChange.sink { _ in rowChanges += 1 }
+        chrome.formatRow.open(keyboard: false)
+        XCTAssertTrue(chrome.formatRow.isOpen)
+        chrome.closeFormatBar()
+        XCTAssertFalse(chrome.formatRow.isOpen, "✕ or Esc restores the row")
+        XCTAssertEqual(pageChanges, 0, "the page (and the note under it) is never invalidated")
+        XCTAssertEqual(rowChanges, 2, "the bottom row's switch is")
+        page.cancel()
+        row.cancel()
+
+        let (controls, _, textView) = make()
+        let text = textView.string
+        let snapshots = controls.snapshotCount
+        controls.isFormatBarOpen = true
+        XCTAssertEqual(textView.string, text)
+        XCTAssertEqual(controls.snapshotCount, snapshots + 1, "one state read as it opens")
+    }
+
+    /// ⌃Tab reaches the open row; ← → Tab ⇧Tab move round it, Return
+    /// presses, and any other key goes back to writing. The text keeps the
+    /// caret throughout.
+    func testTheFormatRowIsOperableFromTheKeyboard() {
+        let (controls, engine, textView) = make()
+        let window = textView.window!
+        textView.setSelectedRange(NSRange(location: range("Annual", textView).location + 2, length: 0))
+        controls.isFormatBarOpen = true
+        XCTAssertTrue(controls.handleKey(keyEvent("\t", "\t", keyCode: 48, .control, window: window)))
+        XCTAssertEqual(controls.formatModel.rowKeyboardIndex, 0, "⌃Tab: the style pill")
+        XCTAssertTrue(controls.handleKey(keyEvent("", "", keyCode: 124, [], window: window)))
+        XCTAssertEqual(controls.formatModel.rowKeyboardIndex, 1, "→: Bulleted")
+        XCTAssertTrue(controls.handleKey(keyEvent("\r", "\r", keyCode: 36, [], window: window)))
+        XCTAssertEqual(engine.document().blocks[3].style, "bullet", "Return applies it to the caret's line")
+        controls.refreshSnapshot()
+        XCTAssertEqual(controls.formatModel.snapshot.value(.paragraph(.bullet)), .on, "the toggle shows it")
+        XCTAssertTrue(controls.handleKey(keyEvent("\t", "\t", keyCode: 48, [], window: window)))
+        XCTAssertEqual(controls.formatModel.rowKeyboardIndex, 2, "Tab: Numbered")
+        XCTAssertTrue(controls.handleKey(keyEvent("\u{19}", "\u{19}", keyCode: 48, .shift, window: window)))
+        XCTAssertTrue(controls.handleKey(keyEvent("", "", keyCode: 123, [], window: window)))
+        XCTAssertEqual(controls.formatModel.rowKeyboardIndex, 0, "⇧Tab and ← go back")
+        XCTAssertTrue(controls.handleKey(keyEvent(" ", " ", keyCode: 49, [], window: window)))
+        XCTAssertTrue(controls.formatModel.rowStyleListOpen, "Space on the pill opens the style list")
+        controls.formatModel.rowStyleListOpen = false
+        XCTAssertFalse(controls.handleKey(keyEvent("x", "x", keyCode: 7, [], window: window)), "a letter is writing")
+        XCTAssertNil(controls.formatModel.rowKeyboardIndex)
+        XCTAssertTrue(controls.isFormatBarOpen, "the row stays open")
+        XCTAssertTrue(window.firstResponder === textView, "the text never lost the keyboard")
+
+        var closed = 0
+        controls.closeFormatBar = { closed += 1; controls.isFormatBarOpen = false }
+        controls.enterRowKeyboard(at: NoteFormatRowItem.all.count - 1)
+        XCTAssertTrue(controls.handleKey(keyEvent("\r", "\r", keyCode: 36, [], window: window)))
+        XCTAssertEqual(closed, 1, "Return on ✕ closes the row")
+        XCTAssertNil(controls.formatModel.rowKeyboardIndex)
+    }
+
+    /// The row's style list and toggles run the route A22/A24 fixed: on an
+    /// empty line the next typed text keeps the chosen style.
+    func testTheFormatRowsStylesAndListsCarryIntoTheNextTypedText() {
+        for style in [NoteParagraphStyle.heading(2), .quote, .checklist, .number, .mono] {
+            let command = NoteFormatCommand.paragraph(style)
+            let (controls, engine, textView) = make()
+            textView.setSelectedRange(NSRange(location: (textView.string as NSString).length, length: 0))
+            type("\n", textView)
+            controls.isFormatBarOpen = true
+            if NoteCommandCatalog.styles.contains(command) {
+                // The pill's list: the same model call its rows make.
+                controls.formatModel.rowStyleListOpen = true
+                controls.formatModel.run(command, from: .formatBar)
+            } else {
+                controls.pressRowItem(.command(command))
+            }
+            type("Next words", textView)
+            let typed = range("Next words", textView)
+            XCTAssertNotEqual(typed.location, NSNotFound)
+            XCTAssertEqual(engine.paragraphStyle(at: typed.location + 2), style, "\(style): the next text keeps it")
+            XCTAssertTrue(controls.isFormatBarOpen, "the row stays open while you write")
+        }
     }
 
     func testDateQueriesReadCommonWords() throws {
@@ -802,28 +924,36 @@ final class NotesFormatControlsTests: XCTestCase {
         XCTAssertEqual(panelHides, 0)
     }
 
-    func testEscInAaClosesAaOnlyAndIsUsedUp() {
+    func testEscClosesTheFormatRowAndIsUsedUp() {
         let (controls, _, textView) = make()
-        let popover = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 100, height: 100), styleMask: [.titled],
-                               backing: .buffered, defer: false)
-        popover.isReleasedWhenClosed = false
-        windows.append(popover)
         var closed = 0
-        controls.closeFormatPopover = { closed += 1; controls.isFormatPopoverOpen = false }
-        controls.isFormatPopoverOpen = true
-        XCTAssertTrue(controls.handleKey(escape(in: popover)), "Esc in Aa's window is taken before it can travel on")
-        XCTAssertEqual(closed, 1)
-        XCTAssertFalse(controls.handleKey(escape(in: popover)), "with Aa closed, it isn't the chain's")
-        XCTAssertTrue(textView.window?.firstResponder === textView, "the note keeps the keyboard")
-
-        // Aa open but the key still in the note (the pop-over didn't take
-        // it): Esc closes Aa and never reaches the text view's "hide the panel".
+        controls.closeFormatBar = { closed += 1; controls.isFormatBarOpen = false }
         var panelHides = 0
         textView.escapeFallback = { panelHides += 1 }
-        controls.isFormatPopoverOpen = true
+        controls.isFormatBarOpen = true
+        XCTAssertTrue(controls.handleKey(escape(in: textView.window!)), "Esc closes the row and goes no further")
+        XCTAssertEqual(closed, 1)
+        XCTAssertEqual(panelHides, 0, "it never reaches the text view's hide-the-panel")
+        XCTAssertFalse(controls.handleKey(escape(in: textView.window!)), "with the row closed, it isn't the chain's")
+        XCTAssertTrue(textView.window?.firstResponder === textView, "the note keeps the keyboard")
+
+        // The selection bar first: Esc is the text view's (it hides the bar),
+        // and the row stays open.
+        controls.isFormatBarOpen = true
+        textView.setSelectedRange(range("most people", textView))
+        controls.refresh()
+        XCTAssertTrue(controls.formatModel.barShown, "marks stay on the selection bar while the row is open")
+        XCTAssertFalse(controls.handleKey(escape(in: textView.window!)))
+        XCTAssertEqual(closed, 1)
+        XCTAssertTrue(controls.isFormatBarOpen)
+
+        // The style list first: Esc closes the list only.
+        textView.setSelectedRange(NSRange(location: 20, length: 0))
+        controls.refresh()
+        controls.formatModel.rowStyleListOpen = true
         XCTAssertTrue(controls.handleKey(escape(in: textView.window!)))
-        XCTAssertEqual(closed, 2)
-        XCTAssertEqual(panelHides, 0)
+        XCTAssertFalse(controls.formatModel.rowStyleListOpen)
+        XCTAssertEqual(closed, 1, "the row stays")
     }
 
     func testEscInACardClosesTheCardOnlyAndIsUsedUp() throws {

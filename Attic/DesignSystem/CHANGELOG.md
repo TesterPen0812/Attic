@@ -5,6 +5,25 @@ Every later change is recorded here: what changed, why, and who asked.
 
 ## Phase 2
 
+### A25 Notes format row replaces Aa's pop-over (redesign/p2-integration, 2026-10-06)
+Owner decision OD-14 (`mockups/p2-36-format-no-panel-drafts.png`, draft 1
+plus draft 7's hint). No colour, radius or size token changed.
+- **New `AtticFormatRowSurface`**: the bottom row's own raised material
+  (Liquid Glass, the drawn recipe under Reduce Transparency) as wide as the
+  row and 36 tall, controls 4 pt in; probed at radius 15.
+- **New `AtticFormatSeparator`**: a 1 × 16 upright line in the `divider`
+  token, 4 pt from each group (the draft's group lines).
+- **New `AtticFormatStyleKind`**: each style's name in a hint of its own
+  style (Title 15 bold … Mono 12 monospaced) for the style list.
+- **`AtticDropdownRow.titleFont`**: an optional font for the name (the style
+  list); every other row is unchanged.
+- **`AtticFormatToggle.announcesState`**: actions in a row of toggles
+  (outdent, indent, close) say no on/off value.
+- **Removed** `AtticFormatStyleChip` and Aa's pop-over metrics
+  (`popoverToggleWidth`, `popoverWidth`, `popoverRowGap`, `popoverGroupGap`,
+  `styleChipPadding`); **added** `rowToggleWidth` 28, `rowCompactToggleWidth`
+  24, `rowSeparatorHeight` 16, `rowSeparatorPadding` 4.
+
 ### A21 header title makes room for the page switcher (redesign/p2-integration, 2026-10-05)
 Owner decision B (Canvas, 2026-10-03), applied to Notes now and shared with
 Canvas later (OD-11). No token, colour, radius or size changed.
