@@ -823,6 +823,12 @@ struct TasksPage: View {
     /// True when it took the key. A Tasks page kept built behind Notes or
     /// Canvas never answers (round 7, R2).
     private func findPressed(_ event: NSEvent) -> Bool {
+        #if DEBUG
+        if ProcessInfo.processInfo.environment["ATTIC_UI_TEST_TASK_NOTE_SCRIPT"] != nil, event.charactersIgnoringModifiers == "f" {
+            NSLog("TASKNOTE-SCRIPT findPressed shown=%d responder=%@", model.isPageShown ? 1 : 0,
+                  String(describing: pointer.view?.window?.firstResponder))
+        }
+        #endif
         guard Self.answersFind(event: event, pageShown: model.isPageShown, tab: model.tab,
                                pageWindow: pointer.view?.window, popoverOpen: AtticTextInput.isPopoverOpen) else { return false }
         beginSearch()

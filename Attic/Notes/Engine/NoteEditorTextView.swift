@@ -45,6 +45,11 @@ final class NoteEditorTextView: NSTextView, NSAccessibilityCustomRotorItemSearch
     /// ⌘F, ⌘G, ⇧⌘G and ⌘E reach the composed finder even when no menu item
     /// carries them.
     override func performKeyEquivalent(with event: NSEvent) -> Bool {
+        #if DEBUG
+        if composedFinder != nil, ProcessInfo.processInfo.environment["ATTIC_UI_TEST_TASK_NOTE_SCRIPT"] != nil {
+            NSLog("TASKNOTE-SCRIPT text view key equivalent %@ first=%d", event.charactersIgnoringModifiers ?? "", window?.firstResponder === self ? 1 : 0)
+        }
+        #endif
         if let composedFinder, window?.firstResponder === self, let action = Self.finderAction(for: event),
            composedFinder.validateAction(action) || action == .showFindInterface {
             composedFinder.performAction(action)
