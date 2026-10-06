@@ -28,16 +28,27 @@ enum NoteFormatMotion {
     static let rowSpace = "notes-format-row-space"
 
     /// One channel of the format row's motion: a delay, then a spring from
-    /// rest (response in seconds, bounce; SwiftUI's damping is 1 − bounce).
+    /// rest (SwiftUI's perceptual duration and bounce, as the app's motion
+    /// presets give them).
     struct Spring: Equatable {
-        let delay: Double
+        var delay: Double = 0
         let response: Double
         var bounce: Double = 0
+
+        init(delay: Double = 0, response: Double, bounce: Double = 0) {
+            self.delay = delay
+            self.response = response
+            self.bounce = bounce
+        }
+
+        init(delay: Double = 0, _ spring: AtticMotionSpring) {
+            self.init(delay: delay, response: spring.response, bounce: spring.bounce)
+        }
 
         var animation: Animation { undelayed.delay(delay) }
 
         /// The spring alone (the caller starts it at `delay`).
-        var undelayed: Animation { .spring(response: response, dampingFraction: 1 - bounce) }
+        var undelayed: Animation { .spring(duration: response, bounce: bounce) }
 
         /// The spring's progress `t` seconds after it was asked to start
         /// (0 before its delay, settling on 1), as SwiftUI runs it.
@@ -52,34 +63,54 @@ enum NoteFormatMotion {
         }
     }
 
-    /// Aa grows into the bar (p2-37 draft 1, owner's pick). The glass and
-    /// the controls keep the draft's springs. The neighbours leave on their
-    /// own clocks so that only the one glass ever moves across the row and
-    /// it never passes over a control that is still showing: New note and
-    /// the note's status (in the glass's way at once) go first, so the glass
-    /// waits 120 ms for them; All notes goes at the same time and is gone long
-    /// before the glass's edge reaches it, even in the narrowest
-    /// panel. Closing reverses it: the controls go, the glass returns into
-    /// Aa, and each neighbour comes back once the glass has cleared its place.
-    enum Open {
-        static let grow = Spring(delay: 0.12, response: 0.42, bounce: 0.12)
-        static let controls = Spring(delay: 0.12 + 0.23, response: 0.2)
-        static let newNoteAndStatus = Spring(delay: 0, response: 0.12)
-        static let allNotes = Spring(delay: 0, response: 0.14)
+    /// Aa grows into the bar (p2-37 draft 1) on the app's own springs in
+    /// the chosen feel (owner, 2026-10-06: "springy like the rest of the
+    /// motion in our app"). The glass is `expand` (a card growing out of
+    /// its button and back); the controls come in as a bar does
+    /// (`popover`) and go with its leave; the neighbours leave with the
+    /// pop-overs' leave and come back with their appear. Every delay is a
+    /// share of those springs, so the order holds in every feel: the
+    /// neighbours go first (the glass waits one leave for them), the glass
+    /// grows, the controls come once it is about half grown; closing, the
+    /// controls go, the glass returns, and each neighbour comes back once the
+    /// glass has cleared its place. Animations: Reduced and Reduce Motion
+    /// swap at once (the switch never asks for these).
+    struct Plan: Equatable {
+        /// A neighbour leaving, and how long its fade takes.
+        let leave: Spring
+        /// A neighbour coming back.
+        let comeBack: Spring
+        let openGrow: Spring
+        let openControls: Spring
+        let closeControls: Spring
+        let closeGrow: Spring
+        /// When each neighbour comes back, from the start of closing.
+        let allNotesReturns: Double
+        let newNoteReturns: Double
+        /// When a leaving neighbour's glass is taken away altogether (its
+        /// fade is over; an identity glass would otherwise keep a faint rim).
+        let newNoteSettles: Double
+        let allNotesSettles: Double
+
+        init(_ tuning: AtticMotionTuning) {
+            let tuck = tuning.leave == .spring
+            let leaving = tuck ? tuning.leaveResponse : tuning.popover.response
+            leave = Spring(response: leaving, bounce: tuck ? 0 : tuning.popover.bounce)
+            comeBack = Spring(tuning.popover)
+            let expand = tuning.expand.response
+            openGrow = Spring(delay: leaving, tuning.expand)
+            openControls = Spring(delay: leaving + 0.55 * expand, tuning.popover)
+            closeControls = leave
+            closeGrow = Spring(delay: 0.8 * leaving, tuning.expand)
+            allNotesReturns = closeGrow.delay + 0.35 * expand
+            newNoteReturns = closeGrow.delay + 0.9 * expand
+            newNoteSettles = leaving
+            allNotesSettles = 1.3 * leaving
+        }
+
+        /// The plan in the feel in use now.
+        static var current: Plan { Plan(.current) }
     }
-
-    /// When a leaving neighbour's glass is taken away altogether (its fade
-    /// is over, and an identity glass would otherwise keep a faint rim).
-    static let newNoteSettles = 0.12
-    static let allNotesSettles = 0.16
-
-    enum Close {
-        static let controls = Spring(delay: 0, response: 0.14)
-        static let grow = Spring(delay: 0.11, response: 0.38, bounce: 0.08)
-        static let allNotes = Spring(delay: 0.22, response: 0.2)
-        static let newNoteAndStatus = Spring(delay: 0.40, response: 0.2)
-    }
-
 }
 
 // MARK: - Selection bar
@@ -246,10 +277,10 @@ struct NoteFormatRowView: View {
 /// its place (they take turns in one place; nothing floats over the note).
 ///
 /// Opening, Aa's own glass becomes the row's and grows into the bar (p2-37
-/// draft 1, `NoteFormatMotion.Open`): New note and the status go first,
+/// draft 1, `NoteFormatMotion.Plan`): New note and the status go first,
 /// All notes as the glass comes, and the controls come in once the glass is
 /// wide. They are the glass's content, so nothing is drawn under it. ✕ or
-/// Esc runs it back into Aa (`NoteFormatMotion.Close`). Animations: Reduced
+/// Esc runs it back into Aa. Animations: Reduced
 /// and Reduce Motion swap at once. While either is on its way out it is
 /// hidden from VoiceOver and the pointer, and once open the bottom row is
 /// disabled. The motion is this view's own state: the page and the note
@@ -360,23 +391,23 @@ struct NoteFormatRowSwitch<Row: View>: View {
     private func runOpen(fromAa: Bool) {
         motionToken += 1
         let token = motionToken
-        let motion = NoteFormatMotion.Open.self
+        let plan = NoteFormatMotion.Plan.current
         // Interrupting a close: whatever has come back leaves at once, and
         // the glass waits for it only if something was showing.
         let showing = channels.newNoteAndStatus < 1 || channels.allNotes < 1
-        let glassDelay = fromAa || showing ? motion.grow.delay : 0
+        let glassDelay = fromAa || showing ? plan.openGrow.delay : 0
         if channels.newNoteAndStatus < 1 || !newNoteGone {
-            withAnimation(motion.newNoteAndStatus.undelayed) { channels.newNoteAndStatus = 1 }
-            after(NoteFormatMotion.newNoteSettles, token: token) { instantly { newNoteGone = true } }
+            withAnimation(plan.leave.undelayed) { channels.newNoteAndStatus = 1 }
+            after(plan.newNoteSettles, token: token) { instantly { newNoteGone = true } }
         }
         if channels.allNotes < 1 || !allNotesGone {
-            withAnimation(motion.allNotes.undelayed) { channels.allNotes = 1 }
-            after(NoteFormatMotion.allNotesSettles, token: token) { instantly { allNotesGone = true } }
+            withAnimation(plan.leave.undelayed) { channels.allNotes = 1 }
+            after(plan.allNotesSettles, token: token) { instantly { allNotesGone = true } }
         }
-        withAnimation(motion.controls.undelayed.delay(glassDelay + motion.controls.delay - motion.grow.delay)) {
+        withAnimation(plan.openControls.undelayed.delay(glassDelay + plan.openControls.delay - plan.openGrow.delay)) {
             channels.controls = 1
         }
-        withAnimation(motion.grow.undelayed.delay(glassDelay), completionCriteria: .logicallyComplete) {
+        withAnimation(plan.openGrow.undelayed.delay(glassDelay), completionCriteria: .logicallyComplete) {
             channels.grow = 1
         } completion: {
             if state.isOpen, phase == .moving { instantly { phase = .open } }
@@ -402,19 +433,19 @@ struct NoteFormatRowSwitch<Row: View>: View {
     private func runClose() {
         motionToken += 1
         let token = motionToken
-        let motion = NoteFormatMotion.Close.self
-        withAnimation(motion.controls.animation) { channels.controls = 0 }
+        let plan = NoteFormatMotion.Plan.current
+        withAnimation(plan.closeControls.animation) { channels.controls = 0 }
         if channels.allNotes > 0 {
-            after(motion.allNotes.delay, token: token) {
-                returnNeighbour(token: token, gone: $allNotesGone) { channels.allNotes = 0 }
+            after(plan.allNotesReturns, token: token) {
+                returnNeighbour(token: token, gone: $allNotesGone, spring: plan.comeBack) { channels.allNotes = 0 }
             }
         }
         if channels.newNoteAndStatus > 0 {
-            after(motion.newNoteAndStatus.delay, token: token) {
-                returnNeighbour(token: token, gone: $newNoteGone) { channels.newNoteAndStatus = 0 }
+            after(plan.newNoteReturns, token: token) {
+                returnNeighbour(token: token, gone: $newNoteGone, spring: plan.comeBack) { channels.newNoteAndStatus = 0 }
             }
         }
-        withAnimation(motion.grow.animation, completionCriteria: .logicallyComplete) {
+        withAnimation(plan.closeGrow.animation, completionCriteria: .logicallyComplete) {
             channels.grow = 0
         } completion: {
             guard !state.isOpen, phase == .moving else { return }
@@ -431,8 +462,9 @@ struct NoteFormatRowSwitch<Row: View>: View {
     /// A neighbour comes back: its glass returns (as the identity glass,
     /// so nothing shows yet) and, on the next turn, materialises and its
     /// glyph fades in.
-    private func returnNeighbour(token: Int, gone: Binding<Bool>, _ change: @escaping () -> Void) {
-        let spring = NoteFormatMotion.Close.allNotes.undelayed
+    private func returnNeighbour(token: Int, gone: Binding<Bool>, spring plan: NoteFormatMotion.Spring,
+                                 _ change: @escaping () -> Void) {
+        let spring = plan.undelayed
         if gone.wrappedValue {
             instantly { gone.wrappedValue = false }
             DispatchQueue.main.async {

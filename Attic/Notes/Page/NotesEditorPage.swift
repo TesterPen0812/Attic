@@ -130,6 +130,9 @@ struct NotesEditorPage: View {
             controller.present()
             chrome.menuCommands = { noteMenuCommands() }
             chrome.leaveEditor = { forward in leaveEditor(forward: forward) }
+            #if DEBUG
+            chrome.captureToggleLibrary = { toggleLibrary() }
+            #endif
             if keyMonitor == nil {
                 keyMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { event in
                     bottomKeyPressed(event) ? nil : event
@@ -244,12 +247,9 @@ struct NotesEditorPage: View {
                                         noteStore.tagCounts
                                     })
                 .id(ObjectIdentifier(session.engine))
-                // A15, as on Tasks: the text runs under the header's
-                // controls and the bottom row, faintly visible as it fades;
-                // full at the title's and the last line's resting places.
-                // No native soft edge here.
-                .atticScrollUnderFade(topBand: layout.headerBottom, restTop: topInset,
-                                      bottomBand: bottomControls, restBottom: bottomInset)
+                // The text runs under the header's glass controls and the
+                // bottom row at full strength (owner, 2026-10-06: no fade
+                // behind glass). No native soft edge here.
                 .accessibilityIdentifier("note-editor")
                 .accessibilitySortPriority(3)
                 .transition(slide(from: Self.noteEdge))

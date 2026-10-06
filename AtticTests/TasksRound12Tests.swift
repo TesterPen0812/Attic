@@ -579,35 +579,24 @@ final class TasksRound12Tests: XCTestCase {
         return last.opacity
     }
 
-    /// A15 (owner, 2026-10-04, replacing D1): rows scrolled under the tabs
-    /// or the bottom stack stay faintly visible (at most the controls'-edge
-    /// opacity, never gone), for the bottom stack as it grows (a strip, a
-    /// selection bar); the resting rows are whole, and the fade is eased
-    /// both ways.
+    /// Owner, 2026-10-06 (revising A15): rows scrolled behind the tabs stay
+    /// faint (never gone); under the bottom stack's glass, whatever its
+    /// height, they are whole, and so are the resting rows.
     func testRowsShowFaintlyUnderTheTabsAndTheBottomStack() {
-        for stack in [CGFloat(36), 60, 96, 136] {
-            let height: CGFloat = 520
-            let stops = TasksViewport.maskStops(height: height, tabsTop: 80, listTop: 110, bottomStack: stack)
-            XCTAssertEqual(stops.map(\.location), stops.map(\.location).sorted(), "stops in order")
-            for y in stride(from: CGFloat(0), through: 96, by: 1) {
-                let opacity = maskOpacity(stops, at: y, height: height)
-                XCTAssertGreaterThan(opacity, 0.04, "faintly there under the tabs at \(y), stack \(stack)")
-                XCTAssertLessThanOrEqual(opacity, AtticScrollUnderFade.controlsEdge + 0.001, "never readable under the tabs at \(y)")
-            }
-            for y in stride(from: height - stack, through: height, by: 1) {
-                let opacity = maskOpacity(stops, at: y, height: height)
-                XCTAssertGreaterThan(opacity, 0.04, "faintly there under the bar at \(y), stack \(stack)")
-                XCTAssertLessThanOrEqual(opacity, AtticScrollUnderFade.controlsEdge + 0.001, "never readable under the bar at \(y)")
-            }
-            XCTAssertEqual(maskOpacity(stops, at: 110, height: height), 1, accuracy: 0.001, "the resting row is whole")
-            XCTAssertEqual(maskOpacity(stops, at: height - stack - AtticLayout.contentToAddBar, height: height), 1, accuracy: 0.001,
-                           "and the last resting row")
-            let bottom = stride(from: height - stack - AtticLayout.contentToAddBar, through: height - stack, by: 1)
-                .map { maskOpacity(stops, at: $0, height: height) }
-            XCTAssertEqual(bottom, bottom.sorted(by: >), "falls toward the bar")
-            let top = stride(from: CGFloat(96), through: 110, by: 1).map { maskOpacity(stops, at: $0, height: height) }
-            XCTAssertEqual(top, top.sorted(), "rises toward the first row")
+        let height: CGFloat = 520
+        let stops = TasksViewport.maskStops(height: height, tabsTop: 80)
+        XCTAssertEqual(stops.map(\.location), stops.map(\.location).sorted(), "stops in order")
+        for y in stride(from: CGFloat(80), through: 96, by: 1) {
+            let opacity = maskOpacity(stops, at: y, height: height)
+            XCTAssertGreaterThan(opacity, 0.04, "faintly there behind the tabs at \(y)")
+            XCTAssertLessThanOrEqual(opacity, AtticScrollUnderFade.behindText + 0.001, "never readable behind the tabs at \(y)")
         }
+        for stack in [CGFloat(36), 60, 96, 136] {
+            for y in stride(from: height - stack, through: height, by: 1) {
+                XCTAssertEqual(maskOpacity(stops, at: y, height: height), 1, accuracy: 0.001, "whole under the bar at \(y)")
+            }
+        }
+        XCTAssertEqual(maskOpacity(stops, at: 110, height: height), 1, accuracy: 0.001, "the resting row is whole")
     }
 
     // MARK: - Astra P2: a page kept behind another section takes no mouse
@@ -681,24 +670,17 @@ final class TasksRound12Tests: XCTestCase {
 
     /// The page drawn with a long list scrolled to two places (a hosted
     /// stand-in for the round's UI test, which no runner could make find the
-    /// panel). Clean cut with A15's scroll-under fade (owner, 2026-10-04,
-    /// replacing D1): rows that pass under the tabs or the add bar's band
-    /// are never drawn at a readable strength there. (That they do pass
-    /// under, faintly, is checked over the header in `DeepReviewFixTests`;
-    /// this capture does not draw the glass's backdrop.)
+    /// panel). Owner, 2026-10-06 (revising A15): rows that pass behind the
+    /// tabs' plain-text line are never drawn at a readable strength there,
+    /// and rows under the add bar's glass are drawn at full strength.
     func testRowsPassOnlyFaintlyUnderTheTabsAndTheAddBarsBandWithTheCleanCut() throws {
         let shares = try bandShares(.cleanCut)
         XCTAssertGreaterThan(shares.moved, 0.02, "the long list scrolled between the captures (\(shares.moved))")
-        XCTAssertLessThan(shares.strongTop, 0.002, "never readable under the tabs' line (\(shares.strongTop))")
-        XCTAssertLessThan(shares.strongBottom, 0.002, "never readable under the add bar's band (\(shares.strongBottom))")
-        // The other half (A17): rows do show faintly under the add bar, or a
-        // clip there would pass the checks above. (This capture draws no glass
-        // backdrop and no row ink under the tabs; `ScrollEdgeUITests` has the
-        // tabs in window-server pixels.)
-        XCTAssertGreaterThan(shares.bottom, 0.0005, "rows show faintly under the add bar's band (\(shares.bottom))")
-        // Negative control: the same band clipped fails the lower bound.
+        XCTAssertLessThan(shares.strongTop, 0.002, "never readable behind the tabs' line (\(shares.strongTop))")
+        XCTAssertGreaterThan(shares.strongBottom, 0.002, "whole under the add bar's glass (\(shares.strongBottom))")
+        // Negative control: the same band clipped fails it.
         let clipped = try bandShares(.cleanCut, clipBands: true)
-        XCTAssertLessThan(clipped.bottom, 0.0005, "a clipped add bar's band fails the lower bound (\(clipped.bottom))")
+        XCTAssertLessThan(clipped.bottom, 0.0005, "a clipped add bar's band shows nothing (\(clipped.bottom))")
     }
 
     // The system soft edge (a preview's choice since 2026-10-03) is checked in

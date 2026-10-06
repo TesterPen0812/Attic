@@ -334,15 +334,15 @@ final class TasksRound3Tests: XCTestCase {
         XCTAssertEqual(TasksViewport.bottomClearance(stackHeight: 36, bottomInset: 24), 76)
         XCTAssertEqual(TasksViewport.bottomClearance(stackHeight: 36 + 8 + 28, bottomInset: 24), 112, "the strip adds its room")
         XCTAssertEqual(TasksViewport.bottomClearance(stackHeight: 0, bottomInset: 12), 64, "never less than the bar")
-        let stops = TasksViewport.maskStops(height: 520, tabsTop: 80, listTop: 110, bottomStack: 60)
-        // A15 (owner, 2026-10-04): rows scroll under the header and fade.
-        XCTAssertEqual(stops.first?.opacity ?? 0, AtticScrollUnderFade.edgeOpacity, accuracy: 0.001, "faint at the panel's top")
+        let stops = TasksViewport.maskStops(height: 520, tabsTop: 80)
+        // Owner, 2026-10-06: whole under the header's and the add bar's glass.
+        XCTAssertEqual(stops.first?.opacity ?? 0, 1, accuracy: 0.001, "whole at the panel's top")
         XCTAssertEqual(stops.first { $0.location >= 110.0 / 520 - 0.0001 }?.opacity, 1, "fully there from the first row's rest")
-        XCTAssertLessThan(stops.last?.opacity ?? 1, 0.5, "receding under the add bar")
+        XCTAssertEqual(stops.last?.opacity ?? 0, 1, accuracy: 0.001, "whole under the add bar")
         XCTAssertEqual(stops.map(\.location), stops.map(\.location).sorted(), "stops in order")
-        let underTabs = stops.filter { $0.location > 80.0 / 520 && $0.location <= 96.0 / 520 + 0.0001 }
-        XCTAssertTrue(underTabs.allSatisfy { $0.opacity > 0 && $0.opacity <= AtticScrollUnderFade.controlsEdge + 0.001 },
-                      "scrolled text shows faintly under the tabs (A15 replaces the round-11 rule)")
+        let underTabs = stops.filter { $0.location >= 80.0 / 520 - 0.0001 && $0.location <= 96.0 / 520 + 0.0001 }
+        XCTAssertTrue(underTabs.allSatisfy { $0.opacity > 0 && $0.opacity <= AtticScrollUnderFade.behindText + 0.001 },
+                      "scrolled text shows faintly behind the tabs")
     }
 
     // MARK: - The quiet open ring (owner fix 1, review 12)

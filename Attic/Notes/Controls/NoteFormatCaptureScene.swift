@@ -204,6 +204,17 @@ enum NoteFormatCaptureScene {
                                   below: NSRect(x: 24, y: rect.maxY, width: 10, height: 1), in: textView)
         case "notemenu":
             chrome.presentMenu()
+        case "fadecheck":
+            // A long note scrolled so text sits under the header and the
+            // bottom row (round 3's no-fade-behind-glass check).
+            for index in 1...30 {
+                type("Line \(index): text that runs under the glass controls as the note scrolls.\n", into: textView)
+            }
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
+                AtticCaptureScroll.scrollToMiddle(in: textView.enclosingScrollView)
+            }
+        case "library":
+            chrome.captureToggleLibrary?()
         case "aacycle":
             textView.setSelectedRange(NSRange(location: range(of: "Keep pricing", in: textView).location, length: 0))
             cycleFormatRow(chrome: chrome, after: 1)

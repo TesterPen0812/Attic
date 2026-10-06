@@ -5,6 +5,20 @@ Every later change is recorded here: what changed, why, and who asked.
 
 ## Phase 2
 
+### A29 round 3: no fade behind glass; the format row on the app's springs (2026-10-06)
+Owner decisions of 2026-10-06 ~09:50. No colour, size or glass changed.
+- **`AtticScrollUnderFade` / `atticScrollUnderFade(plainText:)`**: content
+  runs under glass controls at full strength. Only a line of plain text over
+  the content (Tasks' Now · Later · Done line, All notes' label line) keeps a
+  short fade: `behindText` 0.10 across the text's own height, back to full
+  within `textRamp` 6 pt either side. Removed: the A15 profile (`edgeOpacity`,
+  `overTopControls`, `overBottomControls`, `controlsEdge`, the eased rise).
+  The Notes editor (glass only) has no fade.
+- **`NoteFormatMotion.Plan`**: the format row's motion takes `expand` (the
+  glass), `popover` (the controls; the neighbours' return) and the feel's
+  leave (the neighbours going, the controls going) from the chosen feel, with
+  delays as shares of those springs.
+
 ### A29 the format row grows out of Aa (redesign/p2-format-motion-2, 2026-10-06)
 Owner pick p2-37 draft 1 ("Aa grows into the bar"). No token, colour,
 radius or size changed.
