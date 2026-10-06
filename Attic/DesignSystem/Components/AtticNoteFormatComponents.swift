@@ -189,20 +189,84 @@ struct AtticFormatStyleFace: View {
 /// The bottom row turned into a one-row format bar: the bottom row's own
 /// Liquid Glass (the drawn recipe under Reduce Transparency), as wide as
 /// the row and as tall as its buttons, its controls in a 4 pt inset.
-struct AtticFormatRowSurface<Content: View>: View {
+///
+/// While it grows out of a button (`growth`, p2-37 draft 1) it is still one
+/// glass shape: the glass spans from the button's frame to the row's as
+/// `grow` goes from 0 to 1, and the controls are its content, at their
+/// resting places and clipped to it, so nothing ever sits under or over
+/// the glass. The button's glyph rides on the glass where the button was and
+/// fades in the first third. At rest (`growth` nil or `grow` 1) it is the
+/// plain row.
+struct AtticFormatRowSurface<Content: View>: View, Animatable {
     var height: CGFloat = AtticControlSize.panelButton.height
+    var growth: AtticFormatRowGrowth?
+    /// The controls' own fade (they come in once the glass is wide).
+    var contentOpacity: Double = 1
     @ViewBuilder let content: Content
     @State private var probeID = UUID()
 
+    var animatableData: CGFloat {
+        get { growth?.grow ?? 1 }
+        set { growth?.grow = newValue }
+    }
+
     var body: some View {
         let radius = AtticRadius.control(height: height)
-        HStack(spacing: 0) { content }
+        let row = HStack(spacing: 0) { content }
             .padding(.horizontal, AtticControlSize.capsuleInset)
             .frame(maxWidth: .infinity)
             .frame(height: height)
-            .atticRaisedMaterial(cornerRadius: radius, interactive: false)
-            .atticControlProbe("Format row", id: probeID, expectedSize: nil, radius: radius, expectedRadius: 15)
+            .opacity(contentOpacity)
+        Group {
+            if let growth {
+                let extent = growth.extent
+                Color.clear
+                    .frame(width: extent.width, height: height)
+                    .overlay(alignment: .leading) {
+                        row.frame(width: growth.rowWidth).offset(x: -extent.minX)
+                    }
+                    .overlay(alignment: .leading) {
+                        AtticIcon(systemName: growth.sourceSymbol, size: AtticControlSize.raisedGlyph,
+                                  weight: AtticIconWeight.outline, ink: .icon)
+                            .frame(width: growth.source.width, height: height)
+                            .offset(x: growth.source.minX - extent.minX)
+                            .opacity(growth.sourceGlyphOpacity)
+                            .accessibilityHidden(true)
+                    }
+                    .clipShape(AtticControlShape.shape(cornerRadius: radius))
+                    .atticRaisedMaterial(cornerRadius: radius, interactive: false)
+                    // Placed by layout, not by an offset, so the glass is
+                    // drawn exactly where the shape is on every frame.
+                    .padding(.leading, extent.minX)
+                    .frame(width: growth.rowWidth, alignment: .leading)
+            } else {
+                row.atticRaisedMaterial(cornerRadius: radius, interactive: false)
+            }
+        }
+        .atticControlProbe("Format row", id: probeID, expectedSize: nil, radius: radius, expectedRadius: 15)
     }
+}
+
+/// Where the format row's glass is while it grows out of a button (p2-37
+/// draft 1): the button's frame and the row's width in the row's own space,
+/// and how far it has grown (0 the button, 1 the row; a spring may pass
+/// either end a little).
+struct AtticFormatRowGrowth: Equatable {
+    var source: CGRect
+    var rowWidth: CGFloat
+    var grow: CGFloat
+    var sourceSymbol: String
+
+    /// The glass's horizontal span: each edge travels from the button's to
+    /// the row's in step.
+    var extent: (minX: CGFloat, width: CGFloat) {
+        let minX = source.minX + (0 - source.minX) * grow
+        let maxX = source.maxX + (rowWidth - source.maxX) * grow
+        return (minX, max(0, maxX - minX))
+    }
+
+    /// The button's glyph on the glass: gone by a third of the way.
+    var sourceGlyphOpacity: Double { Double(1 - min(1, max(0, grow * 3))) }
 }
 
 /// The short upright line between the format row's groups.

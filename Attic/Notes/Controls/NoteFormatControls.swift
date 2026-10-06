@@ -47,6 +47,7 @@ final class NoteFormatControls: NSObject {
         didSet {
             guard isFormatBarOpen != oldValue else { return }
             if isFormatBarOpen {
+                moveCaretOutOfTitle()
                 refreshSnapshot()
             } else {
                 formatModel.rowKeyboardIndex = nil
@@ -277,6 +278,36 @@ final class NoteFormatControls: NSObject {
             hideBar()
         }
         updateHint()
+    }
+
+    /// The format row formats the caret's line, and the title keeps its own
+    /// style. A note opens with the caret at the start of its title, so Aa
+    /// there would open a row with every control dimmed (A29: "it's greyed
+    /// out"). Opening the row from a title caret moves the caret to the start
+    /// of the first body line it can format; the text is not changed. A note
+    /// with no such line keeps the caret, and the row says why (VoiceOver's
+    /// hint on each control).
+    private func moveCaretOutOfTitle() {
+        guard let textView, !engine.isReadOnly else { return }
+        let current = selection
+        let title = engine.titleParagraphRange
+        guard current.length == 0, current.location <= NSMaxRange(title),
+              engine.formattableParagraphs(in: current).isEmpty,
+              let line = firstFormattableLine(after: title) else { return }
+        textView.setSelectedRange(NSRange(location: line.location, length: 0))
+    }
+
+    /// The first body line (not an image or file) after the title, if any.
+    private func firstFormattableLine(after title: NSRange) -> NSRange? {
+        let length = engine.textStorage.length
+        var location = NSMaxRange(title) + 1
+        while location <= length {
+            let line = engine.lineRange(at: location)
+            guard line.location > 0 else { return nil }
+            if !engine.isBlockObject(at: line.location) { return line }
+            location = NSMaxRange(line) + 1
+        }
+        return nil
     }
 
     func refreshSnapshot() {

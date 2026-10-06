@@ -284,7 +284,7 @@ struct NotesEditorPage: View {
     // MARK: Bottom row
 
     /// The bottom row; while Aa's format row is open, the format row in its
-    /// place (OD-14: All notes, Aa and New note step aside).
+    /// place (OD-14; p2-37 draft 1: Aa grows into it as the others make way).
     private var bottomRow: some View {
         AtticControlGroup {
             NoteFormatRowSwitch(state: chrome.formatRow, model: { [weak chrome] in chrome?.controls?.formatModel }) {
@@ -302,12 +302,14 @@ struct NotesEditorPage: View {
                     toggleLibrary()
                 }
                 .keyboardShortcut("l", modifiers: [.command, .shift])
+                .noteFormatRowLeaving(.allNotes)
                 .modifier(NotesKeyboardStop(stop: .allNotes, enabled: bottomStops, focus: $bottomFocus))
                 .accessibilityIdentifier("notes-all-notes")
                 .accessibilitySortPriority(1)
                 Spacer(minLength: AtticSpacing.s12)
                 if !controller.isLibraryPresented, let session = controller.active {
                     NoteStatusSlot(controller: controller, store: noteStore, session: session, damaged: damagedRecovery)
+                        .noteFormatRowLeaving(.status)
                         .accessibilitySortPriority(2)
                         .transition(.opacity)
                 }
@@ -322,6 +324,7 @@ struct NotesEditorPage: View {
                     newNote()
                 }
                 .keyboardShortcut("n", modifiers: .command)
+                .noteFormatRowLeaving(.newNote)
                 .modifier(NotesKeyboardStop(stop: .newNote, enabled: bottomStops, focus: $bottomFocus))
                 .accessibilityIdentifier("notes-new-note")
             }
@@ -332,9 +335,10 @@ struct NotesEditorPage: View {
     /// Aa (OD-14, p2-36 draft 1): the bottom row turns into the format row
     /// in place, until ✕ or Esc. ⌘T opens it too.
     private var formatButton: some View {
-        AtticRaisedButton(systemName: "textformat", label: "Format", help: String(localized: "Format (⌘T)")) {
+        AtticRaisedButton(systemName: NoteFormatRowSource.symbol, label: "Format", help: String(localized: "Format (⌘T)")) {
             chrome.openFormatBar(keyboard: false)
         }
+        .noteFormatRowSource()
         .accessibilityIdentifier("notes-format-button")
     }
 

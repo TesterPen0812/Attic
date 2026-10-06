@@ -5,6 +5,16 @@ Every later change is recorded here: what changed, why, and who asked.
 
 ## Phase 2
 
+### A29 the format row grows out of Aa (redesign/p2-format-motion-2, 2026-10-06)
+Owner pick p2-37 draft 1 ("Aa grows into the bar"). No token, colour,
+radius or size changed.
+- **`AtticFormatRowSurface.growth`** (`AtticFormatRowGrowth`, animatable):
+  the row's one glass spans from a button's frame to the whole row as it
+  grows; the controls are the glass's content (clipped to it, at their
+  resting places), and the button's glyph rides on it for the first third.
+  Nil or fully grown, it draws exactly as before.
+- **`AtticFormatRowSurface.contentOpacity`**: the controls' own fade.
+
 ### A25 Notes format row replaces Aa's pop-over (redesign/p2-integration, 2026-10-06)
 Owner decision OD-14 (`mockups/p2-36-format-no-panel-drafts.png`, draft 1
 plus draft 7's hint). No colour, radius or size token changed.
