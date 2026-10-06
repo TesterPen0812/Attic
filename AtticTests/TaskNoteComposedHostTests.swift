@@ -547,9 +547,18 @@ final class TaskNoteComposedHostTests: XCTestCase {
         let manager = UndoManager()
         manager.groupsByEvent = false
         let row = try XCTUnwrap(model.rows.first { $0.title == "Write release notes" })
-        model.beginRename(row.id)
+        model.beginRename(row.id, undoManager: manager)
+        // Typing in the field: draft steps of its own, never the workspace's.
+        let start = (model.renameText as NSString).length
+        model.renameEdited(NSRange(location: 6, length: 0), replacement: "the ")
         model.renameText = "Write the release notes"
-        XCTAssertTrue(model.commitRename(undoManager: manager))
+        XCTAssertNotNil(model.undoRenameDraft(), "⌘Z in the field steps the draft")
+        XCTAssertEqual(model.renameText, "Write release notes")
+        XCTAssertNotNil(model.redoRenameDraft())
+        XCTAssertEqual(model.renameText, "Write the release notes")
+        XCTAssertEqual((model.renameText as NSString).length, start + 4)
+        XCTAssertTrue(model.commitRename())
+        XCTAssertNil(model.undoRenameDraft(), "the field's draft Undo retires with the commit")
         XCTAssertEqual(route.totalStepCount, before + 1)
         XCTAssertEqual(tasks.task(withID: row.id)?.title, "Write the release notes")
         XCTAssertTrue(route.canUndo(in: model.historyID))
@@ -567,7 +576,7 @@ final class TaskNoteComposedHostTests: XCTestCase {
         model.titleEdit.edited(NSRange(location: (text as NSString).length, length: 0), replacement: " #ship ")
         model.titleEdit.text = text + " #ship "
         model.titleEdit.markShown(parser: model.parser, caret: (model.titleEdit.text as NSString).length)
-        XCTAssertTrue(model.commitTitle(undoManager: UndoManager()))
+        XCTAssertTrue(model.commitTitle())
         XCTAssertEqual(tasks.task(withID: id)?.title, "Finalize launch checklist")
         XCTAssertTrue(tasks.task(withID: id)?.tags.contains("ship") == true)
         XCTAssertEqual(model.focusRequest, .list)
@@ -872,5 +881,159 @@ final class TaskNoteComposedHostTests: XCTestCase {
                      median(parts[0]), median(parts[1]), median(parts[2]), median(parts[3])))
         let line = String(format: "TASKNOTE-PERF fold/unfold 50 rows median %.2f ms (max %.2f)", median(fold), fold.max() ?? 0)
         print(line); XCTContext.runActivity(named: line) { _ in }
+    }
+
+    // MARK: Round 2a fixes
+
+    func testARefusedRenameKeepsItsFieldTextAndDraftUndo() throws {
+        let id = try seed(.boundary)
+        let presenter = try open(id)
+        let model = presenter.model
+        let row = try XCTUnwrap(model.rows.first)
+        model.beginRename(row.id)
+        model.renameEdited(NSRange(location: 0, length: 0), replacement: "X")
+        model.renameText = "X" + row.title
+        // Another command is still preparing: the commit is refused.
+        XCTAssertTrue(model.history.reserveInput())
+        XCTAssertFalse(model.commitRename())
+        model.history.releaseInput()
+        XCTAssertEqual(model.renamingID, row.id, "the field stays open")
+        XCTAssertEqual(model.renameText, "X" + row.title, "with its text")
+        XCTAssertNotNil(model.undoRenameDraft(), "and its draft Undo")
+        // Folding cancels it and retires the draft.
+        model.setFolded(true)
+        XCTAssertNil(model.renamingID)
+        XCTAssertNil(model.undoRenameDraft())
+    }
+
+    func testTheTitleDraftHasItsOwnUndoBeforeTheWorkspace() throws {
+        let id = try seed(.boundary)
+        let presenter = try open(id)
+        let model = presenter.model
+        model.beginEditingTitle()
+        let text = model.titleEdit.text
+        model.titleEdited(NSRange(location: (text as NSString).length, length: 0), replacement: "!")
+        model.titleEdit.text = text + "!"
+        XCTAssertEqual(model.undoTitleDraft()?.text, text)
+        XCTAssertEqual(model.redoTitleDraft()?.text, text + "!")
+        model.cancelTitle()
+        XCTAssertNil(model.undoTitleDraft(), "cancel retires the title's draft Undo")
+    }
+
+    func testANewTodoSubtaskGoesAfterLaterRowsInTheOpenDisplayGroup() throws {
+        let id = try seed(.boundary)
+        _ = try open(id)
+        let later = try XCTUnwrap(library.createTasks([TaskDraft(title: "Later row", status: .backlog, parentID: id)]))
+        XCTAssertEqual(later.count, 1)
+        XCTAssertNotNil(library.createTasks([TaskDraft(title: "Todo row", status: .todo, parentID: id)]))
+        let open = tasks.subtasks(of: id).filter { $0.status != .done }.map(\.title)
+        XCTAssertEqual(Array(open.suffix(2)), ["Later row", "Todo row"])
+        // A batch keeps its drafts' order at the end.
+        XCTAssertNotNil(library.createTasks([TaskDraft(title: "A", parentID: id), TaskDraft(title: "B", parentID: id)]))
+        XCTAssertEqual(Array(tasks.subtasks(of: id).filter { $0.status != .done }.map(\.title).suffix(2)), ["A", "B"])
+    }
+
+    func testReorderingCompletedSubtasksSaves() throws {
+        let id = try seed(.boundary)
+        let presenter = try open(id, unfolded: true)
+        let model = presenter.model
+        model.newSubtaskText = "CU order row"
+        XCTAssertTrue(model.commitNewSubtask())
+        let write = try XCTUnwrap(tasks.subtasks(of: id).first { $0.title == "Write release notes" })
+        XCTAssertTrue(model.toggle(write.id))
+        let done = tasks.subtasks(of: id).filter { $0.status == .done }
+        XCTAssertEqual(done.count, 2)
+        XCTAssertTrue(model.move(done[0].id, by: 1), "\(String(describing: model.failure))")
+        XCTAssertNil(model.failure)
+        XCTAssertEqual(tasks.subtasks(of: id).filter { $0.status == .done }.map(\.id), [done[1].id, done[0].id])
+        XCTAssertTrue(model.move(done[0].id, by: -1))
+        XCTAssertNil(model.failure)
+    }
+
+    func testListEntrySelectsTheLastRowElseTheFirst() throws {
+        let id = try seed(.heavy)
+        let presenter = try open(id, unfolded: true)
+        let model = presenter.model
+        XCTAssertEqual(model.listEntryRowID, model.rows.first?.id, "a fresh Tab into the list selects the first row")
+        model.noteRowFocused(model.rows[3].id)
+        model.focusedRowID = nil
+        XCTAssertEqual(model.listEntryRowID, model.rows[3].id)
+        model.requestFocus(.list)
+        XCTAssertEqual(model.focusedRowID, model.rows[3].id)
+    }
+
+    func testHeldRowsSettleAtOnceWithReduceMotion() throws {
+        let id = try seed(.heavy)
+        var design = AtticDesignContext.default
+        design.reduceMotion = true
+        let presenter = try TaskNotePresenter(taskID: id, tasks: tasks, library: library, notes: notes,
+                                              design: design, columnInset: columnInset, defaults: nil)
+        presenters.append(presenter)
+        XCTAssertTrue(presenter.model.reduceMotion)
+    }
+
+    func testDarkWritingUsesTheNotesInkEvenWhenNotesNeverShowed() throws {
+        let id = try seed(.boundary)
+        var dark = AtticDesignContext.default
+        dark.mode = .dark
+        let presenter = try TaskNotePresenter(taskID: id, tasks: tasks, library: library, notes: notes,
+                                              design: dark, columnInset: columnInset, defaults: nil)
+        presenters.append(presenter)
+        let engine = presenter.host.engine
+        let ink = engine.textStorage.attribute(.foregroundColor, at: 0, effectiveRange: nil) as? NSColor
+        XCTAssertEqual(ink, NoteTextStyle(design: dark).bodyColor)
+        XCTAssertNotEqual(ink, NoteTextStyle(design: .default).bodyColor)
+        // A later change of look reaches the open editor.
+        presenter.update(design: .default)
+        XCTAssertEqual(engine.textStorage.attribute(.foregroundColor, at: 0, effectiveRange: nil) as? NSColor,
+                       NoteTextStyle(design: .default).bodyColor)
+    }
+
+    func testTabFromAddSubtaskLeavesTheKeyboardInTheWriting() throws {
+        let id = try seed(.boundary)
+        let presenter = try open(id)
+        let host = presenter.host
+        let window = try XCTUnwrap(host.textView.window)
+        // The block's hosting view had the keyboard (the Add field).
+        window.makeFirstResponder(host.blockView)
+        presenter.model.focusWriting(atTop: true)
+        // SwiftUI handing the keyboard back to its hosting view this turn
+        // must not win.
+        window.makeFirstResponder(host.blockView)
+        RunLoop.main.run(until: Date().addingTimeInterval(0.05))
+        XCTAssertTrue(window.firstResponder === host.textView)
+        XCTAssertEqual(host.textView.selectedRange(), NSRange(location: 0, length: 0))
+        host.textView.insertText("x", replacementRange: NSRange(location: NSNotFound, length: 0))
+        XCTAssertTrue(host.engine.textStorage.string.hasPrefix("x"), "typing after the Tab reaches the writing")
+    }
+
+    func testFindUsesTheComposedFinderAndTheSharedScroll() throws {
+        let id = try seed(.long)
+        let presenter = try open(id)
+        let host = presenter.host
+        XCTAssertTrue(host.textView.composedFinder === host.textFinder)
+        XCTAssertTrue(host.textFinder.findBarContainer === host.scrollView)
+        XCTAssertTrue(host.textFinder.client === host.textView)
+        let item = NSMenuItem(title: "Find…", action: #selector(NSTextView.performTextFinderAction(_:)), keyEquivalent: "f")
+        item.tag = NSTextFinder.Action.showFindInterface.rawValue
+        XCTAssertTrue(host.textView.validateUserInterfaceItem(item))
+        host.textView.performTextFinderAction(item)
+        XCTAssertTrue(host.scrollView.isFindBarVisible, "⌘F shows the bar over the shared scroll")
+        // Scroll-to-match goes through the mapper.
+        let match = (host.engine.textStorage.string as NSString).range(of: "Line 4000 ")
+        host.textView.scrollRangeToVisible(match)
+        settle(host.textView)
+        let rect = try XCTUnwrap(host.mapper.textRect(for: match))
+        XCTAssertTrue(host.mapper.unobscuredRect().intersects(rect))
+    }
+
+    func testTheBlockClipsRowsLeavingOnAFold() throws {
+        let id = try seed(.heavy)
+        let presenter = try open(id, unfolded: true)
+        let block = presenter.host.blockView
+        XCTAssertEqual(block.layer?.masksToBounds, true)
+        presenter.model.setFolded(true)
+        presenter.host.restack()
+        XCTAssertEqual(block.frame.height, TaskNoteMetrics.blockHeader, accuracy: 1)
     }
 }

@@ -65,7 +65,24 @@ final class TaskNotePageModel: ObservableObject {
     /// The row the list's ring is on (arrows move it).
     @Published var focusedRowID: UUID?
     @Published private(set) var renamingID: UUID?
-    @Published var renameText = ""
+    /// The rename field's draft (plain text: its pieces are never parsed).
+    @Published var renameEdit = TaskAddBarText()
+    var renameText: String {
+        get { renameEdit.text }
+        set { renameEdit.text = newValue }
+    }
+    /// Each open field owns its draft history and its `WorkspaceFieldUndo`
+    /// for the whole edit (review P2-2): ⌘Z inside the field walks the
+    /// draft; a successful commit, a cancel or a fold retires both; a
+    /// refused commit keeps both, with the typed text.
+    private(set) var renameHistory = TaskDraftHistory()
+    private var renameField: WorkspaceFieldUndo?
+    private(set) var titleHistory = TaskDraftHistory()
+    private var titleField: WorkspaceFieldUndo?
+    /// The title editor's whole selection (its draft history only).
+    var titleEditSelection: NSRange?
+    /// Reduce Motion: the held rows settle at once (review P2-4).
+    var reduceMotion = false
     @Published var newSubtaskText = ""
     @Published private(set) var isEditingTitle = false {
         didSet { if isEditingTitle != oldValue { onGeometryChange?() } }
@@ -192,7 +209,7 @@ final class TaskNotePageModel: ObservableObject {
             if next != self.head { self.head = next }
             if nextRows != self.rows { self.rows = nextRows }
         }
-        if animated {
+        if animated, !reduceMotion {
             withAnimation(AtticMotionPreset.expand.animation(reduceMotion: false)) { apply() }
         } else {
             apply()
@@ -246,7 +263,7 @@ final class TaskNotePageModel: ObservableObject {
 
     // MARK: Fold (presentation state only: no history, no revision)
 
-    func toggleFold() { setFolded(!isFolded) }
+    func toggleFold(undoManager: UndoManager? = nil) { setFolded(!isFolded) }
 
     func setFolded(_ folded: Bool) {
         guard folded != isFolded else { return }
@@ -255,6 +272,7 @@ final class TaskNotePageModel: ObservableObject {
         if folded {
             focusInside = false
             releaseHold()
+            // Folding cancels an open rename and retires its field Undo.
             if renamingID != nil { cancelRename() }
         }
         onGeometryChange?()
@@ -293,35 +311,61 @@ final class TaskNotePageModel: ObservableObject {
         return true
     }
 
-    func beginRename(_ id: UUID) {
+    func beginRename(_ id: UUID, undoManager: UndoManager? = nil) {
         guard let row = rows.first(where: { $0.id == id }) else { return }
-        renameText = row.title
+        if renamingID != nil, renamingID != id { cancelRename() }
+        renameEdit = TaskAddBarText(text: row.title)
+        renameHistory.reset()
+        renameField = WorkspaceFieldUndo(manager: undoManager ?? UndoManager())
         renamingID = id
+    }
+
+    /// The rename field replaced `range` with `replacement` (a draft step).
+    func renameEdited(_ range: NSRange, replacement: String) {
+        renameHistory.willEdit(renameEdit, selection: nil, range: range, replacement: replacement)
+        renameEdit.edited(range, replacement: replacement)
+    }
+
+    func undoRenameDraft() -> (text: String, selection: NSRange)? {
+        guard let entry = renameHistory.undo(current: renameEdit, selection: nil) else { return nil }
+        renameEdit = entry.text
+        return (entry.text.text, entry.selection)
+    }
+
+    func redoRenameDraft() -> (text: String, selection: NSRange)? {
+        guard let entry = renameHistory.redo(current: renameEdit, selection: nil) else { return nil }
+        renameEdit = entry.text
+        return (entry.text.text, entry.selection)
     }
 
     /// Return saves the rename as one step in the workspace history; the
     /// field's own Undo retires with it (round 1's `WorkspaceFieldUndo`).
     @discardableResult
-    func commitRename(undoManager: UndoManager?) -> Bool {
+    func commitRename() -> Bool {
         guard let id = renamingID else { return true }
         let title = renameText.trimmingCharacters(in: .whitespacesAndNewlines)
         guard let task = store.task(withID: id), !title.isEmpty, title != task.title else {
-            cancelRename(undoManager: undoManager)
+            cancelRename()
             return true
         }
-        let outcome = fieldCommit(undoManager: undoManager) { [library, historyID] in
+        let outcome = fieldCommit(renameField) { [library, historyID] in
             library.updateTask(id, title: title, in: historyID)
         }
+        // Refused: the field, its text and its draft Undo stay.
         guard outcome.isApplied else {
-            return settle(outcome) { [weak self] in _ = self?.commitRename(undoManager: undoManager) }
+            return settle(outcome) { [weak self] in _ = self?.commitRename() }
         }
         clearFailure()
+        renameHistory.reset()
+        renameField = nil
         renamingID = nil
         return true
     }
 
-    func cancelRename(undoManager: UndoManager? = nil) {
-        if let undoManager { WorkspaceFieldUndo(manager: undoManager).cancel() }
+    func cancelRename() {
+        renameField?.cancel()
+        renameField = nil
+        renameHistory.reset()
         renamingID = nil
     }
 
@@ -358,8 +402,11 @@ final class TaskNotePageModel: ObservableObject {
 
     // MARK: The head's title (Tasks' title editor and its shorthand)
 
-    func beginEditingTitle() {
+    func beginEditingTitle(undoManager: UndoManager? = nil) {
         guard let task = store.task(withID: taskID), !isEditingTitle else { return }
+        titleHistory.reset()
+        titleField = WorkspaceFieldUndo(manager: undoManager ?? UndoManager())
+        titleEditSelection = nil
         var edit = TaskAddBarText(text: task.title)
         // Words already in the title stay words: only shorthand typed now
         // applies.
@@ -369,9 +416,45 @@ final class TaskNotePageModel: ObservableObject {
         isEditingTitle = true
     }
 
+    /// The title field replaced `range` with `replacement` (a draft step).
+    func titleEdited(_ range: NSRange, replacement: String) {
+        titleHistory.willEdit(titleEdit, selection: TaskDraftHistory.selection(titleEditSelection, caret: titleEditCaret),
+                              range: range, replacement: replacement)
+        titleEdit.edited(range, replacement: replacement)
+    }
+
+    func dismissTitleChip(_ range: NSRange) {
+        titleHistory.checkpoint(titleEdit, selection: TaskDraftHistory.selection(titleEditSelection, caret: titleEditCaret))
+        titleEdit.dismiss(range)
+    }
+
+    func undoTitleDraft() -> (text: String, selection: NSRange)? {
+        guard let entry = titleHistory.undo(current: titleEdit, selection: TaskDraftHistory.selection(titleEditSelection, caret: titleEditCaret))
+        else { return nil }
+        applyTitleDraft(entry)
+        return (entry.text.text, entry.selection)
+    }
+
+    func redoTitleDraft() -> (text: String, selection: NSRange)? {
+        guard let entry = titleHistory.redo(current: titleEdit, selection: TaskDraftHistory.selection(titleEditSelection, caret: titleEditCaret))
+        else { return nil }
+        applyTitleDraft(entry)
+        return (entry.text.text, entry.selection)
+    }
+
+    private func applyTitleDraft(_ entry: TaskDraftHistory.Entry) {
+        titleEdit = entry.text
+        titleEditCaret = entry.selection.location
+        titleEditSelection = entry.selection
+    }
+
+    /// ⌘Z past a field's own draft: the workspace's history.
+    func undoWorkspace() { _ = library.undo.undo(in: historyID) }
+    func redoWorkspace() { _ = library.undo.redo(in: historyID) }
+
     /// Return commits and moves the keyboard to the block (§ 7).
     @discardableResult
-    func commitTitle(undoManager: UndoManager?) -> Bool {
+    func commitTitle() -> Bool {
         guard isEditingTitle else { return true }
         guard let task = store.task(withID: taskID) else { return report(.taskGone) }
         let parts = titleEdit.parts(parser: parser)
@@ -382,24 +465,29 @@ final class TaskNotePageModel: ObservableObject {
         let newDay: DueDay?? = parts.dueDay.flatMap { $0 != task.dueDay ? .some($0) : nil }
         let newPriority: TaskPriority? = parts.priority.flatMap { $0 != task.priority ? $0 : nil }
         guard newTitle != nil || newTags != nil || newDay != nil || newPriority != nil else {
-            cancelTitle(undoManager: undoManager)
+            cancelTitle()
             requestFocus(.list)
             return true
         }
-        let outcome = fieldCommit(undoManager: undoManager) { [library, taskID, historyID] in
+        let outcome = fieldCommit(titleField) { [library, taskID, historyID] in
             library.updateTask(taskID, title: newTitle, priority: newPriority, tags: newTags, dueDay: newDay, in: historyID)
         }
+        // Refused: the editor, its text and its draft Undo stay.
         guard outcome.isApplied else {
-            return settle(outcome) { [weak self] in _ = self?.commitTitle(undoManager: undoManager) }
+            return settle(outcome) { [weak self] in _ = self?.commitTitle() }
         }
         clearFailure()
+        titleHistory.reset()
+        titleField = nil
         isEditingTitle = false
         requestFocus(.list)
         return true
     }
 
-    func cancelTitle(undoManager: UndoManager? = nil) {
-        if let undoManager { WorkspaceFieldUndo(manager: undoManager).cancel() }
+    func cancelTitle() {
+        titleField?.cancel()
+        titleField = nil
+        titleHistory.reset()
         isEditingTitle = false
     }
 
@@ -411,7 +499,7 @@ final class TaskNotePageModel: ObservableObject {
             requestFocus(isFolded ? .writing : .add)
             return
         }
-        if region == .list, focusedRowID == nil { focusedRowID = lastFocusedRowID.flatMap { id in rows.contains { $0.id == id } ? id : nil } ?? rows.first?.id }
+        if region == .list { focusedRowID = listEntryRowID }
         focusRequest = region
         focusRequestCount &+= 1
     }
@@ -431,6 +519,14 @@ final class TaskNotePageModel: ObservableObject {
         } else {
             requestFocus(.add)
         }
+    }
+
+    /// The row the list's one Tab stop lands on (review P2-5): the ring's
+    /// row, else the last focused row, else the first.
+    var listEntryRowID: UUID? {
+        if let id = focusedRowID, rows.contains(where: { $0.id == id }) { return id }
+        if let id = lastFocusedRowID, rows.contains(where: { $0.id == id }) { return id }
+        return rows.first?.id
     }
 
     func noteRowFocused(_ id: UUID?) {
@@ -483,9 +579,9 @@ final class TaskNotePageModel: ObservableObject {
 
     /// A field's commit: the library's step goes into the workspace history
     /// as exactly one entry, and the field's own Undo targets retire.
-    private func fieldCommit(undoManager: UndoManager?, _ operation: @escaping () -> CommandOutcome) -> CommandOutcome {
+    private func fieldCommit(_ owned: WorkspaceFieldUndo?, _ operation: @escaping () -> CommandOutcome) -> CommandOutcome {
         var outcome = CommandOutcome.failed(CommandFailure(String(localized: "Finish the change in progress first")))
-        let field = WorkspaceFieldUndo(manager: undoManager ?? UndoManager())
+        let field = owned ?? WorkspaceFieldUndo(manager: UndoManager())
         let recorded = field.commit(to: history) {
             library.undo.capturingSteps { outcome = operation() }.first
         }

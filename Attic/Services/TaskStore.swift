@@ -3182,7 +3182,12 @@ final class TaskStore: ObservableObject {
         do {
             if let order = sparseManualOrder(at: destination, in: siblings) {
                 let shown = TaskContentSnapshot(task)
-                for replica in try storedTasks(matching: taskID) {
+                // Every physical replica is captured for the write gate
+                // before it changes, as `assignSpacedManualOrders` does.
+                let replicas = try storedTasks(matching: taskID)
+                WorkspaceLegacyBridge.captureBeforeMutations([task] + replicas, in: context)
+                WorkspaceLegacyBridge.prepareMutations(replicas, in: context)
+                for replica in replicas {
                     let agrees = replica === task || TaskContentSnapshot(replica) == shown
                     replica.manualOrder = order
                     replica.listOrderVersion = TaskItem.currentListOrderVersion
@@ -3955,13 +3960,16 @@ final class TaskStore: ObservableObject {
     /// missing order reads as 0. A lone subtask in an empty or unordered
     /// group stays unordered (creation time puts it last).
     private func endManualOrder(status: TaskStatus, parentID: UUID?, batch: Bool, updatedAt: Date) throws -> Int64? {
-        let group = tasks.filter { $0.status == status && $0.parentID == parentID }
+        // The display group: every unfinished state together, or Done
+        // (review P2-3: a Todo appended after Later rows, not before them).
+        let isDone = status == .done
+        let group = tasks.filter { ($0.status == .done) == isDone && $0.parentID == parentID }
         let orders = group.map { $0.manualOrder ?? 0 }
         if !batch, group.allSatisfy({ $0.manualOrder == nil }) { return nil }
         guard let lowest = orders.min() else { return Self.manualOrderStride }
         guard lowest >= .min + Self.manualOrderStride else {
             let orderedGroup = (parentID.map(subtasks(of:)) ?? orderedTasks(for: status)).filter {
-                $0.status == status && $0.parentID == parentID
+                ($0.status == .done) == isDone && $0.parentID == parentID
             }
             try assignSpacedManualOrders(to: orderedGroup, updatedAt: updatedAt)
             return 0

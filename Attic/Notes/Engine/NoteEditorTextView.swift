@@ -33,6 +33,36 @@ final class NoteEditorTextView: NSTextView, NSAccessibilityCustomRotorItemSearch
     /// does not scroll on its own: caret visibility, the selection bar,
     /// Find and accessibility frames use the shared scroll's one mapper.
     var coordinateMapper: NoteCoordinateMapper?
+    /// The composed host's text finder (the shared scroll holds its bar).
+    weak var composedFinder: NSTextFinder?
+
+    override func performTextFinderAction(_ sender: Any?) {
+        guard let composedFinder else { return super.performTextFinderAction(sender) }
+        let tag = (sender as? NSValidatedUserInterfaceItem)?.tag ?? NSTextFinder.Action.showFindInterface.rawValue
+        if let action = NSTextFinder.Action(rawValue: tag) { composedFinder.performAction(action) }
+    }
+
+    /// ⌘F, ⌘G, ⇧⌘G and ⌘E reach the composed finder even when no menu item
+    /// carries them.
+    override func performKeyEquivalent(with event: NSEvent) -> Bool {
+        if let composedFinder, window?.firstResponder === self, let action = Self.finderAction(for: event),
+           composedFinder.validateAction(action) || action == .showFindInterface {
+            composedFinder.performAction(action)
+            return true
+        }
+        return super.performKeyEquivalent(with: event)
+    }
+
+    static func finderAction(for event: NSEvent) -> NSTextFinder.Action? {
+        let flags = event.modifierFlags.intersection([.command, .option, .shift, .control])
+        switch (event.charactersIgnoringModifiers?.lowercased(), flags) {
+        case ("f", [.command]): return .showFindInterface
+        case ("g", [.command]): return .nextMatch
+        case ("g", [.command, .shift]): return .previousMatch
+        case ("e", [.command]): return .setSearchString
+        default: return nil
+        }
+    }
 
     /// Caret visibility (typing, arrows, Find's scroll-to-match) scrolls the
     /// shared view by the least amount, clear of the header and bottom row.
@@ -447,6 +477,10 @@ final class NoteEditorTextView: NSTextView, NSAccessibilityCustomRotorItemSearch
     }
 
     override func validateUserInterfaceItem(_ item: any NSValidatedUserInterfaceItem) -> Bool {
+        if let composedFinder, item.action == #selector(performTextFinderAction(_:)),
+           let action = NSTextFinder.Action(rawValue: item.tag) {
+            return composedFinder.validateAction(action)
+        }
         if let engine {
             if item.action == #selector(undo(_:)) {
                 let name = engine.history.undoActionName
@@ -675,3 +709,8 @@ protocol NoteObjectInteraction: AnyObject {
     func fileDragEnded()
     func performFileDrop(_ info: any NSDraggingInfo) -> Bool?
 }
+
+/// NSTextView already answers the finder's client calls (string, ranges,
+/// rects, content views and `scrollRangeToVisible`); the composed host's own
+/// `NSTextFinder` uses it as its client.
+extension NoteEditorTextView: NSTextFinderClient {}

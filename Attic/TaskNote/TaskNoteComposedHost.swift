@@ -29,6 +29,8 @@ final class TaskNoteComposedHost: NSObject {
     private(set) var engine: NoteEditorEngine
     private(set) var textView: NoteEditorTextView
     let mapper: NoteCoordinateMapper
+    /// The writing's Find (bar, highlights, scroll-to-match).
+    let textFinder = NSTextFinder()
     private let headController: NSHostingController<AnyView>
     private let blockController: NSHostingController<AnyView>
     /// Instrumentation for the § 9.1 gate (nil unless asked for).
@@ -86,6 +88,13 @@ final class TaskNoteComposedHost: NSObject {
             view.translatesAutoresizingMaskIntoConstraints = true
             documentView.addSubview(view)
         }
+        // Rows leaving on a fold stay inside the block (CU P2): the block's
+        // final height is committed at once and its view clips to it.
+        blockController.view.wantsLayer = true
+        blockController.view.layer?.masksToBounds = true
+        // The key-view loop runs head → block → writing, so a Tab past the
+        // block's last control lands in the text (§ 7).
+        headController.view.nextKeyView = blockController.view
         install(textView)
         observeClip()
         restack()
@@ -113,6 +122,14 @@ final class TaskNoteComposedHost: NSObject {
 
     private func install(_ textView: NoteEditorTextView) {
         textView.coordinateMapper = mapper
+        blockController.view.nextKeyView = textView
+        // Find: the composed page's own text finder, with the shared scroll
+        // as its bar's container (NSTextView only adopts a scroll view it is
+        // the document of). Scroll-to-match goes through the mapper.
+        textFinder.client = textView
+        textFinder.findBarContainer = scrollView
+        textFinder.isIncrementalSearchingEnabled = true
+        textView.composedFinder = textFinder
         textView.textContainerInset = NSSize(width: columnInset, height: 0)
         textView.autoresizingMask = []
         textView.postsFrameChangedNotifications = true
@@ -162,6 +179,8 @@ final class TaskNoteComposedHost: NSObject {
         observers.forEach(NotificationCenter.default.removeObserver)
         observers.removeAll()
         textView.coordinateMapper = nil
+        textView.composedFinder = nil
+        textFinder.client = nil
         textView.isEditable = false
         textView.writingToolsBehavior = .none
         textView.suggestionCommand = nil
@@ -289,6 +308,8 @@ final class TaskNoteComposedHost: NSObject {
         set { blockController.rootView = newValue }
     }
 
+    var headView: NSView { headController.view }
+    var blockView: NSView { blockController.view }
     var headFrame: NSRect { headController.view.frame }
     var blockFrame: NSRect { blockController.view.frame }
 
@@ -303,6 +324,13 @@ final class TaskNoteComposedHost: NSObject {
         }
         window.makeFirstResponder(textView)
         textView.scrollRangeToVisible(textView.selectedRange())
+        // SwiftUI drops the field's focus after this turn; if that hands the
+        // keyboard to the hosting view, take it back (CU P1: Tab from Add).
+        let target = textView
+        DispatchQueue.main.async { [weak window, weak target] in
+            guard let window, let target, target.isEditable, window.firstResponder !== target else { return }
+            window.makeFirstResponder(target)
+        }
     }
 
     /// Scrolls back to the page's top (the head).

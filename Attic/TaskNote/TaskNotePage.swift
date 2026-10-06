@@ -26,6 +26,7 @@ final class TaskNotePresenter: ObservableObject {
     private(set) var lease: WorkspacePageSession.Lease?
     private let surfaceID = UUID()
     private var design: AtticDesignContext
+    private weak var notes: NotesPageController?
     @Published private(set) var engineGeneration: UInt64 = 0
     private var engineObservation: AnyCancellable?
     /// Rings in the head and the block only while the keyboard drives.
@@ -35,6 +36,10 @@ final class TaskNotePresenter: ObservableObject {
 
     init(taskID: UUID, tasks: TaskStore, library: AtticLibrary, notes: NotesPageController,
          design: AtticDesignContext, columnInset: CGFloat, defaults: UserDefaults? = .standard) throws {
+        // The Notes page may never have been shown: its engines take the
+        // panel's look before this session's engine is made (CU P1, Dark ink).
+        notes.update(design: design)
+        self.notes = notes
         let coordinator = try WorkspaceLegacyBridge.coordinator(for: tasks.container)
         let page = try coordinator.sessions.session(for: .task(taskID), notes: notes)
         lease = try page.acquire(surfaceID: surfaceID)
@@ -50,6 +55,7 @@ final class TaskNotePresenter: ObservableObject {
         let model = canReuse ? cached!.model
             : TaskNotePageModel(taskID: taskID, store: tasks, library: library, history: page.history, defaults: defaults)
         self.model = model
+        model.reduceMotion = design.reduceMotion
         let engine: NoteEditorEngine
         if let note = page.note {
             engine = note.engine
@@ -101,6 +107,9 @@ final class TaskNotePresenter: ObservableObject {
     func update(design: AtticDesignContext) {
         guard lease != nil, design != self.design else { return }
         self.design = design
+        notes?.update(design: design)
+        host.engine.update(design: design)
+        model.reduceMotion = design.reduceMotion
         host.setRegions(head: Self.headView(model, design: design), block: Self.blockView(model, design: design))
     }
 
@@ -208,6 +217,11 @@ struct TaskNotePage: View {
                 if let session = presenter.session {
                     NoteStatusSlot(controller: controller, store: noteStore, session: session, damaged: damaged,
                                    leadingItems: taskItems)
+                        .transition(.opacity)
+                } else if let item = taskItems.first {
+                    // A task with no note: its command failures still show,
+                    // in the same pill, without creating a note (review P2-6).
+                    AtticStatusPill(item: item, inlineAction: item.actions.first) {}
                         .transition(.opacity)
                 }
                 Spacer(minLength: AtticSpacing.s12)
@@ -370,6 +384,9 @@ struct TaskNotePageContainer: View {
         } catch {
             openFailed = true
         }
+        #if DEBUG
+        if let presenter { TaskNoteCaptureScript.runIfRequested(presenter) }
+        #endif
     }
 
     /// Back keeps the page when the session refuses to let go (a
