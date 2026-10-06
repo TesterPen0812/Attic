@@ -1,5 +1,6 @@
 import AppKit
 import SwiftData
+import SwiftUI
 import XCTest
 @testable import Attic
 
@@ -14,6 +15,7 @@ final class TaskNoteComposedHostTests: XCTestCase {
     private var coordinator: WorkspaceOperationCoordinator!
     private var windows: [NSWindow] = []
     private var presenters: [TaskNotePresenter] = []
+    private var openingWindow: NSWindow?
 
     /// The panel's size and the Notes page's insets (header 76, bottom row).
     private let panel = NSSize(width: 320, height: 520)
@@ -51,21 +53,36 @@ final class TaskNoteComposedHostTests: XCTestCase {
     }
 
     private func open(_ taskID: UUID, unfolded: Bool? = nil) throws -> TaskNotePresenter {
+        let start = DispatchTime.now().uptimeNanoseconds
         let presenter = try TaskNotePresenter(taskID: taskID, tasks: tasks, library: library, notes: notes,
                                               design: .default, columnInset: columnInset, defaults: nil)
+        let initialized = DispatchTime.now().uptimeNanoseconds
         presenters.append(presenter)
         if let unfolded { presenter.model.setFolded(!unfolded) }
         let host = presenter.host
+        if openingWindow != nil {
+            // The measured page includes its normal native editor controls.
+            let controls = NoteFormatControls(engine: host.engine, textView: host.textView, scrollView: host.scrollView,
+                                              design: .default, noteID: host.engine.noteID, isNewDraft: false)
+            let objects = NoteObjectControls(engine: host.engine, textView: host.textView)
+            host.onInvalidate = { controls.invalidate(); objects.invalidate() }
+        }
         host.setContentInsets(top: topInset, bottom: bottomInset)
-        let window = NSWindow(contentRect: NSRect(origin: .zero, size: panel), styleMask: [.titled],
-                              backing: .buffered, defer: false)
+        let window = openingWindow ?? NSWindow(contentRect: NSRect(origin: .zero, size: panel), styleMask: [.titled],
+                                               backing: .buffered, defer: false)
         window.isReleasedWhenClosed = false
         host.scrollView.frame = NSRect(origin: .zero, size: panel)
         window.contentView = host.scrollView
-        windows.append(window)
+        if openingWindow == nil { windows.append(window) }
+        let mounted = DispatchTime.now().uptimeNanoseconds
         host.restack()
         host.scrollToTop()
+        let restacked = DispatchTime.now().uptimeNanoseconds
         settle(host.textView)
+        if ProcessInfo.processInfo.environment["ATTIC_TASK_NOTE_OPEN_PROFILE"] == "1" {
+            let displayed = DispatchTime.now().uptimeNanoseconds
+            print("TASKNOTE-PROFILE init \(Double(initialized - start) / 1_000_000) mount \(Double(mounted - initialized) / 1_000_000) restack \(Double(restacked - mounted) / 1_000_000) display \(Double(displayed - restacked) / 1_000_000)")
+        }
         return presenter
     }
 
@@ -161,6 +178,157 @@ final class TaskNoteComposedHostTests: XCTestCase {
         XCTAssertTrue(presenter.host.textView === textView)
         XCTAssertTrue(engine.textView === textView)
         XCTAssertTrue(presenter.session?.engine === engine)
+        XCTAssertTrue(presenter.model.library.updateTask(id, title: String(repeating: "A wrapping title ", count: 8)).isApplied)
+        presenter.model.refresh()
+        presenter.host.restack()
+        let readingHeight = presenter.host.headFrame.height
+        presenter.model.beginEditingTitle()
+        presenter.host.restack()
+        XCTAssertLessThan(presenter.host.headFrame.height, readingHeight, "cached head sizing follows the one-line title editor")
+        presenter.model.cancelTitle()
+        presenter.host.restack()
+        XCTAssertEqual(presenter.host.headFrame.height, readingHeight)
+        XCTAssertTrue(presenter.host.textView === textView)
+    }
+
+    func testExternalRefreshRetiresTheDetachedEditorAndKeepsTypingDurable() async throws {
+        let id = try seed(.boundary), presenter = try open(id)
+        let session = try XCTUnwrap(presenter.session)
+        let mounted = NSHostingView(rootView: TaskNotePage(presenter: presenter, controller: notes,
+            noteStore: notes.store, layout: PanelPageLayout(cornerSize: 52, panelSize: panel), onBack: {}))
+        let window = try XCTUnwrap(presenter.host.scrollView.window)
+        window.contentView = mounted
+        mounted.frame = NSRect(origin: .zero, size: panel)
+        mounted.layoutSubtreeIfNeeded()
+        RunLoop.main.run(until: Date().addingTimeInterval(0.05))
+        XCTAssertTrue(NoteFormatControls.active?.engine === session.engine)
+        let oldView = presenter.host.textView
+        let oldEngine = session.engine
+        let page = try coordinator.sessions.session(for: .task(id), notes: notes)
+        let context = coordinator.freshContext(), noteID = session.noteID
+        let replicas = try context.fetch(FetchDescriptor<NoteItem>(predicate: #Predicate { $0.id == noteID }))
+        let document = try NoteDocument(blocks: [.text("Head"), .text("Imported body")]).taskSnapshot(title: "Head")
+        NoteStore.stageDocumentContent(try PreparedNoteDocument(document), format: 1, on: replicas,
+                                      timestamp: Date(), revision: 1, revisionID: UUID())
+        try context.save()
+        page.externalRefresh(origin: "test import")
+        mounted.layoutSubtreeIfNeeded()
+        RunLoop.main.run(until: Date().addingTimeInterval(0.05))
+        XCTAssertTrue(NoteFormatControls.active?.engine === session.engine, "formatting follows the imported editor too")
+        let host = presenter.host
+        XCTAssertFalse(session.engine === oldEngine)
+        XCTAssertTrue(host.engine === session.engine, "a mounted host must follow the session's imported engine")
+        XCTAssertTrue(host.textView.engine === session.engine)
+        XCTAssertTrue(host.mapper.textView === host.textView)
+        XCTAssertFalse(oldView.isEditable)
+        XCTAssertNil(oldView.superview)
+        XCTAssertTrue(host.engine.isBodyOnly)
+        XCTAssertEqual(host.engine.textStorage.string, "Imported body")
+        host.textView.setSelectedRange(NSRange(location: host.engine.textStorage.length, length: 0))
+        type(" saved", into: host.textView)
+        let closed = await presenter.close()
+        XCTAssertTrue(closed)
+        let saved = try XCTUnwrap(notes.store.loadDocument(noteID: noteID)?.content.document)
+        XCTAssertEqual(saved.blocks[1].text, "Imported body saved")
+        XCTAssertFalse(host.scrollView.window?.isKeyWindow == true)
+        XCTAssertFalse(host.scrollView.window?.isVisible == true)
+    }
+
+    func testWarmPresentationRetiresTheClosedEditorAndRefreshesTheHeadUnderANewLease() async throws {
+        let id = try seed(.heavy), original = try open(id)
+        let session = try XCTUnwrap(original.session)
+        let oldView = original.host.textView
+        let oldViewport = oldView.textLayoutManager
+        let oldGeneration = session.engine.viewGeneration
+        let oldLease = original.lease
+        let oldTitle = original.model.head.title
+        let closed = await original.close()
+        XCTAssertTrue(closed)
+        XCTAssertNil(original.lease)
+        XCTAssertNil(session.engine.textView)
+        XCTAssertNil(oldView.engine)
+        XCTAssertNil(oldView.delegate)
+        XCTAssertFalse(oldView.isEditable)
+        XCTAssertTrue(oldView.isSuspended)
+        let closedBody = session.engine.textStorage.string
+        oldView.insertText("late", replacementRange: NSRange(location: NSNotFound, length: 0))
+        XCTAssertEqual(session.engine.textStorage.string, closedBody, "the retained closed editor refuses native input")
+        XCTAssertNil(oldView.coordinateMapper)
+        XCTAssertTrue(session.taskNotePresentation?.host === original.host)
+        XCTAssertNil(original.model.onGeometryChange)
+        XCTAssertNil(original.model.onFocusWriting)
+
+        XCTAssertTrue(library.updateTask(id, title: "Changed while closed").isApplied)
+        RunLoop.main.run(until: Date().addingTimeInterval(0.02))
+        XCTAssertEqual(original.model.head.title, oldTitle, "closed native regions do not observe task changes")
+        let reopened = try open(id)
+        XCTAssertTrue(reopened.session === session)
+        XCTAssertTrue(reopened.host === original.host)
+        XCTAssertTrue(reopened.model === original.model)
+        XCTAssertNil(session.taskNotePresentation, "only the new lease owns the resumed presentation")
+        XCTAssertNotEqual(reopened.lease, oldLease)
+        XCTAssertEqual(reopened.model.head.title, "Changed while closed")
+        XCTAssertEqual(reopened.host.engine.document().blocks.first?.text, "Changed while closed")
+        XCTAssertTrue(reopened.host.textView === oldView)
+        XCTAssertTrue(reopened.host.textView.textLayoutManager === oldViewport, "unchanged closed sessions keep their viewport warm")
+        XCTAssertNotEqual(session.engine.viewGeneration, oldGeneration, "queued native work cannot enter a later lease")
+        XCTAssertTrue(reopened.host.textView.isEditable)
+        XCTAssertFalse(reopened.host.textView.isSuspended)
+        XCTAssertTrue(session.engine.textView === reopened.host.textView)
+        XCTAssertTrue(reopened.host.mapper.textView === reopened.host.textView)
+        let freshView = reopened.host.textView
+        let alreadyClosed = await original.close()
+        XCTAssertTrue(alreadyClosed)
+        XCTAssertTrue(freshView.isEditable, "closing the retired presenter cannot revoke the new lease")
+        XCTAssertFalse(reopened.host.scrollView.window?.isKeyWindow == true)
+        XCTAssertFalse(reopened.host.scrollView.window?.isVisible == true)
+    }
+
+    func testChangedClosedDraftGetsAFreshViewportAndSavesItsNewBody() async throws {
+        let id = try seed(.boundary), original = try open(id)
+        let session = try XCTUnwrap(original.session)
+        let oldViewport = original.host.textView.textLayoutManager
+        let closed = await original.close()
+        XCTAssertTrue(closed)
+        session.engine.performEdit(NSRange(location: session.engine.textStorage.length, length: 0),
+                                   with: NSAttributedString(string: " changed"), name: "Typing")
+        let reopened = try open(id)
+        XCTAssertTrue(reopened.session === session)
+        XCTAssertFalse(reopened.host.textView.textLayoutManager === oldViewport,
+                       "a closed viewport did not observe the new draft")
+        XCTAssertTrue(reopened.host.textView.string.hasSuffix(" changed"))
+        let reclosed = await reopened.close()
+        XCTAssertTrue(reclosed)
+        let saved = try XCTUnwrap(notes.store.loadDocument(noteID: session.noteID)?.content.document)
+        XCTAssertTrue(saved.blocks.last?.text.hasSuffix(" changed") == true)
+    }
+
+    func testAnInterveningLegacyViewCannotResumeTheOldTaskViewport() async throws {
+        let id = try seed(.boundary), original = try open(id)
+        let session = try XCTUnwrap(original.session), oldView = original.host.textView
+        let closed = await original.close()
+        XCTAssertTrue(closed)
+        XCTAssertTrue(notes.open(noteID: session.noteID))
+        let (_, legacyView) = session.engine.makeView()
+        session.engine.detachView()
+        let reopened = try open(id)
+        XCTAssertFalse(reopened.host.textView === oldView)
+        XCTAssertFalse(reopened.host.textView === legacyView)
+        XCTAssertEqual(session.engine.contentStorage.textLayoutManagers.count, 1, "one live renderer after an intervening surface")
+        XCTAssertNil(oldView.engine)
+        XCTAssertNil(legacyView.engine)
+    }
+
+    func testWarmLongViewportResumptionStaysProportionalToTheViewport() async throws {
+        let id = try seed(.long), original = try open(id)
+        let counter = try XCTUnwrap(original.host.layoutCounter)
+        let initial = counter.fragmentsCreated
+        let closed = await original.close()
+        XCTAssertTrue(closed)
+        let reopened = try open(id)
+        XCTAssertTrue(reopened.host.layoutCounter === counter)
+        XCTAssertLessThanOrEqual(counter.fragmentsCreated - initial, 20, "reopen must not lay out the 5,000-line document")
+        XCTAssertLessThanOrEqual(counter.census().laidOut, 20)
     }
 
     // MARK: § 9.1 item 1: the caret stays visible
@@ -558,6 +726,7 @@ final class TaskNoteComposedHostTests: XCTestCase {
 
     private func openPlain(_ id: UUID) throws -> Double {
         var view: NoteEditorTextView?
+        var retire: (() -> Void)?
         let elapsed = try {
             let start = DispatchTime.now().uptimeNanoseconds
             XCTAssertTrue(notes.open(noteID: id))
@@ -566,16 +735,29 @@ final class TaskNoteComposedHostTests: XCTestCase {
             scroll.automaticallyAdjustsContentInsets = false
             scroll.contentInsets = NSEdgeInsets(top: topInset, left: 0, bottom: bottomInset, right: 0)
             textView.textContainerInset = NSSize(width: columnInset, height: 0)
+            // Match NoteEditorRepresentable's production native setup. A
+            // bare NSTextView omits Notes' title/menu/tag accessories while
+            // the composed side draws its SwiftUI head and subtask regions.
+            let chrome = NotesPageChrome()
+            let accessories = NoteTitleAccessories(engine: session.engine, textView: textView, scrollView: scroll,
+                                                   chrome: chrome, design: .default, headerBottom: topInset,
+                                                   isUntouched: { false }, tagEditor: { AnyView(EmptyView()) })
+            let controls = NoteFormatControls(engine: session.engine, textView: textView, scrollView: scroll,
+                                              design: .default, noteID: id, isNewDraft: false)
+            let objects = NoteObjectControls(engine: session.engine, textView: textView)
+            retire = { controls.invalidate(); objects.invalidate(); accessories.invalidate() }
             scroll.frame = NSRect(origin: .zero, size: panel)
-            let window = NSWindow(contentRect: NSRect(origin: .zero, size: panel), styleMask: [.titled], backing: .buffered, defer: false)
+            let window = openingWindow ?? NSWindow(contentRect: NSRect(origin: .zero, size: panel), styleMask: [.titled], backing: .buffered, defer: false)
             window.isReleasedWhenClosed = false
             window.contentView = scroll
-            windows.append(window)
+            if openingWindow == nil { windows.append(window) }
             settle(textView)
             view = textView
             return Double(DispatchTime.now().uptimeNanoseconds - start) / 1_000_000
         }()
-        view?.window?.close()
+        retire?()
+        if let openingWindow { openingWindow.contentView = NSView() }
+        else { view?.window?.close() }
         view?.engine?.detachView()
         return elapsed
     }
@@ -588,27 +770,41 @@ final class TaskNoteComposedHostTests: XCTestCase {
         Task { @MainActor in let ok = await presenter.close(); XCTAssertTrue(ok); closed.fulfill() }
         wait(for: [closed], timeout: 10)
         presenters.removeAll { $0 === presenter }
-        presenter.host.scrollView.window?.close()
+        if let openingWindow { openingWindow.contentView = NSView() }
+        else { presenter.host.scrollView.window?.close() }
         return elapsed
     }
 
     /// § 9: opening a task's note, cold and warm, from the seeded entry
     /// (here: the presenter, its session load, the composed host and the
     /// first display). Paired with the plain note of the same body opened
-    /// through Notes. Reported, and held to OD-9's same-job bound only where
-    /// the plain note does the same work (the warm open after a close
-    /// reloads the released session: round 1's P2-3 lifetime).
+    /// through Notes, including each page's production native controls and
+    /// title accessories. Both share the same bounded warm session cache.
     private func measureOpen(_ scenario: TaskNotePreviewSeed.Scenario, body: [NoteBlock]) throws -> (cold: (Double, Double), warm: ([Double], [Double])) {
+        // Page navigation uses an existing panel, never a new macOS window.
+        // Both sides mount, lay out and display in the same unordered host.
+        let window = NSWindow(contentRect: NSRect(origin: .zero, size: panel), styleMask: [.titled], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        windows.append(window)
+        openingWindow = window
+        defer { openingWindow = nil }
         let id = try seed(scenario)
         let plain = try plainNote(body)
         let other = try plainNote([.text("Elsewhere")])
         let plainCold = try openPlain(plain)
         let composedCold = try openComposed(id)
         var plainWarm: [Double] = [], composedWarm: [Double] = []
-        for _ in 0..<5 {
+        // Twelve samples per side, matching the paired Done evidence budget.
+        // Keep every sample, including scheduling/display outliers.
+        for pair in 0..<12 {
             XCTAssertTrue(notes.open(noteID: other))
-            plainWarm.append(try openPlain(plain))
-            composedWarm.append(try openComposed(id))
+            if pair.isMultiple(of: 2) {
+                plainWarm.append(try openPlain(plain))
+                composedWarm.append(try openComposed(id))
+            } else {
+                composedWarm.append(try openComposed(id))
+                plainWarm.append(try openPlain(plain))
+            }
         }
         let line = String(format: "TASKNOTE-PERF open %@ cold composed %.2f ms / plain %.2f ms · warm composed median %.2f ms (max %.2f) / plain median %.2f ms (max %.2f)",
                           scenario.rawValue, composedCold, plainCold, median(composedWarm), composedWarm.max() ?? 0,
@@ -620,8 +816,12 @@ final class TaskNoteComposedHostTests: XCTestCase {
     func testOpeningTheTaskNoteColdAndWarm() throws {
         let heavy = try measureOpen(.heavy, body: [.text("Research"), .text("Static hosting wins on cost: about €9 a month against €40 for the current server. The redirect map covers all 212 old posts; Sam has the export.")])
         XCTAssertGreaterThan(heavy.cold.0, 0)
+        XCTAssertLessThanOrEqual(median(heavy.warm.0), bound(heavy.warm.1), "warm task notes share plain Notes' cache performance")
         let long = try measureOpen(.long, body: TaskNotePreviewSeed.longProse())
         XCTAssertGreaterThan(long.cold.0, 0)
+        XCTAssertLessThan(median(long.warm.0), 50, "a warm long task note must not reload its document")
+        XCTAssertLessThanOrEqual(median(long.warm.0), bound(long.warm.1), "warm long-note reopen must meet the paired OD-9 bound")
+        print("TASKNOTE-PERF warm long raw composed \(long.warm.0) / plain \(long.warm.1)")
     }
 
     /// § 9: scrolling the composed view shows no regression against the

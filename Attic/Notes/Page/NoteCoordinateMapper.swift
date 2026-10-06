@@ -17,6 +17,8 @@ final class NoteCoordinateMapper {
         self.scrollView = scrollView
     }
 
+    func rebind(textView: NSTextView) { self.textView = textView }
+
     private var clip: NSClipView? { scrollView?.contentView }
 
     // MARK: Conversions

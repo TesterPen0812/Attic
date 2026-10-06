@@ -1,6 +1,7 @@
 import AppKit
 import Combine
 import CryptoKit
+import SwiftData
 import UniformTypeIdentifiers
 
 /// Whether the Notes page uses the new editor. Internal: the
@@ -115,6 +116,9 @@ final class NoteSession: ObservableObject, Identifiable {
     private var bindingGeneration: UInt64 = 0
     var usesWorkspaceBinding = false
     weak var workspacePage: WorkspacePageSession?
+    /// Closed native task-note regions share this session's cache lifetime.
+    /// No lease, controller, timer or second draft is retained here.
+    var taskNotePresentation: TaskNoteWarmPresentation?
     var callbackStamp: CallbackStamp {
         .init(noteID: noteID, engineID: ObjectIdentifier(engine), binding: bindingGeneration,
               draft: editGeneration, revision: baseRevisionID)
@@ -742,11 +746,31 @@ final class NotesPageController: ObservableObject {
     /// Engine-only entry point: does not present a page, create a note, or
     /// attach a native view. Registry callers share the controller's cache.
     func workspaceSession(noteID: UUID) -> NoteSession? {
-        guard let note = store.note(withID: noteID) else { return nil }
         // Cache admission can evict a clean incoming note before activate
         // installs it as active. Reuse that live session rather than split it.
         let existing = cache[noteID] ?? (active?.noteID == noteID ? active : nil)
-        guard let session = existing ?? session(for: note) else { return nil }
+        if let existing, !existing.usesWorkspaceBinding {
+            // Reopen checks this UUID's physical rows only. A warm hit must
+            // not reload every unrelated note and attachment in the store.
+            let context = ModelContext(store.container)
+            context.autosaveEnabled = false
+            guard let rows = try? store.liveReplicas(of: noteID, in: context) else { return nil }
+            let latest = NoteStore.canonicalReplicas(from: rows).first
+            if latest == nil || latest?.revisionID != existing.baseRevisionID || latest?.tags != existing.baseTags {
+                // An actual external change replaces the stale store context
+                // before presentSession rebuilds the clean cached engine.
+                store.refresh()
+            }
+        }
+        guard let note = store.note(withID: noteID) else { return nil }
+        guard let session = (existing ?? session(for: note)).flatMap({
+            $0.usesWorkspaceBinding ? $0 : presentSession($0)
+        }) else { return nil }
+        if let existing, session !== existing {
+            // A closed workspace still has its ordered history. An external
+            // replacement must stop Undo before the retired editor's steps.
+            existing.engine.history.workspace?.recordExternalBarrier(origin: "another surface")
+        }
         if cache[noteID] == nil { wire(session); cache[noteID] = session }
         return session
     }
@@ -767,6 +791,8 @@ final class NotesPageController: ObservableObject {
         return refreshed
     }
     func resumeWorkspaceDurability(_ session: NoteSession) {
+        // Admission happens after the workspace binding protects this owner.
+        touch(session.noteID)
         if NoteSessionPolicy.hasPendingWork(session.state) {
             scheduleSave(session); scheduleDurabilityDeadline(session)
         }
@@ -794,13 +820,11 @@ final class NotesPageController: ObservableObject {
     func releaseWorkspace(_ session: NoteSession) {
         session.usesWorkspaceBinding = false
         session.workspacePage = nil
-        guard active !== session, session.recoveryClaim == nil,
-              !NoteSessionPolicy.hasPendingWork(session.state), !session.isImporting,
-              cache[session.noteID] === session else { return }
-        cache[session.noteID] = nil
-        recency.removeAll { $0 == session.noteID }
-        checkpointKeys[session.id] = nil
-        verifiedCheckpointKeys[session.id] = nil
+        // Close revokes the page and its callbacks, not the warm editor.
+        // The same eight-slot LRU and protected-draft rules as plain Notes
+        // decide when this clean, detached session can be discarded.
+        guard cache[session.noteID] === session else { return }
+        touch(session.noteID)
     }
 
     private func session(for note: NoteItem) -> NoteSession? {

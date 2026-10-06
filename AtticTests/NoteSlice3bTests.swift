@@ -3426,10 +3426,10 @@ extension NoteSlice3bTests {
         // A resolver that succeeds after suspension makes the stale-destination
         // guard, rather than unavailable bytes, responsible for refusing.
         let successful = DeferredPasteBytes([item.id: item])
-        for change in 0..<3 {
+        for change in 0..<4 {
             let target = NoteEditorEngine(noteID: UUID(), document: NoteDocument(blocks: [.text("Destination"), .text("Original")]),
                                           imageProvider: successful)
-            let (_, view) = target.makeView()
+            let (scroll, view) = target.makeView()
             let range = NSRange(location: target.textStorage.length, length: 0)
             view.setSelectedRange(range)
             let before = target.document()
@@ -3440,8 +3440,13 @@ extension NoteSlice3bTests {
             if change == 0 { view.setSelectedRange(NSRange(location: 0, length: 0)) }
             if change == 1 { current = false }
             if change == 2 { _ = target.performEdit(NSRange(location: 0, length: 0), with: NSAttributedString(string: "New "), name: "Typing") }
+            if change == 3 {
+                target.detachView()
+                XCTAssertTrue(target.resumeComposedView(view, in: scroll))
+                XCTAssertTrue(target.textView === view, "the same native view now belongs to a new attachment generation")
+            }
             await XCTAssertFalseAsync(await paste.value)
-            if change < 2 { XCTAssertEqual(target.document(), before); XCTAssertFalse(target.history.canUndo) }
+            if change < 2 || change == 3 { XCTAssertEqual(target.document(), before); XCTAssertFalse(target.history.canUndo) }
             XCTAssertTrue(target.staged.isEmpty)
             XCTAssertFalse(target.document().attachmentIDs.contains(item.id))
         }

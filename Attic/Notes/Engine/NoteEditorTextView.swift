@@ -14,6 +14,16 @@ import UniformTypeIdentifiers
 /// - Exposes objects to VoiceOver.
 /// - Marks keystroke-to-commit for the performance trace.
 final class NoteEditorTextView: NSTextView, NSAccessibilityCustomRotorItemSearchDelegate {
+    /// A cached native view is inert between workspace leases.
+    var isSuspended = false
+
+    override func shouldChangeText(in affectedCharRange: NSRange, replacementString: String?) -> Bool {
+        !isSuspended && super.shouldChangeText(in: affectedCharRange, replacementString: replacementString)
+    }
+
+    override func shouldChangeText(inRanges affectedRanges: [NSValue], replacementStrings: [String]?) -> Bool {
+        !isSuspended && super.shouldChangeText(inRanges: affectedRanges, replacementStrings: replacementStrings)
+    }
     weak var engine: NoteEditorEngine?
     private(set) lazy var undoShim = NoteUndoManagerShim(textView: self)
     /// After each layout pass: the page keeps the title's accessories (the
@@ -52,6 +62,16 @@ final class NoteEditorTextView: NSTextView, NSAccessibilityCustomRotorItemSearch
         return result
     }
 
+    /// A menu/key action queued by the native view belongs to this attachment,
+    /// even when an unchanged cached view later resumes in another lease.
+    private func queueObjectCommand(_ command: NoteObjectCommand, objectID: UUID, engine: NoteEditorEngine) {
+        let generation = engine.viewGeneration
+        Task { [weak self] in
+            guard self?.engine === engine, engine.viewGeneration == generation else { return }
+            _ = await engine.perform(command, objectID: objectID)
+        }
+    }
+
     // MARK: A person's own editing
 
     private func asUserEdit<T>(_ body: () -> T) -> T {
@@ -66,7 +86,7 @@ final class NoteEditorTextView: NSTextView, NSAccessibilityCustomRotorItemSearch
            object is NoteImageAttachment || object is NoteFileAttachment {
             let flags = event.modifierFlags.intersection([.command, .option, .shift, .control])
             if flags.isEmpty, event.charactersIgnoringModifiers == " " {
-                Task { await engine.perform(.quickLook, objectID: object.objectID) }
+                queueObjectCommand(.quickLook, objectID: object.objectID, engine: engine)
                 return
             }
         }
@@ -167,6 +187,7 @@ final class NoteEditorTextView: NSTextView, NSAccessibilityCustomRotorItemSearch
     }
 
     override func insertText(_ string: Any, replacementRange: NSRange) {
+        guard !isSuspended else { return }
         guard let engine, !engine.isWritingToolsSessionActive else {
             return super.insertText(string, replacementRange: replacementRange)
         }
@@ -195,6 +216,7 @@ final class NoteEditorTextView: NSTextView, NSAccessibilityCustomRotorItemSearch
     }
 
     override func setMarkedText(_ string: Any, selectedRange: NSRange, replacementRange: NSRange) {
+        guard !isSuspended else { return }
         if !hasMarkedText() {
             let replaced = replacementRange.location == NSNotFound ? self.selectedRange() : replacementRange
             engine?.history.beginComposition(replacing: replaced)
@@ -231,7 +253,7 @@ final class NoteEditorTextView: NSTextView, NSAccessibilityCustomRotorItemSearch
         if let engine, selectedRange().length == 1,
            let object = engine.object(at: selectedRange().location),
            object is NoteImageAttachment || object is NoteFileAttachment {
-            Task { await engine.perform(.delete, objectID: object.objectID) }
+            queueObjectCommand(.delete, objectID: object.objectID, engine: engine)
             return
         }
         if engine?.handleDeleteBackward() == true { return }
@@ -282,7 +304,7 @@ final class NoteEditorTextView: NSTextView, NSAccessibilityCustomRotorItemSearch
         if let engine, selectedRange().length == 1,
            let object = engine.object(at: selectedRange().location),
            object is NoteImageAttachment || object is NoteFileAttachment {
-            Task { await engine.perform(.delete, objectID: object.objectID) }
+            queueObjectCommand(.delete, objectID: object.objectID, engine: engine)
             return
         }
         asUserEdit { super.delete(sender) }
@@ -292,14 +314,18 @@ final class NoteEditorTextView: NSTextView, NSAccessibilityCustomRotorItemSearch
            let object = engine.object(at: selectedRange().location),
            object is NoteImageAttachment || object is NoteFileAttachment {
             let command: NoteObjectCommand = object is NoteImageAttachment ? .copyImage : .copyFile
-            Task { await engine.perform(command, objectID: object.objectID) }
+            queueObjectCommand(command, objectID: object.objectID, engine: engine)
             return
         }
         super.copy(sender)
     }
     @objc func printNote(_ sender: Any?) {
         guard let engine else { return }
-        Task { _ = await engine.printNote() }
+        let generation = engine.viewGeneration
+        Task { [weak self] in
+            guard self?.engine === engine, engine.viewGeneration == generation else { return }
+            _ = await engine.printNote()
+        }
     }
 
     /// File › Print… (⌘P in the menu bar) prints the note as the engine
@@ -371,6 +397,7 @@ final class NoteEditorTextView: NSTextView, NSAccessibilityCustomRotorItemSearch
     }
 
     override func readSelection(from pboard: NSPasteboard, type: NSPasteboard.PasteboardType) -> Bool {
+        guard !isSuspended else { return false }
         guard let engine else { return super.readSelection(from: pboard, type: type) }
         let target = rangeForUserTextChange
         guard target.location != NSNotFound else { return false }
@@ -378,8 +405,10 @@ final class NoteEditorTextView: NSTextView, NSAccessibilityCustomRotorItemSearch
             if engine.isPerformingSelfMove { return engine.paste(fragmentData: data, at: target) }
             // The private type owns this paste even if verification refuses it:
             // AppKit must not fall back to plain text and flatten its objects.
+            let generation = engine.viewGeneration
             Task { @MainActor [weak self, weak engine] in
-                guard let self, let engine, self.engine === engine, self.rangeForUserTextChange == target else { return }
+                guard let self, let engine, self.engine === engine, engine.viewGeneration == generation,
+                      self.rangeForUserTextChange == target else { return }
                 _ = await engine.pasteDurably(fragmentData: data, at: target)
             }
             return true
@@ -444,7 +473,7 @@ final class NoteEditorTextView: NSTextView, NSAccessibilityCustomRotorItemSearch
                 guard let object = engine.object(at: location),
                       object is NoteImageAttachment || object is NoteFileAttachment else { continue }
                 setSelectedRange(NSRange(location: location, length: 1))
-                Task { await engine.perform(.quickLook, objectID: object.objectID) }
+                queueObjectCommand(.quickLook, objectID: object.objectID, engine: engine)
                 return
             }
         }

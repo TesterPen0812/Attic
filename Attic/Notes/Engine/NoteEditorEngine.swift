@@ -99,6 +99,11 @@ final class NoteEditorEngine: NSObject, NSTextViewDelegate, NSTextStorageDelegat
     /// Document-level fields the text doesn't hold (format, requires, extras).
     private var template: NoteDocument
     private(set) weak var textView: NoteEditorTextView?
+    /// Native work captured before detach may not enter a later view lease.
+    private(set) var viewGeneration: UInt64 = 0
+    var keepsComposedViewportWarm = false
+    private var closedComposedViewport: NSTextLayoutManager?
+    private var closedSpelling: (checking: Bool, correction: Bool)?
     private(set) var scrollView: NSScrollView?
     private(set) var layoutManager: NSTextLayoutManager?
 
@@ -448,8 +453,35 @@ final class NoteEditorEngine: NSObject, NSTextViewDelegate, NSTextStorageDelegat
         return textView
     }
 
+    /// Resume only an unchanged, detached task-note view. Close already
+    /// revoked its native work generation, delegates, controls and editing.
+    func resumeComposedView(_ candidate: NoteEditorTextView, in scrollView: NSScrollView) -> Bool {
+        guard textView == nil, candidate.engine == nil,
+              let manager = candidate.textLayoutManager,
+              manager.textContentManager == nil || (manager === closedComposedViewport && manager.textContentManager === contentStorage) else { return false }
+        viewGeneration &+= 1
+        if let closedComposedViewport, closedComposedViewport !== manager { discardClosedComposedViewport() }
+        if manager.textContentManager == nil { contentStorage.addTextLayoutManager(manager) }
+        if contentStorage.primaryTextLayoutManager !== manager { contentStorage.primaryTextLayoutManager = manager }
+        closedComposedViewport = nil
+        candidate.isSuspended = false
+        candidate.engine = self
+        candidate.delegate = self
+        candidate.isEditable = !isReadOnly
+        candidate.writingToolsBehavior = writingToolsAvailable ? .complete : .none
+        candidate.isContinuousSpellCheckingEnabled = closedSpelling?.checking ?? true
+        candidate.isAutomaticSpellingCorrectionEnabled = closedSpelling?.correction ?? true
+        closedSpelling = nil
+        layoutManager = manager
+        textView = candidate
+        history.textView = candidate
+        self.scrollView = scrollView
+        return true
+    }
+
     private func makeTextView() -> NoteEditorTextView {
         detachView()
+        discardClosedComposedViewport()
         let layoutManager = NSTextLayoutManager()
         let container = NSTextContainer(size: NSSize(width: 320, height: CGFloat.greatestFiniteMagnitude))
         container.widthTracksTextView = true
@@ -468,8 +500,21 @@ final class NoteEditorEngine: NSObject, NSTextViewDelegate, NSTextStorageDelegat
     }
 
     func detachView() {
+        viewGeneration &+= 1
         let wasComposing = activity == .composing
-        if let layoutManager { contentStorage.removeTextLayoutManager(layoutManager) }
+        if let layoutManager {
+            discardClosedComposedViewport()
+            if keepsComposedViewportWarm { closedComposedViewport = layoutManager }
+            else { contentStorage.removeTextLayoutManager(layoutManager) }
+        }
+        if let textView {
+            closedSpelling = (textView.isContinuousSpellCheckingEnabled, textView.isAutomaticSpellingCorrectionEnabled)
+            textView.isSuspended = true
+            textView.isEditable = false
+            textView.isContinuousSpellCheckingEnabled = false
+            textView.isAutomaticSpellingCorrectionEnabled = false
+            textView.writingToolsBehavior = .none
+        }
         textView?.engine = nil
         textView?.delegate = nil
         layoutManager = nil
@@ -477,6 +522,14 @@ final class NoteEditorEngine: NSObject, NSTextViewDelegate, NSTextStorageDelegat
         scrollView = nil
         history.textView = nil
         if wasComposing { setActivity(.idle) }
+    }
+
+    /// Changed documents/imported engines cannot carry a closed viewport.
+    /// This derived cache has exactly the owning NoteSession's lifetime.
+    func discardClosedComposedViewport() {
+        if let closedComposedViewport { contentStorage.removeTextLayoutManager(closedComposedViewport) }
+        closedComposedViewport = nil
+        closedSpelling = nil
     }
 
     private func configure(_ textView: NoteEditorTextView) {
@@ -1776,6 +1829,7 @@ final class NoteEditorEngine: NSObject, NSTextViewDelegate, NSTextStorageDelegat
         let destination = noteID
         let before = document()
         let view = textView
+        let generation = viewGeneration
         let viewSelection = view?.selectedRange()
         var resolved: [UUID: StagedNoteAttachment] = [:]
         let sameNote = decoded.extras["sourceNoteID"]?.stringValue.flatMap(UUID.init(uuidString:)) == noteID
@@ -1790,7 +1844,7 @@ final class NoteEditorEngine: NSObject, NSTextViewDelegate, NSTextStorageDelegat
             resolved[id] = payload
         }
         guard !Task.isCancelled, noteID == destination, activity == .idle,
-              textView === view, view?.selectedRange() == viewSelection,
+              viewGeneration == generation, textView === view, view?.selectedRange() == viewSelection,
               canPasteFragment?() != false, document() == before,
               rangeIsInStorage(selection) else {
             onNotice?(String(localized: "The note or selection changed. Paste again at the new selection."))

@@ -67,7 +67,9 @@ final class TaskNotePageModel: ObservableObject {
     @Published private(set) var renamingID: UUID?
     @Published var renameText = ""
     @Published var newSubtaskText = ""
-    @Published private(set) var isEditingTitle = false
+    @Published private(set) var isEditingTitle = false {
+        didSet { if isEditingTitle != oldValue { onGeometryChange?() } }
+    }
     @Published var titleEdit = TaskAddBarText()
     @Published var titleEditCaret: Int?
     @Published private(set) var failure: Failure?
@@ -119,6 +121,11 @@ final class TaskNotePageModel: ObservableObject {
             isFolded = canonical.filter { $0.status != .done }.count > 6
         }
         refresh()
+        observeStore()
+    }
+
+    private func observeStore() {
+        guard observations.isEmpty else { return }
         // Only this task's family touches the page (§ 9: a task change
         // touches only its row, cards, head and block).
         store.$revision.dropFirst().sink { [weak self] _ in
@@ -130,6 +137,20 @@ final class TaskNotePageModel: ObservableObject {
             self.heldOrder = nil
             DispatchQueue.main.async { self.refresh(animated: true) }
         }.store(in: &observations)
+    }
+
+    func resume() {
+        refresh()
+        observeStore()
+    }
+
+    func suspend() {
+        observations.removeAll()
+        focusInside = false
+        pointerInside = false
+        heldOrder = nil
+        onGeometryChange = nil
+        onFocusWriting = nil
     }
 
     static func foldKey(_ id: UUID) -> String { "AtticTaskNote.folded.\(id.uuidString)" }

@@ -356,7 +356,7 @@ final class WorkspaceSessionTests: XCTestCase {
         note.engine.detachView()
     }
 
-    func testCleanCloseReleasesRegistryPageAndCachedEngine() async throws {
+    func testCleanCloseReleasesRegistryPageAndKeepsTheCachedEditorWarm() async throws {
         var page: WorkspacePageSession? = try self.page()
         weak var weakPage = page
         weak var weakNote = page?.note
@@ -367,8 +367,11 @@ final class WorkspaceSessionTests: XCTestCase {
         XCTAssertFalse(try XCTUnwrap(page?.note).usesWorkspaceBinding)
         XCTAssertThrowsError(try page!.acquire(surfaceID: UUID()))
         page = nil
-        XCTAssertNil(weakPage); XCTAssertNil(weakNote); XCTAssertNil(weakEngine)
+        XCTAssertNil(weakPage)
+        XCTAssertNotNil(weakNote); XCTAssertNotNil(weakEngine)
         let reopened = try self.page()
+        XCTAssertTrue(reopened.note === weakNote)
+        XCTAssertTrue(reopened.note?.engine === weakEngine)
         XCTAssertEqual(reopened.note?.engine.plainText, "Body")
     }
 
@@ -476,6 +479,83 @@ final class WorkspaceSessionTests: XCTestCase {
         XCTAssertEqual(coordinator.validationCounters, .init(fastValidations: 1, slowValidations: 0, freshContexts: 0))
     }
 
+    func testWarmCloseReusesTheEditorButRevokesThePageLeaseAndCallbacks() async throws {
+        let old = try page(), lease = try old.acquire(surfaceID: UUID())
+        let note = try XCTUnwrap(old.note), engine = note.engine
+        try type(" warm", in: old)
+        let stamp = try XCTUnwrap(old.captureCallback(for: lease))
+        let closed = await old.close(lease)
+        XCTAssertTrue(closed)
+        XCTAssertNil(engine.textView)
+        XCTAssertNil(note.workspacePage)
+        XCTAssertFalse(note.usesWorkspaceBinding)
+        XCTAssertThrowsError(try old.acquire(surfaceID: UUID()))
+
+        let reopened = try page(), next = try reopened.acquire(surfaceID: UUID())
+        XCTAssertFalse(reopened === old)
+        XCTAssertTrue(reopened.note === note)
+        XCTAssertTrue(reopened.note?.engine === engine)
+        XCTAssertTrue(reopened.history === old.history)
+        XCTAssertNotEqual(next, lease)
+        XCTAssertFalse(old.install(stamp) { XCTFail("closed callback installed") })
+        XCTAssertFalse(reopened.install(stamp) { XCTFail("old lease installed") })
+        XCTAssertEqual(engine.plainText, "Body warm")
+        XCTAssertTrue(reopened.history.undo())
+        XCTAssertEqual(engine.plainText, "Body")
+        let reclosed = await reopened.close(next)
+        XCTAssertTrue(reclosed)
+        XCTAssertEqual(notes.store.loadDocument(noteID: noteID)?.content.document?.title, "Body")
+    }
+
+    func testClosedWorkspaceUsesTheSameEightSlotLRUAsPlainNotes() async throws {
+        let old = try page(), lease = try old.acquire(surfaceID: UUID())
+        let original = try XCTUnwrap(old.note)
+        let closed = await old.close(lease)
+        XCTAssertTrue(closed)
+        let context = coordinator.freshContext()
+        var ids: [UUID] = []
+        for index in 0..<9 {
+            let note = NoteItem()
+            NoteStore.stageDocumentContent(try PreparedNoteDocument(.init(blocks: [.text("Plain \(index)")])),
+                format: 1, on: [note], timestamp: Date(), revision: 0, revisionID: UUID())
+            context.insert(note); ids.append(note.id)
+        }
+        try context.save(); notes.store.refresh()
+        for id in ids { XCTAssertTrue(notes.open(noteID: id)) }
+        let reopened = try page()
+        XCTAssertFalse(reopened.note === original, "a closed clean task note yields its slot just like a plain note")
+        let next = try reopened.acquire(surfaceID: UUID())
+        let warm = try XCTUnwrap(reopened.note)
+        let reclosed = await reopened.close(next)
+        XCTAssertTrue(reclosed)
+        XCTAssertTrue(try page().note === warm, "the newly used session stays warm")
+    }
+
+    func testWarmReopenRefreshesACleanClosedNoteAfterAnExternalWrite() async throws {
+        let old = try page(), lease = try old.acquire(surfaceID: UUID())
+        let original = try XCTUnwrap(old.note)
+        try type(" before external edit", in: old)
+        let closed = await old.close(lease)
+        XCTAssertTrue(closed)
+        let context = coordinator.freshContext(), id = noteID!
+        let replicas = try context.fetch(FetchDescriptor<NoteItem>(predicate: #Predicate { $0.id == id }))
+        NoteStore.stageDocumentContent(try PreparedNoteDocument(.init(blocks: [.text("External body")])),
+            format: 1, on: replicas, timestamp: Date(), revision: 1, revisionID: UUID())
+        try context.save()
+        let reopened = try page()
+        XCTAssertFalse(reopened.note === original)
+        XCTAssertEqual(reopened.note?.engine.plainText, "External body")
+        let next = try reopened.acquire(surfaceID: UUID())
+        XCTAssertFalse(reopened.history.undo(), "reopening cannot replay the retired editor across an external edit")
+        try type(" after", in: reopened)
+        XCTAssertTrue(reopened.history.undo())
+        XCTAssertEqual(reopened.note?.engine.plainText, "External body")
+        XCTAssertFalse(reopened.history.undo())
+        let reclosed = await reopened.close(next)
+        XCTAssertTrue(reclosed)
+        XCTAssertEqual(notes.store.loadDocument(noteID: id)?.content.document?.title, "External body")
+    }
+
     func testClosePreservesEditsMadeWhileCheckpointIsSuspendedAndRefusesHandoff() async throws {
         let barrier = WorkspaceCallbackBarrier()
         let journal = WorkspaceBarrierJournal(base: coordinator.journal, barrier: barrier)
@@ -517,6 +597,35 @@ final class WorkspaceSessionTests: XCTestCase {
         _ = try reopened.acquire(surfaceID: UUID())
         XCTAssertTrue(reopened.note === page.note, "protected recovery draft keeps one cached session")
         XCTAssertEqual(reopened.note?.engine.plainText, "Body checkpointed")
+    }
+
+    func testClosedCheckpointDraftSurvivesWarmCachePressure() async throws {
+        notes = NotesPageController(store: NoteStore(container: container,
+            persist: { _ in throw WorkspaceFoundationError.unknown },
+            attachmentFileStore: makeTestAttachmentFileStore()), journal: coordinator.journal,
+            defaults: nil, saveDelay: .seconds(600), durabilityDelay: .seconds(600))
+        let old = try page(), lease = try old.acquire(surfaceID: UUID())
+        try type(" protected", in: old)
+        let closed = await old.close(lease)
+        XCTAssertTrue(closed)
+        let original = try XCTUnwrap(old.note)
+        let context = coordinator.freshContext()
+        var ids: [UUID] = []
+        for index in 0..<10 {
+            let note = NoteItem()
+            NoteStore.stageDocumentContent(try PreparedNoteDocument(.init(blocks: [.text("Pressure \(index)")])),
+                format: 1, on: [note], timestamp: Date(), revision: 0, revisionID: UUID())
+            context.insert(note); ids.append(note.id)
+        }
+        try context.save(); notes.store.refresh()
+        for id in ids { XCTAssertTrue(notes.open(noteID: id)) }
+        let reopened = try page(), next = try reopened.acquire(surfaceID: UUID())
+        XCTAssertTrue(reopened.note === original)
+        XCTAssertEqual(original.engine.plainText, "Body protected")
+        let entries = try await coordinator.journal.readRecoveryEntries()
+        XCTAssertEqual(entries.count, 1)
+        let reclosed = await reopened.close(next)
+        XCTAssertTrue(reclosed)
     }
 
     func testExternalRefreshReplacesCleanEngineAndPreservesDirtyDraftBehindABarrier() throws {

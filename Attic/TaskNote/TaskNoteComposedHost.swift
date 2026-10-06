@@ -26,7 +26,7 @@ final class TaskNoteComposedHost: NSObject {
 
     let scrollView: NSScrollView
     let documentView = DocumentView()
-    let engine: NoteEditorEngine
+    private(set) var engine: NoteEditorEngine
     private(set) var textView: NoteEditorTextView
     let mapper: NoteCoordinateMapper
     private let headController: NSHostingController<AnyView>
@@ -42,19 +42,25 @@ final class TaskNoteComposedHost: NSObject {
     /// The Subtasks block's height from its model (fixed row pitch); nil
     /// measures the SwiftUI content.
     var blockHeight: (() -> CGFloat)?
+    var onInvalidate: (() -> Void)?
 
     /// How many times the regions were re-measured and restacked (a fold or
     /// a head change does it once; a keystroke never does).
     private(set) var restackCount = 0
     private var restackScheduled = false
     private var observers: [NSObjectProtocol] = []
+    private var textHeightObserver: NSObjectProtocol?
     private var lastWidth: CGFloat = 0
     private var regionHeights: (head: CGFloat, block: CGFloat) = (0, 0)
+    private var measuredHeadWidth: CGFloat = 0
+    private var headNeedsMeasurement = true
 
     init(engine: NoteEditorEngine, head: AnyView, block: AnyView, columnInset: CGFloat,
+         blockHeight: (() -> CGFloat)? = nil,
          countsLayout: Bool? = nil) {
         self.engine = engine
         self.columnInset = columnInset
+        self.blockHeight = blockHeight
         let scrollView = NSScrollView(frame: NSRect(x: 0, y: 0, width: 320, height: 520))
         scrollView.hasVerticalScroller = true
         scrollView.autohidesScrollers = true
@@ -68,6 +74,7 @@ final class TaskNoteComposedHost: NSObject {
         blockController.sizingOptions = []
         // The engine's one text view, a stacked view in the shared document.
         let textView = engine.makeComposedView(in: scrollView)
+        engine.keepsComposedViewportWarm = true
         self.textView = textView
         mapper = NoteCoordinateMapper(textView: textView, scrollView: scrollView)
         layoutCounter = (countsLayout ?? TaskNoteLayoutCounter.isRequested) ? TaskNoteLayoutCounter() : nil
@@ -80,13 +87,28 @@ final class TaskNoteComposedHost: NSObject {
             documentView.addSubview(view)
         }
         install(textView)
+        observeClip()
+        restack()
+    }
+
+    private func observeClip() {
         let clip = scrollView.contentView
         clip.postsFrameChangedNotifications = true
         observers.append(NotificationCenter.default.addObserver(
             forName: NSView.frameDidChangeNotification, object: clip, queue: .main) { [weak self] _ in
                 MainActor.assumeIsolated { self?.clipDidResize() }
             })
-        restack()
+    }
+
+    func resume(reusingViewport: Bool = false) {
+        guard observers.isEmpty else { return }
+        observeClip()
+        if reusingViewport, engine.resumeComposedView(textView, in: scrollView) {
+            install(textView)
+            restack()
+        } else {
+            replaceEngine(engine)
+        }
     }
 
     private func install(_ textView: NoteEditorTextView) {
@@ -95,17 +117,55 @@ final class TaskNoteComposedHost: NSObject {
         textView.autoresizingMask = []
         textView.postsFrameChangedNotifications = true
         if let layoutCounter, let manager = textView.textLayoutManager { layoutCounter.attach(to: manager) }
-        documentView.addSubview(textView)
-        observers.append(NotificationCenter.default.addObserver(
+        if textView.superview !== documentView { documentView.addSubview(textView) }
+        textHeightObserver = NotificationCenter.default.addObserver(
             forName: NSView.frameDidChangeNotification, object: textView, queue: .main) { [weak self] _ in
                 MainActor.assumeIsolated { self?.textHeightDidChange() }
-            })
+            }
+    }
+
+    /// A clean external import deliberately replaces the session engine.
+    /// Retire the old native editor at the same boundary; it must never
+    /// remain editable after the session stopped owning its storage.
+    func replaceEngine(_ replacement: NoteEditorEngine) {
+        guard replacement !== engine || engine.textView !== textView else { return }
+        let old = textView
+        let frame = old.frame
+        let selected = old.selectedRange()
+        let focused = old.window?.firstResponder === old
+        if let textHeightObserver { NotificationCenter.default.removeObserver(textHeightObserver) }
+        textHeightObserver = nil
+        old.coordinateMapper = nil
+        old.isEditable = false
+        layoutCounter?.detach()
+        if engine.textView === old { engine.detachView() }
+        if replacement !== engine { engine.discardClosedComposedViewport() }
+        old.removeFromSuperview()
+        engine = replacement
+        textView = replacement.makeComposedView(in: scrollView)
+        replacement.keepsComposedViewportWarm = true
+        mapper.rebind(textView: textView)
+        textView.frame = frame
+        install(textView)
+        let length = replacement.textStorage.length
+        let location = min(selected.location, length)
+        textView.setSelectedRange(NSRange(location: location, length: min(selected.length, length - location)))
+        restack()
+        if focused { textView.window?.makeFirstResponder(textView) }
     }
 
     func invalidate() {
+        onInvalidate?()
+        onInvalidate = nil
+        if let textHeightObserver { NotificationCenter.default.removeObserver(textHeightObserver) }
+        textHeightObserver = nil
         observers.forEach(NotificationCenter.default.removeObserver)
         observers.removeAll()
         textView.coordinateMapper = nil
+        textView.isEditable = false
+        textView.writingToolsBehavior = .none
+        textView.suggestionCommand = nil
+        textView.onLayout = nil
         layoutCounter?.detach()
         if engine.textView === textView { engine.detachView() }
     }
@@ -115,6 +175,7 @@ final class TaskNoteComposedHost: NSObject {
     /// The head's or the block's content changed: restack once, on the next
     /// turn (several changes in one turn restack once).
     func setNeedsRestack() {
+        headNeedsMeasurement = true
         guard !restackScheduled else { return }
         restackScheduled = true
         DispatchQueue.main.async { [weak self] in
@@ -135,9 +196,16 @@ final class TaskNoteComposedHost: NSObject {
         let column = max(1, width - columnInset * 2)
         // The regions' SwiftUI content answers for the model's current state
         // (a fold or a rename this turn), not the last drawn one.
-        headController.view.needsLayout = true
-        headController.view.layoutSubtreeIfNeeded()
-        let head = ceil(headController.sizeThatFits(in: NSSize(width: column, height: .greatestFiniteMagnitude)).height)
+        let head: CGFloat
+        if headNeedsMeasurement || measuredHeadWidth != column {
+            headController.view.needsLayout = true
+            headController.view.layoutSubtreeIfNeeded()
+            head = ceil(headController.sizeThatFits(in: NSSize(width: column, height: .greatestFiniteMagnitude)).height)
+            measuredHeadWidth = column
+            headNeedsMeasurement = false
+        } else {
+            head = regionHeights.head
+        }
         // The block's rows have a fixed pitch: its height is arithmetic, so a
         // fold of 50 rows never measures them.
         let block: CGFloat
@@ -214,7 +282,7 @@ final class TaskNoteComposedHost: NSObject {
 
     var headRootView: AnyView {
         get { headController.rootView }
-        set { headController.rootView = newValue }
+        set { headController.rootView = newValue; headNeedsMeasurement = true }
     }
     var blockRootView: AnyView {
         get { blockController.rootView }

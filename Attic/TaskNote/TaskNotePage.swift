@@ -1,5 +1,15 @@
 import AppKit
+import Combine
 import SwiftUI
+
+@MainActor
+struct TaskNoteWarmPresentation {
+    let model: TaskNotePageModel
+    let host: TaskNoteComposedHost
+    let design: AtticDesignContext
+    let draftGeneration: UInt64
+    let viewGeneration: UInt64
+}
 
 /// One open task's note: the registry session and its lease, the page model
 /// and the composed host. Made once per open; the engine and its text view
@@ -16,6 +26,8 @@ final class TaskNotePresenter: ObservableObject {
     private(set) var lease: WorkspacePageSession.Lease?
     private let surfaceID = UUID()
     private var design: AtticDesignContext
+    @Published private(set) var engineGeneration: UInt64 = 0
+    private var engineObservation: AnyCancellable?
     /// Rings in the head and the block only while the keyboard drives.
     private static let focusTracker = AtticKeyboardFocusTracker()
 
@@ -30,8 +42,13 @@ final class TaskNotePresenter: ObservableObject {
         self.taskID = taskID
         self.design = design
         session = page.note
-        let model = TaskNotePageModel(taskID: taskID, store: tasks, library: library, history: page.history,
-                                      defaults: defaults)
+        let cached = session?.taskNotePresentation
+        session?.taskNotePresentation = nil
+        let canReuse = cached.map { $0.model.taskID == taskID && $0.model.store === tasks
+            && $0.model.library === library && $0.model.history === page.history
+            && $0.host.engine === page.note?.engine } ?? false
+        let model = canReuse ? cached!.model
+            : TaskNotePageModel(taskID: taskID, store: tasks, library: library, history: page.history, defaults: defaults)
         self.model = model
         let engine: NoteEditorEngine
         if let note = page.note {
@@ -41,19 +58,36 @@ final class TaskNotePresenter: ObservableObject {
             let blank = (try? NoteDocument.blank.taskSnapshot(title: model.head.title)) ?? .blank
             engine = NoteEditorEngine(noteID: UUID(), document: blank, readOnly: true, design: design, bodyOnly: true)
         }
-        host = TaskNoteComposedHost(engine: engine,
+        host = canReuse ? cached!.host : TaskNoteComposedHost(engine: engine,
                                     head: Self.headView(model, design: design),
                                     block: Self.blockView(model, design: design),
-                                    columnInset: columnInset)
+                                    columnInset: columnInset,
+                                    blockHeight: { [weak model] in model?.blockHeight ?? TaskNoteMetrics.blockHeader })
         engine.setCompatibilityTitle(model.head.title)
-        host.blockHeight = { [weak model] in model?.blockHeight ?? TaskNoteMetrics.blockHeader }
-        host.restack()
         model.onGeometryChange = { [weak self] in
             guard let self else { return }
             self.host.engine.setCompatibilityTitle(self.model.head.title)
             self.host.setNeedsRestack()
         }
         model.onFocusWriting = { [weak self] atTop in self?.host.focusWriting(atTop: atTop) }
+        if canReuse {
+            if cached?.design != design {
+                host.setRegions(head: Self.headView(model, design: design), block: Self.blockView(model, design: design))
+            }
+            let canResumeViewport = cached?.draftGeneration == session?.callbackStamp.draft
+                && cached?.viewGeneration == engine.viewGeneration
+                && cached?.design == design && host.columnInset == columnInset && engine.textView == nil
+            host.columnInset = columnInset
+            model.resume()
+            host.resume(reusingViewport: canResumeViewport)
+            engine.setCompatibilityTitle(model.head.title)
+        }
+        engineObservation = session?.$engine.dropFirst().sink { [weak self] replacement in
+            guard let self, self.lease != nil else { return }
+            self.host.replaceEngine(replacement)
+            replacement.setCompatibilityTitle(self.model.head.title)
+            self.engineGeneration &+= 1
+        }
     }
 
     private static func headView(_ model: TaskNotePageModel, design: AtticDesignContext) -> AnyView {
@@ -65,7 +99,7 @@ final class TaskNotePresenter: ObservableObject {
     }
 
     func update(design: AtticDesignContext) {
-        guard design != self.design else { return }
+        guard lease != nil, design != self.design else { return }
         self.design = design
         host.setRegions(head: Self.headView(model, design: design), block: Self.blockView(model, design: design))
     }
@@ -77,7 +111,14 @@ final class TaskNotePresenter: ObservableObject {
         model.releaseHold()
         guard await page.close(lease) else { return false }
         self.lease = nil
+        engineObservation = nil
+        model.suspend()
         host.invalidate()
+        if let session {
+            session.taskNotePresentation = .init(model: model, host: host, design: design,
+                                                  draftGeneration: session.callbackStamp.draft,
+                                                  viewGeneration: session.engine.viewGeneration)
+        }
         return true
     }
 }
@@ -131,7 +172,8 @@ struct TaskNotePage: View {
     var body: some View {
         ZStack(alignment: .bottom) {
             TaskNoteHostRepresentable(presenter: presenter, chrome: chrome, columnInset: columnInset,
-                                      topInset: topInset, bottomInset: bottomInset, design: design)
+                                      topInset: topInset, bottomInset: bottomInset, design: design,
+                                      engineGeneration: presenter.engineGeneration)
                 .atticScrollUnderFade(topBand: layout.headerBottom, restTop: topInset,
                                       bottomBand: bottomControls, restBottom: bottomInset)
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -144,7 +186,12 @@ struct TaskNotePage: View {
         .onChange(of: design) { _, newValue in presenter.update(design: newValue) }
         .onChange(of: chrome.isFormatPopoverOpen) { _, open in
             chrome.controls?.isFormatPopoverOpen = open
-            if !open { DispatchQueue.main.async { presenter.host.focusWriting(atTop: false) } }
+            if !open {
+                DispatchQueue.main.async {
+                    guard presenter.lease != nil else { return }
+                    presenter.host.focusWriting(atTop: false)
+                }
+            }
         }
         .accessibilityElement(children: .contain)
     }
@@ -200,10 +247,21 @@ struct TaskNoteHostRepresentable: NSViewRepresentable {
     let topInset: CGFloat
     let bottomInset: CGFloat
     let design: AtticDesignContext
+    let engineGeneration: UInt64
 
+    @MainActor
     final class Coordinator {
         var controls: NoteFormatControls?
         var objects: NoteObjectControls?
+        weak var engine: NoteEditorEngine?
+
+        func invalidate() {
+            controls?.invalidate()
+            objects?.invalidate()
+            controls = nil
+            objects = nil
+            engine = nil
+        }
     }
 
     func makeCoordinator() -> Coordinator { Coordinator() }
@@ -212,25 +270,11 @@ struct TaskNoteHostRepresentable: NSViewRepresentable {
         let host = presenter.host
         host.setContentInsets(top: topInset, bottom: bottomInset)
         host.columnInset = columnInset
+        configureControls(context.coordinator)
         let engine = host.engine
         let textView = host.textView
-        if !engine.isReadOnly {
-            let controls = NoteFormatControls(engine: engine, textView: textView, scrollView: host.scrollView, design: design,
-                                              noteID: engine.noteID, isNewDraft: false)
-            controls.requestFormatPopover = { [weak chrome] keyboard in chrome?.openFormatPopover(keyboard: keyboard) }
-            controls.closeFormatPopover = { [weak chrome] in chrome?.isFormatPopoverOpen = false }
-            // ⌃⇧Tab leaves the writing for the Subtasks block (§ 7); ⌃Tab
-            // enters the next card's controls (cards are slice 3).
-            controls.leaveEditor = { [weak model = presenter.model] forward in
-                if !forward { model?.focusBlockFromWriting() }
-            }
-            context.coordinator.controls = controls
-            chrome.controls = controls
-            let objects = NoteObjectControls(engine: engine, textView: textView)
-            context.coordinator.objects = objects
-            chrome.objectControls = objects
-        }
         DispatchQueue.main.async {
+            guard presenter.lease != nil, host.engine === engine, host.textView === textView else { return }
             host.restack()
             host.scrollToTop()
             if let session = presenter.session {
@@ -244,7 +288,38 @@ struct TaskNoteHostRepresentable: NSViewRepresentable {
         return host.scrollView
     }
 
+    private func configureControls(_ coordinator: Coordinator) {
+        guard presenter.lease != nil else { return }
+        let host = presenter.host
+        let engine = host.engine
+        guard coordinator.engine !== engine else { return }
+        coordinator.invalidate()
+        host.onInvalidate = { [weak coordinator] in coordinator?.invalidate() }
+        chrome.controls = nil
+        chrome.objectControls = nil
+        coordinator.engine = engine
+        let textView = host.textView
+        if !engine.isReadOnly {
+            let controls = NoteFormatControls(engine: engine, textView: textView, scrollView: host.scrollView, design: design,
+                                              noteID: engine.noteID, isNewDraft: false)
+            controls.requestFormatPopover = { [weak chrome] keyboard in chrome?.openFormatPopover(keyboard: keyboard) }
+            controls.closeFormatPopover = { [weak chrome] in chrome?.isFormatPopoverOpen = false }
+            // ⌃⇧Tab leaves the writing for the Subtasks block (§ 7); ⌃Tab
+            // enters the next card's controls (cards are slice 3).
+            controls.leaveEditor = { [weak model = presenter.model] forward in
+                if !forward { model?.focusBlockFromWriting() }
+            }
+            coordinator.controls = controls
+            chrome.controls = controls
+            let objects = NoteObjectControls(engine: engine, textView: textView)
+            coordinator.objects = objects
+            chrome.objectControls = objects
+        }
+    }
+
     func updateNSView(_ scrollView: NSScrollView, context: Context) {
+        guard presenter.lease != nil else { return }
+        configureControls(context.coordinator)
         presenter.host.setContentInsets(top: topInset, bottom: bottomInset)
         presenter.host.columnInset = columnInset
         context.coordinator.controls?.update(design: design)
@@ -252,10 +327,7 @@ struct TaskNoteHostRepresentable: NSViewRepresentable {
     }
 
     static func dismantleNSView(_ scrollView: NSScrollView, coordinator: Coordinator) {
-        coordinator.controls?.invalidate()
-        coordinator.controls = nil
-        coordinator.objects?.invalidate()
-        coordinator.objects = nil
+        coordinator.invalidate()
     }
 }
 
