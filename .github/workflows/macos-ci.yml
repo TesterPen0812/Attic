@@ -7,6 +7,9 @@ on:
       lane:
         type: string
         default: costs
+      headless_costs:
+        type: boolean
+        default: false
       run_iphone:
         type: boolean
         default: false
@@ -26,6 +29,11 @@ on:
         default: full
         type: choice
         options: [full, fast, costs]
+      headless_costs:
+        description: Run integration costs without key-window or UI fixtures (lane=costs)
+        required: false
+        default: false
+        type: boolean
       run_iphone:
         description: Run the deferred iPhone build-for-testing lane
         required: false
@@ -480,7 +488,9 @@ jobs:
           # their absolute timing assertions to the shared OD-6 policy.
           python3 Scripts/prepare_cost_reference.py "$RUNNER_TEMP/AtticCostBaseline" frame-row
           python3 Scripts/prepare_cost_reference.py "$RUNNER_TEMP/AtticDoneSearchBaseline" done
-          for name in baseline candidate donebase integrationbase; do
+          builds=(baseline candidate donebase integrationbase)
+          if [ "${{ inputs.headless_costs }}" = true ]; then builds=(candidate integrationbase); fi
+          for name in "${builds[@]}"; do
             source="$GITHUB_WORKSPACE"
             if [ "$name" = baseline ]; then source="$RUNNER_TEMP/AtticCostBaseline"; fi
             if [ "$name" = donebase ]; then source="$RUNNER_TEMP/AtticDoneSearchBaseline"; fi
@@ -494,6 +504,7 @@ jobs:
           done
 
       - name: Record three interleaved frame and row samples
+        if: ${{ !inputs.headless_costs }}
         run: |
           for sample in 1 2 3; do
             sides=(baseline candidate)
@@ -528,7 +539,7 @@ jobs:
               if [ "$side" = baseline ]; then
                 source="$RUNNER_TEMP/AtticIntegrationCostReference"
                 build=integrationbase
-                if [ "$sample" = 1 ]; then
+                if [ "$sample" = 1 ] && [ "${{ inputs.headless_costs }}" != true ]; then
                   rendered=(-only-testing:AtticTests/DoneSearchCostTests/testRenderedFindKeystrokeMediansFitTheInputBudget)
                 fi
               fi
@@ -556,6 +567,7 @@ jobs:
           done
 
       - name: Done search query samples of the accepted baseline
+        if: ${{ !inputs.headless_costs }}
         run: |
           # Three runs of the accepted build's query fixtures, for the
           # median comparison below. OD-6 disables only the
@@ -577,7 +589,7 @@ jobs:
           done
 
       - name: Done search query, keystroke and results-frame budgets
-        if: always() && steps.cost_builds.outcome == 'success'
+        if: always() && steps.cost_builds.outcome == 'success' && !inputs.headless_costs
         run: |
           # shellcheck disable=SC2086
           "$GITHUB_WORKSPACE/Scripts/xcodebuild-locked.sh" test-without-building \
@@ -591,10 +603,13 @@ jobs:
 
       - name: Compare cost rows and re-check failures once in this job
         if: always() && steps.cost_builds.outcome == 'success'
-        run: python3 Scripts/recheck_cost_gates.py "$RUNNER_TEMP/AtticCosts"
+        run: |
+          scope=()
+          if [ "${{ inputs.headless_costs }}" = true ]; then scope=(--headless-only); fi
+          python3 Scripts/recheck_cost_gates.py "${scope[@]}" "$RUNNER_TEMP/AtticCosts"
 
       - name: Print Done query and input evidence even on failure
-        if: always()
+        if: always() && !inputs.headless_costs
         run: |
           if [ -f "$RUNNER_TEMP/AtticCosts/done-search.log" ]; then
             grep -E 'ATTIC_DONE_SEARCH|ATTIC_PHASE5_DONE|ATTIC_DONE_INPUT|ATTIC_NATIVE_INPUT|ATTIC_DONE_RESULTS' \

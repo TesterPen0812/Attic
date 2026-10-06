@@ -50,3 +50,23 @@ def compare(before, after, quantum_ms=None, reference_samples=None):
     return dict(before_ms=before, after_ms=after, reference_range_ms=reference_range,
                 resolution_ms=resolution, resolution_source=source, noise_ms=tolerance,
                 bound_ms=bound, passed=statistics.median(after) <= bound)
+
+
+def compare_derived(before, after, components):
+    """OD-17: a difference carries the sum of its parts' OD-8/9 allowances.
+
+    Keep the measured difference's median; its own range/resolution never
+    sets the bound. Component comparisons must use reference-only calibration.
+    """
+    row = compare(before, after)
+    row['derived_range_ms'] = row.pop('reference_range_ms')
+    row.pop('resolution_ms')
+    row.pop('resolution_source')
+    if len(components) != 2:
+        raise ValueError("a difference requires two component comparisons")
+    noise = sum(part['noise_ms'] for part in components.values())
+    row.update(components=components, noise_ms=noise,
+               bound_ms=statistics.median(before) + noise,
+               bound_source="OD-17: sum of component OD-8/9 allowances")
+    row['passed'] = statistics.median(after) <= row['bound_ms']
+    return row
