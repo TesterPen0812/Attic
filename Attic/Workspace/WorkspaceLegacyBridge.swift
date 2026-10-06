@@ -325,6 +325,25 @@ enum WorkspaceLegacyBridge {
         return state.plainCommit
     }
 
+    /// Reuse only complete, durable families from an in-place commit. A
+    /// missing resident replica or an intervening writer requires a fetch.
+    static func confirmedTaskReplicas(_ ids: Set<UUID>, in source: ModelContext) -> [TaskItem]? {
+        guard let state = objc_getAssociatedObject(source, &contextKey) as? ContextState,
+              state.plainCommit, !source.hasChanges else { return nil }
+        let owners = Set(ids.map { WorkspaceOwner(entity: .task, id: $0) })
+        guard state.coordinator.ledger.canValidate(source, owners: owners, scopes: []) else { return nil }
+        var rows: [TaskItem] = []
+        for owner in owners {
+            guard let token = state.baseline[owner] else { return nil }
+            for replica in token.replicas {
+                guard let row = source.registeredModel(for: replica.physicalID) as TaskItem?,
+                      row.id == owner.id else { return nil }
+                rows.append(row)
+            }
+        }
+        return rows
+    }
+
     struct CommitHeld: Error {}
 
     static func persist(_ source: ModelContext, using writer: @escaping (ModelContext) throws -> Void,

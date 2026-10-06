@@ -34,6 +34,53 @@ final class WorkspaceCommitTests: XCTestCase {
         coordinator = nil; container = nil
         try FileManager.default.removeItem(at: root)
     }
+
+    func testConfirmedTaskReplicasRetainTheWholeDurableFamily() throws {
+        let seed = ModelContext(container)
+        let duplicate = TaskItem(id: taskID, title: "Archived copy", status: .done)
+        duplicate.doneLoggedAt = Date(timeIntervalSince1970: 100)
+        seed.insert(duplicate)
+        try seed.save()
+        let context = WorkspaceLegacyBridge.context(for: container, captureScopes: false)
+        let roots = try context.fetch(FetchDescriptor<TaskItem>())
+        try WorkspaceLegacyBridge.establishScopeBaseline(context, roots: roots, entities: [.task])
+        let family = roots.filter { $0.id == taskID }
+        XCTAssertEqual(family.count, 2)
+        WorkspaceLegacyBridge.prepareMutations(family, in: context)
+        family.forEach { $0.title = "Saved title" }
+        try WorkspaceLegacyBridge.persist(context, using: { try $0.save() }, sourceName: "test", history: false)
+        let saved = try XCTUnwrap(WorkspaceLegacyBridge.confirmedTaskReplicas([taskID], in: context))
+        XCTAssertEqual(Set(saved.map(\.persistentModelID)), Set(family.map(\.persistentModelID)))
+        XCTAssertEqual(saved.map(\.title), ["Saved title", "Saved title"])
+        XCTAssertEqual(saved.filter { $0.doneLoggedAt != nil }.count, 1, "an unshown archived replica is still part of the proof")
+        let fresh = ModelContext(container)
+        let durable = try fresh.fetch(FetchDescriptor<TaskItem>()).filter { $0.id == taskID }
+        XCTAssertEqual(Set(saved.map(\.persistentModelID)), Set(durable.map(\.persistentModelID)))
+        XCTAssertTrue(durable.allSatisfy { $0.title == "Saved title" })
+    }
+
+    func testConfirmedTaskReplicasRefuseDraftsUnknownOwnersAndForeignWrites() throws {
+        let context = WorkspaceLegacyBridge.context(for: container, captureScopes: false)
+        let roots = try context.fetch(FetchDescriptor<TaskItem>())
+        try WorkspaceLegacyBridge.establishScopeBaseline(context, roots: roots, entities: [.task])
+        let task = try XCTUnwrap(roots.first { $0.id == taskID })
+        XCTAssertNil(WorkspaceLegacyBridge.confirmedTaskReplicas([taskID], in: context), "opening is not a durable commit")
+        WorkspaceLegacyBridge.prepareMutation(task, in: context)
+        task.title = "Durable title"
+        try WorkspaceLegacyBridge.persist(context, using: { try $0.save() }, sourceName: "test", history: false)
+        XCTAssertNotNil(WorkspaceLegacyBridge.confirmedTaskReplicas([taskID], in: context))
+        XCTAssertNil(WorkspaceLegacyBridge.confirmedTaskReplicas([UUID()], in: context))
+        task.title = "Unsaved title"
+        XCTAssertNil(WorkspaceLegacyBridge.confirmedTaskReplicas([taskID], in: context))
+        context.rollback()
+        let foreign = ModelContext(container)
+        let id = try XCTUnwrap(taskID)
+        let other = try XCTUnwrap(foreign.fetch(FetchDescriptor<TaskItem>(predicate: #Predicate { $0.id == id })).first)
+        other.title = "Foreign title"
+        try foreign.save()
+        XCTAssertNil(WorkspaceLegacyBridge.confirmedTaskReplicas([taskID], in: context), "a stale resident family must fall back to SQL")
+    }
+
     func testR1RecoveryOffersAreAvailableWhileSweepIsPaused() async throws {
         let pre = try recoveryDraft("independent recovery")
         _ = try await coordinator.journal.writeDurably(pre, staged: [])

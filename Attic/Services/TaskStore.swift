@@ -3615,8 +3615,21 @@ final class TaskStore: ObservableObject {
             if !changedIDs.isEmpty {
                 let ids = Array(changedIDs)
                 do {
-                    let changedRows = try context.fetch(
+                    // The plain writer already confirmed every physical
+                    // replica synchronously. Reuse those saved instances;
+                    // incomplete or invalidated families still use SQL.
+                    let changedRows: [TaskItem]
+                    #if os(macOS)
+                    if let confirmed = WorkspaceLegacyBridge.confirmedTaskReplicas(changedIDs, in: context) {
+                        changedRows = confirmed
+                    } else {
+                        changedRows = try context.fetch(
+                            FetchDescriptor<TaskItem>(predicate: #Predicate { ids.contains($0.id) }))
+                    }
+                    #else
+                    changedRows = try context.fetch(
                         FetchDescriptor<TaskItem>(predicate: #Predicate { ids.contains($0.id) }))
+                    #endif
                     let changedEntries = Self.canonicalReplicas(from: changedRows.filter { !deleted.contains($0.persistentModelID) })
                         .filter { $0.doneLoggedAt != nil && $0.deletedAt == nil && $0.parentID == nil }
                         .map(DoneSearchEntry.init)
