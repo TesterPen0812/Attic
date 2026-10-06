@@ -78,8 +78,10 @@ final class TaskNotePageModel: ObservableObject {
     private(set) var renameHistory = TaskDraftHistory()
     private var renameField: WorkspaceFieldUndo?
     private var renameBase: String?
+    private var renameConflictID: UUID?
     private(set) var titleHistory = TaskDraftHistory()
     private var titleField: WorkspaceFieldUndo?
+    private var titleConflictID: UUID?
     private var titleBase: (title: String, priority: TaskPriority, dueDay: DueDay?)?
     /// The title editor's whole selection (its draft history only).
     var titleEditSelection: NSRange?
@@ -353,7 +355,9 @@ final class TaskNotePageModel: ObservableObject {
             return true
         }
         guard task.title == renameBase else {
-            return report(CommandFailure(String(localized: "This subtask changed elsewhere. Your rename draft is kept; press Esc to keep the newer title.")))
+            report(CommandFailure(String(localized: "This subtask changed elsewhere. Your rename draft is kept; press Esc to keep the newer title.")))
+            renameConflictID = failure?.id
+            return false
         }
         let outcome = fieldCommit(renameField) { [library, historyID] in
             library.updateTask(id, title: title, in: historyID)
@@ -371,6 +375,8 @@ final class TaskNotePageModel: ObservableObject {
     }
 
     func cancelRename() {
+        if let renameConflictID, failure?.id == renameConflictID { clearFailure() }
+        renameConflictID = nil
         renameField?.cancel()
         renameField = nil
         renameHistory.reset()
@@ -483,7 +489,9 @@ final class TaskNotePageModel: ObservableObject {
         guard (!editsTitle || task.title == titleBase?.title || title == task.title),
               (parts.priority == nil || task.priority == titleBase?.priority || parts.priority == task.priority),
               (parts.dueDay == nil || task.dueDay == titleBase?.dueDay || parts.dueDay == task.dueDay) else {
-            return report(CommandFailure(String(localized: "This task changed elsewhere. Your title draft is kept; press Esc to keep the newer values.")))
+            report(CommandFailure(String(localized: "This task changed elsewhere. Your title draft is kept; press Esc to keep the newer values.")))
+            titleConflictID = failure?.id
+            return false
         }
         let newTitle: String? = editsTitle && title != task.title ? title : nil
         let newTags: [String]? = Set(tags.map { $0.lowercased() }) != Set(task.tags.map { $0.lowercased() }) ? tags : nil
@@ -511,6 +519,8 @@ final class TaskNotePageModel: ObservableObject {
     }
 
     func cancelTitle() {
+        if let titleConflictID, failure?.id == titleConflictID { clearFailure() }
+        titleConflictID = nil
         titleField?.cancel()
         titleField = nil
         titleHistory.reset()
@@ -588,6 +598,8 @@ final class TaskNotePageModel: ObservableObject {
     func clearFailure() {
         failure = nil
         retry = nil
+        titleConflictID = nil
+        renameConflictID = nil
     }
 
     @discardableResult

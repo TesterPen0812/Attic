@@ -368,6 +368,7 @@ final class TaskNoteComposedHostTests: XCTestCase {
         XCTAssertNotNil(model.failure)
         XCTAssertNotNil(model.undoTitleDraft(), "conflict retains the field's original Undo")
         model.cancelTitle()
+        XCTAssertNil(model.failure, "cancelling the conflicting title retires its notice")
         let row = try XCTUnwrap(model.rows.first)
         model.beginRename(row.id)
         model.renameEdited(NSRange(location: 0, length: 0), replacement: "Draft ")
@@ -380,8 +381,12 @@ final class TaskNoteComposedHostTests: XCTestCase {
         XCTAssertEqual(model.renameText, "Draft " + row.title)
         XCTAssertNotNil(model.undoRenameDraft())
         model.cancelRename()
+        XCTAssertNil(model.failure, "cancelling the conflicting rename retires its notice")
         let resolved = await presenter.close()
         XCTAssertTrue(resolved, "explicit cancellation lets navigation keep the newer values")
+        let reopened = try open(id)
+        XCTAssertNil(reopened.model.failure, "warm reopen has no obsolete conflict notice")
+        XCTAssertEqual(reopened.model.head.title, "Newer title")
     }
 
     func testUnchangedFieldDraftDoesNotRestoreItsBaseOverExternalChanges() throws {
