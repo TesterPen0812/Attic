@@ -730,11 +730,15 @@ struct NoteTagEditor: View {
 /// The status slot between the bottom buttons (UX plan § 3.12): the most
 /// urgent state in a pill, "+N" when there are more, and every state with
 /// its reasons and actions in the details. Nothing shows when all is well.
-private struct NoteStatusSlot: View {
+struct NoteStatusSlot: View {
     @ObservedObject var controller: NotesPageController
     @ObservedObject var store: NoteStore
     @ObservedObject var session: NoteSession
     @ObservedObject var damaged: NoteDamagedRecoveryExit
+    /// States from outside the note's session, most urgent first (a task's
+    /// note: a task command that changed nothing, § 5.6; OD-4 keeps them in
+    /// this slot rather than a Retry line of their own).
+    var leadingItems: [AtticStatusItem] = []
     @State private var showingDetails = false
     @State private var showingProposal = false
     @Environment(\.atticDesign) private var design
@@ -747,7 +751,7 @@ private struct NoteStatusSlot: View {
         let exits = damaged.entries.map(damagedItem)
         let firstQuieter = list.firstIndex { !["onlyInMemory", "notSaved", "conflict"].contains($0.id) } ?? list.count
         list.insert(contentsOf: exits, at: firstQuieter)
-        return list
+        return leadingItems + list
     }
 
     var body: some View {
@@ -788,7 +792,7 @@ private struct NoteStatusSlot: View {
     }
 
     private func inlineAction(for item: AtticStatusItem) -> AtticStatusItem.Action? {
-        item.id == "notSaved" ? item.actions.first : nil
+        item.id == "notSaved" || item.id == "taskFailure" ? item.actions.first : nil
     }
 
     private func cancel(for item: AtticStatusItem) -> (() -> Void)? {

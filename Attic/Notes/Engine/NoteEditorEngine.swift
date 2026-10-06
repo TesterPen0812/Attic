@@ -87,6 +87,12 @@ final class NoteEditorEngine: NSObject, NSTextViewDelegate, NSTextStorageDelegat
     let textStorage: NSTextStorage
     let history: NoteUndoHistory
     let isReadOnly: Bool
+    /// A task's note (UX plan § 2.12): the editor shows blocks 1…n only.
+    /// Block 0, the compatibility title snapshot, is held here and is never
+    /// shown, selected, edited or read as a heading; the head shows the
+    /// task's live title instead.
+    let isBodyOnly: Bool
+    private var compatibilityTitleBlock: NoteBlock?
     private(set) var style: NoteTextStyle
     private let renderer: NoteObjectRenderer
     private(set) var today: NoteDay
@@ -209,16 +215,44 @@ final class NoteEditorEngine: NSObject, NSTextViewDelegate, NSTextStorageDelegat
         let replacement = NSRange(location: at, length: min(importReplacementLength, textStorage.length - at))
         let remaining = NSMutableAttributedString(attributedString: textStorage)
         remaining.deleteCharacters(in: replacement)
-        return NoteTextCodec.document(from: remaining, template: template)
+        return decode(remaining)
     }
     private var importNoteID: UUID?
+
+    /// The stored document for `text`: in a task's note, the held block 0
+    /// goes back in front of the body (§ 2.12).
+    private func decode(_ text: NSAttributedString) -> NoteDocument {
+        var result = NoteTextCodec.document(from: text, template: template, firstBlockIsTitle: !isBodyOnly)
+        if isBodyOnly, let title = compatibilityTitleBlock {
+            result.blocks.insert(title, at: 0)
+            result.refreshRequiredCapabilities()
+        }
+        return result
+    }
+
+    /// The task's live title for the next body save (§ 2.12: body saves
+    /// refresh block 0 from the live title; a rename alone writes nothing).
+    /// In-memory only: never an edit, a history step or a save.
+    func setCompatibilityTitle(_ title: String) {
+        guard isBodyOnly, var block = compatibilityTitleBlock, block.text != title else { return }
+        block.text = title
+        compatibilityTitleBlock = block
+        if var cached = documentCache, !cached.document.blocks.isEmpty {
+            cached.document.blocks[0] = block
+            documentCache = cached
+        }
+    }
+    var compatibilityTitle: String? { compatibilityTitleBlock?.text }
 
     init(noteID: UUID, document: NoteDocument, readOnly: Bool = false,
          design: AtticDesignContext = .default, today: NoteDay = NoteDay(date: Date()),
          imageProvider: NoteImageProviding? = nil,
          stagedAttachments: [StagedNoteAttachment] = [], tags: [String] = [],
-         workspace: WorkspaceHistory? = nil) {
+         workspace: WorkspaceHistory? = nil, bodyOnly: Bool = false) {
         self.noteID = noteID
+        let projects = bodyOnly && document.requires.contains("taskNote") && document.blocks.first?.kind == .text
+        self.isBodyOnly = projects
+        self.compatibilityTitleBlock = projects ? document.blocks.first : nil
         self.tags = AtticTag.normalizedSet(tags)
         self.isReadOnly = readOnly
         self.style = NoteTextStyle(design: design)
@@ -233,8 +267,13 @@ final class NoteEditorEngine: NSObject, NSTextViewDelegate, NSTextStorageDelegat
         super.init()
         renderer.faceProvider = { [weak self] object in self?.objectFace(for: object) }
         renderer.columnWidth = { [weak self] in self?.objectColumnWidth ?? 300 }
-        textStorage.setAttributedString(NoteTextCodec.attributedString(from: document, style: style))
-        if document.blocks.count > 1, let last = document.blocks.last,
+        var shown = document
+        if projects {
+            shown.blocks.removeFirst()
+            if shown.blocks.isEmpty { shown.blocks = [.text("")] }
+        }
+        textStorage.setAttributedString(NoteTextCodec.attributedString(from: shown, style: style, firstBlockIsTitle: !projects))
+        if shown.blocks.count > (projects ? 0 : 1), let last = shown.blocks.last,
            last.kind == .text, last.text.isEmpty { restoreEmptyParagraph(last) }
         textStorage.delegate = self
         renderObjects(in: NSRange(location: 0, length: textStorage.length))
@@ -278,7 +317,7 @@ final class NoteEditorEngine: NSObject, NSTextViewDelegate, NSTextStorageDelegat
         }
         history.replayDocument = { [weak self] storage, metadata in
             guard let self, metadata.paragraphs.count <= 1 else { return nil }
-            var document = NoteTextCodec.document(from: storage, template: self.template)
+            var document = self.decode(storage)
             if let paragraph = metadata.paragraphs[storage.length],
                let last = document.blocks.indices.last, document.blocks[last].kind == .text, document.blocks[last].text.isEmpty {
                 document.blocks[last] = self.block(for: paragraph)
@@ -313,7 +352,7 @@ final class NoteEditorEngine: NSObject, NSTextViewDelegate, NSTextStorageDelegat
                 return cached.document
             }
         }
-        var result = NoteTextCodec.document(from: textStorage, template: template)
+        var result = decode(textStorage)
         if let pending = pendingParagraphStyle, pending.location == textStorage.length,
            let last = result.blocks.indices.last, result.blocks[last].kind == .text,
            result.blocks[last].text.isEmpty {
@@ -332,7 +371,7 @@ final class NoteEditorEngine: NSObject, NSTextViewDelegate, NSTextStorageDelegat
     /// the starting document, never an in-place rewrite that bypassed the guard.
     func checkpointDocument() -> NoteDocument {
         if activity == .writingToolsRefused, let writingToolsSnapshot {
-            var result = NoteTextCodec.document(from: writingToolsSnapshot, template: template)
+            var result = decode(writingToolsSnapshot)
             if let empty = writingToolsEmptyParagraph, let last = result.blocks.indices.last,
                result.blocks[last].kind == .text, result.blocks[last].text.isEmpty {
                 result.blocks[last] = empty
@@ -388,6 +427,28 @@ final class NoteEditorEngine: NSObject, NSTextViewDelegate, NSTextStorageDelegat
     /// A text view bound to this note's storage (TextKit 2). Only one view
     /// at a time: making a new one detaches the old.
     func makeView() -> (NSScrollView, NoteEditorTextView) {
+        let textView = makeTextView()
+        let scrollView = NSScrollView(frame: textView.frame)
+        scrollView.hasVerticalScroller = true
+        scrollView.autohidesScrollers = true
+        scrollView.drawsBackground = false
+        scrollView.borderType = .noBorder
+        scrollView.documentView = textView
+        textView.autoresizingMask = [.width]
+        self.scrollView = scrollView
+        return (scrollView, textView)
+    }
+
+    /// The composed task-note host (UX plan § 9.1): the text view is one of
+    /// the stacked views in `scrollView`'s document and never scrolls on its
+    /// own. Same rules as `makeView`: one view at a time.
+    func makeComposedView(in scrollView: NSScrollView) -> NoteEditorTextView {
+        let textView = makeTextView()
+        self.scrollView = scrollView
+        return textView
+    }
+
+    private func makeTextView() -> NoteEditorTextView {
         detachView()
         let layoutManager = NSTextLayoutManager()
         let container = NSTextContainer(size: NSSize(width: 320, height: CGFloat.greatestFiniteMagnitude))
@@ -400,18 +461,10 @@ final class NoteEditorEngine: NSObject, NSTextViewDelegate, NSTextStorageDelegat
         textView.engine = self
         configure(textView)
         textView.installHeadingsRotor()
-        let scrollView = NSScrollView(frame: textView.frame)
-        scrollView.hasVerticalScroller = true
-        scrollView.autohidesScrollers = true
-        scrollView.drawsBackground = false
-        scrollView.borderType = .noBorder
-        scrollView.documentView = textView
-        textView.autoresizingMask = [.width]
         self.layoutManager = layoutManager
         self.textView = textView
-        self.scrollView = scrollView
         history.textView = textView
-        return (scrollView, textView)
+        return textView
     }
 
     func detachView() {
@@ -451,7 +504,7 @@ final class NoteEditorEngine: NSObject, NSTextViewDelegate, NSTextStorageDelegat
         textView.isHorizontallyResizable = false
         textView.minSize = .zero
         textView.maxSize = NSSize(width: CGFloat.greatestFiniteMagnitude, height: CGFloat.greatestFiniteMagnitude)
-        textView.typingAttributes = style.titleAttributes
+        textView.typingAttributes = isBodyOnly ? style.bodyAttributes : style.titleAttributes
         textView.insertionPointColor = style.bodyColor
         // Writing Tools: inline, plain-text results only, objects protected.
         textView.writingToolsBehavior = writingToolsAvailable ? .complete : .none
@@ -468,6 +521,7 @@ final class NoteEditorEngine: NSObject, NSTextViewDelegate, NSTextStorageDelegat
     private var titleReservesScheduled = false
 
     func setTitleReserves(tagLine: CGFloat, trailing: CGFloat) {
+        guard !isBodyOnly else { return }
         guard style.tagLineHeight != tagLine || style.titleTrailingReserve != trailing else {
             pendingTitleReserves = nil
             return
@@ -543,7 +597,7 @@ final class NoteEditorEngine: NSObject, NSTextViewDelegate, NSTextStorageDelegat
         let string = textStorage.string as NSString
         guard string.length > 0 else { return }
         let firstBreak = string.range(of: "\n", options: .literal)
-        let titleEnd = firstBreak.location == NSNotFound ? string.length : firstBreak.location + 1
+        let titleEnd = isBodyOnly ? 0 : (firstBreak.location == NSNotFound ? string.length : firstBreak.location + 1)
         let clamped = NSIntersectionRange(range, NSRange(location: 0, length: string.length))
         let titleRange = NSIntersectionRange(clamped, NSRange(location: 0, length: titleEnd))
         if titleRange.length > 0 || (clamped.location <= titleEnd && clamped.length == 0) {
@@ -835,7 +889,9 @@ final class NoteEditorEngine: NSObject, NSTextViewDelegate, NSTextStorageDelegat
             }
             return attributes
         }
-        guard paragraph.location > 0, paragraph.location < textStorage.length else { return style.titleAttributes }
+        guard isBodyOnly || paragraph.location > 0, paragraph.location < textStorage.length else {
+            return isBodyOnly ? style.bodyAttributes : style.titleAttributes
+        }
         let attributes = textStorage.attributes(at: paragraph.location, effectiveRange: nil)
         return style.paragraphAttributes(style: attributes[.noteBlockStyle] as? String,
                                          level: attributes[.noteBlockLevel] as? Int,
@@ -859,7 +915,7 @@ final class NoteEditorEngine: NSObject, NSTextViewDelegate, NSTextStorageDelegat
         if containsPayloadObject, let gate = onFragmentAdmission {
             let candidateStorage = NSMutableAttributedString(attributedString: textStorage)
             candidateStorage.replaceCharacters(in: range, with: replacement)
-            let candidate = NoteTextCodec.document(from: candidateStorage, template: template)
+            let candidate = decode(candidateStorage)
             if let reason = gate(candidate, stagedAttachments(for: candidate)) { return refuse(reason) }
         }
         history.breakCoalescing()
@@ -899,7 +955,7 @@ final class NoteEditorEngine: NSObject, NSTextViewDelegate, NSTextStorageDelegat
         }
         let box = NoteChecklistAttachment(isChecked: false)
         renderer.apply(to: box, today: today)
-        if line.location == 0 {
+        if !isBodyOnly, line.location == 0 {
             // The title never holds objects: start a checklist line below it.
             let insertion = NSMutableAttributedString(string: "\n", attributes: style.bodyAttributes)
             insertion.append(NoteTextCodec.attachmentString(box, attributes: style.bodyAttributes))
@@ -1042,7 +1098,7 @@ final class NoteEditorEngine: NSObject, NSTextViewDelegate, NSTextStorageDelegat
         }
         let candidateStorage = NSMutableAttributedString(attributedString: textStorage)
         candidateStorage.replaceCharacters(in: replacement, with: insertion)
-        let candidate = NoteTextCodec.document(from: candidateStorage, template: template)
+        let candidate = decode(candidateStorage)
         if let failure = onFragmentAdmission?(candidate, items.compactMap(\.staged)) {
             onNotice?(failure)
             return false
@@ -1106,7 +1162,7 @@ final class NoteEditorEngine: NSObject, NSTextViewDelegate, NSTextStorageDelegat
         let current = textView.selectedRange()
         if current.length == 0 {
             let line = lineRange(at: current.location)
-            if line.location > 0, current.location == NSMaxRange(line),
+            if !isTitleLine(line.location), current.location == NSMaxRange(line),
                (textStorage.string as NSString).substring(with: line) == "---",
                conversionEligible(line: line) {
                 let divider = NoteDividerAttachment()
@@ -1179,7 +1235,7 @@ final class NoteEditorEngine: NSObject, NSTextViewDelegate, NSTextStorageDelegat
         // An empty line above (not the title) simply goes.
         if location == line.location, isBlockObject(at: location) {
             let previous = lineRange(at: location - 1)
-            if previous.length > 0 || previous.location == 0 {
+            if previous.length > 0 || isTitleLine(previous.location) {
                 textView.setSelectedRange(NSRange(location: location, length: 1))
                 return true
             }
@@ -1467,7 +1523,7 @@ final class NoteEditorEngine: NSObject, NSTextViewDelegate, NSTextStorageDelegat
         // Recover them from the first surviving run before history records the
         // edit, so Undo and redo preserve the paragraph style as well.
         let editedLine = lineRange(at: editedRange.location)
-        if editedLine.location > 0, editedLine.length > 1,
+        if !isTitleLine(editedLine.location), editedLine.length > 1,
            textStorage.attribute(.noteBlockStyle, at: editedLine.location, effectiveRange: nil) == nil {
             let rest = NSRange(location: editedLine.location + 1, length: editedLine.length - 1)
             var donor: [NSAttributedString.Key: Any]?
@@ -1508,7 +1564,7 @@ final class NoteEditorEngine: NSObject, NSTextViewDelegate, NSTextStorageDelegat
         var nearbyStart = nearby.location
         while nearbyStart < NSMaxRange(nearby), nearbyStart < textStorage.length {
             let line = lineRange(at: nearbyStart)
-            if line.location > 0, line.length > 0, checklistBox(inParagraphAt: line.location) == nil {
+            if !isTitleLine(line.location), line.length > 0, checklistBox(inParagraphAt: line.location) == nil {
                 let name = textStorage.attribute(.noteBlockStyle, at: line.location, effectiveRange: nil) as? String
                 if !["bullet", "number", "quote"].contains(name ?? ""),
                    textStorage.attribute(.noteBlockIndent, at: line.location, effectiveRange: nil) != nil {
@@ -1755,7 +1811,7 @@ final class NoteEditorEngine: NSObject, NSTextViewDelegate, NSTextStorageDelegat
         let startsWithObject = fragment.blocks.first.map { $0.kind != .text } ?? false
         let endsWithBlockObject = fragment.blocks.last.map { $0.kind == .image || $0.kind == .file || $0.kind == .opaque } ?? false
         let atLineStart = selection.location == 0 || string.character(at: selection.location - 1) == 0x0A
-        if startsWithObject, !atLineStart || selection.location == 0 {
+        if startsWithObject, !atLineStart || isTitleLine(selection.location) {
             result.insert(NSAttributedString(string: "\n", attributes: style.bodyAttributes), at: 0)
         }
         if endsWithBlockObject, NSMaxRange(selection) < string.length,
@@ -1764,7 +1820,7 @@ final class NoteEditorEngine: NSObject, NSTextViewDelegate, NSTextStorageDelegat
         }
         let candidateText = NSMutableAttributedString(attributedString: textStorage)
         candidateText.replaceCharacters(in: selection, with: result)
-        let candidate = NoteTextCodec.document(from: candidateText, template: template)
+        let candidate = decode(candidateText)
         if let failure = onFragmentAdmission?(candidate, prepared.copied) {
             onNotice?(failure)
             return false
@@ -1789,7 +1845,7 @@ final class NoteEditorEngine: NSObject, NSTextViewDelegate, NSTextStorageDelegat
         defer { history.endGroup() }
         guard performEdit(selection, with: attributed, name: String(localized: "Paste"),
                           selection: NSRange(location: selection.location + attributed.length, length: 0)) else { return false }
-        if selection.location > titleParagraphRange.length {
+        if selection.location >= bodyStart {
             let detector = try? NSDataDetector(types: NSTextCheckingResult.CheckingType.link.rawValue)
             let range = NSRange(location: 0, length: (normalized as NSString).length)
             for match in detector?.matches(in: normalized, range: range).reversed() ?? [] {
@@ -1905,6 +1961,7 @@ final class NoteObjectAccessibilityElement: NSAccessibilityElement {
         MainActor.assumeIsolated {
             guard let engine, let textView, let window = textView.window,
                   let rect = engine.rect(for: range) else { return .zero }
+            if let mapper = (textView as? NoteEditorTextView)?.coordinateMapper { return mapper.screenRect(fromText: rect) }
             return window.convertToScreen(textView.convert(rect, to: nil))
         }
     }
@@ -1934,7 +1991,14 @@ final class NoteObjectAccessibilityElement: NSAccessibilityElement {
 /// hashtags stay text: only a typed Space or Return converts.
 extension NoteEditorEngine {
     /// The title paragraph, without its line break.
-    var titleParagraphRange: NSRange { lineRange(at: 0) }
+    /// The title paragraph; empty in a task's note, which has no title in
+    /// its text (§ 2.12).
+    var titleParagraphRange: NSRange { isBodyOnly ? NSRange(location: 0, length: 0) : lineRange(at: 0) }
+    /// Where the body starts: after the title's line break, or at 0 in a
+    /// task's note.
+    var bodyStart: Int { isBodyOnly ? 0 : titleParagraphRange.length + 1 }
+    /// Whether a line starting at `location` is the title line.
+    func isTitleLine(_ location: Int) -> Bool { !isBodyOnly && location == 0 }
 
     /// Replaces the note's tags (the tag editor, a store refresh). Not an
     /// Undo step: tags are metadata, and the title shorthand's own steps
@@ -2048,7 +2112,7 @@ extension NoteEditorEngine {
     /// Return at the end of the title when the body's first line is empty:
     /// the caret moves into it instead of adding another empty line.
     func enterBodyFromTitleEnd() -> Bool {
-        guard let textView, !textView.hasMarkedText() else { return false }
+        guard !isBodyOnly, let textView, !textView.hasMarkedText() else { return false }
         let selection = textView.selectedRange()
         let title = titleParagraphRange
         guard selection.length == 0, selection.location == NSMaxRange(title),
@@ -2064,7 +2128,7 @@ extension NoteEditorEngine {
     /// Return at the title's end gives it. False outside the title (the
     /// body keeps Tab for indenting).
     func moveFromTitleToBody() -> Bool {
-        guard let textView, !textView.hasMarkedText() else { return false }
+        guard !isBodyOnly, let textView, !textView.hasMarkedText() else { return false }
         let title = titleParagraphRange
         let selection = textView.selectedRange()
         guard selection.location <= NSMaxRange(title), NSMaxRange(selection) <= NSMaxRange(title) else { return false }
@@ -2122,7 +2186,7 @@ extension NoteEditorEngine {
         var result: [NSRange] = []
         while true {
             let line = lineRange(at: location)
-            if line.location > 0, !isBlockObject(at: line.location) { result.append(line) }
+            if !isTitleLine(line.location), !isBlockObject(at: line.location) { result.append(line) }
             let next = NSMaxRange(line) + 1
             guard next <= end, next <= string.length, NSMaxRange(line) < string.length else { break }
             location = next
@@ -2311,7 +2375,7 @@ struct NoteCapturedTextTarget: Equatable {
 extension NoteEditorEngine {
     func paragraphStyle(at location: Int) -> NoteParagraphStyle? {
         let line = lineRange(at: location)
-        guard line.location > 0, !isBlockObject(at: line.location) else { return nil }
+        guard !isTitleLine(line.location), !isBlockObject(at: line.location) else { return nil }
         if let pending = pendingParagraphStyle, pending.location == line.location { return pending.state.style }
         if checklistBox(inParagraphAt: location) != nil { return .checklist }
         guard line.location < textStorage.length else { return .body }
@@ -2347,7 +2411,7 @@ extension NoteEditorEngine {
 
     func captureLinkTarget(selection: NSRange? = nil) -> NoteLinkTarget? {
         let selection = selection ?? textView?.selectedRange() ?? NSRange(location: textStorage.length, length: 0)
-        guard !isReadOnly, activity == .idle, selection.location > titleParagraphRange.length,
+        guard !isReadOnly, activity == .idle, selection.location >= bodyStart,
               rangeIsInStorage(selection) else { return nil }
         var range = selection
         var url: String?
@@ -2402,7 +2466,7 @@ extension NoteEditorEngine {
                 (values.allSatisfy { $0 == style } ? .on : (values.contains(style) ? .mixed : .off))
             return NoteCommandValidation(enabled: !lines.isEmpty, state: state)
         case let .mark(kind):
-            let inBody = selection.location > titleParagraphRange.length || selection.length > 0
+            let inBody = selection.location >= bodyStart || selection.length > 0
             return NoteCommandValidation(enabled: inBody && (kind != .link || captureLinkTarget(selection: selection) != nil),
                                          state: markState(kind, selection: selection))
         case let .link(url):
@@ -2425,11 +2489,11 @@ extension NoteEditorEngine {
         case .divider:
             return NoteCommandValidation(enabled: !lines.isEmpty, state: .off)
         case .moveUp:
-            return NoteCommandValidation(enabled: !lines.isEmpty && lines[0].location > titleParagraphRange.length + 1, state: .off)
+            return NoteCommandValidation(enabled: !lines.isEmpty && lines[0].location > bodyStart, state: .off)
         case .moveDown:
             return NoteCommandValidation(enabled: !lines.isEmpty && NSMaxRange(lines[lines.count - 1]) < textStorage.length - 1, state: .off)
         case .date:
-            return NoteCommandValidation(enabled: selection.location > titleParagraphRange.length, state: .off)
+            return NoteCommandValidation(enabled: selection.location >= bodyStart, state: .off)
         }
     }
 
@@ -2694,10 +2758,11 @@ extension NoteEditorEngine {
 
     private func moveLine(up: Bool, selection: NSRange) -> Bool {
         let line = paragraphRange(at: selection.location)
+        guard !(up && line.location == 0) else { return false }
         let neighbor = paragraphRange(at: up ? line.location - 1 : NSMaxRange(line))
         let first = up ? neighbor : line
         let second = up ? line : neighbor
-        guard first.location > 0, NSMaxRange(second) <= textStorage.length else { return false }
+        guard !isTitleLine(first.location), NSMaxRange(second) <= textStorage.length else { return false }
         let before = textStorage.attributedSubstring(from: first)
         let after = textStorage.attributedSubstring(from: second)
         let replacement = NSMutableAttributedString(attributedString: after)
@@ -2811,7 +2876,7 @@ extension NoteEditorEngine {
 
     private func validSlashTarget(_ session: NoteSlashSession, needsCaret: Bool) -> Bool {
         guard validCapturedText(session.capturedText),
-              session.range.location > titleParagraphRange.length,
+              session.range.location >= bodyStart,
               lineRange(at: session.range.location).location <= session.range.location else { return false }
         return !needsCaret || textView?.selectedRange() == NSRange(location: NSMaxRange(session.range), length: 0)
     }
@@ -2836,7 +2901,7 @@ extension NoteEditorEngine {
               textView.selectedRange().length == 0 else { return }
         let caret = textView.selectedRange().location
         let line = lineRange(at: caret)
-        guard line.location > 0, paragraphStyle(at: caret) != .mono else { slashSession = nil; return }
+        guard !isTitleLine(line.location), paragraphStyle(at: caret) != .mono else { slashSession = nil; return }
         if text == " " {
             if slashSession != nil { slashSession = nil; return }
             if convertParagraphHabit(line: line) { return }
@@ -2921,7 +2986,7 @@ extension NoteEditorEngine {
     }
 
     private func conversionEligible(line: NSRange) -> Bool {
-        guard line.location > 0, paragraphStyle(at: line.location) != .mono else { return false }
+        guard !isTitleLine(line.location), paragraphStyle(at: line.location) != .mono else { return false }
         var blocked = false
         if line.length > 0 {
             textStorage.enumerateAttribute(.noteMark(.code), in: line) { value, _, stop in
@@ -3132,7 +3197,7 @@ extension NoteEditorEngine {
             let line = lineRange(at: location)
             let attrs = textStorage.attributes(at: line.location, effectiveRange: nil)
             let name = attrs[.noteBlockStyle] as? String
-            let heading = line.location == 0 ? 1 : (name == "heading" ? attrs[.noteBlockLevel] as? Int ?? 2 : nil)
+            let heading = isTitleLine(line.location) ? 1 : (name == "heading" ? attrs[.noteBlockLevel] as? Int ?? 2 : nil)
             let indent = attrs[.noteBlockIndent] as? Int ?? 0
             result.append(NoteAccessibilityParagraph(range: line,
                                                      text: string.substring(with: line).replacingOccurrences(of: String(NoteDocument.objectCharacter), with: ""),
@@ -3149,7 +3214,7 @@ extension NoteEditorEngine {
     private func numberedOrdinal(at location: Int, indent: Int) -> Int {
         var ordinal = 1
         var start = location
-        while start > titleParagraphRange.length + 1 {
+        while start > bodyStart {
             let previous = lineRange(at: start - 1)
             guard previous.location < start, previous.location < textStorage.length else { break }
             let attrs = textStorage.attributes(at: previous.location, effectiveRange: nil)
@@ -3171,7 +3236,7 @@ extension NoteEditorEngine {
             let line = lineRange(at: location)
             let attrs = textStorage.attributes(at: line.location, effectiveRange: nil)
             let name = attrs[.noteBlockStyle] as? String
-            let level = line.location == 0 ? 1 : (name == "heading" ? attrs[.noteBlockLevel] as? Int ?? 2 : nil)
+            let level = isTitleLine(line.location) ? 1 : (name == "heading" ? attrs[.noteBlockLevel] as? Int ?? 2 : nil)
             if let level {
                 let value = string.substring(with: line)
                 if !value.isEmpty {

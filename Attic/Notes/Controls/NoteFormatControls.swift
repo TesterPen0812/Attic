@@ -379,6 +379,14 @@ final class NoteFormatControls: NSObject {
     /// bottom row, to 8 above the panel's edge.
     private func usableRect(overBottomRow: Bool = false) -> NSRect {
         guard let textView, let scrollView else { return .zero }
+        // In a task's note the text view is one of the stacked views in the
+        // shared scroll: the one mapper answers (UX plan § 9.1).
+        if let mapper = textView.coordinateMapper {
+            let unobscured = mapper.unobscuredRect(topInsetReduction: AtticNoteMetrics.titleTopGap,
+                                                   bottomInset: overBottomRow ? 8 : nil)
+            return NSRect(x: textView.visibleRect.minX, y: unobscured.minY,
+                          width: textView.bounds.width, height: unobscured.height)
+        }
         let visible = textView.visibleRect
         let insets = scrollView.contentInsets
         let top = visible.minY + max(0, insets.top - AtticNoteMetrics.titleTopGap)

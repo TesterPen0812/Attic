@@ -19,6 +19,17 @@ final class NoteEditorTextView: NSTextView, NSAccessibilityCustomRotorItemSearch
     /// After each layout pass: the page keeps the title's accessories (the
     /// note menu button and the tag line) on the title's lines.
     var onLayout: (() -> Void)?
+    /// Set in the composed task-note host (UX plan § 9.1), where this view
+    /// does not scroll on its own: caret visibility, the selection bar,
+    /// Find and accessibility frames use the shared scroll's one mapper.
+    var coordinateMapper: NoteCoordinateMapper?
+
+    /// Caret visibility (typing, arrows, Find's scroll-to-match) scrolls the
+    /// shared view by the least amount, clear of the header and bottom row.
+    override func scrollRangeToVisible(_ range: NSRange) {
+        guard let coordinateMapper else { return super.scrollRangeToVisible(range) }
+        coordinateMapper.revealRange(range, margin: 4)
+    }
     /// Views laid over the text (the title's accessories), read by
     /// VoiceOver after the text.
     var accessoryViews: [NSView] = []
@@ -110,7 +121,8 @@ final class NoteEditorTextView: NSTextView, NSAccessibilityCustomRotorItemSearch
 
     /// The placeholder's line, the column's full width.
     var placeholderRect: NSRect {
-        let height = max(NoteTextStyle.titleLineHeight, ceil((engine?.style.titleFont).map { $0.ascender - $0.descender } ?? 0))
+        let font = engine?.isBodyOnly == true ? engine?.style.bodyFont : engine?.style.titleFont
+        let height = max(NoteTextStyle.titleLineHeight, ceil(font.map { $0.ascender - $0.descender } ?? 0))
         return NSRect(x: 0, y: textContainerOrigin.y, width: bounds.width, height: height + 4)
     }
 
@@ -139,8 +151,11 @@ final class NoteEditorTextView: NSTextView, NSAccessibilityCustomRotorItemSearch
         drawsPlaceholder = showsPlaceholder
         guard drawsPlaceholder, let engine else { return }
         let origin = textContainerOrigin
-        let placeholder = NSAttributedString(string: String(localized: "Title"), attributes: [
-            .font: engine.style.titleFont,
+        // A task's note has no title in its text (§ 2.12): its empty writing
+        // invites writing instead (§ 5.5).
+        let placeholder = NSAttributedString(string: engine.isBodyOnly ? String(localized: "Write, or drop a file")
+                                                                       : String(localized: "Title"), attributes: [
+            .font: engine.isBodyOnly ? engine.style.bodyFont : engine.style.titleFont,
             .foregroundColor: engine.style.placeholderColor
         ])
         placeholder.draw(at: NSPoint(x: origin.x + (textContainer?.lineFragmentPadding ?? 0), y: origin.y))

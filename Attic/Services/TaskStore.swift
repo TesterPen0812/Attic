@@ -809,18 +809,25 @@ final class TaskStore: ObservableObject {
                     throw TaskEditRefusal("Subtasks need an unfinished main task. Reopen the main task first.")
                 }
             }
-            // Inserted last-first: each new task is placed above the ones
-            // already in its group, so the first draft ends up on top.
-            for index in drafts.indices.reversed() {
+            // Main tasks are inserted last-first: each new task is placed
+            // above the ones already in its group, so the first draft ends up
+            // on top. Subtasks follow canonical insertion (Phase 3 UX plan
+            // § 2.3.1): after the last subtask of their state group, in the
+            // drafts' order.
+            let subtaskIndices = drafts.indices.filter { drafts[$0].parentID != nil }
+            let taskIndices = drafts.indices.filter { drafts[$0].parentID == nil }
+            for index in Array(taskIndices.reversed()) + subtaskIndices {
                 let draft = drafts[index]
                 // A lone task in an unordered group stays unordered, exactly as
                 // before; a batch is ordered explicitly so its tasks, which
                 // share one timestamp, keep the drafts' order.
-                let manualOrder = try nextManualOrder(
-                    status: draft.status,
-                    parentID: draft.parentID,
-                    updatedAt: timestamp
-                ) ?? (drafts.count > 1 ? Self.manualOrderStride : nil)
+                let manualOrder = draft.parentID != nil
+                    ? try endManualOrder(status: draft.status, parentID: draft.parentID, batch: drafts.count > 1, updatedAt: timestamp)
+                    : try nextManualOrder(
+                        status: draft.status,
+                        parentID: draft.parentID,
+                        updatedAt: timestamp
+                    ) ?? (drafts.count > 1 ? Self.manualOrderStride : nil)
                 let task = TaskItem(
                     id: ids[index],
                     title: titles[index],
@@ -3941,6 +3948,25 @@ final class TaskStore: ObservableObject {
             return Int64(orderedGroup.count + 1) * Self.manualOrderStride
         }
         return maximum + Self.manualOrderStride
+    }
+
+    /// A new subtask's order at the end of its state group (canonical
+    /// insertion, Phase 3 UX plan § 2.3.1). Higher orders come first, and a
+    /// missing order reads as 0. A lone subtask in an empty or unordered
+    /// group stays unordered (creation time puts it last).
+    private func endManualOrder(status: TaskStatus, parentID: UUID?, batch: Bool, updatedAt: Date) throws -> Int64? {
+        let group = tasks.filter { $0.status == status && $0.parentID == parentID }
+        let orders = group.map { $0.manualOrder ?? 0 }
+        if !batch, group.allSatisfy({ $0.manualOrder == nil }) { return nil }
+        guard let lowest = orders.min() else { return Self.manualOrderStride }
+        guard lowest >= .min + Self.manualOrderStride else {
+            let orderedGroup = (parentID.map(subtasks(of:)) ?? orderedTasks(for: status)).filter {
+                $0.status == status && $0.parentID == parentID
+            }
+            try assignSpacedManualOrders(to: orderedGroup, updatedAt: updatedAt)
+            return 0
+        }
+        return lowest - Self.manualOrderStride
     }
 
     private func sparseManualOrder(at index: Int, in orderedGroup: [TaskItem]) -> Int64? {

@@ -52,6 +52,10 @@ final class PanelUIState: ObservableObject {
         set { renameDraft.title = newValue }
     }
     @Published var editingNoteID: UUID?
+    /// A task's own note shown over the Notes page (Phase 3 slice 0b: reached
+    /// from the preview's seeded entry point; production entry points ship in
+    /// slice 1).
+    @Published var openTaskNoteID: UUID?
     @Published var subtaskDrafts: [UUID: String] = [:]
     /// Families whose inline Add entry is activated. Separate from drafts: an
     /// activated-but-empty entry stays visible, a draft reactivates the entry

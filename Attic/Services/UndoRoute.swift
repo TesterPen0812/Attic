@@ -135,8 +135,24 @@ final class UndoRoute: ObservableObject {
         return true
     }
 
+    /// Steps recorded while `capturingSteps` runs go to its caller instead
+    /// of a history: a field's commit (`WorkspaceFieldUndo.commit`) hands the
+    /// one confirmed step to the workspace history itself.
+    private var captures: [(UndoStep) -> Void] = []
+
+    /// Runs `change` and returns the steps it would have recorded, without
+    /// recording them.
+    func capturingSteps(_ change: () -> Void) -> [UndoStep] {
+        var steps: [UndoStep] = []
+        captures.append { steps.append($0) }
+        defer { captures.removeLast() }
+        change()
+        return steps
+    }
+
     /// Records a step for a change that has already been confirmed.
     func record(_ step: UndoStep, in history: UndoHistoryID) {
+        if let capture = captures.last { capture(step); return }
         let history = resolved(history)
         var entry = histories[history] ?? History()
         entry.undo.append(step)

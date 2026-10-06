@@ -814,7 +814,7 @@ final class NotesPageController: ObservableObject {
         }
         let session = NoteSession(noteID: note.id, isPersisted: true, baseRevisionID: load?.revisionID,
                                   engine: makeEngine(noteID: note.id, document: document, readOnly: readOnlyReason != nil,
-                                                     tags: note.tags),
+                                                     tags: note.tags, bodyOnly: note.taskID != nil),
                                   readOnlyReason: readOnlyReason)
         session.baseTags = note.tags
         if let state = defaults?.dictionary(forKey: Self.viewStateKey(note.id)) {
@@ -826,10 +826,13 @@ final class NotesPageController: ObservableObject {
     }
 
     private func makeEngine(noteID: UUID, document: NoteDocument, readOnly: Bool,
-                            staged: [StagedNoteAttachment] = [], tags: [String] = []) -> NoteEditorEngine {
+                            staged: [StagedNoteAttachment] = [], tags: [String] = [],
+                            bodyOnly: Bool = false) -> NoteEditorEngine {
+        // A task's own note (`taskID` set, stored in the `taskNote` form)
+        // loads the body-only projection (UX plan § 2.12).
         let engine = NoteEditorEngine(noteID: noteID, document: document, readOnly: readOnly, design: design,
                                       today: NoteDay(date: now()), imageProvider: self, stagedAttachments: staged,
-                                      tags: tags)
+                                      tags: tags, bodyOnly: bodyOnly)
         return engine
     }
 
@@ -872,7 +875,7 @@ final class NotesPageController: ObservableObject {
             guard let load = store.loadDocument(noteID: session.noteID) else { return nil }
             let reason: NoteReadOnlyReason? = if case let .readOnly(_, reason, _) = load.content { reason } else { nil }
             session.replaceEngine(makeEngine(noteID: session.noteID, document: load.content.document ?? .blank,
-                readOnly: reason != nil, tags: note.tags))
+                readOnly: reason != nil, tags: note.tags, bodyOnly: note.taskID != nil))
             session.readOnlyReason = reason
             session.baseRevisionID = load.revisionID
             session.baseTags = note.tags
@@ -1787,7 +1790,8 @@ final class NotesPageController: ObservableObject {
                 isPersisted: stored != nil || entry.baseRevisionID != nil || !replicas.isEmpty,
                 baseRevisionID: entry.baseRevisionID,
                 engine: makeEngine(noteID: entry.noteID, document: document, readOnly: false, staged: staged,
-                                   tags: entry.tags ?? storedTags),
+                                   tags: entry.tags ?? storedTags,
+                                   bodyOnly: store.note(withID: entry.noteID)?.taskID != nil),
                 readOnlyReason: nil)
             // Unchanged tags stay the stored ones' business (nothing is written
             // over them), yet the draft keeps them, even if its note is gone.

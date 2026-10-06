@@ -3,6 +3,7 @@ import SwiftUI
 /// The one place the shell hosts the Notes page (rebuilt in phase 2).
 struct NotesPageHost: View {
     @ObservedObject var noteStore: NoteStore
+    let taskStore: TaskStore
     @ObservedObject var noteDraft: NoteDraftController
     @ObservedObject var uiState: PanelUIState
     let layout: PanelPageLayout
@@ -29,6 +30,12 @@ struct NotesPageHost: View {
         Group {
             if !hasRestoredSession {
                 ProgressView("Restoring draft…")
+            } else if let taskID = uiState.openTaskNoteID {
+                TaskNotePageContainer(taskID: taskID, tasks: taskStore, controller: noteDraft.pages,
+                                      noteStore: noteStore, layout: layout) {
+                    uiState.openTaskNoteID = nil
+                }
+                .id(taskID)
             } else if usesNewEditor {
                 NotesEditorPage(controller: noteDraft.pages, noteStore: noteStore, noteDraft: noteDraft,
                                 uiState: uiState, layout: layout,

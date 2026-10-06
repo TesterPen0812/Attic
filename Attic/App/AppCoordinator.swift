@@ -521,6 +521,11 @@ final class AppCoordinator: ObservableObject {
         if inMemoryStore, isUITesting, environment["ATTIC_UI_TEST_SEED"] == "caughtup" {
             try? TasksPagePreview.seedCaughtUp(in: container)
         }
+        // Phase 3 slice 0b: the task's-note fixtures (the preview's seeded
+        // entry point; `ATTIC_UI_TEST_TASK_NOTE` opens one).
+        if inMemoryStore, isUITesting, environment["ATTIC_UI_TEST_SEED"] == "tasknote" {
+            try? TaskNotePreviewSeed.seedAll(in: container)
+        }
         #endif
         // Preview builds only (owner, 2026-10-01): a fresh preview identity
         // opens on demo content, written into its own empty store once.
@@ -685,6 +690,11 @@ final class AppCoordinator: ObservableObject {
 
         if isUITesting {
             if ProcessInfo.processInfo.environment["ATTIC_UI_TEST_PINNED"] == "1" { uiState.isPanelPinned = true }
+            // Phase 3 slice 0b's seeded entry point: a task's note over Notes.
+            if let scenario = TaskNotePreviewSeed.requested(), let taskID = TaskNotePreviewSeed.seeded[scenario] {
+                uiState.selectSection(.notes)
+                uiState.openTaskNoteID = taskID
+            }
             // LSUIElement apps do not necessarily become active when XCTest
             // launches them. Activate the real process before presenting the
             // key panel so AppKit, not a test-only model shortcut, owns mouse

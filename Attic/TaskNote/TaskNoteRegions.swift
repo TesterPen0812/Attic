@@ -1,0 +1,368 @@
+import SwiftUI
+
+/// The geometry of the task's note page (mockups `p3-20` 2b, `p3-21`, block
+/// shape `p3-19` column 2). Everything sits on the note's text column.
+enum TaskNoteMetrics {
+    /// The status circle's column: the title starts 28 in.
+    static let titleIndent: CGFloat = 28
+    /// Room at the end of the title's lines for the note's ⋯.
+    static let titleTrailing: CGFloat = 26
+    static let titleLineHeight: CGFloat = 22
+    static let detailsGap: CGFloat = 4
+    static let detailsHeight: CGFloat = 16
+    static let detailsSpacing: CGFloat = 12
+    /// Head to the block: 12, plus the block's own 4 above it.
+    static let headToBlock: CGFloat = 16
+    /// The block to the writing.
+    static let blockToWriting: CGFloat = 10
+    static let blockHeader: CGFloat = 28
+    static let blockBottomPadding: CGFloat = 10
+    static let rowHeight: CGFloat = AtticLayout.subtaskPitch
+    static var blockRadius: CGFloat { AtticRadius.groupCard }
+    static var blockPadding: CGFloat { AtticSpacing.s12 }
+}
+
+// MARK: - The head
+
+/// The live task head (§ 2.2 item 1): the status circle, the task's title
+/// (17 pt bold, wrapping; Tasks' title editor), the priority mark, the
+/// note's ⋯, then the details line (date, tags).
+struct TaskNoteHeadView: View {
+    @ObservedObject var model: TaskNotePageModel
+    var openNoteMenu: () -> Void = {}
+
+    @Environment(\.atticDesign) private var design
+    @Environment(\.undoManager) private var undoManager
+    @FocusState private var titleFocused: Bool
+
+    var body: some View {
+        let head = model.head
+        VStack(alignment: .leading, spacing: 0) {
+            ZStack(alignment: .topLeading) {
+                titleLine(head)
+                    .padding(.leading, TaskNoteMetrics.titleIndent)
+                    .padding(.trailing, TaskNoteMetrics.titleTrailing)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                AtticStatusButton(state: head.state, priority: head.priority,
+                                  subtasks: head.subtasks.total > 0 ? head.subtasks : nil,
+                                  isDisabled: !head.exists) {
+                    model.toggleTask()
+                }
+                // The circle's centre on the first line's centre.
+                .offset(x: AtticControlSize.statusCircle / 2 - AtticControlSize.minimumHitTarget / 2,
+                        y: TaskNoteMetrics.titleLineHeight / 2 - AtticControlSize.minimumHitTarget / 2)
+                .accessibilityIdentifier("task-note-status")
+                AtticNoteMenuButton { openNoteMenu() }
+                    .frame(maxWidth: .infinity, alignment: .topTrailing)
+                    .offset(x: 4, y: -1)
+                    .accessibilityIdentifier("task-note-menu")
+            }
+            if head.due != nil || !head.tags.isEmpty {
+                details(head)
+                    .padding(.top, TaskNoteMetrics.detailsGap)
+                    .padding(.leading, TaskNoteMetrics.titleIndent)
+            }
+        }
+        .accessibilityElement(children: .contain)
+        .accessibilityLabel(spokenSummary(head))
+        .accessibilityIdentifier("task-note-head")
+        .onChange(of: model.focusRequestCount) { _, _ in
+            if model.focusRequest == .title {
+                model.beginEditingTitle()
+                titleFocused = true
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func titleLine(_ head: TaskNotePageModel.Head) -> some View {
+        if model.isEditingTitle {
+            AtticRowTitleEditor(editing: titleEditing)
+                .font(Font(AtticTextStyle.noteTitle.nsFont))
+                .accessibilityIdentifier("task-note-title-editor")
+        } else {
+            // The title wraps and is never truncated; the mark follows its
+            // last word.
+            let title = Text(verbatim: head.title)
+                .font(Font(AtticTextStyle.noteTitle.nsFont))
+                .foregroundColor(design.tokens.color(head.state == .done ? .helper : .heading))
+            Text("\(title)\(priorityText(head.priority))")
+                .fixedSize(horizontal: false, vertical: true)
+                .frame(minHeight: TaskNoteMetrics.titleLineHeight, alignment: .topLeading)
+                .contentShape(Rectangle())
+                .onTapGesture { model.beginEditingTitle() }
+                .accessibilityAddTraits(.isHeader)
+                .accessibilityHeading(.h1)
+                .accessibilityLabel(head.title)
+                .accessibilityAction(named: Text("Edit Title")) { model.beginEditingTitle() }
+                .accessibilityIdentifier("task-note-title")
+        }
+    }
+
+    private func priorityText(_ priority: AtticPriority) -> Text {
+        let mark: String
+        let ink: AtticInk
+        switch priority {
+        case .high: mark = "!!"; ink = .priorityMark
+        case .medium: mark = "!"; ink = .helper
+        case .low: mark = "↓"; ink = .helper
+        case .none: return Text("")
+        }
+        return Text(verbatim: "  " + mark)
+            .font(Font(AtticTextStyle.priorityMark.nsFont).weight(.bold))
+            .foregroundColor(design.tokens.color(ink))
+            .baselineOffset(1)
+    }
+
+    private func details(_ head: TaskNotePageModel.Head) -> some View {
+        HStack(spacing: TaskNoteMetrics.detailsSpacing) {
+            if let due = head.due { AtticDueText(due: due) }
+            ForEach(head.tags, id: \.self) { tag in
+                AtticText(verbatim: "#" + tag, style: .rowMeta, ink: .helper)
+            }
+        }
+        .frame(height: TaskNoteMetrics.detailsHeight, alignment: .leading)
+        .lineLimit(1)
+        .accessibilityElement(children: .combine)
+        .accessibilityIdentifier("task-note-details")
+    }
+
+    private var titleEditing: AtticTitleEditing {
+        AtticTitleEditing(
+            text: Binding(get: { model.titleEdit.text }, set: { model.titleEdit.text = $0 }),
+            commit: { model.commitTitle(undoManager: undoManager) },
+            cancel: { model.cancelTitle(undoManager: undoManager) },
+            tokens: AtticTitleEditing.Tokens(
+                chips: model.titleEdit.tokenChips(parser: model.parser, caret: model.titleEditCaret),
+                dismissChip: { range in model.titleEdit.dismiss(range) },
+                edited: { range, replacement in model.titleEdit.edited(range, replacement: replacement) },
+                caretMoved: { caret in
+                    if model.titleEditCaret != caret { model.titleEditCaret = caret }
+                    var shown = model.titleEdit
+                    if shown.markShown(parser: model.parser, caret: caret) { model.titleEdit = shown }
+                }
+            ),
+            accessibilityLabel: String(localized: "Title"))
+    }
+
+    /// "Finalize launch checklist, in progress, high priority, due today" (§ 8).
+    private func spokenSummary(_ head: TaskNotePageModel.Head) -> String {
+        var parts = [head.title]
+        parts.append(head.state.spokenName)
+        if let priority = head.priority.spokenName { parts.append(priority) }
+        if let due = head.due { parts.append(String(localized: "due \(due.text)")) }
+        return parts.joined(separator: ", ")
+    }
+}
+
+// MARK: - The Subtasks block
+
+/// "Subtasks · 4/10" with its disclosure chevron, the rows and "+ Add
+/// subtask" (§ 2.2 item 2), block-shaped (`p3-19` column 2: radius 17, the
+/// recessed fill, no border, 12 inside, a 28 pt header). Folded, it is one
+/// line: "Subtasks · 4/10 ›".
+///
+/// Keys (§ 7): the list is one stop; ↑↓ move the ring, Space ticks, Return
+/// renames (Return saves), ⌘↑↓ reorder within the group, ⌫ deletes (Undo),
+/// Tab goes to Add subtask and from there to the writing; → ← on the header
+/// unfold and fold.
+struct TaskNoteSubtasksBlock: View {
+    @ObservedObject var model: TaskNotePageModel
+
+    @Environment(\.atticDesign) private var design
+    @Environment(\.atticKeyboardFocusVisible) private var keyboardFocusVisible
+    @Environment(\.undoManager) private var undoManager
+    @FocusState private var focus: TaskNotePageModel.Region?
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            header
+            if !model.isFolded {
+                VStack(alignment: .leading, spacing: 0) {
+                    list
+                    addRow
+                }
+                .padding(.bottom, TaskNoteMetrics.blockBottomPadding)
+                .transition(design.reduceMotion ? .identity : .opacity.combined(with: .move(edge: .top)))
+            }
+        }
+        .padding(.horizontal, TaskNoteMetrics.blockPadding)
+        .background(RoundedRectangle(cornerRadius: TaskNoteMetrics.blockRadius, style: .continuous)
+            .fill(design.tokens.recessed.color))
+        .clipShape(RoundedRectangle(cornerRadius: TaskNoteMetrics.blockRadius, style: .continuous))
+        .onHover { model.setPointerInside($0) }
+        .onChange(of: focus) { _, region in
+            model.setFocusInside(region == .list || region == .add)
+        }
+        .onChange(of: model.focusRequestCount) { _, _ in
+            guard let region = model.focusRequest else { return }
+            switch region {
+            case .list, .add: focus = region
+            case .title, .writing: focus = nil
+            }
+        }
+        .accessibilityElement(children: .contain)
+        .accessibilityLabel(spokenGroup)
+        .accessibilityIdentifier("task-note-subtasks")
+    }
+
+    // MARK: Header
+
+    private var header: some View {
+        Button {
+            withAnimation(design.reduceMotion ? nil : AtticMotionPreset.expand.animation(reduceMotion: false)) {
+                model.toggleFold()
+            }
+        } label: {
+            HStack(spacing: AtticSpacing.s8) {
+                AtticText(verbatim: model.countLabel, style: .rowMetaEmphasis, ink: .helper)
+                Spacer(minLength: 0)
+                AtticIcon(systemName: model.isFolded ? "chevron.right" : "chevron.down", size: 10, weight: .semibold, ink: .helper)
+            }
+            .frame(height: TaskNoteMetrics.blockHeader)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .focusEffectDisabled()
+        .onKeyPress(.rightArrow) { model.setFolded(false); return .handled }
+        .onKeyPress(.leftArrow) { model.setFolded(true); return .handled }
+        .accessibilityLabel(model.countLabel)
+        .accessibilityValue(model.isFolded ? String(localized: "collapsed") : String(localized: "expanded"))
+        .accessibilityHint(model.isFolded ? String(localized: "Shows the subtasks") : String(localized: "Hides the subtasks"))
+        .accessibilityIdentifier("task-note-subtasks-header")
+    }
+
+    // MARK: Rows
+
+    private var list: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            ForEach(model.rows) { row in
+                rowView(row)
+            }
+        }
+        .focusable(!model.rows.isEmpty && model.renamingID == nil)
+        .focused($focus, equals: .list)
+        .focusEffectDisabled()
+        .onKeyPress(phases: .down) { press in listKey(press) }
+        .onChange(of: model.focusedRowID) { _, id in model.noteRowFocused(id) }
+        .accessibilityElement(children: .contain)
+        .accessibilityIdentifier("task-note-subtask-list")
+    }
+
+    private func rowView(_ row: TaskNotePageModel.Row) -> some View {
+        let ringed = keyboardFocusVisible && focus == .list && model.focusedRowID == row.id && model.renamingID == nil
+        return HStack(spacing: AtticSubtaskMetrics.titleGap) {
+            Button { model.toggle(row.id) } label: {
+                AtticSubtaskCheckbox(isDone: row.isDone)
+                    .frame(width: AtticSubtaskMetrics.hitSize, height: AtticSubtaskMetrics.hitSize)
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .focusable(false)
+            .padding(.horizontal, -(AtticSubtaskMetrics.hitSize - AtticControlSize.subtaskCheckbox) / 2)
+            if model.renamingID == row.id {
+                AtticRowTitleEditor(editing: AtticTitleEditing(
+                    text: $model.renameText,
+                    commit: {
+                        let saved = model.commitRename(undoManager: undoManager)
+                        if saved { focus = .list }
+                        return saved
+                    },
+                    cancel: { model.cancelRename(undoManager: undoManager); focus = .list },
+                    accessibilityLabel: String(localized: "Rename subtask")))
+            } else {
+                // Done rows are quiet, without a strikethrough (the mockups).
+                AtticText(verbatim: row.title, style: .listBody, ink: row.isDone ? .helper : .body, truncates: true)
+            }
+            Spacer(minLength: 0)
+        }
+        .frame(height: TaskNoteMetrics.rowHeight)
+        .background(alignment: .leading) {
+            if ringed {
+                Color.clear
+                    .atticFocusRing(true, cornerRadius: AtticRadius.control(height: TaskNoteMetrics.rowHeight - 4))
+                    .padding(.horizontal, -6)
+                    .padding(.vertical, 2)
+            }
+        }
+        .contentShape(Rectangle())
+        .onTapGesture {
+            model.focusedRowID = row.id
+            focus = .list
+        }
+        .id(row.id)
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel(row.title)
+        .accessibilityAddTraits(.isToggle)
+        .accessibilityValue(row.isDone ? String(localized: "completed") : String(localized: "not completed"))
+        .accessibilityAction { model.toggle(row.id) }
+        .accessibilityAction(named: Text("Rename")) { model.beginRename(row.id) }
+        .accessibilityAction(named: Text("Delete Subtask")) { model.delete(row.id) }
+        .accessibilityIdentifier("task-note-subtask-row")
+    }
+
+    private func listKey(_ press: KeyPress) -> KeyPress.Result {
+        guard model.renamingID == nil else { return .ignored }
+        let command = press.modifiers.contains(.command)
+        switch press.key {
+        case .upArrow:
+            if command, let id = model.focusedRowID { model.move(id, by: -1) } else { model.moveRing(by: -1) }
+            return .handled
+        case .downArrow:
+            if command, let id = model.focusedRowID { model.move(id, by: 1) } else { model.moveRing(by: 1) }
+            return .handled
+        case .space:
+            if let id = model.focusedRowID { model.toggle(id) }
+            return .handled
+        case .return:
+            if let id = model.focusedRowID { model.beginRename(id) }
+            return .handled
+        case .delete, .deleteForward:
+            if let id = model.focusedRowID { model.delete(id) }
+            return .handled
+        case .tab:
+            if press.modifiers.contains(.shift) { model.requestFocus(.title) } else { focus = .add }
+            return .handled
+        default:
+            if press.characters == "\u{7F}" || press.characters == "\u{8}" {
+                if let id = model.focusedRowID { model.delete(id) }
+                return .handled
+            }
+            return .ignored
+        }
+    }
+
+    // MARK: Add subtask
+
+    private var addRow: some View {
+        HStack(spacing: AtticSubtaskMetrics.titleGap) {
+            AtticIcon(systemName: "plus", size: 11, weight: .medium, ink: .helper)
+                .frame(width: AtticControlSize.subtaskCheckbox)
+            TextField(String(localized: "Add subtask"), text: $model.newSubtaskText)
+                .textFieldStyle(.plain)
+                .font(Font(AtticTextStyle.listBody.nsFont))
+                .focused($focus, equals: .add)
+                .onSubmit {
+                    _ = model.commitNewSubtask()
+                    if !model.newSubtaskText.isEmpty || model.focusRequest != .writing { focus = .add }
+                }
+                .onKeyPress(.tab, phases: .down) { press in
+                    if press.modifiers.contains(.shift) {
+                        model.requestFocus(model.rows.isEmpty ? .title : .list)
+                    } else {
+                        model.focusWriting(atTop: true)
+                    }
+                    return .handled
+                }
+                .accessibilityLabel(String(localized: "Add subtask"))
+                .accessibilityIdentifier("task-note-add-subtask")
+        }
+        .frame(height: TaskNoteMetrics.rowHeight)
+    }
+
+    /// "Subtasks, 3 items, 1 completed" (§ 8).
+    private var spokenGroup: String {
+        let head = model.head
+        return String(localized: "Subtasks, \(head.subtasks.total) items, \(head.subtasks.done) completed")
+    }
+}

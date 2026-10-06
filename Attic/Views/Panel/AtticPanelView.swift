@@ -203,6 +203,7 @@ struct AtticPanelView: View {
         case .notes:
             NotesPageHost(
                 noteStore: noteStore,
+                taskStore: store,
                 noteDraft: noteDraft,
                 uiState: uiState,
                 layout: pageLayout,
