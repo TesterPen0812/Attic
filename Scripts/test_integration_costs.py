@@ -14,6 +14,7 @@ class IntegrationCostsTests(unittest.TestCase):
             for sample in (1, 2, 3):
                 log = ''.join(f'ATTIC_INTEGRATION_COST {name} median_ms={values.get(name, [10]*3)[sample-1]}\n'
                               for name in METRICS)
+                log += 'NOTE_RECOVERY_CONTROL_MAIN_ACTOR_MS_MEDIAN=0\n'
                 if side == 'baseline':
                     log += ''.join(f'ATTIC_COST_SAMPLES metric={name} raw_ms={samples}\n'
                                    for name, samples in (raw or {}).items())
@@ -90,6 +91,7 @@ class IntegrationCostsTests(unittest.TestCase):
             for side in ('baseline', 'candidate'):
                 for sample in (1, 2, 3):
                     log = ''.join(f'ATTIC_INTEGRATION_COST {m} median_ms=40\n' for m in METRICS)
+                    log += 'NOTE_RECOVERY_CONTROL_MAIN_ACTOR_MS_MEDIAN=0\n'
                     if side == 'baseline' and sample == 1:
                         log += self.rendered_log(40)
                     (root / f'integration-{side}-{sample}.log').write_text(log)
@@ -120,6 +122,7 @@ class IntegrationCostsTests(unittest.TestCase):
                         values.update({name: 499 if sample == 3 else 41 for name in measured})
                     log = ''.join(f'ATTIC_INTEGRATION_COST {name} median_ms={value}\n'
                                   for name, value in values.items())
+                    log += 'NOTE_RECOVERY_CONTROL_MAIN_ACTOR_MS_MEDIAN=0\n'
                     if side == 'baseline' and sample == 1:
                         log += self.rendered_log(40)
                     if side == 'baseline':
@@ -135,8 +138,9 @@ class IntegrationCostsTests(unittest.TestCase):
                 self.assertEqual(main(root), 1)
             report = json.loads((root / 'integration-cost-comparison.json').read_text())
             for name in measured:
-                self.assertEqual(report[name]['bound_ms'], 41.2)
-                self.assertEqual(report[name]['resolution_ms'], 1)
+                self.assertEqual(report[name]['bound_ms'], 41.4 if name == 'recovery-overhead' else 41.2)
+                component = report[name]['components']['recovery-main-actor'] if name == 'recovery-overhead' else report[name]
+                self.assertEqual(component['resolution_ms'], 1)
                 self.assertFalse(report[name]['passed'])
 
 

@@ -23,6 +23,7 @@ def logs(root, candidate=10, reference=10):
             row = f'ATTIC_ROW_BUILD empty=0ms rows=+{value}ms lazy-scroll=+{value}ms\n'
             (root / f'{side}-cost-{sample}.log').write_text(frame + row)
             cost = ''.join(f'ATTIC_INTEGRATION_COST {name} median_ms={value}\n' for name in METRICS)
+            cost += 'NOTE_RECOVERY_CONTROL_MAIN_ACTOR_MS_MEDIAN=0\n'
             if side == 'baseline' and sample == 1:
                 cost += rendered(value)
             (root / f'integration-{side}-{sample}.log').write_text(cost)

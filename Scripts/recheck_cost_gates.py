@@ -3,10 +3,11 @@
 
 Re-run the fixture family containing a failing row, once. Shared fixtures emit
 other rows too; those rows' first passes stay accepted. Bounds are computed by
-the unchanged OD-8/9 comparators independently for each attempt. Missing data,
+the OD-8/9/17 comparators independently for each attempt. Missing data,
 functional assertions, and candidate absolute budgets fail closed.
 """
 import contextlib
+from functools import partial
 import io
 import json
 import os
@@ -24,6 +25,7 @@ ROOT = Path(__file__).resolve().parent.parent
 FAMILIES = {
     'frame-row': (frame.main, 'cost-comparison.json'),
     'integration': (integration.main, 'integration-cost-comparison.json'),
+    'integration-headless': (partial(integration.main, include_rendered=False), 'integration-cost-comparison.json'),
     'done-query': (done.main, 'done-search-comparison.json'),
 }
 INTEGRATION_TESTS = [
@@ -87,7 +89,7 @@ class Sampler:
 
     def __call__(self, family, directory):
         directory.mkdir(parents=True)
-        if family in ('frame-row', 'integration'):
+        if family in ('frame-row', 'integration', 'integration-headless'):
             for sample in (1, 2, 3):
                 for side in paired_order(sample):
                     if family == 'frame-row':
@@ -96,7 +98,8 @@ class Sampler:
                         filename = f'{side}-cost-{sample}.log'
                     else:
                         build = 'integrationbase' if side == 'baseline' else 'candidate'
-                        tests = INTEGRATION_TESTS + ([RENDERED] if sample == 1 else [])
+                        tests = (INTEGRATION_TESTS[:-1] if family == 'integration-headless' else
+                                 INTEGRATION_TESTS + ([RENDERED] if sample == 1 else []))
                         filename = f'integration-{side}-{sample}.log'
                     text = self.run(directory, side, build, tests, filename)
                     if family == 'integration' and side == 'candidate' and sample == 1:
@@ -125,9 +128,9 @@ class Sampler:
             (directory / 'done-search.log').write_text('\n'.join(memory['candidate'] + candidate_disk) + '\n')
 
 
-def check(directory, sampler):
+def check(directory, sampler, families=None):
     evidence = {'policy': 'OD-15: one-step acceptance, two-step rejection', 'families': {}, 'errors': {}}
-    for family in FAMILIES:
+    for family in families or ('frame-row', 'integration', 'done-query'):
         rows = {}
         evidence['families'][family] = rows
         try:
@@ -174,4 +177,4 @@ def check(directory, sampler):
 
 
 if __name__ == '__main__':
-    sys.exit(check(Path(sys.argv[1]), Sampler()))
+    sys.exit(check(Path(sys.argv[-1]), Sampler(), ['integration-headless'] if sys.argv[1] == '--headless-only' else None))

@@ -186,6 +186,7 @@ class CostGatePlumbingTests(unittest.TestCase):
                     for sample in (1, 2, 3):
                         log = ''.join(f'ATTIC_INTEGRATION_COST {name} median_ms={candidate if side == "candidate" and name in notes else 80}\n'
                                       for name in METRICS)
+                        log += 'NOTE_RECOVERY_CONTROL_MAIN_ACTOR_MS_MEDIAN=0\n'
                         if side == 'baseline':
                             log += ''.join(f'ATTIC_COST_SAMPLES metric={name} raw_ms=[80, 81]\n' for name in notes)
                             if sample == 1:
