@@ -29,6 +29,7 @@ final class TaskNotePresenter: ObservableObject {
     private weak var notes: NotesPageController?
     @Published private(set) var engineGeneration: UInt64 = 0
     private var engineObservation: AnyCancellable?
+    private var hasMounted = false
     /// Rings in the head and the block only while the keyboard drives.
     private static let focusTracker = AtticKeyboardFocusTracker()
 
@@ -113,6 +114,19 @@ final class TaskNotePresenter: ObservableObject {
         host.setRegions(head: Self.headView(model, design: design), block: Self.blockView(model, design: design))
     }
 
+    /// A section return remounts the same native page. Only a first open
+    /// starts at the top; subsequent mounts keep the reading position.
+    func restoreViewStateOnMount() {
+        host.restack()
+        if !hasMounted { host.scrollToTop(); hasMounted = true }
+        if let session {
+            let length = host.engine.textStorage.length
+            let selection = session.selection
+            host.textView.setSelectedRange(NSRange(location: min(selection.location, length),
+                length: min(selection.length, max(0, length - selection.location))))
+        }
+    }
+
     /// Back: preserves durably first, then lets go of the lease. Refused
     /// (composition in progress, a save that has not landed) keeps the page.
     func close() async -> Bool {
@@ -128,6 +142,7 @@ final class TaskNotePresenter: ObservableObject {
                                                   draftGeneration: session.callbackStamp.draft,
                                                   viewGeneration: session.engine.viewGeneration)
         }
+        if notes?.taskNotePresenter === self { notes?.taskNotePresenter = nil }
         return true
     }
 }
@@ -289,14 +304,7 @@ struct TaskNoteHostRepresentable: NSViewRepresentable {
         let textView = host.textView
         DispatchQueue.main.async {
             guard presenter.lease != nil, host.engine === engine, host.textView === textView else { return }
-            host.restack()
-            host.scrollToTop()
-            if let session = presenter.session {
-                let length = engine.textStorage.length
-                let selection = session.selection
-                textView.setSelectedRange(NSRange(location: min(selection.location, length),
-                                                  length: min(selection.length, max(0, length - selection.location))))
-            }
+            presenter.restoreViewStateOnMount()
             if !engine.isReadOnly { textView.window?.makeFirstResponder(textView) }
         }
         return host.scrollView
@@ -378,9 +386,8 @@ struct TaskNotePageContainer: View {
         guard presenter == nil, !openFailed else { return }
         guard let library = tasks.commandLibrary else { openFailed = true; return }
         do {
-            presenter = try TaskNotePresenter(taskID: taskID, tasks: tasks, library: library, notes: controller,
-                                              design: design,
-                                              columnInset: layout.chromeInsets.leading + AtticNoteMetrics.columnInset)
+            presenter = try controller.openTaskNote(taskID: taskID, tasks: tasks, library: library,
+                design: design, columnInset: layout.chromeInsets.leading + AtticNoteMetrics.columnInset)
         } catch {
             openFailed = true
         }
@@ -400,5 +407,25 @@ struct TaskNotePageContainer: View {
             closing = false
             if closed { onClose() }
         }
+    }
+}
+
+extension NotesPageController {
+    /// The rebuilt section container resumes its navigation owner's lease.
+    /// A different workspace still cannot steal that lease or its draft.
+    func openTaskNote(taskID: UUID, tasks: TaskStore, library: AtticLibrary,
+                      design: AtticDesignContext, columnInset: CGFloat,
+                      defaults: UserDefaults? = .standard) throws -> TaskNotePresenter {
+        if let presenter = taskNotePresenter, presenter.lease != nil {
+            guard presenter.taskID == taskID, presenter.model.store === tasks,
+                  presenter.model.library === library else { throw TaskNotePresenter.OpenError.unavailable }
+            presenter.update(design: design)
+            presenter.host.columnInset = columnInset
+            return presenter
+        }
+        let presenter = try TaskNotePresenter(taskID: taskID, tasks: tasks, library: library, notes: self,
+            design: design, columnInset: columnInset, defaults: defaults)
+        taskNotePresenter = presenter
+        return presenter
     }
 }

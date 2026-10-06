@@ -374,10 +374,19 @@ final class TaskNotePageModel: ObservableObject {
     func move(_ id: UUID, by offset: Int) -> Bool {
         guard let task = store.task(withID: id), task.parentID == taskID else { return report(.taskGone) }
         let group = store.subtasks(of: taskID).filter { ($0.status == .done) == (task.status == .done) }
-        guard let index = group.firstIndex(where: { $0.id == id }), group.indices.contains(index + offset) else {
+        // A tick holds the visible row still, even though its new state
+        // group is already sorted differently in the store. Move relative
+        // to the visible neighbour, not the canonical row's old index.
+        let shown = rows.filter { $0.isDone == (task.status == .done) }
+        guard let index = shown.firstIndex(where: { $0.id == id }), shown.indices.contains(index + offset),
+              let canonicalIndex = group.firstIndex(where: { $0.id == id }) else {
             return false
         }
-        return settle(library.moveSubtask(id, by: offset, in: historyID)) { [weak self] in self?.move(id, by: offset) }
+        let neighbour = shown[index + offset].id
+        let withoutMovingRow = group.filter { $0.id != id }
+        guard let neighbourIndex = withoutMovingRow.firstIndex(where: { $0.id == neighbour }) else { return false }
+        let destination = neighbourIndex + (offset > 0 ? 1 : 0)
+        return settle(library.moveSubtask(id, by: destination - canonicalIndex, in: historyID)) { [weak self] in self?.move(id, by: offset) }
     }
 
     /// ⌫: to Recently Deleted, one step (Undo brings it back).

@@ -186,6 +186,11 @@ struct TaskNoteSubtasksBlock: View {
 
     var body: some View {
         blockShape
+            // The native host commits the arithmetic block height at once.
+            // A SwiftUI fold transition would animate inside that final
+            // frame, briefly centering/emptying the rows and header.
+            .animation(nil, value: model.isFolded)
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
             .onHover(perform: pointerMoved)
             .onChange(of: focus, focusMoved)
             .onChange(of: model.focusRequestCount, focusRequested)
@@ -216,13 +221,12 @@ struct TaskNoteSubtasksBlock: View {
     }
 
     private var rowsAndAdd: some View {
-        let transition: AnyTransition = design.reduceMotion ? .identity : .opacity
         return VStack(alignment: .leading, spacing: 0) {
             list
             addRow
         }
         .padding(.bottom, TaskNoteMetrics.blockBottomPadding)
-        .transition(transition)
+        .transition(.identity)
     }
 
     private func pointerMoved(_ inside: Bool) { model.setPointerInside(inside) }

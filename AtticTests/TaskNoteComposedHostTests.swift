@@ -40,6 +40,140 @@ final class TaskNoteComposedHostTests: XCTestCase {
 
     // MARK: Fixtures
 
+    private func mountTaskPage(_ taskID: UUID, in hosting: NSHostingController<AnyView>) async throws -> TaskNotePresenter {
+        hosting.rootView = AnyView(TaskNotePageContainer(taskID: taskID, tasks: tasks, controller: notes,
+            noteStore: notes.store, layout: PanelPageLayout(cornerSize: 52, panelSize: panel), onClose: {}))
+        hosting.view.layoutSubtreeIfNeeded()
+        hosting.view.displayIfNeeded()
+        for _ in 0..<30 {
+            if let presenter = notes.taskNotePresenter, presenter.host.scrollView.window === hosting.view.window {
+                presenters.append(presenter)
+                await Task.yield()
+                return presenter
+            }
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        throw TaskNotePresenter.OpenError.unavailable
+    }
+
+    private func sectionHosting() -> NSHostingController<AnyView> {
+        let hosting = NSHostingController(rootView: AnyView(Color.clear))
+        let window = NSWindow(contentRect: NSRect(origin: .zero, size: panel), styleMask: [.titled],
+            backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        window.contentViewController = hosting
+        windows.append(window)
+        return hosting
+    }
+
+    func testTaskPageDraftCaretAndFoldSurviveTasksThenNotesWithANewContainer() async throws {
+        let id = try seed(.boundary), hosting = sectionHosting()
+        let uiState = PanelUIState()
+        uiState.loadPageContent(); uiState.selectSection(.notes); uiState.openTaskNoteID = id
+        let original = try await mountTaskPage(id, in: hosting)
+        original.restoreViewStateOnMount()
+        type("Reopen draft ", into: original.host.textView)
+        original.host.textView.setSelectedRange(NSRange(location: 7, length: 3))
+        original.model.setFolded(true)
+        original.model.newSubtaskText = "Uncommitted subtask"
+        let session = try XCTUnwrap(original.session), lease = original.lease
+        let body = original.host.engine.textStorage.string
+        for _ in 0..<3 {
+            XCTAssertTrue(notes.prepareToLeave(.pageSwitch))
+            uiState.selectSection(.tasks)
+            hosting.rootView = AnyView(Text("Tasks"))
+            hosting.view.layoutSubtreeIfNeeded()
+            await Task.yield()
+            XCTAssertTrue(notes.taskNotePresenter === original)
+            uiState.selectSection(.notes); notes.present()
+            let reopened = try await mountTaskPage(try XCTUnwrap(uiState.openTaskNoteID), in: hosting)
+            reopened.restoreViewStateOnMount()
+            XCTAssertTrue(reopened === original, "a new container resumes the navigation owner's single lease")
+            XCTAssertEqual(reopened.lease, lease)
+            XCTAssertEqual(reopened.host.engine.textStorage.string, body)
+            XCTAssertEqual(reopened.host.textView.selectedRange(), NSRange(location: 7, length: 3))
+            XCTAssertTrue(reopened.model.isFolded)
+            XCTAssertEqual(reopened.model.newSubtaskText, "Uncommitted subtask")
+            XCTAssertTrue(session.usesWorkspaceBinding)
+            XCTAssertFalse(hosting.view.window?.isVisible == true)
+        }
+        let closed = await original.close()
+        XCTAssertTrue(closed)
+        XCTAssertNil(notes.taskNotePresenter)
+        let reopened = try notes.openTaskNote(taskID: id, tasks: tasks, library: library,
+            design: .default, columnInset: columnInset, defaults: nil)
+        presenters.append(reopened)
+        XCTAssertNotEqual(reopened.lease, lease, "Back still revokes the old lease")
+    }
+
+    func testTasksThenNotesWhileCheckpointIsPendingKeepsLatestDraftAndCheckpointOwner() async throws {
+        let id = try seed(.boundary), barrier = TaskNoteCheckpointBarrier()
+        notes = NotesPageController(store: NoteStore(container: container,
+            persist: { _ in throw WorkspaceFoundationError.unknown }, attachmentFileStore: makeTestAttachmentFileStore()),
+            journal: TaskNoteCheckpointJournal(base: coordinator.journal, barrier: barrier), defaults: nil,
+            saveDelay: .seconds(600), durabilityDelay: .seconds(600))
+        notes.attachUndoRoute(library.undo)
+        let hosting = sectionHosting(), original = try await mountTaskPage(id, in: hosting)
+        let session = try XCTUnwrap(original.session), stamp = session.callbackStamp
+        type(" pending", into: original.host.textView)
+        original.host.textView.setSelectedRange(NSRange(location: 4, length: 0))
+        original.model.setFolded(true)
+        XCTAssertTrue(notes.prepareToLeave(.pageSwitch), "retained section navigation may queue its checkpoint")
+        await barrier.waitUntilStarted()
+        hosting.rootView = AnyView(Text("Tasks")); hosting.view.layoutSubtreeIfNeeded()
+        await Task.yield()
+        notes.present()
+        let reopened = try await mountTaskPage(id, in: hosting)
+        reopened.restoreViewStateOnMount()
+        XCTAssertTrue(reopened === original)
+        XCTAssertEqual(reopened.host.textView.selectedRange(), NSRange(location: 4, length: 0))
+        XCTAssertTrue(reopened.model.isFolded)
+        XCTAssertEqual(session.callbackStamp.binding, stamp.binding, "remount does not invalidate the queued checkpoint")
+        type(" latest", into: reopened.host.textView)
+        let expected = reopened.host.engine.textStorage.string
+        await barrier.release()
+        let durable = await notes.preserveAllDurably()
+        XCTAssertTrue(durable)
+        XCTAssertEqual(session.engine.textStorage.string, expected, "the older checkpoint cannot replace current writing")
+        let entries = try await coordinator.journal.readRecoveryEntries()
+        guard case let .valid(entry, _, _) = try XCTUnwrap(entries.first) else { return XCTFail("missing checkpoint") }
+        XCTAssertEqual(NoteContentCodec.decode(entry.content).document?.blocks.dropFirst().map(\.text).joined(separator: "\n"), expected)
+        XCTAssertTrue(notes.workspaceIsDurable(session))
+    }
+
+    func testJustUncheckedBoundarySubtaskMovesUpAfterNoOpPurgeAndUndoes() throws {
+        let id = try seed(.boundary), presenter = try open(id), model = presenter.model
+        let freeze = try XCTUnwrap(model.rows.first { $0.title == "Freeze strings" })
+        let write = try XCTUnwrap(model.rows.first { $0.title == "Write release notes" })
+        model.setFocusInside(true)
+        XCTAssertTrue(tasks.purgeDeleted(before: .distantPast).isEmpty)
+        XCTAssertTrue(model.toggle(freeze.id))
+        XCTAssertEqual(model.rows.map(\.id), [write.id, freeze.id], "unchecking holds the row in place")
+        XCTAssertTrue(model.move(freeze.id, by: -1))
+        model.refresh()
+        XCTAssertEqual(model.rows.map(\.id), [freeze.id, write.id])
+        XCTAssertNil(model.failure)
+        model.undoWorkspace(); model.refresh()
+        XCTAssertEqual(model.rows.map(\.id), [write.id, freeze.id])
+        model.undoWorkspace(); model.refresh()
+        XCTAssertEqual(model.rows.first { $0.id == freeze.id }?.isDone, true)
+    }
+
+    func testJustUncheckedSubtaskMovesUpRelativeToItsHeldNeighbourRatherThanItsCanonicalIndex() throws {
+        let id = try seed(.heavy), presenter = try open(id, unfolded: true), model = presenter.model
+        let export = try XCTUnwrap(model.rows.first { $0.title == "Export the blog posts" })
+        let announce = try XCTUnwrap(model.rows.first { $0.title == "Announce the launch" })
+        model.setFocusInside(true)
+        XCTAssertTrue(model.toggle(export.id))
+        XCTAssertEqual(model.rows.filter { !$0.isDone }.last?.id, export.id)
+        XCTAssertEqual(tasks.subtasks(of: id).filter { $0.status != .done }.first?.id, export.id)
+        XCTAssertTrue(model.move(export.id, by: -1))
+        XCTAssertEqual(model.rows.filter { !$0.isDone }.suffix(2).map(\.id), [export.id, announce.id])
+        model.undoWorkspace(); model.refresh()
+        XCTAssertEqual(model.rows.filter { !$0.isDone }.first?.id, export.id)
+        XCTAssertEqual(model.rows.first { $0.id == export.id }?.isDone, false, "Undo reverses the move, not the tick")
+    }
+
     private func seed(_ scenario: TaskNotePreviewSeed.Scenario) throws -> UUID {
         let id = try TaskNotePreviewSeed.seed(scenario, in: container)
         tasks = TaskStore(container: container)
@@ -1036,4 +1170,48 @@ final class TaskNoteComposedHostTests: XCTestCase {
         presenter.host.restack()
         XCTAssertEqual(block.frame.height, TaskNoteMetrics.blockHeader, accuracy: 1)
     }
+
+    func testFoldAndUnfoldCommitNativeGeometryBeforeTheNextSwiftUIFrame() throws {
+        let id = try seed(.fifty), presenter = try open(id, unfolded: true)
+        presenter.model.setFolded(true)
+        XCTAssertEqual(presenter.host.blockView.frame.height, TaskNoteMetrics.blockHeader, accuracy: 1)
+        presenter.model.setFolded(false)
+        XCTAssertEqual(presenter.host.blockView.frame.height, presenter.model.blockHeight, accuracy: 1)
+    }
+}
+
+private actor TaskNoteCheckpointBarrier {
+    private var started = false
+    private var pending: CheckedContinuation<Void, Never>?
+    private var waiters: [CheckedContinuation<Void, Never>] = []
+    func pause() async {
+        guard !started else { return }
+        started = true
+        waiters.forEach { $0.resume() }; waiters.removeAll()
+        await withCheckedContinuation { pending = $0 }
+    }
+    func waitUntilStarted() async {
+        if started { return }
+        await withCheckedContinuation { waiters.append($0) }
+    }
+    func release() { pending?.resume(); pending = nil }
+}
+
+@MainActor
+private final class TaskNoteCheckpointJournal: NoteDraftJournaling {
+    let base: NoteDraftJournal
+    let barrier: TaskNoteCheckpointBarrier
+    var workspaceJournal: NoteDraftJournal? { base }
+    var requiresAsyncIO: Bool { true }
+    init(base: NoteDraftJournal, barrier: TaskNoteCheckpointBarrier) { self.base = base; self.barrier = barrier }
+    func writeDurably(_ entry: NoteDraftJournalEntry, staged: [StagedNoteAttachment],
+                      replacing claim: NoteRecoveryClaim?) async throws -> NoteRecoveryClaim {
+        await barrier.pause()
+        return try await base.writeDurably(entry, staged: staged, replacing: claim)
+    }
+    func retireDurably(noteID: UUID, claim: NoteRecoveryClaim?, saved: NoteRecoverySavedState?) async throws {
+        try await base.retireDurably(noteID: noteID, claim: claim, saved: saved)
+    }
+    func recoveryEntries() throws -> [NoteDraftRecoveryEntry] { try base.recoveryEntries() }
+    func readRecoveryEntries() async throws -> [NoteDraftRecoveryEntry] { try await base.readRecoveryEntries() }
 }

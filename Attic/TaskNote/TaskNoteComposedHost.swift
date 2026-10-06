@@ -191,10 +191,15 @@ final class TaskNoteComposedHost: NSObject {
 
     // MARK: Stacking
 
-    /// The head's or the block's content changed: restack once, on the next
-    /// turn (several changes in one turn restack once).
+    /// Commit an arithmetic block-height change in the same turn as its
+    /// SwiftUI state. Otherwise new rows can draw inside the old native
+    /// frame for one display frame. Head measurement still coalesces.
     func setNeedsRestack() {
         headNeedsMeasurement = true
+        if let blockHeight, blockHeight() != regionHeights.block {
+            restack()
+            return
+        }
         guard !restackScheduled else { return }
         restackScheduled = true
         DispatchQueue.main.async { [weak self] in

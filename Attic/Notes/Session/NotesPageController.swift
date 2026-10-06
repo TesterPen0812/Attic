@@ -209,6 +209,9 @@ final class NoteSession: ObservableObject, Identifiable {
 final class NotesPageController: ObservableObject {
     enum LeaveReason { case openNote, newNote, library, pageSwitch, hide, quit, exitToOldPage }
     @Published private(set) var active: NoteSession?
+    /// The task page belongs to navigation, not its disposable SwiftUI
+    /// container. Keep its single lease while Notes is behind another section.
+    var taskNotePresenter: TaskNotePresenter?
     /// A legacy note the page shows in the old editor.
     @Published private(set) var legacyNoteID: UUID?
     @Published var isLibraryPresented = false
@@ -1070,18 +1073,19 @@ final class NotesPageController: ObservableObject {
     }
 
     private func prepareToLeave(_ reason: LeaveReason, usingVerifiedCheckpoints: Bool) -> Bool {
-        if let active, !canLeaveComposition(in: active) { return false }
+        let visibleSession = taskNotePresenter?.session ?? active
+        if let visibleSession, !canLeaveComposition(in: visibleSession) { return false }
         if legacyNoteID != nil, !leaveLegacyNote(reason) { return false }
         let retainsSession = reason == .hide || reason == .pageSwitch
         if usingVerifiedCheckpoints {
             guard recoveryWork == nil, cache.values.allSatisfy({ workspaceIsDurable($0) }) else { return false }
         } else if reason == .hide || reason == .quit {
             guard preserveAll(allowQueued: retainsSession) else { return false }
-        } else if let session = active {
+        } else if let session = visibleSession {
             captureViewState(session)
             guard preserve(session, allowQueued: retainsSession) else { return false }
         }
-        if let session = active {
+        if let session = visibleSession {
             if session.isPersisted, !NoteSessionPolicy.hasPendingWork(session.state) {
                 store.recordVersion(noteID: session.noteID, reason: .leave)
                 _ = store.applyPendingEdits(noteID: session.noteID)
@@ -1090,6 +1094,8 @@ final class NotesPageController: ObservableObject {
             session.pauseTask?.cancel()
         }
         if reason == .pageSwitch || reason == .hide || reason == .quit || reason == .exitToOldPage {
+            taskNotePresenter?.model.setFocusInside(false)
+            taskNotePresenter?.model.setPointerInside(false)
             isPageVisible = false
         }
         return true
@@ -1150,6 +1156,7 @@ final class NotesPageController: ObservableObject {
     @discardableResult
     func preserveAll(allowQueued: Bool = false) -> Bool {
         if let active { captureViewState(active) }
+        if let session = taskNotePresenter?.session { captureViewState(session) }
         var ok = true
         for session in cache.values where NoteSessionPolicy.hasPendingWork(session.state) || session.isImporting {
             ok = preserve(session, allowQueued: allowQueued) && ok
