@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Compare d77ec80 and afebc3a with identical save/scaling test fixtures.
+"""Compare two commits with identical headless save/scaling test fixtures.
 
 Diagnostics retain every assertion and raw xcresult, including failed baseline
 runs. They do not replace the required full unit-test lane or change its gates.
@@ -31,6 +31,11 @@ def main():
     parser.add_argument("--xcodebuild-wrapper", type=Path,
                         help="Local runs use the required external locked wrapper; CI uses the same lock directly")
     parser.add_argument("--unsigned", action="store_true")
+    parser.add_argument("--baseline", default=BASELINE)
+    parser.add_argument("--candidate", default=CANDIDATE)
+    parser.add_argument("--optimized", action="store_true")
+    parser.add_argument("--worktree-root", type=Path,
+                        help="Disposable detached worktrees, separate from retained evidence")
     args = parser.parse_args()
     root = Path(__file__).resolve().parents[1]
     output = args.output.resolve()
@@ -38,10 +43,11 @@ def main():
     # Port only the identical measurement fixture; baseline production code
     # remains at d77ec80. Remove one unselected test requiring the new decoder
     # injection API so both test files compile with the old initializer.
-    fixture = subprocess.check_output(["git", "show", f"{CANDIDATE}:{TEST_FILE}"], cwd=root, text=True)
-    start = fixture.index("    func testRecoveryRetirementKeepsCheckpointOnFailedOrStaleDecode()")
-    end = fixture.index("    // Local configuration, macos-26", start)
-    fixture = fixture[:start] + fixture[end:]
+    fixture = subprocess.check_output(["git", "show", f"{args.candidate}:{TEST_FILE}"], cwd=root, text=True)
+    if args.baseline == BASELINE:
+        start = fixture.index("    func testRecoveryRetirementKeepsCheckpointOnFailedOrStaleDecode()")
+        end = fixture.index("    // Local configuration, macos-26", start)
+        fixture = fixture[:start] + fixture[end:]
     wrapper = ([str(args.xcodebuild_wrapper.resolve())] if args.xcodebuild_wrapper else
                ["/usr/bin/lockf", "-k", "/tmp/attic-xcodebuild.lock", "/usr/bin/xcodebuild"])
     signing = (["CODE_SIGNING_ALLOWED=NO"] if args.unsigned else
@@ -49,8 +55,8 @@ def main():
     specs = {}
     results = []
     try:
-        for side, commit in [("baseline", BASELINE), ("candidate", CANDIDATE)]:
-            tree = output / side
+        for side, commit in [("baseline", args.baseline), ("candidate", args.candidate)]:
+            tree = (args.worktree_root or output) / side
             subprocess.run(["git", "worktree", "add", "--detach", str(tree), commit], cwd=root, check=True)
             specs[side] = tree
             (tree / TEST_FILE).write_text(fixture)
@@ -59,6 +65,10 @@ def main():
             command = wrapper + ["-project", "Attic.xcodeproj", "-scheme", "Attic", "-configuration", "Local",
                                  "-destination", "platform=macOS", "-derivedDataPath", str(output / f"dd-{side}")]
             command += signing + [f"-only-testing:{test}" for test in TESTS]
+            command += ["-parallel-testing-enabled", "NO"]
+            if args.optimized:
+                command += ["SWIFT_OPTIMIZATION_LEVEL=-O", "SWIFT_COMPILATION_MODE=wholemodule",
+                            "ENABLE_DEBUG_DYLIB=NO", "ENABLE_TESTABILITY=YES", "ENABLE_HARDENED_RUNTIME=NO"]
             specs[side] = (tree, command)
             if run_logged(command + ["build-for-testing"], tree, output / f"{side}-build.log"):
                 raise RuntimeError(f"{side} test build failed; inspect its log")
@@ -79,7 +89,7 @@ def main():
                 for label, prepared in re.findall(
                         r"(NOTE_[A-Z_]+)_SAVE_MS_MEDIAN=[0-9.]+ PREPARED_MS_MEDIAN=([0-9.]+)", text):
                     metrics[label + "_PREPARED_MS_MEDIAN"] = float(prepared)
-                record = dict(pair=pair, side=side, commit=BASELINE if side == "baseline" else CANDIDATE,
+                record = dict(pair=pair, side=side, commit=args.baseline if side == "baseline" else args.candidate,
                               test_exit=code, summary=summary, metrics=metrics)
                 results.append(record)
                 (output / "results.json").write_text(json.dumps(results, indent=2) + "\n")

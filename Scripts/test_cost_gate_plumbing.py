@@ -13,6 +13,7 @@ import tempfile
 import unittest
 
 from prepare_cost_reference import ROOT, REPLACEMENTS, policy, prepare
+from check_integration_costs import METRICS
 
 
 def command(args, **kwargs):
@@ -173,6 +174,30 @@ class CostGatePlumbingTests(unittest.TestCase):
                 for row in report.values():
                     self.assertEqual(row['queries']['F']['resolution_ms'], 1)
                     self.assertEqual(row['queries']['F']['bound_ms'], 11.2)
+
+    def test_notes_save_comparator_exit_status_keeps_every_notes_row_blocking(self):
+        notes = {name for name in METRICS if name.startswith('note-')}
+        rendered = ''.join(f'ATTIC_DONE_RESULTS run={i} frame_ms=40\n' for i in range(3)) + ''.join(
+            f'ATTIC_DONE_KEY key={i} raw_ms=[40, 40, 40]\n' for i in range(len('Finished task 12')))
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            for candidate, expected in [(81, 0), (82, 1)]:
+                for side in ('baseline', 'candidate'):
+                    for sample in (1, 2, 3):
+                        log = ''.join(f'ATTIC_INTEGRATION_COST {name} median_ms={candidate if side == "candidate" and name in notes else 80}\n'
+                                      for name in METRICS)
+                        if side == 'baseline':
+                            log += ''.join(f'ATTIC_COST_SAMPLES metric={name} raw_ms=[80, 81]\n' for name in notes)
+                            if sample == 1:
+                                log += rendered
+                        (root / f'integration-{side}-{sample}.log').write_text(log)
+                (root / 'done-search.log').write_text(rendered)
+                result = command(['python3', str(ROOT / 'Scripts/check_integration_costs.py'), str(root)])
+                self.assertEqual(result.returncode, expected, result.stdout + result.stderr)
+                report = json.loads((root / 'integration-cost-comparison.json').read_text())
+                for name in notes:
+                    self.assertEqual(report[name]['bound_ms'], 81.2)
+                    self.assertEqual(report[name]['passed'], expected == 0)
 
     def test_frame_row_comparator_fails_candidate_regression_and_prints_every_metric(self):
         with tempfile.TemporaryDirectory() as tmp:

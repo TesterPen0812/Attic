@@ -508,7 +508,10 @@ jobs:
       - name: Record interleaved integration reference and candidate costs
         run: |
           for sample in 1 2 3; do
-            for side in baseline candidate; do
+            # Balance order so runner drift does not always penalize candidate.
+            sides=(baseline candidate)
+            if [ "$sample" = 2 ]; then sides=(candidate baseline); fi
+            for side in "${sides[@]}"; do
               source="$GITHUB_WORKSPACE"
               build=candidate
               rendered=()
