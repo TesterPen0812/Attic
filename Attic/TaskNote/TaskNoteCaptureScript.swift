@@ -105,6 +105,18 @@ enum TaskNoteCaptureScript {
         return found
     }
 
+    /// Appends a line to the script's log (routing traces from elsewhere).
+    nonisolated static func trace(_ line: String) {
+        guard ProcessInfo.processInfo.environment["ATTIC_UI_TEST_TASK_NOTE_SCRIPT"] != nil else { return }
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent("tasknote-script.log")
+        let entry = "\(Date()) trace \(line)\n"
+        if let handle = try? FileHandle(forWritingTo: url) {
+            handle.seekToEndOfFile(); handle.write(Data(entry.utf8)); try? handle.close()
+        } else {
+            try? Data(entry.utf8).write(to: url)
+        }
+    }
+
     private static func log(_ line: String, _ host: TaskNoteComposedHost) {
         let responder = host.textView.window?.firstResponder
         let text = String(host.engine.textStorage.string.prefix(40))

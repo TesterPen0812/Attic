@@ -47,7 +47,7 @@ final class NoteEditorTextView: NSTextView, NSAccessibilityCustomRotorItemSearch
     override func performKeyEquivalent(with event: NSEvent) -> Bool {
         #if DEBUG
         if composedFinder != nil, ProcessInfo.processInfo.environment["ATTIC_UI_TEST_TASK_NOTE_SCRIPT"] != nil {
-            NSLog("TASKNOTE-SCRIPT text view key equivalent %@ first=%d", event.charactersIgnoringModifiers ?? "", window?.firstResponder === self ? 1 : 0)
+            TaskNoteCaptureScript.trace("text view key equivalent \(event.charactersIgnoringModifiers ?? "") first=\(window?.firstResponder === self)")
         }
         #endif
         if let composedFinder, window?.firstResponder === self, let action = Self.finderAction(for: event),
