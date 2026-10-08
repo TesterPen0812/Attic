@@ -144,7 +144,8 @@ final class NotesFormatControlsTests: XCTestCase {
         controls.router.run(.paragraph(.bullet), from: .shortcut)
         let menu = controls.router.menuCommands(from: .noteMenu)
         XCTAssertEqual(menu.map(\.title), ["Insert", "Format"])
-        XCTAssertEqual(menu[0].children.map(\.title), ["Image or File…", "Date…", "Divider"])
+        // Notes v2 tables (owner pick Q6): Insert › Table.
+        XCTAssertEqual(menu[0].children.map(\.title), ["Image or File…", "Date…", "Divider", "Table"])
         let format = menu[1].children
         for command in NoteCommandCatalog.formatSections.flatMap({ $0 }) {
             XCTAssertNotNil(format.first { $0.title == NoteCommandCatalog.menuTitle(command) }, "Format lists \(command)")
@@ -349,12 +350,13 @@ final class NotesFormatControlsTests: XCTestCase {
         XCTAssertEqual(controls.snapshotCount, before, "no state read, no bar work per keystroke")
     }
 
-    /// OD-14: the format row holds the style, the four list types, outdent
-    /// and indent, and ✕, round in that order; the selection bar keeps the
-    /// marks (decision D), inline code included, and no list.
+    /// OD-14: the format row holds the style, the four cells (three lists
+    /// and, since Notes v2's tables, Table in Quote's place: owner pick Q6),
+    /// outdent and indent, and ✕, round in that order; the selection bar
+    /// keeps the marks (decision D), inline code included, and no list.
     func testTheFormatRowAndTheSelectionBarHoldWhatTheDraftShows() {
         XCTAssertEqual(NoteFormatRowItem.all, [.style, .command(.paragraph(.bullet)), .command(.paragraph(.number)),
-                                               .command(.paragraph(.checklist)), .command(.paragraph(.quote)),
+                                               .command(.paragraph(.checklist)), .command(.table),
                                                .command(.outdent), .command(.indent), .close])
         XCTAssertEqual(NoteFormatRowItem.step(7, forward: true), 0, "round again from ✕ to the style")
         XCTAssertEqual(NoteFormatRowItem.step(0, forward: false), 7)

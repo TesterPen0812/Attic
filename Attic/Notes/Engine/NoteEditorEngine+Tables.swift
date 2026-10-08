@@ -47,10 +47,16 @@ extension NoteEditorEngine {
         table.engine = self
         table.style = style
         table.allowsTextAttachmentView = true
-        if restyled {
+        if restyled, let view = table.hostedView {
             table.invalidateLayout(clearingText: true)
-            table.hostedView?.modelDidChange()
-            table.hostedView?.canvas.needsDisplay = true
+            if let cell = view.activeCell, view.hasEditor {
+                // The cell being edited takes the new inks and fonts too.
+                view.editor.prepare(header: table.table.headerRow && cell.row == 0)
+            }
+            view.modelDidChange()
+            view.canvas.needsDisplay = true
+        } else if restyled {
+            table.invalidateLayout(clearingText: true)
         }
     }
 
