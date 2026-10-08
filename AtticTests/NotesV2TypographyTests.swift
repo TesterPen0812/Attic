@@ -340,6 +340,15 @@ final class NotesV2TypographyTests: XCTestCase {
         XCTAssertEqual(view.monoCopyButton.title, String(localized: "Copied"))
         view.updateMonoCopy(at: nil)
         XCTAssertTrue(view.monoCopyButton.isHidden)
+
+        // A block that ends the note (the owner's citation) shows it too.
+        let (endEngine, endView) = makeEngine(cia)
+        let endBlock = try XCTUnwrap(endEngine.monoBlockRange(at: endEngine.textStorage.length - 1))
+        let endRect = try XCTUnwrap(endEngine.monoBlockRect(for: endBlock))
+        XCTAssertEqual(endRect.width, 264, accuracy: 0.01)
+        XCTAssertGreaterThan(endRect.height, 6 * T.mono.lineHeight)
+        endView.updateMonoCopy(at: NSPoint(x: endView.textContainerOrigin.x + endRect.midX, y: endView.textContainerOrigin.y + endRect.maxY - 2))
+        XCTAssertFalse(endView.monoCopyButton.isHidden, "over the block's bottom padding")
     }
 
     func testCodeIsNeverSpellChecked() throws {

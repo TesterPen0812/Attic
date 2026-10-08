@@ -449,7 +449,7 @@ extension NoteEditorEngine {
         guard let layoutManager,
               let first = textRange(for: NSRange(location: range.location, length: 0)).flatMap({
                   layoutManager.textLayoutFragment(for: $0.location) as? NoteBlockLayoutFragment }),
-              let last = textRange(for: NSRange(location: NSMaxRange(range), length: 0)).flatMap({
+              let last = textRange(for: NSRange(location: max(range.location, NSMaxRange(range) - 1), length: 0)).flatMap({
                   layoutManager.textLayoutFragment(for: $0.location) as? NoteBlockLayoutFragment }),
               let top = first.monoBlockRect, let bottom = last.monoBlockRect else { return nil }
         let topRect = top.offsetBy(dx: first.layoutFragmentFrame.minX, dy: first.layoutFragmentFrame.minY)
