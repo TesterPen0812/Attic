@@ -151,6 +151,66 @@ final class NotesPageRenderTests: XCTestCase {
         write(harness.host, name: "writing-scrolled-light")
     }
 
+    /// Notes v2 tables, sheet 3's sample in the real page, off screen (drawn
+    /// controls; no Liquid Glass): at rest, editing a cell (ring, grips,
+    /// chips), and a wide table scrolled sideways; Light and Dark.
+    func testTablesRenderAtRestEditingAndScrolled() throws {
+        for mode in [AtticDesignContext.Mode.light, .dark] {
+            for wide in [false, true] {
+                let rows: [[String]] = wide
+                    ? [["Pillar", "What happened", "Control that failed", "Source"],
+                       ["Confidentiality", "Data taken from the IT network", "No MFA on the VPN account", "beerman2023review"],
+                       ["Integrity", "Systems encrypted by ransomware", "No MFA on the VPN account", "beerman2023review"],
+                       ["Availability", "Pipeline shut down", "No IT/OT separation", "beerman2023review"]]
+                    : [["Pillar", "What happened"], ["Confidentiality", "Data taken from the IT network"],
+                       ["Integrity", "Systems encrypted by ransomware"], ["Availability", "Pipeline shut down"]]
+                var heading = NoteBlock.text("Colonial Pipeline ransomware attack")
+                heading.style = "heading"
+                heading.level = 1
+                var sources = NoteBlock.text("Sources:")
+                sources.style = "heading"
+                sources.level = 3
+                var mono = [NoteBlock]()
+                for line in ["@inproceedings{beerman2023review,", "  title={A review of colonial pipeline ransomware attack},",
+                             "  author={Beerman, Jack and Berent, David and Falter, Zach"] {
+                    var block = NoteBlock.text(line)
+                    block.style = "mono"
+                    mono.append(block)
+                }
+                let blocks: [NoteBlock] = [.text("CIA impact"), heading,
+                    .text("The attackers breached by compromising password fro a VPN account that did not reqiuire multi factor authentication"),
+                    .table(NoteTable(texts: rows)), sources] + mono
+                let harness = try makeHarness(context: AtticDesignContext(mode: mode, controls: .craft)) { store in
+                    guard case .success = store.createDocumentNote(id: UUID(), document: NoteDocument(blocks: blocks)) else {
+                        throw NSError(domain: "seed", code: 1)
+                    }
+                }
+                let note = try XCTUnwrap(harness.store.notes.first)
+                XCTAssertTrue(harness.controller.open(noteID: note.id))
+                spin(0.4)
+                harness.host.layoutSubtreeIfNeeded()
+                spin()
+                let engine = try XCTUnwrap(harness.controller.active?.engine)
+                let table = try XCTUnwrap(engine.tableViews().first, "the table is hosted in the page")
+                XCTAssertEqual(table.frame.width, 264, accuracy: 0.5)
+                let suffix = mode == .dark ? "dark" : "light"
+                if wide {
+                    table.setScrollOffset(table.grid.columnX(1) + 60)
+                    spin()
+                    XCTAssertTrue(table.grid.scrolls)
+                    write(harness.host, name: "tables-wide-\(suffix)")
+                } else {
+                    write(harness.host, name: "tables-rest-\(suffix)")
+                    table.activate(NoteTable.Position(row: 2, column: 1), caret: .end)
+                    spin(0.3)
+                    harness.host.layoutSubtreeIfNeeded()
+                    write(harness.host, name: "tables-editing-\(suffix)")
+                }
+                harness.window.close()
+            }
+        }
+    }
+
     /// An idle note does no layout work, and typing costs one pass per key:
     /// the title's accessories never feed a layout loop.
     func testAnIdleNoteDoesNotLayOutAgainAndAgain() throws {
