@@ -214,23 +214,23 @@ enum AtticRaisedButtonMetrics {
     static let labelIconSize: CGFloat = 13
 }
 
-/// The header's page button (Phase 0's mode dock): 36 pt, inset 4,
-/// 28 pt segments 2 apart (36 shut, 96 open), 13 pt icons.
+/// The header's page button (Phase 0's mode dock): 32 pt (chrome B), inset
+/// 4, 24 pt segments 2 apart (32 shut, 84 open), 13 pt icons.
 enum AtticPageButtonMetrics {
     static let inset: CGFloat = 4
-    static let segment: CGFloat = 28
+    static let segment: CGFloat = AtticControlSize.headerControl - 2 * inset
     static let gap: CGFloat = 2
     static let iconSize: CGFloat = 13
     /// Phase 0's hairline around an accented current page.
     static let accentStrokeWidth: CGFloat = 0.75
 }
 
-/// The add bar (spec: 36 tall, radius 15; the send button inside).
+/// The add bar (chrome B: 32 tall, radius 13.5; the send button inside).
 enum AtticAddBarMetrics {
-    /// With the bar 24 from the panel's edge, the plus is centred on the
-    /// status circles' centre line (36 = 24 + 24 / 2) and the text starts
-    /// on the task titles' line (56 = 24 + 24 + 8).
-    static let leadingPadding: CGFloat = 0
+    /// With the bar 16 from the panel's edge, the plus is centred on the
+    /// status circles' centre line (36 = 16 + 8 + 24 / 2) and the text
+    /// starts on the task titles' line (56 = 16 + 8 + 24 + 8).
+    static let leadingPadding: CGFloat = AtticLayout.contentFromChrome + AtticControlSize.statusCircle / 2 - iconSlot / 2
     static let iconSlot: CGFloat = 24
     static let gap: CGFloat = 8
     static let plusSize: CGFloat = 12.5
@@ -558,10 +558,78 @@ enum AtticTagMetrics {
 
 /// The writing view and All notes (UX plan § 2, mockups p2-01, p2-02,
 /// p2-05, p2-15).
+/// Notes v2's type and spacing (text direction 5, "Notion-like", owner
+/// 2026-10-08; the values are the draft's own, `redesign-notes-v2/drafts/
+/// v2-04-text-directions.html`, `notion`). SF Pro throughout the note, one
+/// near-black ink for the text and its headings; SF Mono for code.
+///
+/// Every gap is the space between two blocks' line boxes, set by the lower
+/// block's kind, except that a heading binds to what follows it. The
+/// editor adds each one as the lower paragraph's `paragraphSpacingBefore`
+/// (`NoteTextStyle`), so no gap is ever counted twice.
+enum AtticNoteType {
+    struct Role: Equatable, Hashable, Sendable {
+        let size: CGFloat
+        let lineHeight: CGFloat
+        /// The draft's CSS weight: 400 regular, 650 (between semibold and
+        /// bold) for the headings, 700 bold for the note's title.
+        let weight: CGFloat
+        var monospaced = false
+    }
+
+    /// The note's first line.
+    static let title = Role(size: 22, lineHeight: 27, weight: 700)
+    /// The Title style inside the note, Heading and Subheading.
+    static let titleStyle = Role(size: 18, lineHeight: 24, weight: 650)
+    static let heading = Role(size: 16.5, lineHeight: 22, weight: 650)
+    static let subheading = Role(size: 15, lineHeight: 21, weight: 650)
+    /// Body, lists and checklists: 14 on a 1.5 line.
+    static let body = Role(size: 14, lineHeight: 21, weight: 400)
+    /// A quote: 15 pt, in the body ink, beside a 3 pt bar.
+    static let quote = Role(size: 15, lineHeight: 22, weight: 400)
+    /// Code (SF Mono), in one rounded block.
+    static let mono = Role(size: 12, lineHeight: 18, weight: 400, monospaced: true)
+
+    /// Between ordinary paragraphs (and list items, quote lines).
+    static let paragraphGap: CGFloat = 3
+    /// From the note's title to its first block.
+    static let titleToText: CGFloat = 12
+    /// Above the Title style, Heading and Subheading; below each, to the
+    /// block it introduces (headings stick to their text).
+    static let aboveTitleStyle: CGFloat = 16
+    static let aboveHeading: CGFloat = 14
+    static let aboveSubheading: CGFloat = 12
+    static let belowTitleStyle: CGFloat = 2
+    static let belowHeading: CGFloat = 1
+    static let belowSubheading: CGFloat = 1
+    /// Around a Mono block (and a block object: an image, a file, a
+    /// divider); 4 when the block follows a heading directly.
+    static let blockMargin: CGFloat = 8
+    static let blockAfterHeading: CGFloat = 4
+    /// The Mono block: 12 × 14 padding, the content card's radius 10.
+    static let monoPaddingV: CGFloat = 12
+    static let monoPaddingH: CGFloat = 14
+    static let monoRadius: CGFloat = AtticRadius.contentCard
+    /// Copy on the block's top-right corner, shown on hover: 11 medium,
+    /// inside the padding.
+    static let monoCopyInset: CGFloat = 6
+    /// Lists and checklists: their text 22 in (each level 22 more), a 5 pt
+    /// dot centred 7 in (the checklist box's centre); numbers end 6 before
+    /// the text.
+    static let listTextInset: CGFloat = 22
+    static let listLevelStep: CGFloat = 22
+    static let bulletDot: CGFloat = 5
+    static let bulletCentre: CGFloat = 7
+    static let numberGap: CGFloat = 6
+    /// Quote: a 3 pt bar at the column's edge, the text 14 in.
+    static let quoteBar: CGFloat = 3
+    static let quoteTextInset: CGFloat = 14
+}
+
 enum AtticNoteMetrics {
-    /// The note's text column: 4 inside the chrome's 24 pt line (28 from
+    /// The note's text column: 12 inside the chrome's 16 pt line (28 from
     /// the panel's edge, the Tasks circles' line), moving inward with it.
-    static let columnInset: CGFloat = 4
+    static let columnInset: CGFloat = AtticLayout.contentFromChrome
     /// The title's first line sits 16 under the header (y = 76 in a
     /// 320 × 520 panel).
     static let titleTopGap: CGFloat = 16
@@ -576,10 +644,22 @@ enum AtticNoteMetrics {
     /// The header title (a scrolled-away title): 36 tall, at most as wide as
     /// the room between the pin and the page button.
     static let headerTitlePadding: CGFloat = 14
-    /// The status slot's pill: 36 tall, at most 176 wide (12 clear of each
-    /// bottom button in a 320 pt panel).
-    static let pillHeight: CGFloat = 36
+    /// The status slot's pill: as tall as the bottom row's buttons (32), at
+    /// most 176 wide, and never wider than the room the row has left
+    /// (`pillMaxWidth(panelWidth:chromeInset:showsFormat:)`), so the row can
+    /// never outgrow the panel and push its corner buttons off its edges.
+    static let pillHeight: CGFloat = AtticControlSize.headerControl
     static let pillMaxWidth: CGFloat = 176
+    /// Aa to New note (chrome B: 6, it was 8 between the 36 pt buttons).
+    static let formatButtonGap: CGFloat = 6
+    /// The status pill's room between the bottom row's buttons: the panel
+    /// less the chrome insets, the buttons (All notes, Aa, New note), Aa's
+    /// gap and 12 clear on each side of the pill.
+    static func pillMaxWidth(panelWidth: CGFloat, chromeInset: CGFloat, showsFormat: Bool) -> CGFloat {
+        let buttons = AtticControlSize.panelButton.width * (showsFormat ? 3 : 2) + (showsFormat ? formatButtonGap : 0)
+        let room = panelWidth - 2 * chromeInset - buttons - 2 * AtticSpacing.s12
+        return max(0, min(pillMaxWidth, room))
+    }
     static let pillIconSize: CGFloat = 13
     static let pillGap: CGFloat = 6
     static let pillPadding: CGFloat = 12
@@ -622,6 +702,9 @@ enum AtticNoteFormatMetrics {
     static let barEdgeMargin: CGFloat = 4
     /// The format row (OD-14): 28 pt cells, 24 when a long style name
     /// would not fit the panel; 16 pt upright lines 4 from their groups.
+    /// Chrome B: the row is the corner controls' 32, its cells 24 tall in
+    /// the 4 pt inset (the capsule-chip rule).
+    static let rowCellHeight: CGFloat = AtticControlSize.headerControl - 2 * AtticControlSize.capsuleInset
     static let rowToggleWidth: CGFloat = 28
     static let rowCompactToggleWidth: CGFloat = 24
     static let rowSeparatorHeight: CGFloat = 16

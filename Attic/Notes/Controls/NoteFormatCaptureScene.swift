@@ -6,7 +6,8 @@ import AppKit
 /// `ATTIC_UI_TESTING=1 ATTIC_UI_TEST_NOTES_SCENE=<scene>` types a sample
 /// note into the new draft through the real text view and router, then
 /// shows one state: `structured`, `bar`, `aa`, `slash`, `date`, `link`,
-/// `context`, `formatmenu`, `notemenu`, `hint`; and, for the dropdown seam,
+/// `context`, `formatmenu`, `notemenu`, `hint`, `typography` (the owner's
+/// CIA note, Notes v2); and, for the dropdown seam,
 /// `slash-lead`, `slash-da` and `date-lead` (under the first paragraph);
 /// `aacycle` opens and closes Aa's format row on a timer for recordings
 /// (two slow cycles, then five quick ones, repeating).
@@ -30,6 +31,10 @@ enum NoteFormatCaptureScene {
             if scene == "hint" {
                 type("Launch sync\n", into: textView)
                 textView.needsDisplay = true
+                return
+            }
+            if scene == "typography" {
+                writeTypographySample(controls: controls, textView: textView)
                 return
             }
             writeSample(controls: controls, textView: textView, rich: scene == "structured")
@@ -56,6 +61,32 @@ enum NoteFormatCaptureScene {
 
     private static func range(of text: String, in textView: NoteEditorTextView) -> NSRange {
         (textView.string as NSString).range(of: text)
+    }
+
+    /// The owner's CIA note as the Notes v2 drafts show it (wording and
+    /// typos kept; "Colonial…" in the Title style, the four labels
+    /// Subheadings, the citation in Mono), typed through the real editor and
+    /// router into the isolated UI-test store (ported from Codex, b388c15).
+    private static func writeTypographySample(controls: NoteFormatControls, textView: NoteEditorTextView) {
+        let samples: [(String, NoteParagraphStyle)] = [
+            ("CIA impact", .body),
+            ("Colonial Pipeline ransomware attack", .heading(1)),
+            ("The attackers breached by compromising password fro a VPN account that did not reqiuire multi factor authentication", .body),
+            ("Confidentiality", .heading(3)), ("", .body),
+            ("Integrity", .heading(3)), ("Availability", .heading(3)),
+            ("The clearest impact was the staff losing access to affected IT system, which led to a shutdown causing fuel transport to be interrupted", .body),
+            ("Sources:", .heading(3)),
+            ("@inproceedings{beerman2023review,", .mono),
+            ("  title={A review of colonial pipeline ransomware attack},", .mono),
+            ("  author={Beerman, Jack and Berent, David and Falter, Zach", .mono)
+        ]
+        for (index, sample) in samples.enumerated() {
+            if index > 0 { textView.insertNewline(nil) }
+            if index > 0 { controls.router.run(.paragraph(sample.1), from: .shortcut) }
+            type(sample.0, into: textView)
+        }
+        textView.setSelectedRange(NSRange(location: 0, length: 0))
+        textView.scrollRangeToVisible(NSRange(location: 0, length: 0))
     }
 
     private static func writeSample(controls: NoteFormatControls, textView: NoteEditorTextView, rich: Bool) {

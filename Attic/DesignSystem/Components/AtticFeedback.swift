@@ -457,6 +457,8 @@ struct AtticStatusPill: View {
     var inlineAction: AtticStatusItem.Action?
     /// ✕ inside the pill (an import).
     var onCancel: (() -> Void)?
+    /// The room the bottom row leaves it (it truncates its words to fit).
+    var maxWidth: CGFloat = AtticNoteMetrics.pillMaxWidth
     let onOpen: () -> Void
 
     @Environment(\.atticDesign) private var design
@@ -506,12 +508,13 @@ struct AtticStatusPill: View {
             }
         }
         .padding(.trailing, inlineAction == nil && onCancel == nil ? 0 : AtticControlSize.capsuleInset)
-        .frame(maxWidth: m.pillMaxWidth)
+        .frame(maxWidth: min(m.pillMaxWidth, maxWidth))
         .fixedSize(horizontal: true, vertical: false)
         .frame(height: m.pillHeight)
         .atticRaisedMaterial(cornerRadius: radius, interactive: false)
         .accessibilityElement(children: .contain)
-        .atticControlProbe("Status pill", id: probeID, expectedSize: nil, radius: radius, expectedRadius: 15)
+        .atticControlProbe("Status pill", id: probeID, expectedSize: nil, radius: radius,
+                           expectedRadius: AtticRadius.control(height: m.pillHeight))
     }
 }
 

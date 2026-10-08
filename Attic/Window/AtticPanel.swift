@@ -1156,6 +1156,10 @@ final class AtticPanelHostingView: NSHostingView<AtticPanelView> {
         self.dockedCorner = dockedCorner
         self.chromeInteractionState = chromeInteractionState
         super.init(rootView: rootView)
+        // The window decides the panel's size, never the content: no
+        // minimum, maximum or intrinsic size flows from SwiftUI to AppKit
+        // (`PanelRootLayout` fills whatever frame the window has).
+        sizingOptions = []
         chromeInteractionState.onModeDockWidthChanged = { [weak self] in
             guard let self, let window = self.window else { return }
             window.invalidateCursorRects(for: self)

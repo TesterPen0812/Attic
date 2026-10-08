@@ -838,17 +838,19 @@ final class NotesFormatControlsTests: XCTestCase {
     }
 
     /// The app's own springs and outward neighbour travel, in every feel:
-    /// in the narrowest panel (a 288 pt row, Aa at 208), the growing glass
+    /// in the narrowest panel (a 288 pt row, Aa at 218), the growing glass
     /// never reaches a visible neighbour, opening or closing. Wider rows
     /// also retain clear space, and the row at rest is the
     /// plain bar with its controls fully drawn.
     func testTheFormatRowGrowsOutOfAaWithOneGlassMoving() {
         for row in [CGFloat(288), 368, 448] {
-            let aa = CGRect(x: row - 80, y: 0, width: 36, height: 36)
-            let allNotes = (minX: CGFloat(0), maxX: CGFloat(36)), newNote = (minX: row - 36, maxX: row)
+            // Chrome B: 32 pt buttons, Aa 6 from New note.
+            let button = AtticControlSize.panelButton.width, gap = AtticNoteMetrics.formatButtonGap
+            let aa = CGRect(x: row - 2 * button - gap, y: 0, width: button, height: button)
+            let allNotes = (minX: CGFloat(0), maxX: button), newNote = (minX: row - button, maxX: row)
             // Two equal spacers center the fixed-size, capped status pill.
             let statusWidth = min(AtticNoteMetrics.pillMaxWidth, 120 + row - 288)
-            let statusCenter = (36 + aa.minX) / 2
+            let statusCenter = (button + aa.minX) / 2
             let status = (minX: statusCenter - statusWidth / 2, maxX: statusCenter + statusWidth / 2)
             for feel in AtticMotionFeel.allCases {
                 let tuning = feel.tuning
@@ -871,13 +873,13 @@ final class NotesFormatControlsTests: XCTestCase {
                                                       sourceSymbol: "textformat").extent
                     let glass = (minX: extent.minX, maxX: extent.minX + extent.width)
                     // A neighbour still showing keeps clear of the glass's edge: New
-                    // note by 6 pt (it rests 8 from Aa), the status by 20, All notes by 24.
+                    // note by 4 pt (it rests 6 from Aa), the status by 20, All notes by 24.
                     func overlaps(_ span: (minX: CGFloat, maxX: CGFloat), offset: CGFloat = 0, clear: CGFloat) -> Bool {
                         let minX = max(0, span.minX + offset), maxX = min(row, span.maxX + offset)
                         guard maxX > minX else { return false } // Clipped outside the row.
                         return glass.minX - clear < maxX && glass.maxX + clear > minX
                     }
-                    XCTAssertFalse(overlaps(newNote, offset: NoteFormatRowNeighbour.newNote.offset(at: rightAway), clear: 6),
+                    XCTAssertFalse(overlaps(newNote, offset: NoteFormatRowNeighbour.newNote.offset(at: rightAway), clear: gap - 2),
                                    "\(feel) \(row)pt \(phase) \(t)s: the glass reaches New note")
                     if overlaps(status, clear: 20) {
                         XCTAssertLessThanOrEqual(statusShows, 0.05, "\(feel) \(phase) \(t)s: the glass reaches the status")

@@ -175,6 +175,7 @@ struct NoteFormatToggle: View {
     let command: NoteFormatCommand
     let surface: NoteCommandSurface
     let width: CGFloat
+    var height: CGFloat = AtticControlSize.smallHeight
     var isKeyboardFocused = false
     /// An action (outdent, indent): no on/off value.
     var announcesState = true
@@ -185,13 +186,13 @@ struct NoteFormatToggle: View {
         Group {
             if command == .mark(.highlight) {
                 AtticFormatToggle(value: snapshot.value(command), label: label, help: NoteFormatModel.help(command),
-                                  width: width, isKeyboardFocused: isKeyboardFocused,
+                                  width: width, height: height, isKeyboardFocused: isKeyboardFocused,
                                   disabledReason: snapshot.disabledReason, action: run) { ink in
                     AtticHighlightGlyph(ink: ink, swatch: model.highlightSwatch)
                 }
             } else {
                 AtticFormatToggle(systemName: NoteCommandCatalog.symbol(command), value: snapshot.value(command),
-                                  label: label, help: NoteFormatModel.help(command), width: width,
+                                  label: label, help: NoteFormatModel.help(command), width: width, height: height,
                                   isKeyboardFocused: isKeyboardFocused, disabledReason: snapshot.disabledReason,
                                   announcesState: announcesState, action: run)
             }
@@ -237,6 +238,7 @@ struct NoteFormatRowView: View {
     }
 
     private func row(toggleWidth: CGFloat) -> some View {
+        let m = AtticNoteFormatMetrics.self
         let focus = model.rowKeyboardIndex
         let lists = NoteCommandCatalog.lists
         let indents = NoteCommandCatalog.indents
@@ -246,19 +248,20 @@ struct NoteFormatRowView: View {
             AtticFormatGroup {
                 ForEach(Array(lists.enumerated()), id: \.offset) { offset, command in
                     NoteFormatToggle(model: model, command: command, surface: .formatBar, width: toggleWidth,
-                                     isKeyboardFocused: focus == 1 + offset)
+                                     height: m.rowCellHeight, isKeyboardFocused: focus == 1 + offset)
                 }
             }
             AtticFormatSeparator()
             AtticFormatGroup {
                 ForEach(Array(indents.enumerated()), id: \.offset) { offset, command in
                     NoteFormatToggle(model: model, command: command, surface: .formatBar, width: toggleWidth,
-                                     isKeyboardFocused: focus == 1 + lists.count + offset, announcesState: false)
+                                     height: m.rowCellHeight, isKeyboardFocused: focus == 1 + lists.count + offset,
+                                     announcesState: false)
                 }
             }
             Spacer(minLength: 0)
             AtticFormatToggle(systemName: "xmark", value: .off, label: String(localized: "Close Format"),
-                              help: String(localized: "Close (Esc)"), width: toggleWidth,
+                              help: String(localized: "Close (Esc)"), width: toggleWidth, height: m.rowCellHeight,
                               isKeyboardFocused: focus == NoteFormatRowItem.all.count - 1, announcesState: false,
                               action: onClose)
                 .accessibilityIdentifier("notes-format-row-close")
@@ -364,7 +367,7 @@ struct NoteFormatRowSwitch<Row: View>: View {
     private var sourceFrame: CGRect {
         if geometry.source.width > 0 { return geometry.source }
         let size = AtticControlSize.panelButton
-        return CGRect(x: width - size.width * 2 - AtticSpacing.s8, y: 0, width: size.width, height: size.height)
+        return CGRect(x: width - size.width * 2 - AtticNoteMetrics.formatButtonGap, y: 0, width: size.width, height: size.height)
     }
 
     private func open() {
@@ -592,7 +595,7 @@ enum NoteFormatRowNeighbour {
 
     /// A whole button and the Aa gap: enough to clear the row edge while
     /// preserving that gap beside Aa's moving trailing edge.
-    static let exitDistance = AtticControlSize.panelButton.width + AtticSpacing.s8
+    static let exitDistance = AtticControlSize.panelButton.width + AtticNoteMetrics.formatButtonGap
 
     func offset(at progress: Double) -> CGFloat {
         let travel = Self.exitDistance * CGFloat(min(1, max(0, progress)))
@@ -700,7 +703,8 @@ struct NoteFormatStylePill: View {
         let name = NoteCommandCatalog.styleName(snapshot.paragraph)
         let enabled = NoteCommandCatalog.styles.contains { snapshot.isEnabled($0) }
         Button { model.rowStyleListOpen = true } label: {
-            AtticFormatStyleFace(title: name, isKeyboardFocused: isKeyboardFocused, isEnabled: enabled)
+            AtticFormatStyleFace(title: name, isKeyboardFocused: isKeyboardFocused, isEnabled: enabled,
+                                 height: AtticNoteFormatMetrics.rowCellHeight)
         }
         .buttonStyle(AtticUndimmedButtonStyle())
         .focusEffectDisabled()

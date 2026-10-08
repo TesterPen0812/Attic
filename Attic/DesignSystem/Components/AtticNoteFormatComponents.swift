@@ -29,6 +29,8 @@ struct AtticFormatToggle<Face: View>: View {
     /// The tooltip ("Bold ⌘B").
     var help: String?
     var width: CGFloat = AtticNoteFormatMetrics.barToggleWidth
+    /// The selection bar's 28; the format row's 24 (chrome B).
+    var height: CGFloat = AtticControlSize.smallHeight
     /// The keyboard's position in a bar or pop-over (a ring, no focus move).
     var isKeyboardFocused = false
     /// Said by VoiceOver while the control is dimmed.
@@ -43,13 +45,12 @@ struct AtticFormatToggle<Face: View>: View {
     @State private var hovered = false
 
     var body: some View {
-        let height = AtticControlSize.smallHeight
         let radius = AtticRadius.control(height: height)
-        let shape = RoundedRectangle(cornerRadius: radius, style: .continuous)
         Button(action: action) {
             AtticFormatToggleFace(value: value, hovered: hovered, radius: radius, face: face)
                 .frame(width: width, height: height)
-                .contentShape(shape)
+                // The format row's 24 pt cells still answer a 28 pt target.
+                .contentShape(Rectangle().inset(by: -AtticControlSize.hitOutset(for: min(width, height))))
         }
         .buttonStyle(AtticFormatPressStyle())
         .focusEffectDisabled()
@@ -67,9 +68,10 @@ struct AtticFormatToggle<Face: View>: View {
 extension AtticFormatToggle where Face == AtticIcon {
     /// A glyph toggle (B, I, a list).
     init(systemName: String, value: Value, label: String, help: String? = nil,
-         width: CGFloat = AtticNoteFormatMetrics.barToggleWidth, isKeyboardFocused: Bool = false,
+         width: CGFloat = AtticNoteFormatMetrics.barToggleWidth, height: CGFloat = AtticControlSize.smallHeight,
+         isKeyboardFocused: Bool = false,
          disabledReason: String? = nil, announcesState: Bool = true, action: @escaping () -> Void) {
-        self.init(value: value, label: label, help: help, width: width, isKeyboardFocused: isKeyboardFocused,
+        self.init(value: value, label: label, help: help, width: width, height: height, isKeyboardFocused: isKeyboardFocused,
                   disabledReason: disabledReason, announcesState: announcesState, action: action) { ink in
             AtticIcon(systemName: systemName, size: AtticSmallControlMetrics.iconSize, weight: .regular, ink: ink)
         }
@@ -161,13 +163,13 @@ struct AtticFormatStyleFace: View {
     let title: String
     var isKeyboardFocused = false
     var isEnabled = true
+    var height: CGFloat = AtticControlSize.smallHeight
 
     @Environment(\.atticDesign) private var design
     @State private var hovered = false
 
     var body: some View {
         let m = AtticNoteFormatMetrics.self
-        let height = AtticControlSize.smallHeight
         let radius = AtticRadius.control(height: height)
         HStack(spacing: 4) {
             AtticText(verbatim: title, style: .controlLabel, ink: isEnabled ? .heading : .disabledText)
@@ -246,7 +248,8 @@ struct AtticFormatRowSurface<Content: View>: View, Animatable {
                 row.atticRaisedMaterial(cornerRadius: radius, interactive: false)
             }
         }
-        .atticControlProbe("Format row", id: probeID, expectedSize: nil, radius: radius, expectedRadius: 15)
+        .atticControlProbe("Format row", id: probeID, expectedSize: nil, radius: radius,
+                              expectedRadius: AtticRadius.control(height: AtticControlSize.panelButton.height))
     }
 }
 

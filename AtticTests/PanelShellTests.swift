@@ -98,11 +98,13 @@ final class PanelShellTests: XCTestCase {
     /// Phase 0's symmetrical top: the pin and the page button are equal
     /// 36 pt squares; the page button opens leftward to 96, the region the
     /// header's hit testing keeps for it.
-    func testHeaderIsTwoEqualSquaresAndThePageButtonOpensTo96() {
-        XCTAssertEqual(PanelHeaderLayout.height, 36)
-        XCTAssertEqual(PanelHeaderLayout.pinSize, CGSize(width: 36, height: 36))
+    /// Chrome B (Notes v2, owner 2026-10-08): 32 pt squares, the page
+    /// button opening to 84 (three 24 pt chips 2 apart in a 4 pt inset).
+    func testHeaderIsTwoEqualSquaresAndThePageButtonOpensTo84() {
+        XCTAssertEqual(PanelHeaderLayout.height, 32)
+        XCTAssertEqual(PanelHeaderLayout.pinSize, CGSize(width: 32, height: 32))
         XCTAssertEqual(AtticPageButton<PanelPage>.width(open: false, count: PanelPage.allCases.count), PanelHeaderLayout.pinSize.width)
-        XCTAssertEqual(PanelHeaderLayout.pageSwitchWidth, 96)
+        XCTAssertEqual(PanelHeaderLayout.pageSwitchWidth, 84)
     }
 
     func testPageLayoutUsesTheCornerAwareInsetsAndPlacesTheHeaderBand() {
@@ -111,13 +113,13 @@ final class PanelShellTests: XCTestCase {
             let layout = PanelPageLayout(cornerSize: corner, panelSize: size)
             XCTAssertEqual(layout.contentInsets, PanelGeometry.contentInsets(cornerSize: corner, panelSize: size))
             XCTAssertEqual(layout.chromeInsets, PanelGeometry.chromeInsets(cornerSize: corner, panelSize: size))
-            XCTAssertEqual(layout.headerBottom, layout.chromeInsets.top + 36)
+            XCTAssertEqual(layout.headerBottom, layout.chromeInsets.top + 32)
         }
-        // Phase 0's room: the controls sit 24 from every edge at the default
-        // corner (the header 24–60), and move inward with larger corners.
-        XCTAssertEqual(PanelPageLayout(cornerSize: 52, panelSize: size).chromeInsets.top, 24)
-        XCTAssertEqual(PanelPageLayout(cornerSize: 52, panelSize: size).headerBottom, 60)
-        XCTAssertGreaterThan(PanelPageLayout(cornerSize: 140, panelSize: size).chromeInsets.top, 24)
+        // Chrome B: the controls sit 16 from every edge at the default
+        // corner (the header 16–48), and move inward with larger corners.
+        XCTAssertEqual(PanelPageLayout(cornerSize: 52, panelSize: size).chromeInsets.top, 16)
+        XCTAssertEqual(PanelPageLayout(cornerSize: 52, panelSize: size).headerBottom, 48)
+        XCTAssertGreaterThan(PanelPageLayout(cornerSize: 140, panelSize: size).chromeInsets.top, 16)
     }
 
     // MARK: Key window

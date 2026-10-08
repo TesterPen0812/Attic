@@ -136,7 +136,7 @@ final class NoteEditorEngine: NSObject, NSTextViewDelegate, NSTextStorageDelegat
     /// Only that request's completion may commit or cancel it.
     private(set) var pendingSlashFile: NoteSlashFileRequest?
     private var slashFileGeneration: UInt64 = 0
-    private var pendingParagraphStyle: (location: Int, state: NoteUndoHistory.ParagraphState)?
+    private(set) var pendingParagraphStyle: (location: Int, state: NoteUndoHistory.ParagraphState)?
 
     fileprivate func notifyTagsChanged() {
         onTagsChange?()
@@ -236,6 +236,9 @@ final class NoteEditorEngine: NSObject, NSTextViewDelegate, NSTextStorageDelegat
         textStorage = contentStorage.textStorage ?? NSTextStorage()
         history = NoteUndoHistory(storage: textStorage)
         super.init()
+        // Lists are shown at their own indent, their markers drawn by the
+        // editor (`textContentStorage(_:textParagraphWith:)`).
+        contentStorage.delegate = self
         renderer.faceProvider = { [weak self] object in self?.objectFace(for: object) }
         renderer.columnWidth = { [weak self] in self?.objectColumnWidth ?? 300 }
         textStorage.setAttributedString(NoteTextCodec.attributedString(from: document, style: style))
@@ -358,6 +361,8 @@ final class NoteEditorEngine: NSObject, NSTextViewDelegate, NSTextStorageDelegat
     func makeView() -> (NSScrollView, NoteEditorTextView) {
         detachView()
         let layoutManager = NSTextLayoutManager()
+        // The Mono block, list markers and quote bars (`NoteBlockLayoutFragment`).
+        layoutManager.delegate = self
         let container = NSTextContainer(size: NSSize(width: 320, height: CGFloat.greatestFiniteMagnitude))
         container.widthTracksTextView = true
         container.lineFragmentPadding = 0
@@ -531,9 +536,12 @@ final class NoteEditorEngine: NSObject, NSTextViewDelegate, NSTextStorageDelegat
                 let metadata = textStorage.attributes(at: position, effectiveRange: nil)
                 let name = metadata[.noteBlockStyle] as? String
                 let depth = metadata[.noteBlockIndent] as? Int ?? 0
-                var base = style.paragraphAttributes(style: name,
-                                                     level: metadata[.noteBlockLevel] as? Int,
-                                                     indent: metadata[.noteBlockIndent] as? Int)
+                let blockObject = isBlockObject(at: paragraph.location)
+                var base = style.paragraphAttributes(
+                    style: name, level: metadata[.noteBlockLevel] as? Int, indent: metadata[.noteBlockIndent] as? Int,
+                    previous: paragraph.location <= titleEnd ? .title : paragraphKind(at: paragraph.location - 1),
+                    isChecklist: checklistBox(inParagraphAt: paragraph.location) != nil, isBlockObject: blockObject,
+                    monoHang: name == "mono" ? style.monoHang(for: string.substring(with: paragraph)) : 0)
                 if let name, ["bullet", "number"].contains(name) {
                     let marker: NSTextList.MarkerFormat = name == "number" ? .decimal : .disc
                     var lists: [NSTextList] = []
@@ -553,6 +561,8 @@ final class NoteEditorEngine: NSObject, NSTextViewDelegate, NSTextStorageDelegat
                 }
                 textStorage.addAttributes(base, range: actual)
                 restyleMarks(in: actual, base: base)
+                // No spelling or grammar marks inside code (Mono, Codex's change).
+                if name == "mono" { textView?.setSpellingState(0, range: actual) }
                 position = NSMaxRange(paragraph)
                 if position <= actual.location { break }
             }
@@ -573,6 +583,7 @@ final class NoteEditorEngine: NSObject, NSTextViewDelegate, NSTextStorageDelegat
         let font = base[.font] as? NSFont ?? style.bodyFont
         for (marks, markRange) in runs {
             textStorage.addAttributes(style.markedAttributes(marks: marks, baseFont: font), range: markRange)
+            if marks[.code] != nil { textView?.setSpellingState(0, range: markRange) }
         }
     }
 
@@ -756,6 +767,19 @@ final class NoteEditorEngine: NSObject, NSTextViewDelegate, NSTextStorageDelegat
 
     func isBlockObject(at location: Int) -> Bool { object(at: location)?.isBlockObject ?? false }
 
+    /// What the paragraph at `location` is, for spacing and drawing.
+    func paragraphKind(at location: Int) -> NoteParagraphKind {
+        let line = paragraphRange(at: location)
+        if line.location == 0 { return .title }
+        if let pending = pendingParagraphStyle, pending.location == line.location {
+            return NoteParagraphKind.of(style: pending.state.style.storageName, level: pending.state.style.level)
+        }
+        guard line.location < textStorage.length else { return .body }
+        if isBlockObject(at: line.location) { return .blockObject }
+        let attributes = textStorage.attributes(at: line.location, effectiveRange: nil)
+        return NoteParagraphKind.of(style: attributes[.noteBlockStyle] as? String, level: attributes[.noteBlockLevel] as? Int)
+    }
+
     func paragraphRange(at location: Int) -> NSRange {
         let string = textStorage.string as NSString
         return string.paragraphRange(for: NSRange(location: min(max(0, location), string.length), length: 0))
@@ -793,8 +817,11 @@ final class NoteEditorEngine: NSObject, NSTextViewDelegate, NSTextStorageDelegat
 
     func attributes(forParagraphAt location: Int) -> [NSAttributedString.Key: Any] {
         let paragraph = paragraphRange(at: location)
+        let previous: NoteParagraphKind? = paragraph.location == 0 ? nil
+            : (paragraph.location <= titleParagraphRange.length ? .title : paragraphKind(at: paragraph.location - 1))
         if let pending = pendingParagraphStyle, pending.location == paragraph.location {
-            var attributes = style.paragraphAttributes(style: pending.state.style.storageName, level: pending.state.style.level, indent: pending.state.indent)
+            var attributes = style.paragraphAttributes(style: pending.state.style.storageName, level: pending.state.style.level,
+                                                       indent: pending.state.indent, previous: previous)
             attributes[.noteBlockStyle] = pending.state.style.storageName
             attributes[.noteBlockLevel] = pending.state.style.level
             if pending.state.indent > 0 { attributes[.noteBlockIndent] = pending.state.indent }
@@ -807,11 +834,16 @@ final class NoteEditorEngine: NSObject, NSTextViewDelegate, NSTextStorageDelegat
             return attributes
         }
         guard paragraph.location > 0 else { return style.titleAttributes }
-        guard paragraph.location < textStorage.length else { return style.bodyAttributes }
+        guard paragraph.location < textStorage.length else {
+            return style.paragraphAttributes(style: nil, level: nil, indent: nil, previous: previous)
+        }
         let attributes = textStorage.attributes(at: paragraph.location, effectiveRange: nil)
-        var result = style.paragraphAttributes(style: attributes[.noteBlockStyle] as? String,
+        let name = attributes[.noteBlockStyle] as? String
+        var result = style.paragraphAttributes(style: name,
                                               level: attributes[.noteBlockLevel] as? Int,
-                                              indent: attributes[.noteBlockIndent] as? Int)
+                                              indent: attributes[.noteBlockIndent] as? Int, previous: previous,
+                                              isChecklist: checklistBox(inParagraphAt: paragraph.location) != nil,
+                                              monoHang: name == "mono" ? style.monoHang(for: lineText(at: paragraph.location)) : 0)
         for key in [NSAttributedString.Key.noteBlockStyle, .noteBlockLevel, .noteBlockIndent] {
             result[key] = attributes[key]
         }
@@ -1614,9 +1646,25 @@ final class NoteEditorEngine: NSObject, NSTextViewDelegate, NSTextStorageDelegat
             history.captureUnrecorded(newRange: editedRange, delta: delta, emptyParagraphBefore: emptyBefore)
         }
         let start = DispatchTime.now().uptimeNanoseconds
-        restyle(paragraphs(around: editedRange))
+        let around = paragraphs(around: editedRange)
+        restyle(around)
+        if editedMask.contains(.editedCharacters), needsRenumbering(around) {
+            // Numbers further down the list change: their fragments are
+            // made again once this edit has been processed.
+            DispatchQueue.main.async { [weak self] in self?.renumberList(after: around) }
+        }
         renderObjects(in: NSIntersectionRange(editedRange, NSRange(location: 0, length: textStorage.length)))
         lastUpkeepMilliseconds = Double(DispatchTime.now().uptimeNanoseconds - start) / 1_000_000
+    }
+
+    /// Whether an edit touched a numbered list (or the line right after one).
+    private func needsRenumbering(_ range: NSRange) -> Bool {
+        var found = false
+        textStorage.enumerateAttribute(.noteBlockStyle, in: NSIntersectionRange(range, NSRange(location: 0, length: textStorage.length))) { value, _, stop in
+            if value as? String == "number" { found = true; stop.pointee = true }
+        }
+        return found || (NSMaxRange(range) < textStorage.length
+            && textStorage.attribute(.noteBlockStyle, at: NSMaxRange(range), effectiveRange: nil) as? String == "number")
     }
 
     private func didReplay(_ range: NSRange) {
@@ -3186,7 +3234,7 @@ extension NoteEditorEngine {
         return result
     }
 
-    private func numberedOrdinal(at location: Int, indent: Int) -> Int {
+    func numberedOrdinal(at location: Int, indent: Int) -> Int {
         var ordinal = 1
         var start = location
         while start > titleParagraphRange.length + 1 {

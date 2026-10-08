@@ -89,7 +89,7 @@ struct AtticPanelView: View {
         ProcessInfo.processInfo.environment["ATTIC_UI_TESTING"] == "1"
 
     var body: some View {
-        themedPanel
+        PanelRootLayout { themedPanel }
     }
 
     // MARK: Composition
@@ -551,5 +551,44 @@ extension AppearancePreference {
         case .light: .light
         case .dark: .dark
         }
+    }
+}
+
+/// The panel's root always takes exactly the room its window gives it, from
+/// its top-leading corner, whatever its content asks for.
+///
+/// A flexible frame reports the larger of its content's size and the
+/// proposal, and `NSHostingView` centres a root that is larger than its
+/// bounds. So a single over-wide child (a bottom row whose status pill no
+/// longer fit beside the buttons, a window frame that changed while
+/// SwiftUI still laid out for the old one) used to push the whole panel
+/// past its window on both sides, cutting the corner buttons off at the
+/// left and right edges (owner, 2026-10-08). Here the content is proposed
+/// the window's size and placed at its origin, every pass, including every
+/// frame of a size change.
+struct PanelRootLayout: Layout {
+    #if DEBUG
+    /// The size the root was last placed at (hosted tests compare it with
+    /// the window's visible frame).
+    @MainActor static var lastPlacedSize: CGSize?
+    #endif
+
+    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
+        // Asked for an ideal size (no proposal), report the content's, so
+        // nothing that measures the hosting view changes; given a size, take
+        // exactly that.
+        if let width = proposal.width, let height = proposal.height { return CGSize(width: width, height: height) }
+        let ideal = subviews.first?.sizeThatFits(.unspecified) ?? .zero
+        return CGSize(width: proposal.width ?? ideal.width, height: proposal.height ?? ideal.height)
+    }
+
+    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
+        for subview in subviews {
+            subview.place(at: bounds.origin, anchor: .topLeading, proposal: ProposedViewSize(bounds.size))
+        }
+        #if DEBUG
+        let size = bounds.size
+        MainActor.assumeIsolated { Self.lastPlacedSize = size }
+        #endif
     }
 }

@@ -15,9 +15,19 @@ enum NoteTextCodec {
         let result = NSMutableAttributedString()
         var listStack: [NSTextList] = []
         var previousListKind: String?
+        // The kind of the block above (for the space between them); a
+        // fragment's first block follows body text.
+        var previousKind: NoteParagraphKind? = firstBlockIsTitle ? nil : .body
         for (index, block) in document.blocks.enumerated() {
             let isTitle = firstBlockIsTitle && index == 0
-            var attributes = isTitle ? style.titleAttributes : style.paragraphAttributes(style: block.style, level: block.level, indent: block.indent)
+            let isBlockObject = [.image, .file, .divider, .opaque].contains(block.kind)
+            let kind: NoteParagraphKind = isTitle ? .title
+                : (isBlockObject ? .blockObject : NoteParagraphKind.of(style: block.kind == .text ? block.style : nil, level: block.level))
+            var attributes = isTitle ? style.titleAttributes : style.paragraphAttributes(
+                style: block.kind == .text ? block.style : nil, level: block.level, indent: block.indent,
+                previous: previousKind, isChecklist: block.kind == .checklist, isBlockObject: isBlockObject,
+                monoHang: kind == .mono ? style.monoHang(for: block.text) : 0)
+            previousKind = kind
             if !isTitle, block.kind == .text, let kind = block.style, ["bullet", "number"].contains(kind) {
                 let depth = block.indent ?? 0
                 let marker: NSTextList.MarkerFormat = kind == "number" ? .decimal : .disc

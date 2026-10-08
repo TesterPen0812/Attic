@@ -86,12 +86,13 @@ enum AtticRadius {
 /// Control sizes (spec § Raised controls). Controls are slightly wider than
 /// tall (about 1.15 : 1).
 enum AtticControlSize {
-    /// The panel's raised buttons (pin, All notes, New note): the header's
-    /// 36 pt square, radius 15 by the 42 % rule.
+    /// The panel's raised buttons (pin, All notes, New note, Aa): the
+    /// header's square, radius 13.5 by the 42 % rule.
     static let panelButton = CGSize(width: headerControl, height: headerControl)
-    /// The header's controls (Phase 0's qualities, 2026-09-26): the pin and
-    /// the page button are equal 36 pt squares, radius 15 by the 42 % rule.
-    static let headerControl: CGFloat = 36
+    /// Chrome B (Notes v2, owner 2026-10-08): every corner control in Notes
+    /// and Tasks is 32 pt (it was 36), 16 pt from the panel's edges
+    /// (`AtticStyle.chromeMinimumInset`), the page switch's capsule height.
+    static let headerControl: CGFloat = 32
     static let settingsBackButton = CGSize(width: 38, height: 34)
     /// The page switch: 32 tall (visual A), chips 24 inside a 4 pt inset.
     static let capsuleHeight: CGFloat = 32
@@ -99,15 +100,17 @@ enum AtticControlSize {
     static let chipHeight: CGFloat = capsuleHeight - 2 * capsuleInset
     /// An icon-only chip, 24 tall and 1.15 × as wide (28).
     static let chipIconWidth: CGFloat = (chipHeight * 1.15).rounded()
-    static let addBarHeight: CGFloat = 36
-    /// The send button: 28 × 28, radius 11, **inside** the add bar.
+    /// The add bar matches the corner controls (chrome B: 32, was 36).
+    static let addBarHeight: CGFloat = headerControl
+    /// The send button: 24 × 24 (chrome B; 28 × 28 in the 36 pt bar),
+    /// nested **inside** the add bar.
     ///
     /// The spec's Raised controls table says "send 36 × 36"; that size came
     /// from mockups where the button sat beside the bar. The owner's polish
     /// rule outranks it: "the send button lives inside the add bar and
     /// appears only when there is text". Inside the 36 pt bar it is nested
     /// `sendInset` (4 pt) from the top, bottom and trailing edges, so it is
-    /// 36 − 2 × 4 = 28 pt square, with the nested radius 15 − 4 = 11
+    /// 32 − 2 × 4 = 24 pt square (chrome B), with the nested radius 13.5 − 4 = 9.5
     /// (corner rule 3: nesting for gaps of 6 pt or less). Kept at 28 × 28
     /// by the owner on 2026-09-24; a test holds the arithmetic.
     static let sendButton = CGSize(width: addBarHeight - 2 * sendInset, height: addBarHeight - 2 * sendInset)
@@ -118,6 +121,9 @@ enum AtticControlSize {
     static let tagHeight: CGFloat = 18
     /// Minimum hit target for any control (glyphs can be smaller).
     static let minimumHitTarget: CGFloat = 28
+    /// How far a control smaller than the minimum target reaches past its
+    /// drawn edge on each side, so it still answers a 28 pt target.
+    static func hitOutset(for side: CGFloat) -> CGFloat { max(0, (minimumHitTarget - side) / 2) }
     /// 16 pt (Phase 0's confident circles; the hit area stays 28).
     static let statusCircle: CGFloat = 16
     static let subtaskCheckbox: CGFloat = 14
@@ -156,6 +162,10 @@ enum AtticLayout {
     /// from the panel's edges; dates 28 from the right.
     static let circleX: CGFloat = 16
     static let textX: CGFloat = 44
+    /// The content line (the Tasks circles, the note's text column) sits
+    /// 12 inside the corner controls' line: 28 from the panel's edge at the
+    /// chrome's 16 pt inset (chrome B, Notes v2), moving inward with it.
+    static let contentFromChrome: CGFloat = 12
     /// Settings' sidebar keeps its own highlight inset.
     static let sidebarHighlightInset: CGFloat = 8
     static let subtaskPitch: CGFloat = 28
@@ -253,23 +263,23 @@ enum AtticTextStyle: String, CaseIterable, Sendable {
         }
     }
 
-    /// Note text is SF Pro Rounded too (owner decision 4, Phase 2): the
-    /// Tasks list's voice for the page of text.
+    /// Note text is SF Pro (Notes v2, text direction 5, owner 2026-10-08;
+    /// it was SF Pro Rounded). Tasks keeps its own Rounded voice.
     var isNoteText: Bool { self == .noteTitle || self == .noteBody }
 
     var spec: Spec {
         let base = baseSpec
         return Spec(size: base.size, weight: base.weight, italic: base.italic, monospacedDigits: base.monospacedDigits,
-                    rounded: isListText || isNoteText)
+                    rounded: isListText)
     }
 
     private var baseSpec: Spec {
         switch self {
-        case .noteTitle: Spec(size: 17, weight: .bold, italic: false, monospacedDigits: false)
+        case .noteTitle: Spec(size: AtticNoteType.title.size, weight: .bold, italic: false, monospacedDigits: false)
         case .panelHeading: Spec(size: 13, weight: .semibold, italic: false, monospacedDigits: false)
         case .body, .rowTitle, .listBody, .menuRow, .toast, .sidebarRow: Spec(size: 13, weight: .regular, italic: false, monospacedDigits: false)
         case .rowTitleActive: Spec(size: 13, weight: .medium, italic: false, monospacedDigits: false)
-        case .noteBody: Spec(size: 14, weight: .regular, italic: false, monospacedDigits: false)
+        case .noteBody: Spec(size: AtticNoteType.body.size, weight: .regular, italic: false, monospacedDigits: false)
         case .dropdownRow: Spec(size: 13, weight: .regular, italic: false, monospacedDigits: false)
         case .dropdownHeading: Spec(size: 13, weight: .semibold, italic: false, monospacedDigits: false)
         case .dropdownDay: Spec(size: 12.5, weight: .regular, italic: false, monospacedDigits: true)

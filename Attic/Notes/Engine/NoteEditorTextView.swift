@@ -26,6 +26,88 @@ final class NoteEditorTextView: NSTextView, NSAccessibilityCustomRotorItemSearch
 
     func installHeadingsRotor() { setAccessibilityCustomRotors([headingsRotor]) }
 
+    // MARK: Code stays out of spell checking
+
+    /// Only the prose around code is checked: Mono lines and inline code are
+    /// never sent (Codex's change, kept), and their marks are cleared as
+    /// they are styled.
+    override func checkText(in range: NSRange, types checkingTypes: NSTextCheckingTypes,
+                            options: [NSSpellChecker.OptionKey: Any] = [:]) {
+        guard let engine else { return super.checkText(in: range, types: checkingTypes, options: options) }
+        let clamped = NSIntersectionRange(range, NSRange(location: 0, length: engine.textStorage.length))
+        var prose: [NSRange] = []
+        engine.textStorage.enumerateAttributes(in: clamped) { attributes, part, _ in
+            guard attributes[.noteBlockStyle] as? String != "mono", attributes[.noteMark(.code)] == nil else { return }
+            if let last = prose.last, NSMaxRange(last) == part.location {
+                prose[prose.count - 1] = NSUnionRange(last, part)
+            } else { prose.append(part) }
+        }
+        for part in prose { super.checkText(in: part, types: checkingTypes, options: options) }
+    }
+
+    // MARK: Copy on a Mono block
+
+    /// The Mono block's Copy, shown while the pointer is over a block.
+    private(set) lazy var monoCopyButton: NoteMonoCopyButton = {
+        let button = NoteMonoCopyButton(frame: .zero)
+        button.isHidden = true
+        button.onCopy = { [weak self] in self?.copyHoveredMonoBlock() }
+        addSubview(button)
+        return button
+    }()
+    /// A location inside the block the Copy belongs to.
+    private(set) var monoCopyLocation: Int?
+    private var hoverArea: NSTrackingArea?
+
+    override func updateTrackingAreas() {
+        super.updateTrackingAreas()
+        if let hoverArea { removeTrackingArea(hoverArea) }
+        let area = NSTrackingArea(rect: .zero, options: [.mouseMoved, .mouseEnteredAndExited, .activeAlways, .inVisibleRect],
+                                  owner: self, userInfo: nil)
+        addTrackingArea(area)
+        hoverArea = area
+    }
+
+    override func mouseMoved(with event: NSEvent) {
+        super.mouseMoved(with: event)
+        updateMonoCopy(at: convert(event.locationInWindow, from: nil))
+    }
+
+    override func mouseExited(with event: NSEvent) {
+        super.mouseExited(with: event)
+        updateMonoCopy(at: nil)
+    }
+
+    /// Shows Copy on the block under `point` (hides it elsewhere).
+    func updateMonoCopy(at point: NSPoint?) {
+        guard let engine, let point, let block = engine.monoBlock(at: point) else {
+            if monoCopyLocation != nil || !monoCopyButton.isHidden {
+                monoCopyLocation = nil
+                monoCopyButton.isHidden = true
+            }
+            return
+        }
+        let style = engine.style
+        let tokens = style.tokens
+        monoCopyButton.fill = tokens.controlFace.nsColor
+        monoCopyButton.hoverFill = tokens.chipHover.over(tokens.controlFace).nsColor
+        monoCopyButton.ink = style.secondaryColor
+        let width = monoCopyButton.fittingWidth
+        let inset = AtticNoteType.monoCopyInset
+        let frame = NSRect(x: block.rect.maxX - inset - width, y: block.rect.minY + inset,
+                           width: width, height: NoteMonoCopyButton.height)
+        if monoCopyButton.frame != frame { monoCopyButton.frame = frame }
+        monoCopyLocation = block.location
+        monoCopyButton.isHidden = false
+    }
+
+    private func copyHoveredMonoBlock() {
+        guard let engine, let location = monoCopyLocation, let text = engine.monoBlockText(at: location) else { return }
+        let pasteboard = NSPasteboard.general
+        pasteboard.clearContents()
+        pasteboard.setString(text, forType: .string)
+    }
+
     func rotor(_ rotor: NSAccessibilityCustomRotor,
                resultFor parameters: NSAccessibilityCustomRotor.SearchParameters) -> NSAccessibilityCustomRotor.ItemResult? {
         guard let engine else { return nil }

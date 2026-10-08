@@ -280,7 +280,9 @@ struct AtticPageButton<Page: Hashable>: View {
                                   ink: isSelected ? (accent == nil ? .glyph : .accent) : .icon)
                     }
                     .frame(width: M.segment, height: M.segment)
-                    .contentShape(Rectangle())
+                    // 24 pt chips (chrome B) still answer a 28 pt target,
+                    // reaching into the gap and the capsule's inset.
+                    .contentShape(Rectangle().inset(by: -AtticControlSize.hitOutset(for: M.segment)))
                 }
                 .buttonStyle(.plain)
                 .focusable(false)
@@ -625,7 +627,8 @@ struct AtticAddBar: View {
         .atticFocusRing(state == .focused, cornerRadius: radius)
         .onHover { hovered = $0 }
         .animation(AtticMotionPreset.popover.animation(reduceMotion: design.reduceMotion, showing: hasText), value: hasText)
-        .atticControlProbe("Add bar", id: probeID, expectedSize: nil, radius: radius, expectedRadius: 15)
+        .atticControlProbe("Add bar", id: probeID, expectedSize: nil, radius: radius,
+                           expectedRadius: AtticRadius.control(height: AtticControlSize.addBarHeight))
     }
 
     @ViewBuilder

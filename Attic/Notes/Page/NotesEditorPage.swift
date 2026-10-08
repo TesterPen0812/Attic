@@ -311,7 +311,10 @@ struct NotesEditorPage: View {
                 .accessibilitySortPriority(1)
                 Spacer(minLength: AtticSpacing.s12)
                 if !controller.isLibraryPresented, let session = controller.active {
-                    NoteStatusSlot(controller: controller, store: noteStore, session: session, damaged: damagedRecovery)
+                    NoteStatusSlot(controller: controller, store: noteStore, session: session, damaged: damagedRecovery,
+                                   maxWidth: AtticNoteMetrics.pillMaxWidth(
+                                       panelWidth: layout.panelSize.width, chromeInset: layout.chromeInsets.leading,
+                                       showsFormat: showsEditor && controller.active?.isReadOnly == false))
                         .noteFormatRowLeaving(.status)
                         .accessibilitySortPriority(2)
                         .transition(.opacity)
@@ -320,7 +323,7 @@ struct NotesEditorPage: View {
                 if showsEditor, controller.active?.isReadOnly == false {
                     formatButton
                         .modifier(NotesKeyboardStop(stop: .format, enabled: bottomStops, focus: $bottomFocus))
-                        .padding(.trailing, AtticSpacing.s8)
+                        .padding(.trailing, AtticNoteMetrics.formatButtonGap)
                         .transition(.opacity)
                 }
                 AtticRaisedButton(systemName: "square.and.pencil", label: "New note", help: String(localized: "New note (⌘N)")) {
@@ -746,6 +749,8 @@ private struct NoteStatusSlot: View {
     @ObservedObject var store: NoteStore
     @ObservedObject var session: NoteSession
     @ObservedObject var damaged: NoteDamagedRecoveryExit
+    /// The room between the bottom row's buttons.
+    let maxWidth: CGFloat
     @State private var showingDetails = false
     @State private var showingProposal = false
     @Environment(\.atticDesign) private var design
@@ -769,7 +774,7 @@ private struct NoteStatusSlot: View {
             if let primary = items.first {
                 AtticStatusPill(item: primary, more: items.count - 1,
                                 inlineAction: items.count == 1 ? inlineAction(for: primary) : nil,
-                                onCancel: items.count == 1 ? cancel(for: primary) : nil) {
+                                onCancel: items.count == 1 ? cancel(for: primary) : nil, maxWidth: maxWidth) {
                     showingDetails = true
                 }
                 .id(key)

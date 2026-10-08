@@ -37,11 +37,12 @@ final class AtticDesignSystemTests: XCTestCase {
     /// highlights 2 shorter, text blocks centred; circles 16 at 28, titles
     /// at 56 (12 apart).
     func testControlSizesFollowPhase0Room() {
-        XCTAssertEqual(AtticControlSize.panelButton, CGSize(width: 36, height: 36))
-        XCTAssertEqual(AtticRadius.control(height: AtticControlSize.headerControl), 15)
+        // Chrome B (Notes v2, owner 2026-10-08): 32 pt, radius 13.5.
+        XCTAssertEqual(AtticControlSize.panelButton, CGSize(width: 32, height: 32))
+        XCTAssertEqual(AtticRadius.control(height: AtticControlSize.headerControl), 13.5)
         XCTAssertEqual(AtticControlSize.settingsBackButton, CGSize(width: 38, height: 34))
-        XCTAssertEqual(AtticPageButton<Int>.width(open: false, count: 3), 36)
-        XCTAssertEqual(AtticPageButton<Int>.width(open: true, count: 3), 96)
+        XCTAssertEqual(AtticPageButton<Int>.width(open: false, count: 3), 32)
+        XCTAssertEqual(AtticPageButton<Int>.width(open: true, count: 3), 84)
         // Compact round (owner): rows 36 / 50, highlights 30 / 44.
         XCTAssertEqual([AtticLayout.rowPitch, AtticLayout.rowHighlightHeight, AtticLayout.detailRowPitch, AtticLayout.detailRowHighlightHeight], [34, 30, 48, 44])
         XCTAssertEqual(AtticTaskRowMetrics.pitchTopInset, 2)
@@ -447,9 +448,9 @@ final class AtticDesignSystemTests: XCTestCase {
 
     func testSendButtonNestsInsideTheAddBar() {
         let send = AtticControlSize.sendButton
-        XCTAssertEqual(send, CGSize(width: 28, height: 28), "Owner's decision: 28 × 28 inside the bar")
+        XCTAssertEqual(send, CGSize(width: 24, height: 24), "Chrome B: 32 − 2 × 4 inside the bar")
         XCTAssertEqual(send.height, AtticControlSize.addBarHeight - 2 * AtticControlSize.sendInset)
-        XCTAssertEqual(AtticRadius.nested(outer: AtticRadius.control(height: AtticControlSize.addBarHeight), gap: AtticControlSize.sendInset), 11)
+        XCTAssertEqual(AtticRadius.nested(outer: AtticRadius.control(height: AtticControlSize.addBarHeight), gap: AtticControlSize.sendInset), 9.5)
     }
 
     /// Astra 19: one definition of what a row can do. VoiceOver offers

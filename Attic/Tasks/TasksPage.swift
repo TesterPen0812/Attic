@@ -1283,8 +1283,11 @@ struct TasksPage: View {
         .padding(.horizontal, cornerInset)
     }
 
-    /// How far the controls sit inside their 12 pt line at this corner size.
-    private var cornerInset: CGFloat { max(0, layout.chromeInsets.leading - AtticSpacing.panelMargin) }
+    /// The page's edge: the circles (16 in the page) sit on the content
+    /// line, 12 inside the controls' line at this corner size.
+    private var cornerInset: CGFloat {
+        max(0, layout.chromeInsets.leading + AtticLayout.contentFromChrome - AtticLayout.circleX)
+    }
 
     private func listSpace(_ tab: TasksTab) -> NamedCoordinateSpace {
         .named("AtticTasksList\(tab.rawValue)")
