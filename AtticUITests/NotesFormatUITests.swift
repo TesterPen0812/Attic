@@ -157,7 +157,11 @@ final class NotesFormatUITests: XCTestCase {
         pill.click()
         let heading = element("notes-format-row-notes-format-heading2")
         require(heading, "the style list")
-        heading.click()
+        // E1 exposes menu-item semantics, but is a custom dropdown, not an
+        // NSMenu. XCUIElement.click() otherwise attempts native menu traversal
+        // and waits for a menu-open notification that this view never sends.
+        XCTAssertTrue(heading.isHittable, "Heading has a real hit point")
+        heading.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).click()
         waitFor((element("notes-format-row-style").value as? String) == "Heading", "Heading is current")
         app.typeKey(.escape, modifierFlags: [])
         waitFor(!element("notes-format-row").exists, "Esc closes the format row")
