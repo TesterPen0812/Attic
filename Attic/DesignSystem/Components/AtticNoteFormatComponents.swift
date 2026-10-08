@@ -254,8 +254,8 @@ struct AtticFormatRowSurface<Content: View>: View, Animatable {
 /// draft 1): the button's frame and the row's width in the row's own space,
 /// and how far each edge has travelled (0 the button's edge, 1 the row's; a
 /// spring may pass either end a little). The edges move on their own
-/// clocks, so the glass can answer the click at once on the open side
-/// while the other side waits for a neighbour to clear (A29 round 4).
+/// channels; Aa's opening and closing now animate them together so the
+/// glass grows and returns as one shape.
 struct AtticFormatRowGrowth: Equatable {
     var source: CGRect
     var rowWidth: CGFloat
