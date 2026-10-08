@@ -133,25 +133,34 @@ enum NoteAgentTableText {
         return merged
     }
 
-    /// New index → old index: equal keys in order first, then what is left
-    /// by position when both sides have the same number of entries.
+    /// New index → old index: equal keys in order first; then, between two
+    /// kept neighbours, the changed entries pair up in order (an edited row
+    /// keeps its id); the rest are new.
     static func match(old: [String], new: [String]) -> [Int?] {
         var result = [Int?](repeating: nil, count: new.count)
         var cursor = 0
-        var taken = Set<Int>()
         for (index, key) in new.enumerated() {
-            if let found = old[cursor...].firstIndex(of: key) {
+            if cursor < old.count, let found = old[cursor...].firstIndex(of: key) {
                 result[index] = found
-                taken.insert(found)
                 cursor = found + 1
             }
         }
-        if old.count == new.count {
-            for index in new.indices where result[index] == nil && !taken.contains(index) {
-                result[index] = index
-                taken.insert(index)
+        // The gaps between anchors (and before the first, after the last).
+        var newStart = 0, oldStart = 0
+        func pairGap(newEnd: Int, oldEnd: Int) {
+            var oldIndex = oldStart
+            for newIndex in newStart..<newEnd where oldIndex < oldEnd {
+                result[newIndex] = oldIndex
+                oldIndex += 1
             }
         }
+        for (index, value) in result.enumerated() {
+            guard let value else { continue }
+            pairGap(newEnd: index, oldEnd: value)
+            newStart = index + 1
+            oldStart = value + 1
+        }
+        pairGap(newEnd: new.count, oldEnd: old.count)
         return result
     }
 

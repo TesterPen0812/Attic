@@ -154,28 +154,62 @@ enum NoteTableText {
     }
 
     /// Tab-separated rows: at least 2 columns, and most lines with the same
-    /// number of tabs (a stray tab in prose is not a table).
+    /// number of cells (a stray tab in prose is not a table). A cell that
+    /// starts with a quote is quoted, as spreadsheets write a cell holding a
+    /// tab, a line break or a quote ("" for a quote inside).
     static func parseTSV(_ text: String) -> [[String]]? {
-        var lines = text.replacingOccurrences(of: "\r\n", with: "\n").replacingOccurrences(of: "\r", with: "\n")
-            .components(separatedBy: "\n")
-        while lines.last?.isEmpty == true { lines.removeLast() }
-        guard !lines.isEmpty, text.contains("\t") else { return nil }
-        let rows = lines.map { $0.components(separatedBy: "\t") }
+        guard text.contains("\t") else { return nil }
+        let source = text.replacingOccurrences(of: "\r\n", with: "\n").replacingOccurrences(of: "\r", with: "\n")
+        var rows: [[String]] = []
+        var row: [String] = []
+        var field = ""
+        var quoted = false
+        var atFieldStart = true
+        var iterator = Array(source).makeIterator()
+        var pending: Character?
+        func next() -> Character? {
+            if let value = pending { pending = nil; return value }
+            return iterator.next()
+        }
+        while let character = next() {
+            if quoted {
+                if character == "\"" {
+                    if let following = next() {
+                        if following == "\"" { field.append("\"") } else { quoted = false; pending = following }
+                    } else { quoted = false }
+                } else {
+                    field.append(character)
+                }
+                continue
+            }
+            switch character {
+            case "\"" where atFieldStart:
+                quoted = true
+                atFieldStart = false
+            case "\t":
+                row.append(field)
+                field = ""
+                atFieldStart = true
+            case "\n":
+                row.append(field)
+                rows.append(row)
+                row = []
+                field = ""
+                atFieldStart = true
+            default:
+                field.append(character)
+                atFieldStart = false
+            }
+        }
+        if !field.isEmpty || !row.isEmpty { row.append(field); rows.append(row) }
+        while let last = rows.last, last.allSatisfy(\.isEmpty) { rows.removeLast() }
+        guard !rows.isEmpty else { return nil }
         let counts = rows.map(\.count)
         guard let common = Dictionary(grouping: counts, by: { $0 }).max(by: { $0.value.count < $1.value.count })?.key,
               common >= 2 else { return nil }
         let agreeing = counts.filter { $0 == common }.count
         guard Double(agreeing) / Double(counts.count) >= 0.6 else { return nil }
-        // Spreadsheets quote a cell holding a tab, a line break or a quote.
-        return rows.map { row in
-            row.map { cell in
-                var value = cell
-                if value.count >= 2, value.hasPrefix("\""), value.hasSuffix("\"") {
-                    value = String(value.dropFirst().dropLast()).replacingOccurrences(of: "\"\"", with: "\"")
-                }
-                return value
-            }
-        }
+        return rows
     }
 
     // MARK: HTML

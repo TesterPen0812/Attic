@@ -123,8 +123,8 @@ struct NoteDocument: Equatable, Sendable {
             block.kind == .divider || block.level != nil || block.indent != nil ||
                 (block.style != nil && block.style != "body")
         }
+        // Marks inside a table's cells are part of table-v1.
         let marked = blocks.contains { !$0.marks.isEmpty }
-            || blocks.contains { $0.table?.rows.contains { $0.cells.contains { !$0.marks.isEmpty } } == true }
         let files = blocks.contains { $0.kind == .file }
         let tables = blocks.contains { $0.kind == .table }
         if tables && !requires.contains("table-v1") { requires.append("table-v1") }

@@ -368,6 +368,63 @@ final class MCPRequestHandlerTests: XCTestCase {
         XCTAssertEqual(noteStore.note(withID: note.id)?.body, "old")
     }
 
+    /// Notes v2 tables (spec § 4.6): agents read a table as a token and a
+    /// pipe table with its ids, edit it by id, and through update_note.
+    func testAgentsReadAndEditTablesByIdAndThroughTheBody() throws {
+        let (noteStore, handler) = try makeNoteHandler()
+        let table = NoteTable(texts: [["Pillar", "What happened"], ["Integrity", "Systems encrypted"]])
+        let tableID = UUID()
+        var heading = NoteBlock.text("Impact")
+        heading.style = "heading"
+        heading.level = 2
+        let base = NoteDocument(blocks: [.text("CIA"), heading, .table(table, id: tableID)])
+        guard case let .success((id, _)) = noteStore.createDocumentNote(id: UUID(), document: base) else { return XCTFail() }
+        let listed = try callNoteTool(handler, "list_notes", [:])
+        let note = try XCTUnwrap((listed["notes"] as? [[String: Any]])?.first { $0["id"] as? String == id.uuidString })
+        let body = try XCTUnwrap(note["body"] as? String)
+        XCTAssertTrue(body.contains("<!-- attic:table id=\(tableID.uuidString) -->\n| Pillar | What happened |"))
+        let tables = try XCTUnwrap(note["tables"] as? [[String: Any]])
+        XCTAssertEqual(tables.first?["table_id"] as? String, tableID.uuidString)
+        let rows = try XCTUnwrap(tables.first?["rows"] as? [[String: Any]])
+        let columns = try XCTUnwrap(tables.first?["columns"] as? [[String: Any]])
+        // update_note_table: a cell by id, and a new row.
+        let revision = try XCTUnwrap(note["revision"] as? String)
+        let edited = try callNoteTool(handler, "update_note_table", [
+            "id": id.uuidString, "base_revision": revision, "table_id": tableID.uuidString,
+            "operations": [
+                ["op": "set_cell", "row_id": rows[1]["id"] as Any, "column_id": columns[1]["id"] as Any, "text": "Encrypted and held"],
+                ["op": "insert_row", "after_row_id": rows[1]["id"] as Any, "cells": ["Availability", "Shut down"]]
+            ]
+        ])
+        XCTAssertEqual(edited["status"] as? String, "applied")
+        var stored = try XCTUnwrap(noteStore.loadDocument(noteID: id)?.content.document?.blocks.first { $0.kind == .table })
+        XCTAssertEqual(stored.id, tableID)
+        XCTAssertEqual(stored.table?.texts, [["Pillar", "What happened"], ["Integrity", "Encrypted and held"], ["Availability", "Shut down"]])
+        XCTAssertEqual(stored.table?.rows[1].id.uuidString, rows[1]["id"] as? String, "the row keeps its id")
+        // update_note: a cell edited in the body, the heading kept.
+        let token = try XCTUnwrap(noteStore.note(withID: id)?.revisionToken)
+        let newBody = NoteTextExport.agentBody(try XCTUnwrap(noteStore.loadDocument(noteID: id)?.content.document))
+            .replacingOccurrences(of: "| Availability | Shut down |", with: "| Availability | Pipeline shut down |")
+        let updated = try callNoteTool(handler, "update_note", ["id": id.uuidString, "base_revision": token, "body": newBody])
+        XCTAssertEqual(updated["status"] as? String, "applied")
+        stored = try XCTUnwrap(noteStore.loadDocument(noteID: id)?.content.document?.blocks.first { $0.kind == .table })
+        XCTAssertEqual(stored.id, tableID)
+        XCTAssertEqual(stored.table?[NoteTable.Position(row: 2, column: 1)].text, "Pipeline shut down")
+        // A bad write changes nothing.
+        let latest = try XCTUnwrap(noteStore.note(withID: id)?.revisionToken)
+        let body2 = try XCTUnwrap(noteStore.note(withID: id)?.body)
+        let request = try JSONSerialization.data(withJSONObject: [
+            "jsonrpc": "2.0", "id": 1, "method": "tools/call",
+            "params": ["name": "update_note_table", "arguments": [
+                "id": id.uuidString, "base_revision": latest, "table_id": tableID.uuidString,
+                "operations": [["op": "insert_row", "cells": ["only one"]]]
+            ] as [String: Any]]
+        ])
+        let response = try XCTUnwrap(JSONSerialization.jsonObject(with: try XCTUnwrap(handler.handle(body: request).body)) as? [String: Any])
+        XCTAssertEqual((response["result"] as? [String: Any])?["isError"] as? Bool, true, "a ragged row is refused")
+        XCTAssertEqual(noteStore.note(withID: id)?.body, body2)
+    }
+
     func testUpdateNoteCanAddAndRemoveChecklistLinesInPlainAndRichNotes() throws {
         for rich in [false, true] {
             for removing in [false, true] {
