@@ -46,6 +46,16 @@ final class NoteUndoHistory {
         fileprivate var paragraphStyleSnapshot: (location: Int, before: ParagraphState, after: ParagraphState)?
         fileprivate var emptyParagraphSnapshot: (before: NoteBlock?, after: NoteBlock?)?
         fileprivate var typingMarkSnapshot: (kind: NoteMark.Kind, before: Bool, after: Bool)?
+        /// A table's grid before and after (by the table's id, so it never
+        /// depends on where the table sits in the text), and the cell and
+        /// selection each side returns to. `cell` is the cell whose typing
+        /// this step coalesces.
+        fileprivate var tableSnapshot: TableSnapshot?
+
+        /// Steps that change something other than characters at a range.
+        fileprivate var isSnapshot: Bool {
+            tagPickerDelta != nil || paragraphStyleSnapshot != nil || typingMarkSnapshot != nil || tableSnapshot != nil
+        }
 
         fileprivate init(range: NSRange, current: NSAttributedString, other: NSAttributedString, name: String, group: Int) {
             self.range = range
@@ -57,6 +67,15 @@ final class NoteUndoHistory {
 
         /// The text this step would restore (tests).
         var restores: String { other.string }
+    }
+
+    struct TableSnapshot {
+        var id: UUID
+        var before: NoteTable
+        var after: NoteTable
+        var focusBefore: NoteTableFocus?
+        var focusAfter: NoteTableFocus?
+        var cell: NoteTable.Position?
     }
 
     private struct Pending {
@@ -84,6 +103,9 @@ final class NoteUndoHistory {
     var emptyParagraphState: (() -> NoteBlock?)?
     var onEmptyParagraphSnapshot: ((NoteBlock?) -> Void)?
     var onTypingMarkSnapshot: ((NoteMark.Kind, Bool) -> Void)?
+    /// Puts a table's grid back (Undo or Redo); false when the table is no
+    /// longer in the note (the step is then skipped).
+    var onTableSnapshot: ((UUID, NoteTable, NoteTableFocus?) -> Bool)?
 
     private(set) var undoOps: [Op] = []
     private(set) var redoOps: [Op] = []
@@ -163,7 +185,8 @@ final class NoteUndoHistory {
                                        (adds: [String], removes: [String])?,
                                        (location: Int, before: ParagraphState, after: ParagraphState)?,
                                        (kind: NoteMark.Kind, before: Bool, after: Bool)?,
-                                       (before: NoteBlock?, after: NoteBlock?)?)
+                                       (before: NoteBlock?, after: NoteBlock?)?,
+                                       TableSnapshot?)
         fileprivate let undo: [Saved]
         fileprivate let redo: [Saved]
     }
@@ -171,7 +194,7 @@ final class NoteUndoHistory {
     func checkpoint() -> Checkpoint {
         open = nil
         func copy(_ ops: [Op]) -> [Checkpoint.Saved] {
-            ops.map { ($0, $0.range, $0.current, $0.other, $0.isInert, $0.tagDelta, $0.tagPickerDelta, $0.paragraphStyleSnapshot, $0.typingMarkSnapshot, $0.emptyParagraphSnapshot) }
+            ops.map { ($0, $0.range, $0.current, $0.other, $0.isInert, $0.tagDelta, $0.tagPickerDelta, $0.paragraphStyleSnapshot, $0.typingMarkSnapshot, $0.emptyParagraphSnapshot, $0.tableSnapshot) }
         }
         return Checkpoint(undo: copy(undoOps), redo: copy(redoOps))
     }
@@ -180,7 +203,7 @@ final class NoteUndoHistory {
     /// is now (the caller restored the text first).
     func rewind(to checkpoint: Checkpoint) {
         func restore(_ saved: [Checkpoint.Saved]) -> [Op] {
-            saved.map { op, range, current, other, inert, tagDelta, tagPickerDelta, paragraphStyleSnapshot, typingMarkSnapshot, emptyParagraphSnapshot in
+            saved.map { op, range, current, other, inert, tagDelta, tagPickerDelta, paragraphStyleSnapshot, typingMarkSnapshot, emptyParagraphSnapshot, tableSnapshot in
                 op.range = range
                 op.current = current
                 op.other = other
@@ -190,6 +213,7 @@ final class NoteUndoHistory {
                 op.paragraphStyleSnapshot = paragraphStyleSnapshot
                 op.typingMarkSnapshot = typingMarkSnapshot
                 op.emptyParagraphSnapshot = emptyParagraphSnapshot
+                op.tableSnapshot = tableSnapshot
                 return op
             }
         }
@@ -235,7 +259,7 @@ final class NoteUndoHistory {
             var entry = Pending(range: range, old: storage.attributedSubstring(from: range),
                                 newRange: NSRange(location: range.location + delta, length: newLength),
                                 emptyParagraphBefore: emptyParagraphState?())
-            if ranges.count == 1, groupID == nil, let op = open, !op.isInert,
+            if ranges.count == 1, groupID == nil, let op = open, !op.isInert, !op.isSnapshot,
                range.location <= NSMaxRange(op.range), NSMaxRange(range) >= op.range.location {
                 entry.coalesceInto = op
                 if range.location < op.range.location {
@@ -343,7 +367,7 @@ final class NoteUndoHistory {
         if let captured = composition, captured.range == preRange {
             old = captured.old
             composition = nil
-        } else if let op = open, !op.isInert, preRange.location >= op.range.location,
+        } else if let op = open, !op.isInert, !op.isSnapshot, preRange.location >= op.range.location,
                   NSMaxRange(preRange) <= NSMaxRange(op.range) {
             old = op.current.attributedSubstring(from: NSRange(location: preRange.location - op.range.location,
                                                                length: oldLength))
@@ -430,6 +454,36 @@ final class NoteUndoHistory {
         append(op)
     }
 
+    /// A change to a table's grid. Typing in one cell coalesces like typing
+    /// in the note (`cell`): consecutive edits of the same cell join the
+    /// open step; any other step, a caret jump or another cell ends it.
+    func recordTableChange(id: UUID, before: NoteTable, after: NoteTable, name: String,
+                           focusBefore: NoteTableFocus?, focusAfter: NoteTableFocus?, cell: NoteTable.Position? = nil) {
+        guard !isReplaying, before != after else { return }
+        if let cell, groupID == nil, let op = open, !op.isInert, var snapshot = op.tableSnapshot,
+           snapshot.id == id, snapshot.cell == cell {
+            snapshot.after = after
+            snapshot.focusAfter = focusAfter
+            op.tableSnapshot = snapshot
+            redoOps.removeAll()
+            return
+        }
+        open = nil
+        let empty = NSAttributedString()
+        let op = Op(range: NSRange(location: 0, length: 0), current: empty, other: empty,
+                    name: name, group: groupID ?? nextOwnGroup())
+        op.tableSnapshot = TableSnapshot(id: id, before: before, after: after, focusBefore: focusBefore,
+                                         focusAfter: focusAfter, cell: cell)
+        append(op)
+        if cell != nil, groupID == nil { open = op }
+    }
+
+    /// The open step is typing in this table's cell.
+    func isTypingInTable(_ id: UUID, cell: NoteTable.Position) -> Bool {
+        guard let snapshot = open?.tableSnapshot else { return false }
+        return snapshot.id == id && snapshot.cell == cell
+    }
+
     /// Runs a storage change that must not become a step (a restore the
     /// history is being rewound to).
     func performUnrecorded(_ body: () -> Void) {
@@ -499,6 +553,19 @@ final class NoteUndoHistory {
             onTypingMarkSnapshot?(snapshot.kind, snapshot.before)
             return true
         }
+        if let snapshot = op.tableSnapshot {
+            isReplaying = true
+            defer { isReplaying = false }
+            guard onTableSnapshot?(snapshot.id, snapshot.before, snapshot.focusBefore) == true else {
+                log.append("could not replay \(op.name): its table is not in the note")
+                op.isInert = true
+                return false
+            }
+            op.tableSnapshot = TableSnapshot(id: snapshot.id, before: snapshot.after, after: snapshot.before,
+                                             focusBefore: snapshot.focusAfter, focusAfter: snapshot.focusBefore,
+                                             cell: snapshot.cell)
+            return true
+        }
         guard NSMaxRange(op.range) <= storage.length else {
             log.append("could not replay \(op.name)")
             return false
@@ -553,7 +620,7 @@ final class NoteUndoHistory {
     }
 
     private func shift(_ op: Op, by edit: (location: Int, old: Int, new: Int)) -> Bool {
-        if op.tagPickerDelta != nil || op.typingMarkSnapshot != nil { return true }
+        if op.tagPickerDelta != nil || op.typingMarkSnapshot != nil || op.tableSnapshot != nil { return true }
         if var snapshot = op.paragraphStyleSnapshot {
             if edit.location + edit.old < snapshot.location {
                 snapshot.location += edit.new - edit.old

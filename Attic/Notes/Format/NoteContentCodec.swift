@@ -122,11 +122,22 @@ enum NoteContentCodec {
                   (block.attachmentID != nil) != (block.importFailure != nil),
                   block.importFailure == nil || block.importFailure?.isEmpty == false else { return false }
         }
+        if block.kind == .table {
+            guard block.id != nil, let table = block.table, table.isRectangular, table.isWithinLimits else { return false }
+            return table.rows.allSatisfy { row in row.cells.allSatisfy { cell in
+                validMarks(cell.marks, in: cell.text) && !cell.text.contains(NoteDocument.objectCharacter) == cell.inlines.isEmpty
+                    && cell.text.filter { $0 == NoteDocument.objectCharacter }.count == cell.inlines.count
+            } }
+        }
         guard block.level == nil || (block.style == "heading" && block.level! > 0),
               block.indent == nil || ((0...2).contains(block.indent!) &&
                   (block.kind == .checklist || ["bullet", "number", "quote"].contains(block.style ?? ""))) else { return false }
-        let units = Array(block.text.utf16)
-        return block.marks.allSatisfy { mark in
+        return validMarks(block.marks, in: block.text)
+    }
+
+    private static func validMarks(_ marks: [NoteMark], in text: String) -> Bool {
+        let units = Array(text.utf16)
+        return marks.allSatisfy { mark in
             mark.offset >= 0 && mark.length > 0 && mark.offset <= units.count &&
                 mark.length <= units.count - mark.offset &&
                 isScalarBoundary(mark.offset, in: units) &&
@@ -152,6 +163,8 @@ enum NoteContentCodec {
             block = decodeImage(object)
         case "file":
             block = decodeFile(object)
+        case "table":
+            block = decodeTable(object)
         case "divider":
             guard let id = object["id"]?.stringValue.flatMap(UUID.init(uuidString:)) else { break }
             block = .divider(id: id)
@@ -266,6 +279,65 @@ enum NoteContentCodec {
         return block
     }
 
+    /// A table must be rectangular, within the limits, with a UUID for the
+    /// table, every column and every row; a cell is text with marks and
+    /// inline objects, as a text block. Anything else keeps the block opaque.
+    private static func decodeTable(_ object: [String: NoteJSON]) -> NoteBlock? {
+        func uuid(_ value: NoteJSON?) -> UUID? { value?.stringValue.flatMap(UUID.init(uuidString:)) }
+        guard let id = uuid(object["id"]),
+              let rawColumns = object["columns"]?.arrayValue, !rawColumns.isEmpty,
+              let rawRows = object["rows"]?.arrayValue, !rawRows.isEmpty else { return nil }
+        var headerRow = true
+        if let raw = object["headerRow"] {
+            guard let value = raw.boolValue else { return nil }
+            headerRow = value
+        }
+        var columns: [NoteTable.Column] = []
+        for raw in rawColumns {
+            guard let column = raw.objectValue, let columnID = uuid(column["id"]) else { return nil }
+            var width: Double?
+            if let rawWidth = column["width"], rawWidth != .null {
+                guard let value = rawWidth.numberValue, value.isFinite, value > 0 else { return nil }
+                width = value
+            }
+            var align = NoteTable.Alignment.left
+            if let rawAlign = column["align"] {
+                guard let value = rawAlign.stringValue.flatMap(NoteTable.Alignment.init(rawValue:)) else { return nil }
+                align = value
+            }
+            columns.append(NoteTable.Column(id: columnID, width: width, align: align,
+                                            extras: column.filter { !["id", "width", "align"].contains($0.key) }))
+        }
+        var rows: [NoteTable.Row] = []
+        for raw in rawRows {
+            guard let row = raw.objectValue, let rowID = uuid(row["id"]),
+                  let rawCells = row["cells"]?.arrayValue, rawCells.count == columns.count else { return nil }
+            var cells: [NoteTable.Cell] = []
+            for rawCell in rawCells {
+                guard let cell = rawCell.objectValue, let text = cell["text"]?.stringValue else { return nil }
+                var value = NoteTable.Cell(text)
+                if let rawMarks = cell["marks"] {
+                    guard let values = rawMarks.arrayValue, let marks = decodeMarks(values, in: text) else { return nil }
+                    value.marks = marks
+                }
+                if let rawInlines = cell["inline"] {
+                    guard let values = rawInlines.arrayValue, let inlines = decodeInlines(values, in: text),
+                          inlines.allSatisfy({ if case .date = $0.kind { return true } else { return false } }) else { return nil }
+                    value.inlines = inlines
+                } else if text.contains(NoteDocument.objectCharacter) {
+                    return nil
+                }
+                value.extras = cell.filter { !["text", "marks", "inline"].contains($0.key) }
+                cells.append(value)
+            }
+            rows.append(NoteTable.Row(id: rowID, cells: cells, extras: row.filter { !["id", "cells"].contains($0.key) }))
+        }
+        let table = NoteTable(headerRow: headerRow, columns: columns, rows: rows,
+                              extras: object.filter { !["kind", "id", "headerRow", "columns", "rows"].contains($0.key) })
+        guard table.isWithinLimits else { return nil }
+        return .table(table, id: id)
+    }
+
     private static func decodeFile(_ object: [String: NoteJSON]) -> NoteBlock? {
         guard let id = object["id"]?.stringValue.flatMap(UUID.init(uuidString:)),
               let name = object["name"]?.stringValue, !name.isEmpty,
@@ -344,6 +416,26 @@ enum NoteContentCodec {
                 object["inline"] = nil
             }
             return .object(object)
+        case .table:
+            guard let table = block.table else { return .null }
+            var object = table.extras
+            object["kind"] = .string("table")
+            object["id"] = block.id.map { .string($0.uuidString) }
+            object["headerRow"] = .bool(table.headerRow)
+            object["columns"] = .array(table.columns.map { column in
+                var fields = column.extras
+                fields["id"] = .string(column.id.uuidString)
+                fields["width"] = column.width.map(NoteJSON.double)
+                fields["align"] = .string(column.align.rawValue)
+                return .object(fields)
+            })
+            object["rows"] = .array(table.rows.map { row in
+                var fields = row.extras
+                fields["id"] = .string(row.id.uuidString)
+                fields["cells"] = .array(row.cells.map(encodeCell))
+                return .object(fields)
+            })
+            return .object(object)
         case .divider:
             var object = block.extras
             object["kind"] = .string("divider")
@@ -370,6 +462,26 @@ enum NoteContentCodec {
             object["importFailure"] = block.importFailure.map(NoteJSON.string)
             return .object(object)
         }
+    }
+
+    private static func encodeCell(_ cell: NoteTable.Cell) -> NoteJSON {
+        var object = cell.extras
+        object["text"] = .string(cell.text)
+        object["marks"] = cell.marks.isEmpty ? nil : .array(cell.marks.map(encodeMark))
+        if !cell.inlines.isEmpty {
+            let units = Array(cell.text.utf16)
+            let offsets = units.indices.filter { units[$0] == NoteDocument.objectUnit }
+            object["inline"] = .array(zip(cell.inlines, offsets).map { inline, offset in encodeInline(inline, offset: offset) })
+        }
+        return .object(object)
+    }
+
+    private static func encodeMark(_ mark: NoteMark) -> NoteJSON {
+        var fields: [String: NoteJSON] = ["kind": .string(mark.kind.rawValue),
+                                          "offset": .int(Int64(mark.offset)),
+                                          "length": .int(Int64(mark.length))]
+        fields["url"] = mark.url.map(NoteJSON.string)
+        return .object(fields)
     }
 
     private static func encodeInline(_ inline: NoteInline, offset: Int) -> NoteJSON {

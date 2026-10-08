@@ -20,7 +20,7 @@ enum NoteTextCodec {
         var previousKind: NoteParagraphKind? = firstBlockIsTitle ? nil : .body
         for (index, block) in document.blocks.enumerated() {
             let isTitle = firstBlockIsTitle && index == 0
-            let isBlockObject = [.image, .file, .divider, .opaque].contains(block.kind)
+            let isBlockObject = [.image, .file, .divider, .table, .opaque].contains(block.kind)
             let kind: NoteParagraphKind = isTitle ? .title
                 : (isBlockObject ? .blockObject : NoteParagraphKind.of(style: block.kind == .text ? block.style : nil, level: block.level))
             var attributes = isTitle ? style.titleAttributes : style.paragraphAttributes(
@@ -79,6 +79,9 @@ enum NoteTextCodec {
             case .opaque:
                 let opaque = NoteOpaqueAttachment(objectID: block.opaqueID ?? UUID(), value: block.opaque ?? .null, isInline: false)
                 paragraph.append(attachmentString(opaque, attributes: attributes))
+            case .table:
+                let table = NoteTableAttachment(objectID: block.id ?? UUID(), table: block.table ?? .blank(), extras: block.extras)
+                paragraph.append(attachmentString(table, attributes: attributes))
             }
             if index < document.blocks.count - 1 {
                 paragraph.append(NSAttributedString(string: "\n", attributes: attributes))
@@ -101,7 +104,7 @@ enum NoteTextCodec {
         return string
     }
 
-    private static func inlineText(_ block: NoteBlock, attributes: [NSAttributedString.Key: Any], style: NoteTextStyle) -> NSAttributedString {
+    static func inlineText(_ block: NoteBlock, attributes: [NSAttributedString.Key: Any], style: NoteTextStyle) -> NSAttributedString {
         let result = NSMutableAttributedString()
         var run = ""
         var inlineIndex = 0
@@ -294,6 +297,11 @@ enum NoteTextCodec {
             case let divider as NoteDividerAttachment:
                 finishCurrent()
                 blocks.append(.divider(id: divider.objectID))
+            case let table as NoteTableAttachment:
+                finishCurrent()
+                var block = NoteBlock.table(table.table, id: table.objectID)
+                block.extras = table.extras
+                blocks.append(block)
             case let date as NoteDateAttachment:
                 current.text.append(NoteDocument.objectCharacter)
                 current.inlines.append(NoteInline(id: date.objectID, kind: .date(date.day), extras: date.extras))
@@ -310,5 +318,80 @@ enum NoteTextCodec {
         }
         if hasContent || current.kind == .checklist || blocks.isEmpty { blocks.append(current) }
         return blocks
+    }
+
+    // MARK: Table cells
+
+    /// A line break inside a cell is U+2028 in the cell editor (one
+    /// paragraph per cell) and "\n" in the stored cell.
+    static let cellLineBreak: Character = "\u{2028}"
+
+    /// A cell's text as the cell editor and the grid draw it: marks, links
+    /// and dates (each date an attachment, drawn by `prepare`).
+    static func cellString(_ cell: NoteTable.Cell, attributes: [NSAttributedString.Key: Any], style: NoteTextStyle,
+                           prepare: (NoteObjectAttachment) -> Void = { _ in }) -> NSMutableAttributedString {
+        var block = cell.block
+        block.text = block.text.replacingOccurrences(of: "\n", with: String(cellLineBreak))
+        let result = NSMutableAttributedString(attributedString: inlineText(block, attributes: attributes, style: style))
+        result.enumerateAttribute(.attachment, in: NSRange(location: 0, length: result.length)) { value, _, _ in
+            if let object = value as? NoteObjectAttachment { prepare(object) }
+        }
+        return result
+    }
+
+    /// The cell a cell editor's text stores: "\n" for its line breaks, a
+    /// U+FFFC and an inline for each date, marks by UTF-16 offset (never
+    /// over an object). Any other attachment is dropped, never stored.
+    static func cell(from text: NSAttributedString, keeping template: NoteTable.Cell = .empty) -> NoteTable.Cell {
+        var cell = NoteTable.Cell(extras: template.extras)
+        let string = text.string as NSString
+        var output = ""
+        var index = 0
+        // Plain runs between objects, with their offsets in the output.
+        var runs: [(source: NSRange, offset: Int)] = []
+        var runStart = 0, runOffset = 0
+        func flushRun(to end: Int) {
+            if end > runStart { runs.append((NSRange(location: runStart, length: end - runStart), runOffset)) }
+        }
+        while index < string.length {
+            let unit = string.character(at: index)
+            if unit == NoteDocument.objectUnit {
+                flushRun(to: index)
+                if let date = text.attribute(.attachment, at: index, effectiveRange: nil) as? NoteDateAttachment {
+                    output.append(NoteDocument.objectCharacter)
+                    cell.inlines.append(NoteInline(id: date.objectID, kind: .date(date.day), extras: date.extras))
+                }
+                index += 1
+                runStart = index
+                runOffset = (output as NSString).length
+                continue
+            }
+            let rest = NSRange(location: index, length: string.length - index)
+            let next = string.range(of: "\u{FFFC}", options: .literal, range: rest)
+            let end = next.location == NSNotFound ? string.length : next.location
+            output += string.substring(with: NSRange(location: index, length: end - index))
+                .replacingOccurrences(of: "\u{2028}", with: "\n")
+                .replacingOccurrences(of: "\u{2029}", with: "\n")
+            index = end
+        }
+        flushRun(to: string.length)
+        cell.text = output
+        for kind in NoteMark.Kind.allCases {
+            for run in runs {
+                text.enumerateAttribute(.noteMark(kind), in: run.source) { value, marked, _ in
+                    guard let value else { return }
+                    let offset = run.offset + marked.location - run.source.location
+                    let mark = NoteMark(kind, offset: offset, length: marked.length,
+                                        url: kind == .link ? value as? String : nil)
+                    if let last = cell.marks.indices.last, cell.marks[last].kind == kind,
+                       cell.marks[last].url == mark.url, cell.marks[last].offset + cell.marks[last].length == offset {
+                        cell.marks[last].length += mark.length
+                    } else {
+                        cell.marks.append(mark)
+                    }
+                }
+            }
+        }
+        return cell
     }
 }

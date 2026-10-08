@@ -320,4 +320,24 @@ struct NoteTextStyle: Equatable {
         let natural = font.ascender - font.descender + font.leading
         return max(0, lineHeight - natural)
     }
+
+    // MARK: Table cells
+
+    /// The header row's face: the body's size, semibold.
+    var tableHeaderFont: NSFont { NSFont.systemFont(ofSize: AtticNoteType.body.size, weight: .semibold) }
+
+    /// A cell's text: the body's 14 / 21 lines, no paragraph spacing, in
+    /// its column's alignment; the header row is semibold.
+    func tableCellAttributes(header: Bool, alignment: NoteTable.Alignment = .left) -> [NSAttributedString.Key: Any] {
+        let paragraph = NSMutableParagraphStyle()
+        paragraph.minimumLineHeight = AtticNoteType.body.lineHeight
+        paragraph.maximumLineHeight = AtticNoteType.body.lineHeight
+        paragraph.alignment = switch alignment {
+        case .left: .natural
+        case .center: .center
+        case .right: .right
+        }
+        paragraph.lineBreakMode = .byWordWrapping
+        return [.font: header ? tableHeaderFont : bodyFont, .foregroundColor: bodyColor, .paragraphStyle: paragraph]
+    }
 }

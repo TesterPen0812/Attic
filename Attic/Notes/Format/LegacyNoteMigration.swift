@@ -179,7 +179,7 @@ enum LegacyNoteMigration {
                 }
                 pending.append(id)
                 order.append(id)
-            case .checklist, .divider, .opaque:
+            case .checklist, .divider, .table, .opaque:
                 return "an unexpected block"
             }
         }

@@ -43,7 +43,7 @@ struct NoteDocument: Equatable, Sendable {
     static let currentFormat = 1
     /// What this build can edit. A document requiring anything else opens
     /// read-only.
-    static let editableCapabilities: Set<String> = ["text", "checklist", "image", "date", "structure-v1", "inline-marks-v1", "file-v1"]
+    static let editableCapabilities: Set<String> = ["text", "checklist", "image", "date", "structure-v1", "inline-marks-v1", "file-v1", "table-v1"]
     /// U+FFFC, the character an inline object occupies in a block's text.
     static let objectCharacter: Character = "\u{FFFC}"
     static let objectUnit: unichar = 0xFFFC
@@ -78,6 +78,9 @@ struct NoteDocument: Equatable, Sendable {
             switch block.kind {
             case .checklist, .image, .file, .divider:
                 if let id = block.id { ids.append(id) }
+            case .table:
+                if let id = block.id { ids.append(id) }
+                ids += block.table?.inlineIDs ?? []
             case .opaque:
                 if let id = block.opaqueID { ids.append(id) }
             case .text:
@@ -121,7 +124,10 @@ struct NoteDocument: Equatable, Sendable {
                 (block.style != nil && block.style != "body")
         }
         let marked = blocks.contains { !$0.marks.isEmpty }
+            || blocks.contains { $0.table?.rows.contains { $0.cells.contains { !$0.marks.isEmpty } } == true }
         let files = blocks.contains { $0.kind == .file }
+        let tables = blocks.contains { $0.kind == .table }
+        if tables && !requires.contains("table-v1") { requires.append("table-v1") }
         if structured && !requires.contains("structure-v1") { requires.append("structure-v1") }
         if marked && !requires.contains("inline-marks-v1") { requires.append("inline-marks-v1") }
         if files && !requires.contains("file-v1") { requires.append("file-v1") }
@@ -134,6 +140,8 @@ enum NoteBlockKind: String, Sendable {
     case image
     case file
     case divider
+    /// A table (`NoteBlock.table`, capability `table-v1`).
+    case table
     /// A block this build cannot read; `NoteBlock.opaque` holds it verbatim.
     case opaque
 }
@@ -170,6 +178,8 @@ struct NoteBlock: Equatable, Sendable {
     var pixelWidth: Int?
     var pixelHeight: Int?
     var inlines: [NoteInline] = []
+    /// Tables: the grid (`kind == .table`).
+    var table: NoteTable?
     /// Unknown fields on a readable block.
     var extras: [String: NoteJSON] = [:]
     /// The whole JSON value of an unreadable block.
@@ -200,6 +210,10 @@ struct NoteBlock: Equatable, Sendable {
 
     static func divider(id: UUID = UUID()) -> NoteBlock {
         NoteBlock(kind: .divider, id: id)
+    }
+
+    static func table(_ table: NoteTable, id: UUID = UUID()) -> NoteBlock {
+        NoteBlock(kind: .table, id: id, table: table)
     }
 
     static func opaque(_ value: NoteJSON) -> NoteBlock {

@@ -129,6 +129,9 @@ final class NoteEditorEngine: NSObject, NSTextViewDelegate, NSTextStorageDelegat
     /// fragment can stage bytes or make an Undo entry.
     var onFragmentAdmission: ((NoteDocument, [StagedNoteAttachment]) -> String?)?
     var canPasteFragment: (() -> Bool)?
+    /// A table's grips, "+" chips or indicator must move (the caret entered
+    /// or left a table, a table changed, scrolled or was laid out again).
+    var onTableChromeChange: (() -> Void)?
     private var pendingLinkTarget: NoteLinkTarget?
     private var activeSlashSession: NoteSlashSession?
     private var slashDateRequest: NoteSlashSession?
@@ -264,6 +267,9 @@ final class NoteEditorEngine: NSObject, NSTextViewDelegate, NSTextStorageDelegat
         history.onEmptyParagraphSnapshot = { [weak self] block in self?.restoreEmptyParagraph(block) }
         history.onTypingMarkSnapshot = { [weak self] kind, enabled in self?.setTypingMark(kind, enabled: enabled) }
         history.canReplay = { [weak self] in self?.activity == .idle }
+        history.onTableSnapshot = { [weak self] id, table, focus in
+            self?.restoreTable(id: id, table: table, focus: focus) ?? false
+        }
     }
 
     // MARK: Document
@@ -604,11 +610,20 @@ final class NoteEditorEngine: NSObject, NSTextViewDelegate, NSTextStorageDelegat
         return result
     }
 
+    /// The cached document no longer matches the text (a table's grid
+    /// changed in place).
+    func invalidateDocumentCache() { documentCache = nil }
+
+    /// Draws an object with the note's renderer (a date inside a cell).
+    func rendererApply(_ object: NoteObjectAttachment) { renderer.apply(to: object, today: today) }
+
     private func renderObjects(in range: NSRange, force: Bool = false) {
         guard range.length > 0 else { return }
         textStorage.enumerateAttribute(.attachment, in: range) { value, _, _ in
             guard let object = value as? NoteObjectAttachment else { return }
-            if let image = object as? NoteImageAttachment {
+            if let table = object as? NoteTableAttachment {
+                adoptTable(table, force: force)
+            } else if let image = object as? NoteImageAttachment {
                 // A decoded image looks the same in every appearance: only a
                 // missing one's placeholder is drawn again.
                 if image.renderedImage == nil || (force && image.isMissing) { loadImage(image) }
@@ -1680,6 +1695,13 @@ final class NoteEditorEngine: NSObject, NSTextViewDelegate, NSTextStorageDelegat
     }
 
     private func didReplay(_ range: NSRange) {
+        // An Undo of the note's text while a cell has the keyboard: the
+        // keyboard goes to the text it changed.
+        if let table = focusedTable, let textView {
+            table.deactivate()
+            textView.window?.makeFirstResponder(textView)
+            textView.setSelectedRange(NSRange(location: min(NSMaxRange(range), textStorage.length), length: 0))
+        }
         onTextChange?()
     }
 
@@ -1745,6 +1767,10 @@ final class NoteEditorEngine: NSObject, NSTextViewDelegate, NSTextStorageDelegat
             switch block.kind {
             case .checklist, .divider:
                 block.id = fresh(block.id)
+            case .table:
+                let original = block.id
+                block.id = fresh(block.id)
+                if block.id != original { block.table = block.table?.withFreshIDs() }
             case .image, .file:
                 guard let attachmentID = block.attachmentID else {
                     if block.kind == .file, block.importFailure != nil {
@@ -1900,7 +1926,7 @@ final class NoteEditorEngine: NSObject, NSTextViewDelegate, NSTextStorageDelegat
     /// One element per object, in reading order, for VoiceOver (stock
     /// TextKit 2 exposes none).
     func accessibilityElements(for textView: NSTextView) -> [NSAccessibilityElement] {
-        objects().map { object, range in
+        objects().filter { !($0.0 is NoteTableAttachment) }.map { object, range in
             NoteObjectAccessibilityElement(engine: self, textView: textView, object: object, range: range)
         }
     }
@@ -1909,6 +1935,23 @@ final class NoteEditorEngine: NSObject, NSTextViewDelegate, NSTextStorageDelegat
         let line = lineRange(at: location)
         let text = (textStorage.string as NSString).substring(with: line)
         return text.replacingOccurrences(of: String(NoteDocument.objectCharacter), with: "")
+    }
+
+    /// The tables' hosted views, in reading order (VoiceOver reads each as
+    /// a table).
+    func tableViews() -> [NoteTableView] {
+        objects().compactMap { ($0.0 as? NoteTableAttachment)?.hostedView }
+    }
+
+    /// The caret's rectangle at `location`, in the text view's coordinates.
+    func caretRect(at location: Int) -> NSRect? {
+        guard let layoutManager, let textView, let start = textRange(for: NSRange(location: location, length: 0))?.location else { return nil }
+        var rect: NSRect?
+        layoutManager.enumerateTextSegments(in: NSTextRange(location: start), type: .selection, options: [.rangeNotRequired]) { _, frame, _, _ in
+            rect = frame
+            return false
+        }
+        return rect.map { $0.offsetBy(dx: textView.textContainerOrigin.x, dy: textView.textContainerOrigin.y) }
     }
 
     /// The object's rectangle in the text view's coordinates.

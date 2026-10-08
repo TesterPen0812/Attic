@@ -339,6 +339,11 @@ struct NoteRowSummary: Equatable {
             case .checklist:
                 text = block.displayText.trimmingCharacters(in: .whitespaces)
                 kind = .checklist(checked: block.checked)
+            case .table:
+                // A table reads as its cells' text, in order.
+                text = (block.table?.texts.flatMap { $0 } ?? []).map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+                    .filter { !$0.isEmpty }.joined(separator: ", ")
+                kind = .text
             case .image, .file, .divider, .opaque:
                 text = ""
                 kind = .object

@@ -23,8 +23,9 @@ final class NoteEditorTextView: NSTextView, NSAccessibilityCustomRotorItemSearch
     /// VoiceOver after the text.
     var accessoryViews: [NSView] = []
     private lazy var headingsRotor = NSAccessibilityCustomRotor(rotorType: .heading, itemSearchDelegate: self)
+    private lazy var tablesRotor = NSAccessibilityCustomRotor(rotorType: .table, itemSearchDelegate: self)
 
-    func installHeadingsRotor() { setAccessibilityCustomRotors([headingsRotor]) }
+    func installHeadingsRotor() { setAccessibilityCustomRotors([headingsRotor, tablesRotor]) }
 
     // MARK: Code stays out of spell checking
 
@@ -196,6 +197,22 @@ final class NoteEditorTextView: NSTextView, NSAccessibilityCustomRotorItemSearch
     func rotor(_ rotor: NSAccessibilityCustomRotor,
                resultFor parameters: NSAccessibilityCustomRotor.SearchParameters) -> NSAccessibilityCustomRotor.ItemResult? {
         guard let engine else { return nil }
+        if rotor.type == .table {
+            // The note's tables, in order (each one's hosted view).
+            let tables = engine.tableViews()
+            let current = parameters.currentItem?.targetElement as? NoteTableView
+            let index = current.flatMap { view in tables.firstIndex { $0 === view } }
+            let next: NoteTableView?
+            if parameters.searchDirection == .next {
+                next = index.map { $0 + 1 < tables.count ? tables[$0 + 1] : nil } ?? tables.first
+            } else {
+                next = index.map { $0 > 0 ? tables[$0 - 1] : nil } ?? tables.last
+            }
+            guard let next else { return nil }
+            let result = NSAccessibilityCustomRotor.ItemResult(targetElement: next)
+            result.customLabel = next.accessibilityLabel() ?? ""
+            return result
+        }
         let headings = engine.headingRanges()
         let current = parameters.currentItem?.targetRange.location ?? (parameters.searchDirection == .next ? -1 : Int.max)
         let candidate = parameters.searchDirection == .next
@@ -368,6 +385,16 @@ final class NoteEditorTextView: NSTextView, NSAccessibilityCustomRotorItemSearch
             if selector == #selector(insertTab(_:)), engine.moveFromTitleToBody() { return }
             if selector == #selector(insertTab(_:)), engine.perform(.indent) { return }
             if selector == #selector(insertBacktab(_:)), engine.perform(.outdent) { return }
+            // An arrow that lands on a table's line goes into the table.
+            let moves = [#selector(moveDown(_:)), #selector(moveUp(_:)), #selector(moveLeft(_:)), #selector(moveRight(_:)),
+                         #selector(moveForward(_:)), #selector(moveBackward(_:))]
+            if moves.contains(selector), !engine.tableViews().isEmpty {
+                let old = selectedRange()
+                let x = engine.caretRect(at: old.length == 0 ? old.location : NSMaxRange(old))?.minX
+                asUserEdit { super.doCommand(by: selector) }
+                _ = engine.enterTableAfterMove(selector, from: old, x: x)
+                return
+            }
         }
         asUserEdit { super.doCommand(by: selector) }
     }
@@ -716,7 +743,8 @@ final class NoteEditorTextView: NSTextView, NSAccessibilityCustomRotorItemSearch
         if !monoCopyButton.isHidden, !base.contains(where: { ($0 as AnyObject) === monoCopyButton }) {
             accessories.append(monoCopyButton)
         }
-        return base + engine.accessibilityElements(for: self) + accessories
+        let tables = engine.tableViews().filter { table in !base.contains { ($0 as AnyObject) === table } }
+        return base + engine.accessibilityElements(for: self) + tables + accessories
     }
 
     override func accessibilityAttributedString(for range: NSRange) -> NSAttributedString? {
@@ -726,6 +754,13 @@ final class NoteEditorTextView: NSTextView, NSAccessibilityCustomRotorItemSearch
         let clamped = NSIntersectionRange(range, NSRange(location: 0, length: storage.length))
         let elements = engine.accessibilityElements(for: self).compactMap { $0 as? NoteObjectAccessibilityElement }
         storage.enumerateAttribute(.attachment, in: clamped) { value, objectRange, _ in
+            if let table = value as? NoteTableAttachment, let view = table.hostedView {
+                let local = NSRange(location: objectRange.location - range.location, length: objectRange.length)
+                if local.location >= 0, NSMaxRange(local) <= result.length {
+                    result.addAttribute(.accessibilityAttachment, value: view, range: local)
+                }
+                return
+            }
             guard let object = value as? NoteObjectAttachment,
                   let element = elements.first(where: { $0.objectID == object.objectID }) else { return }
             let local = NSRange(location: objectRange.location - range.location, length: objectRange.length)

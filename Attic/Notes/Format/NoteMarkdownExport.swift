@@ -52,6 +52,11 @@ enum NoteMarkdownExport {
             case .divider:
                 numbered.removeAll()
                 lines.append(("---", false))
+            case .table:
+                numbered.removeAll()
+                if let table = block.table {
+                    lines.append((NoteTableText.markdown(table) { inlineText($0.block, calendar: calendar, locale: locale) }, false))
+                }
             case .opaque:
                 numbered.removeAll()
                 lines.append((String(localized: "[content that needs a newer Attic]"), false))
@@ -83,6 +88,11 @@ enum NoteMarkdownExport {
         let style = Date.FormatStyle(locale: locale, calendar: calendar, timeZone: calendar.timeZone)
             .weekday(.abbreviated).day().month(.abbreviated).year()
         return day.date(in: calendar).formatted(style)
+    }
+
+    /// A line's text with its marks as Markdown and its dates as text.
+    static func inlineMarkdown(_ block: NoteBlock, calendar: Calendar = .current, locale: Locale = .current) -> String {
+        inlineText(block, calendar: calendar, locale: locale)
     }
 
     private static func inlineText(_ block: NoteBlock, calendar: Calendar, locale: Locale) -> String {

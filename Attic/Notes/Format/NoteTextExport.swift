@@ -30,6 +30,7 @@ enum NoteTextExport {
         case .image: return "[Image]"
         case .file: return "[File: \(block.filename ?? "file")]"
         case .divider: return "---"
+        case .table: return block.table.map(NoteTableText.tsv) ?? ""
         case .opaque: return "[Unsupported content]"
         }
     }
@@ -61,11 +62,26 @@ enum NoteTextExport {
         case .image: return "![image](attic://image/\(block.id?.uuidString ?? ""))"
         case .file: return "[file: \(block.filename ?? "file")](attic://file/\(block.id?.uuidString ?? ""))"
         case .divider: return "---"
+        case .table: return agentTable(block)
         case .opaque: return "[unsupported content](attic://block/\(index))"
         }
     }
 
-    private static func agentInlineText(_ block: NoteBlock) -> String {
+    /// A table as agents read and write it: an `attic:table` token line
+    /// (its id, and `headerRow=false` when the header row is off), then a
+    /// GFM pipe table. Dates in cells read `[date:YYYY-MM-DD]`.
+    static func agentTable(_ block: NoteBlock) -> String {
+        guard let table = block.table else { return "" }
+        var token = "<!-- attic:table id=\(block.id?.uuidString ?? "")"
+        if !table.headerRow { token += " headerRow=false" }
+        token += " -->"
+        var visible = table
+        visible.headerRow = true
+        let grid = NoteTableText.markdown(visible) { cell in agentInlineText(cell.block) }
+        return token + "\n" + grid
+    }
+
+    static func agentInlineText(_ block: NoteBlock) -> String {
         guard !block.inlines.isEmpty else { return block.text }
         var result = ""
         var index = 0

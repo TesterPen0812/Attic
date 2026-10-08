@@ -634,6 +634,44 @@ enum AtticNoteType {
     static let quoteTextInset: CGFloat = 14
 }
 
+/// Notes v2 tables (spec § 4.1, sheet 3, owner 2026-10-08): the body's
+/// type in cells (direction 5: 14 / 21), 6 pt side and 4 pt top and bottom
+/// padding, columns 56–168 by content, a 0.5 pt grid in a 10 pt card, a
+/// 16 pt fade at a cut edge and a 3 pt scroll indicator under a wide table.
+enum AtticNoteTableMetrics {
+    static let cellPaddingH: CGFloat = 6
+    static let cellPaddingV: CGFloat = 4
+    static let minColumnWidth: CGFloat = 56
+    static let maxColumnWidth: CGFloat = 168
+    /// The narrowest a dragged column may get.
+    static let minDraggedWidth: CGFloat = 32
+    static let radius: CGFloat = AtticRadius.contentCard
+    static let hairline: CGFloat = 0.5
+    /// Increase Contrast raises the grid to 1 pt.
+    static let contrastHairline: CGFloat = 1
+    static let edgeFade: CGFloat = 16
+    static let indicatorHeight: CGFloat = 3
+    /// The indicator's top, under the table's bottom edge (inside the 8 pt
+    /// block margin, so scrolling never moves the text below).
+    static let indicatorGap: CGFloat = 2.5
+    static let activeRingWidth: CGFloat = 1.5
+    static let activeRingRadius: CGFloat = 3
+    /// The column grip (above the active column) and the row grip (in the
+    /// margin, 16 from the panel's edge: 12 left of the column).
+    static let columnGripSize = CGSize(width: 18, height: 5)
+    static let rowGripSize = CGSize(width: 5, height: 14)
+    static let rowGripFromColumn: CGFloat = 12
+    static let columnGripAbove: CGFloat = 7
+    /// The "+" chips at the end of the last column and under the last row.
+    static let addChipSize: CGFloat = 14
+    static let addChipGap: CGFloat = 4
+    static let addChipGlyph: CGFloat = 8
+    /// Grips and chips keep a 28 pt hit target, as every small control.
+    static let gripHitTarget: CGFloat = 28
+    /// The vertical grid line's drag area.
+    static let resizeHitWidth: CGFloat = 8
+}
+
 enum AtticNoteMetrics {
     /// The note's text column: 12 inside the chrome's 16 pt line (28 from
     /// the panel's edge, the Tasks circles' line), moving inward with it.

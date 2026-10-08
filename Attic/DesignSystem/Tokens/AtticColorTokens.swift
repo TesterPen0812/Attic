@@ -333,6 +333,26 @@ struct AtticColorTokens: Equatable, Sendable {
         return heading.withAlpha(alpha)
     }
 
+    // MARK: Note tables (sheet 3)
+
+    /// The table's grid and outer edge: the text's ink at 13 % (Light) or
+    /// 18 % (Dark), 30 % under Increase Contrast (drawn 1 pt then).
+    var tableGrid: AtticRGBA {
+        ink(.heading).withAlpha(context.increaseContrast ? 0.30 : (context.mode == .dark ? 0.18 : 0.13))
+    }
+    /// The header row's fill (Light black 3.5 %).
+    var tableHeaderFill: AtticRGBA { ink(.heading).withAlpha(context.mode == .dark ? 0.055 : 0.035) }
+    /// The active cell's ring: a neutral focus ink, as drawn.
+    var tableActiveRing: AtticRGBA { ink(.heading).withAlpha(context.increaseContrast ? 0.75 : (context.mode == .dark ? 0.55 : 0.42)) }
+    /// A multi-cell selection's tint.
+    var tableSelectionFill: AtticRGBA { tagFillSelected }
+    /// The sideways scroll indicator under a wide table.
+    var tableIndicator: AtticRGBA { ink(.heading).withAlpha(context.mode == .dark ? 0.36 : 0.28) }
+    /// The row and column grips and the "+" chips.
+    var tableGripFill: AtticRGBA { ink(.heading).withAlpha(context.mode == .dark ? 0.22 : 0.15) }
+    var tableGripDot: AtticRGBA { ink(.heading).withAlpha(context.mode == .dark ? 0.70 : 0.53) }
+    var tableAddFill: AtticRGBA { ink(.heading).withAlpha(context.mode == .dark ? 0.16 : 0.105) }
+
     var focusRing: AtticRGBA { ink(.accent) }
     var tagFill: AtticRGBA { ink(.accent).withAlpha(context.mode == .dark ? 0.16 : 0.10) }
     var tagFillSelected: AtticRGBA { ink(.accent).withAlpha(context.mode == .dark ? 0.26 : 0.18) }
