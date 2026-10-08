@@ -20,7 +20,8 @@ final class AtticPhase1LookTests: XCTestCase {
             let phase0 = AtticSurfaceModel.phase0(AtticDesignSystemTests.phase0Treatment(context), increaseContrast: context.increaseContrast)
                 .definedDarkEdge()
             let panel = context.tokens.panel
-            XCTAssertEqual(panel.withFoundation(phase0.foundationOpacity), phase0, "only the foundation changes: \(context.caption)")
+            XCTAssertEqual(panel.withFoundation(phase0.foundationOpacity).withDarkTint(0), phase0,
+                           "only the foundation (and Dark's dark tint, A37) changes: \(context.caption)")
             XCTAssertGreaterThanOrEqual(panel.foundationOpacity, phase0.foundationOpacity, context.caption)
             let tokens = context.tokens
             let pairs = [
@@ -29,7 +30,7 @@ final class AtticPhase1LookTests: XCTestCase {
             ]
             XCTAssertGreaterThanOrEqual(panel.worstMargin(pairs), 1, context.caption)
             if panel.foundationOpacity > phase0.foundationOpacity + 0.001 {
-                XCTAssertLessThan(panel.withFoundation(panel.foundationOpacity - 0.01).worstMargin(pairs), AtticSurfaceModel.solverMargin,
+                XCTAssertLessThan(panel.withDarkTint(0).withFoundation(panel.foundationOpacity - 0.01).worstMargin(pairs), AtticSurfaceModel.solverMargin,
                                   "the least backing that passes: \(context.caption)")
             }
             checked += 1
@@ -43,6 +44,81 @@ final class AtticPhase1LookTests: XCTestCase {
         XCTAssertEqual(opacities.count, 4)
         for (opacity, rule) in zip(opacities, [67, 80, 66, 82]) {
             XCTAssertLessThan(opacity, rule)
+        }
+    }
+
+    // MARK: Dark's dark tint (A37)
+
+    /// A37 (owner, 2026-10-08, "Dark-mode glass keeps light text
+    /// readable"): in Dark, Glass and Frosted lay the least black over the
+    /// readable foundation at which Phase 0's primary text keeps 4.5 : 1 and
+    /// its secondary text 3 : 1 (4.5 under Increase Contrast) even over a
+    /// white window the glass passes straight through. Light, Solid and
+    /// Reduce Transparency draw no dark tint, and Light's surface is exactly
+    /// what it was.
+    func testDarkGlassAndFrostedGetTheLeastDarkTintThatKeepsTextReadable() {
+        var dark = 0
+        for context in AtticAppearanceCheck.allContexts() {
+            let panel = context.tokens.panel
+            guard context.mode == .dark, context.isTranslucent else {
+                XCTAssertEqual(panel.darkTint, 0, "no dark tint: \(context.caption)")
+                if panel.kind != .solid {
+                    XCTAssertEqual(panel.backing, panel.base.withAlpha(panel.foundationOpacity),
+                                   "the backing is the foundation, unchanged: \(context.caption)")
+                }
+                continue
+            }
+            let tokens = context.tokens
+            let pairs = [
+                AtticSurfaceModel.Pair(ink: .heading, foreground: tokens.ink(.heading), overlays: []),
+                AtticSurfaceModel.Pair(ink: context.increaseContrast ? .heading : .helper, foreground: tokens.ink(.helper), overlays: [])
+            ]
+            XCTAssertGreaterThanOrEqual(panel.passedThroughMargin(pairs), AtticSurfaceModel.solverMargin, context.caption)
+            for height in [AtticSurfaceModel.contentTop, 1] {
+                let background = panel.compositeOverPassedThroughWindow(at: height)
+                XCTAssertGreaterThanOrEqual(tokens.ink(.heading).contrast(on: background), 4.5, "body text AA: \(context.caption)")
+                XCTAssertGreaterThanOrEqual(tokens.ink(.helper).contrast(on: background), context.increaseContrast ? 4.5 : 3, context.caption)
+            }
+            if panel.darkTint > 0 {
+                XCTAssertLessThan(panel.withDarkTint(panel.darkTint - 0.005).passedThroughMargin(pairs), AtticSurfaceModel.solverMargin,
+                                  "the lightest tint that passes: \(context.caption)")
+            }
+            // Still glass: some of the window shows through.
+            XCTAssertLessThan(panel.backing.alpha, 1, context.caption)
+            // Over every modelled desktop the text is never harder to read.
+            XCTAssertGreaterThanOrEqual(panel.worstMargin(pairs), panel.withDarkTint(0).worstMargin(pairs) - 1e-9, context.caption)
+            dark += 1
+        }
+        XCTAssertGreaterThan(dark, 20)
+        // Reduce Transparency draws Solid: no tint over it, nothing doubles up.
+        let reduced = AtticDesignContext(mode: .dark, surface: .glass, reduceTransparency: true).tokens.panel
+        XCTAssertEqual(reduced.kind, .solid)
+        XCTAssertEqual(reduced.darkTint, 0)
+        XCTAssertEqual(reduced.composite(.white), reduced.base)
+    }
+
+    /// The default (Original, Glass, Tint Off) and Frosted in Dark, pinned:
+    /// the tint each needs, white text over a white window before (the
+    /// readable foundation alone) and after, and Light untouched.
+    func testDarkTintPinnedForOriginal() {
+        func numbers(_ context: AtticDesignContext) -> (tint: Double, before: Double, after: Double) {
+            let panel = context.tokens.panel
+            let ink = context.tokens.ink(.heading)
+            let height = AtticSurfaceModel.contentTop
+            return (panel.darkTint,
+                    ink.contrast(on: panel.withDarkTint(0).compositeOverPassedThroughWindow(at: height)),
+                    ink.contrast(on: panel.compositeOverPassedThroughWindow(at: height)))
+        }
+        for surface in [PanelSurfaceStyle.glass, .frosted] {
+            let dark = numbers(AtticDesignContext(mode: .dark, surface: surface))
+            let light = AtticDesignContext(mode: .light, surface: surface).tokens.panel
+            print(String(format: "A37 Dark %@: tint %.3f, foundation %.3f, before %.2f : 1, after %.2f : 1",
+                         surface.title, dark.tint, AtticDesignContext(mode: .dark, surface: surface).tokens.panel.foundationOpacity,
+                         dark.before, dark.after))
+            XCTAssertLessThan(dark.before, 4.5, "\(surface): the problem the owner saw")
+            XCTAssertGreaterThanOrEqual(dark.after, 4.5, "\(surface)")
+            XCTAssertLessThan(dark.after, 4.5 * AtticSurfaceModel.solverMargin * 1.06, "\(surface): no darker than it needs")
+            XCTAssertEqual(light.darkTint, 0)
         }
     }
 

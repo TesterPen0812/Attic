@@ -5,6 +5,21 @@ Every later change is recorded here: what changed, why, and who asked.
 
 ## Phase 2
 
+### A37: Dark's dark tint (owner, 2026-10-08, "Dark-mode glass keeps light text readable")
+- **`AtticSurfaceModel.darkTint`**: on Dark Glass and Frosted, black laid
+  over the readable foundation and under the Tint, at the least opacity
+  (half-percent steps) at which Phase 0's primary text keeps 4.5 : 1 and
+  its secondary text 3 : 1 (4.5 under Increase Contrast) over a white
+  window the glass passes straight through (`passedThroughWindow`, 255).
+  Live Liquid Glass adapts to what is behind it, so the measured 143 for
+  Dark Glass over white did not hold over a white window (owner-26: the
+  note's white text vanished). Original Dark Glass: 0.425 over a 0.26
+  foundation; Dark Frosted: 0.330 over 0.38.
+- **`backing`**: the foundation with the dark tint, as one colour, which
+  the surface draws and the edge veil fades into. Exactly the foundation
+  when there is no dark tint, so Light, Solid and Reduce Transparency are
+  unchanged.
+
 ### Notes v2, round 2: tables (owner, 2026-10-08, sheet 3 as drafted)
 - **`AtticNoteTableMetrics`**: cell padding 6 × 4 around the body's 14 / 21
   lines (a one-line row is 29), columns 56–168 by content, a 0.5 pt grid

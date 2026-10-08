@@ -556,7 +556,8 @@ struct AtticSurfaceBackground<S: Shape>: View {
         ZStack {
             if model.kind != .solid {
                 underlay
-                shape.fill(model.base.withAlpha(model.foundationOpacity).color)
+                // The foundation, with Dark's dark tint over it (A37).
+                shape.fill(model.backing.color)
             } else if model.porcelain {
                 // Visual A: the flat surface, with its top sheen kept within
                 // the first 24 pt.
@@ -810,8 +811,10 @@ struct AtticEdgeVeil: View {
     var body: some View {
         let model = design.tokens.panel
         let location: Double = edge == .top ? 0 : 1
-        let colour = model.washColor.withAlpha(model.tintOpacity(at: location)).over(model.base)
-        let strength = model.kind == .solid ? 1 : model.foundationOpacity
+        // The surface's own colour and opacity (with Dark's dark tint, A37).
+        let backing = model.kind == .solid ? model.base : model.backing
+        let colour = model.washColor.withAlpha(model.tintOpacity(at: location)).over(backing.withAlpha(1))
+        let strength = backing.alpha
         let ramp = AtticEdgeBlur.veilStops.map {
             Gradient.Stop(color: colour.withAlpha($0.opacity * strength).color, location: $0.location)
         }

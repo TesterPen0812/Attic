@@ -338,11 +338,13 @@ final class AtticDesignSystemTests: XCTestCase {
             let treatment = Self.phase0Treatment(context)
             let phase0 = AtticSurfaceModel.phase0(treatment, increaseContrast: context.increaseContrast)
             let panel = context.tokens.panel
-            XCTAssertEqual(panel, phase0.readable(primary: AtticRGBA(treatment.palette.primaryForeground),
-                                                  secondary: AtticRGBA(treatment.palette.secondaryForeground)).definedDarkEdge(),
+            let primary = AtticRGBA(treatment.palette.primaryForeground)
+            let secondary = AtticRGBA(treatment.palette.secondaryForeground)
+            XCTAssertEqual(panel, phase0.readable(primary: primary, secondary: secondary)
+                .darkTinted(primary: primary, secondary: secondary).definedDarkEdge(),
                            context.caption)
-            XCTAssertEqual(panel.withFoundation(phase0.foundationOpacity), phase0.definedDarkEdge(),
-                           "only the backing and the dark edge differ from Phase 0: \(context.caption)")
+            XCTAssertEqual(panel.withFoundation(phase0.foundationOpacity).withDarkTint(0), phase0.definedDarkEdge(),
+                           "only the backing, Dark's dark tint and the dark edge differ from Phase 0: \(context.caption)")
         }
         XCTAssertEqual(AtticDesignContext(mode: .light, surface: .glass, reduceTransparency: true).tokens.panel.kind, .solid)
         // Phase 0's Original coverage (far more see-through than PR #5's 67 / 80 / 66 / 82).

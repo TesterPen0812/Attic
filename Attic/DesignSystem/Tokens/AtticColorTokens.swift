@@ -649,6 +649,8 @@ struct AtticColorTokens: Equatable, Sendable {
             ? AtticSurfaceModel.phase0(phase0Treatment, increaseContrast: ic)
                 .readable(primary: AtticRGBA(phase0Treatment.palette.primaryForeground),
                           secondary: AtticRGBA(phase0Treatment.palette.secondaryForeground))
+                .darkTinted(primary: AtticRGBA(phase0Treatment.palette.primaryForeground),
+                            secondary: AtticRGBA(phase0Treatment.palette.secondaryForeground))
                 .definedDarkEdge()
             : AtticSurfaceModel.solve(
                 base: panelBase, kind: key.surface, appearance: appearance,
