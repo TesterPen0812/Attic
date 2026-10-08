@@ -7,7 +7,9 @@ import AppKit
 /// note into the new draft through the real text view and router, then
 /// shows one state: `structured`, `bar`, `aa`, `slash`, `date`, `link`,
 /// `context`, `formatmenu`, `notemenu`, `hint`; and, for the dropdown seam,
-/// `slash-lead`, `slash-da` and `date-lead` (under the first paragraph).
+/// `slash-lead`, `slash-da` and `date-lead` (under the first paragraph);
+/// `aacycle` opens and closes Aa's format row on a timer for recordings
+/// (two slow cycles, then five quick ones, repeating).
 /// Nothing here runs in a normal launch.
 @MainActor
 enum NoteFormatCaptureScene {
@@ -92,6 +94,38 @@ enum NoteFormatCaptureScene {
         textView.needsDisplay = true
     }
 
+    /// Slow: open 1.6 s, closed 1.6 s, twice; then five quick open/close
+    /// pairs 0.25 s apart; then again. The process opts out of App Nap
+    /// while it runs: a panel app that is not frontmost has its timers
+    /// coalesced, which merged a quick close with the next open.
+    private static var latencyActivity: NSObjectProtocol?
+
+    private static func cycleFormatRow(chrome: NotesPageChrome, after delay: Double) {
+        if latencyActivity == nil {
+            latencyActivity = ProcessInfo.processInfo.beginActivity(options: [.userInitiated, .latencyCritical],
+                                                                    reason: "Format row recording seam")
+        }
+        var steps: [(Double, Bool)] = [(delay, true), (1.6, false), (1.6, true), (1.6, false)]
+        steps.append((1.6, true))
+        for index in 0..<9 { steps.append((0.25, index % 2 == 0 ? false : true)) }
+        run(steps[...], chrome: chrome)
+    }
+
+    private static func run(_ steps: ArraySlice<(Double, Bool)>, chrome: NotesPageChrome) {
+        guard let (wait, open) = steps.first else {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 1.6) { cycleFormatRow(chrome: chrome, after: 0) }
+            return
+        }
+        let timer = Timer(timeInterval: wait, repeats: false) { _ in
+            MainActor.assumeIsolated {
+                if open { chrome.openFormatBar(keyboard: false) } else { chrome.closeFormatBar() }
+                run(steps.dropFirst(), chrome: chrome)
+            }
+        }
+        timer.tolerance = 0
+        RunLoop.main.add(timer, forMode: .common)
+    }
+
     private static func show(_ scene: String, controls: NoteFormatControls, chrome: NotesPageChrome,
                              textView: NoteEditorTextView) {
         switch scene {
@@ -170,6 +204,20 @@ enum NoteFormatCaptureScene {
                                   below: NSRect(x: 24, y: rect.maxY, width: 10, height: 1), in: textView)
         case "notemenu":
             chrome.presentMenu()
+        case "fadecheck":
+            // A long note scrolled so text sits under the header and the
+            // bottom row (round 3's no-fade-behind-glass check).
+            for index in 1...30 {
+                type("Line \(index): text that runs under the glass controls as the note scrolls.\n", into: textView)
+            }
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
+                AtticCaptureScroll.scrollToMiddle(in: textView.enclosingScrollView)
+            }
+        case "library":
+            chrome.captureToggleLibrary?()
+        case "aacycle":
+            textView.setSelectedRange(NSRange(location: range(of: "Keep pricing", in: textView).location, length: 0))
+            cycleFormatRow(chrome: chrome, after: 1)
         default:
             break
         }

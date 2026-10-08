@@ -134,12 +134,14 @@ final class TasksRound11Tests: XCTestCase {
         }
     }
 
-    /// The fade under the tabs (A15): rows scrolled under them stay faint.
+    /// The fade behind the tabs (owner, 2026-10-06): rows behind the tab
+    /// labels stay faint, never gone or readable; whole from the first row.
     func testRowsShowOnlyFaintlyUnderTheTabs() {
-        let stops = TasksViewport.maskStops(height: 520, tabsTop: 80, listTop: 110, bottomStack: 60)
-        let underLabels = stops.filter { $0.location <= 96.0 / 520 + 0.0001 }
-        XCTAssertTrue(underLabels.allSatisfy { $0.opacity > 0 && $0.opacity <= AtticScrollUnderFade.controlsEdge + 0.001 },
-                      "rows under the tab labels are faint, never gone or readable")
+        let stops = TasksViewport.maskStops(height: 520, tabsTop: 80)
+        let underLabels = stops.filter { $0.location >= 80.0 / 520 - 0.0001 && $0.location <= 96.0 / 520 + 0.0001 }
+        XCTAssertFalse(underLabels.isEmpty)
+        XCTAssertTrue(underLabels.allSatisfy { $0.opacity > 0 && $0.opacity <= AtticScrollUnderFade.behindText + 0.001 },
+                      "rows behind the tab labels are faint, never gone or readable")
         XCTAssertEqual(stops.first { $0.location >= 110.0 / 520 - 0.0001 }?.opacity, 1, "fully there from the first row's rest")
     }
 

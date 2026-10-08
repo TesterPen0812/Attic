@@ -23,6 +23,10 @@ final class NotesPageChrome: ObservableObject {
     /// ⌃Tab / ⌃⇧Tab out of the text (OD-7): the page takes the keyboard
     /// to its next (true) or previous control.
     var leaveEditor: ((_ forward: Bool) -> Void)?
+    #if DEBUG
+    /// The capture seam's All notes (UI-test launches only).
+    var captureToggleLibrary: (() -> Void)?
+    #endif
     /// The open panel for Insert › Image or File…, the `/` row (one file),
     /// or a failed object's Retry and Locate… (one file, for that object).
     enum FileRequest: Equatable {

@@ -130,6 +130,9 @@ struct NotesEditorPage: View {
             controller.present()
             chrome.menuCommands = { noteMenuCommands() }
             chrome.leaveEditor = { forward in leaveEditor(forward: forward) }
+            #if DEBUG
+            chrome.captureToggleLibrary = { toggleLibrary() }
+            #endif
             if keyMonitor == nil {
                 keyMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { event in
                     bottomKeyPressed(event) ? nil : event
@@ -244,12 +247,12 @@ struct NotesEditorPage: View {
                                         noteStore.tagCounts
                                     })
                 .id(ObjectIdentifier(session.engine))
-                // A15, as on Tasks: the text runs under the header's
-                // controls and the bottom row, faintly visible as it fades;
-                // full at the title's and the last line's resting places.
-                // No native soft edge here.
-                .atticScrollUnderFade(topBand: layout.headerBottom, restTop: topInset,
-                                      bottomBand: bottomControls, restBottom: bottomInset)
+                // The text runs under the header's glass controls and the
+                // bottom row at full strength (owner, 2026-10-06: no fade
+                // behind glass), dissolving only into the panel's own top and
+                // bottom edges. No native soft edge here.
+                .atticScrollUnderFade(plainText: [], topEdge: layout.scrollEdgeFadeTop,
+                                      bottomEdge: layout.scrollEdgeFadeBottom)
                 .accessibilityIdentifier("note-editor")
                 .accessibilitySortPriority(3)
                 .transition(slide(from: Self.noteEdge))
@@ -284,7 +287,7 @@ struct NotesEditorPage: View {
     // MARK: Bottom row
 
     /// The bottom row; while Aa's format row is open, the format row in its
-    /// place (OD-14: All notes, Aa and New note step aside).
+    /// place (OD-14; p2-37 draft 1: Aa grows into it as the others make way).
     private var bottomRow: some View {
         AtticControlGroup {
             NoteFormatRowSwitch(state: chrome.formatRow, model: { [weak chrome] in chrome?.controls?.formatModel }) {
@@ -302,12 +305,14 @@ struct NotesEditorPage: View {
                     toggleLibrary()
                 }
                 .keyboardShortcut("l", modifiers: [.command, .shift])
+                .noteFormatRowLeaving(.allNotes)
                 .modifier(NotesKeyboardStop(stop: .allNotes, enabled: bottomStops, focus: $bottomFocus))
                 .accessibilityIdentifier("notes-all-notes")
                 .accessibilitySortPriority(1)
                 Spacer(minLength: AtticSpacing.s12)
                 if !controller.isLibraryPresented, let session = controller.active {
                     NoteStatusSlot(controller: controller, store: noteStore, session: session, damaged: damagedRecovery)
+                        .noteFormatRowLeaving(.status)
                         .accessibilitySortPriority(2)
                         .transition(.opacity)
                 }
@@ -322,6 +327,7 @@ struct NotesEditorPage: View {
                     newNote()
                 }
                 .keyboardShortcut("n", modifiers: .command)
+                .noteFormatRowLeaving(.newNote)
                 .modifier(NotesKeyboardStop(stop: .newNote, enabled: bottomStops, focus: $bottomFocus))
                 .accessibilityIdentifier("notes-new-note")
             }
@@ -332,9 +338,10 @@ struct NotesEditorPage: View {
     /// Aa (OD-14, p2-36 draft 1): the bottom row turns into the format row
     /// in place, until ✕ or Esc. ⌘T opens it too.
     private var formatButton: some View {
-        AtticRaisedButton(systemName: "textformat", label: "Format", help: String(localized: "Format (⌘T)")) {
+        AtticRaisedButton(systemName: NoteFormatRowSource.symbol, label: "Format", help: String(localized: "Format (⌘T)")) {
             chrome.openFormatBar(keyboard: false)
         }
+        .noteFormatRowSource()
         .accessibilityIdentifier("notes-format-button")
     }
 

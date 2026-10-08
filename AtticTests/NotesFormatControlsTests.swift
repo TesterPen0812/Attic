@@ -802,6 +802,201 @@ final class NotesFormatControlsTests: XCTestCase {
         XCTAssertEqual(controls.snapshotCount, snapshots + 1, "one state read as it opens")
     }
 
+    /// A29: a note opens with its caret at the start of the title, where
+    /// nothing in the row applies, so Aa showed a row of dimmed controls
+    /// ("it's greyed out"). Opening the row from the title now puts the caret
+    /// on the first body line (the text is untouched), and every control that
+    /// applies there is enabled.
+    func testOpeningTheFormatRowFromTheTitleFormatsTheFirstBodyLine() {
+        let (controls, _, textView) = make()
+        let text = textView.string
+        textView.setSelectedRange(NSRange(location: 0, length: 0))
+        controls.isFormatBarOpen = true
+        XCTAssertEqual(textView.selectedRange(), NSRange(location: range("Lead", textView).location, length: 0),
+                       "the caret moves to the start of the first body line")
+        XCTAssertEqual(textView.string, text, "the text is not changed")
+        let snapshot = controls.formatModel.snapshot
+        XCTAssertNil(snapshot.disabledReason)
+        for command in NoteCommandCatalog.lists + NoteCommandCatalog.styles where command != .paragraph(.heading(1)) {
+            XCTAssertTrue(snapshot.isEnabled(command), "\(command) applies to the caret's line")
+        }
+        XCTAssertTrue(NoteCommandCatalog.styles.contains { snapshot.isEnabled($0) }, "the style pill is live")
+
+        // A caret already in the body stays where it is.
+        controls.isFormatBarOpen = false
+        let inBody = NSRange(location: range("Annual", textView).location + 3, length: 0)
+        textView.setSelectedRange(inBody)
+        controls.isFormatBarOpen = true
+        XCTAssertEqual(textView.selectedRange(), inBody)
+
+        // A title-only note has no line to format: the caret and text stay.
+        let (titleOnly, _, titleView) = make(NoteDocument(blocks: [.text("Only a title")]))
+        titleView.setSelectedRange(NSRange(location: 3, length: 0))
+        titleOnly.isFormatBarOpen = true
+        XCTAssertEqual(titleView.selectedRange(), NSRange(location: 3, length: 0))
+        XCTAssertEqual(titleView.string, "Only a title")
+    }
+
+    /// The app's own springs and outward neighbour travel, in every feel:
+    /// in the narrowest panel (a 288 pt row, Aa at 208), the growing glass
+    /// never reaches a visible neighbour, opening or closing. Wider rows
+    /// also retain clear space, and the row at rest is the
+    /// plain bar with its controls fully drawn.
+    func testTheFormatRowGrowsOutOfAaWithOneGlassMoving() {
+        for row in [CGFloat(288), 368, 448] {
+            let aa = CGRect(x: row - 80, y: 0, width: 36, height: 36)
+            let allNotes = (minX: CGFloat(0), maxX: CGFloat(36)), newNote = (minX: row - 36, maxX: row)
+            // Two equal spacers center the fixed-size, capped status pill.
+            let statusWidth = min(AtticNoteMetrics.pillMaxWidth, 120 + row - 288)
+            let statusCenter = (36 + aa.minX) / 2
+            let status = (minX: statusCenter - statusWidth / 2, maxX: statusCenter + statusWidth / 2)
+            for feel in AtticMotionFeel.allCases {
+                let tuning = feel.tuning
+                let plan = NoteFormatMotion.Plan(tuning)
+                XCTAssertEqual(plan.openLeading.response, tuning.expand.response, "\(feel): the glass is expand")
+                XCTAssertEqual(plan.openLeading.bounce, tuning.expand.bounce)
+                XCTAssertEqual(plan.openTrailing.response, tuning.expand.response)
+                XCTAssertEqual(plan.openLeading.delay, 0, "\(feel): Aa answers the click at once")
+                XCTAssertEqual(plan.openTrailing, plan.openLeading, "\(feel): both edges move on one clock")
+                XCTAssertEqual(plan.closeGrow.response, tuning.expand.response)
+                XCTAssertEqual(plan.openControls.response, tuning.popover.response, "\(feel): the controls come as a bar")
+                XCTAssertEqual(plan.comeBack.response, tuning.popover.response)
+                XCTAssertGreaterThan(plan.openControls.delay, plan.openTrailing.delay, "\(feel): controls once the glass is wide")
+                XCTAssertGreaterThan(plan.closeGrow.delay, 0, "\(feel): controls first when closing")
+
+                func visible(_ value: Double) -> Double { min(1, max(0, value)) }
+                func check(_ t: Double, leading: Double, trailing: Double, allAway: Double, rightAway: Double,
+                           statusShows: Double, _ phase: String) {
+                    let extent = AtticFormatRowGrowth(source: aa, rowWidth: row, leading: leading, trailing: trailing,
+                                                      sourceSymbol: "textformat").extent
+                    let glass = (minX: extent.minX, maxX: extent.minX + extent.width)
+                    // A neighbour still showing keeps clear of the glass's edge: New
+                    // note by 6 pt (it rests 8 from Aa), the status by 20, All notes by 24.
+                    func overlaps(_ span: (minX: CGFloat, maxX: CGFloat), offset: CGFloat = 0, clear: CGFloat) -> Bool {
+                        let minX = max(0, span.minX + offset), maxX = min(row, span.maxX + offset)
+                        guard maxX > minX else { return false } // Clipped outside the row.
+                        return glass.minX - clear < maxX && glass.maxX + clear > minX
+                    }
+                    XCTAssertFalse(overlaps(newNote, offset: NoteFormatRowNeighbour.newNote.offset(at: rightAway), clear: 6),
+                                   "\(feel) \(row)pt \(phase) \(t)s: the glass reaches New note")
+                    if overlaps(status, clear: 20) {
+                        XCTAssertLessThanOrEqual(statusShows, 0.05, "\(feel) \(phase) \(t)s: the glass reaches the status")
+                    }
+                    XCTAssertFalse(overlaps(allNotes, offset: NoteFormatRowNeighbour.allNotes.offset(at: allAway), clear: 24),
+                                   "\(feel) \(row)pt \(phase) \(t)s: the glass reaches All notes")
+                }
+                for step in 0...1500 {
+                    let t = Double(step) / 1000
+                    XCTAssertEqual(plan.openLeading.value(at: t), plan.openTrailing.value(at: t),
+                                   "\(feel) \(t)s: no left-then-right expansion")
+                    // Opening: both neighbours slide outward on the glass's
+                    // spring; they stay drawn until clipped outside their edge.
+                    check(t, leading: plan.openLeading.value(at: t), trailing: plan.openTrailing.value(at: t),
+                          allAway: plan.openLeading.value(at: t), rightAway: plan.openTrailing.value(at: t),
+                          statusShows: 0, "opening")
+                    // Closing: New note rides in with the trailing edge on
+                    // the glass's own spring; All notes and the status come
+                    // back on their own clocks.
+                    let back = 1 - plan.closeGrow.value(at: t)
+                    XCTAssertEqual(plan.newNoteBack, plan.closeGrow, "\(feel): New note follows the trailing edge")
+                    check(t, leading: back, trailing: back,
+                          allAway: 1 - visible(plan.comeBack.value(at: t - plan.allNotesReturns)),
+                          rightAway: back,
+                          statusShows: visible(plan.comeBack.value(at: t - plan.statusReturns)), "closing")
+                }
+            }
+        }
+
+        let row: CGFloat = 288
+        let aa = CGRect(x: 208, y: 0, width: 36, height: 36)
+        let start = AtticFormatRowGrowth(source: aa, rowWidth: row, grow: 0, sourceSymbol: "textformat")
+        XCTAssertEqual(start.extent.minX, aa.minX); XCTAssertEqual(start.extent.width, aa.width)
+        XCTAssertEqual(start.sourceGlyphOpacity, 1, "it starts as Aa, glyph and all")
+        let end = AtticFormatRowGrowth(source: aa, rowWidth: row, grow: 1, sourceSymbol: "textformat")
+        XCTAssertEqual(end.extent.minX, 0); XCTAssertEqual(end.extent.width, row)
+        XCTAssertEqual(end.sourceGlyphOpacity, 0)
+        XCTAssertEqual(NoteFormatRowChannels.open,
+                       NoteFormatRowChannels(leading: 1, trailing: 1, controls: 1, allNotes: 1, newNoteAndStatus: 1),
+                       "open, the controls are fully drawn")
+    }
+
+    /// A leaving neighbour's glass narrows to the part still inside its
+    /// slot, on the side it travels toward, so it passes under the row's
+    /// edge instead of being drawn over the panel's margin (A32).
+    func testALeavingNeighboursGlassNarrowsUnderTheRowsEdge() {
+        let button = CGRect(origin: .zero, size: AtticControlSize.panelButton)
+        let radius = button.height / 2
+        for neighbour in [NoteFormatRowNeighbour.allNotes, .newNote] {
+            let rest = neighbour.reveal(at: 0)?.shape(cornerRadius: radius).path(in: button).boundingRect
+            XCTAssertEqual(rest?.width ?? 0, button.width, accuracy: 0.01, "\(neighbour): whole at rest")
+            let half = neighbour.reveal(at: 0.4)
+            let part = half?.shape(cornerRadius: radius).path(in: button).boundingRect ?? .zero
+            let travel = abs(neighbour.offset(at: 0.4))
+            XCTAssertEqual(part.width, button.width - travel, accuracy: 0.01)
+            // In the row, the part left stays inside the slot.
+            let shown = part.offsetBy(dx: neighbour.offset(at: 0.4), dy: 0)
+            XCTAssertGreaterThanOrEqual(shown.minX, button.minX - 0.01, "\(neighbour): nothing past the row's edge")
+            XCTAssertLessThanOrEqual(shown.maxX, button.maxX + 0.01, "\(neighbour): nothing past the row's edge")
+            let gone = neighbour.reveal(at: 1)?.shape(cornerRadius: radius).path(in: button)
+            XCTAssertEqual(gone?.isEmpty, true, "\(neighbour): nothing drawn once it has left")
+        }
+        XCTAssertNil(NoteFormatRowNeighbour.status.reveal(at: 0.5), "the status is plain text and only hides")
+    }
+
+    /// Animations: Reduced and Reduce Motion swap the rows at once; with
+    /// motion, the bottom row stays live in the tree (away) while the glass
+    /// grows. Open, it is disabled, out of the pointer and keyboard.
+    func testReduceMotionSwapsTheFormatRowAtOnce() {
+        final class Seen { var enabled = true, away = false }
+        struct Probe: View {
+            let seen: Seen
+            @Environment(\.isEnabled) private var isEnabled
+            @Environment(\.noteFormatRowStage) private var stage
+            var body: some View {
+                seen.enabled = isEnabled
+                seen.away = stage.sourceHidden
+                return Color.clear.frame(width: 288, height: 36)
+            }
+        }
+        func host(reduceMotion: Bool) -> (NoteFormatRowState, Seen) {
+            let (controls, _, _) = make()
+            let state = NoteFormatRowState()
+            let seen = Seen()
+            var design = AtticDesignContext(mode: .light)
+            design.reduceMotion = reduceMotion
+            let view = NoteFormatRowSwitch(state: state, model: { controls.formatModel }) { Probe(seen: seen) }
+                .environment(\.atticDesign, design)
+            let hosting = NSHostingView(rootView: view)
+            hosting.frame = NSRect(x: 0, y: 0, width: 288, height: 36)
+            let window = NSWindow(contentRect: hosting.frame, styleMask: [.borderless], backing: .buffered, defer: false)
+            window.isReleasedWhenClosed = false
+            window.contentView = hosting
+            windows.append(window)
+            hosting.layoutSubtreeIfNeeded()
+            return (state, seen)
+        }
+        func settle() { RunLoop.main.run(until: Date().addingTimeInterval(0.05)) }
+
+        let (reduced, reducedSeen) = host(reduceMotion: true)
+        settle()
+        XCTAssertTrue(reducedSeen.enabled)
+        reduced.open(keyboard: false)
+        settle()
+        XCTAssertFalse(reducedSeen.enabled, "the row is open at once")
+        XCTAssertTrue(reducedSeen.away)
+        reduced.close()
+        settle()
+        XCTAssertTrue(reducedSeen.enabled, "and back at once")
+        XCTAssertFalse(reducedSeen.away)
+
+        let (moving, movingSeen) = host(reduceMotion: false)
+        settle()
+        moving.open(keyboard: false)
+        settle()
+        XCTAssertTrue(movingSeen.away, "with motion Aa's glass is the row's")
+        XCTAssertTrue(movingSeen.enabled, "and the bottom row is still on its way out")
+    }
+
     /// ⌃Tab reaches the open row; ← → Tab ⇧Tab move round it, Return
     /// presses, and any other key goes back to writing. The text keeps the
     /// caret throughout.

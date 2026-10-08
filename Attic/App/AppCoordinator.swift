@@ -695,6 +695,17 @@ final class AppCoordinator: ObservableObject {
                 DispatchQueue.main.asyncAfter(deadline: .now() + 1) { [weak self] in
                     self?.hoverMonitor.keepVisibleForUITesting(makeKey: false)
                 }
+                #if DEBUG
+                // Capture seam: every scrollable list or text in the panel
+                // scrolled to its middle, so content sits under the controls.
+                if let delay = environment["ATTIC_UI_TEST_SCROLL_MIDDLE"].flatMap(Double.init) {
+                    DispatchQueue.main.asyncAfter(deadline: .now() + delay) {
+                        for window in NSApp.windows where window.isVisible {
+                            AtticCaptureScroll.scrollToMiddle(in: window.contentView)
+                        }
+                    }
+                }
+                #endif
                 if let delay = environment["ATTIC_UI_TEST_KEY_AFTER"].flatMap(Double.init) {
                     DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [weak self] in
                         self?.panelController.makeKeyForCapture()
@@ -1015,3 +1026,21 @@ final class AppCoordinator: ObservableObject {
         ]
     }
 }
+
+#if DEBUG
+/// The capture seam's scrolling (UI-test launches only).
+@MainActor
+enum AtticCaptureScroll {
+    static func scrollToMiddle(in view: NSView?) {
+        guard let view else { return }
+        if let scroll = view as? NSScrollView, let document = scroll.documentView {
+            let room = document.frame.height - scroll.contentView.bounds.height
+            if room > 40 {
+                scroll.contentView.scroll(to: NSPoint(x: scroll.contentView.bounds.minX, y: room * 0.45))
+                scroll.reflectScrolledClipView(scroll.contentView)
+            }
+        }
+        view.subviews.forEach { scrollToMiddle(in: $0) }
+    }
+}
+#endif

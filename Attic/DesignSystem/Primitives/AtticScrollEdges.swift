@@ -66,69 +66,68 @@ extension View {
 
 // MARK: - Content scrolls under the fixed controls (A15, shared)
 
-/// Scroll-under fade (owner, 2026-10-04, option A of the p2-27 draft; it
-/// replaces D1's "rows fade out before the controls"): scrolling content
-/// runs under the fixed controls at the top (pin, page button, the tabs or
-/// label line with Find and View Options) and the bottom (add bar, strip,
-/// selection bar), staying faintly visible as it fades, so the Liquid Glass
-/// controls pick up the content moving behind them. An opacity mask over
-/// the scroll view, static geometry: no blur, no per-scroll state, and no
-/// native soft edge. Resting places are unchanged: the first line rests at
-/// `restTop` and the last `restBottom` up from the bottom, both fully there.
-///
-/// The profile is the draft's: about 6 % at the panel's edges, 10 % over
-/// the controls' middle, 22 % at their inner edge (`topBand`, the bottom of
-/// the top controls' labels; `bottomBand`, the bottom controls' top), and
-/// an eased rise to full at the resting places. Under Reduce Transparency
-/// the glass is opaque and hides what passes beneath, as intended.
+/// Scroll-under fade, revised (owner, 2026-10-06: "those are just controls
+/// and are fine"): scrolling content runs under the fixed glass controls at
+/// full strength, with no fade; the glass keeps its own icons readable. A
+/// short fade stays only where scrolled text would sit behind plain text
+/// that has no glass of its own (Tasks' Now · Later · Done line, All notes'
+/// label line): faint across that text's own height, back to full within a
+/// few points either side. At the panel's own top and bottom edges content
+/// dissolves into the edge over a short band (round 4), so the rounded edge
+/// never slices a line. An opacity mask over the scroll view, static
+/// geometry: no blur, no per-scroll state, and no native soft edge. Resting
+/// places are unchanged.
 enum AtticScrollUnderFade {
-    /// At the panel's top and bottom edges.
-    static let edgeOpacity: Double = 0.06
-    /// Over the top controls' middle (the page buttons' lower part).
-    static let overTopControls: Double = 0.10
-    /// Over the bottom controls' middle (the add bar).
-    static let overBottomControls: Double = 0.08
-    /// At the controls' inner edge, where the eased rise to full starts.
-    static let controlsEdge: Double = 0.22
-    /// Where the "over the controls" stop sits, as a fraction of the band.
-    static let bandMiddle: CGFloat = 0.6
-
-    /// The eased rise's samples (smoothstep), from `controlsEdge` to 1.
-    private static let rise: [CGFloat] = [0.25, 0.5, 0.75]
+    /// Behind a line of plain text (scrolled text stays faintly there).
+    static let behindText: Double = 0.10
+    /// From faint to full on either side of that line.
+    static let textRamp: CGFloat = 6
+    /// At the panel's very edge: as faint as behind plain text. (Nearer
+    /// nothing, a list's kept pages stopped being built while idle in the
+    /// hosted pager tests, so the floor stays at a value they pass with.)
+    static let edgeFloor: Double = 0.10
+    /// The eased ramp's samples at the panel's edges.
+    private static let edgeSamples: [CGFloat] = [0, 0.2, 0.4, 0.6, 0.8, 1]
 
     static func ease(_ t: CGFloat) -> Double { Double(t * t * (3 - 2 * t)) }
 
     /// The mask's stops for a view `height` tall: locations 0…1, opacity.
-    static func stops(height: CGFloat, topBand: CGFloat, restTop: CGFloat,
-                      bottomBand: CGFloat, restBottom: CGFloat) -> [(location: CGFloat, opacity: Double)] {
+    /// `plainText` holds the vertical spans (in the view's space) of plain
+    /// text lines over the content; `topEdge` and `bottomEdge` are the
+    /// bands at the panel's own edges where content dissolves into the edge
+    /// (owner, 2026-10-06: "some sort of fade-away effect there"), eased from
+    /// `edgeFloor` at the edge to full at the band's inner end (about the middle
+    /// of the header's controls and of the bottom row). Everywhere else,
+    /// glass included, is full.
+    static func stops(height: CGFloat, plainText: [ClosedRange<CGFloat>],
+                      topEdge: CGFloat = 0, bottomEdge: CGFloat = 0) -> [(location: CGFloat, opacity: Double)] {
         guard height > 0 else { return [(0, 1), (1, 1)] }
-        let upperEdge = min(max(topBand, 0), restTop)
-        let fullTop = max(restTop, upperEdge)
-        let barTop = max(height - bottomBand, fullTop)
-        let fullBottom = min(max(height - restBottom, fullTop), barTop)
-        var points: [(CGFloat, Double)] = [(0, edgeOpacity),
-                                           (upperEdge * bandMiddle, overTopControls),
-                                           (upperEdge, controlsEdge)]
-        for t in rise {
-            points.append((upperEdge + (fullTop - upperEdge) * t, controlsEdge + (1 - controlsEdge) * ease(t)))
+        var ys: [CGFloat] = [0, height]
+        if topEdge > 0 { ys += edgeSamples.map { $0 * topEdge } }
+        if bottomEdge > 0 { ys += edgeSamples.map { height - $0 * bottomEdge } }
+        for band in plainText {
+            ys += [band.lowerBound - textRamp, band.lowerBound, band.upperBound, band.upperBound + textRamp]
         }
-        points.append((fullTop, 1))
-        points.append((fullBottom, 1))
-        for t in rise.reversed() {
-            points.append((barTop - (barTop - fullBottom) * t, controlsEdge + (1 - controlsEdge) * ease(t)))
-        }
-        points.append((barTop, controlsEdge))
-        points.append((height - (height - barTop) * bandMiddle, overBottomControls))
-        points.append((height, edgeOpacity))
         var result: [(location: CGFloat, opacity: Double)] = []
-        var last: CGFloat = -1
-        for (y, opacity) in points {
-            let location = min(max(y / height, 0), 1)
-            guard location > last || result.isEmpty else { continue }
-            result.append((location, opacity))
-            last = location
+        for y in Set(ys.filter { $0 >= 0 && $0 <= height }).sorted() {
+            result.append((y / height, opacity(at: y, height: height, plainText: plainText,
+                                               topEdge: topEdge, bottomEdge: bottomEdge)))
         }
         return result
+    }
+
+    /// The profile's opacity at `y`, straight from the edges and the bands.
+    static func opacity(at y: CGFloat, height: CGFloat, plainText: [ClosedRange<CGFloat>],
+                        topEdge: CGFloat = 0, bottomEdge: CGFloat = 0) -> Double {
+        var value = 1.0
+        if topEdge > 0, y < topEdge { value = min(value, edgeFloor + (1 - edgeFloor) * ease(max(y, 0) / topEdge)) }
+        if bottomEdge > 0, y > height - bottomEdge { value = min(value, edgeFloor + (1 - edgeFloor) * ease(max(height - y, 0) / bottomEdge)) }
+        for band in plainText {
+            if band.contains(y) { value = min(value, behindText); continue }
+            let distance = y < band.lowerBound ? band.lowerBound - y : y - band.upperBound
+            if distance < textRamp { value = min(value, behindText + (1 - behindText) * Double(distance / textRamp)) }
+        }
+        return value
     }
 
     /// The mask's opacity at `y` (linear between stops, as the gradient).
@@ -145,16 +144,15 @@ enum AtticScrollUnderFade {
 
 /// The scroll-under mask (`AtticScrollUnderFade`), sized to the view it masks.
 struct AtticScrollUnderMask: View {
-    let topBand: CGFloat
-    let restTop: CGFloat
-    let bottomBand: CGFloat
-    let restBottom: CGFloat
+    let plainText: [ClosedRange<CGFloat>]
+    var topEdge: CGFloat = 0
+    var bottomEdge: CGFloat = 0
 
     var body: some View {
         GeometryReader { proxy in
             LinearGradient(
-                stops: AtticScrollUnderFade.stops(height: proxy.size.height, topBand: topBand, restTop: restTop,
-                                                  bottomBand: bottomBand, restBottom: restBottom)
+                stops: AtticScrollUnderFade.stops(height: proxy.size.height, plainText: plainText,
+                                                  topEdge: topEdge, bottomEdge: bottomEdge)
                     .map { Gradient.Stop(color: .black.opacity($0.opacity), location: $0.location) },
                 startPoint: .top, endPoint: .bottom
             )
@@ -165,9 +163,9 @@ struct AtticScrollUnderMask: View {
 }
 
 extension View {
-    /// This scrolling content runs under the fixed controls and fades
-    /// there (see `AtticScrollUnderFade`).
-    func atticScrollUnderFade(topBand: CGFloat, restTop: CGFloat, bottomBand: CGFloat, restBottom: CGFloat) -> some View {
-        mask { AtticScrollUnderMask(topBand: topBand, restTop: restTop, bottomBand: bottomBand, restBottom: restBottom) }
+    /// This scrolling content runs under the fixed controls, faint only
+    /// behind lines of plain text (see `AtticScrollUnderFade`).
+    func atticScrollUnderFade(plainText: [ClosedRange<CGFloat>], topEdge: CGFloat = 0, bottomEdge: CGFloat = 0) -> some View {
+        mask { AtticScrollUnderMask(plainText: plainText, topEdge: topEdge, bottomEdge: bottomEdge) }
     }
 }

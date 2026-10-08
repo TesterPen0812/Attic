@@ -401,25 +401,25 @@ final class TasksRound13Tests: XCTestCase {
 
     // MARK: - Item 5, revised by A15: faint under the controls, whole at rest
 
-    /// Round 13 cut rows at the fixed bands; A15 (owner, 2026-10-04)
-    /// replaces that with the draft's scroll-under fade: under the bands the
-    /// list's mask stays in the draft's faint range (6 % to 22 %), and the
-    /// rise to full happens only between the bands and the resting rows.
+    /// Owner, 2026-10-06 (revising A15): no fade behind glass. Rows are
+    /// whole under the header and the bottom stack, whatever its height,
+    /// and faint only behind the Now · Later · Done line, back to full
+    /// within `textRamp` either side.
     func testTheListsMaskKeepsRowsFaintUnderTheBandsAndWholeAtRest() {
-        for stack in [CGFloat(36), 60, 96, 136] {
-            let height: CGFloat = 520
-            let stops = TasksViewport.maskStops(height: height, tabsTop: 80, listTop: 110, bottomStack: stack)
-            func opacity(_ y: CGFloat) -> Double { AtticScrollUnderFade.opacity(stops, at: y, height: height) }
-            XCTAssertEqual(opacity(0), AtticScrollUnderFade.edgeOpacity, accuracy: 0.001, "the panel's top edge")
-            XCTAssertEqual(opacity(height), AtticScrollUnderFade.edgeOpacity, accuracy: 0.001, "the panel's bottom edge")
-            XCTAssertEqual(opacity(96), AtticScrollUnderFade.controlsEdge, accuracy: 0.001, "the tabs' labels end")
-            XCTAssertEqual(opacity(height - stack), AtticScrollUnderFade.controlsEdge, accuracy: 0.001, "the bottom stack's top")
-            let partial = stride(from: CGFloat(96), through: height - stack, by: 0.5).filter { opacity($0) < 0.999 }
-            let top = partial.filter { $0 < height / 2 }, bottom = partial.filter { $0 >= height / 2 }
-            XCTAssertLessThanOrEqual((top.last ?? 96) - 96, 110 - 96, "the top rise ends at the resting row, stack \(stack)")
-            XCTAssertGreaterThanOrEqual(bottom.first ?? height, height - stack - AtticLayout.contentToAddBar,
-                                        "the bottom fall starts at the last resting row, stack \(stack)")
+        let height: CGFloat = 520
+        let stops = TasksViewport.maskStops(height: height, tabsTop: 80)
+        func opacity(_ y: CGFloat) -> Double { AtticScrollUnderFade.opacity(stops, at: y, height: height) }
+        for y in stride(from: CGFloat(0), through: 80 - AtticScrollUnderFade.textRamp, by: 1) {
+            XCTAssertEqual(opacity(y), 1, accuracy: 0.001, "whole under the header's glass at \(y)")
         }
+        for y in stride(from: CGFloat(80), through: 96, by: 1) {
+            XCTAssertEqual(opacity(y), AtticScrollUnderFade.behindText, accuracy: 0.001, "faint behind the tabs at \(y)")
+        }
+        for y in stride(from: 96 + AtticScrollUnderFade.textRamp, through: height, by: 1) {
+            XCTAssertEqual(opacity(y), 1, accuracy: 0.001, "whole down to the bottom stack and under it at \(y)")
+        }
+        XCTAssertLessThanOrEqual(AtticScrollUnderFade.textRamp * 2 + AtticLayout.pageTabsHeight, 2 * AtticLayout.pageTabsHeight,
+                                 "short: about the text's own height")
     }
 
     // MARK: - Item 6: the new-subtask field says what it is

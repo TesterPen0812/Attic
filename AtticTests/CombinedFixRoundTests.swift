@@ -416,32 +416,40 @@ final class CombinedFixRoundTests: XCTestCase {
 
     // MARK: A15 in Notes (replacing P2-02's D1)
 
-    /// The scroll-under fade for the Notes editor in a 320 × 520 panel: the
-    /// text runs faintly under the header's controls and the bottom row
-    /// (never gone, never above the controls'-edge opacity); the title's
-    /// resting line and the last resting line are fully there.
+    /// Owner, 2026-10-06: the Notes editor's edges are glass only (the
+    /// header's buttons and title capsule, the bottom row), so the editor
+    /// has no fade at all; All notes keeps a short one behind its label line.
     func testTheNotesTextShowsFaintlyUnderTheControls() {
+        let stops = AtticScrollUnderFade.stops(height: 520, plainText: [])
+        for y in stride(from: CGFloat(0), through: 520, by: 4) {
+            XCTAssertEqual(AtticScrollUnderFade.opacity(stops, at: y, height: 520), 1, accuracy: 0.001, "whole at \(y)")
+        }
+        let library = AtticScrollUnderFade.stops(height: 520, plainText: [70...86])
+        func opacity(_ y: CGFloat) -> Double { AtticScrollUnderFade.opacity(library, at: y, height: 520) }
+        XCTAssertEqual(opacity(78), AtticScrollUnderFade.behindText, accuracy: 0.001, "faint behind the label line")
+        XCTAssertEqual(opacity(70 - AtticScrollUnderFade.textRamp), 1, accuracy: 0.001)
+        XCTAssertEqual(opacity(86 + AtticScrollUnderFade.textRamp), 1, accuracy: 0.001)
+        XCTAssertEqual(opacity(20), 1, accuracy: 0.001, "whole under the header's glass")
+        XCTAssertEqual(opacity(500), 1, accuracy: 0.001, "whole under the bottom row's glass")
+
+        // Round 4 (owner): content dissolves into the panel's own edges, from
+        // faint at the edge to full at the middle of the header's controls
+        // and of the bottom row; under the rest of the glass it is whole.
         let size = CGSize(width: 320, height: 520)
         let layout = PanelPageLayout(cornerSize: 52, panelSize: size)
-        let restTop = layout.headerBottom + AtticNoteMetrics.titleTopGap
-        let bottomControls = layout.chromeInsets.bottom + AtticControlSize.panelButton.height
-        let restBottom = bottomControls + AtticSpacing.s12
-        let stops = AtticScrollUnderFade.stops(height: size.height, topBand: layout.headerBottom, restTop: restTop,
-                                               bottomBand: bottomControls, restBottom: restBottom)
-        func opacity(at y: CGFloat) -> Double { AtticScrollUnderFade.opacity(stops, at: y, height: size.height) }
-        for y in stride(from: 0, through: layout.headerBottom, by: 1) {
-            XCTAssertGreaterThan(opacity(at: y), 0.04, "faintly there under the header's controls at \(y)")
-            XCTAssertLessThanOrEqual(opacity(at: y), AtticScrollUnderFade.controlsEdge + 0.001, "never readable there at \(y)")
+        let top = layout.scrollEdgeFadeTop, bottom = layout.scrollEdgeFadeBottom
+        let edged = AtticScrollUnderFade.stops(height: 520, plainText: [], topEdge: top, bottomEdge: bottom)
+        func edgeOpacity(_ y: CGFloat) -> Double { AtticScrollUnderFade.opacity(edged, at: y, height: 520) }
+        XCTAssertEqual(edgeOpacity(0), AtticScrollUnderFade.edgeFloor, accuracy: 0.001, "all but gone at the panel's top edge")
+        XCTAssertEqual(edgeOpacity(520), AtticScrollUnderFade.edgeFloor, accuracy: 0.001, "and at its bottom edge")
+        XCTAssertEqual(edgeOpacity(top), 1, accuracy: 0.001, "whole from the header controls' middle")
+        XCTAssertEqual(edgeOpacity(520 - bottom), 1, accuracy: 0.001, "and to the bottom row's middle")
+        XCTAssertLessThan(top, layout.headerBottom, "a short band: within the header")
+        let ramp = stride(from: CGFloat(0), through: top, by: 1).map(edgeOpacity)
+        XCTAssertEqual(ramp, ramp.sorted(), "rising from the edge")
+        for y in stride(from: top, through: 520 - bottom, by: 4) {
+            XCTAssertEqual(edgeOpacity(y), 1, accuracy: 0.001, "whole at \(y)")
         }
-        XCTAssertEqual(opacity(at: restTop), 1, accuracy: 0.001, "the title's resting line is fully there")
-        let barTop = size.height - bottomControls
-        XCTAssertEqual(opacity(at: size.height - restBottom), 1, accuracy: 0.001, "the last resting line is fully there")
-        for y in stride(from: barTop, through: size.height, by: 1) {
-            XCTAssertGreaterThan(opacity(at: y), 0.04, "faintly there under the bottom row at \(y)")
-            XCTAssertLessThanOrEqual(opacity(at: y), AtticScrollUnderFade.controlsEdge + 0.001, "never readable there at \(y)")
-        }
-        XCTAssertGreaterThan(opacity(at: barTop - 6), AtticScrollUnderFade.controlsEdge)
-        XCTAssertLessThan(opacity(at: barTop - 6), 1, "an eased fall before the bottom row")
     }
 
     /// The fade reaches the AppKit editor: SwiftUI masks the platform view
