@@ -35,6 +35,13 @@ enum NotePrint {
                     image.renderedImage = renderer.placeholder(
                         size: image.displaySize(columnWidth: columnWidth), text: String(localized: "Image unavailable"))
                 }
+            } else if let table = object as? NoteTableAttachment {
+                // Paper has no sideways scrolling: the table is drawn to the
+                // page's width (wide columns shrink and wrap).
+                table.style = style
+                let image = table.renderImage(width: columnWidth, design: .default)
+                table.renderedImage = image
+                table.bounds = CGRect(origin: .zero, size: image.size)
             } else {
                 renderer.apply(to: object, today: NoteDay(date: Date()))
             }

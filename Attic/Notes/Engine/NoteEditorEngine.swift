@@ -135,6 +135,8 @@ final class NoteEditorEngine: NSObject, NSTextViewDelegate, NSTextStorageDelegat
     /// The caret entered or left a table, or its cell or cell selection
     /// changed (Aa's row turns into the table's tools and back).
     var onTableFocusChange: (() -> Void)?
+    /// A wide table scrolled sideways (its indicator shows for a moment).
+    var onTableScroll: ((NoteTableView) -> Void)?
     /// The table the keyboard is in, or was in before a control (Aa's row,
     /// a grip's menu) took it for a moment.
     weak var activeTableView: NoteTableView?

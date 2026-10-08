@@ -305,7 +305,7 @@ final class AgentTaskTools {
         [
             "name": "update_note",
             "title": "Update Attic Note",
-            "description": "Replace an Attic note's title, body, or both. Pass the `revision` that list_notes returned as `base_revision`: the write fails if the note changed since, or doesn't exist. A title or body must remain non-empty. In a note stored in the new format, keep checklist (`- [ ] …`), image (`![image](attic://image/…)`), file (`[file: name](attic://file/…)`) and date (`[date:YYYY-MM-DD]`) lines exactly as returned. Removing or changing an object token is rejected; text edits preserve objects. If the person has the note open, the change waits (status \"pending\") and applies when they leave it unchanged; the note's previous text is kept as a version.",
+            "description": "Replace an Attic note's title, body, or both. Pass the `revision` that list_notes returned as `base_revision`: the write fails if the note changed since, or doesn't exist. A title or body must remain non-empty. In a note stored in the new format, keep checklist (`- [ ] …`), image (`![image](attic://image/…)`), file (`[file: name](attic://file/…)`) and date (`[date:YYYY-MM-DD]`) lines exactly as returned. Tables read as an `<!-- attic:table id=… -->` line and a GFM pipe table: keep the token line; edit cell text, and add or remove whole rows or columns, in the pipe table; a pipe table without a token is a new table; removing a table's token and its rows deletes it. Removing or changing an object token is rejected; text edits preserve objects. If the person has the note open, the change waits (status \"pending\") and applies when they leave it unchanged; the note's previous text is kept as a version.",
             "annotations": [
                 "readOnlyHint": false,
                 "destructiveHint": false,
@@ -327,6 +327,32 @@ final class AgentTaskTools {
                     "body": ["type": "string"]
                 ],
                 "required": ["id", "base_revision"],
+                "additionalProperties": false
+            ]
+        ],
+        [
+            "name": "update_note_table",
+            "title": "Edit a Table in an Attic Note",
+            "description": "Edit one table in a note precisely, by the row, column and table ids list_notes returns under `tables`, without rewriting the body. Operations run in order, all or nothing: {\"op\":\"set_cell\",\"row_id\",\"column_id\",\"text\"}, {\"op\":\"insert_row\",\"after_row_id\" (null: first),\"cells\":[text…]}, {\"op\":\"insert_column\",\"after_column_id\" (null: first),\"cells\":[one per row],\"align\"}, {\"op\":\"delete_row\",\"row_id\"}, {\"op\":\"delete_column\",\"column_id\"}, {\"op\":\"set_header_row\",\"value\":bool}, {\"op\":\"set_alignment\",\"column_id\",\"align\":\"left|center|right\"}. Cells hold text and `[date:YYYY-MM-DD]` only. Pass the note's `revision` as `base_revision`. If the person has the note open, the change waits (status \"pending\").",
+            "annotations": [
+                "readOnlyHint": false,
+                "destructiveHint": false,
+                "idempotentHint": false,
+                "openWorldHint": false
+            ],
+            "inputSchema": [
+                "type": "object",
+                "properties": [
+                    "id": ["type": "string", "description": "Note id returned by list_notes."],
+                    "base_revision": ["type": "string", "description": "The note's `revision` from list_notes."],
+                    "table_id": ["type": "string", "description": "The table's `table_id` from list_notes."],
+                    "operations": [
+                        "type": "array",
+                        "items": ["type": "object"],
+                        "description": "The edits, in order."
+                    ]
+                ],
+                "required": ["id", "base_revision", "table_id", "operations"],
                 "additionalProperties": false
             ]
         ],
@@ -546,6 +572,7 @@ final class AgentTaskTools {
         case "list_notes": try listNotes(arguments)
         case "create_note": try createNote(arguments)
         case "update_note": try updateNote(arguments)
+        case "update_note_table": try updateNoteTable(arguments)
         case "delete_note": try deleteNote(arguments)
         case "delete_item": try deleteItem(arguments)
         case "restore_item": try restoreItem(arguments)
@@ -949,6 +976,62 @@ final class AgentTaskTools {
         }
     }
 
+    /// `update_note_table`: one table's cells and structure by id; the same
+    /// base-revision rule and pending-change rule as `update_note`.
+    private func updateNoteTable(_ arguments: [String: Any]) throws -> String {
+        guard let noteStore else { throw AgentToolError.unknownTool("update_note_table") }
+        let note = try findNote(arguments)
+        guard let baseRevision = arguments["base_revision"] as? String, !baseRevision.isEmpty else {
+            throw AgentToolError.invalidArguments("base_revision is required: pass the note's revision from list_notes.")
+        }
+        guard baseRevision == note.revisionToken else {
+            throw AgentToolError.notPerformed(
+                "The note changed since revision \(baseRevision) (now \(note.revisionToken)). Read it again with list_notes and retry."
+            )
+        }
+        guard let rawTable = arguments["table_id"] as? String, let tableID = UUID(uuidString: rawTable) else {
+            throw AgentToolError.invalidArguments("table_id is required: a table's id from list_notes.")
+        }
+        guard let operations = arguments["operations"] as? [[String: Any]], !operations.isEmpty else {
+            throw AgentToolError.invalidArguments("operations must be a non-empty list.")
+        }
+        guard note.usesDocumentFormat, let load = noteStore.loadDocument(noteID: note.id),
+              case let .editable(current) = load.content else {
+            throw AgentToolError.notPerformed("This note has no tables Attic can edit.")
+        }
+        guard let index = current.blocks.firstIndex(where: { $0.kind == .table && $0.id == tableID }),
+              let table = current.blocks[index].table else {
+            throw AgentToolError.invalidArguments("No table with id \(rawTable) is in this note.")
+        }
+        let edited: NoteTable
+        do {
+            edited = try NoteTableAgentEdit.apply(operations, to: table)
+        } catch {
+            throw AgentToolError.invalidArguments(error.localizedDescription)
+        }
+        var document = current
+        document.blocks[index].table = edited
+        document.refreshRequiredCapabilities()
+        let disposition = noteStore.agentWriteDisposition(note.id)
+        switch noteStore.agentWrite(noteID: note.id, baseRevisionToken: baseRevision, document: document,
+                                    agentName: "Agent", disposition: disposition) {
+        case .success(.applied):
+            let updated = noteStore.note(withID: note.id) ?? note
+            var block = document.blocks[index]
+            block.table = edited
+            return try encode(["status": "applied", "table": NoteTableAgentEdit.serialize(block), "note": serializeNote(updated)])
+        case let .success(.pending(editID)):
+            return try encode([
+                "status": "pending",
+                "pending_edit": editID.uuidString,
+                "message": "The note is on screen in Attic. Your edit is waiting as a proposal the person can review.",
+                "note": serializeNote(note)
+            ])
+        case let .failure(error):
+            throw AgentToolError.notPerformed(error.localizedDescription)
+        }
+    }
+
     private func deleteNote(_ arguments: [String: Any]) throws -> String {
         guard noteStore != nil else { throw AgentToolError.unknownTool("delete_note") }
         let note = try findNote(arguments)
@@ -998,6 +1081,8 @@ final class AgentTaskTools {
                     return ["placement_id": block.id?.uuidString ?? "", "name": row?.originalFilename ?? "image",
                             "attachment_id": block.attachmentID?.uuidString ?? "", "bytes_available": availability]
                 }
+                let tables = document.blocks.filter { $0.kind == .table }
+                if !tables.isEmpty { payload["tables"] = tables.map(NoteTableAgentEdit.serialize) }
                 payload["files"] = document.blocks.filter { $0.kind == .file }.map { block -> [String: Any] in
                     let row = block.attachmentID.flatMap { rows[$0] }
                     let availability: Any = block.attachmentID.flatMap { noteStore?.knownAttachmentAvailability($0) }

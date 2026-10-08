@@ -175,6 +175,29 @@ final class NoteTableView: NSView {
         updateFade()
     }
 
+    // MARK: The pointer over the table (its indicator shows)
+
+    private(set) var isPointerInside = false
+    private var hoverArea: NSTrackingArea?
+
+    override func updateTrackingAreas() {
+        super.updateTrackingAreas()
+        if let hoverArea { removeTrackingArea(hoverArea) }
+        let area = NSTrackingArea(rect: .zero, options: [.mouseEnteredAndExited, .activeAlways, .inVisibleRect], owner: self, userInfo: nil)
+        addTrackingArea(area)
+        hoverArea = area
+    }
+
+    override func mouseEntered(with event: NSEvent) {
+        isPointerInside = true
+        if grid.scrolls { engine?.onTableChromeChange?() }
+    }
+
+    override func mouseExited(with event: NSEvent) {
+        isPointerInside = false
+        if grid.scrolls { engine?.onTableChromeChange?() }
+    }
+
     // MARK: Re-hosting
 
     /// TextKit takes the view out of the text and puts it back when the

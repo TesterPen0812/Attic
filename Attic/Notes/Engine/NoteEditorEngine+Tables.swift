@@ -68,7 +68,10 @@ extension NoteEditorEngine {
         onTableChromeChange?()
     }
 
-    func tableDidScroll(_ view: NoteTableView) { onTableChromeChange?() }
+    func tableDidScroll(_ view: NoteTableView) {
+        onTableScroll?(view)
+        onTableChromeChange?()
+    }
 
     func tableWillChangeCell(_ view: NoteTableView) { history.breakCoalescing() }
 

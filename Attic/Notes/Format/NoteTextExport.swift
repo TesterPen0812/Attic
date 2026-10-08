@@ -106,6 +106,10 @@ enum NoteAgentTextError: LocalizedError, Equatable {
     case unknownBlock(String)
     case lossyFormatting
     case unsafeChecklist
+    case raggedTable
+    case tableTooLarge
+    case unknownTable(String)
+    case invalidTableEdit(String)
 
     var errorDescription: String? {
         switch self {
@@ -119,6 +123,14 @@ enum NoteAgentTextError: LocalizedError, Equatable {
             "This edit would flatten, duplicate, reorder, or change an existing checklist item. Keep remaining checklist lines unchanged except for their checked states; add or remove complete checklist lines."
         case .lossyFormatting:
             "This note contains paragraph structure or inline marks that the agent text format cannot safely preserve during this edit. Keep styled blocks unchanged, change only plain text or checklist checked states, or edit the note in Attic."
+        case .raggedTable:
+            "Every row of a table must have as many cells as its header row."
+        case .tableTooLarge:
+            "A table can have at most \(NoteTable.maxColumns) columns and \(NoteTable.maxRows) rows."
+        case let .unknownTable(reference):
+            "The table \(reference) is not in this note. Keep each table's <!-- attic:table id=… --> line as list_notes returned it."
+        case let .invalidTableEdit(reason):
+            reason
         }
     }
 }
@@ -188,8 +200,9 @@ enum NoteAgentTextSafety {
             guard dates(base) == dates(proposed) else { throw NoteAgentTextError.lossyFormatting }
             return
         }
-        let oldBlocks = base.blocks.filter { $0.kind != .checklist }
-        let newBlocks = proposed.blocks.filter { $0.kind != .checklist }
+        // Tables are matched by their own token and may change, come or go.
+        let oldBlocks = base.blocks.filter { $0.kind != .checklist && $0.kind != .table }
+        let newBlocks = proposed.blocks.filter { $0.kind != .checklist && $0.kind != .table }
         guard oldBlocks.count == newBlocks.count else { throw NoteAgentTextError.lossyFormatting }
         for (old, new) in zip(oldBlocks, newBlocks) {
             if old == new { continue }
@@ -224,9 +237,22 @@ enum NoteAgentTextParser {
             blocks.append(try parseTextual(title, kind: .text, reusing: nil))
         }
 
-        let lines = body.isEmpty ? [] : body.components(separatedBy: "\n")
-        for rawLine in lines {
-            let line = rawLine.hasSuffix("\r") ? String(rawLine.dropLast()) : rawLine
+        let lines = (body.isEmpty ? [] : body.components(separatedBy: "\n"))
+            .map { $0.hasSuffix("\r") ? String($0.dropLast()) : $0 }
+        var usedTables = Set<UUID>()
+        // Tables named by a token anywhere in the body are never matched by content.
+        let tokenIDs = Set(lines.compactMap { NoteTableText.commentFields($0)?["id"].flatMap(UUID.init(uuidString:)) })
+        var index = 0
+        while index < lines.count {
+            let line = lines[index]
+            index += 1
+            // 0. A table: its token line (if any) and its pipe rows.
+            if let parsed = try NoteAgentTableText.parse(lines: lines, from: index - 1) {
+                let block = try NoteAgentTableText.block(parsed, base: base, used: &usedTables, tokenIDs: tokenIDs)
+                blocks.append(block)
+                index = index - 1 + parsed.consumed
+                continue
+            }
             // 1. An unchanged line keeps its block exactly.
             if let match = baseLines.first(where: { !used.contains($0.0) && $0.0 > 0 && $0.2 == line }) {
                 blocks.append(match.1)

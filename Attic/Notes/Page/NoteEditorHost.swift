@@ -741,6 +741,7 @@ struct NoteEditorRepresentable: NSViewRepresentable {
         var accessories: NoteTitleAccessories?
         var controls: NoteFormatControls?
         var objects: NoteObjectControls?
+        var tables: NoteTableChrome?
     }
 
     func makeCoordinator() -> Coordinator { Coordinator() }
@@ -786,6 +787,9 @@ struct NoteEditorRepresentable: NSViewRepresentable {
         }
         context.coordinator.objects = objects
         chrome.objectControls = objects
+        let tables = NoteTableChrome(engine: engine, textView: textView, design: design)
+        engine.onTableScroll = { [weak tables] view in tables?.tableDidScroll(view) }
+        context.coordinator.tables = tables
         #if DEBUG
         NoteFormatCaptureScene.runIfRequested(controls: controls, chrome: chrome, textView: textView)
         #endif
@@ -819,6 +823,7 @@ struct NoteEditorRepresentable: NSViewRepresentable {
         context.coordinator.accessories?.headerBottom = headerBottom
         context.coordinator.controls?.update(design: design)
         context.coordinator.objects?.applyLook()
+        context.coordinator.tables?.design = design
     }
 
     static func dismantleNSView(_ scrollView: NSScrollView, coordinator: Coordinator) {
@@ -828,6 +833,8 @@ struct NoteEditorRepresentable: NSViewRepresentable {
         coordinator.controls = nil
         coordinator.objects?.invalidate()
         coordinator.objects = nil
+        coordinator.tables?.invalidate()
+        coordinator.tables = nil
         if coordinator.engine?.scrollView === scrollView { coordinator.engine?.detachView() }
     }
 }

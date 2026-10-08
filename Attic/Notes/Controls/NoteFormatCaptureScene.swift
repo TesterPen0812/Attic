@@ -37,6 +37,10 @@ enum NoteFormatCaptureScene {
                 writeTypographySample(controls: controls, textView: textView)
                 return
             }
+            if scene == "tables" {
+                writeTablesSample(controls: controls, chrome: chrome, textView: textView)
+                return
+            }
             writeSample(controls: controls, textView: textView, rich: scene == "structured")
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) {
                 show(scene, controls: controls, chrome: chrome, textView: textView)
@@ -104,6 +108,59 @@ enum NoteFormatCaptureScene {
                     textView.updateMonoCopy(at: NSPoint(x: rect.midX + origin.x, y: rect.midY + origin.y))
                     textView.pinsMonoCopy = true
                 }
+            }
+        }
+    }
+
+    /// Sheet 3's sample (Notes v2 tables): the CIA note's start, the pillars
+    /// table, then "Sources:" and the citation. `ATTIC_UI_TEST_TABLE_STATE`
+    /// picks the state: `rest` (default), `editing` (the caret in a cell,
+    /// Aa's row in table mode) or `wide` (four columns, scrolled sideways,
+    /// its indicator showing).
+    private static func writeTablesSample(controls: NoteFormatControls, chrome: NotesPageChrome, textView: NoteEditorTextView) {
+        let engine = controls.engine
+        let state = ProcessInfo.processInfo.environment["ATTIC_UI_TEST_TABLE_STATE"] ?? "rest"
+        type("CIA impact", into: textView)
+        textView.insertNewline(nil)
+        controls.router.run(.paragraph(.heading(1)), from: .shortcut)
+        type("Colonial Pipeline ransomware attack", into: textView)
+        textView.insertNewline(nil)
+        controls.router.run(.paragraph(.body), from: .shortcut)
+        type("The attackers breached by compromising password fro a VPN account that did not reqiuire multi factor authentication", into: textView)
+        textView.insertNewline(nil)
+        let wide = state == "wide"
+        let rows: [[String]] = wide
+            ? [["Pillar", "What happened", "Control that failed", "Source"],
+               ["Confidentiality", "Data taken from the IT network", "No MFA on the VPN account", "beerman2023review"],
+               ["Integrity", "Systems encrypted by ransomware", "No MFA on the VPN account", "beerman2023review"],
+               ["Availability", "Pipeline shut down", "No IT/OT separation", "beerman2023review"]]
+            : [["Pillar", "What happened"], ["Confidentiality", "Data taken from the IT network"],
+               ["Integrity", "Systems encrypted by ransomware"], ["Availability", "Pipeline shut down"]]
+        engine.insertTable(NoteTable(texts: rows), replacing: textView.selectedRange(), name: "Insert Table", entering: false)
+        controls.router.run(.paragraph(.heading(3)), from: .shortcut)
+        type("Sources:", into: textView)
+        textView.insertNewline(nil)
+        controls.router.run(.paragraph(.mono), from: .shortcut)
+        for (index, line) in ["@inproceedings{beerman2023review,", "  title={A review of colonial pipeline ransomware attack},",
+                              "  author={Beerman, Jack and Berent, David and Falter, Zach"].enumerated() {
+            if index > 0 { textView.insertNewline(nil) }
+            type(line, into: textView)
+        }
+        engine.history.reset()
+        textView.setSelectedRange(NSRange(location: 0, length: 0))
+        textView.scrollRangeToVisible(NSRange(location: 0, length: 0))
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
+            guard let table = engine.tableViews().first else { return }
+            switch state {
+            case "editing":
+                table.activate(NoteTable.Position(row: 2, column: 1), caret: .end)
+                chrome.openFormatBar(keyboard: false)
+            case "wide":
+                let offset = max(0, table.grid.columnX(1) + 60)
+                table.scrollView.contentView.scroll(to: NSPoint(x: min(offset, table.grid.width - table.bounds.width), y: 0))
+                table.scrollView.reflectScrolledClipView(table.scrollView.contentView)
+            default:
+                break
             }
         }
     }

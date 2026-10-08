@@ -285,7 +285,7 @@ final class MCPRequestHandlerTests: XCTestCase {
         XCTAssertEqual(
             names.sorted(),
             ["create_note", "create_task", "delete_item", "delete_note", "delete_task", "duplicate_task", "link", "list_deleted",
-             "list_notes", "list_tags", "list_tasks", "move_subtask", "restore_item", "restore_items", "update_note", "update_tags", "update_task"]
+             "list_notes", "list_tags", "list_tasks", "move_subtask", "restore_item", "restore_items", "update_note", "update_note_table", "update_tags", "update_task"]
         )
     }
 
