@@ -333,7 +333,8 @@ final class TasksRound3Tests: XCTestCase {
         XCTAssertEqual(TasksViewport.listTop(tabsTop: 80), 110, "the tabs (16) and 14 under them")
         XCTAssertEqual(TasksViewport.bottomClearance(stackHeight: 36, bottomInset: 24), 76)
         XCTAssertEqual(TasksViewport.bottomClearance(stackHeight: 36 + 8 + 28, bottomInset: 24), 112, "the strip adds its room")
-        XCTAssertEqual(TasksViewport.bottomClearance(stackHeight: 0, bottomInset: 12), 64, "never less than the bar")
+        XCTAssertEqual(TasksViewport.bottomClearance(stackHeight: 0, bottomInset: 12),
+                       AtticControlSize.addBarHeight + 12 + AtticLayout.contentToAddBar, "never less than the bar")
         let stops = TasksViewport.maskStops(height: 520, tabsTop: 80)
         // Owner, 2026-10-06: whole under the header's and the add bar's glass.
         XCTAssertEqual(stops.first?.opacity ?? 0, 1, accuracy: 0.001, "whole at the panel's top")
