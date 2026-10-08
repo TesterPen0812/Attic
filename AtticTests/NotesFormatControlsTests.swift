@@ -837,68 +837,75 @@ final class NotesFormatControlsTests: XCTestCase {
         XCTAssertEqual(titleView.string, "Only a title")
     }
 
-    /// The app's own springs (owner, round 3), and the order that keeps one
-    /// glass moving at a time, in every feel: in the narrowest panel (a
-    /// 288 pt row, Aa at 208), the growing glass never reaches a neighbour
-    /// that is still showing, opening or closing, and the row at rest is the
+    /// The app's own springs and outward neighbour travel, in every feel:
+    /// in the narrowest panel (a 288 pt row, Aa at 208), the growing glass
+    /// never reaches a visible neighbour, opening or closing. Wider rows
+    /// also retain clear space, and the row at rest is the
     /// plain bar with its controls fully drawn.
     func testTheFormatRowGrowsOutOfAaWithOneGlassMoving() {
-        let row: CGFloat = 288
-        let aa = CGRect(x: 208, y: 0, width: 36, height: 36)
-        let allNotes = (minX: CGFloat(0), maxX: CGFloat(36)), newNote = (minX: CGFloat(252), maxX: CGFloat(288))
-        let status = (minX: CGFloat(62), maxX: CGFloat(182))
-        for feel in AtticMotionFeel.allCases {
-            let tuning = feel.tuning
-            let plan = NoteFormatMotion.Plan(tuning)
-            XCTAssertEqual(plan.openLeading.response, tuning.expand.response, "\(feel): the glass is expand")
-            XCTAssertEqual(plan.openLeading.bounce, tuning.expand.bounce)
-            XCTAssertEqual(plan.openTrailing.response, tuning.expand.response)
-            XCTAssertEqual(plan.openLeading.delay, 0, "\(feel): Aa answers the click at once")
-            XCTAssertEqual(plan.closeGrow.response, tuning.expand.response)
-            XCTAssertEqual(plan.openControls.response, tuning.popover.response, "\(feel): the controls come as a bar")
-            XCTAssertEqual(plan.comeBack.response, tuning.popover.response)
-            XCTAssertGreaterThan(plan.openControls.delay, plan.openTrailing.delay, "\(feel): controls once the glass is wide")
-            XCTAssertGreaterThan(plan.openTrailing.delay, 0, "\(feel): New note first on its side")
-            XCTAssertGreaterThan(plan.closeGrow.delay, 0, "\(feel): controls first when closing")
+        for row in [CGFloat(288), 368, 448] {
+            let aa = CGRect(x: row - 80, y: 0, width: 36, height: 36)
+            let allNotes = (minX: CGFloat(0), maxX: CGFloat(36)), newNote = (minX: row - 36, maxX: row)
+            // Two equal spacers center the fixed-size, capped status pill.
+            let statusWidth = min(AtticNoteMetrics.pillMaxWidth, 120 + row - 288)
+            let statusCenter = (36 + aa.minX) / 2
+            let status = (minX: statusCenter - statusWidth / 2, maxX: statusCenter + statusWidth / 2)
+            for feel in AtticMotionFeel.allCases {
+                let tuning = feel.tuning
+                let plan = NoteFormatMotion.Plan(tuning)
+                XCTAssertEqual(plan.openLeading.response, tuning.expand.response, "\(feel): the glass is expand")
+                XCTAssertEqual(plan.openLeading.bounce, tuning.expand.bounce)
+                XCTAssertEqual(plan.openTrailing.response, tuning.expand.response)
+                XCTAssertEqual(plan.openLeading.delay, 0, "\(feel): Aa answers the click at once")
+                XCTAssertEqual(plan.openTrailing, plan.openLeading, "\(feel): both edges move on one clock")
+                XCTAssertEqual(plan.closeGrow.response, tuning.expand.response)
+                XCTAssertEqual(plan.openControls.response, tuning.popover.response, "\(feel): the controls come as a bar")
+                XCTAssertEqual(plan.comeBack.response, tuning.popover.response)
+                XCTAssertGreaterThan(plan.openControls.delay, plan.openTrailing.delay, "\(feel): controls once the glass is wide")
+                XCTAssertGreaterThan(plan.closeGrow.delay, 0, "\(feel): controls first when closing")
 
-            func visible(_ value: Double) -> Double { min(1, max(0, value)) }
-            func check(_ t: Double, leading: Double, trailing: Double, allShows: Double, rightShows: Double,
-                       statusShows: Double, _ phase: String) {
-                let extent = AtticFormatRowGrowth(source: aa, rowWidth: row, leading: leading, trailing: trailing,
-                                                  sourceSymbol: "textformat").extent
-                let glass = (minX: extent.minX, maxX: extent.minX + extent.width)
-                // A neighbour still showing keeps clear of the glass's edge: New
-                // note by 6 pt (it rests 8 from Aa), the status by 20, All notes by 24.
-                func overlaps(_ span: (minX: CGFloat, maxX: CGFloat), clear: CGFloat) -> Bool {
-                    glass.minX - clear < span.maxX && glass.maxX + clear > span.minX
+                func visible(_ value: Double) -> Double { min(1, max(0, value)) }
+                func check(_ t: Double, leading: Double, trailing: Double, allAway: Double, rightAway: Double,
+                           statusShows: Double, _ phase: String) {
+                    let extent = AtticFormatRowGrowth(source: aa, rowWidth: row, leading: leading, trailing: trailing,
+                                                      sourceSymbol: "textformat").extent
+                    let glass = (minX: extent.minX, maxX: extent.minX + extent.width)
+                    // A neighbour still showing keeps clear of the glass's edge: New
+                    // note by 6 pt (it rests 8 from Aa), the status by 20, All notes by 24.
+                    func overlaps(_ span: (minX: CGFloat, maxX: CGFloat), offset: CGFloat = 0, clear: CGFloat) -> Bool {
+                        let minX = max(0, span.minX + offset), maxX = min(row, span.maxX + offset)
+                        guard maxX > minX else { return false } // Clipped outside the row.
+                        return glass.minX - clear < maxX && glass.maxX + clear > minX
+                    }
+                    XCTAssertFalse(overlaps(newNote, offset: NoteFormatRowNeighbour.newNote.offset(at: rightAway), clear: 6),
+                                   "\(feel) \(row)pt \(phase) \(t)s: the glass reaches New note")
+                    if overlaps(status, clear: 20) {
+                        XCTAssertLessThanOrEqual(statusShows, 0.05, "\(feel) \(phase) \(t)s: the glass reaches the status")
+                    }
+                    XCTAssertFalse(overlaps(allNotes, offset: NoteFormatRowNeighbour.allNotes.offset(at: allAway), clear: 24),
+                                   "\(feel) \(row)pt \(phase) \(t)s: the glass reaches All notes")
                 }
-                if overlaps(newNote, clear: 6) {
-                    XCTAssertLessThanOrEqual(rightShows, 0.03, "\(feel) \(phase) \(t)s: the glass reaches New note")
+                for step in 0...1500 {
+                    let t = Double(step) / 1000
+                    XCTAssertEqual(plan.openLeading.value(at: t), plan.openTrailing.value(at: t),
+                                   "\(feel) \(t)s: no left-then-right expansion")
+                    // Opening: both neighbours slide outward on the glass's
+                    // spring; they stay drawn until clipped outside their edge.
+                    check(t, leading: plan.openLeading.value(at: t), trailing: plan.openTrailing.value(at: t),
+                          allAway: plan.openLeading.value(at: t), rightAway: plan.openTrailing.value(at: t),
+                          statusShows: 0, "opening")
+                    // Closing: each comes back on its own clock.
+                    let back = 1 - plan.closeGrow.value(at: t)
+                    let newNoteBack = visible(plan.comeBack.value(at: t - plan.newNoteReturns))
+                    check(t, leading: back, trailing: back,
+                          allAway: 1 - visible(plan.comeBack.value(at: t - plan.allNotesReturns)),
+                          rightAway: 1 - newNoteBack, statusShows: newNoteBack, "closing")
                 }
-                if overlaps(status, clear: 20) {
-                    XCTAssertLessThanOrEqual(statusShows, 0.05, "\(feel) \(phase) \(t)s: the glass reaches the status")
-                }
-                if overlaps(allNotes, clear: 24) {
-                    XCTAssertLessThanOrEqual(allShows, 0.03, "\(feel) \(phase) \(t)s: the glass reaches All notes")
-                }
-            }
-            for step in 0...1500 {
-                let t = Double(step) / 1000
-                // Opening: each neighbour fades, then its glass is taken away.
-                // (The status, plain text, is hidden as the row opens.)
-                check(t, leading: plan.openLeading.value(at: t), trailing: plan.openTrailing.value(at: t),
-                      allShows: t >= plan.allNotesSettles ? 0 : visible(1 - plan.allNotesLeave.value(at: t)),
-                      rightShows: t >= plan.newNoteSettles ? 0 : visible(1 - plan.leave.value(at: t)),
-                      statusShows: 0, "opening")
-                // Closing: each comes back on its own clock.
-                let back = 1 - plan.closeGrow.value(at: t)
-                let newNoteBack = visible(plan.comeBack.value(at: t - plan.newNoteReturns))
-                check(t, leading: back, trailing: back,
-                      allShows: visible(plan.comeBack.value(at: t - plan.allNotesReturns)),
-                      rightShows: newNoteBack, statusShows: newNoteBack, "closing")
             }
         }
 
+        let row: CGFloat = 288
+        let aa = CGRect(x: 208, y: 0, width: 36, height: 36)
         let start = AtticFormatRowGrowth(source: aa, rowWidth: row, grow: 0, sourceSymbol: "textformat")
         XCTAssertEqual(start.extent.minX, aa.minX); XCTAssertEqual(start.extent.width, aa.width)
         XCTAssertEqual(start.sourceGlyphOpacity, 1, "it starts as Aa, glyph and all")

@@ -5,6 +5,22 @@ Every later change is recorded here: what changed, why, and who asked.
 
 ## Phase 2
 
+### Aa neighbours slide into their sides (owner refinement, 2026-10-08)
+- All notes' stack travels left and New note travels right as Aa expands,
+  on the same selected app spring. Their glass and glyphs clip at the row
+  edges, instead of fading in place or disappearing immediately.
+- Closing brings them back from those sides. Returning travel stops at
+  each resting slot, keeping the gap beside Aa clear. Reduced motion
+  still swaps at once; Aa's paired-edge spring and timings are unchanged.
+
+### Aa opens as one shape (owner refinement, 2026-10-08)
+- Both glass edges start together on the selected `expand` spring. Removed
+  the trailing-edge leave delay and the dependent controls delay, so Aa no
+  longer stretches left and then right. Other app motion tokens are unchanged.
+- New note retires immediately to clear its adjacent slot; All notes keeps
+  its existing short fade. Closing, reduced motion and reversal cancellation
+  retain their existing behavior.
+
 ### A29 round 4: content dissolves into the panel's edges; Aa answers at once (2026-10-06)
 - **`atticScrollUnderFade(plainText:topEdge:bottomEdge:)`**: content eases
   from `edgeFloor` (0.10) at the panel's top and bottom edges to full at the
