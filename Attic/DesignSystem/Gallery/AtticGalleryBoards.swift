@@ -1376,7 +1376,7 @@ private struct TokensBoard: View {
         .padding(.horizontal, 16)
         BoardHeading(title: "Type")
         VStack(alignment: .leading, spacing: 6) {
-            AtticText(verbatim: "Note title 17 bold", style: .noteTitle, ink: .heading)
+            AtticText(verbatim: "Note title 22 bold", style: .noteTitle, ink: .heading)
             AtticText(verbatim: "Page title 16 bold", style: .pageTitle, ink: .heading)
             AtticText(verbatim: "Section heading 14 bold", style: .sectionHeading, ink: .heading)
             AtticText(verbatim: "Heading 13 semibold", style: .panelHeading, ink: .heading)

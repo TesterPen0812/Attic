@@ -2,6 +2,117 @@ import AppKit
 import QuartzCore
 import UniformTypeIdentifiers
 
+/// Each Mono paragraph draws a slice of its contiguous code block. Only the
+/// first/last slice has corners and vertical padding. Layout stays viewport
+/// driven, including wrapped lines and empty code paragraphs.
+final class NoteCodeLayoutFragment: NSTextLayoutFragment {
+    var startsBlock = true
+    var endsBlock = true
+    var fill = NSColor.clear
+    var border: NSColor?
+
+    override var leadingPadding: CGFloat { NoteTextStyle.codePadding }
+    override var trailingPadding: CGFloat { NoteTextStyle.codePadding }
+    override var topMargin: CGFloat { startsBlock ? NoteTextStyle.codePadding : 0 }
+    override var bottomMargin: CGFloat { endsBlock ? NoteTextStyle.codePadding : 0 }
+
+    private var blockBounds: CGRect {
+        CGRect(x: -layoutFragmentFrame.minX, y: 0,
+               width: textLayoutManager?.textContainer?.size.width ?? layoutFragmentFrame.width,
+               height: layoutFragmentFrame.height)
+    }
+
+    override var renderingSurfaceBounds: CGRect { super.renderingSurfaceBounds.union(blockBounds) }
+
+    override func draw(at point: CGPoint, in context: CGContext) {
+        let rect = blockBounds.offsetBy(dx: point.x, dy: point.y)
+        let r = min(NoteTextStyle.codeRadius, rect.width / 2)
+        let top = startsBlock ? r : 0
+        let bottom = endsBlock ? r : 0
+        let path = CGMutablePath()
+        path.move(to: CGPoint(x: rect.minX + top, y: rect.minY))
+        path.addLine(to: CGPoint(x: rect.maxX - top, y: rect.minY))
+        path.addQuadCurve(to: CGPoint(x: rect.maxX, y: rect.minY + top), control: CGPoint(x: rect.maxX, y: rect.minY))
+        path.addLine(to: CGPoint(x: rect.maxX, y: rect.maxY - bottom))
+        path.addQuadCurve(to: CGPoint(x: rect.maxX - bottom, y: rect.maxY), control: CGPoint(x: rect.maxX, y: rect.maxY))
+        path.addLine(to: CGPoint(x: rect.minX + bottom, y: rect.maxY))
+        path.addQuadCurve(to: CGPoint(x: rect.minX, y: rect.maxY - bottom), control: CGPoint(x: rect.minX, y: rect.maxY))
+        path.addLine(to: CGPoint(x: rect.minX, y: rect.minY + top))
+        path.addQuadCurve(to: CGPoint(x: rect.minX + top, y: rect.minY), control: CGPoint(x: rect.minX, y: rect.minY))
+        path.closeSubpath()
+        context.saveGState()
+        context.addPath(path)
+        context.setFillColor(fill.cgColor)
+        context.fillPath()
+        if let border {
+            context.addPath(path)
+            context.clip()
+            // Interior tiles expose only their sides, never a horizontal seam.
+            let outline = CGMutablePath()
+            outline.move(to: CGPoint(x: rect.minX, y: rect.maxY - bottom))
+            outline.addLine(to: CGPoint(x: rect.minX, y: rect.minY + top))
+            if startsBlock {
+                outline.addQuadCurve(to: CGPoint(x: rect.minX + top, y: rect.minY), control: CGPoint(x: rect.minX, y: rect.minY))
+                outline.addLine(to: CGPoint(x: rect.maxX - top, y: rect.minY))
+                outline.addQuadCurve(to: CGPoint(x: rect.maxX, y: rect.minY + top), control: CGPoint(x: rect.maxX, y: rect.minY))
+            } else { outline.move(to: CGPoint(x: rect.maxX, y: rect.minY)) }
+            outline.addLine(to: CGPoint(x: rect.maxX, y: rect.maxY - bottom))
+            if endsBlock {
+                outline.addQuadCurve(to: CGPoint(x: rect.maxX - bottom, y: rect.maxY), control: CGPoint(x: rect.maxX, y: rect.maxY))
+                outline.addLine(to: CGPoint(x: rect.minX + bottom, y: rect.maxY))
+                outline.addQuadCurve(to: CGPoint(x: rect.minX, y: rect.maxY - bottom), control: CGPoint(x: rect.minX, y: rect.maxY))
+            }
+            context.addPath(outline)
+            context.setStrokeColor(border.cgColor)
+            context.setLineWidth(2)
+            context.strokePath()
+        }
+        context.restoreGState()
+        super.draw(at: point, in: context)
+    }
+}
+
+extension NoteEditorEngine: NSTextLayoutManagerDelegate {
+    func textLayoutManager(_ textLayoutManager: NSTextLayoutManager,
+                           textLayoutFragmentFor location: any NSTextLocation,
+                           in textElement: NSTextElement) -> NSTextLayoutFragment {
+        let offset = contentStorage.offset(from: contentStorage.documentRange.location, to: location)
+        guard paragraphStyle(at: offset) == .mono, offset > 0 else {
+            return NSTextLayoutFragment(textElement: textElement, range: nil)
+        }
+        let line = paragraphRange(at: offset)
+        let fragment = NoteCodeLayoutFragment(textElement: textElement, range: nil)
+        fragment.startsBlock = paragraphStyle(at: line.location - 1) != .mono
+        fragment.endsBlock = NSMaxRange(line) < textStorage.length
+            ? paragraphStyle(at: NSMaxRange(line)) != .mono
+            : (line.length == 0 || !textStorage.string.hasSuffix("\n") || paragraphStyle(at: textStorage.length) != .mono)
+        fragment.fill = style.codeBlockColor
+        fragment.border = style.tokens.recessedBorder?.nsColor
+        return fragment
+    }
+
+    /// Filter results at delivery time too: asynchronous checks may have begun
+    /// before a paragraph was switched from prose to Mono.
+    func textView(_ view: NSTextView, didCheckTextIn range: NSRange,
+                  types checkingTypes: NSTextCheckingTypes,
+                  options: [NSSpellChecker.OptionKey: Any], results: [NSTextCheckingResult],
+                  orthography: NSOrthography, wordCount: Int) -> [NSTextCheckingResult] {
+        results.filter { !containsCode(in: $0.range) }
+    }
+
+    func containsCode(in range: NSRange) -> Bool {
+        let clamped = NSIntersectionRange(range, NSRange(location: 0, length: textStorage.length))
+        var found = false
+        textStorage.enumerateAttributes(in: clamped) { attributes, _, stop in
+            if attributes[.noteBlockStyle] as? String == "mono" || attributes[.noteMark(.code)] != nil {
+                found = true
+                stop.pointee = true
+            }
+        }
+        return found
+    }
+}
+
 /// The note text view: a stock TextKit 2 `NSTextView` with narrow hooks.
 ///
 /// - Marks the entry points that are a person's own editing (typing, IME,
@@ -23,6 +134,20 @@ final class NoteEditorTextView: NSTextView, NSAccessibilityCustomRotorItemSearch
     /// VoiceOver after the text.
     var accessoryViews: [NSView] = []
     private lazy var headingsRotor = NSAccessibilityCustomRotor(rotorType: .heading, itemSearchDelegate: self)
+
+    override func checkText(in range: NSRange, types checkingTypes: NSTextCheckingTypes,
+                            options: [NSSpellChecker.OptionKey: Any] = [:]) {
+        guard let engine else { return super.checkText(in: range, types: checkingTypes, options: options) }
+        let clamped = NSIntersectionRange(range, NSRange(location: 0, length: engine.textStorage.length))
+        var prose: [NSRange] = []
+        engine.textStorage.enumerateAttributes(in: clamped) { attributes, part, _ in
+            guard attributes[.noteBlockStyle] as? String != "mono", attributes[.noteMark(.code)] == nil else { return }
+            if let last = prose.last, NSMaxRange(last) == part.location {
+                prose[prose.count - 1] = NSUnionRange(last, part)
+            } else { prose.append(part) }
+        }
+        for part in prose { super.checkText(in: part, types: checkingTypes, options: options) }
+    }
 
     func installHeadingsRotor() { setAccessibilityCustomRotors([headingsRotor]) }
 

@@ -250,3 +250,162 @@ private struct OwnerFeedbackRoot: View {
             .atticDesign(design.design)
     }
 }
+
+// The approved p2-38 refinement: native geometry and semantic editing boundaries.
+@MainActor
+extension NotesOwnerFeedbackTests {
+    private func styled(_ text: String, _ style: String, level: Int? = nil) -> NoteBlock {
+        var block = NoteBlock.text(text)
+        block.style = style
+        block.level = level
+        return block
+    }
+
+    func testTypographyGroupsEmptySectionsWithoutChangingTheirContent() throws {
+        let blocks: [NoteBlock] = [.text("CIA impact"), styled("Incident", "heading", level: 2),
+            .text("Prose"), styled("Confidentiality", "heading", level: 3), .text(""),
+            styled("Integrity", "heading", level: 3), styled("Availability", "heading", level: 3), .text("Body")]
+        let (engine, _) = makeEngine(blocks)
+        XCTAssertEqual(engine.document().blocks, blocks)
+        let style = engine.style
+        XCTAssertEqual(style.titleFont.pointSize, 22)
+        XCTAssertEqual(style.headingFont.pointSize, 18)
+        XCTAssertEqual(style.subheadingFont.pointSize, 15.5)
+        XCTAssertEqual(style.bodyFont.pointSize, 14)
+        XCTAssertEqual(style.monoFont.pointSize, 12)
+        func paragraph(_ text: String) throws -> NSParagraphStyle {
+            let location = (engine.textStorage.string as NSString).range(of: text).location
+            return try XCTUnwrap(engine.textStorage.attribute(.paragraphStyle, at: location, effectiveRange: nil) as? NSParagraphStyle)
+        }
+        XCTAssertEqual(try paragraph("Confidentiality").paragraphSpacingBefore, 11)
+        XCTAssertEqual(try paragraph("Integrity").paragraphSpacingBefore, 10)
+        XCTAssertEqual(try paragraph("Availability").paragraphSpacingBefore, 10)
+        XCTAssertEqual(try paragraph("Availability").paragraphSpacing, 6)
+        let blank = (engine.textStorage.string as NSString).range(of: "\n\n").location + 1
+        XCTAssertEqual((engine.textStorage.attribute(.paragraphStyle, at: blank, effectiveRange: nil) as? NSParagraphStyle)?.maximumLineHeight, 8)
+    }
+
+    func testMonoFragmentsJoinAcrossEmptyAndWrappedLinesAndSeparateFromProse() throws {
+        let blocks: [NoteBlock] = [.text("Title"), styled(String(repeating: "identifier ", count: 18), "mono"),
+            styled("", "mono"), styled("last line", "mono"), .text("prose"), styled("separate", "mono")]
+        let (engine, view) = makeEngine(blocks)
+        let manager = try XCTUnwrap(engine.layoutManager)
+        manager.ensureLayout(for: engine.contentStorage.documentRange)
+        var fragments: [NoteCodeLayoutFragment] = []
+        manager.enumerateTextLayoutFragments(from: engine.contentStorage.documentRange.location, options: [.ensuresLayout]) { fragment in
+            if let code = fragment as? NoteCodeLayoutFragment { fragments.append(code) }
+            return true
+        }
+        XCTAssertEqual(fragments.count, 4)
+        guard fragments.count == 4 else { return }
+        XCTAssertEqual(fragments.map(\.startsBlock), [true, false, false, true])
+        XCTAssertEqual(fragments.map(\.endsBlock), [false, false, true, true])
+        XCTAssertEqual(fragments.map(\.topMargin), [12, 0, 0, 12])
+        XCTAssertEqual(fragments.map(\.bottomMargin), [0, 0, 12, 12])
+        XCTAssertGreaterThan(fragments[0].textLineFragments.count, 1, "long code wraps inside the card")
+        XCTAssertEqual(fragments[0].renderingSurfaceBounds.width, view.textContainer!.size.width, accuracy: 1)
+        XCTAssertEqual(engine.document().blocks, blocks, "layout never rewrites empty paragraphs")
+        for fragment in fragments {
+            for line in fragment.textLineFragments {
+                XCTAssertGreaterThanOrEqual(line.typographicBounds.minX + fragment.layoutFragmentFrame.minX, 12)
+                XCTAssertLessThanOrEqual(line.typographicBounds.maxX + fragment.layoutFragmentFrame.minX, view.textContainer!.size.width - 12 + 1)
+            }
+        }
+    }
+
+    func testFinalEmptyMonoLineHasBottomPaddingAndUpdatesOnFormatUndo() throws {
+        let (engine, view) = makeEngine([.text("Title"), styled("code", "mono"), styled("", "mono")])
+        let manager = try XCTUnwrap(engine.layoutManager)
+        let end = engine.textStorage.length
+        func fragments() -> [NoteCodeLayoutFragment] {
+            manager.ensureLayout(for: engine.contentStorage.documentRange)
+            var result: [NoteCodeLayoutFragment] = []
+            manager.enumerateTextLayoutFragments(from: engine.contentStorage.documentRange.location,
+                                                options: [.ensuresLayout, .ensuresExtraLineFragment]) {
+                if let fragment = $0 as? NoteCodeLayoutFragment { result.append(fragment) }
+                return true
+            }
+            return result
+        }
+        XCTAssertEqual(fragments().last?.bottomMargin, 12)
+        view.setSelectedRange(NSRange(location: end, length: 0))
+        XCTAssertTrue(engine.perform(.paragraph(.body)))
+        XCTAssertEqual(fragments().last?.endsBlock, true)
+        XCTAssertEqual(fragments().last?.bottomMargin, 12)
+        XCTAssertTrue(engine.history.undo())
+        XCTAssertEqual(engine.paragraphStyle(at: end), .mono)
+        XCTAssertEqual(fragments().last?.bottomMargin, 12)
+        XCTAssertEqual(engine.document().blocks.last?.text, "")
+    }
+
+    func testTagReservesAndFormattingAcrossAnEmptySectionRefreshDependentHeadings() throws {
+        let (engine, view) = makeEngine([.text("Title"), styled("A", "heading", level: 2), .text(""), styled("B", "heading", level: 2)])
+        func spacing(_ text: String) throws -> CGFloat {
+            let at = (engine.textStorage.string as NSString).range(of: text).location
+            return try XCTUnwrap(engine.textStorage.attribute(.paragraphStyle, at: at, effectiveRange: nil) as? NSParagraphStyle).paragraphSpacingBefore
+        }
+        XCTAssertEqual(try spacing("A"), 10)
+        engine.setTitleReserves(tagLine: 18, trailing: 20)
+        XCTAssertEqual(try spacing("A"), 0, "tag space is included immediately")
+        engine.setTitleReserves(tagLine: 0, trailing: 20)
+        XCTAssertEqual(try spacing("A"), 10)
+        let a = (engine.textStorage.string as NSString).range(of: "A")
+        view.setSelectedRange(a)
+        XCTAssertTrue(engine.perform(.paragraph(.body)))
+        XCTAssertEqual(try spacing("B"), 11, "looks through the empty paragraph")
+        let reopened = NoteEditorEngine(noteID: engine.noteID, document: engine.document())
+        let b = (reopened.textStorage.string as NSString).range(of: "B").location
+        XCTAssertEqual((reopened.textStorage.attribute(.paragraphStyle, at: b, effectiveRange: nil) as? NSParagraphStyle)?.paragraphSpacingBefore, try spacing("B"))
+        XCTAssertTrue(engine.history.undo())
+        XCTAssertEqual(try spacing("B"), 10)
+    }
+
+    func testCodeCheckingFiltersOnlyCodeAndRespectsFormattingUndo() throws {
+        var inline = NoteBlock.text("prose inlinecodetypo prose")
+        inline.marks = [NoteMark(.code, offset: 6, length: 14)]
+        let (engine, view) = makeEngine([.text("Title"), styled("codetypo", "mono"), inline])
+        XCTAssertTrue(view.isContinuousSpellCheckingEnabled)
+        let string = engine.textStorage.string as NSString
+        let code = string.range(of: "codetypo")
+        let prose = string.range(of: "prose")
+        let inlineCode = string.range(of: "inlinecodetypo")
+        let results = [code, prose, inlineCode].map { NSTextCheckingResult.spellCheckingResult(range: $0) }
+        func checked() -> [NSTextCheckingResult] {
+            engine.textView(view, didCheckTextIn: NSRange(location: 0, length: string.length),
+                            types: NSTextCheckingResult.CheckingType.spelling.rawValue,
+                            options: [:], results: results, orthography: NSOrthography.defaultOrthography(forLanguage: "en"), wordCount: 3)
+        }
+        XCTAssertEqual(checked().map(\.range), [prose])
+        view.setSelectedRange(code)
+        XCTAssertTrue(engine.perform(.paragraph(.body), selection: code))
+        XCTAssertEqual(checked().map(\.range), [code, prose])
+        XCTAssertTrue(engine.history.undo())
+        XCTAssertEqual(checked().map(\.range), [prose])
+        XCTAssertTrue(engine.history.redo())
+        XCTAssertEqual(checked().map(\.range), [code, prose])
+    }
+
+    func testMonoTypingNewlinesPasteUndoAndPersistenceKeepStyleBoundaries() throws {
+        let (engine, view) = makeEngine([.text("Title"), styled("first", "mono"), .text("body")])
+        let start = (engine.textStorage.string as NSString).range(of: "first").location
+        view.setSelectedRange(NSRange(location: start + 5, length: 0))
+        view.insertNewline(nil)
+        view.insertText("second", replacementRange: NSRange(location: NSNotFound, length: 0))
+        XCTAssertEqual(engine.paragraphStyle(at: view.selectedRange().location), .mono)
+        let beforePaste = engine.document()
+        XCTAssertTrue(engine.pastePlainText("\nthird", at: view.selectedRange()))
+        let pasted = engine.document()
+        XCTAssertEqual(pasted.blocks.last?.text, "body")
+        XCTAssertNil(pasted.blocks.last?.style)
+        XCTAssertTrue(engine.history.undo())
+        XCTAssertEqual(engine.document(), beforePaste)
+        XCTAssertTrue(engine.history.redo())
+        XCTAssertEqual(engine.document(), pasted)
+        let store = try makeTestNoteStore(attachmentFileStore: makeTestAttachmentFileStore())
+        let id = UUID()
+        guard case .success = store.createDocumentNote(id: id, document: pasted) else { return XCTFail("save") }
+        let saved = try XCTUnwrap(store.notes.first { $0.id == id })
+        guard case let .editable(reopened) = NoteContentCodec.decode(saved.content!) else { return XCTFail("reopen") }
+        XCTAssertEqual(reopened, pasted)
+    }
+}

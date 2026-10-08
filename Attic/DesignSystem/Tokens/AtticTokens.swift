@@ -265,7 +265,7 @@ enum AtticTextStyle: String, CaseIterable, Sendable {
 
     private var baseSpec: Spec {
         switch self {
-        case .noteTitle: Spec(size: 17, weight: .bold, italic: false, monospacedDigits: false)
+        case .noteTitle: Spec(size: 22, weight: .bold, italic: false, monospacedDigits: false)
         case .panelHeading: Spec(size: 13, weight: .semibold, italic: false, monospacedDigits: false)
         case .body, .rowTitle, .listBody, .menuRow, .toast, .sidebarRow: Spec(size: 13, weight: .regular, italic: false, monospacedDigits: false)
         case .rowTitleActive: Spec(size: 13, weight: .medium, italic: false, monospacedDigits: false)

@@ -32,6 +32,10 @@ enum NoteFormatCaptureScene {
                 textView.needsDisplay = true
                 return
             }
+            if scene == "typography" {
+                writeTypographySample(controls: controls, textView: textView)
+                return
+            }
             writeSample(controls: controls, textView: textView, rich: scene == "structured")
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) {
                 show(scene, controls: controls, chrome: chrome, textView: textView)
@@ -56,6 +60,29 @@ enum NoteFormatCaptureScene {
 
     private static func range(of text: String, in textView: NoteEditorTextView) -> NSRange {
         (textView.string as NSString).range(of: text)
+    }
+
+    /// The owner's visible excerpt only, entered through the real editor in an isolated UI-test store.
+    private static func writeTypographySample(controls: NoteFormatControls, textView: NoteEditorTextView) {
+        let samples: [(String, NoteParagraphStyle)] = [
+            ("CIA impact", .body),
+            ("Colonial Pipeline ransomware attack", .heading(2)),
+            ("The attackers breached by compromising password fro a VPN account that did not reqiuire multi factor authentication", .body),
+            ("Confidentiality", .heading(3)), ("", .body),
+            ("Integrity", .heading(3)), ("Availability", .heading(3)),
+            ("The clearest impact was the staff losing access to affected IT system, which led to a shutdown causing fuel transport to be interrupted", .body),
+            ("Sources:", .heading(3)),
+            ("@inproceedings{beerman2023review,", .mono),
+            ("  title={A review of colonial pipeline ransomware attack},", .mono),
+            ("  author={Beerman, Jack and Brent, David and Falter, Zach", .mono)
+        ]
+        for (index, sample) in samples.enumerated() {
+            if index > 0 { textView.insertNewline(nil) }
+            if index > 0 { controls.router.run(.paragraph(sample.1), from: .shortcut) }
+            type(sample.0, into: textView)
+        }
+        textView.setSelectedRange(NSRange(location: 0, length: 0))
+        textView.scrollRangeToVisible(NSRange(location: 0, length: 0))
     }
 
     private static func writeSample(controls: NoteFormatControls, textView: NoteEditorTextView, rich: Bool) {

@@ -242,6 +242,7 @@ final class NoteEditorEngine: NSObject, NSTextViewDelegate, NSTextStorageDelegat
         if document.blocks.count > 1, let last = document.blocks.last,
            last.kind == .text, last.text.isEmpty { restoreEmptyParagraph(last) }
         textStorage.delegate = self
+        restyle(NSRange(location: 0, length: textStorage.length))
         renderObjects(in: NSRange(location: 0, length: textStorage.length))
         history.onReplay = { [weak self] range in self?.didReplay(range) }
         history.onTagFlip = { [weak self] tag, add, changesTags, range in
@@ -358,6 +359,7 @@ final class NoteEditorEngine: NSObject, NSTextViewDelegate, NSTextStorageDelegat
     func makeView() -> (NSScrollView, NoteEditorTextView) {
         detachView()
         let layoutManager = NSTextLayoutManager()
+        layoutManager.delegate = self
         let container = NSTextContainer(size: NSSize(width: 320, height: CGFloat.greatestFiniteMagnitude))
         container.widthTracksTextView = true
         container.lineFragmentPadding = 0
@@ -458,8 +460,9 @@ final class NoteEditorEngine: NSObject, NSTextViewDelegate, NSTextStorageDelegat
             textView?.typingAttributes = attributes(forParagraphAt: textView?.selectedRange().location ?? 0)
             return
         }
-        restyle(title)
-        invalidateLayout(title)
+        let affected = paragraphs(around: title)
+        restyle(affected)
+        invalidateLayout(affected)
         if let textView, paragraphRange(at: textView.selectedRange().location).location == 0 {
             textView.typingAttributes = style.titleAttributes
         }
@@ -551,12 +554,47 @@ final class NoteEditorEngine: NSObject, NSTextViewDelegate, NSTextStorageDelegat
                     paragraphStyle.textLists = lists
                     base[.paragraphStyle] = paragraphStyle
                 }
+                applyParagraphGrouping(to: &base, at: paragraph.location)
                 textStorage.addAttributes(base, range: actual)
                 restyleMarks(in: actual, base: base)
+                if name == "mono" { textView?.setSpellingState(0, range: actual) }
                 position = NSMaxRange(paragraph)
                 if position <= actual.location { break }
             }
         }
+    }
+
+    /// Contextual spacing changes presentation only. Real empty paragraphs stay in storage.
+    private func applyParagraphGrouping(to base: inout [NSAttributedString.Key: Any], at location: Int) {
+        let current = paragraphRange(at: location)
+        let previous = location > 0 ? paragraphRange(at: location - 1) : nil
+        let next = NSMaxRange(current) < textStorage.length ? paragraphRange(at: NSMaxRange(current)) : nil
+        func name(_ range: NSRange?) -> String? {
+            guard let range, range.location > 0, range.location < textStorage.length else { return nil }
+            return textStorage.attribute(.noteBlockStyle, at: range.location, effectiveRange: nil) as? String
+        }
+        guard let paragraph = (base[.paragraphStyle] as? NSParagraphStyle)?.mutableCopy() as? NSMutableParagraphStyle else { return }
+        if name(current) == "heading" {
+            if name(next) == "heading" || (next.map { lineRange(at: $0.location).length == 0 } == true) {
+                paragraph.paragraphSpacing = 0
+            }
+            if name(previous) == "heading" {
+                paragraph.paragraphSpacingBefore = 10
+            } else if let previous, lineRange(at: previous.location).length == 0,
+                      previous.location > 0, paragraphStyle(at: previous.location - 1)?.storageName == "heading" {
+                paragraph.paragraphSpacingBefore = 10
+            } else if let previous {
+                let gap = (textStorage.attribute(.paragraphStyle, at: previous.location, effectiveRange: nil) as? NSParagraphStyle)?.paragraphSpacing ?? 0
+                paragraph.paragraphSpacingBefore = max(0, 18 - gap)
+            }
+        } else if lineRange(at: location).length == 0, name(current) != "mono",
+                  name(previous) == "heading", name(next) == "heading" {
+            paragraph.minimumLineHeight = 8
+            paragraph.maximumLineHeight = 8
+            paragraph.lineSpacing = 0
+            paragraph.paragraphSpacing = 0
+        }
+        base[.paragraphStyle] = paragraph
     }
 
     private func restyleMarks(in range: NSRange, base: [NSAttributedString.Key: Any]) {
@@ -573,10 +611,12 @@ final class NoteEditorEngine: NSObject, NSTextViewDelegate, NSTextStorageDelegat
         let font = base[.font] as? NSFont ?? style.bodyFont
         for (marks, markRange) in runs {
             textStorage.addAttributes(style.markedAttributes(marks: marks, baseFont: font), range: markRange)
+            if marks[.code] != nil { textView?.setSpellingState(0, range: markRange) }
         }
     }
 
-    /// The paragraphs covering `range`, plus one on each side.
+    /// The edited paragraphs and immediate neighbors, looking through a real
+    /// empty section once when its neighboring heading also depends on the edit.
     func paragraphs(around range: NSRange) -> NSRange {
         let string = textStorage.string as NSString
         guard string.length > 0 else { return NSRange(location: 0, length: 0) }
@@ -584,10 +624,18 @@ final class NoteEditorEngine: NSObject, NSTextViewDelegate, NSTextStorageDelegat
         let end = min(NSMaxRange(range), string.length)
         var result = string.paragraphRange(for: NSRange(location: start, length: end - start))
         if result.location > 0 {
-            result = NSUnionRange(result, string.paragraphRange(for: NSRange(location: result.location - 1, length: 0)))
+            let previous = string.paragraphRange(for: NSRange(location: result.location - 1, length: 0))
+            result = NSUnionRange(result, previous)
+            if previous.location > 0, lineText(at: previous.location).isEmpty {
+                result = NSUnionRange(result, string.paragraphRange(for: NSRange(location: previous.location - 1, length: 0)))
+            }
         }
         if NSMaxRange(result) < string.length {
-            result = NSUnionRange(result, string.paragraphRange(for: NSRange(location: NSMaxRange(result), length: 0)))
+            let next = string.paragraphRange(for: NSRange(location: NSMaxRange(result), length: 0))
+            result = NSUnionRange(result, next)
+            if NSMaxRange(next) < string.length, lineText(at: next.location).isEmpty {
+                result = NSUnionRange(result, string.paragraphRange(for: NSRange(location: NSMaxRange(next), length: 0)))
+            }
         }
         return result
     }
@@ -2680,6 +2728,7 @@ extension NoteEditorEngine {
         if let level = value.level { typing[.noteBlockLevel] = level }
         if indent > 0 { typing[.noteBlockIndent] = indent }
         textView?.typingAttributes = typing
+        invalidateLayout(paragraphs(around: NSRange(location: location, length: 0)))
         onTextChange?()
     }
 

@@ -28,7 +28,7 @@ final class NoteBlockExtras: NSObject {
 /// The editor's look, from the design system only (fonts from the note text
 /// styles, inks from the resolved tokens).
 ///
-/// The title is 17 bold on a 22 pt line; the body 14 regular on a 21 pt
+/// The title is 22 bold on a 28 pt line; the body 14 regular on a 21 pt
 /// line with paragraphs 7 apart (UX plan § 2), both SF Pro Rounded (owner
 /// decision 4). With tags, the title's paragraph reserves room under it for
 /// the tag line (4 above it, 8 below); its lines keep clear of the ⋯ at the
@@ -40,7 +40,9 @@ struct NoteTextStyle: Equatable {
     /// Room kept at the end of the title's lines for the note menu button.
     var titleTrailingReserve: CGFloat = 0
 
-    static let titleLineHeight: CGFloat = 22
+    static let titleLineHeight: CGFloat = 28
+    static let codePadding: CGFloat = 12
+    static let codeRadius: CGFloat = 10
     static let bodyLineHeight: CGFloat = 21
     static let bodyParagraphGap: CGFloat = 7
     static let titleToBody: CGFloat = 8
@@ -49,13 +51,19 @@ struct NoteTextStyle: Equatable {
 
     var titleFont: NSFont { AtticTextStyle.noteTitle.nsFont }
     var bodyFont: NSFont { AtticTextStyle.noteBody.nsFont }
-    var headingFont: NSFont { NSFontManager.shared.convert(bodyFont, toHaveTrait: .boldFontMask).withSize(16) }
-    var subheadingFont: NSFont { NSFontManager.shared.convert(bodyFont, toHaveTrait: .boldFontMask) }
-    var monoFont: NSFont { NSFont.monospacedSystemFont(ofSize: 13, weight: .regular) }
+    var headingFont: NSFont { roundedFont(size: 18, weight: .semibold) }
+    var subheadingFont: NSFont { roundedFont(size: 15.5, weight: .semibold) }
+    var monoFont: NSFont { NSFont.monospacedSystemFont(ofSize: 12, weight: .regular) }
     var quoteColor: NSColor { secondaryColor }
     var markerColor: NSColor { secondaryColor }
     var highlightColor: NSColor { tokens.tagFill.nsColor }
     var codeColor: NSColor { tokens.tagFill.nsColor }
+    var codeBlockColor: NSColor { tokens.recessed.nsColor }
+
+    private func roundedFont(size: CGFloat, weight: NSFont.Weight) -> NSFont {
+        let font = NSFont.systemFont(ofSize: size, weight: weight)
+        return NSFont(descriptor: font.fontDescriptor.withDesign(.rounded) ?? font.fontDescriptor, size: size) ?? font
+    }
 
     var tokens: AtticColorTokens { AtticColorTokens.resolve(design) }
     var titleColor: NSColor { tokens.ink(.heading).nsColor }
@@ -92,6 +100,18 @@ struct NoteTextStyle: Equatable {
             paragraph.textLists = [NSTextList(markerFormat: .decimal, options: 0)]
         }
         if name == "quote" { paragraph.headIndent += 12; paragraph.firstLineHeadIndent += 12 }
+        if name == "heading" {
+            let font = result[.font] as? NSFont ?? headingFont
+            let height: CGFloat = (level ?? 2) <= 1 ? Self.titleLineHeight : (level == 2 ? 23 : 20)
+            paragraph.lineSpacing = Self.lineSpacing(for: font, lineHeight: height)
+            paragraph.paragraphSpacingBefore = 18
+            paragraph.paragraphSpacing = 6
+        } else if name == "mono" {
+            paragraph.lineSpacing = Self.lineSpacing(for: monoFont, lineHeight: 18)
+            paragraph.paragraphSpacing = 0
+            paragraph.firstLineHeadIndent = 0
+            paragraph.headIndent = 12 // Hanging soft wraps inside the block padding.
+        }
         result[.paragraphStyle] = paragraph
         return result
     }

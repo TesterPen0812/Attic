@@ -100,7 +100,7 @@ final class NoteEditorEngineTests: XCTestCase {
         textView.insertNewline(nil)
         let titleFont = engine.textStorage.attribute(.font, at: 0, effectiveRange: nil) as? NSFont
         let secondFont = engine.textStorage.attribute(.font, at: 3, effectiveRange: nil) as? NSFont
-        XCTAssertEqual(titleFont?.pointSize, AtticTextStyle.noteTitle.nsFont.pointSize)
+        XCTAssertEqual(titleFont?.pointSize, engine.style.titleFont.pointSize)
         XCTAssertEqual(secondFont?.pointSize, AtticTextStyle.noteBody.nsFont.pointSize)
         XCTAssertEqual(engine.document().blocks.prefix(2).map(\.text), ["Ti", "tle"])
     }
