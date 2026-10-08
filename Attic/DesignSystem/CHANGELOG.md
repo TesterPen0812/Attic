@@ -30,7 +30,11 @@ Every later change is recorded here: what changed, why, and who asked.
   15 / 21 (weight 650), Body 14 / 21, Quote 15 / 22, Mono 12 / 18; gaps 3,
   12 after the title, 16 / 14 / 12 above headings and 2 / 1 / 1 below; lists
   22 in with a 5 pt dot; the quote's 3 pt bar, text 14 in; the Mono block's
-  12 × 14 padding and radius 10. All notes' rows: `noteRowTitle` (13
+  radius 10, 12 pt above and below and 9.5 at the sides (the draft's 14 wrapped
+  the owner's 33-character citation line; 33 SF Mono characters at 12 pt are
+  244.8 pt, and 10 pt sides leave 244). Copy is a 20 pt `doc.on.doc` chip,
+  opaque in the block's fill, 3 pt into its top-right corner, shown on hover,
+  with the caret in the block, or for VoiceOver. All notes' rows: `noteRowTitle` (13
   medium) and `noteRowMeta` (11.5), SF Pro.
 
 ### A32: Aa's neighbours pass under the row's edges; the close no longer waits (2026-10-08)

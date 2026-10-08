@@ -102,30 +102,85 @@ final class NoteEditorTextView: NSTextView, NSAccessibilityCustomRotorItemSearch
     var pinsMonoCopy = false
     #endif
 
-    /// Shows Copy on the block under `point` (hides it elsewhere).
+    /// The block the pointer is over (nil: none).
+    private var hoveredMonoLocation: Int?
+
+    /// Shows Copy on the block under `point` (hides it elsewhere, unless
+    /// the caret keeps it on its own block).
     func updateMonoCopy(at point: NSPoint?) {
         #if DEBUG
         if pinsMonoCopy, !monoCopyButton.isHidden { return }
         #endif
-        guard let engine, let point, let block = engine.monoBlock(at: point) else {
+        hoveredMonoLocation = point.flatMap { engine?.monoBlock(at: $0)?.location }
+        placeMonoCopy()
+    }
+
+    /// The block the caret is in, while the keyboard is in the text (Copy
+    /// then shows for the keyboard and for VoiceOver).
+    private var caretMonoLocation: Int? {
+        guard let engine, window?.firstResponder === self else { return nil }
+        let length = engine.textStorage.length
+        guard length > 0 else { return nil }
+        var probe = selectedRange().location
+        if probe >= length {
+            // At the note's end: still in the block on its last code line,
+            // not on the empty line after it.
+            probe = length - 1
+            if (engine.textStorage.string as NSString).character(at: probe) == 0x0A { return nil }
+        }
+        return engine.paragraphStyle(at: probe) == .mono ? probe : nil
+    }
+
+    private var monoCopyPlacementScheduled = false
+
+    override func setSelectedRanges(_ ranges: [NSValue], affinity: NSSelectionAffinity, stillSelecting: Bool) {
+        super.setSelectedRanges(ranges, affinity: affinity, stillSelecting: stillSelecting)
+        guard engine != nil, !stillSelecting else { return }
+        // After the text system has finished with this change (placing
+        // Copy reads the block's layout).
+        guard !monoCopyPlacementScheduled else { return }
+        monoCopyPlacementScheduled = true
+        DispatchQueue.main.async { [weak self] in
+            self?.monoCopyPlacementScheduled = false
+            self?.placeMonoCopy()
+        }
+    }
+
+    override func resignFirstResponder() -> Bool {
+        let resigned = super.resignFirstResponder()
+        if resigned { DispatchQueue.main.async { [weak self] in self?.placeMonoCopy() } }
+        return resigned
+    }
+
+    /// Puts Copy on the hovered block, else the caret's, else hides it.
+    /// Its chip is opaque in the block's own fill, 3 pt inside the corner.
+    func placeMonoCopy() {
+        #if DEBUG
+        if pinsMonoCopy, !monoCopyButton.isHidden { return }
+        #endif
+        guard let engine, let location = hoveredMonoLocation ?? caretMonoLocation,
+              let range = engine.monoBlockRange(at: location), let rect = engine.monoBlockRect(for: range) else {
             if monoCopyLocation != nil || !monoCopyButton.isHidden {
                 monoCopyLocation = nil
                 monoCopyButton.isHidden = true
+                NSAccessibility.post(element: self, notification: .layoutChanged)
             }
             return
         }
         let style = engine.style
         let tokens = style.tokens
-        monoCopyButton.fill = tokens.controlFace.nsColor
-        monoCopyButton.hoverFill = tokens.chipHover.over(tokens.controlFace).nsColor
+        let blockFill = tokens.recessed.over(tokens.panel.base.withAlpha(1))
+        monoCopyButton.fill = blockFill.nsColor
+        monoCopyButton.hoverFill = tokens.chipHover.over(blockFill).nsColor
         monoCopyButton.ink = style.secondaryColor
-        let width = monoCopyButton.fittingWidth
-        let inset = AtticNoteType.monoCopyInset
-        let frame = NSRect(x: block.rect.maxX - inset - width, y: block.rect.minY + inset,
-                           width: width, height: NoteMonoCopyButton.height)
+        let origin = textContainerOrigin
+        let size = NoteMonoCopyButton.size, inset = AtticNoteType.monoCopyInset
+        let frame = NSRect(x: origin.x + rect.maxX - inset - size, y: origin.y + rect.minY + inset, width: size, height: size)
         if monoCopyButton.frame != frame { monoCopyButton.frame = frame }
-        monoCopyLocation = block.location
+        let wasHidden = monoCopyButton.isHidden
+        monoCopyLocation = location
         monoCopyButton.isHidden = false
+        if wasHidden { NSAccessibility.post(element: self, notification: .layoutChanged) }
     }
 
     /// Where Copy puts the block's text (a test uses its own pasteboard).
@@ -656,7 +711,11 @@ final class NoteEditorTextView: NSTextView, NSAccessibilityCustomRotorItemSearch
     override func accessibilityChildren() -> [Any]? {
         let base = super.accessibilityChildren() ?? []
         guard let engine else { return base }
-        let accessories = accessoryViews.filter { view in !view.isHidden && !base.contains { ($0 as AnyObject) === view } }
+        var accessories = accessoryViews.filter { view in !view.isHidden && !base.contains { ($0 as AnyObject) === view } }
+        // Copy, while it shows (the caret in a block, or the pointer over one).
+        if !monoCopyButton.isHidden, !base.contains(where: { ($0 as AnyObject) === monoCopyButton }) {
+            accessories.append(monoCopyButton)
+        }
         return base + engine.accessibilityElements(for: self) + accessories
     }
 

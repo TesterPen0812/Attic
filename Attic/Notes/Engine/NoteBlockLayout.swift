@@ -338,24 +338,27 @@ extension NoteEditorEngine: NSTextLayoutManagerDelegate, NSTextContentStorageDel
     }
 }
 
-// MARK: - Copy on a Mono block (hover)
+// MARK: - Copy on a Mono block
 
-/// "Copy" on a Mono block's top-right corner, inside its padding, shown
-/// only while the pointer is over the block (Notes v2: the simple block,
-/// Copy on hover). It copies the block's lines as plain text and says
-/// "Copied" for a moment.
+/// Copy on a Mono block: a 20 pt `doc.on.doc` chip tucked into the block's
+/// top-right corner, opaque in the block's own fill, so the text under it
+/// is hidden rather than overdrawn and nothing moves. Shown while the
+/// pointer is over the block, while the caret is in it, or for VoiceOver.
+/// It copies the block's lines as plain text and shows a tick for a moment.
 final class NoteMonoCopyButton: NSView {
+    private typealias T = AtticNoteType
     var onCopy: (() -> Void)?
     var fill: NSColor = .controlBackgroundColor { didSet { needsDisplay = true } }
     var hoverFill: NSColor = .controlBackgroundColor { didSet { needsDisplay = true } }
     var ink: NSColor = .secondaryLabelColor { didSet { needsDisplay = true } }
-    private(set) var title = String(localized: "Copy")
+    /// The glyph shown: `doc.on.doc`, or `checkmark` just after a copy.
+    private(set) var symbolName = "doc.on.doc"
     private var hovered = false { didSet { needsDisplay = true } }
     private var resetWork: DispatchWorkItem?
 
-    static let height: CGFloat = 20
-    static let padding: CGFloat = 8
-    static var font: NSFont { NSFont.systemFont(ofSize: 11, weight: .medium) }
+    static var size: CGFloat { T.monoCopySize }
+    /// Nested in the block's corner: its radius less the inset.
+    static var radius: CGFloat { AtticRadius.nested(outer: T.monoRadius, gap: T.monoCopyInset) ?? T.monoRadius }
 
     override init(frame: NSRect) {
         super.init(frame: frame)
@@ -370,11 +373,6 @@ final class NoteMonoCopyButton: NSView {
     required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
 
     override var isFlipped: Bool { true }
-
-    /// Its size for its current words.
-    var fittingWidth: CGFloat {
-        ceil((title as NSString).size(withAttributes: [.font: Self.font]).width) + Self.padding * 2
-    }
 
     override func updateTrackingAreas() {
         super.updateTrackingAreas()
@@ -392,12 +390,14 @@ final class NoteMonoCopyButton: NSView {
 
     private func press() {
         onCopy?()
-        title = String(localized: "Copied")
+        symbolName = "checkmark"
+        setAccessibilityValue(String(localized: "Copied"))
         needsDisplay = true
         resetWork?.cancel()
         let work = DispatchWorkItem { [weak self] in
             guard let self else { return }
-            self.title = String(localized: "Copy")
+            self.symbolName = "doc.on.doc"
+            self.setAccessibilityValue(nil)
             self.needsDisplay = true
         }
         resetWork = work
@@ -405,13 +405,16 @@ final class NoteMonoCopyButton: NSView {
     }
 
     override func draw(_ dirtyRect: NSRect) {
-        let radius = AtticRadius.control(height: bounds.height)
-        let shape = NSBezierPath(roundedRect: bounds, xRadius: radius, yRadius: radius)
+        let shape = NSBezierPath(roundedRect: bounds, xRadius: Self.radius, yRadius: Self.radius)
         (hovered ? hoverFill : fill).setFill()
         shape.fill()
-        let string = NSAttributedString(string: title, attributes: [.font: Self.font, .foregroundColor: ink])
-        let size = string.size()
-        string.draw(at: NSPoint(x: (bounds.width - size.width) / 2, y: (bounds.height - size.height) / 2))
+        let configuration = NSImage.SymbolConfiguration(pointSize: T.monoCopyGlyph, weight: .regular)
+            .applying(NSImage.SymbolConfiguration(paletteColors: [ink]))
+        guard let image = NSImage(systemSymbolName: symbolName, accessibilityDescription: nil)?
+            .withSymbolConfiguration(configuration) else { return }
+        let size = image.size
+        image.draw(in: NSRect(x: (bounds.width - size.width) / 2, y: (bounds.height - size.height) / 2,
+                              width: size.width, height: size.height))
     }
 }
 

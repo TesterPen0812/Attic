@@ -75,6 +75,10 @@ final class NotesV2TypographyTests: XCTestCase {
             as? NSParagraphStyle)
     }
 
+    private func spin(_ seconds: TimeInterval = 0.05) {
+        RunLoop.main.run(until: Date().addingTimeInterval(seconds))
+    }
+
     // MARK: Tokens
 
     func testTypeScaleIsTheDraftsDirection5() {
@@ -88,7 +92,8 @@ final class NotesV2TypographyTests: XCTestCase {
         XCTAssertEqual([T.paragraphGap, T.titleToText], [3, 12])
         XCTAssertEqual([T.aboveTitleStyle, T.aboveHeading, T.aboveSubheading], [16, 14, 12])
         XCTAssertEqual([T.belowTitleStyle, T.belowHeading, T.belowSubheading], [2, 1, 1])
-        XCTAssertEqual([T.monoPaddingV, T.monoPaddingH, T.monoRadius], [12, 14, 10])
+        XCTAssertEqual([T.monoPaddingV, T.monoPaddingH, T.monoRadius], [12, 9.5, 10])
+        XCTAssertEqual([T.monoCopySize, T.monoCopyInset], [20, 3])
         XCTAssertEqual([T.listTextInset, T.bulletDot, T.quoteBar, T.quoteTextInset], [22, 5, 3, 14])
 
         let style = NoteTextStyle()
@@ -234,12 +239,19 @@ final class NotesV2TypographyTests: XCTestCase {
     func testMonoWrapsLikeTheDraftAndHangsFromItsLeadingSpaces() throws {
         let (engine, _) = makeEngine(cia)
         let blocks = monoFragments(engine)
+        // The arithmetic: 33 SF Mono characters at 12 pt need 244.8 pt; the
+        // 264 pt column less 2 × 9.5 leaves 245 (2 × 10 would leave 244, and
+        // the draft's 2 × 14 left 236, which wrapped a lone "w,").
+        let citation = "@inproceedings{beerman2023review,"
+        let needed = (citation as NSString).size(withAttributes: [.font: NoteTextStyle().monoFont]).width
+        XCTAssertLessThanOrEqual(needed, 264 - 2 * T.monoPaddingH)
+        XCTAssertGreaterThan(needed, 264 - 2 * 10, "10 pt sides would still wrap it")
         let first = blocks[0].textLineFragments.filter { $0.characterRange.length > 0 }
-        XCTAssertEqual(first.count, 2)
+        XCTAssertEqual(first.count, 1, "the first citation line fits whole")
         let text = engine.textStorage.string as NSString
         let start = location(of: "@inproceedings", in: engine)
-        XCTAssertEqual(text.substring(with: NSRange(location: start, length: first[0].characterRange.length)),
-                       "@inproceedings{beerman2023revie")
+        XCTAssertEqual(text.substring(with: NSRange(location: start, length: first[0].characterRange.length))
+            .trimmingCharacters(in: .newlines), citation)
         let indent = NoteTextStyle().monoHang(for: "  title")
         XCTAssertGreaterThan(indent, 14)
         for fragment in blocks.dropFirst() {
@@ -320,7 +332,17 @@ final class NotesV2TypographyTests: XCTestCase {
         XCTAssertEqual((view.string as NSString).substring(with: view.selectedRange()), "let a = 1\n  let b = 2")
         XCTAssertEqual(engine.formattingState(for: block).paragraph, .mono, "a selection inside the block reads as Mono")
 
-        // Copy shows only over the block, on its top-right corner.
+        // The caret in the block shows Copy (keyboard, VoiceOver); out of it, not.
+        spin()
+        XCTAssertFalse(view.monoCopyButton.isHidden, "the caret is in the block")
+        XCTAssertTrue(view.accessibilityChildren()?.contains { ($0 as AnyObject) === view.monoCopyButton } ?? false,
+                      "VoiceOver reaches Copy")
+        view.setSelectedRange(NSRange(location: location(of: "Before", in: engine), length: 0))
+        spin()
+        XCTAssertTrue(view.monoCopyButton.isHidden, "the caret left the block")
+        XCTAssertFalse(view.accessibilityChildren()?.contains { ($0 as AnyObject) === view.monoCopyButton } ?? true)
+
+        // The pointer: Copy shows only over the block, tucked into its corner.
         let rect = try XCTUnwrap(engine.monoBlockRect(for: block))
         let origin = view.textContainerOrigin
         view.updateMonoCopy(at: NSPoint(x: origin.x + 4, y: origin.y + 4))
@@ -328,16 +350,22 @@ final class NotesV2TypographyTests: XCTestCase {
         view.updateMonoCopy(at: NSPoint(x: origin.x + rect.midX, y: origin.y + rect.midY))
         XCTAssertFalse(view.monoCopyButton.isHidden)
         let button = view.monoCopyButton.frame
-        XCTAssertEqual(button.maxX, origin.x + rect.maxX - T.monoCopyInset, accuracy: 0.5)
-        XCTAssertEqual(button.minY, origin.y + rect.minY + T.monoCopyInset, accuracy: 0.5)
-        XCTAssertLessThanOrEqual(button.minY + button.height, origin.y + rect.minY + T.monoPaddingV + T.mono.lineHeight)
+        XCTAssertEqual(button.size, CGSize(width: 20, height: 20))
+        XCTAssertEqual(button.maxX, origin.x + rect.maxX - T.monoCopyInset, accuracy: 0.01)
+        XCTAssertEqual(button.minY, origin.y + rect.minY + T.monoCopyInset, accuracy: 0.01)
+        XCTAssertEqual(NoteMonoCopyButton.radius, 7, "nested in the block's 10 pt corner")
+        // An icon in a chip of the block's own fill, opaque; the text never moves.
+        XCTAssertEqual(view.monoCopyButton.symbolName, "doc.on.doc")
+        XCTAssertEqual(view.monoCopyButton.fill.alphaComponent, 1, accuracy: 0.001)
+        let fragmentsBefore = monoFragments(engine).map(\.layoutFragmentFrame)
+        XCTAssertEqual(monoFragments(engine).map(\.layoutFragmentFrame), fragmentsBefore)
 
         let pasteboard = NSPasteboard(name: NSPasteboard.Name("NotesV2TypographyTests.\(UUID().uuidString)"))
         defer { pasteboard.releaseGlobally() }
         view.copyPasteboard = pasteboard
         XCTAssertTrue(view.monoCopyButton.accessibilityPerformPress())
         XCTAssertEqual(pasteboard.string(forType: .string), "let a = 1\n  let b = 2")
-        XCTAssertEqual(view.monoCopyButton.title, String(localized: "Copied"))
+        XCTAssertEqual(view.monoCopyButton.symbolName, "checkmark", "a tick for a moment")
         view.updateMonoCopy(at: nil)
         XCTAssertTrue(view.monoCopyButton.isHidden)
 

@@ -606,13 +606,21 @@ enum AtticNoteType {
     /// divider); 4 when the block follows a heading directly.
     static let blockMargin: CGFloat = 8
     static let blockAfterHeading: CGFloat = 4
-    /// The Mono block: 12 × 14 padding, the content card's radius 10.
+    /// The Mono block: 12 pt above and below, 9.5 at the sides, the content
+    /// card's radius 10. The sides were 14 in the draft, which wrapped the
+    /// owner's first citation line to a lone "w,"; 33 SF Mono characters at
+    /// 12 pt are 244.8 pt, so the side padding must leave at least that of
+    /// the 264 pt column: 10 leaves 244 (a lone ","), 9.5 leaves 245.
     static let monoPaddingV: CGFloat = 12
-    static let monoPaddingH: CGFloat = 14
+    static let monoPaddingH: CGFloat = 9.5
     static let monoRadius: CGFloat = AtticRadius.contentCard
-    /// Copy on the block's top-right corner, shown on hover: 11 medium,
-    /// inside the padding.
-    static let monoCopyInset: CGFloat = 6
+    /// Copy: a 20 pt icon chip (`doc.on.doc`) tucked 3 pt into the block's
+    /// top-right corner, opaque in the block's own fill, shown on hover,
+    /// while the caret is in the block, or for VoiceOver. It never moves
+    /// the text.
+    static let monoCopySize: CGFloat = 20
+    static let monoCopyInset: CGFloat = 3
+    static let monoCopyGlyph: CGFloat = 11
     /// Lists and checklists: their text 22 in (each level 22 more), a 5 pt
     /// dot centred 7 in (the checklist box's centre); numbers end 6 before
     /// the text.
