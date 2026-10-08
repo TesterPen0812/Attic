@@ -120,9 +120,17 @@ final class ScrollEdgeUITests: XCTestCase {
             let middle = panel.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.52))
             middle.hover()
             RunLoop.current.run(until: Date().addingTimeInterval(1))
-            let tabs = app.buttons["tasks-page-now"].frame.union(app.buttons["tasks-page-backlog"].frame)
+            let tabsHit = app.buttons["tasks-page-now"].frame.union(app.buttons["tasks-page-backlog"].frame)
                 .union(app.buttons["tasks-page-done"].frame)
+            // AX reports the comfortable hit target, six points beyond
+            // each label (AtticPageTabsMetrics.hitOutset), not its ink line.
+            // The 16 pt plain line fades; the surrounding ramps return to
+            // full ink and must not be tested as if they were plain labels.
+            XCTAssertEqual(tabsHit.height, 28, accuracy: 0.5)
+            let tabs = tabsHit.insetBy(dx: 6, dy: 6)
+            XCTAssertEqual(tabs.height, 16, accuracy: 0.5)
             let pills = date.frame.union(app.buttons["composer-tag"].frame).union(app.buttons["composer-priority"].frame)
+            print("A38_SCROLL_BANDS hit=\(tabsHit) plain=\(tabs) glass=\(pills)")
             let before = try bitmap(panel)
             save(panel.screenshot(), name: "d1-\(surface)-\(mode)-controls-reference")
             for identifier in ["tasks-page-now", "tasks-page-backlog", "tasks-page-done", "panel-pin-button", "panel-section-picker"] {
@@ -134,6 +142,7 @@ final class ScrollEdgeUITests: XCTestCase {
             // One sign advances this list regardless of natural scrolling.
             var moved = false
             var faintEdges = [Double](repeating: 0, count: 2)
+            var faintLabels = 0.0, readableGlass = 0.0
             // Small phase shifts place glyphs through each narrow edge band,
             // so a gap between lines is not mistaken for clipping.
             for delta in [CGFloat(-170), 11, 11, 340] {
@@ -144,15 +153,13 @@ final class ScrollEdgeUITests: XCTestCase {
                 guard movement > 0.02 else { continue }
                 moved = true
                 // Lower bounds distinguish visible ink from clipping.
-                XCTAssertGreaterThan(changedFraction(before, after, in: tabs, panel: panel.frame), 0.0005,
-                                     "\(surface) \(mode): rows show faintly under the tabs labels")
+                faintLabels = max(faintLabels, changedFraction(before, after, in: tabs, panel: panel.frame))
                 XCTAssertGreaterThan(changedFraction(before, after, in: pills, panel: panel.frame), 0.0005,
                                      "\(surface) \(mode): moving ink remains under the metadata pills")
                 // Plain labels fade; glass retains text-strength changes.
                 XCTAssertLessThan(changedFraction(before, after, in: tabs, panel: panel.frame, threshold: 0.35), 0.002,
                                   "\(surface) \(mode): never readable under the tabs labels")
-                XCTAssertGreaterThan(changedFraction(before, after, in: pills, panel: panel.frame, threshold: 0.35), 0.002,
-                                     "\(surface) \(mode): full-strength ink remains visible under glass metadata pills")
+                readableGlass = max(readableGlass, changedFraction(before, after, in: pills, panel: panel.frame, threshold: 0.35))
                 let topEdge = CGRect(x: panel.frame.minX + 75, y: panel.frame.minY,
                                      width: panel.frame.width - 110, height: 8)
                 let bottomEdge = CGRect(x: topEdge.minX, y: panel.frame.maxY - 8,
@@ -165,6 +172,12 @@ final class ScrollEdgeUITests: XCTestCase {
                 save(panel.screenshot(), name: "revised-\(surface)-\(mode)-glass-readable-labels-faint")
             }
             XCTAssertTrue(moved, "positive control: scrolling visibly changed row ink in the body")
+            // A particular phase can put a gap between glyphs in a band.
+            // The sweep must contain real ink there; every phase must obey
+            // the label/edge upper bounds. Clipping or text-line-strength
+            // fading of glass cannot pass the corresponding lower bounds.
+            XCTAssertGreaterThan(faintLabels, 0.0005, "\(surface) \(mode): faint moving ink survives behind the plain label line")
+            XCTAssertGreaterThan(readableGlass, 0.002, "\(surface) \(mode): full-strength ink remains visible under glass metadata pills")
             for (index, faint) in faintEdges.enumerated() {
                 XCTAssertGreaterThan(faint, 0.0005, "\(surface) \(mode): faint moving ink survives at edge \(index), rather than clipping")
             }
