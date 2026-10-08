@@ -5,6 +5,34 @@ Every later change is recorded here: what changed, why, and who asked.
 
 ## Phase 2
 
+### Notes v2, round 1: chrome B and text direction 5 (owner, 2026-10-08)
+- **Chrome B** (Notes and Tasks): `AtticControlSize.headerControl` 36 → 32
+  (radius 13.5 by the 42 % rule) and `AtticStyle.chromeMinimumInset`
+  24 → 16. Following them: the pin, the page button (24 pt chips,
+  `AtticPageButtonMetrics.segment`), All notes, Aa, New note, the status
+  pill (`AtticNoteMetrics.pillHeight`), the header title, Aa's format row
+  (24 pt cells, `AtticNoteFormatMetrics.rowCellHeight`) and the add bar
+  (`addBarHeight`, its send button 24). Aa sits 6 from New note
+  (`formatButtonGap`). Chips and cells under 28 pt keep a 28 pt target
+  (`AtticControlSize.hitOutset`).
+- **The content line stays at 28** (`AtticLayout.contentFromChrome`, 12
+  inside the chrome's line): the note's column, the Tasks circles and tabs;
+  the add bar's plus stays on the circles' centre line
+  (`AtticAddBarMetrics.leadingPadding` 8).
+- **The status pill never outgrows the bottom row**
+  (`AtticNoteMetrics.pillMaxWidth(panelWidth:chromeInset:showsFormat:)`),
+  and the panel's root always takes its window's size from its origin
+  (`PanelRootLayout`): the corner buttons can no longer be pushed off
+  both edges.
+- **Note text** (`AtticNoteType`, text direction 5): SF Pro throughout the
+  note (`noteTitle` / `noteBody` are no longer Rounded), one near-black ink;
+  Title 22 bold / 27, Title style 18 / 24, Heading 16.5 / 22, Subheading
+  15 / 21 (weight 650), Body 14 / 21, Quote 15 / 22, Mono 12 / 18; gaps 3,
+  12 after the title, 16 / 14 / 12 above headings and 2 / 1 / 1 below; lists
+  22 in with a 5 pt dot; the quote's 3 pt bar, text 14 in; the Mono block's
+  12 × 14 padding and radius 10. All notes' rows: `noteRowTitle` (13
+  medium) and `noteRowMeta` (11.5), SF Pro.
+
 ### A32: Aa's neighbours pass under the row's edges; the close no longer waits (2026-10-08)
 - **`atticControlReveal` / `AtticRevealedControlShape`**: a raised control
   can draw only part of itself. A glass container ignores a clip set on its
