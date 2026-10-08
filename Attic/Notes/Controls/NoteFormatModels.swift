@@ -8,6 +8,8 @@ struct NoteFormatSnapshot: Equatable {
     var paragraph: NoteParagraphStyle?
     var validations: [NoteFormatCommand: NoteCommandValidation] = [:]
     var disabledReason: String?
+    /// The keyboard is in a table: Aa's row is the table's tools.
+    var table: NoteTableToolsState?
 
     static let empty = NoteFormatSnapshot()
 
@@ -22,10 +24,24 @@ struct NoteFormatSnapshot: Equatable {
     static func make(router: NoteCommandRouter, selection: NSRange) -> NoteFormatSnapshot {
         var validations: [NoteFormatCommand: NoteCommandValidation] = [:]
         for command in shownCommands { validations[command] = router.validation(command, selection: selection) }
+        let engine = router.engine
+        if engine.focusedTable != nil {
+            // In a table: only the cell's marks apply (no block styles in cells).
+            for command in shownCommands {
+                if case let .mark(kind) = command, let state = engine.tableMarkState(kind) {
+                    validations[command] = NoteCommandValidation(enabled: true, state: state)
+                } else {
+                    validations[command] = NoteCommandValidation(enabled: false, state: .off)
+                }
+            }
+            return NoteFormatSnapshot(paragraph: nil, validations: validations, disabledReason: nil,
+                                      table: engine.tableToolsState())
+        }
         let styles = (NoteCommandCatalog.styles + NoteCommandCatalog.lists).filter { validations[$0]?.state == .on }
         let paragraph: NoteParagraphStyle? = if case let .paragraph(style)? = styles.first { style } else { nil }
         return NoteFormatSnapshot(paragraph: paragraph, validations: validations,
-                                  disabledReason: router.disabledReason(selection: selection))
+                                  disabledReason: router.disabledReason(selection: selection),
+                                  table: router.engine.tableToolsState())
     }
 
     func isEnabled(_ command: NoteFormatCommand) -> Bool { validations[command]?.enabled ?? false }
@@ -53,18 +69,81 @@ enum NoteFormatBarItem: Hashable {
 }
 
 /// The format row's controls in keyboard order (OD-14, p2-36 draft 1):
-/// the style, the four list types, outdent and indent, then close.
+/// the style, the four cells (three lists and Table), outdent and indent,
+/// then close. In a table (sheet 3, panel 2): Table ⌄, add a row, add a
+/// column, delete the row, delete the column, then close.
 enum NoteFormatRowItem: Hashable {
     case style
     case command(NoteFormatCommand)
+    case tableMenu
+    case tableTool(NoteTableTool)
     case close
 
     static let all: [NoteFormatRowItem] = [.style]
         + (NoteCommandCatalog.lists + NoteCommandCatalog.indents).map { .command($0) } + [.close]
+    static let table: [NoteFormatRowItem] = [.tableMenu] + NoteTableTool.allCases.map { .tableTool($0) } + [.close]
+
+    static func items(inTable: Bool) -> [NoteFormatRowItem] { inTable ? table : all }
 
     /// The index after `index`, `forward` or back, round the row.
-    static func step(_ index: Int, forward: Bool) -> Int {
-        (index + (forward ? 1 : all.count - 1)) % all.count
+    static func step(_ index: Int, forward: Bool, count: Int = all.count) -> Int {
+        (index + (forward ? 1 : count - 1)) % count
+    }
+}
+
+/// A table's state as Aa's row shows it.
+struct NoteTableToolsState: Equatable {
+    var headerRow: Bool
+    var rows: Int
+    var columns: Int
+    /// Delete Row / Column delete the table when it has one left.
+    var canDeleteRow: Bool { rows > 1 }
+    var canDeleteColumn: Bool { columns > 1 }
+}
+
+/// The table tools in Aa's row (sheet 3, panel 2).
+enum NoteTableTool: Hashable, CaseIterable {
+    case addRow, addColumn, deleteRow, deleteColumn
+
+    var title: String {
+        switch self {
+        case .addRow: String(localized: "Add Row")
+        case .addColumn: String(localized: "Add Column")
+        case .deleteRow: String(localized: "Delete Row")
+        case .deleteColumn: String(localized: "Delete Column")
+        }
+    }
+
+    var shortcut: String? {
+        switch self {
+        case .addRow: "⌥⌘↓"
+        case .addColumn: "⌥⌘→"
+        case .deleteRow, .deleteColumn: nil
+        }
+    }
+
+    var glyph: AtticTableToolGlyph.Kind {
+        switch self {
+        case .addRow: .addRow
+        case .addColumn: .addColumn
+        case .deleteRow: .deleteRow
+        case .deleteColumn: .deleteColumn
+        }
+    }
+}
+
+/// Table ⌄ (Aa's row in a table, and the grips' menus share its rows).
+enum NoteTableMenuItem: Hashable, CaseIterable {
+    case headerRow, distributeColumns, convertToText, copyAsMarkdown, deleteTable
+
+    var title: String {
+        switch self {
+        case .headerRow: String(localized: "Header Row")
+        case .distributeColumns: String(localized: "Distribute Columns")
+        case .convertToText: String(localized: "Convert to Text")
+        case .copyAsMarkdown: String(localized: "Copy as Markdown")
+        case .deleteTable: String(localized: "Delete Table")
+        }
     }
 }
 
@@ -83,6 +162,8 @@ final class NoteFormatModel: ObservableObject {
     @Published var rowKeyboardIndex: Int?
     /// The format row's style list is open.
     @Published var rowStyleListOpen = false
+    /// The table menu (Table ⌄) is open.
+    @Published var rowTableMenuOpen = false
     /// The note's highlight colour, for the highlight toggle's swatch.
     @Published var highlightSwatch: AtticRGBA = .clear
 
@@ -93,6 +174,16 @@ final class NoteFormatModel: ObservableObject {
 
     func setSnapshot(_ value: NoteFormatSnapshot) {
         if value != snapshot { snapshot = value }
+        if value.table == nil, rowTableMenuOpen { rowTableMenuOpen = false }
+    }
+
+    func runTable(_ tool: NoteTableTool) {
+        router?.runTable(tool, from: .formatBar)
+    }
+
+    func runTableMenu(_ item: NoteTableMenuItem) {
+        rowTableMenuOpen = false
+        router?.runTableMenu(item, from: .formatBar)
     }
 
     func run(_ command: NoteFormatCommand, from surface: NoteCommandSurface) {

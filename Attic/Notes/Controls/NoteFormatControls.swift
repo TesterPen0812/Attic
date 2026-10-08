@@ -132,6 +132,8 @@ final class NoteFormatControls: NSObject {
         engine.onSlashDateRequest = { [weak self] in self?.openDateCard(fromSlash: true) }
         engine.onSlashFileRequest = { [weak self] request in self?.requestFile?(request) }
         engine.onLinkRequest = { [weak self] target in self?.openLinkCard(target: target) }
+        engine.onTableFocusChange = { [weak self] in self?.scheduleRefresh() }
+        engine.onCellLinkRequest = { [weak self] target in self?.openCellLinkCard(target: target) }
         previousActivity = engine.onActivityChanged
         engine.onActivityChanged = { [weak self] old, new in
             self?.previousActivity?(old, new)
@@ -185,6 +187,8 @@ final class NoteFormatControls: NSObject {
         engine.onSlashDateRequest = nil
         engine.onSlashFileRequest = nil
         engine.onLinkRequest = nil
+        engine.onTableFocusChange = nil
+        engine.onCellLinkRequest = nil
         engine.onActivityChanged = previousActivity
         if engine.pendingSlashDate != nil { engine.cancelSlashDate() }
         textView?.onLayout = previousLayout
@@ -263,7 +267,8 @@ final class NoteFormatControls: NSObject {
         guard let textView else { return }
         let current = selection
         let focused = textView.window?.firstResponder === textView || barOwnsKeyboard
-        let allowsBar = current.length > 0 && focused && !textView.hasMarkedText() && engine.activity == .idle
+        let inTable = tableMarkTarget
+        let allowsBar = ((current.length > 0 && focused && !textView.hasMarkedText()) || inTable) && engine.activity == .idle
             && cardModel.card == nil && dismissedSelection != current && !slashModel.shown
         if allowsBar || isFormatBarOpen {
             snapshotCount += 1
@@ -288,7 +293,7 @@ final class NoteFormatControls: NSObject {
     /// with no such line keeps the caret, and the row says why (VoiceOver's
     /// hint on each control).
     private func moveCaretOutOfTitle() {
-        guard let textView, !engine.isReadOnly else { return }
+        guard let textView, !engine.isReadOnly, engine.focusedTable == nil else { return }
         let current = selection
         let title = engine.titleParagraphRange
         guard current.length == 0, current.location <= NSMaxRange(title),
@@ -335,10 +340,29 @@ final class NoteFormatControls: NSObject {
     /// After a command from the bar or the list, the keyboard is the
     /// note's again (a click there can leave it with the page's hosting view).
     private func returnKeyboardFromBar() {
-        guard cardModel.card == nil, let textView, let window = textView.window,
-              window.firstResponder !== textView else { return }
+        guard cardModel.card == nil else { return }
+        if engine.returnKeyboardToTable() { return }
+        guard let textView, let window = textView.window, window.firstResponder !== textView else { return }
         window.makeFirstResponder(textView)
     }
+
+    /// The keyboard is in one of this note's tables (a cell or whole cells).
+    private var keyboardInTable: Bool {
+        guard let responder = textView?.window?.firstResponder else { return false }
+        if let editor = responder as? NoteTableCellEditor { return editor.table?.engine === engine }
+        if let canvas = responder as? NoteTableCanvas { return canvas.table?.engine === engine }
+        return false
+    }
+
+    /// The text a cell's marks would apply to: the cell editor's selection,
+    /// or whole selected cells.
+    private var tableMarkTarget: Bool {
+        guard keyboardInTable, let table = engine.focusedTable else { return false }
+        if table.cellSelection != nil { return true }
+        return table.isEditingCell && table.editor.selectedRange().length > 0 && !table.editor.hasMarkedText()
+    }
+
+    private var rowItems: [NoteFormatRowItem] { NoteFormatRowItem.items(inTable: formatModel.snapshot.table != nil) }
 
     private func showBar() {
         barWidth = measuredBarWidth(styleName: NoteCommandCatalog.styleName(formatModel.snapshot.paragraph))
@@ -419,9 +443,16 @@ final class NoteFormatControls: NSObject {
     /// Above the selection's first line, or under its last when there is no
     /// room above; never over the selection while either fits.
     func barPlacement(selection: NSRange) -> (frame: NSRect, below: Bool)? {
-        guard let textView, selection.length > 0,
-              let first = engine.rect(for: NSRange(location: selection.location, length: 1)),
-              let last = engine.rect(for: NSRange(location: NSMaxRange(selection) - 1, length: 1)) else { return nil }
+        guard let textView else { return nil }
+        let first: NSRect, last: NSRect
+        if tableMarkTarget, let rects = engine.tableSelectionRects(in: textView) {
+            (first, last) = rects
+        } else {
+            guard selection.length > 0,
+                  let firstRect = engine.rect(for: NSRange(location: selection.location, length: 1)),
+                  let lastRect = engine.rect(for: NSRange(location: NSMaxRange(selection) - 1, length: 1)) else { return nil }
+            (first, last) = (firstRect, lastRect)
+        }
         let m = AtticNoteFormatMetrics.self
         let usable = usableRect()
         let width = barWidth > 0 ? barWidth : Self.barWidth(styleName: NoteCommandCatalog.styleName(formatModel.snapshot.paragraph))
@@ -455,8 +486,10 @@ final class NoteFormatControls: NSObject {
     /// text view sees them (never during a composition).
     func handleKey(_ event: NSEvent) -> Bool {
         if event.keyCode == 53, let closed = closeInnermostOnEscape(event) { return closed }
-        guard let textView, let window = textView.window, event.window === window,
-              window.firstResponder === textView, !textView.hasMarkedText() else { return false }
+        guard let textView, let window = textView.window, event.window === window else { return false }
+        let inTable = keyboardInTable
+        guard window.firstResponder === textView || inTable, !textView.hasMarkedText(),
+              (window.firstResponder as? NSTextView)?.hasMarkedText() != true else { return false }
         let flags = event.modifierFlags.intersection([.command, .option, .shift, .control])
         // ⌃Tab / ⌃⇧Tab (OD-7): the selection bar, when one shows, is the
         // next control (⌃Tab again returns to the text); otherwise the
@@ -473,7 +506,7 @@ final class NoteFormatControls: NSObject {
             } else if formatModel.rowKeyboardIndex != nil {
                 exitRowKeyboard()
             } else if isFormatBarOpen {
-                enterRowKeyboard(at: forward ? 0 : NoteFormatRowItem.all.count - 1)
+                enterRowKeyboard(at: forward ? 0 : rowItems.count - 1)
             } else if let leaveEditor {
                 leaveEditor(forward)
             } else {
@@ -483,6 +516,8 @@ final class NoteFormatControls: NSObject {
         }
         if formatModel.barKeyboardIndex != nil { return handleBarKey(event, flags: flags) }
         if formatModel.rowKeyboardIndex != nil { return handleRowKey(event, flags: flags) }
+        // In a table its own keys come first (marks on cells, ⌥⌘ arrows).
+        if inTable { return false }
         guard flags.contains(.command), let command = NoteCommandCatalog.command(for: event) else { return false }
         router.run(command, from: .shortcut)
         return true
@@ -525,7 +560,7 @@ final class NoteFormatControls: NSObject {
     func enterRowKeyboard(at index: Int = 0) {
         guard isFormatBarOpen else { return }
         exitBarKeyboard()
-        formatModel.rowKeyboardIndex = max(0, min(index, NoteFormatRowItem.all.count - 1))
+        formatModel.rowKeyboardIndex = max(0, min(index, rowItems.count - 1))
         announceRowItem()
     }
 
@@ -535,14 +570,17 @@ final class NoteFormatControls: NSObject {
 
     private func handleRowKey(_ event: NSEvent, flags: NSEvent.ModifierFlags) -> Bool {
         guard let index = formatModel.rowKeyboardIndex else { return false }
+        let items = rowItems
+        let count = items.count
+        guard index < count else { exitRowKeyboard(); return false }
         switch event.keyCode {
-        case 123 where flags.isEmpty: formatModel.rowKeyboardIndex = NoteFormatRowItem.step(index, forward: false)
-        case 124 where flags.isEmpty: formatModel.rowKeyboardIndex = NoteFormatRowItem.step(index, forward: true)
+        case 123 where flags.isEmpty: formatModel.rowKeyboardIndex = NoteFormatRowItem.step(index, forward: false, count: count)
+        case 124 where flags.isEmpty: formatModel.rowKeyboardIndex = NoteFormatRowItem.step(index, forward: true, count: count)
         case 48 where flags.isEmpty || flags == [.shift]:
-            formatModel.rowKeyboardIndex = NoteFormatRowItem.step(index, forward: !flags.contains(.shift))
+            formatModel.rowKeyboardIndex = NoteFormatRowItem.step(index, forward: !flags.contains(.shift), count: count)
         case 36, 76, 49:
             guard flags.isEmpty else { exitRowKeyboard(); return false }
-            pressRowItem(NoteFormatRowItem.all[index])
+            pressRowItem(items[index])
             return true
         default:
             // Anything else is writing: the ring goes, the key reaches the text.
@@ -562,6 +600,11 @@ final class NoteFormatControls: NSObject {
             guard formatModel.snapshot.isEnabled(command) else { NSSound.beep(); return }
             formatModel.run(command, from: .formatBar)
             announceRowItem()
+        case .tableMenu:
+            formatModel.rowTableMenuOpen = true
+        case let .tableTool(tool):
+            formatModel.runTable(tool)
+            announceRowItem()
         case .close:
             closeFormatBar?()
         }
@@ -570,7 +613,13 @@ final class NoteFormatControls: NSObject {
     private func announceRowItem() {
         guard let index = formatModel.rowKeyboardIndex, let textView else { return }
         let text: String
-        switch NoteFormatRowItem.all[index] {
+        let items = rowItems
+        guard index < items.count else { return }
+        switch items[index] {
+        case .tableMenu:
+            text = String(localized: "Table")
+        case let .tableTool(tool):
+            text = tool.title
         case .style:
             text = String(localized: "Style, \(NoteCommandCatalog.styleName(formatModel.snapshot.paragraph))")
         case let .command(command):
@@ -752,6 +801,26 @@ final class NoteFormatControls: NSObject {
     }
 
     private var linkTarget: NoteLinkTarget?
+    /// Link… on a cell's text, and where its card is anchored.
+    private var cellLinkTarget: NoteCellLinkTarget?
+    private var cellCardAnchor: NSRect?
+
+    func openCellLinkCard(target: NoteCellLinkTarget) {
+        guard let textView, let rects = engine.tableSelectionRects(in: textView) ?? engine.focusedTable.map({ view in
+            let rect = view.canvas.convert(view.grid.cellRect(target.position), to: textView)
+            return (rect, rect)
+        }) else { return }
+        hideBar()
+        cardFromSlash = false
+        linkTarget = nil
+        cellLinkTarget = target
+        cellCardAnchor = rects.first.union(rects.last)
+        cardAnchor = NSRange(location: 0, length: 0)
+        cardModel.viewportHeight = nil
+        cardModel.viewportWidth = nil
+        cardModel.openLink(url: target.url)
+        presentCard()
+    }
 
     private var cardSize = NSSize.zero
 
@@ -771,6 +840,15 @@ final class NoteFormatControls: NSObject {
     }
 
     private func placeCard() {
+        if cellLinkTarget != nil, let anchor = cellCardAnchor {
+            guard let placed = placeDropdown(cardHost, idealWidth: cardSize.width, height: cardSize.height,
+                                             anchor: anchor, current: cardPlacement) else { return }
+            cardPlacement = placed
+            if cardModel.viewportWidth != placed.width { cardModel.viewportWidth = placed.width }
+            if cardModel.viewportHeight != placed.heightLimit { cardModel.viewportHeight = placed.heightLimit }
+            if cardModel.above != (placed.side == .above) { cardModel.above = placed.side == .above }
+            return
+        }
         guard let anchorRange = cardAnchor, engine.textStorage.length > 0 else { return }
         let length = engine.textStorage.length
         let start = min(anchorRange.location, length - 1)
@@ -858,6 +936,13 @@ final class NoteFormatControls: NSObject {
     /// A bad address keeps the card and says so; a target that went stale
     /// while the card was open is dropped quietly (the engine refuses it).
     private func commitLink(_ url: String) -> Bool {
+        if let target = cellLinkTarget {
+            let parsed = URL(string: url)
+            guard parsed?.scheme == "https" || parsed?.scheme == "http", parsed?.host != nil else { return false }
+            cellLinkTarget = nil
+            closeCard(refocus: false, restoring: nil)
+            return engine.commitCellLink(url, target: target)
+        }
         guard let target = linkTarget else { return false }
         guard engine.validate(.link(url), selection: target.range).enabled else { return false }
         linkTarget = nil
@@ -871,6 +956,12 @@ final class NoteFormatControls: NSObject {
     }
 
     private func removeLink() {
+        if let target = cellLinkTarget {
+            cellLinkTarget = nil
+            closeCard(refocus: false, restoring: nil)
+            engine.commitCellLink(nil, target: target)
+            return
+        }
         guard let target = linkTarget else { return }
         linkTarget = nil
         engine.cancelLinkRequest()
@@ -884,6 +975,16 @@ final class NoteFormatControls: NSObject {
         if linkTarget != nil {
             linkTarget = nil
             engine.cancelLinkRequest()
+        }
+        if let target = cellLinkTarget {
+            // Back to the cell the card was opened from.
+            cellLinkTarget = nil
+            closeCard(refocus: false, restoring: nil)
+            if refocus, let (attachment, _) = engine.tableAttachment(id: target.tableID),
+               attachment.table.contains(target.position) {
+                attachment.hostedView?.activate(target.position, caret: .range(target.selection))
+            }
+            return
         }
         let range = cardFromSlash ? nil : cardSelection
         closeCard(refocus: refocus, restoring: range)

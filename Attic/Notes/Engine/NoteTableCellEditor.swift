@@ -365,9 +365,10 @@ final class NoteTableCellEditor: NSTextView, NSTextViewDelegate {
         if resigned, let table {
             DispatchQueue.main.async { [weak table] in
                 guard let table, !table.isFocused, table.cellSelection == nil, !table.keepsFocusThroughRehost else { return }
-                // The keyboard went elsewhere (the note's text, another
-                // control): the table is drawn whole again.
-                if table.window != nil { table.deactivate() }
+                // The keyboard went to text elsewhere (the note's text,
+                // another table, a field): the table is drawn whole again.
+                // A control taking it for a moment (Aa's row) keeps the cell.
+                if table.window != nil, table.keyboardLeftForText { table.deactivate() }
             }
         }
         return resigned

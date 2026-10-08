@@ -73,6 +73,12 @@ final class NoteCommandRouter {
             effective = .paragraph(.body)
         }
         onRun?(command, surface)
+        // In a table, marks go to the cell's text or the selected cells.
+        if let table = engine.focusedTable, case let .mark(kind) = command {
+            let applied = kind == .link ? engine.requestCellLink(in: table) : engine.applyCellMark(kind, in: table)
+            onChange?()
+            return applied
+        }
         let applied = engine.perform(effective, selection: selection)
         onChange?()
         return applied
@@ -88,10 +94,26 @@ final class NoteCommandRouter {
         return applied
     }
 
+    /// A table tool (Aa's row in a table) on the table the keyboard is in.
+    @discardableResult
+    func runTable(_ tool: NoteTableTool, from surface: NoteCommandSurface) -> Bool {
+        let applied = engine.perform(tableTool: tool)
+        onChange?()
+        return applied
+    }
+
+    @discardableResult
+    func runTableMenu(_ item: NoteTableMenuItem, from surface: NoteCommandSurface) -> Bool {
+        let applied = engine.perform(tableMenu: item)
+        onChange?()
+        return applied
+    }
+
     func insert(_ action: NoteInsertAction, from surface: NoteCommandSurface) {
         onInsert?(action, surface)
         switch action {
         case .divider: run(.divider, from: surface)
+        case .table: run(.table, from: surface)
         case .date: requestDate?()
         case .imageOrFile: requestFile?()
         }
@@ -100,6 +122,7 @@ final class NoteCommandRouter {
     func canInsert(_ action: NoteInsertAction) -> Bool {
         switch action {
         case .divider: validation(.divider).enabled
+        case .table: validation(.table).enabled && engine.focusedTable == nil
         case .date: engine.validate(.date(NoteDay(date: Date()))).enabled
         case .imageOrFile: !engine.isReadOnly && engine.activity == .idle
         }
@@ -167,6 +190,7 @@ final class NoteCommandRouter {
         case .moveUp: "move-up"
         case .moveDown: "move-down"
         case .date: "date"
+        case .table: "table"
         }
         return "notes-format-\(name)"
     }

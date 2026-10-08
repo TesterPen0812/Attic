@@ -132,6 +132,18 @@ final class NoteEditorEngine: NSObject, NSTextViewDelegate, NSTextStorageDelegat
     /// A table's grips, "+" chips or indicator must move (the caret entered
     /// or left a table, a table changed, scrolled or was laid out again).
     var onTableChromeChange: (() -> Void)?
+    /// The caret entered or left a table, or its cell or cell selection
+    /// changed (Aa's row turns into the table's tools and back).
+    var onTableFocusChange: (() -> Void)?
+    /// The table the keyboard is in, or was in before a control (Aa's row,
+    /// a grip's menu) took it for a moment.
+    weak var activeTableView: NoteTableView?
+    /// Link… on a cell's text: the page opens its link card for it.
+    var onCellLinkRequest: ((NoteCellLinkTarget) -> Void)?
+    /// The last paste that became a table, which "Paste as Text" can take back.
+    var tablePasteOffer: NoteTablePasteOffer?
+    /// ⌥⇧⌘V and "Paste as Text": tabular text stays text.
+    var isPastingAsPlainText = false
     private var pendingLinkTarget: NoteLinkTarget?
     private var activeSlashSession: NoteSlashSession?
     private var slashDateRequest: NoteSlashSession?
@@ -1146,6 +1158,7 @@ final class NoteEditorEngine: NSObject, NSTextViewDelegate, NSTextStorageDelegat
         let current = textView.selectedRange()
         if current.length == 0 {
             let line = lineRange(at: current.location)
+            if line.location > 0, current.location == NSMaxRange(line), convertPipeRowToTable(line: line) { return true }
             if line.location > 0, current.location == NSMaxRange(line),
                (textStorage.string as NSString).substring(with: line) == "---",
                conversionEligible(line: line) {
@@ -1719,6 +1732,16 @@ final class NoteEditorEngine: NSObject, NSTextViewDelegate, NSTextStorageDelegat
     func writeSelection(_ range: NSRange, to pasteboard: NSPasteboard, types: [NSPasteboard.PasteboardType]) -> Bool {
         guard range.length > 0 else { return false }
         let fragment = fragment(for: range)
+        // A whole table on its own: other apps get it as a table (HTML,
+        // tab-separated, Markdown as its text), Attic as itself.
+        if range.length == 1, let table = tableAttachment(at: range.location) {
+            NoteTablePaste.write(table.table, to: pasteboard)
+            if types.contains(Self.fragmentType), let data = try? NoteContentCodec.encode(fragment, context: .fragment) {
+                pasteboard.addTypes([Self.fragmentType], owner: nil)
+                pasteboard.setData(data, forType: Self.fragmentType)
+            }
+            return true
+        }
         pasteboard.declareTypes(types, owner: nil)
         var wrote = false
         for type in types {
@@ -1728,7 +1751,16 @@ final class NoteEditorEngine: NSObject, NSTextViewDelegate, NSTextStorageDelegat
             case .string:
                 wrote = pasteboard.setString(NoteTextExport.plainText(fragment), forType: .string) || wrote
             case .rtf:
-                let selected = textStorage.attributedSubstring(from: range)
+                let selected = NSMutableAttributedString(attributedString: textStorage.attributedSubstring(from: range))
+                // Tables read as their rows of tab-separated text in rich text.
+                var tables: [(NSRange, NoteTable)] = []
+                selected.enumerateAttribute(.attachment, in: NSRange(location: 0, length: selected.length)) { value, part, _ in
+                    if let table = value as? NoteTableAttachment { tables.append((part, table.table)) }
+                }
+                for (part, table) in tables.reversed() {
+                    selected.replaceCharacters(in: part, with: NSAttributedString(string: NoteTableText.tsv(table),
+                                                                                  attributes: style.bodyAttributes))
+                }
                 if let data = try? selected.data(from: NSRange(location: 0, length: selected.length),
                                                  documentAttributes: [.documentType: NSAttributedString.DocumentType.rtf]) {
                     wrote = pasteboard.setData(data, forType: .rtf) || wrote
@@ -1888,6 +1920,9 @@ final class NoteEditorEngine: NSObject, NSTextViewDelegate, NSTextStorageDelegat
 
     /// Plain text from another app, with line breaks made uniform.
     func pastePlainText(_ text: String, at selection: NSRange) -> Bool {
+        if !isPastingAsPlainText, let table = NoteTablePaste.table(fromText: text) {
+            return pasteTable(table, at: selection, sourceText: text)
+        }
         let normalized = LegacyNoteMigration.normalizeLineBreaks(text).0
             .replacingOccurrences(of: String(NoteDocument.objectCharacter), with: "")
         guard !normalized.isEmpty else { return false }
@@ -2333,6 +2368,8 @@ enum NoteFormatCommand: Hashable {
     case mark(NoteMark.Kind)
     case link(String), removeLink
     case indent, outdent, divider, toggleChecklist, moveUp, moveDown, date(NoteDay)
+    /// Insert a table (2 × 3, with its header row) after the caret's line.
+    case table
 
     var title: String {
         switch self {
@@ -2360,6 +2397,7 @@ enum NoteFormatCommand: Hashable {
         case .moveUp: "Move Line Up"
         case .moveDown: "Move Line Down"
         case .date: "Date"
+        case .table: "Table"
         }
     }
 
@@ -2384,6 +2422,7 @@ enum NoteFormatCommand: Hashable {
         case .moveUp: "arrow.up"
         case .moveDown: "arrow.down"
         case .date: "calendar"
+        case .table: "tablecells"
         }
     }
 
@@ -2409,6 +2448,7 @@ enum NoteFormatCommand: Hashable {
         case .toggleChecklist: "⌘Return"
         case .moveUp: "⌥⌘↑"
         case .moveDown: "⌥⌘↓"
+        case .table: "⌥⌘T"
         default: nil
         }
     }
@@ -2566,6 +2606,9 @@ extension NoteEditorEngine {
             return NoteCommandValidation(enabled: !lines.isEmpty && NSMaxRange(lines[lines.count - 1]) < textStorage.length - 1, state: .off)
         case .date:
             return NoteCommandValidation(enabled: selection.location > titleParagraphRange.length, state: .off)
+        case .table:
+            // On while the keyboard is in a table (Aa's row is then the table's tools).
+            return NoteCommandValidation(enabled: true, state: focusedTable != nil ? .on : .off)
         }
     }
 
@@ -2594,6 +2637,9 @@ extension NoteEditorEngine {
         case .moveUp: return moveLine(up: true, selection: selection)
         case .moveDown: return moveLine(up: false, selection: selection)
         case let .date(day): return insertDate(day, at: selection)
+        case .table:
+            guard focusedTable == nil else { return false }
+            return insertTable(at: selection)
         }
     }
 
@@ -2865,7 +2911,7 @@ extension NoteEditorEngine {
 // MARK: - Local typing habits and slash insertion
 
 struct NoteSlashItem: Hashable, Identifiable {
-    enum Kind: String, CaseIterable { case checklist, heading, bullet, number, imageOrFile, date, quote, divider, mono }
+    enum Kind: String, CaseIterable { case checklist, heading, bullet, number, imageOrFile, date, quote, divider, mono, table }
     var kind: Kind
     var id: Kind { kind }
     var title: String {
@@ -2879,6 +2925,7 @@ struct NoteSlashItem: Hashable, Identifiable {
         case .quote: "Quote"
         case .divider: "Divider"
         case .mono: "Mono"
+        case .table: "Table"
         }
     }
     var aliases: [String] {
@@ -2892,6 +2939,7 @@ struct NoteSlashItem: Hashable, Identifiable {
         case .quote: ["quote", "blockquote"]
         case .divider: ["divider", "rule", "line"]
         case .mono: ["mono", "code", "pre"]
+        case .table: ["table", "grid", "cells"]
         }
     }
     static let all = Kind.allCases.map(NoteSlashItem.init(kind:))
@@ -3145,6 +3193,7 @@ extension NoteEditorEngine {
             case .quote: return perform(.paragraph(.quote), selection: caret)
             case .mono: return perform(.paragraph(.mono), selection: caret)
             case .divider: return perform(.divider, selection: caret)
+            case .table: return insertTable(at: caret, name: String(localized: "Insert Table"))
             case .date, .imageOrFile: return false
             }
         }

@@ -899,10 +899,18 @@ private struct NoteStatusSlot: View {
                 // Pending guidance: progress, quietly, clearing itself.
                 return AtticStatusItem(id: "pending", systemName: nil, title: message, tone: .quiet)
             }
-            return AtticStatusItem(id: "notice", systemName: "info.circle", title: message, tone: .normal, actions: [
-                .init(title: String(localized: "Dismiss"), identifier: "notes-notice-dismiss",
-                      handler: details { session.notice = nil })
-            ])
+            var actions: [AtticStatusItem.Action] = []
+            if message == NoteTablePasteOffer.notice, session.engine.tablePasteOffer != nil {
+                // A tabular paste became a table: one click gives its text instead.
+                actions.append(.init(title: String(localized: "Paste as Text"), identifier: "notes-paste-as-text",
+                                     handler: details {
+                                         session.notice = nil
+                                         session.engine.pasteLastTableAsText()
+                                     }))
+            }
+            actions.append(.init(title: String(localized: "Dismiss"), identifier: "notes-notice-dismiss",
+                                 handler: details { session.notice = nil }))
+            return AtticStatusItem(id: "notice", systemName: "info.circle", title: message, tone: .normal, actions: actions)
         }
     }
 }

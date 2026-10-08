@@ -228,7 +228,13 @@ struct NoteFormatRowView: View {
         // A long style name ("Subheading") in a narrow panel: 24 pt cells.
         let m = AtticNoteFormatMetrics.self
         let roomy = width == 0 || Self.minimumWidth(snapshot: model.snapshot, toggleWidth: m.rowToggleWidth) <= width
-        row(toggleWidth: roomy ? m.rowToggleWidth : m.rowCompactToggleWidth)
+        Group {
+            if let table = model.snapshot.table {
+                tableRow(table, toggleWidth: m.rowToggleWidth)
+            } else {
+                row(toggleWidth: roomy ? m.rowToggleWidth : m.rowCompactToggleWidth)
+            }
+        }
             .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { new in
                 if abs(new - width) > 0.5 { width = new }
             }
@@ -247,8 +253,10 @@ struct NoteFormatRowView: View {
             AtticFormatSeparator()
             AtticFormatGroup {
                 ForEach(Array(lists.enumerated()), id: \.offset) { offset, command in
+                    // Table inserts (it is not a state of the line).
                     NoteFormatToggle(model: model, command: command, surface: .formatBar, width: toggleWidth,
-                                     height: m.rowCellHeight, isKeyboardFocused: focus == 1 + offset)
+                                     height: m.rowCellHeight, isKeyboardFocused: focus == 1 + offset,
+                                     announcesState: command != .table)
                 }
             }
             AtticFormatSeparator()
@@ -266,6 +274,48 @@ struct NoteFormatRowView: View {
                               action: onClose)
                 .accessibilityIdentifier("notes-format-row-close")
         }
+    }
+
+    /// The row in a table (sheet 3, panel 2): Table ⌄, add a row and a
+    /// column, delete the row and the column, ✕. The same capsule and
+    /// motion; the cell's marks stay on the selection bar.
+    private func tableRow(_ state: NoteTableToolsState, toggleWidth: CGFloat) -> some View {
+        let m = AtticNoteFormatMetrics.self
+        let focus = model.rowKeyboardIndex
+        let tools = NoteTableTool.allCases
+        return AtticFormatRowSurface(growth: growth, contentOpacity: controlsOpacity) {
+            NoteFormatTablePill(model: model, isKeyboardFocused: focus == 0)
+            AtticFormatSeparator()
+            AtticFormatGroup {
+                ForEach(Array(tools.prefix(2).enumerated()), id: \.offset) { offset, tool in
+                    tableToggle(tool, width: toggleWidth, focused: focus == 1 + offset, enabled: true)
+                }
+            }
+            AtticFormatSeparator()
+            AtticFormatGroup {
+                ForEach(Array(tools.suffix(2).enumerated()), id: \.offset) { offset, tool in
+                    tableToggle(tool, width: toggleWidth, focused: focus == 3 + offset, enabled: true)
+                }
+            }
+            Spacer(minLength: 0)
+            AtticFormatToggle(systemName: "xmark", value: .off, label: String(localized: "Close Format"),
+                              help: String(localized: "Close (Esc)"), width: toggleWidth, height: m.rowCellHeight,
+                              isKeyboardFocused: focus == NoteFormatRowItem.table.count - 1, announcesState: false,
+                              action: onClose)
+                .accessibilityIdentifier("notes-format-row-close")
+        }
+        .accessibilityLabel(String(localized: "Table"))
+    }
+
+    private func tableToggle(_ tool: NoteTableTool, width: CGFloat, focused: Bool, enabled: Bool) -> some View {
+        let help = tool.shortcut.map { "\(tool.title) \($0)" } ?? tool.title
+        return AtticFormatToggle(value: .off, label: tool.title, help: help, width: width,
+                                 height: AtticNoteFormatMetrics.rowCellHeight, isKeyboardFocused: focused,
+                                 announcesState: false, action: { model.runTable(tool) }) { ink in
+            AtticTableToolGlyph(kind: tool.glyph, ink: ink)
+        }
+        .disabled(!enabled)
+        .accessibilityIdentifier("notes-format-row-table-\(tool)")
     }
 
     /// What the row needs before its flexible gap: the inset, the pill, two
@@ -718,6 +768,77 @@ struct NoteFormatStylePill: View {
                        contentHeight: AtticDropdownMetrics.inset * 2
                            + AtticDropdownMetrics.rowHeight * CGFloat(NoteCommandCatalog.styles.count)) {
             NoteFormatStyleListView(model: model)
+        }
+    }
+}
+
+/// Table ⌄ in Aa's row: the table's menu (E1).
+struct NoteFormatTablePill: View {
+    @ObservedObject var model: NoteFormatModel
+    var isKeyboardFocused = false
+
+    var body: some View {
+        Button { model.rowTableMenuOpen = true } label: {
+            AtticFormatStyleFace(title: String(localized: "Table"), isKeyboardFocused: isKeyboardFocused, isEnabled: true,
+                                 height: AtticNoteFormatMetrics.rowCellHeight)
+        }
+        .buttonStyle(AtticUndimmedButtonStyle())
+        .focusEffectDisabled()
+        .help(String(localized: "Table"))
+        .accessibilityLabel(String(localized: "Table"))
+        .accessibilityAddTraits(.isButton)
+        .accessibilityIdentifier("notes-format-row-table")
+        .atticDropdown(isPresented: $model.rowTableMenuOpen, prefer: .above, label: String(localized: "Table"),
+                       contentHeight: AtticDropdownMetrics.inset * 2
+                           + AtticDropdownMetrics.rowHeight * CGFloat(NoteTableMenuItem.allCases.count)) {
+            NoteTableMenuView(model: model)
+        }
+    }
+}
+
+/// The table's menu: Header Row ✓, Distribute Columns, Convert to Text,
+/// Copy as Markdown, Delete Table. ↑ ↓ move, Return or Space choose, Esc closes.
+struct NoteTableMenuView: View {
+    @ObservedObject var model: NoteFormatModel
+    @State private var highlighted: Int?
+    @FocusState private var focused: Bool
+
+    private var items: [NoteTableMenuItem] { NoteTableMenuItem.allCases }
+
+    var body: some View {
+        let header = model.snapshot.table?.headerRow ?? false
+        VStack(alignment: .leading, spacing: 0) {
+            ForEach(Array(items.enumerated()), id: \.offset) { index, item in
+                AtticDropdownRow(title: item.title, check: item == .headerRow ? (header ? .on : .off) : .off,
+                                 isHighlighted: highlighted == index,
+                                 titleInk: .heading,
+                                 onHover: { inside in
+                                     let next = AtticListHighlight.hovered(index, inside: inside, current: highlighted)
+                                     if next != highlighted { highlighted = next }
+                                 }, position: index + 1, itemCount: items.count) { model.runTableMenu(item) }
+                    .accessibilityIdentifier("notes-table-menu-\(item)")
+            }
+        }
+        .focusable()
+        .focused($focused)
+        .focusEffectDisabled()
+        .atticDropdownFocus($focused)
+        .accessibilityElement(children: .contain)
+        .accessibilityLabel(String(localized: "Table"))
+        .accessibilityIdentifier("notes-table-menu")
+        .onKeyPress(phases: .down) { press in
+            switch press.key {
+            case .downArrow: highlighted = min((highlighted ?? -1) + 1, items.count - 1); return .handled
+            case .upArrow: highlighted = max((highlighted ?? items.count) - 1, 0); return .handled
+            case .return, .space:
+                guard let highlighted else { return .ignored }
+                model.runTableMenu(items[highlighted])
+                return .handled
+            case .escape:
+                model.rowTableMenuOpen = false
+                return .handled
+            default: return .ignored
+            }
         }
     }
 }

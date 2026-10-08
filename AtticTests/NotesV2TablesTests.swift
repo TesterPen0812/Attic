@@ -124,6 +124,56 @@ final class NotesV2TablesTests: XCTestCase {
         XCTAssertEqual(narrow.columnWidths, [132, 132], "empty columns share the column")
     }
 
+    /// The grid draws cells with AppKit's string drawing; the live editor
+    /// is TextKit 2. A cell must not jump when it starts or stops being
+    /// edited: the same line breaks and the same baselines.
+    func testDrawnCellsAndTheCellEditorBreakAndSitTheirLinesAlike() throws {
+        let (engine, _) = makeEngine(ciaBlocks())
+        let view = try tableView(engine)
+        let samples = ["Data taken from the IT network", "Systems encrypted by ransomware", "Pipeline shut down",
+                       "A considerably longer cell that wraps over several lines in a narrow column of the table",
+                       "Confidentiality", "naïve café — ünïcödé ✓ 東京 emoji 🙂 mixed", "x"]
+        for header in [false, true] {
+            for width in [44.0, 84.0, 120.0, 156.0, 252.0] as [CGFloat] {
+                for text in samples {
+                    let attributed = NSAttributedString(string: text, attributes: engine.style.tableCellAttributes(header: header))
+                    // AppKit's typesetter (string drawing and measuring).
+                    let storage = NSTextStorage(attributedString: attributed)
+                    let manager = NSLayoutManager()
+                    let container = NSTextContainer(size: CGSize(width: width, height: 10_000))
+                    container.lineFragmentPadding = 0
+                    manager.addTextContainer(container)
+                    storage.addLayoutManager(manager)
+                    manager.ensureLayout(for: container)
+                    var drawn: [(NSRange, CGFloat)] = []
+                    manager.enumerateLineFragments(forGlyphRange: NSRange(location: 0, length: manager.numberOfGlyphs)) { rect, _, _, glyphs, _ in
+                        let characters = manager.characterRange(forGlyphRange: glyphs, actualGlyphRange: nil)
+                        drawn.append((characters, rect.minY + manager.location(forGlyphAt: glyphs.location).y))
+                    }
+                    // The cell editor (TextKit 2).
+                    let editor = view.editor
+                    editor.frame.size.width = width
+                    editor.textContainer?.size = CGSize(width: width, height: CGFloat.greatestFiniteMagnitude)
+                    editor.load(attributed, keepingSelection: false)
+                    var live: [(NSRange, CGFloat)] = []
+                    editor.textLayoutManager?.enumerateTextLayoutFragments(from: editor.textLayoutManager!.documentRange.location,
+                                                                           options: [.ensuresLayout]) { fragment in
+                        for line in fragment.textLineFragments where line.characterRange.length > 0 {
+                            live.append((line.characterRange, fragment.layoutFragmentFrame.minY + line.typographicBounds.minY + line.glyphOrigin.y))
+                        }
+                        return true
+                    }
+                    XCTAssertEqual(drawn.map(\.0), live.map(\.0), "line breaks of “\(text)” at \(width)")
+                    for (a, b) in zip(drawn, live) {
+                        XCTAssertEqual(a.1, b.1, accuracy: 0.5, "baselines of “\(text)” at \(width)")
+                    }
+                    XCTAssertEqual(NoteTableTextCache.measure(attributed, width: width), CGFloat(max(1, live.count)) * 21,
+                                   "measured height of “\(text)” at \(width)")
+                }
+            }
+        }
+    }
+
     // MARK: 2 · The caret between text and cells
 
     func testArrowsCarryTheCaretIntoTheTableAndOutAgain() throws {

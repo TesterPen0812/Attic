@@ -488,7 +488,11 @@ final class NoteEditorTextView: NSTextView, NSAccessibilityCustomRotorItemSearch
         printNote(sender)
     }
     override func paste(_ sender: Any?) { asUserEdit { super.paste(sender) } }
-    override func pasteAsPlainText(_ sender: Any?) { asUserEdit { super.pasteAsPlainText(sender) } }
+    override func pasteAsPlainText(_ sender: Any?) {
+        engine?.isPastingAsPlainText = true
+        defer { engine?.isPastingAsPlainText = false }
+        asUserEdit { super.pasteAsPlainText(sender) }
+    }
 
     // MARK: Files dragged in (the page's object controls)
 
@@ -546,7 +550,7 @@ final class NoteEditorTextView: NSTextView, NSAccessibilityCustomRotorItemSearch
     }
 
     override var readablePasteboardTypes: [NSPasteboard.PasteboardType] {
-        [NoteEditorEngine.fragmentType, .fileURL, .png, .tiff, .rtf, .html, .string]
+        [NoteEditorEngine.fragmentType, NoteTablePaste.tableType, .fileURL, .png, .tiff, .rtf, .html, .string]
     }
 
     override func readSelection(from pboard: NSPasteboard, type: NSPasteboard.PasteboardType) -> Bool {
@@ -562,6 +566,13 @@ final class NoteEditorTextView: NSTextView, NSAccessibilityCustomRotorItemSearch
                 _ = await engine.pasteDurably(fragmentData: data, at: target)
             }
             return true
+        }
+        // Tabular data (cells copied from a table, a spreadsheet, a web
+        // page's table, a Markdown table) pastes as a table.
+        if !engine.isPastingAsPlainText, [NoteTablePaste.tableType, .rtf, .html, .string].contains(type) || type == NoteTablePaste.tsvType,
+           let table = NoteTablePaste.table(from: pboard) {
+            let source = pboard.string(forType: NoteTablePaste.tsvType) ?? pboard.string(forType: .string) ?? NoteTableText.tsv(table)
+            return engine.pasteTable(table, at: target, sourceText: source)
         }
         if type == .fileURL,
            let urls = pboard.readObjects(forClasses: [NSURL.self],

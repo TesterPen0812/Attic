@@ -12,13 +12,14 @@ enum NoteCommandSurface: String, CaseIterable, Sendable {
 /// The Insert menu's three rows (⋯ › Insert, right-click, the menu bar).
 /// Divider is an engine command; Date and Image or File open their pickers.
 enum NoteInsertAction: String, CaseIterable, Sendable {
-    case imageOrFile, date, divider
+    case imageOrFile, date, divider, table
 
     var title: String {
         switch self {
         case .imageOrFile: String(localized: "Image or File…")
         case .date: String(localized: "Date…")
         case .divider: String(localized: "Divider")
+        case .table: String(localized: "Table")
         }
     }
 
@@ -27,6 +28,7 @@ enum NoteInsertAction: String, CaseIterable, Sendable {
         case .imageOrFile: "photo"
         case .date: "calendar"
         case .divider: "minus"
+        case .table: "tablecells"
         }
     }
 }
@@ -37,17 +39,20 @@ enum NoteInsertAction: String, CaseIterable, Sendable {
 /// the engine (`NoteEditorEngine.validate` / `perform`) decides what each
 /// one does. Nothing here keeps a second list of behaviour.
 enum NoteCommandCatalog {
-    /// Paragraph styles, a choice of one (Title … Mono).
+    /// Paragraph styles, a choice of one (Title … Mono, then Quote: a
+    /// paragraph style like them, not a list; owner pick Q6, 2026-10-08).
     static let styles: [NoteFormatCommand] = [
-        .paragraph(.heading(1)), .paragraph(.heading(2)), .paragraph(.heading(3)), .paragraph(.body), .paragraph(.mono)
+        .paragraph(.heading(1)), .paragraph(.heading(2)), .paragraph(.heading(3)), .paragraph(.body), .paragraph(.mono),
+        .paragraph(.quote)
     ]
     /// B I U S.
     static let marks: [NoteFormatCommand] = [.mark(.bold), .mark(.italic), .mark(.underline), .mark(.strikethrough)]
     /// Link, highlight and inline code.
     static let inline: [NoteFormatCommand] = [.mark(.link), .mark(.highlight), .mark(.code)]
-    /// Lists and quote: each toggles back to Body when it is already on.
+    /// The format row's four cells: the lists, each toggling back to Body
+    /// when it is already on, and Table (it takes Quote's cell; Q6).
     static let lists: [NoteFormatCommand] = [
-        .paragraph(.bullet), .paragraph(.number), .paragraph(.checklist), .paragraph(.quote)
+        .paragraph(.bullet), .paragraph(.number), .paragraph(.checklist), .table
     ]
     static let indents: [NoteFormatCommand] = [.outdent, .indent]
     static let lineActions: [NoteFormatCommand] = [.toggleChecklist, .moveUp, .moveDown]
@@ -61,6 +66,8 @@ enum NoteCommandCatalog {
     static let formatSections: [[NoteFormatCommand]] = [
         styles, marks + [.mark(.highlight), .mark(.code)], [.mark(.link), .removeLink], lists, [.indent, .outdent], lineActions
     ]
+    /// The Format menus' rows, without Table (it is in Insert there).
+    static var formatMenuSections: [[NoteFormatCommand]] { formatSections.map { $0.filter { $0 != .table } } }
 
     /// Every command a person can reach (the five-route check iterates it).
     static let allCommands: [NoteFormatCommand] = formatSections.flatMap { $0 } + [.divider]
@@ -104,6 +111,7 @@ enum NoteCommandCatalog {
         case .mark(.link): "link"
         case .mark(.highlight): "highlighter"
         case .paragraph(.checklist): "checklist"
+        case .table: "tablecells"
         case .indent: "increase.indent"
         case .outdent: "decrease.indent"
         default: command.symbolName
@@ -235,6 +243,7 @@ enum NoteCommandCatalog {
         case .number: "1."
         case .quote: ">"
         case .imageOrFile: String(localized: "paste or drop")
+        case .table: "2 × 3"
         case .date, .divider, .mono: nil
         }
     }
@@ -250,6 +259,7 @@ enum NoteCommandCatalog {
         case .quote: "text.quote"
         case .divider: "minus"
         case .mono: "chevron.left.forwardslash.chevron.right"
+        case .table: "tablecells"
         }
     }
 }

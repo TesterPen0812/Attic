@@ -319,3 +319,51 @@ enum AtticFormatStyleKind {
         }
     }
 }
+
+/// The table tools' glyphs in Aa's row (sheet 3, panel 2): a row or column
+/// with a plus or a minus beside it, drawn as the draft draws them (a
+/// 16-unit box, a 1.3 stroke) at the row's icon size.
+struct AtticTableToolGlyph: View {
+    enum Kind { case addRow, addColumn, deleteRow, deleteColumn }
+    let kind: Kind
+    let ink: AtticInk
+    var size: CGFloat = 15
+
+    @Environment(\.atticDesign) private var design
+
+    var body: some View {
+        AtticTableToolShape(kind: kind)
+            .stroke(design.tokens.ink(ink).color, style: StrokeStyle(lineWidth: 1.3 * size / 16, lineCap: .round, lineJoin: .round))
+            .frame(width: size, height: size)
+            .accessibilityHidden(true)
+    }
+}
+
+private struct AtticTableToolShape: Shape {
+    let kind: AtticTableToolGlyph.Kind
+
+    func path(in rect: CGRect) -> Path {
+        let unit = min(rect.width, rect.height) / 16
+        func point(_ x: CGFloat, _ y: CGFloat) -> CGPoint { CGPoint(x: rect.minX + x * unit, y: rect.minY + y * unit) }
+        func box(_ x: CGFloat, _ y: CGFloat, _ width: CGFloat, _ height: CGFloat) -> CGRect {
+            CGRect(x: rect.minX + x * unit, y: rect.minY + y * unit, width: width * unit, height: height * unit)
+        }
+        var path = Path()
+        let radius = 1.4 * unit
+        switch kind {
+        case .addRow, .deleteRow:
+            path.addRoundedRect(in: box(2, 2.5, 12, 5), cornerSize: CGSize(width: radius, height: radius))
+            path.move(to: point(5.5, 12.5)); path.addLine(to: point(10.5, 12.5))
+            if kind == .addRow { path.move(to: point(8, 10)); path.addLine(to: point(8, 15)) }
+        case .addColumn, .deleteColumn:
+            path.addRoundedRect(in: box(2.5, 2, 5, 12), cornerSize: CGSize(width: radius, height: radius))
+            if kind == .addColumn {
+                path.move(to: point(10, 8)); path.addLine(to: point(15, 8))
+                path.move(to: point(12.5, 5.5)); path.addLine(to: point(12.5, 10.5))
+            } else {
+                path.move(to: point(10.5, 8)); path.addLine(to: point(15, 8))
+            }
+        }
+        return path
+    }
+}

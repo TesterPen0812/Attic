@@ -331,6 +331,15 @@ final class NoteTableView: NSView {
         return responder === editor || responder === canvas
     }
 
+    /// The keyboard is now in other text (the note's, another table's, a
+    /// field) or the window lost it altogether.
+    var keyboardLeftForText: Bool {
+        guard let window else { return true }
+        guard let responder = window.firstResponder else { return true }
+        if responder === window { return !window.isKeyWindow }
+        return responder is NSText || responder is NoteTableCanvas
+    }
+
     /// Puts the caret in `position` (the keyboard comes to the table).
     func activate(_ position: NoteTable.Position, caret: NoteTableCaret = .end) {
         guard table.contains(position) else { return }
@@ -745,7 +754,7 @@ final class NoteTableCanvas: NSView {
         if resigned, let table {
             DispatchQueue.main.async { [weak table] in
                 guard let table, !table.isFocused, table.cellSelection != nil, !table.keepsFocusThroughRehost else { return }
-                table.deactivate()
+                if table.keyboardLeftForText { table.deactivate() }
             }
         }
         return resigned

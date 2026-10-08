@@ -31,12 +31,12 @@ extension NoteEditorEngine {
         tableAttachment(id: attachment.objectID).flatMap { $0.0 === attachment ? $0.1 : nil }
     }
 
-    /// The table the keyboard is in (a cell, or whole cells selected).
+    /// The table the keyboard is in (a cell, or whole cells selected), or
+    /// was in before one of the page's controls took it for a moment.
     var focusedTable: NoteTableView? {
-        guard let responder = textView?.window?.firstResponder else { return nil }
-        if let editor = responder as? NoteTableCellEditor, let table = editor.table, table.engine === self { return table }
-        if let canvas = responder as? NoteTableCanvas, let table = canvas.table, table.engine === self { return table }
-        return nil
+        guard let table = activeTableView, table.engine === self, table.window != nil,
+              table.activeCell != nil || table.cellSelection != nil else { return nil }
+        return table
     }
 
     // MARK: Hosting
@@ -74,19 +74,35 @@ extension NoteEditorEngine {
 
     func tableSelectionDidChange(_ view: NoteTableView?) {
         onTableChromeChange?()
-        onCaretChange?()
+        onTableFocusChange?()
     }
 
     func tableFocusDidChange(_ view: NoteTableView) {
+        if view.activeCell != nil || view.cellSelection != nil {
+            if activeTableView !== view { activeTableView?.deactivate() }
+            activeTableView = view
+        } else if activeTableView === view {
+            activeTableView = nil
+        }
         onTableChromeChange?()
+        onTableFocusChange?()
         onCaretChange?()
     }
 
-    /// TextKit re-hosts a table's view when the text before it changes;
-    /// the keyboard goes back to the cell it was in.
-    func isRehostingTable(_ view: NoteTableView) -> Bool {
-        guard let attachment = view.attachment else { return false }
-        return range(ofTable: attachment) != nil && view.window == nil
+    /// After one of the page's controls (Aa's row, a grip's menu): the
+    /// keyboard goes back to the table it came from. False when none.
+    @discardableResult
+    func returnKeyboardToTable() -> Bool {
+        guard let table = focusedTable, let window = table.window else { return false }
+        if let range = table.cellSelection {
+            if window.firstResponder !== table.canvas { window.makeFirstResponder(table.canvas) }
+            _ = range
+        } else if let cell = table.activeCell {
+            if window.firstResponder !== table.editor {
+                table.activate(cell, caret: .range(table.editor.selectedRange()))
+            }
+        }
+        return true
     }
 
     var allowsTableCellEdit: Bool { !isReadOnly && activity != .writingToolsRefused }
@@ -305,6 +321,139 @@ extension NoteEditorEngine {
         NoteMarkdownExport.inlineMarkdown(cell.block)
     }
 
+    // MARK: The selection bar in a table
+
+    /// A mark's state over the cell editor's selection (or the caret's
+    /// typing attributes), or over every selected cell.
+    func tableMarkState(_ kind: NoteMark.Kind) -> NoteFormatState? {
+        guard let view = focusedTable, let attachment = view.attachment else { return nil }
+        if let range = view.cellSelection {
+            let cells = range.positions.map { attachment.table[$0] }.filter { !$0.text.isEmpty }
+            guard !cells.isEmpty else { return .off }
+            let full = cells.filter { cell in
+                cell.marks.contains { $0.kind == kind && $0.offset == 0 && $0.length >= (cell.text as NSString).length }
+            }.count
+            return full == cells.count ? .on : (full == 0 && !cells.contains { $0.marks.contains { $0.kind == kind } } ? .off : .mixed)
+        }
+        guard view.isEditingCell || view.hasEditor, let storage = view.editor.textStorage else { return nil }
+        let selection = view.editor.selectedRange()
+        if selection.length == 0 { return view.editor.typingAttributes[.noteMark(kind)] == nil ? .off : .on }
+        var on = 0, off = 0
+        storage.enumerateAttribute(.noteMark(kind), in: selection) { value, _, _ in
+            if value == nil { off += 1 } else { on += 1 }
+        }
+        return off == 0 ? .on : (on == 0 ? .off : .mixed)
+    }
+
+    /// The table selection's first and last line, in the text view's
+    /// coordinates (the selection bar sits above or below them).
+    func tableSelectionRects(in textView: NSTextView) -> (first: NSRect, last: NSRect)? {
+        guard let view = focusedTable else { return nil }
+        if let range = view.cellSelection {
+            let top = view.grid.cellRect(NoteTable.Position(row: range.rows.lowerBound, column: range.columns.lowerBound))
+            let bottom = view.grid.cellRect(NoteTable.Position(row: range.rows.upperBound, column: range.columns.upperBound))
+            return (view.canvas.convert(top, to: textView), view.canvas.convert(bottom, to: textView))
+        }
+        let editor = view.editor
+        let selection = editor.selectedRange()
+        guard selection.length > 0, let layoutManager = editor.textLayoutManager,
+              let content = layoutManager.textContentManager,
+              let start = content.location(content.documentRange.location, offsetBy: selection.location),
+              let end = content.location(start, offsetBy: selection.length),
+              let range = NSTextRange(location: start, end: end) else { return nil }
+        var frames: [NSRect] = []
+        layoutManager.enumerateTextSegments(in: range, type: .selection, options: []) { _, frame, _, _ in
+            frames.append(frame)
+            return true
+        }
+        guard let first = frames.first, let last = frames.last else { return nil }
+        return (editor.convert(first, to: textView), editor.convert(last, to: textView))
+    }
+
+    /// Link… on a cell's text: its selection (or the link around the caret)
+    /// is captured and the page's link card opens for it.
+    @discardableResult
+    func requestCellLink(in view: NoteTableView) -> Bool {
+        guard let attachment = view.attachment, let cell = view.activeCell, view.hasEditor,
+              let storage = view.editor.textStorage else { return false }
+        var selection = view.editor.selectedRange()
+        var url: String?
+        if selection.length == 0 {
+            guard selection.location < storage.length else { return false }
+            var effective = NSRange()
+            url = storage.attribute(.noteMark(.link), at: selection.location, effectiveRange: &effective) as? String
+            guard url != nil else { return false }
+            selection = effective
+        } else {
+            url = storage.attribute(.noteMark(.link), at: selection.location, effectiveRange: nil) as? String
+        }
+        guard let onCellLinkRequest else { return false }
+        onCellLinkRequest(NoteCellLinkTarget(tableID: attachment.objectID, position: cell, range: selection,
+                                             selection: view.editor.selectedRange(), url: url))
+        return true
+    }
+
+    /// The link card's address on a cell's text (nil removes the link).
+    @discardableResult
+    func commitCellLink(_ url: String?, target: NoteCellLinkTarget) -> Bool {
+        guard let (attachment, _) = tableAttachment(id: target.tableID), attachment.table.contains(target.position),
+              let view = attachment.hostedView else { return false }
+        if let url {
+            let parsed = URL(string: url)
+            guard parsed?.scheme == "https" || parsed?.scheme == "http", parsed?.host != nil else { return false }
+        }
+        view.activate(target.position, caret: .range(target.range))
+        let applied = applyCellMark(.link, in: view, url: url, on: url != nil)
+        view.editor.place(.range(target.selection))
+        return applied
+    }
+
+    // MARK: Aa's row in a table
+
+    func tableToolsState() -> NoteTableToolsState? {
+        guard let table = focusedTable?.table else { return nil }
+        return NoteTableToolsState(headerRow: table.headerRow, rows: table.rowCount, columns: table.columnCount)
+    }
+
+    /// The cell the tools act at: the active cell, or a cell selection's end.
+    private var toolCell: (NoteTableAttachment, NoteTable.Position)? {
+        guard let view = focusedTable, let attachment = view.attachment,
+              let cell = view.activeCell ?? view.cellSelection?.head else { return nil }
+        return (attachment, cell)
+    }
+
+    @discardableResult
+    func perform(tableTool tool: NoteTableTool) -> Bool {
+        guard let (attachment, cell) = toolCell else { return false }
+        switch tool {
+        case .addRow: return addRow(to: attachment, at: cell.row + 1, focusing: cell.column)
+        case .addColumn: return addColumn(to: attachment, at: cell.column + 1, focusingRow: cell.row)
+        case .deleteRow: return deleteRow(of: attachment, at: cell.row)
+        case .deleteColumn: return deleteColumn(of: attachment, at: cell.column)
+        }
+    }
+
+    @discardableResult
+    func perform(tableMenu item: NoteTableMenuItem, attachment given: NoteTableAttachment? = nil) -> Bool {
+        guard let attachment = given ?? toolCell?.0 else { return false }
+        switch item {
+        case .headerRow:
+            let applied = toggleHeaderRow(attachment)
+            _ = returnKeyboardToTable()
+            return applied
+        case .distributeColumns:
+            let applied = distributeColumns(attachment)
+            _ = returnKeyboardToTable()
+            return applied
+        case .convertToText: return convertTableToText(attachment)
+        case .copyAsMarkdown:
+            copyTableAsMarkdown(attachment)
+            _ = returnKeyboardToTable()
+            return true
+        case .deleteTable: return deleteTable(attachment)
+        }
+    }
+
     // MARK: Inserting
 
     /// `/table`, the Aa row, ⋯ › Insert › Table, Format › Table: a 2 × 3
@@ -365,6 +514,94 @@ extension NoteEditorEngine {
             return
         }
         view.activate(position, caret: caret)
+    }
+
+    // MARK: Paste and the Markdown habit
+
+    /// A table pasted over `selection` on its own line, as one Undo step;
+    /// the note says so and offers Paste as Text.
+    @discardableResult
+    func pasteTable(_ table: NoteTable, at selection: NSRange, sourceText: String) -> Bool {
+        guard table.isWithinLimits else {
+            isPastingAsPlainText = true
+            defer { isPastingAsPlainText = false }
+            let pasted = pastePlainText(sourceText, at: selection)
+            onNotice?(String(localized: "That table is larger than \(NoteTable.maxColumns) columns or \(NoteTable.maxRows) rows, so it was pasted as text."))
+            return pasted
+        }
+        let marker = history.marker()
+        guard insertTable(table, replacing: selection, name: String(localized: "Paste"), entering: false) else { return false }
+        tablePasteOffer = NoteTablePasteOffer(text: sourceText, selection: selection, steps: marker + 1)
+        onNotice?(NoteTablePasteOffer.notice)
+        return true
+    }
+
+    /// "Paste as Text": the table paste is undone and its text pasted instead.
+    @discardableResult
+    func pasteLastTableAsText() -> Bool {
+        guard let offer = tablePasteOffer, history.undoOps.count == offer.steps, history.undo() else {
+            tablePasteOffer = nil
+            return false
+        }
+        tablePasteOffer = nil
+        isPastingAsPlainText = true
+        defer { isPastingAsPlainText = false }
+        return pastePlainText(offer.text, at: offer.selection)
+    }
+
+    /// `| a | b |` then Return: the row becomes a table's header with two
+    /// empty rows, as the note's other Markdown habits do; one ⌘Z gives the
+    /// text back.
+    func convertPipeRowToTable(line: NSRange) -> Bool {
+        let typed = (textStorage.string as NSString).substring(with: line)
+        let text = typed.trimmingCharacters(in: .whitespaces)
+        guard text.hasPrefix("|"), text.hasSuffix("|"), text.count > 2, paragraphStyle(at: line.location) != .mono,
+              let cells = NoteTableText.pipeCells(text), cells.count >= 2,
+              cells.count <= NoteTable.maxColumns, NoteTableText.delimiterAlignments(text) == nil else { return false }
+        let table = NoteTable(texts: [cells] + Array(repeating: Array(repeating: "", count: cells.count), count: 2))
+        let attachment = NoteTableAttachment(table: table)
+        adoptTable(attachment, force: false)
+        let replacement = NSMutableAttributedString(attributedString: NoteTextCodec.attachmentString(attachment, attributes: style.bodyAttributes))
+        if NSMaxRange(line) == textStorage.length {
+            replacement.append(NSAttributedString(string: "\n", attributes: style.bodyAttributes))
+        }
+        guard performEdit(line, with: replacement, name: String(localized: "Table")) else { return false }
+        // Undo gives back the row as typed, with the Return.
+        history.setLastRestoredText(NSAttributedString(string: typed + "\n", attributes: style.bodyAttributes))
+        enterTable(attachment, at: NoteTable.Position(row: 1, column: 0), caret: .start)
+        return true
+    }
+
+    /// A table on its own line in place of `selection`: the text before it
+    /// stays on its line, the text after it goes to the next. A paragraph
+    /// always follows the table.
+    @discardableResult
+    func insertTable(_ table: NoteTable, replacing selection: NSRange, name: String, entering: Bool) -> Bool {
+        guard !isReadOnly else { return false }
+        let string = textStorage.string as NSString
+        let title = titleParagraphRange
+        var target = selection
+        // Never in the title: after it.
+        if target.location <= NSMaxRange(title) {
+            target = NSRange(location: NSMaxRange(title), length: max(0, NSMaxRange(target) - NSMaxRange(title)))
+        }
+        let attachment = NoteTableAttachment(table: table)
+        adoptTable(attachment, force: false)
+        let insertion = NSMutableAttributedString()
+        if target.location > 0, string.character(at: target.location - 1) != 0x0A {
+            insertion.append(NSAttributedString(string: "\n", attributes: style.bodyAttributes))
+        }
+        insertion.append(NoteTextCodec.attachmentString(attachment, attributes: style.bodyAttributes))
+        let after = NSMaxRange(target)
+        if after >= string.length || string.character(at: after) != 0x0A {
+            insertion.append(NSAttributedString(string: "\n", attributes: style.bodyAttributes))
+        }
+        let caret = target.location + insertion.length + (after < string.length && string.character(at: after) == 0x0A ? 1 : 0)
+        guard performEdit(target, with: insertion, name: name,
+                          selection: NSRange(location: min(caret, textStorage.length + insertion.length - target.length), length: 0))
+        else { return false }
+        if entering { enterTable(attachment, at: NoteTable.Position(row: 0, column: 0), caret: .start) }
+        return true
     }
 
     // MARK: The keyboard into and out of a table
@@ -516,7 +753,7 @@ extension NoteEditorEngine {
 
     /// A mark on the cell's selected text, or on every selected cell.
     @discardableResult
-    func applyCellMark(_ kind: NoteMark.Kind, in view: NoteTableView, url: String? = nil) -> Bool {
+    func applyCellMark(_ kind: NoteMark.Kind, in view: NoteTableView, url: String? = nil, on forced: Bool? = nil) -> Bool {
         guard let attachment = view.attachment else { return false }
         if let range = view.cellSelection {
             let allOn = range.positions.allSatisfy { position in
@@ -548,6 +785,7 @@ extension NoteEditorEngine {
         storage.enumerateAttribute(.noteMark(kind), in: selection) { value, _, stop in
             if value == nil { on = true; stop.pointee = true }
         }
+        if let forced { on = forced }
         let cell = Self.cell(NoteTextCodec.cell(from: storage), settingMark: kind, on: on, url: url, in: selection)
         guard let active = view.activeCell else { return false }
         let applied = changeTable(attachment, name: NoteFormatCommand.mark(kind).title,
@@ -602,22 +840,35 @@ enum NoteTablePaste {
     static let tableType = NSPasteboard.PasteboardType("com.taha.attic.note-table")
     static let tsvType = NSPasteboard.PasteboardType("public.utf8-tab-separated-values-text")
 
+    /// Tabular plain text: tab-separated rows, or a Markdown pipe table.
+    static func table(fromText text: String) -> NoteTable? {
+        if let rows = NoteTableText.parseTSV(text) { return NoteTable(texts: rows, headerRow: true) }
+        return NoteTableText.parseMarkdown(text)
+    }
+
+    /// An HTML paste that is a table and nothing else (Excel, Numbers, a
+    /// table copied from a web page); a page with prose around a table
+    /// stays rich text.
+    static func table(fromHTML html: String) -> NoteTable? {
+        guard let parsed = NoteTableText.parseHTML(html) else { return nil }
+        guard let start = html.range(of: "<table", options: .caseInsensitive),
+              let end = html.range(of: "</table>", options: [.caseInsensitive, .backwards]) else { return nil }
+        let outside = NoteTableText.htmlText(String(html[..<start.lowerBound]) + String(html[end.upperBound...]))
+        guard outside.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return nil }
+        return NoteTable(texts: parsed.rows, headerRow: true)
+    }
+
     static func table(from pasteboard: NSPasteboard) -> NoteTable? {
         if let data = pasteboard.data(forType: tableType),
            case let .editable(document) = NoteContentCodec.decode(data, context: .fragment),
            let table = document.blocks.first(where: { $0.kind == .table })?.table {
             return table.withFreshIDs()
         }
-        if let html = pasteboard.string(forType: .html), let parsed = NoteTableText.parseHTML(html) {
-            return NoteTable(texts: parsed.rows, headerRow: true)
-        }
-        if let tsv = pasteboard.string(forType: tsvType) ?? pasteboard.string(forType: .string),
-           let rows = NoteTableText.parseTSV(tsv) {
+        if let html = pasteboard.string(forType: .html), let table = table(fromHTML: html) { return table }
+        if let tsv = pasteboard.string(forType: tsvType), let rows = NoteTableText.parseTSV(tsv) {
             return NoteTable(texts: rows, headerRow: true)
         }
-        if let text = pasteboard.string(forType: .string), let table = NoteTableText.parseMarkdown(text) {
-            return table
-        }
+        if let text = pasteboard.string(forType: .string) { return table(fromText: text) }
         return nil
     }
 
@@ -647,4 +898,23 @@ enum NoteTablePaste {
         }
         return html + "</table>"
     }
+}
+
+/// Link… on a cell: the table, the cell and the text the address goes on.
+struct NoteCellLinkTarget: Equatable {
+    var tableID: UUID
+    var position: NoteTable.Position
+    /// The linked run around a caret, or the selection.
+    var range: NSRange
+    var selection: NSRange
+    var url: String?
+}
+
+/// What "Paste as Text" takes back: the pasted text, where it went, and
+/// the history's depth just after the paste (it must still be the last step).
+struct NoteTablePasteOffer: Equatable {
+    static let notice = String(localized: "Pasted as a table.")
+    var text: String
+    var selection: NSRange
+    var steps: Int
 }
