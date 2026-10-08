@@ -387,8 +387,7 @@ final class NotesV2TablesFeatureTests: XCTestCase {
         let view = try view(engine)
         XCTAssertTrue(view.grid.scrolls)
         XCTAssertEqual(view.frame.width, 264, accuracy: 0.5, "the page never scrolls sideways")
-        XCTAssertGreaterThan(view.scrollView.documentView?.frame.width ?? 0, view.scrollView.contentView.bounds.width + 1,
-                             "the panel leaves sideways gestures over it to the table")
+        XCTAssertTrue(view.scrollView.ownsHorizontalScrolling, "the panel leaves sideways gestures over it to the table")
         XCTAssertLessThanOrEqual(textView.frame.width, 320)
         view.activate(P(row: 1, column: 3), caret: .end)
         XCTAssertGreaterThan(view.scrollOffset, 0)

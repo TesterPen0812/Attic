@@ -157,8 +157,7 @@ enum NoteFormatCaptureScene {
                 chrome.openFormatBar(keyboard: false)
             case "wide":
                 let offset = max(0, table.grid.columnX(1) + 60)
-                table.scrollView.contentView.scroll(to: NSPoint(x: min(offset, table.grid.width - table.bounds.width), y: 0))
-                table.scrollView.reflectScrolledClipView(table.scrollView.contentView)
+                table.setScrollOffset(offset)
             default:
                 break
             }

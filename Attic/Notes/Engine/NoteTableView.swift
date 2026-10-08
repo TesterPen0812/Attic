@@ -108,7 +108,8 @@ enum NoteTableDrawing {
 final class NoteTableView: NSView {
     typealias M = AtticNoteTableMetrics
     private(set) weak var attachment: NoteTableAttachment?
-    let scrollView = NoteTableScrollView()
+    /// The table's viewport: it clips the grid and carries the fade.
+    let scrollView = NoteTableViewport()
     let canvas = NoteTableCanvas()
     private(set) lazy var editor: NoteTableCellEditor = {
         let editor = NoteTableCellEditor.make(table: self)
@@ -128,21 +129,12 @@ final class NoteTableView: NSView {
         self.attachment = attachment
         super.init(frame: NSRect(x: 0, y: 0, width: 264, height: 60))
         wantsLayer = true
-        scrollView.drawsBackground = false
-        scrollView.borderType = .noBorder
-        scrollView.hasHorizontalScroller = false
-        scrollView.hasVerticalScroller = false
-        scrollView.horizontalScrollElasticity = .none
-        scrollView.verticalScrollElasticity = .none
-        scrollView.contentView.drawsBackground = false
-        scrollView.documentView = canvas
+        scrollView.wantsLayer = true
+        scrollView.clipsToBounds = true
+        scrollView.addSubview(canvas)
         scrollView.table = self
         canvas.table = self
-        scrollView.wantsLayer = true
         addSubview(scrollView)
-        NotificationCenter.default.addObserver(self, selector: #selector(didScroll),
-                                               name: NSView.boundsDidChangeNotification, object: scrollView.contentView)
-        scrollView.contentView.postsBoundsChangedNotifications = true
         setAccessibilityElement(true)
         setAccessibilityRole(.table)
         refreshLayout()
@@ -169,7 +161,10 @@ final class NoteTableView: NSView {
         let changed = next != grid
         grid = next
         scrollView.frame = bounds
-        canvas.frame = CGRect(origin: canvas.frame.origin, size: CGSize(width: max(grid.width, bounds.width), height: grid.height))
+        // As tall as the view (TextKit may give it a fraction more than the
+        // grid), so the clip has nothing to scroll up and down.
+        canvas.frame = CGRect(x: -scrollOffset, y: 0, width: max(grid.width, bounds.width), height: max(grid.height, bounds.height))
+        clampScroll()
         if changed { canvas.needsDisplay = true }
         placeEditor()
         updateFade()
@@ -299,12 +294,48 @@ final class NoteTableView: NSView {
 
     // MARK: Scrolling
 
-    @objc private func didScroll() {
+    /// How far the table is scrolled sideways (0 at its left edge).
+    private(set) var scrollOffset: CGFloat = 0
+
+    /// The furthest a wide table scrolls.
+    var maxScrollOffset: CGFloat { max(0, grid.width - bounds.width) }
+
+    func setScrollOffset(_ value: CGFloat) {
+        let clamped = min(max(0, value), maxScrollOffset).rounded()
+        guard abs(clamped - scrollOffset) > 0.01 else { return }
+        scrollOffset = clamped
+        canvas.setFrameOrigin(NSPoint(x: -clamped, y: 0))
         updateFade()
         engine?.tableDidScroll(self)
     }
 
-    var scrollOffset: CGFloat { scrollView.contentView.bounds.minX }
+    private func clampScroll() {
+        if scrollOffset > maxScrollOffset { setScrollOffset(maxScrollOffset) }
+    }
+
+    /// Sideways scrolling over a wide table moves it until its end, and
+    /// never chains into a page swipe or swipe-to-close (the panel leaves
+    /// gestures over it alone, `AtticHorizontalScrollOwner`); scrolling up
+    /// and down goes to the note. Each gesture keeps the axis it started on.
+    private var gestureAxisIsSideways: Bool?
+
+    override func scrollWheel(with event: NSEvent) {
+        let starts = event.phase.contains(.began) || (event.phase.isEmpty && event.momentumPhase.isEmpty)
+        if starts { gestureAxisIsSideways = nil }
+        if gestureAxisIsSideways == nil, event.scrollingDeltaX != 0 || event.scrollingDeltaY != 0 {
+            gestureAxisIsSideways = abs(event.scrollingDeltaX) > abs(event.scrollingDeltaY) && grid.scrolls
+        }
+        if gestureAxisIsSideways == true {
+            let delta = event.hasPreciseScrollingDeltas ? event.scrollingDeltaX : event.scrollingDeltaX * 8
+            setScrollOffset(scrollOffset - delta)
+        } else {
+            nextResponder?.scrollWheel(with: event)
+        }
+        if event.phase.contains(.ended) || event.phase.contains(.cancelled), event.momentumPhase.isEmpty {
+            // Momentum may follow and keeps the axis.
+        }
+        if event.momentumPhase.contains(.ended) || event.momentumPhase.contains(.cancelled) { gestureAxisIsSideways = nil }
+    }
 
     /// The 16 pt fade at each cut edge, only while there is more that way.
     private func updateFade() {
@@ -342,8 +373,7 @@ final class NoteTableView: NSView {
                          rect.maxX - bounds.width + (position.column == table.columnCount - 1 ? 0 : M.edgeFade))
         }
         guard abs(offset - scrollOffset) > 0.25 else { return }
-        scrollView.contentView.scroll(to: CGPoint(x: max(0, offset), y: 0))
-        scrollView.reflectScrolledClipView(scrollView.contentView)
+        setScrollOffset(offset)
     }
 
     // MARK: Editing a cell
@@ -571,34 +601,16 @@ final class NoteTableView: NSView {
     }
 }
 
-// MARK: - Scroll view
+// MARK: - Viewport
 
-/// Sideways scrolling over a wide table goes to the table until its end and
-/// never chains into a page swipe (the panel sees a scroll view wider than
-/// its clip and leaves the gesture alone); vertical scrolling goes to the
-/// note.
-final class NoteTableScrollView: NSScrollView {
+/// The table's viewport in the text column: it clips the grid (which moves
+/// sideways inside it) and owns sideways scrolling while the table is wider
+/// than the column.
+final class NoteTableViewport: NSView, AtticHorizontalScrollOwner {
     weak var table: NoteTableView?
-    private var routesToTable: Bool?
-
-    override func scrollWheel(with event: NSEvent) {
-        if event.phase.contains(.began) || (event.phase.isEmpty && event.momentumPhase.isEmpty) { routesToTable = nil }
-        if routesToTable == nil {
-            let horizontal = abs(event.scrollingDeltaX) > abs(event.scrollingDeltaY)
-            let wide = (documentView?.frame.width ?? 0) > contentView.bounds.width + 1
-            if event.scrollingDeltaX != 0 || event.scrollingDeltaY != 0 { routesToTable = horizontal && wide }
-        }
-        if routesToTable == true {
-            super.scrollWheel(with: event)
-        } else {
-            nextResponder?.scrollWheel(with: event)
-        }
-        if event.phase.contains(.ended) || event.phase.contains(.cancelled) || event.momentumPhase.contains(.ended) {
-            if event.momentumPhase.contains(.ended) || event.momentumPhase.isEmpty { routesToTable = nil }
-        }
-    }
-
-    override var acceptsFirstResponder: Bool { false }
+    override var isFlipped: Bool { true }
+    override var isOpaque: Bool { false }
+    var ownsHorizontalScrolling: Bool { table?.grid.scrolls ?? false }
 }
 
 // MARK: - The grid (drawn) and its keys in cell-selection mode

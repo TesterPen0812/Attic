@@ -394,6 +394,7 @@ final class AtticPanel: NSPanel {
         var view = contentView.hitTest(contentView.convert(windowPoint, from: nil))
         while let candidate = view {
             if candidate is CanvasNSView || candidate is NSControl { return true }
+            if let owner = candidate as? AtticHorizontalScrollOwner, owner.ownsHorizontalScrolling { return true }
             if let scroll = candidate as? NSScrollView,
                let document = scroll.documentView,
                document.bounds.width > scroll.contentView.bounds.width + 1 {
@@ -1682,4 +1683,12 @@ extension NSResponder {
     func passUp(_ action: Selector, _ sender: Any?) {
         _ = nextResponder?.tryToPerform(action, with: sender)
     }
+}
+
+/// A view that scrolls sideways itself (a wide note table): a trackpad
+/// gesture that starts over it while it can scroll is its own, never a page
+/// swipe or swipe-to-close.
+@MainActor
+protocol AtticHorizontalScrollOwner: AnyObject {
+    var ownsHorizontalScrolling: Bool { get }
 }

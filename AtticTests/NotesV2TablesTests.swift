@@ -504,4 +504,72 @@ final class NotesV2TablesTests: XCTestCase {
         XCTContext.runActivity(named: report) { _ in }
         XCTAssertLessThan(cellMedian, max(4, textMedian * 2), "a cell keystroke stays in the note's budget")
     }
+
+    /// Opening a long note: a 20 × 10 table on screen against the same note
+    /// without it (cold engine, view, layout and first display).
+    func testOpeningALongNoteWithATwentyByTenTableOnScreen() throws {
+        func note(withTable: Bool) -> [NoteBlock] {
+            var blocks: [NoteBlock] = [.text("Heavy")]
+            for index in 0..<400 {
+                blocks.append(.text("Line \(index) with some ordinary words to wrap a little in a narrow panel."))
+                if withTable, index == 2 {
+                    blocks.append(.table(NoteTable(texts: (0..<20).map { row in (0..<10).map { "r\(row) c\($0)" } })))
+                }
+            }
+            return blocks
+        }
+        func open(_ blocks: [NoteBlock]) -> Double {
+            let start = DispatchTime.now().uptimeNanoseconds
+            let (engine, textView) = makeEngine(blocks)
+            textView.displayIfNeeded()
+            let elapsed = Double(DispatchTime.now().uptimeNanoseconds - start) / 1_000_000
+            if blocks.contains(where: { $0.kind == .table }) {
+                XCTAssertNotNil(engine.tableViews().first?.window, "the table is on screen")
+            }
+            windows.forEach { $0.close() }
+            windows.removeAll()
+            return elapsed
+        }
+        _ = open(note(withTable: true))
+        var plain: [Double] = [], table: [Double] = []
+        for _ in 0..<5 {
+            plain.append(open(note(withTable: false)))
+            table.append(open(note(withTable: true)))
+        }
+        plain.sort()
+        table.sort()
+        let report = String(format: "TABLE-OPEN long note median %.1f ms, with a 20 x 10 table on screen %.1f ms", plain[2], table[2])
+        print(report)
+        XCTContext.runActivity(named: report) { _ in }
+    }
+
+    /// Sideways scrolling over a wide table moves the table; scrolling up
+    /// and down over it moves the note.
+    func testScrollingOverAWideTableGoesSidewaysToItAndUpAndDownToTheNote() throws {
+        let wide = NoteTable(texts: [["Pillar", "What happened", "Control that failed", "Source"],
+                                     ["Confidentiality", "Data taken from the IT network", "No MFA on the VPN account", "beerman2023review"]])
+        var blocks = ciaBlocks(wide)
+        for index in 0..<40 { blocks.append(.text("Filler line \(index) to give the note something to scroll.")) }
+        let (engine, textView) = makeEngine(blocks, height: 300)
+        let view = try tableView(engine)
+        let scrollView = try XCTUnwrap(textView.enclosingScrollView)
+        func scroll(dx: Int32, dy: Int32) throws {
+            let cgEvent = try XCTUnwrap(CGEvent(scrollWheelEvent2Source: nil, units: .pixel, wheelCount: 2, wheel1: dy, wheel2: dx, wheel3: 0))
+            let event = try XCTUnwrap(NSEvent(cgEvent: cgEvent))
+            view.scrollWheel(with: event)
+            spin(0.05)
+        }
+        let noteBefore = scrollView.contentView.bounds.minY
+        // A gesture is many events; AppKit settles the first.
+        for _ in 0..<2 { try scroll(dx: -30, dy: 0) }
+
+        XCTAssertEqual(view.scrollOffset, 60, accuracy: 0.5, "sideways: the table")
+        for _ in 0..<40 { try scroll(dx: -30, dy: 0) }
+        XCTAssertEqual(view.scrollOffset, view.maxScrollOffset, accuracy: 0.5, "until its end, and no further")
+        XCTAssertEqual(scrollView.contentView.bounds.minY, noteBefore, accuracy: 0.5)
+        let tableOffset = view.scrollOffset
+        for _ in 0..<3 { try scroll(dx: 0, dy: -40) }
+        XCTAssertEqual(view.scrollOffset, tableOffset, accuracy: 0.5)
+        XCTAssertGreaterThan(scrollView.contentView.bounds.minY, noteBefore, "up and down: the note")
+    }
 }
