@@ -572,4 +572,29 @@ final class NotesV2TablesTests: XCTestCase {
         XCTAssertEqual(view.scrollOffset, tableOffset, accuracy: 0.5)
         XCTAssertGreaterThan(scrollView.contentView.bounds.minY, noteBefore, "up and down: the note")
     }
+
+    /// Scrolling the note while a cell has the keyboard: the cell keeps it.
+    func testScrollingTheTableOutOfViewKeepsTheCellsKeyboard() throws {
+        var blocks = ciaBlocks()
+        for index in 0..<200 { blocks.append(.text("Filler line \(index) to give the note something to scroll.")) }
+        let (engine, textView) = makeEngine(blocks, height: 300)
+        let view = try tableView(engine)
+        view.activate(NoteTable.Position(row: 1, column: 1), caret: .end)
+        let scrollView = try XCTUnwrap(textView.enclosingScrollView)
+        scrollView.contentView.scroll(to: NSPoint(x: 0, y: 3_000))
+        scrollView.reflectScrolledClipView(scrollView.contentView)
+        settle(engine, textView)
+        spin(0.2)
+        XCTAssertTrue(textView.window?.firstResponder === view.editor, "typing still goes to the cell")
+        view.editor.insertText("!", replacementRange: NSRange(location: NSNotFound, length: 0))
+        XCTAssertEqual(try tableAttachment(engine).table[NoteTable.Position(row: 1, column: 1)].text, "Data taken from the IT network!")
+        // Back in view: TextKit hosts the same view again, still editing.
+        scrollView.contentView.scroll(to: NSPoint(x: 0, y: 0))
+        scrollView.reflectScrolledClipView(scrollView.contentView)
+        settle(engine, textView)
+        spin(0.1)
+        XCTAssertFalse(view.isParked)
+        XCTAssertTrue(textView.window?.firstResponder === view.editor)
+        XCTAssertEqual(view.activeCell, NoteTable.Position(row: 1, column: 1))
+    }
 }

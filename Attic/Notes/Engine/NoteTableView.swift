@@ -201,12 +201,27 @@ final class NoteTableView: NSView {
     private(set) var keepsFocusThroughRehost = false
     private var focusBeforeRehost: (cell: NoteTable.Position?, selection: NSRange?, cells: NoteTableCellRange?)?
 
+    /// Where the view last sat in the note's text view (to park it there).
+    private var lastFrameInTextView: NSRect?
+    /// Parked in the note's text view while TextKit has it out of the
+    /// viewport (the note scrolled while a cell has the keyboard).
+    private(set) var isParked = false
+
     override func viewWillMove(toWindow newWindow: NSWindow?) {
         if newWindow == nil, isFocused {
             keepsFocusThroughRehost = true
             focusBeforeRehost = (activeCell, hasEditor ? editor.selectedRange() : nil, cellSelection)
+            if let textView = engine?.textView, window != nil, !isParked {
+                lastFrameInTextView = convert(bounds, to: textView)
+            }
         }
         super.viewWillMove(toWindow: newWindow)
+    }
+
+    override func viewWillMove(toSuperview newSuperview: NSView?) {
+        // TextKit hosting it again ends a parking.
+        if newSuperview != nil, newSuperview !== engine?.textView { isParked = false }
+        super.viewWillMove(toSuperview: newSuperview)
     }
 
     override func viewDidMoveToWindow() {
@@ -219,6 +234,14 @@ final class NoteTableView: NSView {
                 guard let self, self.keepsFocusThroughRehost else { return }
                 if self.window != nil {
                     self.restoreFocusAfterRehost()
+                } else if let attachment = self.attachment, let engine = self.engine, engine.range(ofTable: attachment) != nil,
+                          let textView = engine.textView, textView.window != nil {
+                    // Scrolled out of TextKit's viewport while a cell has the
+                    // keyboard: parked in the text view, the cell keeps it.
+                    self.isParked = true
+                    self.frame = self.lastFrameInTextView ?? NSRect(x: textView.textContainerOrigin.x, y: -10_000,
+                                                                    width: self.bounds.width, height: self.bounds.height)
+                    textView.addSubview(self)
                 } else {
                     // Gone from the note (deleted, or its Undo): the note's text takes the keyboard.
                     self.keepsFocusThroughRehost = false
@@ -420,6 +443,11 @@ final class NoteTableView: NSView {
 
     /// The keyboard left the table: the editor hides, the grid is drawn whole.
     func deactivate() {
+        if isParked {
+            // Parked out of view for the keyboard's sake; TextKit hosts it again when it is shown.
+            isParked = false
+            removeFromSuperview()
+        }
         guard activeCell != nil || cellSelection != nil else { return }
         activeCell = nil
         cellSelection = nil
