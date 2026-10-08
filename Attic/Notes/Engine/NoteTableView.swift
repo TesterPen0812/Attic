@@ -657,7 +657,11 @@ final class NoteTableCanvas: NSView {
         let editing = table.hasEditor && table.activeCell != nil && !table.editor.isHidden
         NoteTableDrawing.draw(table: attachment.table, layout: table.grid,
                               design: attachment.engine?.objectDesign ?? attachment.style.design, style: attachment.style,
-                              string: { table.cellString($0) }, skipping: editing ? table.activeCell : nil,
+                              string: { position in
+                                  let string = table.cellString(position)
+                                  attachment.engine?.find.decorate(string, tableID: attachment.objectID, cell: position)
+                                  return string
+                              }, skipping: editing ? table.activeCell : nil,
                               selection: table.cellSelection, active: editing ? table.activeCell : nil, dirty: dirtyRect)
     }
 

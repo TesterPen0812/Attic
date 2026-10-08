@@ -1773,6 +1773,9 @@ struct AtticSubtaskRow: View {
     var commands: [AtticMenuCommand] = []
     /// Its title being edited in place (Return, or Rename).
     var renaming: AtticTitleEditing? = nil
+    var onDragChanged: ((CGFloat) -> Void)? = nil
+    var onDragEnded: ((CGFloat) -> Void)? = nil
+    var onDragCancelled: (() -> Void)? = nil
     /// Told when the line gains or loses the keyboard (round 10b), so the
     /// page knows a shortcut is not about the main task.
     var onFocusChange: (Bool) -> Void = { _ in }
@@ -1801,6 +1804,9 @@ struct AtticSubtaskRow: View {
                 AtticRowTitleEditor(editing: renaming)
             } else {
                 AtticText(verbatim: subtask.title, style: .listBody, ink: subtask.isDone ? .helper : .body, strikethrough: subtask.isDone, truncates: true)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .contentShape(Rectangle())
+                    .modifier(AtticSubtaskDrag(changed: onDragChanged, ended: onDragEnded, cancelled: onDragCancelled))
             }
             Spacer(minLength: 0)
             if managed, renaming == nil, hovered || (focused && keyboardFocusVisible) {
@@ -1923,6 +1929,11 @@ struct AtticQuickLook: View {
     var newSubtask: AtticTitleEditing? = nil
     /// A pop-over open from one subtask's line (Move to Task…).
     var popover: (id: UUID, popover: AtticAnchoredPopover)? = nil
+    /// The same completion-group move as the keys and row menu, committed
+    /// only on release, so the whole drag is one Undo step.
+    var onReorder: ((UUID, Int, [UUID]) -> Void)? = nil
+    @State private var drag: TasksDrag?
+    @State private var translation: CGFloat = 0
 
     @Environment(\.atticCapture) private var capture
     @Environment(\.atticDesign) private var design
@@ -1932,8 +1943,26 @@ struct AtticQuickLook: View {
             ForEach(subtasks) { subtask in
                 AtticSubtaskRow(subtask: subtask, onToggle: { onToggle(subtask) }, commands: commands(subtask),
                                 renaming: renaming?.id == subtask.id ? renaming?.editing : nil,
+                                onDragChanged: onReorder == nil ? nil : { updateDrag(subtask, by: $0) },
+                                onDragEnded: onReorder == nil ? nil : { amount in
+                                    updateDrag(subtask, by: amount)
+                                    if let drag { onReorder?(subtask.id, drag.targetIndex, drag.group) }
+                                    drag = nil
+                                    translation = 0
+                                },
+                                onDragCancelled: { drag = nil; translation = 0 },
                                 onFocusChange: { onFocusChange(subtask.id, $0) },
                                 popover: popover?.id == subtask.id ? popover?.popover : nil)
+                    .offset(y: drag?.id == subtask.id ? translation : drag.map {
+                        TasksReorderCell<EmptyView, EmptyView>.offset(of: subtask.id, in: $0, heights: { _ in AtticLayout.subtaskPitch })
+                    } ?? 0)
+                    .background {
+                        if drag?.id == subtask.id {
+                            RoundedRectangle(cornerRadius: AtticRadius.contentCard).fill(design.tokens.recessed.color)
+                                .offset(y: translation)
+                        }
+                    }
+                    .zIndex(drag?.id == subtask.id ? 1 : 0)
             }
             if let newSubtask, capture == nil {
                 HStack(spacing: AtticSubtaskMetrics.titleGap) {
@@ -1950,6 +1979,31 @@ struct AtticQuickLook: View {
         .padding(.leading, AtticLayout.textX)
         .padding(.trailing, AtticLayout.rowHighlightInset)
         .padding(.bottom, AtticQuickLookMetrics.bottomPadding)
+    }
+
+    private func updateDrag(_ subtask: AtticSubtaskModel, by amount: CGFloat) {
+        let group = drag?.group ?? subtasks.filter { $0.isDone == subtask.isDone }.map(\.id)
+        guard let start = drag?.startIndex ?? group.firstIndex(of: subtask.id) else { return }
+        translation = amount
+        let target = TasksReorderCell<EmptyView, EmptyView>.target(start: start, translation: amount,
+            group: group, heights: { _ in AtticLayout.subtaskPitch })
+        drag = TasksDrag(id: subtask.id, tab: .now, group: group, startIndex: start, targetIndex: target)
+    }
+}
+
+/// Only the title starts a subtask drag. Checkbox, actions, text editors
+/// and popovers keep their own gestures. A cancelled gesture settles back.
+private struct AtticSubtaskDrag: ViewModifier {
+    let changed: ((CGFloat) -> Void)?
+    let ended: ((CGFloat) -> Void)?
+    let cancelled: (() -> Void)?
+    @GestureState private var dragging = false
+    func body(content: Content) -> some View {
+        content.gesture(changed == nil ? nil : DragGesture(minimumDistance: 4)
+            .updating($dragging) { _, state, _ in state = true }
+            .onChanged { changed?($0.translation.height) }
+            .onEnded { ended?($0.translation.height) })
+            .onChange(of: dragging) { _, now in if !now { cancelled?() } }
     }
 }
 

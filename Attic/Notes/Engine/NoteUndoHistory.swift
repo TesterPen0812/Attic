@@ -46,6 +46,9 @@ final class NoteUndoHistory {
         fileprivate var paragraphStyleSnapshot: (location: Int, before: ParagraphState, after: ParagraphState)?
         fileprivate var emptyParagraphSnapshot: (before: NoteBlock?, after: NoteBlock?)?
         fileprivate var typingMarkSnapshot: (kind: NoteMark.Kind, before: Bool, after: Bool)?
+        /// Delimiter conversion restores the unmarked closing boundary on
+        /// either replay, even when the caret sits just after marked text.
+        fileprivate var boundaryTypingMarks: [NoteMark.Kind: Any]?
         /// A table's grid before and after (by the table's id, so it never
         /// depends on where the table sits in the text), and the cell and
         /// selection each side returns to. `cell` is the cell whose typing
@@ -103,6 +106,7 @@ final class NoteUndoHistory {
     var emptyParagraphState: (() -> NoteBlock?)?
     var onEmptyParagraphSnapshot: ((NoteBlock?) -> Void)?
     var onTypingMarkSnapshot: ((NoteMark.Kind, Bool) -> Void)?
+    var onBoundaryTypingMarksSnapshot: (([NoteMark.Kind: Any]) -> Void)?
     /// Puts a table's grid back (Undo or Redo); false when the table is no
     /// longer in the note (the step is then skipped).
     var onTableSnapshot: ((UUID, NoteTable, NoteTableFocus?) -> Bool)?
@@ -454,6 +458,10 @@ final class NoteUndoHistory {
         append(op)
     }
 
+    func setLastBoundaryTypingMarks(_ marks: [NoteMark.Kind: Any]) {
+        undoOps.last?.boundaryTypingMarks = marks
+    }
+
     /// A change to a table's grid. Typing in one cell coalesces like typing
     /// in the note (`cell`): consecutive edits of the same cell join the
     /// open step; any other step, a caret jump or another cell ends it.
@@ -596,6 +604,9 @@ final class NoteUndoHistory {
             onEmptyParagraphSnapshot?(snapshot.before)
         }
         onReplay?(op.range)
+        if let marks = op.boundaryTypingMarks {
+            onBoundaryTypingMarksSnapshot?(marks)
+        }
         return true
     }
 

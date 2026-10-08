@@ -15,6 +15,7 @@ import UniformTypeIdentifiers
 /// - Marks keystroke-to-commit for the performance trace.
 final class NoteEditorTextView: NSTextView, NSAccessibilityCustomRotorItemSearchDelegate {
     weak var engine: NoteEditorEngine?
+    var proseTextCompletionEnabled = false
     private(set) lazy var undoShim = NoteUndoManagerShim(textView: self)
     /// After each layout pass: the page keeps the title's accessories (the
     /// note menu button and the tag line) on the title's lines.
@@ -234,6 +235,8 @@ final class NoteEditorTextView: NSTextView, NSAccessibilityCustomRotorItemSearch
     }
 
     override func keyDown(with event: NSEvent) {
+        engine?.updateTextChecking()
+        if engine?.find.handleKey(event) == true { return }
         if let engine, selectedRange().length == 1,
            let object = engine.object(at: selectedRange().location),
            object is NoteImageAttachment || object is NoteFileAttachment {

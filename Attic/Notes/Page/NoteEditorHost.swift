@@ -752,6 +752,7 @@ struct NoteEditorRepresentable: NSViewRepresentable {
         let (scrollView, textView) = engine.makeView()
         scrollView.automaticallyAdjustsContentInsets = false
         scrollView.contentInsets = NSEdgeInsets(top: topInset, left: 0, bottom: bottomInset, right: 0)
+        engine.find.setGeometry(top: topInset, column: columnInset)
         scrollView.scrollerInsets = NSEdgeInsets(top: 0, left: 0, bottom: 0, right: 0)
         textView.textContainerInset = NSSize(width: columnInset, height: 0)
         let session = session
@@ -812,7 +813,8 @@ struct NoteEditorRepresentable: NSViewRepresentable {
     }
 
     func updateNSView(_ scrollView: NSScrollView, context: Context) {
-        let insets = NSEdgeInsets(top: topInset, left: 0, bottom: bottomInset, right: 0)
+        let insets = NSEdgeInsets(top: topInset + session.engine.find.clearance, left: 0, bottom: bottomInset, right: 0)
+        session.engine.find.setGeometry(top: topInset, column: columnInset)
         if scrollView.contentInsets.top != insets.top || scrollView.contentInsets.bottom != insets.bottom {
             scrollView.contentInsets = insets
         }

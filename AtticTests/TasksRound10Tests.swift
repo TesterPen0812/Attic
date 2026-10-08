@@ -730,3 +730,25 @@ final class TasksRound10Tests: XCTestCase {
         XCTAssertNil(SettingsVisibility.globalShortcutFailure(hotKey.registration))
     }
 }
+
+extension TasksRound10Tests {
+    func testSubtaskDragUsesItsCompletionGroupAndOneUndoStep() throws {
+        let parent = try make("Parent")
+        let a = try make("First", parent: parent.id)
+        let b = try make("Second", parent: parent.id)
+        let c = try make("Third", parent: parent.id)
+        let done = try make("Done", .done, parent: parent.id)
+        let before = model.quickLookSubtaskIDs(of: parent.id)
+        let open = before.filter { $0 != done.id }
+        XCTAssertTrue(model.reorderSubtask(c.id, toGroupIndex: 0, group: open).isApplied)
+        XCTAssertEqual(model.quickLookSubtaskIDs(of: parent.id), [c.id, a.id, b.id, done.id])
+        XCTAssertTrue(model.undo().isApplied)
+        XCTAssertEqual(model.quickLookSubtaskIDs(of: parent.id), before)
+        XCTAssertTrue(model.redo().isApplied)
+        XCTAssertEqual(model.quickLookSubtaskIDs(of: parent.id), [c.id, a.id, b.id, done.id])
+        XCTAssertTrue(model.reorderSubtask(done.id, toGroupIndex: 0, group: open).isApplied)
+        XCTAssertEqual(model.quickLookSubtaskIDs(of: parent.id), [c.id, a.id, b.id, done.id], "a done row never crosses into the open group")
+        XCTAssertTrue(model.reorderSubtask(b.id, toGroupIndex: 0, group: open).isApplied)
+        XCTAssertEqual(model.quickLookSubtaskIDs(of: parent.id), [c.id, a.id, b.id, done.id], "a stale drag group settles back")
+    }
+}

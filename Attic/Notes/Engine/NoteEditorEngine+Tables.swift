@@ -96,6 +96,7 @@ extension NoteEditorEngine {
         onTableChromeChange?()
         onTableFocusChange?()
         onCaretChange?()
+        find.updateHighlights()
     }
 
     /// After one of the page's controls (Aa's row, a grip's menu): the
@@ -156,6 +157,7 @@ extension NoteEditorEngine {
     /// The grid changed without a character edit: the saved document, the
     /// table's line and the page's chrome follow.
     func tableContentDidChange(_ attachment: NoteTableAttachment) {
+        find.refresh()
         invalidateDocumentCache()
         onTextChange?()
         onTableChromeChange?()

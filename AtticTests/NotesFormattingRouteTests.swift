@@ -225,9 +225,9 @@ final class NotesFormattingRouteTests: XCTestCase {
     }
 
     func testMarkdownRoutesTypeReturnAndLiteralUndoInEveryState() {
-        let habits: [(String, NoteParagraphStyle?)] = [("# ", .heading(2)), ("## ", nil), ("- ", .bullet),
+        let habits: [(String, NoteParagraphStyle?)] = [("# ", .heading(2)), ("## ", .heading(2)), ("### ", .heading(3)), ("- ", .bullet),
             ("* ", .bullet), ("1. ", .number), ("> ", .quote), ("-[] ", .checklist),
-            ("- [ ] ", .checklist), ("- [x] ", .checklist), ("``` ", nil), ("[] ", nil)]
+            ("- [ ] ", .checklist), ("- [x] ", .checklist), ("``` ", .mono), ("[] ", .checklist)]
         for (prefix, expected) in habits {
             for state in State.allCases {
                 let label = "markdown/\(prefix)/\(state.rawValue)"
@@ -270,9 +270,9 @@ final class NotesFormattingRouteTests: XCTestCase {
                 XCTAssertTrue(engine.textStorage.string.contains(literal), "literal Markdown Undo")
                 XCTAssertTrue(engine.history.redo())
                 XCTAssertEqual(engine.document().blocks, formatted)
-                view.setSelectedRange(caret)
+                XCTAssertEqual(view.selectedRange(), caret, "Redo restores the caret and its delimiter boundary")
                 type("XYZ", into: view)
-                XCTAssertNotNil(engine.textStorage.attribute(.noteMark(mark), at: view.selectedRange().location - 1, effectiveRange: nil))
+                XCTAssertNil(engine.textStorage.attribute(.noteMark(mark), at: view.selectedRange().location - 1, effectiveRange: nil), "the closing delimiter ends the mark, including after Redo")
                 checkReturn(.body, engine: engine, view: view, label: "markdown/\(literal)/\(state)")
                 print("A22_INLINE_MARKDOWN route=markdown/\(literal)/\(state) typed=\(mark)")
             }
@@ -618,5 +618,164 @@ final class NotesFormattingRouteTests: XCTestCase {
         view.insertText("x", replacementRange: NSRange(location: NSNotFound, length: 0))
         view.deleteBackward(nil)
         XCTAssertNil(view.typingAttributes[.noteMark(.bold)], "a backspace at a line start does not inherit bold")
+    }
+}
+
+
+@MainActor
+final class A38NotesRegressionTests: XCTestCase {
+    func testMarkdownMarksEndAtTheClosingDelimiterAndDoNotReachTheNextParagraph() {
+        for literal in ["**Bold**", "*Italic*", "_Italic_", "`Code`"] {
+            let engine = NoteEditorEngine(noteID: UUID(), document: NoteDocument(blocks: [.text("T"), .text("")]))
+            let (_, view) = engine.makeView()
+            view.setSelectedRange(NSRange(location: 2, length: 0))
+            for character in literal + " PlainTail" { view.insertText(String(character), replacementRange: view.selectedRange()) }
+            view.insertNewline(nil)
+            for character in "Next" { view.insertText(String(character), replacementRange: view.selectedRange()) }
+            let blocks = engine.document().blocks
+            XCTAssertEqual(blocks[1].marks.count, 1, literal)
+            XCTAssertEqual(blocks[1].marks[0].length, literal == "**Bold**" || literal == "`Code`" ? 4 : 6)
+            XCTAssertTrue(blocks[2].marks.isEmpty, literal)
+        }
+    }
+
+    func testMonoDisablesEverySubstitutionAndBodyRestoresProseSettings() {
+        let engine = NoteEditorEngine(noteID: UUID(), document: NoteDocument(blocks: [.text("T"), .text("body"), .text("let", style: "mono")]))
+        let (_, view) = engine.makeView()
+        for (location, expected) in [(8, false), (3, true)] {
+            view.setSelectedRange(NSRange(location: location, length: 0))
+            XCTAssertEqual(view.isContinuousSpellCheckingEnabled, expected)
+            XCTAssertEqual(view.isAutomaticSpellingCorrectionEnabled, expected)
+            XCTAssertEqual(view.isAutomaticTextReplacementEnabled, expected)
+            XCTAssertEqual(view.isAutomaticQuoteSubstitutionEnabled, expected)
+            XCTAssertEqual(view.isAutomaticDashSubstitutionEnabled, expected)
+            XCTAssertEqual(view.isAutomaticTextCompletionEnabled, expected && view.proseTextCompletionEnabled)
+            XCTAssertEqual(view.smartInsertDeleteEnabled, expected)
+        }
+        view.setSelectedRange(NSRange(location: engine.textStorage.length, length: 0))
+        view.insertText(" value = \"literal\" --", replacementRange: view.selectedRange())
+        XCTAssertEqual(engine.document().blocks.last?.text, "let value = \"literal\" --")
+    }
+
+    func testMultilinePasteNormalizesTheSurvivingTailIncludingInlineObjectsAndHistory() throws {
+        for style in ["heading", "quote", "bullet", "mono"] {
+            var block = NoteBlock.text("Prefix Tail \u{FFFC}", style: style)
+            block.inlines = [NoteInline(id: UUID(), kind: .date(NoteDay(year: 2026, month: 10, day: 8)!))]
+            if style == "heading" { block.level = 2 }
+            var neighbor = NoteBlock.text("Neighbor", style: "heading")
+            neighbor.level = 2
+            let original = NoteDocument(blocks: [.text("T"), block, neighbor])
+            let engine = NoteEditorEngine(noteID: UUID(), document: original)
+            _ = engine.makeView()
+            let before = engine.document()
+            XCTAssertTrue(engine.pastePlainText("one\ntwo\nthree", at: NSRange(location: 9, length: 0)))
+            let result = engine.document()
+            XCTAssertEqual(result.blocks.map(\.text), ["T", "Prefix one", "two", "threeTail \u{FFFC}", "Neighbor"], style)
+            XCTAssertEqual(result.blocks[1].style, style)
+            XCTAssertNil(result.blocks[2].style)
+            XCTAssertNil(result.blocks[3].style)
+            XCTAssertEqual(result.blocks[3].inlines, block.inlines)
+            XCTAssertEqual(result.blocks[4].style, "heading")
+            let encoded = try NoteContentCodec.encode(result)
+            let saved = try XCTUnwrap(NoteContentCodec.decode(encoded).document)
+            let reopened = NoteEditorEngine(noteID: UUID(), document: saved).document()
+            XCTAssertEqual(reopened, result)
+            XCTAssertEqual(NoteMarkdownExport.markdown(reopened), NoteMarkdownExport.markdown(result))
+            XCTAssertTrue(engine.history.undo())
+            XCTAssertEqual(engine.document(), before)
+            XCTAssertTrue(engine.history.redo())
+            XCTAssertEqual(engine.document(), result)
+        }
+    }
+
+    func testTagsFindNotesWithPlainAndHashQueriesButNeverDeletedNotes() async throws {
+        let store = try makeTestNoteStore(attachmentFileStore: makeTestAttachmentFileStore())
+        let id = UUID()
+        guard case .success = store.createDocumentNote(id: id, document: NoteDocument(blocks: [.text("Unique"), .text("Body")]), tags: ["cuuniquetag"]) else { return XCTFail("fixture") }
+        for query in ["cuuniquetag", "#cuuniquetag", "CUUNIQUETAG"] {
+            let found = try await store.searchNoteIDs(matching: query)
+            XCTAssertEqual(found, [id])
+        }
+        XCTAssertTrue(store.delete(try XCTUnwrap(store.note(withID: id))))
+        let found = try await store.searchNoteIDs(matching: "#cuuniquetag")
+        XCTAssertTrue(found.isEmpty)
+    }
+}
+
+extension A38NotesRegressionTests {
+    func testFindReturnsTheKeyboardToBodyAfterATableMatch() throws {
+        let engine = NoteEditorEngine(noteID: UUID(), document: NoteDocument(blocks: [.text("Find"),
+            .table(NoteTable(texts: [["needle cell", "other"]])), .text("needle body")]))
+        let (scroll, view) = engine.makeView()
+        let table = try XCTUnwrap(engine.objects().compactMap { $0.0 as? NoteTableAttachment }.first)
+        let root = NSView(frame: NSRect(x: 0, y: 0, width: 320, height: 520))
+        scroll.frame = root.bounds
+        root.addSubview(scroll)
+        // An unordered window supplies the real responder chain without
+        // bringing the test host or another app onto the screen.
+        root.addSubview(table.tableView)
+        let window = NSWindow(contentRect: root.bounds, styleMask: .borderless, backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        window.contentView = root
+        defer { engine.find.close(); window.close(); engine.detachView() }
+        engine.find.show()
+        engine.find.query = "needle"
+        engine.find.next(backward: true) // wrap from table to body
+        engine.find.next() // table
+        XCTAssertTrue(window.firstResponder === table.tableView.editor)
+        XCTAssertEqual(table.tableView.activeCell, NoteTable.Position(row: 0, column: 0))
+        engine.find.next() // body
+        XCTAssertTrue(window.firstResponder === view)
+        XCTAssertNil(table.tableView.activeCell)
+        XCTAssertEqual(view.selectedRange(), engine.find.matches[1].noteRange)
+    }
+
+    func testFindNavigatesBodyAndTableTextInBothDirectionsWithoutEditing() throws {
+        let document = NoteDocument(blocks: [.text("Find"), .text("needle one"),
+            .table(NoteTable(texts: [["needle cell", "other"], ["last needle", ""]])), .text("needle end")])
+        let engine = NoteEditorEngine(noteID: UUID(), document: document)
+        let (_, view) = engine.makeView()
+        let before = engine.document()
+        engine.find.show()
+        engine.find.query = "needle"
+        XCTAssertTrue(engine.find.isShown)
+        XCTAssertEqual(engine.find.matches.count, 4)
+        XCTAssertEqual(engine.find.index, 0)
+        XCTAssertEqual(view.selectedRange(), engine.find.matches[0].noteRange)
+        engine.find.next()
+        XCTAssertNotNil(engine.find.matches[try XCTUnwrap(engine.find.index)].cell)
+        engine.find.next()
+        XCTAssertEqual(engine.find.index, 2)
+        engine.find.next()
+        XCTAssertEqual(view.selectedRange(), engine.find.matches[3].noteRange)
+        engine.find.next()
+        XCTAssertEqual(engine.find.index, 0, "wraps forward")
+        engine.find.next(backward: true)
+        XCTAssertEqual(engine.find.index, 3, "wraps backward")
+        XCTAssertEqual(engine.document(), before)
+        XCTAssertTrue(engine.history.undoOps.isEmpty)
+        engine.find.close()
+        XCTAssertFalse(engine.find.isShown)
+        XCTAssertTrue(engine.find.matches.isEmpty)
+    }
+
+    func testFindChordsAndEscapeReachTheSharedEngineAndEditingRefreshesMatches() throws {
+        let engine = NoteEditorEngine(noteID: UUID(), document: NoteDocument(blocks: [.text("T"), .text("needle needle")]))
+        let (_, view) = engine.makeView()
+        func key(_ code: UInt16, _ string: String, _ flags: NSEvent.ModifierFlags) throws -> NSEvent {
+            try XCTUnwrap(NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: flags, timestamp: 0,
+                windowNumber: 0, context: nil, characters: string, charactersIgnoringModifiers: string, isARepeat: false, keyCode: code))
+        }
+        view.keyDown(with: try key(3, "f", .command))
+        XCTAssertTrue(engine.find.isShown)
+        engine.find.query = "needle"
+        view.keyDown(with: try key(5, "g", .command))
+        XCTAssertEqual(engine.find.index, 1)
+        view.keyDown(with: try key(5, "g", [.command, .shift]))
+        XCTAssertEqual(engine.find.index, 0)
+        view.insertText("changed", replacementRange: view.selectedRange())
+        XCTAssertEqual(engine.find.matches.count, 1)
+        view.keyDown(with: try key(53, "\u{1b}", []))
+        XCTAssertFalse(engine.find.isShown)
     }
 }

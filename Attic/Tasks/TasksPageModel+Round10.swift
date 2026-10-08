@@ -144,6 +144,16 @@ extension TasksPageModel {
         return library.moveSubtask(id, by: offset)
     }
 
+    func reorderSubtask(_ id: UUID, toGroupIndex destination: Int, group: [UUID]) -> CommandOutcome {
+        guard let task = store.task(withID: id), let parent = task.parentID else { return .failed(.taskGone) }
+        let siblings = quickLookSubtasks(of: parent, store.subtasks(of: parent))
+            .filter { ($0.status == .done) == (task.status == .done) }.map(\.id)
+        guard group == siblings, let start = siblings.firstIndex(of: id), siblings.indices.contains(destination) else {
+            return .applied // The family changed during the drag: settle back.
+        }
+        return moveSubtask(id, by: destination - start)
+    }
+
     /// The subtasks a quick look's keys and menu act on, in the order it
     /// shows them.
     func quickLookSubtaskIDs(of parentID: UUID) -> [UUID] {

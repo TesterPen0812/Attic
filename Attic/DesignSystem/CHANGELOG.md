@@ -5,6 +5,14 @@ Every later change is recorded here: what changed, why, and who asked.
 
 ## Phase 2
 
+### A38: subtask drag reorder (functional audit repair, 2026-10-08)
+
+`AtticQuickLook` accepts a completion-group reorder callback. A subtask's title
+starts the drag, using the parent row's target and neighbor-offset calculations;
+checkboxes, actions and title editors retain their existing gestures. Release
+commits one move, cancellation settles back, and the lifted row uses the
+existing recessed card surface and radius.
+
 ### Notes v2, round 2: tables (owner, 2026-10-08, sheet 3 as drafted)
 - **`AtticNoteTableMetrics`**: cell padding 6 × 4 around the body's 14 / 21
   lines (a one-line row is 29), columns 56–168 by content, a 0.5 pt grid
