@@ -400,6 +400,12 @@ final class NoteEditorTextView: NSTextView, NSAccessibilityCustomRotorItemSearch
     }
 
     override func insertNewline(_ sender: Any?) {
+        // Return on a selected table goes into its first cell.
+        if let engine, !hasMarkedText(), selectedRange().length == 1,
+           let table = engine.tableAttachment(at: selectedRange().location) {
+            engine.enterTable(table, at: NoteTable.Position(row: 0, column: 0), caret: .end)
+            return
+        }
         // Return after `#word` in the title takes the tag, then moves on.
         if !hasMarkedText() { engine?.takeTitleHashtag() }
         if engine?.handleNewline() == true { return }

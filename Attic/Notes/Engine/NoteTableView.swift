@@ -734,6 +734,11 @@ final class NoteTableCanvas: NSView {
 
     override func keyDown(with event: NSEvent) {
         guard let table, let engine = table.engine else { return super.keyDown(with: event) }
+        if AtticPanel.isUndoKey(event) {
+            // The note's history, never the panel's fallback.
+            if event.modifierFlags.contains(.shift) { engine.history.redo() } else { engine.history.undo() }
+            return
+        }
         if engine.handleTableShortcut(event, in: table) { return }
         interpretKeyEvents([event])
     }

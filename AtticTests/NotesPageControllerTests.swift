@@ -63,6 +63,36 @@ final class NotesPageControllerTests: XCTestCase {
         XCTAssertTrue(session.isPersisted)
     }
 
+    /// Notes v2 tables: a cell edit (no character of the note changes) is
+    /// an edit like any other: saved, journaled, and recovered after a
+    /// failed save and a restart.
+    func testATablesCellEditIsSavedJournaledAndRecovered() async throws {
+        let journal = NoteDraftJournal(directory: directory)
+        let controller = makeController(journal: journal)
+        await controller.startAndWait()
+        let session = try XCTUnwrap(controller.active)
+        type("Plan\n", into: session)
+        let engine = session.engine
+        XCTAssertTrue(engine.insertTable(NoteTable(texts: [["Pillar", "What happened"], ["Integrity", ""]]),
+                                         replacing: NSRange(location: engine.textStorage.length, length: 0),
+                                         name: "Insert Table", entering: false))
+        await XCTAssertTrueAsync(await controller.preserveAllDurably())
+        let table = try XCTUnwrap(engine.objects().compactMap { $0.0 as? NoteTableAttachment }.first)
+        XCTAssertTrue(engine.changeTable(table, name: "Typing") { $0[NoteTable.Position(row: 1, column: 1)] = NoteTable.Cell("Encrypted") })
+        if case .dirty = session.state {} else { XCTFail("a cell edit marks the note as changed") }
+        gate.shouldFail = true
+        // The store refuses; the edit is kept in the recovery journal instead.
+        _ = await controller.preserveAllDurably()
+        XCTAssertFalse(try journal.entries().isEmpty, "the cell edit is in the recovery journal")
+        gate.shouldFail = false
+        let restarted = makeController(journal: NoteDraftJournal(directory: directory))
+        await restarted.startAndWait()
+        let recovered = try XCTUnwrap(restarted.active)
+        XCTAssertEqual(recovered.noteID, session.noteID)
+        XCTAssertEqual(recovered.engine.document().blocks.first { $0.kind == .table }?.table?[NoteTable.Position(row: 1, column: 1)].text,
+                       "Encrypted")
+    }
+
     func testInvalidCheckpointNeverWritesEmptyBytesOrClaimsRecoveryAfterRestart() async throws {
         let journal = NoteDraftJournal(directory: directory)
         let controller = makeController(journal: journal)
