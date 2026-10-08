@@ -219,7 +219,7 @@ struct NoteTextStyle: Equatable {
     /// paragraph and its neighbours with the real one).
     func paragraphAttributes(style name: String?, level: Int?, indent: Int?, previous: NoteParagraphKind? = .body,
                              isChecklist: Bool = false, isBlockObject: Bool = false,
-                             monoHang: CGFloat = 0) -> [NSAttributedString.Key: Any] {
+                             monoHang: CGFloat = 0, monoExitsAtEnd: Bool = false) -> [NSAttributedString.Key: Any] {
         let kind: NoteParagraphKind = isBlockObject ? .blockObject : NoteParagraphKind.of(style: name, level: level)
         var result = bodyAttributes
         result[.font] = font(for: kind)
@@ -235,6 +235,13 @@ struct NoteTextStyle: Equatable {
         case .mono:
             paragraph.firstLineHeadIndent = 0
             paragraph.headIndent = monoHang
+            if monoExitsAtEnd {
+                // The block's bottom padding goes before the note's empty
+                // last line, which TextKit lays out in this paragraph
+                // (`NoteBlockLayoutFragment` then adds no margin); that line
+                // keeps its own space before, as any paragraph below a block.
+                paragraph.paragraphSpacing = T.monoPaddingV + Self.baselineShift(T.mono)
+            }
         case .quote:
             paragraph.firstLineHeadIndent = depth + T.quoteTextInset
             paragraph.headIndent = depth + T.quoteTextInset

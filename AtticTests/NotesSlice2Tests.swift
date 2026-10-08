@@ -217,16 +217,31 @@ final class NotesSlice2EngineTests: XCTestCase {
         engine.setTitleReserves(tagLine: 15, trailing: 32)
         let style = engine.textStorage.attribute(.paragraphStyle, at: 0, effectiveRange: nil) as? NSParagraphStyle
         XCTAssertEqual(style?.tailIndent, -32)
-        XCTAssertEqual(style?.paragraphSpacing, NoteTextStyle.titleToTags + 15 + NoteTextStyle.tagsToBody)
+        // The tag line with 4 above it and 8 below; the first block keeps
+        // its own 12 from the title (Notes v2), so the title adds the rest.
         let body = engine.textStorage.attribute(.paragraphStyle, at: 8, effectiveRange: nil) as? NSParagraphStyle
+        XCTAssertEqual((style?.paragraphSpacing ?? 0) + NoteTextStyle.titleToBody,
+                       NoteTextStyle.titleToTags + 15 + NoteTextStyle.tagsToBody)
+        XCTAssertEqual(body?.paragraphSpacingBefore ?? 0,
+                       NoteTextStyle.spacingBefore(.body, after: .title), accuracy: 0.001)
         XCTAssertEqual(body?.tailIndent, 0, "the body is not narrowed")
         XCTAssertTrue(engine.history.undoOps.isEmpty, "reserves are never an Undo step")
-        XCTAssertEqual(style?.lineSpacing ?? 0, NoteTextStyle.lineSpacing(for: engine.style.titleFont, lineHeight: 22), accuracy: 0.01)
+        XCTAssertEqual(style?.minimumLineHeight, AtticNoteType.title.lineHeight)
+        XCTAssertEqual(style?.maximumLineHeight, AtticNoteType.title.lineHeight)
     }
 
-    func testNoteTextIsRounded() async {
-        XCTAssertTrue(AtticTextStyle.noteTitle.spec.rounded)
-        XCTAssertTrue(AtticTextStyle.noteBody.spec.rounded)
+    /// Notes v2, text direction 5 (owner, 2026-10-08): SF Pro in the note,
+    /// Rounded stays Tasks' voice.
+    func testNoteTextIsSFPro() async {
+        XCTAssertFalse(AtticTextStyle.noteTitle.spec.rounded)
+        XCTAssertFalse(AtticTextStyle.noteBody.spec.rounded)
+        XCTAssertTrue(AtticTextStyle.rowTitle.spec.rounded)
+        let style = NoteTextStyle()
+        for font in [style.titleFont, style.bodyFont, style.titleStyleFont, style.headingFont, style.subheadingFont, style.quoteFont] {
+            XCTAssertNotEqual(font.fontDescriptor.object(forKey: .init(rawValue: "NSCTFontUIFontDesignTrait")) as? String,
+                              "NSCTFontUIFontDesignRounded", font.fontName)
+            XCTAssertFalse(font.fontName.localizedCaseInsensitiveContains("rounded"), font.fontName)
+        }
     }
 }
 

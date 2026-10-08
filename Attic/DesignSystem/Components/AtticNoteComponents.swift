@@ -303,21 +303,21 @@ struct AtticNoteRow: View {
                 }
                 VStack(alignment: .leading, spacing: AtticTaskRowMetrics.titleToDetails) {
                     HStack(spacing: AtticTaskRowMetrics.trailingMinGap) {
-                        AtticText(verbatim: model.title, style: .rowTitle, ink: .heading, truncates: true)
+                        AtticText(verbatim: model.title, style: .noteRowTitle, ink: .heading, truncates: true)
                             .frame(maxWidth: .infinity, alignment: .leading)
                         HStack(spacing: m.countGap + 1) {
                             if model.needsAttention {
                                 AtticIcon(systemName: "exclamationmark.circle", size: AtticErrorLineMetrics.iconSize,
                                           weight: .medium, ink: .warningText)
                             }
-                            AtticText(verbatim: model.time, style: .rowMeta, ink: .helper)
+                            AtticText(verbatim: model.time, style: .noteRowMeta, ink: .helper)
                                 .opacity(hidesTime ? 0 : 1)
                         }
                         .fixedSize()
                     }
                     .frame(height: AtticTaskRowMetrics.titleLineHeight)
                     HStack(spacing: AtticTaskRowMetrics.trailingMinGap) {
-                        AtticText(verbatim: model.preview, style: .rowMeta, ink: .helper, truncates: true)
+                        AtticText(verbatim: model.preview, style: .noteRowMeta, ink: .helper, truncates: true)
                             .frame(maxWidth: .infinity, alignment: .leading)
                         counts.fixedSize()
                     }
@@ -370,7 +370,7 @@ struct AtticNoteGroupHeading: View {
     let title: String
 
     var body: some View {
-        AtticText(verbatim: title, style: .rowMeta, ink: .helper)
+        AtticText(verbatim: title, style: .noteRowMeta, ink: .helper)
             .frame(height: AtticTaskRowMetrics.titleLineHeight)
             .frame(height: AtticLayout.rowPitch)
             .padding(.leading, AtticNoteMetrics.rowTextX)

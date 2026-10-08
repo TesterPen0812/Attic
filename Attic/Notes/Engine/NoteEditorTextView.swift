@@ -45,6 +45,25 @@ final class NoteEditorTextView: NSTextView, NSAccessibilityCustomRotorItemSearch
         for part in prose { super.checkText(in: part, types: checkingTypes, options: options) }
     }
 
+    // MARK: A Mono block at the note's end
+
+    private var isSizingForTrailingBlock = false
+
+    /// AppKit sizes the text view to its last line, without the bottom
+    /// padding a Mono block at the note's end keeps below that line: the
+    /// view is made tall enough for the block's whole fragment.
+    override func setFrameSize(_ newSize: NSSize) {
+        var size = newSize
+        if isVerticallyResizable, !isSizingForTrailingBlock, let engine {
+            isSizingForTrailingBlock = true
+            if let bottom = engine.trailingMonoBlockBottom() {
+                size.height = max(size.height, ceil(bottom + textContainerOrigin.y + textContainerInset.height))
+            }
+            isSizingForTrailingBlock = false
+        }
+        super.setFrameSize(size)
+    }
+
     // MARK: Copy on a Mono block
 
     /// The Mono block's Copy, shown while the pointer is over a block.
@@ -78,8 +97,16 @@ final class NoteEditorTextView: NSTextView, NSAccessibilityCustomRotorItemSearch
         updateMonoCopy(at: nil)
     }
 
+    #if DEBUG
+    /// Capture seam: Copy stays where the scene put it, whatever the pointer does.
+    var pinsMonoCopy = false
+    #endif
+
     /// Shows Copy on the block under `point` (hides it elsewhere).
     func updateMonoCopy(at point: NSPoint?) {
+        #if DEBUG
+        if pinsMonoCopy, !monoCopyButton.isHidden { return }
+        #endif
         guard let engine, let point, let block = engine.monoBlock(at: point) else {
             if monoCopyLocation != nil || !monoCopyButton.isHidden {
                 monoCopyLocation = nil
@@ -101,9 +128,12 @@ final class NoteEditorTextView: NSTextView, NSAccessibilityCustomRotorItemSearch
         monoCopyButton.isHidden = false
     }
 
+    /// Where Copy puts the block's text (a test uses its own pasteboard).
+    var copyPasteboard: NSPasteboard = .general
+
     private func copyHoveredMonoBlock() {
         guard let engine, let location = monoCopyLocation, let text = engine.monoBlockText(at: location) else { return }
-        let pasteboard = NSPasteboard.general
+        let pasteboard = copyPasteboard
         pasteboard.clearContents()
         pasteboard.setString(text, forType: .string)
     }

@@ -13,7 +13,9 @@ import SwiftUI
 /// reads as one rounded rectangle with no seams.
 final class NoteBlockLayoutFragment: NSTextLayoutFragment {
     enum Decoration: Equatable {
-        case mono(starts: Bool, ends: Bool)
+        /// `exitsAtEnd`: the block's last line ends the note, and the empty
+        /// line after it (inside this fragment) is not code.
+        case mono(starts: Bool, ends: Bool, exitsAtEnd: Bool = false)
         /// A dot centred at `x` in the column.
         case bullet(x: CGFloat)
         /// A list number ending at `trailing` in the column.
@@ -23,7 +25,7 @@ final class NoteBlockLayoutFragment: NSTextLayoutFragment {
         case quote(x: CGFloat, joinsAbove: Bool, joinsBelow: Bool)
     }
 
-    var decoration: Decoration = .mono(starts: true, ends: true)
+    var decoration: Decoration = .mono(starts: true, ends: true, exitsAtEnd: false)
     /// The paragraph's space before its first line (inside the fragment).
     var spacingBefore: CGFloat = 0
     /// How far the paragraph's line boxes sit above the draft's (see
@@ -37,8 +39,8 @@ final class NoteBlockLayoutFragment: NSTextLayoutFragment {
     private typealias T = AtticNoteType
     private static var monoShift: CGFloat { NoteTextStyle.baselineShift(T.mono) }
 
-    private var mono: (starts: Bool, ends: Bool)? {
-        if case let .mono(starts, ends) = decoration { return (starts, ends) }
+    private var mono: (starts: Bool, ends: Bool, exitsAtEnd: Bool)? {
+        if case let .mono(starts, ends, exitsAtEnd) = decoration { return (starts, ends, exitsAtEnd) }
         return nil
     }
 
@@ -53,7 +55,7 @@ final class NoteBlockLayoutFragment: NSTextLayoutFragment {
     }
     override var bottomMargin: CGFloat {
         guard let mono else { return super.bottomMargin }
-        return mono.ends ? T.monoPaddingV + Self.monoShift : 0
+        return mono.ends && !mono.exitsAtEnd ? T.monoPaddingV + Self.monoShift : 0
     }
 
     private var columnWidth: CGFloat {
@@ -65,8 +67,12 @@ final class NoteBlockLayoutFragment: NSTextLayoutFragment {
     var monoBlockRect: CGRect? {
         guard let mono else { return nil }
         let top = mono.starts ? spacingBefore : 0
-        return CGRect(x: -layoutFragmentFrame.minX, y: top, width: columnWidth,
-                      height: max(0, layoutFragmentFrame.height - top))
+        var bottom = layoutFragmentFrame.height
+        if mono.exitsAtEnd, let last = textLineFragments.last(where: { $0.characterRange.length > 0 }) ?? textLineFragments.first {
+            // Not the note's empty last line: it sits below the block.
+            bottom = last.typographicBounds.maxY + T.monoPaddingV + Self.monoShift
+        }
+        return CGRect(x: -layoutFragmentFrame.minX, y: top, width: columnWidth, height: max(0, bottom - top))
     }
 
     private var firstBaseline: CGFloat? {
@@ -103,7 +109,7 @@ final class NoteBlockLayoutFragment: NSTextLayoutFragment {
 
     override func draw(at point: CGPoint, in context: CGContext) {
         if let block = monoBlockRect, let mono {
-            drawBlock(block, starts: mono.starts, ends: mono.ends, at: point, in: context)
+            drawBlock(block, starts: mono.starts, ends: mono.ends || mono.exitsAtEnd, at: point, in: context)
         }
         super.draw(at: point, in: context)
         switch decoration {
@@ -222,7 +228,8 @@ extension NoteEditorEngine: NSTextLayoutManagerDelegate, NSTextContentStorageDel
         let depth = CGFloat(attributes[.noteBlockIndent] as? Int ?? 0) * AtticNoteType.listLevelStep
         switch name {
         case "mono":
-            return .mono(starts: !isMono(paragraphBefore: line), ends: !isMono(paragraphAfter: line))
+            return .mono(starts: !isMono(paragraphBefore: line), ends: !isMono(paragraphAfter: line),
+                         exitsAtEnd: monoExitsAtEnd(line))
         case "bullet":
             return .bullet(x: depth + AtticNoteType.bulletCentre)
         case "number":
@@ -423,6 +430,18 @@ extension NoteEditorEngine {
         let inView = rect.offsetBy(dx: origin.x, dy: origin.y)
         guard inView.contains(point) else { return nil }
         return (location, inView)
+    }
+
+    /// The bottom of the note's last paragraph's fragment, in the text
+    /// container, when that paragraph is Mono (its block's bottom padding
+    /// counts); nil otherwise.
+    func trailingMonoBlockBottom() -> CGFloat? {
+        guard let layoutManager, textStorage.length > 0 else { return nil }
+        let last = paragraphRange(at: textStorage.length - 1)
+        guard last.location > 0, textStorage.attribute(.noteBlockStyle, at: last.location, effectiveRange: nil) as? String == "mono",
+              let range = textRange(for: NSRange(location: last.location, length: 0)),
+              let fragment = layoutManager.textLayoutFragment(for: range.location) as? NoteBlockLayoutFragment else { return nil }
+        return fragment.layoutFragmentFrame.maxY
     }
 
     /// A Mono block's rectangle in the text container's coordinates.

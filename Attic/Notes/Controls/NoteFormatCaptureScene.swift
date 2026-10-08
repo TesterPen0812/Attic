@@ -87,6 +87,25 @@ enum NoteFormatCaptureScene {
         }
         textView.setSelectedRange(NSRange(location: 0, length: 0))
         textView.scrollRangeToVisible(NSRange(location: 0, length: 0))
+        // `ATTIC_UI_TEST_NOTES_SCROLL=<pt>` scrolls the note that far from
+        // its top (the Mono block in view); `ATTIC_UI_TEST_MONO_COPY=1`
+        // shows the block's Copy as if the pointer were over it.
+        let environment = ProcessInfo.processInfo.environment
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) {
+            if let value = environment["ATTIC_UI_TEST_NOTES_SCROLL"].flatMap(Double.init), let scrollView = textView.enclosingScrollView {
+                scrollView.contentView.scroll(to: NSPoint(x: 0, y: -scrollView.contentInsets.top + CGFloat(value)))
+                scrollView.reflectScrolledClipView(scrollView.contentView)
+            }
+            if environment["ATTIC_UI_TEST_MONO_COPY"] == "1", let engine = textView.engine {
+                let code = (textView.string as NSString).range(of: "@inproceedings")
+                if code.location != NSNotFound, let block = engine.monoBlockRange(at: code.location),
+                   let rect = engine.monoBlockRect(for: block) {
+                    let origin = textView.textContainerOrigin
+                    textView.updateMonoCopy(at: NSPoint(x: rect.midX + origin.x, y: rect.midY + origin.y))
+                    textView.pinsMonoCopy = true
+                }
+            }
+        }
     }
 
     private static func writeSample(controls: NoteFormatControls, textView: NoteEditorTextView, rich: Bool) {

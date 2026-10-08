@@ -234,6 +234,9 @@ enum AtticTextStyle: String, CaseIterable, Sendable {
     // Phase 0's qualities: an in-progress title (medium) and the list's own
     // 13 pt text (empty states, the add bar, subtasks, the Done search).
     case rowTitleActive, listBody
+    // Notes v2: All notes' rows in the note's own SF Pro (a 13 medium
+    // title over 11.5 regular meta), so the list and the note read as one.
+    case noteRowTitle, noteRowMeta
     case controlLabel, chipLabel, menuRow, shortcut, toast, tag, count, dropLabel
     // Attic's own dropdowns (E1, p2-24 D; Compact size, p2-28): 13 pt
     // names (SF Pro), the date card's month title, its days and its light
@@ -279,6 +282,8 @@ enum AtticTextStyle: String, CaseIterable, Sendable {
         case .panelHeading: Spec(size: 13, weight: .semibold, italic: false, monospacedDigits: false)
         case .body, .rowTitle, .listBody, .menuRow, .toast, .sidebarRow: Spec(size: 13, weight: .regular, italic: false, monospacedDigits: false)
         case .rowTitleActive: Spec(size: 13, weight: .medium, italic: false, monospacedDigits: false)
+        case .noteRowTitle: Spec(size: 13, weight: .medium, italic: false, monospacedDigits: false)
+        case .noteRowMeta: Spec(size: 11.5, weight: .regular, italic: false, monospacedDigits: false)
         case .noteBody: Spec(size: AtticNoteType.body.size, weight: .regular, italic: false, monospacedDigits: false)
         case .dropdownRow: Spec(size: 13, weight: .regular, italic: false, monospacedDigits: false)
         case .dropdownHeading: Spec(size: 13, weight: .semibold, italic: false, monospacedDigits: false)

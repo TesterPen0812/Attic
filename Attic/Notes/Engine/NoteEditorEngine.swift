@@ -541,7 +541,8 @@ final class NoteEditorEngine: NSObject, NSTextViewDelegate, NSTextStorageDelegat
                     style: name, level: metadata[.noteBlockLevel] as? Int, indent: metadata[.noteBlockIndent] as? Int,
                     previous: paragraph.location <= titleEnd ? .title : paragraphKind(at: paragraph.location - 1),
                     isChecklist: checklistBox(inParagraphAt: paragraph.location) != nil, isBlockObject: blockObject,
-                    monoHang: name == "mono" ? style.monoHang(for: string.substring(with: paragraph)) : 0)
+                    monoHang: name == "mono" ? style.monoHang(for: string.substring(with: paragraph)) : 0,
+                    monoExitsAtEnd: name == "mono" && monoExitsAtEnd(paragraph))
                 if let name, ["bullet", "number"].contains(name) {
                     let marker: NSTextList.MarkerFormat = name == "number" ? .decimal : .disc
                     var lists: [NSTextList] = []
@@ -766,6 +767,17 @@ final class NoteEditorEngine: NSObject, NSTextViewDelegate, NSTextStorageDelegat
     }
 
     func isBlockObject(at location: Int) -> Bool { object(at: location)?.isBlockObject ?? false }
+
+    /// A Mono paragraph that ends the note with a line break after it, and
+    /// the empty line below it is not Mono: the block ends with this line,
+    /// and the empty line (TextKit's extra line) sits a block margin below.
+    func monoExitsAtEnd(_ paragraph: NSRange) -> Bool {
+        let string = textStorage.string as NSString
+        guard paragraph.length > 0, NSMaxRange(paragraph) == string.length,
+              string.character(at: NSMaxRange(paragraph) - 1) == 0x0A else { return false }
+        guard let pending = pendingParagraphStyle, pending.location == string.length else { return true }
+        return pending.state.style != .mono
+    }
 
     /// What the paragraph at `location` is, for spacing and drawing.
     func paragraphKind(at location: Int) -> NoteParagraphKind {
@@ -2723,7 +2735,15 @@ extension NoteEditorEngine {
         block?.indent = indent > 0 ? indent : nil
         pendingParagraphStyle = value == .body && block == nil ? nil : (location, .init(style: value, indent: indent, block: block))
         documentCache = nil
-        var typing = style.paragraphAttributes(style: value.storageName, level: value.level, indent: indent)
+        var typing = style.paragraphAttributes(style: value.storageName, level: value.level, indent: indent,
+                                               previous: location > 0 ? paragraphKind(at: location - 1) : nil)
+        // The paragraph above draws differently beside a Mono line or
+        // without one (a Mono block's last line at the note's end).
+        if location > 0, location <= textStorage.length {
+            let above = paragraphRange(at: location - 1)
+            restyle(above)
+            invalidateLayout(above)
+        }
         if let name = value.storageName { typing[.noteBlockStyle] = name }
         if let level = value.level { typing[.noteBlockLevel] = level }
         if indent > 0 { typing[.noteBlockIndent] = indent }
