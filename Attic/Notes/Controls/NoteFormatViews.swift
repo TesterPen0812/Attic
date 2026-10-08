@@ -67,13 +67,15 @@ enum NoteFormatMotion {
     /// the chosen feel (owner, 2026-10-06: "springy like the rest of the
     /// motion in our app"). The glass is `expand` (a card growing out of
     /// its button and back); the controls come in as a bar does
-    /// (`popover`) and go with its leave; the neighbours slide into their
-    /// sides on the glass's spring and come back with their appear. Every
-    /// delay is a share of those springs. Opening, both glass edges and
-    /// neighbours move together at once. Controls come once it is about half grown; closing, the
-    /// controls go, the glass returns, and each neighbour comes back once the
-    /// glass has cleared its place. Animations: Reduced and Reduce Motion
-    /// swap at once (the switch never asks for these).
+    /// (`popover`) and go with its leave; the neighbours slide into the
+    /// row's sides on the glass's spring. Every delay is a share of those
+    /// springs. Opening, both glass edges and both neighbours move together
+    /// at once, and the controls come once it is about half grown. Closing,
+    /// the controls start to go and the glass follows within half a leave;
+    /// New note rides back in with the glass's trailing edge (the 8 pt gap
+    /// held, as it was pushed out), and All notes and the status come back
+    /// once the glass has cleared their places (A32). Animations: Reduced
+    /// and Reduce Motion swap at once (the switch never asks for these).
     struct Plan: Equatable {
         /// The format controls leaving.
         let leave: Spring
@@ -85,9 +87,12 @@ enum NoteFormatMotion {
         let openControls: Spring
         let closeControls: Spring
         let closeGrow: Spring
-        /// When each neighbour comes back, from the start of closing.
+        /// New note's way back: the glass's own closing spring, so it
+        /// follows the trailing edge in.
+        let newNoteBack: Spring
+        /// When All notes and the status come back, from the start of closing.
         let allNotesReturns: Double
-        let newNoteReturns: Double
+        let statusReturns: Double
 
         init(_ tuning: AtticMotionTuning) {
             let tuck = tuning.leave == .spring
@@ -99,9 +104,13 @@ enum NoteFormatMotion {
             openTrailing = openLeading
             openControls = Spring(delay: 0.55 * expand, tuning.popover)
             closeControls = leave
-            closeGrow = Spring(delay: 0.8 * leaving, tuning.expand)
+            // Half a leave: the controls are on their way out, and the glass
+            // never stands wide and empty (A32: 0.8 of a leave held it still
+            // for up to ten frames in Calm).
+            closeGrow = Spring(delay: 0.4 * leaving, tuning.expand)
+            newNoteBack = closeGrow
             allNotesReturns = closeGrow.delay + 0.35 * expand
-            newNoteReturns = closeGrow.delay + 0.9 * expand
+            statusReturns = closeGrow.delay + 0.9 * expand
         }
 
         /// The plan in the feel in use now.
@@ -456,17 +465,18 @@ struct NoteFormatRowSwitch<Row: View>: View {
                 returnNeighbour(token: token, gone: $allNotesGone, spring: plan.comeBack) { channels.allNotes = 0 }
             }
         }
-        if channels.newNoteAndStatus > 0 {
-            after(plan.newNoteReturns, token: token) {
-                returnNeighbour(token: token, gone: $newNoteGone, spring: plan.comeBack) {
-                    channels.newNoteAndStatus = 0
-                    statusHidden = false
-                }
+        if statusHidden {
+            after(plan.statusReturns, token: token) {
+                withAnimation(plan.comeBack.undelayed) { statusHidden = false }
             }
         }
+        // New note's glass comes back whole but still beyond the row's
+        // edge (nothing of it is drawn yet), and rides in with the glass.
+        if newNoteGone { instantly { newNoteGone = false } }
         withAnimation(plan.closeGrow.animation, completionCriteria: .logicallyComplete) {
             channels.leading = 0
             channels.trailing = 0
+            channels.newNoteAndStatus = 0
         } completion: {
             guard motionToken == token, !state.isOpen, phase == .moving else { return }
             // Aa takes its glass back; a neighbour still due keeps its clock.
@@ -592,6 +602,18 @@ enum NoteFormatRowNeighbour {
         case .status: return 0
         }
     }
+
+    /// What is left inside the slot after `offset(at:)`: the side the
+    /// button travels toward is cut by the distance it has gone, so it
+    /// passes under the row's edge.
+    func reveal(at progress: Double) -> AtticControlReveal? {
+        let travel = abs(offset(at: progress))
+        switch self {
+        case .allNotes: return AtticControlReveal(leading: travel)
+        case .newNote: return AtticControlReveal(trailing: travel)
+        case .status: return nil
+        }
+    }
 }
 
 private struct NoteFormatRowLeaving: ViewModifier {
@@ -614,7 +636,11 @@ private struct NoteFormatRowLeaving: ViewModifier {
 
 /// Clip at the button's outer slot edge, preserving vertical shadow room.
 /// Clamping each interpolated frame prevents a returning spring from
-/// overshooting inward into Aa's 8 pt gap.
+/// overshooting inward into Aa's 8 pt gap. A glass container ignores the
+/// clip on its members' glass (A32: the buttons were left half out over
+/// the panel's margin, then vanished at once), so the button's glass
+/// itself narrows to the part still inside its slot
+/// (`atticControlReveal`); the clip remains for the drawn controls.
 private struct NoteFormatRowSlide: ViewModifier, Animatable {
     let neighbour: NoteFormatRowNeighbour
     var progress: Double
@@ -626,6 +652,7 @@ private struct NoteFormatRowSlide: ViewModifier, Animatable {
 
     func body(content: Content) -> some View {
         content
+            .environment(\.atticControlReveal, neighbour.reveal(at: progress))
             .offset(x: neighbour.offset(at: progress))
             .padding(.vertical, AtticNoteFormatMetrics.shadowRoom)
             .clipped()

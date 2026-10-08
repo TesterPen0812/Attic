@@ -196,6 +196,7 @@ struct AtticRaisedMaterialModifier: ViewModifier {
     @Environment(\.atticCapture) private var capture
     @Environment(\.atticControlAway) private var away
     @Environment(\.atticControlGone) private var gone
+    @Environment(\.atticControlReveal) private var reveal
 
     func body(content: Content) -> some View {
         let shape = AtticControlShape.shape(cornerRadius: cornerRadius)
@@ -204,30 +205,82 @@ struct AtticRaisedMaterialModifier: ViewModifier {
             // an identity glass keeps while it fades stays in the group.
             content.opacity(0)
         } else if capture == nil, design.effectiveControls == .liquidGlass {
-            let tokens = design.tokens
-            let glass: Glass = away ? .identity : (interactive ? .regular.interactive() : .regular)
-            content
-                .background {
-                    if let fill = AtticGlassStateFill.fill(for: state, tokens: tokens) {
-                        shape.fill(fill.color)
-                    }
-                }
-                // Inside the glass: a glass container draws its members
-                // itself and ignores an opacity set on them from outside.
-                .opacity(away ? 0 : 1)
-                .glassEffect(glass, in: shape)
-                .overlay {
-                    if design.increaseContrast {
-                        shape.inset(by: AtticHairline.widthIncreased / 2)
-                            .stroke(AtticGlassModel.contrastEdge(dark: design.mode == .dark).color, lineWidth: AtticHairline.widthIncreased)
-                            .opacity(away ? 0 : 1)
-                            .allowsHitTesting(false)
-                    }
-                }
+            if let reveal {
+                glass(content.clipShape(reveal.shape(cornerRadius: cornerRadius)),
+                      in: reveal.shape(cornerRadius: cornerRadius))
+            } else {
+                glass(content, in: shape)
+            }
         } else {
             content.background(AtticRaisedBackground(cornerRadius: cornerRadius, state: state))
                 .opacity(away ? 0 : 1)
         }
+    }
+
+    private func glass<Content: View, S: InsettableShape>(_ content: Content, in shape: S) -> some View {
+        let tokens = design.tokens
+        let glass: Glass = away ? .identity : (interactive ? .regular.interactive() : .regular)
+        return content
+            .background {
+                if let fill = AtticGlassStateFill.fill(for: state, tokens: tokens) {
+                    shape.fill(fill.color)
+                }
+            }
+            // Inside the glass: a glass container draws its members
+            // itself and ignores an opacity set on them from outside.
+            .opacity(away ? 0 : 1)
+            .glassEffect(glass, in: shape)
+            .overlay {
+                if design.increaseContrast {
+                    shape.inset(by: AtticHairline.widthIncreased / 2)
+                        .stroke(AtticGlassModel.contrastEdge(dark: design.mode == .dark).color, lineWidth: AtticHairline.widthIncreased)
+                        .opacity(away ? 0 : 1)
+                        .allowsHitTesting(false)
+                }
+            }
+    }
+}
+
+/// The part of a raised control that is drawn while it slides under an
+/// edge (A32, Aa's neighbours leaving into the row's sides): the control's
+/// frame less `leading` and `trailing` points. A glass container draws its
+/// members itself and ignores a clip set on them from outside, so the
+/// glass's own shape narrows to the part still inside, and the content is
+/// clipped to it. Its corners stay the control's until the part is
+/// narrower than two of them. Unset (nil), a control draws as before.
+struct AtticControlReveal: Equatable {
+    var leading: CGFloat = 0
+    var trailing: CGFloat = 0
+
+    func shape(cornerRadius: CGFloat) -> AtticRevealedControlShape {
+        AtticRevealedControlShape(cornerRadius: cornerRadius, leading: leading, trailing: trailing)
+    }
+}
+
+struct AtticRevealedControlShape: InsettableShape {
+    var cornerRadius: CGFloat
+    var leading: CGFloat
+    var trailing: CGFloat
+    var inset: CGFloat = 0
+
+    var animatableData: AnimatablePair<CGFloat, CGFloat> {
+        get { AnimatablePair(leading, trailing) }
+        set { leading = newValue.first; trailing = newValue.second }
+    }
+
+    func path(in rect: CGRect) -> Path {
+        let width = rect.width - max(0, leading) - max(0, trailing)
+        guard width > 0.5 else { return Path() }
+        let part = CGRect(x: rect.minX + max(0, leading), y: rect.minY, width: width, height: rect.height)
+        return RoundedRectangle(cornerRadius: min(cornerRadius, width / 2, rect.height / 2), style: .continuous)
+            .inset(by: inset)
+            .path(in: part)
+    }
+
+    func inset(by amount: CGFloat) -> AtticRevealedControlShape {
+        var shape = self
+        shape.inset += amount
+        return shape
     }
 }
 
@@ -256,6 +309,19 @@ extension EnvironmentValues {
 
 private struct AtticControlGoneKey: EnvironmentKey {
     static let defaultValue = false
+}
+
+private struct AtticControlRevealKey: EnvironmentKey {
+    static let defaultValue: AtticControlReveal? = nil
+}
+
+extension EnvironmentValues {
+    /// The raised controls below draw only this part of themselves (see
+    /// `AtticControlReveal`). Nil, the default, changes nothing.
+    var atticControlReveal: AtticControlReveal? {
+        get { self[AtticControlRevealKey.self] }
+        set { self[AtticControlRevealKey.self] = newValue }
+    }
 }
 
 /// The one shape of Attic's controls: a continuous rounded rectangle with

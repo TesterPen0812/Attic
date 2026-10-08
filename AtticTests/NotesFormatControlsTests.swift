@@ -894,12 +894,15 @@ final class NotesFormatControlsTests: XCTestCase {
                     check(t, leading: plan.openLeading.value(at: t), trailing: plan.openTrailing.value(at: t),
                           allAway: plan.openLeading.value(at: t), rightAway: plan.openTrailing.value(at: t),
                           statusShows: 0, "opening")
-                    // Closing: each comes back on its own clock.
+                    // Closing: New note rides in with the trailing edge on
+                    // the glass's own spring; All notes and the status come
+                    // back on their own clocks.
                     let back = 1 - plan.closeGrow.value(at: t)
-                    let newNoteBack = visible(plan.comeBack.value(at: t - plan.newNoteReturns))
+                    XCTAssertEqual(plan.newNoteBack, plan.closeGrow, "\(feel): New note follows the trailing edge")
                     check(t, leading: back, trailing: back,
                           allAway: 1 - visible(plan.comeBack.value(at: t - plan.allNotesReturns)),
-                          rightAway: 1 - newNoteBack, statusShows: newNoteBack, "closing")
+                          rightAway: back,
+                          statusShows: visible(plan.comeBack.value(at: t - plan.statusReturns)), "closing")
                 }
             }
         }
@@ -915,6 +918,29 @@ final class NotesFormatControlsTests: XCTestCase {
         XCTAssertEqual(NoteFormatRowChannels.open,
                        NoteFormatRowChannels(leading: 1, trailing: 1, controls: 1, allNotes: 1, newNoteAndStatus: 1),
                        "open, the controls are fully drawn")
+    }
+
+    /// A leaving neighbour's glass narrows to the part still inside its
+    /// slot, on the side it travels toward, so it passes under the row's
+    /// edge instead of being drawn over the panel's margin (A32).
+    func testALeavingNeighboursGlassNarrowsUnderTheRowsEdge() {
+        let button = CGRect(origin: .zero, size: AtticControlSize.panelButton)
+        let radius = button.height / 2
+        for neighbour in [NoteFormatRowNeighbour.allNotes, .newNote] {
+            let rest = neighbour.reveal(at: 0)?.shape(cornerRadius: radius).path(in: button).boundingRect
+            XCTAssertEqual(rest?.width ?? 0, button.width, accuracy: 0.01, "\(neighbour): whole at rest")
+            let half = neighbour.reveal(at: 0.4)
+            let part = half?.shape(cornerRadius: radius).path(in: button).boundingRect ?? .zero
+            let travel = abs(neighbour.offset(at: 0.4))
+            XCTAssertEqual(part.width, button.width - travel, accuracy: 0.01)
+            // In the row, the part left stays inside the slot.
+            let shown = part.offsetBy(dx: neighbour.offset(at: 0.4), dy: 0)
+            XCTAssertGreaterThanOrEqual(shown.minX, button.minX - 0.01, "\(neighbour): nothing past the row's edge")
+            XCTAssertLessThanOrEqual(shown.maxX, button.maxX + 0.01, "\(neighbour): nothing past the row's edge")
+            let gone = neighbour.reveal(at: 1)?.shape(cornerRadius: radius).path(in: button)
+            XCTAssertEqual(gone?.isEmpty, true, "\(neighbour): nothing drawn once it has left")
+        }
+        XCTAssertNil(NoteFormatRowNeighbour.status.reveal(at: 0.5), "the status is plain text and only hides")
     }
 
     /// Animations: Reduced and Reduce Motion swap the rows at once; with

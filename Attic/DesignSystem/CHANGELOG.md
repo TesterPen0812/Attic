@@ -5,6 +5,17 @@ Every later change is recorded here: what changed, why, and who asked.
 
 ## Phase 2
 
+### A32: Aa's neighbours pass under the row's edges; the close no longer waits (2026-10-08)
+- **`atticControlReveal` / `AtticRevealedControlShape`**: a raised control
+  can draw only part of itself. A glass container ignores a clip set on its
+  members, so All notes and New note were drawn sliding out over the
+  panel's margin and then vanished at once. Their glass shape now narrows to
+  the part still inside the slot, so each passes under the row's edge.
+- Closing: the glass starts back after 0.4 of a leave (was 0.8, which held
+  a wide, empty glass for several frames in Calm). New note rides back in
+  with the glass's trailing edge on the same spring, keeping the 8 pt gap;
+  All notes and the status return on their own clocks as before.
+
 ### Aa neighbours slide into their sides (owner refinement, 2026-10-08)
 - All notes' stack travels left and New note travels right as Aa expands,
   on the same selected app spring. Their glass and glyphs clip at the row
