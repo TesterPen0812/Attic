@@ -300,6 +300,31 @@ final class NotesV2TablesFeatureTests: XCTestCase {
         XCTAssertEqual(attachment.table[P(row: 3, column: 1)].marks, [NoteMark(.link, offset: 0, length: 8, url: "https://example.com")])
     }
 
+    /// Whole cells selected: the bar holds the columns' alignment, B I U S,
+    /// highlight, and copy, cut and clear (spec § 4.3).
+    func testTheCellsBarAlignsCopiesCutsAndClears() throws {
+        let (engine, _) = makeEngine(blocks())
+        let attachment = try table(engine)
+        let view = try view(engine)
+        let router = NoteCommandRouter(engine: engine)
+        view.selectCells(NoteTableCellRange(anchor: P(row: 1, column: 0), head: P(row: 2, column: 1)))
+        let snapshot = NoteFormatSnapshot.make(router: router, selection: NSRange(location: 0, length: 0))
+        XCTAssertEqual(snapshot.cells, NoteCellSelectionState(alignment: .left))
+        XCTAssertEqual(NoteFormatBarItem.items(cells: true), [.align] + (NoteCommandCatalog.barMarks + [.mark(.highlight)]).map { .command($0) }
+                       + [.cellAction(.copy), .cellAction(.cut), .cellAction(.clear)])
+        XCTAssertTrue(router.alignCells(.center, from: .selectionBar))
+        XCTAssertEqual(attachment.table.columns.map(\.align), [.center, .center], "alignment applies to the selected columns")
+        let pasteboard = NSPasteboard(name: .init("cells-bar-\(UUID())"))
+        XCTAssertTrue(engine.perform(cellAction: .cut, pasteboard: pasteboard))
+        XCTAssertEqual(pasteboard.string(forType: NoteTablePaste.tsvType),
+                       "Confidentiality\tData taken from the IT network\nIntegrity\tSystems encrypted by ransomware")
+        XCTAssertEqual(attachment.table.rows[1].cells.map(\.text), ["", ""], "cut clears the cells")
+        XCTAssertEqual(attachment.table.rowCount, 4, "and keeps the grid")
+        XCTAssertTrue(engine.history.undo())
+        XCTAssertTrue(engine.perform(cellAction: .clear, pasteboard: pasteboard))
+        XCTAssertEqual(attachment.table.rows[2].cells.map(\.text), ["", ""])
+    }
+
     func testTheSelectionBarSitsOverTheCellsSelection() throws {
         let (engine, textView) = makeEngine(blocks())
         let view = try view(engine)

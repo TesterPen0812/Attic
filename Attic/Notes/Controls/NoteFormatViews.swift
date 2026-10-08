@@ -141,6 +141,42 @@ struct NoteFormatBarView: View {
     }
 
     private var bar: some View {
+        Group {
+            if let cells = model.snapshot.cells { cellsBar(cells) } else { textBar }
+        }
+    }
+
+    /// Over whole cells (spec § 4.3): the columns' alignment, B I U S,
+    /// highlight, then copy, cut and clear.
+    private func cellsBar(_ state: NoteCellSelectionState) -> some View {
+        let focus = model.barKeyboardIndex
+        let marks = NoteCommandCatalog.barMarks + [.mark(.highlight)]
+        let title = state.alignment?.title ?? String(localized: "Align")
+        return AtticFormatBarSurface {
+            AtticCommandMenu(commands: model.alignMenu(), accessibilityLabel: String(localized: "Alignment, \(title)")) {
+                AtticFormatStyleFace(title: title, isKeyboardFocused: focus == 0, isEnabled: true)
+            }
+            .help(String(localized: "Alignment"))
+            .accessibilityIdentifier("notes-format-bar-align")
+            AtticFormatGroup { toggles(marks, startingAt: 1) }
+            AtticFormatGroup {
+                ForEach(Array(NoteCellAction.allCases.enumerated()), id: \.offset) { offset, action in
+                    AtticFormatToggle(systemName: action.symbolName, value: .off, label: action.title,
+                                      help: action.shortcut.map { "\(action.title) \($0)" } ?? action.title,
+                                      width: AtticNoteFormatMetrics.barToggleWidth,
+                                      isKeyboardFocused: focus == 1 + marks.count + offset, announcesState: false) {
+                        model.runCells(action)
+                    }
+                    .accessibilityIdentifier("notes-format-bar-cells-\(action)")
+                }
+            }
+        }
+        .accessibilityElement(children: .contain)
+        .accessibilityLabel(String(localized: "Cells bar"))
+        .accessibilityIdentifier("notes-format-bar")
+    }
+
+    private var textBar: some View {
         let snapshot = model.snapshot
         let focus = model.barKeyboardIndex
         return AtticFormatBarSurface {

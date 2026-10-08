@@ -730,6 +730,13 @@ final class NoteTableCanvas: NSView {
         }
     }
 
+    override func menu(for event: NSEvent) -> NSMenu? {
+        guard let table, let engine = table.engine,
+              let cell = table.grid.position(at: convert(event.locationInWindow, from: nil), clamped: true) else { return nil }
+        let commands = engine.tableContextCommands(for: table, at: cell)
+        return commands.isEmpty ? nil : AtticNativeMenu.make(commands, title: String(localized: "Table"))
+    }
+
     // MARK: Keys with whole cells selected
 
     override func keyDown(with event: NSEvent) {

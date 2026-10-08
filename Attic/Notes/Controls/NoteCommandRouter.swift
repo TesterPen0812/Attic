@@ -47,7 +47,15 @@ final class NoteCommandRouter {
     /// Enabled and on/off/mixed for `command` at the current selection
     /// (the engine decides, including Link at a caret inside a link).
     func validation(_ command: NoteFormatCommand, selection: NSRange? = nil) -> NoteCommandValidation {
-        engine.validate(command, selection: selection ?? self.selection)
+        if engine.focusedTable != nil {
+            // In a table only the cell's marks apply (never the note's
+            // text behind it); Table shows as on.
+            if case let .mark(kind) = command, let state = engine.tableMarkState(kind) {
+                return NoteCommandValidation(enabled: true, state: state)
+            }
+            return NoteCommandValidation(enabled: false, state: command == .table ? .on : .off)
+        }
+        return engine.validate(command, selection: selection ?? self.selection)
     }
 
     /// Why most commands are dimmed right now, for VoiceOver
@@ -73,8 +81,10 @@ final class NoteCommandRouter {
             effective = .paragraph(.body)
         }
         onRun?(command, surface)
-        // In a table, marks go to the cell's text or the selected cells.
-        if let table = engine.focusedTable, case let .mark(kind) = command {
+        // In a table, marks go to the cell's text or the selected cells;
+        // nothing else reaches the note's text behind it.
+        if let table = engine.focusedTable {
+            guard case let .mark(kind) = command else { return false }
             let applied = kind == .link ? engine.requestCellLink(in: table) : engine.applyCellMark(kind, in: table)
             onChange?()
             return applied
@@ -90,6 +100,23 @@ final class NoteCommandRouter {
     func commitLink(_ url: String, target: NoteLinkTarget, from surface: NoteCommandSurface) -> Bool {
         onRun?(.link(url), surface)
         let applied = engine.commitLink(url, target: target)
+        onChange?()
+        return applied
+    }
+
+    /// The cells' bar: copy, cut or clear the selected cells.
+    @discardableResult
+    func runCells(_ action: NoteCellAction, from surface: NoteCommandSurface) -> Bool {
+        let applied = engine.perform(cellAction: action)
+        onChange?()
+        return applied
+    }
+
+    @discardableResult
+    func alignCells(_ alignment: NoteTable.Alignment, from surface: NoteCommandSurface) -> Bool {
+        guard let table = engine.focusedTable, let attachment = table.attachment,
+              let range = table.cellSelection ?? table.activeCell.map({ NoteTableCellRange(anchor: $0, head: $0) }) else { return false }
+        let applied = engine.setAlignment(alignment, of: attachment, columns: range.columns)
         onChange?()
         return applied
     }

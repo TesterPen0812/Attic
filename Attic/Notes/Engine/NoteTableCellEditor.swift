@@ -374,6 +374,20 @@ final class NoteTableCellEditor: NSTextView, NSTextViewDelegate {
         return resigned
     }
 
+    // MARK: Right-click
+
+    override func menu(for event: NSEvent) -> NSMenu? {
+        let menu = super.menu(for: event) ?? NSMenu()
+        guard let table, let engine = table.engine, let cell = table.activeCell else { return menu }
+        let commands = engine.tableContextCommands(for: table, at: cell)
+        guard !commands.isEmpty else { return menu }
+        let item = NSMenuItem(title: String(localized: "Table"), action: nil, keyEquivalent: "")
+        item.submenu = AtticNativeMenu.make(commands, title: String(localized: "Table"))
+        menu.insertItem(.separator(), at: 0)
+        menu.insertItem(item, at: 0)
+        return menu
+    }
+
     // MARK: Accessibility
 
     override func accessibilityParent() -> Any? {

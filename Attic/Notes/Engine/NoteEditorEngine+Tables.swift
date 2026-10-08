@@ -417,6 +417,64 @@ extension NoteEditorEngine {
         return applied
     }
 
+    /// Whole cells selected: the state the cells' bar shows.
+    func cellSelectionState() -> NoteCellSelectionState? {
+        guard let view = focusedTable, let range = view.cellSelection, let attachment = view.attachment else { return nil }
+        let aligns = Set(range.columns.compactMap { attachment.table.columns.indices.contains($0) ? attachment.table.columns[$0].align : nil })
+        return NoteCellSelectionState(alignment: aligns.count == 1 ? aligns.first : nil)
+    }
+
+    /// The cells' bar: copy, cut (clears, the grid stays) or clear.
+    @discardableResult
+    func perform(cellAction action: NoteCellAction, pasteboard: NSPasteboard = .general) -> Bool {
+        guard let view = focusedTable, let range = view.cellSelection else { return false }
+        switch action {
+        case .copy:
+            copyCells(in: view, range: range, to: pasteboard)
+        case .cut:
+            copyCells(in: view, range: range, to: pasteboard)
+            clearCells(in: view, range: range, name: String(localized: "Cut"))
+        case .clear:
+            clearCells(in: view, range: range)
+        }
+        _ = returnKeyboardToTable()
+        return true
+    }
+
+    /// A cell's right-click rows: the grips' and the row's actions, so
+    /// nothing depends on the hover-only controls.
+    func tableContextCommands(for view: NoteTableView, at cell: NoteTable.Position) -> [AtticMenuCommand] {
+        guard !isReadOnly, let attachment = view.attachment, attachment.table.contains(cell) else { return [] }
+        let table = attachment.table
+        return [
+            AtticMenuCommand("Add Row Above", systemImage: "arrow.up.to.line") { [weak self] in
+                self?.addRow(to: attachment, at: cell.row, focusing: cell.column)
+            },
+            AtticMenuCommand("Add Row Below", systemImage: "arrow.down.to.line") { [weak self] in
+                self?.addRow(to: attachment, at: cell.row + 1, focusing: cell.column)
+            },
+            AtticMenuCommand("Add Column Before", systemImage: "arrow.left.to.line", startsSection: true) { [weak self] in
+                self?.addColumn(to: attachment, at: cell.column, focusingRow: cell.row)
+            },
+            AtticMenuCommand("Add Column After", systemImage: "arrow.right.to.line") { [weak self] in
+                self?.addColumn(to: attachment, at: cell.column + 1, focusingRow: cell.row)
+            },
+            AtticMenuCommand("Delete Row", systemImage: "trash", isDisabled: table.rowCount < 2, startsSection: true) { [weak self] in
+                self?.deleteRow(of: attachment, at: cell.row)
+            },
+            AtticMenuCommand("Delete Column", systemImage: "trash", isDisabled: table.columnCount < 2) { [weak self] in
+                self?.deleteColumn(of: attachment, at: cell.column)
+            },
+            AtticMenuCommand("Header Row", startsSection: true, isChecked: table.headerRow) { [weak self] in
+                self?.toggleHeaderRow(attachment)
+            },
+            AtticMenuCommand("Copy as Markdown") { [weak self] in self?.copyTableAsMarkdown(attachment) },
+            AtticMenuCommand("Delete Table", systemImage: "trash", isDestructive: true) { [weak self] in
+                self?.deleteTable(attachment)
+            }
+        ]
+    }
+
     // MARK: Aa's row in a table
 
     func tableToolsState() -> NoteTableToolsState? {

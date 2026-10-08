@@ -10,6 +10,8 @@ struct NoteFormatSnapshot: Equatable {
     var disabledReason: String?
     /// The keyboard is in a table: Aa's row is the table's tools.
     var table: NoteTableToolsState?
+    /// Whole cells are selected: the selection bar is the cells' bar.
+    var cells: NoteCellSelectionState?
 
     static let empty = NoteFormatSnapshot()
 
@@ -35,7 +37,7 @@ struct NoteFormatSnapshot: Equatable {
                 }
             }
             return NoteFormatSnapshot(paragraph: nil, validations: validations, disabledReason: nil,
-                                      table: engine.tableToolsState())
+                                      table: engine.tableToolsState(), cells: engine.cellSelectionState())
         }
         let styles = (NoteCommandCatalog.styles + NoteCommandCatalog.lists).filter { validations[$0]?.state == .on }
         let paragraph: NoteParagraphStyle? = if case let .paragraph(style)? = styles.first { style } else { nil }
@@ -60,12 +62,73 @@ struct NoteFormatSnapshot: Equatable {
 }
 
 /// The bar's controls in keyboard order (← → move, Return or Space press).
+/// Over whole cells: the columns' alignment, B I U S, highlight, then
+/// copy, cut and clear (spec § 4.3).
 enum NoteFormatBarItem: Hashable {
     case style
     case command(NoteFormatCommand)
+    case align
+    case cellAction(NoteCellAction)
 
     static let all: [NoteFormatBarItem] = [.style]
         + (NoteCommandCatalog.barMarks + NoteCommandCatalog.barInline).map { .command($0) }
+    static let cells: [NoteFormatBarItem] = [.align]
+        + (NoteCommandCatalog.barMarks + [.mark(.highlight)]).map { .command($0) }
+        + NoteCellAction.allCases.map { .cellAction($0) }
+
+    static func items(cells: Bool) -> [NoteFormatBarItem] { cells ? Self.cells : all }
+}
+
+/// Whole cells selected: their columns' alignment (nil when mixed).
+struct NoteCellSelectionState: Equatable {
+    var alignment: NoteTable.Alignment?
+}
+
+/// What the cells' bar does to the selected cells.
+enum NoteCellAction: Hashable, CaseIterable {
+    case copy, cut, clear
+
+    var title: String {
+        switch self {
+        case .copy: String(localized: "Copy")
+        case .cut: String(localized: "Cut")
+        case .clear: String(localized: "Clear Cells")
+        }
+    }
+
+    var symbolName: String {
+        switch self {
+        case .copy: "doc.on.doc"
+        case .cut: "scissors"
+        case .clear: "eraser"
+        }
+    }
+
+    var shortcut: String? {
+        switch self {
+        case .copy: "⌘C"
+        case .cut: "⌘X"
+        case .clear: "⌫"
+        }
+    }
+}
+
+extension NoteTable.Alignment {
+    var title: String {
+        switch self {
+        case .left: String(localized: "Left")
+        case .center: String(localized: "Centre")
+        case .right: String(localized: "Right")
+        }
+    }
+
+    var symbolName: String {
+        switch self {
+        case .left: "text.alignleft"
+        case .center: "text.aligncenter"
+        case .right: "text.alignright"
+        }
+    }
 }
 
 /// The format row's controls in keyboard order (OD-14, p2-36 draft 1):
@@ -175,6 +238,20 @@ final class NoteFormatModel: ObservableObject {
     func setSnapshot(_ value: NoteFormatSnapshot) {
         if value != snapshot { snapshot = value }
         if value.table == nil, rowTableMenuOpen { rowTableMenuOpen = false }
+    }
+
+    func runCells(_ action: NoteCellAction) {
+        router?.runCells(action, from: .selectionBar)
+    }
+
+    /// The cells' bar's alignment menu (the current one checked).
+    func alignMenu() -> [AtticMenuCommand] {
+        NoteTable.Alignment.allCases.map { alignment in
+            AtticMenuCommand(verbatim: alignment.title, systemImage: alignment.symbolName,
+                             state: snapshot.cells?.alignment == alignment ? .on : nil) { [weak self] in
+                self?.router?.alignCells(alignment, from: .selectionBar)
+            }
+        }
     }
 
     func runTable(_ tool: NoteTableTool) {

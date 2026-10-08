@@ -5,6 +5,26 @@ Every later change is recorded here: what changed, why, and who asked.
 
 ## Phase 2
 
+### Notes v2, round 2: tables (owner, 2026-10-08, sheet 3 as drafted)
+- **`AtticNoteTableMetrics`**: cell padding 6 × 4 around the body's 14 / 21
+  lines (a one-line row is 29), columns 56–168 by content, a 0.5 pt grid
+  (1 pt under Increase Contrast) in a 10 pt card, a 16 pt fade at a cut
+  edge, a 3 pt indicator 2.5 under a wide table, the active cell's 1.5 pt
+  ring (radius 3), the 18 × 5 column grip, the 5 × 14 row grip 12 left of
+  the column, 14 pt "+" chips; every grip and chip keeps a 28 pt target.
+- **Colour tokens** (`AtticColorTokens`): `tableGrid` (the text's ink at
+  13 % Light, 18 % Dark, 30 % with Increase Contrast), `tableHeaderFill`
+  (3.5 % Light), `tableActiveRing` (a neutral 42 % ink, as the draft draws
+  it, not the accent), `tableSelectionFill` (= `tagFillSelected`),
+  `tableIndicator`, `tableGripFill`, `tableGripDot`, `tableAddFill`.
+- **Components**: `AtticNoteTableGripView`, `AtticNoteTableAddChipView`
+  and `AtticNoteTableIndicatorView` (AppKit, drawn from the tokens), and
+  `AtticTableToolGlyph` (Aa's row in a table: add or delete a row or
+  column, the draft's glyphs).
+- **Aa's row** (owner pick Q6): Table takes Quote's cell; Quote joins the
+  style list after Mono. In a table the row shows Table ⌄, the four tools
+  and ✕ in the same capsule.
+
 ### Notes v2, round 1: chrome B and text direction 5 (owner, 2026-10-08)
 - **Chrome B** (Notes and Tasks): `AtticControlSize.headerControl` 36 → 32
   (radius 13.5 by the 42 % rule) and `AtticStyle.chromeMinimumInset`

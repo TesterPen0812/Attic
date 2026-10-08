@@ -365,7 +365,10 @@ final class NoteFormatControls: NSObject {
     private var rowItems: [NoteFormatRowItem] { NoteFormatRowItem.items(inTable: formatModel.snapshot.table != nil) }
 
     private func showBar() {
-        barWidth = measuredBarWidth(styleName: NoteCommandCatalog.styleName(formatModel.snapshot.paragraph))
+        // The cells' bar is measured under its own key (its pill names the alignment).
+        let key = formatModel.snapshot.cells.map { "cells:" + ($0.alignment?.title ?? "Align") }
+            ?? NoteCommandCatalog.styleName(formatModel.snapshot.paragraph)
+        barWidth = measuredBarWidth(styleName: key)
         placeBar()
         barHost.isInteractive = true
         if barHost.isHidden { barHost.isHidden = false }
@@ -390,7 +393,7 @@ final class NoteFormatControls: NSObject {
         probe.barShown = true
         let host = NSHostingView(rootView: AnyView(NoteFormatBarView(model: probe).atticDesign(design)))
         let measured = host.fittingSize.width - AtticNoteFormatMetrics.shadowRoom * 2
-        let width = max(measured, Self.barWidth(styleName: styleName))
+        let width = styleName.hasPrefix("cells:") ? measured : max(measured, Self.barWidth(styleName: styleName))
         barWidths[styleName] = width
         return width
     }
@@ -643,14 +646,18 @@ final class NoteFormatControls: NSObject {
         formatModel.barKeyboardIndex = nil
     }
 
+    private var barItems: [NoteFormatBarItem] { NoteFormatBarItem.items(cells: formatModel.snapshot.cells != nil) }
+
     private func handleBarKey(_ event: NSEvent, flags: NSEvent.ModifierFlags) -> Bool {
         guard let index = formatModel.barKeyboardIndex else { return false }
-        let count = NoteFormatBarItem.all.count
+        let items = barItems
+        let count = items.count
+        guard index < count else { exitBarKeyboard(); return false }
         switch event.keyCode {
         case 123: formatModel.barKeyboardIndex = (index - 1 + count) % count
         case 124: formatModel.barKeyboardIndex = (index + 1) % count
         case 48: formatModel.barKeyboardIndex = flags.contains(.shift) ? (index - 1 + count) % count : (index + 1) % count
-        case 36, 76, 49: pressBarItem(NoteFormatBarItem.all[index]); return true
+        case 36, 76, 49: pressBarItem(items[index]); return true
         case 53: exitBarKeyboard(); return true
         default:
             exitBarKeyboard()
@@ -670,13 +677,26 @@ final class NoteFormatControls: NSObject {
         case let .command(command):
             guard formatModel.snapshot.isEnabled(command) else { NSSound.beep(); return }
             formatModel.run(command, from: .selectionBar)
+        case .align:
+            guard let textView else { return }
+            let anchor = barFrame
+            AtticNativeMenu.popUp(formatModel.alignMenu(),
+                                  below: NSRect(x: anchor.minX, y: anchor.minY, width: 80, height: anchor.height), in: textView)
+        case let .cellAction(action):
+            formatModel.runCells(action)
         }
     }
 
     private func announceBarItem() {
         guard let index = formatModel.barKeyboardIndex, let textView else { return }
         let text: String
-        switch NoteFormatBarItem.all[index] {
+        let items = barItems
+        guard index < items.count else { return }
+        switch items[index] {
+        case .align:
+            text = String(localized: "Alignment, \(formatModel.snapshot.cells?.alignment?.title ?? String(localized: "Mixed"))")
+        case let .cellAction(action):
+            text = action.title
         case .style:
             text = String(localized: "Style, \(NoteCommandCatalog.styleName(formatModel.snapshot.paragraph))")
         case let .command(command):
@@ -1160,7 +1180,7 @@ final class NoteFormatControls: NSObject {
     /// The note's text has the keyboard (the menu bar acts on it).
     var hasKeyboard: Bool {
         guard let textView else { return false }
-        return textView.window?.firstResponder === textView
+        return textView.window?.firstResponder === textView || keyboardInTable
     }
 
     // MARK: Test access
