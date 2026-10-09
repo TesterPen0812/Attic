@@ -1,0 +1,32 @@
+Phase X hunt 1: observed red reproductions before XCTExpectFailure declarations
+Base product: 1508b04757989dd2602c267bac951a934f6d9aee
+Source: .build/hunt1/confirm-red.log (2026-10-09 12:21 Europe/London)
+
+AtticTests/PhaseXHunt1ReproTests.swift:144: error: -[AtticTests.PhaseXHunt1ReproTests testH2_01MarkdownTableLiteralBreakTagSurvivesExportImport] : XCTAssertEqual failed: ("[["Header"], ["literal \n text"]]") is not equal to ("[["Header"], ["literal <br> text"]]")
+AtticTests/PhaseXHunt1ReproTests.swift:153: error: -[AtticTests.PhaseXHunt1ReproTests testH2_02MarkdownTableInlineMarksSurviveExportImport] : XCTAssertEqual failed: ("[["Header"], ["**bold** [link](https://example.com)"]]") is not equal to ("[["Header"], ["bold link"]]")
+AtticTests/PhaseXHunt1ReproTests.swift:154: error: -[AtticTests.PhaseXHunt1ReproTests testH2_02MarkdownTableInlineMarksSurviveExportImport] : XCTAssertEqual failed: ("[]") is not equal to ("[AtticUnitTestHost.NoteMark(kind: AtticUnitTestHost.NoteMark.Kind.bold, offset: 0, length: 4, url: nil), AtticUnitTestHost.NoteMark(kind: AtticUnitTestHost.NoteMark.Kind.link, offset: 5, length: 4, url: Optional("https://example.com"))]")
+AtticTests/PhaseXHunt1ReproTests.swift:169: error: -[AtticTests.PhaseXHunt1ReproTests testH2_03RestoreRejectsDivergentVersionReplicas] : failed - Divergent history replicas must refuse restore
+AtticTests/PhaseXHunt1ReproTests.swift:170: error: -[AtticTests.PhaseXHunt1ReproTests testH2_03RestoreRejectsDivergentVersionReplicas] : XCTAssertEqual failed: ("Optional(58 bytes)") is not equal to ("Optional(56 bytes)")
+AtticTests/PhaseXHunt1ReproTests.swift:182: error: -[AtticTests.PhaseXHunt1ReproTests testH2_04UndoRedoRestoresExactSelection] : XCTAssertEqual failed: ("{10, 0}") is not equal to ("{7, 3}")
+AtticTests/PhaseXHunt1ReproTests.swift:197: error: -[AtticTests.PhaseXHunt1ReproTests testH2_05MigrationRefusesCanonicallyEqualButByteDivergentReplicas] : failed - The migration gate must refuse byte-divergent legacy replicas
+AtticTests/PhaseXHunt1ReproTests.swift:209: error: -[AtticTests.PhaseXHunt1ReproTests testH2_05MigrationRefusesUnicodeSpellingChangeAfterVerification] : failed - A change of original UTF-16 spelling must invalidate the verified migration
+
+Expected-failure validation: .build/hunt1/expected-run2.log
+19 tests, zero unexpected failures, six expected-failure cases, eight expected assertions.
+PHASEX_GENERATED sequences=3000 steps=72000 seconds=6.971617937088013
+PHASEX_LIFETIME noteViewRetained=true stockTK2ViewRetained=true
+
+Strict-concurrency headless area validation: .build/hunt1/headless-area.log / headless-area.xcresult
+209 tests executed, three opt-in migration tests and one deferred CloudKit test skipped, zero unexpected failures; 15.18 seconds.
+
+Long-mode validation: .build/hunt1/long-sequences.log / long-sequences.xcresult
+PHASEX_GENERATED sequences=20000 steps=2400000 seconds=263.41323590278625
+One test, zero failures; TEST_RUNNER_ATTIC_PHASEX_LONG=1.
+
+Final exact UTF-16 oracle validation: .build/hunt1/final-utf16.log
+20 tests, zero unexpected failures, six expected-failure cases.
+PHASEX_GENERATED sequences=3000 steps=72000 seconds=6.765537977218628
+Final exact UTF-16 long oracle: .build/hunt1/final-long-utf16.log
+PHASEX_GENERATED sequences=20000 steps=2400000 seconds=469.3050539493561
+One test, zero failures.
+Closeout: g61-mfin EXIT 0 not present; S4 and S7 not audited.
