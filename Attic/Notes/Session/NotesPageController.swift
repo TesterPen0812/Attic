@@ -30,7 +30,7 @@ enum NotesEditorSetting {
 
 enum NoteStatusItem: Equatable {
     case onlyInMemory(String), notSaved(String), changedElsewhere, deletedElsewhere
-    case proposal(String), importing, notice(String), readOnly(String)
+    case proposal(String), deletionProposal(String), editedBy(String, Date), importing, notice(String), readOnly(String)
 
     var label: String {
         switch self {
@@ -39,6 +39,8 @@ enum NoteStatusItem: Equatable {
         case .changedElsewhere: String(localized: "Changed elsewhere")
         case .deletedElsewhere: String(localized: "Deleted elsewhere")
         case let .proposal(agent): "\(agent) has changes"
+        case let .deletionProposal(agent): "Deleted by \(agent)"
+        case let .editedBy(agent, date): "\(agent) edited \(date.formatted(date: .omitted, time: .shortened))"
         case .importing: String(localized: "Adding files")
         case let .notice(message): message
         case .readOnly: String(localized: "Read only")
@@ -51,8 +53,34 @@ enum NoteStatusItem: Equatable {
         case .changedElsewhere: String(localized: "This note changed outside this editor. Your text is kept in recovery.")
         case .deletedElsewhere: String(localized: "This note was deleted elsewhere. Your text is kept in recovery. Keep as new note to save it under a new ID.")
         case .proposal: String(localized: "An agent suggested changes to this note.")
+        case .deletionProposal: String(localized: "Deletion is waiting for your review. Your text is still here; Restore keeps this note, or Save as New Note keeps a separate copy.")
+        case .editedBy: String(localized: "This outside edit is saved. Undo stops at the outside edit; the previous text is kept in Version History.")
         case .importing: String(localized: "Files are still being added to this note.")
         }
+    }
+}
+
+/// Immutable comparison ticket: acceptance checks both store bytes and live text again.
+struct NoteProposalReview: Identifiable, Equatable {
+    let id: UUID
+    let sessionID: UUID
+    let noteID: UUID
+    let agent: String
+    let createdAt: Date
+    let isDeletion: Bool
+    let current: NoteDocument
+    let proposed: NoteDocument
+    let proposedPreview: NoteDocument
+    let revision: String
+    let savedContent: Data?
+    let signature: NoteProposalSignature
+    var proposalContent: Data? { signature.content }
+
+    var summary: String {
+        if isDeletion { return "The whole note would move to Recently Deleted." }
+        let changed = zip(current.blocks, proposed.blocks).filter { $0 != $1 }.count
+        let removed = max(0, current.blocks.count - proposed.blocks.count)
+        return "\(changed) blocks changed · \(removed) removed"
     }
 }
 
@@ -212,7 +240,9 @@ final class NotesPageController: ObservableObject {
     private let prepareDocument: @Sendable (NoteDocument) async -> PreparedNoteDocument?
     private var cache: [UUID: NoteSession] = [:]
     private var recency: [UUID] = []
-    private var proposalStatusCache: [UUID: (revision: UInt64, agent: String?)] = [:]
+    private var proposalStatusCache: [UUID: (revision: UInt64, agent: String?, deletionAgent: String?)] = [:]
+    @Published var proposalReview: NoteProposalReview?
+    @Published var proposalReviewNotice: String?
     private var verifiedAvailability: [UUID: (revision: UInt64, digest: String, available: Bool)] = [:]
     private var verifyingAvailability = Set<UUID>()
     private var resolvedAttachmentRows: [UUID: (revision: UInt64, row: NoteAttachment?)] = [:]
@@ -577,10 +607,11 @@ final class NotesPageController: ObservableObject {
     func proposalAgent(for session: NoteSession) -> String? {
         guard session.isPersisted else { return nil }
         if let cached = proposalStatusCache[session.noteID], cached.revision == store.revision { return cached.agent }
-        let agent = store.pendingEdits(noteID: session.noteID).first.map {
+        let edits = store.pendingEdits(noteID: session.noteID)
+        let agent = edits.first(where: { !$0.isDeletion }).map {
             $0.agentName.isEmpty ? String(localized: "Agent") : $0.agentName
         }
-        proposalStatusCache[session.noteID] = (store.revision, agent)
+        proposalStatusCache[session.noteID] = (store.revision, agent, edits.first(where: \.isDeletion).map { $0.agentName.isEmpty ? "Agent" : $0.agentName })
         return agent
     }
 
@@ -593,11 +624,168 @@ final class NotesPageController: ObservableObject {
         case .conflict(.deleted): items.append(.deletedElsewhere)
         default: break
         }
-        if let agent = proposalAgent(for: session) { items.append(.proposal(agent)) }
+        let agent = proposalAgent(for: session)
+        if let deletion = proposalStatusCache[session.noteID]?.deletionAgent { items.append(.deletionProposal(deletion)) }
+        if let agent { items.append(.proposal(agent)) }
         if session.isImporting { items.append(.importing) }
         if let notice = session.notice { items.append(.notice(notice)) }
         if let reason = session.readOnlyReason { items.append(.readOnly(reason.message)) }
+        if let note = store.note(withID: session.noteID), let editor = note.externalEditorName, let time = note.externalEditedAt {
+            items.append(.editedBy(editor, time))
+        }
         return items
+    }
+
+    var reviewProposals: [NotePendingEdit] {
+        guard let session = active else { return [] }
+        return store.pendingEdits(noteID: session.noteID)
+    }
+
+    @discardableResult
+    func beginProposalReview(id: UUID? = nil) async -> Bool {
+        guard await awaitRecoveryForUser(), let session = active, !session.isImporting,
+              canLeaveComposition(in: session) else { return false }
+        return await performAfterRecovery {
+            guard self.active === session, self.preserve(session),
+                  let edit = self.store.pendingEdits(noteID: session.noteID).first(where: { id == nil || $0.id == id }),
+                  let family = try? self.store.pendingEditRows(edit.id),
+                  NotePhysicalFamilyRetention.proposalEligible(family, noteIDs: [session.noteID]) else { return false }
+            family.forEach { $0.needsReview = true }
+            guard self.store.commitStagedChanges() else { return false }
+            self.captureViewState(session)
+            self.proposalReviewNotice = nil
+            return self.refreshProposalReview(id: edit.id, session: session)
+        }
+    }
+
+    private func refreshProposalReview(id: UUID, session: NoteSession) -> Bool {
+        guard let note = store.note(withID: session.noteID),
+              let edit = store.pendingEdits(noteID: session.noteID).first(where: { $0.id == id }),
+              let data = edit.proposedContent, let document = NoteContentCodec.decode(data).document else { return false }
+        // A clean editor can follow a fresh outside save; dirty/conflicted text stays owned by its draft.
+        if session.state == .clean, session.baseRevisionID != note.revisionID,
+           let saved = note.content.flatMap({ NoteContentCodec.decode($0).document }) {
+            session.replaceEngine(makeEngine(noteID: note.id, document: saved, readOnly: false, tags: note.tags))
+            session.baseRevisionID = note.revisionID
+            session.baseTags = note.tags
+            wire(session)
+        }
+        var preview = document
+        if !edit.isDeletion {
+            let missing = session.engine.document().blocks.filter { !document.blocks.contains($0) }
+            if !missing.isEmpty {
+                preview.blocks.append(.text("Not in proposal", style: "heading"))
+                preview.blocks += missing.map { block in
+                    var copy = block
+                    if copy.id != nil { copy.id = UUID() }
+                    return copy
+                }
+            }
+        }
+        proposalReview = NoteProposalReview(id: edit.id, sessionID: session.id, noteID: session.noteID,
+            agent: edit.agentName.isEmpty ? "Agent" : edit.agentName, createdAt: edit.createdAt, isDeletion: edit.isDeletion,
+            current: session.engine.document(), proposed: edit.isDeletion ? .blank : document, proposedPreview: preview,
+            revision: note.revisionToken, savedContent: note.content, signature: NoteProposalSignature(edit))
+        return true
+    }
+
+    func endProposalReview() {
+        proposalReview = nil
+        proposalReviewNotice = nil
+    }
+
+    @discardableResult
+    func acceptProposal() async -> Bool {
+        guard await awaitRecoveryForUser(), let review = proposalReview, let session = active,
+              session.id == review.sessionID, !session.isImporting,
+              canLeaveComposition(in: session) else { return false }
+        return await performAfterRecovery {
+            guard self.proposalReview == review, self.active === session else { return false }
+            guard let note = self.store.note(withID: review.noteID), note.revisionToken == review.revision,
+                  note.content == review.savedContent, session.engine.document() == review.current else {
+                _ = self.refreshProposalReview(id: review.id, session: session)
+                self.proposalReviewNotice = "The note changed. The comparison has refreshed; review it before replacing."
+                return false
+            }
+            guard !session.isConflict else {
+                self.proposalReviewNotice = "Your draft changed elsewhere. Save as New Note before replacing it."
+                return false
+            }
+            // The journal must retire while the note is still live. Async retirement
+            // refuses this attempt and requires a retry after its durable proof completes.
+            if review.isDeletion, !self.retireRecoveryCopy(noteID: review.noteID, session: session) {
+                self.proposalReviewNotice = "Recovery data is being preserved. Retry deletion when saving finishes."
+                return false
+            }
+            let outcome = self.store.replaceWithProposal(review.id, noteID: review.noteID,
+                expectedRevision: review.revision, expectedSavedContent: review.savedContent,
+                expectedProposal: review.signature, preserving: review.current)
+            switch outcome {
+            case let .failure(error):
+                self.proposalReviewNotice = error.localizedDescription
+                return false
+            case let .success(token):
+                self.endProposalReview()
+                if review.isDeletion {
+                    session.saveTask?.cancel(); session.durabilityTask?.cancel(); session.pauseTask?.cancel()
+                    self.cache[review.noteID] = nil
+                    session.engine.detachView()
+                    self.active = nil
+                    self.isLibraryPresented = true
+                } else {
+                    session.replaceEngine(self.makeEngine(noteID: review.noteID, document: review.proposed,
+                        readOnly: false, tags: session.engine.tags))
+                    session.baseRevisionID = UUID(uuidString: token)
+                    self.wire(session)
+                    self.didSave(session, staged: [])
+                }
+                return true
+            }
+        }
+    }
+
+    @discardableResult
+    func discardReviewedProposal() -> Bool {
+        guard let review = proposalReview, store.discardProposal(review.id, noteID: review.noteID) else {
+            proposalReviewNotice = store.lastErrorMessage ?? "The proposal could not be discarded."
+            return false
+        }
+        endProposalReview()
+        return true
+    }
+
+    @discardableResult
+    func saveReviewedProposalAsNew() async -> Bool {
+        guard await awaitRecoveryForUser(), let review = proposalReview, let session = active,
+              session.id == review.sessionID, !session.isImporting,
+              canLeaveComposition(in: session) else { return false }
+        if review.isDeletion, session.engine.document() != review.current {
+            _ = refreshProposalReview(id: review.id, session: session)
+            proposalReviewNotice = "Your text changed. Review the refreshed comparison before saving a copy."
+            return false
+        }
+        let document = review.isDeletion ? review.current : review.proposed
+        guard let stored = await performBoundedUserIO({ [self] in Array(await durableAttachmentsAsync(in: document).values) }),
+              proposalReview == review, active === session else { return false }
+        return await performAfterRecovery {
+            guard self.proposalReview == review, self.active === session,
+                  let rows = try? self.store.pendingEditRows(review.id),
+                  NotePhysicalFamilyRetention.proposalEligible(rows, noteIDs: [review.noteID]),
+                  rows.first.map(NoteProposalSignature.init) == review.signature,
+                  let (copy, bytes) = self.replacementForDeletedNote(document, oldID: review.noteID,
+                    staged: session.engine.stagedAttachments(for: document) + stored) else {
+                self.proposalReviewNotice = "The proposal or its files changed. Review it again."
+                return false
+            }
+            switch self.store.createDocumentNote(id: UUID(), document: copy, staged: bytes,
+                tags: session.engine.tags, resolvingProposal: review.id) {
+            case let .failure(error): self.proposalReviewNotice = error.localizedDescription; return false
+            case .success:
+                self.endProposalReview()
+                session.notice = "Saved as a new note."
+                return true
+            }
+        }
     }
 
     func conflictComparison(for session: NoteSession) -> (agent: String, current: String, proposed: String)? {
@@ -717,6 +905,12 @@ final class NotesPageController: ObservableObject {
         let engine = NoteEditorEngine(noteID: noteID, document: document, readOnly: readOnly, design: design,
                                       today: NoteDay(date: now()), imageProvider: self, stagedAttachments: staged,
                                       tags: tags)
+        if let editor = store.note(withID: noteID)?.externalEditorName {
+            engine.history.outsideEditBarrier = editor
+            engine.history.onOutsideEditBarrier = { [weak engine] editor in
+                engine?.onNotice?("Edited by \(editor): can't undo past this")
+            }
+        }
         return engine
     }
 
@@ -882,6 +1076,7 @@ final class NotesPageController: ObservableObject {
 
     private func agentDisposition(for noteID: UUID) -> NoteAgentWriteDisposition {
         if journal?.requiresAsyncIO == true && !didRecoverAtLaunch { return .refuse("Recovery is still being checked. Retry after it completes.") }
+        if legacyNoteID == noteID, isPageVisible, !isLibraryPresented { return .proposal }
         guard let session = cache[noteID] else { return .direct }
         let presence: NoteSessionPolicy.Presence = isPageVisible && !isLibraryPresented && active === session
             ? .onScreen : .background
@@ -911,6 +1106,7 @@ final class NotesPageController: ObservableObject {
             captureViewState(session)
             guard preserve(session, allowQueued: retainsSession) else { return false }
         }
+        endProposalReview()
         if let session = active {
             if session.isPersisted, !NoteSessionPolicy.hasPendingWork(session.state) {
                 store.recordVersion(noteID: session.noteID, reason: .leave)

@@ -1,3 +1,4 @@
+import SwiftData
 import Combine
 import Foundation
 import SwiftUI
@@ -57,6 +58,7 @@ final class NotesLibraryModel: ObservableObject {
     private var cache: (key: RowsKey, groups: [Group])?
     /// Each stored note's preview body, read from its document once per
     /// saved revision (a row rebuild decodes only the notes that changed).
+    private var proposalIDs: (revision: UInt64, ids: Set<UUID>)?
     private var bodies: [UUID: (revision: Int64, revisionID: UUID?, body: NoteRowSummary.Body)] = [:]
 
     private struct RowsKey: Equatable {
@@ -259,10 +261,15 @@ final class NotesLibraryModel: ObservableObject {
     private func row(_ note: NoteItem, store: NoteStore, attention: Set<UUID>) -> AtticNoteRowModel {
         let summary = NoteRowSummary(note: note, attachments: store.attachments(for: note.id), body: body(of: note))
         let time = Self.time(note.updatedAt, now: now(), calendar: calendar)
+        if proposalIDs?.revision != store.revision {
+            let edits = (try? store.modelContext.fetch(FetchDescriptor<NotePendingEdit>())) ?? []
+            proposalIDs = (store.revision, Set(edits.map(\.noteID)))
+        }
+        let hasProposal = proposalIDs?.ids.contains(note.id) == true
         return AtticNoteRowModel(
-            id: note.id, title: summary.title, time: time, needsAttention: attention.contains(note.id),
+            id: note.id, title: summary.title, time: time, needsAttention: attention.contains(note.id), hasProposal: hasProposal,
             preview: summary.preview, checklist: summary.checklist, images: summary.images, files: summary.files,
-            spoken: summary.spoken(time: time, needsAttention: attention.contains(note.id))
+            spoken: summary.spoken(time: time, needsAttention: attention.contains(note.id)) + (hasProposal ? ", proposal waiting" : "")
         )
     }
 

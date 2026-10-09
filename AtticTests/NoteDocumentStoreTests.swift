@@ -38,6 +38,83 @@ final class NoteDocumentStoreTests: XCTestCase {
 
     // MARK: Saves and replicas
 
+    func testS5ReviewedProposalNeverAppliesAutomatically() throws {
+        let (id, token) = try create(document("Current"))
+        guard case .success = store.agentWrite(noteID: id, baseRevisionToken: token.uuidString,
+            document: document("Proposed"), agentName: "Claude", disposition: .proposal) else { return XCTFail() }
+        let edit = try XCTUnwrap(store.pendingEdits(noteID: id).first)
+        edit.needsReview = true
+        try store.modelContext.save()
+        XCTAssertEqual(store.applyPendingEdits(noteID: id), 0)
+        XCTAssertEqual(store.note(withID: id)?.title, "Current")
+        XCTAssertEqual(store.pendingEdits(noteID: id).count, 1)
+    }
+
+    func testS5DeletionRejectsStaleRevisionAndDivergentPhysicalReplica() throws {
+        let (id, token) = try create(document("Keep me"))
+        guard case .failure(.staleRevision) = store.agentDelete(noteID: id, baseRevisionToken: "stale",
+            agentName: "Claude", disposition: .direct) else { return XCTFail() }
+        let copy = NoteItem(id: id, title: "Different text")
+        copy.contentFormat = 1; copy.content = try NoteContentCodec.encode(document("Different text"))
+        copy.revisionID = token
+        store.modelContext.insert(copy)
+        try store.modelContext.save()
+        guard case .failure(.saveFailed) = store.agentDelete(noteID: id, baseRevisionToken: token.uuidString,
+            agentName: "Claude", disposition: .direct) else { return XCTFail() }
+        XCTAssertTrue(try rows(id).allSatisfy { $0.deletedAt == nil })
+    }
+
+    func testS5DivergentDeletionProposalCannotResolveAnyPhysicalReplica() throws {
+        let (id, token) = try create(document("Keep me"))
+        guard case let .success(.pending(editID)) = store.agentDelete(noteID: id, baseRevisionToken: token.uuidString,
+            agentName: "Claude", disposition: .proposal) else { return XCTFail() }
+        let first = try XCTUnwrap(store.pendingEdits(noteID: id).first)
+        let divergent = NotePendingEdit(id: editID, noteID: id, baseRevisionToken: first.baseRevisionToken,
+            proposedContent: try XCTUnwrap(first.proposedContent), agentName: first.agentName,
+            createdAt: first.createdAt, baseVersionID: first.baseVersionID)
+        divergent.needsReview = first.needsReview
+        // Same bytes, different meaning. It must not delete either replica.
+        store.modelContext.insert(divergent)
+        try store.modelContext.save()
+        XCTAssertFalse(store.discardProposal(editID, noteID: id))
+        guard case .failure = store.replaceWithProposal(editID, noteID: id, expectedRevision: token.uuidString,
+            expectedSavedContent: store.note(withID: id)?.content, expectedProposal: NoteProposalSignature(first),
+            preserving: document("Keep me")) else { return XCTFail() }
+        XCTAssertEqual(try store.pendingEditRows(editID).count, 2)
+        XCTAssertNotNil(store.note(withID: id))
+    }
+
+    func testS5ChangedProposalMeaningRefusesReplacement() throws {
+        let (id, token) = try create(document("Keep me"))
+        guard case let .success(.pending(editID)) = store.agentWrite(noteID: id, baseRevisionToken: token.uuidString,
+            document: document("Proposed"), agentName: "Claude", disposition: .proposal) else { return XCTFail() }
+        let edit = try XCTUnwrap(store.pendingEdits(noteID: id).first)
+        let signature = NoteProposalSignature(edit)
+        edit.isDeletion = true
+        try store.modelContext.save()
+        guard case .failure = store.replaceWithProposal(editID, noteID: id, expectedRevision: token.uuidString,
+            expectedSavedContent: store.note(withID: id)?.content, expectedProposal: signature,
+            preserving: document("Keep me")) else { return XCTFail() }
+        XCTAssertEqual(store.note(withID: id)?.title, "Keep me")
+        XCTAssertEqual(store.pendingEdits(noteID: id).count, 1)
+    }
+
+    func testS5AttributionIsDurableAndAcknowledgementUpdatesEveryReplica() throws {
+        let (id, token) = try create(document("Current"))
+        guard case .success = store.agentWrite(noteID: id, baseRevisionToken: token.uuidString,
+            document: document("Outside"), agentName: "Claude", disposition: .direct) else { return XCTFail() }
+        let fresh = ModelContext(store.container)
+        let saved = try XCTUnwrap(fresh.fetch(FetchDescriptor<NoteItem>(predicate: #Predicate { $0.id == id })).first)
+        XCTAssertEqual(saved.externalEditorName, "Claude")
+        XCTAssertNotNil(saved.externalEditedAt)
+        let duplicate = NoteItem(id: id, title: saved.title)
+        duplicate.externalEditorName = "Claude"; duplicate.externalEditedAt = saved.externalEditedAt
+        store.modelContext.insert(duplicate)
+        try store.modelContext.save()
+        XCTAssertTrue(store.acknowledgeExternalEdit(noteID: id))
+        XCTAssertTrue(try rows(id).allSatisfy { $0.externalEditorName == nil && $0.externalEditedAt == nil })
+    }
+
     func testSaveWritesEveryFieldToEveryReplica() throws {
         let (id, revision) = try create(document("Plan", ["one"]))
         // A second physical row with the same id (a CloudKit duplicate).
@@ -942,6 +1019,28 @@ final class NoteDocumentStoreTests: XCTestCase {
         XCTAssertEqual(second.note(withID: id)?.title, "Base")
         XCTAssertEqual(second.versions(noteID: id).first(where: { $0.id == edit.baseVersionID })?.title, "Base")
         XCTAssertEqual(NoteContentCodec.decode(try XCTUnwrap(edit.proposedContent)).document?.title, "Proposal")
+    }
+
+    func testS5DeletionAndMultipleProposalsPersistAcrossRestart() throws {
+        let directory = ownedTemporaryDirectory(prefix: "AtticS5Proposals")
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        let container = try PersistenceController.makeContainer(inMemory: false, cloudSyncEnabled: false, storeDirectory: directory)
+        let first = trackAttachmentReconciliation(of: NoteStore(container: container, attachmentFileStore: makeTestAttachmentFileStore()))
+        guard case let .success((id, token)) = first.createDocumentNote(id: UUID(), document: document("Base")) else { return XCTFail() }
+        for agent in ["Claude", "Other editor"] {
+            guard case .success(.pending) = first.agentWrite(noteID: id, baseRevisionToken: token.uuidString,
+                document: document(agent), agentName: agent, disposition: .proposal) else { return XCTFail() }
+        }
+        guard case .success(.pending) = first.agentDelete(noteID: id, baseRevisionToken: token.uuidString,
+            agentName: "Claude", disposition: .proposal) else { return XCTFail() }
+        let reopenedContainer = try PersistenceController.makeContainer(inMemory: false, cloudSyncEnabled: false, storeDirectory: directory)
+        let second = trackAttachmentReconciliation(of: NoteStore(container: reopenedContainer, attachmentFileStore: makeTestAttachmentFileStore()))
+        let proposals = second.pendingEdits(noteID: id)
+        XCTAssertEqual(proposals.count, 3)
+        XCTAssertEqual(proposals.filter(\.isDeletion).count, 1)
+        XCTAssertTrue(proposals.filter(\.isDeletion).allSatisfy(\.needsReview))
+        XCTAssertEqual(Set(proposals.compactMap(\.baseVersionID)).count, 3)
+        XCTAssertEqual(second.note(withID: id)?.title, "Base")
     }
 
     func testFailedProposalApplyRetainsPendingEditAndBaseUntilRetry() throws {

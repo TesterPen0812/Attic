@@ -204,6 +204,7 @@ struct AtticNoteRowModel: Identifiable, Equatable {
     let time: String
     /// ⚠ not saved: the warning glyph beside the time.
     var needsAttention = false
+    var hasProposal = false
     let preview: String
     var checklist: (done: Int, total: Int)?
     var images = 0
@@ -213,7 +214,7 @@ struct AtticNoteRowModel: Identifiable, Equatable {
 
     static func == (lhs: Self, rhs: Self) -> Bool {
         lhs.id == rhs.id && lhs.title == rhs.title && lhs.time == rhs.time && lhs.needsAttention == rhs.needsAttention
-            && lhs.preview == rhs.preview && lhs.checklist?.done == rhs.checklist?.done
+            && lhs.hasProposal == rhs.hasProposal && lhs.preview == rhs.preview && lhs.checklist?.done == rhs.checklist?.done
             && lhs.checklist?.total == rhs.checklist?.total && lhs.images == rhs.images && lhs.files == rhs.files
     }
 }
@@ -309,6 +310,9 @@ struct AtticNoteRow: View {
                             if model.needsAttention {
                                 AtticIcon(systemName: "exclamationmark.circle", size: AtticErrorLineMetrics.iconSize,
                                           weight: .medium, ink: .warningText)
+                            } else if model.hasProposal {
+                                AtticIcon(systemName: "sparkle", size: AtticErrorLineMetrics.iconSize,
+                                          ink: .helper)
                             }
                             AtticText(verbatim: model.time, style: .noteRowMeta, ink: .helper)
                                 .opacity(hidesTime ? 0 : 1)

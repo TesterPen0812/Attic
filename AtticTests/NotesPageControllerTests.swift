@@ -49,6 +49,154 @@ final class NotesPageControllerTests: XCTestCase {
                                     byteCount: Int64(bytes.count), digest: digest, data: bytes)
     }
 
+    private func s5Fixture(_ document: NoteDocument) async throws -> (NotesPageController, NoteSession, UUID) {
+        let controller = makeController()
+        await controller.startAndWait()
+        guard case let .success((id, revision)) = store.createDocumentNote(id: UUID(), document: document) else {
+            throw NoteDocumentStoreError.saveFailed("fixture")
+        }
+        await XCTAssertTrueAsync(await controller.openDurably(noteID: id))
+        let session = try XCTUnwrap(controller.active)
+        var proposal = document
+        proposal.blocks[0] = .text("Claude proposal")
+        guard case let .success(.pending(editID)) = store.agentWrite(noteID: id,
+            baseRevisionToken: revision.uuidString, document: proposal,
+            agentName: "Claude", disposition: store.agentWriteDisposition(id)) else {
+            throw NoteDocumentStoreError.saveFailed("proposal fixture")
+        }
+        return (controller, session, editID)
+    }
+
+    func testS5TypingWhileAgentWritesStaysCurrentAndReviewedProposalSurvivesLeave() async throws {
+        let (controller, session, id) = try await s5Fixture(NoteDocument(blocks: [.text("My note")]))
+        type(" while Claude writes", into: session)
+        await XCTAssertTrueAsync(await controller.beginProposalReview(id: id))
+        XCTAssertEqual(controller.proposalReview?.current.title, "My note while Claude writes")
+        XCTAssertEqual(controller.proposalReview?.proposed.title, "Claude proposal")
+        controller.endProposalReview()
+        await XCTAssertTrueAsync(await controller.prepareToLeaveDurably(.quit))
+        XCTAssertEqual(store.note(withID: session.noteID)?.title, "My note while Claude writes")
+        XCTAssertEqual(store.pendingEdits(noteID: session.noteID).count, 1)
+    }
+
+    func testS5BackMeansDecideLaterEvenWhenCurrentIsUnchanged() async throws {
+        let (controller, session, id) = try await s5Fixture(NoteDocument(blocks: [.text("Unchanged")]))
+        await XCTAssertTrueAsync(await controller.beginProposalReview(id: id))
+        controller.endProposalReview()
+        await XCTAssertTrueAsync(await controller.prepareToLeaveDurably(.quit))
+        XCTAssertEqual(store.note(withID: session.noteID)?.title, "Unchanged")
+        XCTAssertEqual(store.pendingEdits(noteID: session.noteID).map(\.id), [id])
+        XCTAssertTrue(store.pendingEdits(noteID: session.noteID).allSatisfy(\.needsReview))
+    }
+
+    func testS5OnScreenLegacyEditsAndDeletionAlsoWaitAsProposals() async throws {
+        let note = try XCTUnwrap(store.create(title: "Legacy", body: "My text"))
+        let controller = makeController()
+        await controller.startAndWait()
+        await XCTAssertTrueAsync(await controller.openDurably(noteID: note.id))
+        XCTAssertEqual(controller.legacyNoteID, note.id)
+        XCTAssertEqual(store.agentWriteDisposition(note.id), .proposal)
+        guard case .success(.pending) = store.agentWrite(noteID: note.id, baseRevisionToken: note.revisionToken,
+            document: NoteDocument(blocks: [.text("Claude"), .text("Proposed text")]),
+            agentName: "Claude", disposition: store.agentWriteDisposition(note.id)) else { return XCTFail() }
+        guard case .success(.pending) = store.agentDelete(noteID: note.id, baseRevisionToken: note.revisionToken,
+            agentName: "Claude", disposition: store.agentWriteDisposition(note.id)) else { return XCTFail() }
+        XCTAssertEqual(store.note(withID: note.id)?.body, "My text")
+        XCTAssertEqual(store.note(withID: note.id)?.contentFormat, 0)
+        XCTAssertEqual(store.pendingEdits(noteID: note.id).count, 2)
+    }
+
+    func testS5AcceptanceAfterAnotherEditRefreshesBeforeReplacing() async throws {
+        let (controller, session, id) = try await s5Fixture(NoteDocument(blocks: [.text("Current")]))
+        await XCTAssertTrueAsync(await controller.beginProposalReview(id: id))
+        guard case .success = store.saveDocument(noteID: session.noteID,
+            document: NoteDocument(blocks: [.text("Another saved edit")]), baseRevisionID: session.baseRevisionID) else { return XCTFail() }
+        await XCTAssertFalseAsync(await controller.acceptProposal())
+        XCTAssertEqual(store.note(withID: session.noteID)?.title, "Another saved edit")
+        XCTAssertEqual(controller.proposalReview?.current.title, "Another saved edit")
+        XCTAssertNotNil(controller.proposalReviewNotice)
+        await XCTAssertTrueAsync(await controller.acceptProposal())
+        XCTAssertEqual(store.note(withID: session.noteID)?.title, "Claude proposal")
+        XCTAssertEqual(store.pendingEdits(noteID: session.noteID).count, 0)
+        XCTAssertEqual(store.note(withID: session.noteID)?.externalEditorName, "Claude")
+        let (_, textView) = session.engine.makeView()
+        let undoItem = NSMenuItem(title: "Undo", action: #selector(NoteEditorTextView.undo(_:)), keyEquivalent: "z")
+        XCTAssertTrue(textView.validateUserInterfaceItem(undoItem), "the barrier must be reachable by the real Undo command")
+        textView.undo(nil)
+        XCTAssertTrue(session.notice?.contains("can't undo past this") == true)
+    }
+
+    func testS5LiveEditAfterOpeningReviewRefreshesAndIsPreservedAsVersion() async throws {
+        let (controller, session, id) = try await s5Fixture(NoteDocument(blocks: [.text("Current")]))
+        await XCTAssertTrueAsync(await controller.beginProposalReview(id: id))
+        type(" live edit", into: session)
+        await XCTAssertFalseAsync(await controller.acceptProposal())
+        XCTAssertEqual(controller.proposalReview?.current.title, "Current live edit")
+        await XCTAssertTrueAsync(await controller.acceptProposal())
+        XCTAssertTrue(store.versions(noteID: session.noteID).contains { $0.title == "Current live edit" })
+    }
+
+    func testS5FailedReplaceStaysInReviewAndRetainsProposal() async throws {
+        let (controller, session, id) = try await s5Fixture(NoteDocument(blocks: [.text("Current")]))
+        await XCTAssertTrueAsync(await controller.beginProposalReview(id: id))
+        let priorVersions = store.versions(noteID: session.noteID).count
+        gate.shouldFail = true
+        await XCTAssertFalseAsync(await controller.acceptProposal())
+        XCTAssertNotNil(controller.proposalReview)
+        XCTAssertNotNil(controller.proposalReviewNotice)
+        XCTAssertEqual(store.note(withID: session.noteID)?.title, "Current")
+        XCTAssertEqual(store.pendingEdits(noteID: session.noteID).count, 1)
+        XCTAssertEqual(store.versions(noteID: session.noteID).count, priorVersions)
+        gate.shouldFail = false
+        await XCTAssertTrueAsync(await controller.acceptProposal())
+    }
+
+    func testS5SaveAsNewKeepsOriginalOtherProposalsTablesAndMono() async throws {
+        var original = NoteDocument(blocks: [.text("Current"), .text("monospaced", style: "mono"),
+                                            .table(NoteTable(texts: [["A", "B"], ["C", "D"]]))])
+        original.refreshRequiredCapabilities()
+        let (controller, session, first) = try await s5Fixture(original)
+        guard case let .success(.pending(second)) = store.agentWrite(noteID: session.noteID,
+            baseRevisionToken: try XCTUnwrap(store.note(withID: session.noteID)).revisionToken,
+            document: original, agentName: "Other editor", disposition: .proposal) else { return XCTFail() }
+        await XCTAssertTrueAsync(await controller.beginProposalReview(id: second))
+        XCTAssertEqual(controller.proposalReview?.proposed, original)
+        gate.shouldFail = true
+        await XCTAssertFalseAsync(await controller.saveReviewedProposalAsNew())
+        XCTAssertEqual(store.notes.count, 1)
+        XCTAssertEqual(store.pendingEdits(noteID: session.noteID).count, 2)
+        gate.shouldFail = false
+        await XCTAssertTrueAsync(await controller.saveReviewedProposalAsNew())
+        XCTAssertEqual(store.notes.count, 2)
+        XCTAssertEqual(store.loadDocument(noteID: session.noteID)?.content.document, original)
+        let copy = try XCTUnwrap(store.notes.first { $0.id != session.noteID })
+        XCTAssertEqual(store.loadDocument(noteID: copy.id)?.content.document, original)
+        XCTAssertEqual(store.pendingEdits(noteID: session.noteID).map(\.id), [first])
+    }
+
+    func testS5DeletionStatusRestoreAndAcceptanceRacePreserveTyping() async throws {
+        let (controller, session, _) = try await s5Fixture(NoteDocument(blocks: [.text("My text")]))
+        type(" unsaved", into: session)
+        let note = try XCTUnwrap(store.note(withID: session.noteID))
+        guard case let .success(.pending(deletion)) = store.agentDelete(noteID: note.id,
+            baseRevisionToken: note.revisionToken, agentName: "Claude", disposition: .proposal) else { return XCTFail() }
+        XCTAssertEqual(controller.statusItems(for: session).first, .deletionProposal("Claude"))
+        await XCTAssertTrueAsync(await controller.beginProposalReview(id: deletion))
+        XCTAssertTrue(controller.proposalReview?.isDeletion == true)
+        XCTAssertEqual(controller.proposalReview?.current.title, "My text unsaved")
+        XCTAssertTrue(controller.discardReviewedProposal())
+        XCTAssertNotNil(store.note(withID: session.noteID))
+        XCTAssertEqual(store.pendingEdits(noteID: session.noteID).count, 1)
+        guard case let .success(.pending(again)) = store.agentDelete(noteID: note.id,
+            baseRevisionToken: try XCTUnwrap(store.note(withID: note.id)).revisionToken, agentName: "Claude", disposition: .proposal) else { return XCTFail() }
+        await XCTAssertTrueAsync(await controller.beginProposalReview(id: again))
+        type(" newer", into: session)
+        await XCTAssertFalseAsync(await controller.acceptProposal())
+        XCTAssertNotNil(store.note(withID: session.noteID))
+        await XCTAssertTrueAsync(await controller.saveReviewedProposalAsNew())
+        XCTAssertTrue(store.notes.contains { $0.id != session.noteID && $0.title == "My text unsaved newer" })
+    }
+
     func testANewDraftIsSavedOnlyOnceItHasContent() async throws {
         let controller = makeController()
         await controller.startAndWait()
