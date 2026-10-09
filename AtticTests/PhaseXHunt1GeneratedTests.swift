@@ -318,7 +318,6 @@ final class PhaseXHunt1GeneratedTests: XCTestCase {
     }
 
     func testHunt2GeneratedMarkdownCellLiteralsAndMarksRoundTrip() throws {
-        XCTExpectFailure("H4-03")
         let tokens = ["plain", " ", "  ", "\t", "|", "\\", "*", "_", "<br>", "&lt;br&gt;", "😀", "e\u{301}", "\n", "[x](y)", "`", "=="]
         for seed in 0..<256 {
             var rng = RNG(value: UInt64(seed) + 0xCA11)
@@ -335,7 +334,6 @@ final class PhaseXHunt1GeneratedTests: XCTestCase {
     }
 
     func testH4_03MarkdownTableEdgeWhitespaceSurvivesEveryExporter() throws {
-        XCTExpectFailure("H4-03")
         for text in [" a ", "\t", "  ", "\ta\t", "\u{00a0}a\u{00a0}", " \n ", " \u{2003}x\t"] {
             let table = NoteTable(texts: [["Header"], [text]])
             let document = NoteDocument(blocks: [.table(table)])
