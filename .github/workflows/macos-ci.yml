@@ -153,7 +153,10 @@ jobs:
       - name: Run macOS unit tests
         id: unit_tests
         continue-on-error: true
-        timeout-minutes: 20
+        # Includes compiling the fresh host. The expanded Phase 2 suite
+        # reached 2,382 passing cases before the old 20-minute watchdog.
+        # Keep it bounded without changing test or performance assertions.
+        timeout-minutes: 25
         env:
           # The runner has no person at it: unit tests may make a window key
           # and let AppKit resolve targetless menu actions for real.
