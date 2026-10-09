@@ -101,7 +101,7 @@ struct NotesEditorPage: View {
         max(0, layout.chromeInsets.bottom + buttonHeight + AtticSpacing.s8 - layout.contentInsets.bottom)
     }
 
-    var body: some View {
+    private var pageContent: some View {
         ZStack(alignment: .bottom) {
             content
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -131,6 +131,10 @@ struct NotesEditorPage: View {
         .onChange(of: controller.active?.id) { _, id in
             if id != nil { hasShownNote = true }
         }
+    }
+
+    var body: some View {
+        pageContent
         .onAppear {
             hasShownNote = controller.active != nil
             controller.update(design: design)
