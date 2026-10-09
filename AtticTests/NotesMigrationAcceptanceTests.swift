@@ -467,10 +467,14 @@ final class NotesMigrationAcceptanceTests: XCTestCase {
 
     /// Only the opt-in script creates this request. Ordinary CI skips this test.
     func testOwnerApprovedCopiedStoreDryRun() throws {
+        guard let runnerID = ProcessInfo.processInfo.environment["ATTIC_S6_DRY_RUN_ID"] else {
+            throw XCTSkip("This runner has no approved dry-run request")
+        }
         let repo = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
         let requestURL = repo.appendingPathComponent(".build/migration-dry-run-request.json")
         guard FileManager.default.fileExists(atPath: requestURL.path) else { throw XCTSkip("No explicitly approved copy supplied") }
         let request = try JSONDecoder().decode([String: String].self, from: Data(contentsOf: requestURL))
+        guard request["requestID"] == runnerID else { throw XCTSkip("Request belongs to another runner") }
         let copy = URL(fileURLWithPath: try XCTUnwrap(request["copy"]))
         let temp = FileManager.default.temporaryDirectory.resolvingSymlinksInPath().path + "/"
         XCTAssertTrue(copy.resolvingSymlinksInPath().path.hasPrefix(temp), "Only the script's temporary copy is allowed")

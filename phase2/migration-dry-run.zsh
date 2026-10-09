@@ -43,14 +43,15 @@ print -- "Report directory: $out"
 # Hash the staged source, make a writable copy, and fingerprint all legacy
 # physical rows. Only the copy is ever opened by SQLite or the app stack.
 python3 "$repo/phase2/migration_copy.py" prepare "$source_dir" "$store_name" "$out" "$mode" "$repo"
-python3 - "$request" "$out" "$store_name" <<'PY'
+request_id=$(uuidgen)
+python3 - "$request" "$out" "$store_name" "$request_id" <<'PY'
 import json, pathlib, sys
-pathlib.Path(sys.argv[1]).write_text(json.dumps({'copy': str(pathlib.Path(sys.argv[2]) / 'copy' / sys.argv[3]), 'report': str(pathlib.Path(sys.argv[2]) / 'migration-report.json')}))
+pathlib.Path(sys.argv[1]).write_text(json.dumps({'copy': str(pathlib.Path(sys.argv[2]) / 'copy' / sys.argv[3]), 'report': str(pathlib.Path(sys.argv[2]) / 'migration-report.json'), 'requestID': sys.argv[4]}))
 PY
 wrapper=/Users/taha/Developer/attic-redesign-assets/xcodebuild-locked.sh
 # The isolated unit-test host is used, never Attic S6 or the owner's app.
 result=0
-OS_ACTIVITY_MODE=disable "$wrapper" -project "$repo/Attic.xcodeproj" -scheme Attic -configuration Local \
+TEST_RUNNER_ATTIC_S6_DRY_RUN_ID="$request_id" OS_ACTIVITY_MODE=disable "$wrapper" -project "$repo/Attic.xcodeproj" -scheme Attic -configuration Local \
   -destination 'platform=macOS' -derivedDataPath "$repo/.build/dd" \
   -only-testing:AtticTests/NotesMigrationAcceptanceTests/testOwnerApprovedCopiedStoreDryRun \
   CODE_SIGNING_ALLOWED=NO test 2>&1 \
