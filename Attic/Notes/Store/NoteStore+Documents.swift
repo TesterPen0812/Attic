@@ -971,7 +971,14 @@ extension NoteStore {
         // member may be ambiguous, unreadable or owned by another note.
         guard NotePhysicalFamilyRetention.versionEligible(family, noteIDs: [noteID],
             proposalBases: [], recoveryBases: []) else {
-            return .failure(.invalidDocument("This saved version has conflicting or unreadable copies and cannot be restored safely."))
+            let unreadable = family.contains { row in
+                row.reason == nil || !((row.contentFormat == 0 && row.content == nil)
+                    || (row.contentFormat == NoteDocument.currentFormat
+                        && row.content.map { NoteContentCodec.decode($0).isEditable } == true))
+            }
+            return .failure(.invalidDocument(unreadable
+                ? "This saved version can't be read by this version of Attic."
+                : "This saved version has conflicting copies and cannot be restored safely."))
         }
         let timestamp = currentDate
         let context = modelContext
