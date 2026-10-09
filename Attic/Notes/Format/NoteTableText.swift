@@ -15,7 +15,7 @@ enum NoteTableText {
     /// line break in a cell becomes `<br>`, and the alignment row reads
     /// `---`, `:---:` or `---:`. With the header row off, the first row is
     /// still GFM's header and a comment line before the table says so.
-    static func markdown(_ table: NoteTable, cellText: (NoteTable.Cell) -> String = { $0.displayText }) -> String {
+    static func markdown(_ table: NoteTable, cellText: (NoteTable.Cell) -> String = { NoteMarkdownExport.escapeInlineText($0.displayText) }) -> String {
         guard table.isRectangular else { return "" }
         var lines: [String] = []
         if !table.headerRow { lines.append(headerOffComment) }
@@ -34,29 +34,38 @@ enum NoteTableText {
     }
 
     static func escape(_ text: String) -> String {
-        text.replacingOccurrences(of: "\\", with: "\\\\")
-            .replacingOccurrences(of: "|", with: "\\|")
+        text.replacingOccurrences(of: "|", with: "\\|")
             .replacingOccurrences(of: "\r\n", with: "<br>")
             .replacingOccurrences(of: "\n", with: "<br>")
     }
 
-    static func unescape(_ text: String) -> String {
+    /// Plain agent cell text has no inline parser: quote HTML and literal
+    /// backslashes once before the table's pipe/newline escaping.
+    static func plainCellMarkdown(_ text: String) -> String {
+        text.replacingOccurrences(of: "&", with: "&amp;")
+            .replacingOccurrences(of: "<", with: "&lt;")
+            .replacingOccurrences(of: ">", with: "&gt;")
+            .replacingOccurrences(of: "\\", with: "\\\\")
+    }
+
+    static func unescape(_ text: String, decodeHTML: Bool = true) -> String {
         var result = ""
         var iterator = text.makeIterator()
         while let character = iterator.next() {
             if character == "\\", let next = iterator.next() {
-                if next == "|" || next == "\\" { result.append(next) } else { result.append(character); result.append(next) }
+                if next == "|" || (decodeHTML && next == "\\") { result.append(next) } else { result.append(character); result.append(next) }
             } else {
                 result.append(character)
             }
         }
-        return result.replacingOccurrences(of: "<br>", with: "\n")
+        let breaks = result.replacingOccurrences(of: "<br>", with: "\n")
             .replacingOccurrences(of: "<br/>", with: "\n")
             .replacingOccurrences(of: "<br />", with: "\n")
+        return decodeHTML ? decodeEntities(breaks) : breaks
     }
 
     /// The cells of one pipe-table line, or nil when it is not one.
-    static func pipeCells(_ line: String) -> [String]? {
+    static func pipeCells(_ line: String, decodeHTML: Bool = true) -> [String]? {
         let trimmed = line.trimmingCharacters(in: .whitespaces)
         guard trimmed.contains("|") else { return nil }
         var cells: [String] = []
@@ -82,7 +91,7 @@ enum NoteTableText {
         if trimmed.hasPrefix("|") { cells.removeFirst() }
         if trimmed.hasSuffix("|"), !trimmed.hasSuffix("\\|"), !cells.isEmpty { cells.removeLast() }
         guard !cells.isEmpty else { return nil }
-        return cells.map { unescape($0.trimmingCharacters(in: .whitespaces)) }
+        return cells.map { unescape($0.trimmingCharacters(in: .whitespaces), decodeHTML: decodeHTML) }
     }
 
     /// The alignments of a GFM delimiter row (`| --- | :-: |`), or nil.
@@ -110,17 +119,104 @@ enum NoteTableText {
             if let raw = comment["id"], let value = UUID(uuidString: raw) { id = value }
             index += 1
         }
-        guard index + 1 < lines.count, let header = pipeCells(lines[index]),
+        guard index + 1 < lines.count, let header = pipeCells(lines[index], decodeHTML: false),
               let alignments = delimiterAlignments(lines[index + 1]), alignments.count == header.count else { return nil }
         var rows = [header]
         var end = index + 2
-        while end < lines.count, let cells = pipeCells(lines[end]) {
+        while end < lines.count, let cells = pipeCells(lines[end], decodeHTML: false) {
             rows.append(cells)
             end += 1
         }
         let width = header.count
         let rectangular = rows.map { row in Array((row + Array(repeating: "", count: max(0, width - row.count))).prefix(width)) }
-        return (NoteTable(texts: rectangular, headerRow: !headerOff, alignments: alignments), end, id, headerOff)
+        var table = NoteTable(texts: rectangular, headerRow: !headerOff, alignments: alignments)
+        for row in table.rows.indices {
+            table.rows[row].cells = rectangular[row].map(inlineCell)
+        }
+        return (table, end, id, headerOff)
+    }
+
+    /// The inline syntax emitted by Copy as Markdown, with UTF-16 mark
+    /// offsets. Parse before decoding entities so escaped literals stay prose.
+    static func inlineCell(_ markdown: String) -> NoteTable.Cell {
+        let input = Array(markdown)
+        let delimiters: [(String, String, NoteMark.Kind)] = [
+            ("**", "**", .bold), ("*", "*", .italic), ("~~", "~~", .strikethrough),
+            ("`", "`", .code), ("==", "==", .highlight), ("<u>", "</u>", .underline)
+        ]
+        var remainingWork = max(1, input.count) * 16
+        func matches(_ token: String, at index: Int) -> Bool {
+            let chars = Array(token)
+            return index + chars.count <= input.count && Array(input[index..<(index + chars.count)]) == chars
+        }
+        func parse(from start: Int, until end: String? = nil, depth: Int = 0) -> (cell: NoteTable.Cell, next: Int, closed: Bool) {
+            var cell = NoteTable.Cell(), index = start, literal = ""
+            func flush() { cell.text += decodeEntities(literal); literal = "" }
+            func append(_ inner: NoteTable.Cell, kind: NoteMark.Kind, url: String? = nil) {
+                flush()
+                let offset = cell.text.utf16.count
+                cell.text += inner.text
+                cell.marks += inner.marks.map { NoteMark($0.kind, offset: offset + $0.offset, length: $0.length, url: $0.url) }
+                if !inner.text.isEmpty { cell.marks.append(NoteMark(kind, offset: offset, length: inner.text.utf16.count, url: url)) }
+            }
+            while index < input.count {
+                // Malformed external input must not cause recursive rescans
+                // to block paste. Exhaustion leaves the remaining text literal.
+                guard remainingWork > 0 else {
+                    literal += String(input[index...]); flush()
+                    return (cell, input.count, end == nil)
+                }
+                remainingWork -= 1
+                if input[index] == "\\", index + 1 < input.count {
+                    literal.append(input[index + 1]); index += 2; continue
+                }
+                if let end, matches(end, at: index) {
+                    flush(); return (cell, index + end.count, true)
+                }
+                if depth < 32, input[index] == "[" {
+                    let label = parse(from: index + 1, until: "]", depth: depth + 1)
+                    if label.closed, matches("(", at: label.next) {
+                        var cursor = label.next + 1, nesting = 1, url = ""
+                        while cursor < input.count {
+                            let character = input[cursor]
+                            if character == "\\", cursor + 1 < input.count {
+                                url.append(input[cursor + 1]); cursor += 2; continue
+                            }
+                            if character == "(" { nesting += 1 }
+                            if character == ")" { nesting -= 1; if nesting == 0 { break } }
+                            url.append(character); cursor += 1
+                        }
+                        if nesting == 0 {
+                            append(label.cell, kind: .link, url: decodeEntities(url))
+                            index = cursor + 1; continue
+                        }
+                    }
+                }
+                var consumed = false
+                if depth < 32 {
+                    for (open, close, kind) in delimiters where matches(open, at: index) {
+                        let inner = parse(from: index + open.count, until: close, depth: depth + 1)
+                        if inner.closed, !inner.cell.text.isEmpty {
+                            append(inner.cell, kind: kind); index = inner.next; consumed = true; break
+                        }
+                    }
+                }
+                if !consumed { literal.append(input[index]); index += 1 }
+            }
+            flush(); return (cell, index, end == nil)
+        }
+        var cell = parse(from: 0).cell
+        cell.marks.sort { $0.kind.rawValue != $1.kind.rawValue ? $0.kind.rawValue < $1.kind.rawValue : $0.offset < $1.offset }
+        // Export splits marks at overlap boundaries; join their adjacent runs.
+        var merged: [NoteMark] = []
+        for mark in cell.marks {
+            if let last = merged.last, last.kind == mark.kind, last.url == mark.url,
+               last.offset + last.length == mark.offset {
+                merged[merged.count - 1] = NoteMark(last.kind, offset: last.offset, length: last.length + mark.length, url: last.url)
+            } else { merged.append(mark) }
+        }
+        cell.marks = merged
+        return cell
     }
 
     /// The whole text is one pipe table (a paste, Markdown's `| a | b |`).
@@ -269,7 +365,7 @@ enum NoteTableText {
 
     static func decodeEntities(_ text: String) -> String {
         guard text.contains("&") else { return text }
-        let named = ["&nbsp;": " ", "&amp;": "&", "&lt;": "<", "&gt;": ">", "&quot;": "\"", "&#39;": "'", "&apos;": "'"]
+        let named = [("&nbsp;", " "), ("&lt;", "<"), ("&gt;", ">"), ("&quot;", "\""), ("&#39;", "'"), ("&apos;", "'")]
         var result = text
         for (entity, value) in named { result = result.replacingOccurrences(of: entity, with: value) }
         // Numeric references.
@@ -278,6 +374,6 @@ enum NoteTableText {
             let value = body.hasPrefix("x") ? UInt32(body.dropFirst(), radix: 16) : UInt32(body)
             result.replaceSubrange(range, with: value.flatMap(UnicodeScalar.init).map { String(Character($0)) } ?? "")
         }
-        return result
+        return result.replacingOccurrences(of: "&amp;", with: "&")
     }
 }

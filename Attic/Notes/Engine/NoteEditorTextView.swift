@@ -343,6 +343,8 @@ final class NoteEditorTextView: NSTextView, NSAccessibilityCustomRotorItemSearch
     }
 
     override func insertText(_ string: Any, replacementRange: NSRange) {
+        let generation = engine?.history.recordingGeneration
+        defer { engine?.history.completeSelection(since: generation) }
         guard let engine, !engine.isWritingToolsSessionActive else {
             return super.insertText(string, replacementRange: replacementRange)
         }

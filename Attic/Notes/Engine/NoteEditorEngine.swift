@@ -206,7 +206,10 @@ final class NoteEditorEngine: NSObject, NSTextViewDelegate, NSTextStorageDelegat
     /// so only Return carries inline marks onto the next line.
     private var newlineEditInFlight = false
     private func clearNewlineEditIfIdle() {
-        if userEditDepth == 0 && engineEditDepth == 0 { newlineEditInFlight = false }
+        if userEditDepth == 0 && engineEditDepth == 0 {
+            newlineEditInFlight = false
+            history.completeSelection()
+        }
     }
     private(set) var isWritingToolsSessionActive = false
     private(set) var writingToolsBeganInView = false

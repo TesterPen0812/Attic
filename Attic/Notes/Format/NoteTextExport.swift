@@ -77,7 +77,7 @@ enum NoteTextExport {
         token += " -->"
         var visible = table
         visible.headerRow = true
-        let grid = NoteTableText.markdown(visible) { cell in agentInlineText(cell.block) }
+        let grid = NoteTableText.markdown(visible) { cell in NoteTableText.plainCellMarkdown(agentInlineText(cell.block)) }
         return token + "\n" + grid
     }
 

@@ -5,6 +5,36 @@ import XCTest
 /// Soft delete and Recently Deleted across tasks, notes and canvases.
 @MainActor
 final class RecentlyDeletedTests: XCTestCase {
+
+    func testR1_03PurgeKeepsByteDivergentTitles() throws {
+        let container = try PersistenceController.makeContainer(inMemory: true)
+        let context = ModelContext(container), id = UUID()
+        let date = Date(timeIntervalSince1970: 1000)
+        for title in ["Café", "Cafe\u{301}"] {
+            let row = TaskItem(id: id, title: title, createdAt: date, updatedAt: date)
+            row.deletedAt = date; row.deletionRootID = id; row.deletionMembersRaw = id.uuidString
+            context.insert(row)
+        }
+        try context.save()
+        XCTAssertTrue(TaskStore(container: container).purgeDeleted(before: .distantFuture).isEmpty)
+        XCTAssertEqual(try allTasks(container).count, 2)
+    }
+
+    func testR1_03RestoreRefusesByteDivergentLiveCopy() throws {
+        let container = try PersistenceController.makeContainer(inMemory: true)
+        let context = ModelContext(container), id = UUID()
+        let date = Date(timeIntervalSince1970: 1000)
+        let deleted = TaskItem(id: id, title: "Café", createdAt: date, updatedAt: date)
+        deleted.deletedAt = date; deleted.deletionRootID = id; deleted.deletionMembersRaw = id.uuidString
+        let live = TaskItem(id: id, title: "Cafe\u{301}", createdAt: date, updatedAt: date)
+        context.insert(deleted); context.insert(live)
+        try context.save()
+        XCTAssertFalse(TaskStore(container: container).restoreDeleted(taskID: id))
+        let rows = try allTasks(container)
+        XCTAssertEqual(rows.filter { $0.deletedAt != nil }.count, 1)
+        XCTAssertEqual(Set(rows.map { Array($0.title.utf16) }).count, 2)
+    }
+
     private var calendar: Calendar = {
         var calendar = Calendar(identifier: .gregorian)
         calendar.timeZone = TimeZone(identifier: "Europe/Rome")!

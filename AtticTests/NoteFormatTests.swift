@@ -6,6 +6,21 @@ import XCTest
 /// `attic.note/1`: stable ids, capability checks, read-only future formats
 /// kept as their original bytes, opaque unknown blocks (requirement 1).
 final class NoteFormatTests: XCTestCase {
+
+    func testFix3MarkdownEscapesLiteralsOnlyInsideTables() throws {
+        let literal = "*stars* _under_ [link](url) <br> &amp;"
+        var table = NoteTable(texts: [["Header"], [literal], ["bold"]])
+        table.rows[2].cells[0].marks = [NoteMark(.bold, offset: 0, length: 4)]
+        let doc = NoteDocument(blocks: [.text(literal), .text(literal), .checklist(literal), .table(table)])
+        let markdown = NoteMarkdownExport.markdown(doc)
+        XCTAssertTrue(markdown.hasPrefix("# " + literal + "\n\n" + literal + "\n\n- [ ] " + literal))
+        let grid = try XCTUnwrap(markdown.range(of: "| Header |"))
+        let imported = try XCTUnwrap(NoteTableText.parseMarkdown(String(markdown[grid.lowerBound...])))
+        XCTAssertEqual(imported.texts, table.texts)
+        XCTAssertTrue(imported.rows[1].cells[0].marks.isEmpty)
+        XCTAssertEqual(imported.rows[2].cells[0].marks, table.rows[2].cells[0].marks)
+    }
+
     private let dateID = UUID()
     private let checklistID = UUID()
     private let imageID = UUID()

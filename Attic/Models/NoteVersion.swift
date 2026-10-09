@@ -114,6 +114,14 @@ struct NoteProposalSignature: Equatable {
     let createdAt: Date
     let isDeletion: Bool
 
+    static func == (lhs: Self, rhs: Self) -> Bool {
+        lhs.id == rhs.id && lhs.noteID == rhs.noteID
+            && NoteTextReplacement.utf16Equal(lhs.baseRevisionToken, rhs.baseRevisionToken)
+            && lhs.baseVersionID == rhs.baseVersionID && lhs.content == rhs.content
+            && NoteTextReplacement.utf16Equal(lhs.agent, rhs.agent)
+            && lhs.createdAt == rhs.createdAt && lhs.isDeletion == rhs.isDeletion
+    }
+
     @MainActor init(_ edit: NotePendingEdit) {
         id = edit.id; noteID = edit.noteID; baseRevisionToken = edit.baseRevisionToken
         baseVersionID = edit.baseVersionID; content = edit.proposedContent

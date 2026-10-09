@@ -5,8 +5,8 @@ import Foundation
 /// blank line and list lines by a single break; checklists read `- [ ]` and
 /// `- [x]`; dates read as text ("Thu, 1 Oct 2026"); images as a readable
 /// label (`[image: pricing-v2.png]`). Anything this build can't read stays
-/// as a literal placeholder rather than disappearing. Markdown characters the
-/// person typed are kept as typed.
+/// as a literal placeholder rather than disappearing. Outside table cells,
+/// Markdown characters the person typed are kept as typed.
 enum NoteMarkdownExport {
     static func markdown(_ document: NoteDocument, calendar: Calendar = .current, locale: Locale = .current,
                          filename: (UUID) -> String? = { _ in nil }) -> String {
@@ -55,7 +55,7 @@ enum NoteMarkdownExport {
             case .table:
                 numbered.removeAll()
                 if let table = block.table {
-                    lines.append((NoteTableText.markdown(table) { inlineText($0.block, calendar: calendar, locale: locale) }, false))
+                    lines.append((NoteTableText.markdown(table) { inlineMarkdown($0.block, calendar: calendar, locale: locale) }, false))
                 }
             case .opaque:
                 numbered.removeAll()
@@ -90,12 +90,29 @@ enum NoteMarkdownExport {
         return day.date(in: calendar).formatted(style)
     }
 
-    /// A line's text with its marks as Markdown and its dates as text.
+    /// A table cell's text with its marks as Markdown and its dates as text.
     static func inlineMarkdown(_ block: NoteBlock, calendar: Calendar = .current, locale: Locale = .current) -> String {
-        inlineText(block, calendar: calendar, locale: locale)
+        inlineText(block, calendar: calendar, locale: locale, escapeLiterals: true)
     }
 
-    private static func inlineText(_ block: NoteBlock, calendar: Calendar, locale: Locale) -> String {
+    /// Escape prose before adding mark delimiters, so literal Markdown and
+    /// HTML cannot turn into formatting on table re-import.
+    static func escapeInlineText(_ text: String) -> String {
+        var result = ""
+        for character in text {
+            switch character {
+            case "&": result += "&amp;"
+            case "<": result += "&lt;"
+            case ">": result += "&gt;"
+            case "\\", "*", "_", "~", "`", "[", "]", "=": result += "\\" + String(character)
+            default: result.append(character)
+            }
+        }
+        return result
+    }
+
+    private static func inlineText(_ block: NoteBlock, calendar: Calendar, locale: Locale,
+                                   escapeLiterals: Bool = false) -> String {
         var result = ""
         let text = block.text as NSString
         var boundaries: Set<Int> = [0, text.length]
@@ -121,6 +138,7 @@ enum NoteMarkdownExport {
                 continue
             }
             var value = text.substring(with: range)
+            if escapeLiterals { value = escapeInlineText(value) }
             let marks = block.marks.filter { $0.offset <= pair.0 && $0.offset + $0.length >= pair.1 }
             for mark in marks.sorted(by: { $0.kind.rawValue < $1.kind.rawValue }).reversed() {
                 switch mark.kind {
@@ -130,7 +148,14 @@ enum NoteMarkdownExport {
                 case .strikethrough: value = "~~" + value + "~~"
                 case .code: value = "`" + value + "`"
                 case .highlight: value = "==" + value + "=="
-                case .link: value = "[" + value + "](" + (mark.url ?? "") + ")"
+                case .link:
+                    var destination = mark.url ?? ""
+                    if escapeLiterals {
+                        destination = escapeInlineText(destination)
+                            .replacingOccurrences(of: "(", with: "\\(")
+                            .replacingOccurrences(of: ")", with: "\\)")
+                    }
+                    value = "[" + value + "](" + destination + ")"
                 }
             }
             result += value

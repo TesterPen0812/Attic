@@ -6,6 +6,26 @@ import XCTest
 /// another note still needs (data review findings 3 and 4).
 @MainActor
 final class AttachmentRecentlyDeletedTests: XCTestCase {
+
+    func testR1_03AttachmentPurgeKeepsByteDivergentTaskTitles() throws {
+        let container = try PersistenceController.makeContainer(inMemory: true)
+        let context = ModelContext(container), id = UUID()
+        let date = Date(timeIntervalSince1970: 1000)
+        let reference = TaskImageReference(id: UUID(), filename: "plan.txt", digest: String(repeating: "a", count: 64),
+            contentTypeIdentifier: "public.plain-text", byteCount: 4)
+        let data = try JSONEncoder().encode([RemovedTaskAttachment(reference: reference, removedAt: date)])
+        for title in ["Café", "Cafe\u{301}"] {
+            let row = TaskItem(id: id, title: title, createdAt: date, updatedAt: date)
+            row.removedAttachmentsData = data
+            context.insert(row)
+        }
+        try context.save()
+        XCTAssertEqual(TaskStore(container: container).purgeRemovedAttachments(before: .distantFuture), 0)
+        let rows = try ModelContext(container).fetch(FetchDescriptor<TaskItem>())
+        XCTAssertEqual(rows.count, 2)
+        XCTAssertTrue(rows.allSatisfy { $0.removedAttachmentsData == data })
+    }
+
     private let day: TimeInterval = 24 * 3_600
 
 

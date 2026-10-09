@@ -60,7 +60,7 @@ enum NoteStatusItem: Equatable {
     }
 }
 
-/// Immutable comparison ticket: acceptance checks both store bytes and live text again.
+/// Immutable comparison ticket: acceptance checks store bytes and the live draft again.
 struct NoteProposalReview: Identifiable, Equatable {
     let id: UUID
     let sessionID: UUID
@@ -69,6 +69,7 @@ struct NoteProposalReview: Identifiable, Equatable {
     let createdAt: Date
     let isDeletion: Bool
     let current: NoteDocument
+    let currentTags: [String]
     let proposed: NoteDocument
     let proposedPreview: NoteDocument
     let revision: String
@@ -117,6 +118,8 @@ final class NoteSession: ObservableObject, Identifiable {
     @Published private(set) var noteID: UUID
     @Published fileprivate(set) var isPersisted: Bool
     fileprivate(set) var baseRevisionID: UUID?
+    /// Saved bytes also identify same-token changes imported by a fresh context.
+    fileprivate var baseContent: Data?
     /// The tags the store holds for this note (as loaded or last saved). A
     /// save writes the engine's tags only when they differ.
     fileprivate(set) var baseTags: [String] = []
@@ -680,7 +683,8 @@ final class NotesPageController: ObservableObject {
         guard await awaitRecoveryForUser(), let session = active, !session.isImporting,
               canLeaveComposition(in: session) else { return false }
         return await performAfterRecovery {
-            guard self.active === session, self.preserve(session),
+            guard self.active === session, !session.isImporting, self.canLeaveComposition(in: session),
+                  self.preserve(session),
                   let edit = self.store.pendingEdits(noteID: session.noteID).first(where: { id == nil || $0.id == id }),
                   let family = try? self.store.pendingEditRows(edit.id),
                   NotePhysicalFamilyRetention.proposalEligible(family, noteIDs: [session.noteID]) else { return false }
@@ -697,10 +701,11 @@ final class NotesPageController: ObservableObject {
               let edit = store.pendingEdits(noteID: session.noteID).first(where: { $0.id == id }),
               let data = edit.proposedContent, let document = NoteContentCodec.decode(data).document else { return false }
         // A clean editor can follow a fresh outside save; dirty/conflicted text stays owned by its draft.
-        if session.state == .clean, session.baseRevisionID != note.revisionID,
+        if session.state == .clean, session.baseRevisionID != note.revisionID || session.baseContent != note.content,
            let saved = note.content.flatMap({ NoteContentCodec.decode($0).document }) {
             session.replaceEngine(makeEngine(noteID: note.id, document: saved, readOnly: false, tags: note.tags))
             session.baseRevisionID = note.revisionID
+            session.baseContent = note.content
             session.baseTags = note.tags
             wire(session)
         }
@@ -718,7 +723,8 @@ final class NotesPageController: ObservableObject {
         }
         proposalReview = NoteProposalReview(id: edit.id, sessionID: session.id, noteID: session.noteID,
             agent: edit.agentName.isEmpty ? "Agent" : edit.agentName, createdAt: edit.createdAt, isDeletion: edit.isDeletion,
-            current: session.engine.document(), proposed: edit.isDeletion ? .blank : document, proposedPreview: preview,
+            current: session.engine.document(), currentTags: session.engine.tags,
+            proposed: edit.isDeletion ? .blank : document, proposedPreview: preview,
             revision: note.revisionToken, savedContent: note.content, signature: NoteProposalSignature(edit))
         return true
     }
@@ -733,16 +739,31 @@ final class NotesPageController: ObservableObject {
         guard await awaitRecoveryForUser(), let review = proposalReview, let session = active,
               session.id == review.sessionID, !session.isImporting,
               canLeaveComposition(in: session) else { return false }
+        guard !session.isConflict else {
+            proposalReviewNotice = "Your draft changed elsewhere. Save as New Note before replacing it."
+            return false
+        }
+        let engine = session.engine, generation = session.editGeneration
+        if NoteSessionPolicy.hasPendingWork(session.state) {
+            // A document-only comparison misses tags and staged file bytes.
+            // Save the whole draft before replacing its engine or retiring
+            // recovery, then require review of that saved state.
+            _ = await preserveDurably(session)
+            guard active === session, proposalReview == review, session.engine === engine else { return false }
+            _ = refreshProposalReview(id: review.id, session: session)
+            proposalReviewNotice = "Your draft changed. Review the refreshed comparison before replacing."
+            return false
+        }
         return await performAfterRecovery {
-            guard self.proposalReview == review, self.active === session else { return false }
+            guard self.proposalReview == review, self.active === session, !session.isImporting,
+                  self.canLeaveComposition(in: session) else { return false }
             guard let note = self.store.note(withID: review.noteID), note.revisionToken == review.revision,
-                  note.content == review.savedContent, session.engine.document() == review.current else {
+                  note.content == review.savedContent, session.engine === engine,
+                  session.editGeneration == generation, session.state == .clean,
+                  session.engine.document() == review.current, session.engine.tags == review.currentTags,
+                  session.engine.tags == session.baseTags else {
                 _ = self.refreshProposalReview(id: review.id, session: session)
                 self.proposalReviewNotice = "The note changed. The comparison has refreshed; review it before replacing."
-                return false
-            }
-            guard !session.isConflict else {
-                self.proposalReviewNotice = "Your draft changed elsewhere. Save as New Note before replacing it."
                 return false
             }
             // The journal must retire while the note is still live. Async retirement
@@ -802,7 +823,9 @@ final class NotesPageController: ObservableObject {
         guard let stored = await performBoundedUserIO({ [self] in Array(await durableAttachmentsAsync(in: document).values) }),
               proposalReview == review, active === session else { return false }
         return await performAfterRecovery {
-            guard self.proposalReview == review, self.active === session,
+            guard self.proposalReview == review, self.active === session, !session.isImporting,
+                  self.canLeaveComposition(in: session),
+                  !review.isDeletion || session.engine.document() == review.current,
                   let rows = try? self.store.pendingEditRows(review.id),
                   NotePhysicalFamilyRetention.proposalEligible(rows, noteIDs: [review.noteID]),
                   rows.first.map(NoteProposalSignature.init) == review.signature,
@@ -926,6 +949,7 @@ final class NotesPageController: ObservableObject {
                                                      tags: note.tags),
                                   readOnlyReason: readOnlyReason)
         session.baseTags = note.tags
+        session.baseContent = note.content
         if let state = defaults?.dictionary(forKey: Self.viewStateKey(note.id)) {
             session.selection = NSRange(location: state["location"] as? Int ?? 0,
                                         length: state["length"] as? Int ?? 0)
@@ -958,7 +982,7 @@ final class NotesPageController: ObservableObject {
     }
 
     /// A clean cached session is rebuilt once, at presentation, if its store
-    /// revision moved. A missing clean note is dropped.
+    /// revision or content moved. A missing clean note is dropped.
     private func presentSession(_ session: NoteSession) -> NoteSession? {
         if case .conflict = session.state {
             session.state = .conflict(store.note(withID: session.noteID) == nil ? .deleted : .changed)
@@ -970,7 +994,7 @@ final class NotesPageController: ObservableObject {
             session.engine.detachView()
             return nil
         }
-        guard session.baseRevisionID != note.revisionID else {
+        guard session.baseRevisionID != note.revisionID || session.baseContent != note.content else {
             // Tags set elsewhere (an agent, another page) move no revision.
             if note.tags != session.baseTags, session.engine.tags == session.baseTags {
                 session.baseTags = note.tags
@@ -1563,6 +1587,7 @@ final class NotesPageController: ObservableObject {
 
     private func didSave(_ session: NoteSession, staged: [StagedNoteAttachment], retainingNewerEdits: Bool = false) {
         captureViewState(session)
+        session.baseContent = store.note(withID: session.noteID)?.content
         session.state = retainingNewerEdits ? .dirty : .clean
         if retainingNewerEdits { scheduleSave(session) }
         if !retainingNewerEdits {
@@ -2636,10 +2661,16 @@ extension NotesPageController {
     func restoreHistoryVersionDurably() async -> Bool {
         guard let browser = historyBrowser, let selected = browser.selected, selected.canRestore,
               !browser.isRestoring, !browser.showsCurrent, let session = active,
-              session.noteID == browser.noteID, session.state == .clean, !session.isImporting else { return false }
+              session.noteID == browser.noteID, session.state == .clean, !session.isImporting,
+              canLeaveComposition(in: session) else { return false }
+        let engine = session.engine, generation = session.editGeneration
         browser.isRestoring = true
         defer { browser.isRestoring = false }
-        guard await awaitRecoveryForUser(), historyBrowser === browser, active === session else { return false }
+        guard await awaitRecoveryForUser(), historyBrowser === browser, active === session,
+              session.engine === engine, canLeaveComposition(in: session),
+              session.editGeneration == generation, session.state == .clean, !session.isImporting,
+              browser.selected?.id == selected.id, browser.selected?.canRestore == true,
+              !browser.showsCurrent else { return false }
         let preservationID = UUID()
         switch store.restoreVersion(selected.id, noteID: browser.noteID,
                                     expectedRevisionID: browser.currentRevision, preservationID: preservationID) {
@@ -2750,10 +2781,17 @@ extension NotesPageController {
             if let returned = undo.session {
                 legacyNoteID = nil
                 returned.baseRevisionID = revision
-                returned.state = .clean
+                returned.baseContent = note.content
                 returned.baseTags = note.tags
-                returned.engine.setTags(note.tags)
+                // The displaced session can receive late callbacks while retained
+                // for Undo. Its text and tags remain owned until actually saved.
+                returned.state = returned.engine.document() == store.loadDocument(noteID: undo.noteID)?.content.document
+                    && returned.engine.tags == note.tags ? .clean : .dirty
                 activate(returned)
+                if returned.state == .dirty {
+                    scheduleSave(returned)
+                    scheduleDurabilityDeadline(returned)
+                }
             } else {
                 cache[undo.noteID] = nil
                 active = nil

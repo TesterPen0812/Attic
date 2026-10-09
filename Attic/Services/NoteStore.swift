@@ -41,8 +41,8 @@ typealias NoteAttachmentImporter = Any
 
 private struct NoteReplicaSnapshot: Equatable {
     let id: UUID
-    let title: String
-    let body: String
+    let title: [UInt16]
+    let body: [UInt16]
     let createdAt: Date
     let updatedAt: Date
     let deletedAt: Date?
@@ -60,8 +60,8 @@ private struct NoteReplicaSnapshot: Equatable {
 
     init(_ note: NoteItem) {
         id = note.id
-        title = note.title
-        body = note.body
+        title = Array(note.title.utf16)
+        body = Array(note.body.utf16)
         createdAt = note.createdAt
         updatedAt = note.updatedAt
         deletedAt = note.deletedAt
@@ -106,14 +106,14 @@ private enum NoteReplicaMutationError: LocalizedError {
 private struct NoteAttachmentReplicaSnapshot: Equatable {
     let id: UUID
     let noteID: UUID
-    let originalFilename: String
-    let contentTypeIdentifier: String
+    let originalFilename: [UInt16]
+    let contentTypeIdentifier: [UInt16]
     let byteCount: Int64
     let sortIndex: Int64
     let inlineOffset: Int?
     let displayWidth: Double?
     let displayHeight: Double?
-    let contentDigest: String
+    let contentDigest: [UInt16]
     let createdAt: Date
     let updatedAt: Date
     let deletedAt: Date?
@@ -122,14 +122,14 @@ private struct NoteAttachmentReplicaSnapshot: Equatable {
     init(_ row: NoteAttachment) {
         id = row.id
         noteID = row.noteID
-        originalFilename = row.originalFilename
-        contentTypeIdentifier = row.contentTypeIdentifier
+        originalFilename = Array(row.originalFilename.utf16)
+        contentTypeIdentifier = Array(row.contentTypeIdentifier.utf16)
         byteCount = row.byteCount
         sortIndex = row.sortIndex
         inlineOffset = row.inlineOffset
         displayWidth = row.displayWidth
         displayHeight = row.displayHeight
-        contentDigest = row.contentDigest
+        contentDigest = Array(row.contentDigest.utf16)
         createdAt = row.createdAt
         updatedAt = row.updatedAt
         deletedAt = row.deletedAt
@@ -550,7 +550,7 @@ final class NoteStore: ObservableObject {
         let destinationBody = body ?? note.body
         guard !destinationTitle.isEmpty || Self.hasMeaningfulBody(destinationBody) else { return false }
 
-        let titleChanged = destinationTitle != note.title
+        let titleChanged = !NoteTextReplacement.utf16Equal(destinationTitle, note.title)
         let bodyChanged = !NoteTextReplacement.utf16Equal(destinationBody, note.body)
         let visibleSnapshot = NoteReplicaSnapshot(note)
         let replicasNeedRepair = replicas.contains { NoteReplicaSnapshot($0) != visibleSnapshot }
@@ -608,6 +608,9 @@ final class NoteStore: ObservableObject {
             replica.contentFormat = 0
             replica.plainText = Self.legacyPlainText(title: destinationTitle, body: destinationBody)
             replica.taskID = note.taskID
+            replica.pinnedAt = note.pinnedAt
+            replica.externalEditorName = note.externalEditorName
+            replica.externalEditedAt = note.externalEditedAt
             replica.revision = contentChanged ? revision &+ 1 : revision
             replica.revisionID = revisionID
         }
