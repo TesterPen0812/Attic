@@ -2,9 +2,9 @@ import Combine
 import Foundation
 import SwiftUI
 
-/// All notes, plain (slice 2; the filters and More tags… are slice 4):
-/// rows in date groups, a search that reads away from the main actor with
-/// loading and failure states, and the list's keyboard selection.
+/// All notes: rows in date groups, an optional tag filter (the top line's
+/// recent tags and More tags…), a search that reads away from the main
+/// actor with loading and failure states, and the list's keyboard selection.
 @MainActor
 final class NotesLibraryModel: ObservableObject {
     enum SearchState: Equatable {
@@ -39,6 +39,15 @@ final class NotesLibraryModel: ObservableObject {
     @Published private(set) var showsLoading = false
     /// The row the keyboard's ↑ ↓ are on.
     @Published var highlightedID: UUID?
+    /// The tag All notes shows (nil: every note). A search looks inside it.
+    /// It stays while the library is away and comes back with it, unless the
+    /// note you come back from would be hidden (`reconcileFilter`).
+    @Published var tagFilter: String? {
+        didSet {
+            guard tagFilter != oldValue else { return }
+            highlightedID = nil
+        }
+    }
 
     /// Runs a search; tests inject failures and delays.
     var search: (String) async throws -> Set<UUID>
@@ -58,6 +67,11 @@ final class NotesLibraryModel: ObservableObject {
     /// Each stored note's preview body, read from its document once per
     /// saved revision (a row rebuild decodes only the notes that changed).
     private var bodies: [UUID: (revision: Int64, revisionID: UUID?, body: NoteRowSummary.Body)] = [:]
+    /// How many note bodies the rows decoded (a profiling seam: a rebuild
+    /// after one save decodes that note only).
+    private(set) var bodyDecodeCount = 0
+    /// Every tag, most recently edited first, for the store revision it was read at.
+    private var recentTagsCache: (revision: UInt64, tags: [String])?
 
     private struct RowsKey: Equatable {
         let revision: UInt64
@@ -65,6 +79,7 @@ final class NotesLibraryModel: ObservableObject {
         let attention: Set<UUID>
         let drafts: [UUID]
         let day: Int
+        let tag: String?
     }
 
     init(search: @escaping (String) async throws -> Set<UUID>, store: NoteStore? = nil, controller: NotesPageController? = nil, now: @escaping () -> Date = Date.init,
@@ -170,13 +185,19 @@ final class NotesLibraryModel: ObservableObject {
     func groups(store: NoteStore, drafts: [NoteSession]) -> [Group] {
         observeStore(store)
         let attention = Set(drafts.map(\.noteID))
-        let unsaved = drafts.filter { store.note(withID: $0.noteID) == nil }
+        var unsaved = drafts.filter { store.note(withID: $0.noteID) == nil }
         let searching = isSearching
         let key = RowsKey(revision: store.revision, matches: searching ? matches : nil, attention: attention,
-                          drafts: unsaved.map(\.noteID), day: calendar.ordinality(of: .day, in: .era, for: now()) ?? 0)
+                          drafts: unsaved.map(\.noteID), day: calendar.ordinality(of: .day, in: .era, for: now()) ?? 0,
+                          tag: tagFilter)
         if let cache, cache.key == key, unsaved.isEmpty { return cache.groups }
 
         var notes = store.orderedNotes()
+        let allNotes = notes
+        if let tag = tagFilter {
+            notes = notes.filter { $0.tags.contains(tag) }
+            unsaved = unsaved.filter { $0.engine.tags.contains(tag) }
+        }
         if searching {
             guard let matches else { return cache?.groups ?? [] }
             notes = notes.filter { matches.contains($0.id) }
@@ -201,10 +222,10 @@ final class NotesLibraryModel: ObservableObject {
                 else if note.updatedAt >= weekStart { week.append(model) }
                 else { earlier.append(model) }
             }
-            // Deleted notes' bodies go (the full list was just built).
-            if bodies.count > notes.count {
-                let shown = Set(notes.map(\.id))
-                bodies = bodies.filter { shown.contains($0.key) }
+            // Deleted notes' bodies go (the full list was just read).
+            if bodies.count > allNotes.count {
+                let stored = Set(allNotes.map(\.id))
+                bodies = bodies.filter { stored.contains($0.key) }
             }
             result = [
                 Group(id: "pinned", title: String(localized: "Pinned"), rows: pinned),
@@ -215,6 +236,86 @@ final class NotesLibraryModel: ObservableObject {
         }
         cache = (key, result)
         return result
+    }
+
+    // MARK: Tags
+
+    /// Every tag in Notes, the most recently edited note's first (ties by
+    /// name). Read once per store revision.
+    func recentTags(store: NoteStore) -> [String] {
+        observeStore(store)
+        if let recentTagsCache, recentTagsCache.revision == store.revision { return recentTagsCache.tags }
+        let tags = Self.recentTags(store.notes.lazy.filter { $0.deletedAt == nil }.map { ($0.tagsRaw, $0.updatedAt) })
+        recentTagsCache = (store.revision, tags)
+        return tags
+    }
+
+    /// Tags ordered by the latest edit of a note that carries them.
+    static func recentTags(_ notes: some Sequence<(tagsRaw: String, updatedAt: Date)>) -> [String] {
+        var latest: [String: Date] = [:]
+        for note in notes where !note.tagsRaw.isEmpty {
+            for tag in AtticTag.decode(note.tagsRaw) where latest[tag].map({ $0 < note.updatedAt }) ?? true {
+                latest[tag] = note.updatedAt
+            }
+        }
+        return latest.sorted { $0.value != $1.value ? $0.value > $1.value : $0.key.localizedStandardCompare($1.key) == .orderedAscending }
+            .map(\.key)
+    }
+
+    /// The top line's tags after "All notes": the active tag first (always
+    /// shown), then the most recent others, up to `limit` in all.
+    func tagTabs(store: NoteStore, limit: Int) -> [String] {
+        let recent = recentTags(store: store)
+        var tabs = tagFilter.map { [$0] } ?? []
+        for tag in recent where tabs.count < limit && tag != tagFilter { tabs.append(tag) }
+        return tabs
+    }
+
+    /// Clicking a tag: filter to it, or back to every note when it is the
+    /// active one. A search in progress stays and now looks inside it.
+    func toggleTag(_ tag: String) {
+        tagFilter = tagFilter == tag ? nil : tag
+    }
+
+    /// Opening All notes keeps the earlier filter only when it still shows
+    /// the note you came from (and still has a note); otherwise every note.
+    func reconcileFilter(store: NoteStore, selected: UUID?) {
+        guard let tag = tagFilter else { return }
+        let carriers = store.notes.filter { $0.deletedAt == nil && $0.tags.contains(tag) }
+        if carriers.isEmpty { tagFilter = nil; return }
+        if let selected, let note = store.note(withID: selected), !note.tags.contains(tag) { tagFilter = nil }
+    }
+
+    // MARK: Words
+
+    /// The search field's placeholder: the count, or the tag searched in.
+    static func placeholder(count: Int, tag: String?) -> String {
+        if let tag { return String(localized: "Search #\(tag)") }
+        return count == 1 ? String(localized: "Search 1 note") : String(localized: "Search \(count) notes")
+    }
+
+    /// The line where the rows would be when a search finds nothing.
+    static func noMatches(query: String, tag: String?) -> String {
+        if let tag { return String(localized: "No notes match “\(query)” in #\(tag)") }
+        return String(localized: "No notes match “\(query)”")
+    }
+
+    /// The filter's line when no note carries the tag (any more).
+    static func emptyFilter(tag: String) -> String { String(localized: "No notes in #\(tag)") }
+
+    /// The next step after no matches: a new note named for the search.
+    static func newNoteTitle(query: String, tag: String?) -> String {
+        if let tag { return String(localized: "New note “\(query)” in #\(tag)") }
+        return String(localized: "New note “\(query)”")
+    }
+
+    /// The search that found nothing, when it finished for what the field
+    /// holds now and did not fail: what "New note “…”" (and Return) would
+    /// create. Nil otherwise (still searching, failed, or rows shown).
+    func queryForNewNote(in groups: [Group]) -> String? {
+        let text = query.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !text.isEmpty, groups.isEmpty, matches != nil, searchState == .idle, matchedQuery == text else { return nil }
+        return text
     }
 
     /// The rows in list order, for ↑ ↓.
@@ -271,6 +372,7 @@ final class NotesLibraryModel: ObservableObject {
         guard note.usesDocumentFormat else { return NoteRowSummary.body(of: note) }
         if let kept = bodies[note.id], kept.revision == note.revision, kept.revisionID == note.revisionID { return kept.body }
         let body = NoteRowSummary.body(of: note)
+        bodyDecodeCount += 1
         bodies[note.id] = (note.revision, note.revisionID, body)
         return body
     }

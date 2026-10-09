@@ -444,8 +444,19 @@ struct AtticNoteLibraryLine: View {
     let onBeginSearch: () -> Void
     let onEndSearch: () -> Void
     var onKeyPress: ((KeyPress) -> KeyPress.Result)?
+    /// The tags after the title, as many as fit (the active one first and
+    /// always shown). None: the title stands alone, as a heading.
+    var tags: [String] = []
+    /// The tag the list is filtered to (nil: every note).
+    var activeTag: String?
+    /// A tag (or the title, nil) was clicked.
+    var onSelectTag: (String?) -> Void = { _ in }
+    /// More tags…: whether its card is open, and the card.
+    var moreTagsShown: Binding<Bool>?
+    var moreTagsCard: (() -> AnyView)?
 
     @Environment(\.atticDesign) private var design
+    @State private var moreHovered = false
 
     var body: some View {
         let height = AtticControlSize.smallHeight
@@ -457,10 +468,15 @@ struct AtticNoteLibraryLine: View {
                                       removal: .opacity.combined(with: .scale(scale: 0.97, anchor: .trailing))))
             } else {
                 HStack(spacing: 0) {
-                    AtticText(verbatim: title, style: .pageTabSelected, ink: .heading)
-                        .padding(.leading, AtticLayout.pageTabsX)
-                        .accessibilityAddTraits(.isHeader)
-                        .accessibilityIdentifier("notes-library-label")
+                    if tags.isEmpty {
+                        AtticText(verbatim: title, style: .pageTabSelected, ink: .heading)
+                            .padding(.leading, AtticLayout.pageTabsX)
+                            .accessibilityAddTraits(.isHeader)
+                            .accessibilityIdentifier("notes-library-label")
+                    } else {
+                        tagLine
+                            .padding(.leading, AtticLayout.pageTabsX)
+                    }
                     Spacer(minLength: 0)
                     AtticSmallButton(systemName: "magnifyingglass", label: "Search notes (⌘F)", action: onBeginSearch)
                         .accessibilityIdentifier("notes-library-search-button")
@@ -472,6 +488,51 @@ struct AtticNoteLibraryLine: View {
         }
         .frame(height: height)
         .animation(AtticMotionPreset.popover.springy(reduceMotion: design.reduceMotion), value: searchShown)
+    }
+
+    /// The fewest tags the line shows: the active one is never dropped.
+    private var minimumTags: Int { activeTag == nil ? 0 : 1 }
+
+    /// "All notes", then as many tags as fit, then More tags…: the longest
+    /// that fits is shown (the tags' order is the caller's).
+    private var tagLine: some View {
+        ViewThatFits(in: .horizontal) {
+            ForEach(Array(stride(from: tags.count, through: minimumTags, by: -1)), id: \.self) { count in
+                HStack(spacing: AtticPageTabsMetrics.spacing) {
+                    tabs(Array(tags.prefix(count)))
+                    moreTags
+                }
+                .fixedSize()
+            }
+        }
+    }
+
+    private func tabs(_ shown: [String]) -> some View {
+        let items = [AtticPageTabs<String?>.Item(page: nil, title: title, accessibilityIdentifier: "notes-library-label")]
+            + shown.map { AtticPageTabs<String?>.Item(page: $0, title: "#\($0)", accessibilityIdentifier: "notes-library-tag-\($0)") }
+        return AtticPageTabs(items: items, selection: Binding(get: { activeTag }, set: { onSelectTag($0) }))
+    }
+
+    @ViewBuilder
+    private var moreTags: some View {
+        if let moreTagsShown, let moreTagsCard {
+            Button { moreTagsShown.wrappedValue.toggle() } label: {
+                AtticText(verbatim: String(localized: "More tags…"), style: .pageTab,
+                          ink: moreHovered || moreTagsShown.wrappedValue ? .body : .helper)
+                    .fixedSize()
+                    .frame(height: AtticLayout.pageTabsHeight)
+                    .contentShape(Rectangle().inset(by: -AtticPageTabsMetrics.hitOutset))
+            }
+            .buttonStyle(.plain)
+            .focusEffectDisabled()
+            .onHover { moreHovered = $0 }
+            .atticDropdown(isPresented: moreTagsShown, prefer: .below, label: String(localized: "More tags")) {
+                moreTagsCard()
+            }
+            .help(String(localized: "Every tag, with a find field"))
+            .accessibilityLabel(String(localized: "More tags"))
+            .accessibilityIdentifier("notes-library-more-tags")
+        }
     }
 
     private var field: some View {

@@ -1,12 +1,13 @@
 import AppKit
 import SwiftUI
 
-/// All notes, plain (slice 2): the fixed "All notes" label on the tabs'
-/// line with a quiet magnifier at its end, then the notes in date groups.
-/// The filters and More tags… arrive with slice 4. Typing, ⌘F or the
+/// All notes: the fixed "All notes" label on the tabs' line, then the
+/// recent tags as far as they fit and More tags… (a click filters), a quiet
+/// magnifier at its end, then the notes in date groups. Typing, ⌘F or the
 /// magnifier turn the label line into the search field (a springy
-/// take-over); ↑ ↓ move through the rows, Return opens, ⌘⌫ deletes; Esc
-/// ends the search, then goes back to the note.
+/// take-over); ↑ ↓ move through the rows, Return opens (or, when a search
+/// found nothing, makes the note it names), ⌘⌫ deletes; Esc ends the
+/// search, then goes back to the note.
 struct NotesLibraryView: View {
     @ObservedObject var model: NotesLibraryModel
     @ObservedObject var controller: NotesPageController
@@ -23,6 +24,8 @@ struct NotesLibraryView: View {
     let onOpen: (UUID) -> Void
     let onDelete: (UUID) -> Void
     let onBack: () -> Void
+    /// "New note “kyoto”" after no matches: the title, and the filter's tag.
+    var onCreate: (_ title: String, _ tag: String?) -> Void = { _, _ in }
 
     @Environment(\.atticDesign) private var design
     @FocusState private var fieldFocused: Bool
@@ -33,6 +36,11 @@ struct NotesLibraryView: View {
     @StateObject private var keys = NotesLibraryKeys()
     /// Where the rows' ⋯ are: ⇧⌘I opens the menu under the highlighted one.
     @State private var anchors = AtticNoteRowAnchors()
+    /// More tags…'s card is open (its keys are its own).
+    @State private var moreTagsShown = false
+
+    /// The most tags the top line tries to fit after "All notes".
+    static let tagTabLimit = 4
 
     static let space = NamedCoordinateSpace.named("AtticNotesLibrary")
 
@@ -76,7 +84,10 @@ struct NotesLibraryView: View {
                 .accessibilityHidden(true)
             AtticNoteLibraryLine(title: String(localized: "All notes"), placeholder: placeholder, query: $model.query,
                                  searchShown: shown, fieldFocused: $fieldFocused,
-                                 onBeginSearch: { beginSearch() }, onEndSearch: endSearch)
+                                 onBeginSearch: { beginSearch() }, onEndSearch: endSearch,
+                                 tags: model.tagTabs(store: store, limit: Self.tagTabLimit), activeTag: model.tagFilter,
+                                 onSelectTag: { tag in selectTag(tag) },
+                                 moreTagsShown: $moreTagsShown, moreTagsCard: { AnyView(moreTagsCard) })
                 // Centred on the tabs' line, as on Tasks.
                 .padding(.top, labelsTop - (AtticControlSize.smallHeight - AtticLayout.pageTabsHeight) / 2)
                 // Read before the rows, as when it stood above them.
@@ -86,6 +97,7 @@ struct NotesLibraryView: View {
         .padding(.horizontal, pageEdge)
         .background(NotesWindowReader(keys: keys).frame(width: 0, height: 0).accessibilityHidden(true))
         .onAppear {
+            model.reconcileFilter(store: store, selected: controller.librarySelectionID)
             keys.handler = { event in handle(event) }
             keys.start()
             if searchFocused { beginSearch() }
@@ -135,6 +147,31 @@ struct NotesLibraryView: View {
         }
     }
 
+    // MARK: Tags
+
+    /// A tag in the top line, or "All notes" (nil). Clicking the active tag
+    /// keeps it (the tabs' rule); the title goes back to every note.
+    private func selectTag(_ tag: String?) {
+        model.tagFilter = tag
+    }
+
+    /// More tags…: every tag with its count, a find field; the active tag
+    /// is ticked. Choosing one filters to it (the active one: every note).
+    private var moreTagsCard: some View {
+        let counts = store.tagCounts
+        let all = counts.keys.sorted { $0.localizedStandardCompare($1) == .orderedAscending }
+        return AtticTagPickerCard(rows: { query in
+            let needle = query.trimmingCharacters(in: .whitespaces).replacingOccurrences(of: "#", with: "")
+            let shown = needle.isEmpty ? all : all.filter { $0.localizedStandardContains(needle) }
+            return (shown.map { AtticTagPicker.Tag(name: $0, state: $0 == model.tagFilter ? .on : .off,
+                                                   detail: "\(counts[$0] ?? 0)") }, nil)
+        }, listRows: all.count, onToggle: { name in
+            model.toggleTag(name)
+            moreTagsShown = false
+        }, onCreate: { _, _ in false })
+        .accessibilityIdentifier("notes-library-more-tags-card")
+    }
+
     private func endSearch() {
         model.clearSearch()
         searchOpen = false
@@ -154,7 +191,7 @@ struct NotesLibraryView: View {
         // The library slides away when a note opens, and this view (and its
         // monitor) outlives that slide by a moment: a key pressed in the
         // note is the note's, never the library's.
-        guard controller.isLibraryPresented else { return false }
+        guard controller.isLibraryPresented, !moreTagsShown else { return false }
         let groups = model.groups(store: store, drafts: controller.failedDrafts)
         let selected = controller.librarySelectionID
         let editor = keys.window?.firstResponder as? NSTextView
@@ -173,8 +210,14 @@ struct NotesLibraryView: View {
         case let .move(step):
             model.moveHighlight(by: step, in: groups, from: selected)
         case .open:
-            guard let id = model.openTarget(in: groups) else { return false }
-            onOpen(id)
+            if let id = model.openTarget(in: groups) {
+                onOpen(id)
+            } else if fieldFocused, let title = model.queryForNewNote(in: groups) {
+                // Nothing matched: Return makes the note the search names.
+                onCreate(title, model.tagFilter)
+            } else {
+                return false
+            }
         case .delete:
             // In the search field ⌘⌫ edits the text until ↑ ↓ picked a row.
             guard let id = model.deleteTarget(in: groups, selected: selected, inField: fieldFocused) else { return false }
@@ -272,8 +315,7 @@ struct NotesLibraryView: View {
     }
 
     private var placeholder: String {
-        let count = store.notes.count
-        return count == 1 ? String(localized: "Search 1 note") : String(localized: "Search \(count) notes")
+        NotesLibraryModel.placeholder(count: store.notes.count, tag: model.tagFilter)
     }
 
     private func list(_ groups: [NotesLibraryModel.Group], selected: UUID?) -> some View {
@@ -344,12 +386,37 @@ struct NotesLibraryView: View {
                         AtticLoadingRows(count: 2).accessibilityIdentifier("notes-library-searching")
                     }
                 } else {
-                    emptyLine(String(localized: "No notes match “\(model.matchedQuery)”"))
+                    emptyLine(NotesLibraryModel.noMatches(query: model.matchedQuery, tag: model.tagFilter))
+                    if let title = model.queryForNewNote(in: groups) {
+                        newNoteButton(title: title, tag: model.tagFilter)
+                    }
                 }
+            } else if let tag = model.tagFilter {
+                emptyLine(NotesLibraryModel.emptyFilter(tag: tag))
             } else {
                 emptyLine(String(localized: "No notes yet"))
             }
         }
+    }
+
+    /// The next step after no matches (Return does the same from the field).
+    private func newNoteButton(title: String, tag: String?) -> some View {
+        Button { onCreate(title, tag) } label: {
+            HStack(spacing: AtticNoteMetrics.countGap + 2) {
+                AtticIcon(systemName: "square.and.pencil", size: AtticNoteMetrics.countIconSize + 2,
+                          weight: .regular, ink: .body)
+                AtticText(verbatim: NotesLibraryModel.newNoteTitle(query: title, tag: tag), style: .listBody,
+                          ink: .body, truncates: true)
+            }
+            .frame(height: AtticLayout.rowPitch)
+            .padding(.leading, AtticNoteMetrics.rowTextX)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(AtticUndimmedButtonStyle())
+        .focusEffectDisabled()
+        .help(String(localized: "Make a note with this title (Return)"))
+        .accessibilityIdentifier("notes-library-new-from-search")
     }
 
     private func emptyLine(_ text: String) -> some View {

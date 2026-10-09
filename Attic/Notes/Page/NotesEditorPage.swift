@@ -114,6 +114,12 @@ struct NotesEditorPage: View {
                 .padding(.bottom, layout.chromeInsets.bottom)
             shortcuts
         }
+        // A deliberate two-finger swipe goes to All notes and back (the
+        // panel's swipe router: a pull past its threshold, never momentum;
+        // it yields to sideways controls, a drag selection, and refuses
+        // while text is being composed, as the button does).
+        .background(NotesPageSwipeMonitor(isLibraryPresented: controller.isLibraryPresented) { toggleLibrary() }
+            .accessibilityHidden(true))
         // Springy slides between the note and All notes, and for a new or
         // another note (keystrokes are never held back: the text view takes
         // the keyboard at once, and nothing here animates per keystroke).
@@ -231,7 +237,8 @@ struct NotesEditorPage: View {
                              libraryCommands: { Self.historyCommands(for: controller) },
                              onOpen: { id in openFromLibrary(id) },
                              onDelete: { id in delete(id) },
-                             onBack: { toggleLibrary() })
+                             onBack: { toggleLibrary() },
+                             onCreate: { title, tag in newNote(title: title, tag: tag) })
                 .transition(slide(from: Self.libraryEdge))
         } else if let legacyID = controller.legacyNoteID, noteDraft.activeNoteID == legacyID {
             // A note not yet in the new format keeps the old editor.
@@ -498,6 +505,14 @@ struct NotesEditorPage: View {
         library.clearSearch()
         guard controller.requestNewNote() else { return }
         // An untouched draft stays; only the caret moves to its title.
+        DispatchQueue.main.async { chrome.focusText() }
+    }
+
+    /// "New note “kyoto”" (in #launch) from All notes: the note the search
+    /// named, its caret at the end of the title.
+    private func newNote(title: String, tag: String?) {
+        guard controller.requestNewNote(title: title, tags: tag.map { [$0] } ?? []) else { return }
+        library.clearSearch()
         DispatchQueue.main.async { chrome.focusText() }
     }
 
@@ -984,4 +999,51 @@ private struct NotesKeyboardStop: ViewModifier {
             .focusable(enabled)
             .focused(focus, equals: stop)
     }
+}
+
+/// Registers the Notes page with the panel's trackpad-swipe router (the
+/// router decides direction and threshold; this only says whether All notes
+/// shows and what a finished swipe does).
+struct NotesPageSwipeMonitor: NSViewRepresentable {
+    let isLibraryPresented: Bool
+    let onSwipe: () -> Void
+
+    func makeNSView(context: Context) -> NotesPageSwipeView {
+        NotesPageSwipeView(isLibraryPresented: isLibraryPresented, onSwipe: onSwipe)
+    }
+
+    func updateNSView(_ view: NotesPageSwipeView, context: Context) {
+        view.onSwipe = onSwipe
+        view.isNotesLibraryPresented = isLibraryPresented
+    }
+}
+
+final class NotesPageSwipeView: NSView, PanelNotesSwipeTarget {
+    var onSwipe: () -> Void
+    var isNotesLibraryPresented: Bool
+    var swipeView: NSView { self }
+    private weak var registeredPanel: AtticPanel?
+
+    init(isLibraryPresented: Bool, onSwipe: @escaping () -> Void) {
+        isNotesLibraryPresented = isLibraryPresented
+        self.onSwipe = onSwipe
+        super.init(frame: .zero)
+    }
+
+    @available(*, unavailable)
+    required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
+
+    /// Clicks go through to the page.
+    override func hitTest(_ point: NSPoint) -> NSView? { nil }
+
+    override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        if let registeredPanel, registeredPanel.notesSwipeTarget === self {
+            registeredPanel.notesSwipeTarget = nil
+        }
+        registeredPanel = window as? AtticPanel
+        registeredPanel?.notesSwipeTarget = self
+    }
+
+    func performNotesSwipe() { onSwipe() }
 }
