@@ -49,6 +49,9 @@ final class NotesPageControllerTests: XCTestCase {
                                     byteCount: Int64(bytes.count), digest: digest, data: bytes)
     }
 
+    #if !ATTIC_COST_REFERENCE_HOST
+    // These functional review tests need S5's APIs. The pinned historical
+    // cost host receives this file only for its unchanged measurement tests.
     private func s5Fixture(_ document: NoteDocument) async throws -> (NotesPageController, NoteSession, UUID) {
         let controller = makeController()
         await controller.startAndWait()
@@ -213,6 +216,7 @@ final class NotesPageControllerTests: XCTestCase {
         await XCTAssertTrueAsync(await controller.saveReviewedProposalAsNew())
         XCTAssertTrue(store.notes.contains { $0.id != session.noteID && $0.title == "My text unsaved newer" })
     }
+    #endif
 
     func testANewDraftIsSavedOnlyOnceItHasContent() async throws {
         let controller = makeController()
