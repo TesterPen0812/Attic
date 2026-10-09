@@ -14,6 +14,13 @@ final class PerformanceSeedTests: XCTestCase {
         let now = Date(timeIntervalSince1970: 1_800_000_000)
         try PerformanceSeed.generate(in: container, root: root, includeDoneHistory: true, now: now)
 
+        let context = ModelContext(container)
+        let notes = try context.fetch(FetchDescriptor<NoteItem>())
+        XCTAssertEqual(notes.count, PerformanceSeed.noteCount)
+        XCTAssertTrue(notes.allSatisfy { $0.contentFormat == 1 && $0.content.map { NoteContentCodec.decode($0).isEditable } == true })
+        let noteAttachments = try context.fetch(FetchDescriptor<NoteAttachment>())
+        let documentIDs = Set(notes.flatMap { $0.content.flatMap { NoteContentCodec.decode($0).document }?.attachmentIDs ?? [] })
+        XCTAssertEqual(documentIDs, Set(noteAttachments.map(\.id)), "Every seeded attachment remains placed in a document")
         let store = TaskStore(container: container)
         let logged = store.doneLog()
         let today = Calendar.current.startOfDay(for: now)

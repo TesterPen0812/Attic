@@ -51,7 +51,6 @@ final class PanelUIState: ObservableObject {
         get { renameDraft.title }
         set { renameDraft.title = newValue }
     }
-    @Published var editingNoteID: UUID?
     @Published var subtaskDrafts: [UUID: String] = [:]
     /// Families whose inline Add entry is activated. Separate from drafts: an
     /// activated-but-empty entry stays visible, a draft reactivates the entry
@@ -219,7 +218,6 @@ final class PanelUIState: ObservableObject {
 
     func beginAdding() {
         editingTaskID = nil
-        editingNoteID = nil
         isComposerPresented = true
     }
 
@@ -287,7 +285,6 @@ final class PanelUIState: ObservableObject {
         isComposerPresented = false
         editingTaskID = nil
         editingDraftTitle = ""
-        editingNoteID = nil
         draggedTaskID = nil
         focusedSubtaskParentID = nil
         confirmingTaskDeletionID = nil
@@ -299,12 +296,10 @@ final class PanelUIState: ObservableObject {
 
     func endAdding() {
         isComposerPresented = false
-        editingNoteID = nil
     }
 
     func beginEditing(_ task: TaskItem) {
         isComposerPresented = false
-        editingNoteID = nil
         editingTaskID = task.id
         editingDraftTitle = task.title
     }
@@ -312,14 +307,6 @@ final class PanelUIState: ObservableObject {
     func endEditing() {
         editingTaskID = nil
         editingDraftTitle = ""
-    }
-
-    /// Editing a note reuses the composer slot so the panel reserves height
-    /// for a multi-line body instead of clipping an inline editor.
-    func beginEditingNote(_ note: NoteItem) {
-        editingTaskID = nil
-        editingNoteID = note.id
-        isComposerPresented = true
     }
 
     func reconcileTaskIDs(_ availableIDs: Set<UUID>) {

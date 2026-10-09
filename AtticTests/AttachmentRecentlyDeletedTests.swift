@@ -71,13 +71,17 @@ final class AttachmentRecentlyDeletedTests: XCTestCase {
         XCTAssertTrue(store.task(withID: task.id)?.removedAttachments.isEmpty == true)
     }
 
-    func testRemovingANoteAttachmentKeepsItRestorableUntilThePurge() throws {
+    func testRemovingADocumentAttachmentRetainsPayloadOwnedByHistory() throws {
         let clock = MutableNow(Date(timeIntervalSince1970: 100_000))
         let container = try PersistenceController.makeContainer(inMemory: true)
         let seed = ModelContext(container)
         let note = NoteItem(title: "Note")
         let attachment = NoteAttachment(noteID: note.id, originalFilename: "a.txt", byteCount: 1, sortIndex: 0,
-                                        contentDigest: String(repeating: "a", count: 64), payload: Data([7]))
+                                        contentDigest: NotePayloadDigest.sha256(Data([7])), payload: Data([7]))
+        let document = NoteDocument(blocks: [.text("Note"), .file(attachmentID: attachment.id,
+            filename: attachment.originalFilename, contentTypeIdentifier: attachment.contentTypeIdentifier, byteCount: 1)])
+        note.content = try NoteContentCodec.encode(document)
+        note.plainText = NoteTextExport.plainText(document)
         seed.insert(note)
         seed.insert(attachment)
         try seed.save()
@@ -96,8 +100,10 @@ final class AttachmentRecentlyDeletedTests: XCTestCase {
         XCTAssertTrue(notes.removeAttachment(try XCTUnwrap(notes.attachments(for: note.id).first)))
         XCTAssertEqual(notes.purgeRemovedAttachments(before: clock.value), 0, "not before its 30 days")
         clock.value += 31 * day
-        XCTAssertEqual(library.purgeExpired(now: clock.value, calendar: Calendar(identifier: .gregorian)).attachmentCount, 1)
-        XCTAssertEqual(try ModelContext(container).fetchCount(FetchDescriptor<NoteAttachment>()), 0)
+        notes.thinVersions(noteID: note.id)
+        XCTAssertEqual(library.purgeExpired(now: clock.value, calendar: Calendar(identifier: .gregorian)).attachmentCount, 0, "Rich document history keeps its only recoverable attachment")
+        XCTAssertEqual(try ModelContext(container).fetchCount(FetchDescriptor<NoteAttachment>()), 1)
+        XCTAssertTrue(notes.versions(noteID: note.id).contains { $0.attachmentIDs.contains(attachment.id) })
     }
 
 

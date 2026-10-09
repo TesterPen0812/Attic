@@ -266,12 +266,13 @@ final class SwipeToCloseIntegrationTests: XCTestCase {
         let panel = controller.panelForTesting
         uiState.selectSection(.notes)
         spin(0.5)
-        XCTAssertTrue(noteDraft.beginNew())
-        noteDraft.body = "An unsaved thought"
+        noteDraft.pages.start()
+        XCTAssertTrue(noteDraft.pages.newNote())
+        XCTAssertTrue(try XCTUnwrap(noteDraft.pages.active).engine.performEdit(NSRange(location: 0, length: 0), with: NSAttributedString(string: "An unsaved thought"), name: "Type"))
         gate.shouldFail = true
         try swipe(panel)
         XCTAssertTrue(controller.isVisibleForPerformanceProbe, "a draft that cannot be saved keeps the panel")
-        XCTAssertEqual(noteDraft.body, "An unsaved thought", "the draft stays")
+        XCTAssertEqual(noteDraft.pages.active?.engine.plainText, "An unsaved thought", "the draft stays")
         gate.shouldFail = false
         try swipe(panel)
         spin(until: { !controller.isVisibleForPerformanceProbe }, timeout: 3)

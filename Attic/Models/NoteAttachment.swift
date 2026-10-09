@@ -10,7 +10,7 @@ final class NoteAttachment {
     var contentTypeIdentifier: String = UTType.data.identifier
     var byteCount: Int64 = 0
     var sortIndex: Int64 = 0
-    /// UTF-16 body offset at a paragraph boundary; nil keeps the card in the tray.
+    /// Retired storage columns retained for additive schema compatibility; never read or written by the editor.
     var inlineOffset: Int? = nil
     var displayWidth: Double? = nil
     var displayHeight: Double? = nil

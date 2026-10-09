@@ -314,7 +314,7 @@ final class NoteTableCellEditor: NSTextView, NSTextViewDelegate {
         }
         guard let text = pboard.string(forType: .string) else { return false }
         // Plain text goes into the cell; its line breaks stay inside it.
-        let normalized = LegacyNoteMigration.normalizeLineBreaks(text).0
+        let normalized = NoteLineBreaks.normalizeLineBreaks(text).0
             .replacingOccurrences(of: "\n", with: String(NoteTextCodec.cellLineBreak))
             .replacingOccurrences(of: String(NoteDocument.objectCharacter), with: "")
         insertText(normalized, replacementRange: rangeForUserTextChange)

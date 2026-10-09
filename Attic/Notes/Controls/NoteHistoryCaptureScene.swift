@@ -10,7 +10,7 @@ enum NoteHistoryCaptureScene {
     static func seedIfRequested(_ controller: NotesPageController) async {
         let environment = ProcessInfo.processInfo.environment
         guard environment["ATTIC_UI_TESTING"] == "1",
-              NotesEditorSetting.isPreviewIdentity(Bundle.main.bundleIdentifier),
+              PreviewIdentity.isPreview(Bundle.main.bundleIdentifier),
               environment["ATTIC_UI_TEST_NOTES_SCENE"]?.hasPrefix("history") == true,
               !didRun else { return }
         didRun = true

@@ -123,17 +123,6 @@ final class PhaseXHunt1bTests: XCTestCase {
         }
     }
 
-    func testR2_01MigrationKeepsTagsChangedAfterPlanning() throws {
-        let store = try makeTestNoteStore(attachmentFileStore: makeTestAttachmentFileStore())
-        let note = try XCTUnwrap(store.create(title: "Legacy", body: "Body"))
-        let plan = try LegacyNoteMigration.plan(store.legacySnapshot(noteID: note.id).get()).get()
-        let verified = try LegacyNoteMigration.verify(plan, roundTrip: { NoteTextKitRoundTrip.document(afterRoundTrip: $0) }).get()
-        note.tags = ["latest"]
-        try store.modelContext.save()
-        _ = try store.commitMigration(verified).get()
-        XCTAssertEqual(store.note(withID: note.id)?.tags, ["latest"])
-    }
-
     func testR2_03UndoReschedulesBothAutosaveAndDurabilityDeadline() async throws {
         for deadline in [false, true] {
             let store = try makeTestNoteStore(attachmentFileStore: makeTestAttachmentFileStore())
@@ -334,65 +323,24 @@ final class PhaseXHunt1bTests: XCTestCase {
         }
     }
 
-    func testH3_02LegacySaveAndMigrationConvergeCanonicalMetadata() throws {
-        for migrate in [false, true] {
-            let store = try makeTestNoteStore(attachmentFileStore: makeTestAttachmentFileStore())
-            let note = try XCTUnwrap(store.create(title: "Legacy", body: "Body"))
-            XCTAssertTrue(store.setPinned(true, noteID: note.id))
-            note.externalEditorName = "Agent"
-            note.externalEditedAt = Date(timeIntervalSince1970: 1_700_000_000)
-            let duplicate = NoteItem(id: note.id, title: note.title, body: note.body,
-                                     createdAt: note.createdAt, updatedAt: note.updatedAt.addingTimeInterval(-60))
-            store.modelContext.insert(duplicate); try store.modelContext.save()
-            store.refresh()
-            if migrate {
-                let snapshot = try store.legacySnapshot(noteID: note.id).get()
-                let plan = try LegacyNoteMigration.plan(snapshot).get()
-                let verified = try LegacyNoteMigration.verify(plan, roundTrip: { NoteTextKitRoundTrip.document(afterRoundTrip: $0) }).get()
-                _ = try store.commitMigration(verified).get()
-            } else {
-                XCTAssertTrue(store.update(try XCTUnwrap(store.note(withID: note.id)), body: "Changed"))
-            }
-            let physical = try ModelContext(store.container).fetch(FetchDescriptor<NoteItem>()).filter { $0.id == note.id }
-            XCTAssertEqual(physical.count, 2)
-            for replica in physical {
-                XCTAssertEqual(replica.pinnedAt, note.pinnedAt)
-                XCTAssertEqual(replica.externalEditorName, note.externalEditorName)
-                XCTAssertEqual(replica.externalEditedAt, note.externalEditedAt)
-            }
-        }
-    }
-
-    func testH3_03MigrationPreservesAttachmentOnlyLegacyHistoryState() throws {
-        let store = try makeTestNoteStore(attachmentFileStore: makeTestAttachmentFileStore())
-        let id = try XCTUnwrap(store.create(title: "Legacy", body: "Same prose")).id
-        XCTAssertTrue(store.recordVersion(noteID: id, reason: .leave))
-        let image = NoteAttachment(noteID: id, originalFilename: "added.png", contentTypeIdentifier: "public.png",
-                                   byteCount: 3, sortIndex: 0, contentDigest: NotePayloadDigest.sha256(Data([1, 2, 3])), payload: Data([1, 2, 3]))
-        image.inlineOffset = 0
-        store.modelContext.insert(image); try store.modelContext.save()
-        let snapshot = try store.legacySnapshot(noteID: id).get()
-        let plan = try LegacyNoteMigration.plan(snapshot).get()
-        let verified = try LegacyNoteMigration.verify(plan, roundTrip: { NoteTextKitRoundTrip.document(afterRoundTrip: $0) }).get()
-        _ = try store.commitMigration(verified).get()
-        let originals = store.versions(noteID: id).filter { $0.contentFormat == 0 && $0.attachmentIDs.contains(image.id) }
-        XCTAssertFalse(originals.isEmpty, "Before migration must retain the current legacy attachment visibility")
-    }
-
     func testH3_03VersionRecordingPreservesAttachmentVisibilityChanges() throws {
         let store = try makeTestNoteStore(attachmentFileStore: makeTestAttachmentFileStore())
-        let id = try XCTUnwrap(store.create(title: "Legacy", body: "Same prose")).id
+        let id = try XCTUnwrap(store.create(title: "Text", body: "Same prose")).id
         XCTAssertTrue(store.recordVersion(noteID: id, reason: .leave))
-        let image = NoteAttachment(noteID: id, originalFilename: "added.png", contentTypeIdentifier: "public.png",
-                                   byteCount: 3, sortIndex: 0, contentDigest: NotePayloadDigest.sha256(Data([1, 2, 3])), payload: Data([1, 2, 3]))
-        store.modelContext.insert(image); try store.modelContext.save()
+        let bytes = Data([1, 2, 3])
+        let image = StagedNoteAttachment(id: UUID(), filename: "added.png", contentTypeIdentifier: "public.png",
+            byteCount: 3, digest: NotePayloadDigest.sha256(bytes), data: bytes)
+        var document = try XCTUnwrap(store.loadDocument(noteID: id)?.content.document)
+        document.blocks.append(.image(attachmentID: image.id))
+        guard case .success = store.saveDocument(noteID: id, document: document,
+            baseRevisionID: store.note(withID: id)?.revisionID, staged: [image]) else { return XCTFail() }
         XCTAssertTrue(store.recordVersion(noteID: id, reason: .pause))
         let withImage = try XCTUnwrap(store.versions(noteID: id).first)
         XCTAssertEqual(withImage.attachmentIDs, [image.id])
         let count = store.versions(noteID: id).count
         XCTAssertTrue(store.recordVersion(noteID: id, reason: .pause))
         XCTAssertEqual(store.versions(noteID: id).count, count, "An unchanged attachment set is already preserved")
-        image.deletedAt = Date(); try store.modelContext.save()
+        XCTAssertTrue(store.removeAttachment(try XCTUnwrap(store.attachments(for: id).first)))
         XCTAssertTrue(store.recordVersion(noteID: id, reason: .pause))
         XCTAssertTrue(try XCTUnwrap(store.versions(noteID: id).first).attachmentIDs.isEmpty)
         XCTAssertEqual(store.versions(noteID: id).count, count + 1)

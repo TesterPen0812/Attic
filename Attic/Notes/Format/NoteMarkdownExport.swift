@@ -72,17 +72,6 @@ enum NoteMarkdownExport {
         return result
     }
 
-    /// A note still in the old format: its title and body as they are.
-    static func markdown(title: String, body: String) -> String {
-        let heading = title.trimmingCharacters(in: .whitespaces)
-        let text = body.trimmingCharacters(in: .newlines)
-        switch (heading.isEmpty, text.isEmpty) {
-        case (true, _): return text
-        case (false, true): return "# " + heading
-        case (false, false): return "# " + heading + "\n\n" + text
-        }
-    }
-
     /// A date as the note shows it, with the year: "Thu, 1 Oct 2026".
     static func dateText(_ day: NoteDay, calendar: Calendar = .current, locale: Locale = .current) -> String {
         let style = Date.FormatStyle(locale: locale, calendar: calendar, timeZone: calendar.timeZone)

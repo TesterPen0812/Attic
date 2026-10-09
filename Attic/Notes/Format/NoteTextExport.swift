@@ -1,6 +1,6 @@
 import Foundation
 
-/// Text forms of a note for search, the legacy `body` column and agents.
+/// Text forms of a note for search, the derived `body` column and agents.
 enum NoteTextExport {
     /// Search and preview text: the title, then one line per block. Objects
     /// read as `[ ] text`, `[x] text`, `[Image]`; dates as ISO days.
@@ -8,7 +8,7 @@ enum NoteTextExport {
         document.blocks.map(plainLine).joined(separator: "\n")
     }
 
-    /// Everything after the title, as plain text (the legacy `body` column
+    /// Everything after the title, as plain text (the derived `body` column
     /// for a note stored in the new format, so older readers still show it).
     static func plainBody(_ document: NoteDocument) -> String {
         document.blocks.dropFirst().map(plainLine).joined(separator: "\n")

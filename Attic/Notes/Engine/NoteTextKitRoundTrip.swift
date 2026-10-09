@@ -1,8 +1,7 @@
 import AppKit
 
 /// Puts a document through the real text system (a TextKit 2 text view and
-/// a full layout pass) and reads it back. The migration gate requires the
-/// result to equal the document it started from.
+/// a full layout pass) and reads it back for document fidelity tests.
 @MainActor
 enum NoteTextKitRoundTrip {
     static func document(afterRoundTrip document: NoteDocument) -> NoteDocument {

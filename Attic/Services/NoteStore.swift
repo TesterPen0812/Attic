@@ -6,37 +6,8 @@ import SwiftData
 #if os(macOS)
 typealias NoteAttachmentFileStore = AttachmentFileStore
 
-protocol NoteAttachmentFileImporting: Sendable {
-    func importFiles(
-        _ urls: [URL],
-        baseSortIndex: Int64,
-        existingCount: Int,
-        existingBytes: Int64,
-        progress: (@Sendable (Int, Int) async -> Void)?
-    ) async throws -> [ImportedAttachment]
-}
-
-extension AttachmentFileStore: NoteAttachmentFileImporting {}
-
-typealias NoteAttachmentImporter = any NoteAttachmentFileImporting
-
-struct NoteAttachmentImportActivity: Equatable {
-    let requestID: UUID
-    let editorSession: NoteEditorSession
-    let origin: NoteAttachmentImportOrigin
-    let ownerLabel: String
-    var originWasPersisted: Bool
-    var state: AttachmentImportState
-}
-
-enum NoteAttachmentImportPresentation: Equatable {
-    case idle
-    case current(AttachmentImportState)
-    case background(ownerLabel: String, state: AttachmentImportState)
-}
 #else
 typealias NoteAttachmentFileStore = Any
-typealias NoteAttachmentImporter = Any
 #endif
 
 private struct NoteReplicaSnapshot: Equatable {
@@ -110,9 +81,6 @@ private struct NoteAttachmentReplicaSnapshot: Equatable {
     let contentTypeIdentifier: [UInt16]
     let byteCount: Int64
     let sortIndex: Int64
-    let inlineOffset: Int?
-    let displayWidth: Double?
-    let displayHeight: Double?
     let contentDigest: [UInt16]
     let createdAt: Date
     let updatedAt: Date
@@ -126,9 +94,6 @@ private struct NoteAttachmentReplicaSnapshot: Equatable {
         contentTypeIdentifier = Array(row.contentTypeIdentifier.utf16)
         byteCount = row.byteCount
         sortIndex = row.sortIndex
-        inlineOffset = row.inlineOffset
-        displayWidth = row.displayWidth
-        displayHeight = row.displayHeight
         contentDigest = Array(row.contentDigest.utf16)
         createdAt = row.createdAt
         updatedAt = row.updatedAt
@@ -206,19 +171,12 @@ final class NoteStore: ObservableObject {
 
     @Published private(set) var lastErrorMessage: String?
     @Published private(set) var revision: UInt64 = 0
-    /// Test/diagnostic seam for PERF-A3: body-only callers derive at most once
-    /// per update, while editor-originated saves can supply the exact batch.
-    private(set) var attachmentAnchorFallbackDerivations = 0
     @Published private(set) var cloudSyncStatus = CloudSyncStatus()
 #if os(macOS)
     @Published private(set) var attachmentsByNoteID: [UUID: [NoteAttachment]] = [:]
-    @Published private(set) var attachmentImportActivity: NoteAttachmentImportActivity?
     @Published private(set) var attachmentFailures: [UUID: String] = [:]
     @Published private(set) var attachmentRetryVersions: [UUID: UInt64] = [:]
 
-    var attachmentImportState: AttachmentImportState {
-        attachmentImportActivity?.state ?? .idle
-    }
 #endif
 
     let container: ModelContainer
@@ -372,7 +330,6 @@ final class NoteStore: ObservableObject {
     var recoveryProtectedRevisionIDs: () throws -> Set<UUID> = { [] }
 #if os(macOS)
     private let attachmentFileStore: AttachmentFileStore
-    private let attachmentImporter: any NoteAttachmentFileImporting
 #endif
     private var context: ModelContext
     /// A successful save keeps this context alive. Reuse the capability check
@@ -407,8 +364,6 @@ final class NoteStore: ObservableObject {
     private(set) var importActivityToken: NSObjectProtocol?
     private(set) var exportActivityTimeoutTask: Task<Void, Never>?
     private(set) var importActivityTimeoutTask: Task<Void, Never>?
-    private var attachmentImportInFlight = false
-    private var invalidatedAttachmentImportIDs = Set<UUID>()
     private var attachmentReconciliationTask: Task<Void, Never>?
     private var attachmentReconciliationGeneration: UInt64 = 0
     private var reconciledAttachmentSignature: Int?
@@ -427,14 +382,12 @@ final class NoteStore: ObservableObject {
         now: @escaping () -> Date = Date.init,
         persist: @escaping (ModelContext) throws -> Void = { try $0.save() },
         attachmentFileStore: NoteAttachmentFileStore? = nil,
-        attachmentImporter: NoteAttachmentImporter? = nil,
         makeFreshContext: (() throws -> ModelContext)? = nil
     ) {
         self.container = container
 #if os(macOS)
         let resolvedAttachmentFileStore = attachmentFileStore ?? AttachmentFileStore()
         self.attachmentFileStore = resolvedAttachmentFileStore
-        self.attachmentImporter = attachmentImporter ?? resolvedAttachmentFileStore
 #endif
         context = ModelContext(container)
         self.now = now
@@ -499,129 +452,24 @@ final class NoteStore: ObservableObject {
            existing.contains(where: { $0.deletedAt != nil }) {
             resolvedID = UUID()
         }
-        let timestamp = now()
-        let note = NoteItem(
-            id: resolvedID,
-            title: normalizedTitle,
-            body: body,
-            createdAt: timestamp,
-            updatedAt: timestamp
-        )
-        note.plainText = Self.legacyPlainText(title: normalizedTitle, body: body)
-        context.insert(note)
-        notes.append(note)
-        guard save() else { return nil }
-#if os(macOS)
-        markAttachmentImportOriginPersisted(noteID: resolvedID)
-#endif
-        return note
+        let document = NoteDocument(blocks: [.text(normalizedTitle)] + body.components(separatedBy: "\n").map { .text($0) })
+        guard case let .success((noteID, _)) = createDocumentNote(id: resolvedID, document: document) else { return nil }
+        return note(withID: noteID)
     }
 
+    /// Plain-text caller API, using the same validated document writer as the editor.
     @discardableResult
-    func update(
-        _ note: NoteItem,
-        title: String? = nil,
-        body: String? = nil,
-        bodyEditBatch: NoteBodyEditBatch? = nil
-    ) -> Bool {
-        update(note, title: title, body: body, bodyEditBatch: bodyEditBatch,
-               preservationReason: .replacedByDraft)
-    }
-
-    /// All physical rows are checked before any one of them is changed.
-    func update(
-        _ note: NoteItem,
-        title: String?,
-        body: String?,
-        bodyEditBatch: NoteBodyEditBatch?,
-        preservationReason: NoteVersionReason
-    ) -> Bool {
-        guard notes.contains(where: { $0.id == note.id }) else { return false }
-        let preflight: NoteMutationPreflight
+    func update(_ note: NoteItem, title: String? = nil, body: String? = nil) -> Bool {
+        let nextTitle = title ?? note.title, nextBody = body ?? note.body
+        guard !nextTitle.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            || !nextBody.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return false }
+        guard let loaded = loadDocument(noteID: note.id), let base = loaded.content.document else { return false }
         do {
-            preflight = try noteMutationPreflight(note.id, format: .legacy)
-        } catch {
-            lastErrorMessage = error.localizedDescription
-            return false
-        }
-        let replicas = preflight.replicas
-        let note = preflight.canonical
-        let destinationTitle = title.map(Self.normalizedTitle) ?? note.title
-        let destinationBody = body ?? note.body
-        guard !destinationTitle.isEmpty || Self.hasMeaningfulBody(destinationBody) else { return false }
-
-        let titleChanged = !NoteTextReplacement.utf16Equal(destinationTitle, note.title)
-        let bodyChanged = !NoteTextReplacement.utf16Equal(destinationBody, note.body)
-        let visibleSnapshot = NoteReplicaSnapshot(note)
-        let replicasNeedRepair = replicas.contains { NoteReplicaSnapshot($0) != visibleSnapshot }
-        guard titleChanged || bodyChanged || replicasNeedRepair else { return true }
-
-        let timestamp = now()
-        let displaced = replicas.filter {
-            preservationReason == .beforeAgentEdit || NoteReplicaSnapshot($0) != visibleSnapshot
-        }
-        stageDisplacedReplicas(displaced, reason: preservationReason, timestamp: timestamp)
-        if bodyChanged {
-            do {
-                let attachments = try storedAttachments(forNoteID: note.id)
-                // One ordered edit list per save: paragraphs that survive
-                // between disjoint edits keep their anchors instead of
-                // collapsing into one spanning replacement.
-                let hasInlineAttachments = attachments.contains { $0.inlineOffset != nil }
-                let edits: [NoteTextReplacement]
-                if !hasInlineAttachments {
-                    edits = []
-                } else if let supplied = bodyEditBatch?.validatedEdits(
-                    from: note.body,
-                    to: destinationBody
-                ) {
-                    edits = supplied
-                } else {
-                    attachmentAnchorFallbackDerivations += 1
-                    edits = NoteTextReplacement.edits(from: note.body, to: destinationBody)
-                }
-                for attachment in attachments {
-                    if let offset = attachment.inlineOffset {
-                        attachment.inlineOffset = NoteInlineAnchor.moved(offset, by: edits, in: destinationBody)
-                    }
-                }
-            } catch {
-                context.rollback()
-                lastErrorMessage = error.localizedDescription
-                return false
-            }
-        }
-        // Every stored field goes to every replica (requirement 8), with one
-        // new revision for the whole logical note.
-        let contentChanged = titleChanged || bodyChanged
-        let revision = replicas.map(\.revision).max() ?? 0
-        let revisionID = contentChanged ? UUID() : note.revisionID
-        for replica in replicas {
-            replica.title = destinationTitle
-            replica.body = destinationBody
-            replica.createdAt = note.createdAt
-            replica.tagsRaw = note.tagsRaw
-            replica.deletedAt = nil
-            replica.deletedAttachmentIDsRaw = nil
-            replica.updatedAt = timestamp
-            replica.content = nil
-            replica.contentFormat = 0
-            replica.plainText = Self.legacyPlainText(title: destinationTitle, body: destinationBody)
-            replica.taskID = note.taskID
-            replica.pinnedAt = note.pinnedAt
-            replica.externalEditorName = note.externalEditorName
-            replica.externalEditedAt = note.externalEditedAt
-            replica.revision = contentChanged ? revision &+ 1 : revision
-            replica.revisionID = revisionID
-        }
-        return save()
-    }
-
-    static let documentFormatRefusal =
-        "This note is stored in the new format. Edit it in the new Notes editor."
-
-    static func legacyPlainText(title: String, body: String) -> String {
-        body.isEmpty ? title : title + "\n" + body
+            let document = try NoteAgentTextParser.document(title: title ?? NoteTextExport.agentLine(base.blocks[0], index: 0),
+                body: body ?? NoteTextExport.agentBody(base), base: base)
+            guard case .success = saveDocument(noteID: note.id, document: document, baseRevisionID: loaded.revisionID) else { return false }
+            return true
+        } catch { recordError(error.localizedDescription); return false }
     }
 
     /// Tags are metadata: setting them does not move the note in the
@@ -665,12 +513,6 @@ final class NoteStore: ObservableObject {
             lastErrorMessage = error.localizedDescription
             return false
         }
-#if os(macOS)
-        let attachmentImportIDToInvalidate = attachmentImportInFlight
-            && attachmentImportActivity?.origin.noteID == note.id
-            ? attachmentImportActivity?.requestID
-            : nil
-#endif
         // `updatedAt` is kept, so a restored note returns to its place in
         // the newest-first list.
         let timestamp = now()
@@ -683,11 +525,6 @@ final class NoteStore: ObservableObject {
         attachmentsByNoteID[note.id] = nil
 #endif
         guard save() else { return false }
-#if os(macOS)
-        if let attachmentImportIDToInvalidate {
-            invalidatedAttachmentImportIDs.insert(attachmentImportIDToInvalidate)
-        }
-#endif
         return true
     }
 
@@ -868,263 +705,6 @@ final class NoteStore: ObservableObject {
         attachmentsByNoteID[noteID] ?? []
     }
 
-    func attachmentImportState(for editorSession: NoteEditorSession) -> AttachmentImportState {
-        guard attachmentImportActivity?.editorSession == editorSession else { return .idle }
-        return attachmentImportState
-    }
-
-    func attachmentImportPresentation(
-        for editorSession: NoteEditorSession
-    ) -> NoteAttachmentImportPresentation {
-        guard let activity = attachmentImportActivity else { return .idle }
-        if activity.editorSession == editorSession {
-            return .current(activity.state)
-        }
-        return .background(ownerLabel: activity.ownerLabel, state: activity.state)
-    }
-
-    /// Imports a batch into the immutable origin captured by the draft before
-    /// this async transaction starts. A blank origin owns a reserved logical
-    /// note ID that a concurrent autosave may create while file work is in
-    /// flight; either completion order converges on that one ID.
-    @discardableResult
-    func importAttachments(
-        _ request: NoteAttachmentImportRequest
-    ) async -> NoteAttachmentImportOutcome {
-        guard !request.urls.isEmpty else {
-            let message = "Choose at least one file to attach."
-            lastErrorMessage = message
-            return .failed(message)
-        }
-        guard !attachmentImportInFlight else {
-            lastErrorMessage = "Finish or cancel the current attachment import before adding more files."
-            return .busy
-        }
-        let originWasPersistedByDefinition: Bool
-        switch request.origin {
-        case .note:
-            originWasPersistedByDefinition = true
-        case .blankDraft:
-            originWasPersistedByDefinition = false
-        }
-        attachmentImportInFlight = true
-        attachmentImportActivity = NoteAttachmentImportActivity(
-            requestID: request.id,
-            editorSession: request.editorSession,
-            origin: request.origin,
-            ownerLabel: attachmentImportOwnerLabel(for: request.origin),
-            originWasPersisted: originWasPersistedByDefinition,
-            state: .importing(completed: 0, total: request.urls.count)
-        )
-        defer {
-            attachmentImportInFlight = false
-            invalidatedAttachmentImportIDs.remove(request.id)
-        }
-        var imported: [ImportedAttachment] = []
-        var transactionContext: ModelContext?
-
-        do {
-            let targetNoteID = request.origin.noteID
-            let originWasPersistedAtStart: Bool
-            switch request.origin {
-            case .note:
-                _ = try storedNotes(matching: targetNoteID)
-                originWasPersistedAtStart = true
-            case .blankDraft:
-                originWasPersistedAtStart = try !storedNotesIfPresent(
-                    matching: targetNoteID
-                ).isEmpty
-            }
-            if originWasPersistedAtStart {
-                markAttachmentImportOriginPersisted(noteID: targetNoteID)
-            }
-
-            let existing = try visibleAttachments(forNoteID: targetNoteID)
-            guard let baseSortIndex = AttachmentLimits.nextSortIndex(
-                after: existing.map(\.sortIndex).max(),
-                adding: request.urls.count
-            ) else {
-                throw AttachmentFileStoreError.sortIndexExhausted
-            }
-            let existingBytes = totalAttachmentBytes(existing)
-            imported = try await attachmentImporter.importFiles(
-                request.urls,
-                baseSortIndex: baseSortIndex,
-                existingCount: existing.count,
-                existingBytes: existingBytes
-            ) { [weak self] completed, total in
-                await self?.updateAttachmentImportProgress(
-                    requestID: request.id,
-                    completed: completed,
-                    total: total
-                )
-            }
-            try Task.checkCancellation()
-
-            guard !invalidatedAttachmentImportIDs.contains(request.id) else {
-                throw NoteReplicaMutationError.missingReplica(targetNoteID)
-            }
-            let refreshedContext = try makeFreshContext()
-            transactionContext = refreshedContext
-            let originWasPersisted = attachmentImportActivity?.requestID == request.id
-                ? attachmentImportActivity?.originWasPersisted ?? originWasPersistedAtStart
-                : originWasPersistedAtStart
-            switch request.origin {
-            case .note:
-                // The file copy can yield to CloudKit refresh notifications.
-                // Recheck the logical note before committing attachments so a
-                // note deleted remotely during the copy cannot gain orphaned
-                // attachment rows. Re-read its attachments as well: a remote
-                // insert during the copy must not let this batch exceed the
-                // per-note limit or reuse stale sort indexes.
-                _ = try storedNotes(matching: targetNoteID, in: refreshedContext)
-            case .blankDraft:
-                let noteReplicas = try storedNotesIfPresent(
-                    matching: targetNoteID,
-                    in: refreshedContext
-                )
-                if noteReplicas.isEmpty {
-                    // If this reserved origin had already become durable and is
-                    // now absent, deletion wins over the attachment completion.
-                    guard !originWasPersisted else {
-                        throw NoteReplicaMutationError.missingReplica(targetNoteID)
-                    }
-                    let timestamp = now()
-                    refreshedContext.insert(NoteItem(
-                        id: targetNoteID,
-                        title: "",
-                        body: "",
-                        createdAt: timestamp,
-                        updatedAt: timestamp
-                    ))
-                }
-            }
-
-            try Task.checkCancellation()
-            let currentAttachments = try visibleAttachments(
-                forNoteID: targetNoteID,
-                in: refreshedContext
-            )
-            guard currentAttachments.count <= AttachmentLimits.maxAttachmentsPerNote,
-                  imported.count <= AttachmentLimits.maxAttachmentsPerNote - currentAttachments.count else {
-                throw AttachmentFileStoreError.tooManyAttachments
-            }
-            let importedBytes = totalAttachmentBytes(imported)
-            let currentBytes = totalAttachmentBytes(currentAttachments)
-            guard importedBytes <= AttachmentLimits.maxBytesPerNote - currentBytes else {
-                throw AttachmentFileStoreError.noteTooLarge
-            }
-            guard let currentBaseSortIndex = AttachmentLimits.nextSortIndex(
-                after: currentAttachments.map(\.sortIndex).max(),
-                adding: imported.count
-            ) else {
-                throw AttachmentFileStoreError.sortIndexExhausted
-            }
-            let references = imported.enumerated().map { offset, item in
-                NoteAttachment(
-                    id: item.id,
-                    noteID: targetNoteID,
-                    originalFilename: item.filename,
-                    contentTypeIdentifier: item.contentTypeIdentifier,
-                    byteCount: item.byteCount,
-                    sortIndex: currentBaseSortIndex + Int64(offset),
-                    contentDigest: item.digest,
-                    createdAt: item.createdAt,
-                    payload: item.payload
-                )
-            }
-            references.forEach(refreshedContext.insert)
-            // Attachment changes participate in the same note recency as text.
-            let timestamp = now()
-            for note in try storedNotes(matching: targetNoteID, in: refreshedContext) {
-                note.updatedAt = timestamp
-            }
-            let presentation = try presentationSnapshot(in: refreshedContext)
-            switch persistImport(
-                in: refreshedContext,
-                fallbackPresentation: presentation
-            ) {
-            case .persisted, .persistedButRefreshFailed:
-                clearAttachmentImportActivity(requestID: request.id)
-                return .imported(noteID: targetNoteID)
-            case let .failed(message):
-                try? await removeImportedMaterializations(imported)
-                updateAttachmentImportState(.failed(message), requestID: request.id)
-                return .failed(message)
-            }
-        } catch is CancellationError {
-            transactionContext?.rollback()
-            try? await removeImportedMaterializations(imported)
-            clearAttachmentImportActivity(requestID: request.id)
-            return .cancelled
-        } catch NoteReplicaMutationError.missingReplica {
-            transactionContext?.rollback()
-            try? await removeImportedMaterializations(imported)
-            let message = "The note is no longer available."
-            updateAttachmentImportState(.failed(message), requestID: request.id)
-            lastErrorMessage = message
-            return .originUnavailable
-        } catch {
-            transactionContext?.rollback()
-            try? await removeImportedMaterializations(imported)
-            updateAttachmentImportState(
-                .failed(error.localizedDescription),
-                requestID: request.id
-            )
-            lastErrorMessage = error.localizedDescription
-            return .failed(error.localizedDescription)
-        }
-    }
-
-    /// Changes presentation metadata only; image bytes are never decoded or copied here.
-    @discardableResult
-    func placeAttachment(_ id: UUID, in noteID: UUID, offset: Int?, before targetID: UUID? = nil,
-                         size: CGSize? = nil) -> Bool {
-        do {
-            let all = try storedAttachments(forNoteID: noteID)
-            guard all.contains(where: { $0.id == id }) else { return false }
-            let note = notes.first { $0.id == noteID }
-            let anchor = offset.map { NoteInlineAnchor.paragraphStart($0, in: note?.body ?? "") }
-            for replica in all where replica.id == id {
-                replica.inlineOffset = anchor
-                if let size {
-                    replica.displayWidth = min(600, max(150, size.width.isFinite ? size.width : 250))
-                    replica.displayHeight = min(400, max(56, size.height.isFinite ? size.height : 56))
-                }
-                replica.updatedAt = now()
-            }
-            if size == nil || targetID != nil {
-                let current = attachments(for: noteID).map(\.id)
-                var order = current.filter { $0 != id }
-                // A card dropped on itself is not a reorder: it must stay where
-                // it is. `order` no longer holds the source, so a target equal
-                // to it missed the lookup and the card was appended to the end
-                // (A,B,C dropping A on A produced B,C,A).
-                let index = targetID == id
-                    ? current.firstIndex(of: id)
-                    : targetID.flatMap { order.firstIndex(of: $0) }
-                order.insert(id, at: min(index ?? order.endIndex, order.endIndex))
-                let indices = Dictionary(uniqueKeysWithValues: order.enumerated().map { ($0.element, Int64($0.offset)) })
-                for replica in all { replica.sortIndex = indices[replica.id] ?? replica.sortIndex }
-            }
-            for owner in try storedNotesIfPresent(matching: noteID) { owner.updatedAt = now() }
-            guard save() else { return false }
-            attachmentsByNoteID[noteID] = visibleUniqueAttachments(from: all)[noteID]
-            return true
-        } catch {
-            context.rollback()
-            lastErrorMessage = error.localizedDescription
-            return false
-        }
-    }
-
-    /// Removes one attachment into Recently Deleted: every replica is
-    /// marked, and its bytes and file stay until the removal is purged 30 days
-    /// later. The note moves up the list as for any attachment change.
-    /// Replicas that claim different notes are refused and left exactly as
-    /// they are: which note owns the attachment is unresolved, and removing
-    /// it from one note must not hide it from another.
-    @discardableResult
     func removeAttachment(_ attachment: NoteAttachment) -> Bool {
         let replicas: [NoteAttachment]
         do {
@@ -1197,44 +777,11 @@ final class NoteStore: ObservableObject {
     /// Brings a removed attachment back to its note, every replica, in one save.
     @discardableResult
     func restoreAttachment(_ attachmentID: UUID) -> Bool {
-        if let row = attachmentFamily(attachmentID).first,
-           note(withID: row.noteID)?.usesDocumentFormat == true {
-            guard attachmentFamily(attachmentID).allSatisfy({ $0.noteID == row.noteID }),
-                  attachmentFamily(attachmentID).contains(where: { $0.deletedAt != nil }) else { return false }
-            return restoreDocumentAttachment(row)
-        }
-        do {
-            let replicas = try storedAttachments(matching: attachmentID)
-            guard replicas.contains(where: { $0.deletedAt != nil }),
-                  let noteID = replicas.first?.noteID,
-                  replicas.allSatisfy({ $0.noteID == noteID }),
-                  notes.contains(where: { $0.id == noteID }) else {
-                throw NoteReplicaMutationError.notRecentlyDeleted(attachmentID)
-            }
-            guard attachments(for: noteID).count < AttachmentLimits.maxAttachmentsPerNote else {
-                throw AttachmentFileStoreError.tooManyAttachments
-            }
-            let timestamp = now()
-            for replica in replicas {
-                replica.deletedAt = nil
-                replica.updatedAt = timestamp
-            }
-            for note in try storedNotes(matching: noteID) { note.updatedAt = timestamp }
-        } catch {
-            context.rollback()
-            lastErrorMessage = error.localizedDescription
-            return false
-        }
-        guard save() else { return false }
-        // The reload below reconciles files in full, so a restored
-        // attachment whose file went missing is materialised again.
-        reconciledAttachmentSignature = nil
-        do {
-            try reloadModels()
-        } catch {
-            lastErrorMessage = "Restored, but the note could not be refreshed: \(error.localizedDescription)"
-        }
-        return true
+        let family = attachmentFamily(attachmentID)
+        guard let row = family.first,
+              family.allSatisfy({ $0.noteID == row.noteID }),
+              family.contains(where: { $0.deletedAt != nil }) else { return false }
+        return restoreDocumentAttachment(row)
     }
 
     /// Removes for good the attachments removed before `cutoff`, when every
@@ -1605,6 +1152,10 @@ final class NoteStore: ObservableObject {
     /// Replaces the presented models with a fresh read of the store.
     func reloadPresentation() throws { try reloadModels() }
 
+    /// A committed local document save already invalidated its changed byte families.
+    /// Keep unrelated verified bytes when presenting the newly inserted rows.
+    func reloadAfterDocumentSave() throws { try reloadModels(preservingAttachmentProofs: true) }
+
 #if os(macOS)
     /// Every attachment row (shown or removed) a note owns.
     func attachmentRows(forNoteID noteID: UUID) throws -> [NoteAttachment] {
@@ -1959,63 +1510,6 @@ final class NoteStore: ObservableObject {
                 NSLog("Attic attachment reconciliation failed: %@", error.localizedDescription)
             }
         }
-    }
-
-    private func attachmentImportOwnerLabel(
-        for origin: NoteAttachmentImportOrigin
-    ) -> String {
-        switch origin {
-        case .blankDraft:
-            return "previous draft"
-        case let .note(noteID):
-            guard let note = notes.first(where: { $0.id == noteID }) else {
-                return "previous note"
-            }
-            let title = note.title.trimmingCharacters(in: .whitespacesAndNewlines)
-            if !title.isEmpty {
-                return "note “\(String(title.prefix(48)))”"
-            }
-            let body = note.body
-                .split(whereSeparator: \.isNewline)
-                .first?
-                .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-            guard !body.isEmpty else { return "previous note" }
-            return "note “\(String(body.prefix(48)))”"
-        }
-    }
-
-    private func markAttachmentImportOriginPersisted(noteID: UUID) {
-        guard var activity = attachmentImportActivity,
-              activity.origin.noteID == noteID,
-              !activity.originWasPersisted else { return }
-        activity.originWasPersisted = true
-        attachmentImportActivity = activity
-    }
-
-    private func updateAttachmentImportProgress(
-        requestID: UUID,
-        completed: Int,
-        total: Int
-    ) {
-        updateAttachmentImportState(
-            .importing(completed: completed, total: total),
-            requestID: requestID
-        )
-    }
-
-    private func updateAttachmentImportState(
-        _ state: AttachmentImportState,
-        requestID: UUID
-    ) {
-        guard var activity = attachmentImportActivity,
-              activity.requestID == requestID else { return }
-        activity.state = state
-        attachmentImportActivity = activity
-    }
-
-    private func clearAttachmentImportActivity(requestID: UUID) {
-        guard attachmentImportActivity?.requestID == requestID else { return }
-        attachmentImportActivity = nil
     }
 
     private func removeMaterializationsAfterSuccessfulSave(

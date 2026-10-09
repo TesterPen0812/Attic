@@ -383,8 +383,6 @@ final class NotesLibraryModel: ObservableObject {
     }
 
     private func body(of note: NoteItem) -> NoteRowSummary.Body {
-        // A legacy note's text is read as is (no decode, nothing to keep).
-        guard note.usesDocumentFormat else { return NoteRowSummary.body(of: note) }
         if let kept = bodies[note.id], kept.content == note.content, kept.plainText == note.plainText { return kept.body }
         let body = NoteRowSummary.body(of: note)
         bodyDecodeCount += 1
@@ -467,8 +465,7 @@ struct NoteRowSummary: Equatable {
             }
         }
 
-        /// A line of text with no document behind it (a legacy note, or
-        /// stored bytes this build cannot read): as written, apart from the
+        /// A line of text with no document behind it (stored bytes this build cannot read): as written, apart from the
         /// derived text's object lines and `[ ]` / `[x]` checklist lines.
         init(plain line: String) {
             let trimmed = line.trimmingCharacters(in: .whitespaces)
@@ -508,8 +505,7 @@ struct NoteRowSummary: Equatable {
         }
     }
 
-    /// The body of a stored note: its document's blocks; a legacy note's
-    /// (or an unreadable document's) text as written.
+    /// The body of a stored note: its document's blocks or an unreadable document's derived text.
     @MainActor
     static func body(of note: NoteItem) -> Body {
         if note.usesDocumentFormat, let data = note.content, let document = NoteContentCodec.decode(data).document {
@@ -520,19 +516,8 @@ struct NoteRowSummary: Equatable {
 
     @MainActor
     init(note: NoteItem, attachments: [NoteAttachment], body: Body? = nil) {
-        var images = 0
-        var files = 0
-        if note.usesDocumentFormat {
-            images = note.imageCount
-            files = note.fileCount
-        } else {
-            for attachment in attachments {
-                if attachment.isImage { images += 1 } else { files += 1 }
-            }
-        }
-        let firstFile = note.usesDocumentFormat ? (note.firstFileName
-            ?? attachments.sorted { $0.sortIndex < $1.sortIndex }.first?.originalFilename)
-            : attachments.sorted { $0.sortIndex < $1.sortIndex }.first?.originalFilename
+        let images = note.imageCount, files = note.fileCount
+        let firstFile = note.firstFileName ?? attachments.sorted { $0.sortIndex < $1.sortIndex }.first?.originalFilename
         self.init(title: note.title, body: body ?? Self.body(of: note), images: images, files: files, firstFile: firstFile)
     }
 

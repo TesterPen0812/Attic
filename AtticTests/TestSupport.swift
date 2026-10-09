@@ -23,16 +23,14 @@ extension XCTestCase {
     func makeTestNoteStore(
         now: @escaping () -> Date = Date.init,
         persist: @escaping (ModelContext) throws -> Void = { try $0.save() },
-        attachmentFileStore: AttachmentFileStore,
-        attachmentImporter: (any NoteAttachmentFileImporting)? = nil
+        attachmentFileStore: AttachmentFileStore
     ) throws -> NoteStore {
         let container = try PersistenceController.makeContainer(inMemory: true)
         let store = NoteStore(
             container: container,
             now: now,
             persist: persist,
-            attachmentFileStore: attachmentFileStore,
-            attachmentImporter: attachmentImporter
+            attachmentFileStore: attachmentFileStore
         )
         addTeardownBlock { [weak store] in await store?.waitForAttachmentReconciliation() }
         return store

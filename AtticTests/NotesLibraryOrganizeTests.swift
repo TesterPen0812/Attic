@@ -304,7 +304,7 @@ final class NotesLibraryOrganizeTests: XCTestCase {
         XCTAssertNil(panel.notesSwipeTarget, "a page that left unregisters")
     }
 
-    /// Review S4-R5: a legacy editor inside the Notes page registers over
+    /// Review S4-R5: another editor inside the Notes page registers over
     /// it; when it leaves, the page gets the slot back.
     func testAnInnerSwipeTargetHandsTheSlotBackWhenItLeaves() {
         let panel = AtticPanel(contentRect: CGRect(x: 0, y: 0, width: 332, height: 480),

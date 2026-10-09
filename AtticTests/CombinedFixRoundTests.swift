@@ -489,8 +489,6 @@ final class CombinedFixRoundTests: XCTestCase {
         let previous = NSApp.accessibilityAttributeValue(attribute)
         NSApp.accessibilitySetValue(true, forAttribute: attribute)
         defer { NSApp.accessibilitySetValue(previous, forAttribute: attribute) }
-        UserDefaults.standard.set(true, forKey: NotesEditorSetting.defaultsKey)
-        defer { UserDefaults.standard.removeObject(forKey: NotesEditorSetting.defaultsKey) }
         let suite = "CombinedFixRoundTests.\(UUID().uuidString)"
         let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
         defer { defaults.removePersistentDomain(forName: suite) }

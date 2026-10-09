@@ -63,15 +63,10 @@ final class PanelAgentPresenter: AgentPanelPresenting {
             case .note:
                 guard let note = noteStore.note(withID: ref.id) else { return .notFound("note") }
                 if case let .refused(refusal) = reveal(.notes) { return .failed(refusal.explanation) }
-                if uiState.editingNoteID != note.id {
-                    guard !noteDraft.isActive || noteDraft.close() else {
-                        return .failed("the Notes page is open, but the note being edited could not be saved, so “\(note.title)” was not opened.")
-                    }
-                    guard noteDraft.beginEditing(note) else {
-                        return .failed("the Notes page is open, but “\(note.title)” could not be opened.")
-                    }
-                    uiState.beginEditingNote(note)
+                guard noteDraft.pages.open(noteID: note.id) else {
+                    return .failed("the Notes page is open, but the requested note could not be opened.")
                 }
+                noteDraft.pages.dismissLibrary()
                 return .shown("the note “\(note.title)”")
             case .canvas:
                 guard canvasSession.canvases.contains(where: { $0.id == ref.id }) else { return .notFound("canvas") }

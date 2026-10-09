@@ -3,31 +3,6 @@ import Combine
 import CryptoKit
 import UniformTypeIdentifiers
 
-/// Whether the Notes page uses the new editor. Internal: the
-/// `AtticUseNewNotesEditor` default, when set, decides (either way);
-/// otherwise the new editor is on in every preview identity
-/// (`com.taha.Attic.preview.<name>`: "Attic Preview" is
-/// `com.taha.Attic.preview.main`) and off elsewhere. A note already in the
-/// new format always opens in the new editor, whatever this says.
-///
-/// The official `com.taha.Attic` identity keeps the legacy editor by
-/// default for now: switching it is decided at Phase 2's pull request.
-enum NotesEditorSetting {
-    static let defaultsKey = "AtticUseNewNotesEditor"
-    static let previewBundlePrefix = "com.taha.Attic.preview."
-
-    static func isEnabled(defaults: UserDefaults = .standard, bundleIdentifier: String? = Bundle.main.bundleIdentifier) -> Bool {
-        if defaults.object(forKey: defaultsKey) != nil { return defaults.bool(forKey: defaultsKey) }
-        return isPreviewIdentity(bundleIdentifier)
-    }
-
-    /// A strict preview identity: the preview prefix and a name after it.
-    static func isPreviewIdentity(_ bundleIdentifier: String?) -> Bool {
-        guard let bundleIdentifier, bundleIdentifier.hasPrefix(previewBundlePrefix) else { return false }
-        return bundleIdentifier.count > previewBundlePrefix.count
-    }
-}
-
 enum NoteStatusItem: Equatable {
     case onlyInMemory(String), notSaved(String), changedElsewhere, deletedElsewhere
     case proposal(String), deletionProposal(String), editedBy(String, Date), importing, notice(String), readOnly(String)
@@ -211,7 +186,7 @@ final class NoteSession: ObservableObject, Identifiable {
 /// - a never-saved draft with no content is discarded, nothing else is.
 @MainActor
 final class NotesPageController: ObservableObject {
-    enum LeaveReason { case openNote, newNote, library, pageSwitch, hide, quit, exitToOldPage }
+    enum LeaveReason { case openNote, newNote, library, pageSwitch, hide, quit }
     @Published private(set) var active: NoteSession?
     @Published private(set) var historyBrowser: NoteHistoryBrowser?
     private struct VersionRestoreUndo {
@@ -229,8 +204,6 @@ final class NotesPageController: ObservableObject {
     var versionRestoreUndoID: UUID? { versionRestoreUndo?.isUndo == true ? versionRestoreUndo?.id : nil }
     private(set) var versionHistoryCommandTask: Task<Void, Never>?
     private var isVersionRestoreReplaying = false
-    /// A legacy note the page shows in the old editor.
-    @Published private(set) var legacyNoteID: UUID?
     @Published var isLibraryPresented = false
     @Published private(set) var design: AtticDesignContext = .default
     @Published private(set) var recoveryWarnings: [String] = []
@@ -482,11 +455,6 @@ final class NotesPageController: ObservableObject {
     /// New Note from the menu bar before the page first appeared: honoured
     /// by `start()` (after a recovered draft, which always opens first).
     private var pendingNewNote = false
-    /// Saves and closes the old editor's draft before the page moves on
-    /// from a legacy note (set by `NoteDraftController`).
-    var leaveLegacyNote: (LeaveReason) -> Bool = { _ in true }
-    var prepareLegacyVersionReplay: (() -> Bool)?
-    var finishLegacyVersionReplay: (() -> Void)?
     private static let lastViewedKey = "notes.lastViewedNote.v2"
 
     private static func viewStateKey(_ id: UUID) -> String { "notes.viewState.\(id.uuidString)" }
@@ -858,7 +826,6 @@ final class NotesPageController: ObservableObject {
     func openFailedDraft(sessionID: UUID) -> Bool {
         guard let draft = cache.values.first(where: { $0.id == sessionID }) else { return false }
         if active !== draft { guard prepareToLeave(.openNote) else { return false } }
-        legacyNoteID = nil
         activate(draft)
         isLibraryPresented = false
         return true
@@ -900,22 +867,15 @@ final class NotesPageController: ObservableObject {
         }
     }
 
-    /// Opens a note. Legacy notes open in the old editor (`legacyNoteID`).
+    /// Opens a stored document in the Notes editor.
     @discardableResult
     func open(noteID: UUID) -> Bool {
-        if let active, active.noteID == noteID, legacyNoteID == nil {
+        if let active, active.noteID == noteID {
             present()
             return true
         }
         guard let note = store.note(withID: noteID) else { return false }
         guard prepareToLeave(.openNote) else { return false }
-        if !note.usesDocumentFormat {
-            active = nil
-            legacyNoteID = noteID
-            remember(noteID)
-            return true
-        }
-        legacyNoteID = nil
         guard let session = session(for: note).flatMap(presentSession) else { return false }
         activate(session)
         return true
@@ -924,9 +884,8 @@ final class NotesPageController: ObservableObject {
     /// A new draft; the current one is preserved first.
     @discardableResult
     func newNote() -> Bool {
-        if let active, active.isUntouchedDraft, legacyNoteID == nil { return true }
+        if let active, active.isUntouchedDraft { return true }
         guard prepareToLeave(.newNote) else { return false }
-        legacyNoteID = nil
         let id = UUID()
         let session = NoteSession(noteID: id, isPersisted: false, baseRevisionID: nil,
                                   engine: makeEngine(noteID: id, document: .blank, readOnly: false),
@@ -1145,7 +1104,6 @@ final class NotesPageController: ObservableObject {
 
     private func agentDisposition(for noteID: UUID) -> NoteAgentWriteDisposition {
         if journal?.requiresAsyncIO == true && !didRecoverAtLaunch { return .refuse("Recovery is still being checked. Retry after it completes.") }
-        if legacyNoteID == noteID, isPageVisible, !isLibraryPresented { return .proposal }
         guard let session = cache[noteID] else { return .direct }
         let presence: NoteSessionPolicy.Presence = isPageVisible && !isLibraryPresented && active === session
             ? .onScreen : .background
@@ -1167,7 +1125,6 @@ final class NotesPageController: ObservableObject {
     @discardableResult
     func prepareToLeave(_ reason: LeaveReason) -> Bool {
         if let active, !canLeaveComposition(in: active) { return false }
-        if legacyNoteID != nil, !leaveLegacyNote(reason) { return false }
         let retainsSession = reason == .hide || reason == .pageSwitch
         if reason == .hide || reason == .quit {
             guard preserveAll(allowQueued: retainsSession) else { return false }
@@ -1184,7 +1141,7 @@ final class NotesPageController: ObservableObject {
             if session.isUntouchedDraft { cache[session.noteID] = nil }
             session.pauseTask?.cancel()
         }
-        if reason == .pageSwitch || reason == .hide || reason == .quit || reason == .exitToOldPage {
+        if reason == .pageSwitch || reason == .hide || reason == .quit {
             isPageVisible = false
         }
         closeHistory()
@@ -1231,7 +1188,7 @@ final class NotesPageController: ObservableObject {
 
     func dismissLibrary() {
         isLibraryPresented = false
-        guard active != nil || legacyNoteID != nil else {
+        guard active != nil else {
             // The note on screen was deleted: the last note visited, else a new draft.
             if let last = lastViewedNoteID, store.note(withID: last) != nil, open(noteID: last) { return }
             _ = newNote()
@@ -2687,14 +2644,7 @@ extension NotesPageController {
             closeHistory()
             session.engine.detachView()
             cache[browser.noteID] = nil
-            if note.usesDocumentFormat, let restored = self.session(for: note) {
-                activate(restored)
-            } else {
-                // A pre-migration snapshot keeps its original legacy bytes
-                // and uses the existing legacy presentation path.
-                active = nil
-                legacyNoteID = note.id
-            }
+            if let restored = self.session(for: note) { activate(restored) }
             return true
         }
     }
@@ -2764,23 +2714,17 @@ extension NotesPageController {
                   latest.id == expectedID, latest.isUndo == isUndo,
                   latest.restoredRevisionID == expectedRevision,
                   store.note(withID: undo.noteID)?.revisionID == expectedRevision else { return false }
-        } else {
-            guard historyBrowser == nil, legacyNoteID == undo.noteID,
-                  prepareLegacyVersionReplay?() ?? leaveLegacyNote(.openNote),
-                  store.note(withID: undo.noteID)?.revisionID == expectedRevision else { return false }
-        }
+        } else { return false }
         let inverseID = UUID()
         switch store.restoreVersion(undo.versionID, noteID: undo.noteID, expectedRevisionID: expectedRevision,
                                     preservationID: inverseID) {
         case let .failure(error): current?.notice = error.localizedDescription; return false
         case let .success(token):
-            if current == nil { finishLegacyVersionReplay?() }
             closeHistory()
             current?.engine.detachView()
             guard let revision = UUID(uuidString: token), let note = store.note(withID: undo.noteID) else { return false }
             if let returned = undo.session {
-                legacyNoteID = nil
-                returned.baseRevisionID = revision
+                        returned.baseRevisionID = revision
                 returned.baseContent = note.content
                 returned.baseTags = note.tags
                 // The displaced session can receive late callbacks while retained
@@ -2792,11 +2736,7 @@ extension NotesPageController {
                     scheduleSave(returned)
                     scheduleDurabilityDeadline(returned)
                 }
-            } else {
-                cache[undo.noteID] = nil
-                active = nil
-                legacyNoteID = undo.noteID
-            }
+            } else if let restored = self.session(for: note) { activate(restored) }
             store.historyRetainedVersionIDs.remove(undo.versionID)
             store.historyRetainedVersionIDs.insert(inverseID)
             versionRestoreUndo = VersionRestoreUndo(id: undo.id, noteID: undo.noteID, versionID: inverseID,
@@ -2838,7 +2778,6 @@ extension NotesPageController {
         let title = title.trimmingCharacters(in: .whitespacesAndNewlines)
         guard didStart, !title.isEmpty, !title.contains(where: \.isNewline) else { return false }
         guard prepareToLeave(.newNote) else { return false }
-        legacyNoteID = nil
         let id = UUID()
         let document = NoteDocument(blocks: [.text(title)])
         let session = NoteSession(noteID: id, isPersisted: false, baseRevisionID: nil,
@@ -2875,9 +2814,6 @@ extension NotesPageController {
     /// The delete itself, as a history step also runs it (Redo, and Undo of
     /// a duplicate).
     private func removeNote(noteID: UUID) -> Bool {
-        if legacyNoteID == noteID {
-            guard leaveLegacyNote(.openNote) else { return false }
-        }
         let session = cache[noteID]
         if let session {
             session.engine.refreshCompositionActivity()
@@ -2923,7 +2859,6 @@ extension NotesPageController {
             return false
         }
         recency.removeAll { $0 == noteID }
-        if legacyNoteID == noteID { legacyNoteID = nil }
         if lastViewedNoteID == noteID { defaults?.removeObject(forKey: Self.lastViewedKey) }
         if let session, active === session {
             active = nil
@@ -3010,7 +2945,6 @@ extension NotesPageController {
             active?.notice = String(localized: "The note couldn’t be duplicated: \(storeMessage())")
             return nil
         }
-        legacyNoteID = nil
         activate(session)
         isLibraryPresented = false
         return newID
@@ -3143,8 +3077,6 @@ extension NotesPageController {
         } else if let stored = store.loadDocument(noteID: noteID)?.content.document {
             document = stored
             staged = [:]
-        } else if let note = store.note(withID: noteID), !note.usesDocumentFormat {
-            return NoteMarkdownExport.markdown(title: note.title, body: note.body)
         } else {
             return nil
         }
@@ -3161,7 +3093,6 @@ extension NotesPageController {
     /// The note the library selects: the one on screen, else (from a new
     /// draft or after a delete) the last note visited.
     var librarySelectionID: UUID? {
-        if let legacyNoteID { return legacyNoteID }
         if let active, active.isPersisted { return active.noteID }
         return lastViewedNoteID
     }

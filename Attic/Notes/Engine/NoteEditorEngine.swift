@@ -1992,7 +1992,7 @@ final class NoteEditorEngine: NSObject, NSTextViewDelegate, NSTextStorageDelegat
         if !isPastingAsPlainText, let table = NoteTablePaste.table(fromText: text) {
             return pasteTable(table, at: selection, sourceText: text)
         }
-        let normalized = LegacyNoteMigration.normalizeLineBreaks(text).0
+        let normalized = NoteLineBreaks.normalizeLineBreaks(text).0
             .replacingOccurrences(of: String(NoteDocument.objectCharacter), with: "")
         guard !normalized.isEmpty else { return false }
         // The destination's block style belongs to the first pasted paragraph

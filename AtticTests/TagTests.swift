@@ -317,7 +317,7 @@ final class TagTests: XCTestCase {
         XCTAssertEqual(library.tags.inventoryFetchCount, fetches)
         XCTAssertEqual(library.tags.inventoryRowReadCount, reads)
         XCTAssertTrue(tasks.update(try XCTUnwrap(tasks.tasks.first), title: "Only task text changed"))
-        XCTAssertTrue(notes.update(try XCTUnwrap(notes.notes.first { !$0.usesDocumentFormat }), body: "Only note text changed"))
+        XCTAssertTrue(notes.update(try XCTUnwrap(notes.notes.first { $0.id != documentID }), body: "Only note text changed"))
         guard case .success = notes.saveDocument(noteID: documentID,
             document: NoteDocument(blocks: [.text("Only document text changed")]), baseRevisionID: revision) else { return XCTFail() }
         XCTAssertEqual(notes.tagCounts["shared"], 2_000)
