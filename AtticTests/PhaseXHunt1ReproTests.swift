@@ -231,6 +231,33 @@ final class PhaseXHunt1ReproTests: XCTestCase {
         XCTAssertEqual(view.selectedRange(), afterSelection)
     }
 
+    func testH2_05MigrationRefusesCanonicallyEqualButByteDivergentReplicas() throws {
+        let store = try makeTestNoteStore(attachmentFileStore: makeTestAttachmentFileStore())
+        let note = try XCTUnwrap(store.create(title: "Legacy", body: "caf\u{E9}"))
+        let copy = NoteItem(id: note.id, title: note.title, body: "cafe\u{301}")
+        copy.revisionID = note.revisionID
+        store.modelContext.insert(copy); try store.modelContext.save()
+        XCTAssertEqual(note.body, copy.body, "Swift's canonical equality masks the different UTF-16 spelling")
+        XCTAssertNotEqual(Array(note.body.utf16), Array(copy.body.utf16))
+        XCTExpectFailure("H2-05")
+        guard case .failure(.replicasDisagree) = store.legacySnapshot(noteID: note.id) else {
+            return XCTFail("The migration gate must refuse byte-divergent legacy replicas")
+        }
+    }
+
+    func testH2_05MigrationRefusesUnicodeSpellingChangeAfterVerification() throws {
+        let store = try makeTestNoteStore(attachmentFileStore: makeTestAttachmentFileStore())
+        let note = try XCTUnwrap(store.create(title: "Legacy", body: "caf\u{E9}"))
+        let snapshot = try store.legacySnapshot(noteID: note.id).get()
+        let plan = try LegacyNoteMigration.plan(snapshot).get()
+        let verified = try LegacyNoteMigration.verify(plan, roundTrip: { NoteTextKitRoundTrip.document(afterRoundTrip: $0) }).get()
+        note.body = "cafe\u{301}"; try store.modelContext.save()
+        XCTExpectFailure("H2-05")
+        guard case .failure(.changedSincePlanned) = store.commitMigration(verified) else {
+            return XCTFail("A change of original UTF-16 spelling must invalidate the verified migration")
+        }
+    }
+
     func testDetachedEngineReleasesAndViewLifetimeMatchesStockTextKit() async throws {
         weak var weakEditor: NoteEditorEngine?
         weak var weakView: NoteEditorTextView?
