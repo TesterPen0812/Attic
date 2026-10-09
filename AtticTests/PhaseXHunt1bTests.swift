@@ -43,6 +43,236 @@ final class PhaseXHunt1bTests: XCTestCase {
         XCTAssertEqual(shown.preview, "New preview", "A fresh context must replace the old cached body")
     }
 
+    func testR2_01AcceptPreservesTagsChangedAfterReview() async throws {
+        for deletion in [false, true] {
+            let store = try makeTestNoteStore(attachmentFileStore: makeTestAttachmentFileStore())
+            let id = try create(store, tags: ["saved"])
+            let page = await controller(store)
+            XCTAssertTrue(page.open(noteID: id))
+            let session = try XCTUnwrap(page.active)
+            let revision = try XCTUnwrap(store.note(withID: id)).revisionToken
+            let result = deletion
+                ? store.agentDelete(noteID: id, baseRevisionToken: revision, agentName: "Agent", disposition: .proposal)
+                : store.agentWrite(noteID: id, baseRevisionToken: revision,
+                    document: NoteDocument(blocks: [.text("Proposed")]), agentName: "Agent", disposition: .proposal)
+            guard case let .success(.pending(proposal)) = result else { return XCTFail("proposal fixture") }
+            await XCTAssertTrueAsync(await page.beginProposalReview(id: proposal))
+            session.engine.setTagsFromPicker(["unsaved"])
+            await XCTAssertFalseAsync(await page.acceptProposal(), "Changed session state needs preservation and review first")
+            XCTAssertTrue(page.active === session)
+            XCTAssertEqual(session.engine.tags, ["unsaved"])
+            // The refreshed review can safely replace only after all pending work is saved.
+            await XCTAssertTrueAsync(await page.acceptProposal())
+            let physical = try ModelContext(store.container).fetch(FetchDescriptor<NoteItem>()).filter { $0.id == id }
+            XCTAssertEqual(physical.count, 1)
+            XCTAssertEqual(physical.first?.tags, ["unsaved"], "Saved or trashed note must keep the edited tags")
+            if !deletion {
+                await XCTAssertTrueAsync(await page.preserveAllDurably())
+                XCTAssertEqual(store.note(withID: id)?.tags, ["unsaved"])
+                XCTAssertEqual(page.active?.state, .clean)
+            }
+        }
+    }
+
+    func testR2_01AcceptSavesStagedFilesBeforeReplacingReviewedDraft() async throws {
+        let store = try makeTestNoteStore(attachmentFileStore: makeTestAttachmentFileStore())
+        let id = try create(store)
+        let page = await controller(store)
+        XCTAssertTrue(page.open(noteID: id))
+        let session = try XCTUnwrap(page.active)
+        guard case let .success(.pending(proposal)) = store.agentWrite(noteID: id,
+            baseRevisionToken: try XCTUnwrap(store.note(withID: id)).revisionToken,
+            document: NoteDocument(blocks: [.text("Proposed")]), agentName: "Agent", disposition: .proposal) else {
+            return XCTFail("proposal fixture")
+        }
+        await XCTAssertTrueAsync(await page.beginProposalReview(id: proposal))
+        let bytes = Data("unsaved file".utf8)
+        let file = StagedNoteAttachment(id: UUID(), filename: "draft.txt", contentTypeIdentifier: "public.plain-text",
+            byteCount: Int64(bytes.count), digest: NotePayloadDigest.sha256(bytes), data: bytes)
+        session.engine.beginImageImport(at: NSRange(location: session.engine.textStorage.length, length: 0))
+        XCTAssertTrue(session.engine.insertImportedObjects([NoteImportedObject(staged: file, pixelSize: nil)]))
+        let draft = session.engine.document()
+        await XCTAssertFalseAsync(await page.acceptProposal())
+        await XCTAssertTrueAsync(await page.acceptProposal())
+        XCTAssertTrue(store.versions(noteID: id).contains { $0.content.flatMap { NoteContentCodec.decode($0).document } == draft })
+        XCTAssertEqual(store.attachmentFamily(file.id).first?.payload, bytes)
+    }
+
+    func testR2_01SaveAsNewKeepsLiveTagsAndOriginalPendingWork() async throws {
+        for deletion in [false, true] {
+            let store = try makeTestNoteStore(attachmentFileStore: makeTestAttachmentFileStore())
+            let id = try create(store, tags: ["saved"])
+            let page = await controller(store)
+            XCTAssertTrue(page.open(noteID: id))
+            let session = try XCTUnwrap(page.active)
+            let revision = try XCTUnwrap(store.note(withID: id)).revisionToken
+            let result = deletion
+                ? store.agentDelete(noteID: id, baseRevisionToken: revision, agentName: "Agent", disposition: .proposal)
+                : store.agentWrite(noteID: id, baseRevisionToken: revision,
+                    document: NoteDocument(blocks: [.text("Proposed")]), agentName: "Agent", disposition: .proposal)
+            guard case let .success(.pending(proposal)) = result else { return XCTFail("proposal fixture") }
+            await XCTAssertTrueAsync(await page.beginProposalReview(id: proposal))
+            session.engine.setTagsFromPicker(["live"])
+            await XCTAssertTrueAsync(await page.saveReviewedProposalAsNew())
+            XCTAssertTrue(page.active === session)
+            XCTAssertEqual(session.state, .dirty)
+            let copy = try XCTUnwrap(store.notes.first { $0.id != id })
+            XCTAssertEqual(copy.tags, ["live"])
+            await XCTAssertTrueAsync(await page.preserveAllDurably())
+            XCTAssertEqual(store.note(withID: id)?.tags, ["live"])
+        }
+    }
+
+    func testR2_01MigrationKeepsTagsChangedAfterPlanning() throws {
+        let store = try makeTestNoteStore(attachmentFileStore: makeTestAttachmentFileStore())
+        let note = try XCTUnwrap(store.create(title: "Legacy", body: "Body"))
+        let plan = try LegacyNoteMigration.plan(store.legacySnapshot(noteID: note.id).get()).get()
+        let verified = try LegacyNoteMigration.verify(plan, roundTrip: { NoteTextKitRoundTrip.document(afterRoundTrip: $0) }).get()
+        note.tags = ["latest"]
+        try store.modelContext.save()
+        _ = try store.commitMigration(verified).get()
+        XCTAssertEqual(store.note(withID: note.id)?.tags, ["latest"])
+    }
+
+    func testR2_03UndoReschedulesBothAutosaveAndDurabilityDeadline() async throws {
+        for deadline in [false, true] {
+            let store = try makeTestNoteStore(attachmentFileStore: makeTestAttachmentFileStore())
+            let id = try create(store, title: "Earlier")
+            XCTAssertTrue(store.recordVersion(noteID: id, reason: .pause))
+            _ = try store.saveDocument(noteID: id, document: NoteDocument(blocks: [.text("Current")]),
+                baseRevisionID: store.note(withID: id)?.revisionID).get()
+            let page = NotesPageController(store: store,
+                journal: NoteDraftJournal(directory: ownedTemporaryDirectory(prefix: "R2UndoTimers")),
+                saveDelay: deadline ? .seconds(600) : .milliseconds(20),
+                durabilityDelay: deadline ? .milliseconds(20) : .seconds(600), pauseVersionDelay: .seconds(600))
+            await page.startAndWait()
+            XCTAssertTrue(page.open(noteID: id))
+            let displaced = try XCTUnwrap(page.active)
+            await XCTAssertTrueAsync(await page.openHistoryDurably())
+            await XCTAssertTrueAsync(await page.restoreHistoryVersionDurably())
+            XCTAssertTrue(displaced.engine.performEdit(NSRange(location: displaced.engine.textStorage.length, length: 0),
+                with: NSAttributedString(string: " late"), name: "Late callback"))
+            let late = displaced.engine.document()
+            // Let the original timer fail against the restored revision and expire.
+            try await Task.sleep(for: .milliseconds(200))
+            await page.waitForRecoveryWork()
+            XCTAssertTrue(displaced.isConflict)
+            await XCTAssertTrueAsync(await page.undoVersionRestoreDurably(expectedID: page.versionRestoreUndoID))
+            XCTAssertEqual(displaced.state, .dirty)
+            for _ in 0..<100 {
+                if displaced.state == .clean { break }
+                try await Task.sleep(for: .milliseconds(10))
+            }
+            XCTAssertEqual(displaced.state, .clean, "Undo must restart the \(deadline ? "deadline" : "autosave")")
+            XCTAssertEqual(store.loadDocument(noteID: id)?.content.document, late)
+        }
+    }
+
+    private func restoreDuringRecoveryWait(
+        _ mutate: (NoteSession, NoteHistoryBrowser) -> Void
+    ) async throws -> (Bool, NotesPageController, NoteSession, NoteHistoryBrowser) {
+        let gate = PersistenceGate()
+        let store = try makeTestNoteStore(persist: { try gate.save($0) }, attachmentFileStore: makeTestAttachmentFileStore())
+        let id = try create(store, title: "Earlier")
+        XCTAssertTrue(store.recordVersion(noteID: id, reason: .pause))
+        _ = try store.saveDocument(noteID: id, document: NoteDocument(blocks: [.text("Middle")]),
+            baseRevisionID: store.note(withID: id)?.revisionID).get()
+        XCTAssertTrue(store.recordVersion(noteID: id, reason: .pause))
+        _ = try store.saveDocument(noteID: id, document: NoteDocument(blocks: [.text("Current")]),
+            baseRevisionID: store.note(withID: id)?.revisionID).get()
+        let journal = H3BlockingJournal(directory: ownedTemporaryDirectory(prefix: "R2RestoreWait"))
+        let page = await controller(store, journal: journal)
+        await XCTAssertTrueAsync(await page.newNoteDurably())
+        let hidden = try XCTUnwrap(page.active)
+        XCTAssertTrue(hidden.engine.performEdit(NSRange(location: 0, length: 0), with: NSAttributedString(string: "Hidden"), name: "Type"))
+        await XCTAssertTrueAsync(await page.preserveAllDurably())
+        XCTAssertTrue(page.open(noteID: id))
+        await XCTAssertTrueAsync(await page.openHistoryDurably())
+        let session = try XCTUnwrap(page.active), browser = try XCTUnwrap(page.historyBrowser)
+        let waiting = expectation(description: "Recovery suspended")
+        var resume: CheckedContinuation<Void, Never>?
+        journal.beforeWrite = {
+            journal.beforeWrite = nil
+            await withCheckedContinuation { resume = $0; waiting.fulfill() }
+        }
+        XCTAssertTrue(hidden.engine.performEdit(NSRange(location: hidden.engine.textStorage.length, length: 0),
+            with: NSAttributedString(string: " pending"), name: "Type"))
+        gate.shouldFail = true
+        XCTAssertTrue(page.preserve(hidden, allowQueued: true))
+        await fulfillment(of: [waiting], timeout: 5)
+        gate.shouldFail = false
+        let restore = Task { await page.restoreHistoryVersionDurably() }
+        for _ in 0..<100 {
+            if browser.isRestoring { break }
+            try await Task.sleep(for: .milliseconds(5))
+        }
+        XCTAssertTrue(browser.isRestoring)
+        mutate(session, browser)
+        resume?.resume()
+        let result = await restore.value
+        await page.waitForRecoveryWork()
+        return (result, page, session, browser)
+    }
+
+    func testR2_02RestoreRefreshesCompositionBeforeCheckingLateEdits() async throws {
+        var heldView: NoteEditorTextView?
+        let (restored, page, session, browser) = try await restoreDuringRecoveryWait { session, _ in
+            let (_, view) = session.engine.makeView()
+            heldView = view
+            view.setSelectedRange(NSRange(location: session.engine.textStorage.length, length: 0))
+            view.setMarkedText("中", selectedRange: NSRange(location: 1, length: 0),
+                replacementRange: NSRange(location: NSNotFound, length: 0))
+            session.engine.textDidChange(Notification(name: NSText.didChangeNotification))
+            XCTAssertEqual(session.engine.activity, .composing)
+            view.delegate = nil
+            view.setMarkedText("", selectedRange: NSRange(location: 0, length: 0),
+                replacementRange: NSRange(location: NSNotFound, length: 0))
+            view.unmarkText()
+            view.delegate = session.engine
+            XCTAssertEqual(session.engine.activity, .composing)
+        }
+        XCTAssertFalse(restored)
+        XCTAssertTrue(page.active === session)
+        XCTAssertTrue(page.historyBrowser === browser)
+        XCTAssertEqual(session.engine.activity, .idle, "Cancelled composition must self-heal even when the edit generation changed")
+        _ = heldView
+    }
+
+    func testR2_04RestoreRechecksSelectedVersionAfterRecoveryWait() async throws {
+        let (restored, page, session, browser) = try await restoreDuringRecoveryWait { _, browser in
+            XCTAssertGreaterThan(browser.entries.count, 1)
+            browser.selectedIndex = 1
+            browser.updateComparison()
+        }
+        XCTAssertFalse(restored, "A selection changed during the await requires a fresh Restore action")
+        XCTAssertTrue(page.active === session)
+        XCTAssertTrue(page.historyBrowser === browser)
+        XCTAssertEqual(page.active?.engine.document().title, "Current")
+    }
+
+    func testR2_05RestoreKeepsNewerUnpinnedReplicaCanonical() async throws {
+        let store = try makeTestNoteStore(attachmentFileStore: makeTestAttachmentFileStore())
+        let id = try create(store)
+        XCTAssertTrue(store.recordVersion(noteID: id, reason: .pause))
+        let older = try XCTUnwrap(store.note(withID: id))
+        older.pinnedAt = Date(timeIntervalSince1970: 1_700_000_000)
+        let newer = NoteItem(id: id, title: older.title, body: older.body,
+            createdAt: older.createdAt, updatedAt: older.updatedAt.addingTimeInterval(60))
+        newer.content = older.content; newer.contentFormat = older.contentFormat
+        newer.revision = older.revision; newer.revisionID = older.revisionID
+        newer.pinnedAt = nil
+        store.modelContext.insert(newer); try store.modelContext.save()
+        store.refresh()
+        XCTAssertFalse(try XCTUnwrap(store.note(withID: id)).isPinned)
+        let page = await controller(store)
+        XCTAssertTrue(page.open(noteID: id))
+        await XCTAssertTrueAsync(await page.openHistoryDurably())
+        await XCTAssertTrueAsync(await page.restoreHistoryVersionDurably())
+        let physical = try ModelContext(store.container).fetch(FetchDescriptor<NoteItem>()).filter { $0.id == id }
+        XCTAssertEqual(physical.count, 2)
+        XCTAssertTrue(physical.allSatisfy { $0.pinnedAt == nil }, "Restore must converge on the newer replica's explicit unpin")
+    }
+
     func testH3_01CleanCachedSessionFollowsSameTokenContentRefresh() async throws {
         let store = try makeTestNoteStore(attachmentFileStore: makeTestAttachmentFileStore())
         let id = try create(store, body: "Old body")
