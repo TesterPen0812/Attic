@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Authorization/argument gates; compatible seeded-store end-to-end runs are opt-in."""
 from pathlib import Path
+from contextlib import closing
 import json
 import io
 import sqlite3
@@ -50,7 +51,7 @@ class MigrationCopyIntegrityTests(unittest.TestCase):
         self.source.mkdir()
         self.out = self.root / 'out'
         self.out.mkdir()
-        with sqlite3.connect(self.source / 'development.store') as db:
+        with closing(sqlite3.connect(self.source / 'development.store')) as db, db:
             db.execute('pragma journal_mode=wal')
             db.execute('create table ZNOTEITEM (Z_PK integer primary key, Z_ENT integer, Z_OPT integer, ZID blob, ZBODY text)')
             db.executemany('insert into ZNOTEITEM values (?,1,1,?,?)', [(1, b'ID', 'fixture'), (2, b'ID', 'fixture')])
@@ -66,7 +67,7 @@ class MigrationCopyIntegrityTests(unittest.TestCase):
         before = inventory(self.source)
         self.prepare()
         copy = self.out / 'copy' / 'development.store'
-        with sqlite3.connect(copy) as db:
+        with closing(sqlite3.connect(copy)) as db, db:
             db.execute('alter table ZNOTEITEM add column ZCONTENTFORMAT integer default 0')
         report = {'status': 'opened', 'noteRows': 2, 'rows': [
             {'state': 'verified-migration-candidate', 'reason': None}]}
@@ -82,7 +83,7 @@ class MigrationCopyIntegrityTests(unittest.TestCase):
         self.prepare()
         original = json.loads((self.out / 'rows-before.json').read_text())
         copy = self.out / 'copy' / 'development.store'
-        with sqlite3.connect(copy) as db:
+        with closing(sqlite3.connect(copy)) as db, db:
             db.execute('delete from ZNOTEITEM where Z_PK=2')
         self.assertNotEqual(rows_snapshot(copy, original), original)
         cleanup(self.out)
@@ -110,6 +111,16 @@ class MigrationCopyIntegrityTests(unittest.TestCase):
         self.assertFalse((self.out / 'copy').exists())
         self.assertIsNone(json.loads((self.out / 'migration-report.json').read_text())['counts'])
         self.assertTrue(json.loads((self.out / 'integrity-report.json').read_text())['source_unchanged'])
+
+    def test_unreadable_copy_still_publishes_source_check_and_cleans_copy(self):
+        self.prepare()
+        (self.out / 'copy' / 'development.store').write_bytes(b'not a database')
+        with self.assertRaisesRegex(RuntimeError, 'finalization failed'):
+            finalize(self.source, 'development.store', self.out, 65)
+        report = json.loads((self.out / 'integrity-report.json').read_text())
+        self.assertTrue(report['source_unchanged'])
+        self.assertIsNone(report['legacy_rows_unchanged'])
+        self.assertTrue(report['working_copy_deleted'])
 
 
 if __name__ == '__main__':

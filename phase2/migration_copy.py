@@ -1,5 +1,6 @@
 """Private copy/integrity helpers. Never emit row values or source filenames."""
 import hashlib
+from contextlib import closing
 import json
 import os
 import re
@@ -29,7 +30,7 @@ def inventory(root):
 
 def rows_snapshot(store, original=None):
     # Only our writable copy is opened by SQLite (including its WAL).
-    with sqlite3.connect(f'{store.as_uri()}?mode=ro', uri=True) as db:
+    with closing(sqlite3.connect(f'{store.as_uri()}?mode=ro', uri=True)) as db:
         if original is None:
             tables = [r[0] for r in db.execute(
                 "select name from sqlite_master where type='table' and name in "
@@ -87,12 +88,36 @@ def prepare(source, name, out, mode, repo):
 
 
 def finalize(source, name, out, exit_code):
-    before = json.loads((out / 'before.json').read_text())
-    original = json.loads((out / 'rows-before.json').read_text())
-    unchanged = inventory(source) == before
-    preserved = rows_snapshot(out / 'copy' / name, original) == original
-    verification = {'source_unchanged': unchanged, 'legacy_rows_unchanged': preserved,
-                    'test_exit': exit_code}
+    verification = {'source_unchanged': None, 'legacy_rows_unchanged': None, 'test_exit': exit_code}
+    failure = None
+    try:
+        before = json.loads((out / 'before.json').read_text())
+        verification['source_unchanged'] = inventory(source) == before
+        original = json.loads((out / 'rows-before.json').read_text())
+        verification['legacy_rows_unchanged'] = rows_snapshot(out / 'copy' / name, original) == original
+        finish_report(out)
+    except Exception as error:
+        # Still publish every completed integrity check; unknown is never true.
+        failure = error
+        (out / 'migration-report.json').write_text(json.dumps({
+            'status': 'blocked', 'reason': 'integrity-finalization', 'counts': None
+        }, indent=2))
+    finally:
+        try:
+            cleanup(out)
+        finally:
+            verification['working_copy_deleted'] = not (out / 'copy').exists()
+            (out / 'integrity-report.json').write_text(json.dumps(verification, indent=2))
+            print(json.dumps(verification))
+    if failure is not None:
+        raise RuntimeError('Copy audit finalization failed') from None
+    if not all(verification[k] is True for k in ('source_unchanged', 'legacy_rows_unchanged', 'working_copy_deleted')):
+        raise RuntimeError('Integrity verification failed')
+    if json.loads((out / 'migration-report.json').read_text()).get('status') != 'opened':
+        raise RuntimeError('Application schema open/audit did not complete')
+
+
+def finish_report(out):
     report_path = out / 'migration-report.json'
     report = json.loads(report_path.read_text()) if report_path.exists() else {'status': 'blocked', 'reason': 'runner-incomplete'}
     rows = report.get('rows', [])
@@ -118,15 +143,9 @@ def finalize(source, name, out, exit_code):
     # On failure, unknown counts stay null rather than becoming an apparent pass.
     if report.get('status') != 'opened':
         report['counts'] = None
+    # Per-note IDs/states are used only in memory to make aggregate counts.
+    report.pop('rows', None)
     report_path.write_text(json.dumps(report, indent=2, sort_keys=True))
-    cleanup(out)
-    verification['working_copy_deleted'] = not (out / 'copy').exists()
-    (out / 'integrity-report.json').write_text(json.dumps(verification, indent=2))
-    print(json.dumps(verification))
-    if not unchanged or not preserved or not verification['working_copy_deleted']:
-        raise RuntimeError('Integrity verification failed')
-    if report.get('status') != 'opened':
-        raise RuntimeError('Application schema open/audit did not complete')
 
 
 def cleanup(out):
@@ -165,6 +184,10 @@ if __name__ == '__main__':
             filter_log(sys.stdin, sys.stdout)
         else:
             raise RuntimeError('Unknown action')
+    except RuntimeError as error:
+        # Our RuntimeErrors contain only authored, value-free reason classes.
+        print(str(error), file=sys.stderr)
+        sys.exit(1)
     except Exception:
         # Exceptions from sqlite/filesystem can contain paths or values.
         print('Migration copy preparation/integrity failed', file=sys.stderr)

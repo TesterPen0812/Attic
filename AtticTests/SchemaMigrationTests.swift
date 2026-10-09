@@ -74,11 +74,16 @@ final class SchemaMigrationTests: XCTestCase {
         let current = try XCTUnwrap(NSManagedObjectModel.makeManagedObjectModel(for: PersistenceController.appModelTypes))
         for entity in old.entities {
             let destination = try XCTUnwrap(current.entitiesByName[try XCTUnwrap(entity.name)])
+            XCTAssertEqual(destination.renamingIdentifier, entity.renamingIdentifier)
+            XCTAssertEqual(destination.uniquenessConstraints.count, 0)
+            XCTAssertTrue(entity.relationshipsByName.isEmpty)
+            XCTAssertTrue(destination.relationshipsByName.isEmpty)
             for attribute in entity.attributesByName.values {
                 let retained = try XCTUnwrap(destination.attributesByName[attribute.name])
                 XCTAssertEqual(retained.attributeType, attribute.attributeType)
                 XCTAssertEqual(retained.isOptional, attribute.isOptional)
                 XCTAssertEqual(retained.renamingIdentifier, attribute.renamingIdentifier)
+                XCTAssertEqual(retained.allowsExternalBinaryDataStorage, attribute.allowsExternalBinaryDataStorage)
             }
             for attribute in destination.attributesByName.values where entity.attributesByName[attribute.name] == nil {
                 XCTAssertTrue(attribute.isOptional || attribute.defaultValue != nil,
@@ -87,6 +92,8 @@ final class SchemaMigrationTests: XCTestCase {
         }
         XCTAssertEqual(Set(current.entitiesByName.keys).subtracting(old.entitiesByName.keys),
                        ["ItemLink", "NoteVersion", "NotePendingEdit"])
+        XCTAssertEqual(current.entitiesByName["NoteItem"]?.attributesByName["contentFormat"]?.defaultValue as? Int, 0)
+        XCTAssertEqual(current.entitiesByName["TaskItem"]?.attributesByName["listOrderVersion"]?.defaultValue as? Int, 0)
         _ = try NSMappingModel.inferredMappingModel(forSourceModel: old, destinationModel: current)
     }
 

@@ -345,6 +345,7 @@ final class NotesMigrationAcceptanceTests: XCTestCase {
         try FileManager.default.createDirectory(at: source, withIntermediateDirectories: true)
         let url = PersistenceController.makeConfiguration(cloudSyncEnabled: false, storeDirectory: source).url
         let id = UUID()
+        let diskAttachmentID = UUID()
         try autoreleasepool {
             let schema = Schema(SchemaMigrationTests.prePhase0Types)
             let container = try ModelContainer(for: schema,
@@ -362,8 +363,14 @@ final class NotesMigrationAcceptanceTests: XCTestCase {
                 byteCount: 200_000, sortIndex: 0, contentDigest: "fixture", payload: Data(repeating: 4, count: 200_000)))
             context.insert(PrePhase0.NoteAttachment(noteID: id, originalFilename: "missing.txt",
                 byteCount: 3, sortIndex: 1, contentDigest: "missing", payload: nil))
+            context.insert(PrePhase0.NoteAttachment(id: diskAttachmentID, noteID: id, originalFilename: "disk.txt",
+                byteCount: 3, sortIndex: 2, contentDigest: "disk", payload: nil))
             try context.save()
         }
+        let file = source.appendingPathComponent("Attic/Attachments/v1")
+            .appendingPathComponent(diskAttachmentID.uuidString).appendingPathComponent("disk/disk.txt")
+        try FileManager.default.createDirectory(at: file.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try Data([7, 8, 9]).write(to: file)
         let metadata = try NSPersistentStoreCoordinator.metadataForPersistentStore(type: .sqlite, at: url)
         XCTAssertEqual(metadata[NSStoreModelVersionIdentifiersKey] as? [String], ["1.0.0"])
         XCTAssertEqual((metadata[NSStoreModelVersionHashesKey] as? [String: Data])?.mapValues { $0.base64EncodedString() },
@@ -375,14 +382,14 @@ final class NotesMigrationAcceptanceTests: XCTestCase {
         try FileManager.default.copyItem(at: source, to: copy)
         let report = try MigrationCopyAudit.runThroughApplication(storeURL: copy.appendingPathComponent(url.lastPathComponent))
         XCTAssertEqual(report.rows.map(\.state).sorted(), ["refused-legacy-editable", "verified-migration-candidate"])
-        XCTAssertEqual(report.rows.first { $0.noteID == id.uuidString }?.attachments, 2)
+        XCTAssertEqual(report.rows.first { $0.noteID == id.uuidString }?.attachments, 3)
         XCTAssertTrue(report.schemaMigrated)
         XCTAssertEqual(report.noteRows, 3)
         XCTAssertEqual(report.notesTotal, 2)
         XCTAssertEqual(report.taskRows, 2)
         XCTAssertEqual(report.canvasBoards, 1)
         XCTAssertEqual(report.canvasStrokes, 1)
-        XCTAssertEqual(report.attachmentsFound, 1)
+        XCTAssertEqual(report.attachmentsFound, 2)
         XCTAssertEqual(report.attachmentsMissing, 1)
         XCTAssertEqual(report.migratedCleanly, 1)
         XCTAssertEqual(report.refused, 1)
@@ -392,7 +399,7 @@ final class NotesMigrationAcceptanceTests: XCTestCase {
         XCTAssertFalse(reopened.schemaMigrated)
         XCTAssertEqual(reopened.noteRows, 3)
         XCTAssertEqual(reopened.taskRows, 2)
-        XCTAssertEqual(reopened.attachmentsFound, 1)
+        XCTAssertEqual(reopened.attachmentsFound, 2)
     }
 
     func testExportExplicitDryRunFixture() async throws {
