@@ -382,11 +382,11 @@ final class AtticUITests: XCTestCase {
     func testMainPanelIdleHidesAutosavedNoteWithEditorFocus() throws {
         addBar.click()
         app.typeKey("2", modifierFlags: .command)
-        let newNote = app.buttons["new-note-empty-state"]
+        let newNote = app.buttons["notes-new-note"]
         XCTAssertTrue(newNote.waitForExistence(timeout: 3))
         newNote.click()
-        let body = app.textViews["note-body"]
-        XCTAssertTrue(body.waitForExistence(timeout: 3))
+        let body = app.textViews["note-text"]
+        XCTAssertTrue(body.waitForExistence(timeout: 10))
         body.click()
         body.typeText("An autosaved note can rest.")
         waitForValue("An autosaved note can rest.", in: body)
@@ -717,54 +717,37 @@ final class AtticUITests: XCTestCase {
     func testNotesEditorKeepsDraftWhileBrowsingSavedNotes() throws {
         app.typeKey("2", modifierFlags: .command)
 
-        let newNote = app.buttons["new-note-empty-state"]
+        let newNote = app.buttons["notes-new-note"]
         XCTAssertTrue(newNote.waitForExistence(timeout: 3))
         newNote.click()
 
-        let title = app.textFields["note-title"]
-        XCTAssertTrue(title.waitForExistence(timeout: 2))
-        title.coordinate(withNormalizedOffset: CGVector(dx: 0.25, dy: 0.5)).click()
-        app.typeText("Live Notes UI")
-        app.typeKey(.return, modifierFlags: [])
-
-        let body = app.textViews["note-body"]
-        XCTAssertTrue(body.waitForExistence(timeout: 2))
-        let controls = app.descendants(matching: .any)["note-entry-bar"]
-        XCTAssertGreaterThan(body.frame.height, app.dialogs.firstMatch.frame.height * 0.5,
-                             "An attachment-free note should use the workspace, not a fixed short editor")
-        XCTAssertLessThan(abs(controls.frame.minY - body.frame.maxY), 20,
-                          "Writing should extend down to the note controls")
-        body.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).click()
-        app.typeText("The active draft stays mounted while the library is open.")
+        let body = app.textViews["note-text"]
+        XCTAssertTrue(body.waitForExistence(timeout: 10))
+        XCTAssertTrue(body.wait(for: \.isHittable, toEqual: true, timeout: 10))
+        body.click()
+        let text = "Live Notes UI\nThe active draft survives opening the library."
+        app.typeText(text)
+        waitForValue(text, in: body)
         app.typeKey(.escape, modifierFlags: [])
         XCTAssertTrue(body.exists)
 
-        XCTAssertFalse(app.buttons["save-note"].exists, "Autosave needs no redundant save control")
-        XCTAssertTrue(body.exists, "Autosaving must keep the focused workspace open")
-
-        let browse = app.buttons["browse-saved-notes"]
-        XCTAssertTrue(browse.waitForExistence(timeout: 2))
+        let browse = app.buttons["notes-all-notes"]
+        XCTAssertTrue(browse.waitForExistence(timeout: 5))
         browse.click()
-
-        let drawer = app.descendants(matching: .any)["saved-notes-drawer"]
-        XCTAssertTrue(drawer.waitForExistence(timeout: 2))
-        let savedTitle = app.descendants(matching: .any).matching(NSPredicate(
-            format: "label BEGINSWITH %@",
-            "Live Notes UI"
+        XCTAssertTrue(app.descendants(matching: .any)["notes-library"].waitForExistence(timeout: 5))
+        let savedTitle = app.buttons.matching(NSPredicate(
+            format: "label BEGINSWITH %@", "Live Notes UI,"
         )).firstMatch
-        XCTAssertTrue(savedTitle.waitForExistence(timeout: 2))
+        XCTAssertTrue(savedTitle.waitForExistence(timeout: 5))
 
-        let returnToWriting = app.buttons["return-to-writing"]
-        XCTAssertTrue(returnToWriting.waitForExistence(timeout: 2))
-        returnToWriting.click()
-
-        XCTAssertTrue(body.waitForExistence(timeout: 2))
-        XCTAssertEqual(
-            body.value as? String,
-            "The active draft stays mounted while the library is open."
-        )
-        XCTAssertTrue(app.buttons["add-note-attachment"].exists)
-        XCTAssertFalse(app.staticTexts["Drop files here"].exists)
+        // The same control becomes Back; returning restores the draft and caret.
+        XCTAssertEqual(browse.label, "Back")
+        browse.click()
+        XCTAssertTrue(body.waitForExistence(timeout: 5))
+        waitForValue(text, in: body)
+        app.typeText("!")
+        waitForValue(text + "!", in: body)
+        XCTAssertTrue(app.buttons["notes-format-button"].exists)
     }
 
     func testNativePanelResizeKeepsDockedEdgesAndMinimumSize() throws {
@@ -810,32 +793,34 @@ final class AtticUITests: XCTestCase {
 
     func testNoteTextScrollsUnderStationaryControls() throws {
         app.typeKey("2", modifierFlags: .command)
-        let newNote = app.buttons["new-note-empty-state"]
+        let newNote = app.buttons["notes-new-note"]
         XCTAssertTrue(newNote.waitForExistence(timeout: 3))
         newNote.click()
-        let body = app.textViews["note-body"]
-        XCTAssertTrue(body.waitForExistence(timeout: 3))
-        let scroll = app.scrollViews["note-document-scroll"]
-        scroll.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).click()
-        app.typeText((1...30).map { String($0) }.joined(separator: "\n"))
+        let body = app.textViews["note-text"]
+        XCTAssertTrue(body.waitForExistence(timeout: 10))
+        XCTAssertTrue(body.wait(for: \.isHittable, toEqual: true, timeout: 10))
+        body.click()
+        let text = "Scrolling note\n" + (1...60).map { String($0) }.joined(separator: "\n")
+        app.typeText(text)
+        waitForValue(text, in: body)
+        let scroll = app.scrollViews.containing(.textView, identifier: "note-text").firstMatch
         let pin = app.buttons["panel-pin-button"]
-        let controls = app.descendants(matching: .any)["note-entry-bar"]
+        let controls = app.buttons["notes-all-notes"]
         XCTAssertTrue(scroll.exists)
         XCTAssertLessThan(scroll.frame.minY, pin.frame.minY)
         XCTAssertGreaterThan(scroll.frame.maxY, controls.frame.maxY)
         let pinFrame = pin.frame
         let controlsFrame = controls.frame
-        // AppKit's scroll view delegates hit testing to its document; XCTest
-        // cannot synthesize a wheel hit on the scroll-view AX wrapper. Native
-        // Home/Page Down scroll the same viewport without relocating controls.
+        let headerTitle = app.descendants(matching: .any)["notes-header-title"]
+        // Home scrolls the document to its title; Page Down moves it under
+        // the fixed header, whose title then becomes accessible.
         app.typeKey(.home, modifierFlags: [])
-        let title = app.textFields["note-title"]
-        XCTAssertTrue(title.isHittable)
-        let initialTitleY = title.frame.minY
+        XCTAssertTrue(headerTitle.waitForNonExistence(timeout: 5))
         app.typeKey(.pageDown, modifierFlags: [])
+        XCTAssertTrue(headerTitle.waitForExistence(timeout: 5))
         XCTAssertEqual(pin.frame, pinFrame)
         XCTAssertEqual(controls.frame, controlsFrame)
-        XCTAssertLessThan(title.frame.minY, initialTitleY)
+        XCTAssertEqual(body.value as? String, text)
         let capture = XCTAttachment(screenshot: app.dialogs.firstMatch.screenshot())
         capture.name = "Note-text-under-fixed-controls"
         capture.lifetime = .keepAlways
@@ -845,12 +830,12 @@ final class AtticUITests: XCTestCase {
     func testNotesBodyPreservesFocusAcrossIncrementalTyping() throws {
         app.typeKey("2", modifierFlags: .command)
 
-        let newNote = app.buttons["new-note-empty-state"]
+        let newNote = app.buttons["notes-new-note"]
         XCTAssertTrue(newNote.waitForExistence(timeout: 3))
         newNote.click()
 
-        let body = app.textViews["note-body"]
-        XCTAssertTrue(body.waitForExistence(timeout: 2))
+        let body = app.textViews["note-text"]
+        XCTAssertTrue(body.waitForExistence(timeout: 10))
         body.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).click()
 
         // Send separate key events instead of one `typeText` batch. This

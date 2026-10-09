@@ -5,8 +5,7 @@ import XCTest
 /// note is kept when you leave and reopens where you left it; `#word` in
 /// the title becomes a tag (one ⌘Z undoes it); Delete Note shows All notes
 /// with an Undo toast that brings the note back; All notes searches and
-/// opens a note. The page runs with the new editor switched on, over the
-/// UI-test store (in memory).
+/// opens a note. The document editor runs over the UI-test store (in memory).
 final class NotesPageUITests: XCTestCase {
     private var app: XCUIApplication!
 
