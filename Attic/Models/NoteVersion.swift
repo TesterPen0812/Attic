@@ -89,6 +89,7 @@ final class NotePendingEdit {
     var agentName: String = ""
     var createdAt: Date = Date()
     var needsReview: Bool = false
+    var isDeletion: Bool = false
 
     init(id: UUID = UUID(), noteID: UUID, baseRevisionToken: String, proposedContent: Data,
          agentName: String, createdAt: Date, baseVersionID: UUID? = nil) {
@@ -99,5 +100,23 @@ final class NotePendingEdit {
         self.baseVersionID = baseVersionID
         self.agentName = agentName
         self.createdAt = createdAt
+    }
+}
+
+/// A review ticket covers meaning and attribution as well as the document bytes.
+struct NoteProposalSignature: Equatable {
+    let id: UUID
+    let noteID: UUID
+    let baseRevisionToken: String
+    let baseVersionID: UUID?
+    let content: Data?
+    let agent: String
+    let createdAt: Date
+    let isDeletion: Bool
+
+    @MainActor init(_ edit: NotePendingEdit) {
+        id = edit.id; noteID = edit.noteID; baseRevisionToken = edit.baseRevisionToken
+        baseVersionID = edit.baseVersionID; content = edit.proposedContent
+        agent = edit.agentName; createdAt = edit.createdAt; isDeletion = edit.isDeletion
     }
 }

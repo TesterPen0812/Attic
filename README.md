@@ -104,6 +104,15 @@ current app session; it is not a saved task until submitted.
 
 When Agent access is explicitly enabled, Attic serves the [Model Context Protocol](https://modelcontextprotocol.io) over Streamable HTTP at `http://127.0.0.1:7335/mcp`, loopback only. The feature is disabled by default and tool requests require the private bearer token provided by Settings → Agent Access → Copy setup prompt. Authorized clients such as Claude Code, Synara, Codex or Cursor can list, create, update, complete and delete tasks, and every change appears live in the panel. Change the port with `defaults write com.taha.Attic agentServerPort <port>`.
 
+Notes tools follow the same revision rule: send the `revision` from `list_notes`
+as `base_revision` to `update_note`, `update_note_table`, and `delete_note` (or
+`delete_item` for a note). An edit or deletion of a note on screen waits as an
+individual persisted proposal; the response has `status: "pending"` and its
+`pending_edit` ID. Optional `agent_name` identifies the client or outside editor
+in review and in the saved-edit attribution; otherwise Attic says "Agent".
+Review offers Current / Proposed, Replace with proposal, Save Proposal as New
+Note, and Discard Proposal. Back leaves it pending for a later decision.
+
 Local-only builds support authenticated local MCP without enabling CloudKit or
 APNs. Each app bundle identity has its own cryptographically random 256-bit
 credential in Keychain, so previews never reuse the daily app's token. Credential

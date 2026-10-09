@@ -592,6 +592,22 @@ final class NotesLibraryModelTests: XCTestCase {
         return NotesLibraryModel(search: search, now: { [unowned self] in self.now }, calendar: calendar)
     }
 
+    func testS5LibraryKeepsTimeAndNamesEveryPendingProposal() throws {
+        let id = try create("Current", daysAgo: 0)
+        let note = try XCTUnwrap(store.note(withID: id))
+        let library = model()
+        let before = try XCTUnwrap(library.groups(store: store, drafts: []).flatMap(\.rows).first)
+        XCTAssertFalse(before.hasProposal)
+        guard case let .success(.pending(editID)) = store.agentWrite(noteID: id, baseRevisionToken: note.revisionToken,
+            document: NoteDocument(blocks: [.text("Proposed")]), agentName: "Claude", disposition: .proposal) else { return XCTFail() }
+        let row = try XCTUnwrap(library.groups(store: store, drafts: []).flatMap(\.rows).first)
+        XCTAssertEqual(row.time, before.time)
+        XCTAssertTrue(row.hasProposal)
+        XCTAssertTrue(row.spoken.contains("proposal waiting"))
+        XCTAssertTrue(store.discardProposal(editID, noteID: id))
+        XCTAssertFalse(try XCTUnwrap(library.groups(store: store, drafts: []).flatMap(\.rows).first).hasProposal)
+    }
+
     func testHiddenLibraryAutosavesDoNotRunSearchAfterAnyDismissalRoute() async throws {
         enum Exit: CaseIterable { case dismiss, newNote, duplicate, openNote, failedDraft }
         for route in Exit.allCases {

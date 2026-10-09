@@ -625,7 +625,9 @@ final class NoteEditorTextView: NSTextView, NSAccessibilityCustomRotorItemSearch
             if item.action == #selector(undo(_:)) {
                 let name = engine.history.undoActionName
                 (item as? NSMenuItem)?.title = name.isEmpty ? String(localized: "Undo") : String(localized: "Undo \(name)")
-                return isEditable && engine.history.canUndo
+                // At an outside-edit barrier the command explains why it
+                // stops, even when there is no local step left to invert.
+                return isEditable && (engine.history.canUndo || engine.history.outsideEditBarrier != nil)
             }
             if item.action == #selector(redo(_:)) {
                 let name = engine.history.redoActionName

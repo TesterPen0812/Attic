@@ -63,6 +63,7 @@ enum NotePhysicalFamilyRetention {
                   row.baseRevisionToken == first.baseRevisionToken, row.baseVersionID == first.baseVersionID,
                   row.proposedContent == first.proposedContent, row.agentName == first.agentName,
                   row.createdAt == first.createdAt, row.needsReview == first.needsReview,
+                  row.isDeletion == first.isDeletion,
                   row.proposedContent.map({ NoteContentCodec.decode($0).isEditable }) == true
             else { return .unknown }
             return .eligible
@@ -438,7 +439,8 @@ extension NoteStore {
         document: NoteDocument,
         staged: [StagedNoteAttachment] = [],
         prepared: PreparedNoteDocument? = nil,
-        tags: [String]? = nil
+        tags: [String]? = nil,
+        resolvingProposal: UUID? = nil
     ) -> Result<(noteID: UUID, revisionID: UUID), NoteDocumentStoreError> {
         let context = modelContext
         if let existing = try? replicasIncludingDeleted(of: id), !existing.isEmpty {
@@ -472,6 +474,14 @@ extension NoteStore {
         } catch {
             context.rollback()
             return .failure(.encodingFailed(error.localizedDescription))
+        }
+        if let resolvingProposal {
+            guard let family = try? pendingEditRows(resolvingProposal), let first = family.first,
+                  NotePhysicalFamilyRetention.proposalEligible(family, noteIDs: [first.noteID]) else {
+                context.rollback()
+                return .failure(.saveFailed("The proposal changed. Review it again."))
+            }
+            family.forEach(context.delete)
         }
         context.insert(note)
         guard commitStagedChanges() else {
@@ -625,6 +635,8 @@ extension NoteStore {
                 replica.tagsRaw = canonical.tagsRaw
                 replica.taskID = canonical.taskID
                 replica.pinnedAt = canonical.pinnedAt
+                replica.externalEditorName = canonical.externalEditorName
+                replica.externalEditedAt = canonical.externalEditedAt
             }
             if let tags { replica.tagsRaw = tags }
         }
@@ -1039,7 +1051,7 @@ extension NoteStore {
         if case let .refuse(reason) = disposition { return .failure(.saveFailed(reason)) }
         let preflight: NoteMutationPreflight
         do {
-            preflight = try noteMutationPreflight(noteID, format: .document)
+            preflight = try noteMutationPreflight(noteID, format: disposition == .proposal ? .editable : .document)
         } catch {
             return .failure(error as? NoteDocumentStoreError ?? .noteMissing(noteID))
         }
@@ -1081,6 +1093,7 @@ extension NoteStore {
         do {
             let revisionID = try stage(document, on: replicas, timestamp: timestamp,
                                        revision: replicas.map(\.revision).max() ?? 0)
+            attributeExternalEdit(replicas, name: agentName, at: timestamp)
             guard commitStagedChanges() else {
                 return .failure(.saveFailed(lastErrorMessage ?? "The note could not be saved."))
             }
@@ -1127,7 +1140,8 @@ extension NoteStore {
             let replicas = preflight.replicas
             let current = preflight.canonical
             guard let editRows = try? pendingEditRows(edit.id),
-                  NotePhysicalFamilyRetention.proposalEligible(editRows, noteIDs: [noteID]) else { continue }
+                  NotePhysicalFamilyRetention.proposalEligible(editRows, noteIDs: [noteID]),
+                  !edit.needsReview, !edit.isDeletion else { continue }
             guard current.revisionToken == edit.baseRevisionToken,
                   let data = edit.proposedContent,
                   case let .editable(document) = NoteContentCodec.decode(data),
@@ -1148,17 +1162,130 @@ extension NoteStore {
                 modelContext.rollback()
                 continue
             }
+            attributeExternalEdit(replicas, name: edit.agentName, at: timestamp)
             editRows.forEach(modelContext.delete)
             if commitStagedChanges() { applied += 1 }
         }
         return applied
     }
 
-    private func pendingEditRows(_ id: UUID) throws -> [NotePendingEdit] {
+    func pendingEditRows(_ id: UUID) throws -> [NotePendingEdit] {
         let targetID = id
         return try modelContext.fetch(FetchDescriptor<NotePendingEdit>(
             predicate: #Predicate { $0.id == targetID }
         ))
+    }
+
+    /// All outside surfaces use these same revision and presence rules.
+    func agentDelete(noteID: UUID, baseRevisionToken: String, agentName: String,
+                     disposition: NoteAgentWriteDisposition) -> Result<NoteAgentWriteOutcome, NoteDocumentStoreError> {
+        if case let .refuse(reason) = disposition { return .failure(.saveFailed(reason)) }
+        do {
+            let preflight = try noteMutationPreflight(noteID, format: .editable)
+            let note = preflight.canonical
+            guard note.revisionToken == baseRevisionToken else {
+                return .failure(.staleRevision(expected: baseRevisionToken, current: note.revisionToken))
+            }
+            // A divergent replica makes deletion unsafe even if the displayed revision agrees.
+            guard preflight.replicas.allSatisfy({ $0.revisionToken == baseRevisionToken &&
+                $0.content == note.content && $0.title == note.title && $0.body == note.body }) else {
+                return .failure(.saveFailed("The note's replicas disagree. Deletion was not performed."))
+            }
+            let timestamp = currentDate
+            if disposition == .proposal {
+                let document = note.content.flatMap { NoteContentCodec.decode($0).document }
+                    ?? NoteDocument(blocks: [.text(note.title)] + note.body.components(separatedBy: "\n").map { .text($0) })
+                let baseID = UUID()
+                modelContext.insert(NoteVersion(id: baseID, noteID: noteID, createdAt: timestamp,
+                    reason: .beforeAgentEdit, content: note.content, contentFormat: note.contentFormat,
+                    title: note.title, body: note.body, attachmentIDs: try attachmentRows(forNoteID: noteID).map(\.id),
+                    sourceRevisionID: note.revisionID))
+                let edit = NotePendingEdit(noteID: noteID, baseRevisionToken: baseRevisionToken,
+                    proposedContent: try NoteContentCodec.encode(document), agentName: agentName,
+                    createdAt: timestamp, baseVersionID: baseID)
+                edit.isDeletion = true
+                edit.needsReview = true
+                modelContext.insert(edit)
+                guard commitStagedChanges() else { throw NoteDocumentStoreError.saveFailed(lastErrorMessage ?? "Deletion could not be kept.") }
+                return .success(.pending(editID: edit.id))
+            }
+            stageDisplacedReplicas(preflight.replicas, reason: .beforeAgentEdit, timestamp: timestamp)
+            attributeExternalEdit(preflight.replicas, name: agentName, at: timestamp)
+            guard delete(note) else { throw NoteDocumentStoreError.saveFailed(lastErrorMessage ?? "Deletion failed.") }
+            return .success(.applied(revisionToken: baseRevisionToken))
+        } catch {
+            modelContext.rollback()
+            return .failure(error as? NoteDocumentStoreError ?? .saveFailed(error.localizedDescription))
+        }
+    }
+
+    func attributeExternalEdit(_ replicas: [NoteItem], name: String, at timestamp: Date) {
+        for row in replicas {
+            row.externalEditorName = name.isEmpty ? "Agent" : name
+            row.externalEditedAt = timestamp
+        }
+    }
+
+    @discardableResult
+    func acknowledgeExternalEdit(noteID: UUID) -> Bool {
+        guard let rows = try? liveReplicas(of: noteID), !rows.isEmpty else { return false }
+        rows.forEach { $0.externalEditorName = nil; $0.externalEditedAt = nil }
+        return commitStagedChanges()
+    }
+
+    /// Resolves precisely one complete proposal UUID family, never its siblings.
+    func discardProposal(_ id: UUID, noteID: UUID) -> Bool {
+        guard let rows = try? pendingEditRows(id),
+              NotePhysicalFamilyRetention.proposalEligible(rows, noteIDs: [noteID]) else { return false }
+        rows.forEach(modelContext.delete)
+        return commitStagedChanges()
+    }
+
+    /// Replacement, preservation of the live text, attribution and resolution commit together.
+    func replaceWithProposal(_ id: UUID, noteID: UUID, expectedRevision: String,
+                             expectedSavedContent: Data?, expectedProposal: NoteProposalSignature,
+                             preserving current: NoteDocument) -> Result<String, NoteDocumentStoreError> {
+        do {
+            let preflight = try noteMutationPreflight(noteID, format: .editable)
+            let note = preflight.canonical
+            guard note.revisionToken == expectedRevision, note.content == expectedSavedContent else {
+                throw NoteDocumentStoreError.staleRevision(expected: expectedRevision, current: note.revisionToken)
+            }
+            let rows = try pendingEditRows(id)
+            guard NotePhysicalFamilyRetention.proposalEligible(rows, noteIDs: [noteID]),
+                  let edit = rows.first, NoteProposalSignature(edit) == expectedProposal else {
+                throw NoteDocumentStoreError.saveFailed("The proposal changed. Review it again.")
+            }
+            let timestamp = currentDate
+            stageDisplacedReplicas(preflight.replicas, reason: .beforeAgentEdit, timestamp: timestamp)
+            // This can be unsaved typing; preserve it even when it differs from the store.
+            modelContext.insert(NoteVersion(noteID: noteID, createdAt: timestamp, reason: .replacedByDraft,
+                content: try NoteContentCodec.encode(current), contentFormat: current.format,
+                title: current.title, body: NoteTextExport.plainBody(current), attachmentIDs: current.attachmentIDs,
+                sourceRevisionID: note.revisionID))
+            if edit.isDeletion {
+                guard preflight.replicas.allSatisfy({ $0.revisionToken == expectedRevision && $0.content == note.content &&
+                    $0.title == note.title && $0.body == note.body }) else {
+                    throw NoteDocumentStoreError.saveFailed("The note's replicas disagree. Deletion was not performed.")
+                }
+                rows.forEach(modelContext.delete)
+                attributeExternalEdit(preflight.replicas, name: edit.agentName, at: timestamp)
+                guard delete(note) else { throw NoteDocumentStoreError.saveFailed(lastErrorMessage ?? "Deletion failed.") }
+                return .success(expectedRevision)
+            }
+            guard let bytes = edit.proposedContent, case let .editable(document) = NoteContentCodec.decode(bytes) else {
+                throw NoteDocumentStoreError.readOnly
+            }
+            let token = try stage(document, on: preflight.replicas, timestamp: timestamp,
+                                  revision: preflight.replicas.map(\.revision).max() ?? 0)
+            attributeExternalEdit(preflight.replicas, name: edit.agentName, at: timestamp)
+            rows.forEach(modelContext.delete)
+            guard commitStagedChanges() else { throw NoteDocumentStoreError.saveFailed(lastErrorMessage ?? "Replacement failed.") }
+            return .success(token.uuidString)
+        } catch {
+            modelContext.rollback()
+            return .failure(error as? NoteDocumentStoreError ?? .saveFailed(error.localizedDescription))
+        }
     }
 
     // MARK: Migration gate (requirement 2)

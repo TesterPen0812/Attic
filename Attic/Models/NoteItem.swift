@@ -26,6 +26,10 @@ final class NoteItem {
     /// newest-first order or changes its revision, on every replica.
     var pinnedAt: Date? = nil
 
+    /// Durable, unacknowledged outside-edit attribution. Local typing does not clear it.
+    var externalEditorName: String? = nil
+    var externalEditedAt: Date? = nil
+
     // MARK: Phase 2 note format (`attic.note/1`, see `NoteDocument`)
     //
     // All defaulted or optional, no uniqueness (CloudKit rules). A note with

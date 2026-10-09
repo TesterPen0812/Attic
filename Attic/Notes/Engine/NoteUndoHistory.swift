@@ -111,6 +111,9 @@ final class NoteUndoHistory {
     /// longer in the note (the step is then skipped).
     var onTableSnapshot: ((UUID, NoteTable, NoteTableFocus?) -> Bool)?
 
+    var outsideEditBarrier: String?
+    var onOutsideEditBarrier: ((String) -> Void)?
+
     private(set) var undoOps: [Op] = []
     private(set) var redoOps: [Op] = []
     private(set) var log: [String] = []
@@ -509,7 +512,10 @@ final class NoteUndoHistory {
     @discardableResult
     func undo() -> Bool {
         guard canReplay?() ?? true else { return false }
-        guard let last = undoOps.last else { return false }
+        guard let last = undoOps.last else {
+            if let origin = outsideEditBarrier { onOutsideEditBarrier?(origin) }
+            return false
+        }
         open = nil
         let group = last.group
         var changed = false

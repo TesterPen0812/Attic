@@ -347,7 +347,9 @@ final class NoteTableCellEditor: NSTextView, NSTextViewDelegate {
 
     override func validateUserInterfaceItem(_ item: any NSValidatedUserInterfaceItem) -> Bool {
         if let engine = table?.engine {
-            if item.action == #selector(undo(_:)) { return engine.history.canUndo }
+            if item.action == #selector(undo(_:)) {
+                return isEditable && (engine.history.canUndo || engine.history.outsideEditBarrier != nil)
+            }
             if item.action == #selector(redo(_:)) { return engine.history.canRedo }
         }
         return super.validateUserInterfaceItem(item)

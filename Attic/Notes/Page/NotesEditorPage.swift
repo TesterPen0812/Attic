@@ -105,13 +105,13 @@ struct NotesEditorPage: View {
         ZStack(alignment: .bottom) {
             content
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
-            if showsEditor {
+            if showsEditor, controller.proposalReview == nil {
                 headerTitle
             }
-            bottomRow
+            if controller.proposalReview == nil { bottomRow
                 .padding(.leading, layout.chromeInsets.leading)
                 .padding(.trailing, layout.chromeInsets.trailing)
-                .padding(.bottom, layout.chromeInsets.bottom)
+                .padding(.bottom, layout.chromeInsets.bottom) }
             shortcuts
         }
         // Springy slides between the note and All notes, and for a new or
@@ -217,7 +217,7 @@ struct NotesEditorPage: View {
     }
 
     private var showsEditor: Bool {
-        !controller.isLibraryPresented && controller.active != nil && controller.legacyNoteID == nil
+        !controller.isLibraryPresented && controller.proposalReview == nil && controller.active != nil && controller.legacyNoteID == nil
     }
 
     // MARK: Content
@@ -239,6 +239,10 @@ struct NotesEditorPage: View {
                              topContentInset: topInset, bottomContentInset: bottomInset)
                 .padding(.horizontal, layout.contentInsets.leading)
                 .transition(slide(from: Self.noteEdge))
+        } else if let review = controller.proposalReview {
+            NoteProposalComparison(controller: controller, store: noteStore, review: review,
+                columnInset: columnInset, topInset: layout.headerBottom + 8, bottomInset: layout.chromeInsets.bottom,
+                design: design)
         } else if let session = controller.active {
             NoteEditorRepresentable(session: session, chrome: chrome, columnInset: columnInset,
                                     topInset: topInset, bottomInset: bottomInset, headerBottom: layout.headerBottom,
@@ -802,7 +806,7 @@ private struct NoteStatusSlot: View {
         .sheet(isPresented: $showingProposal) {
             if let comparison = session.isConflict
                 ? controller.conflictComparison(for: session) : controller.proposalComparison(for: session) {
-                NoteProposalComparison(title: session.isConflict ? comparison.agent : "\(comparison.agent) has changes",
+                NoteConflictComparison(title: session.isConflict ? comparison.agent : "\(comparison.agent) has changes",
                                        current: comparison.current,
                                        proposed: comparison.proposed)
             }
@@ -817,6 +821,7 @@ private struct NoteStatusSlot: View {
         switch item.id {
         case "importing": controller.cancelActiveImport
         case "notice": { session.notice = nil }
+        case "editedBy": { _ = store.acknowledgeExternalEdit(noteID: session.noteID) }
         default: nil
         }
     }
@@ -881,11 +886,47 @@ private struct NoteStatusSlot: View {
                                        .init(title: String(localized: "Review"), identifier: "notes-review-conflict",
                                              handler: details { showingProposal = true })
                                    ])
+        case .deletionProposal:
+            let displayedID = controller.proposalID(for: session, deletion: true)
+            return AtticStatusItem(id: "deletionProposal", systemName: "exclamationmark.circle", title: status.label,
+                explanation: status.explanation, tone: .warning, actions: [
+                    .init(title: "Restore", identifier: "notes-restore-deletion", handler: details {
+                        guard let id = displayedID else { return }
+                        if !store.discardProposal(id, noteID: session.noteID) {
+                            session.notice = store.lastErrorMessage ?? "The deletion proposal could not be restored."
+                        }
+                    }),
+                    .init(title: "Save as New Note", identifier: "notes-deletion-save-new", handler: details {
+                        guard let id = displayedID else { return }
+                        Task {
+                            if await controller.beginProposalReview(id: id) {
+                                _ = await controller.saveReviewedProposalAsNew()
+                            }
+                        }
+                    }),
+                    .init(title: "Review", identifier: "notes-review-deletion", handler: details {
+                        guard let id = displayedID else { return }
+                        Task { _ = await controller.beginProposalReview(id: id) }
+                    })
+                ])
+        case .editedBy:
+            return AtticStatusItem(id: "editedBy", systemName: "info.circle", title: status.label,
+                explanation: status.explanation, tone: .quiet, actions: [
+                    .init(title: "Dismiss", identifier: "notes-attribution-dismiss", handler: details {
+                        if !store.acknowledgeExternalEdit(noteID: session.noteID) {
+                            session.notice = store.lastErrorMessage ?? "Attribution could not be acknowledged."
+                        }
+                    })
+                ])
         case .proposal:
+            let displayedID = controller.proposalID(for: session, deletion: false)
             return AtticStatusItem(id: "proposal", systemName: "sparkle", title: status.label,
                                    explanation: status.explanation, actions: [
                                        .init(title: String(localized: "Review"), identifier: "notes-agent-has-changes",
-                                             handler: details { showingProposal = true })
+                                             handler: details {
+                                                 guard let id = displayedID else { return }
+                                                 Task { _ = await controller.beginProposalReview(id: id) }
+                                             })
                                    ])
         case .importing:
             let progress = session.importProgress
@@ -923,7 +964,7 @@ private struct NoteStatusSlot: View {
 
 /// The proposal stays read-only until the person deliberately resolves it.
 /// The transactional replacement controls arrive with the review slice.
-private struct NoteProposalComparison: View {
+private struct NoteConflictComparison: View {
     let title: String
     let current: String
     let proposed: String
@@ -950,6 +991,138 @@ private struct NoteProposalComparison: View {
         .frame(width: 440, height: 480)
         .accessibilityIdentifier("notes-proposal-comparison")
     }
+}
+
+/// Panel-sized review uses the shipping read-only engine, including tables and Mono.
+private struct NoteProposalComparison: View {
+    @ObservedObject var controller: NotesPageController
+    @ObservedObject var store: NoteStore
+    let review: NoteProposalReview
+    let columnInset: CGFloat
+    let topInset: CGFloat
+    let bottomInset: CGFloat
+    let design: AtticDesignContext
+    @State private var proposed = false
+    @State private var scrollOffset: CGFloat = 0
+    @State private var busy = false
+
+    private var document: NoteDocument {
+        guard proposed else { return review.current }
+        if review.isDeletion { return NoteDocument(blocks: [.text("Proposed deletion"), .text("This note would move to Recently Deleted.")]) }
+        return review.proposedPreview
+    }
+
+    var body: some View {
+        VStack(spacing: 8) {
+            VStack(alignment: .leading, spacing: 6) {
+                Picker("Version", selection: $proposed) {
+                    Text("Current").tag(false)
+                    Text("Proposed").tag(true)
+                }.pickerStyle(.segmented)
+                AtticText(verbatim: "\(review.agent) · \(review.createdAt.formatted(date: .omitted, time: .shortened)) · \(review.summary)",
+                          style: .helper, ink: .helper)
+                if controller.reviewProposals.count > 1 {
+                    Menu("\(controller.reviewProposals.count) proposals") {
+                        ForEach(controller.reviewProposals, id: \.id) { edit in
+                            Button("\(edit.agentName.isEmpty ? "Agent" : edit.agentName) · \(edit.createdAt.formatted(date: .omitted, time: .shortened))\(edit.isDeletion ? " · Delete" : "")") {
+                                Task { _ = await controller.beginProposalReview(id: edit.id) }
+                            }
+                        }
+                    }.accessibilityIdentifier("notes-proposal-picker")
+                }
+            }.padding(.horizontal, columnInset)
+            NoteComparisonPreview(document: document, noteID: review.noteID, design: design,
+                                  imageProvider: controller, columnInset: columnInset, scrollOffset: $scrollOffset)
+                .accessibilityIdentifier("notes-proposal-document")
+            if let message = controller.proposalReviewNotice {
+                AtticText(verbatim: message, style: .helper, ink: .helper)
+                    .padding(.horizontal, columnInset)
+                    .accessibilityIdentifier("notes-proposal-failure")
+            }
+            VStack(spacing: 8) {
+                if review.isDeletion {
+                    Button("Restore") { _ = controller.discardReviewedProposal() }
+                        .accessibilityIdentifier("notes-proposal-restore")
+                } else {
+                    Button("Replace with proposal") { run { await controller.acceptProposal() } }
+                        .accessibilityIdentifier("notes-proposal-replace")
+                }
+                HStack {
+                    Button("Back") { controller.endProposalReview() }
+                        .accessibilityIdentifier("notes-proposal-back")
+                    Spacer(minLength: 4)
+                    Menu {
+                        Button(review.isDeletion ? "Save as New Note" : "Save Proposal as New Note") {
+                            run { await controller.saveReviewedProposalAsNew() }
+                        }.accessibilityIdentifier("notes-proposal-save-new")
+                        Button("Discard Proposal") { _ = controller.discardReviewedProposal() }
+                            .accessibilityIdentifier("notes-proposal-discard")
+                        if review.isDeletion {
+                            Button("Delete Note", role: .destructive) { run { await controller.acceptProposal() } }
+                                .accessibilityIdentifier("notes-proposal-delete")
+                        }
+                    } label: { Image(systemName: "ellipsis") }
+                    .accessibilityLabel("Proposal actions")
+                    .accessibilityIdentifier("notes-proposal-menu")
+                }
+            }.padding(.horizontal, columnInset).disabled(busy)
+        }
+        .padding(.top, topInset)
+        .padding(.bottom, bottomInset)
+        .font(.system(size: 12.5))
+        .accessibilityIdentifier("notes-proposal-comparison")
+    }
+
+    private func run(_ action: @escaping @MainActor () async -> Bool) {
+        busy = true
+        Task { _ = await action(); busy = false }
+    }
+}
+
+private struct NoteComparisonPreview: NSViewRepresentable {
+    let document: NoteDocument
+    let noteID: UUID
+    let design: AtticDesignContext
+    let imageProvider: NoteImageProviding
+    let columnInset: CGFloat
+    @Binding var scrollOffset: CGFloat
+
+    final class Coordinator {
+        var engine: NoteEditorEngine?
+        var document: NoteDocument?
+    }
+    func makeCoordinator() -> Coordinator { Coordinator() }
+    func makeNSView(context: Context) -> NSView {
+        let host = NSView()
+        install(in: host, coordinator: context.coordinator, offset: scrollOffset)
+        return host
+    }
+    func updateNSView(_ host: NSView, context: Context) {
+        guard context.coordinator.document != document else { return }
+        let offset = (host.subviews.first as? NSScrollView)?.contentView.bounds.origin.y ?? scrollOffset
+        install(in: host, coordinator: context.coordinator, offset: offset)
+    }
+    func sizeThatFits(_ proposal: ProposedViewSize, nsView: NSView, context: Context) -> CGSize? {
+        proposal.replacingUnspecifiedDimensions(by: CGSize(width: 320, height: 300))
+    }
+    private func install(in host: NSView, coordinator: Coordinator, offset: CGFloat) {
+        coordinator.engine?.detachView()
+        host.subviews.forEach { $0.removeFromSuperview() }
+        let engine = NoteEditorEngine(noteID: noteID, document: document, readOnly: true,
+                                      design: design, imageProvider: imageProvider)
+        coordinator.engine = engine
+        coordinator.document = document
+        let (scroll, text) = engine.makeView()
+        text.textContainerInset = NSSize(width: columnInset, height: 0)
+        scroll.frame = host.bounds
+        scroll.autoresizingMask = [.width, .height]
+        host.addSubview(scroll)
+        DispatchQueue.main.async {
+            scroll.contentView.scroll(to: NSPoint(x: 0, y: max(0, offset)))
+            scroll.reflectScrolledClipView(scroll.contentView)
+        }
+    }
+    static func dismantleNSView(_ host: NSView, coordinator: Coordinator) { coordinator.engine?.detachView() }
 }
 
 // MARK: - Keyboard order (OD-7)

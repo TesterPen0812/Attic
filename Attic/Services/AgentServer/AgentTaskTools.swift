@@ -315,6 +315,7 @@ final class AgentTaskTools {
             "inputSchema": [
                 "type": "object",
                 "properties": [
+                    "agent_name": ["type": "string", "description": "Client or outside editor name for attribution; defaults to Agent."],
                     "id": [
                         "type": "string",
                         "description": "Note id returned by list_notes or create_note."
@@ -343,6 +344,7 @@ final class AgentTaskTools {
             "inputSchema": [
                 "type": "object",
                 "properties": [
+                    "agent_name": ["type": "string", "description": "Client or outside editor name for attribution; defaults to Agent."],
                     "id": ["type": "string", "description": "Note id returned by list_notes."],
                     "base_revision": ["type": "string", "description": "The note's `revision` from list_notes."],
                     "table_id": ["type": "string", "description": "The table's `table_id` from list_notes."],
@@ -369,12 +371,14 @@ final class AgentTaskTools {
             "inputSchema": [
                 "type": "object",
                 "properties": [
+                    "agent_name": ["type": "string", "description": "Client or outside editor name for attribution; defaults to Agent."],
+                    "base_revision": ["type": "string", "description": "Required for a note: its revision from list_notes. On-screen deletion waits for review."],
                     "id": [
                         "type": "string",
                         "description": "Note id returned by list_notes or create_note."
                     ]
                 ],
-                "required": ["id"],
+                "required": ["id", "base_revision"],
                 "additionalProperties": false
             ]
         ]
@@ -412,6 +416,8 @@ final class AgentTaskTools {
             "inputSchema": [
                 "type": "object",
                 "properties": [
+                    "agent_name": ["type": "string", "description": "Client or outside editor name for attribution; defaults to Agent."],
+                    "base_revision": ["type": "string", "description": "Required for a note: its revision from list_notes. On-screen deletion waits for review."],
                     "kind": ["type": "string", "enum": AtticItemKind.allCases.map(\.rawValue)],
                     "id": ["type": "string", "description": "The item's UUID."]
                 ],
@@ -926,13 +932,30 @@ final class AgentTaskTools {
             )
         }
         if note.usesDocumentFormat {
-            return try updateDocumentNote(note, title: newTitle, body: newBody, baseRevision: baseRevision, noteStore: noteStore)
+            return try updateDocumentNote(note, title: newTitle, body: newBody, baseRevision: baseRevision, noteStore: noteStore, agentName: agentName(arguments))
+        }
+        let disposition = noteStore.agentWriteDisposition(note.id)
+        if case let .refuse(reason) = disposition { throw AgentToolError.notPerformed(reason) }
+        guard note.revisionToken == baseRevision else {
+            throw AgentToolError.notPerformed("The draft was saved after your read. Read it again with list_notes and retry.")
+        }
+        if disposition == .proposal {
+            let base = NoteDocument(blocks: [.text(note.title)] + note.body.components(separatedBy: "\n").map { .text($0) })
+            let document = try NoteAgentTextParser.document(title: newTitle ?? note.title, body: newBody ?? note.body, base: base)
+            switch noteStore.agentWrite(noteID: note.id, baseRevisionToken: baseRevision, document: document,
+                                       agentName: agentName(arguments), disposition: .proposal) {
+            case let .success(.pending(editID)):
+                return try encode(["status": "pending", "pending_edit": editID.uuidString, "note": serializeNote(note)])
+            case let .failure(error): throw AgentToolError.notPerformed(error.localizedDescription)
+            default: throw AgentToolError.notPerformed("The edit did not wait for review.")
+            }
         }
         let destinationTitle = newTitle.map(NoteStore.normalizedTitle) ?? note.title
         let destinationBody = newBody ?? note.body
         guard !destinationTitle.isEmpty || NoteStore.hasMeaningfulBody(destinationBody) else {
             throw AgentToolError.invalidArguments("A title or body must remain non-empty.")
         }
+        noteStore.attributeExternalEdit(try noteStore.liveReplicas(of: note.id), name: agentName(arguments), at: noteStore.currentDate)
         try performNote {
             noteStore.agentUpdateLegacy(note, title: newTitle, body: newBody)
         }
@@ -941,7 +964,7 @@ final class AgentTaskTools {
     }
 
     private func updateDocumentNote(_ note: NoteItem, title: String?, body: String?, baseRevision: String,
-                                    noteStore: NoteStore) throws -> String {
+                                    noteStore: NoteStore, agentName: String) throws -> String {
         guard let load = noteStore.loadDocument(noteID: note.id), case let .editable(current) = load.content else {
             throw AgentToolError.notPerformed("This note was saved by a newer version of Attic and is read-only here.")
         }
@@ -960,7 +983,7 @@ final class AgentTaskTools {
         }
         let disposition = noteStore.agentWriteDisposition(note.id)
         switch noteStore.agentWrite(noteID: note.id, baseRevisionToken: baseRevision, document: document,
-                                    agentName: "Agent", disposition: disposition) {
+                                    agentName: agentName, disposition: disposition) {
         case .success(.applied):
             let updated = noteStore.note(withID: note.id) ?? note
             return try encode(["status": "applied", "note": serializeNote(updated)])
@@ -1014,7 +1037,7 @@ final class AgentTaskTools {
         document.refreshRequiredCapabilities()
         let disposition = noteStore.agentWriteDisposition(note.id)
         switch noteStore.agentWrite(noteID: note.id, baseRevisionToken: baseRevision, document: document,
-                                    agentName: "Agent", disposition: disposition) {
+                                    agentName: agentName(arguments), disposition: disposition) {
         case .success(.applied):
             let updated = noteStore.note(withID: note.id) ?? note
             var block = document.blocks[index]
@@ -1032,12 +1055,27 @@ final class AgentTaskTools {
         }
     }
 
+    private func agentName(_ arguments: [String: Any]) -> String {
+        let name = (arguments["agent_name"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        return name.isEmpty ? "Agent" : String(name.prefix(80))
+    }
+
     private func deleteNote(_ arguments: [String: Any]) throws -> String {
-        guard noteStore != nil else { throw AgentToolError.unknownTool("delete_note") }
+        guard let noteStore else { throw AgentToolError.unknownTool("delete_note") }
         let note = try findNote(arguments)
-        let id = note.id.uuidString
-        try performLibrary { library.delete(AtticItemRef(.note, note.id)) }
-        return try encode(["deleted": id])
+        guard let base = arguments["base_revision"] as? String, !base.isEmpty else {
+            throw AgentToolError.invalidArguments("base_revision is required: pass the note's revision from list_notes.")
+        }
+        switch noteStore.agentDelete(noteID: note.id, baseRevisionToken: base, agentName: agentName(arguments),
+                                    disposition: noteStore.agentWriteDisposition(note.id)) {
+        case .success(.applied):
+            return try encode(["deleted": note.id.uuidString, "kind": "note", "status": "applied",
+                "restorable_until": Self.dateFormatter.string(from: RecentlyDeletedPolicy.expiry(deletedAt: Date(), calendar: .autoupdatingCurrent))])
+        case let .success(.pending(editID)):
+            return try encode(["status": "pending", "kind": "note", "pending_edit": editID.uuidString,
+                "message": "Deletion is waiting for review. The person's text stays in Attic."])
+        case let .failure(error): throw AgentToolError.notPerformed(error.localizedDescription)
+        }
     }
 
     private func findNote(_ arguments: [String: Any]) throws -> NoteItem {
@@ -1166,6 +1204,7 @@ final class AgentTaskTools {
         guard library.state(of: ref) == .live else {
             throw AgentToolError.invalidArguments("No \(ref.kind.rawValue) exists with id \(ref.id.uuidString).")
         }
+        if ref.kind == .note { return try deleteNote(arguments) }
         try performLibrary { library.delete(ref) }
         let restorableUntil = RecentlyDeletedPolicy.expiry(deletedAt: Date(), calendar: .autoupdatingCurrent)
         return try encode([

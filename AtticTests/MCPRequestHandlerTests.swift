@@ -614,9 +614,44 @@ final class MCPRequestHandlerTests: XCTestCase {
         let (noteStore, handler) = try makeNoteHandler()
         let note = try XCTUnwrap(noteStore.create(body: "Remove me"))
 
-        let payload = try callNoteTool(handler, "delete_note", ["id": note.id.uuidString])
+        let payload = try callNoteTool(handler, "delete_note", ["id": note.id.uuidString, "base_revision": note.revisionToken])
         XCTAssertEqual(payload["deleted"] as? String, note.id.uuidString)
         XCTAssertTrue(noteStore.notes.isEmpty)
+    }
+
+    func testS5DeleteRequiresRevisionAndKeepsOnScreenNote() throws {
+        let (notes, handler) = try makeNoteHandler()
+        let note = try XCTUnwrap(notes.create(title: "Keep my typing"))
+        XCTAssertTrue(try toolError(handler, "delete_note", ["id": note.id.uuidString]).contains("base_revision"))
+        notes.agentWriteDisposition = { _ in .proposal }
+        let result = try callNoteTool(handler, "delete_note", ["id": note.id.uuidString,
+            "base_revision": note.revisionToken, "agent_name": "Claude"])
+        XCTAssertEqual(result["status"] as? String, "pending")
+        XCTAssertNotNil(notes.note(withID: note.id))
+        XCTAssertEqual(notes.pendingEdits(noteID: note.id).first?.agentName, "Claude")
+    }
+
+    func testS5GenericNoteDeletionAlsoRequiresRevisionAndProposes() throws {
+        let (library, handler) = try makeLibraryHandler()
+        let notes = try XCTUnwrap(library.notes)
+        let note = try XCTUnwrap(notes.create(title: "Safe generic delete"))
+        XCTAssertTrue(try toolError(handler, "delete_item", ["kind": "note", "id": note.id.uuidString]).contains("base_revision"))
+        notes.agentWriteDisposition = { _ in .proposal }
+        let result = try callNoteTool(handler, "delete_item", ["kind": "note", "id": note.id.uuidString,
+            "base_revision": note.revisionToken, "agent_name": "Other editor"])
+        XCTAssertEqual(result["status"] as? String, "pending")
+        XCTAssertNotNil(notes.note(withID: note.id))
+        XCTAssertTrue(notes.pendingEdits(noteID: note.id).first?.isDeletion == true)
+    }
+
+    func testS5ProposalUsesPerCallAttribution() throws {
+        let (notes, handler) = try makeNoteHandler()
+        guard case let .success((id, revision)) = notes.createDocumentNote(id: UUID(),
+            document: NoteDocument(blocks: [.text("Title"), .text("Body")])) else { return XCTFail() }
+        notes.agentWriteDisposition = { _ in .proposal }
+        _ = try callNoteTool(handler, "update_note", ["id": id.uuidString, "base_revision": revision.uuidString,
+            "body": "Suggested", "agent_name": "Claude"])
+        XCTAssertEqual(notes.pendingEdits(noteID: id).first?.agentName, "Claude")
     }
 
     func testNoteToolsAreUnknownWhenNoNoteStoreProvided() throws {
@@ -787,7 +822,7 @@ final class MCPRequestHandlerTests: XCTestCase {
     func testDeleteNoteNowMovesTheNoteToRecentlyDeleted() throws {
         let (library, handler) = try makeLibraryHandler()
         let note = try XCTUnwrap(library.notes?.create(title: "Keep safe"))
-        let payload = try callNoteTool(handler, "delete_note", ["id": note.id.uuidString])
+        let payload = try callNoteTool(handler, "delete_note", ["id": note.id.uuidString, "base_revision": note.revisionToken])
         XCTAssertEqual(payload["deleted"] as? String, note.id.uuidString)
         XCTAssertTrue(try XCTUnwrap(library.notes).notes.isEmpty)
         XCTAssertEqual(library.state(of: AtticItemRef(.note, note.id)), .deleted)
@@ -801,7 +836,7 @@ final class MCPRequestHandlerTests: XCTestCase {
         XCTAssertNotNil(library.canvases?.createCanvas(name: "Keep"))
         let board = try XCTUnwrap(library.canvases?.createCanvas(name: "Board"))
         for (kind, id) in [("task", task.id), ("note", note.id), ("canvas", board.id)] {
-            let payload = try callNoteTool(handler, "delete_item", ["kind": kind, "id": id.uuidString])
+            let payload = try callNoteTool(handler, "delete_item", ["kind": kind, "id": id.uuidString, "base_revision": note.revisionToken])
             XCTAssertEqual(payload["kind"] as? String, kind)
             XCTAssertNotNil(payload["restorable_until"] as? String)
         }
