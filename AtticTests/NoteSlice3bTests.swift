@@ -897,6 +897,14 @@ final class NoteSlice3bTests: XCTestCase {
         await XCTAssertTrueAsync(await controller.preserveAllDurably())
         clock.value += 31 * 86_400
         store.thinVersions(noteID: id)
+        // S7 retains rich snapshots for recovery. Model the absence of
+        // durable history explicitly so this test still isolates live Undo
+        // ownership; S7's thinning tests cover the retained snapshots.
+        let snapshots = try store.modelContext.fetch(FetchDescriptor<NoteVersion>(
+            predicate: #Predicate { $0.noteID == id }))
+        for snapshot in snapshots { store.modelContext.delete(snapshot) }
+        try store.modelContext.save()
+        XCTAssertTrue(store.versions(noteID: id).isEmpty)
         XCTAssertEqual(store.purgeRemovedAttachments(before: clock.value.addingTimeInterval(1)), 0)
         session.engine.history.reset()
         store.thinVersions(noteID: id)
