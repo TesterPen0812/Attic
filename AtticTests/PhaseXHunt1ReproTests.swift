@@ -198,6 +198,23 @@ final class PhaseXHunt1ReproTests: XCTestCase {
         XCTAssertEqual(imported.rows[1].cells[0].marks, table.rows[1].cells[0].marks)
     }
 
+    func testH2_03RestoreRejectsDivergentVersionReplicas() throws {
+        let store = try makeTestNoteStore(attachmentFileStore: makeTestAttachmentFileStore())
+        let (id, _) = try create(NoteDocument(blocks: [.text("Current")]), in: store)
+        let versionID = UUID()
+        for title in ["Version A", "Version B"] {
+            store.modelContext.insert(NoteVersion(id: versionID, noteID: id, createdAt: Date(), reason: .leave,
+                content: try NoteContentCodec.encode(NoteDocument(blocks: [.text(title)])), contentFormat: 1,
+                title: title, body: "", attachmentIDs: [], sourceRevisionID: UUID()))
+        }
+        try store.modelContext.save()
+        let before = store.note(withID: id)?.content
+        XCTExpectFailure("H2-03")
+        let result = store.restoreVersion(versionID, noteID: id)
+        if case .success = result { XCTFail("Divergent history replicas must refuse restore") }
+        XCTAssertEqual(store.note(withID: id)?.content, before)
+    }
+
     func testDetachedEngineReleasesAndViewLifetimeMatchesStockTextKit() async throws {
         weak var weakEditor: NoteEditorEngine?
         weak var weakView: NoteEditorTextView?
