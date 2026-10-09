@@ -205,7 +205,9 @@ final class NotesLibraryModel: ObservableObject {
             unsaved = unsaved.filter { $0.engine.tags.contains(tag) }
         }
         if searching {
-            guard let matches else { return cache?.groups ?? [] }
+            // The earlier rows stay while a search runs, but only rows of
+            // this filter (review S4-R2).
+            guard let matches else { return cache.flatMap { $0.key.tag == tagFilter ? $0.groups : nil } ?? [] }
             notes = notes.filter { matches.contains($0.id) }
         }
         let draftRows = unsaved.map { draftRow($0) }

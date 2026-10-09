@@ -431,7 +431,11 @@ extension NoteStore {
     /// "October 1, 2026", "tomorrow"); nil for anything else, so words that
     /// merely contain a date stay a text search.
     nonisolated static func searchedDay(_ text: String, calendar: Calendar = .current) -> NoteDay? {
-        guard let detector = try? NSDataDetector(types: NSTextCheckingResult.CheckingType.date.rawValue) else { return nil }
+        // A time ("10:30", "2pm", "now") reads as today: not a day you
+        // searched for (review S4-R4).
+        let timeOnly = #"\d:\d\d|\d\s*[ap]\.?m\b|^\s*(now|noon|midnight|tonight)\s*$"#
+        guard text.range(of: timeOnly, options: [.regularExpression, .caseInsensitive]) == nil,
+              let detector = try? NSDataDetector(types: NSTextCheckingResult.CheckingType.date.rawValue) else { return nil }
         let whole = NSRange(text.startIndex..., in: text)
         guard let match = detector.firstMatch(in: text, options: [], range: whole),
               match.range == whole, let date = match.date else { return nil }

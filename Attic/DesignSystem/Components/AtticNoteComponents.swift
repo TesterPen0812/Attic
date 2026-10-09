@@ -490,6 +490,15 @@ struct AtticNoteLibraryLine: View {
         .animation(AtticMotionPreset.popover.springy(reduceMotion: design.reduceMotion), value: searchShown)
     }
 
+    /// The longest tag name a tab spells out: the active tag is always shown,
+    /// so a long one is shortened to leave room for More tags… and the
+    /// magnifier in the narrowest panel (review S4-R3).
+    static let tabTitleLimit = 16
+
+    static func tabTitle(_ tag: String) -> String {
+        tag.count > tabTitleLimit ? "#\(tag.prefix(tabTitleLimit - 1))…" : "#\(tag)"
+    }
+
     /// The fewest tags the line shows: the active one is never dropped.
     private var minimumTags: Int { activeTag == nil ? 0 : 1 }
 
@@ -509,7 +518,7 @@ struct AtticNoteLibraryLine: View {
 
     private func tabs(_ shown: [String]) -> some View {
         let items = [AtticPageTabs<String?>.Item(page: nil, title: title, accessibilityIdentifier: "notes-library-label")]
-            + shown.map { AtticPageTabs<String?>.Item(page: $0, title: "#\($0)", accessibilityIdentifier: "notes-library-tag-\($0)") }
+            + shown.map { AtticPageTabs<String?>.Item(page: $0, title: Self.tabTitle($0), accessibilityIdentifier: "notes-library-tag-\($0)") }
         return AtticPageTabs(items: items, selection: Binding(get: { activeTag }, set: { onSelectTag($0) }),
                              groupLabel: String(localized: "Filter notes by tag"))
     }

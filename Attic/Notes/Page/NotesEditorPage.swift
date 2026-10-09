@@ -1039,13 +1039,21 @@ final class NotesPageSwipeView: NSView, PanelNotesSwipeTarget {
     /// Clicks go through to the page.
     override func hitTest(_ point: NSPoint) -> NSView? { nil }
 
+    /// The page this one covered (a legacy editor inside the Notes page):
+    /// it gets the slot back when this one leaves (review S4-R5).
+    private weak var coveredTarget: (any PanelNotesSwipeTarget)?
+
     override func viewDidMoveToWindow() {
         super.viewDidMoveToWindow()
         if let registeredPanel, registeredPanel.notesSwipeTarget === self {
-            registeredPanel.notesSwipeTarget = nil
+            registeredPanel.notesSwipeTarget = coveredTarget.flatMap { $0.swipeView.window === registeredPanel ? $0 : nil }
         }
+        coveredTarget = nil
         registeredPanel = window as? AtticPanel
-        registeredPanel?.notesSwipeTarget = self
+        if let panel = registeredPanel, panel.notesSwipeTarget !== self {
+            coveredTarget = panel.notesSwipeTarget
+            panel.notesSwipeTarget = self
+        }
     }
 
     func performNotesSwipe() { onSwipe() }

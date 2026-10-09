@@ -69,6 +69,21 @@ final class NotesLibraryOrganizeTests: XCTestCase {
                        "clearing the filter shows every match again, with no new search")
     }
 
+    /// Review S4-R2: while the first search runs, the earlier rows stay,
+    /// but never rows from another filter.
+    func testAFilterChangeDuringTheFirstSearchNeverShowsTheOtherFiltersRows() throws {
+        let tagged = try create("Tagged", tags: ["launch"])
+        let plain = try create("Plain")
+        let library = NotesLibraryModel(search: { _ in try await Task.sleep(for: .seconds(60)); return [] }, store: store)
+        XCTAssertEqual(ids(library.groups(store: store, drafts: [])), [tagged, plain])
+        library.query = "kyoto"
+        XCTAssertEqual(ids(library.groups(store: store, drafts: [])), [tagged, plain], "earlier results stay meanwhile")
+        library.tagFilter = "launch"
+        XCTAssertFalse(ids(library.groups(store: store, drafts: [])).contains(plain),
+                       "a note outside the new filter is never shown")
+        library.clearSearch()
+    }
+
     func testChangingTheFilterDropsTheKeyboardsRow() throws {
         let a = try create("Alpha", tags: ["x"])
         try create("Beta")
@@ -177,6 +192,24 @@ final class NotesLibraryOrganizeTests: XCTestCase {
         XCTAssertEqual(words, [withDate], "ordinary words still search the text")
     }
 
+    /// Review S4-R4: a time reads as today, not a day searched for.
+    func testATimeIsNotADaySearch() {
+        for query in ["10:30", "2pm", "2 PM", "now", "noon", "tonight"] {
+            XCTAssertNil(NoteStore.searchedDay(query), "“\(query)”")
+        }
+        XCTAssertEqual(NoteStore.searchedDay("1 October 2026")?.isoString, "2026-10-01")
+        XCTAssertNotNil(NoteStore.searchedDay("tomorrow"))
+        XCTAssertNil(NoteStore.searchedDay("meet on 1 October 2026"), "words around a date stay a text search")
+    }
+
+    /// Review S4-R3: a long active tag is shortened, never pushing More
+    /// tags… and the magnifier out of the panel.
+    func testALongTagIsShortenedOnTheTopLine() {
+        XCTAssertEqual(AtticNoteLibraryLine.tabTitle("launch"), "#launch")
+        XCTAssertEqual(AtticNoteLibraryLine.tabTitle("abcdefghijklmnop"), "#abcdefghijklmnop", "16 fit")
+        XCTAssertEqual(AtticNoteLibraryLine.tabTitle("abcdefghijklmnopq"), "#abcdefghijklmno…")
+    }
+
     func testARowsTagsMenuFiltersToATagAndTicksTheActiveOne() {
         var chosen: [String?] = []
         let menu = NotesLibraryView.tagsSubmenu(tags: ["launch", "work"], activeTag: "work") { chosen.append($0) }
@@ -269,6 +302,26 @@ final class NotesLibraryOrganizeTests: XCTestCase {
         XCTAssertNil(view.hitTest(NSPoint(x: 1, y: 1)), "clicks go through to the page")
         view.removeFromSuperview()
         XCTAssertNil(panel.notesSwipeTarget, "a page that left unregisters")
+    }
+
+    /// Review S4-R5: a legacy editor inside the Notes page registers over
+    /// it; when it leaves, the page gets the slot back.
+    func testAnInnerSwipeTargetHandsTheSlotBackWhenItLeaves() {
+        let panel = AtticPanel(contentRect: CGRect(x: 0, y: 0, width: 332, height: 480),
+                               styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: true)
+        panel.contentView = NSView(frame: CGRect(x: 0, y: 0, width: 332, height: 480))
+        let page = NotesPageSwipeView(isLibraryPresented: false) {}
+        let inner = NotesPageSwipeView(isLibraryPresented: false) {}
+        panel.contentView?.addSubview(page)
+        panel.contentView?.addSubview(inner)
+        XCTAssertTrue(panel.notesSwipeTarget === inner)
+        inner.removeFromSuperview()
+        XCTAssertTrue(panel.notesSwipeTarget === page, "the page swipes again")
+        panel.contentView?.addSubview(inner)
+        page.removeFromSuperview()
+        XCTAssertTrue(panel.notesSwipeTarget === inner, "removing the covered page leaves the inner one")
+        inner.removeFromSuperview()
+        XCTAssertNil(panel.notesSwipeTarget, "a page no longer in the window never gets the slot back")
     }
 
     // MARK: Derived summaries on a large library

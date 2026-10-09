@@ -2336,6 +2336,9 @@ extension NotesPageController {
                                   readOnlyReason: nil)
         // The caret waits at the end of the title, as if it had been typed.
         session.selection = NSRange(location: (title as NSString).length, length: 0)
+        // Pending before it joins the cache: an untouched session can be
+        // evicted there as an empty draft (review S4-R1).
+        session.state = .dirty
         activate(session)
         // The text was not typed into the view: mark it as the edit it is.
         textDidChange(in: session)
