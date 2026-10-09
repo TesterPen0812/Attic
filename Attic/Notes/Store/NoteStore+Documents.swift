@@ -332,6 +332,11 @@ extension NoteStore {
     @discardableResult
     func stageDisplacedReplicas(_ replicas: [NoteItem], reason: NoteVersionReason, timestamp: Date,
                                 excludingUnchangedBase baseRevisionID: UUID? = nil) -> Int {
+        // A singleton at the excluded base cannot have a divergent sibling.
+        // Skip it before constructing and hashing whole-body UTF-16 identity;
+        // the family path below still preserves exact spellings for replicas.
+        if replicas.count == 1, let baseRevisionID,
+           replicas[0].revisionID == baseRevisionID { return 0 }
         var seen = Set<NotePreservationState>()
         var inserted = 0
         let baseReplicas = replicas.filter { baseRevisionID != nil && $0.revisionID == baseRevisionID }

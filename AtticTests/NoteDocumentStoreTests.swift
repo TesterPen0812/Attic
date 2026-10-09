@@ -263,6 +263,29 @@ final class NoteDocumentStoreTests: XCTestCase {
                        "known bytes must not be decoded again on each save")
     }
 
+    func testExcludedBaseSkipsOnlyAnUnambiguousReplicaFamily() throws {
+        let timestamp = Date()
+        for excluded in [false, true] {
+            let (id, revision) = try create(document("Original", ["caf\u{E9}"]))
+            let note = try XCTUnwrap(store.note(withID: id))
+            XCTAssertEqual(store.stageDisplacedReplicas([note], reason: .replacedByDraft,
+                timestamp: timestamp, excludingUnchangedBase: excluded ? revision : UUID()), excluded ? 0 : 1)
+            XCTAssertEqual(versions(id).count, excluded ? 0 : 1)
+        }
+        let (id, revision) = try create(document("Original", ["caf\u{E9}"]))
+        let note = try XCTUnwrap(store.note(withID: id))
+        let sibling = NoteItem(id: id, title: note.title, body: "cafe\u{301}")
+        sibling.content = note.content
+        sibling.contentFormat = note.contentFormat
+        sibling.revisionID = revision
+        store.modelContext.insert(sibling)
+        try store.modelContext.save()
+        XCTAssertEqual(store.stageDisplacedReplicas([note, sibling], reason: .replacedByDraft,
+            timestamp: timestamp, excludingUnchangedBase: revision), 2)
+        XCTAssertEqual(Set(versions(id).map { Array($0.body.utf16) }),
+                       Set([Array("caf\u{E9}".utf16), Array("cafe\u{301}".utf16)]))
+    }
+
     func testBatchAttachmentAdmissionDecodesTheBaseOnlyOnce() throws {
         let base = NoteDocument(blocks: (0..<5_000).map { .text("Line \($0)") })
         let (id, _) = try create(base)
