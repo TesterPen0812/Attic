@@ -2791,6 +2791,34 @@ extension NotesPageController {
         return true
     }
 
+    /// All notes' "New note “kyoto”" (in #launch), after a search found
+    /// nothing: a fresh draft whose title is the search and whose tags are
+    /// the filter's, pending like typed text (saved, journalled and kept on
+    /// leave by the usual rules). The current note is preserved first.
+    @discardableResult
+    func requestNewNote(title: String, tags: [String]) -> Bool {
+        let title = title.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard didStart, !title.isEmpty, !title.contains(where: \.isNewline) else { return false }
+        guard prepareToLeave(.newNote) else { return false }
+        legacyNoteID = nil
+        let id = UUID()
+        let document = NoteDocument(blocks: [.text(title)])
+        let session = NoteSession(noteID: id, isPersisted: false, baseRevisionID: nil,
+                                  engine: makeEngine(noteID: id, document: document, readOnly: false, tags: tags),
+                                  readOnlyReason: nil)
+        // The caret waits at the end of the title, as if it had been typed.
+        session.selection = NSRange(location: (title as NSString).length, length: 0)
+        // Pending before it joins the cache: an untouched session can be
+        // evicted there as an empty draft (review S4-R1).
+        session.state = .dirty
+        activate(session)
+        // The text was not typed into the view: mark it as the edit it is.
+        textDidChange(in: session)
+        isLibraryPresented = false
+        present()
+        return true
+    }
+
     /// Delete Note (⋯, or right-click and ⌘⌫ in All notes): an intentional
     /// leave, never "Deleted elsewhere". Pending text is saved first, so
     /// Restore brings back the latest; the session and its recovery copy go;

@@ -5,6 +5,17 @@ Every later change is recorded here: what changed, why, and who asked.
 
 ## Phase 2
 
+### S4: All notes' tag line (ux-plan §3.10, owner decisions 3 and 6, 2026-10-09)
+
+- **`AtticNoteLibraryLine`** takes `tags`, `activeTag`, `onSelectTag` and More
+  tags… (`moreTagsShown`, `moreTagsCard`). With tags, "All notes" and the tags
+  are `AtticPageTabs` (the Tasks tabs' look, underline on the active filter),
+  as many as fit with the active tag never dropped, then a quiet "More tags…"
+  label that opens the shared tag picker card. With no tags the line is the
+  plain heading it was.
+- **`AtticPageTabs.groupLabel`**: VoiceOver's name for the group (default
+  "Pages"; All notes says "Filter notes by tag").
+
 ### A41: integrated Notes v2 hands-on repairs (owner, 2026-10-09)
 
 Keep size C, A39 width re-layout and A38 behavior repairs together. Find takes

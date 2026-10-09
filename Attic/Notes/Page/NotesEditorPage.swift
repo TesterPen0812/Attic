@@ -116,6 +116,12 @@ struct NotesEditorPage: View {
             }
             if controller.historyBrowser == nil { shortcuts }
         }
+        // A deliberate two-finger swipe goes to All notes and back (the
+        // panel's swipe router: a pull past its threshold, never momentum;
+        // it yields to sideways controls, a drag selection, and refuses
+        // while text is being composed, as the button does).
+        .background(NotesPageSwipeMonitor(isLibraryPresented: controller.isLibraryPresented) { toggleLibrary() }
+            .accessibilityHidden(true))
         // Springy slides between the note and All notes, and for a new or
         // another note (keystrokes are never held back: the text view takes
         // the keyboard at once, and nothing here animates per keystroke).
@@ -244,7 +250,8 @@ struct NotesEditorPage: View {
                              libraryCommands: { Self.historyCommands(for: controller) },
                              onOpen: { id in openFromLibrary(id) },
                              onDelete: { id in delete(id) },
-                             onBack: { toggleLibrary() })
+                             onBack: { toggleLibrary() },
+                             onCreate: { title, tag in newNote(title: title, tag: tag) })
                 .transition(slide(from: Self.libraryEdge))
         } else if let legacyID = controller.legacyNoteID, noteDraft.activeNoteID == legacyID {
             // A note not yet in the new format keeps the old editor.
@@ -518,6 +525,14 @@ struct NotesEditorPage: View {
         DispatchQueue.main.async { chrome.focusText() }
     }
 
+    /// "New note “kyoto”" (in #launch) from All notes: the note the search
+    /// named, its caret at the end of the title.
+    private func newNote(title: String, tag: String?) {
+        guard controller.requestNewNote(title: title, tags: tag.map { [$0] } ?? []) else { return }
+        library.clearSearch()
+        DispatchQueue.main.async { chrome.focusText() }
+    }
+
     private func openFromLibrary(_ id: UUID) {
         if let draft = controller.failedDrafts.first(where: { $0.noteID == id }), noteStore.note(withID: id) == nil {
             controller.openFailedDraft(sessionID: draft.id)
@@ -658,6 +673,9 @@ struct NotesEditorPage: View {
             AtticMenuCommand(pinned ? "Unpin from Top" : "Pin to Top", isDisabled: stored == nil, startsSection: true,
                              identifier: "notes-row-pin") {
                 controller.setPinned(!pinned, noteID: id)
+            },
+            NotesLibraryView.tagsSubmenu(tags: stored?.tags ?? [], activeTag: library.tagFilter) { [library] tag in
+                library.tagFilter = tag
             },
             AtticMenuCommand("Copy as Markdown", shortcut: KeyboardShortcut("c", modifiers: [.command, .option, .shift]),
                              startsSection: true, identifier: NotesLibraryView.copyMarkdownIdentifier) {
@@ -1173,4 +1191,59 @@ private struct NotesKeyboardStop: ViewModifier {
             .focusable(enabled)
             .focused(focus, equals: stop)
     }
+}
+
+/// Registers the Notes page with the panel's trackpad-swipe router (the
+/// router decides direction and threshold; this only says whether All notes
+/// shows and what a finished swipe does).
+struct NotesPageSwipeMonitor: NSViewRepresentable {
+    let isLibraryPresented: Bool
+    let onSwipe: () -> Void
+
+    func makeNSView(context: Context) -> NotesPageSwipeView {
+        NotesPageSwipeView(isLibraryPresented: isLibraryPresented, onSwipe: onSwipe)
+    }
+
+    func updateNSView(_ view: NotesPageSwipeView, context: Context) {
+        view.onSwipe = onSwipe
+        view.isNotesLibraryPresented = isLibraryPresented
+    }
+}
+
+final class NotesPageSwipeView: NSView, PanelNotesSwipeTarget {
+    var onSwipe: () -> Void
+    var isNotesLibraryPresented: Bool
+    var swipeView: NSView { self }
+    private weak var registeredPanel: AtticPanel?
+
+    init(isLibraryPresented: Bool, onSwipe: @escaping () -> Void) {
+        isNotesLibraryPresented = isLibraryPresented
+        self.onSwipe = onSwipe
+        super.init(frame: .zero)
+    }
+
+    @available(*, unavailable)
+    required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
+
+    /// Clicks go through to the page.
+    override func hitTest(_ point: NSPoint) -> NSView? { nil }
+
+    /// The page this one covered (a legacy editor inside the Notes page):
+    /// it gets the slot back when this one leaves (review S4-R5).
+    private weak var coveredTarget: (any PanelNotesSwipeTarget)?
+
+    override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        if let registeredPanel, registeredPanel.notesSwipeTarget === self {
+            registeredPanel.notesSwipeTarget = coveredTarget.flatMap { $0.swipeView.window === registeredPanel ? $0 : nil }
+        }
+        coveredTarget = nil
+        registeredPanel = window as? AtticPanel
+        if let panel = registeredPanel, panel.notesSwipeTarget !== self {
+            coveredTarget = panel.notesSwipeTarget
+            panel.notesSwipeTarget = self
+        }
+    }
+
+    func performNotesSwipe() { onSwipe() }
 }
