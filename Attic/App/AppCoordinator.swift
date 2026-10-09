@@ -711,6 +711,22 @@ final class AppCoordinator: ObservableObject {
                         self?.panelController.makeKeyForCapture()
                     }
                 }
+                #if DEBUG
+                // Capture seams for what Settings changes while a note is open
+                // (A39 F08 and the appearance switch): `<seconds>:<width>` and
+                // `<seconds>:<light|dark|system>`, set on the same `AppSettings`
+                // properties the Settings controls write.
+                for spec in (environment["ATTIC_UI_TEST_SET_WIDTH"] ?? "").split(separator: ",") {
+                    let parts = spec.split(separator: ":")
+                    guard parts.count == 2, let delay = Double(parts[0]), let width = Double(parts[1]) else { continue }
+                    DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [weak self] in self?.settings.panelContentSize = width }
+                }
+                for spec in (environment["ATTIC_UI_TEST_SET_APPEARANCE"] ?? "").split(separator: ",") {
+                    let parts = spec.split(separator: ":")
+                    guard parts.count == 2, let delay = Double(parts[0]), let mode = AppearancePreference(rawValue: String(parts[1])) else { continue }
+                    DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [weak self] in self?.settings.appearance = mode }
+                }
+                #endif
                 return
             }
             NSApp.activate()

@@ -1203,7 +1203,12 @@ private struct AtticStripButton: View {
     private var labelFloor: CGFloat {
         let m = AtticSmallControlMetrics.self
         guard let value else { return AtticControlSize.smallMinWidth }
-        guard value.text.count > keepsPrefix + 1 else { return 0 }
+        // A short value (a tag like "#a33") is never squeezed: it keeps its
+        // whole text, so a date or a long tag gives way first (A39 F12; it
+        // showed as "#…" beside a date and a priority).
+        guard value.text.count > keepsPrefix + 1 else {
+            return m.labelPadding + m.iconSize + iconLabelGap + value.style.measuredWidth(value.text) + clearGap
+        }
         return m.labelPadding + m.iconSize + iconLabelGap + keptPrefixWidth + clearGap
     }
 

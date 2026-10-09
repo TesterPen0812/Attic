@@ -138,7 +138,7 @@ struct NoteTextStyle: Equatable {
     /// List numbers are quieter than the text; bullets and the quote bar
     /// are in the text's ink.
     var markerColor: NSColor { secondaryColor }
-    var placeholderColor: NSColor { tokens.ink(.placeholder).nsColor }
+    var placeholderColor: NSColor { tokens.hintInk.nsColor }
     var highlightColor: NSColor { tokens.tagFill.nsColor }
     var codeColor: NSColor { tokens.tagFill.nsColor }
     /// The Mono block's fill (Light black 4.5 %, Dark white 5.5 %) and,

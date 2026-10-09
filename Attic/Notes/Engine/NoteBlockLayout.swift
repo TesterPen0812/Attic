@@ -340,9 +340,9 @@ extension NoteEditorEngine: NSTextLayoutManagerDelegate, NSTextContentStorageDel
 
 // MARK: - Copy on a Mono block
 
-/// Copy on a Mono block: a 20 pt `doc.on.doc` chip tucked into the block's
-/// top-right corner, opaque in the block's own fill, so the text under it
-/// is hidden rather than overdrawn and nothing moves. Shown while the
+/// Copy on a Mono block: an 18 pt `doc.on.doc` chip on the block's top-right
+/// corner, rising above its top edge so it ends where the text begins and
+/// covers nothing; opaque in the block's own fill. Shown while the
 /// pointer is over the block, while the caret is in it, or for VoiceOver.
 /// It copies the block's lines as plain text and shows a tick for a moment.
 final class NoteMonoCopyButton: NSView {
@@ -357,8 +357,7 @@ final class NoteMonoCopyButton: NSView {
     private var resetWork: DispatchWorkItem?
 
     static var size: CGFloat { T.monoCopySize }
-    /// Nested in the block's corner: its radius less the inset.
-    static var radius: CGFloat { AtticRadius.nested(outer: T.monoRadius, gap: T.monoCopyInset) ?? T.monoRadius }
+    static var radius: CGFloat { size / 3 }
 
     override init(frame: NSRect) {
         super.init(frame: frame)

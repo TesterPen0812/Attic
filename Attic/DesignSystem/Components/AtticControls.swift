@@ -1553,6 +1553,28 @@ enum AtticNativeMenu {
         }
     }
 
+    /// Opens the menu as the system opens a right-click menu, under `rect`
+    /// (in `view`'s coordinates, aligned to its leading edge), and returns
+    /// when it closes: Notes' ⋯ menu (A39 F06). The pop-up style above keeps
+    /// a menu beside its button and, at the panel's screen corner, squeezes
+    /// the Format submenu's names to "H…g"; a context menu places its
+    /// submenus as the system does, names whole. Falls back to the pop-up
+    /// style if no event can be made.
+    static func popUpContextMenu(_ commands: [AtticMenuCommand], below rect: NSRect, in view: NSView) {
+        let menu = make(commands)
+        menu.appearance = view.window?.effectiveAppearance
+        let location = NSPoint(x: rect.minX, y: view.isFlipped ? rect.maxY + 4 : rect.minY - 4)
+        guard let window = view.window,
+              let event = NSEvent.mouseEvent(with: .rightMouseDown, location: view.convert(location, to: nil),
+                                             modifierFlags: [], timestamp: ProcessInfo.processInfo.systemUptime,
+                                             windowNumber: window.windowNumber, context: nil, eventNumber: 0,
+                                             clickCount: 1, pressure: 1) else {
+            menu.popUp(positioning: nil, at: location, in: view)
+            return
+        }
+        NSMenu.popUpContextMenu(menu, with: event, for: view)
+    }
+
     /// Opens the menu as the system opens a right-click menu, with its top
     /// left at `point` in `view` (under its bottom-left corner by default):
     /// a row's actions (⇧⌘I, the row's ⋯, VoiceOver's Show actions). The

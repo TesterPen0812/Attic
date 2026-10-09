@@ -612,6 +612,44 @@ final class DeepReviewFixTests: XCTestCase {
         XCTAssertEqual(Strip.iconOnlyButtons(tagless, available: 200), [1, 2])
     }
 
+    /// A39 F12: "tomorrow #a33 !!" in the 268 pt strip showed the tag as
+    /// "#…" beside the date and the priority. A short tag now keeps its whole
+    /// text at every width the strip is laid out in; the date gives way.
+    func testAShortTagKeepsItsWholeTextBesideADateAndAPriority() throws {
+        typealias Strip = AtticComposerStrip<EmptyView, EmptyView, EmptyView>
+        let attribute = NSAccessibility.Attribute(rawValue: "AXEnhancedUserInterface")
+        let previous = NSApp.accessibilityAttributeValue(attribute)
+        NSApp.accessibilitySetValue(true, forAttribute: attribute)
+        defer { NSApp.accessibilitySetValue(previous, forAttribute: attribute) }
+        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 400, height: 80), styleMask: [.titled], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        defer { window.close() }
+        for available: CGFloat in [226, 234, 242, 252, 260, 268, 276, 288] {
+            let strip = Strip(datePresented: .constant(false), tagsPresented: .constant(false), priorityPresented: .constant(false),
+                              date: AtticStripValue(text: "Tomorrow", spoken: "Tomorrow"), tags: TasksComposerValues.tags(["a33"]),
+                              priority: TasksComposerValues.priority(.high), onClearDate: {}, onClearTags: {}, onClearPriority: {},
+                              datePicker: { EmptyView() }, tagPicker: { EmptyView() }, priorityPicker: { EmptyView() })
+            let host = NSHostingView(rootView: strip.frame(width: available).atticDesign(AtticDesignContext(reduceMotion: true)))
+            host.frame = NSRect(x: 0, y: 0, width: available, height: 40)
+            window.contentView?.addSubview(host)
+            host.layoutSubtreeIfNeeded()
+            RunLoop.main.run(until: Date().addingTimeInterval(0.15))
+            host.layoutSubtreeIfNeeded()
+            func all(_ element: AnyObject) -> [AnyObject] {
+                [element] + ((element.accessibilityChildren?() ?? nil) ?? []).flatMap { all($0 as AnyObject) }
+            }
+            func width(_ identifier: String) -> CGFloat? {
+                all(host).first { (($0 as? NSObject)?.perform(Selector(("accessibilityIdentifier")))?.takeUnretainedValue() as? String) == identifier }
+                    .map { $0.accessibilityFrame().width }
+            }
+            let tag = try XCTUnwrap(width("composer-tag"), "the tag button at \(available)")
+            let natural = AtticSmallControlMetrics.labelPadding + AtticSmallControlMetrics.iconSize + AtticPickerMetrics.stripCompactIconGap
+                + AtticTextStyle.controlLabel.measuredWidth("#a33")
+            XCTAssertGreaterThanOrEqual(tag, natural - 0.5, "#a33 whole at \(available) (\(tag) vs \(natural))")
+            host.removeFromSuperview()
+        }
+    }
+
     // MARK: - Code review: the pager's test-only settle
 
     func testThePagerSettleOverrideNeedsAUITestPreviewAndASaneDuration() {

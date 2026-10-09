@@ -422,6 +422,58 @@ final class NotesV2TablesFeatureTests: XCTestCase {
         XCTAssertNotNil(view.scrollView.layer?.mask)
     }
 
+    /// A39: a `---` rule above a wide table. The note's owner saw the rule
+    /// and the table run off the panel's right edge; the column must stay the
+    /// text's 264 pt and the rule must span it and no more.
+    func testARuleAboveAWideTableStaysInTheColumn() throws {
+        let wide = NoteTable(texts: [["Pillar", "What happened", "Control that failed", "Source"],
+                                     ["Confidentiality", "Data taken from the IT network", "No MFA on the VPN account", "beerman2023review"]])
+        let long = "The attackers breached by compromising password fro a VPN account that did not reqiuire multi factor authentication"
+        let (engine, textView) = makeEngine([.text("CIA impact"), .text(long), .divider(), .text("Below the rule"), .table(wide), .text("After")])
+        for _ in 0..<3 { settle(engine, textView) }
+        try view(engine).setScrollOffset(80)
+        for _ in 0..<3 { settle(engine, textView) }
+        XCTAssertLessThanOrEqual(textView.frame.width, 320.5, "the text view keeps the panel's width")
+        let container = try XCTUnwrap(textView.textContainer)
+        XCTAssertLessThanOrEqual(container.size.width, 264 + 2 * container.lineFragmentPadding + 0.5, "the text container is the column")
+        let table = try view(engine)
+        XCTAssertEqual(table.frame.width, 264, accuracy: 0.5)
+        let rule = try XCTUnwrap(engine.objects().compactMap { $0.0 as? NoteDividerAttachment }.first)
+        let bounds = rule.attachmentBounds(for: [:], location: engine.contentStorage.documentRange.location, textContainer: container,
+                                           proposedLineFragment: CGRect(x: 0, y: 0, width: container.size.width, height: 21),
+                                           position: .zero)
+        XCTAssertLessThanOrEqual(bounds.width, 264.5, "a rule spans the text column and no more")
+        var lineRights: [CGFloat] = []
+        engine.layoutManager?.enumerateTextLayoutFragments(from: engine.contentStorage.documentRange.location, options: [.ensuresLayout]) { fragment in
+            lineRights.append(fragment.layoutFragmentFrame.maxX)
+            return true
+        }
+        XCTAssertLessThanOrEqual(lineRights.max() ?? 0, 264 + 2 * container.lineFragmentPadding + 0.5, "nothing is laid out past the column")
+    }
+
+    /// The same, built as the owner typed it: `---` and Return, more text,
+    /// then a wide table, then scrolled sideways.
+    func testATypedRuleAboveAWideTableAlsoStaysInTheColumn() throws {
+        let wide = NoteTable(texts: [["Pillar", "What happened", "Control that failed", "Source"],
+                                     ["Confidentiality", "Data taken from the IT network", "No MFA on the VPN account", "beerman2023review"]])
+        let long = "The attackers breached by compromising password fro a VPN account that did not reqiuire multi factor authentication"
+        let (engine, textView) = makeEngine([.text("CIA impact"), .text(long), .text("")])
+        textView.setSelectedRange(NSRange(location: engine.textStorage.length, length: 0))
+        type("---", into: textView)
+        textView.insertNewline(nil)
+        type("Below the rule", into: textView)
+        textView.insertNewline(nil)
+        XCTAssertTrue(engine.insertTable(wide, replacing: textView.selectedRange(), name: "Insert Table", entering: false))
+        for _ in 0..<3 { settle(engine, textView) }
+        try view(engine).setScrollOffset(80)
+        for _ in 0..<3 { settle(engine, textView) }
+        let container = try XCTUnwrap(textView.textContainer)
+        XCTAssertNotNil(engine.objects().compactMap { $0.0 as? NoteDividerAttachment }.first, "the rule was made")
+        XCTAssertLessThanOrEqual(textView.frame.width, 320.5, "the text view keeps the panel's width")
+        XCTAssertLessThanOrEqual(container.size.width, 264 + 2 * container.lineFragmentPadding + 0.5)
+        XCTAssertEqual(try view(engine).frame.width, 264, accuracy: 0.5)
+    }
+
     // MARK: Paste and copy
 
     func testTabularPasteBecomesATableInOneStepWithPasteAsText() throws {

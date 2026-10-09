@@ -306,6 +306,17 @@ struct AtticColorTokens: Equatable, Sendable {
     }
     func color(_ ink: AtticInk) -> Color { self.ink(ink).color }
 
+    /// The quietest note text: a new note's "Title" and the empty line's
+    /// "Type / for headings…" hint (A39 F10). On Glass and Frosted the
+    /// design's placeholder ink is Phase 0's secondary grey, near the
+    /// primary (0.12 against 0.08, Light), so a hint in it read as typed
+    /// text. This is the primary ink at partial opacity: it follows the
+    /// surface it sits on, stays clearly lighter than typing in Light and
+    /// Dark, and steps up under Increase Contrast.
+    var hintInk: AtticRGBA {
+        ink(.heading).withAlpha(context.increaseContrast ? 0.80 : 0.52)
+    }
+
     /// An open task's ring (to do, and Later's dashed ring), owner fix 1
     /// (2026-09-27, card B of v15): the primary ink at low opacity, so it
     /// follows the surface it sits on and the title carries the row. Light

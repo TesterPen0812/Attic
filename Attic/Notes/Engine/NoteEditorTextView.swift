@@ -112,6 +112,9 @@ final class NoteEditorTextView: NSTextView, NSAccessibilityCustomRotorItemSearch
         #if DEBUG
         if pinsMonoCopy, !monoCopyButton.isHidden { return }
         #endif
+        // The chip rises above the block: the pointer reaching it is still
+        // on the block's Copy.
+        if let point, !monoCopyButton.isHidden, monoCopyButton.frame.contains(point) { return }
         hoveredMonoLocation = point.flatMap { engine?.monoBlock(at: $0)?.location }
         placeMonoCopy()
     }
@@ -176,7 +179,8 @@ final class NoteEditorTextView: NSTextView, NSAccessibilityCustomRotorItemSearch
         monoCopyButton.ink = style.secondaryColor
         let origin = textContainerOrigin
         let size = NoteMonoCopyButton.size, inset = AtticNoteType.monoCopyInset
-        let frame = NSRect(x: origin.x + rect.maxX - inset - size, y: origin.y + rect.minY + inset, width: size, height: size)
+        let frame = NSRect(x: origin.x + rect.maxX - inset - size, y: origin.y + rect.minY - AtticNoteType.monoCopyRise,
+                           width: size, height: size)
         if monoCopyButton.frame != frame { monoCopyButton.frame = frame }
         let wasHidden = monoCopyButton.isHidden
         monoCopyLocation = location

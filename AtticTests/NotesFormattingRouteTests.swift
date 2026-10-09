@@ -178,7 +178,8 @@ final class NotesFormattingRouteTests: XCTestCase {
     }
 
     func testEverySlashEntryInEveryStateThroughAcceptanceTypingReturnAndUndo() {
-        let styles: [NoteSlashItem.Kind: NoteParagraphStyle] = [.heading: .heading(2), .bullet: .bullet,
+        let styles: [NoteSlashItem.Kind: NoteParagraphStyle] = [.title: .heading(1), .heading: .heading(2), .subheading: .heading(3),
+            .body: .body, .bullet: .bullet,
             .number: .number, .checklist: .checklist, .quote: .quote, .mono: .mono]
         for kind in NoteSlashItem.Kind.allCases {
             for state in State.allCases {

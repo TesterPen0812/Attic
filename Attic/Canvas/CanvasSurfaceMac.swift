@@ -31,6 +31,14 @@ struct CanvasNSViewRepresentable: NSViewRepresentable {
         configure(nsView)
     }
 
+    /// The canvas takes exactly the room it is given. Otherwise SwiftUI asks
+    /// the view for its fitting size, which is its current frame, and a page
+    /// kept built behind the current one holds the whole panel at the old
+    /// width after Settings narrows it (A39 F08).
+    func sizeThatFits(_ proposal: ProposedViewSize, nsView: CanvasNSView, context: Context) -> CGSize? {
+        proposal.replacingUnspecifiedDimensions(by: CGSize(width: 320, height: 400))
+    }
+
     static func dismantleNSView(
         _ nsView: CanvasNSView,
         coordinator: ()

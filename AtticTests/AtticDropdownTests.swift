@@ -238,12 +238,13 @@ final class AtticDropdownTests: XCTestCase {
         let first = try XCTUnwrap(rows.first)
         XCTAssertEqual(first.accessibilityRole(), .menuItem)
         XCTAssertTrue(first.isAccessibilitySelected())
-        XCTAssertEqual(first.accessibilityValue() as? String, "1 of 10")
+        XCTAssertEqual(first.accessibilityValue() as? String, "1 of 13")
         XCTAssertEqual(first.accessibilityIdentifier(), "notes-slash-checklist")
         XCTAssertGreaterThan(first.accessibilityFrame().width, 0)
         XCTAssertEqual(first.accessibilityFrame().height, AtticDropdownMetrics.rowHeight, accuracy: 1)
-        // Ten rows since Notes v2's Table.
-        XCTAssertEqual(rows.last?.accessibilityValue() as? String, "10 of 10")
+        // Thirteen rows: Notes v2's Table, and the Aa style list's Title,
+        // Subheading and Body beside Heading (A39 F04).
+        XCTAssertEqual(rows.last?.accessibilityValue() as? String, "13 of 13")
         XCTAssertEqual(rows.filter { $0.isAccessibilitySelected() }.count, 1, "only the highlight is selected")
     }
 

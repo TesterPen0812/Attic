@@ -6,7 +6,7 @@ import AppKit
 /// `ATTIC_UI_TESTING=1 ATTIC_UI_TEST_NOTES_SCENE=<scene>` types a sample
 /// note into the new draft through the real text view and router, then
 /// shows one state: `structured`, `bar`, `aa`, `slash`, `date`, `link`,
-/// `context`, `formatmenu`, `notemenu`, `hint`, `typography` (the owner's
+/// `context`, `formatmenu`, `notemenu`, `hint`, `aasub`, `typography` (the owner's
 /// CIA note, Notes v2); and, for the dropdown seam,
 /// `slash-lead`, `slash-da` and `date-lead` (under the first paragraph);
 /// `aacycle` opens and closes Aa's format row on a timer for recordings
@@ -41,7 +41,7 @@ enum NoteFormatCaptureScene {
                 writeTablesSample(controls: controls, chrome: chrome, textView: textView)
                 return
             }
-            writeSample(controls: controls, textView: textView, rich: scene == "structured")
+            writeSample(controls: controls, textView: textView, rich: scene == "structured" || scene == "aasub")
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) {
                 show(scene, controls: controls, chrome: chrome, textView: textView)
             }
@@ -128,6 +128,14 @@ enum NoteFormatCaptureScene {
         controls.router.run(.paragraph(.body), from: .shortcut)
         type("The attackers breached by compromising password fro a VPN account that did not reqiuire multi factor authentication", into: textView)
         textView.insertNewline(nil)
+        // `ATTIC_UI_TEST_TABLE_RULE=1`: a `---` rule typed above the table
+        // (A39: a rule spans the text column only).
+        if ProcessInfo.processInfo.environment["ATTIC_UI_TEST_TABLE_RULE"] == "1" {
+            type("---", into: textView)
+            textView.insertNewline(nil)
+            type("Below the rule", into: textView)
+            textView.insertNewline(nil)
+        }
         let wide = state == "wide"
         let rows: [[String]] = wide
             ? [["Pillar", "What happened", "Control that failed", "Source"],
@@ -258,6 +266,10 @@ enum NoteFormatCaptureScene {
             }
         case "aa":
             textView.setSelectedRange(NSRange(location: range(of: "Keep pricing", in: textView).location, length: 0))
+            chrome.openFormatBar(keyboard: false)
+        case "aasub":
+            // A39 F11: Aa's row with the longest style name ("Subheading").
+            textView.setSelectedRange(NSRange(location: range(of: "Open questions", in: textView).location, length: 0))
             chrome.openFormatBar(keyboard: false)
         case "slash":
             textView.insertNewline(nil)

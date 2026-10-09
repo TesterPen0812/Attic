@@ -93,7 +93,7 @@ final class NotesV2TypographyTests: XCTestCase {
         XCTAssertEqual([T.aboveTitleStyle, T.aboveHeading, T.aboveSubheading], [16, 14, 12])
         XCTAssertEqual([T.belowTitleStyle, T.belowHeading, T.belowSubheading], [2, 1, 1])
         XCTAssertEqual([T.monoPaddingV, T.monoPaddingH, T.monoRadius], [12, 9.5, 10])
-        XCTAssertEqual([T.monoCopySize, T.monoCopyInset], [20, 3])
+        XCTAssertEqual([T.monoCopySize, T.monoCopyInset, T.monoCopyRise], [18, 4, 6])
         XCTAssertEqual([T.listTextInset, T.bulletDot, T.quoteBar, T.quoteTextInset], [22, 5, 3, 14])
 
         let style = NoteTextStyle()
@@ -118,6 +118,22 @@ final class NotesV2TypographyTests: XCTestCase {
 
     /// The space between line boxes, by the lower block's kind; a heading
     /// binds to what follows it.
+    /// A39 F10: the empty-line hint and a new note's "Title" are visibly
+    /// quieter than typed text, on every surface and mode.
+    func testTheHintIsQuieterThanTypedTextInLightAndDark() {
+        for context in [AtticDesignContext.default, AtticDesignContext(mode: .dark),
+                        AtticDesignContext(mode: .dark, increaseContrast: true), AtticDesignContext(increaseContrast: true)] {
+            let tokens = AtticColorTokens.resolve(context)
+            let hint = tokens.hintInk, text = tokens.ink(.heading)
+            XCTAssertLessThan(hint.alpha, 1, "partial opacity: it follows the surface")
+            XCTAssertEqual([hint.red, hint.green, hint.blue], [text.red, text.green, text.blue], "the text's own ink")
+            XCTAssertEqual(NoteTextStyle(design: context).placeholderColor, hint.nsColor)
+        }
+        let plain = AtticColorTokens.resolve(AtticDesignContext.default).hintInk.alpha
+        let high = AtticColorTokens.resolve(AtticDesignContext(increaseContrast: true)).hintInk.alpha
+        XCTAssertGreaterThan(high, plain, "Increase Contrast steps it up")
+    }
+
     func testGapsAreTheDrafts() {
         typealias K = NoteParagraphKind
         let cases: [(K, K?, CGFloat)] = [
@@ -350,10 +366,15 @@ final class NotesV2TypographyTests: XCTestCase {
         view.updateMonoCopy(at: NSPoint(x: origin.x + rect.midX, y: origin.y + rect.midY))
         XCTAssertFalse(view.monoCopyButton.isHidden)
         let button = view.monoCopyButton.frame
-        XCTAssertEqual(button.size, CGSize(width: 20, height: 20))
+        XCTAssertEqual(button.size, CGSize(width: 18, height: 18))
         XCTAssertEqual(button.maxX, origin.x + rect.maxX - T.monoCopyInset, accuracy: 0.01)
-        XCTAssertEqual(button.minY, origin.y + rect.minY + T.monoCopyInset, accuracy: 0.01)
-        XCTAssertEqual(NoteMonoCopyButton.radius, 7, "nested in the block's 10 pt corner")
+        XCTAssertEqual(button.minY, origin.y + rect.minY - T.monoCopyRise, accuracy: 0.01)
+        // It ends where the text's padding ends: never over a character.
+        XCTAssertLessThanOrEqual(button.maxY, origin.y + rect.minY + T.monoPaddingV + 0.01, "above the first line")
+        XCTAssertEqual(NoteMonoCopyButton.radius, 6)
+        // The pointer reaching the chip above the block keeps it.
+        view.updateMonoCopy(at: NSPoint(x: button.midX, y: button.minY + 1))
+        XCTAssertFalse(view.monoCopyButton.isHidden, "the chip is still the block's Copy under the pointer")
         // An icon in a chip of the block's own fill, opaque; the text never moves.
         XCTAssertEqual(view.monoCopyButton.symbolName, "doc.on.doc")
         XCTAssertEqual(view.monoCopyButton.fill.alphaComponent, 1, accuracy: 0.001)

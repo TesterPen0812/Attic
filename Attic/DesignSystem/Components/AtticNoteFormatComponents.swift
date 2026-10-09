@@ -108,7 +108,11 @@ private struct AtticFormatToggleFace<Face: View>: View {
             case .off: hovered ? tokens.chipHover : .clear
             }
         }
-        let ink: AtticInk = !isEnabled ? .disabledIcon : (value == .off ? .icon : .glyph)
+        // Off, in Dark, a format control reads as an active one: the body
+        // ink, not the quiet icon grey that looks disabled over the dark
+        // surface (A39 F13). Disabled ones keep the ghost ink.
+        let offInk: AtticInk = design.tokens.context.mode == .dark ? .body : .icon
+        let ink: AtticInk = !isEnabled ? .disabledIcon : (value == .off ? offInk : .glyph)
         face(ink)
             .frame(maxWidth: .infinity, maxHeight: .infinity)
             .background(RoundedRectangle(cornerRadius: radius, style: .continuous).fill(fill.color))
@@ -206,6 +210,9 @@ struct AtticFormatRowSurface<Content: View>: View, Animatable {
     var contentOpacity: Double = 1
     @ViewBuilder let content: Content
     @State private var probeID = UUID()
+    @Environment(\.atticDesign) private var design
+
+    private var dark: Bool { design.tokens.context.mode == .dark }
 
     var animatableData: AnimatablePair<CGFloat, CGFloat> {
         get { AnimatablePair(growth?.leading ?? 1, growth?.trailing ?? 1) }
@@ -231,8 +238,9 @@ struct AtticFormatRowSurface<Content: View>: View, Animatable {
                         row.frame(width: growth.rowWidth).offset(x: -extent.minX)
                     }
                     .overlay(alignment: .leading) {
+                        // Aa's own glyph (strong in Dark, A39 F13).
                         AtticIcon(systemName: growth.sourceSymbol, size: AtticControlSize.raisedGlyph,
-                                  weight: AtticIconWeight.outline, ink: .icon)
+                                  weight: dark ? .regular : AtticIconWeight.outline, ink: dark ? .glyph : .icon)
                             .frame(width: growth.source.width, height: height)
                             .offset(x: growth.source.minX - extent.minX)
                             .opacity(growth.sourceGlyphOpacity)
@@ -292,6 +300,10 @@ struct AtticFormatRowGrowth: Equatable {
 
 /// The short upright line between the format row's groups.
 struct AtticFormatSeparator: View {
+    /// 4 pt either side; the compact row (a long style name, "Subheading", in
+    /// a 320 pt panel) tightens it to 2 so the whole name shows (A39 F11).
+    var compact = false
+
     @Environment(\.atticDesign) private var design
 
     var body: some View {
@@ -299,7 +311,7 @@ struct AtticFormatSeparator: View {
         Rectangle()
             .fill(design.tokens.divider.color)
             .frame(width: 1, height: m.rowSeparatorHeight)
-            .padding(.horizontal, m.rowSeparatorPadding)
+            .padding(.horizontal, compact ? m.rowCompactSeparatorPadding : m.rowSeparatorPadding)
             .accessibilityHidden(true)
     }
 }

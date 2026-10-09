@@ -614,13 +614,16 @@ enum AtticNoteType {
     static let monoPaddingV: CGFloat = 12
     static let monoPaddingH: CGFloat = 9.5
     static let monoRadius: CGFloat = AtticRadius.contentCard
-    /// Copy: a 20 pt icon chip (`doc.on.doc`) tucked 3 pt into the block's
-    /// top-right corner, opaque in the block's own fill, shown on hover,
-    /// while the caret is in the block, or for VoiceOver. It never moves
-    /// the text.
-    static let monoCopySize: CGFloat = 20
-    static let monoCopyInset: CGFloat = 3
-    static let monoCopyGlyph: CGFloat = 11
+    /// Copy: an 18 pt icon chip (`doc.on.doc`) on the block's top-right
+    /// corner, 4 in from the right edge and rising 6 above the top edge, so
+    /// its bottom is the text's own top (the 12 pt padding) and it never
+    /// covers a character, even on a full first line (A39). Opaque in the
+    /// block's own fill; shown on hover (or over the chip itself), while the
+    /// caret is in the block, or for VoiceOver. It never moves the text.
+    static let monoCopySize: CGFloat = 18
+    static let monoCopyInset: CGFloat = 4
+    static let monoCopyRise: CGFloat = 6
+    static let monoCopyGlyph: CGFloat = 10
     /// Lists and checklists: their text 22 in (each level 22 more), a 5 pt
     /// dot centred 7 in (the checklist box's centre); numbers end 6 before
     /// the text.
@@ -755,6 +758,9 @@ enum AtticNoteFormatMetrics {
     static let rowCompactToggleWidth: CGFloat = 24
     static let rowSeparatorHeight: CGFloat = 16
     static let rowSeparatorPadding: CGFloat = 4
+    /// The compact row's lines (24 pt cells): 2 from their groups, so
+    /// "Subheading" fits a 320 pt panel's 288 pt row whole (A39 F11).
+    static let rowCompactSeparatorPadding: CGFloat = 2
     /// The `/` list, the date card and the link card, 6 below the line.
     static let slashMaxVisibleRows = 9
     static let linkCardWidth: CGFloat = 272

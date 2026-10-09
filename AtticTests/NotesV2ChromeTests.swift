@@ -186,4 +186,97 @@ final class NotesV2ChromeTests: XCTestCase {
         }
         withExtendedLifetime(controller) {}
     }
+
+    /// A39 F08, the owner's repro: a note with a table is open and Settings
+    /// changes the panel's width (420 → 320 → 420). The note editor and every
+    /// page that is built fill the panel's content rect at once, every time,
+    /// and again after switching pages. Nothing keeps its old width or is cut
+    /// by the window's edge. The real panel, hidden.
+    func testNotesFollowsAWidthChangeAndPageSwitchesWithoutClipping() throws {
+        let suite = "NotesV2ChromeTests.\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let persistence = try PersistenceController.makeContainer(inMemory: true, cloudSyncEnabled: false)
+        let store = TaskStore(container: persistence)
+        let notes = trackAttachmentReconciliation(of: NoteStore(container: persistence, attachmentFileStore: makeTestAttachmentFileStore()))
+        let settings = AppSettings(defaults: defaults)
+        settings.panelContentSize = 420
+        let uiState = PanelUIState()
+        let drafts = NoteDraftController(noteStore: notes)
+        let existingWindows = Set(NSApplication.shared.windows.map(ObjectIdentifier.init))
+        let controller = AtticPanelController(
+            store: store, noteStore: notes,
+            canvasSession: CanvasSession(store: CanvasStore(container: persistence)),
+            noteDraft: drafts, settings: settings, uiState: uiState
+        )
+        let panel = try XCTUnwrap(NSApplication.shared.windows.compactMap { $0 as? AtticPanel }
+            .first { !existingWindows.contains(ObjectIdentifier($0)) })
+        let container = try XCTUnwrap(panel.contentView as? AtticPanelContentContainer)
+        XCTAssertFalse(panel.isVisible, "This regression must not display a test window")
+
+        uiState.selectSection(.notes)
+        controller.preparePagesForReveal()
+        drafts.pages.start()
+        XCTAssertTrue(drafts.pages.newNote())
+        let session = try XCTUnwrap(drafts.pages.active)
+        let table = NoteTable(texts: [["Pillar", "What happened", "Control that failed", "Source"],
+                                      ["Confidentiality", "Data taken from the IT network", "No MFA on the VPN account", "beerman2023review"]])
+        _ = session.engine.insertTable(table, replacing: NSRange(location: session.engine.textStorage.length, length: 0),
+                                       name: "Insert Table", entering: false)
+
+        func spin() {
+            for _ in 0..<4 {
+                container.layoutSubtreeIfNeeded()
+                container.hostingView.layoutSubtreeIfNeeded()
+                RunLoop.main.run(until: Date().addingTimeInterval(0.05))
+            }
+        }
+        func editor() -> NSScrollView? {
+            func find(_ view: NSView) -> NSScrollView? {
+                if let scroll = view as? NSScrollView, scroll.documentView is NoteEditorTextView { return scroll }
+                for sub in view.subviews { if let found = find(sub) { return found } }
+                return nil
+            }
+            return find(container.hostingView)
+        }
+        func assertFills(_ label: String, file: StaticString = #filePath, line: UInt = #line) {
+            spin()
+            let visible = panel.visibleContentFrame.size
+            guard let scroll = editor() else { return XCTFail("no note editor: \(label)", file: file, line: line) }
+            let frame = scroll.convert(scroll.bounds, to: container.hostingView)
+            XCTAssertEqual(frame.width, visible.width, accuracy: 0.5, "the note fills the panel's width, \(label)", file: file, line: line)
+            XCTAssertEqual(frame.minX, 0, accuracy: 0.5, "from the panel's edge, \(label)", file: file, line: line)
+            let placed = PanelRootLayout.lastPlacedSize
+            XCTAssertEqual(placed?.width ?? -1, visible.width, accuracy: 0.5, "the root, \(label)", file: file, line: line)
+        }
+
+        // The page restores its session on the next turns.
+        let deadline = Date().addingTimeInterval(3)
+        while editor() == nil, Date() < deadline { spin() }
+        assertFills("at 420")
+        for width in [320, 420, 360, 320, 380, 420] as [Double] {
+            settings.panelContentSize = width
+            assertFills("width \(width)")
+        }
+        // Switching pages after the change (Notes stays built behind Tasks).
+        settings.panelContentSize = 320
+        for section in [PanelSection.tasks, .notes, .tasks, .notes] {
+            uiState.selectSection(section)
+            if section == .notes {
+                let wait = Date().addingTimeInterval(3)
+                while editor() == nil, Date() < wait { spin() }
+                assertFills("320, after switching to \(section)")
+            } else {
+                spin()
+            }
+        }
+        settings.panelContentSize = 420
+        uiState.selectSection(.tasks)
+        settings.panelContentSize = 320
+        uiState.selectSection(.notes)
+        let wait = Date().addingTimeInterval(3)
+        while editor() == nil, Date() < wait { spin() }
+        assertFills("narrowed while Notes was behind another page")
+        withExtendedLifetime(controller) {}
+    }
 }

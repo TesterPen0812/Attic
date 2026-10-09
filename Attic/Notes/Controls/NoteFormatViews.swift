@@ -263,7 +263,7 @@ struct NoteFormatRowView: View {
     var body: some View {
         // A long style name ("Subheading") in a narrow panel: 24 pt cells.
         let m = AtticNoteFormatMetrics.self
-        let roomy = width == 0 || Self.minimumWidth(snapshot: model.snapshot, toggleWidth: m.rowToggleWidth) <= width
+        let roomy = width == 0 || Self.minimumWidth(snapshot: model.snapshot, toggleWidth: m.rowToggleWidth, compact: false) <= width
         Group {
             if let table = model.snapshot.table {
                 tableRow(table, toggleWidth: m.rowToggleWidth)
@@ -284,9 +284,10 @@ struct NoteFormatRowView: View {
         let focus = model.rowKeyboardIndex
         let lists = NoteCommandCatalog.lists
         let indents = NoteCommandCatalog.indents
+        let compact = toggleWidth < m.rowToggleWidth
         return AtticFormatRowSurface(growth: growth, contentOpacity: controlsOpacity) {
             NoteFormatStylePill(model: model, isKeyboardFocused: focus == 0)
-            AtticFormatSeparator()
+            AtticFormatSeparator(compact: compact)
             AtticFormatGroup {
                 ForEach(Array(lists.enumerated()), id: \.offset) { offset, command in
                     // Table inserts (it is not a state of the line).
@@ -295,7 +296,7 @@ struct NoteFormatRowView: View {
                                      announcesState: command != .table)
                 }
             }
-            AtticFormatSeparator()
+            AtticFormatSeparator(compact: compact)
             AtticFormatGroup {
                 ForEach(Array(indents.enumerated()), id: \.offset) { offset, command in
                     NoteFormatToggle(model: model, command: command, surface: .formatBar, width: toggleWidth,
@@ -356,12 +357,13 @@ struct NoteFormatRowView: View {
 
     /// What the row needs before its flexible gap: the inset, the pill, two
     /// lines and the cells.
-    static func minimumWidth(snapshot: NoteFormatSnapshot, toggleWidth: CGFloat) -> CGFloat {
+    static func minimumWidth(snapshot: NoteFormatSnapshot, toggleWidth: CGFloat, compact: Bool? = nil) -> CGFloat {
         let m = AtticNoteFormatMetrics.self
+        let compact = compact ?? (toggleWidth < m.rowToggleWidth)
         let label = ceil((NoteCommandCatalog.styleName(snapshot.paragraph) as NSString)
             .size(withAttributes: [.font: AtticTextStyle.controlLabel.nsFont]).width)
         let pill = label + 4 + m.barStyleChevron + 2 + m.barStylePadding * 2
-        let separators = 2 * (1 + m.rowSeparatorPadding * 2)
+        let separators = 2 * (1 + (compact ? m.rowCompactSeparatorPadding : m.rowSeparatorPadding) * 2)
         let cells = CGFloat(NoteFormatRowItem.all.count - 1) * toggleWidth
         return ceil(AtticControlSize.capsuleInset * 2 + pill + separators + cells)
     }
@@ -402,40 +404,45 @@ struct NoteFormatRowSwitch<Row: View>: View {
     @State private var surfaceMounted = false
 
     var body: some View {
-        ZStack(alignment: .leading) {
-            // Always in the tree (mounting it again as the row closes
-            // stalled the first frames of the motion, A29 round 2); while the
-            // row is open it is away, disabled and out of the keyboard loop.
-            let away = phase != .closed
-            row
-                .environment(\.noteFormatRowStage, NoteFormatRowStage(allNotes: channels.allNotes,
-                                                                      newNoteAndStatus: channels.newNoteAndStatus,
-                                                                      allNotesGone: allNotesGone,
-                                                                      newNoteAndStatusGone: newNoteGone,
-                                                                      statusHidden: statusHidden,
-                                                                      sourceHidden: away))
-                .environment(\.noteFormatRowGeometry, geometry)
-                .disabled(phase == .open)
-                .allowsHitTesting(!away)
-                .accessibilityHidden(away)
-            if let model = shownModel ?? model() {
-                let dormant = phase == .closed
-                NoteFormatRowView(model: model,
-                                  growth: AtticFormatRowGrowth(source: source, rowWidth: width,
-                                                               leading: channels.leading, trailing: channels.trailing,
-                                                               sourceSymbol: NoteFormatRowSource.symbol),
-                                  controlsOpacity: channels.controls) { state.close() }
-                    .environment(\.atticControlGone, dormant)
-                    .allowsHitTesting(!dormant && state.isOpen)
-                    .accessibilityHidden(dormant || !state.isOpen)
-                    .onAppear { surfaceMounted = true }
-                    .onDisappear { surfaceMounted = false }
+        // The bottom row decides the size; the format row's glass is laid
+        // over it and never asks for room (it has a fixed width of its own:
+        // as a sibling it held the whole page at its old width after
+        // Settings narrowed the panel, A39 F08).
+        let away = phase != .closed
+        // Always in the tree (mounting it again as the row closes
+        // stalled the first frames of the motion, A29 round 2); while the
+        // row is open it is away, disabled and out of the keyboard loop.
+        row
+            // The room the bottom row is given, measured on the row itself.
+            .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { new in
+                if abs(new - width) > 0.5 { width = new }
             }
-        }
+            .environment(\.noteFormatRowStage, NoteFormatRowStage(allNotes: channels.allNotes,
+                                                                  newNoteAndStatus: channels.newNoteAndStatus,
+                                                                  allNotesGone: allNotesGone,
+                                                                  newNoteAndStatusGone: newNoteGone,
+                                                                  statusHidden: statusHidden,
+                                                                  sourceHidden: away))
+            .environment(\.noteFormatRowGeometry, geometry)
+            .disabled(phase == .open)
+            .allowsHitTesting(!away)
+            .accessibilityHidden(away)
+            .overlay(alignment: .leading) {
+                if let model = shownModel ?? model() {
+                    let dormant = phase == .closed
+                    NoteFormatRowView(model: model,
+                                      growth: AtticFormatRowGrowth(source: source, rowWidth: width,
+                                                                   leading: channels.leading, trailing: channels.trailing,
+                                                                   sourceSymbol: NoteFormatRowSource.symbol),
+                                      controlsOpacity: channels.controls) { state.close() }
+                        .environment(\.atticControlGone, dormant)
+                        .allowsHitTesting(!dormant && state.isOpen)
+                        .accessibilityHidden(dormant || !state.isOpen)
+                        .onAppear { surfaceMounted = true }
+                        .onDisappear { surfaceMounted = false }
+                }
+            }
         .coordinateSpace(.named(NoteFormatMotion.rowSpace))
-        .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { new in
-            if abs(new - width) > 0.5 { width = new }
-        }
         .onChange(of: state.isOpen) { _, open in
             if open { self.open() } else { close() }
         }
@@ -1101,7 +1108,7 @@ struct NoteSlashHintView: View {
             + Text(verbatim: "/").font(.system(size: size - 0.5, design: .monospaced))
             + Text(String(localized: " for headings, lists, quotes…")))
             .font(AtticTextStyle.noteBody.font)
-            .foregroundStyle(design.tokens.color(.placeholder))
+            .foregroundStyle(design.tokens.hintInk.color)
             .fixedSize()
             .allowsHitTesting(false)
             .accessibilityHidden(true)

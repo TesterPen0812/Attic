@@ -672,14 +672,14 @@ final class NoteTitleAccessories: NotesKeyboardReturnTarget {
         defer { chrome.isMenuOpen = false }
         if !fromHeader, !menuHost.isHidden, let textView,
            textView.visibleRect.insetBy(dx: 0, dy: 0).contains(NSPoint(x: menuHost.frame.midX, y: menuHost.frame.midY)) {
-            AtticNativeMenu.popUp(commands, below: menuHost.bounds.insetBy(dx: 4, dy: 2), in: menuHost)
+            AtticNativeMenu.popUpContextMenu(commands, below: menuHost.bounds.insetBy(dx: 4, dy: 2), in: menuHost)
             return
         }
         // Under the header's middle, where the header title sits.
         let bounds = scrollView.bounds
         let y = scrollView.isFlipped ? headerBottom : bounds.height - headerBottom
         let anchor = NSRect(x: bounds.midX - 90, y: scrollView.isFlipped ? y - 36 : y, width: 180, height: 36)
-        AtticNativeMenu.popUp(commands, below: anchor, in: scrollView)
+        AtticNativeMenu.popUpContextMenu(commands, below: anchor, in: scrollView)
     }
 
     func focusText() {
@@ -809,6 +809,14 @@ struct NoteEditorRepresentable: NSViewRepresentable {
             context.coordinator.accessories?.layout()
         }
         return scrollView
+    }
+
+    /// The editor takes exactly the room it is given. Without this SwiftUI
+    /// asks the scroll view for its fitting size, which is its current
+    /// frame: after Settings narrowed the panel (420 → 320) the page kept its
+    /// old width, with the right-hand controls cut off (A39 F08).
+    func sizeThatFits(_ proposal: ProposedViewSize, nsView: NSScrollView, context: Context) -> CGSize? {
+        proposal.replacingUnspecifiedDimensions(by: CGSize(width: 320, height: 400))
     }
 
     func updateNSView(_ scrollView: NSScrollView, context: Context) {

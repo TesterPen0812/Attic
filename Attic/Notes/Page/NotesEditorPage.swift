@@ -296,12 +296,16 @@ struct NotesEditorPage: View {
         }
     }
 
+    /// In Dark the bottom row's glyphs take the strong ink (A39 F13): the
+    /// quiet icon grey read as disabled over the dark surface.
+    private var darkGlyphs: Bool { design.tokens.context.mode == .dark }
+
     private var bottomButtons: some View {
         Group {
             HStack(spacing: 0) {
                 AtticRaisedButton(systemName: Self.libraryButtonGlyph(libraryShown: controller.isLibraryPresented),
                                   label: controller.isLibraryPresented ? "Back" : "All notes",
-                                  help: allNotesHelp) {
+                                  help: allNotesHelp, emphasisedGlyph: darkGlyphs) {
                     toggleLibrary()
                 }
                 .keyboardShortcut("l", modifiers: [.command, .shift])
@@ -326,7 +330,8 @@ struct NotesEditorPage: View {
                         .padding(.trailing, AtticNoteMetrics.formatButtonGap)
                         .transition(.opacity)
                 }
-                AtticRaisedButton(systemName: "square.and.pencil", label: "New note", help: String(localized: "New note (⌘N)")) {
+                AtticRaisedButton(systemName: "square.and.pencil", label: "New note", help: String(localized: "New note (⌘N)"),
+                                  emphasisedGlyph: darkGlyphs) {
                     newNote()
                 }
                 .keyboardShortcut("n", modifiers: .command)
@@ -341,7 +346,8 @@ struct NotesEditorPage: View {
     /// Aa (OD-14, p2-36 draft 1): the bottom row turns into the format row
     /// in place, until ✕ or Esc. ⌘T opens it too.
     private var formatButton: some View {
-        AtticRaisedButton(systemName: NoteFormatRowSource.symbol, label: "Format", help: String(localized: "Format (⌘T)")) {
+        AtticRaisedButton(systemName: NoteFormatRowSource.symbol, label: "Format", help: String(localized: "Format (⌘T)"),
+                          emphasisedGlyph: darkGlyphs) {
             chrome.openFormatBar(keyboard: false)
         }
         .noteFormatRowSource()

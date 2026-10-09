@@ -366,6 +366,14 @@ final class NotesFormatControlsTests: XCTestCase {
         XCTAssertLessThanOrEqual(NoteFormatControls.barWidth(styleName: "Subheading"), 320 - 8, "the bar fits the panel")
         XCTAssertLessThanOrEqual(NoteFormatRowView.minimumWidth(snapshot: .empty, toggleWidth: AtticNoteFormatMetrics.rowToggleWidth),
                                  288, "the row fits a 320 pt panel's bottom row with 28 pt cells")
+        // A39 F11: "Subheading" shows whole in a 320 pt panel (288 pt row):
+        // the compact row, 24 pt cells and 2 pt around its lines.
+        var subheading = NoteFormatSnapshot.empty
+        subheading.paragraph = .heading(3)
+        let compact = NoteFormatRowView.minimumWidth(snapshot: subheading, toggleWidth: AtticNoteFormatMetrics.rowCompactToggleWidth)
+        XCTAssertLessThanOrEqual(compact, 288, "the longest style name fits the narrowest panel")
+        XCTAssertGreaterThan(NoteFormatRowView.minimumWidth(snapshot: subheading, toggleWidth: AtticNoteFormatMetrics.rowToggleWidth), 288,
+                             "with 28 pt cells it would not")
     }
 
     // MARK: The / list
@@ -377,7 +385,7 @@ final class NotesFormatControlsTests: XCTestCase {
         XCTAssertTrue(controls.slashModel.shown)
         XCTAssertEqual(controls.slashModel.items.first?.kind, .checklist, "most used first")
         XCTAssertTrue(controls.handleCommand(#selector(NSResponder.moveDown(_:))))
-        XCTAssertEqual(controls.slashModel.highlightedKind, .heading)
+        XCTAssertEqual(controls.slashModel.highlightedKind, .title)
         XCTAssertTrue(controls.handleCommand(#selector(NSResponder.moveUp(_:))))
         XCTAssertTrue(controls.handleCommand(#selector(NSResponder.moveUp(_:))))
         XCTAssertEqual(controls.slashModel.highlighted, controls.slashModel.items.count - 1, "↑ wraps")
@@ -386,7 +394,7 @@ final class NotesFormatControlsTests: XCTestCase {
         XCTAssertTrue(textView.string.hasSuffix("\n/"), "Esc leaves the typed /")
 
         type(" /hea", textView)
-        XCTAssertEqual(controls.slashModel.items.map(\.kind), [.heading], "the engine filters")
+        XCTAssertEqual(controls.slashModel.items.map(\.kind), [.heading, .subheading], "the engine filters")
         XCTAssertTrue(controls.handleCommand(#selector(NSResponder.insertTab(_:))), "Tab picks")
         let last = try XCTUnwrap(engine.document().blocks.last)
         XCTAssertEqual(last.style, "heading")
@@ -398,6 +406,29 @@ final class NotesFormatControlsTests: XCTestCase {
         XCTAssertFalse(controls.slashModel.shown, "Space closes the list")
     }
 
+    /// A39 F04: the `/` list offers exactly the block styles the Aa style
+    /// list has, under the same names, and each one applies its own style.
+    func testTheSlashListOffersTheAaStyleListsBlockStylesWithTheSameNames() throws {
+        let styleNames = NoteCommandCatalog.styles.map(\.title)
+        XCTAssertEqual(styleNames, ["Title", "Heading", "Subheading", "Body", "Mono", "Quote"])
+        let slashNames = NoteSlashItem.all.map(\.title)
+        for name in styleNames { XCTAssertTrue(slashNames.contains(name), "/ offers \(name)") }
+        XCTAssertEqual(slashNames.filter { styleNames.contains($0) }.count, styleNames.count, "no style twice")
+
+        let expected: [(String, NoteSlashItem.Kind, NoteParagraphStyle)] = [
+            ("title", .title, .heading(1)), ("head", .heading, .heading(2)), ("subheading", .subheading, .heading(3)),
+            ("sub", .subheading, .heading(3)), ("body", .body, .body), ("mono", .mono, .mono), ("quote", .quote, .quote)
+        ]
+        for (query, kind, style) in expected {
+            let (controls, engine, textView) = make()
+            textView.setSelectedRange(NSRange(location: (textView.string as NSString).length, length: 0))
+            type("\n/\(query)", textView)
+            XCTAssertEqual(controls.slashModel.items.first?.kind, kind, "/\(query) puts \(kind) first")
+            XCTAssertTrue(controls.handleCommand(#selector(NSResponder.insertTab(_:))), "Tab picks /\(query)")
+            XCTAssertEqual(engine.paragraphStyle(at: textView.selectedRange().location), style, "/\(query)")
+        }
+    }
+
     func testFullSlashListFlipsAboveALowCaretAndOpensBelowAHighCaret() throws {
         // Real editor + controls: this catches the old Notes-only placement
         // path, which truncated rows before trying the full list above.
@@ -406,14 +437,17 @@ final class NotesFormatControlsTests: XCTestCase {
         type("\n/", lowText)
         XCTAssertTrue(lowControls.slashModel.shown)
         XCTAssertTrue(lowControls.slashModel.above)
-        XCTAssertNil(lowControls.slashModel.viewportHeight, "all nine rows fit above the low caret")
+        // Thirteen rows since the Aa styles joined the list (A39 F04): above
+        // a low caret in this 500 pt window they scroll within the room.
+        let room = try XCTUnwrap(lowControls.slashModel.viewportHeight, "the list scrolls above the low caret")
+        XCTAssertGreaterThan(room, 8 * AtticDropdownMetrics.rowHeight, "most of the list shows")
 
         let (highControls, highEngine, highText) = make(NoteDocument(blocks: [.text("Title"), .text("")]))
         highText.setSelectedRange(NSRange(location: highEngine.textStorage.length, length: 0))
         type("/", highText)
         XCTAssertTrue(highControls.slashModel.shown)
         XCTAssertFalse(highControls.slashModel.above)
-        XCTAssertNil(highControls.slashModel.viewportHeight, "all nine rows fit below the high caret")
+        XCTAssertNil(highControls.slashModel.viewportHeight, "every row fits below the high caret")
     }
 
     /// P3-B3: the `/` list keeps its side while typing filters it; a list
@@ -429,7 +463,7 @@ final class NotesFormatControlsTests: XCTestCase {
         let below = textView.visibleRect.maxY - d.panelMargin - (slash.maxY + d.anchorGap)
         XCTAssertGreaterThanOrEqual(below, d.rowHeight + d.inset * 2, "one row would fit below the caret")
         type("hea", textView)
-        XCTAssertEqual(controls.slashModel.items.map(\.kind), [.heading], "the engine filters")
+        XCTAssertEqual(controls.slashModel.items.map(\.kind), [.heading, .subheading], "the engine filters")
         XCTAssertTrue(controls.slashModel.above, "the filtered list keeps its side")
         XCTAssertNil(controls.slashModel.viewportHeight)
         XCTAssertTrue(controls.handleCommand(#selector(NSResponder.cancelOperation(_:))))
@@ -999,6 +1033,53 @@ final class NotesFormatControlsTests: XCTestCase {
         settle()
         XCTAssertTrue(movingSeen.away, "with motion Aa's glass is the row's")
         XCTAssertTrue(movingSeen.enabled, "and the bottom row is still on its way out")
+    }
+
+    /// A39 F08: the bottom row, with the format row's glass in it, takes the
+    /// room it is given and never more, whatever width it had before. The
+    /// glass's own fixed width (the width last measured) used to hold the
+    /// whole Notes page at its old size after Settings narrowed the panel
+    /// (420 → 320), cutting the right of the page off. Open or closed, and
+    /// back out again.
+    func testTheBottomRowAndItsFormatGlassFollowTheWidthDownAndUp() {
+        final class Box { var width: CGFloat = 0 }
+        for open in [false, true] {
+            let (controls, _, _) = make()
+            let state = NoteFormatRowState()
+            let box = Box()
+            var design = AtticDesignContext(mode: .light)
+            design.reduceMotion = true
+            let view = NoteFormatRowSwitch(state: state, model: { controls.formatModel }) {
+                HStack(spacing: 0) {
+                    Color.clear.frame(width: 36, height: 32)
+                    Spacer(minLength: 12)
+                    Color.clear.frame(width: 36, height: 32)
+                }
+            }
+            .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { box.width = $0 }
+            .frame(maxWidth: .infinity)
+            .environment(\.atticDesign, design)
+            let hosting = NSHostingView(rootView: view)
+            hosting.frame = NSRect(x: 0, y: 0, width: 388, height: 40)
+            let window = NSWindow(contentRect: hosting.frame, styleMask: [.borderless], backing: .buffered, defer: false)
+            window.isReleasedWhenClosed = false
+            window.contentView = hosting
+            windows.append(window)
+            func settle(to width: CGFloat) {
+                hosting.frame.size.width = width
+                for _ in 0..<3 {
+                    hosting.layoutSubtreeIfNeeded()
+                    RunLoop.main.run(until: Date().addingTimeInterval(0.05))
+                }
+            }
+            settle(to: 388)
+            if open { state.open(keyboard: false); settle(to: 388) }
+            XCTAssertEqual(box.width, 388, accuracy: 0.5, "open: \(open)")
+            for width in [288, 388, 288, 330, 388] as [CGFloat] {
+                settle(to: width)
+                XCTAssertEqual(box.width, width, accuracy: 0.5, "open: \(open), the row follows \(width)")
+            }
+        }
     }
 
     /// ⌃Tab reaches the open row; ← → Tab ⇧Tab move round it, Return

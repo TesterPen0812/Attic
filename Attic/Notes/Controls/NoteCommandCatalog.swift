@@ -244,14 +244,15 @@ enum NoteCommandCatalog {
         case .quote: ">"
         case .imageOrFile: String(localized: "paste or drop")
         case .table: "2 × 3"
-        case .date, .divider, .mono: nil
+        case .title, .subheading, .body, .date, .divider, .mono: nil
         }
     }
 
     static func slashSymbol(_ kind: NoteSlashItem.Kind) -> String {
         switch kind {
         case .checklist: "checklist"
-        case .heading: "textformat.size"
+        case .title, .heading, .subheading: "textformat.size"
+        case .body: "text.alignleft"
         case .bullet: "list.bullet"
         case .number: "list.number"
         case .imageOrFile: "photo"

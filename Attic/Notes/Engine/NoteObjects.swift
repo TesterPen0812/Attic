@@ -66,6 +66,10 @@ final class NoteChecklistAttachment: NoteObjectAttachment {
 
 /// A structural rule occupying a whole paragraph, with stable identity.
 final class NoteDividerAttachment: NoteObjectAttachment {
+    /// The rule's thickness: a hairline (a device pixel at 2×), 1 pt under
+    /// Increase Contrast (as the table's grid).
+    static func ruleThickness(increaseContrast: Bool) -> CGFloat { increaseContrast ? 1 : 0.5 }
+
     override init(objectID: UUID = UUID()) { super.init(objectID: objectID) }
     override var isBlockObject: Bool { true }
     override var accessibilityDescription: String { String(localized: "Divider") }
@@ -368,8 +372,15 @@ final class NoteObjectRenderer {
                 text: opaque.isInline ? "…" : String(localized: "Content from a newer Attic")
             )
         case let divider as NoteDividerAttachment:
-            divider.renderedImage = render(Rectangle().fill(design.tokens.ink(.helper).color)
-                .frame(height: 1).frame(height: NoteTextStyle.bodyLineHeight))
+            // A 0.5 pt rule in the separator ink (the table's grid ink), on
+            // a whole device pixel; the attachment's bounds make it the
+            // text column's width and no more (spec § Divider; A39: it was
+            // the near-black secondary ink at 1 pt).
+            let thickness = NoteDividerAttachment.ruleThickness(increaseContrast: design.increaseContrast)
+            divider.renderedImage = render(Rectangle().fill(design.tokens.tableGrid.color)
+                .frame(height: thickness)
+                .padding(.top, ((NoteTextStyle.bodyLineHeight - thickness) / 2).rounded(.down))
+                .frame(height: NoteTextStyle.bodyLineHeight, alignment: .top))
         case let file as NoteFileAttachment:
             let size = ByteCountFormatter.string(fromByteCount: file.byteCount, countStyle: .file)
             let face = faceProvider?(file) ?? AtticNoteObjectFace(kind: .file, name: file.filename, detail: size,

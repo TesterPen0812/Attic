@@ -2913,13 +2913,20 @@ extension NoteEditorEngine {
 // MARK: - Local typing habits and slash insertion
 
 struct NoteSlashItem: Hashable, Identifiable {
-    enum Kind: String, CaseIterable { case checklist, heading, bullet, number, imageOrFile, date, quote, divider, mono, table }
+    /// The block styles are the Aa style list's (Title, Heading, Subheading,
+    /// Body, Mono; Quote is the sixth), with the same names (A39 F04).
+    enum Kind: String, CaseIterable {
+        case checklist, title, heading, subheading, body, bullet, number, imageOrFile, date, quote, divider, mono, table
+    }
     var kind: Kind
     var id: Kind { kind }
     var title: String {
         switch kind {
         case .checklist: "Checklist"
+        case .title: "Title"
         case .heading: "Heading"
+        case .subheading: "Subheading"
+        case .body: "Body"
         case .bullet: "Bulleted List"
         case .number: "Numbered List"
         case .imageOrFile: "Image or File"
@@ -2933,7 +2940,10 @@ struct NoteSlashItem: Hashable, Identifiable {
     var aliases: [String] {
         switch kind {
         case .checklist: ["check", "todo", "box"]
-        case .heading: ["head", "title"]
+        case .title: ["h1", "big"]
+        case .heading: ["head", "h2"]
+        case .subheading: ["subhead", "sub", "h3"]
+        case .body: ["text", "paragraph", "plain"]
         case .bullet: ["list", "bul", "unordered"]
         case .number: ["list", "num", "ordered"]
         case .imageOrFile: ["image", "file", "attachment", "photo"]
@@ -3189,7 +3199,10 @@ extension NoteEditorEngine {
             let caret = NSRange(location: session.range.location, length: 0)
             switch kind {
             case .checklist: return perform(.paragraph(.checklist), selection: caret)
+            case .title: return perform(.paragraph(.heading(1)), selection: caret)
             case .heading: return perform(.paragraph(.heading(2)), selection: caret)
+            case .subheading: return perform(.paragraph(.heading(3)), selection: caret)
+            case .body: return perform(.paragraph(.body), selection: caret)
             case .bullet: return perform(.paragraph(.bullet), selection: caret)
             case .number: return perform(.paragraph(.number), selection: caret)
             case .quote: return perform(.paragraph(.quote), selection: caret)
