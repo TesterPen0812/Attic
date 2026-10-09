@@ -392,6 +392,11 @@ final class NoteStore: ObservableObject {
     private var presentationByID: [UUID: NoteItem]?
     private let now: () -> Date
     private let persist: (ModelContext) throws -> Void
+    /// Versions held by an open browser or a restore's Undo ticket.
+    var historyRetainedVersionIDs = Set<UUID>()
+    #if DEBUG
+    var s7FailNextRestoreForUITesting = false
+    #endif
     private let makeFreshContext: () throws -> ModelContext
     private(set) var remoteChangeObservation: AnyCancellable?
     private(set) var cloudKitEventObservation: AnyCancellable?

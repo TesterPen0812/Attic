@@ -735,6 +735,7 @@ struct NoteEditorRepresentable: NSViewRepresentable {
     let tagEditor: () -> AnyView
     /// Every tag in Notes with its count (for the title's suggestions).
     let tagCounts: () -> [String: Int]
+    var scrollOverride: CGFloat? = nil
 
     final class Coordinator {
         var engine: NoteEditorEngine?
@@ -799,7 +800,9 @@ struct NoteEditorRepresentable: NSViewRepresentable {
             let length = engine.textStorage.length
             textView.setSelectedRange(NSRange(location: min(selection.location, length),
                                               length: min(selection.length, max(0, length - selection.location))))
-            if session.scrollOffset > 0 {
+            if let scrollOverride {
+                scrollView.contentView.scroll(to: NSPoint(x: 0, y: scrollOverride))
+            } else if session.scrollOffset > 0 {
                 scrollView.contentView.scroll(to: NSPoint(x: 0, y: session.scrollOffset))
             } else {
                 scrollView.contentView.scroll(to: NSPoint(x: 0, y: -topInset))

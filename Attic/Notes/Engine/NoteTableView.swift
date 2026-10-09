@@ -750,7 +750,7 @@ final class NoteTableCanvas: NSView {
         guard let table, let engine = table.engine else { return super.keyDown(with: event) }
         if AtticPanel.isUndoKey(event) {
             // The note's history, never the panel's fallback.
-            if event.modifierFlags.contains(.shift) { engine.history.redo() } else { engine.history.undo() }
+            if event.modifierFlags.contains(.shift) { engine.redoCommand() } else { engine.undoCommand() }
             return
         }
         if engine.handleTableShortcut(event, in: table) { return }
@@ -826,8 +826,8 @@ final class NoteTableCanvas: NSView {
 
     @objc func delete(_ sender: Any?) { doCommand(by: #selector(deleteBackward(_:))) }
 
-    @objc func undo(_ sender: Any?) { table?.engine?.history.undo() }
-    @objc func redo(_ sender: Any?) { table?.engine?.history.redo() }
+    @objc func undo(_ sender: Any?) { table?.engine?.undoCommand() }
+    @objc func redo(_ sender: Any?) { table?.engine?.redoCommand() }
 
     override var undoManager: UndoManager? { table?.engine?.textView?.undoShim ?? super.undoManager }
 

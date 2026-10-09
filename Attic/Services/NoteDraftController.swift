@@ -209,6 +209,10 @@ final class NoteDraftController: ObservableObject {
             if reason != .hide && reason != .quit { self.discardDraft() }
             return true
         }
+        pages.prepareLegacyVersionReplay = { [weak self] in
+            self?.prepareLegacyToLeave(.openNote) ?? true
+        }
+        pages.finishLegacyVersionReplay = { [weak self] in self?.discardDraft() }
         if let data = sessionDefaults?.data(forKey: Self.sessionKey),
            let saved = try? JSONDecoder().decode(StoredEditorSession.self, from: data) {
             lastEditedNoteID = saved.noteID
