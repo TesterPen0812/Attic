@@ -887,10 +887,25 @@ private struct NoteStatusSlot: View {
                                              handler: details { showingProposal = true })
                                    ])
         case .deletionProposal:
+            let displayedID = controller.proposalID(for: session, deletion: true)
             return AtticStatusItem(id: "deletionProposal", systemName: "exclamationmark.circle", title: status.label,
                 explanation: status.explanation, tone: .warning, actions: [
+                    .init(title: "Restore", identifier: "notes-restore-deletion", handler: details {
+                        guard let id = displayedID else { return }
+                        if !store.discardProposal(id, noteID: session.noteID) {
+                            session.notice = store.lastErrorMessage ?? "The deletion proposal could not be restored."
+                        }
+                    }),
+                    .init(title: "Save as New Note", identifier: "notes-deletion-save-new", handler: details {
+                        guard let id = displayedID else { return }
+                        Task {
+                            if await controller.beginProposalReview(id: id) {
+                                _ = await controller.saveReviewedProposalAsNew()
+                            }
+                        }
+                    }),
                     .init(title: "Review", identifier: "notes-review-deletion", handler: details {
-                        let id = store.pendingEdits(noteID: session.noteID).first(where: \.isDeletion)?.id
+                        guard let id = displayedID else { return }
                         Task { _ = await controller.beginProposalReview(id: id) }
                     })
                 ])
@@ -904,10 +919,14 @@ private struct NoteStatusSlot: View {
                     })
                 ])
         case .proposal:
+            let displayedID = controller.proposalID(for: session, deletion: false)
             return AtticStatusItem(id: "proposal", systemName: "sparkle", title: status.label,
                                    explanation: status.explanation, actions: [
                                        .init(title: String(localized: "Review"), identifier: "notes-agent-has-changes",
-                                             handler: details { Task { _ = await controller.beginProposalReview() } })
+                                             handler: details {
+                                                 guard let id = displayedID else { return }
+                                                 Task { _ = await controller.beginProposalReview(id: id) }
+                                             })
                                    ])
         case .importing:
             let progress = session.importProgress

@@ -174,6 +174,23 @@ final class NotesPageControllerTests: XCTestCase {
         XCTAssertEqual(store.pendingEdits(noteID: session.noteID).map(\.id), [first])
     }
 
+    func testS5DisplayedDeletionActionCannotResolveANewerSibling() async throws {
+        let (controller, session, _) = try await s5Fixture(NoteDocument(blocks: [.text("Current")]))
+        let note = try XCTUnwrap(store.note(withID: session.noteID))
+        var ids: [UUID] = []
+        for agent in ["Claude", "Other editor"] {
+            guard case let .success(.pending(id)) = store.agentDelete(noteID: note.id,
+                baseRevisionToken: note.revisionToken, agentName: agent, disposition: .proposal) else { return XCTFail() }
+            ids.append(id)
+        }
+        let displayed = try XCTUnwrap(controller.proposalID(for: session, deletion: true))
+        XCTAssertEqual(displayed, ids[0])
+        XCTAssertTrue(store.discardProposal(displayed, noteID: note.id))
+        XCTAssertEqual(controller.proposalID(for: session, deletion: true), ids[1])
+        XCTAssertFalse(store.discardProposal(displayed, noteID: note.id), "a stale action must never choose the next proposal")
+        XCTAssertEqual(store.pendingEdits(noteID: note.id).filter(\.isDeletion).map(\.id), [ids[1]])
+    }
+
     func testS5DeletionStatusRestoreAndAcceptanceRacePreserveTyping() async throws {
         let (controller, session, _) = try await s5Fixture(NoteDocument(blocks: [.text("My text")]))
         type(" unsaved", into: session)

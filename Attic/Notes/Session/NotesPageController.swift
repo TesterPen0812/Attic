@@ -240,7 +240,14 @@ final class NotesPageController: ObservableObject {
     private let prepareDocument: @Sendable (NoteDocument) async -> PreparedNoteDocument?
     private var cache: [UUID: NoteSession] = [:]
     private var recency: [UUID] = []
-    private var proposalStatusCache: [UUID: (revision: UInt64, agent: String?, deletionAgent: String?)] = [:]
+    private struct ProposalStatus {
+        let revision: UInt64
+        let agent: String?
+        let deletionAgent: String?
+        let editID: UUID?
+        let deletionID: UUID?
+    }
+    private var proposalStatusCache: [UUID: ProposalStatus] = [:]
     @Published var proposalReview: NoteProposalReview?
     @Published var proposalReviewNotice: String?
     private var verifiedAvailability: [UUID: (revision: UInt64, digest: String, available: Bool)] = [:]
@@ -611,8 +618,17 @@ final class NotesPageController: ObservableObject {
         let agent = edits.first(where: { !$0.isDeletion }).map {
             $0.agentName.isEmpty ? String(localized: "Agent") : $0.agentName
         }
-        proposalStatusCache[session.noteID] = (store.revision, agent, edits.first(where: \.isDeletion).map { $0.agentName.isEmpty ? "Agent" : $0.agentName })
+        proposalStatusCache[session.noteID] = ProposalStatus(revision: store.revision, agent: agent,
+            deletionAgent: edits.first(where: \.isDeletion).map { $0.agentName.isEmpty ? "Agent" : $0.agentName },
+            editID: edits.first(where: { !$0.isDeletion })?.id, deletionID: edits.first(where: \.isDeletion)?.id)
         return agent
+    }
+
+    /// A status action belongs to the proposal displayed when the action was built.
+    /// If it disappears before the click, the action must not resolve its sibling.
+    func proposalID(for session: NoteSession, deletion: Bool) -> UUID? {
+        _ = proposalAgent(for: session)
+        return deletion ? proposalStatusCache[session.noteID]?.deletionID : proposalStatusCache[session.noteID]?.editID
     }
 
     func statusItems(for session: NoteSession) -> [NoteStatusItem] {
