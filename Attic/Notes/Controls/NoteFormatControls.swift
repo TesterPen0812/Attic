@@ -1148,7 +1148,7 @@ final class NoteFormatControls: NSObject {
         guard let textView else { return }
         let current = selection
         let show = !engine.isReadOnly && caretOnEmptyLine(current) && engine.paragraphStyle(at: current.location) == .body
-            && !textView.hasMarkedText() && engine.slashSession == nil && cardModel.card == nil
+            && engine.focusedTable == nil && !textView.hasMarkedText() && engine.slashSession == nil && cardModel.card == nil
         if show, let rect = caretRect() {
             let size = hintHost.fittingSize
             let frame = NSRect(x: rect.minX, y: rect.minY + (rect.height - size.height) / 2, width: size.width, height: size.height).integral
