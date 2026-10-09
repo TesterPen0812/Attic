@@ -966,16 +966,11 @@ extension NoteStore {
         guard let version = family.first, version.noteID == noteID else {
             return .failure(.versionMissing(versionID))
         }
-        guard family.allSatisfy({ row in
-            row.noteID == noteID && row.createdAt == version.createdAt && row.reasonRaw == version.reasonRaw
-                && row.content == version.content && row.contentFormat == version.contentFormat
-                && row.title == version.title && row.body == version.body
-                && row.attachmentIDsRaw == version.attachmentIDsRaw && row.sourceRevisionID == version.sourceRevisionID
-        }) else { return .failure(.invalidDocument("This saved version has conflicting copies and cannot be restored safely.")) }
-        guard version.contentFormat == 0 && version.content == nil
-            || (version.contentFormat == NoteDocument.currentFormat
-                && version.content.map { NoteContentCodec.decode($0).isEditable } == true) else {
-            return .failure(.readOnly)
+        // Admission uses the same complete-family rule as retention. No
+        // member may be ambiguous, unreadable or owned by another note.
+        guard NotePhysicalFamilyRetention.versionEligible(family, noteIDs: [noteID],
+            proposalBases: [], recoveryBases: []) else {
+            return .failure(.invalidDocument("This saved version has conflicting or unreadable copies and cannot be restored safely."))
         }
         let timestamp = currentDate
         let context = modelContext

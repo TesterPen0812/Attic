@@ -209,9 +209,47 @@ final class PhaseXHunt1ReproTests: XCTestCase {
         }
         try store.modelContext.save()
         let before = store.note(withID: id)?.content
-        XCTExpectFailure("H2-03")
         let result = store.restoreVersion(versionID, noteID: id)
         if case .success = result { XCTFail("Divergent history replicas must refuse restore") }
+        XCTAssertEqual(store.note(withID: id)?.content, before)
+    }
+
+    func testH2_03HistoryRestoreRejectsDivergentFamilyAndKeepsPreview() async throws {
+        let store = try makeTestNoteStore(attachmentFileStore: makeTestAttachmentFileStore())
+        let (id, _) = try create(NoteDocument(blocks: [.text("Current")]), in: store)
+        let versionID = UUID(), timestamp = Date(), revision = UUID()
+        for title in ["Version A", "Version B"] {
+            store.modelContext.insert(NoteVersion(id: versionID, noteID: id, createdAt: timestamp, reason: .leave,
+                content: try NoteContentCodec.encode(NoteDocument(blocks: [.text(title)])), contentFormat: 1,
+                title: title, body: "", attachmentIDs: [], sourceRevisionID: revision))
+        }
+        try store.modelContext.save()
+        let controller = NotesPageController(store: store,
+            journal: NoteDraftJournal(directory: ownedTemporaryDirectory(prefix: "H203Browser")),
+            saveDelay: .seconds(600), pauseVersionDelay: .seconds(600))
+        await controller.startAndWait()
+        XCTAssertTrue(controller.open(noteID: id))
+        await XCTAssertTrueAsync(await controller.openHistoryDurably())
+        let browser = try XCTUnwrap(controller.historyBrowser)
+        let before = store.note(withID: id)?.content
+        await XCTAssertFalseAsync(await controller.restoreHistoryVersionDurably())
+        XCTAssertTrue(controller.historyBrowser === browser)
+        XCTAssertNotNil(browser.failure)
+        XCTAssertEqual(store.note(withID: id)?.content, before)
+        XCTAssertNil(controller.versionRestoreUndoID)
+        controller.closeHistory()
+    }
+
+    func testH2_03RestoreUsesRetentionCompleteFamilyAdmission() throws {
+        let store = try makeTestNoteStore(attachmentFileStore: makeTestAttachmentFileStore())
+        let (id, _) = try create(NoteDocument(blocks: [.text("Current")]), in: store)
+        let version = NoteVersion(noteID: id, createdAt: Date(), reason: .leave, content: nil,
+            contentFormat: 0, title: "Unknown", body: "Keep unknown history", attachmentIDs: [], sourceRevisionID: nil)
+        version.reasonRaw = "future-reason"
+        store.modelContext.insert(version); try store.modelContext.save()
+        XCTAssertFalse(NotePhysicalFamilyRetention.versionEligible([version], noteIDs: [id], proposalBases: [], recoveryBases: []))
+        let before = store.note(withID: id)?.content
+        if case .success = store.restoreVersion(version.id, noteID: id) { XCTFail("Unknown family must refuse restore") }
         XCTAssertEqual(store.note(withID: id)?.content, before)
     }
 
