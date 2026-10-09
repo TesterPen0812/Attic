@@ -602,6 +602,70 @@ final class PhaseXHunt1bTests: XCTestCase {
         XCTAssertEqual(physical.filter { $0.id == richID }.count, 2)
     }
 
+    func testHunt2GeneratedTagsUndoRedoAndAcceptPreserveWholeDraft() async throws {
+        for seed in 0..<24 {
+            let store = try makeTestNoteStore(attachmentFileStore: makeTestAttachmentFileStore())
+            let id = try create(store, tags: ["saved"]), page = await controller(store)
+            XCTAssertTrue(page.open(noteID: id))
+            let session = try XCTUnwrap(page.active)
+            let deletion = seed % 3 == 0
+            let revision = try XCTUnwrap(store.note(withID: id)).revisionToken
+            let outcome = deletion
+                ? store.agentDelete(noteID: id, baseRevisionToken: revision, agentName: "Agent", disposition: .proposal)
+                : store.agentWrite(noteID: id, baseRevisionToken: revision,
+                    document: NoteDocument(blocks: [.text("Proposed \(seed)")]), agentName: "Agent", disposition: .proposal)
+            guard case let .success(.pending(proposal)) = outcome else { return XCTFail("seed=\(seed)") }
+            await XCTAssertTrueAsync(await page.beginProposalReview(id: proposal))
+            for step in 0..<(1 + seed % 5) {
+                let previous = session.engine.tags
+                let tags = ["tag\(seed)", "step\(step)"]
+                session.engine.setTagsFromPicker(tags)
+                let expected = session.engine.tags
+                XCTAssertTrue(session.engine.history.undo())
+                XCTAssertEqual(session.engine.tags, previous)
+                XCTAssertTrue(session.engine.history.redo())
+                XCTAssertEqual(session.engine.tags, expected)
+            }
+            let tags = session.engine.tags
+            await XCTAssertFalseAsync(await page.acceptProposal(), "seed=\(seed): pending work needs renewed review")
+            XCTAssertEqual(session.engine.tags, tags)
+            await XCTAssertTrueAsync(await page.acceptProposal(), "seed=\(seed)")
+            let physical = try ModelContext(store.container).fetch(FetchDescriptor<NoteItem>()).filter { $0.id == id }
+            XCTAssertEqual(physical.first?.tags, tags, "seed=\(seed)")
+            XCTAssertEqual(physical.first?.deletedAt != nil, deletion)
+            if !deletion {
+                await XCTAssertTrueAsync(await page.preserveAllDurably())
+                XCTAssertEqual(page.active?.engine.tags, tags)
+                XCTAssertEqual(page.active?.engine.document().title, "Proposed \(seed)")
+            }
+        }
+    }
+
+    func testHunt2GeneratedRestoreRevalidatesMutationsDuringWait() async throws {
+        for seed in 0..<12 {
+            let kind = seed % 6
+            let (restored, page, session, _) = try await restoreDuringRecoveryWait { session, browser in
+                switch kind {
+                case 0: _ = session.engine.performEdit(NSRange(location: session.engine.textStorage.length, length: 0), with: NSAttributedString(string: " late\(seed)"), name: "Type")
+                case 1: session.engine.setTagsFromPicker(["late\(seed)"])
+                case 2: browser.selectedIndex = 1; browser.updateComparison()
+                case 3: browser.showsCurrent = true
+                case 4:
+                    session.engine.history.beginGroup()
+                    _ = session.engine.performEdit(NSRange(location: session.engine.textStorage.length, length: 0), with: NSAttributedString(string: " grouped"), name: "Type")
+                    session.engine.setTagsFromPicker(["grouped"])
+                    session.engine.history.endGroup()
+                default: break // A wait alone must not reject a legitimate restore.
+                }
+            }
+            XCTAssertEqual(restored, kind == 5, "seed=\(seed)")
+            if kind != 5 { XCTAssertTrue(page.active === session, "seed=\(seed)") }
+            if kind == 1 { XCTAssertEqual(session.engine.tags, ["late\(seed)"]) }
+            if kind == 0 { XCTAssertTrue(session.engine.plainText.contains(" late\(seed)")) }
+            await XCTAssertTrueAsync(await page.preserveAllDurably())
+        }
+    }
+
 }
 
 @MainActor
