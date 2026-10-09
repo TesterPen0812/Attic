@@ -60,7 +60,7 @@ enum NoteStatusItem: Equatable {
     }
 }
 
-/// Immutable comparison ticket: acceptance checks both store bytes and live text again.
+/// Immutable comparison ticket: acceptance checks store bytes and the live draft again.
 struct NoteProposalReview: Identifiable, Equatable {
     let id: UUID
     let sessionID: UUID
@@ -69,6 +69,7 @@ struct NoteProposalReview: Identifiable, Equatable {
     let createdAt: Date
     let isDeletion: Bool
     let current: NoteDocument
+    let currentTags: [String]
     let proposed: NoteDocument
     let proposedPreview: NoteDocument
     let revision: String
@@ -722,7 +723,8 @@ final class NotesPageController: ObservableObject {
         }
         proposalReview = NoteProposalReview(id: edit.id, sessionID: session.id, noteID: session.noteID,
             agent: edit.agentName.isEmpty ? "Agent" : edit.agentName, createdAt: edit.createdAt, isDeletion: edit.isDeletion,
-            current: session.engine.document(), proposed: edit.isDeletion ? .blank : document, proposedPreview: preview,
+            current: session.engine.document(), currentTags: session.engine.tags,
+            proposed: edit.isDeletion ? .blank : document, proposedPreview: preview,
             revision: note.revisionToken, savedContent: note.content, signature: NoteProposalSignature(edit))
         return true
     }
@@ -737,17 +739,31 @@ final class NotesPageController: ObservableObject {
         guard await awaitRecoveryForUser(), let review = proposalReview, let session = active,
               session.id == review.sessionID, !session.isImporting,
               canLeaveComposition(in: session) else { return false }
+        guard !session.isConflict else {
+            proposalReviewNotice = "Your draft changed elsewhere. Save as New Note before replacing it."
+            return false
+        }
+        let engine = session.engine, generation = session.editGeneration
+        if NoteSessionPolicy.hasPendingWork(session.state) {
+            // A document-only comparison misses tags and staged file bytes.
+            // Save the whole draft before replacing its engine or retiring
+            // recovery, then require review of that saved state.
+            _ = await preserveDurably(session)
+            guard active === session, proposalReview == review, session.engine === engine else { return false }
+            _ = refreshProposalReview(id: review.id, session: session)
+            proposalReviewNotice = "Your draft changed. Review the refreshed comparison before replacing."
+            return false
+        }
         return await performAfterRecovery {
             guard self.proposalReview == review, self.active === session, !session.isImporting,
                   self.canLeaveComposition(in: session) else { return false }
             guard let note = self.store.note(withID: review.noteID), note.revisionToken == review.revision,
-                  note.content == review.savedContent, session.engine.document() == review.current else {
+                  note.content == review.savedContent, session.engine === engine,
+                  session.editGeneration == generation, session.state == .clean,
+                  session.engine.document() == review.current, session.engine.tags == review.currentTags,
+                  session.engine.tags == session.baseTags else {
                 _ = self.refreshProposalReview(id: review.id, session: session)
                 self.proposalReviewNotice = "The note changed. The comparison has refreshed; review it before replacing."
-                return false
-            }
-            guard !session.isConflict else {
-                self.proposalReviewNotice = "Your draft changed elsewhere. Save as New Note before replacing it."
                 return false
             }
             // The journal must retire while the note is still live. Async retirement
