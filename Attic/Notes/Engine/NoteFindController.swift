@@ -91,7 +91,8 @@ final class NoteFindController: ObservableObject {
         matches = []
         index = nil
         engine?.scrollView?.contentInsets.top = topInset
-        layoutBar()
+        host?.removeFromSuperview()
+        host = nil
         updateHighlights(clear: true)
         if returnFocus, let engine {
             if let id = selected?.tableID, let cell = selected?.cell, let range = selected?.cellRange,
@@ -201,6 +202,10 @@ final class NoteFindController: ObservableObject {
                     layout.addRenderingAttribute(.backgroundColor, value: highlight, for: range)
                 }
             }
+            // NSTextView caches fragment layers. Removing rendering attributes
+            // alone leaves their old yellow pixels until another text edit.
+            layout.invalidateLayout(for: engine.contentStorage.documentRange)
+            engine.textView?.needsDisplay = true
         }
         for view in engine.tableViews() {
             view.canvas.needsDisplay = true

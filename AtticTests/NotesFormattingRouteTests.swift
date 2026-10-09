@@ -1,4 +1,5 @@
 import AppKit
+import SwiftUI
 import XCTest
 @testable import Attic
 
@@ -703,6 +704,39 @@ final class A38NotesRegressionTests: XCTestCase {
 }
 
 extension A38NotesRegressionTests {
+    func testEscapeClosesFindBeforeTheFormatRowAndRemovesItsRenderingAttributes() throws {
+        let engine = NoteEditorEngine(noteID: UUID(), document: NoteDocument(blocks: [.text("T"), .text("needle needle")]))
+        let (scroll, view) = engine.makeView()
+        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 320, height: 520), styleMask: .borderless, backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        window.contentView = scroll
+        let controls = NoteFormatControls(engine: engine, textView: view, scrollView: scroll,
+            design: .default, noteID: engine.noteID, isNewDraft: false)
+        defer { controls.invalidate(); engine.detachView(); window.close() }
+        var rowClosed = false
+        controls.isFormatBarOpen = true
+        controls.closeFormatBar = { rowClosed = true }
+        engine.find.show()
+        engine.find.query = "needle"
+        func backgroundRanges() -> Int {
+            var count = 0
+            engine.layoutManager?.enumerateRenderingAttributes(from: engine.contentStorage.documentRange.location, reverse: false) { _, attributes, _ in
+                if attributes[.backgroundColor] != nil { count += 1 }
+                return true
+            }
+            return count
+        }
+        XCTAssertGreaterThan(backgroundRanges(), 0, "the positive control actually has Find ink")
+        let escape = try XCTUnwrap(NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: [], timestamp: 0,
+            windowNumber: window.windowNumber, context: nil, characters: "\u{1b}", charactersIgnoringModifiers: "\u{1b}", isARepeat: false, keyCode: 53))
+        XCTAssertTrue(controls.handleKey(escape), "the formatting monitor may receive Esc first")
+        XCTAssertFalse(engine.find.isShown)
+        XCTAssertFalse(rowClosed)
+        XCTAssertEqual(backgroundRanges(), 0)
+        XCTAssertTrue(window.firstResponder === view)
+        XCTAssertFalse(scroll.subviews.contains { $0 is NSHostingView<AnyView> }, "closed Find cannot leave hidden controls in the AX tree")
+    }
+
     func testFindReturnsTheKeyboardToBodyAfterATableMatch() throws {
         let engine = NoteEditorEngine(noteID: UUID(), document: NoteDocument(blocks: [.text("Find"),
             .table(NoteTable(texts: [["needle cell", "other"]])), .text("needle body")]))

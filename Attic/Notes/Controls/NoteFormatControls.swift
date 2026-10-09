@@ -546,6 +546,11 @@ final class NoteFormatControls: NSObject {
             cancelCard()
             return true
         }
+        // Find is above the format row. Both install local monitors, whose
+        // order is unspecified; whichever receives Esc first must close Find.
+        if event.window === window, engine.find.isShown {
+            return engine.find.handleKey(event)
+        }
         if isFormatBarOpen, !formatModel.barShown, formatModel.barKeyboardIndex == nil, !slashModel.shown {
             // The row closes and the keyboard is the text's again (the note's
             // text would otherwise have nothing left to close and hide the
