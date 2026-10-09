@@ -122,7 +122,7 @@ final class NoteDraftController: ObservableObject {
 
         static func == (lhs: PersistedSnapshot, rhs: PersistedSnapshot) -> Bool {
             lhs.noteID == rhs.noteID
-                && lhs.title == rhs.title
+                && NoteTextReplacement.utf16Equal(lhs.title, rhs.title)
                 && NoteTextReplacement.utf16Equal(lhs.body, rhs.body)
         }
     }
@@ -269,7 +269,8 @@ final class NoteDraftController: ObservableObject {
             recoveryErrorMessage = nil
             let existing = noteStore.notes.first { $0.id == (saved.noteID ?? saved.reservedNoteID) }
             if let existing,
-               existing.title == NoteStore.normalizedTitle(saved.title), existing.body == saved.body {
+               NoteTextReplacement.utf16Equal(existing.title, NoteStore.normalizedTitle(saved.title)),
+               NoteTextReplacement.utf16Equal(existing.body, saved.body) {
                 applySnapshot(noteID: existing.id, title: existing.title, body: existing.body, isActive: true)
                 checkpointRecovery()
                 return true
