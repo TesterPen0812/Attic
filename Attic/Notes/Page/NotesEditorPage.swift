@@ -654,6 +654,9 @@ struct NotesEditorPage: View {
                              identifier: "notes-row-pin") {
                 controller.setPinned(!pinned, noteID: id)
             },
+            NotesLibraryView.tagsSubmenu(tags: stored?.tags ?? [], activeTag: library.tagFilter) { [library] tag in
+                library.tagFilter = tag
+            },
             AtticMenuCommand("Copy as Markdown", shortcut: KeyboardShortcut("c", modifiers: [.command, .option, .shift]),
                              startsSection: true, identifier: NotesLibraryView.copyMarkdownIdentifier) {
                 controller.copyMarkdown(noteID: id)

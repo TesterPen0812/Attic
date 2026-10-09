@@ -510,7 +510,8 @@ struct AtticNoteLibraryLine: View {
     private func tabs(_ shown: [String]) -> some View {
         let items = [AtticPageTabs<String?>.Item(page: nil, title: title, accessibilityIdentifier: "notes-library-label")]
             + shown.map { AtticPageTabs<String?>.Item(page: $0, title: "#\($0)", accessibilityIdentifier: "notes-library-tag-\($0)") }
-        return AtticPageTabs(items: items, selection: Binding(get: { activeTag }, set: { onSelectTag($0) }))
+        return AtticPageTabs(items: items, selection: Binding(get: { activeTag }, set: { onSelectTag($0) }),
+                             groupLabel: String(localized: "Filter notes by tag"))
     }
 
     @ViewBuilder

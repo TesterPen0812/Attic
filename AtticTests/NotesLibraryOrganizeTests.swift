@@ -159,6 +159,17 @@ final class NotesLibraryOrganizeTests: XCTestCase {
         XCTAssertEqual(words, [withDate], "ordinary words still search the text")
     }
 
+    func testARowsTagsMenuFiltersToATagAndTicksTheActiveOne() {
+        var chosen: [String?] = []
+        let menu = NotesLibraryView.tagsSubmenu(tags: ["launch", "work"], activeTag: "work") { chosen.append($0) }
+        XCTAssertEqual(menu.children.map(\.title), ["#launch", "#work"])
+        XCTAssertEqual(menu.children.map(\.state), [nil, .on])
+        menu.children[0].action()
+        menu.children[1].action()
+        XCTAssertEqual(chosen, ["launch", nil], "a tag filters; the active one again shows every note")
+        XCTAssertTrue(NotesLibraryView.tagsSubmenu(tags: [], activeTag: nil) { _ in }.isDisabled, "no tags: dimmed")
+    }
+
     // MARK: Words
 
     func testTheSearchWordsNameTheFilter() {

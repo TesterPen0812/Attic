@@ -244,6 +244,19 @@ struct NotesLibraryView: View {
         return true
     }
 
+    /// A row's Tags ▸ (right-click): the note's tags, since rows don't
+    /// repeat them. In All notes a tag filters (D3); the active one is
+    /// ticked and choosing it again shows every note. Dimmed with none.
+    static func tagsSubmenu(tags: [String], activeTag: String?, onSelect: @escaping (String?) -> Void) -> AtticMenuCommand {
+        var command = AtticMenuCommand.submenu(String(localized: "Tags"), tags.map { tag in
+            AtticMenuCommand(verbatim: "#\(tag)", state: tag == activeTag ? .on : nil) {
+                onSelect(tag == activeTag ? nil : tag)
+            }
+        })
+        command.identifier = "notes-row-tags"
+        return command
+    }
+
     static let duplicateIdentifier = "notes-row-duplicate"
     static let copyMarkdownIdentifier = "notes-row-copy-markdown"
     static let undoIdentifier = "notes-row-undo"
