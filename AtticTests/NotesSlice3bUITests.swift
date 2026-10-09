@@ -582,4 +582,21 @@ final class NotesSlice3bUITests: XCTestCase {
         XCTAssertEqual(runs, 1)
         XCTAssertNil(toasts.current)
     }
+    func testHunt2RepeatedLayoutUpdatesDoNotRestartRingDisappearance() throws {
+        let item = try pngStaged()
+        let block = NoteBlock.image(attachmentID: item.id, widthFraction: 0.5, pixelWidth: 400, pixelHeight: 200)
+        let engine = NoteEditorEngine(noteID: UUID(), document: NoteDocument(blocks: [.text("Title"), block, .text("after")]), stagedAttachments: [item])
+        let (window, view, controls) = hosted(engine)
+        defer { controls.invalidate(); engine.detachView(); window.close() }
+        let range = try XCTUnwrap(engine.objectPlacement(block.id!)?.1)
+        view.setSelectedRange(range)
+        spin(0.15)
+        XCTAssertTrue(controls.isRingShown)
+        view.setSelectedRange(NSRange(location: engine.textStorage.length, length: 0))
+        // Layout callbacks can arrive throughout the fade while other hosted
+        // views animate. Reasserting the same target must not restart it.
+        for _ in 0..<20 { controls.updateSelection(); spin(0.02) }
+        XCTAssertFalse(controls.isRingShown, "Repeated layout updates must not postpone the 100 ms fade beyond the existing 400 ms check")
+    }
+
 }
