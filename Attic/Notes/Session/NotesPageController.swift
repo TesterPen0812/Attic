@@ -2667,8 +2667,10 @@ extension NotesPageController {
         browser.isRestoring = true
         defer { browser.isRestoring = false }
         guard await awaitRecoveryForUser(), historyBrowser === browser, active === session,
-              session.engine === engine, session.editGeneration == generation, session.state == .clean,
-              !session.isImporting, canLeaveComposition(in: session) else { return false }
+              session.engine === engine, canLeaveComposition(in: session),
+              session.editGeneration == generation, session.state == .clean, !session.isImporting,
+              browser.selected?.id == selected.id, browser.selected?.canRestore == true,
+              !browser.showsCurrent else { return false }
         let preservationID = UUID()
         switch store.restoreVersion(selected.id, noteID: browser.noteID,
                                     expectedRevisionID: browser.currentRevision, preservationID: preservationID) {
