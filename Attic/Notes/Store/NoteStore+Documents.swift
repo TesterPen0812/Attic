@@ -1359,6 +1359,54 @@ extension NoteStore {
     // MARK: Migration gate (requirement 2)
 
     /// A legacy note as it is shown today, or why it can't be read as one.
+    /// Metadata only: refresh a legacy preview after late imports or outside
+    /// edits without faulting, retaining or comparing attachment payloads on
+    /// every unrelated store revision. Keep physical replicas in the stamp.
+    struct LegacyPreviewFingerprint: Equatable {
+        struct Note: Equatable {
+            let physicalID: PersistentIdentifier
+            let revision: String
+            let updatedAt: Date
+            let format: Int
+            let title: String
+            let body: String
+            let tags: String
+        }
+        struct Attachment: Equatable {
+            let physicalID: PersistentIdentifier
+            let id: UUID
+            let offset: Int?
+            let order: Int64
+            let createdAt: Date
+            let updatedAt: Date
+            let filename: String
+            let type: String
+            let bytes: Int64
+            let digest: String
+        }
+        let noteID: UUID
+        let notes: [Note]
+        let attachments: [Attachment]
+    }
+
+    func legacyPreviewFingerprint(noteID: UUID) throws -> LegacyPreviewFingerprint {
+        let notes = try liveReplicas(of: noteID).sorted {
+            String(describing: $0.persistentModelID) < String(describing: $1.persistentModelID)
+        }.map {
+            LegacyPreviewFingerprint.Note(physicalID: $0.persistentModelID, revision: $0.revisionToken,
+                updatedAt: $0.updatedAt, format: $0.contentFormat, title: $0.title, body: $0.body, tags: $0.tagsRaw)
+        }
+        let attachments = try attachmentRows(forNoteID: noteID).filter { $0.deletedAt == nil }.sorted {
+            String(describing: $0.persistentModelID) < String(describing: $1.persistentModelID)
+        }.map {
+            LegacyPreviewFingerprint.Attachment(physicalID: $0.persistentModelID, id: $0.id,
+                offset: $0.inlineOffset, order: $0.sortIndex, createdAt: $0.createdAt, updatedAt: $0.updatedAt,
+                filename: $0.originalFilename, type: $0.contentTypeIdentifier,
+                bytes: $0.byteCount, digest: $0.contentDigest)
+        }
+        return LegacyPreviewFingerprint(noteID: noteID, notes: notes, attachments: attachments)
+    }
+
     func legacySnapshot(noteID: UUID) -> Result<LegacyNoteSnapshot, LegacyMigrationRefusal> {
         guard let preflight = try? noteMutationPreflight(noteID, format: .legacy) else {
             if let replicas = try? liveReplicas(of: noteID),

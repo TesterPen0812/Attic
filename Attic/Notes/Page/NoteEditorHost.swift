@@ -459,7 +459,8 @@ final class NoteTitleAccessories: NotesKeyboardReturnTarget {
             self?.presentMenu(fromHeader: false)
         }
         .atticDesign(design))
-        tagHost.rootView = AnyView(NoteTagLineRoot(chrome: chrome, tags: shownTags, tagEditor: tagEditor)
+        tagHost.rootView = AnyView(NoteTagLineRoot(chrome: chrome, tags: shownTags, tagEditor: tagEditor,
+                                                  isEditable: !engine.isReadOnly)
             .atticDesign(design))
         tagMeasure.rootView = AnyView(AtticNoteTagLine(tags: shownTags) { _ in }.atticDesign(design))
     }
@@ -709,12 +710,14 @@ private struct NoteTagLineRoot: View {
     @ObservedObject var chrome: NotesPageChrome
     let tags: [String]
     let tagEditor: () -> AnyView
+    let isEditable: Bool
 
     var body: some View {
         AtticNoteTagLine(tags: tags) { _ in chrome.tagEditor = .tags }
             .frame(maxWidth: .infinity, alignment: .leading)
             .accessibilityIdentifier("notes-tag-line")
-            .atticDropdown(isPresented: Binding(get: { chrome.tagEditor == .tags },
+            .disabled(!isEditable)
+            .atticDropdown(isPresented: Binding(get: { isEditable && chrome.tagEditor == .tags },
                                                 set: { if !$0, chrome.tagEditor == .tags { chrome.tagEditor = nil } }),
                            label: String(localized: "Tags")) { tagEditor() }
     }

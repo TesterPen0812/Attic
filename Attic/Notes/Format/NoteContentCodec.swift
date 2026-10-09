@@ -23,6 +23,7 @@ enum NoteContent: Equatable, Sendable {
 }
 
 enum NoteReadOnlyReason: Equatable, Sendable {
+    case legacyFormat
     case newerFormat(Int)
     case requiresCapabilities([String])
     case unsupportedContent
@@ -30,6 +31,8 @@ enum NoteReadOnlyReason: Equatable, Sendable {
 
     var message: String {
         switch self {
+        case .legacyFormat:
+            "This note uses the original format. Convert to edit it in this editor."
         case .newerFormat, .requiresCapabilities, .unsupportedContent:
             "Some content needs a newer Attic, so this note is read-only here."
         case .unreadable:

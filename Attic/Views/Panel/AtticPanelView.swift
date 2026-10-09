@@ -28,6 +28,7 @@ struct AtticPanelView: View {
     @State private var noticeHeight: CGFloat = 0
     @State private var noticeClearance = PanelPageNoticeClearancePreferenceKey.defaultValue
     @State var hasRestoredNoteSession = false
+    @AppStorage(NotesEditorSetting.defaultsKey) private var newNotesEditorEnabled = NotesEditorSetting.isPreviewIdentity(Bundle.main.bundleIdentifier)
     /// The current page's primary input (the Tasks add bar). The shell owns
     /// it so a page switch can take focus out of the page.
     @FocusState private var isQuickEntryFocused: Bool
@@ -119,6 +120,10 @@ struct AtticPanelView: View {
                 }
             }
         }
+        // A removed SwiftUI page can survive for its outgoing transition.
+        // Changing editor families must retire that entire retained subtree.
+        .id(newNotesEditorEnabled)
+        .animation(nil, value: newNotesEditorEnabled)
         .coordinateSpace(name: AtticPanelCoordinateSpaceName.taskWorkspace)
         .coordinateSpace(PanelPageLayout.coordinateSpace)
         .overlay(alignment: .top) {

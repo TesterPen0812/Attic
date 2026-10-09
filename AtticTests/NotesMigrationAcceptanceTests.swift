@@ -86,6 +86,7 @@ private enum MigrationCopyAudit {
         case .changedSincePlanned: "revision-changed"
         case .alreadyMigrated: "already-migrated"
         case .saveFailed: "save-failed"
+        case .leaveRefused: "leave-refused"
         }
     }
 

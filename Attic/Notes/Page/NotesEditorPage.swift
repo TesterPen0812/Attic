@@ -49,6 +49,9 @@ struct NotesEditorPage: View {
     /// The history step the delete toast undoes: the toast answers only
     /// while that step is still the next Undo.
     @State private var postedToastStep: UUID?
+    @State private var legacyPreview: NoteSession?
+    @State private var legacyPreviewError: String?
+    @State private var legacyPreviewSource: NoteStore.LegacyPreviewFingerprint?
 
     init(controller: NotesPageController, noteStore: NoteStore, noteDraft: NoteDraftController,
          uiState: PanelUIState, layout: PanelPageLayout, exitToOldPage: (() -> Void)? = nil,
@@ -140,6 +143,7 @@ struct NotesEditorPage: View {
             controller.update(design: design)
             controller.start()
             controller.present()
+            refreshLegacyPreview()
             chrome.menuCommands = { noteMenuCommands() }
             chrome.leaveEditor = { forward in leaveEditor(forward: forward) }
             #if DEBUG
@@ -173,7 +177,10 @@ struct NotesEditorPage: View {
                 bottomFocus = stop
             }
         }
-        .onChange(of: design) { _, newValue in controller.update(design: newValue) }
+        .onChange(of: design) { _, newValue in
+            controller.update(design: newValue)
+            legacyPreview?.engine.update(design: newValue)
+        }
         .task {
             #if DEBUG
             await NoteHistoryCaptureScene.seedIfRequested(controller)
@@ -183,7 +190,8 @@ struct NotesEditorPage: View {
             chrome.closeFormatBar()
             chrome.cancelKeyboardReturn()
         }
-        .onChange(of: controller.legacyNoteID) { _, id in openLegacy(id) }
+        .onChange(of: controller.legacyNoteID) { _, _ in refreshLegacyPreview() }
+        .onChange(of: noteStore.revision) { _, _ in refreshLegacyPreview() }
         .onChange(of: controller.active?.id) { _, opened in
             // Another note: the keyboard return belonged to the last one.
             chrome.cancelKeyboardReturn()
@@ -238,7 +246,7 @@ struct NotesEditorPage: View {
     }
 
     private var showsEditor: Bool {
-        !controller.isLibraryPresented && controller.proposalReview == nil && controller.active != nil && controller.legacyNoteID == nil
+        !controller.isLibraryPresented && controller.proposalReview == nil && (controller.active != nil || legacyPreview != nil)
     }
 
     // MARK: Content
@@ -257,12 +265,26 @@ struct NotesEditorPage: View {
                              onBack: { toggleLibrary() },
                              onCreate: { title, tag in newNote(title: title, tag: tag) })
                 .transition(slide(from: Self.libraryEdge))
-        } else if let legacyID = controller.legacyNoteID, noteDraft.activeNoteID == legacyID {
-            // A note not yet in the new format keeps the old editor.
-            NoteComposerView(noteDraft: noteDraft, uiState: uiState,
-                             topContentInset: topInset, bottomContentInset: bottomInset)
-                .padding(.horizontal, layout.contentInsets.leading)
-                .transition(slide(from: Self.noteEdge))
+        } else if controller.legacyNoteID != nil {
+            if let session = legacyPreview {
+                NoteEditorRepresentable(session: session, chrome: chrome, columnInset: columnInset,
+                    topInset: topInset, bottomInset: bottomInset, headerBottom: layout.headerBottom,
+                    design: design, tagEditor: { AnyView(EmptyView()) }, tagCounts: { [:] })
+                    .id(ObjectIdentifier(session.engine))
+                    .atticScrollUnderFade(plainText: [], topEdge: layout.scrollEdgeFadeTop,
+                                         bottomEdge: layout.scrollEdgeFadeBottom)
+                    .accessibilityIdentifier("note-editor-legacy-preview")
+                    .transition(slide(from: Self.noteEdge))
+            } else {
+                ContentUnavailableView {
+                    Label("Original note kept", systemImage: "doc")
+                } description: {
+                    Text(legacyPreviewError ?? "This note cannot be previewed safely.")
+                } actions: {
+                    Button("Switch Notes to old editor", action: useOldEditor)
+                        .help("Uses the old editor for all notes")
+                }
+            }
         } else if let review = controller.proposalReview {
             NoteProposalComparison(controller: controller, store: noteStore, review: review,
                 columnInset: columnInset, topInset: layout.headerBottom + 8, bottomInset: layout.chromeInsets.bottom,
@@ -322,6 +344,7 @@ struct NotesEditorPage: View {
                 bottomButtons
             }
         }
+        .notesRenderBoundary("notes-v2-bottom-row")
     }
 
     /// In Dark the bottom row's glyphs take the strong ink (A39 F13): the
@@ -342,7 +365,14 @@ struct NotesEditorPage: View {
                 .accessibilityIdentifier("notes-all-notes")
                 .accessibilitySortPriority(1)
                 Spacer(minLength: AtticSpacing.s12)
-                if !controller.isLibraryPresented, let session = controller.active {
+                if !controller.isLibraryPresented, controller.legacyNoteID != nil, let legacyPreview {
+                    AtticStatusPill(item: AtticStatusItem(id: "legacy-conversion", systemName: "pencil",
+                        title: legacyConversionTitle(for: legacyPreview)), maxWidth: AtticNoteMetrics.pillMaxWidth(
+                            panelWidth: layout.panelSize.width, chromeInset: layout.chromeInsets.leading,
+                            showsFormat: false)) { convertLegacy() }
+                        .accessibilityHint("Converts this note after checking its text and attachments, so waiting agent edits can be reviewed")
+                        .accessibilityIdentifier("notes-convert-legacy")
+                } else if !controller.isLibraryPresented, let session = controller.active {
                     NoteStatusSlot(controller: controller, store: noteStore, session: session, damaged: damagedRecovery,
                                    maxWidth: AtticNoteMetrics.pillMaxWidth(
                                        panelWidth: layout.panelSize.width, chromeInset: layout.chromeInsets.leading,
@@ -481,7 +511,7 @@ struct NotesEditorPage: View {
                 .keyboardShortcut("c", modifiers: [.command, .option, .shift])
                 .disabled(!showsEditor)
             Button("") {
-                if let engine = controller.active?.engine { Task { _ = await engine.printNote() } }
+                if let engine = (controller.active ?? legacyPreview)?.engine { Task { _ = await engine.printNote() } }
             }
             .keyboardShortcut("p", modifiers: .command)
             .disabled(!showsEditor)
@@ -546,12 +576,58 @@ struct NotesEditorPage: View {
         library.clearSearch()
     }
 
-    private func openLegacy(_ id: UUID?) {
-        guard let id, let note = noteStore.note(withID: id) else { return }
-        if noteDraft.beginEditing(note) { uiState.beginEditingNote(note) }
+    private func refreshLegacyPreview() {
+        let id = controller.legacyNoteID
+        let snapshot = id.flatMap { try? noteStore.legacyPreviewFingerprint(noteID: $0) }
+        if let snapshot, legacyPreview?.noteID == id, snapshot == legacyPreviewSource { return }
+        legacyPreview?.engine.detachView()
+        legacyPreview = nil
+        legacyPreviewError = nil
+        legacyPreviewSource = snapshot
+        guard let id else { return }
+        if noteStore.note(withID: id)?.usesDocumentFormat == true {
+            _ = controller.open(noteID: id)
+            return
+        }
+        switch controller.legacyPreview(noteID: id) {
+        case let .success(session): legacyPreview = session
+        case let .failure(reason): legacyPreviewError = reason.description
+        }
+    }
+
+    private func convertLegacy() {
+        guard let id = controller.legacyNoteID else { return }
+        switch controller.convertLegacyForEditing(noteID: id) {
+        case .success: refreshLegacyPreview()
+        case let .failure(reason):
+            noteStore.setAttachmentError(reason.description)
+            refreshLegacyPreview()
+        }
+    }
+
+    private func legacyConversionTitle(for session: NoteSession) -> String {
+        if controller.proposalAgent(for: session) != nil { return String(localized: "Edit waiting · Convert") }
+        if controller.proposalID(for: session, deletion: true) != nil { return String(localized: "Deletion waiting · Convert") }
+        return String(localized: "Convert to edit")
+    }
+
+    private func useOldEditor() {
+        guard let id = controller.legacyNoteID, let note = noteStore.note(withID: id) else { return }
+        guard !note.usesDocumentFormat else { _ = controller.open(noteID: id); return }
+        guard controller.prepareToLeave(.exitToOldPage) else { return }
+        guard noteDraft.beginEditing(note) else {
+            controller.present()
+            noteStore.setAttachmentError(noteDraft.recoveryErrorMessage ?? "The old editor could not open this note. Finish or save its current draft first.")
+            return
+        }
+        // The explicit fallback changes the page choice first: the old
+        // composer is hosted only by NotesPageHost while the flag is off.
+        UserDefaults.standard.set(false, forKey: NotesEditorSetting.defaultsKey)
+        uiState.beginEditingNote(note)
     }
 
     private var currentNoteID: UUID? {
+        if let legacyPreview, controller.legacyNoteID == legacyPreview.noteID { return legacyPreview.noteID }
         guard let session = controller.active, controller.legacyNoteID == nil else { return nil }
         return session.noteID
     }
@@ -607,11 +683,14 @@ struct NotesEditorPage: View {
     /// as this slice supports them, then the note's actions. What is not
     /// built yet is left out.
     private func noteMenuCommands() -> [AtticMenuCommand] {
-        guard let session = controller.active, controller.legacyNoteID == nil else { return [] }
+        guard let session = controller.active ?? legacyPreview else { return [] }
         let id = session.noteID
         let engine = session.engine
         let editable = !session.isReadOnly
         var commands: [AtticMenuCommand] = []
+        if controller.legacyNoteID == id {
+            commands.append(AtticMenuCommand("Convert to edit", identifier: "notes-menu-convert") { convertLegacy() })
+        }
         // A selected image or file: its own commands first (Image ▸ or
         // File ▸), the same list as its right-click menu.
         if let objects = chrome.objectControls,

@@ -269,6 +269,7 @@ struct NoteComposerView: View {
         .animation(reduceMotion ? nil : AtticMotion.quick, value: isFileTargeted)
         .accessibilityElement(children: .contain)
         .accessibilityIdentifier("active-note-workspace")
+        .notesRenderBoundary("legacy-note-composer")
     }
 
     private var editorSurface: some View {
@@ -419,6 +420,7 @@ struct NoteComposerView: View {
         .accessibilityElement(children: .contain)
         .accessibilityLabel("Note controls")
         .accessibilityIdentifier("note-entry-bar")
+        .notesRenderBoundary("legacy-notes-bottom-row")
     }
 
     private func noteControl(_ title: String, symbol: String, identifier: String,

@@ -38,6 +38,7 @@ enum LegacyMigrationRefusal: Error, Equatable, Sendable, CustomStringConvertible
     case changedSincePlanned
     case alreadyMigrated
     case saveFailed(String)
+    case leaveRefused
 
     var description: String {
         switch self {
@@ -51,6 +52,7 @@ enum LegacyMigrationRefusal: Error, Equatable, Sendable, CustomStringConvertible
         case .changedSincePlanned: "The note changed after it was checked."
         case .alreadyMigrated: "The note is already in the new format."
         case let .saveFailed(message): "The converted note could not be saved: \(message)"
+        case .leaveRefused: "The current edit could not be finished. Finish or save it before converting this note."
         }
     }
 }

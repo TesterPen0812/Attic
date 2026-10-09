@@ -95,22 +95,21 @@ final class NoteEditorEngine: NSObject, NSTextViewDelegate, NSTextStorageDelegat
     var canRedoVersionRestore: (() -> Bool)?
     var undoVersionRestore: (() -> Void)?
     var redoVersionRestore: (() -> Void)?
-    var canUndoCommand: Bool { !isReadOnly && (history.canUndo || canUndoVersionRestore?() == true || history.outsideEditBarrier != nil) }
-    var canRedoCommand: Bool { !isReadOnly && (history.canRedo || canRedoVersionRestore?() == true) }
+    var canUndoCommand: Bool { canUndoVersionRestore?() == true || (!isReadOnly && (history.canUndo || history.outsideEditBarrier != nil)) }
+    var canRedoCommand: Bool { canRedoVersionRestore?() == true || (!isReadOnly && history.canRedo) }
     var undoCommandName: String { history.canUndo ? history.undoActionName : (canUndoVersionRestore?() == true ? "Restore Version" : "") }
     var redoCommandName: String { canRedoVersionRestore?() == true ? "Restore Version" : history.redoActionName }
 
     @discardableResult func undoCommand() -> Bool {
-        guard !isReadOnly else { return false }
-        if history.canUndo { return history.undo() }
-        guard canUndoVersionRestore?() == true else { return history.undo() }
-        undoVersionRestore?()
-        return true
+        if !isReadOnly, history.canUndo { return history.undo() }
+        // A read-only legacy preview may undo a committed version restore
+        // through its controller; it still cannot undo or edit local text.
+        if canUndoVersionRestore?() == true { undoVersionRestore?(); return true }
+        return !isReadOnly && history.undo()
     }
     @discardableResult func redoCommand() -> Bool {
-        guard !isReadOnly else { return false }
         if canRedoVersionRestore?() == true { redoVersionRestore?(); return true }
-        return history.redo()
+        return !isReadOnly && history.redo()
     }
     private(set) var style: NoteTextStyle
     private let renderer: NoteObjectRenderer

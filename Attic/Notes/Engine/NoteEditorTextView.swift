@@ -625,12 +625,12 @@ final class NoteEditorTextView: NSTextView, NSAccessibilityCustomRotorItemSearch
             if item.action == #selector(undo(_:)) {
                 let name = engine.undoCommandName
                 (item as? NSMenuItem)?.title = name.isEmpty ? String(localized: "Undo") : String(localized: "Undo \(name)")
-                return isEditable && engine.canUndoCommand
+                return (isEditable || engine.canUndoVersionRestore?() == true) && engine.canUndoCommand
             }
             if item.action == #selector(redo(_:)) {
                 let name = engine.redoCommandName
                 (item as? NSMenuItem)?.title = name.isEmpty ? String(localized: "Redo") : String(localized: "Redo \(name)")
-                return isEditable && engine.canRedoCommand
+                return (isEditable || engine.canRedoVersionRestore?() == true) && engine.canRedoCommand
             }
         }
         return super.validateUserInterfaceItem(item)

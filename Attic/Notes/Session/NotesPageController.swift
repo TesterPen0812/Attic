@@ -226,7 +226,7 @@ final class NotesPageController: ObservableObject {
     var versionRestoreUndoID: UUID? { versionRestoreUndo?.isUndo == true ? versionRestoreUndo?.id : nil }
     private(set) var versionHistoryCommandTask: Task<Void, Never>?
     private var isVersionRestoreReplaying = false
-    /// A legacy note the page shows in the old editor.
+    /// A note in legacy storage, previewed without conversion by the new page.
     @Published private(set) var legacyNoteID: UUID?
     @Published var isLibraryPresented = false
     @Published private(set) var design: AtticDesignContext = .default
@@ -877,7 +877,8 @@ final class NotesPageController: ObservableObject {
         }
     }
 
-    /// Opens a note. Legacy notes open in the old editor (`legacyNoteID`).
+    /// Opens a note. Legacy storage is identified separately; the new page
+    /// previews it without mounting the old composer or converting on open.
     @discardableResult
     func open(noteID: UUID) -> Bool {
         if let active, active.noteID == noteID, legacyNoteID == nil {
@@ -896,6 +897,52 @@ final class NotesPageController: ObservableObject {
         guard let session = session(for: note).flatMap(presentSession) else { return false }
         activate(session)
         return true
+    }
+
+    /// A display-only projection: opening old notes never changes their bytes.
+    func legacyPreview(noteID: UUID) -> Result<NoteSession, LegacyMigrationRefusal> {
+        store.legacySnapshot(noteID: noteID).flatMap(LegacyNoteMigration.plan).map { plan in
+            let session = NoteSession(noteID: noteID, isPersisted: true,
+                baseRevisionID: store.note(withID: noteID)?.revisionID,
+                engine: makeEngine(noteID: noteID, document: plan.document, readOnly: true,
+                                   tags: store.note(withID: noteID)?.tags ?? []),
+                readOnlyReason: .legacyFormat)
+            session.engine.canUndoVersionRestore = { [weak self] in
+                guard let self, self.legacyNoteID == noteID else { return false }
+                return self.canReplayVersionRestore(undo: true)
+            }
+            session.engine.canRedoVersionRestore = { [weak self] in
+                guard let self, self.legacyNoteID == noteID else { return false }
+                return self.canReplayVersionRestore(undo: false)
+            }
+            session.engine.undoVersionRestore = { [weak self] in self?.requestVersionRestoreReplay(undo: true) }
+            session.engine.redoVersionRestore = { [weak self] in self?.requestVersionRestoreReplay(undo: false) }
+            return session
+        }
+    }
+
+    /// Only the explicit Convert to edit action commits the existing two-step
+    /// migration gate, including its pre-migration version and replica checks.
+    func convertLegacyForEditing(noteID: UUID) -> Result<Void, LegacyMigrationRefusal> {
+        guard NotesEditorSetting.isEnabled(), legacyNoteID == noteID else { return .failure(.changedSincePlanned) }
+        guard prepareToLeave(.openNote) else { return .failure(.leaveRefused) }
+        return store.legacySnapshot(noteID: noteID)
+            .flatMap(LegacyNoteMigration.plan)
+            .flatMap { LegacyNoteMigration.verify($0, roundTrip: NoteTextKitRoundTrip.document(afterRoundTrip:)) }
+            .flatMap { verified in
+                let tags = store.note(withID: noteID)?.tags ?? []
+                return store.commitMigration(verified).map { token in
+                    // Leaving was checked before the transaction. Do not ask
+                    // the legacy draft to leave again after committing it.
+                    let session = NoteSession(noteID: noteID, isPersisted: true,
+                        baseRevisionID: UUID(uuidString: token),
+                        engine: makeEngine(noteID: noteID, document: verified.plan.document,
+                                           readOnly: false, tags: tags), readOnlyReason: nil)
+                    session.baseTags = tags
+                    legacyNoteID = nil
+                    activate(session)
+                }
+            }
     }
 
     /// A new draft; the current one is preserved first.
@@ -2678,8 +2725,11 @@ extension NotesPageController {
 
     private func canReplayVersionRestore(undo: Bool) -> Bool {
         guard versionHistoryCommandTask == nil, !isVersionRestoreReplaying,
-              let step = versionRestoreUndo, step.isUndo == undo,
-              historyBrowser == nil, let current = active, current.noteID == step.noteID,
+              let step = versionRestoreUndo, step.isUndo == undo, historyBrowser == nil else { return false }
+        if active == nil {
+            return legacyNoteID == step.noteID && store.note(withID: step.noteID)?.revisionID == step.restoredRevisionID
+        }
+        guard let current = active, current.noteID == step.noteID,
               !current.isImporting, !current.isConflict, !current.isReadOnly,
               current.engine.activity == .idle,
               store.note(withID: step.noteID)?.revisionID == step.restoredRevisionID else { return false }
@@ -2755,6 +2805,8 @@ extension NotesPageController {
                 returned.engine.setTags(note.tags)
                 activate(returned)
             } else {
+                // A nil saved session denotes the legacy snapshot displaced
+                // by a restore; document snapshots always retain a session.
                 cache[undo.noteID] = nil
                 active = nil
                 legacyNoteID = undo.noteID
@@ -2828,7 +2880,7 @@ extension NotesPageController {
     @discardableResult
     func deleteNote(noteID: UUID) -> Bool {
         // Deleting the note on screen returns to it on Undo.
-        let reopen = active?.noteID == noteID && !isLibraryPresented
+        let reopen = (active?.noteID == noteID || legacyNoteID == noteID) && !isLibraryPresented
         guard removeNote(noteID: noteID) else { return false }
         undoRoute.record(deleteStep(noteID: noteID, reopen: reopen), in: .notesLibrary)
         return true
@@ -2885,7 +2937,10 @@ extension NotesPageController {
             return false
         }
         recency.removeAll { $0 == noteID }
-        if legacyNoteID == noteID { legacyNoteID = nil }
+        if legacyNoteID == noteID {
+            legacyNoteID = nil
+            if active == nil { isLibraryPresented = true }
+        }
         if lastViewedNoteID == noteID { defaults?.removeObject(forKey: Self.lastViewedKey) }
         if let session, active === session {
             active = nil

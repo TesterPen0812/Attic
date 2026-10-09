@@ -1,7 +1,355 @@
 import AppKit
+import CryptoKit
 import SwiftUI
+import SwiftData
 import XCTest
 @testable import Attic
+
+/// O-01/O-02: exercise the actual shell without ever ordering its window.
+@MainActor
+final class NotesEditorIsolationTests: XCTestCase {
+    private var controller: AtticPanelController!
+    private var panel: AtticPanel!
+    private var host: NSView!
+    private var defaults: UserDefaults!
+    private var suite: String!
+    private var oldFlag: Any?
+    private var settings: AppSettings!
+    private var ui: PanelUIState!
+    private var drafts: NoteDraftController!
+    private var notes: NoteStore!
+    private var legacyID: UUID!
+    private let gate = PersistenceGate()
+
+    override func setUp() async throws {
+        oldFlag = UserDefaults.standard.object(forKey: NotesEditorSetting.defaultsKey)
+        UserDefaults.standard.set(true, forKey: NotesEditorSetting.defaultsKey)
+        suite = "NotesEditorIsolationTests.\(UUID().uuidString)"
+        defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        let persistence = try PersistenceController.makeContainer(inMemory: true, cloudSyncEnabled: false)
+        notes = trackAttachmentReconciliation(of: NoteStore(container: persistence,
+            persist: { [gate] in try gate.save($0) }, attachmentFileStore: makeTestAttachmentFileStore()))
+        let note = try XCTUnwrap(notes.create(title: "Moodboard", body: "Warm greys, one accent, lots of air.\nThe palette and the type specimen are attached."))
+        legacyID = note.id
+        XCTAssertTrue(notes.setTags(["mood"], for: note))
+        let bitmap = try XCTUnwrap(NSBitmapImageRep(bitmapDataPlanes: nil, pixelsWide: 4, pixelsHigh: 4,
+            bitsPerSample: 8, samplesPerPixel: 4, hasAlpha: true, isPlanar: false,
+            colorSpaceName: .deviceRGB, bytesPerRow: 0, bitsPerPixel: 0))
+        let png = try XCTUnwrap(bitmap.representation(using: .png, properties: [:]))
+        for (index, name) in ["Palette.png", "Type specimen.txt"].enumerated() {
+            let payload = index == 0 ? png : Data("Type specimen".utf8)
+            let digest = SHA256.hash(data: payload).map { String(format: "%02x", $0) }.joined()
+            notes.modelContext.insert(NoteAttachment(noteID: note.id, originalFilename: name,
+                contentTypeIdentifier: index == 0 ? "public.png" : "public.plain-text", byteCount: Int64(payload.count),
+                sortIndex: Int64(index), contentDigest: digest, payload: payload))
+        }
+        try notes.modelContext.save()
+        notes.refresh()
+        await notes.waitForAttachmentReconciliation()
+        defaults.set(note.id.uuidString, forKey: "notes.lastViewedNote.v2")
+        drafts = NoteDraftController(noteStore: notes, sessionDefaults: defaults)
+        defaults.set(460.0, forKey: "panelHeight")
+        settings = AppSettings(defaults: defaults)
+        ui = PanelUIState()
+        ui.selectSection(.notes)
+        let before = Set(NSApplication.shared.windows.map(ObjectIdentifier.init))
+        controller = AtticPanelController(store: TaskStore(container: persistence), noteStore: notes,
+            canvasSession: CanvasSession(store: CanvasStore(container: persistence)), noteDraft: drafts,
+            settings: settings, uiState: ui)
+        panel = try XCTUnwrap(NSApplication.shared.windows.compactMap { $0 as? AtticPanel }
+            .first { !before.contains(ObjectIdentifier($0)) })
+        host = try XCTUnwrap((panel.contentView as? AtticPanelContentContainer)?.hostingView)
+        controller.preparePagesForReveal()
+        settle()
+    }
+
+    override func tearDown() async throws {
+        XCTAssertFalse(panel.isVisible)
+        panel.contentView = nil
+        panel.close()
+        controller = nil
+        host = nil
+        defaults.removePersistentDomain(forName: suite)
+        if let oldFlag { UserDefaults.standard.set(oldFlag, forKey: NotesEditorSetting.defaultsKey) }
+        else { UserDefaults.standard.removeObject(forKey: NotesEditorSetting.defaultsKey) }
+    }
+
+    private func settle(_ seconds: TimeInterval = 0.3) {
+        controller.preparePagesForReveal()
+        host.layoutSubtreeIfNeeded()
+        RunLoop.main.run(until: Date().addingTimeInterval(seconds))
+        host.layoutSubtreeIfNeeded()
+        XCTAssertFalse(panel.isVisible, "headless: no window may be ordered")
+    }
+
+    private func views(_ root: NSView) -> [NSView] {
+        [root] + root.subviews.flatMap(views)
+    }
+
+    private func assertIsolated(_ route: String, file: StaticString = #filePath, line: UInt = #line) {
+        let descendants = views(host)
+        XCTAssertFalse(descendants.contains { $0 is AttachmentAcceptingTextView }, "legacy text editor mounted: \(route)", file: file, line: line)
+        XCTAssertFalse(descendants.contains { $0 is NoteAttachmentDragView }, "legacy attachment handle mounted: \(route)", file: file, line: line)
+        let boundaries = descendants.compactMap { $0 as? NotesRenderBoundary.BoundaryView }
+        let identifiers = boundaries.map(\.boundaryID)
+        let rows = boundaries.filter { $0.boundaryID.contains("bottom-row") }
+        print("O01_ROUTE \(route): \(rows.map { ($0.boundaryID, $0.convert($0.bounds, to: host)) })")
+        for legacy in ["legacy-note-composer", "legacy-notes-bottom-row"] {
+            XCTAssertFalse(identifiers.contains(legacy), "legacy UI \(legacy): \(route)", file: file, line: line)
+        }
+        XCTAssertEqual(identifiers.filter { $0 == "notes-v2-bottom-row" }.count, 1, route, file: file, line: line)
+        XCTAssertEqual(descendants.filter { $0 is NoteEditorTextView }.count, 1, "new text editor: \(route)", file: file, line: line)
+    }
+
+    func testLegacyNoteNeverMountsOldComposerInsideNewPageOnAnyRoute() throws {
+        assertIsolated("launch restore")
+        XCTAssertTrue(drafts.pages.showLibrary())
+        settle()
+        XCTAssertTrue(drafts.pages.open(noteID: legacyID))
+        drafts.pages.dismissLibrary()
+        settle()
+        assertIsolated("All notes open")
+        for corner in [ScreenCorner.topLeft, .topRight] {
+            settings.corner = corner
+            settle()
+            XCTAssertTrue(drafts.pages.open(noteID: legacyID))
+            settle()
+            assertIsolated("corner \(corner)")
+        }
+        settings.panelCornerSize = 89
+        settle()
+        assertIsolated("corner size 89")
+        for width in [420.0, 320.0] {
+            settings.panelContentSize = width
+            settle()
+            assertIsolated("size \(width)")
+        }
+        for _ in 0..<2 {
+            ui.switchPage(to: .tasks, motion: PanelPageMotion.current(reduceMotion: false)) {}
+            settle(0.02)
+            ui.switchPage(to: .notes, motion: PanelPageMotion.current(reduceMotion: false)) {}
+            settle(0.02)
+            assertIsolated("mid-transition")
+            settle(0.8)
+            assertIsolated("page switch settled")
+        }
+        XCTAssertTrue(drafts.pages.newNote())
+        settle()
+        assertIsolated("new note")
+    }
+
+    func testFlagToggleAndAnExitCapturedBeforeToggleCannotReopenOldUI() throws {
+        UserDefaults.standard.set(false, forKey: NotesEditorSetting.defaultsKey)
+        let note = try XCTUnwrap(notes.note(withID: legacyID))
+        XCTAssertTrue(drafts.beginEditing(note))
+        ui.beginEditingNote(note)
+        settle()
+        XCTAssertTrue(views(host).contains { $0 is AttachmentAcceptingTextView })
+        let page = NotesPageHost(noteStore: notes, noteDraft: drafts, uiState: ui,
+            layout: PanelPageLayout(cornerSize: 89, panelSize: CGSize(width: 320, height: 460)), hasRestoredSession: true)
+        let exit = try XCTUnwrap(page.legacyExitAction)
+        UserDefaults.standard.set(true, forKey: NotesEditorSetting.defaultsKey)
+        settle()
+        assertIsolated("flag on")
+        exit()
+        settle()
+        XCTAssertEqual(drafts.activeNoteID, legacyID, "a stale exit cannot discard the original draft")
+        assertIsolated("stale exitToOldPage")
+        XCTAssertNil(page.legacyExitAction)
+    }
+
+    func testLegacyPreviewIsReadOnlyAndConversionIsExplicitVerifiedAndEditable() throws {
+        let note = try XCTUnwrap(notes.note(withID: legacyID))
+        let body = note.body
+        let rows = notes.attachments(for: legacyID).map(\.id)
+        let preview = try drafts.pages.legacyPreview(noteID: legacyID).get()
+        XCTAssertTrue(preview.isReadOnly)
+        XCTAssertEqual(preview.engine.tags, ["mood"])
+        XCTAssertEqual(preview.engine.document().title, "Moodboard")
+        XCTAssertEqual(Set(preview.engine.document().attachmentIDs), Set(rows))
+        XCTAssertEqual(note.contentFormat, 0, "previewing never converts")
+        XCTAssertNil(note.content)
+        try drafts.pages.convertLegacyForEditing(noteID: legacyID).get()
+        settle()
+        XCTAssertEqual(notes.note(withID: legacyID)?.body, body)
+        XCTAssertEqual(notes.attachments(for: legacyID).map(\.id), rows)
+        XCTAssertTrue(notes.versions(noteID: legacyID).contains { $0.reason == .beforeMigration && $0.body == body })
+        let session = try XCTUnwrap(drafts.pages.active)
+        XCTAssertFalse(session.isReadOnly)
+        XCTAssertEqual(Set(session.engine.document().attachmentIDs), Set(rows))
+        let text = try XCTUnwrap(session.engine.textView)
+        let location = (session.engine.textStorage.string as NSString).range(of: "Warm greys").location
+        text.insertText("Very ", replacementRange: NSRange(location: location, length: 0))
+        XCTAssertTrue(drafts.pages.save(session))
+        let saved = try XCTUnwrap(notes.loadDocument(noteID: legacyID)?.content.document)
+        XCTAssertTrue(saved.blocks.contains { $0.text.hasPrefix("Very Warm") })
+        assertIsolated("converted and edited")
+    }
+
+    func testRefusedConversionKeepsAllOriginalBytes() throws {
+        let refused = NoteItem(title: "Two\nlines", body: "Original")
+        notes.modelContext.insert(refused)
+        try notes.modelContext.save()
+        notes.refresh()
+        XCTAssertTrue(drafts.pages.open(noteID: refused.id))
+        guard case .failure(.titleHasLineBreak) = drafts.pages.legacyPreview(noteID: refused.id),
+              case .failure(.titleHasLineBreak) = drafts.pages.convertLegacyForEditing(noteID: refused.id)
+        else { return XCTFail("unsafe conversion must be refused") }
+        XCTAssertEqual(refused.contentFormat, 0)
+        XCTAssertNil(refused.content)
+        XCTAssertEqual(refused.title, "Two\nlines")
+        XCTAssertEqual(refused.body, "Original")
+        settle()
+        XCTAssertFalse(views(host).contains { $0 is AttachmentAcceptingTextView })
+    }
+
+    func testConversionSaveFailureRollsBackEveryReplicaAndRetryPreservesAttachments() throws {
+        let original = try XCTUnwrap(notes.note(withID: legacyID))
+        let replica = NoteItem(id: original.id, title: original.title, body: original.body,
+                              createdAt: original.createdAt, updatedAt: original.updatedAt)
+        replica.revisionID = original.revisionID
+        replica.revision = original.revision
+        notes.modelContext.insert(replica)
+        try notes.modelContext.save()
+        notes.refresh()
+        let attachments = Set(notes.attachments(for: legacyID).map(\.id))
+        gate.shouldFail = true
+        guard case .failure(.saveFailed) = drafts.pages.convertLegacyForEditing(noteID: legacyID)
+        else { return XCTFail("injected save failure must refuse conversion") }
+        for row in [original, replica] {
+            XCTAssertEqual(row.contentFormat, 0)
+            XCTAssertNil(row.content)
+            XCTAssertEqual(row.title, "Moodboard")
+        }
+        XCTAssertFalse(notes.versions(noteID: legacyID).contains { $0.reason == .beforeMigration })
+        settle()
+        assertIsolated("failed conversion")
+        gate.shouldFail = false
+        try drafts.pages.convertLegacyForEditing(noteID: legacyID).get()
+        let freshReplicas = try notes.modelContext.fetch(FetchDescriptor<NoteItem>()).filter { $0.id == legacyID }
+        XCTAssertEqual(freshReplicas.count, 2)
+        XCTAssertTrue(freshReplicas.allSatisfy { $0.contentFormat == 1 })
+        XCTAssertEqual(freshReplicas[0].content, freshReplicas[1].content)
+        XCTAssertEqual(Set(try XCTUnwrap(drafts.pages.active).engine.document().attachmentIDs), attachments)
+    }
+
+    func testLegacyPreviewRefreshesAttachmentsAddedAfterTheNoteOpens() async throws {
+        func renderedAttachmentIDs() throws -> Set<UUID> {
+            let text = try XCTUnwrap(views(host).compactMap { $0 as? NoteEditorTextView }.first)
+            return Set(NoteTextCodec.document(from: try XCTUnwrap(text.textStorage)).attachmentIDs)
+        }
+        XCTAssertEqual(try renderedAttachmentIDs().count, 2)
+        let existingTextView = try XCTUnwrap(views(host).compactMap { $0 as? NoteEditorTextView }.first)
+        notes.refresh()
+        settle()
+        XCTAssertTrue(views(host).compactMap { $0 as? NoteEditorTextView }.first === existingTextView,
+                      "unchanged metadata must retain the preview instead of re-reading payloads")
+        let payload = Data("Later attachment".utf8)
+        let added = NoteAttachment(noteID: legacyID, originalFilename: "Later.txt",
+            contentTypeIdentifier: "public.plain-text", byteCount: Int64(payload.count), sortIndex: 2,
+            contentDigest: SHA256.hash(data: payload).map { String(format: "%02x", $0) }.joined(), payload: payload)
+        notes.modelContext.insert(added)
+        try notes.modelContext.save()
+        notes.refresh()
+        await notes.waitForAttachmentReconciliation()
+        settle()
+        XCTAssertEqual(try renderedAttachmentIDs(), Set(notes.attachments(for: legacyID).map(\.id)),
+                       "async demo imports must appear even when the note's text revision did not change")
+        XCTAssertEqual(notes.note(withID: legacyID)?.contentFormat, 0)
+    }
+
+    func testConversionChecksLegacyLeaveOnlyBeforeCommit() throws {
+        var checks = 0
+        drafts.pages.leaveLegacyNote = { _ in checks += 1; return checks == 1 }
+        try drafts.pages.convertLegacyForEditing(noteID: legacyID).get()
+        XCTAssertEqual(checks, 1, "a committed conversion must not be reported as a refused second leave")
+        XCTAssertNil(drafts.pages.legacyNoteID)
+        XCTAssertEqual(drafts.pages.active?.noteID, legacyID)
+        XCTAssertEqual(notes.note(withID: legacyID)?.contentFormat, 1)
+    }
+
+    func testRefusedLegacyLeaveDoesNotConvertOrClaimTheNoteChanged() throws {
+        drafts.pages.leaveLegacyNote = { _ in false }
+        guard case .failure(.leaveRefused) = drafts.pages.convertLegacyForEditing(noteID: legacyID) else {
+            return XCTFail("a refused leave must report its own reason")
+        }
+        XCTAssertEqual(notes.note(withID: legacyID)?.contentFormat, 0)
+        XCTAssertFalse(notes.versions(noteID: legacyID).contains { $0.reason == .beforeMigration })
+        assertIsolated("refused conversion leave")
+    }
+
+    func testPreMigrationHistoryRestoreUndoRedoKeepsTheRightEditorAndAttachments() async throws {
+        try drafts.pages.convertLegacyForEditing(noteID: legacyID).get()
+        let original = try XCTUnwrap(drafts.pages.active)
+        let version = try XCTUnwrap(notes.versions(noteID: legacyID).first { $0.reason == .beforeMigration })
+        await XCTAssertTrueAsync(await drafts.pages.openHistoryDurably())
+        let browser = try XCTUnwrap(drafts.pages.historyBrowser)
+        let index = try XCTUnwrap(browser.entries.firstIndex { $0.id == version.id })
+        drafts.pages.selectHistoryVersion(index)
+        await XCTAssertTrueAsync(await drafts.pages.restoreHistoryVersionDurably())
+        for _ in 0..<2 {
+            settle(0.8)
+            XCTAssertEqual(notes.note(withID: legacyID)?.contentFormat, 0)
+            assertIsolated("pre-migration version restored")
+            await XCTAssertTrueAsync(await drafts.pages.undoVersionRestoreDurably(expectedID: drafts.pages.versionRestoreUndoID))
+            settle(0.8)
+            XCTAssertTrue(drafts.pages.active === original)
+            XCTAssertEqual(notes.note(withID: legacyID)?.contentFormat, 1)
+            assertIsolated("undo legacy restore")
+            await XCTAssertTrueAsync(await drafts.pages.redoVersionRestoreDurably())
+        }
+        settle(0.8)
+        XCTAssertEqual(notes.attachments(for: legacyID).count, 2)
+        assertIsolated("redo legacy restore")
+    }
+
+    func testNativeUndoAfterPreMigrationRestoreReturnsToTheEditableDocument() async throws {
+        try drafts.pages.convertLegacyForEditing(noteID: legacyID).get()
+        let original = try XCTUnwrap(drafts.pages.active)
+        let version = try XCTUnwrap(notes.versions(noteID: legacyID).first { $0.reason == .beforeMigration })
+        await XCTAssertTrueAsync(await drafts.pages.openHistoryDurably())
+        let browser = try XCTUnwrap(drafts.pages.historyBrowser)
+        drafts.pages.selectHistoryVersion(try XCTUnwrap(browser.entries.firstIndex { $0.id == version.id }))
+        await XCTAssertTrueAsync(await drafts.pages.restoreHistoryVersionDurably())
+        settle(0.8)
+        let text = try XCTUnwrap(views(host).compactMap { $0 as? NoteEditorTextView }.first)
+        let undoItem = NSMenuItem(title: "Undo", action: NSSelectorFromString("undo:"), keyEquivalent: "z")
+        XCTAssertTrue(text.validateUserInterfaceItem(undoItem), "native Undo must validate on the read-only preview")
+        text.undo(nil)
+        await drafts.pages.versionHistoryCommandTask?.value
+        XCTAssertTrue(drafts.pages.active === original, "native Undo must reach the durable version route from a legacy preview")
+        XCTAssertEqual(notes.note(withID: legacyID)?.contentFormat, 1)
+    }
+
+    func testEnablingNewEditorDuringAnOutgoingLegacyPageTransitionRemovesLegacyViews() throws {
+        UserDefaults.standard.set(false, forKey: NotesEditorSetting.defaultsKey)
+        XCTAssertTrue(drafts.beginEditing(try XCTUnwrap(notes.note(withID: legacyID))))
+        ui.beginEditingNote(try XCTUnwrap(notes.note(withID: legacyID)))
+        settle()
+        XCTAssertTrue(views(host).contains { $0 is AttachmentAcceptingTextView })
+        ui.switchPage(to: .tasks, motion: .current(reduceMotion: false)) {}
+        settle(0.02)
+        UserDefaults.standard.set(true, forKey: NotesEditorSetting.defaultsKey)
+        ui.switchPage(to: .notes, motion: .current(reduceMotion: false)) {}
+        settle(0.02)
+        assertIsolated("enabled during outgoing legacy transition")
+        settle(0.8)
+        assertIsolated("flag transition settled")
+    }
+
+    func testDeletingLegacyPreviewShowsLibraryAndUndoReopensIt() throws {
+        XCTAssertTrue(drafts.pages.deleteNote(noteID: legacyID))
+        settle()
+        XCTAssertTrue(drafts.pages.isLibraryPresented, "deleting a preview must leave a usable page")
+        XCTAssertTrue(drafts.pages.undoLibrary())
+        // The spring retains the outgoing new preview during the library
+        // slide; assert the settled tree, as with the page-switch routes.
+        settle(0.8)
+        XCTAssertFalse(drafts.pages.isLibraryPresented)
+        XCTAssertEqual(drafts.pages.legacyNoteID, legacyID)
+        assertIsolated("delete then Undo")
+    }
+}
 
 /// Notes v2, round 1: chrome B (32 pt corner controls 16 pt from the
 /// panel's edges, in Notes and Tasks) and the panel always fitting its

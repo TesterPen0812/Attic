@@ -1,7 +1,40 @@
 import SwiftUI
 
+#if DEBUG
+/// Native boundaries let off-screen tests inspect SwiftUI's mounted tree,
+/// where AppKit does not expose the accessibility tree of a hidden window.
+struct NotesRenderBoundary: NSViewRepresentable {
+    static let isTesting = NSClassFromString("XCTestCase") != nil
+    final class BoundaryView: NSView {
+        var boundaryID = ""
+    }
+    let identifier: String
+    func makeNSView(context: Context) -> BoundaryView {
+        let view = BoundaryView()
+        view.boundaryID = identifier
+        return view
+    }
+    func updateNSView(_ view: BoundaryView, context: Context) { view.boundaryID = identifier }
+}
+
+extension View {
+    @ViewBuilder func notesRenderBoundary(_ identifier: String) -> some View {
+        if NotesRenderBoundary.isTesting {
+            background(NotesRenderBoundary(identifier: identifier).allowsHitTesting(false))
+        } else {
+            self
+        }
+    }
+}
+#else
+extension View {
+    func notesRenderBoundary(_ identifier: String) -> some View { self }
+}
+#endif
+
 /// The one place the shell hosts the Notes page (rebuilt in phase 2).
 struct NotesPageHost: View {
+    @AppStorage(NotesEditorSetting.defaultsKey) private var newEditorEnabled = NotesEditorSetting.isPreviewIdentity(Bundle.main.bundleIdentifier)
     @ObservedObject var noteStore: NoteStore
     @ObservedObject var noteDraft: NoteDraftController
     @ObservedObject var uiState: PanelUIState
@@ -15,13 +48,13 @@ struct NotesPageHost: View {
     /// when the old page opened a note already in the new format (only the
     /// new editor may write it).
     private var usesNewEditor: Bool {
-        if NotesEditorSetting.isEnabled() { return true }
+        if newEditorEnabled { return true }
         guard uiState.isComposerPresented, let id = noteDraft.activeNoteID else { return false }
         return noteStore.note(withID: id)?.usesDocumentFormat ?? false
     }
 
-    private var legacyExitAction: (() -> Void)? {
-        guard !NotesEditorSetting.isEnabled() else { return nil }
+    var legacyExitAction: (() -> Void)? {
+        guard !newEditorEnabled else { return nil }
         return { exitToOldPage() }
     }
 
@@ -59,6 +92,8 @@ struct NotesPageHost: View {
     }
 
     private func exitToOldPage() {
+        // A closure captured before the flag changed cannot reopen the old UI.
+        guard !NotesEditorSetting.isEnabled() else { return }
         guard noteDraft.prepareToLeave(.exitToOldPage) else { return }
         noteDraft.discardDraft()
         uiState.endAdding()
