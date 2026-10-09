@@ -34,7 +34,10 @@ enum NoteTableText {
     }
 
     static func escape(_ text: String) -> String {
-        text.replacingOccurrences(of: "\\", with: "\\\\")
+        text.replacingOccurrences(of: "&", with: "&amp;")
+            .replacingOccurrences(of: "<", with: "&lt;")
+            .replacingOccurrences(of: ">", with: "&gt;")
+            .replacingOccurrences(of: "\\", with: "\\\\")
             .replacingOccurrences(of: "|", with: "\\|")
             .replacingOccurrences(of: "\r\n", with: "<br>")
             .replacingOccurrences(of: "\n", with: "<br>")
@@ -50,9 +53,9 @@ enum NoteTableText {
                 result.append(character)
             }
         }
-        return result.replacingOccurrences(of: "<br>", with: "\n")
+        return decodeEntities(result.replacingOccurrences(of: "<br>", with: "\n")
             .replacingOccurrences(of: "<br/>", with: "\n")
-            .replacingOccurrences(of: "<br />", with: "\n")
+            .replacingOccurrences(of: "<br />", with: "\n"))
     }
 
     /// The cells of one pipe-table line, or nil when it is not one.
@@ -269,7 +272,7 @@ enum NoteTableText {
 
     static func decodeEntities(_ text: String) -> String {
         guard text.contains("&") else { return text }
-        let named = ["&nbsp;": " ", "&amp;": "&", "&lt;": "<", "&gt;": ">", "&quot;": "\"", "&#39;": "'", "&apos;": "'"]
+        let named = [("&nbsp;", " "), ("&lt;", "<"), ("&gt;", ">"), ("&quot;", "\""), ("&#39;", "'"), ("&apos;", "'")]
         var result = text
         for (entity, value) in named { result = result.replacingOccurrences(of: entity, with: value) }
         // Numeric references.
@@ -278,6 +281,6 @@ enum NoteTableText {
             let value = body.hasPrefix("x") ? UInt32(body.dropFirst(), radix: 16) : UInt32(body)
             result.replaceSubrange(range, with: value.flatMap(UnicodeScalar.init).map { String(Character($0)) } ?? "")
         }
-        return result
+        return result.replacingOccurrences(of: "&amp;", with: "&")
     }
 }

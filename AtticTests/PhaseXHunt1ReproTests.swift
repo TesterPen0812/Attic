@@ -181,9 +181,8 @@ final class PhaseXHunt1ReproTests: XCTestCase {
 
     // Reproductions were run red before being marked by finding ID.
     func testH2_01MarkdownTableLiteralBreakTagSurvivesExportImport() throws {
-        let table = NoteTable(texts: [["Header"], ["literal <br> text"]])
+        let table = NoteTable(texts: [["Header"], ["literal <br> text"], ["<br/> <br /> &lt;br&gt; &amp; &#10;"], ["line\nbreak | slash\\"]])
         let imported = try XCTUnwrap(NoteTableText.parseMarkdown(NoteTableText.markdown(table)))
-        XCTExpectFailure("H2-01")
         XCTAssertEqual(imported.texts, table.texts)
     }
 
