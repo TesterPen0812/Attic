@@ -334,7 +334,6 @@ final class NoLegacyNotesTests: XCTestCase {
     }
 
     func testH4_01RetiredImportStateHasNoDeclaration() throws {
-        XCTExpectFailure("H4-01")
         let root = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
         let source = try String(contentsOf: root.appendingPathComponent("Attic/Models/NoteAttachment.swift"), encoding: .utf8)
         XCTAssertFalse(source.contains("enum AttachmentImportState"))
