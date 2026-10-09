@@ -517,7 +517,7 @@ private struct PageSwitchBoard: View {
     @Bindable var demo: AtticGalleryDemo
 
     var body: some View {
-        BoardHeading(title: "Page button (Phase 0's mode dock) · 36 × 36, opens to 96")
+        BoardHeading(title: "Page button (Chrome B) · 32 × 32, opens to 84")
         SpecimenRow {
             AtticSpecimen("Shut: the current page") {
                 AtticPageButton(items: AtticGallerySamples.pages, selection: .constant(0), pinnedOpen: false)

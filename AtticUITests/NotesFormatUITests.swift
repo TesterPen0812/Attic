@@ -199,7 +199,10 @@ final class NotesFormatUITests: XCTestCase {
         let row = element("notes-format-row")
         require(row, "the format row opens over the typed paragraph")
         if value == "current style" {
-            waitFor((element("notes-format-row-style").value as? String) == "Heading", "the typed paragraph is " + command)
+            // Heading and Quote are paragraph styles in the current Aa row;
+            // only list types have a separate on/off button.
+            let style = command == "quote" ? "Quote" : "Heading"
+            waitFor((element("notes-format-row-style").value as? String) == style, "the typed paragraph is " + command)
         } else {
             let option = row.descendants(matching: .any)["notes-format-" + command]
             require(option, "the row exposes the typed paragraph's list type")
@@ -212,7 +215,7 @@ final class NotesFormatUITests: XCTestCase {
     }
 
     func testSlashQuoteReturnThenTypingProducesQuote() {
-        checkSlashTyping("/quote", command: "quote", value: "on")
+        checkSlashTyping("/quote", command: "quote", value: "current style")
     }
 
     func testSlashListReturnThenTypingProducesList() {

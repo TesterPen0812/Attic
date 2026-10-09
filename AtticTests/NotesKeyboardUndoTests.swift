@@ -101,7 +101,8 @@ final class NotesKeyboardUndoTests: XCTestCase {
 
     /// One key, through AppKit's order. Returns who took it.
     @discardableResult
-    private func press(_ characters: String, keyCode: UInt16, _ flags: NSEvent.ModifierFlags = [], toTheLibrary: Bool = false, in harness: Harness) throws -> Route {
+    private func press(_ characters: String, keyCode: UInt16, _ flags: NSEvent.ModifierFlags = [], toTheLibrary: Bool = false,
+                       splitTextDispatchForRegression: Bool = false, in harness: Harness) throws -> Route {
         let window = harness.window
         let event = try XCTUnwrap(NSEvent.keyEvent(
             with: .keyDown, location: .zero, modifierFlags: flags,
@@ -114,10 +115,16 @@ final class NotesKeyboardUndoTests: XCTestCase {
         // history moved. (The keys that only the library uses are sent
         // without dispatching further, and their effects are asserted.)
         let before = libraryFingerprint(harness)
+        // Text Undo is a synchronous responder-chain action. Do not spin
+        // the run loop between a key and that action: a queued SwiftUI
+        // focus update can replace its responder during the artificial gap.
+        let input = window.firstResponder as? NSTextView
+        let textOwnsHistory = keyCode == 6 && (flags.contains(.shift)
+            ? input?.undoManager?.canRedo == true : input?.undoManager?.canUndo == true)
         NSApp.sendEvent(event)
         // The monitor now dispatches durable Undo/Redo asynchronously. Observe
         // its completion before inferring that the key fell through to AppKit.
-        spin(0.15)
+        if !textOwnsHistory || splitTextDispatchForRegression { spin(0.15) }
         defer { spin(0.15) }
         if toTheLibrary || libraryFingerprint(harness) != before { return .monitor }
         guard flags.contains(.command) else { return .nobody }
@@ -200,6 +207,7 @@ final class NotesKeyboardUndoTests: XCTestCase {
 
         harness.toasts.show("Note deleted", answersUndoKey: false) { fired += 1 }
         spin()
+        assertTextUndoReady(textView, in: harness)
         XCTAssertNotNil(harness.toasts.current)
         XCTAssertEqual(try press("z", keyCode: 6, .command, in: harness), .firstResponder)
         XCTAssertEqual(fired, 0, "the toast's action did not run")
@@ -211,9 +219,43 @@ final class NotesKeyboardUndoTests: XCTestCase {
         textView.insertText(" again", replacementRange: textView.selectedRange())
         harness.toasts.show("Task deleted") { fired += 1 }
         spin()
+        assertTextUndoReady(textView, in: harness)
         XCTAssertEqual(try press("z", keyCode: 6, .command, in: harness), .firstResponder)
         XCTAssertEqual(fired, 0, "no toast's action ran on ⌘Z")
         XCTAssertFalse(editorText(harness).contains("again"), "the text's own typing was undone")
+    }
+
+    private func assertTextUndoReady(_ view: NoteEditorTextView, in harness: Harness,
+                                     file: StaticString = #filePath, line: UInt = #line) {
+        let engine = harness.controller.active?.engine
+        print("A38_TOAST_UNDO currentView=\(engine?.textView === view) responder=\(harness.window.firstResponder === view) attached=\(view.engine != nil) marked=\(view.hasMarkedText()) activity=\(String(describing: engine?.activity)) canUndo=\(engine?.history.canUndo == true) history=\(engine?.history.log.suffix(4) ?? [])")
+        XCTAssertTrue(engine?.textView === view, "the live editor", file: file, line: line)
+        XCTAssertTrue(harness.window.firstResponder === view, "the editor has the key", file: file, line: line)
+        XCTAssertFalse(view.hasMarkedText(), "no unfinished composition", file: file, line: line)
+        XCTAssertEqual(engine?.activity, .idle, file: file, line: line)
+        XCTAssertTrue(engine?.history.canUndo == true, "a replayable typing step exists", file: file, line: line)
+    }
+
+    /// Deterministic reproducer of the former split dispatch: the queued
+    /// focus update used to run during `press`'s pre-action sleep, so the
+    /// empty text view answered `undo:` and the note kept "more".
+    func testUndoDispatchUsesTheKeyResponderBeforeQueuedFocusChanges() throws {
+        let (harness, ids) = try makeHarness(titles: ["Alpha"])
+        let editor = try openAndFocus(ids[0], in: harness)
+        editor.insertText(" more", replacementRange: editor.selectedRange())
+        harness.toasts.show("Note deleted", answersUndoKey: false) {}
+        spin()
+        assertTextUndoReady(editor, in: harness)
+        let other = NSTextView(frame: NSRect(x: 0, y: 0, width: 10, height: 10))
+        harness.host.addSubview(other)
+        DispatchQueue.main.async { harness.window.makeFirstResponder(other) }
+        XCTAssertEqual(try press("z", keyCode: 6, .command, splitTextDispatchForRegression: true, in: harness), .firstResponder)
+        XCTAssertTrue(editorText(harness).contains("more"), "positive control: the old split dispatch reproduces the failure")
+        XCTAssertTrue(harness.window.makeFirstResponder(editor))
+        DispatchQueue.main.async { harness.window.makeFirstResponder(other) }
+        XCTAssertEqual(try press("z", keyCode: 6, .command, in: harness), .firstResponder)
+        XCTAssertFalse(editorText(harness).contains("more"), "the key acts on the responder it reached")
+        XCTAssertTrue(harness.window.firstResponder === other, "the queued focus update still runs after dispatch")
     }
 
     // MARK: Search-field Undo while a delete toast is visible

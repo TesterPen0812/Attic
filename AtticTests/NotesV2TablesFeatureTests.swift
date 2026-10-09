@@ -268,6 +268,63 @@ final class NotesV2TablesFeatureTests: XCTestCase {
         XCTAssertTrue(engine.document().blocks.contains { $0.kind == .table })
     }
 
+    func testAppearanceChangeKeepsAFocusedTableBelowItsPrecedingText() throws {
+        let (engine, textView) = makeEngine(blocks(.blank()))
+        let view = try view(engine)
+        view.activate(P(row: 1, column: 1), caret: .end)
+        let before = view.convert(view.bounds, to: textView)
+        engine.update(design: AtticDesignContext(mode: .dark))
+        RunLoop.main.run(until: Date().addingTimeInterval(0.3))
+        let after = view.convert(view.bounds, to: textView)
+        XCTAssertEqual(after.minX, before.minX, accuracy: 0.5)
+        XCTAssertEqual(after.minY, before.minY, accuracy: 0.5)
+        XCTAssertTrue(textView.window?.firstResponder === view.editor)
+    }
+
+    func testTableControlsFollowTheAttachmentsFinalFrameAfterAWidthChange() throws {
+        let (engine, textView) = makeEngine(blocks(.blank()))
+        let view = try view(engine)
+        let chrome = NoteTableChrome(engine: engine, textView: textView, design: engine.style.design)
+        defer { chrome.invalidate() }
+        view.activate(P(row: 1, column: 1), caret: .end)
+        chrome.place()
+        // The note's layout callback has already run when TextKit resizes
+        // its attachment. Its own layout must update the overlay controls.
+        for width: CGFloat in [364, 264] {
+            view.setFrameSize(NSSize(width: width, height: view.bounds.height))
+            view.needsLayout = true
+            view.layoutSubtreeIfNeeded()
+            let rect = view.convert(view.bounds, to: textView)
+            XCTAssertEqual(chrome.addColumnChip.frame.midX,
+                           rect.maxX + AtticNoteTableMetrics.addChipGap + AtticNoteTableMetrics.addChipSize / 2,
+                           accuracy: 0.5)
+            XCTAssertEqual(chrome.addRowChip.frame.midX, rect.midX, accuracy: 0.5)
+        }
+    }
+
+    func testRedoOfDeletingTheLastRowOrColumnKeepsTypingInTheSurvivingCell() throws {
+        for deletingRow in [true, false] {
+            let (engine, textView) = makeEngine(blocks())
+            let attachment = try table(engine)
+            let view = try view(engine)
+            let original = P(row: attachment.table.rowCount - 1, column: attachment.table.columnCount - 1)
+            view.activate(original, caret: .end)
+            XCTAssertTrue(deletingRow ? engine.deleteRow(of: attachment, at: original.row)
+                                      : engine.deleteColumn(of: attachment, at: original.column))
+            let surviving = try XCTUnwrap(view.activeCell)
+            let text = attachment.table[surviving].text
+            XCTAssertTrue(engine.history.undo())
+            XCTAssertEqual(view.activeCell, original)
+            XCTAssertTrue(engine.history.redo())
+            settle(engine, textView)
+            XCTAssertEqual(view.activeCell, surviving)
+            XCTAssertTrue(textView.window?.firstResponder === view.editor)
+            XCTAssertEqual(view.editor.selectedRange(), NSRange(location: text.utf16.count, length: 0))
+            type(" continued", into: view.editor)
+            XCTAssertEqual(attachment.table[surviving].text, text + " continued")
+        }
+    }
+
     func testMarksApplyToACellsTextAndToEverySelectedCell() throws {
         let (engine, _) = makeEngine(blocks())
         let attachment = try table(engine)

@@ -5,6 +5,17 @@ Every later change is recorded here: what changed, why, and who asked.
 
 ## Phase 2
 
+### A41: integrated Notes v2 hands-on repairs (owner, 2026-10-09)
+
+Keep size C, A39 width re-layout and A38 behavior repairs together. Find takes
+keyboard focus before immediate typing; table deletion records the surviving
+cell for Redo. New and restyled tables complete viewport layout, and table
+controls follow the attachment's final frame. Scroll events over the grid or
+active cell reach the table's horizontal handler while vertical scrolling
+continues to the note. Empty mark lists skip UTF-16 validation allocation on
+save. Focused regressions cover these interactions; the subtask standalone
+oracle invokes the mounted accessibility command.
+
 ### A37: Dark's dark tint (owner, 2026-10-08, "Dark-mode glass keeps light text readable")
 - **`AtticSurfaceModel.darkTint`**: on Dark Glass and Frosted, black laid
   over the readable foundation and under the Tint, at the least opacity
@@ -19,6 +30,24 @@ Every later change is recorded here: what changed, why, and who asked.
   the surface draws and the edge veil fades into. Exactly the foundation
   when there is no dark tint, so Light, Solid and Reduce Transparency are
   unchanged.
+
+### A38: page-switch contrast on opaque surfaces (CI repair, 2026-10-09)
+
+The palette-colored selected page glyph missed the 3:1 icon floor on the
+opaque tinted chip, both on Solid and with Reduce Transparency. On opaque
+surfaces it uses the existing strong glyph ink, retaining the palette's
+selected fill and hairline. Translucent surfaces and Dark glass are unchanged.
+The focused pixel regression uses Electric Blue and Sea Glass at every Tint
+step, with and without Reduce Transparency; no contrast exception or threshold
+is added or relaxed.
+
+### A38: subtask drag reorder (functional audit repair, 2026-10-08)
+
+`AtticQuickLook` accepts a completion-group reorder callback. A subtask's title
+starts the drag, using the parent row's target and neighbor-offset calculations;
+checkboxes, actions and title editors retain their existing gestures. Release
+commits one move, cancellation settles back, and the lifted row uses the
+existing recessed card surface and radius.
 
 ### Notes v2, round 2: tables (owner, 2026-10-08, sheet 3 as drafted)
 - **`AtticNoteTableMetrics`**: cell padding 6 × 4 around the body's 14 / 21

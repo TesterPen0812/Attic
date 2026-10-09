@@ -296,9 +296,41 @@ final class TasksFollowupSubtaskMoveTests: XCTestCase {
                                                           in: commands, showActions: { shown += 1 }), .ignored)
         XCTAssertEqual(shown, 1)
 
-        // The menu's Make Standalone Task is the command itself.
-        let standalone = try XCTUnwrap(commands.first { $0.title == "Make Standalone Task" })
-        standalone.action()
+        // Invoke the mounted row's shared command, as VoiceOver does. The
+        // retained `hosted.page` is a value copy outside SwiftUI; commands
+        // from it do not have the live row-focus binding after promotion.
+        hosted.spin(0.2)
+        let enhanced = NSAccessibility.Attribute(rawValue: "AXEnhancedUserInterface")
+        let previous = NSApp.accessibilityAttributeValue(enhanced)
+        NSApp.accessibilitySetValue(true, forAttribute: enhanced)
+        defer { NSApp.accessibilitySetValue(previous, forAttribute: enhanced) }
+        var visited = Set<ObjectIdentifier>()
+        func standaloneAction(in object: AnyObject) -> NSAccessibilityCustomAction? {
+            guard visited.insert(ObjectIdentifier(object)).inserted,
+                  let element = object as? NSObject else { return nil }
+            // SwiftUI's accessibility nodes answer the AppKit selectors
+            // without declaring NSAccessibilityProtocol conformance.
+            func value(_ name: String) -> Any? {
+                let selector = NSSelectorFromString(name)
+                return element.responds(to: selector) ? element.perform(selector)?.takeUnretainedValue() : nil
+            }
+            let label = value("accessibilityLabel") as? String
+                ?? element.accessibilityAttributeValue(.description) as? String
+            let actions = value("accessibilityCustomActions") as? [NSAccessibilityCustomAction]
+            if label == subtask.title,
+               let action = actions?.first(where: { $0.name == "Make Standalone Task" }) {
+                return action
+            }
+            let children = value("accessibilityChildren") as? [Any]
+                ?? element.accessibilityAttributeValue(.children) as? [Any] ?? []
+            for child in children {
+                if let action = standaloneAction(in: child as AnyObject) { return action }
+            }
+            return nil
+        }
+        let standalone = try XCTUnwrap(standaloneAction(in: hosted.window))
+        let perform = try XCTUnwrap(standalone.handler)
+        XCTAssertTrue(perform())
         hosted.spin(0.2)
         XCTAssertNil(hosted.store.task(withID: subtask.id)?.parentID)
         XCTAssertTrue(hosted.model.rows(for: .now).contains { $0.id == subtask.id }, "a row of its own on Now")

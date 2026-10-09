@@ -279,6 +279,9 @@ final class NoteTableView: NSView {
     override func layout() {
         super.layout()
         scrollView.frame = bounds
+        // TextKit lays out attachment views after the note's layout callback.
+        // Place the grips and add chips again using the table's final frame.
+        engine?.onTableChromeChange?()
     }
 
     /// The model changed (typing, a structure change, an Undo, an agent).
@@ -639,6 +642,9 @@ final class NoteTableViewport: NSView, AtticHorizontalScrollOwner {
     override var isFlipped: Bool { true }
     override var isOpaque: Bool { false }
     var ownsHorizontalScrolling: Bool { table?.grid.scrolls ?? false }
+    override func scrollWheel(with event: NSEvent) {
+        table?.scrollWheel(with: event)
+    }
 }
 
 // MARK: - The grid (drawn) and its keys in cell-selection mode
@@ -651,13 +657,20 @@ final class NoteTableCanvas: NSView {
     override var isOpaque: Bool { false }
     override var acceptsFirstResponder: Bool { table?.cellSelection != nil }
     override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
+    override func scrollWheel(with event: NSEvent) {
+        table?.scrollWheel(with: event)
+    }
 
     override func draw(_ dirtyRect: NSRect) {
         guard let table, let attachment = table.attachment else { return }
         let editing = table.hasEditor && table.activeCell != nil && !table.editor.isHidden
         NoteTableDrawing.draw(table: attachment.table, layout: table.grid,
                               design: attachment.engine?.objectDesign ?? attachment.style.design, style: attachment.style,
-                              string: { table.cellString($0) }, skipping: editing ? table.activeCell : nil,
+                              string: { position in
+                                  let string = table.cellString(position)
+                                  attachment.engine?.find.decorate(string, tableID: attachment.objectID, cell: position)
+                                  return string
+                              }, skipping: editing ? table.activeCell : nil,
                               selection: table.cellSelection, active: editing ? table.activeCell : nil, dirty: dirtyRect)
     }
 

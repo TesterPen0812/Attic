@@ -95,6 +95,7 @@ final class NoteEditorEngine: NSObject, NSTextViewDelegate, NSTextStorageDelegat
     private(set) weak var textView: NoteEditorTextView?
     private(set) var scrollView: NSScrollView?
     private(set) var layoutManager: NSTextLayoutManager?
+    private(set) lazy var find = NoteFindController(engine: self)
 
     weak var imageProvider: NoteImageProviding?
     /// The text changed through editing, undo or an editor command.
@@ -280,6 +281,14 @@ final class NoteEditorEngine: NSObject, NSTextViewDelegate, NSTextStorageDelegat
         history.emptyParagraphState = { [weak self] in self?.emptyParagraphBlock() }
         history.onEmptyParagraphSnapshot = { [weak self] block in self?.restoreEmptyParagraph(block) }
         history.onTypingMarkSnapshot = { [weak self] kind, enabled in self?.setTypingMark(kind, enabled: enabled) }
+        history.onBoundaryTypingMarksSnapshot = { [weak self] marks in
+            guard let self, let textView = self.textView else { return }
+            var attributes = self.attributes(forParagraphAt: textView.selectedRange().location)
+            for (kind, value) in marks { attributes[.noteMark(kind)] = value }
+            attributes.merge(self.style.markedAttributes(marks: marks, baseFont: attributes[.font] as? NSFont ?? self.style.bodyFont)) { _, new in new }
+            textView.typingAttributes = attributes
+            self.updateTextChecking()
+        }
         history.canReplay = { [weak self] in self?.activity == .idle }
         history.onTableSnapshot = { [weak self] id, table, focus in
             self?.restoreTable(id: id, table: table, focus: focus) ?? false
@@ -393,7 +402,8 @@ final class NoteEditorEngine: NSObject, NSTextViewDelegate, NSTextStorageDelegat
         textView.engine = self
         configure(textView)
         textView.installHeadingsRotor()
-        let scrollView = NSScrollView(frame: textView.frame)
+        let scrollView = NoteDocumentScrollView(frame: textView.frame)
+        scrollView.scrollerStyle = .overlay
         scrollView.hasVerticalScroller = true
         scrollView.autohidesScrollers = true
         scrollView.drawsBackground = false
@@ -404,10 +414,12 @@ final class NoteEditorEngine: NSObject, NSTextViewDelegate, NSTextStorageDelegat
         self.textView = textView
         self.scrollView = scrollView
         history.textView = textView
+        find.attach()
         return (scrollView, textView)
     }
 
     func detachView() {
+        find.detach()
         let wasComposing = activity == .composing
         if let layoutManager { contentStorage.removeTextLayoutManager(layoutManager) }
         textView?.engine = nil
@@ -438,6 +450,7 @@ final class NoteEditorEngine: NSObject, NSTextViewDelegate, NSTextStorageDelegat
         textView.isAutomaticQuoteSubstitutionEnabled = true
         textView.isAutomaticDashSubstitutionEnabled = true
         textView.smartInsertDeleteEnabled = true
+        textView.proseTextCompletionEnabled = textView.isAutomaticTextCompletionEnabled
         textView.drawsBackground = false
         textView.textContainerInset = NSSize(width: 0, height: 8)
         textView.isVerticallyResizable = true
@@ -514,6 +527,14 @@ final class NoteEditorEngine: NSObject, NSTextViewDelegate, NSTextStorageDelegat
         renderObjects(in: NSRange(location: 0, length: textStorage.length), force: true)
         textView?.insertionPointColor = style.bodyColor
         invalidateLayout(NSRange(location: 0, length: textStorage.length))
+        // Restyling invalidates TextKit's attachment providers too. Finish
+        // their viewport layout before a focused table can be parked at a
+        // stale frame while the appearance or panel width changes.
+        textView?.needsLayout = true
+        DispatchQueue.main.async { [weak self] in
+            self?.textView?.layoutSubtreeIfNeeded()
+            self?.textView?.textLayoutManager?.textViewportLayoutController.layoutViewport()
+        }
     }
 
     /// Dates read as Today, Tomorrow or Yesterday: recomputed when the panel
@@ -1351,6 +1372,7 @@ final class NoteEditorEngine: NSObject, NSTextViewDelegate, NSTextStorageDelegat
 
     func textDidChange(_ notification: Notification) {
         history.didChange()
+        find.refresh()
         pendingImportEdit = nil
         refreshSlashAfterEdit()
         pendingLinkTarget = nil
@@ -1416,7 +1438,23 @@ final class NoteEditorEngine: NSObject, NSTextViewDelegate, NSTextStorageDelegat
             textView.typingAttributes = attributes
         }
         onSelectionChange?(selection)
+        updateTextChecking()
         onCaretChange?()
+    }
+
+    /// AppKit's substitutions are input settings, separate from spell
+    /// checking. Change them with the insertion point, before input begins.
+    func updateTextChecking() {
+        guard let textView else { return }
+        let literal = paragraphStyle(at: textView.selectedRange().location) == .mono
+            || textView.typingAttributes[.noteMark(.code)] != nil
+        textView.isContinuousSpellCheckingEnabled = !literal
+        textView.isAutomaticSpellingCorrectionEnabled = !literal
+        textView.isAutomaticTextReplacementEnabled = !literal
+        textView.isAutomaticQuoteSubstitutionEnabled = !literal
+        textView.isAutomaticDashSubstitutionEnabled = !literal
+        textView.isAutomaticTextCompletionEnabled = !literal && textView.proseTextCompletionEnabled
+        textView.smartInsertDeleteEnabled = !literal
     }
 
     /// The caret never rests between a checkbox and its line start: moving
@@ -1903,15 +1941,16 @@ final class NoteEditorEngine: NSObject, NSTextViewDelegate, NSTextStorageDelegat
            string.character(at: NSMaxRange(selection)) != 0x0A {
             result.append(NSAttributedString(string: "\n", attributes: style.bodyAttributes))
         }
+        let paste = pasteIncludingTail(result, replacing: selection)
         let candidateText = NSMutableAttributedString(attributedString: textStorage)
-        candidateText.replaceCharacters(in: selection, with: result)
+        candidateText.replaceCharacters(in: paste.range, with: paste.text)
         let candidate = NoteTextCodec.document(from: candidateText, template: template)
         if let failure = onFragmentAdmission?(candidate, prepared.copied) {
             onNotice?(failure)
             return false
         }
         for item in prepared.copied { staged[item.id] = item }
-        guard performEdit(selection, with: result, name: String(localized: "Paste"),
+        guard performEdit(paste.range, with: paste.text, name: String(localized: "Paste"),
                           selection: NSRange(location: selection.location + result.length, length: 0)) else {
             // Refused: the images copied for it are dropped, so no row appears.
             for item in prepared.copied { staged[item.id] = nil }
@@ -1943,7 +1982,8 @@ final class NoteEditorEngine: NSObject, NSTextViewDelegate, NSTextStorageDelegat
         }
         history.beginGroup()
         defer { history.endGroup() }
-        guard performEdit(selection, with: attributed, name: String(localized: "Paste"),
+        let paste = pasteIncludingTail(attributed, replacing: selection)
+        guard performEdit(paste.range, with: paste.text, name: String(localized: "Paste"),
                           selection: NSRange(location: selection.location + attributed.length, length: 0)) else { return false }
         if selection.location > titleParagraphRange.length {
             let detector = try? NSDataDetector(types: NSTextCheckingResult.CheckingType.link.rawValue)
@@ -1956,6 +1996,33 @@ final class NoteEditorEngine: NSObject, NSTextViewDelegate, NSTextStorageDelegat
             textView?.setSelectedRange(NSRange(location: selection.location + attributed.length, length: 0))
         }
         return true
+    }
+
+    /// A paragraph has one block style. A multiline paste splits the old
+    /// paragraph, so its surviving tail must take the final pasted line's
+    /// style in this same undoable edit. Inline marks and objects survive;
+    /// a block object on its own line is never swept into the replacement.
+    func pasteIncludingTail(_ pasted: NSAttributedString, replacing selection: NSRange) -> (range: NSRange, text: NSAttributedString) {
+        guard pasted.string.contains("\n"), NSMaxRange(selection) < textStorage.length,
+              !isBlockObject(at: NSMaxRange(selection)) else { return (selection, pasted) }
+        let tailStart = NSMaxRange(selection)
+        let line = lineRange(at: tailStart)
+        let stringBefore = textStorage.string as NSString
+        let separator = NSMaxRange(line) < textStorage.length && stringBefore.character(at: NSMaxRange(line)) == 0x0A ? 1 : 0
+        let tailLength = NSMaxRange(line) - tailStart + separator
+        guard tailLength > 0 else { return (selection, pasted) }
+        let tail = NSMutableAttributedString(attributedString: textStorage.attributedSubstring(from: NSRange(location: tailStart, length: tailLength)))
+        let string = pasted.string as NSString
+        let lastLine = string.range(of: "\n", options: .backwards).location + 1
+        let attributes = lastLine < pasted.length ? pasted.attributes(at: lastLine, effectiveRange: nil) : style.bodyAttributes
+        let all = NSRange(location: 0, length: tail.length)
+        for key in [NSAttributedString.Key.noteBlockStyle, .noteBlockLevel, .noteBlockIndent] {
+            tail.removeAttribute(key, range: all)
+            if let value = attributes[key] { tail.addAttribute(key, value: value, range: all) }
+        }
+        let result = NSMutableAttributedString(attributedString: pasted)
+        result.append(tail)
+        return (NSRange(location: selection.location, length: selection.length + tailLength), result)
     }
 
     // MARK: Accessibility
@@ -2720,6 +2787,7 @@ extension NoteEditorEngine {
         })
         attributes.merge(style.markedAttributes(marks: marks, baseFont: base[.font] as? NSFont ?? style.bodyFont)) { _, new in new }
         textView.typingAttributes = attributes
+        updateTextChecking()
     }
 
     private func removeLink(selection: NSRange) -> Bool {
@@ -2839,6 +2907,7 @@ extension NoteEditorEngine {
         if let level = value.level { typing[.noteBlockLevel] = level }
         if indent > 0 { typing[.noteBlockIndent] = indent }
         textView?.typingAttributes = typing
+        updateTextChecking()
         onTextChange?()
     }
 
@@ -3064,13 +3133,15 @@ extension NoteEditorEngine {
         let isBullet = paragraphStyle(at: line.location) == .bullet
         let choices: [(String, NoteParagraphStyle)] = [
             ("[ ] ", .checklist), ("[x] ", .checklist), ("[X] ", .checklist),
-            ("# ", .heading(2)), ("- ", .bullet), ("* ", .bullet), ("1. ", .number),
+            ("# ", .heading(2)), ("## ", .heading(2)), ("### ", .heading(3)),
+            ("``` ", .mono), ("[] ", .checklist),
+            ("- ", .bullet), ("* ", .bullet), ("1. ", .number),
             ("-[] ", .checklist), ("- [ ] ", .checklist), ("- [x] ", .checklist), ("> ", .quote)
         ]
         guard let (prefix, format) = choices.first(where: { value.hasPrefix($0.0) }),
               let textView, textView.selectedRange().location == line.location + (prefix as NSString).length else { return false }
-        if prefix.hasPrefix("[") && !isBullet { return false }
-        if prefix.hasPrefix("[") {
+        if prefix.hasPrefix("[") && prefix != "[] " && !isBullet { return false }
+        if prefix.hasPrefix("[") && prefix != "[] " {
             let checked = prefix != "[ ] "
             let box = NoteChecklistAttachment(isChecked: checked)
             renderer.apply(to: box, today: today)
@@ -3125,8 +3196,22 @@ extension NoteEditorEngine {
             for (marks, run) in runs {
                 replacement.addAttributes(style.markedAttributes(marks: marks, baseFont: font), range: run)
             }
-            return performEdit(range, with: replacement, name: "Format \(kind.rawValue.capitalized)",
-                               selection: NSRange(location: start + replacement.length, length: 0))
+            // The closing delimiter's attributes describe what follows the
+            // marked span. Selection updates during replacement otherwise
+            // inherit the just-marked character to the left of the caret.
+            var following = textStorage.attributes(at: NSMaxRange(range) - 1, effectiveRange: nil)
+            for key in NSAttributedString.Key.noteBookkeeping { following[key] = nil }
+            following[.attachment] = nil
+            let applied = performEdit(range, with: replacement, name: "Format \(kind.rawValue.capitalized)",
+                                      selection: NSRange(location: start + replacement.length, length: 0))
+            if applied {
+                history.setLastBoundaryTypingMarks(Dictionary(uniqueKeysWithValues: NoteMark.Kind.allCases.compactMap { mark in
+                    following[.noteMark(mark)].map { (mark, $0) }
+                }))
+                textView?.typingAttributes = following
+                updateTextChecking()
+            }
+            return applied
         }
         return false
     }
@@ -3322,7 +3407,8 @@ extension NoteEditorEngine {
         }
         let normalized = NoteTextCodec.document(from: result, firstBlockIsTitle: false)
         let attributed = NoteTextCodec.attributedString(from: normalized, style: style, firstBlockIsTitle: false)
-        return performEdit(selection, with: attributed, name: "Paste", selection: NSRange(location: selection.location + attributed.length, length: 0))
+        let paste = pasteIncludingTail(attributed, replacing: selection)
+        return performEdit(paste.range, with: paste.text, name: "Paste", selection: NSRange(location: selection.location + attributed.length, length: 0))
     }
 }
 

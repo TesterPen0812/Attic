@@ -583,6 +583,24 @@ final class NotesV2TablesTests: XCTestCase {
         XCTAssertGreaterThan(scrollView.contentView.bounds.minY, noteBefore, "up and down: the note")
     }
 
+    func testSidewaysScrollOverTheDrawnGridReachesTheTable() throws {
+        var wide = NoteTable(texts: [["First wide column", "Second wide column", "Third wide column", "Fourth wide column"]])
+        for index in wide.columns.indices { wide.columns[index].width = 168 }
+        let (engine, _) = makeEngine(ciaBlocks(wide))
+        let view = try tableView(engine)
+        XCTAssertGreaterThan(view.maxScrollOffset, 60)
+        let cg = try XCTUnwrap(CGEvent(scrollWheelEvent2Source: nil, units: .pixel, wheelCount: 2, wheel1: 0, wheel2: -30, wheel3: 0))
+        let event = try XCTUnwrap(NSEvent(cgEvent: cg))
+        view.canvas.scrollWheel(with: event)
+        spin(0.05)
+        view.canvas.scrollWheel(with: event)
+        XCTAssertEqual(view.scrollOffset, 60, accuracy: 0.5)
+        view.activate(NoteTable.Position(row: 0, column: 0), caret: .end)
+        let before = view.scrollOffset
+        view.editor.scrollWheel(with: event)
+        XCTAssertEqual(view.scrollOffset, min(before + 30, view.maxScrollOffset), accuracy: 0.5)
+    }
+
     /// Scrolling the note while a cell has the keyboard: the cell keeps it.
     func testScrollingTheTableOutOfViewKeepsTheCellsKeyboard() throws {
         var blocks = ciaBlocks()

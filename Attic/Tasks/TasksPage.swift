@@ -1566,7 +1566,13 @@ struct TasksPage: View {
                                             accessibilityLabel: String(localized: "New subtask of \(row.model.title)"),
                                             placeholder: String(localized: "Add subtask…"))
                         : nil,
-                    popover: movePopover(parentID: id, open: live.metaPopover)
+                    popover: movePopover(parentID: id, open: live.metaPopover),
+                    onReorder: { subtaskID, index, group in
+                        let move = { model.reorderSubtask(subtaskID, toGroupIndex: index, group: group) }
+                        if model.report(move(), on: id, retry: move).isApplied {
+                            AtticHaptics.tick(enabled: design.hapticsEnabled)
+                        }
+                    }
                 )
                 // It opens from under its row (a fade in Calm).
                 .transition(AtticMotionPreset.expand.transition(reduceMotion: design.reduceMotion, edge: nil, anchor: .top))

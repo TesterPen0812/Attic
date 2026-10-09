@@ -91,7 +91,7 @@ final class DeepReviewFixTests: XCTestCase {
         XCTAssertFalse(hosted.model.rows(for: .now).isEmpty)
     }
 
-    // MARK: - A15 (was D1): rows pass faintly under every visible control
+    // MARK: - Revised scroll-under: full ink under glass, faint at labels and edges
 
     func testTheViewportTracksFindTheStripSelectionAndPasteOffer() throws {
         useCleanCut()
@@ -112,8 +112,8 @@ final class DeepReviewFixTests: XCTestCase {
         XCTAssertEqual(resting.minY, 0, accuracy: 0.5)
         XCTAssertEqual(resting.maxY, hosted.height, accuracy: 0.5)
         XCTAssertEqual(list.contentInsets.top, TasksViewport.listTop(tabsTop: tabsTop), accuracy: 0.5)
-        // Clean cut keeps a full viewport. The A15 mask fades row ink under
-        // the controls instead of resizing the native scroll view. Compare two
+        // Clean cut keeps a full viewport. Glass is unfaded; plain labels
+        // and the outer edges have short fades. Compare two
         // actual scroll positions in each state, with visible body movement
         // as a positive control so an empty capture cannot pass.
         func assertClear(bottom: CGFloat, state: String, negativeControl: Bool = false) throws {
@@ -127,7 +127,17 @@ final class DeepReviewFixTests: XCTestCase {
                 content.cacheDisplay(in: content.bounds, to: image)
                 return image
             }
-            var first = try capture(260), second = try capture(1_300)
+            // The long demo has only fourteen added errands. 1,300 scrolls
+            // past its end and captures an empty list, hiding edge regressions.
+            // These two positions keep real row ink through the viewport.
+            var first = try capture(260), second = try capture(200)
+            if state == "idle", ProcessInfo.processInfo.environment["ATTIC_A38_EDGE_OUTPUT"] != nil {
+                let folder = FileManager.default.temporaryDirectory.appendingPathComponent("attic-a38-edges-\(UUID().uuidString)")
+                try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+                try first.representation(using: .png, properties: [:])?.write(to: folder.appendingPathComponent("edge-first.png"))
+                try second.representation(using: .png, properties: [:])?.write(to: folder.appendingPathComponent("edge-second.png"))
+                print("A38_EDGE_ARTIFACTS \(folder.path)")
+            }
             let scale = CGFloat(first.pixelsWide) / content.bounds.width
             func difference(top: CGFloat, bottom: CGFloat, threshold: CGFloat = 0.03) -> Double {
                 var changed = 0, total = 0
@@ -147,25 +157,53 @@ final class DeepReviewFixTests: XCTestCase {
                 }
                 return total == 0 ? 1 : Double(changed) / Double(total)
             }
-            XCTAssertGreaterThan(difference(top: TasksViewport.listTop(tabsTop: tabsTop) + 30, bottom: bottom - 30), 0.02,
+            let bodyTop = TasksViewport.listTop(tabsTop: tabsTop) + 30, bodyBottom = bottom - 30
+            func bodyInk(_ image: NSBitmapImageRep) -> Double {
+                var ink = 0, total = 0
+                for y in Int(bodyTop * scale)..<Int(bodyBottom * scale) {
+                    for x in 0..<image.pixelsWide {
+                        guard let c = image.colorAt(x: x, y: y)?.usingColorSpace(.sRGB) else { continue }
+                        total += 1
+                        if max(1 - c.redComponent, 1 - c.greenComponent, 1 - c.blueComponent) * c.alphaComponent > 0.35 { ink += 1 }
+                    }
+                }
+                return total == 0 ? 0 : Double(ink) / Double(total)
+            }
+            for image in [first, second] {
+                XCTAssertGreaterThan(bodyInk(image), 0.01, "\(state): each capture contains real body ink; neither may be past the list's end")
+            }
+            XCTAssertGreaterThan(difference(top: bodyTop, bottom: bodyBottom), 0.02,
                                  "\(state): rows actually moved between captures")
-            // A15 (owner, 2026-10-04): rows pass under the header, the
-            // tabs and the bottom controls, faintly: some ink changes there,
-            // but never at a readable strength.
+            // Owner revision, 2026-10-06: full ink under glass; only
+            // the plain tabs line and the panel's own outer edges fade.
             let labelsBottom = tabsTop + AtticLayout.pageTabsHeight
-            XCTAssertGreaterThan(difference(top: 0, bottom: labelsBottom), 0.0005,
-                                 "\(state): rows pass faintly under the header and tabs")
-            XCTAssertLessThan(difference(top: 0, bottom: labelsBottom, threshold: 0.35), 0.002,
-                              "\(state): never readable under the header and tabs")
-            // The bottom controls have their own lower bound (A17): a clip
-            // there would pass every "never readable" check. (This capture
-            // draws no glass backdrop and shows no row ink under the tabs
-            // themselves; `ScrollEdgeUITests` checks the tabs and the pills
-            // in window-server pixels.)
-            XCTAssertGreaterThan(difference(top: bottom, bottom: hosted.height), 0.0005,
-                                 "\(state): rows pass faintly under the bottom controls")
-            XCTAssertLessThan(difference(top: bottom, bottom: hosted.height, threshold: 0.35), 0.002,
-                              "\(state): never readable under the bottom controls")
+            let glassTop = layout.scrollEdgeFadeTop
+            let glassBottom = hosted.height - bottomInset - AtticControlSize.panelButton.height / 2
+            XCTAssertGreaterThan(difference(top: glassTop, bottom: tabsTop - AtticScrollUnderFade.textRamp, threshold: 0.35), 0.002,
+                                 "\(state): readable ink under header glass")
+            XCTAssertGreaterThan(difference(top: bottom, bottom: glassBottom, threshold: 0.35), 0.002,
+                                 "\(state): readable ink under bottom glass")
+            XCTAssertGreaterThan(difference(top: tabsTop, bottom: labelsBottom), 0.0005,
+                                 "\(state): ink remains faintly visible behind plain tabs")
+            XCTAssertLessThan(difference(top: tabsTop, bottom: labelsBottom, threshold: 0.35), 0.002,
+                              "\(state): no readable ink behind plain tabs")
+            // A narrow edge can fall between glyph lines at a single scroll
+            // position. Sweep a row pitch: at least one phase must show faint
+            // moving ink, and none may show text-strength ink.
+            let edgeBands = [(CGFloat(0), glassTop / 4),
+                             (hosted.height - (hosted.height - glassBottom) / 4, hosted.height)]
+            var faintEdges = [Double](repeating: 0, count: edgeBands.count)
+            for phase in [CGFloat(0), AtticLayout.rowPitch / 3, AtticLayout.rowPitch * 2 / 3] {
+                if phase > 0 { first = try capture(260 - phase); second = try capture(200 - phase) }
+                for (index, band) in edgeBands.enumerated() {
+                    faintEdges[index] = max(faintEdges[index], difference(top: band.0, bottom: band.1))
+                    XCTAssertLessThan(difference(top: band.0, bottom: band.1, threshold: 0.35), 0.002,
+                                      "\(state): edge \(index) dissolves ink at phase \(phase)")
+                }
+            }
+            for (index, faint) in faintEdges.enumerated() {
+                XCTAssertGreaterThan(faint, 0.0005, "\(state): faint moving ink survives at edge \(index), rather than clipping")
+            }
             if negativeControl {
                 // Negative control: the same bands clipped (covered by an
                 // opaque view) fail both lower bounds, so they can fail.
@@ -177,9 +215,13 @@ final class DeepReviewFixTests: XCTestCase {
                 }
                 defer { covers.forEach { $0.removeFromSuperview() } }
                 first = try capture(260)
-                second = try capture(1_300)
-                XCTAssertLessThan(difference(top: 0, bottom: labelsBottom), 0.0005, "\(state): clipped header and tabs fail the lower bound")
-                XCTAssertLessThan(difference(top: bottom, bottom: hosted.height), 0.0005, "\(state): clipped bottom fails the lower bound")
+                second = try capture(200)
+                XCTAssertLessThan(difference(top: glassTop, bottom: tabsTop - AtticScrollUnderFade.textRamp, threshold: 0.35), 0.002, "\(state): clipping fails the readable-glass oracle")
+                XCTAssertLessThan(difference(top: bottom, bottom: glassBottom, threshold: 0.35), 0.002, "\(state): clipping fails the readable-bottom oracle")
+                XCTAssertLessThan(difference(top: tabsTop, bottom: labelsBottom), 0.0005, "\(state): clipping fails the faint-label oracle")
+                XCTAssertLessThan(difference(top: 0, bottom: glassTop / 4), 0.0005, "\(state): clipping fails the faint-top-edge oracle")
+                XCTAssertLessThan(difference(top: hosted.height - (hosted.height - glassBottom) / 4,
+                                             bottom: hosted.height), 0.0005, "\(state): clipping fails the faint-bottom-edge oracle")
             }
             XCTAssertTrue(ScrollEdgeTests.pockets(in: list).isEmpty, "\(state): no native edge")
             XCTAssertEqual(frame(), resting, "\(state): controls change the mask, not the viewport")

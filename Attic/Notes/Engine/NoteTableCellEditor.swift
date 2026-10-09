@@ -15,6 +15,9 @@ import QuartzCore
 @MainActor
 final class NoteTableCellEditor: NSTextView, NSTextViewDelegate {
     weak var table: NoteTableView?
+    override func scrollWheel(with event: NSEvent) {
+        table?.scrollWheel(with: event)
+    }
     /// True while the editor's own text is being written to the model (the
     /// model's echo must not reload the editor).
     var isApplyingOwnEdit = false
@@ -190,6 +193,7 @@ final class NoteTableCellEditor: NSTextView, NSTextViewDelegate {
     // MARK: Keys
 
     override func keyDown(with event: NSEvent) {
+        if table?.engine?.find.handleKey(event) == true { return }
         if let table, let engine = table.engine, !hasMarkedText(), engine.handleTableShortcut(event, in: table) { return }
         let typing = event.charactersIgnoringModifiers?.isEmpty == false
             && !event.modifierFlags.contains(.command) && !event.modifierFlags.contains(.control)

@@ -136,6 +136,9 @@ enum NoteContentCodec {
     }
 
     private static func validMarks(_ marks: [NoteMark], in text: String) -> Bool {
+        // Ordinary paragraphs (and empty table cells) have no mark ranges
+        // to validate. Avoid allocating their UTF-16 buffers on every save.
+        guard !marks.isEmpty else { return true }
         let units = Array(text.utf16)
         return marks.allSatisfy { mark in
             mark.offset >= 0 && mark.length > 0 && mark.offset <= units.count &&

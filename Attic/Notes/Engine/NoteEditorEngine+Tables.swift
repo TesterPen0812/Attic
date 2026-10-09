@@ -96,6 +96,7 @@ extension NoteEditorEngine {
         onTableChromeChange?()
         onTableFocusChange?()
         onCaretChange?()
+        find.updateHighlights()
     }
 
     /// After one of the page's controls (Aa's row, a grip's menu): the
@@ -156,6 +157,7 @@ extension NoteEditorEngine {
     /// The grid changed without a character edit: the saved document, the
     /// table's line and the page's chrome follow.
     func tableContentDidChange(_ attachment: NoteTableAttachment) {
+        find.refresh()
         invalidateDocumentCache()
         onTextChange?()
         onTableChromeChange?()
@@ -206,21 +208,29 @@ extension NoteEditorEngine {
 
     @discardableResult
     func deleteRow(of attachment: NoteTableAttachment, at index: Int) -> Bool {
+        guard attachment.table.rows.indices.contains(index) else { return false }
         guard attachment.table.rowCount > 1 else { return deleteTable(attachment) }
         let column = attachment.hostedView?.activeCell?.column ?? 0
-        guard changeTable(attachment, name: String(localized: "Delete Row"), { $0.removeRow(at: index) }) else { return false }
-        let row = min(index, attachment.table.rowCount - 1)
-        attachment.hostedView?.activate(NoteTable.Position(row: row, column: column), caret: .end)
+        let focus = NoteTable.Position(row: min(index, attachment.table.rowCount - 2), column: column)
+        let survivingRow = index == attachment.table.rowCount - 1 ? index - 1 : index + 1
+        let selection = NSRange(location: attachment.table[NoteTable.Position(row: survivingRow, column: column)].text.utf16.count, length: 0)
+        guard changeTable(attachment, name: String(localized: "Delete Row"),
+                          after: NoteTableFocus(position: focus, selection: selection), { $0.removeRow(at: index) }) else { return false }
+        attachment.hostedView?.activate(focus, caret: .end)
         return true
     }
 
     @discardableResult
     func deleteColumn(of attachment: NoteTableAttachment, at index: Int) -> Bool {
+        guard attachment.table.columns.indices.contains(index) else { return false }
         guard attachment.table.columnCount > 1 else { return deleteTable(attachment) }
         let row = attachment.hostedView?.activeCell?.row ?? 0
-        guard changeTable(attachment, name: String(localized: "Delete Column"), { $0.removeColumn(at: index) }) else { return false }
-        let column = min(index, attachment.table.columnCount - 1)
-        attachment.hostedView?.activate(NoteTable.Position(row: row, column: column), caret: .end)
+        let focus = NoteTable.Position(row: row, column: min(index, attachment.table.columnCount - 2))
+        let survivingColumn = index == attachment.table.columnCount - 1 ? index - 1 : index + 1
+        let selection = NSRange(location: attachment.table[NoteTable.Position(row: row, column: survivingColumn)].text.utf16.count, length: 0)
+        guard changeTable(attachment, name: String(localized: "Delete Column"),
+                          after: NoteTableFocus(position: focus, selection: selection), { $0.removeColumn(at: index) }) else { return false }
+        attachment.hostedView?.activate(focus, caret: .end)
         return true
     }
 
@@ -570,6 +580,7 @@ extension NoteEditorEngine {
         if let layoutManager, let textRange = textRange(for: range) { layoutManager.ensureLayout(for: textRange) }
         textView?.scrollRangeToVisible(range)
         textView?.layoutSubtreeIfNeeded()
+        textView?.textLayoutManager?.textViewportLayoutController.layoutViewport()
         let view = attachment.tableView
         if view.window == nil {
             // TextKit hosts the view on its next pass.

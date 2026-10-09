@@ -40,6 +40,9 @@ concurrency:
   cancel-in-progress: true
 
 env:
+  # Script-driven builds use the same wrapper as explicit xcodebuild steps.
+  XCODEBUILD: ${{ github.workspace }}/Scripts/xcodebuild_locked.sh
+  ATTIC_XCODEBUILD_COMMAND: ${{ github.workspace }}/Scripts/xcodebuild_locked.sh
   LUNA_REPAIRED_COMMIT: 8063d92c995015b77a0493723270b6c183adb784
   BUNDLE_FROZEN: "true"
   PERF_REFERENCE_COMMIT: fb450820f5ccab289a050de3cf0695958786a465
@@ -79,10 +82,10 @@ jobs:
 
       - name: Verify Xcode 26 toolchain
         run: |
-          xcodebuild -version
+          Scripts/xcodebuild_locked.sh -version
           sdk_version="$(xcrun --sdk macosx --show-sdk-version)"
           echo "macOS SDK $sdk_version"
-          xcodebuild -version | head -n 1 | grep -Eq '^Xcode 26\.'
+          Scripts/xcodebuild_locked.sh -version | head -n 1 | grep -Eq '^Xcode 26\.'
           test "${sdk_version%%.*}" = 26
 
       - name: Set up Ruby
@@ -124,7 +127,7 @@ jobs:
         id: mac_build
         continue-on-error: true
         run: |
-          xcodebuild \
+          Scripts/xcodebuild_locked.sh \
             -project Attic.xcodeproj \
             -scheme Attic \
             -configuration Local \
@@ -137,7 +140,7 @@ jobs:
         id: strict_build
         continue-on-error: true
         run: |
-          xcodebuild \
+          Scripts/xcodebuild_locked.sh \
             -project Attic.xcodeproj \
             -scheme Attic \
             -configuration Local \
@@ -160,7 +163,7 @@ jobs:
           # it: Tab-order tests expect rows and fields, not every button.
           # Full Keyboard Access has its own step below.
           rm -rf "$RUNNER_TEMP/AtticUnitTests.xcresult"
-          xcodebuild \
+          Scripts/xcodebuild_locked.sh \
             -project Attic.xcodeproj \
             -scheme Attic \
             -configuration Local \
@@ -193,7 +196,7 @@ jobs:
           fi
           defaults write -g AppleKeyboardUIMode -int 3
           rm -rf "$RUNNER_TEMP/AtticFullKeyboardAccessTests.xcresult"
-          xcodebuild \
+          Scripts/xcodebuild_locked.sh \
             -project Attic.xcodeproj \
             -scheme Attic \
             -configuration Local \
@@ -261,7 +264,7 @@ jobs:
         timeout-minutes: 45
         run: |
           rm -rf "$RUNNER_TEMP/AtticPerformanceUITests.xcresult"
-          xcodebuild \
+          Scripts/xcodebuild_locked.sh \
             -project Attic.xcodeproj \
             -scheme AtticUI \
             -configuration Local \
@@ -290,7 +293,7 @@ jobs:
         id: analyzer
         continue-on-error: true
         run: |
-          xcodebuild \
+          Scripts/xcodebuild_locked.sh \
             -project Attic.xcodeproj \
             -scheme Attic \
             -configuration Local \
@@ -386,7 +389,7 @@ jobs:
             shard_flags+=(-only-testing:AtticUITests)
           fi
           ATTIC_VISUAL_UAT_DIRECTORY="$RUNNER_TEMP/attic-visual-uat" \
-          xcodebuild \
+          Scripts/xcodebuild_locked.sh \
             -project Attic.xcodeproj \
             -scheme AtticUI \
             -configuration Local \
@@ -479,14 +482,20 @@ jobs:
           builds=(baseline candidate donebase integrationbase)
           if [ "${{ inputs.headless_costs }}" = true ]; then builds=(candidate integrationbase); fi
           for name in "${builds[@]}"; do
+            fixture_flags=()
             source="$GITHUB_WORKSPACE"
             if [ "$name" = baseline ]; then source="$RUNNER_TEMP/AtticCostBaseline"; fi
             if [ "$name" = donebase ]; then source="$RUNNER_TEMP/AtticDoneSearchBaseline"; fi
-            if [ "$name" = integrationbase ]; then source="$RUNNER_TEMP/AtticIntegrationCostReference"; fi
+            if [ "$name" = integrationbase ]; then
+              source="$RUNNER_TEMP/AtticIntegrationCostReference"
+              # This pre-table app runs identical cost fixtures; the new
+              # table-only functional test belongs to the candidate suite.
+              fixture_flags=('OTHER_SWIFT_FLAGS=$(inherited) -DATTIC_COST_REFERENCE_HOST')
+            fi
             # shellcheck disable=SC2086
             (cd "$source" && "$GITHUB_WORKSPACE/Scripts/xcodebuild_locked.sh" build-for-testing \
               -project Attic.xcodeproj -scheme Attic -configuration Local -destination 'platform=macOS' \
-              -derivedDataPath "$RUNNER_TEMP/AtticCost-$name" $COST_FLAGS) \
+              -derivedDataPath "$RUNNER_TEMP/AtticCost-$name" $COST_FLAGS "${fixture_flags[@]}") \
               > "$RUNNER_TEMP/AtticCosts/$name-build.log" 2>&1 \
               || { tail -n 80 "$RUNNER_TEMP/AtticCosts/$name-build.log"; exit 1; }
           done
@@ -640,8 +649,8 @@ jobs:
         id: perf_xcode
         continue-on-error: true
         run: |
-          xcodebuild -version
-          xcodebuild -version | head -n 1 | grep -Eq '^Xcode 26\.'
+          Scripts/xcodebuild_locked.sh -version
+          Scripts/xcodebuild_locked.sh -version | head -n 1 | grep -Eq '^Xcode 26\.'
 
       - name: Record interleaved reference and candidate samples
         id: perf_probe
@@ -788,10 +797,10 @@ jobs:
 
       - name: Verify Xcode 26 toolchain
         run: |
-          xcodebuild -version
+          Scripts/xcodebuild_locked.sh -version
           sdk_version="$(xcrun --sdk macosx --show-sdk-version)"
           echo "macOS SDK $sdk_version"
-          xcodebuild -version | head -n 1 | grep -Eq '^Xcode 26\.'
+          Scripts/xcodebuild_locked.sh -version | head -n 1 | grep -Eq '^Xcode 26\.'
           test "${sdk_version%%.*}" = 26
 
       - name: Set up Ruby
@@ -840,7 +849,7 @@ jobs:
         id: iphone_build
         continue-on-error: true
         run: |
-          xcodebuild \
+          Scripts/xcodebuild_locked.sh \
             -project Attic.xcodeproj \
             -scheme AtticMobile \
             -configuration Local \

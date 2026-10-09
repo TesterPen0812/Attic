@@ -63,6 +63,7 @@ final class NotesPageControllerTests: XCTestCase {
         XCTAssertTrue(session.isPersisted)
     }
 
+    #if !ATTIC_COST_REFERENCE_HOST
     /// Notes v2 tables: a cell edit (no character of the note changes) is
     /// an edit like any other: saved, journaled, and recovered after a
     /// failed save and a restart.
@@ -92,6 +93,7 @@ final class NotesPageControllerTests: XCTestCase {
         XCTAssertEqual(recovered.engine.document().blocks.first { $0.kind == .table }?.table?[NoteTable.Position(row: 1, column: 1)].text,
                        "Encrypted")
     }
+    #endif
 
     func testInvalidCheckpointNeverWritesEmptyBytesOrClaimsRecoveryAfterRestart() async throws {
         let journal = NoteDraftJournal(directory: directory)
@@ -2954,4 +2956,40 @@ private actor DeadlineWriteBarrier {
         await withCheckedContinuation { continuation = $0 }
     }
     func release() { continuation?.resume(); continuation = nil }
+}
+
+extension NotesPageControllerTests {
+    func testA38PasteTailAgreesLiveSavedReopenedAndExportedWithAttachments() async throws {
+        let image = try realImage()
+        var heading = NoteBlock.text("Prefix Tail \u{FFFC}", style: "heading")
+        heading.level = 2
+        heading.inlines = [NoteInline(id: UUID(), kind: .date(NoteDay(year: 2026, month: 10, day: 8)!))]
+        let original = NoteDocument(blocks: [.text("Paste"), heading,
+            .image(attachmentID: image.id, pixelWidth: 2, pixelHeight: 2), .text("Neighbor", style: "quote")])
+        let id = UUID()
+        guard case .success = store.createDocumentNote(id: id, document: original, staged: [image]) else { return XCTFail("fixture") }
+        let controller = makeController()
+        await controller.startAndWait()
+        await XCTAssertTrueAsync(await controller.openDurably(noteID: id))
+        let session = try XCTUnwrap(controller.active)
+        _ = session.engine.makeView()
+        let before = session.engine.document()
+        XCTAssertTrue(session.engine.pastePlainText("one\ntwo\nthree", at: NSRange(location: 13, length: 0)))
+        let live = session.engine.document()
+        XCTAssertNil(live.blocks[3].style, "the old tail joins the last Body paragraph")
+        XCTAssertEqual(live.blocks[3].inlines, heading.inlines)
+        XCTAssertEqual(live.attachmentIDs, original.attachmentIDs)
+        XCTAssertTrue(controller.save(session))
+        let saved = try XCTUnwrap(store.loadDocument(noteID: id)?.content.document)
+        XCTAssertEqual(saved, live)
+        let second = makeController()
+        await second.startAndWait()
+        await XCTAssertTrueAsync(await second.openDurably(noteID: id))
+        let reopened = try XCTUnwrap(second.active).engine.document()
+        XCTAssertEqual(reopened, live)
+        XCTAssertEqual(controller.markdown(noteID: id), second.markdown(noteID: id))
+        XCTAssertEqual(NoteMarkdownExport.markdown(live), NoteMarkdownExport.markdown(saved))
+        XCTAssertTrue(session.engine.history.undo())
+        XCTAssertEqual(session.engine.document(), before)
+    }
 }
