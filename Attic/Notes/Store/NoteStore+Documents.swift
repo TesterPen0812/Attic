@@ -1078,8 +1078,14 @@ extension NoteStore {
     }
 
     private func isSameState(_ version: NoteVersion, _ note: NoteItem) -> Bool {
-        return version.contentFormat == note.contentFormat && version.content == note.content
-            && NoteTextReplacement.utf16Equal(version.title, note.title) && NoteTextReplacement.utf16Equal(version.body, note.body)
+        guard version.contentFormat == note.contentFormat, version.content == note.content,
+              NoteTextReplacement.utf16Equal(version.title, note.title),
+              NoteTextReplacement.utf16Equal(version.body, note.body) else { return false }
+        // Legacy bytes do not encode attachment visibility. A prose-identical
+        // version only preserves the note when it also keeps the live IDs.
+        guard note.contentFormat == 0 else { return true }
+        guard let rows = try? attachmentRows(forNoteID: note.id) else { return false }
+        return version.attachmentIDs == Set(rows.filter { $0.deletedAt == nil }.map(\.id))
     }
 
     /// The replica presentation shows for these rows.

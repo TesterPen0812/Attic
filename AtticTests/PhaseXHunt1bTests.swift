@@ -83,9 +83,28 @@ final class PhaseXHunt1bTests: XCTestCase {
         let verified = try LegacyNoteMigration.verify(plan, roundTrip: { NoteTextKitRoundTrip.document(afterRoundTrip: $0) }).get()
         _ = try store.commitMigration(verified).get()
         let originals = store.versions(noteID: id).filter { $0.contentFormat == 0 && $0.attachmentIDs.contains(image.id) }
-        XCTExpectFailure("H3-03") {
-            XCTAssertFalse(originals.isEmpty, "Before migration must retain the current legacy attachment visibility")
-        }
+        XCTAssertFalse(originals.isEmpty, "Before migration must retain the current legacy attachment visibility")
+    }
+
+    func testH3_03VersionRecordingPreservesAttachmentVisibilityChanges() throws {
+        let store = try makeTestNoteStore(attachmentFileStore: makeTestAttachmentFileStore())
+        let id = try XCTUnwrap(store.create(title: "Legacy", body: "Same prose")).id
+        XCTAssertTrue(store.recordVersion(noteID: id, reason: .leave))
+        let image = NoteAttachment(noteID: id, originalFilename: "added.png", contentTypeIdentifier: "public.png",
+                                   byteCount: 3, sortIndex: 0, contentDigest: NotePayloadDigest.sha256(Data([1, 2, 3])), payload: Data([1, 2, 3]))
+        store.modelContext.insert(image); try store.modelContext.save()
+        XCTAssertTrue(store.recordVersion(noteID: id, reason: .pause))
+        let withImage = try XCTUnwrap(store.versions(noteID: id).first)
+        XCTAssertEqual(withImage.attachmentIDs, [image.id])
+        let count = store.versions(noteID: id).count
+        XCTAssertTrue(store.recordVersion(noteID: id, reason: .pause))
+        XCTAssertEqual(store.versions(noteID: id).count, count, "An unchanged attachment set is already preserved")
+        image.deletedAt = Date(); try store.modelContext.save()
+        XCTAssertTrue(store.recordVersion(noteID: id, reason: .pause))
+        XCTAssertTrue(try XCTUnwrap(store.versions(noteID: id).first).attachmentIDs.isEmpty)
+        XCTAssertEqual(store.versions(noteID: id).count, count + 1)
+        _ = try store.restoreVersion(withImage.id, noteID: id).get()
+        XCTAssertTrue(store.attachments(for: id).contains { $0.id == image.id })
     }
 
     func testH3_04RestorePreservesEditsArrivingDuringRecoveryWait() async throws {
