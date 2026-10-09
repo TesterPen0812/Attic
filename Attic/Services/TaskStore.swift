@@ -134,7 +134,7 @@ struct CloudSyncProtectionState: Equatable {
 
 private struct TaskReplicaSnapshot: Equatable {
     let id: UUID
-    let title: String
+    let title: [UInt16]
     let statusRaw: String
     let priorityRaw: String
     let createdAt: Date
@@ -164,7 +164,7 @@ private struct TaskReplicaSnapshot: Equatable {
 
     init(_ task: TaskItem) {
         id = task.id
-        title = task.title
+        title = Array(task.title.utf16)
         statusRaw = task.statusRaw
         priorityRaw = task.priorityRaw
         createdAt = task.createdAt
@@ -188,7 +188,7 @@ private struct TaskReplicaSnapshot: Equatable {
 /// What a task holds, without when it was last touched or how it was
 /// deleted: two replicas with equal content show the same task.
 private struct TaskContentSnapshot: Equatable {
-    let title: String
+    let title: [UInt16]
     let statusRaw: String
     let priorityRaw: String
     let createdAt: Date
@@ -204,7 +204,7 @@ private struct TaskContentSnapshot: Equatable {
     let completedFromOrder: Int64?
 
     init(_ task: TaskItem) {
-        title = task.title
+        title = Array(task.title.utf16)
         statusRaw = task.statusRaw
         priorityRaw = task.priorityRaw
         createdAt = task.createdAt
