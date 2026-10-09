@@ -5,6 +5,36 @@ import XCTest
 /// The design system's tokens and the automated appearance check.
 @MainActor
 final class AtticDesignSystemTests: XCTestCase {
+    func testA38PageSwitchKeepsContrastWithReducedTransparency() {
+        let contexts = [AtticPanelTheme.electricBlue, .seaGlass].flatMap { palette in
+            PanelTintLevel.allCases.map { tint in
+                AtticDesignContext(mode: .light, palette: palette, surface: .solid, tint: tint, reduceTransparency: true)
+            }
+        }
+        let report = AtticAppearanceCheck.run(families: [.pageSwitch], contexts: contexts, scale: 2)
+        if let context = contexts.first {
+            let capture = AtticGalleryStage(family: .pageSwitch, demo: AtticGalleryDemo())
+                .atticDesign(context)
+                .environment(\.atticCapture, AtticCaptureContext(collector: nil, backdrop: .desktop(.midGrey)))
+                .coordinateSpace(.named(AtticCaptureContext.coordinateSpace))
+            let renderer = ImageRenderer(content: capture)
+            renderer.scale = 2
+            if let image = renderer.cgImage, let png = NSBitmapImageRep(cgImage: image).representation(using: .png, properties: [:]) {
+                let attachment = XCTAttachment(data: png, uniformTypeIdentifier: "public.png")
+                attachment.name = "A38-page-switch-reduce-transparency"
+                attachment.lifetime = .keepAlways
+                add(attachment)
+                if ProcessInfo.processInfo.environment["ATTIC_A38_PAGE_OUTPUT"] != nil {
+                    let folder = ownedTemporaryDirectory(prefix: "A38PageContrast")
+                    try? png.write(to: folder.appendingPathComponent("page-switch.png"))
+                    print("A38_PAGE_SWITCH_ARTIFACTS=\(folder.path)")
+                }
+            }
+        }
+        let remaining = OpenRingException.remaining(Phase0AccentException.remaining(Phase0TranslucentException.remaining(report.failures)))
+        XCTAssertTrue(remaining.isEmpty, remaining.map { "\($0.key): \($0.value)" }.joined(separator: "\n"))
+    }
+
     // MARK: Tokens
 
     func testSpacingSitsOnTheFourPointGrid() {

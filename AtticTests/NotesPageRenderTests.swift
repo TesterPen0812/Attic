@@ -191,6 +191,13 @@ final class NotesPageRenderTests: XCTestCase {
                 harness.host.layoutSubtreeIfNeeded()
                 spin()
                 let engine = try XCTUnwrap(harness.controller.active?.engine)
+                let scroll = try XCTUnwrap(engine.scrollView)
+                // Notes v2 must keep the owner's overlay-scroller contract,
+                // even if AppKit tries to restore the legacy system style.
+                scroll.scrollerStyle = .legacy
+                harness.host.layoutSubtreeIfNeeded()
+                spin()
+                XCTAssertEqual(scroll.scrollerStyle, .overlay)
                 let table = try XCTUnwrap(engine.tableViews().first, "the table is hosted in the page")
                 XCTAssertEqual(table.frame.width, 264, accuracy: 0.5)
                 let suffix = mode == .dark ? "dark" : "light"

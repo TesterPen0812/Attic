@@ -201,7 +201,7 @@ struct AtticSelectedChip: View {
 /// pointer or keyboard focus it opens leftward into all the pages' icons
 /// (the current one on the chip, each with a tooltip and its shortcut); a
 /// click goes there, and it folds back when the pointer leaves. 36 pt,
-/// inset 4, 28 pt segments 2 apart: 36 wide shut, 96 open.
+/// inset 4, 24 pt segments 2 apart: 32 wide shut, 84 open.
 ///
 /// One control for the keyboard (← → move between pages while it has
 /// focus; ⌘1–⌘3 work from anywhere). VoiceOver reads one group, "Pages",
@@ -277,7 +277,12 @@ struct AtticPageButton<Page: Hashable>: View {
                         }
                         AtticIcon(systemName: item.systemName, size: M.iconSize,
                                   weight: isSelected ? .regular : AtticIconWeight.outline,
-                                  ink: isSelected ? (accent == nil ? .glyph : .accent) : .icon)
+                                  // On the opaque accessibility surface,
+                                  // palette ink can fall below the icon's
+                                  // floor on its tinted chip. Keep that
+                                  // palette's fill/hairline; use the strong
+                                  // selected-control glyph ink there.
+                                  ink: isSelected ? (accent == nil || design.reduceTransparency ? .glyph : .accent) : .icon)
                     }
                     .frame(width: M.segment, height: M.segment)
                     // 24 pt chips (chrome B) still answer a 28 pt target,

@@ -402,7 +402,8 @@ final class NoteEditorEngine: NSObject, NSTextViewDelegate, NSTextStorageDelegat
         textView.engine = self
         configure(textView)
         textView.installHeadingsRotor()
-        let scrollView = NSScrollView(frame: textView.frame)
+        let scrollView = NoteDocumentScrollView(frame: textView.frame)
+        scrollView.scrollerStyle = .overlay
         scrollView.hasVerticalScroller = true
         scrollView.autohidesScrollers = true
         scrollView.drawsBackground = false
