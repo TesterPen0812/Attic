@@ -128,6 +128,24 @@ final class NotesLibraryOrganizeTests: XCTestCase {
         XCTAssertNil(library.tagFilter, "no note carries the tag any more: every note")
     }
 
+    func testShowingAllNotesFromAnUntaggedNoteResetsTheFilterBeforeTheListIsBuilt() async throws {
+        let tagged = try create("Tagged", tags: ["launch"])
+        let plain = try create("Plain")
+        let controller = makeController()
+        await controller.startAndWait()
+        let library = NotesLibraryModel(search: { _ in [] }, store: store, controller: controller)
+        XCTAssertTrue(controller.open(noteID: tagged))
+        XCTAssertTrue(controller.showLibrary())
+        library.tagFilter = "launch"
+        controller.dismissLibrary()
+        XCTAssertTrue(controller.showLibrary())
+        XCTAssertEqual(library.tagFilter, "launch", "back from the tagged note: the filter is restored")
+        controller.dismissLibrary()
+        XCTAssertTrue(controller.open(noteID: plain))
+        XCTAssertTrue(controller.showLibrary())
+        XCTAssertNil(library.tagFilter, "it would hide the note you came from: every note")
+    }
+
     func testAFilterWithNoNotesLeftKeepsItsLineUntilYouLeave() throws {
         let only = try create("Only", tags: ["launch"])
         let library = NotesLibraryModel(search: { _ in [] }, store: store)

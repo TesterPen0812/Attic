@@ -97,7 +97,6 @@ struct NotesLibraryView: View {
         .padding(.horizontal, pageEdge)
         .background(NotesWindowReader(keys: keys).frame(width: 0, height: 0).accessibilityHidden(true))
         .onAppear {
-            model.reconcileFilter(store: store, selected: controller.librarySelectionID)
             keys.handler = { event in handle(event) }
             keys.start()
             if searchFocused { beginSearch() }

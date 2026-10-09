@@ -91,8 +91,14 @@ final class NotesLibraryModel: ObservableObject {
         // Every exit route publishes here, including corner New Note and
         // Duplicate. Clear synchronously before hidden-editor autosaves.
         if let controller {
-            presentationSubscription = controller.$isLibraryPresented.sink { [weak self] shown in
-                if !shown { self?.clearSearch() }
+            presentationSubscription = controller.$isLibraryPresented.sink { [weak self, weak controller] shown in
+                guard let self else { return }
+                if !shown { self.clearSearch(); return }
+                // Before the list is built: a filter that would hide the
+                // note you came from never shows for a frame.
+                if let store = self.observedStore {
+                    self.reconcileFilter(store: store, selected: controller?.librarySelectionID)
+                }
             }
         }
     }
