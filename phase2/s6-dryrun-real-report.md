@@ -16,4 +16,4 @@
 | Focused unit tests passed / skipped / failed | 10 / 3 / 0 |
 | Python safety tests passed / failed | 9 / 0 |
 | Real-copy runner tests passed / failed | 1 / 0 |
-| Full CI runs | pending |
+| Full CI runs / macOS jobs started / queued | [1 queued](https://github.com/TesterPen0812/Attic/actions/runs/37918320360) / 0 / 9 |
