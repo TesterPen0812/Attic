@@ -24,11 +24,6 @@ final class AtticDesignSystemTests: XCTestCase {
                 attachment.name = "A38-page-switch-reduce-transparency"
                 attachment.lifetime = .keepAlways
                 add(attachment)
-                if ProcessInfo.processInfo.environment["ATTIC_A38_PAGE_OUTPUT"] != nil {
-                    let folder = ownedTemporaryDirectory(prefix: "A38PageContrast")
-                    try? png.write(to: folder.appendingPathComponent("page-switch.png"))
-                    print("A38_PAGE_SWITCH_ARTIFACTS=\(folder.path)")
-                }
             }
         }
         let remaining = OpenRingException.remaining(Phase0AccentException.remaining(Phase0TranslucentException.remaining(report.failures)))
