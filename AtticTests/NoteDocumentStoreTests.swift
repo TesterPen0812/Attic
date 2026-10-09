@@ -1012,6 +1012,37 @@ final class NoteDocumentStoreTests: XCTestCase {
         XCTAssertEqual(refusal(legacy("x", attachments: [file])), .fileAttachment(file.id))
     }
 
+    func testMigrationInverseRefusesReorderedTrayBlocks() throws {
+        let first = attachment(nil, sort: 0), second = attachment(99, sort: 1)
+        let plan = try LegacyNoteMigration.plan(legacy("Body", attachments: [second, first])).get()
+        var document = plan.document
+        document.blocks.swapAt(document.blocks.count - 2, document.blocks.count - 1)
+        let changed = LegacyNoteMigration.Plan(snapshot: plan.snapshot, document: document,
+            normalizedBody: plan.normalizedBody, normalizedLineBreaks: plan.normalizedLineBreaks,
+            snappedAnchors: plan.snappedAnchors)
+        guard case .failure(.projectionMismatch("tray attachment order")) =
+            LegacyNoteMigration.verify(changed, roundTrip: textKitRoundTrip) else {
+            return XCTFail("The inverse must reject a reordered tray, even when TextKit preserves it")
+        }
+    }
+
+    func testMigrationVerificationKeepsExactUnicodeSpelling() throws {
+        let plan = try LegacyNoteMigration.plan(legacy("caf\u{0065}\u{0301}", title: "caf\u{0065}\u{0301}")).get()
+        var changed = plan.document
+        changed.blocks[0].text = "caf\u{00E9}"
+        let changedPlan = LegacyNoteMigration.Plan(snapshot: plan.snapshot, document: changed,
+            normalizedBody: plan.normalizedBody, normalizedLineBreaks: plan.normalizedLineBreaks,
+            snappedAnchors: plan.snappedAnchors)
+        guard case .failure(.projectionMismatch("title")) = LegacyNoteMigration.verify(changedPlan, roundTrip: textKitRoundTrip) else {
+            return XCTFail("Canonical equality must not mask a changed title spelling")
+        }
+        guard case .failure(.roundTripMismatch) = LegacyNoteMigration.verify(plan, roundTrip: { input in
+            var output = input
+            output.blocks[1].text = "caf\u{00E9}"
+            return output
+        }) else { return XCTFail("The text-system gate must preserve exact Unicode, not only visual equality") }
+    }
+
     private func refusal(_ snapshot: LegacyNoteSnapshot) -> LegacyMigrationRefusal? {
         if case let .failure(reason) = LegacyNoteMigration.plan(snapshot) { return reason }
         return nil

@@ -146,7 +146,10 @@ enum LegacyNoteMigration {
     ) -> Result<VerifiedLegacyMigration, LegacyMigrationRefusal> {
         if let mismatch = inverseMismatch(plan) { return .failure(.projectionMismatch(mismatch)) }
         let returned = roundTrip(plan.document)
-        guard returned == plan.document else {
+        guard returned == plan.document,
+              let expectedBytes = try? NoteContentCodec.encode(plan.document),
+              let returnedBytes = try? NoteContentCodec.encode(returned),
+              returnedBytes == expectedBytes else {
             return .failure(.roundTripMismatch(firstDifference(plan.document, returned)))
         }
         return .success(VerifiedLegacyMigration(plan: plan))
@@ -156,7 +159,8 @@ enum LegacyNoteMigration {
 
     private static func inverseMismatch(_ plan: Plan) -> String? {
         let document = plan.document
-        guard let first = document.blocks.first, first.kind == .text, first.text == plan.snapshot.title else {
+        guard let first = document.blocks.first, first.kind == .text,
+              NoteTextReplacement.utf16Equal(first.text, plan.snapshot.title) else {
             return "title"
         }
         var lines: [String] = []
@@ -207,6 +211,11 @@ enum LegacyNoteMigration {
         let expectedInline = expected.filter { placement[$0.id] != nil }
             .sorted { (placement[$0.id] ?? 0) < (placement[$1.id] ?? 0) }.map(\.id)
         guard inlineOrder == expectedInline else { return "attachment order" }
+        let trayOrder = order.filter { placement[$0] == nil }
+        let expectedTray = expected.filter { attachment in
+            attachment.inlineOffset.map { map($0) >= length } ?? true
+        }.map(\.id)
+        guard trayOrder == expectedTray else { return "tray attachment order" }
         return nil
     }
 
