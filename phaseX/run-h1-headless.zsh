@@ -8,6 +8,7 @@ cd "$root"
 typeset mode=${1:-normal}
 typeset -a only=(
   -only-testing:AtticTests/PhaseXHunt1ReproTests
+  -only-testing:AtticTests/PhaseXHunt1bTests
   -only-testing:AtticTests/PhaseXHunt1GeneratedTests
   -only-testing:AtticTests/PhaseXHunt1TaskInvariantTests
 )
