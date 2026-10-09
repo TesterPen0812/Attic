@@ -23,7 +23,7 @@ enum NoteFormatCaptureScene {
     }
 
     static func runIfRequested(controls: NoteFormatControls, chrome: NotesPageChrome, textView: NoteEditorTextView) {
-        guard let scene = requestedScene, !didRun else { return }
+        guard let scene = requestedScene, !scene.hasPrefix("history"), !didRun else { return }
         didRun = true
         let delay = Double(ProcessInfo.processInfo.environment["ATTIC_UI_TEST_NOTES_SCENE_DELAY"] ?? "2.5") ?? 2.5
         DispatchQueue.main.asyncAfter(deadline: .now() + delay) {

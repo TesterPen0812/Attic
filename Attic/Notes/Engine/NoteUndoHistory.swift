@@ -115,6 +115,7 @@ final class NoteUndoHistory {
     private(set) var redoOps: [Op] = []
     private(set) var log: [String] = []
     private(set) var isReplaying = false
+    private(set) var isTraversing = false
     private var open: Op?
     private var pending: [Pending] = []
     private var expectedLength = 0
@@ -510,6 +511,8 @@ final class NoteUndoHistory {
     func undo() -> Bool {
         guard canReplay?() ?? true else { return false }
         guard let last = undoOps.last else { return false }
+        isTraversing = true
+        defer { isTraversing = false }
         open = nil
         let group = last.group
         var changed = false
@@ -527,6 +530,8 @@ final class NoteUndoHistory {
     func redo() -> Bool {
         guard canReplay?() ?? true else { return false }
         guard let first = redoOps.first else { return false }
+        isTraversing = true
+        defer { isTraversing = false }
         open = nil
         let group = first.group
         var changed = false

@@ -87,6 +87,31 @@ final class NoteEditorEngine: NSObject, NSTextViewDelegate, NSTextStorageDelegat
     let textStorage: NSTextStorage
     let history: NoteUndoHistory
     let isReadOnly: Bool
+    /// Ephemeral comparison marks. Never serialized or used by live edits.
+    var historyDifferenceOffsets = Set<Int>()
+    /// A committed whole-note restore is a durable boundary after this
+    /// engine's local text steps. The controller owns its inverse save.
+    var canUndoVersionRestore: (() -> Bool)?
+    var canRedoVersionRestore: (() -> Bool)?
+    var undoVersionRestore: (() -> Void)?
+    var redoVersionRestore: (() -> Void)?
+    var canUndoCommand: Bool { !isReadOnly && (history.canUndo || canUndoVersionRestore?() == true) }
+    var canRedoCommand: Bool { !isReadOnly && (history.canRedo || canRedoVersionRestore?() == true) }
+    var undoCommandName: String { history.canUndo ? history.undoActionName : (canUndoVersionRestore?() == true ? "Restore Version" : "") }
+    var redoCommandName: String { canRedoVersionRestore?() == true ? "Restore Version" : history.redoActionName }
+
+    @discardableResult func undoCommand() -> Bool {
+        guard !isReadOnly else { return false }
+        if history.canUndo { return history.undo() }
+        guard canUndoVersionRestore?() == true else { return false }
+        undoVersionRestore?()
+        return true
+    }
+    @discardableResult func redoCommand() -> Bool {
+        guard !isReadOnly else { return false }
+        if canRedoVersionRestore?() == true { redoVersionRestore?(); return true }
+        return history.redo()
+    }
     private(set) var style: NoteTextStyle
     private let renderer: NoteObjectRenderer
     private(set) var today: NoteDay

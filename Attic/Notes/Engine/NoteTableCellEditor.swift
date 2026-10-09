@@ -337,18 +337,18 @@ final class NoteTableCellEditor: NSTextView, NSTextViewDelegate {
 
     @objc func undo(_ sender: Any?) {
         guard !hasMarkedText(), let engine = table?.engine else { return }
-        engine.history.undo()
+        engine.undoCommand()
     }
 
     @objc func redo(_ sender: Any?) {
         guard !hasMarkedText(), let engine = table?.engine else { return }
-        engine.history.redo()
+        engine.redoCommand()
     }
 
     override func validateUserInterfaceItem(_ item: any NSValidatedUserInterfaceItem) -> Bool {
         if let engine = table?.engine {
-            if item.action == #selector(undo(_:)) { return engine.history.canUndo }
-            if item.action == #selector(redo(_:)) { return engine.history.canRedo }
+            if item.action == #selector(undo(_:)) { return engine.canUndoCommand }
+            if item.action == #selector(redo(_:)) { return engine.canRedoCommand }
         }
         return super.validateUserInterfaceItem(item)
     }

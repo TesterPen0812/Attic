@@ -105,14 +105,15 @@ struct NotesEditorPage: View {
         ZStack(alignment: .bottom) {
             content
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
-            if showsEditor {
+            if showsEditor && controller.historyBrowser == nil {
                 headerTitle
             }
-            bottomRow
+            if controller.historyBrowser == nil { bottomRow
                 .padding(.leading, layout.chromeInsets.leading)
                 .padding(.trailing, layout.chromeInsets.trailing)
                 .padding(.bottom, layout.chromeInsets.bottom)
-            shortcuts
+            }
+            if controller.historyBrowser == nil { shortcuts }
         }
         // Springy slides between the note and All notes, and for a new or
         // another note (keystrokes are never held back: the text view takes
@@ -162,6 +163,15 @@ struct NotesEditorPage: View {
             }
         }
         .onChange(of: design) { _, newValue in controller.update(design: newValue) }
+        .task {
+            #if DEBUG
+            await NoteHistoryCaptureScene.seedIfRequested(controller)
+            #endif
+        }
+        .onChange(of: controller.historyBrowser?.noteID) { _, _ in
+            chrome.closeFormatBar()
+            chrome.cancelKeyboardReturn()
+        }
         .onChange(of: controller.legacyNoteID) { _, id in openLegacy(id) }
         .onChange(of: controller.active?.id) { _, opened in
             // Another note: the keyboard return belonged to the last one.
@@ -224,7 +234,9 @@ struct NotesEditorPage: View {
 
     @ViewBuilder
     private var content: some View {
-        if controller.isLibraryPresented {
+        if let history = controller.historyBrowser {
+            NoteHistoryPage(controller: controller, browser: history, layout: layout)
+        } else if controller.isLibraryPresented {
             NotesLibraryView(model: library, controller: controller, store: noteStore, layout: layout,
                              bottomClearance: bottomInset, bottomControls: bottomControls, searchFocused: $searchFocused,
                              rowCommands: { id in rowCommands(id) },
@@ -569,7 +581,7 @@ struct NotesEditorPage: View {
 
     /// The note's menu (⋯, ⇧⌘I, the header title): Insert and Format as far
     /// as this slice supports them, then the note's actions. What is not
-    /// built yet is left out, except Version History (dimmed until slice 7).
+    /// built yet is left out.
     private func noteMenuCommands() -> [AtticMenuCommand] {
         guard let session = controller.active, controller.legacyNoteID == nil else { return [] }
         let id = session.noteID
@@ -598,7 +610,10 @@ struct NotesEditorPage: View {
         if editable {
             commands.append(AtticMenuCommand("Tags…", identifier: "notes-menu-tags") { chrome.presentTagEditor() })
         }
-        commands.append(AtticMenuCommand("Version History", isDisabled: true) {})
+        commands.append(AtticMenuCommand("Version History", isDisabled: !session.isPersisted || !editable,
+                                         identifier: "notes-menu-history") {
+            Task { @MainActor in _ = await controller.openHistoryDurably() }
+        })
         commands.append(AtticMenuCommand("Copy as Markdown", shortcut: KeyboardShortcut("c", modifiers: [.command, .option, .shift]),
                                          startsSection: true, identifier: "notes-menu-copy-markdown") {
             controller.copyMarkdown(noteID: id)

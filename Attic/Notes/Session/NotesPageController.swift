@@ -182,6 +182,22 @@ final class NoteSession: ObservableObject, Identifiable {
 final class NotesPageController: ObservableObject {
     enum LeaveReason { case openNote, newNote, library, pageSwitch, hide, quit, exitToOldPage }
     @Published private(set) var active: NoteSession?
+    @Published private(set) var historyBrowser: NoteHistoryBrowser?
+    private struct VersionRestoreUndo {
+        let id: UUID
+        let noteID: UUID
+        let versionID: UUID
+        var restoredRevisionID: UUID
+        let document: NoteDocument?
+        let tags: [String]
+        let historyPosition: [ObjectIdentifier]
+        let session: NoteSession?
+        let isUndo: Bool
+    }
+    private var versionRestoreUndo: VersionRestoreUndo?
+    var versionRestoreUndoID: UUID? { versionRestoreUndo?.isUndo == true ? versionRestoreUndo?.id : nil }
+    private(set) var versionHistoryCommandTask: Task<Void, Never>?
+    private var isVersionRestoreReplaying = false
     /// A legacy note the page shows in the old editor.
     @Published private(set) var legacyNoteID: UUID?
     @Published var isLibraryPresented = false
@@ -429,6 +445,8 @@ final class NotesPageController: ObservableObject {
     /// Saves and closes the old editor's draft before the page moves on
     /// from a legacy note (set by `NoteDraftController`).
     var leaveLegacyNote: (LeaveReason) -> Bool = { _ in true }
+    var prepareLegacyVersionReplay: (() -> Bool)?
+    var finishLegacyVersionReplay: (() -> Void)?
     private static let lastViewedKey = "notes.lastViewedNote.v2"
 
     private static func viewStateKey(_ id: UUID) -> String { "notes.viewState.\(id.uuidString)" }
@@ -721,6 +739,7 @@ final class NotesPageController: ObservableObject {
     }
 
     private func activate(_ session: NoteSession) {
+        closeHistory()
         wire(session)
         cache[session.noteID] = session
         touch(session.noteID)
@@ -773,6 +792,16 @@ final class NotesPageController: ObservableObject {
 
     private func wire(_ session: NoteSession) {
         let engine = session.engine
+        engine.canUndoVersionRestore = { [weak self, weak session] in
+            guard let self, let session, self.active === session else { return false }
+            return self.canReplayVersionRestore(undo: true)
+        }
+        engine.canRedoVersionRestore = { [weak self, weak session] in
+            guard let self, let session, self.active === session else { return false }
+            return self.canReplayVersionRestore(undo: false)
+        }
+        engine.undoVersionRestore = { [weak self] in self?.requestVersionRestoreReplay(undo: true) }
+        engine.redoVersionRestore = { [weak self] in self?.requestVersionRestoreReplay(undo: false) }
         engine.imageProvider = self
         engine.onTextChange = { [weak self, weak session] in
             guard let self, let session else { return }
@@ -922,6 +951,7 @@ final class NotesPageController: ObservableObject {
         if reason == .pageSwitch || reason == .hide || reason == .quit || reason == .exitToOldPage {
             isPageVisible = false
         }
+        closeHistory()
         return true
     }
 
@@ -1106,6 +1136,11 @@ final class NotesPageController: ObservableObject {
 
     private func textDidChange(in session: NoteSession) {
         guard !session.isReadOnly else { return }
+        if let step = versionRestoreUndo, !step.isUndo, step.noteID == session.noteID,
+           !session.engine.history.isTraversing {
+            store.historyRetainedVersionIDs.remove(step.versionID)
+            versionRestoreUndo = nil
+        }
         if !NoteSessionPolicy.hasPendingWork(session.state) { session.state = .dirty }
         session.editGeneration &+= 1
         session.lastEditAt = now()
@@ -1225,6 +1260,13 @@ final class NotesPageController: ObservableObject {
                                   baseRevisionID: session.baseRevisionID, staged: staged, prepared: prepared,
                                   tags: pendingTags) {
         case let .success(revisionID):
+            // Only this controller's successful writes advance the replay
+            // boundary. An imported/external revision must still refuse Undo.
+            if var step = versionRestoreUndo, step.noteID == session.noteID,
+               step.restoredRevisionID == session.baseRevisionID {
+                step.restoredRevisionID = revisionID
+                versionRestoreUndo = step
+            }
             session.baseRevisionID = revisionID
             if let pendingTags { session.baseTags = pendingTags }
             didSave(session, staged: staged, retainingNewerEdits: retainingNewerEdits)
@@ -2296,6 +2338,224 @@ enum NoteSessionPolicy {
         guard activity == .idle, !hasBatch, !hasMarkedText else { return false }
         if case .conflict = state { return true }
         return false
+    }
+}
+
+// MARK: - Version history (Phase 2, slice 7)
+
+extension NotesPageController {
+    func openHistoryDurably() async -> Bool {
+        guard historyBrowser == nil, let session = active, session.isPersisted,
+              !session.isReadOnly, !session.isImporting, !session.isConflict,
+              canLeaveComposition(in: session) else { return false }
+        captureViewState(session)
+        guard await preserveDurably(session), active === session, session.state == .clean,
+              store.note(withID: session.noteID)?.revisionID == session.baseRevisionID else {
+            session.notice = "The current note must be saved before opening version history. Your text is kept."
+            return false
+        }
+        session.pauseTask?.cancel()
+        let entries = store.versions(noteID: session.noteID).map(NoteHistoryEntry.init)
+        let browser = NoteHistoryBrowser(noteID: session.noteID, current: session.engine.document(),
+            currentRevision: session.baseRevisionID, entries: entries)
+        if let scroll = session.engine.scrollView {
+            browser.scrollOffset = scroll.contentView.bounds.origin.y + scroll.contentInsets.top
+        }
+        store.historyRetainedVersionIDs.formUnion(entries.map(\.id))
+        historyBrowser = browser
+        refreshHistoryPreview()
+        return true
+    }
+
+    func refreshHistoryPreview() {
+        guard let browser = historyBrowser else { return }
+        if let scroll = browser.preview?.engine.scrollView {
+            browser.scrollOffset = scroll.contentView.bounds.origin.y + scroll.contentInsets.top
+        }
+        browser.preview?.engine.detachView()
+        browser.updateComparison()
+        let comparison = browser.comparison
+        let engine = makeEngine(noteID: browser.noteID, document: comparison.document, readOnly: true)
+        var offset = 0
+        let text = engine.textStorage.string as NSString
+        for (index, block) in comparison.document.blocks.enumerated() {
+            let length = block.kind == .text ? block.text.utf16.count
+                : (block.kind == .checklist ? block.text.utf16.count + 1 : 1)
+            if comparison.changedBlocks.contains(index) {
+                var start = offset
+                repeat {
+                    guard start < text.length else { break }
+                    let range = text.paragraphRange(for: NSRange(location: start, length: 0))
+                    engine.historyDifferenceOffsets.insert(range.location)
+                    start = NSMaxRange(range)
+                } while start < offset + length
+            }
+            offset += length + 1
+        }
+        let preview = NoteSession(noteID: browser.noteID, isPersisted: true,
+            baseRevisionID: browser.currentRevision, engine: engine, readOnlyReason: .unsupportedContent)
+        preview.scrollOffset = browser.scrollOffset
+        browser.preview = preview
+    }
+
+    func selectHistoryVersion(_ index: Int) {
+        guard let browser = historyBrowser, !browser.isRestoring, browser.entries.indices.contains(index) else { return }
+        browser.selectedIndex = index
+        browser.showsCurrent = false
+        browser.failure = nil
+        refreshHistoryPreview()
+    }
+
+    func closeHistory() {
+        guard let browser = historyBrowser else { return }
+        browser.preview?.engine.detachView()
+        store.historyRetainedVersionIDs.subtract(browser.entries.map(\.id))
+        if let undo = versionRestoreUndo { store.historyRetainedVersionIDs.insert(undo.versionID) }
+        historyBrowser = nil
+    }
+
+    func copyHistoryVersion() {
+        guard let browser = historyBrowser, let selected = browser.selected else { return }
+        let engine = makeEngine(noteID: browser.noteID, document: selected.document, readOnly: true)
+        _ = engine.writeSelection(NSRange(location: 0, length: engine.textStorage.length), to: .general,
+                                  types: [.string, .rtf, NoteEditorEngine.fragmentType])
+    }
+
+    func restoreHistoryVersionDurably() async -> Bool {
+        guard let browser = historyBrowser, let selected = browser.selected, selected.canRestore,
+              !browser.isRestoring, !browser.showsCurrent, let session = active,
+              session.noteID == browser.noteID, session.state == .clean, !session.isImporting else { return false }
+        browser.isRestoring = true
+        defer { browser.isRestoring = false }
+        guard await awaitRecoveryForUser(), historyBrowser === browser, active === session else { return false }
+        let preservationID = UUID()
+        switch store.restoreVersion(selected.id, noteID: browser.noteID,
+                                    expectedRevisionID: browser.currentRevision, preservationID: preservationID) {
+        case let .failure(error):
+            browser.failure = error.localizedDescription
+            return false
+        case let .success(token):
+            guard let revision = UUID(uuidString: token), let note = store.note(withID: browser.noteID) else { return false }
+            if let previous = versionRestoreUndo { store.historyRetainedVersionIDs.remove(previous.versionID) }
+            versionRestoreUndo = VersionRestoreUndo(id: UUID(), noteID: browser.noteID, versionID: preservationID,
+                restoredRevisionID: revision, document: store.loadDocument(noteID: browser.noteID)?.content.document,
+                tags: note.tags, historyPosition: [], session: session, isUndo: true)
+            store.historyRetainedVersionIDs.insert(preservationID)
+            closeHistory()
+            session.engine.detachView()
+            cache[browser.noteID] = nil
+            if note.usesDocumentFormat, let restored = self.session(for: note) {
+                activate(restored)
+            } else {
+                // A pre-migration snapshot keeps its original legacy bytes
+                // and uses the existing legacy presentation path.
+                active = nil
+                legacyNoteID = note.id
+            }
+            return true
+        }
+    }
+
+    func undoVersionRestoreDurably(expectedID: UUID?) async -> Bool {
+        await replayVersionRestoreDurably(undo: true, expectedID: expectedID)
+    }
+
+    func redoVersionRestoreDurably() async -> Bool {
+        await replayVersionRestoreDurably(undo: false, expectedID: versionRestoreUndo?.id)
+    }
+
+    private func canReplayVersionRestore(undo: Bool) -> Bool {
+        guard versionHistoryCommandTask == nil, !isVersionRestoreReplaying,
+              let step = versionRestoreUndo, step.isUndo == undo,
+              historyBrowser == nil, let current = active, current.noteID == step.noteID,
+              !current.isImporting, !current.isConflict, !current.isReadOnly,
+              current.engine.activity == .idle,
+              store.note(withID: step.noteID)?.revisionID == step.restoredRevisionID else { return false }
+        return current.engine.document() == step.document
+            && current.engine.history.undoOps.map(ObjectIdentifier.init) == step.historyPosition
+            && current.engine.tags == step.tags
+    }
+
+    private func requestVersionRestoreReplay(undo: Bool) {
+        guard versionHistoryCommandTask == nil else { return }
+        let ticket = versionRestoreUndo?.id
+        versionHistoryCommandTask = Task { @MainActor [weak self] in
+            guard let self else { return }
+            defer { self.versionHistoryCommandTask = nil }
+            _ = await self.replayVersionRestoreDurably(undo: undo, expectedID: ticket)
+        }
+    }
+
+    private func replayVersionRestoreDurably(undo isUndo: Bool, expectedID: UUID?) async -> Bool {
+        guard !isVersionRestoreReplaying else { return false }
+        isVersionRestoreReplaying = true
+        defer { isVersionRestoreReplaying = false }
+        guard let initial = versionRestoreUndo, initial.id == expectedID, initial.isUndo == isUndo,
+              await awaitRecoveryForUser(), let undo = versionRestoreUndo,
+              undo.id == expectedID, undo.isUndo == isUndo else { return false }
+        let current = active
+        var expectedRevision = undo.restoredRevisionID
+        if let current {
+            guard current.noteID == undo.noteID, !current.isImporting, !current.isConflict, !current.isReadOnly,
+                  historyBrowser == nil, canLeaveComposition(in: current),
+                  current.engine.document() == undo.document,
+                  current.engine.history.undoOps.map(ObjectIdentifier.init) == undo.historyPosition,
+                  store.note(withID: undo.noteID)?.revisionID == expectedRevision else { return false }
+            let generation = current.editGeneration
+            let tags = current.engine.tags
+            if current.state != .clean {
+                // Typing followed by Undo may have returned exactly to the
+                // restored state while its coalesced save is still pending.
+                guard current.engine.tags == undo.tags,
+                      await preserveDurably(current), current.state == .clean,
+                      let revision = current.baseRevisionID else { return false }
+                expectedRevision = revision
+            }
+            // A durability await permits typing, imports and navigation.
+            // Never interpret their newer save as permission to replace them.
+            guard active === current, historyBrowser == nil, generation == current.editGeneration,
+                  !current.isImporting, !current.isConflict, !current.isReadOnly,
+                  canLeaveComposition(in: current), current.engine.document() == undo.document,
+                  current.engine.history.undoOps.map(ObjectIdentifier.init) == undo.historyPosition,
+                  current.engine.tags == tags, let latest = versionRestoreUndo,
+                  latest.id == expectedID, latest.isUndo == isUndo,
+                  latest.restoredRevisionID == expectedRevision,
+                  store.note(withID: undo.noteID)?.revisionID == expectedRevision else { return false }
+        } else {
+            guard historyBrowser == nil, legacyNoteID == undo.noteID,
+                  prepareLegacyVersionReplay?() ?? leaveLegacyNote(.openNote),
+                  store.note(withID: undo.noteID)?.revisionID == expectedRevision else { return false }
+        }
+        let inverseID = UUID()
+        switch store.restoreVersion(undo.versionID, noteID: undo.noteID, expectedRevisionID: expectedRevision,
+                                    preservationID: inverseID) {
+        case let .failure(error): current?.notice = error.localizedDescription; return false
+        case let .success(token):
+            if current == nil { finishLegacyVersionReplay?() }
+            closeHistory()
+            current?.engine.detachView()
+            guard let revision = UUID(uuidString: token), let note = store.note(withID: undo.noteID) else { return false }
+            if let returned = undo.session {
+                legacyNoteID = nil
+                returned.baseRevisionID = revision
+                returned.state = .clean
+                returned.baseTags = note.tags
+                returned.engine.setTags(note.tags)
+                activate(returned)
+            } else {
+                cache[undo.noteID] = nil
+                active = nil
+                legacyNoteID = undo.noteID
+            }
+            store.historyRetainedVersionIDs.remove(undo.versionID)
+            store.historyRetainedVersionIDs.insert(inverseID)
+            versionRestoreUndo = VersionRestoreUndo(id: undo.id, noteID: undo.noteID, versionID: inverseID,
+                restoredRevisionID: revision, document: active?.engine.document(),
+                tags: active?.engine.tags ?? note.tags,
+                historyPosition: active?.engine.history.undoOps.map(ObjectIdentifier.init) ?? [],
+                session: current, isUndo: !isUndo)
+            return true
+        }
     }
 }
 

@@ -612,25 +612,25 @@ final class NoteEditorTextView: NSTextView, NSAccessibilityCustomRotorItemSearch
 
     @objc func undo(_ sender: Any?) {
         guard let engine, !hasMarkedText() else { return }
-        engine.history.undo()
+        engine.undoCommand()
     }
 
     @objc func redo(_ sender: Any?) {
         guard let engine, !hasMarkedText() else { return }
-        engine.history.redo()
+        engine.redoCommand()
     }
 
     override func validateUserInterfaceItem(_ item: any NSValidatedUserInterfaceItem) -> Bool {
         if let engine {
             if item.action == #selector(undo(_:)) {
-                let name = engine.history.undoActionName
+                let name = engine.undoCommandName
                 (item as? NSMenuItem)?.title = name.isEmpty ? String(localized: "Undo") : String(localized: "Undo \(name)")
-                return isEditable && engine.history.canUndo
+                return isEditable && engine.canUndoCommand
             }
             if item.action == #selector(redo(_:)) {
-                let name = engine.history.redoActionName
+                let name = engine.redoCommandName
                 (item as? NSMenuItem)?.title = name.isEmpty ? String(localized: "Redo") : String(localized: "Redo \(name)")
-                return isEditable && engine.history.canRedo
+                return isEditable && engine.canRedoCommand
             }
         }
         return super.validateUserInterfaceItem(item)
@@ -833,17 +833,17 @@ final class NoteUndoManagerShim: UndoManager {
         MainActor.assumeIsolated { textView?.engine?.history }
     }
 
-    override var canUndo: Bool { MainActor.assumeIsolated { history?.canUndo ?? false } }
-    override var canRedo: Bool { MainActor.assumeIsolated { history?.canRedo ?? false } }
-    override var undoActionName: String { MainActor.assumeIsolated { history?.undoActionName ?? "" } }
-    override var redoActionName: String { MainActor.assumeIsolated { history?.redoActionName ?? "" } }
+    override var canUndo: Bool { MainActor.assumeIsolated { textView?.engine?.canUndoCommand ?? false } }
+    override var canRedo: Bool { MainActor.assumeIsolated { textView?.engine?.canRedoCommand ?? false } }
+    override var undoActionName: String { MainActor.assumeIsolated { textView?.engine?.undoCommandName ?? "" } }
+    override var redoActionName: String { MainActor.assumeIsolated { textView?.engine?.redoCommandName ?? "" } }
 
     override func undo() {
-        MainActor.assumeIsolated { _ = history?.undo() }
+        MainActor.assumeIsolated { _ = textView?.engine?.undoCommand() }
     }
 
     override func redo() {
-        MainActor.assumeIsolated { _ = history?.redo() }
+        MainActor.assumeIsolated { _ = textView?.engine?.redoCommand() }
     }
 }
 

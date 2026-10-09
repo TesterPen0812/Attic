@@ -847,7 +847,13 @@ extension NoteStore {
             } else {
                 proposals = try modelContext.fetch(FetchDescriptor<NotePendingEdit>())
             }
-            protectedIDs = Set(proposals.compactMap(\.baseVersionID))
+            // Rich snapshots are retained: an image or table may be the
+            // only recoverable copy of content absent from today's note.
+            let rich = physical.filter { version in
+                !version.attachmentIDs.isEmpty || version.content.flatMap { NoteContentCodec.decode($0).document }
+                    .map { !$0.attachmentIDs.isEmpty || $0.blocks.contains { $0.kind == .table } } == true
+            }.map(\.id)
+            protectedIDs = Set(proposals.compactMap(\.baseVersionID)).union(rich).union(historyRetainedVersionIDs)
             recoveryBases = try recoveryProtectedRevisionIDs()
         } catch {
             // Unknown proposal, version or recovery ownership keeps history.
@@ -909,7 +915,8 @@ extension NoteStore {
 
     /// Restores a version. What the note holds now is kept as a version
     /// first, in the same save: Restore succeeds only when both commit.
-    func restoreVersion(_ versionID: UUID, noteID: UUID) -> Result<String, NoteDocumentStoreError> {
+    func restoreVersion(_ versionID: UUID, noteID: UUID, expectedRevisionID: UUID? = nil,
+                        preservationID: UUID? = nil) -> Result<String, NoteDocumentStoreError> {
         let preflight: NoteMutationPreflight
         do {
             preflight = try noteMutationPreflight(noteID, format: .editable)
@@ -917,12 +924,22 @@ extension NoteStore {
             return .failure(error as? NoteDocumentStoreError ?? .noteMissing(noteID))
         }
         let replicas = preflight.replicas
+        if let expectedRevisionID, preflight.canonical.revisionID != expectedRevisionID {
+            return .failure(.staleRevision(expected: expectedRevisionID.uuidString, current: preflight.canonical.revisionToken))
+        }
         let targetID = versionID
-        guard let version = ((try? modelContext.fetch(FetchDescriptor<NoteVersion>(
+        let family = ((try? modelContext.fetch(FetchDescriptor<NoteVersion>(
             predicate: #Predicate { $0.id == targetID }
-        ))) ?? []).first, version.noteID == noteID else {
+        ))) ?? [])
+        guard let version = family.first, version.noteID == noteID else {
             return .failure(.versionMissing(versionID))
         }
+        guard family.allSatisfy({ row in
+            row.noteID == noteID && row.createdAt == version.createdAt && row.reasonRaw == version.reasonRaw
+                && row.content == version.content && row.contentFormat == version.contentFormat
+                && row.title == version.title && row.body == version.body
+                && row.attachmentIDsRaw == version.attachmentIDsRaw && row.sourceRevisionID == version.sourceRevisionID
+        }) else { return .failure(.invalidDocument("This saved version has conflicting copies and cannot be restored safely.")) }
         guard version.contentFormat == 0 && version.content == nil
             || (version.contentFormat == NoteDocument.currentFormat
                 && version.content.map { NoteContentCodec.decode($0).isEditable } == true) else {
@@ -930,7 +947,13 @@ extension NoteStore {
         }
         let timestamp = currentDate
         let context = modelContext
-        stageDisplacedReplicas(replicas, reason: .beforeRestore, timestamp: timestamp)
+        if let preservationID {
+            stageVersion(of: preflight.canonical, reason: .beforeRestore, timestamp: timestamp,
+                         context: context, id: preservationID)
+            stageDisplacedReplicas(replicas.filter { $0 !== preflight.canonical }, reason: .beforeRestore, timestamp: timestamp)
+        } else {
+            stageDisplacedReplicas(replicas, reason: .beforeRestore, timestamp: timestamp)
+        }
         let revisionID = UUID()
         let revision = (replicas.map(\.revision).max() ?? 0) &+ 1
         let derived = Self.derivedColumns(content: version.content, format: version.contentFormat,
@@ -956,12 +979,35 @@ extension NoteStore {
             }
         }
         if let data = version.content, let restored = NoteContentCodec.decode(data).document {
-            do { try stageAttachmentVisibility(referencedBy: restored, noteID: noteID, timestamp: timestamp) }
+            do {
+                let rows = try attachmentRows(forNoteID: noteID)
+                try stageAttachmentVisibility(referencedBy: restored, noteID: noteID, timestamp: timestamp, rows: rows)
+            }
             catch {
                 context.rollback()
                 return .failure(.saveFailed(error.localizedDescription))
             }
+        } else if version.contentFormat == 0 {
+            do {
+                for row in try attachmentRows(forNoteID: noteID) {
+                    let visible = version.attachmentIDs.contains(row.id)
+                    if visible != (row.deletedAt == nil) { row.updatedAt = timestamp }
+                    row.deletedAt = visible ? nil : timestamp
+                }
+            } catch {
+                context.rollback()
+                return .failure(.saveFailed(error.localizedDescription))
+            }
         }
+        #if DEBUG
+        if s7FailNextRestoreForUITesting,
+           ProcessInfo.processInfo.environment["ATTIC_UI_TESTING"] == "1",
+           NotesEditorSetting.isPreviewIdentity(Bundle.main.bundleIdentifier) {
+            s7FailNextRestoreForUITesting = false
+            context.rollback()
+            return .failure(.saveFailed("The version could not be saved. The current note is kept. Try again."))
+        }
+        #endif
         guard commitStagedChanges() else {
             return .failure(.saveFailed(lastErrorMessage ?? "The version could not be restored."))
         }
@@ -969,7 +1015,8 @@ extension NoteStore {
         return .success(revisionID.uuidString)
     }
 
-    func stageVersion(of replica: NoteItem, reason: NoteVersionReason, timestamp: Date, context: ModelContext) {
+    func stageVersion(of replica: NoteItem, reason: NoteVersionReason, timestamp: Date, context: ModelContext,
+                      id: UUID = UUID()) {
         let attachmentIDs: [UUID]
         if replica.usesDocumentFormat, let data = replica.content,
            case let .editable(document) = NoteContentCodec.decode(data) {
@@ -980,6 +1027,7 @@ extension NoteStore {
                 .filter { $0.deletedAt == nil }.map(\.id)
         }
         context.insert(NoteVersion(
+            id: id,
             noteID: replica.id,
             createdAt: timestamp,
             reason: reason,
