@@ -608,6 +608,9 @@ final class NoteStore: ObservableObject {
             replica.contentFormat = 0
             replica.plainText = Self.legacyPlainText(title: destinationTitle, body: destinationBody)
             replica.taskID = note.taskID
+            replica.pinnedAt = note.pinnedAt
+            replica.externalEditorName = note.externalEditorName
+            replica.externalEditedAt = note.externalEditedAt
             replica.revision = contentChanged ? revision &+ 1 : revision
             replica.revisionID = revisionID
         }

@@ -1003,6 +1003,9 @@ extension NoteStore {
                 replica.createdAt = preflight.canonical.createdAt
                 replica.tagsRaw = preflight.canonical.tagsRaw
                 replica.taskID = preflight.canonical.taskID
+                replica.pinnedAt = preflight.canonical.pinnedAt
+                replica.externalEditorName = preflight.canonical.externalEditorName
+                replica.externalEditedAt = preflight.canonical.externalEditedAt
             }
         }
         if let data = version.content, let restored = NoteContentCodec.decode(data).document {
@@ -1439,6 +1442,8 @@ extension NoteStore {
                 replica.tagsRaw = preflight.canonical.tagsRaw
                 replica.taskID = preflight.canonical.taskID
                 replica.pinnedAt = preflight.canonical.pinnedAt
+                replica.externalEditorName = preflight.canonical.externalEditorName
+                replica.externalEditedAt = preflight.canonical.externalEditedAt
             }
         }
         guard commitStagedChanges() else {

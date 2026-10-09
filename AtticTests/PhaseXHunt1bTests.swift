@@ -72,10 +72,15 @@ final class PhaseXHunt1bTests: XCTestCase {
         let store = try makeTestNoteStore(attachmentFileStore: makeTestAttachmentFileStore())
         let id = try create(store)
         XCTAssertTrue(store.recordVersion(noteID: id, reason: .pause))
-        let canonical = try XCTUnwrap(store.note(withID: id))
         XCTAssertTrue(store.setPinned(true, noteID: id))
+        let canonical = try XCTUnwrap(store.note(withID: id))
+        canonical.tags = ["canonical"]
+        canonical.taskID = UUID()
+        canonical.externalEditorName = "Agent"
+        canonical.externalEditedAt = Date(timeIntervalSince1970: 1_700_000_000)
+        try store.modelContext.save()
         let duplicate = NoteItem(id: id, title: canonical.title, body: canonical.body,
-                                 createdAt: canonical.createdAt, updatedAt: canonical.updatedAt.addingTimeInterval(-60))
+                                 createdAt: canonical.createdAt.addingTimeInterval(-100), updatedAt: canonical.updatedAt.addingTimeInterval(-60))
         duplicate.content = canonical.content; duplicate.contentFormat = canonical.contentFormat
         duplicate.revision = canonical.revision; duplicate.revisionID = canonical.revisionID
         duplicate.pinnedAt = nil
@@ -88,8 +93,43 @@ final class PhaseXHunt1bTests: XCTestCase {
         await XCTAssertTrueAsync(await page.restoreHistoryVersionDurably())
         let physical = try ModelContext(store.container).fetch(FetchDescriptor<NoteItem>()).filter { $0.id == id }
         XCTAssertEqual(physical.count, 2)
-        XCTExpectFailure("H3-02") {
-            XCTAssertTrue(physical.allSatisfy(\.isPinned), "Restore must preserve canonical metadata on every replica")
+        XCTAssertTrue(physical.allSatisfy(\.isPinned), "Restore must preserve canonical metadata on every replica")
+        for replica in physical {
+            XCTAssertEqual(replica.pinnedAt, canonical.pinnedAt)
+            XCTAssertEqual(replica.createdAt, canonical.createdAt)
+            XCTAssertEqual(replica.tags, canonical.tags)
+            XCTAssertEqual(replica.taskID, canonical.taskID)
+            XCTAssertEqual(replica.externalEditorName, canonical.externalEditorName)
+            XCTAssertEqual(replica.externalEditedAt, canonical.externalEditedAt)
+        }
+    }
+
+    func testH3_02LegacySaveAndMigrationConvergeCanonicalMetadata() throws {
+        for migrate in [false, true] {
+            let store = try makeTestNoteStore(attachmentFileStore: makeTestAttachmentFileStore())
+            let note = try XCTUnwrap(store.create(title: "Legacy", body: "Body"))
+            XCTAssertTrue(store.setPinned(true, noteID: note.id))
+            note.externalEditorName = "Agent"
+            note.externalEditedAt = Date(timeIntervalSince1970: 1_700_000_000)
+            let duplicate = NoteItem(id: note.id, title: note.title, body: note.body,
+                                     createdAt: note.createdAt, updatedAt: note.updatedAt.addingTimeInterval(-60))
+            store.modelContext.insert(duplicate); try store.modelContext.save()
+            store.refresh()
+            if migrate {
+                let snapshot = try store.legacySnapshot(noteID: note.id).get()
+                let plan = try LegacyNoteMigration.plan(snapshot).get()
+                let verified = try LegacyNoteMigration.verify(plan, roundTrip: { NoteTextKitRoundTrip.document(afterRoundTrip: $0) }).get()
+                _ = try store.commitMigration(verified).get()
+            } else {
+                XCTAssertTrue(store.update(try XCTUnwrap(store.note(withID: note.id)), body: "Changed"))
+            }
+            let physical = try ModelContext(store.container).fetch(FetchDescriptor<NoteItem>()).filter { $0.id == note.id }
+            XCTAssertEqual(physical.count, 2)
+            for replica in physical {
+                XCTAssertEqual(replica.pinnedAt, note.pinnedAt)
+                XCTAssertEqual(replica.externalEditorName, note.externalEditorName)
+                XCTAssertEqual(replica.externalEditedAt, note.externalEditedAt)
+            }
         }
     }
 
