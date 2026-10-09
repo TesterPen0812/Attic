@@ -397,21 +397,26 @@ extension NoteStore {
 
     // MARK: Search
 
-    /// All notes' search: titles, text, tags and image or file names. Read from
-    /// its own context away from the main actor, so typing never waits for
-    /// it; the caller keeps its earlier results on screen meanwhile.
+    /// All notes' search: titles, text, tags, image or file names, and
+    /// displayed dates (a search that is a date, "1 October", finds the
+    /// notes whose date chips show that day). Read from its own context away
+    /// from the main actor, so typing never waits for it; the caller keeps
+    /// its earlier results on screen meanwhile.
     func searchNoteIDs(matching query: String) async throws -> Set<UUID> {
         let container = self.container
         let text = query.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !text.isEmpty else { return [] }
         let tagText = text.hasPrefix("#") ? String(text.dropFirst()) : text
+        // Stored text holds a chip's day as its ISO day (`2026-10-01`).
+        let dayText = Self.searchedDay(text)?.isoString ?? ""
         return try await Task.detached(priority: .userInitiated) {
             let context = ModelContext(container)
             let notes = try context.fetch(FetchDescriptor<NoteItem>(predicate: #Predicate { note in
                 note.deletedAt == nil && (note.title.localizedStandardContains(text)
                     || note.plainText.localizedStandardContains(text)
                     || note.body.localizedStandardContains(text)
-                    || (!tagText.isEmpty && note.tagsRaw.localizedStandardContains(tagText)))
+                    || (!tagText.isEmpty && note.tagsRaw.localizedStandardContains(tagText))
+                    || (!dayText.isEmpty && note.plainText.contains(dayText)))
             }))
             var ids = Set(notes.map(\.id))
             let files = try context.fetch(FetchDescriptor<NoteAttachment>(predicate: #Predicate { attachment in
@@ -420,6 +425,17 @@ extension NoteStore {
             ids.formUnion(files.map(\.noteID))
             return ids
         }.value
+    }
+
+    /// The day a search names when the whole search is a date ("1 Oct",
+    /// "October 1, 2026", "tomorrow"); nil for anything else, so words that
+    /// merely contain a date stay a text search.
+    nonisolated static func searchedDay(_ text: String, calendar: Calendar = .current) -> NoteDay? {
+        guard let detector = try? NSDataDetector(types: NSTextCheckingResult.CheckingType.date.rawValue) else { return nil }
+        let whole = NSRange(text.startIndex..., in: text)
+        guard let match = detector.firstMatch(in: text, options: [], range: whole),
+              match.range == whole, let date = match.date else { return nil }
+        return NoteDay(date: date, calendar: calendar)
     }
 
     // MARK: Loading

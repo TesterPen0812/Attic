@@ -137,6 +137,28 @@ final class NotesLibraryOrganizeTests: XCTestCase {
         XCTAssertEqual(library.tagFilter, "launch", "kept while All notes shows, so Undo brings the note back into it")
     }
 
+    // MARK: Search reaches displayed dates
+
+    /// A date chip shows a day ("1 Oct"), and the note stores it as an ISO
+    /// day: a search that is a date finds the notes that carry that day.
+    func testASearchThatIsADateFindsTheNotesWithThatDay() async throws {
+        let day = try XCTUnwrap(NoteDay(year: 2026, month: 10, day: 1))
+        var line = NoteBlock.text("Fly out \u{FFFC}")
+        line.inlines = [NoteInline(id: UUID(), kind: .date(day))]
+        let dated = NoteDocument(blocks: [.text("Offsite"), line])
+        guard case let .success((withDate, _)) = store.createDocumentNote(id: UUID(), document: dated) else {
+            return XCTFail("create")
+        }
+        let other = try create("Other", "nothing on 2 October")
+        for query in ["1 October 2026", "October 1, 2026", "2026-10-01"] {
+            let found = try await store.searchNoteIDs(matching: query)
+            XCTAssertTrue(found.contains(withDate), "“\(query)” finds the note whose chip shows that day")
+            XCTAssertFalse(found.contains(other), "“\(query)”: another day is not a match")
+        }
+        let words = try await store.searchNoteIDs(matching: "fly out")
+        XCTAssertEqual(words, [withDate], "ordinary words still search the text")
+    }
+
     // MARK: Words
 
     func testTheSearchWordsNameTheFilter() {
