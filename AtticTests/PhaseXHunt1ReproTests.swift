@@ -324,12 +324,132 @@ final class PhaseXHunt1ReproTests: XCTestCase {
         view.setSelectedRange(selected)
         view.insertText("X", replacementRange: selected)
         let after = editor.document(), afterSelection = view.selectedRange()
-        XCTExpectFailure("H2-04")
         XCTAssertTrue(editor.history.undo())
         XCTAssertEqual(view.selectedRange(), selected)
         XCTAssertTrue(editor.history.redo())
         XCTAssertEqual(editor.document(), after)
         XCTAssertEqual(view.selectedRange(), afterSelection)
+    }
+
+    func testH2_04SelectionsRoundTripAcrossEveryEditKind() throws {
+        let cases: [(String, NSRange, (NoteEditorEngine, NoteEditorTextView) -> Void)] = [
+            ("Typing", NSRange(location: 7, length: 3), { _, view in view.insertText("X", replacementRange: view.selectedRange()) }),
+            ("Delete", NSRange(location: 7, length: 3), { _, view in view.deleteBackward(nil) }),
+            ("Replace", NSRange(location: 7, length: 3), { editor, _ in
+                XCTAssertTrue(editor.performEdit(NSRange(location: 7, length: 3), with: NSAttributedString(string: "XY"),
+                    name: "Replace", selection: NSRange(location: 8, length: 1))) }),
+            ("Inline", NSRange(location: 7, length: 3), { editor, view in XCTAssertTrue(editor.perform(.mark(.bold), selection: view.selectedRange())) }),
+            ("Paragraph", NSRange(location: 7, length: 3), { editor, view in XCTAssertTrue(editor.perform(.paragraph(.bullet), selection: view.selectedRange())) }),
+            ("Checklist", NSRange(location: 7, length: 3), { editor, view in XCTAssertTrue(editor.perform(.paragraph(.checklist), selection: view.selectedRange())) }),
+            ("Date", NSRange(location: 7, length: 3), { editor, view in XCTAssertTrue(editor.insertDate(NoteDay(year: 2026, month: 10, day: 9)!, at: view.selectedRange())) }),
+            ("Tags", NSRange(location: 7, length: 3), { editor, _ in editor.setTagsFromPicker(["work"]) }),
+            ("Typing mark", NSRange(location: 7, length: 0), { editor, view in XCTAssertTrue(editor.perform(.mark(.italic), selection: view.selectedRange())) })
+        ]
+        for (label, beforeSelection, edit) in cases {
+            let editor = engine(NoteDocument(blocks: [.text("Title"), .text("abcdef")]))
+            let (scroll, view) = editor.makeView()
+            view.setSelectedRange(beforeSelection)
+            let before = editor.document()
+            edit(editor, view)
+            let after = editor.document(), afterSelection = view.selectedRange()
+            view.setSelectedRange(NSRange(location: 0, length: 0))
+            XCTAssertTrue(editor.history.undo(), label)
+            XCTAssertEqual(editor.document(), before, label)
+            XCTAssertEqual(view.selectedRange(), beforeSelection, label)
+            view.setSelectedRange(NSRange(location: 1, length: 0))
+            XCTAssertTrue(editor.history.redo(), label)
+            XCTAssertEqual(editor.document(), after, label)
+            XCTAssertEqual(view.selectedRange(), afterSelection, label)
+            editor.detachView(); _ = scroll
+        }
+    }
+
+    func testH2_04GroupedAndCoalescedSelectionUsesEditEndpoints() {
+        let editor = engine(NoteDocument(blocks: [.text("Title"), .text("abcdef")]))
+        let (scroll, view) = editor.makeView()
+        defer { editor.detachView(); _ = scroll }
+        let before = NSRange(location: 7, length: 3)
+        view.setSelectedRange(before)
+        view.insertText("X", replacementRange: before)
+        view.insertText("Y", replacementRange: view.selectedRange())
+        let after = view.selectedRange()
+        XCTAssertTrue(editor.history.undo()); XCTAssertEqual(view.selectedRange(), before)
+        XCTAssertTrue(editor.history.redo()); XCTAssertEqual(view.selectedRange(), after)
+        editor.history.beginGroup()
+        let groupBefore = view.selectedRange()
+        XCTAssertTrue(editor.performEdit(NSRange(location: 6, length: 0), with: NSAttributedString(string: "A"), name: "Group"))
+        XCTAssertTrue(editor.performEdit(NSRange(location: 7, length: 0), with: NSAttributedString(string: "B"), name: "Group",
+            selection: NSRange(location: 8, length: 2)))
+        editor.history.endGroup()
+        let groupAfter = view.selectedRange()
+        XCTAssertTrue(editor.history.undo()); XCTAssertEqual(view.selectedRange(), groupBefore)
+        XCTAssertTrue(editor.history.redo()); XCTAssertEqual(view.selectedRange(), groupAfter)
+    }
+
+    func testH2_04TableEmptyParagraphCompositionAndCheckpointSelections() throws {
+        let editor = engine(NoteDocument(blocks: [.text("Title"), .table(NoteTable(texts: [["a"], ["b"]])), .text("")]))
+        let (scroll, view) = editor.makeView()
+        defer { editor.detachView(); _ = scroll }
+        let original = NSRange(location: 8, length: 0)
+        view.setSelectedRange(original)
+        XCTAssertTrue(editor.perform(.paragraph(.bullet), selection: original))
+        view.setSelectedRange(NSRange(location: 0, length: 0))
+        XCTAssertTrue(editor.history.undo()); XCTAssertEqual(view.selectedRange(), original)
+        XCTAssertTrue(editor.history.redo()); XCTAssertEqual(view.selectedRange(), original)
+        let table = try XCTUnwrap(editor.objects().compactMap { $0.0 as? NoteTableAttachment }.first)
+        view.setSelectedRange(NSRange(location: 6, length: 1))
+        let before = view.selectedRange()
+        XCTAssertTrue(editor.changeTable(table, name: "Cell") { $0.rows[1].cells[0].text = "changed" })
+        view.setSelectedRange(NSRange(location: 0, length: 0))
+        XCTAssertTrue(editor.history.undo()); XCTAssertEqual(view.selectedRange(), before)
+        XCTAssertTrue(editor.history.redo()); XCTAssertEqual(view.selectedRange(), before)
+
+        let composing = engine(NoteDocument(blocks: [.text("Title"), .text("abcdef")]))
+        let (composeScroll, composeView) = composing.makeView()
+        defer { composing.detachView(); _ = composeScroll }
+        let selected = NSRange(location: 7, length: 3)
+        composeView.setSelectedRange(selected)
+        composeView.setMarkedText("字", selectedRange: NSRange(location: 1, length: 0), replacementRange: selected)
+        composeView.unmarkText()
+        let after = composeView.selectedRange(), document = composing.document()
+        let checkpoint = composing.history.checkpoint()
+        XCTAssertTrue(composing.history.undo()); XCTAssertEqual(composeView.selectedRange(), selected)
+        XCTAssertTrue(composing.history.redo()); XCTAssertEqual(composeView.selectedRange(), after)
+        XCTAssertEqual(composing.document(), document)
+        composing.history.rewind(to: checkpoint)
+        XCTAssertTrue(composing.history.undo()); XCTAssertEqual(composeView.selectedRange(), selected)
+    }
+
+    func testH2_04CaretOnlyCommandsDoNotRewriteRecordedEndpoints() {
+        let editor = engine(NoteDocument(blocks: [.text("Title"), .text("abcdef")]))
+        let (scroll, view) = editor.makeView()
+        defer { editor.detachView(); _ = scroll }
+        let before = NSRange(location: 7, length: 3)
+        view.setSelectedRange(before)
+        view.insertText("X", replacementRange: before)
+        let after = view.selectedRange()
+        view.setSelectedRange(NSRange(location: 0, length: 0))
+        view.deleteBackward(nil) // No edit at the start of the document.
+        XCTAssertTrue(editor.history.undo()); XCTAssertEqual(view.selectedRange(), before)
+        XCTAssertTrue(editor.history.redo()); XCTAssertEqual(view.selectedRange(), after)
+    }
+
+    func testH2_04CaretCommandAfterSnapshotCannotChangeRedoSelection() {
+        for tags in [true, false] {
+            let editor = engine(NoteDocument(blocks: [.text("Title"), .text("abcdef")]))
+            let (scroll, view) = editor.makeView()
+            let selected = NSRange(location: 7, length: 0)
+            view.setSelectedRange(selected)
+            if tags { editor.setTagsFromPicker(["work"]) }
+            else { XCTAssertTrue(editor.perform(.mark(.bold), selection: selected)) }
+            // The same user-edit bracket used by a caret-only key command.
+            editor.userEditDepth += 1
+            view.setSelectedRange(NSRange(location: 0, length: 0))
+            editor.userEditDepth -= 1
+            XCTAssertTrue(editor.history.undo()); XCTAssertEqual(view.selectedRange(), selected)
+            XCTAssertTrue(editor.history.redo()); XCTAssertEqual(view.selectedRange(), selected)
+            editor.detachView(); _ = scroll
+        }
     }
 
     func testH2_05MigrationRefusesCanonicallyEqualButByteDivergentReplicas() throws {

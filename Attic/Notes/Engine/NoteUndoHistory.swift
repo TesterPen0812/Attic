@@ -36,6 +36,8 @@ final class NoteUndoHistory {
         fileprivate(set) var name: String
         fileprivate(set) var isInert = false
         fileprivate let group: Int
+        fileprivate var selectionBefore: NSRange?
+        fileprivate var selectionAfter: NSRange?
         /// The title shorthand this step made: `adds` says what flipping the
         /// step does next time; `changesTags` is false when the note already
         /// had the tag (the step then only moves text, but its Undo still
@@ -89,6 +91,7 @@ final class NoteUndoHistory {
         var pre: NSAttributedString?
         var post: NSAttributedString?
         var emptyParagraphBefore: NoteBlock? = nil
+        var selectionBefore: NSRange? = nil
     }
 
     let storage: NSTextStorage
@@ -121,11 +124,13 @@ final class NoteUndoHistory {
     private(set) var isTraversing = false
     private var open: Op?
     private var pending: [Pending] = []
+    private var selectionCompletion: Op?
+    private(set) var recordingGeneration = 0
     private var expectedLength = 0
     private var nextGroup = 0
     private var groupDepth = 0
     private var groupID: Int?
-    private var composition: (range: NSRange, old: NSAttributedString)?
+    private var composition: (range: NSRange, old: NSAttributedString, selection: NSRange?)?
     let limit: Int
 
     init(storage: NSTextStorage, limit: Int = 500) {
@@ -160,6 +165,7 @@ final class NoteUndoHistory {
         redoOps.removeAll()
         open = nil
         pending.removeAll()
+        selectionCompletion = nil
         composition = nil
     }
 
@@ -176,6 +182,8 @@ final class NoteUndoHistory {
     }
 
     func endGroup() {
+        if let last = undoOps.last, last.group == groupID { last.selectionAfter = textView?.selectedRange() }
+        completeSelection()
         groupDepth = max(0, groupDepth - 1)
         if groupDepth == 0 {
             groupID = nil
@@ -194,7 +202,7 @@ final class NoteUndoHistory {
                                        (location: Int, before: ParagraphState, after: ParagraphState)?,
                                        (kind: NoteMark.Kind, before: Bool, after: Bool)?,
                                        (before: NoteBlock?, after: NoteBlock?)?,
-                                       TableSnapshot?)
+                                       TableSnapshot?, NSRange?, NSRange?)
         fileprivate let undo: [Saved]
         fileprivate let redo: [Saved]
     }
@@ -202,7 +210,7 @@ final class NoteUndoHistory {
     func checkpoint() -> Checkpoint {
         open = nil
         func copy(_ ops: [Op]) -> [Checkpoint.Saved] {
-            ops.map { ($0, $0.range, $0.current, $0.other, $0.isInert, $0.tagDelta, $0.tagPickerDelta, $0.paragraphStyleSnapshot, $0.typingMarkSnapshot, $0.emptyParagraphSnapshot, $0.tableSnapshot) }
+            ops.map { ($0, $0.range, $0.current, $0.other, $0.isInert, $0.tagDelta, $0.tagPickerDelta, $0.paragraphStyleSnapshot, $0.typingMarkSnapshot, $0.emptyParagraphSnapshot, $0.tableSnapshot, $0.selectionBefore, $0.selectionAfter) }
         }
         return Checkpoint(undo: copy(undoOps), redo: copy(redoOps))
     }
@@ -211,7 +219,7 @@ final class NoteUndoHistory {
     /// is now (the caller restored the text first).
     func rewind(to checkpoint: Checkpoint) {
         func restore(_ saved: [Checkpoint.Saved]) -> [Op] {
-            saved.map { op, range, current, other, inert, tagDelta, tagPickerDelta, paragraphStyleSnapshot, typingMarkSnapshot, emptyParagraphSnapshot, tableSnapshot in
+            saved.map { op, range, current, other, inert, tagDelta, tagPickerDelta, paragraphStyleSnapshot, typingMarkSnapshot, emptyParagraphSnapshot, tableSnapshot, selectionBefore, selectionAfter in
                 op.range = range
                 op.current = current
                 op.other = other
@@ -222,6 +230,8 @@ final class NoteUndoHistory {
                 op.typingMarkSnapshot = typingMarkSnapshot
                 op.emptyParagraphSnapshot = emptyParagraphSnapshot
                 op.tableSnapshot = tableSnapshot
+                op.selectionBefore = selectionBefore
+                op.selectionAfter = selectionAfter
                 return op
             }
         }
@@ -229,6 +239,7 @@ final class NoteUndoHistory {
         redoOps = restore(checkpoint.redo)
         open = nil
         pending.removeAll()
+        selectionCompletion = nil
         composition = nil
         log.append("rewound to a checkpoint")
     }
@@ -251,6 +262,7 @@ final class NoteUndoHistory {
         redoOps.removeAll()
         open = nil
         pending.removeAll()
+        selectionCompletion = nil
         composition = nil
         log.append("discarded steps since \(keep)")
     }
@@ -266,7 +278,7 @@ final class NoteUndoHistory {
             let newLength = strings.map { ($0[index] as NSString).length } ?? range.length
             var entry = Pending(range: range, old: storage.attributedSubstring(from: range),
                                 newRange: NSRange(location: range.location + delta, length: newLength),
-                                emptyParagraphBefore: emptyParagraphState?())
+                                emptyParagraphBefore: emptyParagraphState?(), selectionBefore: textView?.selectedRange())
             if ranges.count == 1, groupID == nil, let op = open, !op.isInert, !op.isSnapshot,
                range.location <= NSMaxRange(op.range), NSMaxRange(range) >= op.range.location {
                 entry.coalesceInto = op
@@ -319,9 +331,13 @@ final class NoteUndoHistory {
                                                                            length: endBefore + delta - start))
                 }
                 op.range = NSRange(location: start, length: endBefore + delta - start)
+                selectionCompletion = op
+                recordingGeneration &+= 1
+                op.selectionAfter = textView?.selectedRange()
                 updateEmptyParagraphSnapshot(op, before: entry.emptyParagraphBefore)
             } else {
                 let op = Op(range: entry.newRange, current: now, other: entry.old, name: name, group: groupID ?? nextOwnGroup())
+                op.selectionBefore = entry.selectionBefore
                 updateEmptyParagraphSnapshot(op, before: entry.emptyParagraphBefore)
                 append(op)
                 open = (pending.count == 1 && groupID == nil) ? undoOps.last : nil
@@ -342,7 +358,23 @@ final class NoteUndoHistory {
         return nextGroup
     }
 
+    /// Capture the final selection after AppKit or a command finishes,
+    /// never a later caret move and never a replay's intermediate selection.
+    func completeSelection(since generation: Int? = nil) {
+        guard !isReplaying, !isTraversing, pending.isEmpty else { return }
+        let op = generation.map { $0 != recordingGeneration ? undoOps.last : nil } ?? selectionCompletion
+        op?.selectionAfter = textView?.selectedRange()
+        selectionCompletion = nil
+    }
+
     private func append(_ op: Op) {
+        // Snapshot operations do not change the root text selection. Their
+        // cell focus lives in the snapshot, and groups capture their final
+        // endpoint in endGroup. Never leave them open for a later arrow key.
+        selectionCompletion = op.isSnapshot ? nil : op
+        recordingGeneration &+= 1
+        if op.selectionBefore == nil { op.selectionBefore = textView?.selectedRange() }
+        op.selectionAfter = textView?.selectedRange()
         undoOps.append(op)
         redoOps.removeAll()
         if undoOps.count > limit { undoOps.removeFirst(undoOps.count - limit) }
@@ -353,7 +385,7 @@ final class NoteUndoHistory {
     /// storage changes.
     func beginComposition(replacing range: NSRange) {
         guard !isReplaying, range.length > 0, NSMaxRange(range) <= storage.length else { return }
-        composition = (range, storage.attributedSubstring(from: range))
+        composition = (range, storage.attributedSubstring(from: range), textView?.selectedRange())
         open = nil
     }
 
@@ -372,6 +404,7 @@ final class NoteUndoHistory {
         let preRange = NSRange(location: newRange.location, length: oldLength)
         var old: NSAttributedString?
         var coalesce: Op?
+        let selectionBefore = composition?.selection ?? textView?.selectedRange()
         if let captured = composition, captured.range == preRange {
             old = captured.old
             composition = nil
@@ -391,7 +424,7 @@ final class NoteUndoHistory {
             return
         }
         pending = [Pending(range: preRange, old: old, newRange: newRange, coalesceInto: coalesce,
-                           emptyParagraphBefore: emptyParagraphBefore)]
+                           emptyParagraphBefore: emptyParagraphBefore, selectionBefore: selectionBefore)]
         if let op = coalesce {
             // Inside the open step: its recorded old text already covers this.
             pending[0].pre = nil
@@ -405,6 +438,9 @@ final class NoteUndoHistory {
                                                                        length: op.range.length + delta))
             }
             op.range = NSRange(location: op.range.location, length: op.range.length + delta)
+            selectionCompletion = op
+            recordingGeneration &+= 1
+            op.selectionAfter = textView?.selectedRange()
             updateEmptyParagraphSnapshot(op, before: emptyParagraphBefore)
             pending.removeAll()
             return
@@ -476,6 +512,9 @@ final class NoteUndoHistory {
            snapshot.id == id, snapshot.cell == cell {
             snapshot.after = after
             snapshot.focusAfter = focusAfter
+            selectionCompletion = nil
+            op.selectionAfter = textView?.selectedRange()
+            recordingGeneration &+= 1
             op.tableSnapshot = snapshot
             redoOps.removeAll()
             return
@@ -504,6 +543,7 @@ final class NoteUndoHistory {
         body()
         isReplaying = wasReplaying
         pending.removeAll()
+        selectionCompletion = nil
         composition = nil
         open = nil
     }
@@ -558,16 +598,19 @@ final class NoteUndoHistory {
             return false
         }
         if let delta = op.tagPickerDelta {
+            flipSelection(op)
             op.tagPickerDelta = (delta.removes, delta.adds)
             onTagPickerDelta?(delta.adds, delta.removes)
             return true
         }
         if let snapshot = op.paragraphStyleSnapshot {
+            flipSelection(op)
             op.paragraphStyleSnapshot = (snapshot.location, snapshot.after, snapshot.before)
             onParagraphStyleSnapshot?(snapshot.location, snapshot.before)
             return true
         }
         if let snapshot = op.typingMarkSnapshot {
+            flipSelection(op)
             op.typingMarkSnapshot = (snapshot.kind, snapshot.after, snapshot.before)
             onTypingMarkSnapshot?(snapshot.kind, snapshot.before)
             return true
@@ -580,6 +623,7 @@ final class NoteUndoHistory {
                 op.isInert = true
                 return false
             }
+            flipSelection(op)
             op.tableSnapshot = TableSnapshot(id: snapshot.id, before: snapshot.after, after: snapshot.before,
                                              focusBefore: snapshot.focusAfter, focusAfter: snapshot.focusBefore,
                                              cell: snapshot.cell)
@@ -605,7 +649,7 @@ final class NoteUndoHistory {
         op.other = op.current
         op.current = replacement
         op.range = NSRange(location: op.range.location, length: replacement.length)
-        textView?.setSelectedRange(NSRange(location: NSMaxRange(op.range), length: 0))
+        flipSelection(op, fallback: NSRange(location: NSMaxRange(op.range), length: 0))
         if let delta = op.tagDelta {
             op.tagDelta = (delta.tag, !delta.adds, delta.changesTags)
             onTagFlip?(delta.tag, delta.adds, delta.changesTags, op.range)
@@ -619,6 +663,15 @@ final class NoteUndoHistory {
             onBoundaryTypingMarksSnapshot?(marks)
         }
         return true
+    }
+
+    private func flipSelection(_ op: Op, fallback: NSRange? = nil) {
+        let selection = op.selectionBefore ?? fallback
+        swap(&op.selectionBefore, &op.selectionAfter)
+        if let selection, let textView {
+            let location = min(max(0, selection.location), storage.length)
+            textView.setSelectedRange(NSRange(location: location, length: min(selection.length, storage.length - location)))
+        }
     }
 
     // MARK: Rebasing through an outside edit
@@ -642,6 +695,19 @@ final class NoteUndoHistory {
     }
 
     private func shift(_ op: Op, by edit: (location: Int, old: Int, new: Int)) -> Bool {
+        func moved(_ selection: NSRange?, by change: (location: Int, old: Int, new: Int)) -> NSRange? {
+            guard let selection else { return nil }
+            func position(_ value: Int) -> Int {
+                if value <= change.location { return value }
+                if value >= change.location + change.old { return value + change.new - change.old }
+                return change.location + change.new
+            }
+            let start = position(selection.location), end = position(NSMaxRange(selection))
+            return NSRange(location: start, length: max(0, end - start))
+        }
+        op.selectionAfter = moved(op.selectionAfter, by: edit)
+        op.selectionBefore = moved(op.selectionBefore, by: map(edit, at: op.range.location,
+            oldLength: op.current.length, newLength: op.other.length))
         if op.tagPickerDelta != nil || op.typingMarkSnapshot != nil || op.tableSnapshot != nil { return true }
         if var snapshot = op.paragraphStyleSnapshot {
             if edit.location + edit.old < snapshot.location {
