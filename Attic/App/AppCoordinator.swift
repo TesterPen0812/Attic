@@ -261,12 +261,15 @@ struct AppRuntimeEnvironment {
                 TaskImageFiles(rootURL: $0.appendingPathComponent("TaskImages", isDirectory: true))
             } ?? makeTaskImageFiles()
         )
-        let notes = NoteStore(
-            container: container,
-            attachmentFileStore: performanceRoot.map {
-                AttachmentFileStore(rootURL: $0.appendingPathComponent("NoteAttachments", isDirectory: true))
-            } ?? makeAttachmentFileStore()
-        )
+        let attachmentFiles = performanceRoot.map {
+            AttachmentFileStore(rootURL: $0.appendingPathComponent("NoteAttachments", isDirectory: true))
+        } ?? makeAttachmentFileStore() ?? AttachmentFileStore()
+        do {
+            try OldNotesPurge.cleanup(in: container, recoveryURL: noteRecoveryURL, attachmentRoot: attachmentFiles.rootURL)
+        } catch {
+            preconditionFailure("Old-note file cleanup must finish before Notes recovery starts.")
+        }
+        let notes = NoteStore(container: container, attachmentFileStore: attachmentFiles)
         return (tasks, notes)
     }
 }

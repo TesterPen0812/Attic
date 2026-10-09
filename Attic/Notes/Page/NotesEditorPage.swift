@@ -22,8 +22,6 @@ struct NotesEditorPage: View {
     @ObservedObject var noteDraft: NoteDraftController
     @ObservedObject var uiState: PanelUIState
     let layout: PanelPageLayout
-    /// Set when the switch is off: All notes returns to the old page.
-    var exitToOldPage: (() -> Void)?
 
     @Environment(\.atticDesign) private var design
     @Environment(\.atticPanelToasts) private var toasts
@@ -51,14 +49,13 @@ struct NotesEditorPage: View {
     @State private var postedToastStep: UUID?
 
     init(controller: NotesPageController, noteStore: NoteStore, noteDraft: NoteDraftController,
-         uiState: PanelUIState, layout: PanelPageLayout, exitToOldPage: (() -> Void)? = nil,
+         uiState: PanelUIState, layout: PanelPageLayout,
          librarySearch: ((String) async throws -> Set<UUID>)? = nil) {
         self.controller = controller
         self.noteStore = noteStore
         self.noteDraft = noteDraft
         self.uiState = uiState
         self.layout = layout
-        self.exitToOldPage = exitToOldPage
         let store = noteStore
         _damagedRecovery = StateObject(wrappedValue: NoteDamagedRecoveryExit(perform: { [controller] command in
             await controller.perform(command)
@@ -183,7 +180,6 @@ struct NotesEditorPage: View {
             chrome.closeFormatBar()
             chrome.cancelKeyboardReturn()
         }
-        .onChange(of: controller.legacyNoteID) { _, id in openLegacy(id) }
         .onChange(of: controller.active?.id) { _, opened in
             // Another note: the keyboard return belonged to the last one.
             chrome.cancelKeyboardReturn()
@@ -238,7 +234,7 @@ struct NotesEditorPage: View {
     }
 
     private var showsEditor: Bool {
-        !controller.isLibraryPresented && controller.proposalReview == nil && controller.active != nil && controller.legacyNoteID == nil
+        !controller.isLibraryPresented && controller.proposalReview == nil && controller.active != nil
     }
 
     // MARK: Content
@@ -257,12 +253,6 @@ struct NotesEditorPage: View {
                              onBack: { toggleLibrary() },
                              onCreate: { title, tag in newNote(title: title, tag: tag) })
                 .transition(slide(from: Self.libraryEdge))
-        } else if let legacyID = controller.legacyNoteID, noteDraft.activeNoteID == legacyID {
-            // A note not yet in the new format keeps the old editor.
-            NoteComposerView(noteDraft: noteDraft, uiState: uiState,
-                             topContentInset: topInset, bottomContentInset: bottomInset)
-                .padding(.horizontal, layout.contentInsets.leading)
-                .transition(slide(from: Self.noteEdge))
         } else if let review = controller.proposalReview {
             NoteProposalComparison(controller: controller, store: noteStore, review: review,
                 columnInset: columnInset, topInset: layout.headerBottom + 8, bottomInset: layout.chromeInsets.bottom,
@@ -503,10 +493,6 @@ struct NotesEditorPage: View {
     // MARK: Navigation
 
     private func toggleLibrary() {
-        if let exitToOldPage {
-            exitToOldPage()
-            return
-        }
         if controller.isLibraryPresented {
             library.clearSearch()
             controller.dismissLibrary()
@@ -546,13 +532,8 @@ struct NotesEditorPage: View {
         library.clearSearch()
     }
 
-    private func openLegacy(_ id: UUID?) {
-        guard let id, let note = noteStore.note(withID: id) else { return }
-        if noteDraft.beginEditing(note) { uiState.beginEditingNote(note) }
-    }
-
     private var currentNoteID: UUID? {
-        guard let session = controller.active, controller.legacyNoteID == nil else { return nil }
+        guard let session = controller.active else { return nil }
         return session.noteID
     }
 
@@ -607,7 +588,7 @@ struct NotesEditorPage: View {
     /// as this slice supports them, then the note's actions. What is not
     /// built yet is left out.
     private func noteMenuCommands() -> [AtticMenuCommand] {
-        guard let session = controller.active, controller.legacyNoteID == nil else { return [] }
+        guard let session = controller.active else { return [] }
         let id = session.noteID
         let engine = session.engine
         let editable = !session.isReadOnly
@@ -1232,7 +1213,7 @@ final class NotesPageSwipeView: NSView, PanelNotesSwipeTarget {
     /// Clicks go through to the page.
     override func hitTest(_ point: NSPoint) -> NSView? { nil }
 
-    /// The page this one covered (a legacy editor inside the Notes page):
+    /// The page this one covered (another editor inside the Notes page):
     /// it gets the slot back when this one leaves (review S4-R5).
     private weak var coveredTarget: (any PanelNotesSwipeTarget)?
 

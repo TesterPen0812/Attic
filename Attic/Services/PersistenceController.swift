@@ -35,7 +35,8 @@ enum PersistenceController {
             ItemLink.self,
             // Phase 2: note versions and agents' pending note edits.
             NoteVersion.self,
-            NotePendingEdit.self
+            NotePendingEdit.self,
+            StoreMaintenance.self
         ]
         #else
         [
@@ -107,10 +108,14 @@ enum PersistenceController {
         if !inMemory && cloudSyncEnabled {
             try createPreCloudKitBackupIfNeeded(for: configuration)
         }
-        return try ModelContainer(
+        let container = try ModelContainer(
             for: Schema(appModelTypes),
             configurations: configuration
         )
+        #if os(macOS)
+        _ = try OldNotesPurge.run(in: container)
+        #endif
+        return container
     }
 
     /// A durable, CloudKit-free store used only by controlled UI tests that
@@ -145,10 +150,14 @@ enum PersistenceController {
             url: storeURL,
             cloudKitDatabase: .none
         )
-        return try ModelContainer(
+        let container = try ModelContainer(
             for: Schema(appModelTypes),
             configurations: configuration
         )
+        #if os(macOS)
+        _ = try OldNotesPurge.run(in: container)
+        #endif
+        return container
     }
 
     #if DEBUG

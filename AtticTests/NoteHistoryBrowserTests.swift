@@ -121,21 +121,6 @@ final class NoteHistoryBrowserTests: XCTestCase {
         XCTAssertEqual(store.note(withID: original.noteID)?.body, "Earlier paragraph\nStudent pricing")
     }
 
-    func testLegacyRestoreUndoReturnsTheOriginalDocumentSession() async throws {
-        try type("Modern\nCurrent paragraph")
-        await XCTAssertTrueAsync(await controller.preserveAllDurably())
-        let original = try XCTUnwrap(controller.active)
-        store.modelContext.insert(NoteVersion(noteID: original.noteID, createdAt: Date(), reason: .beforeMigration,
-            content: nil, contentFormat: 0, title: "Legacy", body: "Earlier paragraph", attachmentIDs: [], sourceRevisionID: nil))
-        try store.modelContext.save()
-        await XCTAssertTrueAsync(await controller.openHistoryDurably())
-        await XCTAssertTrueAsync(await controller.restoreHistoryVersionDurably())
-        XCTAssertEqual(controller.legacyNoteID, original.noteID)
-        await XCTAssertTrueAsync(await controller.undoVersionRestoreDurably(expectedID: controller.versionRestoreUndoID))
-        XCTAssertTrue(controller.active === original)
-        XCTAssertEqual(store.note(withID: original.noteID)?.title, "Modern")
-    }
-
     func testNativeUndoCommandCanUndoRestoreAfterToastExpires() async throws {
         let (original, _) = try await history()
         await XCTAssertTrueAsync(await controller.restoreHistoryVersionDurably())
@@ -180,22 +165,6 @@ final class NoteHistoryBrowserTests: XCTestCase {
         XCTAssertTrue(original.engine.redoCommand())
         await XCTAssertTrueAsync(await controller.redoVersionRestoreDurably())
         XCTAssertTrue(controller.active === restored)
-    }
-
-    func testLegacyCompositionRefusesUndoBeforeAnyStoreMutation() async throws {
-        try type("Modern")
-        await XCTAssertTrueAsync(await controller.preserveAllDurably())
-        let original = try XCTUnwrap(controller.active)
-        store.modelContext.insert(NoteVersion(noteID: original.noteID, createdAt: Date(), reason: .beforeMigration,
-            content: nil, contentFormat: 0, title: "Legacy", body: "Earlier", attachmentIDs: [], sourceRevisionID: nil))
-        try store.modelContext.save()
-        await XCTAssertTrueAsync(await controller.openHistoryDurably())
-        await XCTAssertTrueAsync(await controller.restoreHistoryVersionDurably())
-        controller.leaveLegacyNote = { reason in reason == .hide }
-        let revision = store.note(withID: original.noteID)?.revisionID
-        await XCTAssertFalseAsync(await controller.undoVersionRestoreDurably(expectedID: controller.versionRestoreUndoID))
-        XCTAssertEqual(store.note(withID: original.noteID)?.revisionID, revision)
-        XCTAssertEqual(controller.legacyNoteID, original.noteID)
     }
 
     func testRedoTraversesEarlierTagUndoBeforeRedoingRestore() async throws {

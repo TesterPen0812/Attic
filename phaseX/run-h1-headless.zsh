@@ -19,7 +19,7 @@ case "$mode" in
     only=(-only-testing:AtticTests/PhaseXHunt1GeneratedTests/testSeededEditorSequencesAgreeAfterEveryOperation)
     ;;
   --area)
-    for suite in NoteEditorEngineTests NoteDocumentStoreTests NoteFormatTests NotesMigrationAcceptanceTests NoteStoreTests TaskStoreTests DailyCleanupServiceTests SubtaskTests; do
+    for suite in NoteEditorEngineTests NoteDocumentStoreTests NoteFormatTests NoteStoreTests TaskStoreTests DailyCleanupServiceTests SubtaskTests; do
       only+=(-only-testing:AtticTests/$suite)
     done
     ;;
@@ -27,7 +27,7 @@ case "$mode" in
 esac
 mkdir -p .build/hunt1
 "$lock" test -project Attic.xcodeproj -scheme Attic -configuration Local \
-  -destination 'platform=macOS' -derivedDataPath .build/dd-hunt1 "${only[@]}" \
+  -destination 'platform=macOS' -derivedDataPath "${ATTIC_DERIVED_DATA:-.build/dd-o01}" "${only[@]}" \
   CODE_SIGN_IDENTITY=- CODE_SIGN_STYLE=Manual DEVELOPMENT_TEAM= ENABLE_HARDENED_RUNTIME=NO \
   SWIFT_STRICT_CONCURRENCY=complete \
-  ATTIC_MACOS_UNIT_HOST_BUNDLE_IDENTIFIER=com.taha.Attic.preview.hunt1host
+  ATTIC_MACOS_UNIT_HOST_BUNDLE_IDENTIFIER="${ATTIC_UNIT_HOST:-com.taha.Attic.preview.phase-x-o01-unit}"

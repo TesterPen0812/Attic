@@ -32,7 +32,7 @@ enum TaskDropContent: Equatable {
     static let internalMarkerTypes: [UTType] = [
         TaskDragPayload.internalTaskType,
         attachmentCardType,
-        UTType(exportedAs: NoteInlineCardsLayout.dragType.rawValue)
+        UTType(exportedAs: NoteEditorEngine.fragmentType.rawValue)
     ]
 
     /// What task drop destinations register: the listed file types, general

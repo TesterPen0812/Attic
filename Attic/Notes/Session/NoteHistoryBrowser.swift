@@ -19,7 +19,7 @@ struct NoteHistoryEntry: Identifiable {
             canRestore = version.contentFormat == NoteDocument.currentFormat && decoded.isEditable
         } else {
             document = NoteDocument(blocks: [.text(version.title)] + version.body.components(separatedBy: "\n").map { .text($0) })
-            canRestore = version.contentFormat == 0
+            canRestore = false
         }
     }
 }
@@ -31,7 +31,6 @@ extension NoteVersionReason {
         case .leave: "On leaving"
         case .beforeAgentEdit: "Before agent edit"
         case .beforeRestore: "Before restore"
-        case .beforeMigration: "Before migration"
         case .beforeWritingTools: "Before Writing Tools"
         case .replacedByDraft: "Before recovered draft"
         }

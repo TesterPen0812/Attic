@@ -76,7 +76,7 @@ final class NoteDocumentStoreTests: XCTestCase {
         let shared = UUID(), timestamp = Date()
         for title in ["Earlier", "Different"] {
             store.modelContext.insert(NoteVersion(id: shared, noteID: id, createdAt: timestamp, reason: .pause,
-                content: nil, contentFormat: 0, title: title, body: "", attachmentIDs: [], sourceRevisionID: revision))
+                content: try NoteContentCodec.encode(document(title)), contentFormat: 1, title: title, body: "", attachmentIDs: [], sourceRevisionID: revision))
         }
         try store.modelContext.save()
         guard case let .failure(error) = store.restoreVersion(shared, noteID: id) else { return XCTFail() }
@@ -216,9 +216,9 @@ final class NoteDocumentStoreTests: XCTestCase {
         XCTAssertTrue(versions(id).contains { $0.reason == .replacedByDraft && $0.title == "stale" })
     }
 
-    func testDivergentLegacyReplicasSharingARevisionAreEachPreserved() throws {
+    func testDivergentTextCreatedReplicasSharingARevisionAreEachPreserved() throws {
         let (id, revision) = try create(document("Original"))
-        for title in ["Legacy A", "Legacy B"] {
+        for title in ["Replica A", "Replica B"] {
             let replica = NoteItem(id: id, title: title, body: "different")
             replica.revisionID = revision
             store.modelContext.insert(replica)
@@ -227,7 +227,7 @@ final class NoteDocumentStoreTests: XCTestCase {
         guard case .success = store.saveDocument(noteID: id, document: document("Edited"),
                                                   baseRevisionID: revision) else { return XCTFail() }
         let saved = Set(versions(id).map(\.title))
-        XCTAssertTrue(saved.isSuperset(of: ["Original", "Legacy A", "Legacy B"]))
+        XCTAssertTrue(saved.isSuperset(of: ["Original", "Replica A", "Replica B"]))
         XCTAssertEqual(Set(try rows(id).map(\.title)), ["Edited"])
     }
 
@@ -261,6 +261,29 @@ final class NoteDocumentStoreTests: XCTestCase {
         XCTAssertTrue(versions(id).isEmpty, "only pause, leave and explicit safety boundaries make snapshots")
         XCTAssertEqual(store.documentReplicaDecodeCount, decodesBefore,
                        "known bytes must not be decoded again on each save")
+    }
+
+    func testExcludedBaseSkipsOnlyAnUnambiguousReplicaFamily() throws {
+        let timestamp = Date()
+        for excluded in [false, true] {
+            let (id, revision) = try create(document("Original", ["caf\u{E9}"]))
+            let note = try XCTUnwrap(store.note(withID: id))
+            XCTAssertEqual(store.stageDisplacedReplicas([note], reason: .replacedByDraft,
+                timestamp: timestamp, excludingUnchangedBase: excluded ? revision : UUID()), excluded ? 0 : 1)
+            XCTAssertEqual(versions(id).count, excluded ? 0 : 1)
+        }
+        let (id, revision) = try create(document("Original", ["caf\u{E9}"]))
+        let note = try XCTUnwrap(store.note(withID: id))
+        let sibling = NoteItem(id: id, title: note.title, body: "cafe\u{301}")
+        sibling.content = note.content
+        sibling.contentFormat = note.contentFormat
+        sibling.revisionID = revision
+        store.modelContext.insert(sibling)
+        try store.modelContext.save()
+        XCTAssertEqual(store.stageDisplacedReplicas([note, sibling], reason: .replacedByDraft,
+            timestamp: timestamp, excludingUnchangedBase: revision), 2)
+        XCTAssertEqual(Set(versions(id).map { Array($0.body.utf16) }),
+                       Set([Array("caf\u{E9}".utf16), Array("cafe\u{301}".utf16)]))
     }
 
     func testBatchAttachmentAdmissionDecodesTheBaseOnlyOnce() throws {
@@ -346,26 +369,9 @@ final class NoteDocumentStoreTests: XCTestCase {
         XCTAssertTrue(versions(id).isEmpty)
     }
 
-    func testLegacyAutosavesDoNotMakeHistoryRows() throws {
-        let note = try XCTUnwrap(store.create(title: "Draft"))
-        for number in 0..<20 {
-            XCTAssertTrue(store.update(note, body: "Body \(number)"))
-        }
-        XCTAssertTrue(versions(note.id).isEmpty)
-    }
 
-    func testRemovedLegacyAttachmentIsPurgeableAfterOrdinaryEdits() throws {
-        let note = try XCTUnwrap(store.create(title: "Legacy"))
-        let row = NoteAttachment(noteID: note.id, originalFilename: "old.bin", byteCount: 1,
-                                 sortIndex: 0, contentDigest: String(repeating: "a", count: 64),
-                                 payload: Data([1]))
-        store.modelContext.insert(row)
-        try store.modelContext.save()
-        for number in 0..<3 { XCTAssertTrue(store.update(note, body: "Edit \(number)")) }
-        XCTAssertTrue(store.removeAttachment(row))
-        XCTAssertEqual(store.purgeRemovedAttachments(before: .distantFuture), 1)
-        XCTAssertTrue(try store.attachmentRows(forNoteID: note.id).isEmpty)
-    }
+
+
 
     func testStaleDocumentBaseCannotOverwriteAnAgentEdit() throws {
         let (id, base) = try create(document("Current"))
@@ -438,21 +444,6 @@ final class NoteDocumentStoreTests: XCTestCase {
         XCTAssertEqual(try rows(id).map(\.title), baseline.map(\.2))
     }
 
-    func testLegacyUpdateRefusesNewFormatNotesAndBumpsRevisionOnLegacyNotes() throws {
-        let (id, _) = try create(document("New"))
-        let note = try XCTUnwrap(store.note(withID: id))
-        XCTAssertFalse(store.update(note, title: "Clobber", body: "x"))
-        XCTAssertEqual(store.note(withID: id)?.title, "New")
-
-        let legacy = try XCTUnwrap(store.create(title: "Old", body: "text"))
-        XCTAssertEqual(legacy.revisionToken, NoteItem.initialRevisionToken)
-        XCTAssertTrue(store.update(legacy, body: "changed"))
-        let updated = try XCTUnwrap(store.note(withID: legacy.id))
-        XCTAssertNotNil(updated.revisionID)
-        XCTAssertEqual(updated.revision, 1)
-        XCTAssertEqual(updated.plainText, "Old\nchanged")
-    }
-
     func testFailedSaveChangesNothing() throws {
         let (id, revision) = try create(document("Plan"))
         gate.shouldFail = true
@@ -501,25 +492,25 @@ final class NoteDocumentStoreTests: XCTestCase {
     func testVersionThinningKeepsHourlyAndDailySnapshotsAndProposalBase() throws {
         let (id, _) = try create(document("Current"))
         let now = Date()
-        func oldVersion(days: Double, minutes: Double) -> NoteVersion {
+        func oldVersion(days: Double, minutes: Double) throws -> NoteVersion {
             NoteVersion(noteID: id, createdAt: now.addingTimeInterval(-days * 86_400 + minutes * 60),
-                        reason: .pause, content: nil, contentFormat: 0, title: "old", body: "",
+                        reason: .pause, content: try NoteContentCodec.encode(document("old")), contentFormat: 1, title: "old", body: "",
                         attachmentIDs: [], sourceRevisionID: UUID())
         }
-        let hourlyFirst = oldVersion(days: 2, minutes: 0)
+        let hourlyFirst = try oldVersion(days: 2, minutes: 0)
         hourlyFirst.createdAt = Date(timeIntervalSince1970:
             floor(hourlyFirst.createdAt.timeIntervalSince1970 / 3_600) * 3_600 + 60)
         let hourlySecond = NoteVersion(noteID: id, createdAt: hourlyFirst.createdAt.addingTimeInterval(60),
-            reason: .pause, content: nil, contentFormat: 0, title: "old", body: "",
+            reason: .pause, content: try NoteContentCodec.encode(document("old")), contentFormat: 1, title: "old", body: "",
             attachmentIDs: [], sourceRevisionID: UUID())
-        let dailyFirst = oldVersion(days: 8, minutes: 0)
+        let dailyFirst = try oldVersion(days: 8, minutes: 0)
         dailyFirst.createdAt = Date(timeIntervalSince1970:
             floor(dailyFirst.createdAt.timeIntervalSince1970 / 86_400) * 86_400 + 60)
         let dailySecond = NoteVersion(noteID: id, createdAt: dailyFirst.createdAt.addingTimeInterval(60),
-            reason: .pause, content: nil, contentFormat: 0, title: "old", body: "",
+            reason: .pause, content: try NoteContentCodec.encode(document("old")), contentFormat: 1, title: "old", body: "",
             attachmentIDs: [], sourceRevisionID: UUID())
-        let expired = oldVersion(days: 31, minutes: 0)
-        let protected = oldVersion(days: 31, minutes: 5)
+        let expired = try oldVersion(days: 31, minutes: 0)
+        let protected = try oldVersion(days: 31, minutes: 5)
         for version in [hourlyFirst, hourlySecond, dailyFirst, dailySecond, expired, protected] {
             store.modelContext.insert(version)
         }
@@ -537,10 +528,10 @@ final class NoteDocumentStoreTests: XCTestCase {
     func testVersionThinningDeletesEveryPhysicalCopyOfRemovedVersion() throws {
         let (id, _) = try create(document("Current"))
         let old = NoteVersion(noteID: id, createdAt: Date().addingTimeInterval(-40 * 86_400),
-                              reason: .pause, content: nil, contentFormat: 0, title: "old", body: "",
+                              reason: .pause, content: try NoteContentCodec.encode(document("old")), contentFormat: 1, title: "old", body: "",
                               attachmentIDs: [], sourceRevisionID: UUID())
         let duplicate = NoteVersion(id: old.id, noteID: id, createdAt: old.createdAt,
-                                    reason: .pause, content: nil, contentFormat: 0, title: "old", body: "",
+                                    reason: .pause, content: try NoteContentCodec.encode(document("old")), contentFormat: 1, title: "old", body: "",
                                     attachmentIDs: [], sourceRevisionID: old.sourceRevisionID)
         store.modelContext.insert(old)
         store.modelContext.insert(duplicate)
@@ -553,7 +544,7 @@ final class NoteDocumentStoreTests: XCTestCase {
     func testUnreadableRecoveryBaseStopsVersionThinning() throws {
         let (id, _) = try create(document("Current"))
         let old = NoteVersion(noteID: id, createdAt: Date().addingTimeInterval(-40 * 86_400),
-                              reason: .pause, content: nil, contentFormat: 0, title: "old", body: "",
+                              reason: .pause, content: try NoteContentCodec.encode(document("old")), contentFormat: 1, title: "old", body: "",
                               attachmentIDs: [], sourceRevisionID: UUID())
         store.modelContext.insert(old)
         try store.modelContext.save()
@@ -565,7 +556,7 @@ final class NoteDocumentStoreTests: XCTestCase {
     func testF5FailedProposalRetentionScanKeepsEveryVersion() throws {
         let (id, _) = try create(document("Current"))
         let expired = NoteVersion(noteID: id, createdAt: Date().addingTimeInterval(-40 * 86_400),
-            reason: .pause, content: nil, contentFormat: 0, title: "old", body: "",
+            reason: .pause, content: try NoteContentCodec.encode(document("old")), contentFormat: 1, title: "old", body: "",
             attachmentIDs: [], sourceRevisionID: UUID())
         store.modelContext.insert(expired)
         try store.modelContext.save()
@@ -580,10 +571,10 @@ final class NoteDocumentStoreTests: XCTestCase {
     func testF5DivergentPhysicalProposalReplicasProtectBothBaseVersions() throws {
         let (id, _) = try create(document("Current"))
         let first = NoteVersion(noteID: id, createdAt: Date().addingTimeInterval(-40 * 86_400),
-            reason: .pause, content: nil, contentFormat: 0, title: "first", body: "",
+            reason: .pause, content: try NoteContentCodec.encode(document("first")), contentFormat: 1, title: "first", body: "",
             attachmentIDs: [], sourceRevisionID: UUID())
         let second = NoteVersion(noteID: id, createdAt: Date().addingTimeInterval(-39 * 86_400),
-            reason: .pause, content: nil, contentFormat: 0, title: "second", body: "",
+            reason: .pause, content: try NoteContentCodec.encode(document("second")), contentFormat: 1, title: "second", body: "",
             attachmentIDs: [], sourceRevisionID: UUID())
         let proposalID = UUID()
         for version in [first, second] { store.modelContext.insert(version) }
@@ -604,11 +595,11 @@ final class NoteDocumentStoreTests: XCTestCase {
         let protectedRevision = UUID()
         let selected = NoteVersion(id: sharedID, noteID: id,
             createdAt: Date().addingTimeInterval(-39 * 86_400), reason: .pause,
-            content: nil, contentFormat: 0, title: "newer", body: "",
+            content: try NoteContentCodec.encode(document("newer")), contentFormat: 1, title: "newer", body: "",
             attachmentIDs: [], sourceRevisionID: UUID())
         let protected = NoteVersion(id: sharedID, noteID: id,
             createdAt: Date().addingTimeInterval(-40 * 86_400), reason: .pause,
-            content: nil, contentFormat: 0, title: "protected", body: "",
+            content: try NoteContentCodec.encode(document("protected")), contentFormat: 1, title: "protected", body: "",
             attachmentIDs: [], sourceRevisionID: protectedRevision)
         store.modelContext.insert(selected)
         store.modelContext.insert(protected)
@@ -629,7 +620,7 @@ final class NoteDocumentStoreTests: XCTestCase {
         for (noteID, title) in [(id, "target"), (otherID, "other")] {
             store.modelContext.insert(NoteVersion(id: sharedID, noteID: noteID,
                 createdAt: Date().addingTimeInterval(-40 * 86_400), reason: .pause,
-                content: nil, contentFormat: 0, title: title, body: "",
+                content: try NoteContentCodec.encode(document(title)), contentFormat: 1, title: title, body: "",
                 attachmentIDs: [], sourceRevisionID: UUID()))
         }
         try store.modelContext.save()
@@ -699,7 +690,7 @@ final class NoteDocumentStoreTests: XCTestCase {
             for index in 0..<2 {
                 store.modelContext.insert(NoteVersion(id: family, noteID: id,
                     createdAt: old.addingTimeInterval(-Double(offset) * 60), reason: .pause,
-                    content: contents[index], contentFormat: 0, title: "v", body: "", attachmentIDs: [],
+                    content: try contents[index] ?? NoteContentCodec.encode(document("v")), contentFormat: 1, title: "v", body: "", attachmentIDs: [],
                     sourceRevisionID: sources[index]))
             }
         }
@@ -711,7 +702,7 @@ final class NoteDocumentStoreTests: XCTestCase {
         XCTAssertEqual(try physicalVersions(split).count, 2, "a divergent family is kept whole")
         for _ in 0..<2 {
             store.modelContext.insert(NoteVersion(id: unread, noteID: id, createdAt: old, reason: .pause,
-                content: nil, contentFormat: 0, title: "v", body: "", attachmentIDs: [], sourceRevisionID: nil))
+                content: try NoteContentCodec.encode(document("v")), contentFormat: 1, title: "v", body: "", attachmentIDs: [], sourceRevisionID: nil))
         }
         try store.modelContext.save()
         store.recoveryProtectedRevisionIDs = { throw CocoaError(.fileReadCorruptFile) }
@@ -738,10 +729,10 @@ final class NoteDocumentStoreTests: XCTestCase {
         XCTAssertEqual(store.purgeRemovedAttachments(before: .distantFuture), 0,
             "unknown historical document ownership keeps even an agreeing byte family")
         XCTAssertEqual(try physicalAttachments(removed.id).count, 1)
-        // Simulate the owner resolving the malformed legacy content. The
+        // Simulate the owner resolving the malformed content. The
         // original agreeing/divergent-family deletion assertions still apply
         // once the complete historical inventory is knowable.
-        for version in try physicalVersions(split) { version.content = nil }
+        for version in try physicalVersions(split) { version.content = try NoteContentCodec.encode(document("v")) }
         try store.modelContext.save()
         XCTAssertEqual(store.purgeRemovedAttachments(before: .distantFuture), 1, "only the agreeing file is purged")
         XCTAssertTrue(try physicalAttachments(removed.id).isEmpty)
@@ -755,7 +746,7 @@ final class NoteDocumentStoreTests: XCTestCase {
         let shared = UUID()
         for noteID in [deletedID, id] {
             store.modelContext.insert(NoteVersion(id: shared, noteID: noteID, createdAt: old, reason: .pause,
-                content: nil, contentFormat: 0, title: "shared", body: "", attachmentIDs: [], sourceRevisionID: nil))
+                content: try NoteContentCodec.encode(document("shared")), contentFormat: 1, title: "shared", body: "", attachmentIDs: [], sourceRevisionID: nil))
         }
         try store.modelContext.save()
         XCTAssertTrue(store.delete(try XCTUnwrap(store.note(withID: deletedID))))
@@ -795,7 +786,7 @@ final class NoteDocumentStoreTests: XCTestCase {
         for noteID in [deletedID, otherID] {
             store.modelContext.insert(NoteVersion(id: familyID, noteID: noteID,
                 createdAt: Date().addingTimeInterval(-40 * 86_400), reason: .pause,
-                content: nil, contentFormat: 0, title: "shared", body: "", attachmentIDs: [],
+                content: try NoteContentCodec.encode(document("shared")), contentFormat: 1, title: "shared", body: "", attachmentIDs: [],
                 sourceRevisionID: UUID()))
         }
         try store.modelContext.save()
@@ -892,20 +883,6 @@ final class NoteDocumentStoreTests: XCTestCase {
         guard case .success = store.restoreVersion(version.id, noteID: id) else { return XCTFail("missing placeholders remain restorable") }
         XCTAssertEqual(store.loadDocument(noteID: id)?.content.document?.blocks, earlier.blocks)
         XCTAssertTrue(try store.attachmentRows(forNoteID: id).isEmpty)
-    }
-
-    func testS7LegacyRestoreMakesOnlyItsRecordedAttachmentsVisible() throws {
-        let earlier = stagedImage(), later = stagedImage()
-        let (id, revision) = try create(NoteDocument(blocks: [.text("Current"), .image(attachmentID: earlier.id)]), staged: [earlier])
-        let version = NoteVersion(noteID: id, createdAt: Date(), reason: .beforeMigration,
-            content: nil, contentFormat: 0, title: "Legacy", body: "Earlier", attachmentIDs: [earlier.id], sourceRevisionID: revision)
-        store.modelContext.insert(version)
-        try store.modelContext.save()
-        guard case .success = store.saveDocument(noteID: id,
-            document: NoteDocument(blocks: [.text("Later"), .image(attachmentID: later.id)]), baseRevisionID: revision, staged: [later])
-        else { return XCTFail() }
-        guard case .success = store.restoreVersion(version.id, noteID: id) else { return XCTFail() }
-        XCTAssertEqual(Set(try store.attachmentRows(forNoteID: id).filter { $0.deletedAt == nil }.map(\.id)), [earlier.id])
     }
 
     func testAgentWritesAndProposalsPreserveTheOrderedPlainChecklistInventory() throws {
@@ -1008,14 +985,6 @@ final class NoteDocumentStoreTests: XCTestCase {
         XCTAssertEqual(store.note(withID: id)?.title, "Agent plan")
         XCTAssertEqual(store.note(withID: id)?.revisionToken, newToken)
         XCTAssertTrue(versions(id).contains { $0.reason == .beforeAgentEdit && $0.title == "Plan" })
-    }
-
-    func testDirectAgentDocumentWriteCannotBypassLegacyMigrationGate() throws {
-        let note = try XCTUnwrap(store.create(title: "Legacy"))
-        guard case .failure(.invalidDocument) = store.agentWrite(noteID: note.id,
-            baseRevisionToken: note.revisionToken, document: document("New format"),
-            agentName: "Claude", disposition: .direct) else { return XCTFail() }
-        XCTAssertEqual(store.note(withID: note.id)?.contentFormat, 0)
     }
 
     func testAgentWriteToAnOpenNoteWaitsAndAppliesOnLeaveWhenUnchanged() throws {
@@ -1213,181 +1182,8 @@ final class NoteDocumentStoreTests: XCTestCase {
 
     // MARK: Migration gate (requirement 2, fixtures only)
 
-    private func legacy(_ body: String, title: String = "Note",
-                        attachments: [LegacyNoteSnapshot.Attachment] = []) -> LegacyNoteSnapshot {
-        LegacyNoteSnapshot(noteID: UUID(), title: title, body: body, attachments: attachments,
-                           revisionToken: NoteItem.initialRevisionToken)
-    }
-
-    private func attachment(_ offset: Int?, sort: Int64 = 0, image: Bool = true, id: UUID = UUID()) -> LegacyNoteSnapshot.Attachment {
-        .init(id: id, inlineOffset: offset, sortIndex: sort, createdAt: Date(timeIntervalSince1970: 0), isImage: image)
-    }
-
     private func textKitRoundTrip(_ document: NoteDocument) -> NoteDocument {
         NoteTextKitRoundTrip.document(afterRoundTrip: document)
     }
 
-    func testMigrationProjectsTodaysPlacementAndTray() throws {
-        let top = attachment(0, sort: 0), middle = attachment(8, sort: 1), tray = attachment(nil, sort: 2)
-        let end = attachment(99, sort: 3)
-        let snapshot = legacy("First\r\nSecond line\u{2029}Third\n", attachments: [end, tray, middle, top])
-        guard case let .success(plan) = LegacyNoteMigration.plan(snapshot) else { return XCTFail() }
-        XCTAssertEqual(plan.normalizedBody, "First\nSecond line\nThird\n")
-        XCTAssertEqual(plan.normalizedLineBreaks, 2)
-        XCTAssertEqual(plan.snappedAnchors, 1, "offset 8 is inside 'Second line', shown at its start")
-        let kinds = plan.document.blocks.map { $0.kind == .image ? "img:\($0.attachmentID == top.id ? "top" : $0.attachmentID == middle.id ? "mid" : $0.attachmentID == tray.id ? "tray" : "end")" : "t:\($0.text)" }
-        XCTAssertEqual(kinds, ["t:Note", "img:top", "t:First", "img:mid", "t:Second line", "t:Third", "t:", "img:tray", "img:end"])
-        guard case .success = LegacyNoteMigration.verify(plan, roundTrip: textKitRoundTrip) else { return XCTFail() }
-    }
-
-    func testMigrationRefusesWhatItCannotKeep() {
-        let id = UUID()
-        XCTAssertEqual(refusal(legacy("x", attachments: [attachment(0, id: id), attachment(0, id: id)])), .duplicateAttachmentIDs)
-        XCTAssertEqual(refusal(legacy("x", title: "two\nlines")), .titleHasLineBreak)
-        XCTAssertEqual(refusal(legacy("a\u{FFFC}b")), .bodyContainsObjectCharacter)
-        let file = attachment(nil, image: false)
-        XCTAssertEqual(refusal(legacy("x", attachments: [file])), .fileAttachment(file.id))
-    }
-
-    func testMigrationInverseRefusesReorderedTrayBlocks() throws {
-        let first = attachment(nil, sort: 0), second = attachment(99, sort: 1)
-        let plan = try LegacyNoteMigration.plan(legacy("Body", attachments: [second, first])).get()
-        var document = plan.document
-        document.blocks.swapAt(document.blocks.count - 2, document.blocks.count - 1)
-        let changed = LegacyNoteMigration.Plan(snapshot: plan.snapshot, document: document,
-            normalizedBody: plan.normalizedBody, normalizedLineBreaks: plan.normalizedLineBreaks,
-            snappedAnchors: plan.snappedAnchors)
-        guard case .failure(.projectionMismatch("tray attachment order")) =
-            LegacyNoteMigration.verify(changed, roundTrip: textKitRoundTrip) else {
-            return XCTFail("The inverse must reject a reordered tray, even when TextKit preserves it")
-        }
-    }
-
-    func testMigrationVerificationKeepsExactUnicodeSpelling() throws {
-        let plan = try LegacyNoteMigration.plan(legacy("caf\u{0065}\u{0301}", title: "caf\u{0065}\u{0301}")).get()
-        var changed = plan.document
-        changed.blocks[0].text = "caf\u{00E9}"
-        let changedPlan = LegacyNoteMigration.Plan(snapshot: plan.snapshot, document: changed,
-            normalizedBody: plan.normalizedBody, normalizedLineBreaks: plan.normalizedLineBreaks,
-            snappedAnchors: plan.snappedAnchors)
-        guard case .failure(.projectionMismatch("title")) = LegacyNoteMigration.verify(changedPlan, roundTrip: textKitRoundTrip) else {
-            return XCTFail("Canonical equality must not mask a changed title spelling")
-        }
-        guard case .failure(.roundTripMismatch) = LegacyNoteMigration.verify(plan, roundTrip: { input in
-            var output = input
-            output.blocks[1].text = "caf\u{00E9}"
-            return output
-        }) else { return XCTFail("The text-system gate must preserve exact Unicode, not only visual equality") }
-    }
-
-    private func refusal(_ snapshot: LegacyNoteSnapshot) -> LegacyMigrationRefusal? {
-        if case let .failure(reason) = LegacyNoteMigration.plan(snapshot) { return reason }
-        return nil
-    }
-
-    func testMigrationEdgeCasesPassTheGate() {
-        let cases: [LegacyNoteSnapshot] = [
-            legacy(""),
-            legacy("", title: ""),
-            legacy("", attachments: [attachment(nil), attachment(0)]),       // attachment-only
-            legacy("😀 emoji\n", attachments: [attachment(3)]),              // anchor inside a surrogate pair's paragraph
-            legacy("a\n\nb", attachments: [attachment(2, sort: 1), attachment(2, sort: 0)]) // ties
-        ]
-        for snapshot in cases {
-            guard case let .success(plan) = LegacyNoteMigration.plan(snapshot) else { return XCTFail("\(snapshot)") }
-            guard case .success = LegacyNoteMigration.verify(plan, roundTrip: textKitRoundTrip) else { return XCTFail("\(snapshot)") }
-        }
-    }
-
-    func testVerificationRejectsATamperedPlanOrABadRoundTrip() throws {
-        guard case let .success(plan) = LegacyNoteMigration.plan(legacy("body")) else { return XCTFail() }
-        guard case .failure(.roundTripMismatch) = LegacyNoteMigration.verify(plan, roundTrip: { _ in .blank }) else {
-            return XCTFail("the round trip is checked, not assumed")
-        }
-    }
-
-    func testMigrationCommitsThroughTheStoreAndKeepsTheRevertPath() throws {
-        let note = try XCTUnwrap(store.create(title: "Old", body: "one\r\ntwo"))
-        guard case let .success(snapshot) = store.legacySnapshot(noteID: note.id),
-              case let .success(plan) = LegacyNoteMigration.plan(snapshot),
-              case let .success(verified) = LegacyNoteMigration.verify(plan, roundTrip: textKitRoundTrip) else { return XCTFail() }
-
-        // Interrupted migration: the save fails, nothing changes.
-        gate.shouldFail = true
-        guard case .failure(.saveFailed) = store.commitMigration(verified) else { return XCTFail() }
-        gate.shouldFail = false
-        XCTAssertEqual(store.note(withID: note.id)?.contentFormat, 0)
-        XCTAssertTrue(versions(note.id).isEmpty)
-
-        guard case .success = store.commitMigration(verified) else { return XCTFail() }
-        let migrated = try XCTUnwrap(store.note(withID: note.id))
-        XCTAssertEqual(migrated.contentFormat, 1)
-        XCTAssertEqual(migrated.title, "Old", "title kept")
-        XCTAssertEqual(migrated.body, "one\r\ntwo", "body kept exactly (revert path)")
-        XCTAssertTrue(versions(note.id).contains { $0.reason == .beforeMigration && $0.body == "one\r\ntwo" })
-        XCTAssertEqual(store.loadDocument(noteID: note.id)?.content.document?.blocks.map(\.text), ["Old", "one", "two"])
-        guard case .failure(.alreadyMigrated) = store.legacySnapshot(noteID: note.id) else { return XCTFail() }
-    }
-
-    func testStaleMigrationIsRefused() throws {
-        let note = try XCTUnwrap(store.create(title: "Old", body: "one"))
-        guard case let .success(snapshot) = store.legacySnapshot(noteID: note.id),
-              case let .success(plan) = LegacyNoteMigration.plan(snapshot),
-              case let .success(verified) = LegacyNoteMigration.verify(plan, roundTrip: textKitRoundTrip) else { return XCTFail() }
-        XCTAssertTrue(store.update(note, body: "edited meanwhile"))
-        guard case .failure(.changedSincePlanned) = store.commitMigration(verified) else { return XCTFail() }
-        XCTAssertEqual(store.note(withID: note.id)?.contentFormat, 0)
-    }
-
-    func testMigrationRejectsAttachmentMovementReorderAndPayloadChange() throws {
-        for change in 0..<3 {
-            let note = try XCTUnwrap(store.create(title: "Old", body: "first\nsecond"))
-            let first = NoteAttachment(id: UUID(), noteID: note.id, originalFilename: "one.png",
-                                       contentTypeIdentifier: "public.png", byteCount: 1,
-                                       sortIndex: 0, contentDigest: "a",
-                                       payload: Data([1]))
-            let second = NoteAttachment(id: UUID(), noteID: note.id, originalFilename: "two.png",
-                                        contentTypeIdentifier: "public.png", byteCount: 1,
-                                        sortIndex: 1, contentDigest: "b",
-                                        payload: Data([2]))
-            first.inlineOffset = 0
-            second.inlineOffset = 6
-            store.modelContext.insert(first)
-            store.modelContext.insert(second)
-            try store.modelContext.save()
-            guard case let .success(snapshot) = store.legacySnapshot(noteID: note.id),
-                  case let .success(plan) = LegacyNoteMigration.plan(snapshot),
-                  case let .success(verified) = LegacyNoteMigration.verify(plan, roundTrip: textKitRoundTrip) else {
-                return XCTFail("valid fixture")
-            }
-            switch change {
-            case 0: first.inlineOffset = nil
-            case 1: second.sortIndex = -1
-            default: first.payload = Data([9])
-            }
-            try store.modelContext.save()
-            guard case .failure(.changedSincePlanned) = store.commitMigration(verified) else {
-                return XCTFail("stale attachment input was accepted: \(change)")
-            }
-            XCTAssertEqual(store.note(withID: note.id)?.contentFormat, 0)
-        }
-    }
-
-    func testMigrationCommitRefusesAFutureReplicaAddedAfterVerification() throws {
-        let note = try XCTUnwrap(store.create(title: "Legacy", body: "body"))
-        guard case let .success(snapshot) = store.legacySnapshot(noteID: note.id),
-              case let .success(plan) = LegacyNoteMigration.plan(snapshot),
-              case let .success(verified) = LegacyNoteMigration.verify(plan, roundTrip: textKitRoundTrip) else {
-            return XCTFail("verified fixture")
-        }
-        let future = NoteItem(id: note.id, title: "Legacy", body: "body")
-        future.contentFormat = 7
-        future.content = Data("future".utf8)
-        store.modelContext.insert(future)
-        try store.modelContext.save()
-        guard case .failure(.changedSincePlanned) = store.commitMigration(verified) else {
-            return XCTFail("future replica must block migration")
-        }
-        XCTAssertEqual(try rows(note.id).map(\.contentFormat).sorted(), [0, 7])
-    }
 }

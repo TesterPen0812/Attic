@@ -33,14 +33,15 @@ final class NoteItem {
     // MARK: Phase 2 note format (`attic.note/1`, see `NoteDocument`)
     //
     // All defaulted or optional, no uniqueness (CloudKit rules). A note with
-    // `contentFormat == 0` is legacy: `title` and `body` are its content.
+    // Persisted format zero identifies historical rows for the one-time removal.
+    // Keep that storage default so schema upgrades do not relabel old rows.
     // From format 1 on, `content` is the truth and `title`, `body` and
     // `plainText` are derived from it on every save, on every replica.
 
-    /// The stored document; nil while the note is legacy. Kept byte for byte
+    /// The stored document. Kept byte for byte
     /// when this build can only read it (a newer format).
     @Attribute(.externalStorage) var content: Data? = nil
-    /// 0 legacy title/body, 1 `attic.note/1`, higher = written by a newer Attic.
+    /// 0 historical format (purged once), 1 `attic.note/1`, higher = a newer Attic.
     var contentFormat: Int = 0
     /// Derived search and agent text (title, then one line per block).
     var plainText: String = ""
@@ -69,6 +70,13 @@ final class NoteItem {
         self.body = body
         self.createdAt = createdAt
         self.updatedAt = updatedAt ?? createdAt
+        #if os(macOS)
+        let document = NoteDocument(blocks: [.text(title)] + body.components(separatedBy: "\n").map { .text($0) })
+        do { self.content = try NoteContentCodec.encode(document) }
+        catch { preconditionFailure("Plain-text note encoding failed") }
+        self.contentFormat = NoteDocument.currentFormat
+        self.plainText = NoteTextExport.plainText(document)
+        #endif
     }
 
     /// The recorded attachment family, or nil when none was recorded or

@@ -246,15 +246,13 @@ struct AtticPanelView: View {
             .onChange(of: uiState.selectedSection) { _, _ in
                 syncBottomControlsHeight()
                 releaseTaskEntryInteractionLocks()
-                openMostRecentNoteIfNeeded()
                 if PerformanceSignposts.hasPendingPageSwitch {
                     DispatchQueue.main.async { PerformanceSignposts.pageLaidOut() }
                 }
             }
             .task {
-                _ = await noteDraft.restoreRecoveryIfNeeded()
+                await noteDraft.pages.startAndWait()
                 hasRestoredNoteSession = true
-                openMostRecentNoteIfNeeded()
             }
             // Task-list plumbing the legacy Tasks page relies on; it runs on
             // every page, as it always has, and leaves with that page.
@@ -269,10 +267,6 @@ struct AtticPanelView: View {
             }
             .onPreferenceChange(TaskListViewportPreferenceKey.self) { viewport in
                 subtaskPanels.updateTaskListViewport(viewport)
-            }
-            .onChange(of: noteStore.revision) { _, _ in
-                reconcileNoteDraft()
-                openMostRecentNoteIfNeeded()
             }
     }
 
@@ -291,7 +285,7 @@ struct AtticPanelView: View {
             }
             .onChange(of: noteDraft.isDirty) { _, _ in syncNoteDraftInteractionLocks() }
             .onChange(of: noteDraft.hasConflict) { _, _ in syncNoteDraftInteractionLocks() }
-            .onChange(of: noteStore.attachmentImportState) { _, _ in syncNoteDraftInteractionLocks() }
+            .onChange(of: noteDraft.isImporting) { _, _ in syncNoteDraftInteractionLocks() }
             .onPreferenceChange(PanelNoticeHeightPreferenceKey.self) { measured in
                 let resolved = max(0, measured.isFinite ? measured : 0)
                 if abs(noticeHeight - resolved) >= 0.5 { noticeHeight = resolved }
@@ -384,7 +378,6 @@ struct AtticPanelView: View {
         uiState.switchPage(to: section, motion: pageMotion) {
             if section.isNotes {
                 noteDraft.pages.present()
-                openMostRecentNoteIfNeeded()
             }
         }
     }

@@ -880,8 +880,7 @@ final class AgentTaskTools {
         guard !trimmedTitle.isEmpty || !trimmedBody.isEmpty else {
             throw AgentToolError.invalidArguments("A non-empty title or body is required.")
         }
-        if NotesEditorSetting.isEnabled() {
-            // The new editor is on: agents write the new format too.
+        do {
             let document: NoteDocument
             do {
                 document = try NoteAgentTextParser.document(title: title, body: body, base: .blank)
@@ -896,10 +895,6 @@ final class AgentTaskTools {
                 throw AgentToolError.storeFailure(error.localizedDescription)
             }
         }
-        guard let note = noteStore.create(title: title, body: body) else {
-            throw AgentToolError.storeFailure(noteStore.lastErrorMessage ?? "Unknown error.")
-        }
-        return try encode(["note": serializeNote(note)])
     }
 
     private func updateNote(_ arguments: [String: Any]) throws -> String {
@@ -931,36 +926,8 @@ final class AgentTaskTools {
                 "The note changed since revision \(baseRevision) (now \(note.revisionToken)). Read it again with list_notes and retry."
             )
         }
-        if note.usesDocumentFormat {
-            return try updateDocumentNote(note, title: newTitle, body: newBody, baseRevision: baseRevision, noteStore: noteStore, agentName: agentName(arguments))
-        }
-        let disposition = noteStore.agentWriteDisposition(note.id)
-        if case let .refuse(reason) = disposition { throw AgentToolError.notPerformed(reason) }
-        guard note.revisionToken == baseRevision else {
-            throw AgentToolError.notPerformed("The draft was saved after your read. Read it again with list_notes and retry.")
-        }
-        if disposition == .proposal {
-            let base = NoteDocument(blocks: [.text(note.title)] + note.body.components(separatedBy: "\n").map { .text($0) })
-            let document = try NoteAgentTextParser.document(title: newTitle ?? note.title, body: newBody ?? note.body, base: base)
-            switch noteStore.agentWrite(noteID: note.id, baseRevisionToken: baseRevision, document: document,
-                                       agentName: agentName(arguments), disposition: .proposal) {
-            case let .success(.pending(editID)):
-                return try encode(["status": "pending", "pending_edit": editID.uuidString, "note": serializeNote(note)])
-            case let .failure(error): throw AgentToolError.notPerformed(error.localizedDescription)
-            default: throw AgentToolError.notPerformed("The edit did not wait for review.")
-            }
-        }
-        let destinationTitle = newTitle.map(NoteStore.normalizedTitle) ?? note.title
-        let destinationBody = newBody ?? note.body
-        guard !destinationTitle.isEmpty || NoteStore.hasMeaningfulBody(destinationBody) else {
-            throw AgentToolError.invalidArguments("A title or body must remain non-empty.")
-        }
-        noteStore.attributeExternalEdit(try noteStore.liveReplicas(of: note.id), name: agentName(arguments), at: noteStore.currentDate)
-        try performNote {
-            noteStore.agentUpdateLegacy(note, title: newTitle, body: newBody)
-        }
-        let updated = noteStore.note(withID: note.id) ?? note
-        return try encode(["status": "applied", "note": serializeNote(updated)])
+        return try updateDocumentNote(note, title: newTitle, body: newBody, baseRevision: baseRevision,
+            noteStore: noteStore, agentName: agentName(arguments))
     }
 
     private func updateDocumentNote(_ note: NoteItem, title: String?, body: String?, baseRevision: String,

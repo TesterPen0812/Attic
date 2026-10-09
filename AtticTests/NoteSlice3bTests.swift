@@ -1757,9 +1757,9 @@ extension NoteSlice3bTests {
                 let note = try XCTUnwrap(store.create(title: "Deleted", body: "body"))
                 let ownerID = note.id
                 let a = NoteVersion(id: versionID, noteID: ownerID, createdAt: old, reason: .leave,
-                    content: nil, contentFormat: 0, title: "Legacy", body: "First", attachmentIDs: [item.id], sourceRevisionID: revision)
+                    content: try NoteContentCodec.encode(NoteDocument(blocks: [.text("History"), .text("First")])), contentFormat: 1, title: "History", body: "First", attachmentIDs: [item.id], sourceRevisionID: revision)
                 let b = NoteVersion(id: versionID, noteID: ownerID, createdAt: old, reason: .leave,
-                    content: nil, contentFormat: 0, title: "Legacy", body: "First", attachmentIDs: [item.id], sourceRevisionID: revision)
+                    content: try NoteContentCodec.encode(NoteDocument(blocks: [.text("History"), .text("First")])), contentFormat: 1, title: "History", body: "First", attachmentIDs: [item.id], sourceRevisionID: revision)
                 switch field {
                 case .title: b.title = "Other"
                 case .body: b.body = "Second"
@@ -2755,9 +2755,11 @@ extension NoteSlice3bTests {
             let destination = try XCTUnwrap(controller.active)
             XCTAssertTrue(destination.engine.performEdit(NSRange(location: 0, length: 0), with: NSAttributedString(string: "Edited "), name: "Typing"))
             XCTAssertTrue(controller.save(destination))
-            let outcome = await store.importAttachments(.init(editorSession: .init(noteID: importOwner.id, generation: 1),
-                origin: .note(importOwner.id), urls: [url]))
-            guard case .imported = outcome else { return XCTFail("fixture import: \(outcome)") }
+            let importPage = NotesPageController(store: store, journal: nil)
+            XCTAssertTrue(importPage.open(noteID: importOwner.id))
+            importPage.importFiles([url])
+            await importPage.waitForImportWork()
+            await XCTAssertTrueAsync(await importPage.preserveAllDurably())
             XCTAssertNotNil(store.cachedVerifiedAttachmentBytes(item.id), "successful local reload preserves unrelated proof")
             if duplicate {
                 XCTAssertTrue(controller.open(noteID: source))

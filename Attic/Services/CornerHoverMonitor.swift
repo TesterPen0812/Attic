@@ -290,10 +290,8 @@ final class CornerHoverMonitor {
         let targetSection = section ?? uiState.selectedSection
 
         if targetSection != uiState.selectedSection {
-            if uiState.selectedSection.isNotes, NotesEditorSetting.isEnabled() {
+            if uiState.selectedSection.isNotes {
                 guard noteDraft.prepareToLeave(.pageSwitch) else { return .unsavedNote }
-            } else if uiState.selectedSection.isNotes, noteDraft.isActive {
-                guard noteDraft.close() else { return .unsavedNote }
             }
             PerformanceSignposts.beginPageSwitch()
             // The shell's one switch (A20): sprung like any other while the
@@ -304,19 +302,13 @@ final class CornerHoverMonitor {
         }
 
         guard openComposer else { return nil }
-        if targetSection.isNotes, NotesEditorSetting.isEnabled() {
+        if targetSection.isNotes {
             // The new Notes page: New Note always starts a fresh draft.
             guard noteDraft.pages.requestNewNote() else {
                 PerformanceSignposts.cancelPageSwitch()
                 return .unsavedNote
             }
             return nil
-        }
-        if targetSection.isNotes {
-            guard noteDraft.beginNew() else {
-                PerformanceSignposts.cancelPageSwitch()
-                return .unsavedNote
-            }
         }
 
         var transaction = Transaction()

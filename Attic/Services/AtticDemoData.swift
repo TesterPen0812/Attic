@@ -155,11 +155,16 @@ enum AtticDemoData {
             try demoImage().write(to: image, options: .atomic)
             let file = folder.appendingPathComponent("Type specimen.txt")
             try Data(typeSpecimen.utf8).write(to: file, options: .atomic)
-            _ = await notes.importAttachments(NoteAttachmentImportRequest(
-                editorSession: NoteEditorSession(noteID: attachmentsNoteID, generation: 0),
-                origin: .note(attachmentsNoteID),
-                urls: [image, file]
-            ))
+            guard let loaded = notes.loadDocument(noteID: attachmentsNoteID), var document = loaded.content.document else { return }
+            let importedImage = await NotesPageController.loadFile(image, type: "public.png")
+            let importedFile = await NotesPageController.loadFile(file, type: "public.plain-text")
+            guard let imageBytes = importedImage.staged, let fileBytes = importedFile.staged else { return }
+            document.blocks += [.image(attachmentID: imageBytes.id),
+                .file(attachmentID: fileBytes.id, filename: fileBytes.filename,
+                      contentTypeIdentifier: fileBytes.contentTypeIdentifier, byteCount: fileBytes.byteCount)]
+            _ = try notes.saveDocument(noteID: attachmentsNoteID, document: document,
+                baseRevisionID: loaded.revisionID, staged: [imageBytes, fileBytes]).get()
+
         } catch {
             NSLog("Attic demo data: %@", error.localizedDescription)
         }

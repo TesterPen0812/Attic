@@ -3,7 +3,7 @@ import SwiftData
 
 /// A saved version of a note (spec § Notes → Version history): taken on a
 /// 2-minute pause, when the note is left, and before any agent edit,
-/// restore, migration or Writing Tools rewrite. Old snapshots are thinned,
+/// restore or Writing Tools rewrite. Old snapshots are thinned,
 /// except bases held by proposals or recovery. Duplicates of one `id`
 /// (CloudKit) are identical by construction and deduplicated for presentation.
 /// Phase 2 slice 1 stores them; the history browser comes in slice 7.
@@ -17,7 +17,7 @@ final class NoteVersion {
     /// The note's content at that time (format ≥ 1), byte for byte.
     @Attribute(.externalStorage) var content: Data? = nil
     var contentFormat: Int = 0
-    /// A legacy note's title and body (format 0), or the derived ones.
+    /// Derived title and body retained for history presentation.
     var title: String = ""
     var body: String = ""
     /// The attachment rows this version shows (sorted, space-separated), so
@@ -66,7 +66,6 @@ enum NoteVersionReason: String, CaseIterable, Sendable {
     case leave
     case beforeAgentEdit
     case beforeRestore
-    case beforeMigration
     case beforeWritingTools
     /// The stored note had moved on from the revision an editor draft was
     /// based on (a recovered draft, a divergent replica): the stored text is

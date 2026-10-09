@@ -136,7 +136,7 @@ final class TaskAttachmentDropTests: XCTestCase {
         }
         XCTAssertEqual(classify([.url]), .unsupported, "a link")
         XCTAssertEqual(classify([.folder]), .unsupported, "a promised folder")
-        XCTAssertEqual(classify([UTType(exportedAs: NoteInlineCardsLayout.dragType.rawValue)]), .unsupported,
+        XCTAssertEqual(classify([UTType(exportedAs: NoteEditorEngine.fragmentType.rawValue)]), .unsupported,
                        "a note card moving inside its note")
         XCTAssertEqual(classify([try XCTUnwrap(UTType(filenameExtension: "docx")), .utf8PlainText]), .unsupported,
                        "anything that also carries text stays unsupported")

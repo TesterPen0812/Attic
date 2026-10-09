@@ -43,8 +43,7 @@ enum NotePhysicalFamilyRetention {
                   NoteTextReplacement.utf16Equal(row.title, first.title), NoteTextReplacement.utf16Equal(row.body, first.body),
                   row.attachmentIDsRaw == first.attachmentIDsRaw,
                   row.sourceRevisionID == first.sourceRevisionID,
-                  (row.contentFormat == 0 && row.content == nil)
-                    || (row.contentFormat == NoteDocument.currentFormat
+                  (row.contentFormat == NoteDocument.currentFormat
                         && row.content.map { NoteContentCodec.decode($0).isEditable } == true),
                   row.attachmentIDsRaw.split(separator: " ").allSatisfy({ UUID(uuidString: String($0)) != nil })
             else { return .unknown }
@@ -122,7 +121,6 @@ struct NoteDocumentRetentionSnapshot: Sendable {
             let cached = raw.compactMap { UUID(uuidString: String($0)) }
             guard cached.count == raw.count else { throw NoteDocumentStoreError.readOnly }
             ids.formUnion(cached)
-            if version.format == 0, version.content == nil { continue }
             guard version.format == NoteDocument.currentFormat else { throw NoteDocumentStoreError.readOnly }
             ids.formUnion(try decodedIDs(version.content))
         }
@@ -233,7 +231,6 @@ enum NoteAgentWriteDisposition: Equatable {
 }
 
 enum NoteMutationFormat: Equatable {
-    case legacy
     case document
     case editable
 }
@@ -306,12 +303,7 @@ extension NoteStore {
         guard let selected = canonical(replicas) else { throw NoteDocumentStoreError.noteMissing(noteID) }
         for replica in replicas {
             switch replica.contentFormat {
-            case 0:
-                guard replica.content == nil, format != .document || replicas.contains(where: \.usesDocumentFormat) else {
-                    throw NoteDocumentStoreError.invalidDocument("This note has not been moved to the new format.")
-                }
             case 1:
-                guard format != .legacy else { throw NoteDocumentStoreError.readOnly }
                 guard let data = replica.content else { throw NoteDocumentStoreError.readOnly }
                 let key = ObjectIdentifier(replica)
                 let editable: Bool
@@ -336,10 +328,15 @@ extension NoteStore {
     }
 
     /// Preserve each different displaced document, including two physical
-    /// rows with the same revision token but different bytes or legacy text.
+    /// rows with the same revision token but different bytes or derived text.
     @discardableResult
     func stageDisplacedReplicas(_ replicas: [NoteItem], reason: NoteVersionReason, timestamp: Date,
                                 excludingUnchangedBase baseRevisionID: UUID? = nil) -> Int {
+        // A singleton at the excluded base cannot have a divergent sibling.
+        // Skip it before constructing and hashing whole-body UTF-16 identity;
+        // the family path below still preserves exact spellings for replicas.
+        if replicas.count == 1, let baseRevisionID,
+           replicas[0].revisionID == baseRevisionID { return 0 }
         var seen = Set<NotePreservationState>()
         var inserted = 0
         let baseReplicas = replicas.filter { baseRevisionID != nil && $0.revisionID == baseRevisionID }
@@ -465,7 +462,7 @@ extension NoteStore {
         let context = modelContext
         if let existing = try? replicasIncludingDeleted(of: id), !existing.isEmpty {
             if existing.contains(where: { $0.deletedAt != nil }) { return .failure(.noteMissing(id)) }
-            // A crashed first save or a legacy row may already own this ID.
+            // A crashed first save or a deleted row may already own this ID.
             // The caller has no revision proving it may replace that row.
             return .failure(.staleRevision(expected: NoteItem.initialRevisionToken,
                                            current: canonical(existing)?.revisionToken ?? NoteItem.initialRevisionToken))
@@ -836,7 +833,7 @@ extension NoteStore {
         // files reconciled.
         guard insertedAttachments else { return }
         do {
-            try reloadPresentation()
+            try reloadAfterDocumentSave()
         } catch {
             recordError("Saved, but the note could not be refreshed: \(error.localizedDescription)")
         }
@@ -972,8 +969,7 @@ extension NoteStore {
         guard NotePhysicalFamilyRetention.versionEligible(family, noteIDs: [noteID],
             proposalBases: [], recoveryBases: []) else {
             let unreadable = family.contains { row in
-                row.reason == nil || !((row.contentFormat == 0 && row.content == nil)
-                    || (row.contentFormat == NoteDocument.currentFormat
+                row.reason == nil || !((row.contentFormat == NoteDocument.currentFormat
                         && row.content.map { NoteContentCodec.decode($0).isEditable } == true))
             }
             return .failure(.invalidDocument(unreadable
@@ -1025,22 +1021,12 @@ extension NoteStore {
                 context.rollback()
                 return .failure(.saveFailed(error.localizedDescription))
             }
-        } else if version.contentFormat == 0 {
-            do {
-                for row in try attachmentRows(forNoteID: noteID) {
-                    let visible = version.attachmentIDs.contains(row.id)
-                    if visible != (row.deletedAt == nil) { row.updatedAt = timestamp }
-                    row.deletedAt = visible ? nil : timestamp
-                }
-            } catch {
-                context.rollback()
-                return .failure(.saveFailed(error.localizedDescription))
-            }
         }
+
         #if DEBUG
         if s7FailNextRestoreForUITesting,
            ProcessInfo.processInfo.environment["ATTIC_UI_TESTING"] == "1",
-           NotesEditorSetting.isPreviewIdentity(Bundle.main.bundleIdentifier) {
+           PreviewIdentity.isPreview(Bundle.main.bundleIdentifier) {
             s7FailNextRestoreForUITesting = false
             context.rollback()
             return .failure(.saveFailed("The version could not be saved. The current note is kept. Try again."))
@@ -1060,7 +1046,7 @@ extension NoteStore {
            case let .editable(document) = NoteContentCodec.decode(data) {
             attachmentIDs = document.attachmentIDs
         } else {
-            // Legacy, newer or unreadable content: keep every row the note has.
+            // Newer or unreadable content: keep every row the note has.
             attachmentIDs = ((try? attachmentRows(forNoteID: replica.id)) ?? [])
                 .filter { $0.deletedAt == nil }.map(\.id)
         }
@@ -1092,11 +1078,7 @@ extension NoteStore {
         guard version.contentFormat == note.contentFormat, version.content == note.content,
               NoteTextReplacement.utf16Equal(version.title, note.title),
               NoteTextReplacement.utf16Equal(version.body, note.body) else { return false }
-        // Legacy bytes do not encode attachment visibility. A prose-identical
-        // version only preserves the note when it also keeps the live IDs.
-        guard note.contentFormat == 0 else { return true }
-        guard let rows = try? attachmentRows(forNoteID: note.id) else { return false }
-        return version.attachmentIDs == Set(rows.filter { $0.deletedAt == nil }.map(\.id))
+        return true
     }
 
     /// The replica presentation shows for these rows.
@@ -1107,7 +1089,7 @@ extension NoteStore {
     static func derivedColumns(content: Data?, format: Int, title: String, body: String)
         -> (title: String, body: String, plainText: String, imageCount: Int, fileCount: Int, firstFileName: String?) {
         guard format >= 1, let content else {
-            return (title, body, legacyPlainText(title: title, body: body), 0, 0, nil)
+            return (title, body, body.isEmpty ? title : title + "\n" + body, 0, 0, nil)
         }
         guard let document = NoteContentCodec.decode(content).document else { return (title, body, title, 0, 0, nil) }
         return (normalizedTitle(document.title), NoteTextExport.plainBody(document), NoteTextExport.plainText(document),
@@ -1185,14 +1167,6 @@ extension NoteStore {
             modelContext.rollback()
             return .failure(.encodingFailed(error.localizedDescription))
         }
-    }
-
-    /// An agent's edit of a legacy note (the old editor handles a note it
-    /// has open by itself): the note as it was is kept as a version in the
-    /// same save. The caller has checked the base revision.
-    func agentUpdateLegacy(_ note: NoteItem, title: String?, body: String?) -> Bool {
-        update(note, title: title, body: body, bodyEditBatch: nil,
-               preservationReason: .beforeAgentEdit)
     }
 
     /// Oldest first, one per id.
@@ -1366,98 +1340,6 @@ extension NoteStore {
             modelContext.rollback()
             return .failure(error as? NoteDocumentStoreError ?? .saveFailed(error.localizedDescription))
         }
-    }
-
-    // MARK: Migration gate (requirement 2)
-
-    /// A legacy note as it is shown today, or why it can't be read as one.
-    func legacySnapshot(noteID: UUID) -> Result<LegacyNoteSnapshot, LegacyMigrationRefusal> {
-        guard let preflight = try? noteMutationPreflight(noteID, format: .legacy) else {
-            if let replicas = try? liveReplicas(of: noteID),
-               !replicas.isEmpty, replicas.allSatisfy(\.usesDocumentFormat) {
-                return .failure(.alreadyMigrated)
-            }
-            return .failure(.changedSincePlanned)
-        }
-        let replicas = preflight.replicas
-        let current = preflight.canonical
-        guard replicas.allSatisfy({ NoteTextReplacement.utf16Equal($0.title, current.title) && NoteTextReplacement.utf16Equal($0.body, current.body) }) else {
-            return .failure(.replicasDisagree)
-        }
-        let rows = ((try? attachmentRows(forNoteID: noteID)) ?? []).filter { $0.deletedAt == nil }
-        // Replicas of one attachment id must agree on what the gate reads.
-        var byID: [UUID: NoteAttachment] = [:]
-        for row in rows {
-            if let seen = byID[row.id] {
-                guard seen.inlineOffset == row.inlineOffset, seen.sortIndex == row.sortIndex,
-                      seen.createdAt == row.createdAt, seen.isImage == row.isImage,
-                      NoteTextReplacement.utf16Equal(seen.originalFilename, row.originalFilename),
-                      NoteTextReplacement.utf16Equal(seen.contentTypeIdentifier, row.contentTypeIdentifier),
-                      seen.byteCount == row.byteCount, seen.contentDigest == row.contentDigest,
-                      seen.payload == row.payload else { return .failure(.replicasDisagree) }
-            } else {
-                byID[row.id] = row
-            }
-        }
-        return .success(LegacyNoteSnapshot(
-            noteID: noteID,
-            title: current.title,
-            body: current.body,
-            attachments: LegacyNoteMigration.displayOrder(byID.values.map {
-                .init(id: $0.id, inlineOffset: $0.inlineOffset, sortIndex: $0.sortIndex,
-                      createdAt: $0.createdAt, isImage: $0.isImage,
-                      filename: $0.originalFilename, contentTypeIdentifier: $0.contentTypeIdentifier,
-                      byteCount: $0.byteCount, payload: $0.payload)
-            }),
-            revisionToken: current.revisionToken
-        ))
-    }
-
-    /// Commits a verified migration: a "before migration" version, then the
-    /// document on every replica, in one save. Title, body and attachment
-    /// rows are left exactly as they were (the revert path).
-    func commitMigration(_ migration: VerifiedLegacyMigration) -> Result<String, LegacyMigrationRefusal> {
-        let plan = migration.plan
-        guard case let .success(now) = legacySnapshot(noteID: plan.snapshot.noteID) else {
-            return .failure(.changedSincePlanned)
-        }
-        guard now.revisionToken == plan.snapshot.revisionToken, NoteTextReplacement.utf16Equal(now.title, plan.snapshot.title),
-              NoteTextReplacement.utf16Equal(now.body, plan.snapshot.body),
-              now.attachments == plan.snapshot.attachments else {
-            return .failure(.changedSincePlanned)
-        }
-        guard let preflight = try? noteMutationPreflight(plan.snapshot.noteID, format: .legacy),
-              plan.document.isWritableByThisBuild,
-              let data = try? NoteContentCodec.encode(plan.document) else {
-            return .failure(.changedSincePlanned)
-        }
-        let replicas = preflight.replicas
-        let timestamp = currentDate
-        stageDisplacedReplicas(replicas, reason: .beforeMigration, timestamp: timestamp)
-        let revisionID = UUID()
-        let revision = (replicas.map(\.revision).max() ?? 0) &+ 1
-        for replica in replicas {
-            replica.content = data
-            replica.contentFormat = plan.document.format
-            replica.plainText = NoteTextExport.plainText(plan.document)
-            replica.imageCount = plan.document.blocks.filter { $0.kind == .image }.count
-            replica.fileCount = plan.document.blocks.filter { $0.kind == .file }.count
-            replica.firstFileName = plan.document.blocks.first { $0.kind == .file }?.filename
-            replica.revision = revision
-            replica.revisionID = revisionID
-            if replica !== preflight.canonical {
-                replica.createdAt = preflight.canonical.createdAt
-                replica.tagsRaw = preflight.canonical.tagsRaw
-                replica.taskID = preflight.canonical.taskID
-                replica.pinnedAt = preflight.canonical.pinnedAt
-                replica.externalEditorName = preflight.canonical.externalEditorName
-                replica.externalEditedAt = preflight.canonical.externalEditedAt
-            }
-        }
-        guard commitStagedChanges() else {
-            return .failure(.saveFailed(lastErrorMessage ?? "unknown error"))
-        }
-        return .success(revisionID.uuidString)
     }
 
     // MARK: Retention

@@ -92,23 +92,6 @@ final class NotesPageControllerTests: XCTestCase {
         XCTAssertTrue(store.pendingEdits(noteID: session.noteID).allSatisfy(\.needsReview))
     }
 
-    func testS5OnScreenLegacyEditsAndDeletionAlsoWaitAsProposals() async throws {
-        let note = try XCTUnwrap(store.create(title: "Legacy", body: "My text"))
-        let controller = makeController()
-        await controller.startAndWait()
-        await XCTAssertTrueAsync(await controller.openDurably(noteID: note.id))
-        XCTAssertEqual(controller.legacyNoteID, note.id)
-        XCTAssertEqual(store.agentWriteDisposition(note.id), .proposal)
-        guard case .success(.pending) = store.agentWrite(noteID: note.id, baseRevisionToken: note.revisionToken,
-            document: NoteDocument(blocks: [.text("Claude"), .text("Proposed text")]),
-            agentName: "Claude", disposition: store.agentWriteDisposition(note.id)) else { return XCTFail() }
-        guard case .success(.pending) = store.agentDelete(noteID: note.id, baseRevisionToken: note.revisionToken,
-            agentName: "Claude", disposition: store.agentWriteDisposition(note.id)) else { return XCTFail() }
-        XCTAssertEqual(store.note(withID: note.id)?.body, "My text")
-        XCTAssertEqual(store.note(withID: note.id)?.contentFormat, 0)
-        XCTAssertEqual(store.pendingEdits(noteID: note.id).count, 2)
-    }
-
     func testS5AcceptanceAfterAnotherEditRefreshesBeforeReplacing() async throws {
         let (controller, session, id) = try await s5Fixture(NoteDocument(blocks: [.text("Current")]))
         await XCTAssertTrueAsync(await controller.beginProposalReview(id: id))
