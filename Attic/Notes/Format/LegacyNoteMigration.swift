@@ -14,6 +14,14 @@ struct LegacyNoteSnapshot: Equatable, Sendable {
         var byteCount: Int64 = 0
         /// Actual payload, not only the stored digest (which may be stale).
         var payload: Data? = nil
+
+        static func == (lhs: Self, rhs: Self) -> Bool {
+            lhs.id == rhs.id && lhs.inlineOffset == rhs.inlineOffset && lhs.sortIndex == rhs.sortIndex
+                && lhs.createdAt == rhs.createdAt && lhs.isImage == rhs.isImage
+                && NoteTextReplacement.utf16Equal(lhs.filename, rhs.filename)
+                && NoteTextReplacement.utf16Equal(lhs.contentTypeIdentifier, rhs.contentTypeIdentifier)
+                && lhs.byteCount == rhs.byteCount && lhs.payload == rhs.payload
+        }
     }
 
     let noteID: UUID
@@ -177,8 +185,8 @@ enum LegacyNoteMigration {
                 guard let id = block.attachmentID else { return "an image without an attachment" }
                 if block.kind == .file {
                     guard let source = plan.snapshot.attachments.first(where: { $0.id == id }),
-                          block.filename == source.filename,
-                          block.contentTypeIdentifier == source.contentTypeIdentifier,
+                          block.filename.map { NoteTextReplacement.utf16Equal($0, source.filename) } == true,
+                          block.contentTypeIdentifier.map { NoteTextReplacement.utf16Equal($0, source.contentTypeIdentifier) } == true,
                           block.byteCount == source.byteCount else { return "file metadata" }
                 }
                 pending.append(id)

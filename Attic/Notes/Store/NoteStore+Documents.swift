@@ -40,7 +40,7 @@ enum NotePhysicalFamilyRetention {
             guard noteIDs.contains(row.noteID), row.noteID == first.noteID, row.reason != nil,
                   row.reasonRaw == first.reasonRaw, row.createdAt == first.createdAt,
                   row.content == first.content, row.contentFormat == first.contentFormat,
-                  row.title == first.title, row.body == first.body,
+                  NoteTextReplacement.utf16Equal(row.title, first.title), NoteTextReplacement.utf16Equal(row.body, first.body),
                   row.attachmentIDsRaw == first.attachmentIDsRaw,
                   row.sourceRevisionID == first.sourceRevisionID,
                   (row.contentFormat == 0 && row.content == nil)
@@ -61,7 +61,7 @@ enum NotePhysicalFamilyRetention {
         return mayDelete(family) { row in
             guard noteIDs.contains(row.noteID), row.noteID == first.noteID,
                   row.baseRevisionToken == first.baseRevisionToken, row.baseVersionID == first.baseVersionID,
-                  row.proposedContent == first.proposedContent, row.agentName == first.agentName,
+                  row.proposedContent == first.proposedContent, NoteTextReplacement.utf16Equal(row.agentName, first.agentName),
                   row.createdAt == first.createdAt, row.needsReview == first.needsReview,
                   row.isDeletion == first.isDeletion,
                   row.proposedContent.map({ NoteContentCodec.decode($0).isEditable }) == true
@@ -246,14 +246,14 @@ struct NoteMutationPreflight {
 private struct NotePreservationState: Hashable {
     let format: Int
     let content: Data?
-    let title: String
-    let body: String
+    let title: [UInt16]
+    let body: [UInt16]
 
     init(_ note: NoteItem) {
         format = note.contentFormat
         content = note.content
-        title = note.title
-        body = note.body
+        title = Array(note.title.utf16)
+        body = Array(note.body.utf16)
     }
 }
 
@@ -1079,7 +1079,7 @@ extension NoteStore {
 
     private func isSameState(_ version: NoteVersion, _ note: NoteItem) -> Bool {
         return version.contentFormat == note.contentFormat && version.content == note.content
-            && version.title == note.title && version.body == note.body
+            && NoteTextReplacement.utf16Equal(version.title, note.title) && NoteTextReplacement.utf16Equal(version.body, note.body)
     }
 
     /// The replica presentation shows for these rows.
@@ -1251,7 +1251,7 @@ extension NoteStore {
             }
             // A divergent replica makes deletion unsafe even if the displayed revision agrees.
             guard preflight.replicas.allSatisfy({ $0.revisionToken == baseRevisionToken &&
-                $0.content == note.content && $0.title == note.title && $0.body == note.body }) else {
+                $0.content == note.content && NoteTextReplacement.utf16Equal($0.title, note.title) && NoteTextReplacement.utf16Equal($0.body, note.body) }) else {
                 return .failure(.saveFailed("The note's replicas disagree. Deletion was not performed."))
             }
             let timestamp = currentDate
@@ -1328,7 +1328,7 @@ extension NoteStore {
                 sourceRevisionID: note.revisionID))
             if edit.isDeletion {
                 guard preflight.replicas.allSatisfy({ $0.revisionToken == expectedRevision && $0.content == note.content &&
-                    $0.title == note.title && $0.body == note.body }) else {
+                    NoteTextReplacement.utf16Equal($0.title, note.title) && NoteTextReplacement.utf16Equal($0.body, note.body) }) else {
                     throw NoteDocumentStoreError.saveFailed("The note's replicas disagree. Deletion was not performed.")
                 }
                 rows.forEach(modelContext.delete)
@@ -1364,7 +1364,7 @@ extension NoteStore {
         }
         let replicas = preflight.replicas
         let current = preflight.canonical
-        guard replicas.allSatisfy({ $0.title == current.title && $0.body == current.body }) else {
+        guard replicas.allSatisfy({ NoteTextReplacement.utf16Equal($0.title, current.title) && NoteTextReplacement.utf16Equal($0.body, current.body) }) else {
             return .failure(.replicasDisagree)
         }
         let rows = ((try? attachmentRows(forNoteID: noteID)) ?? []).filter { $0.deletedAt == nil }
@@ -1374,8 +1374,8 @@ extension NoteStore {
             if let seen = byID[row.id] {
                 guard seen.inlineOffset == row.inlineOffset, seen.sortIndex == row.sortIndex,
                       seen.createdAt == row.createdAt, seen.isImage == row.isImage,
-                      seen.originalFilename == row.originalFilename,
-                      seen.contentTypeIdentifier == row.contentTypeIdentifier,
+                      NoteTextReplacement.utf16Equal(seen.originalFilename, row.originalFilename),
+                      NoteTextReplacement.utf16Equal(seen.contentTypeIdentifier, row.contentTypeIdentifier),
                       seen.byteCount == row.byteCount, seen.contentDigest == row.contentDigest,
                       seen.payload == row.payload else { return .failure(.replicasDisagree) }
             } else {
@@ -1404,8 +1404,8 @@ extension NoteStore {
         guard case let .success(now) = legacySnapshot(noteID: plan.snapshot.noteID) else {
             return .failure(.changedSincePlanned)
         }
-        guard now.revisionToken == plan.snapshot.revisionToken, now.title == plan.snapshot.title,
-              now.body == plan.snapshot.body,
+        guard now.revisionToken == plan.snapshot.revisionToken, NoteTextReplacement.utf16Equal(now.title, plan.snapshot.title),
+              NoteTextReplacement.utf16Equal(now.body, plan.snapshot.body),
               now.attachments == plan.snapshot.attachments else {
             return .failure(.changedSincePlanned)
         }

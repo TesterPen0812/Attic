@@ -253,6 +253,36 @@ final class PhaseXHunt1ReproTests: XCTestCase {
         XCTAssertEqual(store.note(withID: id)?.content, before)
     }
 
+    func testH2_05RetentionAndPreservationKeepExactLegacySpellings() throws {
+        let store = try makeTestNoteStore(attachmentFileStore: makeTestAttachmentFileStore())
+        let note = try XCTUnwrap(store.create(title: "Legacy", body: "caf\u{E9}"))
+        let timestamp = Date(), versionID = UUID()
+        var family: [NoteVersion] = []
+        for body in ["caf\u{E9}", "cafe\u{301}"] {
+            let version = NoteVersion(id: versionID, noteID: note.id, createdAt: timestamp, reason: .leave,
+                content: nil, contentFormat: 0, title: "Legacy", body: body, attachmentIDs: [], sourceRevisionID: note.revisionID)
+            store.modelContext.insert(version); family.append(version)
+        }
+        try store.modelContext.save()
+        XCTAssertFalse(NotePhysicalFamilyRetention.versionEligible(family, noteIDs: [note.id], proposalBases: [], recoveryBases: []))
+        let unversioned = try XCTUnwrap(store.create(title: "Another", body: "caf\u{E9}"))
+        let copy = NoteItem(id: unversioned.id, title: "Another", body: "cafe\u{301}")
+        copy.revisionID = unversioned.revisionID
+        XCTAssertEqual(store.stageDisplacedReplicas([unversioned, copy], reason: .beforeRestore, timestamp: timestamp), 2)
+    }
+
+    func testH2_05ProposalAttributionIdentityIsExact() throws {
+        let edit = NotePendingEdit(noteID: UUID(), baseRevisionToken: UUID().uuidString,
+            proposedContent: try NoteContentCodec.encode(NoteDocument(blocks: [.text("Proposed")])),
+            agentName: "caf\u{E9}", createdAt: Date())
+        let signature = NoteProposalSignature(edit)
+        edit.agentName = "cafe\u{301}"
+        XCTAssertNotEqual(NoteProposalSignature(edit), signature)
+        let copy = NotePendingEdit(id: edit.id, noteID: edit.noteID, baseRevisionToken: edit.baseRevisionToken,
+            proposedContent: try XCTUnwrap(edit.proposedContent), agentName: "caf\u{E9}", createdAt: edit.createdAt)
+        XCTAssertFalse(NotePhysicalFamilyRetention.proposalEligible([edit, copy], noteIDs: [edit.noteID]))
+    }
+
     func testH2_04UndoRedoRestoresExactSelection() {
         let editor = engine(NoteDocument(blocks: [.text("Title"), .text("abcdef")]))
         let (scroll, view) = editor.makeView()
@@ -277,7 +307,6 @@ final class PhaseXHunt1ReproTests: XCTestCase {
         store.modelContext.insert(copy); try store.modelContext.save()
         XCTAssertEqual(note.body, copy.body, "Swift's canonical equality masks the different UTF-16 spelling")
         XCTAssertNotEqual(Array(note.body.utf16), Array(copy.body.utf16))
-        XCTExpectFailure("H2-05")
         guard case .failure(.replicasDisagree) = store.legacySnapshot(noteID: note.id) else {
             return XCTFail("The migration gate must refuse byte-divergent legacy replicas")
         }
@@ -290,7 +319,6 @@ final class PhaseXHunt1ReproTests: XCTestCase {
         let plan = try LegacyNoteMigration.plan(snapshot).get()
         let verified = try LegacyNoteMigration.verify(plan, roundTrip: { NoteTextKitRoundTrip.document(afterRoundTrip: $0) }).get()
         note.body = "cafe\u{301}"; try store.modelContext.save()
-        XCTExpectFailure("H2-05")
         guard case .failure(.changedSincePlanned) = store.commitMigration(verified) else {
             return XCTFail("A change of original UTF-16 spelling must invalidate the verified migration")
         }
@@ -348,6 +376,23 @@ final class PhaseXHunt1ReproTests: XCTestCase {
         XCTAssertTrue(editor.staged.isEmpty)
         XCTAssertFalse(editor.history.canUndo)
         _ = scroll
+    }
+
+    func testH2_05AttachmentPurgeKeepsCanonicallyEqualButExactDivergentMetadata() throws {
+        let clock = Date(timeIntervalSince1970: 1_700_000_000)
+        let store = try makeTestNoteStore(now: { clock }, attachmentFileStore: makeTestAttachmentFileStore())
+        let note = try XCTUnwrap(store.create(title: "Keep attachment family"))
+        let id = UUID(), bytes = Data([1, 2, 3]), timestamp = clock.addingTimeInterval(-60 * 86_400)
+        for name in ["caf\u{E9}.txt", "cafe\u{301}.txt"] {
+            let row = NoteAttachment(id: id, noteID: note.id, originalFilename: name,
+                contentTypeIdentifier: "public.plain-text", byteCount: 3, sortIndex: 0,
+                contentDigest: NotePayloadDigest.sha256(bytes), payload: bytes)
+            row.createdAt = timestamp; row.updatedAt = timestamp; row.deletedAt = timestamp
+            store.modelContext.insert(row)
+        }
+        try store.modelContext.save()
+        XCTAssertEqual(store.purgeRemovedAttachments(before: clock), 0)
+        XCTAssertEqual(try ModelContext(store.container).fetch(FetchDescriptor<NoteAttachment>()).count, 2)
     }
 
     func testTableLayoutCacheRecomputesCellWrappingAfterWidthChange() throws {
