@@ -695,7 +695,7 @@ extension NoteStore {
         for item in staged where shown.contains(item.id) && existing.contains(item.id) && !metadataOnlyIDs.contains(item.id) {
             let family = rows.filter { $0.id == item.id }
             guard family.allSatisfy({ $0.byteCount == item.byteCount && $0.contentDigest == item.digest
-                && $0.contentTypeIdentifier == item.contentTypeIdentifier
+                && NoteTextReplacement.utf16Equal($0.contentTypeIdentifier, item.contentTypeIdentifier)
                 && ($0.payload == nil || $0.payload == item.data) }) else {
                 throw NoteDocumentStoreError.invalidDocument("Stored attachment bytes disagree with recovery. Recovery is being kept.")
             }
@@ -712,8 +712,9 @@ extension NoteStore {
             guard let id = block.attachmentID, let originals = baseBlocks[id] else { return false }
             return originals.contains { pair in
                 let original = pair.1
-                return block.id == original.id && block.kind == original.kind && block.filename == original.filename
-                    && block.contentTypeIdentifier == original.contentTypeIdentifier
+                return block.id == original.id && block.kind == original.kind
+                    && block.filename.map { Array($0.utf16) } == original.filename.map { Array($0.utf16) }
+                    && block.contentTypeIdentifier.map { Array($0.utf16) } == original.contentTypeIdentifier.map { Array($0.utf16) }
                     && block.byteCount == original.byteCount
                     && block.pixelWidth == original.pixelWidth && block.pixelHeight == original.pixelHeight
             }
