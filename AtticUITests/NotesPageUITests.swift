@@ -144,4 +144,32 @@ final class NotesPageUITests: XCTestCase {
         row("Kyoto trip").click()
         waitFor(noteText.exists && noteValue == "Kyoto trip\nTemples", "the note opens (\(noteValue))")
     }
+
+    func testATagFiltersAllNotesAndASearchWithNoMatchesMakesTheNote() throws {
+        newNote()
+        app.typeText("Trip #kyoto ")
+        let tag = app.descendants(matching: .any).matching(NSPredicate(format: "label == %@", "Tag kyoto")).firstMatch
+        require(tag, "the title shorthand made the tag")
+        newNote()
+        app.typeText("Groceries\nOat milk")
+        waitFor(noteValue == "Groceries\nOat milk", "the untagged note typed")
+        newNote()
+
+        showAllNotes()
+        let tab = app.buttons["notes-library-tag-kyoto"]
+        require(tab, "the recent tag sits on the All notes line")
+        tab.click()
+        waitFor(!row("Groceries").exists, "the filter hides the untagged note")
+        require(row("Trip"), "the tagged note stays")
+
+        app.buttons["notes-library-search-button"].click()
+        let search = app.textFields.matching(NSPredicate(format: "label == %@", "Search #kyoto")).firstMatch
+        require(search, "the placeholder names the tag")
+        app.typeText("osaka")
+        let make = app.buttons["notes-library-new-from-search"]
+        require(make, "no matches offers a note named for the search")
+        make.click()
+        waitFor(noteText.exists && noteValue == "osaka", "the new note has the search as its title (\(noteValue))")
+        require(tag, "and the filter's tag")
+    }
 }
