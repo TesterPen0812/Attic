@@ -2786,6 +2786,10 @@ extension NotesPageController {
                 returned.state = returned.engine.document() == store.loadDocument(noteID: undo.noteID)?.content.document
                     && returned.engine.tags == note.tags ? .clean : .dirty
                 activate(returned)
+                if returned.state == .dirty {
+                    scheduleSave(returned)
+                    scheduleDurabilityDeadline(returned)
+                }
             } else {
                 cache[undo.noteID] = nil
                 active = nil
