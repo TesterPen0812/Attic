@@ -187,6 +187,17 @@ final class PhaseXHunt1ReproTests: XCTestCase {
         XCTAssertEqual(imported.texts, table.texts)
     }
 
+    func testH2_02MarkdownTableInlineMarksSurviveExportImport() throws {
+        var table = NoteTable(texts: [["Header"], ["bold link"]])
+        table.rows[1].cells[0].marks = [NoteMark(.bold, offset: 0, length: 4),
+            NoteMark(.link, offset: 5, length: 4, url: "https://example.com")]
+        let markdown = NoteTableText.markdown(table, cellText: NoteEditorEngine.markdownCellText)
+        let imported = try XCTUnwrap(NoteTablePaste.table(fromText: markdown))
+        XCTExpectFailure("H2-02")
+        XCTAssertEqual(imported.texts, table.texts)
+        XCTAssertEqual(imported.rows[1].cells[0].marks, table.rows[1].cells[0].marks)
+    }
+
     func testDetachedEngineReleasesAndViewLifetimeMatchesStockTextKit() async throws {
         weak var weakEditor: NoteEditorEngine?
         weak var weakView: NoteEditorTextView?
