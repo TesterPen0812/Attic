@@ -277,12 +277,13 @@ struct AtticPageButton<Page: Hashable>: View {
                         }
                         AtticIcon(systemName: item.systemName, size: M.iconSize,
                                   weight: isSelected ? .regular : AtticIconWeight.outline,
-                                  // On the opaque accessibility surface,
+                                  // On an opaque surface (including the
+                                  // Reduce Transparency accessibility mode),
                                   // palette ink can fall below the icon's
                                   // floor on its tinted chip. Keep that
                                   // palette's fill/hairline; use the strong
                                   // selected-control glyph ink there.
-                                  ink: isSelected ? (accent == nil || design.reduceTransparency ? .glyph : .accent) : .icon)
+                                  ink: isSelected ? (accent == nil || design.effectiveSurface == .solid ? .glyph : .accent) : .icon)
                     }
                     .frame(width: M.segment, height: M.segment)
                     // 24 pt chips (chrome B) still answer a 28 pt target,

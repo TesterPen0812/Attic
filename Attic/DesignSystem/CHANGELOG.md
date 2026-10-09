@@ -5,14 +5,15 @@ Every later change is recorded here: what changed, why, and who asked.
 
 ## Phase 2
 
-### A38: page-switch contrast with Reduce Transparency (CI repair, 2026-10-09)
+### A38: page-switch contrast on opaque surfaces (CI repair, 2026-10-09)
 
 The palette-colored selected page glyph missed the 3:1 icon floor on the
-opaque tinted chip. With Reduce Transparency it uses the existing strong
-glyph ink, retaining the palette's selected fill and hairline. Ordinary
-appearance and Dark glass are unchanged. The focused pixel regression uses
-Electric Blue and Sea Glass at every Tint step; no contrast exception or
-threshold is added or relaxed.
+opaque tinted chip, both on Solid and with Reduce Transparency. On opaque
+surfaces it uses the existing strong glyph ink, retaining the palette's
+selected fill and hairline. Translucent surfaces and Dark glass are unchanged.
+The focused pixel regression uses Electric Blue and Sea Glass at every Tint
+step, with and without Reduce Transparency; no contrast exception or threshold
+is added or relaxed.
 
 ### A38: subtask drag reorder (functional audit repair, 2026-10-08)
 

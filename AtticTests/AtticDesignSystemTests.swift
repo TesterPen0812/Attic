@@ -5,10 +5,12 @@ import XCTest
 /// The design system's tokens and the automated appearance check.
 @MainActor
 final class AtticDesignSystemTests: XCTestCase {
-    func testA38PageSwitchKeepsContrastWithReducedTransparency() {
+    func testA38PageSwitchKeepsContrastOnOpaqueSurfaces() {
         let contexts = [AtticPanelTheme.electricBlue, .seaGlass].flatMap { palette in
-            PanelTintLevel.allCases.map { tint in
-                AtticDesignContext(mode: .light, palette: palette, surface: .solid, tint: tint, reduceTransparency: true)
+            [false, true].flatMap { reduced in
+                PanelTintLevel.allCases.map { tint in
+                    AtticDesignContext(mode: .light, palette: palette, surface: .solid, tint: tint, reduceTransparency: reduced)
+                }
             }
         }
         let report = AtticAppearanceCheck.run(families: [.pageSwitch], contexts: contexts, scale: 2)
@@ -21,7 +23,7 @@ final class AtticDesignSystemTests: XCTestCase {
             renderer.scale = 2
             if let image = renderer.cgImage, let png = NSBitmapImageRep(cgImage: image).representation(using: .png, properties: [:]) {
                 let attachment = XCTAttachment(data: png, uniformTypeIdentifier: "public.png")
-                attachment.name = "A38-page-switch-reduce-transparency"
+                attachment.name = "A38-page-switch-opaque"
                 attachment.lifetime = .keepAlways
                 add(attachment)
             }
