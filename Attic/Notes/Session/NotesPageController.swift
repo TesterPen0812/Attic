@@ -680,7 +680,8 @@ final class NotesPageController: ObservableObject {
         guard await awaitRecoveryForUser(), let session = active, !session.isImporting,
               canLeaveComposition(in: session) else { return false }
         return await performAfterRecovery {
-            guard self.active === session, self.preserve(session),
+            guard self.active === session, !session.isImporting, self.canLeaveComposition(in: session),
+                  self.preserve(session),
                   let edit = self.store.pendingEdits(noteID: session.noteID).first(where: { id == nil || $0.id == id }),
                   let family = try? self.store.pendingEditRows(edit.id),
                   NotePhysicalFamilyRetention.proposalEligible(family, noteIDs: [session.noteID]) else { return false }
@@ -734,7 +735,8 @@ final class NotesPageController: ObservableObject {
               session.id == review.sessionID, !session.isImporting,
               canLeaveComposition(in: session) else { return false }
         return await performAfterRecovery {
-            guard self.proposalReview == review, self.active === session else { return false }
+            guard self.proposalReview == review, self.active === session, !session.isImporting,
+                  self.canLeaveComposition(in: session) else { return false }
             guard let note = self.store.note(withID: review.noteID), note.revisionToken == review.revision,
                   note.content == review.savedContent, session.engine.document() == review.current else {
                 _ = self.refreshProposalReview(id: review.id, session: session)
@@ -802,7 +804,9 @@ final class NotesPageController: ObservableObject {
         guard let stored = await performBoundedUserIO({ [self] in Array(await durableAttachmentsAsync(in: document).values) }),
               proposalReview == review, active === session else { return false }
         return await performAfterRecovery {
-            guard self.proposalReview == review, self.active === session,
+            guard self.proposalReview == review, self.active === session, !session.isImporting,
+                  self.canLeaveComposition(in: session),
+                  !review.isDeletion || session.engine.document() == review.current,
                   let rows = try? self.store.pendingEditRows(review.id),
                   NotePhysicalFamilyRetention.proposalEligible(rows, noteIDs: [review.noteID]),
                   rows.first.map(NoteProposalSignature.init) == review.signature,
@@ -2636,10 +2640,14 @@ extension NotesPageController {
     func restoreHistoryVersionDurably() async -> Bool {
         guard let browser = historyBrowser, let selected = browser.selected, selected.canRestore,
               !browser.isRestoring, !browser.showsCurrent, let session = active,
-              session.noteID == browser.noteID, session.state == .clean, !session.isImporting else { return false }
+              session.noteID == browser.noteID, session.state == .clean, !session.isImporting,
+              canLeaveComposition(in: session) else { return false }
+        let engine = session.engine, generation = session.editGeneration
         browser.isRestoring = true
         defer { browser.isRestoring = false }
-        guard await awaitRecoveryForUser(), historyBrowser === browser, active === session else { return false }
+        guard await awaitRecoveryForUser(), historyBrowser === browser, active === session,
+              session.engine === engine, session.editGeneration == generation, session.state == .clean,
+              !session.isImporting, canLeaveComposition(in: session) else { return false }
         let preservationID = UUID()
         switch store.restoreVersion(selected.id, noteID: browser.noteID,
                                     expectedRevisionID: browser.currentRevision, preservationID: preservationID) {
@@ -2750,9 +2758,11 @@ extension NotesPageController {
             if let returned = undo.session {
                 legacyNoteID = nil
                 returned.baseRevisionID = revision
-                returned.state = .clean
                 returned.baseTags = note.tags
-                returned.engine.setTags(note.tags)
+                // The displaced session can receive late callbacks while retained
+                // for Undo. Its text and tags remain owned until actually saved.
+                returned.state = returned.engine.document() == store.loadDocument(noteID: undo.noteID)?.content.document
+                    && returned.engine.tags == note.tags ? .clean : .dirty
                 activate(returned)
             } else {
                 cache[undo.noteID] = nil

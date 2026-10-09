@@ -144,10 +144,34 @@ final class PhaseXHunt1bTests: XCTestCase {
                 && page.active?.engine.document() == changed
             cleanMatchesStore = true
         }
-        XCTExpectFailure("H3-04") {
-            XCTAssertTrue(safePreservation, "Late work must stay owned by the current editor or be saved before Restore")
-            XCTAssertTrue(cleanMatchesStore, "A clean returned editor must agree with persisted content")
-        }
+        XCTAssertTrue(safePreservation, "Late work must stay owned by the current editor or be saved before Restore")
+        XCTAssertTrue(cleanMatchesStore, "A clean returned editor must agree with persisted content")
+    }
+
+    func testH3_04UndoKeepsLateWorkInTheDisplacedSessionDirty() async throws {
+        let store = try makeTestNoteStore(attachmentFileStore: makeTestAttachmentFileStore())
+        let id = try create(store, title: "Earlier")
+        XCTAssertTrue(store.recordVersion(noteID: id, reason: .pause))
+        _ = try store.saveDocument(noteID: id, document: NoteDocument(blocks: [.text("Current")]),
+                                   baseRevisionID: store.note(withID: id)?.revisionID).get()
+        let page = await controller(store)
+        XCTAssertTrue(page.open(noteID: id))
+        let original = try XCTUnwrap(page.active)
+        await XCTAssertTrueAsync(await page.openHistoryDurably())
+        await XCTAssertTrueAsync(await page.restoreHistoryVersionDurably())
+        XCTAssertTrue(original.engine.performEdit(NSRange(location: original.engine.textStorage.length, length: 0),
+                                                  with: NSAttributedString(string: " LATE"), name: "Late callback"))
+        original.engine.setTagsFromPicker(["late"])
+        let late = original.engine.document()
+        await XCTAssertTrueAsync(await page.undoVersionRestoreDurably(expectedID: page.versionRestoreUndoID))
+        XCTAssertTrue(page.active === original)
+        XCTAssertEqual(original.engine.document(), late)
+        XCTAssertEqual(original.engine.tags, ["late"])
+        XCTAssertEqual(original.state, .dirty)
+        await XCTAssertTrueAsync(await page.preserveAllDurably())
+        XCTAssertEqual(store.loadDocument(noteID: id)?.content.document, late)
+        XCTAssertEqual(store.note(withID: id)?.tags, ["late"])
+        XCTAssertEqual(original.state, .clean)
     }
 
     func testSearchTracksTagsRenamesMovesAndDeletesAndNoMatchCreation() async throws {
