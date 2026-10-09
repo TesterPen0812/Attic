@@ -65,10 +65,10 @@ final class NotesLibraryModel: ObservableObject {
     private var storeRevision: UInt64 = 0
     private var searchGeneration: UInt64 = 0
     private var cache: (key: RowsKey, groups: [Group])?
-    /// Each stored note's preview body, read from its document once per
-    /// saved revision (a row rebuild decodes only the notes that changed).
+    /// Each stored note's preview body, read once per content identity,
+    /// including fresh-context changes that keep the same revision token.
     private var proposalIDs: (revision: UInt64, ids: Set<UUID>)?
-    private var bodies: [UUID: (revision: Int64, revisionID: UUID?, body: NoteRowSummary.Body)] = [:]
+    private var bodies: [UUID: (content: Data?, plainText: String, body: NoteRowSummary.Body)] = [:]
     /// How many note bodies the rows decoded (a profiling seam: a rebuild
     /// after one save decodes that note only).
     private(set) var bodyDecodeCount = 0
@@ -385,10 +385,10 @@ final class NotesLibraryModel: ObservableObject {
     private func body(of note: NoteItem) -> NoteRowSummary.Body {
         // A legacy note's text is read as is (no decode, nothing to keep).
         guard note.usesDocumentFormat else { return NoteRowSummary.body(of: note) }
-        if let kept = bodies[note.id], kept.revision == note.revision, kept.revisionID == note.revisionID { return kept.body }
+        if let kept = bodies[note.id], kept.content == note.content, kept.plainText == note.plainText { return kept.body }
         let body = NoteRowSummary.body(of: note)
         bodyDecodeCount += 1
-        bodies[note.id] = (note.revision, note.revisionID, body)
+        bodies[note.id] = (note.content, note.plainText, body)
         return body
     }
 

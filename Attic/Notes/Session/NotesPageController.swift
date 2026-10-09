@@ -117,6 +117,8 @@ final class NoteSession: ObservableObject, Identifiable {
     @Published private(set) var noteID: UUID
     @Published fileprivate(set) var isPersisted: Bool
     fileprivate(set) var baseRevisionID: UUID?
+    /// Saved bytes also identify same-token changes imported by a fresh context.
+    fileprivate var baseContent: Data?
     /// The tags the store holds for this note (as loaded or last saved). A
     /// save writes the engine's tags only when they differ.
     fileprivate(set) var baseTags: [String] = []
@@ -698,10 +700,11 @@ final class NotesPageController: ObservableObject {
               let edit = store.pendingEdits(noteID: session.noteID).first(where: { $0.id == id }),
               let data = edit.proposedContent, let document = NoteContentCodec.decode(data).document else { return false }
         // A clean editor can follow a fresh outside save; dirty/conflicted text stays owned by its draft.
-        if session.state == .clean, session.baseRevisionID != note.revisionID,
+        if session.state == .clean, session.baseRevisionID != note.revisionID || session.baseContent != note.content,
            let saved = note.content.flatMap({ NoteContentCodec.decode($0).document }) {
             session.replaceEngine(makeEngine(noteID: note.id, document: saved, readOnly: false, tags: note.tags))
             session.baseRevisionID = note.revisionID
+            session.baseContent = note.content
             session.baseTags = note.tags
             wire(session)
         }
@@ -930,6 +933,7 @@ final class NotesPageController: ObservableObject {
                                                      tags: note.tags),
                                   readOnlyReason: readOnlyReason)
         session.baseTags = note.tags
+        session.baseContent = note.content
         if let state = defaults?.dictionary(forKey: Self.viewStateKey(note.id)) {
             session.selection = NSRange(location: state["location"] as? Int ?? 0,
                                         length: state["length"] as? Int ?? 0)
@@ -962,7 +966,7 @@ final class NotesPageController: ObservableObject {
     }
 
     /// A clean cached session is rebuilt once, at presentation, if its store
-    /// revision moved. A missing clean note is dropped.
+    /// revision or content moved. A missing clean note is dropped.
     private func presentSession(_ session: NoteSession) -> NoteSession? {
         if case .conflict = session.state {
             session.state = .conflict(store.note(withID: session.noteID) == nil ? .deleted : .changed)
@@ -974,7 +978,7 @@ final class NotesPageController: ObservableObject {
             session.engine.detachView()
             return nil
         }
-        guard session.baseRevisionID != note.revisionID else {
+        guard session.baseRevisionID != note.revisionID || session.baseContent != note.content else {
             // Tags set elsewhere (an agent, another page) move no revision.
             if note.tags != session.baseTags, session.engine.tags == session.baseTags {
                 session.baseTags = note.tags
@@ -1567,6 +1571,7 @@ final class NotesPageController: ObservableObject {
 
     private func didSave(_ session: NoteSession, staged: [StagedNoteAttachment], retainingNewerEdits: Bool = false) {
         captureViewState(session)
+        session.baseContent = store.note(withID: session.noteID)?.content
         session.state = retainingNewerEdits ? .dirty : .clean
         if retainingNewerEdits { scheduleSave(session) }
         if !retainingNewerEdits {
@@ -2758,6 +2763,7 @@ extension NotesPageController {
             if let returned = undo.session {
                 legacyNoteID = nil
                 returned.baseRevisionID = revision
+                returned.baseContent = note.content
                 returned.baseTags = note.tags
                 // The displaced session can receive late callbacks while retained
                 // for Undo. Its text and tags remain owned until actually saved.

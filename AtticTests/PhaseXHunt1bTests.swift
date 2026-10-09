@@ -40,9 +40,32 @@ final class PhaseXHunt1bTests: XCTestCase {
         let shown = try XCTUnwrap(rows(library, store).first)
         XCTAssertEqual(shown.id, id)
         XCTAssertEqual(shown.title, "Renamed")
-        XCTExpectFailure("H3-01") {
-            XCTAssertEqual(shown.preview, "New preview", "A fresh context must replace the old cached body")
-        }
+        XCTAssertEqual(shown.preview, "New preview", "A fresh context must replace the old cached body")
+    }
+
+    func testH3_01CleanCachedSessionFollowsSameTokenContentRefresh() async throws {
+        let store = try makeTestNoteStore(attachmentFileStore: makeTestAttachmentFileStore())
+        let id = try create(store, body: "Old body")
+        let page = await controller(store)
+        XCTAssertTrue(page.open(noteID: id))
+        let original = try XCTUnwrap(page.active)
+        let imported = ModelContext(store.container)
+        let row = try XCTUnwrap(imported.fetch(FetchDescriptor<NoteItem>()).first { $0.id == id })
+        let changed = NoteDocument(blocks: [.text("Renamed"), .text("New body")])
+        row.content = try NoteContentCodec.encode(changed)
+        row.title = "Renamed"; row.body = "New body"; row.plainText = "Renamed\nNew body"
+        try imported.save()
+        store.refresh(); page.present()
+        XCTAssertEqual(page.active?.engine.document(), changed)
+        let refreshed = try XCTUnwrap(page.active)
+        XCTAssertFalse(refreshed === original)
+        XCTAssertTrue(refreshed.engine.performEdit(NSRange(location: refreshed.engine.textStorage.length, length: 0),
+                                                   with: NSAttributedString(string: " mine"), name: "Type"))
+        row.content = try NoteContentCodec.encode(NoteDocument(blocks: [.text("Outside")]))
+        try imported.save()
+        store.refresh(); page.present()
+        XCTAssertTrue(page.active === refreshed, "A dirty editor retains its own text after refresh")
+        XCTAssertEqual(page.active?.engine.document().blocks.last?.text, "New body mine")
     }
 
     func testH3_02BrowserRestoreConvergesPinnedMetadataAcrossPhysicalReplicas() async throws {
