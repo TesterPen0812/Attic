@@ -762,6 +762,28 @@ final class NotesFormatControlsTests: XCTestCase {
 
     // MARK: Hint and dates
 
+    func testEmptyBodyHintHidesWhileEditingATableCell() throws {
+        let (controls, engine, textView) = make(NoteDocument(blocks: [.text("Table"), .text("")]))
+        textView.setSelectedRange(NSRange(location: engine.textStorage.length, length: 0))
+        controls.refresh()
+        XCTAssertTrue(controls.isHintVisible)
+        XCTAssertTrue(engine.insertTable())
+        controls.refresh()
+        XCTAssertNotNil(engine.focusedTable, "the table insertion puts the keyboard in its first cell")
+        XCTAssertFalse(controls.isHintVisible, "the body hint must not overlap the table's Add Row control")
+        XCTAssertNil(textView.accessibilityHelp(), "the body hint is not help for a table cell")
+        // Page restoration returns the main editor's caret while the table
+        // keeps its cell selection and Add Row chrome.
+        textView.window?.makeFirstResponder(textView)
+        textView.setSelectedRange(NSRange(location: engine.textStorage.length, length: 0))
+        controls.refresh()
+        XCTAssertNotNil(engine.focusedTable)
+        XCTAssertFalse(controls.isHintVisible, "remembered table focus must not bring the overlap back")
+        engine.focusedTable?.deactivate()
+        controls.refresh()
+        XCTAssertTrue(controls.isHintVisible, "ordinary empty body lines still show their hint after leaving the table")
+    }
+
     /// Draft 7's hint: an empty body line with the caret in it, every
     /// note; gone with the first keystroke; never on a line with text, the
     /// title, a styled empty line or a read-only note. VoiceOver hears it as
