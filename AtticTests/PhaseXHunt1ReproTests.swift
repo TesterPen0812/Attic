@@ -215,6 +215,22 @@ final class PhaseXHunt1ReproTests: XCTestCase {
         XCTAssertEqual(store.note(withID: id)?.content, before)
     }
 
+    func testH2_04UndoRedoRestoresExactSelection() {
+        let editor = engine(NoteDocument(blocks: [.text("Title"), .text("abcdef")]))
+        let (scroll, view) = editor.makeView()
+        defer { editor.detachView(); _ = scroll }
+        let selected = NSRange(location: 7, length: 3)
+        view.setSelectedRange(selected)
+        view.insertText("X", replacementRange: selected)
+        let after = editor.document(), afterSelection = view.selectedRange()
+        XCTExpectFailure("H2-04")
+        XCTAssertTrue(editor.history.undo())
+        XCTAssertEqual(view.selectedRange(), selected)
+        XCTAssertTrue(editor.history.redo())
+        XCTAssertEqual(editor.document(), after)
+        XCTAssertEqual(view.selectedRange(), afterSelection)
+    }
+
     func testDetachedEngineReleasesAndViewLifetimeMatchesStockTextKit() async throws {
         weak var weakEditor: NoteEditorEngine?
         weak var weakView: NoteEditorTextView?
