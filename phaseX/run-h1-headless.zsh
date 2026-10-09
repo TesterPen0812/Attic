@@ -1,5 +1,5 @@
 #!/bin/zsh
-# Normal: 3,000 × 24 operations; --long: 20,000 × 120; --area: backend suites too.
+# Normal: 3,000 × 24 operations; --long: 20,000 × 120; --area: full engine and backend suites too.
 # All hosts are local-only and isolated; no window or general-pasteboard tests.
 set -euo pipefail
 readonly root=${0:A:h:h}
@@ -19,7 +19,7 @@ case "$mode" in
     only=(-only-testing:AtticTests/PhaseXHunt1GeneratedTests/testSeededEditorSequencesAgreeAfterEveryOperation)
     ;;
   --area)
-    for suite in NoteDocumentStoreTests NoteFormatTests NotesMigrationAcceptanceTests NoteStoreTests TaskStoreTests DailyCleanupServiceTests SubtaskTests; do
+    for suite in NoteEditorEngineTests NoteDocumentStoreTests NoteFormatTests NotesMigrationAcceptanceTests NoteStoreTests TaskStoreTests DailyCleanupServiceTests SubtaskTests; do
       only+=(-only-testing:AtticTests/$suite)
     done
     ;;

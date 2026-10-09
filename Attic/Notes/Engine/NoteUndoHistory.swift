@@ -670,7 +670,10 @@ final class NoteUndoHistory {
         swap(&op.selectionBefore, &op.selectionAfter)
         if let selection, let textView {
             let location = min(max(0, selection.location), storage.length)
-            textView.setSelectedRange(NSRange(location: location, length: min(selection.length, storage.length - location)))
+            let restored = NSRange(location: location, length: min(selection.length, storage.length - location))
+            // Even setting the same caret makes AppKit rederive typing
+            // attributes from the text, discarding pending inline marks.
+            if textView.selectedRange() != restored { textView.setSelectedRange(restored) }
         }
     }
 

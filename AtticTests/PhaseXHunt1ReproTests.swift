@@ -316,6 +316,27 @@ final class PhaseXHunt1ReproTests: XCTestCase {
         XCTAssertFalse(NotePhysicalFamilyRetention.proposalEligible([edit, copy], noteIDs: [edit.noteID]))
     }
 
+    func testFix4TypingMarkUndoRedoKeepsOtherPendingMarks() throws {
+        let engine = NoteEditorEngine(noteID: UUID(), document: NoteDocument(blocks: [.text("T"), .text("Plain")]))
+        let (_, view) = engine.makeView()
+        let caret = NSRange(location: engine.textStorage.length, length: 0)
+        view.setSelectedRange(caret)
+        XCTAssertTrue(engine.perform(.mark(.bold)))
+        XCTAssertTrue(engine.perform(.mark(.italic)))
+        for _ in 0..<3 {
+            XCTAssertTrue(engine.history.undo())
+            XCTAssertEqual(view.selectedRange(), caret)
+            let undone = try XCTUnwrap(view.typingAttributes[.font] as? NSFont)
+            XCTAssertTrue(undone.fontDescriptor.symbolicTraits.contains(.bold))
+            XCTAssertFalse(undone.fontDescriptor.symbolicTraits.contains(.italic))
+            XCTAssertTrue(engine.history.redo())
+            XCTAssertEqual(view.selectedRange(), caret)
+            let redone = try XCTUnwrap(view.typingAttributes[.font] as? NSFont)
+            XCTAssertTrue(redone.fontDescriptor.symbolicTraits.contains(.bold))
+            XCTAssertTrue(redone.fontDescriptor.symbolicTraits.contains(.italic))
+        }
+    }
+
     func testH2_04UndoRedoRestoresExactSelection() {
         let editor = engine(NoteDocument(blocks: [.text("Title"), .text("abcdef")]))
         let (scroll, view) = editor.makeView()
