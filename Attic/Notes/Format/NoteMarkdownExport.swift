@@ -95,6 +95,22 @@ enum NoteMarkdownExport {
         inlineText(block, calendar: calendar, locale: locale)
     }
 
+    /// Escape prose before adding mark delimiters, so literal Markdown and
+    /// HTML cannot turn into formatting on table re-import.
+    static func escapeInlineText(_ text: String) -> String {
+        var result = ""
+        for character in text {
+            switch character {
+            case "&": result += "&amp;"
+            case "<": result += "&lt;"
+            case ">": result += "&gt;"
+            case "\\", "*", "_", "~", "`", "[", "]", "=": result += "\\" + String(character)
+            default: result.append(character)
+            }
+        }
+        return result
+    }
+
     private static func inlineText(_ block: NoteBlock, calendar: Calendar, locale: Locale) -> String {
         var result = ""
         let text = block.text as NSString
@@ -120,7 +136,7 @@ enum NoteMarkdownExport {
                 }
                 continue
             }
-            var value = text.substring(with: range)
+            var value = escapeInlineText(text.substring(with: range))
             let marks = block.marks.filter { $0.offset <= pair.0 && $0.offset + $0.length >= pair.1 }
             for mark in marks.sorted(by: { $0.kind.rawValue < $1.kind.rawValue }).reversed() {
                 switch mark.kind {
@@ -130,7 +146,11 @@ enum NoteMarkdownExport {
                 case .strikethrough: value = "~~" + value + "~~"
                 case .code: value = "`" + value + "`"
                 case .highlight: value = "==" + value + "=="
-                case .link: value = "[" + value + "](" + (mark.url ?? "") + ")"
+                case .link:
+                    let destination = escapeInlineText(mark.url ?? "")
+                        .replacingOccurrences(of: "(", with: "\\(")
+                        .replacingOccurrences(of: ")", with: "\\)")
+                    value = "[" + value + "](" + destination + ")"
                 }
             }
             result += value

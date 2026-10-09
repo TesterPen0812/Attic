@@ -54,6 +54,15 @@ final class PhaseXHunt1ReproTests: XCTestCase {
         return (document, staged)
     }
 
+    func testH2_02LinkDestinationLiteralEntitiesAndClosingParenthesesSurvive() throws {
+        for url in ["https://example.com/?x=&amp;", "https://example.com/a)b", "https://example.com/a(b", "https://example.com/?x=&lt;br&gt;"] {
+            var table = NoteTable(texts: [["Header"], ["link"]])
+            table.rows[1].cells[0].marks = [NoteMark(.link, offset: 0, length: 4, url: url)]
+            let imported = try XCTUnwrap(NoteTableText.parseMarkdown(NoteTableText.markdown(table, cellText: NoteEditorEngine.markdownCellText)))
+            XCTAssertEqual(imported.rows[1].cells[0], table.rows[1].cells[0], url)
+        }
+    }
+
     func testAllBlockStylesObjectsLinksAndTagsSurviveLiveSaveReopenAndRestore() throws {
         let (document, staged) = richDocument()
         XCTAssertEqual(NoteTextKitRoundTrip.document(afterRoundTrip: document), document)
@@ -182,7 +191,10 @@ final class PhaseXHunt1ReproTests: XCTestCase {
     // Reproductions were run red before being marked by finding ID.
     func testH2_01MarkdownTableLiteralBreakTagSurvivesExportImport() throws {
         let table = NoteTable(texts: [["Header"], ["literal <br> text"], ["<br/> <br /> &lt;br&gt; &amp; &#10;"], ["line\nbreak | slash\\"]])
-        let imported = try XCTUnwrap(NoteTableText.parseMarkdown(NoteTableText.markdown(table)))
+        let markdown = NoteTableText.markdown(table)
+        XCTAssertTrue(markdown.contains("literal &lt;br&gt; text"))
+        XCTAssertFalse(markdown.contains("literal &amp;lt;br&amp;gt; text"))
+        let imported = try XCTUnwrap(NoteTableText.parseMarkdown(markdown))
         XCTAssertEqual(imported.texts, table.texts)
     }
 
@@ -192,9 +204,31 @@ final class PhaseXHunt1ReproTests: XCTestCase {
             NoteMark(.link, offset: 5, length: 4, url: "https://example.com")]
         let markdown = NoteTableText.markdown(table, cellText: NoteEditorEngine.markdownCellText)
         let imported = try XCTUnwrap(NoteTablePaste.table(fromText: markdown))
-        XCTExpectFailure("H2-02")
         XCTAssertEqual(imported.texts, table.texts)
         XCTAssertEqual(imported.rows[1].cells[0].marks, table.rows[1].cells[0].marks)
+    }
+
+    func testH2_02EveryInlineMarkNestedUnicodeAndLiteralSyntaxSurvive() throws {
+        for kind in NoteMark.Kind.allCases {
+            var table = NoteTable(texts: [["Header"], ["😀 café"]])
+            table.rows[1].cells[0].marks = [NoteMark(kind, offset: 0, length: 7,
+                url: kind == .link ? "https://example.com/a_(b)?x=1&y=2" : nil)]
+            let copy = try XCTUnwrap(NoteTableText.parseMarkdown(NoteTableText.markdown(table, cellText: NoteEditorEngine.markdownCellText)))
+            XCTAssertEqual(copy.texts, table.texts, "\(kind)")
+            XCTAssertEqual(copy.rows[1].cells[0].marks, table.rows[1].cells[0].marks, "\(kind)")
+        }
+        var table = NoteTable(texts: [["Header"], ["bold italic link"], ["**literal** [link](url) <u>raw</u> &lt;br&gt;"]])
+        table.rows[1].cells[0].marks = [NoteMark(.bold, offset: 0, length: 11), NoteMark(.italic, offset: 5, length: 6),
+            NoteMark(.link, offset: 12, length: 4, url: "https://example.com")]
+        let copy = try XCTUnwrap(NoteTableText.parseMarkdown(NoteTableText.markdown(table, cellText: NoteEditorEngine.markdownCellText)))
+        XCTAssertEqual(copy.texts, table.texts)
+        XCTAssertEqual(copy.rows[1].cells[0].marks, table.rows[1].cells[0].marks)
+        XCTAssertTrue(copy.rows[2].cells[0].marks.isEmpty)
+    }
+
+    func testH2_02MalformedNestedMarkupStaysLiteralAndBounded() {
+        let text = String(repeating: "[", count: 2_000) + "unclosed"
+        XCTAssertEqual(NoteTableText.inlineCell(text).text, text)
     }
 
     func testH2_03RestoreRejectsDivergentVersionReplicas() throws {
