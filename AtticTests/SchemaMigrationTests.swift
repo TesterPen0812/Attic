@@ -69,6 +69,27 @@ final class SchemaMigrationTests: XCTestCase {
 
     // MARK: - Migration of a pre-Phase 0 store
 
+    func testDailyToRedesignDiffIsEntirelyAdditiveAndInfersAMapping() throws {
+        let old = try XCTUnwrap(NSManagedObjectModel.makeManagedObjectModel(for: Self.prePhase0Types))
+        let current = try XCTUnwrap(NSManagedObjectModel.makeManagedObjectModel(for: PersistenceController.appModelTypes))
+        for entity in old.entities {
+            let destination = try XCTUnwrap(current.entitiesByName[try XCTUnwrap(entity.name)])
+            for attribute in entity.attributesByName.values {
+                let retained = try XCTUnwrap(destination.attributesByName[attribute.name])
+                XCTAssertEqual(retained.attributeType, attribute.attributeType)
+                XCTAssertEqual(retained.isOptional, attribute.isOptional)
+                XCTAssertEqual(retained.renamingIdentifier, attribute.renamingIdentifier)
+            }
+            for attribute in destination.attributesByName.values where entity.attributesByName[attribute.name] == nil {
+                XCTAssertTrue(attribute.isOptional || attribute.defaultValue != nil,
+                              "Added fields must be optional or defaulted")
+            }
+        }
+        XCTAssertEqual(Set(current.entitiesByName.keys).subtracting(old.entitiesByName.keys),
+                       ["ItemLink", "NoteVersion", "NotePendingEdit"])
+        _ = try NSMappingModel.inferredMappingModel(forSourceModel: old, destinationModel: current)
+    }
+
     func testCopiedPrePhase0StoreMigratesInPlaceWithoutLosingOrDeletingAnything() async throws {
         let fixture = try await makePrePhase0Fixture()
         // Only copies are ever opened; the fixture itself stays untouched.
