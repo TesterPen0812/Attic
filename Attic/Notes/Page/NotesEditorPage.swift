@@ -22,7 +22,6 @@ struct NotesEditorPage: View {
     @ObservedObject var noteDraft: NoteDraftController
     @ObservedObject var uiState: PanelUIState
     let layout: PanelPageLayout
-    /// Set when the switch is off: All notes returns to the old page.
 
     @Environment(\.atticDesign) private var design
     @Environment(\.atticPanelToasts) private var toasts
@@ -532,8 +531,6 @@ struct NotesEditorPage: View {
         }
         library.clearSearch()
     }
-
-
 
     private var currentNoteID: UUID? {
         guard let session = controller.active else { return nil }

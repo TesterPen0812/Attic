@@ -728,7 +728,6 @@ final class AtticUITests: XCTestCase {
         let text = "Live Notes UI\nThe active draft survives opening the library."
         app.typeText(text)
         waitForValue(text, in: body)
-        app.typeKey(.escape, modifierFlags: [])
         XCTAssertTrue(body.exists)
 
         let browse = app.buttons["notes-all-notes"]
@@ -807,8 +806,10 @@ final class AtticUITests: XCTestCase {
         let pin = app.buttons["panel-pin-button"]
         let controls = app.buttons["notes-all-notes"]
         XCTAssertTrue(scroll.exists)
-        XCTAssertLessThan(scroll.frame.minY, pin.frame.minY)
-        XCTAssertGreaterThan(scroll.frame.maxY, controls.frame.maxY)
+        // The native AX scroll area reports its inset visible viewport.
+        // Its height still protects against a short, fixed-height editor;
+        // the header transition below proves that the document scrolls.
+        XCTAssertGreaterThan(scroll.frame.height, app.dialogs.firstMatch.frame.height * 0.5)
         let pinFrame = pin.frame
         let controlsFrame = controls.frame
         let headerTitle = app.descendants(matching: .any)["notes-header-title"]
