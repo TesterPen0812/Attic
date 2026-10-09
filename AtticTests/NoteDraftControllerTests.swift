@@ -5,6 +5,52 @@ import XCTest
 @testable import Attic
 
 final class NoteDraftControllerTests: XCTestCase {
+
+    @MainActor
+    func testR1_01RecoveryKeepsExactTitleAndBodyThroughSave() async throws {
+        for titleOnly in [false, true] {
+            let directory = ownedTemporaryDirectory(prefix: "R1RecoveryIdentity")
+            let url = directory.appendingPathComponent("draft.json")
+            let store = try makeTestNoteStore(attachmentFileStore: makeTestAttachmentFileStore())
+            let note = try XCTUnwrap(store.create(title: "Café", body: "Café"))
+            let title = titleOnly ? "Cafe\u{301}" : note.title
+            let body = titleOnly ? note.body : "Cafe\u{301}"
+            try await NoteDraftRecoveryFile(url: url).checkpoint(NoteDraftRecoverySnapshot(
+                noteID: note.id, reservedNoteID: note.id, title: title, body: body,
+                persistedTitle: note.title, persistedBody: note.body), generation: 1)
+            let draft = NoteDraftController(noteStore: store, autosaveDelay: .seconds(60), recoveryURL: url)
+            let restored = await draft.restoreRecoveryIfNeeded()
+            XCTAssertTrue(restored)
+            XCTAssertTrue(draft.isDirty, "A different UTF-16 spelling is still unsaved")
+            XCTAssertNil(draft.conflict)
+            XCTAssertEqual(Array(draft.title.utf16), Array(title.utf16))
+            XCTAssertEqual(Array(draft.body.utf16), Array(body.utf16))
+            XCTAssertTrue(draft.flush())
+            await draft.waitForRecoveryCheckpoint()
+            let saved = try XCTUnwrap(store.note(withID: note.id))
+            XCTAssertEqual(Array(saved.title.utf16), Array(title.utf16))
+            XCTAssertEqual(Array(saved.body.utf16), Array(body.utf16))
+            XCTAssertFalse(FileManager.default.fileExists(atPath: url.path))
+        }
+    }
+
+    @MainActor
+    func testR1_01RecoveryDetectsExactPersistedTitleConflict() async throws {
+        let url = ownedTemporaryDirectory(prefix: "R1RecoveryConflict").appendingPathComponent("draft.json")
+        let store = try makeTestNoteStore(attachmentFileStore: makeTestAttachmentFileStore())
+        let note = try XCTUnwrap(store.create(title: "Cafe\u{301}", body: "Saved"))
+        try await NoteDraftRecoveryFile(url: url).checkpoint(NoteDraftRecoverySnapshot(
+            noteID: note.id, reservedNoteID: note.id, title: "Local title", body: "Draft",
+            persistedTitle: "Café", persistedBody: "Saved"), generation: 1)
+        let draft = NoteDraftController(noteStore: store, autosaveDelay: .seconds(60), recoveryURL: url)
+        let restored = await draft.restoreRecoveryIfNeeded()
+        XCTAssertTrue(restored)
+        XCTAssertEqual(draft.conflict, .remoteChange)
+        XCTAssertFalse(draft.flush())
+        XCTAssertEqual(Array(try XCTUnwrap(store.note(withID: note.id)).title.utf16), Array("Cafe\u{301}".utf16))
+        await draft.waitForRecoveryCheckpoint()
+    }
+
     @MainActor
     func testLegacyNavigationRefusesActiveComposition() throws {
         let store = try makeTestNoteStore(attachmentFileStore: makeTestAttachmentFileStore())

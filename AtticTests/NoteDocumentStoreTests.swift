@@ -9,6 +9,83 @@ import XCTest
 /// (requirement 2, on fixtures only).
 @MainActor
 final class NoteDocumentStoreTests: XCTestCase {
+
+    func testR1_02StagedRecoveryAttachmentRequiresExactType() throws {
+        let bytes = Data("file".utf8), attachmentID = UUID()
+        let staged = StagedNoteAttachment(id: attachmentID, filename: "file.txt", contentTypeIdentifier: "test.café",
+            byteCount: 4, digest: NotePayloadDigest.sha256(bytes), data: bytes)
+        let block = NoteBlock.file(attachmentID: attachmentID, filename: staged.filename,
+            contentTypeIdentifier: staged.contentTypeIdentifier, byteCount: staged.byteCount)
+        let doc = NoteDocument(blocks: [.text("Draft"), block])
+        let (id, revision) = try create(doc, staged: [staged])
+        let divergent = StagedNoteAttachment(id: attachmentID, filename: staged.filename,
+            contentTypeIdentifier: "test.cafe\u{301}", byteCount: 4, digest: staged.digest, data: bytes)
+        XCTAssertNil(store.attachmentAdmissionFailure(noteID: id, document: doc, staged: [staged]))
+        XCTAssertNotNil(store.attachmentAdmissionFailure(noteID: id, document: doc, staged: [divergent]))
+        guard case .failure = store.saveDocument(noteID: id, document: doc, baseRevisionID: revision, staged: [divergent])
+        else { return XCTFail("A stored type must match recovery exactly") }
+        XCTAssertEqual(Array(try XCTUnwrap(store.attachmentRows(forNoteID: id).first).contentTypeIdentifier.utf16),
+            Array(staged.contentTypeIdentifier.utf16))
+    }
+
+
+    func testR1_02MissingRecoveryAttachmentRequiresExactFilenameAndType() throws {
+        for filenameOnly in [true, false] {
+            let (id, revision) = try create(document("Draft"))
+            let missing = NoteBlock.file(attachmentID: UUID(), filename: "Café.pdf",
+                contentTypeIdentifier: "test.café", byteCount: 4)
+            let base = NoteDocument(blocks: [.text("Draft"), missing])
+            let row = try XCTUnwrap(store.note(withID: id))
+            row.content = try NoteContentCodec.encode(base)
+            try store.modelContext.save()
+            XCTAssertNil(store.attachmentAdmissionFailure(noteID: id, document: base, staged: []))
+            var changed = base
+            if filenameOnly { changed.blocks[1].filename = "Cafe\u{301}.pdf" }
+            else { changed.blocks[1].contentTypeIdentifier = "test.cafe\u{301}" }
+            XCTAssertNotNil(store.attachmentAdmissionFailure(noteID: id, document: changed, staged: []))
+            guard case .failure = store.saveDocument(noteID: id, document: changed, baseRevisionID: revision)
+            else { XCTFail("Recovery must not rewrite missing metadata with a different UTF-16 spelling"); continue }
+            XCTAssertEqual(store.note(withID: id)?.content, try NoteContentCodec.encode(base))
+            XCTAssertTrue(try store.attachmentRows(forNoteID: id).isEmpty)
+        }
+    }
+
+    func testR1_04RestoreNamesUnreadableFormatAndUnknownReason() throws {
+        for unknownReason in [false, true] {
+            let (id, revision) = try create(document("Current"))
+            let version = NoteVersion(noteID: id, createdAt: Date(), reason: .pause,
+                content: try NoteContentCodec.encode(document("Earlier")),
+                contentFormat: unknownReason ? 1 : NoteDocument.currentFormat + 1,
+                title: "Earlier", body: "", attachmentIDs: [], sourceRevisionID: revision)
+            if unknownReason { version.reasonRaw = "futureReason" }
+            store.modelContext.insert(version)
+            try store.modelContext.save()
+            let before = store.note(withID: id)?.content
+            guard case let .failure(error) = store.restoreVersion(version.id, noteID: id) else {
+                XCTFail("Unreadable history must refuse restore"); continue
+            }
+            XCTAssertTrue(error.localizedDescription.contains("can't be read by this version"), error.localizedDescription)
+            XCTAssertFalse(error.localizedDescription.contains("conflicting"), error.localizedDescription)
+            XCTAssertEqual(store.note(withID: id)?.content, before)
+            XCTAssertEqual(versions(id).count, 1)
+        }
+    }
+
+    func testR1_04RestoreNamesConflictingCopiesSeparately() throws {
+        let (id, revision) = try create(document("Current"))
+        let shared = UUID(), timestamp = Date()
+        for title in ["Earlier", "Different"] {
+            store.modelContext.insert(NoteVersion(id: shared, noteID: id, createdAt: timestamp, reason: .pause,
+                content: nil, contentFormat: 0, title: title, body: "", attachmentIDs: [], sourceRevisionID: revision))
+        }
+        try store.modelContext.save()
+        guard case let .failure(error) = store.restoreVersion(shared, noteID: id) else { return XCTFail() }
+        XCTAssertTrue(error.localizedDescription.contains("conflicting copies"), error.localizedDescription)
+        XCTAssertFalse(error.localizedDescription.contains("unreadable"), error.localizedDescription)
+        XCTAssertFalse(error.localizedDescription.contains("can't be read"), error.localizedDescription)
+        XCTAssertEqual(store.note(withID: id)?.title, "Current")
+    }
+
     private var gate: PersistenceGate!
     private var store: NoteStore!
 
