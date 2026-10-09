@@ -91,8 +91,8 @@ final class NotesV2TablesTests: XCTestCase {
         let view = try tableView(engine)
         XCTAssertNotNil(view.window, "the view is in the note's window")
         XCTAssertEqual(view.frame.width, 264, accuracy: 0.5, "the table spans the text column")
-        // Rows: one 21 pt line and 4 + 4 padding = 29; the wrapped cells take two lines.
-        XCTAssertEqual(view.grid.rowHeights.first ?? 0, 29, accuracy: 0.01)
+        // Rows: one 17.5 pt line and 4 + 4 padding, rounded up to 26; the wrapped cells take two lines.
+        XCTAssertEqual(view.grid.rowHeights.first ?? 0, 26, accuracy: 0.01)
         XCTAssertEqual(view.grid.width, 264, accuracy: 0.01, "a narrow table stretches to fill the column")
         XCTAssertEqual(view.frame.height, view.grid.height, accuracy: 0.5)
         // The table's line: 8 above it, nothing but the grid in its line box.
@@ -167,7 +167,7 @@ final class NotesV2TablesTests: XCTestCase {
                     for (a, b) in zip(drawn, live) {
                         XCTAssertEqual(a.1, b.1, accuracy: 0.5, "baselines of “\(text)” at \(width)")
                     }
-                    XCTAssertEqual(NoteTableTextCache.measure(attributed, width: width), CGFloat(max(1, live.count)) * 21,
+                    XCTAssertEqual(NoteTableTextCache.measure(attributed, width: width), CGFloat(max(1, live.count)) * AtticNoteType.body.lineHeight,
                                    "measured height of “\(text)” at \(width)")
                 }
             }
@@ -181,7 +181,17 @@ final class NotesV2TablesTests: XCTestCase {
         let view = try tableView(engine)
         let window = try XCTUnwrap(textView.window)
         // ↓ from the paragraph's last line: the first row, the column under the caret.
-        textView.setSelectedRange(NSRange(location: location(of: "authentication", in: engine) + 3, length: 0))
+        // A few characters into the paragraph's last line, wherever it now breaks.
+        let manager = try XCTUnwrap(textView.textLayoutManager)
+        let paragraphStart = location(of: "The attackers breached", in: engine)
+        var caretLocation = location(of: "authentication", in: engine) + 3
+        manager.enumerateTextLayoutFragments(from: manager.documentRange.location, options: [.ensuresLayout]) { fragment in
+            let start = manager.offset(from: manager.documentRange.location, to: fragment.rangeInElement.location)
+            guard start == paragraphStart, let line = fragment.textLineFragments.last else { return true }
+            caretLocation = start + line.characterRange.location + 3
+            return false
+        }
+        textView.setSelectedRange(NSRange(location: caretLocation, length: 0))
         textView.doCommand(by: #selector(NSResponder.moveDown(_:)))
         settle(engine, textView)
         XCTAssertTrue(window.firstResponder === view.editor, "the cell editor has the keyboard")
@@ -264,7 +274,7 @@ final class NotesV2TablesTests: XCTestCase {
         view.editor.doCommand(by: #selector(NSResponder.insertNewlineIgnoringFieldEditor(_:)))
         type("two", into: view.editor)
         XCTAssertEqual(attachment.table[NoteTable.Position(row: 1, column: 0)].text, "one\ntwo")
-        XCTAssertEqual(view.grid.rowHeights[1], 2 * 21 + 8, accuracy: 0.01, "the row grows with its cell")
+        XCTAssertEqual(view.grid.rowHeights[1], 43, accuracy: 0.01, "the row grows with its cell")
     }
 
     func testShiftArrowsPastACellsEdgeSelectCellsAndEscSelectsTheCellThenTheTable() throws {

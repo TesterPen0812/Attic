@@ -82,35 +82,35 @@ final class NotesV2TypographyTests: XCTestCase {
     // MARK: Tokens
 
     func testTypeScaleIsTheDraftsDirection5() {
-        XCTAssertEqual(T.title, T.Role(size: 22, lineHeight: 27, weight: 700))
-        XCTAssertEqual(T.titleStyle, T.Role(size: 18, lineHeight: 24, weight: 650))
-        XCTAssertEqual(T.heading, T.Role(size: 16.5, lineHeight: 22, weight: 650))
-        XCTAssertEqual(T.subheading, T.Role(size: 15, lineHeight: 21, weight: 650))
-        XCTAssertEqual(T.body, T.Role(size: 14, lineHeight: 21, weight: 400))
-        XCTAssertEqual(T.quote, T.Role(size: 15, lineHeight: 22, weight: 400))
-        XCTAssertEqual(T.mono, T.Role(size: 12, lineHeight: 18, weight: 400, monospaced: true))
-        XCTAssertEqual([T.paragraphGap, T.titleToText], [3, 12])
-        XCTAssertEqual([T.aboveTitleStyle, T.aboveHeading, T.aboveSubheading], [16, 14, 12])
-        XCTAssertEqual([T.belowTitleStyle, T.belowHeading, T.belowSubheading], [2, 1, 1])
-        XCTAssertEqual([T.monoPaddingV, T.monoPaddingH, T.monoRadius], [12, 9.5, 10])
-        XCTAssertEqual([T.monoCopySize, T.monoCopyInset, T.monoCopyRise], [18, 4, 6])
-        XCTAssertEqual([T.listTextInset, T.bulletDot, T.quoteBar, T.quoteTextInset], [22, 5, 3, 14])
+        XCTAssertEqual(T.title, T.Role(size: 18.5, lineHeight: 22, weight: 700))
+        XCTAssertEqual(T.titleStyle, T.Role(size: 15.5, lineHeight: 19.5, weight: 650))
+        XCTAssertEqual(T.heading, T.Role(size: 14.5, lineHeight: 19, weight: 650))
+        XCTAssertEqual(T.subheading, T.Role(size: 13.5, lineHeight: 18, weight: 650))
+        XCTAssertEqual(T.body, T.Role(size: 12.5, lineHeight: 17.5, weight: 400))
+        XCTAssertEqual(T.quote, T.Role(size: 13.5, lineHeight: 19.5, weight: 400))
+        XCTAssertEqual(T.mono, T.Role(size: 11, lineHeight: 15.5, weight: 400, monospaced: true))
+        XCTAssertEqual([T.paragraphGap, T.titleToText], [2, 7])
+        XCTAssertEqual([T.aboveTitleStyle, T.aboveHeading, T.aboveSubheading], [11, 9, 8])
+        XCTAssertEqual([T.belowTitleStyle, T.belowHeading, T.belowSubheading], [1, 1, 1])
+        XCTAssertEqual([T.monoPaddingV, T.monoPaddingH, T.monoRadius], [9, 8.5, 10])
+        XCTAssertEqual([T.monoCopySize, T.monoCopyInset, T.monoCopyRise], [16, 4, 7])
+        XCTAssertEqual([T.listTextInset, T.bulletDot, T.quoteBar, T.quoteTextInset], [20, 4.5, 3, 13])
 
         let style = NoteTextStyle()
-        XCTAssertEqual(style.titleFont.pointSize, 22)
+        XCTAssertEqual(style.titleFont.pointSize, 18.5)
         XCTAssertTrue(style.titleFont.fontDescriptor.symbolicTraits.contains(.bold))
-        XCTAssertEqual(style.titleStyleFont.pointSize, 18)
-        XCTAssertEqual(style.headingFont.pointSize, 16.5)
-        XCTAssertEqual(style.subheadingFont.pointSize, 15)
-        XCTAssertEqual(style.bodyFont.pointSize, 14)
-        XCTAssertEqual(style.quoteFont.pointSize, 15)
-        XCTAssertEqual(style.monoFont.pointSize, 12)
+        XCTAssertEqual(style.titleStyleFont.pointSize, 15.5)
+        XCTAssertEqual(style.headingFont.pointSize, 14.5)
+        XCTAssertEqual(style.subheadingFont.pointSize, 13.5)
+        XCTAssertEqual(style.bodyFont.pointSize, 12.5)
+        XCTAssertEqual(style.quoteFont.pointSize, 13.5)
+        XCTAssertEqual(style.monoFont.pointSize, 11)
         XCTAssertTrue(style.monoFont.fontDescriptor.symbolicTraits.contains(.monoSpace))
         // 650 sits between semibold and bold: wider than semibold, narrower than bold.
         let sample = "Colonial Pipeline ransomware" as NSString
         func width(_ font: NSFont) -> CGFloat { sample.size(withAttributes: [.font: font]).width }
-        XCTAssertGreaterThan(width(style.titleStyleFont), width(.systemFont(ofSize: 18, weight: .semibold)))
-        XCTAssertLessThan(width(style.titleStyleFont), width(.systemFont(ofSize: 18, weight: .bold)))
+        XCTAssertGreaterThan(width(style.titleStyleFont), width(.systemFont(ofSize: 15.5, weight: .semibold)))
+        XCTAssertLessThan(width(style.titleStyleFont), width(.systemFont(ofSize: 15.5, weight: .bold)))
         // One near-black ink for the text and its headings.
         XCTAssertEqual(style.bodyColor, style.titleColor)
         XCTAssertEqual(style.quoteColor, style.bodyColor)
@@ -137,14 +137,14 @@ final class NotesV2TypographyTests: XCTestCase {
     func testGapsAreTheDrafts() {
         typealias K = NoteParagraphKind
         let cases: [(K, K?, CGFloat)] = [
-            (.body, nil, 0), (.titleStyle, .title, 12), (.body, .title, 12), (.mono, .title, 12),
-            (.titleStyle, .body, 16), (.heading, .body, 14), (.subheading, .body, 12),
-            (.subheading, .subheading, 12), (.heading, .mono, 14),
-            (.body, .titleStyle, 2), (.body, .heading, 1), (.body, .subheading, 1),
+            (.body, nil, 0), (.titleStyle, .title, 7), (.body, .title, 7), (.mono, .title, 7),
+            (.titleStyle, .body, 11), (.heading, .body, 9), (.subheading, .body, 8),
+            (.subheading, .subheading, 8), (.heading, .mono, 9),
+            (.body, .titleStyle, 1), (.body, .heading, 1), (.body, .subheading, 1),
             (.mono, .subheading, 4), (.mono, .titleStyle, 4),
-            (.body, .body, 3), (.quote, .quote, 3), (.quote, .body, 3),
-            (.mono, .body, 8), (.body, .mono, 8), (.mono, .mono, 0),
-            (.blockObject, .body, 8), (.body, .blockObject, 8)
+            (.body, .body, 2), (.quote, .quote, 2), (.quote, .body, 2),
+            (.mono, .body, 6), (.body, .mono, 6), (.mono, .mono, 0),
+            (.blockObject, .body, 6), (.body, .blockObject, 6)
         ]
         for (kind, previous, gap) in cases {
             XCTAssertEqual(NoteTextStyle.gap(above: kind, after: previous), gap, "\(kind) after \(String(describing: previous))")
@@ -249,19 +249,17 @@ final class NotesV2TypographyTests: XCTestCase {
                        NoteTextStyle.gap(above: .mono, after: .subheading) + NoteTextStyle.boxShift(.subheading), accuracy: 0.01)
     }
 
-    /// The draft's first citation line: 31 characters fit the block's 236 pt,
-    /// so "w," wraps alone, as drawn. Soft wraps hang from the line's own
-    /// leading spaces.
+    /// The draft's first citation line fits whole (33 characters; 14 pt sides
+    /// once wrapped a lone "w,"). Soft wraps hang from the line's own leading
+    /// spaces.
     func testMonoWrapsLikeTheDraftAndHangsFromItsLeadingSpaces() throws {
         let (engine, _) = makeEngine(cia)
         let blocks = monoFragments(engine)
-        // The arithmetic: 33 SF Mono characters at 12 pt need 244.8 pt; the
-        // 264 pt column less 2 × 9.5 leaves 245 (2 × 10 would leave 244, and
-        // the draft's 2 × 14 left 236, which wrapped a lone "w,").
+        // The arithmetic: 33 SF Mono characters at 11 pt need 224.4 pt; the
+        // 264 pt column less 2 × 8.5 leaves 247.
         let citation = "@inproceedings{beerman2023review,"
         let needed = (citation as NSString).size(withAttributes: [.font: NoteTextStyle().monoFont]).width
         XCTAssertLessThanOrEqual(needed, 264 - 2 * T.monoPaddingH)
-        XCTAssertGreaterThan(needed, 264 - 2 * 10, "10 pt sides would still wrap it")
         let first = blocks[0].textLineFragments.filter { $0.characterRange.length > 0 }
         XCTAssertEqual(first.count, 1, "the first citation line fits whole")
         let text = engine.textStorage.string as NSString
@@ -269,7 +267,7 @@ final class NotesV2TypographyTests: XCTestCase {
         XCTAssertEqual(text.substring(with: NSRange(location: start, length: first[0].characterRange.length))
             .trimmingCharacters(in: .newlines), citation)
         let indent = NoteTextStyle().monoHang(for: "  title")
-        XCTAssertGreaterThan(indent, 14)
+        XCTAssertGreaterThan(indent, 12)
         for fragment in blocks.dropFirst() {
             let lines = fragment.textLineFragments.filter { $0.characterRange.length > 0 }
             XCTAssertGreaterThan(lines.count, 1, "the long lines wrap")
@@ -366,12 +364,12 @@ final class NotesV2TypographyTests: XCTestCase {
         view.updateMonoCopy(at: NSPoint(x: origin.x + rect.midX, y: origin.y + rect.midY))
         XCTAssertFalse(view.monoCopyButton.isHidden)
         let button = view.monoCopyButton.frame
-        XCTAssertEqual(button.size, CGSize(width: 18, height: 18))
+        XCTAssertEqual(button.size, CGSize(width: 16, height: 16))
         XCTAssertEqual(button.maxX, origin.x + rect.maxX - T.monoCopyInset, accuracy: 0.01)
         XCTAssertEqual(button.minY, origin.y + rect.minY - T.monoCopyRise, accuracy: 0.01)
         // It ends where the text's padding ends: never over a character.
         XCTAssertLessThanOrEqual(button.maxY, origin.y + rect.minY + T.monoPaddingV + 0.01, "above the first line")
-        XCTAssertEqual(NoteMonoCopyButton.radius, 6)
+        XCTAssertEqual(NoteMonoCopyButton.radius, T.monoCopySize / 3, accuracy: 0.001)
         // The pointer reaching the chip above the block keeps it.
         view.updateMonoCopy(at: NSPoint(x: button.midX, y: button.minY + 1))
         XCTAssertFalse(view.monoCopyButton.isHidden, "the chip is still the block's Copy under the pointer")
@@ -471,11 +469,11 @@ final class NotesV2TypographyTests: XCTestCase {
         for line in lines.dropFirst() { XCTAssertEqual(line.typographicBounds.minX, T.listTextInset, accuracy: 0.01) }
     }
 
-    func testQuoteIs15WithA3PointBarJoiningItsLines() throws {
+    func testQuoteIs13_5WithA3PointBarJoiningItsLines() throws {
         let (engine, _) = makeEngine([.text("Title"), styled("First thought", "quote"), styled("Second thought", "quote"),
                                       .text("Body")])
         let frags = fragments(engine)
-        XCTAssertEqual((engine.textStorage.attribute(.font, at: location(of: "First", in: engine), effectiveRange: nil) as? NSFont)?.pointSize, 15)
+        XCTAssertEqual((engine.textStorage.attribute(.font, at: location(of: "First", in: engine), effectiveRange: nil) as? NSFont)?.pointSize, 13.5)
         let first = try XCTUnwrap(frags[1] as? NoteBlockLayoutFragment)
         let second = try XCTUnwrap(frags[2] as? NoteBlockLayoutFragment)
         XCTAssertEqual(first.decoration, .quote(x: 0, joinsAbove: false, joinsBelow: true))

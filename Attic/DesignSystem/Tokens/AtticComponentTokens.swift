@@ -578,41 +578,41 @@ enum AtticNoteType {
     }
 
     /// The note's first line.
-    static let title = Role(size: 22, lineHeight: 27, weight: 700)
+    static let title = Role(size: 18.5, lineHeight: 22, weight: 700)
     /// The Title style inside the note, Heading and Subheading.
-    static let titleStyle = Role(size: 18, lineHeight: 24, weight: 650)
-    static let heading = Role(size: 16.5, lineHeight: 22, weight: 650)
-    static let subheading = Role(size: 15, lineHeight: 21, weight: 650)
-    /// Body, lists and checklists: 14 on a 1.5 line.
-    static let body = Role(size: 14, lineHeight: 21, weight: 400)
-    /// A quote: 15 pt, in the body ink, beside a 3 pt bar.
-    static let quote = Role(size: 15, lineHeight: 22, weight: 400)
+    static let titleStyle = Role(size: 15.5, lineHeight: 19.5, weight: 650)
+    static let heading = Role(size: 14.5, lineHeight: 19, weight: 650)
+    static let subheading = Role(size: 13.5, lineHeight: 18, weight: 650)
+    /// Body, lists and checklists: 12.5 on a 1.4 line.
+    static let body = Role(size: 12.5, lineHeight: 17.5, weight: 400)
+    /// A quote: 13.5 pt, in the body ink, beside a 3 pt bar.
+    static let quote = Role(size: 13.5, lineHeight: 19.5, weight: 400)
     /// Code (SF Mono), in one rounded block.
-    static let mono = Role(size: 12, lineHeight: 18, weight: 400, monospaced: true)
+    static let mono = Role(size: 11, lineHeight: 15.5, weight: 400, monospaced: true)
 
     /// Between ordinary paragraphs (and list items, quote lines).
-    static let paragraphGap: CGFloat = 3
+    static let paragraphGap: CGFloat = 2
     /// From the note's title to its first block.
-    static let titleToText: CGFloat = 12
+    static let titleToText: CGFloat = 7
     /// Above the Title style, Heading and Subheading; below each, to the
     /// block it introduces (headings stick to their text).
-    static let aboveTitleStyle: CGFloat = 16
-    static let aboveHeading: CGFloat = 14
-    static let aboveSubheading: CGFloat = 12
-    static let belowTitleStyle: CGFloat = 2
+    static let aboveTitleStyle: CGFloat = 11
+    static let aboveHeading: CGFloat = 9
+    static let aboveSubheading: CGFloat = 8
+    static let belowTitleStyle: CGFloat = 1
     static let belowHeading: CGFloat = 1
     static let belowSubheading: CGFloat = 1
     /// Around a Mono block (and a block object: an image, a file, a
     /// divider); 4 when the block follows a heading directly.
-    static let blockMargin: CGFloat = 8
+    static let blockMargin: CGFloat = 6
     static let blockAfterHeading: CGFloat = 4
     /// The Mono block: 12 pt above and below, 9.5 at the sides, the content
     /// card's radius 10. The sides were 14 in the draft, which wrapped the
     /// owner's first citation line to a lone "w,"; 33 SF Mono characters at
     /// 12 pt are 244.8 pt, so the side padding must leave at least that of
     /// the 264 pt column: 10 leaves 244 (a lone ","), 9.5 leaves 245.
-    static let monoPaddingV: CGFloat = 12
-    static let monoPaddingH: CGFloat = 9.5
+    static let monoPaddingV: CGFloat = 9
+    static let monoPaddingH: CGFloat = 8.5
     static let monoRadius: CGFloat = AtticRadius.contentCard
     /// Copy: an 18 pt icon chip (`doc.on.doc`) on the block's top-right
     /// corner, 4 in from the right edge and rising 6 above the top edge, so
@@ -620,21 +620,21 @@ enum AtticNoteType {
     /// covers a character, even on a full first line (A39). Opaque in the
     /// block's own fill; shown on hover (or over the chip itself), while the
     /// caret is in the block, or for VoiceOver. It never moves the text.
-    static let monoCopySize: CGFloat = 18
+    static let monoCopySize: CGFloat = 16
     static let monoCopyInset: CGFloat = 4
-    static let monoCopyRise: CGFloat = 6
-    static let monoCopyGlyph: CGFloat = 10
-    /// Lists and checklists: their text 22 in (each level 22 more), a 5 pt
-    /// dot centred 7 in (the checklist box's centre); numbers end 6 before
+    static let monoCopyRise: CGFloat = 7
+    static let monoCopyGlyph: CGFloat = 9
+    /// Lists and checklists: their text 20 in (each level 20 more), a 4.5 pt
+    /// dot centred 7 in (the checklist box's centre); numbers end 5 before
     /// the text.
-    static let listTextInset: CGFloat = 22
-    static let listLevelStep: CGFloat = 22
-    static let bulletDot: CGFloat = 5
+    static let listTextInset: CGFloat = 20
+    static let listLevelStep: CGFloat = 20
+    static let bulletDot: CGFloat = 4.5
     static let bulletCentre: CGFloat = 7
-    static let numberGap: CGFloat = 6
-    /// Quote: a 3 pt bar at the column's edge, the text 14 in.
+    static let numberGap: CGFloat = 5
+    /// Quote: a 3 pt bar at the column's edge, the text 13 in.
     static let quoteBar: CGFloat = 3
-    static let quoteTextInset: CGFloat = 14
+    static let quoteTextInset: CGFloat = 13
 }
 
 /// Notes v2 tables (spec § 4.1, sheet 3, owner 2026-10-08): the body's

@@ -88,7 +88,7 @@ struct NoteTextStyle: Equatable {
     static let bodyLineHeight: CGFloat = T.body.lineHeight
     static let bodyParagraphGap: CGFloat = T.paragraphGap
     static let titleToBody: CGFloat = T.titleToText
-    static let titleToTags: CGFloat = 4
+    static let titleToTags: CGFloat = 3
     static let tagsToBody: CGFloat = T.titleToText - titleToTags
 
     // MARK: Fonts

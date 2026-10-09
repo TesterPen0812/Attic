@@ -50,7 +50,7 @@ final class NoteChecklistAttachment: NoteObjectAttachment {
 
     /// The box plus the gap before the line's text.
     static let boxSize: CGFloat = AtticControlSize.subtaskCheckbox
-    static let trailingGap: CGFloat = 8
+    static let trailingGap: CGFloat = 6
 
     override func attachmentBounds(for attributes: [NSAttributedString.Key: Any], location: any NSTextLocation,
                                    textContainer: NSTextContainer?, proposedLineFragment: CGRect,
