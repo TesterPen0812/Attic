@@ -21,6 +21,7 @@ enum OldNotesPurge {
             let attachments = try context.fetch(FetchDescriptor<NoteAttachment>()).filter { ids.contains($0.noteID) }
             let versions = try context.fetch(FetchDescriptor<NoteVersion>()).filter { ids.contains($0.noteID) }
             let proposals = try context.fetch(FetchDescriptor<NotePendingEdit>()).filter { ids.contains($0.noteID) }
+            _ = try LinkStore.stagePurge(touching: Set(ids.map { AtticItemRef(.note, $0) }), in: context)
             removed.forEach(context.delete); attachments.forEach(context.delete)
             versions.forEach(context.delete); proposals.forEach(context.delete)
             var files = Set(attachments.map(\.id))

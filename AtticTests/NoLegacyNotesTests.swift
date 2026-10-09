@@ -344,7 +344,6 @@ final class NoLegacyNotesTests: XCTestCase {
     }
 
     func testH4_02PurgeRemovesLinksAtomicallyAndProtectsOtherFamilies() throws {
-        XCTExpectFailure("H4-02")
         let container = try rawContainer(), context = ModelContext(container)
         let id = UUID(), keptID = UUID(), taskID = UUID()
         context.insert(old(id)); context.insert(NoteItem(id: keptID, title: "Keep"))
