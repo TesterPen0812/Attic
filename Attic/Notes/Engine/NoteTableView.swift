@@ -642,9 +642,6 @@ final class NoteTableViewport: NSView, AtticHorizontalScrollOwner {
     override var isFlipped: Bool { true }
     override var isOpaque: Bool { false }
     var ownsHorizontalScrolling: Bool { table?.grid.scrolls ?? false }
-    override func scrollWheel(with event: NSEvent) {
-        table?.scrollWheel(with: event)
-    }
 }
 
 // MARK: - The grid (drawn) and its keys in cell-selection mode
@@ -657,9 +654,6 @@ final class NoteTableCanvas: NSView {
     override var isOpaque: Bool { false }
     override var acceptsFirstResponder: Bool { table?.cellSelection != nil }
     override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
-    override func scrollWheel(with event: NSEvent) {
-        table?.scrollWheel(with: event)
-    }
 
     override func draw(_ dirtyRect: NSRect) {
         guard let table, let attachment = table.attachment else { return }

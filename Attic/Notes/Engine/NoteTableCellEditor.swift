@@ -15,9 +15,6 @@ import QuartzCore
 @MainActor
 final class NoteTableCellEditor: NSTextView, NSTextViewDelegate {
     weak var table: NoteTableView?
-    override func scrollWheel(with event: NSEvent) {
-        table?.scrollWheel(with: event)
-    }
     /// True while the editor's own text is being written to the model (the
     /// model's echo must not reload the editor).
     var isApplyingOwnEdit = false

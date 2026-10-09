@@ -10,10 +10,8 @@ Every later change is recorded here: what changed, why, and who asked.
 Keep size C, A39 width re-layout and A38 behavior repairs together. Find takes
 keyboard focus before immediate typing; table deletion records the surviving
 cell for Redo. New and restyled tables complete viewport layout, and table
-controls follow the attachment's final frame. Scroll events over the grid or
-active cell reach the table's horizontal handler while vertical scrolling
-continues to the note. Empty mark lists skip UTF-16 validation allocation on
-save. Focused regressions cover these interactions; the subtask standalone
+controls follow the attachment's final frame. Empty mark lists skip UTF-16
+validation allocation on save. Focused regressions cover these interactions; the subtask standalone
 oracle invokes the mounted accessibility command.
 
 ### A37: Dark's dark tint (owner, 2026-10-08, "Dark-mode glass keeps light text readable")
