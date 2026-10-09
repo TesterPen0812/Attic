@@ -770,6 +770,67 @@ final class NoteDocumentStoreTests: XCTestCase {
         guard case .failure(.versionMissing) = store.restoreVersion(UUID(), noteID: id) else { return XCTFail() }
     }
 
+    func testS7ThinningKeepsAttachmentAndTableSnapshots() throws {
+        let (id, _) = try create(document("Current"))
+        let attachmentID = UUID()
+        let old = Date().addingTimeInterval(-40 * 86_400)
+        let documents = [
+            NoteDocument(blocks: [.text("Image"), .image(attachmentID: attachmentID)]),
+            NoteDocument(blocks: [.text("Table"), .table(NoteTable(texts: [["Lost", "cell"]]))])]
+        var retained = Set<UUID>()
+        for document in documents {
+            let version = NoteVersion(noteID: id, createdAt: old, reason: .pause,
+                content: try NoteContentCodec.encode(document), contentFormat: 1,
+                title: document.title, body: "", attachmentIDs: document.attachmentIDs, sourceRevisionID: UUID())
+            retained.insert(version.id)
+            store.modelContext.insert(version)
+        }
+        try store.modelContext.save()
+        store.thinVersions(noteID: id)
+        XCTAssertTrue(Set(versions(id).map(\.id)).isSuperset(of: retained))
+    }
+
+    func testS7RestoreRefusesDivergentVersionFamily() throws {
+        let (id, _) = try create(document("Current"))
+        let shared = UUID()
+        for title in ["One", "Two"] {
+            store.modelContext.insert(NoteVersion(id: shared, noteID: id, createdAt: Date(), reason: .pause,
+                content: try NoteContentCodec.encode(document(title)), contentFormat: 1,
+                title: title, body: "", attachmentIDs: [], sourceRevisionID: nil))
+        }
+        try store.modelContext.save()
+        guard case .failure = store.restoreVersion(shared, noteID: id) else { return XCTFail("ambiguous version must not restore") }
+        XCTAssertEqual(store.note(withID: id)?.title, "Current")
+    }
+
+    func testS7RestoreKeepsSupportedMissingFilePlaceholderAndAvailableText() throws {
+        let (id, revision) = try create(document("Current"))
+        let missing = NoteBlock.file(attachmentID: UUID(), filename: "missing.pdf", contentTypeIdentifier: "com.adobe.pdf", byteCount: 4)
+        let earlier = NoteDocument(blocks: [.text("Earlier"), .text("Recover this text"), missing])
+        let version = NoteVersion(noteID: id, createdAt: Date(), reason: .pause,
+            content: try NoteContentCodec.encode(earlier), contentFormat: 1, title: earlier.title, body: "",
+            attachmentIDs: earlier.attachmentIDs, sourceRevisionID: revision)
+        store.modelContext.insert(version)
+        try store.modelContext.save()
+        guard case .success = store.restoreVersion(version.id, noteID: id) else { return XCTFail("missing placeholders remain restorable") }
+        XCTAssertEqual(store.loadDocument(noteID: id)?.content.document?.blocks, earlier.blocks)
+        XCTAssertTrue(try store.attachmentRows(forNoteID: id).isEmpty)
+    }
+
+    func testS7LegacyRestoreMakesOnlyItsRecordedAttachmentsVisible() throws {
+        let earlier = stagedImage(), later = stagedImage()
+        let (id, revision) = try create(NoteDocument(blocks: [.text("Current"), .image(attachmentID: earlier.id)]), staged: [earlier])
+        let version = NoteVersion(noteID: id, createdAt: Date(), reason: .beforeMigration,
+            content: nil, contentFormat: 0, title: "Legacy", body: "Earlier", attachmentIDs: [earlier.id], sourceRevisionID: revision)
+        store.modelContext.insert(version)
+        try store.modelContext.save()
+        guard case .success = store.saveDocument(noteID: id,
+            document: NoteDocument(blocks: [.text("Later"), .image(attachmentID: later.id)]), baseRevisionID: revision, staged: [later])
+        else { return XCTFail() }
+        guard case .success = store.restoreVersion(version.id, noteID: id) else { return XCTFail() }
+        XCTAssertEqual(Set(try store.attachmentRows(forNoteID: id).filter { $0.deletedAt == nil }.map(\.id)), [earlier.id])
+    }
+
     func testAgentWritesAndProposalsPreserveTheOrderedPlainChecklistInventory() throws {
         var first = NoteBlock.checklist("Pay rent", checked: true)
         first.extras = ["owner": .string("person")]

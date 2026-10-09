@@ -937,6 +937,8 @@ struct AtticPageTabs<Page: Hashable>: View {
     @Binding var selection: Page
     /// The gallery pins a state (hover, focus) on one tab only.
     var statePinnedPage: Page?
+    /// What VoiceOver calls the group (All notes: its filters).
+    var groupLabel = String(localized: "Pages")
 
     @Environment(\.atticDesign) private var design
     @Environment(\.atticCapture) private var capture
@@ -1013,7 +1015,7 @@ struct AtticPageTabs<Page: Hashable>: View {
             return .handled
         }
         .accessibilityElement(children: .contain)
-        .accessibilityLabel(String(localized: "Pages"))
+        .accessibilityLabel(groupLabel)
     }
 
     /// A plain change (round 11): the page that shows the selection moves

@@ -13,6 +13,7 @@ import SwiftUI
 /// reads as one rounded rectangle with no seams.
 final class NoteBlockLayoutFragment: NSTextLayoutFragment {
     enum Decoration: Equatable {
+        case history
         /// `exitsAtEnd`: the block's last line ends the note, and the empty
         /// line after it (inside this fragment) is not code.
         case mono(starts: Bool, ends: Bool, exitsAtEnd: Bool = false)
@@ -26,6 +27,7 @@ final class NoteBlockLayoutFragment: NSTextLayoutFragment {
     }
 
     var decoration: Decoration = .mono(starts: true, ends: true, exitsAtEnd: false)
+    var hasHistoryDifference = false
     /// The paragraph's space before its first line (inside the fragment).
     var spacingBefore: CGFloat = 0
     /// How far the paragraph's line boxes sit above the draft's (see
@@ -82,6 +84,7 @@ final class NoteBlockLayoutFragment: NSTextLayoutFragment {
 
     private var decorationRect: CGRect {
         switch decoration {
+        case .history: return .zero
         case .mono:
             return monoBlockRect ?? .zero
         case let .bullet(x):
@@ -108,12 +111,19 @@ final class NoteBlockLayoutFragment: NSTextLayoutFragment {
     }
 
     override func draw(at point: CGPoint, in context: CGContext) {
+        if hasHistoryDifference {
+            context.saveGState()
+            context.setFillColor(ink.withAlphaComponent(0.65).cgColor)
+            context.fill(CGRect(x: point.x - layoutFragmentFrame.minX - 7, y: point.y + spacingBefore,
+                                width: 2, height: max(3, layoutFragmentFrame.height - spacingBefore)))
+            context.restoreGState()
+        }
         if let block = monoBlockRect, let mono {
             drawBlock(block, starts: mono.starts, ends: mono.ends || mono.exitsAtEnd, at: point, in: context)
         }
         super.draw(at: point, in: context)
         switch decoration {
-        case .mono:
+        case .mono, .history:
             break
         case let .bullet(x):
             guard let baseline = firstBaseline else { return }
@@ -195,13 +205,16 @@ extension NoteEditorEngine: NSTextLayoutManagerDelegate, NSTextContentStorageDel
                            textLayoutFragmentFor location: any NSTextLocation,
                            in textElement: NSTextElement) -> NSTextLayoutFragment {
         let offset = contentStorage.offset(from: contentStorage.documentRange.location, to: location)
-        guard offset > 0, offset < textStorage.length,
-              let decoration = decoration(forParagraphAt: offset) else {
+        let changed = historyDifferenceOffsets.contains(offset)
+        let native = offset > 0 && offset < textStorage.length ? decoration(forParagraphAt: offset) : nil
+        guard offset >= 0, offset < textStorage.length,
+              let decoration = native ?? (changed ? .history : nil) else {
             return NSTextLayoutFragment(textElement: textElement, range: nil)
         }
         let fragment = NoteBlockLayoutFragment(textElement: textElement, range: nil)
         let paragraph = textStorage.attribute(.paragraphStyle, at: offset, effectiveRange: nil) as? NSParagraphStyle
         fragment.decoration = decoration
+        fragment.hasHistoryDifference = changed
         fragment.spacingBefore = paragraph?.paragraphSpacingBefore ?? 0
         let kind = paragraphKind(at: offset)
         fragment.boxShift = NoteTextStyle.boxShift(kind)
@@ -212,7 +225,7 @@ extension NoteEditorEngine: NSTextLayoutManagerDelegate, NSTextContentStorageDel
         case .number:
             fragment.ink = style.markerColor
             fragment.markerFont = NSFont.monospacedDigitSystemFont(ofSize: AtticNoteType.body.size, weight: .regular)
-        case .bullet, .quote:
+        case .bullet, .quote, .history:
             fragment.ink = style.bodyColor
             fragment.markerFont = style.font(for: kind)
         }

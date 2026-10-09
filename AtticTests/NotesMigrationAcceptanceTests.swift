@@ -6,10 +6,43 @@ import UniformTypeIdentifiers
 import XCTest
 @testable import Attic
 
-/// Read-only Core Data deliberately bypasses NoteStore's startup reconciliation.
-/// No schema migration, save, attachment repair, or normal app launch is allowed.
+/// The app persistence stack migrates only a disposable copy. The subsequent
+/// read-only format audit bypasses startup reconciliation and never saves notes.
 @MainActor
 private enum MigrationCopyAudit {
+    static func runThroughApplication(storeURL: URL) throws -> Report {
+        let directory = storeURL.deletingLastPathComponent()
+        let configuration = PersistenceController.makeConfiguration(cloudSyncEnabled: false, storeDirectory: directory)
+        guard configuration.url.standardizedFileURL == storeURL.standardizedFileURL else {
+            throw NSError(domain: "AtticMigrationAudit.StoreName", code: 1)
+        }
+        let before = try NSPersistentStoreCoordinator.metadataForPersistentStore(type: .sqlite, at: storeURL)
+        let oldHashes = before[NSStoreModelVersionHashesKey] as? [String: Data]
+        // Exactly the local app's constructor: inferred migration is enabled by
+        // SwiftData. No alternate Core Data mapping or migration options here.
+        try autoreleasepool {
+            let container = try PersistenceController.makeContainer(cloudSyncEnabled: false, storeDirectory: directory)
+            let context = ModelContext(container)
+            context.autosaveEnabled = false
+            _ = try context.fetch(FetchDescriptor<TaskItem>())
+            _ = try context.fetch(FetchDescriptor<CanvasBoardItem>())
+            _ = try context.fetch(FetchDescriptor<CanvasStrokeItem>())
+            _ = try context.fetch(FetchDescriptor<CanvasImageItem>())
+            _ = try context.fetch(FetchDescriptor<CanvasSemanticObjectItem>())
+            _ = try context.fetch(FetchDescriptor<NoteItem>())
+            _ = try context.fetch(FetchDescriptor<NoteAttachment>())
+        }
+        let after = try NSPersistentStoreCoordinator.metadataForPersistentStore(type: .sqlite, at: storeURL)
+        let newHashes = after[NSStoreModelVersionHashesKey] as? [String: Data]
+        let current = try XCTUnwrap(NSManagedObjectModel.makeManagedObjectModel(for: PersistenceController.appModelTypes))
+        guard newHashes == current.entityVersionHashesByName else {
+            throw NSError(domain: "AtticMigrationAudit.Schema", code: 1)
+        }
+        var report = try run(storeURL: storeURL)
+        report.mode = "application schema migration; read-only format plan, inverse and TextKit 2; no note commit"
+        report.schemaMigrated = oldHashes != newHashes
+        return report
+    }
     struct Row: Codable {
         let noteID: String
         let state: String
@@ -20,8 +53,40 @@ private enum MigrationCopyAudit {
         let snappedAnchors: Int
     }
     struct Report: Codable {
-        let mode: String = "read-only; projection, inverse and real TextKit 2 round trip; no commit"
+        var mode: String = "read-only; projection, inverse and real TextKit 2 round trip; no commit"
+        var schemaMigrated: Bool = false
+        var status: String = "opened"
+        let noteRows: Int
+        let taskRows: Int
+        let canvasBoards: Int
+        let canvasStrokes: Int
+        let canvasImages: Int
+        let canvasObjects: Int
+        let attachmentRows: Int
+        let attachmentsFound: Int
+        let attachmentsMissing: Int
         let rows: [Row]
+        var notesTotal: Int { rows.count }
+        var migratedCleanly: Int { rows.filter { $0.state == "verified-migration-candidate" }.count }
+        var refused: Int { rows.filter { $0.state == "refused-legacy-editable" }.count }
+        var legacy: Int { rows.filter { $0.state == "verified-migration-candidate" || $0.state == "refused-legacy-editable" }.count }
+        var alreadyNew: Int { rows.filter { $0.state == "supported-editable" || $0.state == "unsupported-read-only" }.count }
+    }
+
+    // Never include associated strings from errors: they can carry private data.
+    private static func reasonClass(_ reason: LegacyMigrationRefusal) -> String {
+        switch reason {
+        case .duplicateAttachmentIDs: "duplicate-attachment-ids"
+        case .titleHasLineBreak: "title-line-break"
+        case .bodyContainsObjectCharacter: "object-character"
+        case .fileAttachment: "file-metadata"
+        case .replicasDisagree: "replicas-disagree"
+        case .projectionMismatch: "projection-mismatch"
+        case .roundTripMismatch: "textkit-round-trip-mismatch"
+        case .changedSincePlanned: "revision-changed"
+        case .alreadyMigrated: "already-migrated"
+        case .saveFailed: "save-failed"
+        }
     }
 
     static func run(storeURL: URL) throws -> Report {
@@ -37,6 +102,22 @@ private enum MigrationCopyAudit {
         context.persistentStoreCoordinator = coordinator
         let notes = try context.fetch(NSFetchRequest<NSManagedObject>(entityName: "NoteItem"))
         let attachments = try context.fetch(NSFetchRequest<NSManagedObject>(entityName: "NoteAttachment"))
+        func payload(_ row: NSManagedObject) -> Data? {
+            if let bytes = row.value(forKey: "payload") as? Data { return bytes }
+            guard let id = row.value(forKey: "id") as? UUID,
+                  let digest = row.value(forKey: "contentDigest") as? String, !digest.isEmpty,
+                  digest != ".", digest != "..", !digest.contains("/"), !digest.contains("\\"),
+                  let originalFilename = row.value(forKey: "originalFilename") as? String else { return nil }
+            let filename = AttachmentFileStore.sanitizedFilename(originalFilename)
+            guard
+                  !filename.isEmpty, filename != ".", filename != "..", !filename.contains("/"),
+                  !filename.contains("\\") else { return nil }
+            let url = storeURL.deletingLastPathComponent().appendingPathComponent("Attic/Attachments/v1")
+                .appendingPathComponent(id.uuidString).appendingPathComponent(digest.lowercased())
+                .appendingPathComponent(filename)
+            return try? Data(contentsOf: url)
+        }
+        let found = attachments.filter { payload($0) != nil }.count
         let families = try Dictionary(grouping: notes, by: { try XCTUnwrap($0.value(forKey: "id") as? UUID) })
         var results: [Row] = []
         for id in families.keys.sorted(by: { $0.uuidString < $1.uuidString }) {
@@ -57,7 +138,7 @@ private enum MigrationCopyAudit {
                     if case .editable = NoteContentCodec.decode($0) { return true }; return false
                 } == true && formats.allSatisfy { $0 == NoteDocument.currentFormat }
                 results.append(Row(noteID: id.uuidString, state: editable ? "supported-editable" : "unsupported-read-only",
-                    reason: editable ? nil : "Original document bytes retained", attachments: 0, missingPayloads: 0,
+                    reason: editable ? nil : "unsupported-or-divergent-document", attachments: 0, missingPayloads: 0,
                     normalizedLineBreaks: 0, snappedAnchors: 0))
                 continue
             }
@@ -84,7 +165,7 @@ private enum MigrationCopyAudit {
                     filename: row.value(forKey: "originalFilename") as? String ?? "",
                     contentTypeIdentifier: type,
                     byteCount: (row.value(forKey: "byteCount") as? NSNumber)?.int64Value ?? 0,
-                    payload: row.value(forKey: "payload") as? Data)
+                    payload: payload(row))
                 let digest = row.value(forKey: "contentDigest") as? String ?? ""
                 if let old = byID[attachmentID], old != value || digests[attachmentID] != digest { refusal = .replicasDisagree }
                 byID[attachmentID] = value
@@ -104,11 +185,18 @@ private enum MigrationCopyAudit {
                 }
             }
             results.append(Row(noteID: id.uuidString, state: refusal == nil ? "verified-migration-candidate" : "refused-legacy-editable",
-                reason: refusal?.description, attachments: byID.count,
+                reason: refusal.map(reasonClass), attachments: byID.count,
                 missingPayloads: byID.values.filter { $0.payload == nil }.count,
                 normalizedLineBreaks: breaks, snappedAnchors: snapped))
         }
-        return Report(rows: results)
+        func count(_ entity: String) throws -> Int {
+            try context.count(for: NSFetchRequest<NSFetchRequestResult>(entityName: entity))
+        }
+        return try Report(noteRows: notes.count, taskRows: count("TaskItem"),
+            canvasBoards: count("CanvasBoardItem"), canvasStrokes: count("CanvasStrokeItem"),
+            canvasImages: count("CanvasImageItem"), canvasObjects: count("CanvasSemanticObjectItem"),
+            attachmentRows: attachments.count, attachmentsFound: found,
+            attachmentsMissing: attachments.count - found, rows: results)
     }
 }
 
@@ -252,6 +340,68 @@ final class NotesMigrationAcceptanceTests: XCTestCase {
         return hashes
     }
 
+    func testDailySchemaDryRunOpensThroughApplicationAndPreservesReplicas() throws {
+        let source = root.appendingPathComponent("daily-source")
+        try FileManager.default.createDirectory(at: source, withIntermediateDirectories: true)
+        let url = PersistenceController.makeConfiguration(cloudSyncEnabled: false, storeDirectory: source).url
+        let id = UUID()
+        let diskAttachmentID = UUID()
+        try autoreleasepool {
+            let schema = Schema(SchemaMigrationTests.prePhase0Types)
+            let container = try ModelContainer(for: schema,
+                configurations: ModelConfiguration(schema: schema, url: url, cloudKitDatabase: .none))
+            let context = ModelContext(container)
+            context.autosaveEnabled = false
+            context.insert(PrePhase0.NoteItem(id: id, title: "Fixture", body: "One\r\nTwo"))
+            context.insert(PrePhase0.NoteItem(id: id, title: "Fixture", body: "One\r\nTwo"))
+            context.insert(PrePhase0.NoteItem(title: "Two\nlines", body: "Kept"))
+            context.insert(PrePhase0.TaskItem(id: id, title: "Fixture task"))
+            context.insert(PrePhase0.TaskItem(id: id, title: "Fixture task replica"))
+            context.insert(PrePhase0.CanvasBoardItem())
+            context.insert(PrePhase0.CanvasStrokeItem(payload: Data([1, 2, 3])))
+            context.insert(PrePhase0.NoteAttachment(noteID: id, originalFilename: "fixture.txt",
+                byteCount: 200_000, sortIndex: 0, contentDigest: "fixture", payload: Data(repeating: 4, count: 200_000)))
+            context.insert(PrePhase0.NoteAttachment(noteID: id, originalFilename: "missing.txt",
+                byteCount: 3, sortIndex: 1, contentDigest: "missing", payload: nil))
+            context.insert(PrePhase0.NoteAttachment(id: diskAttachmentID, noteID: id, originalFilename: "disk.txt",
+                byteCount: 3, sortIndex: 2, contentDigest: "disk", payload: nil))
+            try context.save()
+        }
+        let file = source.appendingPathComponent("Attic/Attachments/v1")
+            .appendingPathComponent(diskAttachmentID.uuidString).appendingPathComponent("disk/disk.txt")
+        try FileManager.default.createDirectory(at: file.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try Data([7, 8, 9]).write(to: file)
+        let metadata = try NSPersistentStoreCoordinator.metadataForPersistentStore(type: .sqlite, at: url)
+        XCTAssertEqual(metadata[NSStoreModelVersionIdentifiersKey] as? [String], ["1.0.0"])
+        XCTAssertEqual((metadata[NSStoreModelVersionHashesKey] as? [String: Data])?.mapValues { $0.base64EncodedString() },
+                       SchemaMigrationTests.baseRevisionEntityHashes)
+        // Metadata validation may update SQLite's SHM reader bookkeeping;
+        // freeze the source baseline only after fixture construction/validation.
+        let before = try fileHashes(source)
+        let copy = root.appendingPathComponent("daily-copy")
+        try FileManager.default.copyItem(at: source, to: copy)
+        let report = try MigrationCopyAudit.runThroughApplication(storeURL: copy.appendingPathComponent(url.lastPathComponent))
+        XCTAssertEqual(report.rows.map(\.state).sorted(), ["refused-legacy-editable", "verified-migration-candidate"])
+        XCTAssertEqual(report.rows.first { $0.noteID == id.uuidString }?.attachments, 3)
+        XCTAssertTrue(report.schemaMigrated)
+        XCTAssertEqual(report.noteRows, 3)
+        XCTAssertEqual(report.notesTotal, 2)
+        XCTAssertEqual(report.taskRows, 2)
+        XCTAssertEqual(report.canvasBoards, 1)
+        XCTAssertEqual(report.canvasStrokes, 1)
+        XCTAssertEqual(report.attachmentsFound, 2)
+        XCTAssertEqual(report.attachmentsMissing, 1)
+        XCTAssertEqual(report.migratedCleanly, 1)
+        XCTAssertEqual(report.refused, 1)
+        XCTAssertEqual(report.rows.first { $0.state == "refused-legacy-editable" }?.reason, "title-line-break")
+        XCTAssertEqual(try fileHashes(source), before)
+        let reopened = try MigrationCopyAudit.runThroughApplication(storeURL: copy.appendingPathComponent(url.lastPathComponent))
+        XCTAssertFalse(reopened.schemaMigrated)
+        XCTAssertEqual(reopened.noteRows, 3)
+        XCTAssertEqual(reopened.taskRows, 2)
+        XCTAssertEqual(reopened.attachmentsFound, 2)
+    }
+
     func testExportExplicitDryRunFixture() async throws {
         let repo = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
         let request = repo.appendingPathComponent(".build/migration-fixture-request")
@@ -317,23 +467,28 @@ final class NotesMigrationAcceptanceTests: XCTestCase {
 
     /// Only the opt-in script creates this request. Ordinary CI skips this test.
     func testOwnerApprovedCopiedStoreDryRun() throws {
+        guard let runnerID = ProcessInfo.processInfo.environment["ATTIC_S6_DRY_RUN_ID"] else {
+            throw XCTSkip("This runner has no approved dry-run request")
+        }
         let repo = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
         let requestURL = repo.appendingPathComponent(".build/migration-dry-run-request.json")
         guard FileManager.default.fileExists(atPath: requestURL.path) else { throw XCTSkip("No explicitly approved copy supplied") }
         let request = try JSONDecoder().decode([String: String].self, from: Data(contentsOf: requestURL))
+        guard request["requestID"] == runnerID else { throw XCTSkip("Request belongs to another runner") }
         let copy = URL(fileURLWithPath: try XCTUnwrap(request["copy"]))
         let temp = FileManager.default.temporaryDirectory.resolvingSymlinksInPath().path + "/"
         XCTAssertTrue(copy.resolvingSymlinksInPath().path.hasPrefix(temp), "Only the script's temporary copy is allowed")
         guard copy.resolvingSymlinksInPath().path.hasPrefix(temp) else { return }
         let reportURL = URL(fileURLWithPath: try XCTUnwrap(request["report"]))
         do {
-            let report = try MigrationCopyAudit.run(storeURL: copy)
+            let report = try MigrationCopyAudit.runThroughApplication(storeURL: copy)
             let encoder = JSONEncoder(); encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
             try encoder.encode(report).write(to: reportURL, options: .atomic)
         } catch {
-            try JSONEncoder().encode(["status": "refused", "reason": String(describing: error),
-                "note": "No schema migration or save attempted; legacy path remains required"]).write(to: reportURL, options: .atomic)
-            throw error
+            let failure = error as NSError
+            try JSONEncoder().encode(["status": "refused", "reason_domain": failure.domain,
+                "reason_code": String(failure.code)]).write(to: reportURL, options: .atomic)
+            XCTFail("Disposable store open/audit refused; error domain/code in report")
         }
     }
 }

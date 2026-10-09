@@ -1,17 +1,28 @@
 # S6 migration dry run
 
-**No owner store has been located, read or copied during S6.** Run only after explicitly approving the dry run and quitting the app that writes the supplied store. There is no default directory and no discovery of store locations.
+Run only on an explicitly approved, quiescent **staged copy**. The script refuses protected owner containers and symlinks. It never discovers stores or opens the staged source with SQLite. Copy the complete Application Support store family, including WAL/SHM, `.development_SUPPORT/`, and `Attic/` file storage.
 
 ```zsh
 phase2/migration-dry-run.zsh --approve-owner-store --source-quiescent \
-  --store-directory '/owner-supplied/directory-containing-the-store' \
-  --store-name 'owner-supplied.store'
+  --store-directory '/owner-supplied/staged-copy' \
+  --store-name development.store
 ```
 
-The directory must contain the SQLite file, its WAL/SHM sidecars when present, and its external binary-storage support directories. Copy the whole store directory, not SQLite alone. Never use this task to reset or migrate the original. `--approve-owner-store` records the owner's opt-in; the agent must still obtain explicit approval before invoking it on owner data. `--fixture` is restricted to this worktree's `.build` or OS temporary directories.
+The script hashes the source and copies the entire supplied directory to a disposable writable temporary directory. The isolated Local unit-test host opens that copy with **`PersistenceController.makeContainer(cloudSyncEnabled: false, storeDirectory:)`**, the local app's real persistence constructor and its inferred lightweight schema migration. The supplied store name must match that configuration (`development.store` in Local builds); a mismatch is refused rather than opening an empty store. CloudKit stays disabled. A random per-run request token is passed only to this test runner; unrelated suites skip the request even while it is queued for the build lock. No NoteStore startup reconciliation, daily cleanup, attachment repair, or note-format commit runs.
 
-The script keeps a temporary copy and reports its location. Files/directories in the copy are made read-only. An isolated unit-test host opens Core Data with `NSReadOnlyPersistentStoreOption`, automatic and inferred schema migration both disabled, and never constructs `NoteStore` or commits a migration. Each legacy family passes through the production plan, inverse, and real TextKit 2 round trip. Reports contain IDs, state, refusals, attachment/missing-byte counts, normalized line breaks and snapped anchors, without note text or attachment bytes. Supported and unsupported existing documents are classified; unsupported bytes are never rewritten. Deleted families are skipped. Incompatible store schemas are refused rather than upgraded.
+After the schema opens, a read-only audit groups physical note replicas by UUID and refuses divergent or partly deleted families. Live legacy families pass through production plan, inverse verification, and a real TextKit 2 round trip. Existing documents are classified as supported or unsupported; note bytes are never rewritten. Attachment bytes are checked in SwiftData external storage or the copied `Attic/Attachments/v1` directory. Counts distinguish physical rows and logical note families, clean migration candidates, refusal reason classes, legacy/already-new notes, deleted families, attachments found/missing, tasks, and canvas boards/content. “Migrated cleanly” means the format dry run verified; it does not mean note-format changes were committed.
 
-`migration-report.json` describes candidates/refusals; `integrity-report.json` checks SHA-256 inventories of the source and every copied file before/after; `test.log` keeps runner/build diagnostics. The script fails on a runner error or changed source/copy. A compatibility refusal is not a migration pass. Close the source writer first: a live WAL copied across files is not a consistent snapshot. No report commits or repairs anything. The temporary folder is retained for review; its copy has read-only permissions.
+`migration-report.json` contains aggregate counts and states only; errors contain domain/code only. `integrity-report.json` proves the staged source's full SHA-256 file inventory is unchanged, and fingerprints of every old persisted user field (as a multiset preserving duplicate physical rows) match before/after schema migration. SQLite bookkeeping columns are excluded. Private inventories/fingerprints and **all working copies are deleted**, including runner-failure paths; only reports and filtered runner status/count diagnostics remain. Native runtime diagnostics are discarded before being written to the retained log. A runner failure, incompatible schema, changed source, or altered old rows is a failure, never a pass.
 
-Verification: `python3 phase2/test_migration_dry_run.py` checks syntax/authorization gates. `NotesMigrationAcceptanceTests` builds durable fixtures and exercises rollback, fresh-context reopen, recovery, editable refused legacy and byte-preserved future documents. The compatible script end-to-end check uses an explicitly exported constructed fixture only.
+## Daily 1.0.0 schema compatibility
+
+The approved staged Daily store's seven entity hashes exactly match `SchemaMigrationTests.baseRevisionEntityHashes` (the `PrePhase0` models from `f2c737a`). No VersionedSchema or custom MigrationPlan is needed: all seven entities and their attributes retain names, types, and optionality. There are no removed or renamed fields. Additions:
+
+- `TaskItem`: optional deletion/link/attachment/Done/due/completion-origin fields, empty `deletionMembersRaw` and `tagsRaw`, and default-zero `listOrderVersion`.
+- `NoteItem`: optional deletion, pin, document content, task/revision/file metadata fields; empty tags/plain text; default-zero format/revision/image/file counts. Existing title/body remain.
+- `NoteAttachment`: optional `deletedAt`.
+- `CanvasBoardItem`: empty tags and optional purge/recent-deletion/content-count fields.
+- Stroke, image, and semantic-object schemas are unchanged.
+- New entities: `ItemLink`, `NoteVersion`, `NotePendingEdit`, without required links to old rows or uniqueness constraints.
+
+`testDailyToRedesignDiffIsEntirelyAdditiveAndInfersAMapping` checks the attribute diff and inferred mapping. The exact 1.0.0 durable fixture exercises migration through the application, duplicate preservation, externally stored attachment bytes, missing payloads, file-backed bytes, and reopen. Existing schema tests additionally cover all seven models, file references, defaults, and cleanup/restore safety. `python3 phase2/test_migration_dry_run.py` checks authorization, protection, copying, duplicate-row fingerprints, and cleanup. The original refusal was specific to the previous read-only harness, which explicitly disabled schema migration.
