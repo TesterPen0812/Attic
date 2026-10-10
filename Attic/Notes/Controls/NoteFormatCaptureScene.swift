@@ -212,9 +212,11 @@ enum NoteFormatCaptureScene {
         line("A heading", .paragraph(.heading(2)), controls: controls, textView: textView)
         line("A subheading", .paragraph(.heading(3)), controls: controls, textView: textView)
         line("A short quote", .paragraph(.quote), controls: controls, textView: textView)
+        line("Body text between the quotes", .paragraph(.body), controls: controls, textView: textView)
+        // A quote line continues the quote; the command would toggle it off.
         line("A longer quote that wraps onto a second line so the bar follows all of its text.", .paragraph(.quote),
              controls: controls, textView: textView)
-        line("The second paragraph of that quote", .paragraph(.quote), controls: controls, textView: textView)
+        line("The second paragraph of that quote", nil, controls: controls, textView: textView)
         line("A bullet item", .paragraph(.bullet), controls: controls, textView: textView)
         line("A checklist item", .paragraph(.checklist), controls: controls, textView: textView)
         line("let total = 1 + 2", .paragraph(.mono), controls: controls, textView: textView)
