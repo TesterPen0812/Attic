@@ -116,7 +116,7 @@ final class NotesFormatControlsTests: XCTestCase {
         }
     }
 
-    func testH13SelectionBelowViewportDoesNotPutAFormatBarOutsideTheEditor() {
+    func testH13SelectionBelowViewportDoesNotPutAFormatBarOutsideTheEditor() throws {
         let document = NoteDocument(blocks: [.text("H13")] + (0..<100).map { .text("Line \($0)") })
         let (controls, engine, text) = make(document, topInset: 64)
         let target = range("Line 99", text)
@@ -128,6 +128,13 @@ final class NotesFormatControlsTests: XCTestCase {
         text.scrollRangeToVisible(target)
         spin()
         XCTAssertTrue(controls.formatModel.barShown, "the controls return with the visible selection")
+        let reads = controls.snapshotCount
+        for _ in 0..<3 {
+            let clip = try XCTUnwrap(engine.scrollView?.contentView)
+            clip.scroll(to: NSPoint(x: 0, y: clip.bounds.minY - 1))
+            spin()
+        }
+        XCTAssertEqual(controls.snapshotCount, reads, "scrolling a visible selection only repositions its bar")
     }
 
     func testH13EveryMarkOnMixedTextTogglesAndUndoesWithoutChangingObjects() throws {

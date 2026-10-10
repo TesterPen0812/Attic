@@ -162,9 +162,14 @@ final class NoteFormatControls: NSObject {
             forName: NSView.boundsDidChangeNotification, object: clip, queue: .main
         ) { [weak self] _ in MainActor.assumeIsolated {
             AtticOverlayHierarchy.layoutPass { self?.layoutDidChange() }
-            // An offscreen selection's bar returns when the selection scrolls
-            // back into view. A caret-only scroll still does no snapshot work.
-            if (self?.selection.length ?? 0) > 0 { self?.scheduleRefresh() }
+            // Only a hidden bar returning to view needs a new snapshot.
+            // Moving an already-visible bar must not rescan a long selection
+            // on every scroll tick; layoutDidChange above just places it.
+            if let self, self.barHost.isHidden, (self.selection.length > 0 || self.tableMarkTarget),
+               self.dismissedSelection != self.selection,
+               self.barPlacement(selection: self.selection) != nil {
+                self.scheduleRefresh()
+            }
         } }
         keyMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
             self?.handleKey(event) == true ? nil : event
