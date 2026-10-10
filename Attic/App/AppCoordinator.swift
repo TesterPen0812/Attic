@@ -538,6 +538,10 @@ final class AppCoordinator: ObservableObject {
         if inMemoryStore, isUITesting, environment["ATTIC_UI_TEST_SEED"] == "scale" {
             try? TasksPagePreview.seedScale(in: container)
         }
+        // The colour pass sheet's tasks (`phaseX/colour-final.md`).
+        if inMemoryStore, isUITesting, environment["ATTIC_UI_TEST_SEED"] == "colour" {
+            try? TasksPagePreview.seedColour(in: container)
+        }
         // Everything finished today: the caught-up Now page.
         if inMemoryStore, isUITesting, environment["ATTIC_UI_TEST_SEED"] == "caughtup" {
             try? TasksPagePreview.seedCaughtUp(in: container)
