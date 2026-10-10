@@ -1774,9 +1774,7 @@ final class PhaseXHunt6Tests: XCTestCase {
                 }
             }
             try await collector.removeMaterializations([ref])
-            XCTExpectFailure("H8-01") {
-                XCTAssertTrue(FileManager.default.fileExists(atPath: url.path), "timing=\(timing)")
-            }
+            XCTAssertTrue(FileManager.default.fileExists(atPath: url.path), "timing=\(timing)")
         }
     }
 
@@ -1836,4 +1834,30 @@ final class PhaseXHunt6Tests: XCTestCase {
 
 private extension Result {
     var isSuccess: Bool { if case .success = self { return true }; return false }
+}
+
+@MainActor
+extension PhaseXHunt6Tests {
+    func testH8_02ACollectorKeepsAnotherLiveFacadesStagedBytesUntilRelease() async throws {
+        let root = ownedTemporaryDirectory(prefix: "H8LiveJournal")
+        var live: NoteDraftJournal? = NoteDraftJournal(directory: root)
+        let collector = NoteDraftJournal(directory: root)
+        let bytes = Data("live staged bytes".utf8), id = UUID(), noteID = UUID()
+        let item = StagedNoteAttachment(id: id, filename: "live.txt", contentTypeIdentifier: "public.plain-text",
+            byteCount: Int64(bytes.count), digest: NotePayloadDigest.sha256(bytes), data: bytes)
+        live?.liveReferencedIDs = { [id] }
+        let document = NoteDocument(blocks: [.text("live"), .file(attachmentID: id, filename: item.filename,
+            contentTypeIdentifier: item.contentTypeIdentifier, byteCount: item.byteCount)])
+        let entry = NoteDraftJournalEntry(noteID: noteID, isPersisted: false, baseRevisionID: nil,
+            content: try NoteContentCodec.encode(document), selectionLocation: 0, selectionLength: 0,
+            staged: [.init(id: id, filename: item.filename, contentTypeIdentifier: item.contentTypeIdentifier,
+                          byteCount: item.byteCount, digest: item.digest)], savedAt: Date())
+        let claim = try await XCTUnwrapAsync(try await live?.writeDurably(entry, staged: [item]))
+        try await collector.discardOwnedDurably(noteID: noteID, claim: claim)
+        let url = root.appendingPathComponent("staged").appendingPathComponent(id.uuidString)
+        XCTExpectFailure("H8-02") { XCTAssertTrue(FileManager.default.fileExists(atPath: url.path)) }
+        live = nil
+        _ = try await collector.readRecoveryEntries()
+        XCTAssertFalse(FileManager.default.fileExists(atPath: url.path), "Cleanup eventually follows release of the last live owner")
+    }
 }
