@@ -225,6 +225,7 @@ private struct AtticDropdownTabs: ViewModifier {
     let count: Int
     @Environment(\.atticDropdownRegisterKeys) private var registerKeys
     @Environment(\.atticDropdownTakeListKeyboard) private var takeListKeyboard
+    @Environment(\.atticDropdownKeyboardTrace) private var trace
 
     func body(content: Content) -> some View {
         content
@@ -238,6 +239,7 @@ private struct AtticDropdownTabs: ViewModifier {
         registerKeys { event in
             guard event.keyCode == 48,
                   event.modifierFlags.intersection([.command, .option, .control]).isEmpty else { return false }
+            trace?("tab state field=\(field.wrappedValue) list=\(list.wrappedValue) count=\(count)")
             AtticDropdownTabFocus.transfer(listFocused: list.wrappedValue,
                 fullKeyboardAccess: NSApp.isFullKeyboardAccessEnabled,
                 setField: { field.wrappedValue = $0 }, setList: { list.wrappedValue = $0 },
@@ -251,6 +253,7 @@ private struct AtticDropdownListFocus: ViewModifier {
     var focus: FocusState<Bool>.Binding
     @Binding var highlighted: Int?
     let count: Int
+    @Environment(\.atticDropdownKeyboardTrace) private var trace
 
     func body(content: Content) -> some View {
         content
@@ -258,6 +261,7 @@ private struct AtticDropdownListFocus: ViewModifier {
             .focused(focus)
             .focusEffectDisabled()
             .onChange(of: focus.wrappedValue) { _, now in
+                trace?("list focus=\(now)")
                 if now, highlighted == nil, count > 0 { highlighted = 0 }
             }
     }
@@ -847,11 +851,19 @@ private struct AtticDropdownFocusModifier: ViewModifier {
     var focus: FocusState<Bool>.Binding
     let enabled: Bool
     @Environment(\.atticDropdownFocusRequest) private var request
+    @Environment(\.atticDropdownKeyboardTrace) private var trace
 
     func body(content: Content) -> some View {
         content
-            .onAppear { if AtticDropdownInitialFocus.shouldRequest(enabled: enabled, request: request) { focus.wrappedValue = true } }
-            .onChange(of: request) { _, _ in if enabled { focus.wrappedValue = true } }
+            .onAppear {
+                trace?("field appear request=\(String(describing: request)) state=\(focus.wrappedValue)")
+                if AtticDropdownInitialFocus.shouldRequest(enabled: enabled, request: request) { focus.wrappedValue = true }
+            }
+            .onChange(of: request) { _, now in
+                trace?("field request=\(String(describing: now)) state=\(focus.wrappedValue)")
+                if enabled { focus.wrappedValue = true }
+            }
+            .onChange(of: focus.wrappedValue) { _, now in trace?("field focus=\(now)") }
     }
 }
 
@@ -950,6 +962,7 @@ final class AtticDropdownPresenter {
                 self?.keyboardTrace?("register handler=\(handler != nil)")
                 self?.contentKeyHandler = handler
             })
+            .environment(\.atticDropdownKeyboardTrace, keyboardTrace)
             .environment(\.atticDropdownTakeListKeyboard, { [weak self] in
                 guard let host = self?.host, let window = host.window else { return }
                 // A Bool focus request can highlight the list while AppKit's
@@ -1154,6 +1167,7 @@ final class AtticDropdownPresenter {
             window.makeFirstResponder(host)
         }
         stage.focusRequest += 1
+        keyboardTrace?("initial keyboard request=\(stage.focusRequest) responder=\(String(describing: window.firstResponder))")
     }
 
     /// The view to give the keyboard back to: a field's own view, not the
@@ -1356,11 +1370,19 @@ private struct AtticDropdownHeightKey: EnvironmentKey {
     static let defaultValue: CGFloat? = nil
 }
 
+private struct AtticDropdownKeyboardTraceKey: EnvironmentKey {
+    static let defaultValue: ((String) -> Void)? = nil
+}
+
 private struct AtticDropdownTakeListKeyboardKey: EnvironmentKey {
     static let defaultValue: () -> Void = {}
 }
 
 extension EnvironmentValues {
+    var atticDropdownKeyboardTrace: ((String) -> Void)? {
+        get { self[AtticDropdownKeyboardTraceKey.self] }
+        set { self[AtticDropdownKeyboardTraceKey.self] = newValue }
+    }
     var atticDropdownTakeListKeyboard: () -> Void {
         get { self[AtticDropdownTakeListKeyboardKey.self] }
         set { self[AtticDropdownTakeListKeyboardKey.self] = newValue }
