@@ -4113,7 +4113,38 @@ private struct TasksListEdges<Mask: View>: ViewModifier {
                 .contentMargins(.bottom, bottomClearance, for: .scrollIndicators)
                 .atticScrollEdgeEffect(style)
                 .mask { cleanMask }
+                .mask { TasksPlainControlsMask(stackHeight: stack.height, bottomInset: bottomInset) }
         }
+    }
+}
+
+/// The strip, selection bar and failure/paste lines have plain labels,
+/// unlike the glass add bar. Rows disappear before those labels and may
+/// still run behind the add bar. The measured stack follows immediately;
+/// the delayed mask height must never leave two text lines superimposed.
+struct TasksPlainControlsMask: View {
+    let stackHeight: CGFloat
+    let bottomInset: CGFloat
+
+    var body: some View {
+        GeometryReader { proxy in
+            if stackHeight > AtticControlSize.addBarHeight + 0.5 {
+                let height = max(1, proxy.size.height)
+                let top = max(0, height - bottomInset - stackHeight)
+                let bottom = max(top, height - bottomInset - AtticControlSize.addBarHeight)
+                LinearGradient(stops: [
+                    .init(color: .black, location: 0),
+                    .init(color: .black, location: max(0, top - AtticSpacing.s8) / height),
+                    .init(color: .clear, location: top / height),
+                    .init(color: .clear, location: bottom / height),
+                    .init(color: .black, location: min(height, bottom + AtticSpacing.s8) / height),
+                    .init(color: .black, location: 1)
+                ], startPoint: .top, endPoint: .bottom)
+            } else {
+                Color.black
+            }
+        }
+        .allowsHitTesting(false)
     }
 }
 
