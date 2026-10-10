@@ -49,31 +49,62 @@ actor AttachmentFileStore {
     private final class RetentionRegistry: @unchecked Sendable {
         let lock = NSLock()
         var providers: [UUID: @Sendable () async -> Set<UUID>?] = [:]
-        func snapshot() -> [@Sendable () async -> Set<UUID>?] {
-            lock.lock(); defer { lock.unlock() }; return Array(providers.values)
+        var generation: UInt64 = 0
+        func snapshot() -> (UInt64, [@Sendable () async -> Set<UUID>?]) {
+            lock.lock(); defer { lock.unlock() }; return (generation, Array(providers.values))
+        }
+        func remove(_ directory: URL, ifCurrent generation: UInt64, using files: FileManager) throws -> Bool {
+            lock.lock(); defer { lock.unlock() }
+            guard self.generation == generation else { return false }
+            if files.fileExists(atPath: directory.path) { try files.removeItem(at: directory) }
+            return true
         }
     }
-    private nonisolated let retention = RetentionRegistry()
+    private final class RetentionRegistries: @unchecked Sendable {
+        private final class Entry {
+            weak var registry: RetentionRegistry?
+            init(_ registry: RetentionRegistry) { self.registry = registry }
+        }
+        let lock = NSLock()
+        private var entries: [URL: Entry] = [:]
+        func registry(for root: URL) -> RetentionRegistry {
+            lock.lock(); defer { lock.unlock() }
+            let key = root.resolvingSymlinksInPath()
+            if let existing = entries[key]?.registry { return existing }
+            entries = entries.filter { $0.value.registry != nil }
+            let result = RetentionRegistry()
+            entries[key] = Entry(result)
+            return result
+        }
+    }
+    private static let registries = RetentionRegistries()
+    private nonisolated let retention: RetentionRegistry
 
     /// Registration is synchronous and thread-safe so the destructive
     /// primitive cannot race the store's initialization task.
     nonisolated func registerByteOwners(_ owner: UUID, provider: @escaping @Sendable () async -> Set<UUID>?) {
-        retention.lock.lock(); retention.providers[owner] = provider; retention.lock.unlock()
+        retention.lock.lock()
+        retention.providers[owner] = provider
+        retention.generation &+= 1
+        retention.lock.unlock()
     }
 
     private func removeUnownedDirectory(_ directory: URL) async throws -> Bool {
         guard let id = UUID(uuidString: directory.deletingLastPathComponent().lastPathComponent) else { return false }
-        for provider in retention.snapshot() {
+        let (generation, providers) = retention.snapshot()
+        for provider in providers {
             guard let ids = await provider(), !ids.contains(id) else { return false }
         }
-        if fileManager.fileExists(atPath: directory.path) { try fileManager.removeItem(at: directory) }
-        return true
+        // Registration can cross a provider's await. Check and unlink under
+        // the registration lock; a new path owner always gets a fresh sweep.
+        return try retention.remove(directory, ifCurrent: generation, using: fileManager)
     }
 
     init(rootURL: URL? = nil, fileManager: FileManager = .default) {
         self.fileManager = fileManager
         self.rootURL = (rootURL ?? Self.defaultRootURL(fileManager: fileManager))
             .standardizedFileURL
+        retention = Self.registries.registry(for: self.rootURL)
     }
 
     func prepare() throws {
