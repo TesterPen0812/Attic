@@ -676,6 +676,11 @@ struct SubtaskPanelContent: View {
                 .font(.system(size: 13, design: .rounded))
                 .focused($isEntryFocused)
                 .onSubmit(addSubtask)
+                .background(SubtaskBackspace(text: { draft.wrappedValue },
+                    remove: { uiState.backspaceEmptySubtask(store: store, parentID: parentID) },
+                    undo: { uiState.undoSubtaskEdit(store: store, nativeHasUndo: $0) },
+                    redo: { uiState.redoSubtaskEdit(store: store, nativeHasRedo: $0) },
+                    didEdit: { uiState.noteSubtaskTextEdit(store: store) }))
                 // Escape cancels the entry deliberately (drops the draft).
                 // Window-level Escape dismissal stays a separate path that
                 // only fires when no field editor is active.

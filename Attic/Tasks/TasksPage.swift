@@ -1585,13 +1585,21 @@ struct TasksPage: View {
                     renaming: (active ? model.renamingSubtaskID : nil).map { renaming in
                         (renaming, AtticTitleEditing(text: $model.subtaskRename, commit: { model.commitSubtaskRename() },
                                                      cancel: { model.cancelSubtaskRename() },
-                                                     accessibilityLabel: String(localized: "Rename subtask")))
+                                                     accessibilityLabel: String(localized: "Rename subtask"),
+                                                     emptyBackspace: { model.backspaceEmptySubtask() },
+                                            pageUndo: { native in (model.taskChangeOwnsUndo || !native) && model.undo().isApplied },
+                                            pageRedo: { native in (model.taskChangeOwnsRedo || !native) && model.redo().isApplied },
+                                            didEdit: { model.noteTextEdit() }))
                     },
                     newSubtask: model.newSubtaskParentID == id && active
                         ? AtticTitleEditing(text: $model.newSubtaskTitle, commit: { model.commitNewSubtask() },
                                             cancel: { model.cancelEditing() },
                                             accessibilityLabel: String(localized: "New subtask of \(row.model.title)"),
-                                            placeholder: String(localized: "Add subtask…"))
+                                            placeholder: String(localized: "Add subtask…"),
+                                            emptyBackspace: { model.backspaceEmptySubtask() },
+                                            pageUndo: { native in (model.taskChangeOwnsUndo || !native) && model.undo().isApplied },
+                                            pageRedo: { native in (model.taskChangeOwnsRedo || !native) && model.redo().isApplied },
+                                            didEdit: { model.noteTextEdit() })
                         : nil,
                     popover: movePopover(parentID: id, open: live.metaPopover),
                     onReorder: { subtaskID, index, group in

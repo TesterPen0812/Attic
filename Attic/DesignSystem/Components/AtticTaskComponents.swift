@@ -429,6 +429,12 @@ struct AtticTitleEditing {
     /// line, round 13); nil shows nothing, as a title editor never empties.
     var placeholder: String? = nil
 
+    /// Only subtask editors consume Backspace on a truly empty field.
+    var emptyBackspace: (() -> Bool)? = nil
+    var pageUndo: ((_ nativeHasUndo: Bool) -> Bool)? = nil
+    var pageRedo: ((_ nativeHasRedo: Bool) -> Bool)? = nil
+    var didEdit: (() -> Void)? = nil
+
     struct Tokens {
         var chips: [AtticTokenChip]
         /// Backspace after a chip, edits and the caret, as in the add bar.
@@ -488,6 +494,9 @@ struct AtticRowTitleEditor: View {
             .onAppear { tokenFocused = true }
             .onChange(of: tokenFocused) { _, now in lost(now) { tokenFocused = true } }
             .onChange(of: editing.text.wrappedValue) { _, _ in finished = false }
+        } else if editing.emptyBackspace != nil {
+            AtticSubtaskTitleField(editing: editing, color: NSColor(design.tokens.color(.heading)))
+                .frame(height: AtticTaskRowMetrics.titleLineHeight)
         } else {
             TextField("", text: editing.text,
                       prompt: editing.placeholder.map { Text($0).foregroundStyle(design.tokens.color(.placeholder)) })
@@ -2327,5 +2336,126 @@ private struct AtticTagColourMenu: ViewModifier {
         } else {
             content.contextMenu { AtticMenuItems(commands: commands) }
         }
+    }
+}
+
+/// NSTextField's editor consumes an empty Backspace before SwiftUI's key
+/// handlers. Its delegate exposes that one command without intercepting
+/// app-wide keys or changing typing, selection, input methods or Undo.
+private struct AtticSubtaskTitleField: NSViewRepresentable {
+    let editing: AtticTitleEditing
+    let color: NSColor
+    func makeCoordinator() -> Coordinator { Coordinator(editing) }
+    func makeNSView(context: Context) -> NSTextField {
+        let field = NSTextField()
+        let cell = AtticSubtaskTitleCell()
+        cell.editor.isFieldEditor = true
+        field.cell = cell
+        field.isEditable = true
+        field.isSelectable = true
+        cell.usesSingleLineMode = true
+        field.isBordered = false
+        field.drawsBackground = false
+        field.focusRingType = .none
+        field.font = AtticTextStyle.rowTitle.nsFont
+        field.delegate = context.coordinator
+        return field
+    }
+    func updateNSView(_ field: NSTextField, context: Context) {
+        context.coordinator.editing = editing
+        if context.coordinator.lastText != editing.text.wrappedValue {
+            context.coordinator.lastText = editing.text.wrappedValue
+            context.coordinator.finished = false
+        }
+        (field.cell as? AtticSubtaskTitleCell)?.editor.editing = editing
+        field.textColor = color
+        field.placeholderString = editing.placeholder
+        field.setAccessibilityLabel(editing.accessibilityLabel)
+        if field.stringValue != editing.text.wrappedValue { field.stringValue = editing.text.wrappedValue }
+        guard !context.coordinator.focused else { return }
+        context.coordinator.focused = true
+        DispatchQueue.main.async { [weak field] in
+            guard let field, let window = field.window, window.isKeyWindow, !field.isHiddenOrHasHiddenAncestor else { return }
+            window.makeFirstResponder(field)
+            (window.firstResponder as? NSTextView)?.setSelectedRange(NSRange(location: (field.stringValue as NSString).length, length: 0))
+        }
+    }
+    final class Coordinator: NSObject, NSTextFieldDelegate {
+        var editing: AtticTitleEditing
+        var focused = false
+        var finished = false
+        var reclaims = 0
+        var lastText: String?
+        init(_ editing: AtticTitleEditing) { self.editing = editing }
+        func controlTextDidChange(_ notification: Notification) {
+            guard let field = notification.object as? NSTextField else { return }
+            editing.text.wrappedValue = field.stringValue
+            editing.didEdit?()
+            lastText = field.stringValue
+            finished = false
+        }
+        func controlTextDidEndEditing(_ notification: Notification) {
+            guard !finished, let field = notification.object as? NSTextField, field.window?.isKeyWindow == true else { return }
+            if AtticRowTitleEditor.isPersonsDeparture(NSApp.currentEvent?.type) || reclaims >= 2 {
+                finished = editing.commit()
+            } else {
+                reclaims += 1
+                DispatchQueue.main.async { [weak field, weak self] in
+                    guard let self, !self.finished, let field, !field.isHiddenOrHasHiddenAncestor else { return }
+                    field.window?.makeFirstResponder(field)
+                }
+            }
+        }
+        func control(_ control: NSControl, textView: NSTextView, doCommandBy command: Selector) -> Bool {
+            guard !textView.hasMarkedText() else { return false }
+            if command == #selector(NSResponder.deleteBackward(_:)), textView.string.isEmpty {
+                // Mark finished before the model removes this editor: a
+                // resulting focus loss must never commit its stale draft.
+                finished = true
+                if editing.emptyBackspace?() == true { return true }
+                finished = false
+                return false
+            }
+            if command == #selector(NSResponder.insertNewline(_:)) {
+                let saved = editing.commit()
+                finished = saved && editing.text.wrappedValue == textView.string
+                return true
+            }
+            if command == #selector(NSResponder.cancelOperation(_:)) {
+                finished = true
+                editing.cancel()
+                return true
+            }
+            return false
+        }
+    }
+}
+
+private final class AtticSubtaskTitleCell: NSTextFieldCell {
+    let editor = AtticSubtaskFieldEditor()
+    override func fieldEditor(for controlView: NSView) -> NSTextView? { editor }
+}
+
+/// Typing stays in AppKit's undo manager. A newer Tasks step (such as
+/// deleting an empty sibling) answers Undo before the older typing.
+private final class AtticSubtaskFieldEditor: NSTextView {
+    var editing: AtticTitleEditing?
+    @objc func undo(_ sender: Any?) {
+        guard !hasMarkedText() else { return }
+        if editing?.pageUndo?(undoManager?.canUndo == true) != true { undoManager?.undo() }
+    }
+    @objc func redo(_ sender: Any?) {
+        guard !hasMarkedText() else { return }
+        if editing?.pageRedo?(undoManager?.canRedo == true) != true { undoManager?.redo() }
+    }
+    override func keyDown(with event: NSEvent) {
+        let flags = event.modifierFlags.intersection([.command, .option, .control, .shift])
+        if event.charactersIgnoringModifiers?.lowercased() == "z", flags == .command { undo(nil); return }
+        if event.charactersIgnoringModifiers?.lowercased() == "z", flags == [.command, .shift] { redo(nil); return }
+        super.keyDown(with: event)
+    }
+    override func validateMenuItem(_ menuItem: NSMenuItem) -> Bool {
+        if menuItem.action == #selector(undo(_:)) || menuItem.action == #selector(redo(_:)) { return editing != nil }
+        return super.validateMenuItem(menuItem)
     }
 }

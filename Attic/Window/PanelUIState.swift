@@ -30,6 +30,7 @@ enum PanelInteractionLockReason: Hashable, Sendable {
 @MainActor
 final class TaskRenameDraft: ObservableObject {
     @Published var title = ""
+    @Published var focusRequest: UInt64 = 0
 }
 
 @MainActor
@@ -297,6 +298,76 @@ final class PanelUIState: ObservableObject {
 
     func endAdding() {
         isComposerPresented = false
+    }
+
+    private var subtaskStepAtLastTyping: UUID?
+    private var subtaskRedoIsNext = false
+
+    func noteSubtaskTextEdit(store: TaskStore) {
+        subtaskStepAtLastTyping = store.commandLibrary?.undo.undoStepID(in: .tasks)
+        subtaskRedoIsNext = false
+    }
+
+    func undoSubtaskEdit(store: TaskStore, nativeHasUndo: Bool) -> Bool {
+        guard let library = store.commandLibrary,
+              !nativeHasUndo || library.undo.undoStepID(in: .tasks) != subtaskStepAtLastTyping else { return false }
+        guard library.undo(in: .tasks).isApplied else { return false }
+        subtaskStepAtLastTyping = library.undo.undoStepID(in: .tasks)
+        subtaskRedoIsNext = true
+        return true
+    }
+
+    func redoSubtaskEdit(store: TaskStore, nativeHasRedo: Bool) -> Bool {
+        guard let library = store.commandLibrary, subtaskRedoIsNext || !nativeHasRedo,
+              library.redo(in: .tasks).isApplied else { return false }
+        subtaskStepAtLastTyping = library.undo.undoStepID(in: .tasks)
+        return true
+    }
+
+    /// Family-panel sibling of the Tasks quick-look handler. Saved children
+    /// use the same duplicate-safe library command and history.
+    func backspaceEmptySubtask(store: TaskStore, parentID: UUID, childID: UUID? = nil) -> Bool {
+        guard let library = store.commandLibrary, store.task(withID: parentID) != nil else { return false }
+        let siblings = store.subtasks(of: parentID)
+        if let childID {
+            guard editingTaskID == childID, editingDraftTitle.isEmpty,
+                  store.task(withID: childID)?.parentID == parentID else { return false }
+            let previous = siblings.firstIndex { $0.id == childID }.flatMap { $0 > 0 ? siblings[$0 - 1].id : nil }
+            guard library.deleteTasks([childID]).isApplied else { return false }
+            endEditing()
+            if let previous, let task = store.task(withID: previous) { beginEditing(task) }
+        } else {
+            guard subtaskEntryActiveIDs.contains(parentID), (subtaskDrafts[parentID] ?? "").isEmpty else { return false }
+            let previous = siblings.last?.id
+            let preservesRename = editingTaskID.map { editingDraftTitle != store.task(withID: $0)?.title } ?? false
+            cancelSubtaskEntry(for: parentID)
+            if preservesRename { renameDraft.focusRequest &+= 1 }
+            else if let previous, let task = store.task(withID: previous) { beginEditing(task) }
+            let clean: () -> Bool = { [weak self, weak store] in
+                guard let self, let store else { return false }
+                if !preservesRename, let id = self.editingTaskID, self.editingDraftTitle != store.task(withID: id)?.title { return false }
+                return (self.subtaskDrafts[parentID] ?? "").isEmpty
+            }
+            library.undo.record(UndoStep(name: String(localized: "Remove empty subtask"), undoOutcome: { [weak self, weak store] in
+                guard let self, let store, store.task(withID: parentID) != nil else { return .obsolete }
+                guard clean() else { return .failed }
+                if !preservesRename { self.endEditing() }
+                self.activateSubtaskEntry(for: parentID)
+                return .applied
+            }, redoOutcome: { [weak self, weak store] in
+                guard let self, let store, store.task(withID: parentID) != nil else { return .obsolete }
+                guard clean() else { return .failed }
+                self.cancelSubtaskEntry(for: parentID)
+                if preservesRename { self.renameDraft.focusRequest &+= 1 }
+                else {
+                    self.endEditing()
+                    if let previous, let task = store.task(withID: previous) { self.beginEditing(task) }
+                }
+                return .applied
+            }), in: .tasks)
+        }
+        subtaskRedoIsNext = false
+        return true
     }
 
     func beginEditing(_ task: TaskItem) {
