@@ -27,6 +27,27 @@ final class AtticDropdownTests: XCTestCase {
         XCTAssertTrue(field); XCTAssertFalse(list, "Without FKA, Tab stays in the field")
     }
 
+    func testH5_04ListFocusReleasesTheNativeFieldEditorWithoutOrderingAWindow() throws {
+        let window = NSWindow(contentRect: CGRect(x: 0, y: 0, width: 320, height: 240),
+            styleMask: [.titled], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        defer { window.close() }
+        let field = NSTextField(frame: CGRect(x: 20, y: 180, width: 200, height: 24))
+        let host = AtticOverlayHostingView(rootView: AnyView(EmptyView()))
+        host.acceptsKeyboard = true; host.frame = CGRect(x: 0, y: 0, width: 320, height: 120)
+        window.contentView?.addSubview(field); window.contentView?.addSubview(host)
+        XCTAssertTrue(window.makeFirstResponder(field))
+        XCTAssertIdentical(AtticDropdownPresenter.owner(of: window.firstResponder), field)
+        var fieldFocused = true, listFocused = false
+        AtticDropdownTabFocus.transfer(listFocused: false, fullKeyboardAccess: true,
+            setField: { fieldFocused = $0 }, setList: { listFocused = $0 },
+            takeListKeyboard: { XCTAssertTrue(window.makeFirstResponder(host)) })
+        XCTExpectFailure("H5-04")
+        XCTAssertIdentical(window.firstResponder, host, "The actual field editor must release the keyboard")
+        XCTAssertFalse(fieldFocused); XCTAssertTrue(listFocused)
+        XCTAssertFalse(window.isVisible); XCTAssertFalse(window.isKeyWindow)
+    }
+
     func testTheWidthFitsItsContentNeverUnderTheMinimumNeverPastTheMargin() {
         let m = AtticDropdownMetrics.self
         let available: CGFloat = 320 - m.panelMargin * 2
