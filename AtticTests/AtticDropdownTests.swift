@@ -12,6 +12,22 @@ import XCTest
 final class AtticDropdownTests: XCTestCase {
     // MARK: The width rule
 
+    func testH5_04TabTransfersExclusiveFocusBetweenFieldAndList() {
+        var field = true, list = false
+        AtticDropdownTabFocus.transfer(listFocused: list, fullKeyboardAccess: true,
+            setField: { field = $0 }, setList: { list = $0 })
+        XCTExpectFailure("H5-04")
+        XCTAssertFalse(field, "The old field request must be released before requesting list focus")
+        XCTAssertTrue(list)
+        AtticDropdownTabFocus.transfer(listFocused: list, fullKeyboardAccess: true,
+            setField: { field = $0 }, setList: { list = $0 })
+        XCTAssertTrue(field)
+        XCTAssertFalse(list, "The old list request must be released before returning to the field")
+        AtticDropdownTabFocus.transfer(listFocused: list, fullKeyboardAccess: false,
+            setField: { field = $0 }, setList: { list = $0 })
+        XCTAssertTrue(field); XCTAssertFalse(list, "Without FKA, Tab stays in the field")
+    }
+
     func testTheWidthFitsItsContentNeverUnderTheMinimumNeverPastTheMargin() {
         let m = AtticDropdownMetrics.self
         let available: CGFloat = 320 - m.panelMargin * 2

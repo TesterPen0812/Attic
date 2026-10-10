@@ -203,6 +203,17 @@ extension View {
     }
 }
 
+enum AtticDropdownTabFocus {
+    static func transfer(listFocused: Bool, fullKeyboardAccess: Bool,
+                         setField: (Bool) -> Void, setList: (Bool) -> Void) {
+        if listFocused {
+            setField(true)
+        } else if fullKeyboardAccess {
+            setList(true)
+        }
+    }
+}
+
 private struct AtticDropdownTabs: ViewModifier {
     var field: FocusState<Bool>.Binding
     var list: FocusState<Bool>.Binding
@@ -215,11 +226,9 @@ private struct AtticDropdownTabs: ViewModifier {
                 registerKeys { event in
                     guard event.keyCode == 48,
                           event.modifierFlags.intersection([.command, .option, .control]).isEmpty else { return false }
-                    if list.wrappedValue {
-                        field.wrappedValue = true
-                    } else if NSApp.isFullKeyboardAccessEnabled {
-                        list.wrappedValue = true
-                    }
+                    AtticDropdownTabFocus.transfer(listFocused: list.wrappedValue,
+                        fullKeyboardAccess: NSApp.isFullKeyboardAccessEnabled,
+                        setField: { field.wrappedValue = $0 }, setList: { list.wrappedValue = $0 })
                     return true
                 }
             }
