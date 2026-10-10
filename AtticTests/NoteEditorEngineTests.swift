@@ -25,8 +25,8 @@ final class NoteEditorEngineTests: XCTestCase {
         ])
     }
 
-    private func makeEngine(_ document: NoteDocument? = nil, window: Bool = false) -> (NoteEditorEngine, NoteEditorTextView) {
-        let engine = NoteEditorEngine(noteID: UUID(), document: document ?? sample())
+    private func makeEngine(_ document: NoteDocument? = nil, window: Bool = false, staged: [StagedNoteAttachment] = []) -> (NoteEditorEngine, NoteEditorTextView) {
+        let engine = NoteEditorEngine(noteID: UUID(), document: document ?? sample(), stagedAttachments: staged)
         let (scrollView, textView) = engine.makeView()
         scrollView.frame = NSRect(x: 0, y: 0, width: 400, height: 600)
         if window {
@@ -114,6 +114,47 @@ final class NoteEditorEngineTests: XCTestCase {
             XCTAssertFalse(view.window!.isKeyWindow)
             engine.detachView()
         }
+    }
+
+    func testH12_02TypingAfterDividerWithALoadedPNGKeepsTheLineAboveFooter() throws {
+        let bitmap = try XCTUnwrap(NSBitmapImageRep(bitmapDataPlanes: nil, pixelsWide: 800, pixelsHigh: 400,
+            bitsPerSample: 8, samplesPerPixel: 4, hasAlpha: true, isPlanar: false, colorSpaceName: .deviceRGB,
+            bytesPerRow: 0, bitsPerPixel: 0))
+        bitmap.setColor(.systemBlue, atX: 0, y: 0)
+        let data = try XCTUnwrap(bitmap.representation(using: .png, properties: [:]))
+        let item = StagedNoteAttachment(id: UUID(), filename: "h12.png", contentTypeIdentifier: "public.png",
+            byteCount: Int64(data.count), digest: NotePayloadDigest.sha256(data), data: data)
+        let document = NoteDocument(blocks: [.text("Long note"),
+            .image(attachmentID: item.id, pixelWidth: 800, pixelHeight: 400)] + (0..<28).map { .text("Body line \($0)") })
+        let (engine, view) = makeEngine(document, window: true, staged: [item])
+        let scroll = try XCTUnwrap(engine.scrollView)
+        scroll.frame.size = NSSize(width: 320, height: 464)
+        scroll.automaticallyAdjustsContentInsets = false
+        scroll.contentInsets = NSEdgeInsets(top: 80, left: 0, bottom: 92, right: 0)
+        let image = try XCTUnwrap(engine.objects().compactMap { $0.0 as? NoteImageAttachment }.first)
+        let deadline = Date().addingTimeInterval(3)
+        while image.renderedImage == nil, Date() < deadline { RunLoop.main.run(until: Date().addingTimeInterval(0.01)) }
+        XCTAssertNotNil(image.renderedImage)
+        XCTAssertFalse(image.isMissing, "real PNG decoded")
+        engine.layoutManager?.ensureLayout(for: engine.contentStorage.documentRange)
+        view.layoutSubtreeIfNeeded()
+        let imageRange = try XCTUnwrap(engine.range(of: image))
+        let imageRect = try XCTUnwrap(engine.rect(for: imageRange))
+        XCTAssertGreaterThan(imageRect.height, 100, "the image contributes its real height")
+        view.setSelectedRange(NSRange(location: engine.textStorage.length, length: 0))
+        view.insertNewline(nil)
+        type("/divider", view)
+        XCTAssertTrue(engine.acceptSlashItem(.divider))
+        type("Text after divider", view)
+        RunLoop.main.run(until: Date().addingTimeInterval(0.15))
+        view.layoutSubtreeIfNeeded()
+        let rect = try XCTUnwrap(engine.rect(for: (engine.textStorage.string as NSString).range(of: "Text after divider")))
+        let clip = view.convert(scroll.contentView.bounds, from: scroll.contentView)
+        print("H12_02 loadedPNG image=\(imageRect) line=\(rect) clip=\(clip)")
+        XCTAssertLessThanOrEqual(rect.maxY, clip.maxY - scroll.contentInsets.bottom + 1)
+        XCTAssertFalse(view.window!.isVisible)
+        XCTAssertFalse(view.window!.isKeyWindow)
+        engine.detachView()
     }
 
     // MARK: Drawing
