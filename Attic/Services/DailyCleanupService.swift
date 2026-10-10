@@ -10,6 +10,8 @@ final class DailyCleanupService {
     private let now: () -> Date
     private let calendar: () -> Calendar
     private var timer: Timer?
+    private var generation: UUID?
+    private(set) var queuedCleanupTask: Task<Void, Never>?
     private var notificationTokens: [NSObjectProtocol] = []
     private var workspaceTokens: [NSObjectProtocol] = []
 
@@ -26,7 +28,9 @@ final class DailyCleanupService {
     }
 
     func start() {
-        guard notificationTokens.isEmpty, workspaceTokens.isEmpty else { return }
+        guard generation == nil else { return }
+        let generation = UUID()
+        self.generation = generation
 
         let center = NotificationCenter.default
         let refreshNotifications: [Notification.Name] = [
@@ -36,7 +40,7 @@ final class DailyCleanupService {
         ]
         notificationTokens = refreshNotifications.map { name in
             center.addObserver(forName: name, object: nil, queue: .main) { [weak self] _ in
-                Task { @MainActor in self?.cleanupAndReschedule() }
+                MainActor.assumeIsolated { self?.enqueueCleanup(for: generation) }
             }
         }
 
@@ -47,14 +51,17 @@ final class DailyCleanupService {
                 object: nil,
                 queue: .main
             ) { [weak self] _ in
-                Task { @MainActor in self?.cleanupAndReschedule() }
+                MainActor.assumeIsolated { self?.enqueueCleanup(for: generation) }
             }
         ]
 
-        cleanupAndReschedule()
+        cleanupAndReschedule(for: generation)
     }
 
     func stop() {
+        generation = nil
+        queuedCleanupTask?.cancel()
+        queuedCleanupTask = nil
         timer?.invalidate()
         timer = nil
         notificationTokens.forEach(NotificationCenter.default.removeObserver)
@@ -80,7 +87,14 @@ final class DailyCleanupService {
         return moved
     }
 
-    private func cleanupAndReschedule() {
+    private func enqueueCleanup(for generation: UUID) {
+        queuedCleanupTask = Task { @MainActor [weak self] in
+            self?.cleanupAndReschedule(for: generation)
+        }
+    }
+
+    private func cleanupAndReschedule(for generation: UUID) {
+        guard self.generation == generation else { return }
         let timestamp = now()
         // Foreground/wake refresh is a fallback for delayed or dropped
         // CloudKit remote-change pushes; a local-only build has no remote
@@ -94,6 +108,7 @@ final class DailyCleanupService {
     }
 
     private func scheduleNextMidnight(after date: Date) {
+        guard let generation else { return }
         timer?.invalidate()
         let activeCalendar = calendar()
         guard let nextDay = activeCalendar.date(byAdding: .day, value: 1, to: activeCalendar.startOfDay(for: date)) else {
@@ -101,7 +116,7 @@ final class DailyCleanupService {
         }
 
         let nextTimer = Timer(fire: nextDay, interval: 0, repeats: false) { [weak self] _ in
-            Task { @MainActor in self?.cleanupAndReschedule() }
+            MainActor.assumeIsolated { self?.enqueueCleanup(for: generation) }
         }
         nextTimer.tolerance = 1
         RunLoop.main.add(nextTimer, forMode: .common)

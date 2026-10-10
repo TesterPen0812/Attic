@@ -23,7 +23,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         #if !ATTIC_LOCAL_ONLY
         NSApplication.shared.registerForRemoteNotifications()
         #endif
-        AppCoordinator.shared.start()
+        AppCoordinator.shared?.start()
         PerformanceSignposts.menuReady()
     }
 
@@ -44,15 +44,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     func applicationShouldTerminate(
         _ sender: NSApplication
     ) -> NSApplication.TerminateReply {
+        guard let coordinator = AppCoordinator.shared else { return .terminateNow }
         Task { @MainActor in
-            let ready = await AppCoordinator.shared.prepareForTerminationDurably()
+            let ready = await coordinator.prepareForTerminationDurably()
             sender.reply(toApplicationShouldTerminate: ready)
         }
         return .terminateLater
     }
 
     func applicationWillTerminate(_ notification: Notification) {
-        AppCoordinator.shared.stop()
+        AppCoordinator.shared?.stop()
     }
 
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool {
@@ -60,7 +61,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
-        AppCoordinator.shared.showPanel()
+        AppCoordinator.shared?.showPanel()
         return true
     }
 }

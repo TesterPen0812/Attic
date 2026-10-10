@@ -272,7 +272,7 @@ final class TasksRound7ShellTests: XCTestCase {
                 if let value { setenv(key, value, 1) } else { unsetenv(key) }
             }
         }
-        let runtimeNotes = AppCoordinator.shared.noteStore
+        let runtimeNotes = try XCTUnwrap(AppCoordinator.shared).noteStore
         addTeardownBlock { await runtimeNotes.waitForAttachmentReconciliation() }
         let suite = "TasksRound7HostedTests.\(UUID().uuidString)"
         let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))

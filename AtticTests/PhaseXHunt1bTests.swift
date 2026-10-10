@@ -667,6 +667,149 @@ final class PhaseXHunt1bTests: XCTestCase {
     }
 
 
+    func testH6_01StartupRetainsFailureAndRetriesTheSameLoaderWithoutFallback() throws {
+        let root = ownedTemporaryDirectory(prefix: "Hunt4Startup")
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        let file = root.appendingPathComponent("store-sentinel")
+        let bytes = Data("existing store must remain".utf8)
+        try bytes.write(to: file)
+        var attempts = 0
+        let startup = AppStartup<ModelContainer> {
+            attempts += 1
+            XCTAssertEqual(try Data(contentsOf: file), bytes)
+            if attempts == 1 { throw NSError(domain: "Store cannot be opened", code: 1) }
+            return try PersistenceController.makeContainer(inMemory: true, cloudSyncEnabled: false)
+        }
+        XCTAssertEqual(attempts, 1)
+        XCTAssertNil(startup.value)
+        do {
+            XCTAssertEqual(startup.failureMessage, "Attic could not open its local data. Try again. Your existing data is kept.")
+        }
+        startup.retry()
+        XCTAssertEqual(attempts, 2)
+        XCTAssertNotNil(startup.value)
+        XCTAssertNil(startup.failureMessage)
+        startup.retry()
+        XCTAssertEqual(attempts, 2, "A successful startup is not opened twice")
+        XCTAssertEqual(try Data(contentsOf: file), bytes)
+    }
+
+    func testH6_01ActualCoordinatorRetryReopensOwnedDiskStoreWithFreshContexts() async throws {
+        let root = ownedTemporaryDirectory(prefix: "Hunt4DiskStartup")
+        let attachments = root.appendingPathComponent("Attachments", isDirectory: true)
+        try FileManager.default.createDirectory(at: attachments, withIntermediateDirectories: true)
+        let token = UUID().uuidString
+        try Data(token.utf8).write(to: attachments.appendingPathComponent(AppRuntimeEnvironment.testAttachmentRootOwnerMarkerName))
+        let suite = "H6Startup." + UUID().uuidString
+        addTeardownBlock { UserDefaults(suiteName: suite)?.removePersistentDomain(forName: suite) }
+        let runtime = AppRuntimeEnvironment(environment: ["ATTIC_TESTING": "1", "ATTIC_TEST_DEFAULTS_SUITE": suite,
+            "ATTIC_TEST_ATTACHMENT_ROOT": attachments.path, "ATTIC_TEST_ATTACHMENT_ROOT_OWNER_TOKEN": token],
+            arguments: [], applicationSupportURL: root)
+        let diskRoot = root.appendingPathComponent("Store", isDirectory: true)
+        let initial = try PersistenceController.makeContainer(cloudSyncEnabled: false, storeDirectory: diskRoot)
+        let id = UUID()
+        let context = ModelContext(initial)
+        context.insert(TaskItem(id: id, title: "Keep this disk task"))
+        try context.save()
+        var attempts = 0
+        let startup = AppStartup<AppCoordinator> {
+            try AppCoordinator(runtime: runtime, openStore: {
+                attempts += 1
+                if attempts == 1 { throw NSError(domain: "Owned store denied", code: 1) }
+                return try PersistenceController.makeContainer(cloudSyncEnabled: false, storeDirectory: diskRoot)
+            })
+        }
+        XCTAssertNil(startup.value)
+        XCTAssertNotNil(startup.failureMessage)
+        XCTAssertEqual(try ModelContext(initial).fetch(FetchDescriptor<TaskItem>()).map(\.id), [id])
+        startup.retry()
+        let coordinator = try XCTUnwrap(startup.value)
+        XCTAssertEqual(attempts, 2)
+        XCTAssertEqual(coordinator.store.task(withID: id)?.title, "Keep this disk task")
+        XCTAssertEqual(coordinator.store.container.configurations.first?.url, initial.configurations.first?.url)
+        XCTAssertFalse(coordinator.store.container === initial)
+        XCTAssertFalse(coordinator.store.container.mainContext === initial.mainContext)
+        XCTAssertEqual(coordinator.globalShortcutRegistration, .notRegistered)
+        coordinator.start()
+        XCTAssertEqual(coordinator.globalShortcutRegistration, .notRegistered, "Unit runtime must not start interactive services")
+        await coordinator.noteStore.waitForAttachmentReconciliation()
+        startup.retry()
+        XCTAssertEqual(attempts, 2)
+    }
+
+    func testH6_02DisplayRemovalReclampsPinnedFrameEvenWhenHeightIsUnchanged() throws {
+        let frame = CGRect(x: 2200, y: 100, width: 272, height: 300)
+        let remaining = CGRect(x: -1000, y: 28, width: 1000, height: 720)
+        let result = SubtaskPanelLayout.pinnedResizedFrame(frame, newHeight: frame.height,
+            screenVisibleFrames: [remaining])
+        do {
+            XCTAssertNotNil(result, "Display reconciliation is independent of height changes")
+        }
+        if let result {
+            XCTAssertTrue(remaining.insetBy(dx: 12, dy: 12).contains(result))
+            XCTAssertEqual(result.size, frame.size)
+            XCTAssertNil(SubtaskPanelLayout.pinnedResizedFrame(result, newHeight: result.height,
+                screenVisibleFrames: [remaining]), "Reconciliation is idempotent")
+        }
+    }
+
+    func testH6_03SettingsSizeFitsAWorkAreaSmallerThanItsPreferredMinimum() {
+        let screen = CGRect(x: -600, y: 32, width: 600, height: 420)
+        let size = SettingsWindowLayout.fittedContentSize(to: screen)
+        do {
+            XCTAssertLessThanOrEqual(size.width, screen.width - 48)
+            XCTAssertLessThanOrEqual(size.height, screen.height - 48)
+        }
+    }
+
+    func testH6_05SettingsScreenChangeRefreshesNativeLimitsWithoutMovingWindow() throws {
+        let store = try makeTestStore()
+        var workArea = CGRect(x: 0, y: 0, width: 600, height: 420)
+        let defaults = UserDefaults(suiteName: "H6Settings." + UUID().uuidString)!
+        let server = AgentServer(port: 0, bearerToken: String(repeating: "a", count: 43),
+            handler: MCPRequestHandler(tools: AgentTaskTools(store: store)))
+        let controller = SettingsWindowController(settings: AppSettings(defaults: defaults),
+            loginItemService: LoginItemService(), agentServer: server,
+            globalHotKey: GlobalHotKey(combination: .newTask), library: nil, workArea: { _ in workArea })
+        let window = try XCTUnwrap(controller.window as? SettingsWindow)
+        controller.fitToCurrentWorkArea(window, reposition: false)
+        let compactMaximum = window.contentMaxSize
+        let frame = window.frame
+        workArea = CGRect(x: 600, y: 0, width: 1600, height: 1000)
+        NotificationCenter.default.post(name: NSWindow.didChangeScreenNotification, object: window)
+        do {
+            XCTAssertGreaterThan(window.contentMaxSize.width, compactMaximum.width)
+            XCTAssertGreaterThan(window.contentMaxSize.height, compactMaximum.height)
+        }
+        XCTAssertEqual(window.frame, frame, "Dragging between displays must preserve the user's position")
+        XCTAssertFalse(window.isVisible)
+        XCTAssertFalse(window.isKeyWindow)
+    }
+
+    func testH6_04StoppedCleanupDiscardsQueuedObserverAndPreviousGeneration() async throws {
+        let notifications = [Notification.Name.NSCalendarDayChanged, .NSSystemTimeZoneDidChange,
+            NSApplication.didBecomeActiveNotification, NSWorkspace.didWakeNotification]
+        for name in notifications {
+            for restart in [false, true] {
+                let store = try makeTestStore()
+                var purges = 0
+                let service = DailyCleanupService(store: store, purgeRecentlyDeleted: { _, _ in purges += 1 })
+                service.start()
+                XCTAssertEqual(purges, 1)
+                let center = name == NSWorkspace.didWakeNotification
+                    ? NSWorkspace.shared.notificationCenter : NotificationCenter.default
+                center.post(name: name, object: nil)
+                let queued = try XCTUnwrap(service.queuedCleanupTask)
+                service.stop()
+                if restart { service.start() }
+                // Await the actual queued callback, rather than relying on actor scheduling/yields.
+                await queued.value
+                XCTAssertEqual(purges, restart ? 2 : 1, "Stopped and superseded generations do no work: \(name)")
+                service.stop()
+            }
+        }
+    }
+
     func testR3_09FailedProposalReadsDoNotRepeatAtTheSameRevision() async throws {
         let store = try makeTestNoteStore(attachmentFileStore: makeTestAttachmentFileStore())
         _ = try create(store)

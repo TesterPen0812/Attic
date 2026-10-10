@@ -338,7 +338,7 @@ struct AtticPanelView: View {
             "Settings…",
             systemImage: "gearshape",
             shortcut: KeyboardShortcut(",", modifiers: .command)
-        ) { AppCoordinator.shared.openSettings() })
+        ) { AppCoordinator.shared?.openSettings() })
         return commands
     }
 

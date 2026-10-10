@@ -11,14 +11,25 @@ enum SettingsWindowLayout {
     static func fittedContentSize(to visibleFrame: NSRect) -> NSSize {
         NSSize(
             width: max(
-                minimumContentSize.width,
+                min(minimumContentSize.width, availableDimension(visibleFrame.width, minimum: minimumContentSize.width)),
                 min(preferredContentSize.width, visibleFrame.width - (screenMargin * 2))
             ),
             height: max(
-                minimumContentSize.height,
+                min(minimumContentSize.height, availableDimension(visibleFrame.height, minimum: minimumContentSize.height)),
                 min(preferredContentSize.height, visibleFrame.height - (screenMargin * 2))
             )
         )
+    }
+
+    private static func availableDimension(_ dimension: CGFloat, minimum: CGFloat) -> CGFloat {
+        guard dimension.isFinite, dimension > 0 else { return 0 }
+        // Keep the established minimum while it fits. A smaller work area
+        // temporarily bounds it instead of putting controls off-screen.
+        return dimension >= minimum ? dimension : max(0, dimension - screenMargin * 2)
+    }
+
+    static func constrainedFrame(_ frame: CGRect, to visibleFrame: CGRect) -> CGRect {
+        PanelGeometry.constrainedFrame(frame, to: visibleFrame, inset: screenMargin)
     }
 
     /// The traffic lights' frame origins inside a title bar container
@@ -99,14 +110,17 @@ final class SettingsWindowController: NSWindowController {
     private static let frameAutosaveName = "AtticSettingsWindow"
     private var hasPositionedWindow = false
     private var observers: [NSObjectProtocol] = []
+    private let workArea: ((SettingsWindow) -> CGRect?)?
 
     init(
         settings: AppSettings,
         loginItemService: LoginItemService,
         agentServer: AgentServer,
         globalHotKey: GlobalHotKey,
-        library: AtticLibrary?
+        library: AtticLibrary?,
+        workArea: ((SettingsWindow) -> CGRect?)? = nil
     ) {
+        self.workArea = workArea
         // Sync controls are intentionally absent while Attic is macOS-first
         // and local-only.
         let rootView = SettingsView(
@@ -150,6 +164,23 @@ final class SettingsWindowController: NSWindowController {
             })
         }
 
+        observers.append(center.addObserver(forName: NSWindow.didChangeScreenNotification,
+            object: window, queue: .main) { [weak self] _ in
+                MainActor.assumeIsolated {
+                    guard let self, let window = self.window as? SettingsWindow else { return }
+                    // Refresh limits during a drag without relocating the window.
+                    self.fitToCurrentWorkArea(window, reposition: false)
+                }
+            })
+
+        observers.append(center.addObserver(forName: NSApplication.didChangeScreenParametersNotification,
+            object: nil, queue: .main) { [weak self] _ in
+                MainActor.assumeIsolated {
+                    guard let self, let window = self.window as? SettingsWindow else { return }
+                    self.fitToCurrentWorkArea(window)
+                }
+            })
+
         Self.seedRecentlyDeletedForUITesting(library)
     }
 
@@ -161,24 +192,43 @@ final class SettingsWindowController: NSWindowController {
     func show() {
         guard let window = window as? SettingsWindow else { return }
 
-        if let screen = window.screen ?? NSScreen.main {
-            if hasPositionedWindow {
-                let constrainedFrame = window.constrainFrameRect(window.frame, to: screen)
-                window.setFrame(constrainedFrame, display: false)
-            } else {
-                window.setContentSize(
-                    SettingsWindowLayout.fittedContentSize(to: screen.visibleFrame)
-                )
-                window.center()
-                hasPositionedWindow = true
-            }
-        }
+        fitToCurrentWorkArea(window)
 
         NSApp.activate(ignoringOtherApps: true)
         showWindow(nil)
         window.makeKeyAndOrderFront(nil)
         window.orderFrontRegardless()
         window.placeTrafficLights()
+    }
+
+    /// Reconciles size and position without changing ordering or focus.
+    /// Screen removal and a stale autosaved frame use the same path as Show.
+    func fitToCurrentWorkArea(_ window: SettingsWindow, reposition: Bool = true) {
+        let screens = NSScreen.screens
+        let screen = window.screen.flatMap { candidate in screens.first { $0 === candidate } }
+            ?? NSScreen.main ?? screens.first
+        guard let visibleFrame = workArea?(window) ?? screen?.visibleFrame else { return }
+        let safe = SettingsWindowLayout.constrainedFrame(visibleFrame, to: visibleFrame)
+        let available = window.contentRect(forFrameRect: safe).size
+        window.contentMinSize = CGSize(
+            width: min(SettingsWindowLayout.minimumContentSize.width, max(0, available.width)),
+            height: min(SettingsWindowLayout.minimumContentSize.height, max(0, available.height))
+        )
+        window.contentMaxSize = CGSize(
+            width: min(SettingsWindowLayout.maximumContentSize.width, max(0, available.width)),
+            height: min(SettingsWindowLayout.maximumContentSize.height, max(0, available.height))
+        )
+        guard reposition else { return }
+        if !hasPositionedWindow {
+            window.setContentSize(SettingsWindowLayout.fittedContentSize(to: visibleFrame))
+            window.center()
+            hasPositionedWindow = true
+        }
+        window.setFrame(SettingsWindowLayout.constrainedFrame(window.frame, to: visibleFrame), display: false)
+    }
+
+    deinit {
+        observers.forEach(NotificationCenter.default.removeObserver)
     }
 
     /// UI-test seam: with `ATTIC_UI_TEST_SEED_RECENTLY_DELETED=1` a UI-test
