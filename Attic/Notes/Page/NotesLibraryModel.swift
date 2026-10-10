@@ -230,7 +230,7 @@ final class NotesLibraryModel: ObservableObject {
                 failedProposalRevision = nil
             } catch {
                 failedProposalRevision = store.revision
-                store.reportAuxiliaryReadFailure("Proposals could not be read: \(error.localizedDescription)")
+                store.reportProposalReadFailure(error)
             }
         }
         let allNotes = notes

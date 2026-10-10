@@ -630,7 +630,7 @@ final class NotesPageController: ObservableObject {
         let edits: [NotePendingEdit]
         do { edits = try store.readPendingEdits(noteID: session.noteID) }
         catch {
-            store.reportAuxiliaryReadFailure("Proposals could not be read: \(error.localizedDescription)")
+            store.reportProposalReadFailure(error)
             return proposalStatusCache[session.noteID]?.agent
         }
         let agent = edits.first(where: { !$0.isDeletion }).map {
