@@ -257,24 +257,65 @@ extension NoteDraftJournaling {
 /// (`staged/<id>`), written atomically. All disk I/O and verification live
 /// on this serialized actor; the main-actor facade exposes cached inventory.
 private struct NoteLiveReferenceSnapshot: Sendable {
+    let owner: UUID
     let version: UInt64
     let ids: Set<UUID>
 }
 
-private actor NoteDraftJournalIO {
-    let directory: URL
-    private let fileManagerFactory: @Sendable () -> FileManager
-    private lazy var fileManager = fileManagerFactory()
-    private var liveReferences = Set<UUID>()
-    private var liveReferenceVersion: UInt64 = 0
-    private func installLiveReferences(_ snapshot: NoteLiveReferenceSnapshot) {
-        guard snapshot.version >= liveReferenceVersion else { return }
-        liveReferenceVersion = snapshot.version
-        liveReferences = snapshot.ids
+/// Facades of one journal path share the claim-to-write transaction and the
+/// live staging inventory. Neither outlives the last facade on that path.
+private final class NoteDraftPathAuthority: @unchecked Sendable {
+    let transaction = NSRecursiveLock()
+    private let referencesLock = NSLock()
+    private var references: [UUID: NoteLiveReferenceSnapshot] = [:]
+
+    func publish(_ snapshot: NoteLiveReferenceSnapshot) {
+        referencesLock.lock(); defer { referencesLock.unlock() }
+        guard snapshot.version >= (references[snapshot.owner]?.version ?? 0) else { return }
+        references[snapshot.owner] = snapshot
+    }
+    func release(_ owner: UUID) {
+        referencesLock.lock(); defer { referencesLock.unlock() }
+        references[owner] = nil
+    }
+    func withLiveReferences<T>(_ body: (Set<UUID>) -> T) -> T {
+        referencesLock.lock(); defer { referencesLock.unlock() }
+        return body(Set(references.values.flatMap(\.ids)))
     }
 
-    init(directory: URL, fileManagerFactory: @escaping @Sendable () -> FileManager) {
+    private final class Entry {
+        weak var authority: NoteDraftPathAuthority?
+        init(_ authority: NoteDraftPathAuthority) { self.authority = authority }
+    }
+    private final class Registry: @unchecked Sendable {
+        let lock = NSLock()
+        private var entries: [URL: Entry] = [:]
+        func authority(for directory: URL) -> NoteDraftPathAuthority {
+            lock.lock(); defer { lock.unlock() }
+            let key = directory.standardizedFileURL.resolvingSymlinksInPath()
+            if let current = entries[key]?.authority { return current }
+            entries = entries.filter { $0.value.authority != nil }
+            let result = NoteDraftPathAuthority()
+            entries[key] = Entry(result)
+            return result
+        }
+    }
+    private static let registry = Registry()
+    static func shared(for directory: URL) -> NoteDraftPathAuthority { registry.authority(for: directory) }
+}
+
+private actor NoteDraftJournalIO {
+    let directory: URL
+    private let path: NoteDraftPathAuthority
+    private let fileManagerFactory: @Sendable () -> FileManager
+    private lazy var fileManager = fileManagerFactory()
+    private func installLiveReferences(_ snapshot: NoteLiveReferenceSnapshot) {
+        path.publish(snapshot)
+    }
+
+    init(directory: URL, path: NoteDraftPathAuthority, fileManagerFactory: @escaping @Sendable () -> FileManager) {
         self.directory = directory
+        self.path = path
         self.fileManagerFactory = fileManagerFactory
     }
 
@@ -333,6 +374,7 @@ private actor NoteDraftJournalIO {
     func write(_ entry: NoteDraftJournalEntry, staged: [StagedNoteAttachment],
                replacing claim: NoteRecoveryClaim?, cancellingPending: Bool = false,
                live: NoteLiveReferenceSnapshot) throws -> NoteRecoveryClaim {
+        path.transaction.lock(); defer { path.transaction.unlock() }
         installLiveReferences(live)
         let previous = ownership(of: url(for: entry.noteID))
         guard previous.mayRelease(claim: claim, saved: { nil }, discarding: true) else {
@@ -385,6 +427,7 @@ private actor NoteDraftJournalIO {
     /// If the file cannot be unlinked, an empty retired marker replaces it,
     /// so it can never come back as unsaved work.
     func retire(noteID: UUID, claim: NoteRecoveryClaim?, saved: NoteRecoverySavedState?, live: NoteLiveReferenceSnapshot) throws {
+        path.transaction.lock(); defer { path.transaction.unlock() }
         installLiveReferences(live)
         let file = url(for: noteID)
         let state = ownership(of: file)
@@ -394,6 +437,7 @@ private actor NoteDraftJournalIO {
     }
 
     func discardOwned(noteID: UUID, claim: NoteRecoveryClaim, live: NoteLiveReferenceSnapshot) throws {
+        path.transaction.lock(); defer { path.transaction.unlock() }
         installLiveReferences(live)
         guard ownership(of: url(for: noteID)).mayRelease(claim: claim, saved: { nil }, discarding: true) else {
             throw NoteDraftJournalError.unknownOwnership
@@ -423,6 +467,7 @@ private actor NoteDraftJournalIO {
     }
 
     func listDamaged() throws -> [NoteDamagedRecoveryDetails] {
+        path.transaction.lock(); defer { path.transaction.unlock() }
         guard fileManager.fileExists(atPath: directory.path) else { return [] }
         return try fileManager.contentsOfDirectory(at: directory, includingPropertiesForKeys: nil)
             .filter { $0.pathExtension == "json" }
@@ -434,7 +479,8 @@ private actor NoteDraftJournalIO {
     }
 
     func damagedDetails(noteID: UUID) throws -> NoteDamagedRecoveryDetails {
-        try damagedDetails(file: url(for: noteID))
+        path.transaction.lock(); defer { path.transaction.unlock() }
+        return try damagedDetails(file: url(for: noteID))
     }
 
     private func damagedDetails(file: URL) throws -> NoteDamagedRecoveryDetails {
@@ -467,6 +513,7 @@ private actor NoteDraftJournalIO {
     }
 
     func archiveDamaged(_ confirmation: NoteDamagedRecoveryConfirmation, to destination: URL?, resolving: Bool, live: NoteLiveReferenceSnapshot) throws -> URL {
+        path.transaction.lock(); defer { path.transaction.unlock() }
         installLiveReferences(live)
         guard URL(fileURLWithPath: confirmation.checkpointFilename).lastPathComponent == confirmation.checkpointFilename,
               confirmation.checkpointFilename.hasSuffix(".json") else { throw NoteDraftJournalError.unknownOwnership }
@@ -531,6 +578,7 @@ private actor NoteDraftJournalIO {
     }
 
     func recoveryEntries(collectRetired: Bool = true, live: NoteLiveReferenceSnapshot) throws -> [NoteDraftRecoveryEntry] {
+        path.transaction.lock(); defer { path.transaction.unlock() }
         installLiveReferences(live)
         let results = try readEntries(collectRetired: collectRetired)
         removeUnreferencedStagedFiles()
@@ -538,7 +586,8 @@ private actor NoteDraftJournalIO {
     }
 
     func retentionEntries() throws -> [NoteDraftRecoveryEntry] {
-        try readEntries(collectRetired: false)
+        path.transaction.lock(); defer { path.transaction.unlock() }
+        return try readEntries(collectRetired: false)
     }
 
     private func readEntries(collectRetired: Bool) throws -> [NoteDraftRecoveryEntry] {
@@ -571,6 +620,7 @@ private actor NoteDraftJournalIO {
     /// Never collect when any journal file is unreadable: its bytes may still
     /// be the only recovery copy.
     private func removeUnreferencedStagedFiles() {
+        path.withLiveReferences { liveReferences in
         guard let journals = try? fileManager.contentsOfDirectory(at: directory, includingPropertiesForKeys: nil)
             .filter({ $0.pathExtension == "json" }),
               let files = try? fileManager.contentsOfDirectory(at: stagedDirectory, includingPropertiesForKeys: nil)
@@ -584,6 +634,7 @@ private actor NoteDraftJournalIO {
             guard let id = UUID(uuidString: file.lastPathComponent), !retained.contains(id) else { continue }
             try? fileManager.removeItem(at: file)
         }
+        }
     }
 }
 
@@ -595,6 +646,8 @@ private actor NoteDraftJournalIO {
 final class NoteDraftJournal: NoteDraftJournaling {
     let directory: URL
     private let io: NoteDraftJournalIO
+    private let path: NoteDraftPathAuthority
+    private let liveOwner = UUID()
     private var cached: [NoteDraftRecoveryEntry]?
     private var liveReferenceVersion: UInt64 = 0
     private var cachedVersion: UInt64 = 0
@@ -602,7 +655,9 @@ final class NoteDraftJournal: NoteDraftJournaling {
     private func liveSnapshot() throws -> NoteLiveReferenceSnapshot {
         let ids = try liveReferencedIDs()
         liveReferenceVersion &+= 1
-        return .init(version: liveReferenceVersion, ids: ids)
+        let snapshot = NoteLiveReferenceSnapshot(owner: liveOwner, version: liveReferenceVersion, ids: ids)
+        path.publish(snapshot)
+        return snapshot
     }
 
     private func publish(_ entries: [NoteDraftRecoveryEntry], for snapshot: NoteLiveReferenceSnapshot) {
@@ -617,8 +672,11 @@ final class NoteDraftJournal: NoteDraftJournaling {
     /// FileManager. Shared injected managers must synchronize their own state.
     init(directory: URL, fileManagerFactory: @escaping @Sendable () -> FileManager = { FileManager() }) {
         self.directory = directory
-        io = NoteDraftJournalIO(directory: directory, fileManagerFactory: fileManagerFactory)
+        path = NoteDraftPathAuthority.shared(for: directory)
+        io = NoteDraftJournalIO(directory: directory, path: path, fileManagerFactory: fileManagerFactory)
     }
+
+    isolated deinit { path.release(liveOwner) }
 
     func write(_ entry: NoteDraftJournalEntry, staged: [StagedNoteAttachment], replacing: NoteRecoveryClaim?) throws -> NoteRecoveryClaim {
         throw NoteDraftJournalError.asynchronousIORequired
@@ -642,7 +700,8 @@ final class NoteDraftJournal: NoteDraftJournaling {
         return entries
     }
     func readRetentionEntries() async throws -> [NoteDraftRecoveryEntry] {
-        try await io.retentionEntries()
+        _ = try liveSnapshot()
+        return try await io.retentionEntries()
     }
     func writeDurably(_ entry: NoteDraftJournalEntry, staged: [StagedNoteAttachment], replacing: NoteRecoveryClaim? = nil) async throws -> NoteRecoveryClaim {
         let snapshot = try liveSnapshot()

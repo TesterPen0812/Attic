@@ -1822,7 +1822,7 @@ final class PhaseXHunt6Tests: XCTestCase {
         gate.release.signal()
         let results = [await a.result, await b.result]
         let winners = results.compactMap { try? $0.get() }
-        XCTExpectFailure("H8-02") { XCTAssertEqual(winners.count, 1, "A claim check and replacement must be one path transaction") }
+        XCTAssertEqual(winners.count, 1, "A claim check and replacement must be one path transaction")
         let entries = try await second.entriesDurably()
         XCTAssertEqual(entries.count, 1)
         if winners.count == 1 {
@@ -1855,7 +1855,7 @@ extension PhaseXHunt6Tests {
         let claim = try await XCTUnwrapAsync(try await live?.writeDurably(entry, staged: [item]))
         try await collector.discardOwnedDurably(noteID: noteID, claim: claim)
         let url = root.appendingPathComponent("staged").appendingPathComponent(id.uuidString)
-        XCTExpectFailure("H8-02") { XCTAssertTrue(FileManager.default.fileExists(atPath: url.path)) }
+        XCTAssertTrue(FileManager.default.fileExists(atPath: url.path))
         live = nil
         _ = try await collector.readRecoveryEntries()
         XCTAssertFalse(FileManager.default.fileExists(atPath: url.path), "Cleanup eventually follows release of the last live owner")
