@@ -92,7 +92,7 @@ struct NotesEditorPage: View {
     /// The title's first line 16 under the header.
     private var topInset: CGFloat { layout.headerBottom + AtticNoteMetrics.titleTopGap }
     /// The last line rests 12 above the bottom row.
-    private var bottomInset: CGFloat { layout.chromeInsets.bottom + buttonHeight + AtticSpacing.s12 }
+    private var bottomInset: CGFloat { AtticSpacing.s12 }
     /// The bottom row's top, up from the panel's bottom edge.
     private var bottomControls: CGFloat { layout.chromeInsets.bottom + buttonHeight }
     private var noticeClearance: CGFloat {
@@ -266,12 +266,11 @@ struct NotesEditorPage: View {
                                         noteStore.tagCounts
                                     })
                 .id(ObjectIdentifier(session.engine))
-                // The text runs under the header's glass controls and the
-                // bottom row at full strength (owner, 2026-10-06: no fade
-                // behind glass), dissolving only into the panel's own top and
-                // bottom edges. No native soft edge here.
-                .atticScrollUnderFade(plainText: [], topEdge: layout.scrollEdgeFadeTop,
-                                      bottomEdge: layout.scrollEdgeFadeBottom)
+                // F-13: the editor ends above the footer. Content insets alone
+                // only provide scroll-to-end room; they do not stop intermediate
+                // lines and attachment views drawing under the glass buttons.
+                .atticScrollUnderFade(plainText: [], topEdge: layout.scrollEdgeFadeTop, bottomEdge: 0)
+                .padding(.bottom, bottomControls)
                 .accessibilityIdentifier("note-editor")
                 .accessibilitySortPriority(3)
                 .transition(slide(from: Self.noteEdge))

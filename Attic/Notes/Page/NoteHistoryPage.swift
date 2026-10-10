@@ -18,13 +18,14 @@ struct NoteHistoryPage: View {
                 NoteEditorRepresentable(session: session, chrome: chrome,
                     columnInset: layout.chromeInsets.leading + AtticNoteMetrics.columnInset,
                     topInset: layout.headerBottom + 76,
-                    bottomInset: layout.chromeInsets.bottom + 64,
+                    bottomInset: 64 - AtticControlSize.panelButton.height,
                     headerBottom: layout.headerBottom, design: design,
                     tagEditor: { AnyView(EmptyView()) }, tagCounts: { [:] },
                     scrollOverride: browser.scrollOffset - layout.headerBottom - 76)
                     .id(session.id)
                     .atticScrollUnderFade(plainText: [(layout.headerBottom + 32)...(layout.headerBottom + 52)], topEdge: layout.scrollEdgeFadeTop,
-                                         bottomEdge: layout.scrollEdgeFadeBottom)
+                                         bottomEdge: 0)
+                    .padding(.bottom, layout.chromeInsets.bottom + AtticControlSize.panelButton.height)
                     .accessibilityIdentifier("notes-history-preview")
             }
             VStack(spacing: 6) {
