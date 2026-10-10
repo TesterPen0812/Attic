@@ -436,6 +436,8 @@ final class NoteTitleAccessories: NotesKeyboardReturnTarget {
         boundsObserver = nil
         engine.onTagsDisplayChange = nil
         engine.onCaretChange = nil
+        // The session keeps its engine: the title shows in full again.
+        engine.setTitleOpacity(1)
         textView?.onLayout = nil
         textView?.suggestionCommand = nil
         textView?.accessoryViews = []
@@ -646,7 +648,9 @@ final class NoteTitleAccessories: NotesKeyboardReturnTarget {
         }
     }
 
-    /// The header title fades in as the title passes under the header.
+    /// The header title fades in as the title passes under the header, and
+    /// the body's own title fades out by the same amount (D-03): one title
+    /// at a time.
     func updateHeaderTitle() {
         guard let scrollView, let rects = engine.titleLineRects() else { return }
         let clip = scrollView.contentView.bounds
@@ -657,6 +661,7 @@ final class NoteTitleAccessories: NotesKeyboardReturnTarget {
             let shown = title.isEmpty ? String(localized: "Untitled note") : title
             if chrome.headerTitle != shown { chrome.headerTitle = shown }
         }
+        engine.setTitleOpacity(1 - progress)
         let current = chrome.headerTitleProgress
         if abs(progress - current) >= 0.02 || ((progress == 0 || progress == 1) && progress != current) {
             chrome.headerTitleProgress = progress

@@ -132,6 +132,10 @@ final class NoteEditorEngine: NSObject, NSTextViewDelegate, NSTextStorageDelegat
     var onWritingToolsDidEnd: (() -> Void)?
     /// A short explanation for the status slot (a refused change).
     var onNotice: ((String) -> Void)?
+    /// How strongly the body's title line is drawn: 1 at rest, falling to 0
+    /// as the header's title takes its place (`setTitleOpacity`), so the
+    /// note's name is never on screen twice (design review D-03).
+    var titleOpacity: CGFloat = 1
     /// Called before a Writing Tools session starts (the session saves and
     /// keeps a version first).
     var onWritingToolsWillBegin: (() -> Bool)?
