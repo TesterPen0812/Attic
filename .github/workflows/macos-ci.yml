@@ -512,7 +512,8 @@ jobs:
     # These fixtures time wall-clock work, so they run only here, on
     # optimized builds and one test at a time; the -Onone unit lane skips
     # them. OD-15 re-samples a failing comparison family once, AB/BA/AB;
-    # first-attempt passing rows remain accepted.
+    # first-attempt passing rows remain accepted. Done rendered rows collect
+    # eight paired AB/BA invocations (24 readings/side) on each attempt.
     steps:
       - name: Check out candidate and baseline history
         uses: actions/checkout@v5
@@ -608,9 +609,6 @@ jobs:
               if [ "$side" = baseline ]; then
                 source="$RUNNER_TEMP/AtticIntegrationCostReference"
                 build=integrationbase
-                if [ "$sample" = 1 ] && [ "${{ inputs.headless_costs }}" != true ]; then
-                  rendered=(-only-testing:AtticTests/DoneSearchCostTests/testRenderedFindKeystrokeMediansFitTheInputBudget)
-                fi
               fi
               # Reference collects timings only (OD-6); functional assertions remain.
               reference_only=0
@@ -634,6 +632,10 @@ jobs:
               grep -E 'ATTIC_INTEGRATION_COST|ATTIC_DONE_RESULTS|ATTIC_DONE_KEY' "$RUNNER_TEMP/AtticCosts/integration-$side-$sample.log"
             done
           done
+
+      - name: Record eight paired AB/BA Done input and results invocations
+        if: ${{ !inputs.headless_costs }}
+        run: python3 Scripts/sample_done_costs.py "$RUNNER_TEMP/AtticCosts"
 
       - name: Done search query samples of the accepted baseline
         if: ${{ !inputs.headless_costs }}

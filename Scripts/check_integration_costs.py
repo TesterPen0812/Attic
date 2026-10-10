@@ -97,10 +97,18 @@ def main(directory, include_rendered=True):
                                        [block[name] for block in sides['candidate']],
                                        {part: components[part] for part in parts})
     if include_rendered:
-        before = rendered((directory / "integration-baseline-1.log").read_text(), reference_only=True)
-        done = (directory / "done-search.log").read_text()
-        texts.append(done)
-        after = rendered(done)
+        if (directory / "done-rendered-pairs.json").exists():
+            from sample_done_costs import readings
+            before, after, paired_texts = readings(directory, rendered)
+            texts.extend(paired_texts)
+        else:
+            if any(directory.glob("rendered-*.log")):
+                raise ValueError("paired Done logs require their complete manifest")
+            # Retain support for archived pre-round10 artifacts.
+            before = rendered((directory / "integration-baseline-1.log").read_text(), reference_only=True)
+            done = (directory / "done-search.log").read_text()
+            texts.append(done)
+            after = rendered(done)
         for name in before:
             report[name] = compare(before[name], after[name], fixture_quantum(texts, name))
     (directory / "integration-cost-comparison.json").write_text(json.dumps(report, indent=2) + "\n")

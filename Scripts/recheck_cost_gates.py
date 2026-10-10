@@ -13,6 +13,7 @@ import json
 import os
 from pathlib import Path
 import shlex
+import shutil
 import statistics
 import subprocess
 import sys
@@ -83,6 +84,8 @@ class Sampler:
         args += self.flags + [f'-only-testing:AtticTests/{test}' for test in tests]
         with log.open('w') as stream:
             result = subprocess.run(args, cwd=source, env=env, stdout=stream, stderr=subprocess.STDOUT)
+        # These bundles are scratch; complete logs remain the timing evidence.
+        shutil.rmtree(log.with_suffix('.xcresult'), ignore_errors=True)
         if result.returncode:
             raise RuntimeError(f'{side} re-check exited {result.returncode}; see {log}')
         return log.read_text()
@@ -99,11 +102,12 @@ class Sampler:
                     else:
                         build = 'integrationbase' if side == 'baseline' else 'candidate'
                         tests = (INTEGRATION_TESTS[:-1] if family == 'integration-headless' else
-                                 INTEGRATION_TESTS + ([RENDERED] if sample == 1 else []))
+                                 INTEGRATION_TESTS)
                         filename = f'integration-{side}-{sample}.log'
                     text = self.run(directory, side, build, tests, filename)
-                    if family == 'integration' and side == 'candidate' and sample == 1:
-                        (directory / 'done-search.log').write_text(text)
+            if family == 'integration':
+                from sample_done_costs import collect
+                collect(directory, self.run)
         else:
             # Historical disk fixture emits one session per invocation; the
             # current fixture emits three. Pick matching session i from each

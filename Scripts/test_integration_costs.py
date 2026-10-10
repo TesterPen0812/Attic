@@ -62,6 +62,23 @@ class IntegrationCostsTests(unittest.TestCase):
             with self.assertRaises(ValueError):
                 main(root)
 
+    def test_done_sampler_executes_eight_balanced_pairs_with_fresh_fixture_sessions(self):
+        from sample_done_costs import collect, order, RENDERED
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            calls = []
+            def run(directory, side, build, tests, filename):
+                calls.append((side, build, tests, filename))
+                text = self.rendered_log(4)
+                (directory / filename).write_text(text)
+                return text
+            collect(root, run)
+            self.assertEqual([side for side, _, _, _ in calls], sum([order(i) for i in range(1, 9)], []))
+            self.assertEqual(sum(side == 'baseline' for side, _, _, _ in calls), 8)
+            self.assertTrue(all(tests == [RENDERED] for _, _, tests, _ in calls))
+            self.assertTrue(all(build == ('integrationbase' if side == 'baseline' else 'candidate') for side, build, _, _ in calls))
+            self.assertEqual(json.loads((root / 'done-paired-diagnostics.json').read_text())['samples_per_side'], 24)
+
     def test_every_notes_save_gate_uses_same_job_reference_range_and_raw_resolution(self):
         notes = {name for name in METRICS if name.startswith('note-')}
         self.assertEqual(len(notes), 10)  # standalone, empty/populated, with/without attachment; both paths
