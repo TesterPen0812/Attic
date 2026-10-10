@@ -811,6 +811,41 @@ final class PhaseXHunt1bTests: XCTestCase {
         }
     }
 
+    func testOwnerProposalReadNoticeRetriesWhenNotesLibraryReopens() async throws {
+        let store = try makeTestNoteStore(attachmentFileStore: makeTestAttachmentFileStore())
+        let id = try create(store)
+        let page = await controller(store)
+        XCTAssertTrue(page.open(noteID: try create(store, title: "Other note")))
+        _ = try store.agentWrite(noteID: id, baseRevisionToken: try XCTUnwrap(store.note(withID: id)).revisionToken,
+            document: NoteDocument(blocks: [.text("Proposed")]), agentName: "Agent", disposition: .proposal).get()
+        let library = NotesLibraryModel(search: { _ in [] }, store: store, controller: page)
+        XCTAssertTrue(page.showLibrary())
+        store.auxiliaryFetchWillRead = { type in
+            if type == NotePendingEdit.self { throw NSError(domain: "Opaque proposal details", code: 9) }
+        }
+        _ = rows(library, store)
+        await Task.yield()
+        XCTAssertEqual(store.lastErrorMessage,
+            "Proposals could not be read. Reopen Notes to try again. Your notes are kept.")
+        store.auxiliaryFetchWillRead = nil
+        page.dismissLibrary()
+        XCTAssertTrue(page.showLibrary())
+        XCTAssertTrue(try XCTUnwrap(rows(library, store).first { $0.id == id }).hasProposal)
+    }
+
+    func testOwnerPendingEditsReadNoticeKeepsSystemDetailsOutOfTheNotice() async throws {
+        let store = try makeTestNoteStore(attachmentFileStore: makeTestAttachmentFileStore())
+        let id = try create(store)
+        store.auxiliaryFetchWillRead = { type in
+            if type == NotePendingEdit.self { throw NSError(domain: "Opaque proposal details", code: 9) }
+        }
+        XCTAssertTrue(store.pendingEdits(noteID: id).isEmpty)
+        await Task.yield()
+        XCTAssertEqual(store.lastErrorMessage,
+            "Proposals could not be read. Reopen Notes to try again. Your notes are kept.")
+        XCTAssertNotNil(store.note(withID: id))
+    }
+
     func testR3_09FailedProposalReadsDoNotRepeatAtTheSameRevision() async throws {
         let store = try makeTestNoteStore(attachmentFileStore: makeTestAttachmentFileStore())
         _ = try create(store)
@@ -886,18 +921,32 @@ final class PhaseXHunt1bTests: XCTestCase {
             contentTypeIdentifier: "public.plain-text", byteCount: Int64(bytes.count)), .text("After file")])
         _ = try store.createDocumentNote(id: noteID, document: original, staged: [staged]).get()
         let attachment = try XCTUnwrap(store.attachmentFamily(fileID).first)
+        let savedOriginal = try XCTUnwrap(store.loadDocument(noteID: noteID)).content.document
         XCTAssertTrue(store.removeDocumentAttachment(fileID, noteID: noteID))
         let before = try XCTUnwrap(store.loadDocument(noteID: noteID)).content.document
         store.auxiliaryFetchWillRead = { type in
             if type == NoteVersion.self { throw NSError(domain: "H5-fetch", code: 1) }
         }
-        let restored = store.restoreDocumentAttachment(attachment)
+        let library = AtticLibrary(tasks: TaskStore(container: store.container), notes: store)
+        let deleted = RecentlyDeletedModel(library: library)
+        deleted.reload()
+        let entry = try XCTUnwrap(deleted.entries.first { entry in
+            if case let .attachment(summary) = entry.source { return summary.attachmentID == attachment.id }
+            return false
+        })
+        deleted.restore(entry)
         do {
-            XCTAssertFalse(restored, "An unavailable history must not be treated as absent placement")
+            XCTAssertEqual(store.lastErrorMessage,
+                "This attachment’s place in the note could not be read. Try again. Your note is kept.")
+            XCTAssertTrue(deleted.message?.text.contains(store.lastErrorMessage!) == true)
+            XCTAssertTrue(deleted.entries.contains { $0.id == entry.id }, "Restore stays available for another attempt")
             XCTAssertEqual(store.loadDocument(noteID: noteID)?.content.document, before)
         }
         store.auxiliaryFetchWillRead = nil
-        // Retry is covered by the history repro and the area's restore tests.
+        deleted.restore(entry)
+        XCTAssertNil(deleted.message)
+        XCTAssertFalse(deleted.entries.contains { $0.id == entry.id })
+        XCTAssertEqual(store.loadDocument(noteID: noteID)?.content.document, savedOriginal)
     }
 
 
@@ -945,7 +994,8 @@ final class PhaseXHunt1bTests: XCTestCase {
         XCTAssertEqual(store.revision, revision, "Read recovery must not require a write")
         do {
             XCTAssertEqual(retried, "Hunt agent")
-            XCTAssertNotNil(store.lastErrorMessage, "The failed fetch must be reported")
+            XCTAssertEqual(store.lastErrorMessage,
+                "Proposals could not be read. Reopen Notes to try again. Your notes are kept.")
         }
         XCTAssertEqual(store.pendingEdits(noteID: id).count, 1)
     }

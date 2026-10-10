@@ -214,6 +214,9 @@ final class TasksPageModel: ObservableObject {
     /// A quick-look subtask being renamed in place (round 10), its text,
     /// and whether its save failed ("Not saved · Retry").
     @Published var renamingSubtaskID: UUID?
+    /// A rename belongs to the quick look it opened in. A move elsewhere
+    /// cannot leave its editor holding that original page's keys.
+    var renamingSubtaskParentID: UUID?
     @Published var subtaskRename = ""
     @Published var subtaskRenameFailed = false
     /// The subtask line that has the keyboard (round 10b). Not published: it
@@ -340,6 +343,14 @@ final class TasksPageModel: ObservableObject {
         self.toasts = toasts ?? PanelToastCenter()
         self.memory = memory
         parser = TaskTextParser(calendar: services.calendar(), locale: services.locale, now: services.now)
+        Publishers.MergeMany(DatePresentationEnvironment.notifications.map {
+            NotificationCenter.default.publisher(for: $0)
+        }).sink { [weak self] _ in
+            DispatchQueue.main.async { [weak self] in
+                self?.objectWillChange.send()
+                self?.cellUpdates.objectWillChange.send()
+            }
+        }.store(in: &cancellables)
         // A task that left the list (deleted, cleaned up) leaves the
         // selection and the quick look too.
         library.tasks.$revision
@@ -367,6 +378,9 @@ final class TasksPageModel: ObservableObject {
     // MARK: - Lists
 
     private var today: DueDay { DueDay(date: services.now(), calendar: services.calendar()) }
+    private var dateEnvironment: DatePresentationEnvironment {
+        DatePresentationEnvironment(calendar: services.calendar(), locale: services.locale)
+    }
 
     func rowModel(for task: TaskItem, match: String? = nil) -> TasksListRow {
         let subtasks: [TaskItem]
@@ -402,6 +416,7 @@ final class TasksPageModel: ObservableObject {
         let expanded: Set<UUID>
         let completedExpanded: Bool
         let today: DueDay
+        let dateEnvironment: DatePresentationEnvironment
         let view: TasksViewOptions
         let search: String
     }
@@ -416,6 +431,7 @@ final class TasksPageModel: ObservableObject {
         let expanded: Set<UUID>
         let completedExpanded: Bool
         let today: DueDay
+        let dateEnvironment: DatePresentationEnvironment
         let doneLog: [UUID]
         let search: String
         /// Now's and Later's view (item 6).
@@ -428,7 +444,7 @@ final class TasksPageModel: ObservableObject {
 
     func pageToken(_ tab: TasksTab) -> PageToken {
         PageToken(tab: tab, revision: store.revision, held: held.filter { $0.value.tab == tab }, expanded: expanded,
-                  completedExpanded: tab == .now && completedTodayExpanded, today: today,
+                  completedExpanded: tab == .now && completedTodayExpanded, today: today, dateEnvironment: dateEnvironment,
                   doneLog: tab == .done ? doneLogTasks.map(\.id) : [], search: searchQuery(for: tab),
                   view: viewOptions(for: tab), owner: self.tab == tab && isPageShown)
     }
@@ -453,7 +469,7 @@ final class TasksPageModel: ObservableObject {
 
     private func cached(_ tab: TasksTab) -> (key: RowsKey, sections: TasksSections, rows: [TasksListRow]) {
         let key = RowsKey(tab: tab, revision: store.revision, held: held.filter { $0.value.tab == tab }, expanded: expanded,
-                          completedExpanded: tab == .now && completedTodayExpanded, today: today,
+                          completedExpanded: tab == .now && completedTodayExpanded, today: today, dateEnvironment: dateEnvironment,
                           view: viewOptions(for: tab), search: tab == .done ? "" : trimmedQuery(for: tab))
         if let cached = rowsCache[tab], cached.key == key { return cached }
         let all = buildRows(for: tab)
@@ -536,7 +552,7 @@ final class TasksPageModel: ObservableObject {
     /// newest first; filtered by the search.
     func doneDays() -> [TasksDoneDay] {
         let key = DoneKey(revision: store.revision, loaded: doneLogTasks.map(\.id), search: doneSearch,
-                          today: DueDay(date: services.now(), calendar: services.calendar()))
+                          today: DueDay(date: services.now(), calendar: services.calendar()), dateEnvironment: dateEnvironment)
         if let doneCache, doneCache.key == key { return doneCache.days }
         let days = buildDoneDays()
         doneCache = (key, days)
@@ -548,6 +564,7 @@ final class TasksPageModel: ObservableObject {
         let loaded: [UUID]
         let search: String
         let today: DueDay
+        let dateEnvironment: DatePresentationEnvironment
     }
 
     private var doneCache: (key: DoneKey, days: [TasksDoneDay])?
@@ -1151,12 +1168,28 @@ final class TasksPageModel: ObservableObject {
     }
 
     private func pruneMissing() {
-        let live = { (id: UUID) in self.store.task(withID: id) != nil || self.tab == .done }
+        let live = { (id: UUID) in
+            self.tab == .done ? self.store.listedTask(withID: id) != nil : self.store.task(withID: id) != nil
+        }
         let keptSelection = selection.filter(live)
         if keptSelection != selection { selection = keptSelection }
         if let anchor = selectionAnchor, !live(anchor) { selectionAnchor = nil }
-        if let editingTitleID, store.task(withID: editingTitleID) == nil, tab != .done { cancelEditing() }
-        if let newSubtaskParentID, store.task(withID: newSubtaskParentID) == nil { self.newSubtaskParentID = nil }
+        // Check logical ownership, not the anchor's one-/two-line view
+        // lifetime. Done-log rows remain valid while they are listed.
+        func hasRow(_ id: UUID) -> Bool {
+            guard live(id) else { return false }
+            // Done reloads its paged projection asynchronously. An empty
+            // intermediate page is not evidence that a listed task vanished.
+            if tab == .done { return store.listedTask(withID: id)?.status == .done }
+            return rows(for: tab).contains { $0.id == id }
+        }
+        if let editingTitleID, !hasRow(editingTitleID) { cancelEditing() }
+        if let newSubtaskParentID, !hasRow(newSubtaskParentID) { cancelEditing() }
+        if let id = renamingSubtaskID {
+            let parent = store.task(withID: id)?.parentID
+            let hasOwner = parent.map { $0 == renamingSubtaskParentID && hasRow($0) } ?? false
+            if !hasOwner { cancelSubtaskRename() }
+        }
     }
 
     // MARK: - State changes

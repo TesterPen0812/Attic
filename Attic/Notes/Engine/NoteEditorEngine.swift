@@ -1,4 +1,5 @@
 import AppKit
+import Combine
 
 /// Where the editor gets image bytes that are already stored.
 @MainActor
@@ -115,6 +116,8 @@ final class NoteEditorEngine: NSObject, NSTextViewDelegate, NSTextStorageDelegat
     private(set) var style: NoteTextStyle
     private let renderer: NoteObjectRenderer
     private(set) var today: NoteDay
+    private let relativeDateNow: () -> Date
+    private var dateEnvironmentSubscription: AnyCancellable?
     /// Document-level fields the text doesn't hold (format, requires, extras).
     private var template: NoteDocument
     private(set) weak var textView: NoteEditorTextView?
@@ -268,13 +271,15 @@ final class NoteEditorEngine: NSObject, NSTextViewDelegate, NSTextStorageDelegat
     init(noteID: UUID, document: NoteDocument, readOnly: Bool = false,
          design: AtticDesignContext = .default, today: NoteDay = NoteDay(date: Date()),
          imageProvider: NoteImageProviding? = nil,
-         stagedAttachments: [StagedNoteAttachment] = [], tags: [String] = []) {
+         stagedAttachments: [StagedNoteAttachment] = [], tags: [String] = [],
+         relativeDateNow: @escaping () -> Date = Date.init) {
         self.noteID = noteID
         self.tags = AtticTag.normalizedSet(tags)
         self.isReadOnly = readOnly
         self.style = NoteTextStyle(design: design)
         self.renderer = NoteObjectRenderer(design: design)
         self.today = today
+        self.relativeDateNow = relativeDateNow
         self.template = document
         self.imageProvider = imageProvider
         self.staged = Dictionary(uniqueKeysWithValues: stagedAttachments.map { ($0.id, $0) })
@@ -282,6 +287,16 @@ final class NoteEditorEngine: NSObject, NSTextViewDelegate, NSTextStorageDelegat
         textStorage = contentStorage.textStorage ?? NSTextStorage()
         history = NoteUndoHistory(storage: textStorage)
         super.init()
+        // Live editors, history and comparisons all share this rendering
+        // lifetime; refreshing dates never edits the document or its history.
+        dateEnvironmentSubscription = Publishers.MergeMany(DatePresentationEnvironment.notifications.map {
+            NotificationCenter.default.publisher(for: $0)
+        }).sink { [weak self] _ in
+            DispatchQueue.main.async { [weak self] in
+                guard let self else { return }
+                self.refreshRelativeDates(today: NoteDay(date: self.relativeDateNow()), force: true)
+            }
+        }
         // Lists are shown at their own indent, their markers drawn by the
         // editor (`textContentStorage(_:textParagraphWith:)`).
         contentStorage.delegate = self
@@ -567,9 +582,9 @@ final class NoteEditorEngine: NSObject, NSTextViewDelegate, NSTextStorageDelegat
     }
 
     /// Dates read as Today, Tomorrow or Yesterday: recomputed when the panel
-    /// shows (no timers while hidden).
-    func refreshRelativeDates(today: NoteDay) {
-        guard today != self.today else { return }
+    /// shows and on system date-environment notifications (no polling timer).
+    func refreshRelativeDates(today: NoteDay, force: Bool = false) {
+        guard force || today != self.today else { return }
         self.today = today
         var dates: [NSRange] = []
         textStorage.enumerateAttribute(.attachment, in: NSRange(location: 0, length: textStorage.length)) { value, range, _ in
