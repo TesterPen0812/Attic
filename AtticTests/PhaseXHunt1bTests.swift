@@ -1,4 +1,5 @@
 import AppKit
+import Combine
 import SwiftData
 import XCTest
 @testable import Attic
@@ -1374,7 +1375,8 @@ extension PhaseXHunt5Tests {
         let initial = NoteDocument(blocks: [.text("Initial"), .file(attachmentID: file.id, filename: file.filename, contentTypeIdentifier: file.contentTypeIdentifier, byteCount: file.byteCount)])
         _ = try notes.createDocumentNote(id: noteID, document: initial, staged: [file]).get()
         XCTAssertTrue(notes.recordVersion(noteID: noteID, reason: .leave))
-        let versionID = try XCTUnwrap(notes.versions(noteID: noteID).first?.id)
+        let originalVersion = try XCTUnwrap(notes.versions(noteID: noteID).first)
+        let versionID = originalVersion.id
         let board = try XCTUnwrap(canvases.createCanvas(name: "Board"))
         _ = try XCTUnwrap(canvases.createCanvas(name: "Spare"))
         XCTAssertTrue(canvases.selectCanvas(board.id))
@@ -1396,6 +1398,10 @@ extension PhaseXHunt5Tests {
         objectReplica.payload = object.payload; objectReplica.width = object.transform.width; objectReplica.height = object.transform.height
         replicaContext.insert(objectReplica)
         replicaContext.insert(ItemLink(id: link.id, source: link.source, target: link.target, kind: link.kind, createdAt: link.createdAt))
+        replicaContext.insert(NoteVersion(id: versionID, noteID: noteID, createdAt: originalVersion.createdAt,
+            reason: try XCTUnwrap(originalVersion.reason), content: originalVersion.content,
+            contentFormat: originalVersion.contentFormat, title: originalVersion.title, body: originalVersion.body,
+            attachmentIDs: Array(originalVersion.attachmentIDs), sourceRevisionID: originalVersion.sourceRevisionID))
         try replicaContext.save()
         tasks.refresh(); notes.refresh(); canvases.refresh()
         var taskTitle = "Root", noteTitle = "Initial", boardName = "Board"
@@ -1449,7 +1455,18 @@ extension PhaseXHunt5Tests {
                     _ = try notes.restoreVersion(versionID, noteID: noteID).get(); noteTitle = "Initial"
                 case 10:
                     guard case let .success(.pending(proposal)) = notes.agentWrite(noteID: noteID, baseRevisionToken: try XCTUnwrap(notes.note(withID: noteID)).revisionToken, document: NoteDocument(blocks: [.text("Proposal"), initial.blocks[1]]), agentName: "Generated", disposition: .proposal) else { XCTFail(label); throw PersistenceGate.Failure() }
-                    if cycle == 0 { XCTAssertTrue(notes.discardProposal(proposal, noteID: noteID), label) }
+                    let proposalContext = ModelContext(container)
+                    let proposalID = proposal
+                    let original = try XCTUnwrap(proposalContext.fetch(FetchDescriptor<NotePendingEdit>(predicate: #Predicate { $0.id == proposalID })).first)
+                    let duplicate = NotePendingEdit(id: original.id, noteID: original.noteID,
+                        baseRevisionToken: original.baseRevisionToken, proposedContent: try XCTUnwrap(original.proposedContent),
+                        agentName: original.agentName, createdAt: original.createdAt, baseVersionID: original.baseVersionID)
+                    duplicate.needsReview = original.needsReview; duplicate.isDeletion = original.isDeletion
+                    proposalContext.insert(duplicate); try proposalContext.save()
+                    if cycle == 0 {
+                        XCTAssertTrue(notes.discardProposal(proposal, noteID: noteID), label)
+                        XCTAssertEqual(try ModelContext(container).fetchCount(FetchDescriptor<NotePendingEdit>()), 0, label)
+                    }
                 default:
                     XCTAssertTrue(linkDeleted ? library.links.restoreLink(link.id) : library.links.unlink(link.id), label)
                     linkDeleted.toggle()
@@ -1469,7 +1486,13 @@ extension PhaseXHunt5Tests {
                 XCTAssertEqual(try check.fetchCount(FetchDescriptor<CanvasSemanticObjectItem>()), 2, label)
                 XCTAssertTrue(try check.fetch(FetchDescriptor<ItemLink>()).allSatisfy { ($0.deletedAt != nil) == linkDeleted && $0.sourceID == task.id && $0.targetID == noteID }, label)
                 XCTAssertTrue(try check.fetch(FetchDescriptor<NoteVersion>()).allSatisfy { $0.noteID == noteID }, label)
-                XCTAssertTrue(try check.fetch(FetchDescriptor<NotePendingEdit>()).allSatisfy { $0.noteID == noteID }, label)
+                let versionIDs = Set(try check.fetch(FetchDescriptor<NoteVersion>()).map(\.id))
+                XCTAssertTrue(try check.fetch(FetchDescriptor<NotePendingEdit>()).allSatisfy {
+                    $0.noteID == noteID && $0.baseVersionID.map { versionIDs.contains($0) } == true
+                }, label)
+                XCTAssertEqual(Set(tasks.tasks.map(\.id)).count, tasks.tasks.count, label)
+                XCTAssertEqual(Set(notes.notes.map(\.id)).count, notes.notes.count, label)
+                XCTAssertEqual(Set(canvases.canvases.map(\.id)).count, canvases.canvases.count, label)
             }
         }
         await notes.waitForAttachmentReconciliation()
@@ -1505,5 +1528,124 @@ extension PhaseXHunt5Tests {
         await store.waitForAttachmentReconciliation()
         await page.waitForRecoveryWork()
         return probes
+    }
+}
+
+@MainActor
+extension PhaseXHunt5Tests {
+    func testOtherAreaRollbackAndRevisionPublishingKeepUnsavedNoteDraft() async throws {
+        let container = try PersistenceController.makeContainer(inMemory: true, cloudSyncEnabled: false)
+        let taskGate = PersistenceGate(), canvasGate = PersistenceGate()
+        let tasks = TaskStore(container: container, persist: taskGate.save)
+        let notes = NoteStore(container: container, attachmentFileStore: makeTestAttachmentFileStore())
+        let canvases = CanvasStore(container: container, persist: canvasGate.save)
+        let library = AtticLibrary(tasks: tasks, notes: notes, canvases: canvases)
+        let uiState = PanelUIState()
+        let note = try notes.createDocumentNote(id: UUID(), document: NoteDocument(blocks: [.text("Saved")])).get()
+        let page = NotesPageController(store: notes, journal: NoteDraftJournal(directory: ownedTemporaryDirectory(prefix: "H7Cross")),
+            saveDelay: .seconds(600), durabilityDelay: .seconds(600), pauseVersionDelay: .seconds(600))
+        await XCTAssertTrueAsync(await page.openDurably(noteID: note.noteID))
+        let session = try XCTUnwrap(page.active)
+        session.engine.performEdit(NSRange(location: session.engine.textStorage.length, length: 0),
+            with: NSAttributedString(string: " unsaved"), name: "Typing")
+        let draft = session.engine.document()
+        var taskRevisions = 0, noteRevisions = 0, canvasRevisions = 0
+        let observations = [tasks.$revision.dropFirst().sink { _ in taskRevisions += 1 },
+            notes.$revision.dropFirst().sink { _ in noteRevisions += 1 },
+            canvases.$revision.dropFirst().sink { _ in canvasRevisions += 1 }]
+        for index in 0..<12 {
+            taskGate.shouldFail = true; XCTAssertNil(tasks.create(title: "Rollback task")); taskGate.shouldFail = false
+            canvasGate.shouldFail = true; XCTAssertNil(canvases.createCanvas(name: "Rollback canvas")); canvasGate.shouldFail = false
+            _ = try XCTUnwrap(tasks.create(title: "Saved task \(index)"))
+            _ = try XCTUnwrap(canvases.createCanvas(name: "Saved board \(index)"))
+            uiState.selectSection(index % 2 == 0 ? .tasks : .canvas)
+            XCTAssertEqual(library.state(of: AtticItemRef(.note, note.noteID)), .live)
+            XCTAssertEqual(session.engine.document(), draft)
+            XCTAssertTrue(page.active === session)
+            XCTAssertEqual(notes.note(withID: note.noteID)?.title, "Saved", "Other contexts cannot commit the editor draft")
+        }
+        XCTAssertGreaterThan(taskRevisions, 0); XCTAssertGreaterThan(canvasRevisions, 0)
+        XCTAssertEqual(noteRevisions, 0, "Unrelated writes do not publish a Notes save")
+        await XCTAssertTrueAsync(await page.preserveAllDurably())
+        XCTAssertEqual(notes.note(withID: note.noteID)?.title, "Saved unsaved")
+        XCTAssertEqual(try ModelContext(container).fetchCount(FetchDescriptor<TaskItem>()), 12)
+        XCTAssertEqual(try ModelContext(container).fetchCount(FetchDescriptor<CanvasBoardItem>()), 12)
+        XCTAssertEqual(observations.count, 3)
+        await notes.waitForAttachmentReconciliation()
+    }
+
+    func testGeneratedCleanupRestartsTimeZoneAndWakeKeepOneTimerAndOneMove() async throws {
+        let notifications = [Notification.Name.NSCalendarDayChanged, .NSSystemTimeZoneDidChange,
+            NSWorkspace.didWakeNotification, NSApplication.didBecomeActiveNotification]
+        for identifier in ["Europe/London", "America/New_York", "Pacific/Auckland", "Asia/Kathmandu"] {
+            var calendar = Calendar(identifier: .gregorian)
+            calendar.timeZone = try XCTUnwrap(TimeZone(identifier: identifier))
+            var now = try XCTUnwrap(calendar.date(from: DateComponents(year: 2026, month: 10, day: 24, hour: 23, minute: 30)))
+            let store = try makeTestStore(now: { now })
+            let task = try XCTUnwrap(store.create(title: "Done")); XCTAssertTrue(store.markDone(task))
+            let service = DailyCleanupService(store: store, now: { now }, calendar: { calendar })
+            service.start()
+            for step in 0..<24 {
+                let oldTimer: Timer = try field("timer", in: service)
+                let name = notifications[step % notifications.count]
+                let center = name == NSWorkspace.didWakeNotification ? NSWorkspace.shared.notificationCenter : NotificationCenter.default
+                center.post(name: name, object: nil)
+                let callback = try XCTUnwrap(service.queuedCleanupTask)
+                if step % 3 == 0 {
+                    service.stop(); XCTAssertFalse(oldTimer.isValid)
+                    service.start()
+                }
+                now = now.addingTimeInterval(3_600)
+                if step % 4 == 0 { calendar.timeZone = try XCTUnwrap(TimeZone(identifier: step % 8 == 0 ? "Pacific/Auckland" : identifier)) }
+                await callback.value
+                center.post(name: name, object: nil)
+                await service.queuedCleanupTask?.value
+                XCTAssertFalse(oldTimer.isValid)
+                let current: Timer = try field("timer", in: service)
+                let next = try XCTUnwrap(calendar.date(byAdding: .day, value: 1, to: calendar.startOfDay(for: now)))
+                XCTAssertEqual(current.fireDate, next)
+                XCTAssertLessThanOrEqual(store.doneLog().count, 1)
+            }
+            XCTAssertEqual(store.doneLog().map(\.id), [task.id])
+            let last: Timer = try field("timer", in: service)
+            service.stop(); XCTAssertFalse(last.isValid)
+            XCTAssertEqual(try ModelContext(store.container).fetchCount(FetchDescriptor<TaskItem>()), 1)
+        }
+    }
+
+    func testSerializedGeometryReplaysGeneratedDisplayRemovalAndRelaunch() throws {
+        var random: UInt64 = 5489
+        var frame = CGRect(x: 2200, y: -150, width: 272, height: 300)
+        for step in 0..<192 {
+            random = random &* 6364136223846793005 &+ 1442695040888963407
+            let screen = CGRect(x: Double(Int(random % 4000) - 2000), y: Double(Int((random >> 8) % 1500) - 750),
+                width: Double(360 + (random >> 16) % 1800), height: Double(400 + (random >> 32) % 1000))
+            // Persist and deserialize value geometry as a new process would;
+            // the expected bounds come from the generated work area, not the helper.
+            let persisted = try JSONEncoder().encode(frame)
+            let restored = try JSONDecoder().decode(CGRect.self, from: persisted)
+            frame = SubtaskPanelLayout.pinnedResizedFrame(restored, newHeight: 280 + CGFloat(step % 4) * 20,
+                screenVisibleFrames: [screen]) ?? restored
+            XCTAssertTrue(screen.insetBy(dx: 12, dy: 12).contains(frame), "step=\(step)")
+            XCTAssertNil(SubtaskPanelLayout.pinnedResizedFrame(frame, newHeight: frame.height, screenVisibleFrames: [screen]))
+            let size = SettingsWindowLayout.fittedContentSize(to: screen)
+            let settings = SettingsWindowLayout.constrainedFrame(CGRect(origin: restored.origin, size: size), to: screen)
+            XCTAssertTrue(screen.insetBy(dx: 24, dy: 24).contains(settings))
+            let next = try JSONDecoder().decode(CGRect.self, from: JSONEncoder().encode(settings))
+            XCTAssertEqual(SettingsWindowLayout.constrainedFrame(next, to: screen), settings)
+        }
+    }
+
+    func testDeepAndMalformedUserJSONReturnsReadablePreservedErrorWithoutTrapping() {
+        for depth in [32, 256, 1024, 4096] {
+            let data = Data((String(repeating: "[", count: depth) + "0" + String(repeating: "]", count: depth)).utf8)
+            guard case let .readOnly(original, reason, _) = NoteContentCodec.decode(data) else { return XCTFail("Invalid document accepted") }
+            XCTAssertEqual(original, data); XCTAssertFalse(reason.message.isEmpty)
+        }
+        for text in ["{", String(repeating: "&", count: 4096), "{\"format\":-1,\"blocks\":[]}"] {
+            let data = Data(text.utf8)
+            guard case let .readOnly(original, reason, _) = NoteContentCodec.decode(data) else { return XCTFail("Malformed document accepted") }
+            XCTAssertEqual(original, data); XCTAssertTrue(reason.message.contains("kept"))
+        }
     }
 }
