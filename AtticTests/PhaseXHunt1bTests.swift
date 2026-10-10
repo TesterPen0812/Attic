@@ -1190,6 +1190,51 @@ final class PhaseXHunt5Tests: XCTestCase {
         XCTAssertEqual(try Data(contentsOf: pending), bytes)
     }
 
+    func testH7_04LiveStoreReadsFreshJournalAfterOnlyItsControllerReleases() async throws {
+        let files = makeTestAttachmentFileStore()
+        let container = try PersistenceController.makeContainer(inMemory: true, cloudSyncEnabled: false)
+        var store: NoteStore? = NoteStore(container: container, attachmentFileStore: files)
+        await store?.waitForAttachmentReconciliation()
+        let root = ownedTemporaryDirectory(prefix: "H7FreshJournal")
+        let formerJournal = NoteDraftJournal(directory: root)
+        _ = try await formerJournal.readRecoveryEntries()
+        var page: NotesPageController? = NotesPageController(store: try XCTUnwrap(store), journal: formerJournal)
+        await page?.waitForRecoveryWork()
+        let releasedPage = WeakProbe(page), releasedStore = WeakProbe(store)
+        page = nil
+        XCTAssertNil(releasedPage.value); XCTAssertNotNil(releasedStore.value)
+        let bytes = Data("new recovery owner".utf8), id = UUID()
+        let staged = StagedNoteAttachment(id: id, filename: "fresh.txt", contentTypeIdentifier: "public.plain-text",
+            byteCount: Int64(bytes.count), digest: NotePayloadDigest.sha256(bytes), data: bytes)
+        let document = NoteDocument(blocks: [.text("Fresh recovery"), .file(attachmentID: id, filename: staged.filename,
+            contentTypeIdentifier: staged.contentTypeIdentifier, byteCount: staged.byteCount)])
+        let currentJournal = NoteDraftJournal(directory: root)
+        _ = try await currentJournal.writeDurably(NoteDraftJournalEntry(noteID: UUID(), isPersisted: false,
+            baseRevisionID: nil, content: try NoteContentCodec.encode(document), selectionLocation: 0, selectionLength: 0,
+            staged: [.init(id: id, filename: staged.filename, contentTypeIdentifier: staged.contentTypeIdentifier,
+                byteCount: staged.byteCount, digest: staged.digest)], savedAt: Date()), staged: [staged])
+        // Bytes admitted by another owner but not yet checkpointed must not
+        // be collected as a side effect of refreshing the old authority.
+        let pending = root.appendingPathComponent("staged").appendingPathComponent(UUID().uuidString)
+        try bytes.write(to: pending)
+        let reference = AttachmentFileReference(id: id, digest: staged.digest, filename: staged.filename, payload: bytes)
+        let url = try await XCTUnwrapAsync(try await files.ensureMaterialized(reference))
+        try await files.removeMaterializations([reference])
+        XCTExpectFailure("H7-04") { XCTAssertTrue(FileManager.default.fileExists(atPath: url.path)) }
+        XCTAssertEqual(try Data(contentsOf: pending), bytes, "A retention read must not collect another owner's staging")
+        let damaged = root.appendingPathComponent(UUID().uuidString + ".json")
+        try Data("damaged checkpoint".utf8).write(to: damaged)
+        let extraID = UUID()
+        let extra = AttachmentFileReference(id: extraID, digest: staged.digest, filename: staged.filename, payload: bytes)
+        let extraURL = try await XCTUnwrapAsync(try await files.ensureMaterialized(extra))
+        try await files.removeMaterializations([extra])
+        XCTExpectFailure("H7-04") { XCTAssertTrue(FileManager.default.fileExists(atPath: extraURL.path)) }
+        XCTAssertEqual(try Data(contentsOf: damaged), Data("damaged checkpoint".utf8))
+        XCTAssertEqual(try Data(contentsOf: pending), bytes)
+        await store?.waitForAttachmentReconciliation()
+        XCTAssertNotNil(store)
+    }
+
     func testH7_02ReleasingCleanupInvalidatesItsMidnightTimer() throws {
         let store = try makeTestStore()
         for _ in 0..<12 {
@@ -1646,6 +1691,53 @@ extension PhaseXHunt5Tests {
             let data = Data(text.utf8)
             guard case let .readOnly(original, reason, _) = NoteContentCodec.decode(data) else { return XCTFail("Malformed document accepted") }
             XCTAssertEqual(original, data); XCTAssertTrue(reason.message.contains("kept"))
+        }
+    }
+}
+
+@MainActor
+extension PhaseXHunt5Tests {
+    func testH7_04LiveCollectorRevalidatesStoreAndRecoveryRegistrationAfterSuspension() async throws {
+        for replaceHook in [false, true] {
+            let files = makeTestAttachmentFileStore()
+            let container = try PersistenceController.makeContainer(inMemory: true, cloudSyncEnabled: false)
+            let store = NoteStore(container: container, attachmentFileStore: files)
+            await store.waitForAttachmentReconciliation()
+            let id = UUID(), bytes = Data("late owner".utf8)
+            let reference = AttachmentFileReference(id: id, digest: NotePayloadDigest.sha256(bytes), filename: "late.txt", payload: bytes)
+            let url = try await XCTUnwrapAsync(try await files.ensureMaterialized(reference))
+            var changed = false
+            store.recoveryReferencedAttachmentIDsDurably = { [weak store] in
+                guard !changed, let store else { return [] }
+                changed = true
+                await Task.yield()
+                if replaceHook {
+                    // A newly attached controller/authority can replace the
+                    // hook without changing the database revision.
+                    store.recoveryReferencedAttachmentIDs = { [id] }
+                } else {
+                    // Imported durable ownership arrives after the worker's
+                    // snapshot. Refresh replaces the stale store context.
+                    let context = ModelContext(container), noteID = UUID()
+                    let document = NoteDocument(blocks: [.text("Late durable owner"), .file(attachmentID: id,
+                        filename: reference.filename, contentTypeIdentifier: "public.plain-text", byteCount: Int64(bytes.count))])
+                    let note = NoteItem(id: noteID, title: "Late durable owner")
+                    note.content = try NoteContentCodec.encode(document)
+                    context.insert(note)
+                    context.insert(NoteAttachment(id: id, noteID: noteID, originalFilename: reference.filename,
+                        contentTypeIdentifier: "public.plain-text", byteCount: Int64(bytes.count), sortIndex: 0,
+                        contentDigest: reference.digest, payload: bytes))
+                    try context.save()
+                    store.refresh()
+                }
+                return []
+            }
+            try await files.removeMaterializations([reference])
+            XCTExpectFailure("H7-04") {
+                XCTAssertTrue(changed, "Durable recovery authority must participate")
+                XCTAssertTrue(FileManager.default.fileExists(atPath: url.path), "replaceHook=\(replaceHook)")
+            }
+            await store.waitForAttachmentReconciliation()
         }
     }
 }
