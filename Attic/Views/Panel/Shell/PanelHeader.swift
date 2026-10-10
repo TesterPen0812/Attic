@@ -28,8 +28,8 @@ struct PanelHeader: View {
     /// built behind the current one, so the click only shows them.
     var onApproachPageSwitch: () -> Void = {}
     /// ⇧⌘N and ⇧⌘F (round 10).
-    var onNewNote: () -> Void = { AppCoordinator.shared.showNewNote() }
-    var onSearch: () -> Void = { AppCoordinator.shared.showSearch() }
+    var onNewNote: () -> Void = { AppCoordinator.shared?.showNewNote() }
+    var onSearch: () -> Void = { AppCoordinator.shared?.showSearch() }
 
     @Environment(\.atticDesign) private var design
     @ObservedObject private var cornerButtons = AtticCornerButtonsLab.shared

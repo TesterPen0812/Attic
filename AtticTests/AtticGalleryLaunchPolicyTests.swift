@@ -76,7 +76,7 @@ final class AtticGalleryLaunchPolicyTests: XCTestCase {
     @MainActor
     private func runFileCleanup(for launch: AppRuntimeEnvironment) async throws {
         let container = try PersistenceController.makeContainer(inMemory: true)
-        let (tasks, notes) = launch.makeItemStores(container: container)
+        let (tasks, notes) = try launch.makeItemStores(container: container)
         await notes.waitForAttachmentReconciliation()
         let staging = ownedTemporaryDirectory(prefix: "AtticGalleryStaging")
         _ = await tasks.sweepUnreferencedAttachmentStorage(minimumAge: 0, dropStagingRoot: staging)

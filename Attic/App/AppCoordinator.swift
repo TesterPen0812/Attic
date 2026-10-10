@@ -254,7 +254,7 @@ struct AppRuntimeEnvironment {
     /// are given, so a launch's store and its file roots must belong
     /// together: an in-memory gallery store never meets the real files.
     @MainActor
-    func makeItemStores(container: ModelContainer, performanceRoot: URL? = nil) -> (tasks: TaskStore, notes: NoteStore) {
+    func makeItemStores(container: ModelContainer, performanceRoot: URL? = nil) throws -> (tasks: TaskStore, notes: NoteStore) {
         let tasks = TaskStore(
             container: container,
             taskImageFiles: performanceRoot.map {
@@ -264,11 +264,7 @@ struct AppRuntimeEnvironment {
         let attachmentFiles = performanceRoot.map {
             AttachmentFileStore(rootURL: $0.appendingPathComponent("NoteAttachments", isDirectory: true))
         } ?? makeAttachmentFileStore() ?? AttachmentFileStore()
-        do {
-            try OldNotesPurge.cleanup(in: container, recoveryURL: noteRecoveryURL, attachmentRoot: attachmentFiles.rootURL)
-        } catch {
-            preconditionFailure("Old-note file cleanup must finish before Notes recovery starts.")
-        }
+        try OldNotesPurge.cleanup(in: container, recoveryURL: noteRecoveryURL, attachmentRoot: attachmentFiles.rootURL)
         let notes = NoteStore(container: container, attachmentFileStore: attachmentFiles)
         return (tasks, notes)
     }
@@ -299,6 +295,11 @@ enum AppTerminationPreparation {
     }
 }
 
+private struct AppStartupError: LocalizedError {
+    let message: String
+    var errorDescription: String? { message }
+}
+
 /// One store-open attempt, followed only by explicit retry. The failed
 /// store is retained; constructing an empty replacement is never a fallback.
 @MainActor
@@ -314,14 +315,25 @@ final class AppStartup<Value>: ObservableObject {
 
     func retry() {
         guard value == nil else { return }
-        do { value = try open() }
-        catch { /* H6-01 red seam: the old startup has no recoverable notice. */ }
+        do {
+            value = try open()
+            failureMessage = nil
+        } catch {
+            failureMessage = "Attic could not open its local data. Try again. Your existing data is kept."
+            NSLog("Attic startup could not open local data: %@", error.localizedDescription)
+        }
     }
 }
 
 @MainActor
 final class AppCoordinator: ObservableObject {
-    static let shared = AppCoordinator()
+    static let startup = AppStartup { try AppCoordinator() }
+    static var shared: AppCoordinator? { startup.value }
+
+    static func retryStartup() {
+        startup.retry()
+        shared?.start()
+    }
 
     /// Read-only mirror of the global shortcut's registration, so UI can stop
     /// advertising a combination the system refused without being able to
@@ -410,7 +422,7 @@ final class AppCoordinator: ObservableObject {
     private var performanceSignalSource: (any DispatchSourceSignal)?
     private var performancePhaseIndex = 0
 
-    private init() {
+    private init() throws {
         PerformanceSignposts.beginLaunch()
         let environment = ProcessInfo.processInfo.environment
         let runtime = AppRuntimeEnvironment(environment: environment)
@@ -418,18 +430,18 @@ final class AppCoordinator: ObservableObject {
         let isRunningTests = runtime.isRunningTests
         let externalPerformanceRoot = PerformanceProbe.validatedRoot(environment: environment)
         if environment["ATTIC_PERF_STORE_ROOT"] != nil && externalPerformanceRoot == nil {
-            fatalError("Performance store root is not an owned temporary directory")
+            throw AppStartupError(message: "Performance store root is not an owned temporary directory")
         }
         let uiPerformanceRoot: URL?
         do {
             uiPerformanceRoot = try PerformanceProbe.uiTestRoot(environment: environment)
         } catch {
-            fatalError("Unable to create the isolated performance UI test root: \(error)")
+            throw error
         }
         let performanceUICleanup = environment["ATTIC_PERF_UI_CLEANUP"] == "1"
         if environment["ATTIC_PERF_UI_TEST"] == "1",
            uiPerformanceRoot == nil, !performanceUICleanup {
-            fatalError("Performance UI tests require their isolated preview bundle")
+            throw AppStartupError(message: "Performance UI tests require their isolated preview bundle")
         }
         let performanceRoot = externalPerformanceRoot ?? uiPerformanceRoot
         let performanceSeedOnly = environment["ATTIC_PERF_SEED_ONLY"] == "1"
@@ -474,7 +486,7 @@ final class AppCoordinator: ObservableObject {
                     PerformanceProbe.writePhase("seed_complete", root: performanceRoot)
                 }
             } catch {
-                fatalError("Unable to create the isolated performance store: \(error)")
+                throw error
             }
         } else if usesCanvasUITestPersistence {
             do {
@@ -482,7 +494,7 @@ final class AppCoordinator: ObservableObject {
                     reset: environment["ATTIC_UI_TEST_CANVAS_RESET"] == "1"
                 ) }
             } catch {
-                fatalError("Unable to create the isolated Canvas UI test store: \(error)")
+                throw error
             }
         } else {
             #if ATTIC_LOCAL_ONLY
@@ -492,7 +504,7 @@ final class AppCoordinator: ObservableObject {
                     cloudSyncEnabled: false
                 ) }
             } catch {
-                fatalError("Unable to create the local-only SwiftData container: \(error)")
+                throw error
             }
             #else
             do {
@@ -507,10 +519,7 @@ final class AppCoordinator: ObservableObject {
                     ) }
                     settings.reportCloudSyncStartupFailure(cloudError.localizedDescription)
                 } catch {
-                    fatalError(
-                        "Unable to create the SwiftData container with CloudKit "
-                            + "(\(cloudError)) or local-only (\(error))"
-                    )
+                    throw error
                 }
             }
             #endif
@@ -551,7 +560,7 @@ final class AppCoordinator: ObservableObject {
         }
         self.demoDataAllowed = demoDataAllowed
         self.demoContainer = demoDataAllowed ? container : nil
-        let (store, noteStore) = runtime.makeItemStores(container: container, performanceRoot: performanceRoot)
+        let (store, noteStore) = try runtime.makeItemStores(container: container, performanceRoot: performanceRoot)
         if demoSeeded {
             let bundleIdentifier = runtime.bundleIdentifier
             Task { @MainActor in await AtticDemoData.attachFiles(to: noteStore, bundleIdentifier: bundleIdentifier) }

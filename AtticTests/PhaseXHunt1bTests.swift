@@ -682,7 +682,7 @@ final class PhaseXHunt1bTests: XCTestCase {
         }
         XCTAssertEqual(attempts, 1)
         XCTAssertNil(startup.value)
-        XCTExpectFailure("H6-01") {
+        do {
             XCTAssertEqual(startup.failureMessage, "Attic could not open its local data. Try again. Your existing data is kept.")
         }
         startup.retry()
