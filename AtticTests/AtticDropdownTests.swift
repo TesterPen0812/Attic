@@ -16,7 +16,6 @@ final class AtticDropdownTests: XCTestCase {
         var field = true, list = false
         AtticDropdownTabFocus.transfer(listFocused: list, fullKeyboardAccess: true,
             setField: { field = $0 }, setList: { list = $0 })
-        XCTExpectFailure("H5-04")
         XCTAssertFalse(field, "The old field request must be released before requesting list focus")
         XCTAssertTrue(list)
         AtticDropdownTabFocus.transfer(listFocused: list, fullKeyboardAccess: true,

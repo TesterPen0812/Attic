@@ -207,8 +207,10 @@ enum AtticDropdownTabFocus {
     static func transfer(listFocused: Bool, fullKeyboardAccess: Bool,
                          setField: (Bool) -> Void, setList: (Bool) -> Void) {
         if listFocused {
+            setList(false)
             setField(true)
         } else if fullKeyboardAccess {
+            setField(false)
             setList(true)
         }
     }
