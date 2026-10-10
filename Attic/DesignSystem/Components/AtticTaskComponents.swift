@@ -1245,7 +1245,20 @@ struct AtticTaskRow: View {
             VStack(alignment: .leading, spacing: m.titleToDetails) {
                 HStack(alignment: .firstTextBaseline, spacing: 0) {
                     if let titleEditing, capture == nil {
-                        AtticRowTitleEditor(editing: titleEditing)
+                        // Keep the title's real text baseline in layout. An
+                        // NSViewRepresentable otherwise contributes its bottom
+                        // edge as a baseline, lifting the date while its own
+                        // NSTextView draws the title lower (F-09).
+                        AtticText(verbatim: model.title,
+                                  style: model.state == .inProgress ? .rowTitleActive : .rowTitle,
+                                  ink: .heading, truncates: true)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .hidden()
+                            .overlay(alignment: .leading) {
+                                AtticRowTitleEditor(editing: titleEditing)
+                                    .frame(height: m.titleLineHeight)
+                            }
+                            .layoutPriority(-1)
                     } else {
                         HStack(alignment: .firstTextBaseline, spacing: AtticPriorityMarkMetrics.titleGap) {
                             AtticText(
