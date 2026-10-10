@@ -194,6 +194,20 @@ final class PhaseXHunt9Tests: XCTestCase {
         }
     }
 
+    func testH11_09ReopenedNoteDatePickerFollowsCurrentTimezone() throws {
+        let savedZone = NSTimeZone.default
+        defer { NSTimeZone.default = savedZone }
+        NSTimeZone.default = try XCTUnwrap(TimeZone(secondsFromGMT: 0))
+        let card = NoteFormatCardModel()
+        let now = try XCTUnwrap(ISO8601DateFormatter().date(from: "2026-10-10T12:00:00Z"))
+        card.openDate(fromSlash: false, today: now)
+        NSTimeZone.default = try XCTUnwrap(TimeZone(secondsFromGMT: 43_200))
+        card.openDate(fromSlash: false, today: now)
+        XCTExpectFailure("H11-09") {
+            XCTAssertEqual(card.candidateDate, Calendar.current.startOfDay(for: now), "Today must use the current local day")
+        }
+    }
+
     private final class ClearBox: ObservableObject { @Published var presented = false }
     private struct CanvasRoot: View {
         let session: CanvasSession
