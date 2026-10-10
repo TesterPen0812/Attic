@@ -1967,7 +1967,7 @@ extension PhaseXHunt6Tests {
             for step in 0..<96 {
                 // Initial steps guarantee every supported kind is visited;
                 // random tails mix edits, layering, delete, clear and replay.
-                let action = step < 7 ? step : rng.next(15)
+                let action = step < 7 ? step : rng.next(18)
                 let before = model
                 var changed = false
                 let point = CanvasPoint(x: Double(rng.next(2000)) - 1000, y: Double(rng.next(2000)) - 1000)
@@ -2044,6 +2044,18 @@ extension PhaseXHunt6Tests {
                         else { session.selectSemanticObject(id); changed = session.moveSelectedSemanticLayer(forward: true) }
                         if changed { value.layer = highest + 1; model[id] = value }
                     }
+                case 15:
+                    let erased = Set(model.filter { $0.value.kind == "stroke" }.map(\.key))
+                    changed = session.erase(strokeIDs: erased)
+                    XCTAssertEqual(changed, !erased.isEmpty)
+                    if changed { for id in erased { model[id] = nil } }
+                case 16:
+                    gate.shouldFail = true
+                    XCTAssertFalse(session.importPreparedImage(.init(encodedData: Data([1]), contentType: "public.png", pixelWidth: 64, pixelHeight: 64), at: point))
+                    gate.shouldFail = false
+                case 17:
+                    let imported = await session.importImage(data: Data("invalid image".utf8), at: point)
+                    XCTAssertFalse(imported)
                 default:
                     gate.shouldFail = true
                     XCTAssertFalse(session.completeStroke(points: [point, .init(x: point.x + 1, y: point.y + 1)]))
@@ -2160,15 +2172,160 @@ extension PhaseXHunt6Tests {
             await page.waitForRecoveryWork()
             XCTAssertEqual(session.engine.document(), newer)
             XCTAssertEqual(session.engine.tags, tags)
-            XCTExpectFailure("H8-06") {
-                XCTAssertEqual(session.state, .dirty)
-                XCTAssertEqual(try? journal.recoveryEntries().count, 1)
-            }
+            XCTAssertEqual(session.state, .dirty)
+            XCTAssertEqual(try? journal.recoveryEntries().count, 1)
             await XCTAssertTrueAsync(await page.preserveAllDurably())
-            XCTExpectFailure("H8-06 preservation after stale save") {
-                XCTAssertEqual(store.loadDocument(noteID: id)?.content.document, newer)
-                XCTAssertEqual(store.note(withID: id)?.tags, tags)
+            XCTAssertEqual(store.loadDocument(noteID: id)?.content.document, newer)
+            XCTAssertEqual(store.note(withID: id)?.tags, tags)
+        }
+    }
+}
+
+@MainActor
+extension PhaseXHunt6Tests {
+    private final class ReferenceOwners {
+        var live: [Set<UUID>] = [[], [], []]
+        var unknown = false
+    }
+
+    func testGeneratedOwnershipInterleavesFacadesReplacementsCheckpointsAndFailedSaves() async throws {
+        for seed in 1...8 {
+            var rng = Hunt6Random(state: UInt64(seed))
+            let root = ownedTemporaryDirectory(prefix: "H8Owners"), journalRoot = ownedTemporaryDirectory(prefix: "H8Journals")
+            let files = AttachmentFileStore(rootURL: root), collector = AttachmentFileStore(rootURL: root)
+            let owners = ReferenceOwners(), gate = PersistenceGate()
+            let container = try PersistenceController.makeContainer(inMemory: true, cloudSyncEnabled: false)
+            var stores: [NoteStore?] = []
+            var journals: [NoteDraftJournal?] = []
+            func install(_ index: Int) async {
+                let store = NoteStore(container: container, persist: gate.save, attachmentFileStore: files)
+                store.recoveryReferencedAttachmentIDs = {
+                    if owners.unknown { throw PersistenceGate.Failure() }
+                    return owners.live[index]
+                }
+                await store.waitForAttachmentReconciliation()
+                if stores.count <= index { stores.append(store) } else { stores[index] = store }
+                let journal = NoteDraftJournal(directory: journalRoot)
+                journal.liveReferencedIDs = { owners.live[index] }
+                if journals.count <= index { journals.append(journal) } else { journals[index] = journal }
             }
+            for index in 0..<3 { await install(index) }
+            let bytes = Data("generated owner \(seed)".utf8), id = UUID(), noteID = UUID()
+            let ref = AttachmentFileReference(id: id, digest: NotePayloadDigest.sha256(bytes), filename: "owned.txt", payload: bytes)
+            let item = StagedNoteAttachment(id: id, filename: ref.filename, contentTypeIdentifier: "public.plain-text",
+                byteCount: Int64(bytes.count), digest: ref.digest, data: bytes)
+            let document = NoteDocument(blocks: [.text("Owner"), .file(attachmentID: id, filename: ref.filename,
+                contentTypeIdentifier: item.contentTypeIdentifier, byteCount: item.byteCount)])
+            let content = try NoteContentCodec.encode(document)
+            // Deliberately divergent duplicate UUID rows: either physical row
+            // reaching the attachment protects it, regardless of presentation.
+            let durable = ModelContext(container)
+            let left = NoteItem(id: noteID, title: "Owner"), right = NoteItem(id: noteID, title: "Other replica")
+            left.content = content; right.content = try NoteContentCodec.encode(NoteDocument(blocks: [.text("Other replica")]))
+            durable.insert(left); durable.insert(right); try durable.save()
+            for store in stores { store?.refresh(); await store?.waitForAttachmentReconciliation() }
+            var diskOwns = true
+            var checkpointClaim: NoteRecoveryClaim?
+            let checkpointID = UUID()
+            let entry = NoteDraftJournalEntry(noteID: checkpointID, isPersisted: false, baseRevisionID: nil, content: content,
+                selectionLocation: 0, selectionLength: 0, staged: [.init(id: id, filename: item.filename,
+                contentTypeIdentifier: item.contentTypeIdentifier, byteCount: item.byteCount, digest: item.digest)], savedAt: Date())
+            for step in 0..<40 {
+                let index = rng.next(3), action = step < 8 ? step : rng.next(8)
+                let url = try await XCTUnwrapAsync(try await files.ensureMaterialized(ref))
+                switch action {
+                case 0: owners.live[index] = [id]
+                case 1: owners.live[index] = []
+                case 2:
+                    stores[index] = nil; journals[index] = nil
+                    await install(index)
+                case 3:
+                    checkpointClaim = try await journals[index]?.writeDurably(entry, staged: [item], replacing: checkpointClaim)
+                case 4:
+                    if let checkpointClaim { try await journals[index]?.discardOwnedDurably(noteID: checkpointID, claim: checkpointClaim) }
+                    checkpointClaim = nil
+                case 5:
+                    left.content = diskOwns ? right.content : content
+                    try durable.save(); diskOwns.toggle()
+                    for store in stores { store?.refresh(); await store?.waitForAttachmentReconciliation() }
+                case 6:
+                    gate.shouldFail = true
+                    XCTAssertNil(stores[index]?.create(title: "Failed save"))
+                    gate.shouldFail = false
+                default:
+                    let store = try XCTUnwrap(stores[index])
+                    var changed = false
+                    store.recoveryReferencedAttachmentIDsDurably = {
+                        if !changed { changed = true; await Task.yield(); owners.live[index] = [id] }
+                        return owners.live[index]
+                    }
+                    try await collector.removeMaterializations([ref])
+                    store.recoveryReferencedAttachmentIDsDurably = nil
+                }
+                owners.unknown = step % 11 == 0
+                try await collector.removeMaterializations([ref])
+                let mustExist = diskOwns || owners.unknown || owners.live.contains { $0.contains(id) }
+                if mustExist { XCTAssertEqual(try Data(contentsOf: url), bytes, "seed=\(seed) step=\(step) action=\(action)") }
+                if checkpointClaim != nil {
+                    let stagedURL = journalRoot.appendingPathComponent("staged").appendingPathComponent(id.uuidString)
+                    XCTAssertEqual(try Data(contentsOf: stagedURL), bytes)
+                }
+                owners.unknown = false
+            }
+            // Release every physical and cached owner before asserting eventual
+            // collection; a surviving cache is also a reachable byte owner.
+            owners.live = [[], [], []]
+            durable.delete(left); durable.delete(right); try durable.save()
+            for store in stores { store?.refresh(); await store?.waitForAttachmentReconciliation() }
+            stores = []; journals = []
+            let finalJournal = NoteDraftJournal(directory: journalRoot)
+            if let checkpointClaim { try await finalJournal.discardOwnedDurably(noteID: checkpointID, claim: checkpointClaim) }
+            _ = try await finalJournal.readRecoveryEntries()
+            XCTAssertFalse(FileManager.default.fileExists(atPath: journalRoot.appendingPathComponent("staged").appendingPathComponent(id.uuidString).path))
+            try await collector.removeMaterializations([ref])
+            let remaining = try await collector.existingMaterializedURL(for: ref)
+            XCTAssertNil(remaining)
+        }
+    }
+}
+
+@MainActor
+extension PhaseXHunt6Tests {
+    func testH8_06SynchronousCommitEditsRemainDirty() async throws {
+        let store = try makeTestNoteStore(attachmentFileStore: makeTestAttachmentFileStore())
+        let id = try store.createDocumentNote(id: UUID(), document: NoteDocument(blocks: [.text("A")])).get().noteID
+        let page = NotesPageController(store: store, journal: NoteDraftJournal(directory: ownedTemporaryDirectory(prefix: "H8CommitEdit")),
+            saveDelay: .seconds(600), durabilityDelay: .seconds(600))
+        await page.startAndWait()
+        XCTAssertTrue(page.open(noteID: id))
+        let session = try XCTUnwrap(page.active)
+        XCTAssertTrue(session.engine.performEdit(NSRange(location: 1, length: 0), with: NSAttributedString(string: "B"), name: "Type"))
+        store.documentSaveCommitted = { _, _ in
+            store.documentSaveCommitted = nil
+            XCTAssertTrue(session.engine.performEdit(NSRange(location: 2, length: 0), with: NSAttributedString(string: "C"), name: "Reentrant type"))
+        }
+        XCTAssertTrue(page.save(session))
+        XCTExpectFailure("H8-06 synchronous commit sibling") { XCTAssertEqual(session.state, .dirty) }
+        await XCTAssertTrueAsync(await page.preserveAllDurably())
+        XCTExpectFailure("H8-06 synchronous commit preservation") {
+            XCTAssertEqual(store.loadDocument(noteID: id)?.content.document, session.engine.document())
+        }
+    }
+
+    func testH8_07PreparedProjectionCannotSubstituteAnotherDocument() throws {
+        let a = NoteDocument(blocks: [.text("Prepared A")]), b = NoteDocument(blocks: [.text("Requested B")])
+        let prepared = try PreparedNoteDocument(a)
+        for route in 0..<3 {
+            let store = try makeTestNoteStore(attachmentFileStore: makeTestAttachmentFileStore())
+            let id = UUID()
+            if route == 0 {
+                _ = try store.createDocumentNote(id: id, document: b, prepared: prepared).get()
+            } else {
+                let revision = try store.createDocumentNote(id: id, document: a).get().revisionID
+                _ = try store.saveDocument(noteID: id, document: b, baseRevisionID: revision, prepared: prepared,
+                    tags: route == 2 ? ["tag"] : nil).get()
+            }
+            XCTExpectFailure("H8-07") { XCTAssertEqual(store.loadDocument(noteID: id)?.content.document, b) }
         }
     }
 }
