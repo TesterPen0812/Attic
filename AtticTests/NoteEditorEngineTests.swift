@@ -55,6 +55,38 @@ final class NoteEditorEngineTests: XCTestCase {
         for character in text { textView.insertText(String(character), replacementRange: NSRange(location: NSNotFound, length: 0)) }
     }
 
+    // H12-02: normal slash insertion and typing, in an unshown window.
+    func testH12_02TypingAfterDividerKeepsTheWholeLineAboveFooter() throws {
+        for withImage in [false, true] {
+            var blocks: [NoteBlock] = [.text("Long note")]
+            if withImage { blocks.append(.image(id: UUID(), attachmentID: UUID(), pixelWidth: 800, pixelHeight: 400)) }
+            blocks += (0..<28).map { .text("Body line \($0)") }
+            let (engine, view) = makeEngine(NoteDocument(blocks: blocks), window: true)
+            let scroll = try XCTUnwrap(engine.scrollView)
+            scroll.frame.size = NSSize(width: 320, height: 464)
+            scroll.automaticallyAdjustsContentInsets = false
+            scroll.contentInsets = NSEdgeInsets(top: 80, left: 0, bottom: 92, right: 0)
+            view.setSelectedRange(NSRange(location: engine.textStorage.length, length: 0))
+            view.insertNewline(nil)
+            type("/divider", view)
+            view.insertNewline(nil)
+            XCTAssertTrue(engine.document().blocks.contains { $0.kind == .divider })
+            type("Text after divider", view)
+            RunLoop.main.run(until: Date().addingTimeInterval(0.15))
+            view.layoutSubtreeIfNeeded()
+            let line = (engine.textStorage.string as NSString).range(of: "Text after divider")
+            let rect = try XCTUnwrap(engine.rect(for: line))
+            let clip = view.convert(scroll.contentView.bounds, from: scroll.contentView)
+            print("H12_02 image=\(withImage) line=\(rect) clip=\(clip) inset=\(scroll.contentInsets) frame=\(view.frame)")
+            XCTAssertGreaterThanOrEqual(rect.minY, clip.minY + scroll.contentInsets.top - 1)
+            XCTAssertLessThanOrEqual(rect.maxY, clip.maxY - scroll.contentInsets.bottom + 1,
+                                     "the whole typed line clears the footer, image=\(withImage)")
+            XCTAssertFalse(view.window!.isVisible)
+            XCTAssertFalse(view.window!.isKeyWindow)
+            engine.detachView()
+        }
+    }
+
     // MARK: Drawing
 
     func testObjectsAreDrawnFromTheDesignSystem() {
