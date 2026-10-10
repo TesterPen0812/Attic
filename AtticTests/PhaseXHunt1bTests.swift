@@ -694,6 +694,49 @@ final class PhaseXHunt1bTests: XCTestCase {
         XCTAssertEqual(try Data(contentsOf: file), bytes)
     }
 
+    func testH6_01ActualCoordinatorRetryReopensOwnedDiskStoreWithFreshContexts() async throws {
+        let root = ownedTemporaryDirectory(prefix: "Hunt4DiskStartup")
+        let attachments = root.appendingPathComponent("Attachments", isDirectory: true)
+        try FileManager.default.createDirectory(at: attachments, withIntermediateDirectories: true)
+        let token = UUID().uuidString
+        try Data(token.utf8).write(to: attachments.appendingPathComponent(AppRuntimeEnvironment.testAttachmentRootOwnerMarkerName))
+        let suite = "H6Startup." + UUID().uuidString
+        addTeardownBlock { UserDefaults(suiteName: suite)?.removePersistentDomain(forName: suite) }
+        let runtime = AppRuntimeEnvironment(environment: ["ATTIC_TESTING": "1", "ATTIC_TEST_DEFAULTS_SUITE": suite,
+            "ATTIC_TEST_ATTACHMENT_ROOT": attachments.path, "ATTIC_TEST_ATTACHMENT_ROOT_OWNER_TOKEN": token],
+            arguments: [], applicationSupportURL: root)
+        let diskRoot = root.appendingPathComponent("Store", isDirectory: true)
+        let initial = try PersistenceController.makeContainer(cloudSyncEnabled: false, storeDirectory: diskRoot)
+        let id = UUID()
+        let context = ModelContext(initial)
+        context.insert(TaskItem(id: id, title: "Keep this disk task"))
+        try context.save()
+        var attempts = 0
+        let startup = AppStartup<AppCoordinator> {
+            try AppCoordinator(runtime: runtime, openStore: {
+                attempts += 1
+                if attempts == 1 { throw NSError(domain: "Owned store denied", code: 1) }
+                return try PersistenceController.makeContainer(cloudSyncEnabled: false, storeDirectory: diskRoot)
+            })
+        }
+        XCTAssertNil(startup.value)
+        XCTAssertNotNil(startup.failureMessage)
+        XCTAssertEqual(try ModelContext(initial).fetch(FetchDescriptor<TaskItem>()).map(\.id), [id])
+        startup.retry()
+        let coordinator = try XCTUnwrap(startup.value)
+        XCTAssertEqual(attempts, 2)
+        XCTAssertEqual(coordinator.store.task(withID: id)?.title, "Keep this disk task")
+        XCTAssertEqual(coordinator.store.container.configurations.first?.url, initial.configurations.first?.url)
+        XCTAssertFalse(coordinator.store.container === initial)
+        XCTAssertFalse(coordinator.store.container.mainContext === initial.mainContext)
+        XCTAssertEqual(coordinator.globalShortcutRegistration, .notRegistered)
+        coordinator.start()
+        XCTAssertEqual(coordinator.globalShortcutRegistration, .notRegistered, "Unit runtime must not start interactive services")
+        await coordinator.noteStore.waitForAttachmentReconciliation()
+        startup.retry()
+        XCTAssertEqual(attempts, 2)
+    }
+
     func testH6_02DisplayRemovalReclampsPinnedFrameEvenWhenHeightIsUnchanged() throws {
         let frame = CGRect(x: 2200, y: 100, width: 272, height: 300)
         let remaining = CGRect(x: -1000, y: 28, width: 1000, height: 720)

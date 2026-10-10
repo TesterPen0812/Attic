@@ -422,10 +422,10 @@ final class AppCoordinator: ObservableObject {
     private var performanceSignalSource: (any DispatchSourceSignal)?
     private var performancePhaseIndex = 0
 
-    private init() throws {
+    init(runtime: AppRuntimeEnvironment = AppRuntimeEnvironment(),
+         openStore: (() throws -> ModelContainer)? = nil) throws {
         PerformanceSignposts.beginLaunch()
-        let environment = ProcessInfo.processInfo.environment
-        let runtime = AppRuntimeEnvironment(environment: environment)
+        let environment = runtime.environment
         let isUITesting = runtime.isUITesting
         let isRunningTests = runtime.isRunningTests
         let externalPerformanceRoot = PerformanceProbe.validatedRoot(environment: environment)
@@ -472,7 +472,9 @@ final class AppCoordinator: ObservableObject {
         }
         #endif
         let container: ModelContainer
-        if let performanceRoot {
+        if let openStore {
+            container = try PerformanceSignposts.storeOpen(openStore)
+        } else if let performanceRoot {
             do {
                 container = try PerformanceSignposts.storeOpen { try PersistenceController.makeCanvasUITestContainer(
                     reset: performanceSeedOnly, baseDirectory: performanceRoot
