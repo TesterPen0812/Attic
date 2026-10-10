@@ -880,13 +880,15 @@ extension View {
     /// responder … but it is in a different window"). With accessibility
     /// or Full Keyboard Access on, the card's field then lost the keyboard.
     func atticDropdownFocus(_ focus: FocusState<Bool>.Binding, when enabled: Bool = true) -> some View {
-        modifier(AtticDropdownFocusModifier(focus: { focus.wrappedValue = true }, enabled: enabled))
+        modifier(AtticDropdownFocusModifier(focus: { if !focus.wrappedValue { focus.wrappedValue = true } }, enabled: enabled))
     }
 
     /// `atticDropdownFocus` for a card with a field and a list: the field
     /// takes the keyboard.
     func atticDropdownFocus(_ focus: FocusState<AtticDropdownFocusTarget?>.Binding, when enabled: Bool = true) -> some View {
-        modifier(AtticDropdownFocusModifier(focus: { focus.wrappedValue = .field }, enabled: enabled))
+        // Only while nothing in the card has the keyboard: the opening's
+        // focus never undoes a move the person already made (Tab).
+        modifier(AtticDropdownFocusModifier(focus: { if focus.wrappedValue == nil { focus.wrappedValue = .field } }, enabled: enabled))
     }
 }
 
@@ -1039,9 +1041,15 @@ final class AtticDropdownPresenter {
         if takesKeyboard { Self.openCount += 1 }
         previousResponder = Self.owner(of: window.firstResponder)
         install(in: window)
+        // The host takes the keyboard now, while nothing can have reached
+        // the card: deferred to the next turn, a cold first opening ran it
+        // after the first Tab, and it put the keyboard back in the field
+        // (H5-04, CI). A host still waiting to join the window (a layout
+        // pass) takes it on the next turn.
+        if takesKeyboard, host.window != nil { takeKeyboard() }
         DispatchQueue.main.async { [weak self] in
             guard let self, self.isOpen else { return }
-            if self.takesKeyboard { self.takeKeyboard() }
+            if self.takesKeyboard, self.stage.focusRequest == 0 { self.takeKeyboard() }
             self.stage.shown = true
         }
     }
@@ -1194,7 +1202,9 @@ final class AtticDropdownPresenter {
     private func takeKeyboard() {
         guard let host, let window = host.window else { return }
         host.layoutSubtreeIfNeeded()
-        window.makeFirstResponder(host)
+        // A card that already has the keyboard keeps it where it is.
+        let inside = (window.firstResponder as? NSView).map { $0 === host || $0.isDescendant(of: host) } ?? false
+        if !inside { window.makeFirstResponder(host) }
         stage.focusRequest += 1
     }
 

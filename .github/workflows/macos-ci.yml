@@ -106,7 +106,6 @@ jobs:
             testH5_04ATabBeforeTheOpeningHandoffIsNotUndoneByIt \
             testH5_04AReusedPresenterOpensItsNextCardAsItOpenedTheFirst \
             testH5_04TabHandsTheKeyboardBetweenFieldAndRowsOnAReusedPresenter || status=1
-          run_tests diagnosis 1 testZZDiagnoseNativeTagPickerTab || true
           exit $status
       - name: Upload focused keyboard evidence
         if: always()
