@@ -916,6 +916,8 @@ final class AtticDropdownPresenter {
     private var openIdealWidth: CGFloat = 0
     private var naturalHeight: CGFloat = 0
     private var contentKeyHandler: ((NSEvent) -> Bool)?
+    // Nil outside diagnostic tests; callers buffer observations until the interaction ends.
+    var keyboardTrace: ((String) -> Void)?
     var label = ""
     var design = AtticDesignContext()
     var content = AnyView(EmptyView())
@@ -938,13 +940,18 @@ final class AtticDropdownPresenter {
             .environment(\.atticDropdownContentWidthChanged, contentWidth == nil ? { [weak self] width in
                 self?.grow(toWidth: width)
             } : nil)
-            .environment(\.atticDropdownRegisterKeys, { [weak self] handler in self?.contentKeyHandler = handler })
+            .environment(\.atticDropdownRegisterKeys, { [weak self] handler in
+                self?.keyboardTrace?("register handler=\(handler != nil)")
+                self?.contentKeyHandler = handler
+            })
             .environment(\.atticDropdownTakeListKeyboard, { [weak self] in
                 guard let host = self?.host, let window = host.window else { return }
                 // A Bool focus request can highlight the list while AppKit's
                 // shared field editor still receives Space and arrow keys.
                 // Release it inside this card before requesting SwiftUI focus.
-                window.makeFirstResponder(host)
+                self?.keyboardTrace?("handoff before=\(String(describing: window.firstResponder))")
+                let accepted = window.makeFirstResponder(host)
+                self?.keyboardTrace?("handoff accepted=\(accepted) after=\(String(describing: window.firstResponder))")
             })
             .atticDesign(design))
     }
@@ -1177,9 +1184,13 @@ final class AtticDropdownPresenter {
 
     /// Let the active input method cancel composition before dismissing.
     func handleKey(_ event: NSEvent) -> NSEvent? {
+        keyboardTrace?("key code=\(event.keyCode) open=\(isOpen) window=\(event.window === host?.window) handler=\(contentKeyHandler != nil) responder=\(String(describing: event.window?.firstResponder))")
         guard isOpen, event.type == .keyDown, event.window === host?.window,
               (event.window?.firstResponder as? NSTextInputClient)?.hasMarkedText() != true else { return event }
-        if contentKeyHandler?(event) == true { return nil }
+        if contentKeyHandler?(event) == true {
+            keyboardTrace?("handled code=\(event.keyCode) responder=\(String(describing: event.window?.firstResponder))")
+            return nil
+        }
         guard event.keyCode == 53,
               event.modifierFlags.intersection([.command, .option, .control, .shift]).isEmpty else { return event }
         dismiss()

@@ -911,10 +911,13 @@ final class AtticDropdownTests: XCTestCase {
         window.contentView?.addSubview(anchor)
         var toggled: [String] = []
         var dismissals = 0
+        var keyboardTrace: [String] = []
+        defer { keyboardTrace.forEach { print("H5-04 native trace: \($0)") } }
         func open() throws -> AtticDropdownPresenter {
             window.makeFirstResponder(original)
             let presenter = AtticDropdownPresenter()
             presenter.design = AtticDesignContext(reduceMotion: true)
+            presenter.keyboardTrace = { keyboardTrace.append($0) }
             presenter.onDismiss = { dismissals += 1 }
             presenter.content = AnyView(TaskTagPickerView(allTags: ["design", "home", "launch"], state: { $0 == "home" ? .on : .off },
                                                           onToggle: { toggled.append($0) }, onCreate: { _, _ in true }))
@@ -931,6 +934,7 @@ final class AtticDropdownTests: XCTestCase {
                 count += 1
             }
             spin(0.2)
+            keyboardTrace.append("settled responder=\(String(describing: window.firstResponder))")
         }
         func press(_ characters: String, _ code: UInt16) {
             deliver([NSEvent.EventType.keyDown, .keyUp].map { type in
