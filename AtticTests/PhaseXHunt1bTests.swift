@@ -1084,7 +1084,7 @@ final class PhaseXHunt5Tests: XCTestCase {
             XCTAssertNil(released)
             // Clean even the red repro's run-loop residue before leaving.
             defer { timer.invalidate() }
-            XCTExpectFailure("H7-02") { XCTAssertFalse(timer.isValid) }
+            do { XCTAssertFalse(timer.isValid) }
         }
     }
 
@@ -1109,7 +1109,7 @@ final class PhaseXHunt5Tests: XCTestCase {
         defer { save.cancel(); deadline.cancel() }
         // Retain the session as a displaced editor might: its old controller
         // must not leave deadlines runnable just because that editor survives.
-        XCTExpectFailure("H7-03") {
+        do {
             XCTAssertTrue(save.isCancelled)
             XCTAssertTrue(deadline.isCancelled)
         }
@@ -1125,6 +1125,6 @@ final class PhaseXHunt5Tests: XCTestCase {
         session = nil
         XCTAssertNil(released)
         defer { deadline.cancel() }
-        XCTExpectFailure("H7-03") { XCTAssertTrue(deadline.isCancelled) }
+        do { XCTAssertTrue(deadline.isCancelled) }
     }
 }

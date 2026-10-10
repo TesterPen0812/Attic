@@ -186,6 +186,17 @@ final class NoteSession: ObservableObject, Identifiable {
 /// - a never-saved draft with no content is discarded, nothing else is.
 @MainActor
 final class NotesPageController: ObservableObject {
+    isolated deinit {
+        for session in cache.values {
+            session.saveTask?.cancel()
+            session.durabilityTask?.cancel()
+            session.pauseTask?.cancel()
+        }
+        versionHistoryCommandTask?.cancel()
+        // Serialized recovery writes keep their owners until they finish.
+        // Teardown must not abandon a checkpoint or an admitted import.
+    }
+
     enum LeaveReason { case openNote, newNote, library, pageSwitch, hide, quit }
     @Published private(set) var active: NoteSession?
     @Published private(set) var historyBrowser: NoteHistoryBrowser?
