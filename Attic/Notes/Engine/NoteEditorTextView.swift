@@ -138,8 +138,17 @@ final class NoteEditorTextView: NSTextView, NSAccessibilityCustomRotorItemSearch
 
     private var monoCopyPlacementScheduled = false
 
+    /// The caret, fitted to the glyphs (F-03).
+    private(set) lazy var caretFitter = NoteCaretFitter(textView: self)
+
+    override func updateInsertionPointStateAndRestartTimer(_ restartFlag: Bool) {
+        super.updateInsertionPointStateAndRestartTimer(restartFlag)
+        caretFitter.refresh()
+    }
+
     override func setSelectedRanges(_ ranges: [NSValue], affinity: NSSelectionAffinity, stillSelecting: Bool) {
         super.setSelectedRanges(ranges, affinity: affinity, stillSelecting: stillSelecting)
+        caretFitter.refresh()
         guard engine != nil, !stillSelecting else { return }
         // After the text system has finished with this change (placing
         // Copy reads the block's layout).
@@ -282,6 +291,7 @@ final class NoteEditorTextView: NSTextView, NSAccessibilityCustomRotorItemSearch
             updatePlaceholder()
             onLayout?()
         }
+        caretFitter.refresh()
     }
 
     // MARK: The title's placeholder
