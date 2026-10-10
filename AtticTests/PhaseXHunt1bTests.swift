@@ -1309,29 +1309,36 @@ extension PhaseXHunt5Tests {
         for failures in [1, 3, 7] {
             let root = ownedTemporaryDirectory(prefix: "H7Startup"), disk = root.appendingPathComponent("Store")
             let runtime = try isolatedRuntime(root), id = UUID()
-            let url = try autoreleasepool {
+            var attempts = 0
+            let (startup, url) = try autoreleasepool {
                 let container = try PersistenceController.makeContainer(cloudSyncEnabled: false, storeDirectory: disk)
                 let context = ModelContext(container)
                 context.insert(TaskItem(id: id, title: "Durable before startup"))
                 try context.save()
-                return try XCTUnwrap(container.configurations.first?.url)
+                let url = try XCTUnwrap(container.configurations.first?.url)
+                let bytes = try Data(contentsOf: url)
+                let startup = AppStartup<AppCoordinator> {
+                    try AppCoordinator(runtime: runtime, openStore: {
+                        attempts += 1
+                        if attempts <= failures { throw PersistenceGate.Failure() }
+                        return try PersistenceController.makeContainer(cloudSyncEnabled: false, storeDirectory: disk)
+                    })
+                }
+                // Keep seed teardown outside the measured failed-open interval:
+                // SwiftData may finish SQLite housekeeping after release.
+                try withExtendedLifetime((container, context)) {
+                    for attempt in 1...failures {
+                        XCTAssertEqual(attempts, attempt)
+                        XCTAssertNil(startup.value, "No coordinator/stores/interactive services before success")
+                        XCTAssertEqual(startup.failureMessage, "Attic could not open its local data. Try again. Your existing data is kept.")
+                        XCTAssertEqual(try Data(contentsOf: url), bytes)
+                        if attempt < failures { startup.retry() }
+                    }
+                }
+                return (startup, url)
             }
-            let bytes = try Data(contentsOf: url)
-            var attempts = 0
-            let startup = AppStartup<AppCoordinator> {
-                try AppCoordinator(runtime: runtime, openStore: {
-                    attempts += 1
-                    if attempts <= failures { throw PersistenceGate.Failure() }
-                    return try PersistenceController.makeContainer(cloudSyncEnabled: false, storeDirectory: disk)
-                })
-            }
-            for attempt in 1...failures {
-                XCTAssertEqual(attempts, attempt)
-                XCTAssertNil(startup.value, "No coordinator/stores/interactive services before success")
-                XCTAssertEqual(startup.failureMessage, "Attic could not open its local data. Try again. Your existing data is kept.")
-                XCTAssertEqual(try Data(contentsOf: url), bytes)
-                startup.retry()
-            }
+            // Both seed contexts are gone before a successful relaunch-style open.
+            startup.retry()
             let coordinator = try XCTUnwrap(startup.value)
             XCTAssertEqual(attempts, failures + 1)
             XCTAssertNil(startup.failureMessage)
