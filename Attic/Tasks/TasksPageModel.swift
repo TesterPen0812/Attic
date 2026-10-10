@@ -214,6 +214,9 @@ final class TasksPageModel: ObservableObject {
     /// A quick-look subtask being renamed in place (round 10), its text,
     /// and whether its save failed ("Not saved · Retry").
     @Published var renamingSubtaskID: UUID?
+    /// A rename belongs to the quick look it opened in. A move elsewhere
+    /// cannot leave its editor holding that original page's keys.
+    var renamingSubtaskParentID: UUID?
     @Published var subtaskRename = ""
     @Published var subtaskRenameFailed = false
     /// The subtask line that has the keyboard (round 10b). Not published: it
@@ -1151,12 +1154,28 @@ final class TasksPageModel: ObservableObject {
     }
 
     private func pruneMissing() {
-        let live = { (id: UUID) in self.store.task(withID: id) != nil || self.tab == .done }
+        let live = { (id: UUID) in
+            self.tab == .done ? self.store.listedTask(withID: id) != nil : self.store.task(withID: id) != nil
+        }
         let keptSelection = selection.filter(live)
         if keptSelection != selection { selection = keptSelection }
         if let anchor = selectionAnchor, !live(anchor) { selectionAnchor = nil }
-        if let editingTitleID, store.task(withID: editingTitleID) == nil, tab != .done { cancelEditing() }
-        if let newSubtaskParentID, store.task(withID: newSubtaskParentID) == nil { self.newSubtaskParentID = nil }
+        // Check logical ownership, not the anchor's one-/two-line view
+        // lifetime. Done-log rows remain valid while they are listed.
+        func hasRow(_ id: UUID) -> Bool {
+            guard live(id) else { return false }
+            // Done reloads its paged projection asynchronously. An empty
+            // intermediate page is not evidence that a listed task vanished.
+            if tab == .done { return store.listedTask(withID: id)?.status == .done }
+            return rows(for: tab).contains { $0.id == id }
+        }
+        if let editingTitleID, !hasRow(editingTitleID) { cancelEditing() }
+        if let newSubtaskParentID, !hasRow(newSubtaskParentID) { cancelEditing() }
+        if let id = renamingSubtaskID {
+            let parent = store.task(withID: id)?.parentID
+            let hasOwner = parent.map { $0 == renamingSubtaskParentID && hasRow($0) } ?? false
+            if !hasOwner { cancelSubtaskRename() }
+        }
     }
 
     // MARK: - State changes

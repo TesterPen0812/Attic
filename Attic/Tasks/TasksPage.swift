@@ -626,8 +626,18 @@ struct TasksPage: View {
     /// the panel and the page's keys (H10-03).
     private func closePickerOfAMissingRow() {
         guard let open = metaPopover else { return }
-        let rows = open.tab == .done ? model.doneDays().flatMap(\.rows) : model.rows(for: open.tab)
-        if !rows.contains(where: { $0.id == open.id }) { metaPopover = nil }
+        let hasAnchor: Bool
+        if open.tab == .done {
+            let task = store.listedTask(withID: open.id)
+            let query = model.doneSearch.trimmingCharacters(in: .whitespacesAndNewlines)
+            hasAnchor = task?.status == .done && (query.isEmpty || task?.title.localizedStandardContains(query) == true)
+        } else {
+            hasAnchor = model.rows(for: open.tab).contains { $0.id == open.id }
+        }
+        let hasTargets = open.targets.allSatisfy { store.listedTask(withID: $0) != nil }
+        let hasChild = open.kind != .move || (model.expanded.contains(open.id)
+            && open.targets.allSatisfy { store.task(withID: $0)?.parentID == open.id })
+        if !hasAnchor || !hasTargets || !hasChild { metaPopover = nil }
     }
 
     /// A drag in progress and a row's pickers end when the panel hides or

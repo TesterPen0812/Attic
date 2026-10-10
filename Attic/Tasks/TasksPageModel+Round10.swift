@@ -85,6 +85,7 @@ extension TasksPageModel {
         guard let task = store.task(withID: id), task.parentID != nil, renamingSubtaskID != id else { return }
         guard finishEditing() else { return }
         subtaskRename = task.title
+        renamingSubtaskParentID = task.parentID
         renamingSubtaskID = id
     }
 
@@ -100,6 +101,7 @@ extension TasksPageModel {
             // task is gone): a failure from an earlier try is over too
             // (round 12, P2-1: it kept the page's unsaved-edit hold).
             renamingSubtaskID = nil
+            renamingSubtaskParentID = nil
             subtaskRenameFailed = false
             return true
         }
@@ -109,11 +111,13 @@ extension TasksPageModel {
         }
         subtaskRenameFailed = false
         renamingSubtaskID = nil
+        renamingSubtaskParentID = nil
         return true
     }
 
     func cancelSubtaskRename() {
         renamingSubtaskID = nil
+        renamingSubtaskParentID = nil
         subtaskRenameFailed = false
     }
 

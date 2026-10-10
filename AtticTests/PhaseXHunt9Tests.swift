@@ -96,10 +96,8 @@ final class PhaseXHunt9Tests: XCTestCase {
         spin()
         XCTAssertNotNil(store.task(withID: parent.id), "picker/field anchor survives")
         XCTAssertNil(store.task(withID: child.id))
-        XCTExpectFailure("H11-02") {
-            XCTAssertNil(model.renamingSubtaskID, "the missing field cannot keep page keys locked")
-            XCTAssertFalse(model.hasUnsavedEdit, "the missing field's failed-save hold is released")
-        }
+        XCTAssertNil(model.renamingSubtaskID, "the missing field cannot keep page keys locked")
+        XCTAssertFalse(model.hasUnsavedEdit, "the missing field's failed-save hold is released")
     }
 
     private func action(named name: String, label: String, in root: AnyObject) -> NSAccessibilityCustomAction? {
@@ -146,9 +144,7 @@ final class PhaseXHunt9Tests: XCTestCase {
         XCTAssertTrue(library.delete(AtticItemRef(.task, child.id)))
         spin(0.35)
         XCTAssertTrue(model.rows(for: .now).contains { $0.id == parent.id })
-        XCTExpectFailure("H11-03") {
-            XCTAssertFalse(locks.last, "missing target closes the card and releases the page")
-        }
+        XCTAssertFalse(locks.last, "missing target closes the card and releases the page")
         XCTAssertFalse(window.isVisible)
         XCTAssertFalse(window.isKeyWindow)
     }
@@ -165,10 +161,8 @@ final class PhaseXHunt9Tests: XCTestCase {
         XCTAssertTrue(library.delete(AtticItemRef(.task, task.id)))
         spin()
         XCTAssertFalse(model.doneDays().flatMap(\.rows).contains { $0.id == task.id })
-        XCTExpectFailure("H11-04") {
-            XCTAssertFalse(model.selection.contains(task.id))
-            XCTAssertNil(model.editingTitleID, "absent Done rows are not immortal")
-        }
+        XCTAssertFalse(model.selection.contains(task.id))
+        XCTAssertNil(model.editingTitleID, "absent Done rows are not immortal")
     }
 
     func testH11_05DateCachesFollowTimezoneWithinTheSameLocalDay() throws {
@@ -274,9 +268,110 @@ final class PhaseXHunt9Tests: XCTestCase {
         XCTAssertTrue(library.delete(AtticItemRef(.task, parent.id)))
         spin()
         XCTAssertNil(model.newSubtaskParentID)
-        XCTExpectFailure("H11-08") {
-            XCTAssertFalse(model.hasUnsavedEdit, "missing editor cannot hold every subsequent agent reveal")
-            XCTAssertNil(model.failedSave, "or offer a retry against its deleted parent")
-        }
+        XCTAssertFalse(model.hasUnsavedEdit, "missing editor cannot hold every subsequent agent reveal")
+        XCTAssertNil(model.failedSave, "or offer a retry against its deleted parent")
+    }
+
+    func testCoverageRenameSurvivesRollbackThenClosesForMoveAndUndoDoesNotReopenIt() throws {
+        let gate = PersistenceGate()
+        let store = try makeTestStore(persist: gate.save), library = AtticLibrary(tasks: store)
+        let first = try XCTUnwrap(store.create(title: "First"))
+        let second = try XCTUnwrap(store.create(title: "Second"))
+        let child = try XCTUnwrap(store.create(title: "Child", parentID: first.id))
+        let model = TasksPageModel(library: library, services: TasksPageServices())
+        model.setExpanded(first.id, true)
+        model.beginRenamingSubtask(child.id)
+        model.subtaskRename = "Retained draft"
+        gate.shouldFail = true
+        XCTAssertFalse(library.delete(AtticItemRef(.task, child.id)))
+        gate.shouldFail = false
+        spin()
+        XCTAssertEqual(model.renamingSubtaskID, child.id, "failed delete did not remove the owner")
+        XCTAssertEqual(model.subtaskRename, "Retained draft")
+        XCTAssertTrue(library.moveSubtask(child.id, toTask: second.id).isApplied)
+        spin()
+        XCTAssertNil(model.renamingSubtaskID, "moving to another quick look ends the original editor")
+        XCTAssertTrue(library.undo(in: .tasks).isApplied)
+        spin()
+        XCTAssertEqual(store.task(withID: child.id)?.parentID, first.id)
+        XCTAssertNil(model.renamingSubtaskID, "Undo restores the object, not its expired editor")
+        XCTAssertTrue(library.redo(in: .tasks).isApplied)
+        spin()
+        XCTAssertNil(model.renamingSubtaskID)
+    }
+
+    func testCoverageDoneLogEditorSurvivesAnUnrelatedChangeAndFailedDelete() throws {
+        let gate = PersistenceGate()
+        let now = Date()
+        let store = try makeTestStore(now: { now }, persist: gate.save), library = AtticLibrary(tasks: store)
+        let task = try XCTUnwrap(store.create(title: "Archived"))
+        XCTAssertTrue(library.updateTask(task.id, status: .done).isApplied)
+        XCTAssertEqual(store.moveCompletedToDoneLog(before: now.addingTimeInterval(1)), 1)
+        XCTAssertNil(store.task(withID: task.id))
+        XCTAssertNotNil(store.listedTask(withID: task.id))
+        let model = TasksPageModel(library: library, services: TasksPageServices())
+        model.select(tab: .done)
+        model.selectOnly(task.id)
+        model.beginEditingTitle(task.id)
+        model.editingTitle = "Kept draft"
+        _ = try XCTUnwrap(store.create(title: "Neighbour"))
+        spin()
+        XCTAssertEqual(model.editingTitleID, task.id, "archive membership remains live")
+        gate.shouldFail = true
+        XCTAssertFalse(library.delete(AtticItemRef(.task, task.id)))
+        gate.shouldFail = false
+        spin()
+        XCTAssertEqual(model.editingTitleID, task.id)
+        XCTAssertEqual(model.editingTitle, "Kept draft")
+        XCTAssertTrue(model.selection.contains(task.id))
+    }
+
+    func testCoverageFailedSubtaskDraftStaysUntilItsParentActuallyLeaves() throws {
+        let gate = PersistenceGate()
+        let store = try makeTestStore(persist: gate.save), library = AtticLibrary(tasks: store)
+        let parent = try XCTUnwrap(store.create(title: "Parent"))
+        let model = TasksPageModel(library: library, services: TasksPageServices())
+        model.beginAddingSubtask(to: parent.id)
+        model.newSubtaskTitle = "Kept child"
+        gate.shouldFail = true
+        XCTAssertFalse(model.commitNewSubtask())
+        gate.shouldFail = false
+        _ = try XCTUnwrap(store.create(title: "Neighbour"))
+        spin()
+        XCTAssertEqual(model.newSubtaskParentID, parent.id)
+        XCTAssertTrue(model.hasUnsavedEdit)
+        XCTAssertEqual(model.newSubtaskTitle, "Kept child")
+        XCTAssertTrue(library.updateTask(parent.id, status: .backlog).isApplied)
+        spin()
+        XCTAssertNil(model.newSubtaskParentID)
+        XCTAssertFalse(model.hasUnsavedEdit)
+    }
+
+    func testCoverageRowPickerSurvivesTitleReflowAndUndoDoesNotReopenIt() throws {
+        setenv("ATTIC_UI_TEST_META", "tags@0.1", 1)
+        defer { unsetenv("ATTIC_UI_TEST_META") }
+        let store = try makeTestStore(), library = AtticLibrary(tasks: store)
+        let task = try XCTUnwrap(store.create(title: "Short"))
+        XCTAssertTrue(library.updateTask(task.id, tags: ["work"]).isApplied)
+        let model = TasksPageModel(library: library, services: TasksPageServices())
+        final class Locks { var last = false }
+        let locks = Locks()
+        let size = CGSize(width: 340, height: 560)
+        let page = TasksPage(model: model, store: store, layout: PanelPageLayout(cornerSize: 52, panelSize: size),
+            addBarFocused: .constant(false), chrome: TasksPageChrome(editLock: { locks.last = $0 }))
+        let window = window(size)
+        window.contentView = NSHostingView(rootView: page.atticDesign(.default).frame(width: size.width, height: size.height))
+        spin(0.5)
+        XCTAssertTrue(locks.last)
+        XCTAssertTrue(library.updateTask(task.id, title: String(repeating: "Long title ", count: 12)).isApplied)
+        spin(0.3)
+        XCTAssertTrue(locks.last, "reflow preserves logical row membership")
+        XCTAssertTrue(library.delete(AtticItemRef(.task, task.id)))
+        spin(0.3)
+        XCTAssertFalse(locks.last)
+        XCTAssertTrue(library.undo(in: .tasks).isApplied)
+        spin(0.3)
+        XCTAssertNotNil(store.task(withID: task.id))
+        XCTAssertFalse(locks.last, "the restored row does not resurrect the old picker")
     }
 }
