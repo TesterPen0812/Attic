@@ -66,7 +66,6 @@ final class PhaseXHunt8Tests: XCTestCase {
         scroll.layoutSubtreeIfNeeded()
         XCTAssertEqual(rgba(engine.textView?.insertionPointColor), rgba(NoteTextStyle(design: dark).bodyColor),
                        "the note itself took the dark look")
-        XCTExpectFailure("H10-01: the find bar keeps the design it was opened with")
         XCTAssertEqual(rgba(field()?.textColor), rgba(NSColor(dark.tokens.color(.heading))),
                        "the open find bar's field takes the dark ink")
         engine.find.close(returnFocus: false)
@@ -132,7 +131,6 @@ final class PhaseXHunt8Tests: XCTestCase {
         XCTAssertEqual(rgba(try XCTUnwrap(comparisonText()).insertionPointColor), rgba(NoteTextStyle(design: light).bodyColor))
         box.design = dark
         spin(0.3)
-        XCTExpectFailure("H10-02: the comparison's read-only note keeps the design it was opened with")
         XCTAssertEqual(rgba(comparisonText()?.insertionPointColor), rgba(NoteTextStyle(design: dark).bodyColor),
                        "the comparison redraws in the dark look")
         controller.endProposalReview()

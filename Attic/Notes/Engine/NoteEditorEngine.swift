@@ -554,6 +554,7 @@ final class NoteEditorEngine: NSObject, NSTextViewDelegate, NSTextStorageDelegat
         restyle(NSRange(location: 0, length: textStorage.length))
         renderObjects(in: NSRange(location: 0, length: textStorage.length), force: true)
         textView?.insertionPointColor = style.bodyColor
+        find.update(design: design)
         invalidateLayout(NSRange(location: 0, length: textStorage.length))
         // Restyling invalidates TextKit's attachment providers too. Finish
         // their viewport layout before a focused table can be parked at a
