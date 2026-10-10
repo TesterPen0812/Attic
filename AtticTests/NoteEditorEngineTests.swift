@@ -86,6 +86,22 @@ final class NoteEditorEngineTests: XCTestCase {
     }
 
 
+    func testPerf2TableRowOriginsDoNotResumPrefixesPerFrame() {
+        let heights = (0..<500).map { CGFloat(21 + $0 % 7) }
+        let layout = NoteTableLayout(columnWidths: [56, 72], rowHeights: heights, viewportWidth: 128)
+        NoteTableLayout.rowOriginAdditionCount = 0
+        var expected: CGFloat = 0
+        for row in heights.indices {
+            XCTAssertEqual(layout.rowY(row), expected)
+            expected += heights[row]
+        }
+        XCTAssertEqual(layout.rowY(-1), 0)
+        XCTAssertEqual(layout.rowY(heights.count + 1), expected)
+        print("PERF2_ROW_ORIGINS additions=\(NoteTableLayout.rowOriginAdditionCount)")
+        XCTAssertEqual(NoteTableLayout.rowOriginAdditionCount, 0,
+                       "a draw reads existing row origins; it never sums prefixes again")
+    }
+
     func testObjectsAreDrawnFromTheDesignSystem() {
         let (engine, _) = makeEngine()
         for (object, _) in engine.objects() where !(object is NoteImageAttachment) {

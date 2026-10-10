@@ -12,18 +12,41 @@ struct NoteTableLayout: Equatable {
     typealias M = AtticNoteTableMetrics
 
     var columnWidths: [CGFloat]
-    var rowHeights: [CGFloat]
+    let rowHeights: [CGFloat]
+    private let rowOrigins: [CGFloat]
     /// The column the table sits in (its viewport).
     var viewportWidth: CGFloat
 
+    init(columnWidths: [CGFloat], rowHeights: [CGFloat], viewportWidth: CGFloat) {
+        self.columnWidths = columnWidths
+        self.rowHeights = rowHeights
+        self.viewportWidth = viewportWidth
+        var origins: [CGFloat] = [0]
+        origins.reserveCapacity(rowHeights.count + 1)
+        var y: CGFloat = 0
+        for height in rowHeights {
+            y += height
+            origins.append(y)
+            #if DEBUG
+            Self.rowOriginAdditionCount += 1
+            #endif
+        }
+        rowOrigins = origins
+    }
+
     var width: CGFloat { columnWidths.reduce(0, +) }
-    var height: CGFloat { rowHeights.reduce(0, +) }
+    var height: CGFloat { rowOrigins.last ?? 0 }
     var size: CGSize { CGSize(width: width, height: height) }
     /// Wider than the column: it scrolls sideways.
     var scrolls: Bool { width > viewportWidth + 0.5 }
 
     func columnX(_ column: Int) -> CGFloat { columnWidths.prefix(max(0, column)).reduce(0, +) }
-    func rowY(_ row: Int) -> CGFloat { rowHeights.prefix(max(0, row)).reduce(0, +) }
+    #if DEBUG
+    nonisolated(unsafe) static var rowOriginAdditionCount = 0
+    #endif
+    func rowY(_ row: Int) -> CGFloat {
+        rowOrigins[min(max(0, row), rowHeights.count)]
+    }
 
     func cellRect(_ position: NoteTable.Position) -> CGRect {
         guard columnWidths.indices.contains(position.column), rowHeights.indices.contains(position.row) else { return .zero }
