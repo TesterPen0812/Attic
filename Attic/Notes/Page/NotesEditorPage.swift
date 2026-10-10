@@ -39,6 +39,7 @@ struct NotesEditorPage: View {
     /// The stop to focus once the controls have become focusable.
     @State private var pendingStop: NotesKeyboardOrder.Stop?
     @State private var keyMonitor: Any?
+    @State private var filePickerOwner: UUID?
     @State private var postedToastID: UUID?
     /// Whether this page has shown a note yet. The note that the page
     /// opens on arrives without a slide: the page switch moves the page
@@ -155,6 +156,8 @@ struct NotesEditorPage: View {
             }
         }
         .onDisappear {
+            if let filePickerOwner { TaskAttachmentPickerSession.cancel(owner: filePickerOwner) }
+            uiState.setInteractionLock(.notesFilePicker, isActive: false)
             chrome.cancelKeyboardReturn()
             if let keyMonitor { NSEvent.removeMonitor(keyMonitor) }
             keyMonitor = nil
@@ -182,6 +185,7 @@ struct NotesEditorPage: View {
             chrome.cancelKeyboardReturn()
         }
         .onChange(of: controller.active?.id) { _, opened in
+            if let filePickerOwner { TaskAttachmentPickerSession.cancel(owner: filePickerOwner) }
             // Another note: the keyboard return belonged to the last one.
             chrome.cancelKeyboardReturn()
             chrome.tagEditor = nil
@@ -221,12 +225,24 @@ struct NotesEditorPage: View {
                 dismissOwnToast()
             }
         }
-        .fileImporter(isPresented: Binding(get: { chrome.fileRequest != nil },
-                                           set: { if !$0 { chrome.fileRequest = nil } }),
-                      allowedContentTypes: [.item], allowsMultipleSelection: chrome.fileRequest == .insert) { result in
-            finishFileRequest(result)
-        } onCancellation: {
-            finishFileRequest(nil)
+        .onChange(of: chrome.fileRequest, initial: true) { _, request in
+            guard let request else {
+                if let filePickerOwner { TaskAttachmentPickerSession.cancel(owner: filePickerOwner) }
+                return
+            }
+            let owner = UUID()
+            let sourceSession = controller.active?.id
+            filePickerOwner = owner
+            uiState.setInteractionLock(.notesFilePicker, isActive: true)
+            TaskAttachmentPickerSession.present(owner: owner, parentWindow: controller.active?.engine.textView?.window,
+                allowedTypes: [.item], allowsMultipleSelection: request == .insert) { urls in
+                // A superseded picker must not consume a newer slash,
+                // Retry or Locate ticket, or release its interaction hold.
+                guard filePickerOwner == owner, chrome.presentedFileRequest == request else { return }
+                filePickerOwner = nil
+                uiState.setInteractionLock(.notesFilePicker, isActive: false)
+                finishFileRequest(controller.active?.id == sourceSession && !urls.isEmpty ? .success(urls) : nil)
+            }
         }
         .preference(key: PanelPageNoticeClearancePreferenceKey.self, value: noticeClearance)
         // A group, so its identifier never replaces its controls' own.

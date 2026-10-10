@@ -699,7 +699,7 @@ final class AtticPanelController: NSObject, NSWindowDelegate {
                     hostingView.cancelActiveInteraction(reason: .screenChanged)
                     recoverPanelInsideUsableArea()
                 case .applicationActivated:
-                    recoverPanelInsideUsableArea()
+                    recoverPanelInsideUsableArea(preservingPlacement: true)
                 case .applicationDeactivated:
                     panel.cancelTrackpadSwipe()
                     hostingView.cancelActiveInteraction(reason: .applicationDeactivated)
@@ -1177,7 +1177,8 @@ final class AtticPanelController: NSObject, NSWindowDelegate {
     }
 
     private func recoverPanelInsideUsableArea(
-        preferredScreen: NSScreen? = nil
+        preferredScreen: NSScreen? = nil,
+        preservingPlacement: Bool = false
     ) {
         let frameBeforeWorkAreaRefresh = panel.visibleContentFrame
         guard let workArea = refreshCurrentWorkArea(
@@ -1195,7 +1196,10 @@ final class AtticPanelController: NSObject, NSWindowDelegate {
         }
 
         let targetFrame: CGRect
-        if isWindowDragging || isLiveResizing {
+        if preservingPlacement, workArea.visibleFrame.contains(frameBeforeWorkAreaRefresh) {
+            return
+        }
+        if preservingPlacement || isWindowDragging || isLiveResizing {
             targetFrame = PanelGeometry.constrainedFrame(
                 panel.visibleContentFrame,
                 to: workArea.visibleFrame
