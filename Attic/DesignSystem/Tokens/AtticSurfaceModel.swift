@@ -468,7 +468,6 @@ struct AtticSurfaceModel: Equatable, Sendable {
         glassPressed: AtticRGBA,
         chipSelected: AtticRGBA,
         chipHover: AtticRGBA,
-        doneDisc: AtticRGBA,
         recessed: AtticRGBA,
         tagFill: AtticRGBA,
         tagFillSelected: AtticRGBA
@@ -503,9 +502,7 @@ struct AtticSurfaceModel: Equatable, Sendable {
             p(.disabledIcon, []), p(.disabledIcon, [recessed]),
             // The check mark on its fill (opaque, so the surface below
             // does not matter): done, and done while disabled.
-            p(.onDone, [inks[.doneFill] ?? .black(1)]), p(.onDone, [inks[.disabledIcon] ?? .black(1)]),
-            // A done task's check on its quiet disc (opaque).
-            p(.doneCheck, [doneDisc])
+            p(.onDone, [inks[.doneFill] ?? .black(1)]), p(.onDone, [inks[.disabledIcon] ?? .black(1)])
         ]
     }
 

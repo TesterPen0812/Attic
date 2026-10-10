@@ -1158,6 +1158,9 @@ struct AtticMenuCommand: Identifiable {
     var isHeader = false
     /// For UI tests and automation (Notes' menus): the item's identifier.
     var identifier: String?
+    /// A tag colour's dot before the title (the tag menu's Colour row, tag
+    /// filters and the multi-select tag action).
+    var swatch: AtticTagHue?
     let action: () -> Void
 
     init(
@@ -1186,9 +1189,11 @@ struct AtticMenuCommand: Identifiable {
         startsSection: Bool = false,
         state: AtticCheckState? = nil,
         detail: String? = nil,
+        swatch: AtticTagHue? = nil,
         action: @escaping () -> Void
     ) {
         self.title = title
+        self.swatch = swatch
         self.systemImage = systemImage
         self.shortcut = shortcut
         self.isDestructive = isDestructive
@@ -1439,6 +1444,8 @@ struct AtticMenuItems: View {
     private func label(_ command: AtticMenuCommand) -> some View {
         if let systemImage = command.systemImage {
             SwiftUI.Label(command.title, systemImage: systemImage)
+        } else if let swatch = command.swatch {
+            SwiftUI.Label { Text(verbatim: command.title) } icon: { Image(nsImage: AtticTagSwatch.image(swatch)) }
         } else {
             Text(verbatim: command.title)
         }
@@ -1503,6 +1510,8 @@ enum AtticNativeMenu {
         item.keyEquivalentModifierMask = []
         if let systemImage = command.systemImage, command.state != .mixed {
             item.image = NSImage(systemSymbolName: systemImage, accessibilityDescription: nil)
+        } else if let swatch = command.swatch, command.state != .mixed {
+            item.image = AtticTagSwatch.image(swatch)
         }
         if !command.children.isEmpty {
             item.submenu = make(command.children, title: command.title)

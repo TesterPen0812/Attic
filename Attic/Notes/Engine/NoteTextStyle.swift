@@ -139,8 +139,12 @@ struct NoteTextStyle: Equatable {
     /// are in the text's ink.
     var markerColor: NSColor { secondaryColor }
     var placeholderColor: NSColor { tokens.hintInk.nsColor }
-    var highlightColor: NSColor { tokens.tagFill.nsColor }
+    /// The yellow marker (colour pass, owner 2026-10-10); code keeps its grey.
+    var highlightColor: NSColor { tokens.highlightMarker.nsColor }
     var codeColor: NSColor { tokens.tagFill.nsColor }
+    /// Links: blue, with their underline in the same blue at 55 %.
+    var linkColor: NSColor { tokens.ink(.linkText).nsColor }
+    var linkUnderlineColor: NSColor { tokens.linkUnderline.nsColor }
     /// The Mono block's fill (Light black 4.5 %, Dark white 5.5 %) and,
     /// under Increase Contrast, its edge.
     var codeBlockColor: NSColor { tokens.recessed.nsColor }
@@ -286,7 +290,8 @@ struct NoteTextStyle: Equatable {
         if marks[.strikethrough] != nil { result[.strikethroughStyle] = NSUnderlineStyle.single.rawValue }
         if let url = marks[.link] as? String, let value = URL(string: url) {
             result[.link] = value
-            result[.foregroundColor] = bodyColor
+            result[.foregroundColor] = linkColor
+            result[.underlineColor] = linkUnderlineColor
         }
         return result
     }

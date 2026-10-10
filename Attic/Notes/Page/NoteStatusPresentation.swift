@@ -95,6 +95,15 @@ enum NoteStatusPresentation {
         return (noticeRules.map(\.headline) + [problemFallbackHeadline, newsFallbackHeadline]).filter { seen.insert($0).inserted }
     }
 
+    /// A notice that needs a look but lost nothing: something couldn't be
+    /// read (an attachment, images in a copy). It takes the amber icon;
+    /// other notices keep the grey one (colour pass, owner 2026-10-10).
+    static func isCaution(notice message: String) -> Bool {
+        let lowered = message.localizedLowercase
+        return ["couldn’t be read", "couldn't be read", "could not be read", "can’t read", "can't read", "couldn’t read", "couldn't read"]
+            .contains(where: lowered.contains)
+    }
+
     /// The pill's words for a notice: short, whatever the sentence.
     static func headline(forNotice message: String) -> String {
         for rule in noticeRules where rule.match.contains(where: message.contains) { return rule.headline }

@@ -275,9 +275,8 @@ struct TaskRowView: View, Equatable {
         Text(task.title)
             .lineLimit(1)
             .fixedSize(horizontal: true, vertical: false)
-            .strikethrough(task.status == .done, color: .secondary)
-            .foregroundStyle(task.status == .done
-                ? palette.secondaryForegroundColor : palette.primaryForegroundColor)
+            // Done style C (owner, 2026-10-10): the title keeps its ink.
+            .foregroundStyle(palette.primaryForegroundColor)
             .accessibilityLabel(task.title)
     }
 

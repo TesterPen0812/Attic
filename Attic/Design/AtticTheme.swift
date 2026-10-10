@@ -26,6 +26,7 @@ struct TaskStatusMark: View {
     var size: CGFloat = 15
     @Environment(\.atticClearGlassForegroundReadabilityEnabled) private var clearReadabilityEnabled
     @Environment(\.colorScheme) private var colorScheme
+    @Environment(\.colorSchemeContrast) private var contrast
     #if os(macOS)
     @Environment(\.atticPanelThemePalette) private var palette
     #endif
@@ -66,12 +67,25 @@ struct TaskStatusMark: View {
                     .fill(indicatorColor)
                     .frame(width: size * 0.7, height: size * 0.7)
             case .done:
+                #if os(macOS)
+                // The design system's done mark (owner, 2026-10-10): the
+                // title's ink with the inverse tick, as on the Tasks page.
+                let tokens = AtticDesignContext(mode: colorScheme == .dark ? .dark : .light,
+                                                increaseContrast: contrast == .increased).tokens
+                Circle()
+                    .fill(tokens.color(.doneFill))
+                    .frame(width: size, height: size)
+                Image(systemName: "checkmark")
+                    .font(.system(size: size * 0.47, weight: .bold))
+                    .foregroundStyle(tokens.color(.onDone))
+                #else
                 Circle()
                     .fill(indicatorColor)
                     .frame(width: size, height: size)
                 Image(systemName: "checkmark")
                     .font(.system(size: size * 0.47, weight: .bold))
                     .foregroundStyle(checkColor)
+                #endif
             case .backlog:
                 Circle()
                     .stroke(

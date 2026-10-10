@@ -70,8 +70,8 @@ struct AtticNoteMenuButton: View {
     }
 }
 
-/// The tags under a note's title (UX plan § 2): 11.5 medium in the
-/// secondary grey, 12 apart, wrapping to the column. Each tag is a button;
+/// The tags under a note's title (UX plan § 2): 11.5 medium in each tag's
+/// colour, 12 apart, wrapping to the column. Each tag is a button;
 /// in the writing view a click edits the note's tags (owner decision 3).
 struct AtticNoteTagLine: View {
     let tags: [String]
@@ -105,12 +105,14 @@ private struct AtticNoteTagButton: View {
     var body: some View {
         let hover = forced == .hover || hovered
         Button(action: action) {
-            AtticText(verbatim: "#" + name, style: .tag, ink: hover ? .body : .helper)
+            // In the tag's colour (colour pass, owner 2026-10-10).
+            AtticTagLabel(name: name, style: .tag, hovered: hover)
                 .contentShape(Rectangle())
         }
         .buttonStyle(AtticUndimmedButtonStyle())
         .focusEffectDisabled()
         .onHover { hovered = $0 }
+        .atticTagColourMenu(name)
         .help(String(localized: "Edit tags"))
         .accessibilityLabel(String(localized: "Tag \(name)"))
         .accessibilityHint(String(localized: "Edits this note’s tags"))
@@ -419,12 +421,16 @@ struct AtticTagSuggestionList: View {
     let highlighted: Int
     let onPick: (Int) -> Void
 
+    @Environment(\.atticTagColouring) private var colouring
+
     var body: some View {
         AtticDropdownCard() {
             ForEach(Array(suggestions.enumerated()), id: \.element.id) { index, suggestion in
                 AtticDropdownRow(title: suggestion.isNew ? String(localized: "New tag “#\(suggestion.name)”") : "#" + suggestion.name,
                                 detail: suggestion.isNew ? nil : "\(suggestion.count)",
-                                isHighlighted: index == highlighted, position: index + 1, itemCount: suggestions.count) { onPick(index) }
+                                isHighlighted: index == highlighted,
+                                titleInk: suggestion.isNew ? .body : colouring.hue(for: suggestion.name).ink,
+                                position: index + 1, itemCount: suggestions.count) { onPick(index) }
             }
         }
         .accessibilityElement(children: .contain)
@@ -460,6 +466,7 @@ struct AtticNoteLibraryLine: View {
     var moreTagsCard: (() -> AnyView)?
 
     @Environment(\.atticDesign) private var design
+    @Environment(\.atticTagColouring) private var colouring
     @State private var moreHovered = false
 
     var body: some View {
@@ -522,7 +529,8 @@ struct AtticNoteLibraryLine: View {
 
     private func tabs(_ shown: [String]) -> some View {
         let items = [AtticPageTabs<String?>.Item(page: nil, title: title, accessibilityIdentifier: "notes-library-label")]
-            + shown.map { AtticPageTabs<String?>.Item(page: $0, title: Self.tabTitle($0), accessibilityIdentifier: "notes-library-tag-\($0)") }
+            + shown.map { AtticPageTabs<String?>.Item(page: $0, title: Self.tabTitle($0), accessibilityIdentifier: "notes-library-tag-\($0)",
+                                                      ink: colouring.hue(for: $0).ink) }
         return AtticPageTabs(items: items, selection: Binding(get: { activeTag }, set: { onSelectTag($0) }),
                              groupLabel: String(localized: "Filter notes by tag"))
     }

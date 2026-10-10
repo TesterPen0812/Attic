@@ -556,9 +556,12 @@ struct AtticRowTitleEditor: View {
 ///   whatever the priority.
 /// - **In progress:** the same ring with a 5 pt filled centre dot
 ///   ("working on it") until a subtask is ticked; then a true pie of the
-///   share ticked, with no minimum (owner, 2026-09-26). A task not started
-///   keeps its empty ring whatever its subtasks say (its "☑ n/m" shows it).
-/// - **Done:** a quiet grey disc with a darker grey check.
+///   share ticked, with no minimum (owner, 2026-09-26), capped at 92 % so
+///   all subtasks ticked still leaves a sliver of ring and never reads as
+///   done. A task not started keeps its empty ring whatever its subtasks
+///   say (its "☑ n/m" shows it).
+/// - **Done:** a filled disc in the same ink with its tick in the inverse
+///   (owner, 2026-10-10): only done is filled and ticked.
 /// - **Backlog (Later):** the same ring, dashed.
 ///
 /// Completing: the done disc sweeps in from 12 o'clock, then the check
@@ -624,13 +627,14 @@ struct AtticStatusCircle: View {
             case .done:
                 AtticCompletionMark(
                     completion: completionProgress ?? completion,
-                    ring: tokens.color(isDisabled ? .disabledIcon : Self.ringInk), ringWidth: width, disc: tokens.doneDisc.color
+                    ring: tokens.color(isDisabled ? .disabledIcon : Self.ringInk), ringWidth: width,
+                    disc: tokens.color(isDisabled ? .disabledIcon : .doneFill)
                 )
                 .opacity(discOpacity)
                 AtticCheckShape()
                     .trim(from: 0, to: checkProgress ?? drawnCheck)
-                    .stroke(tokens.color(.doneCheck), style: StrokeStyle(lineWidth: m.checkLineWidth, lineCap: .round, lineJoin: .round))
-                    .atticCheckProbe(id: checkProbeID, ink: .doneCheck, foreground: tokens.ink(.doneCheck))
+                    .stroke(tokens.color(.onDone), style: StrokeStyle(lineWidth: m.checkLineWidth, lineCap: .round, lineJoin: .round))
+                    .atticCheckProbe(id: checkProbeID, foreground: tokens.ink(.onDone))
                     .padding(m.checkInset)
                     .opacity(discOpacity)
             case .backlog:
@@ -665,11 +669,15 @@ struct AtticStatusCircle: View {
         .accessibilityHidden(true)
     }
 
+    /// The largest pie an in-progress task draws: 4 of 4 keeps a sliver of
+    /// open ring, so a full pie never reads as the done disc.
+    static let pieCap = 0.92
+
     /// In progress: the pie's share, or nil (the centre dot) while no
-    /// subtask is ticked. A true share, with no minimum.
+    /// subtask is ticked. A true share, with no minimum, capped at `pieCap`.
     static func pieShare(_ subtasks: (done: Int, total: Int)?) -> Double? {
         guard let subtasks, subtasks.total > 0, subtasks.done > 0 else { return nil }
-        return min(1, Double(subtasks.done) / Double(subtasks.total))
+        return min(pieCap, Double(subtasks.done) / Double(subtasks.total))
     }
 
     /// The spoken state: "in progress, 1 of 3 subtasks".
@@ -930,6 +938,9 @@ struct AtticPageTabs<Page: Hashable>: View {
         let title: String
         /// For UI tests and automation.
         var accessibilityIdentifier: String?
+        /// A tag tab's own colour (colour pass): its words in the tag's hue
+        /// in every state, the selected tab still semibold and underlined.
+        var ink: AtticInk?
         var id: String { title }
     }
 
@@ -965,7 +976,7 @@ struct AtticPageTabs<Page: Hashable>: View {
                             .hidden()
                             .accessibilityHidden(true)
                         AtticText(verbatim: item.title, style: isSelected ? .pageTabSelected : .pageTab,
-                                  ink: isSelected ? .heading : (hovered ? .body : .helper))
+                                  ink: item.ink ?? (isSelected ? .heading : (hovered ? .body : .helper)))
                             .fixedSize()
                     }
                         .frame(height: AtticLayout.pageTabsHeight)
@@ -1242,8 +1253,9 @@ struct AtticTaskRow: View {
                                 // Phase 0's qualities: SF Pro Rounded, medium
                                 // while in progress, in the primary ink.
                                 style: model.state == .inProgress ? .rowTitleActive : .rowTitle,
-                                // Done fades the title, without a strike (v9).
-                                ink: disabled ? .disabledText : (done ? .helper : .heading),
+                                // Done style C (owner, 2026-10-10): the title
+                                // keeps its full ink; the filled mark says done.
+                                ink: disabled ? .disabledText : .heading,
                                 truncates: true,
                                 highlights: model.titleMatchRanges
                             )
@@ -1564,18 +1576,18 @@ private struct AtticDetailsTags: View {
     @State private var hovered = false
 
     var body: some View {
-        let ink: AtticInk = disabled ? .disabledText : .accentText
+        // Each tag in its own colour (colour pass, owner 2026-10-10).
         let content = ViewThatFits(in: .horizontal) {
-            all(ink: ink)
+            all()
             if tags.count > 1 {
                 HStack(spacing: AtticTaskRowMetrics.detailsItemSpacing) {
-                    AtticText(verbatim: "#" + tags[0], style: .rowMeta, ink: ink).fixedSize()
-                    more(ink: ink)
+                    AtticTagLabel(name: tags[0], disabled: disabled).fixedSize()
+                    more()
                 }
             }
             HStack(spacing: AtticTaskRowMetrics.detailsItemSpacing) {
-                AtticText(verbatim: "#" + tags[0], style: .rowMeta, ink: ink, truncates: true)
-                if tags.count > 1 { more(ink: ink) }
+                AtticTagLabel(name: tags[0], disabled: disabled, truncates: true)
+                if tags.count > 1 { more() }
             }
         }
         if let onTags, !disabled {
@@ -1597,15 +1609,15 @@ private struct AtticDetailsTags: View {
         }
     }
 
-    private func all(ink: AtticInk) -> some View {
+    private func all() -> some View {
         HStack(spacing: AtticTaskRowMetrics.detailsItemSpacing) {
             ForEach(tags, id: \.self) { tag in
-                AtticText(verbatim: "#" + tag, style: .rowMeta, ink: ink).fixedSize()
+                AtticTagLabel(name: tag, disabled: disabled).fixedSize()
             }
         }
     }
 
-    private func more(ink: AtticInk) -> some View {
+    private func more() -> some View {
         AtticText(verbatim: "+\(tags.count - 1)", style: .rowMeta, ink: disabled ? .disabledText : .helper)
             .fixedSize()
     }
@@ -1722,9 +1734,9 @@ struct AtticCompletedLine: View {
 // MARK: - Quick look and subtasks
 
 /// A subtask's rounded-square checkbox (tasks keep circles, so the two never
-/// look alike). Done matches a done task: the quiet grey (`doneDisc`) with
-/// a darker grey check (`doneCheck`, 3 : 1 on it); the fill is decoration,
-/// the check is what the appearance check judges.
+/// look alike). Done matches a done task: filled in the title's ink
+/// (`doneFill`) with the inverse tick (`onDone`); the tick is what the
+/// appearance check judges.
 struct AtticSubtaskCheckbox: View {
     let isDone: Bool
 
@@ -1741,10 +1753,10 @@ struct AtticSubtaskCheckbox: View {
         let lineWidth = design.increaseContrast ? m.lineWidthIncreased : m.lineWidth
         ZStack {
             if isDone {
-                shape.fill(tokens.doneDisc.color)
+                shape.fill(tokens.color(.doneFill))
                 AtticCheckShape()
-                    .stroke(tokens.color(.doneCheck), style: StrokeStyle(lineWidth: m.checkLineWidth, lineCap: .round, lineJoin: .round))
-                    .atticCheckProbe(id: checkProbeID, ink: .doneCheck, foreground: tokens.ink(.doneCheck))
+                    .stroke(tokens.color(.onDone), style: StrokeStyle(lineWidth: m.checkLineWidth, lineCap: .round, lineJoin: .round))
+                    .atticCheckProbe(id: checkProbeID, foreground: tokens.ink(.onDone))
                     .padding(m.checkInset)
             } else {
                 shape.inset(by: lineWidth / 2).stroke(tokens.color(.priorityNone), lineWidth: lineWidth)
@@ -1805,7 +1817,8 @@ struct AtticSubtaskRow: View {
             if let renaming, capture == nil {
                 AtticRowTitleEditor(editing: renaming)
             } else {
-                AtticText(verbatim: subtask.title, style: .listBody, ink: subtask.isDone ? .helper : .body, strikethrough: subtask.isDone, truncates: true)
+                // Done style C (owner, 2026-10-10): the title keeps its ink.
+                AtticText(verbatim: subtask.title, style: .listBody, ink: .body, truncates: true)
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .contentShape(Rectangle())
                     .modifier(AtticSubtaskDrag(changed: onDragChanged, ended: onDragEnded, cancelled: onDragCancelled))
@@ -2104,7 +2117,7 @@ struct AtticTaskCard: View {
                     .padding(.leading, m.leadingInset - hitInset)
                     .padding(.top, m.circleTop)
                 VStack(alignment: .leading, spacing: AtticTaskRowMetrics.titleToDetails) {
-                    AtticText(verbatim: model.title, style: .rowTitle, ink: model.state == .done ? .helper : .body, truncates: true)
+                    AtticText(verbatim: model.title, style: .rowTitle, ink: .body, truncates: true)
                         .frame(height: m.titleHeight)
                     if model.hasDetails || model.subtasks != nil {
                         AtticCardDetails(model: model)
@@ -2200,9 +2213,51 @@ private struct AtticCardDetails: View {
 
 // MARK: - Tag
 
-/// A tag: the accent (grey on Original), sentence of `#word`. `inline` is
-/// plain text for details lines; `chip` is a recessed pill that follows the
-/// control corner rule (18 tall, radius 7.5).
+/// A tag set in a line of text, in its colour (colour pass, owner
+/// 2026-10-10): `#word` in the tag's hue on a soft fill of the same hue
+/// that reaches past the words without moving them. Disabled, it is the
+/// disabled grey with no fill.
+struct AtticTagLabel: View {
+    let name: String
+    var style: AtticTextStyle = .rowMeta
+    var disabled = false
+    var hovered = false
+    var truncates = false
+
+    @Environment(\.atticDesign) private var design
+    @Environment(\.atticTagColouring) private var colouring
+
+    var body: some View {
+        let tokens = design.tokens
+        let hue = colouring.hue(for: name)
+        let fill: AtticRGBA = disabled ? .clear : (hovered ? tokens.hover.over(tokens.tagFill(hue)) : tokens.tagFill(hue))
+        AtticText(verbatim: "#" + name, style: style, ink: disabled ? .disabledText : hue.ink, truncates: truncates)
+            .background(
+                RoundedRectangle(cornerRadius: AtticTagMetrics.inlineFillRadius, style: .continuous)
+                    .fill(fill.color)
+                    .padding(.horizontal, -AtticTagMetrics.inlineFillOutset)
+            )
+    }
+}
+
+/// A tag's colour dot (the tag picker's rows, Settings).
+struct AtticTagDot: View {
+    let hue: AtticTagHue
+    var diameter: CGFloat = AtticTagMetrics.dotDiameter
+
+    @Environment(\.atticDesign) private var design
+
+    var body: some View {
+        Circle().fill(design.tokens.tagInk(hue).color)
+            .frame(width: diameter, height: diameter)
+            .accessibilityHidden(true)
+    }
+}
+
+/// A tag in its colour, sentence of `#word`. `inline` sits in a details
+/// line; `chip` is a pill of the tag's hue that follows the control corner
+/// rule (18 tall, radius 7.5). A right-click offers the tag menu's Colour
+/// row where colours can change.
 struct AtticTagChip: View {
     enum Style { case chip, inline }
 
@@ -2212,6 +2267,7 @@ struct AtticTagChip: View {
 
     @Environment(\.atticDesign) private var design
     @Environment(\.atticForcedState) private var forced
+    @Environment(\.atticTagColouring) private var colouring
     @State private var hovered = false
     @State private var probeID = UUID()
 
@@ -2220,19 +2276,43 @@ struct AtticTagChip: View {
         let height = AtticControlSize.tagHeight
         let radius = AtticRadius.control(height: height)
         let hover = forced == .hover || hovered
-        let fill: AtticRGBA = isSelected ? tokens.tagFillSelected : (hover ? tokens.hover.over(tokens.tagFill) : tokens.tagFill)
+        let hue = colouring.hue(for: name)
+        let fill: AtticRGBA = isSelected ? tokens.tagFillSelected(hue) : (hover ? tokens.hover.over(tokens.tagFill(hue)) : tokens.tagFill(hue))
         switch style {
         case .inline:
-            AtticText(verbatim: "#" + name, style: .rowMeta, ink: .accentText)
+            AtticTagLabel(name: name)
         case .chip:
-            AtticText(verbatim: "#" + name, style: .tag, ink: .accentText)
+            AtticText(verbatim: "#" + name, style: .tag, ink: hue.ink)
                 .padding(.horizontal, AtticTagMetrics.horizontalPadding)
                 .frame(height: height)
                 .background(RoundedRectangle(cornerRadius: radius, style: .continuous).fill(fill.color))
                 .onHover { hovered = $0 }
                 .accessibilityLabel(String(localized: "Tag \(name)"))
                 .accessibilityAddTraits(isSelected ? .isSelected : [])
+                .atticTagColourMenu(name)
                 .atticControlProbe("Tag", id: probeID, expectedSize: nil, radius: radius, expectedRadius: 7.5)
+        }
+    }
+}
+
+extension View {
+    /// The tag menu's Colour row on a right-click, where colours can change
+    /// (colour pass, owner 2026-10-10).
+    func atticTagColourMenu(_ tag: String) -> some View {
+        modifier(AtticTagColourMenu(tag: tag))
+    }
+}
+
+private struct AtticTagColourMenu: ViewModifier {
+    let tag: String
+    @Environment(\.atticTagColouring) private var colouring
+
+    func body(content: Content) -> some View {
+        let commands = colouring.colourCommands(for: tag)
+        if commands.isEmpty {
+            content
+        } else {
+            content.contextMenu { AtticMenuItems(commands: commands) }
         }
     }
 }

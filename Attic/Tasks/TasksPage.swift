@@ -29,6 +29,7 @@ struct TasksPage: View {
     var chrome = TasksPageChrome()
 
     @Environment(\.atticDesign) private var design
+    @Environment(\.atticTagColouring) private var tagColouring
     /// How the lists meet the floating controls: Clean cut with the
     /// scroll-under fade (A15, owner 2026-10-04, replacing D1's fade before
     /// the controls); the native soft edge stays off everywhere.
@@ -2060,7 +2061,7 @@ struct TasksPage: View {
     /// All Tags… opens the searchable picker with every tag and creation.
     private func tagCommands(_ key: TasksRowID, targets: [UUID]) -> [AtticMenuCommand] {
         var list = model.tagChoices(for: targets).prefix(12).map { tag in
-            AtticMenuCommand(verbatim: "#" + tag, state: model.tagState(tag, for: targets)) {
+            AtticMenuCommand(verbatim: "#" + tag, state: model.tagState(tag, for: targets), swatch: tagColouring.hue(for: tag)) {
                 menuCommand(key) { model.toggleTag(tag, for: $0) }
             }
         }

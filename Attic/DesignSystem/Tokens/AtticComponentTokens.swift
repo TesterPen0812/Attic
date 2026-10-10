@@ -552,6 +552,13 @@ enum AtticPaletteTileMetrics {
 /// Tag chips (18 tall, control corner rule).
 enum AtticTagMetrics {
     static let horizontalPadding: CGFloat = 6
+    /// A tag set in a line of text (a row's details, a note's tag line):
+    /// its hue's fill reaches this far past the words on each side, so the
+    /// fill changes no layout (colour pass sheet: 4 px padding, -2 px margin).
+    static let inlineFillOutset: CGFloat = 4
+    static let inlineFillRadius: CGFloat = 5
+    /// The tag menu's colour dot and Settings' tag dot.
+    static let dotDiameter: CGFloat = 8
 }
 
 // MARK: - Notes (Phase 2, slice 2)
