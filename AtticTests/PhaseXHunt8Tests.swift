@@ -163,10 +163,15 @@ final class PhaseXHunt8Tests: XCTestCase {
         spin(1.0)
         let row = try XCTUnwrap(model.rows(for: model.tab).first { !$0.model.tags.isEmpty })
         XCTAssertEqual(locks.values.last, true, "the row's tag list opened: edit mode")
+        // A change that keeps the row (a tag toggled from its own list) keeps the list open.
+        let revision = store.revision
+        _ = model.toggleTag("hunt8", for: [row.id])
+        spin(0.5)
+        XCTAssertNotEqual(store.revision, revision)
+        XCTAssertEqual(locks.values.last, true, "the row is still listed: its list stays open")
         XCTAssertTrue(library.delete(AtticItemRef(.task, row.id)), "the agent's delete_task route")
         spin(0.5)
         XCTAssertFalse(model.rows(for: model.tab).contains { $0.id == row.id })
-        XCTExpectFailure("H10-03: the page's picker state outlives its row")
         XCTAssertEqual(locks.values.last, false, "with its row gone the picker is closed and edit mode ends")
     }
 
