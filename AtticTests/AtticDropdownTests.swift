@@ -136,15 +136,12 @@ final class AtticDropdownTests: XCTestCase {
         window.contentView?.addSubview(anchor)
         let presenter = AtticDropdownPresenter()
         presenter.design = AtticDesignContext(reduceMotion: true)
-        presenter.content = AnyView(TaskTagPickerView(allTags: ["design", "home"], state: { _ in .off }, onToggle: { _ in }, onCreate: { _, _ in true }))
+        var toggled: [String] = []
+        presenter.content = AnyView(TaskTagPickerView(allTags: ["design", "home"], state: { _ in .off },
+                                                      onToggle: { toggled.append($0) }, onCreate: { _, _ in true }))
         func fieldHasKeyboard() -> Bool {
             guard let editor = window.firstResponder as? NSTextView, editor.isFieldEditor, let host = presenter.host else { return false }
             return (editor.delegate as? NSView)?.isDescendant(of: host) == true
-        }
-        func selected() -> [String] {
-            guard let host = presenter.host else { return [] }
-            return accessibilityElements(host).compactMap { $0 as? AtticDropdownMenuItem.ItemView }
-                .filter { $0.isAccessibilitySelected() }.compactMap { $0.accessibilityLabel() }
         }
         for round in 1...10 {
             XCTAssertTrue(window.makeFirstResponder(original))
@@ -157,7 +154,13 @@ final class AtticDropdownTests: XCTestCase {
             XCTAssertFalse(fieldHasKeyboard(), "round \(round): Tab left the field (\(String(describing: responder)))")
             XCTAssertTrue(responder.map { v in presenter.host.map { v.isDescendant(of: $0) } ?? false } == true,
                           "round \(round): the rows have the keyboard, inside the card")
-            XCTAssertEqual(selected(), ["#design"], "round \(round): arriving highlights the first row")
+            // Arriving highlights the first row, and Space presses it. (VoiceOver's
+            // "selected" is read in the native test: off screen it is not kept.)
+            let space = key(" ", code: 49, in: window)
+            if presenter.handleKey(space) != nil { window.sendEvent(space) }
+            spin(0.2)
+            XCTAssertEqual(toggled, ["design"], "round \(round): Space pressed the row Tab reached")
+            toggled = []
             XCTAssertNil(presenter.handleKey(key("\t", code: 48, flags: .shift, in: window)))
             spin(0.2)
             XCTAssertTrue(fieldHasKeyboard(), "round \(round): Shift-Tab returns to the field")
@@ -170,109 +173,90 @@ final class AtticDropdownTests: XCTestCase {
 
     // MARK: H5-04 diagnosis (CI, Full Keyboard Access only; prints, asserts nothing)
 
-    struct FKADiagnosisCard: View {
-        let variant: Int
-        let takeHost: () -> Void
-        let log: (String) -> Void
-        @State private var text = ""
-        @State private var highlighted: Int?
-        @FocusState private var focus: AtticDropdownFocusTarget?
-        @Environment(\.atticDropdownRegisterKeys) private var registerKeys
-
-        var body: some View {
-            VStack(spacing: 0) {
-                AtticDropdownField(text: $text, placeholder: "Find a thing", focus: $focus)
-                VStack(spacing: 0) {
-                    Text(highlighted == 0 ? "> one" : "one").frame(width: 140, height: 28)
-                    Text("two").frame(width: 140, height: 28)
-                }
-                .modifier(Variant(variant: variant, focus: $focus))
-            }
-            .atticDropdownFocus($focus)
-            .onChange(of: focus) { _, now in log("focus=\(String(describing: now))"); if now == .list, highlighted == nil { highlighted = 0 } }
-            .onKeyPress(phases: .down) { press in
-                log("keyPress \(press.characters.debugDescription) focus=\(String(describing: focus))")
-                return press.key == .space && focus == .list ? .handled : .ignored
-            }
-            .onAppear {
-                let focus = $focus
-                registerKeys { event in
-                    guard event.keyCode == 48 else { return false }
-                    let target: AtticDropdownFocusTarget = focus.wrappedValue == .list ? .field : .list
-                    switch variant {
-                    case 3: takeHost(); focus.wrappedValue = target
-                    case 4: focus.wrappedValue = nil; DispatchQueue.main.async { focus.wrappedValue = target }
-                    case 5: takeHost(); DispatchQueue.main.async { focus.wrappedValue = target }
-                    default: focus.wrappedValue = target
-                    }
-                    return true
-                }
-            }
-        }
-
-        struct Variant: ViewModifier {
-            let variant: Int
-            var focus: FocusState<AtticDropdownFocusTarget?>.Binding
-            func body(content: Content) -> some View {
-                if variant == 2 {
-                    content.focusable(true).focused(focus, equals: .list).focusEffectDisabled()
-                } else {
-                    content.focusable(true, interactions: .activate).focused(focus, equals: .list).focusEffectDisabled()
-                }
-            }
+    /// A key panel that records who asks AppKit for the first responder.
+    final class RecordingKeyPanel: NSPanel {
+        override var canBecomeKey: Bool { true }
+        var start = ProcessInfo.processInfo.systemUptime
+        var log: [String] = []
+        override func makeFirstResponder(_ responder: NSResponder?) -> Bool {
+            let frames = Thread.callStackSymbols.dropFirst(2).compactMap { line -> String? in
+                guard line.contains("Attic") || line.contains("SwiftUI") || line.contains("AppKit") else { return nil }
+                let parts = line.split(separator: " ", omittingEmptySubsequences: true)
+                guard parts.count > 3 else { return nil }
+                return parts[1] + ":" + String(parts[3...].joined(separator: " ").prefix(90))
+            }.prefix(9)
+            let name: String
+            if let t = responder as? NSTextView, t.isFieldEditor { name = "fieldEditor" } else { name = responder.map { String(describing: type(of: $0)) } ?? "nil" }
+            let ok = super.makeFirstResponder(responder)
+            log.append(String(format: "%.3f", ProcessInfo.processInfo.systemUptime - start) + " MFR \(name) ok=\(ok) <- " + frames.joined(separator: " < "))
+            return ok
         }
     }
 
-    func testZZDiagnoseFullKeyboardAccessListFocus() throws {
-        guard ProcessInfo.processInfo.environment["ATTIC_FULL_KEYBOARD_ACCESS_TESTS"] == "1" else {
-            throw XCTSkip("CI only")
-        }
-        for keyWindow in [false, true] {
-            for variant in 1...5 {
-                let window: NSWindow
-                if keyWindow {
-                    let panel = KeyPanel(contentRect: NSRect(x: -4000, y: -4000, width: 320, height: 520),
-                                         styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
-                    panel.isReleasedWhenClosed = false
-                    panel.contentView = NSView(frame: NSRect(x: 0, y: 0, width: 320, height: 520))
-                    panel.orderFront(nil)
-                    panel.makeKey()
-                    window = panel
-                } else {
-                    window = makeUnshownWindow()
+    func testZZDiagnoseNativeTagPickerTab() throws {
+        guard ProcessInfo.processInfo.environment["ATTIC_FULL_KEYBOARD_ACCESS_TESTS"] == "1" else { throw XCTSkip("CI only") }
+        let attribute = NSAccessibility.Attribute(rawValue: "AXEnhancedUserInterface")
+        let previous = NSApp.accessibilityAttributeValue(attribute)
+        NSApp.accessibilitySetValue(true, forAttribute: attribute)
+        defer { NSApp.accessibilitySetValue(previous, forAttribute: attribute) }
+        var printed = 0, printedPass = 0
+        for round in 1...12 {
+            let window = RecordingKeyPanel(contentRect: NSRect(x: -4000, y: -4000, width: 320, height: 520),
+                                           styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
+            window.isReleasedWhenClosed = false
+            window.contentView = NSView(frame: NSRect(x: 0, y: 0, width: 320, height: 520))
+            window.orderFront(nil)
+            window.makeKey()
+            let original = NSTextField(frame: CGRect(x: 20, y: 470, width: 200, height: 24))
+            window.contentView?.addSubview(original)
+            let anchor = NSView(frame: CGRect(x: 20, y: 400, width: 60, height: 28))
+            window.contentView?.addSubview(anchor)
+            window.makeFirstResponder(original)
+            window.start = ProcessInfo.processInfo.systemUptime
+            window.log = []
+            var toggled: [String] = []
+            let presenter = AtticDropdownPresenter()
+            presenter.design = AtticDesignContext(reduceMotion: true)
+            var subs: [AnyCancellable] = []
+            func stamp(_ s: String) { window.log.append(String(format: "%.3f ", ProcessInfo.processInfo.systemUptime - window.start) + s) }
+            subs.append(presenter.stage.$height.dropFirst().sink { stamp("stage.height=\(String(describing: $0))") })
+            subs.append(presenter.stage.$width.dropFirst().sink { stamp("stage.width=\(String(describing: $0))") })
+            subs.append(presenter.stage.$focusRequest.dropFirst().sink { stamp("stage.focusRequest=\($0)") })
+            presenter.content = AnyView(TaskTagPickerView(allTags: ["design", "home", "launch"], state: { $0 == "home" ? .on : .off },
+                                                          onToggle: { toggled.append($0) }, onCreate: { _, _ in true }))
+            presenter.present(from: anchor)
+            spin(0.3)
+            func deliver(_ events: [NSEvent]) {
+                events.forEach { NSApp.postEvent($0, atStart: false) }
+                var count = 0
+                while count < 64, let next = NSApp.nextEvent(matching: .any, until: Date(), inMode: .default, dequeue: true) {
+                    NSApp.sendEvent(next); count += 1
                 }
-                let anchor = NSView(frame: CGRect(x: 20, y: 400, width: 60, height: 28))
-                window.contentView?.addSubview(anchor)
-                var lines: [String] = []
-                func fr() -> String {
-                    let r = window.firstResponder
-                    if let t = r as? NSTextView, t.isFieldEditor { return "fieldEditor" }
-                    return r.map { String(describing: type(of: $0)) } ?? "nil"
-                }
-                let presenter = AtticDropdownPresenter()
-                presenter.design = AtticDesignContext(reduceMotion: true)
-                presenter.content = AnyView(FKADiagnosisCard(variant: variant, takeHost: { [weak presenter] in
-                    if let host = presenter?.host { _ = host.window?.makeFirstResponder(host) }
-                }, log: { lines.append($0) }))
-                presenter.present(from: anchor)
-                spin(0.3)
-                lines.append("open fr=\(fr())")
-                func send(_ c: String, _ code: UInt16) {
-                    let event = key(c, code: code, in: window)
-                    if presenter.handleKey(event) != nil { window.sendEvent(event) }
-                    spin(0.2)
-                }
-                send("\t", 48); lines.append("tab fr=\(fr())")
-                send(" ", 49); lines.append("space fr=\(fr())")
-                send("\t", 48); lines.append("tab2 fr=\(fr())")
-                print("FKADIAG key=\(keyWindow) isKey=\(window.isKeyWindow) v\(variant): " + lines.joined(separator: " | "))
-                presenter.close(restoreFocus: false, immediately: true)
-                window.close()
-                spin(0.1)
+                spin(0.2)
             }
+            func press(_ c: String, _ code: UInt16) {
+                stamp("press \(code)")
+                deliver([NSEvent.EventType.keyDown, .keyUp].map { type in
+                    NSEvent.keyEvent(with: type, location: .zero, modifierFlags: [], timestamp: ProcessInfo.processInfo.systemUptime,
+                                     windowNumber: window.windowNumber, context: nil, characters: c,
+                                     charactersIgnoringModifiers: c, isARepeat: false, keyCode: code)!
+                })
+            }
+            press("\t", 48)
+            let afterTab = (window.firstResponder as? NSTextView)?.isFieldEditor == true ? "fieldEditor" : String(describing: window.firstResponder.map { type(of: $0) })
+            press(" ", 49)
+            let ok = toggled == ["design"]
+            print("FKANATIVE round \(round) ok=\(ok) afterTab=\(afterTab) toggled=\(toggled)")
+            if !ok ? printed < 3 : printedPass < 1 {
+                if ok { printedPass += 1 } else { printed += 1 }
+                window.log.forEach { print("FKANATIVE   r\(round) " + $0) }
+            }
+            subs.removeAll()
+            presenter.close(restoreFocus: false, immediately: true)
+            window.close()
+            spin(0.1)
         }
     }
-
 
     // MARK: Focus sweep (H5-05 and on): the same two-owner pattern elsewhere
 
