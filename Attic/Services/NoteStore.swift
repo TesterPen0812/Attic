@@ -337,6 +337,7 @@ final class NoteStore: ObservableObject {
         let container: ModelContainer
         var recoveryIDs: () throws -> Set<UUID> = { [] }
         var durableRecoveryIDs: (() async throws -> Set<UUID>)?
+        var recoveryGeneration = UUID()
 
         init(container: ModelContainer) { self.container = container }
 
@@ -360,11 +361,15 @@ final class NoteStore: ObservableObject {
         set {
             attachmentRetentionSource.recoveryIDs = newValue
             attachmentRetentionSource.durableRecoveryIDs = nil
+            attachmentRetentionSource.recoveryGeneration = UUID()
         }
     }
     var recoveryReferencedAttachmentIDsDurably: (() async throws -> Set<UUID>)? {
         get { attachmentRetentionSource.durableRecoveryIDs }
-        set { attachmentRetentionSource.durableRecoveryIDs = newValue }
+        set {
+            attachmentRetentionSource.durableRecoveryIDs = newValue
+            attachmentRetentionSource.recoveryGeneration = UUID()
+        }
     }
 #else
     var recoveryReferencedAttachmentIDs: () throws -> Set<UUID> = { [] }
@@ -471,6 +476,7 @@ final class NoteStore: ObservableObject {
                 // must keep all bytes, without faulting external blobs on main.
                 guard !context.hasChanges else { return nil }
                 let generation = revision
+                let recoveryGeneration = attachmentRetentionSource.recoveryGeneration
                 let container = self.container
                 let observer = retentionDecodeObserver, readObserver = retentionContentReadObserver
                 var ids = try await Self.readDurableAttachmentIDs(in: container,
@@ -480,7 +486,16 @@ final class NoteStore: ObservableObject {
                 // results or leave cleanup waiting for another unrelated event.
                 guard !Task.isCancelled, !context.hasChanges else { return nil }
                 guard revision == generation else { continue }
-                ids.formUnion(try recoveryReferencedAttachmentIDs())
+                if let durableRecovery = recoveryReferencedAttachmentIDsDurably {
+                    ids.formUnion(try await durableRecovery())
+                } else {
+                    ids.formUnion(try recoveryReferencedAttachmentIDs())
+                }
+                // A released controller requires a fresh journal read. Saves,
+                // imports or a replacement controller may cross that await.
+                guard !Task.isCancelled, !context.hasChanges else { return nil }
+                guard revision == generation,
+                      attachmentRetentionSource.recoveryGeneration == recoveryGeneration else { continue }
                 return ids
             }
             return nil

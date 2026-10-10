@@ -519,7 +519,10 @@ final class NotesPageController: ObservableObject {
             }
             return ids
         }
-        store.recoveryReferencedAttachmentIDsDurably = { [journal] in
+        store.recoveryReferencedAttachmentIDsDurably = { [weak self, journal] in
+            // A live controller also owns unsaved session attachments. Its
+            // existing synchronous authority includes those without disk IO.
+            if let self { return try self.store.recoveryReferencedAttachmentIDs() }
             guard let journal else { return [] }
             return try Self.recoveryAttachmentIDs(in: try await journal.readRetentionEntries())
         }
