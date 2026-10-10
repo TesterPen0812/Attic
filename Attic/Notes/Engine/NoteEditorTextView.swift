@@ -342,6 +342,18 @@ final class NoteEditorTextView: NSTextView, NSAccessibilityCustomRotorItemSearch
         PerformanceSignposts.noteDidLayout()
     }
 
+    /// TextKit's attachment-adjacent caret can be shorter than the glyph
+    /// line. Reveal both, so typing after a block clears the footer inset.
+    override func scrollRangeToVisible(_ range: NSRange) {
+        super.scrollRangeToVisible(range)
+        guard let engine, range.location != NSNotFound, range.length == 0,
+              range.location > 0, range.location <= engine.textStorage.length,
+              (engine.textStorage.string as NSString).character(at: range.location - 1) != 0x0A,
+              let glyph = engine.rect(for: NSRange(location: range.location - 1, length: 1)) else { return }
+        let rect = engine.caretRect(at: range.location).map { $0.union(glyph) } ?? glyph
+        scrollToVisible(rect)
+    }
+
     override func insertText(_ string: Any, replacementRange: NSRange) {
         let generation = engine?.history.recordingGeneration
         defer { engine?.history.completeSelection(since: generation) }
@@ -370,6 +382,7 @@ final class NoteEditorTextView: NSTextView, NSAccessibilityCustomRotorItemSearch
         if !wasComposing, wrap.before == false, wrap.after == false {
             engine.handleTypedText(text, wasComposing: wasComposing)
         }
+        scrollRangeToVisible(selectedRange())
     }
 
     override func setMarkedText(_ string: Any, selectedRange: NSRange, replacementRange: NSRange) {

@@ -87,6 +87,35 @@ final class NoteEditorEngineTests: XCTestCase {
         }
     }
 
+    func testH12_02SiblingBlocksKeepTypingAboveFooter() throws {
+        let siblings: [NoteBlock] = [
+            .text("Ordinary body"), .divider(),
+            .image(attachmentID: UUID(), pixelWidth: 800, pixelHeight: 400),
+            .file(attachmentID: UUID(), filename: "plan.txt", contentTypeIdentifier: "public.plain-text", byteCount: 77),
+            .table(NoteTable(texts: [["A", "B"], ["C", "D"]])), .checklist("Check this")
+        ]
+        for sibling in siblings {
+            let document = NoteDocument(blocks: [.text("Long note")] + (0..<28).map { .text("Body line \($0)") } + [sibling, .text("")])
+            let (engine, view) = makeEngine(document, window: true)
+            let scroll = try XCTUnwrap(engine.scrollView)
+            scroll.frame.size = NSSize(width: 320, height: 464)
+            scroll.automaticallyAdjustsContentInsets = false
+            scroll.contentInsets = NSEdgeInsets(top: 80, left: 0, bottom: 92, right: 0)
+            view.setSelectedRange(NSRange(location: engine.textStorage.length, length: 0))
+            for character in "Text after block" {
+                type(String(character), view)
+                view.layoutSubtreeIfNeeded()
+                let line = engine.lineRange(at: view.selectedRange().location)
+                let rect = try XCTUnwrap(engine.rect(for: line))
+                let clip = view.convert(scroll.contentView.bounds, from: scroll.contentView)
+                XCTAssertLessThanOrEqual(rect.maxY, clip.maxY - scroll.contentInsets.bottom + 1, "\(sibling.kind) / \(character)")
+            }
+            XCTAssertFalse(view.window!.isVisible)
+            XCTAssertFalse(view.window!.isKeyWindow)
+            engine.detachView()
+        }
+    }
+
     // MARK: Drawing
 
     func testObjectsAreDrawnFromTheDesignSystem() {
