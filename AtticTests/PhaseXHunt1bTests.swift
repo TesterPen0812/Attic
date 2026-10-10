@@ -1316,8 +1316,7 @@ extension PhaseXHunt5Tests {
             let probes = try await releasedShellProbes()
             try await Task.sleep(for: .milliseconds(50))
             for (index, probe) in probes.enumerated() {
-                if index == 6 { XCTExpectFailure("H7-05") { XCTAssertNil(probe.value) } }
-                else { XCTAssertNil(probe.value) }
+                XCTAssertNil(probe.value, "owner index=\(index)")
             }
         }
     }
@@ -1495,7 +1494,7 @@ extension PhaseXHunt5Tests {
         let probes = try await releasedNoteProbes()
         XCTAssertNil(probes[0].value)
         XCTAssertNil(probes[1].value)
-        XCTExpectFailure("H7-05") { XCTAssertNil(probes[2].value) }
+        XCTAssertNil(probes[2].value)
     }
 
     private func releasedNoteProbes() async throws -> [WeakProbe<AnyObject>] {

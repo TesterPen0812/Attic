@@ -1074,8 +1074,8 @@ final class NotesPageController: ObservableObject {
             if !NoteSessionPolicy.hasPendingWork(session.state), session.engine.tags == session.baseTags { return }
             self.textDidChange(in: session)
         }
-        engine.onWritingToolsWillBegin = { [weak self, weak session] in
-            guard let self, let session else { return false }
+        engine.onWritingToolsWillBegin = { [weak self, weak session, weak engine] in
+            guard let self, let session, let engine else { return false }
             guard NoteSessionPolicy.writingToolsAvailable(session.state, activity: engine.activity,
                     refusedSinceLastStoreSave: session.refusedWritingToolsSinceSave,
                     hasMarkedText: engine.textView?.hasMarkedText() == true) else {
