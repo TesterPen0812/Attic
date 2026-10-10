@@ -1746,3 +1746,94 @@ extension PhaseXHunt5Tests {
         }
     }
 }
+
+/// Round 6 adversarial ownership seams; no shown or key windows.
+@MainActor
+final class PhaseXHunt6Tests: XCTestCase {
+    private func reference(_ bytes: Data = Data("sole private bytes".utf8)) -> AttachmentFileReference {
+        .init(id: UUID(), digest: NotePayloadDigest.sha256(bytes), filename: "owned.txt", payload: bytes)
+    }
+
+    func testH8_01CollectorsSharePathAuthorityAndRecheckLateRegistrations() async throws {
+        for timing in 0..<3 {
+            let root = ownedTemporaryDirectory(prefix: "H8Authority")
+            let owner = AttachmentFileStore(rootURL: root)
+            let collector = timing == 0 ? AttachmentFileStore(rootURL: root) : owner
+            let ref = reference()
+            let url = try await XCTUnwrapAsync(try await owner.ensureMaterialized(ref))
+            let token = UUID()
+            if timing == 0 {
+                owner.registerByteOwners(token) { [ref.id] }
+            } else {
+                // During an awaited provider, a new facade/authority is installed
+                // (or the current provider is replaced). The old empty answer
+                // must never authorize removal under that new authority.
+                owner.registerByteOwners(token) {
+                    owner.registerByteOwners(timing == 1 ? UUID() : token) { [ref.id] }
+                    return []
+                }
+            }
+            try await collector.removeMaterializations([ref])
+            XCTExpectFailure("H8-01") {
+                XCTAssertTrue(FileManager.default.fileExists(atPath: url.path), "timing=\(timing)")
+            }
+        }
+    }
+
+    /// Pauses a writer after its claim check but before its staged-directory
+    /// creation. No product delay or assertion changes; every wait is bounded.
+    private final class CheckpointBarrier: FileManager, @unchecked Sendable {
+        let reached: XCTestExpectation
+        let release = DispatchSemaphore(value: 0)
+        private let lock = NSLock()
+        private var used = false
+        init(reached: XCTestExpectation) { self.reached = reached; super.init() }
+        override func createDirectory(at url: URL, withIntermediateDirectories createIntermediates: Bool,
+                                      attributes: [FileAttributeKey: Any]? = nil) throws {
+            let pause = lock.withLock { () -> Bool in
+                guard url.lastPathComponent == "staged", !used else { return false }
+                used = true; return true
+            }
+            if pause {
+                reached.fulfill()
+                guard release.wait(timeout: .now() + 10) == .success else { throw PersistenceGate.Failure() }
+            }
+            try super.createDirectory(at: url, withIntermediateDirectories: createIntermediates, attributes: attributes)
+        }
+    }
+
+    func testH8_02TwoJournalFacadesCannotBothReplaceAnUnownedCheckpoint() async throws {
+        let root = ownedTemporaryDirectory(prefix: "H8Checkpoint")
+        let reached = expectation(description: "writer reached claim-to-write boundary")
+        let gate = CheckpointBarrier(reached: reached)
+        let first = NoteDraftJournal(directory: root, fileManagerFactory: { gate })
+        let second = NoteDraftJournal(directory: root)
+        let noteID = UUID()
+        func entry(_ text: String) throws -> NoteDraftJournalEntry {
+            .init(noteID: noteID, isPersisted: false, baseRevisionID: nil,
+                  content: try NoteContentCodec.encode(NoteDocument(blocks: [.text(text)])),
+                  selectionLocation: 0, selectionLength: 0, staged: [], savedAt: Date())
+        }
+        let left = try entry("left unsaved text"), right = try entry("right unsaved text")
+        let a = Task { try await first.writeDurably(left, staged: []) }
+        await fulfillment(of: [reached], timeout: 5)
+        let b = Task { try await second.writeDurably(right, staged: []) }
+        // Give the competing facade its turn, then release unconditionally:
+        // a path-serialized implementation queues it instead of deadlocking.
+        try await Task.sleep(for: .milliseconds(100))
+        gate.release.signal()
+        let results = [await a.result, await b.result]
+        let winners = results.compactMap { try? $0.get() }
+        XCTExpectFailure("H8-02") { XCTAssertEqual(winners.count, 1, "A claim check and replacement must be one path transaction") }
+        let entries = try await second.entriesDurably()
+        XCTAssertEqual(entries.count, 1)
+        if winners.count == 1 {
+            let expected = results[0].isSuccess ? left.content : right.content
+            XCTAssertEqual(entries.first?.0.content, expected)
+        }
+    }
+}
+
+private extension Result {
+    var isSuccess: Bool { if case .success = self { return true }; return false }
+}
