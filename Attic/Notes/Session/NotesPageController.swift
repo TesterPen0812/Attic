@@ -2557,8 +2557,7 @@ extension NotesPageController {
         let entries: [NoteHistoryEntry]
         do { entries = try store.readVersions(noteID: session.noteID).map(NoteHistoryEntry.init) }
         catch {
-            session.notice = "Version history could not be read. Try again. \(error.localizedDescription)"
-            store.recordError(session.notice!)
+            session.notice = "Version history could not be read. Try again. Your note is kept."
             return false
         }
         let browser = NoteHistoryBrowser(noteID: session.noteID, current: session.engine.document(),

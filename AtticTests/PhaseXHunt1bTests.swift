@@ -694,6 +694,21 @@ final class PhaseXHunt1bTests: XCTestCase {
         XCTAssertEqual(attempts, previousAttempts + 1, "A new store revision retries the read")
     }
 
+    func testR3_10HistoryReadFailureUsesOneReadableNotice() async throws {
+        let store = try makeTestNoteStore(attachmentFileStore: makeTestAttachmentFileStore())
+        let id = try create(store)
+        let page = await controller(store)
+        XCTAssertTrue(page.open(noteID: id))
+        store.auxiliaryFetchWillRead = { type in
+            if type == NoteVersion.self { throw NSError(domain: "Opaque database details", code: 10) }
+        }
+        await XCTAssertFalseAsync(await page.openHistoryDurably())
+        do {
+            XCTAssertEqual(page.active?.notice, "Version history could not be read. Try again. Your note is kept.")
+            XCTAssertNil(store.lastErrorMessage, "The session notice is the single history error surface")
+        }
+    }
+
     func testH5_01FailedHistoryFetchRefusesEmptyBrowserAndRetries() async throws {
         let store = try makeTestNoteStore(attachmentFileStore: makeTestAttachmentFileStore())
         let id = try create(store)
