@@ -57,6 +57,35 @@ final class NoteEditorEngineTests: XCTestCase {
 
     // MARK: Drawing
 
+    func testPerf2EmptyFindDoesNoSearchOrLayoutWorkWhileTyping() throws {
+        var blocks = (0..<5_000).map { NoteBlock.text("Line \($0) with ordinary text") }
+        blocks.insert(.table(NoteTable(texts: [["needle", "cell"], ["other", "value"]])), at: 100)
+        blocks.insert(.image(attachmentID: UUID(), pixelWidth: 800, pixelHeight: 400), at: 200)
+        let (engine, view) = makeEngine(NoteDocument(blocks: blocks), window: true)
+        engine.find.show()
+        view.setSelectedRange(NSRange(location: engine.textStorage.length, length: 0))
+        let searches = engine.find.objectSearchPassCount
+        let layouts = engine.find.highlightLayoutPassCount
+        type("twenty five ordinary keys", view)
+        print("PERF2_EMPTY_FIND searches=\(engine.find.objectSearchPassCount - searches) layouts=\(engine.find.highlightLayoutPassCount - layouts)")
+        XCTAssertEqual(engine.find.objectSearchPassCount, searches)
+        XCTAssertEqual(engine.find.highlightLayoutPassCount, layouts)
+        XCTAssertTrue(engine.find.matches.isEmpty)
+        // Clearing a real search must still remove its highlights once.
+        engine.find.query = "needle"
+        XCTAssertEqual(engine.find.matches.count, 1)
+        XCTAssertNotNil(engine.find.matches.first?.tableID)
+        let beforeClear = engine.find.highlightLayoutPassCount
+        engine.find.query = ""
+        XCTAssertTrue(engine.find.matches.isEmpty)
+        XCTAssertNil(engine.find.index)
+        XCTAssertEqual(engine.find.highlightLayoutPassCount, beforeClear + 1)
+        let cleared = engine.find.highlightLayoutPassCount
+        engine.find.refresh()
+        XCTAssertEqual(engine.find.highlightLayoutPassCount, cleared)
+    }
+
+
     func testObjectsAreDrawnFromTheDesignSystem() {
         let (engine, _) = makeEngine()
         for (object, _) in engine.objects() where !(object is NoteImageAttachment) {
