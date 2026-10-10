@@ -1033,3 +1033,43 @@ private final class H3BlockingJournal: NoteDraftJournaling {
         try await base.discardOwnedDurably(noteID: noteID, claim: claim)
     }
 }
+
+/// No test here presents, orders, activates or keys a window.
+@MainActor
+final class PhaseXHunt5Tests: XCTestCase {
+    private func field<T>(_ name: String, in owner: Any, as type: T.Type = T.self) throws -> T {
+        try XCTUnwrap(Mirror(reflecting: owner).children.first { $0.label == name }?.value as? T)
+    }
+
+    func testH7_01ReleasedStoreDoesNotPermanentlyVetoSharedFileCollector() async throws {
+        let files = makeTestAttachmentFileStore()
+        let container = try PersistenceController.makeContainer(inMemory: true, cloudSyncEnabled: false)
+        var former: NoteStore? = NoteStore(container: container, attachmentFileStore: files)
+        await former?.waitForAttachmentReconciliation()
+        weak var released = former
+        former = nil
+        XCTAssertNil(released)
+
+        // A replacement must still protect live and unreadable ownership.
+        let current = NoteStore(container: container, attachmentFileStore: files)
+        await current.waitForAttachmentReconciliation()
+        let bytes = Data("owned bytes".utf8)
+        let id = UUID()
+        let reference = AttachmentFileReference(id: id, digest: NotePayloadDigest.sha256(bytes),
+            filename: "kept.txt", payload: bytes)
+        let url = try await XCTUnwrapAsync(try await files.ensureMaterialized(reference))
+        current.recoveryReferencedAttachmentIDs = { [id] }
+        try await files.removeMaterializations([reference])
+        XCTAssertEqual(try Data(contentsOf: url), bytes)
+        current.recoveryReferencedAttachmentIDs = { throw PersistenceGate.Failure() }
+        try await files.removeMaterializations([reference])
+        XCTAssertEqual(try Data(contentsOf: url), bytes, "Unknown live ownership remains conservative")
+        current.recoveryReferencedAttachmentIDs = { [] }
+        try await files.removeMaterializations([reference])
+        XCTExpectFailure("H7-01") {
+            XCTAssertFalse(FileManager.default.fileExists(atPath: url.path),
+                "A dead store is not an unknown live byte owner")
+        }
+    }
+
+}
