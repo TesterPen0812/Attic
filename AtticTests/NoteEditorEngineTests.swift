@@ -69,7 +69,7 @@ final class NoteEditorEngineTests: XCTestCase {
             view.setSelectedRange(NSRange(location: engine.textStorage.length, length: 0))
             view.insertNewline(nil)
             type("/divider", view)
-            view.insertNewline(nil)
+            XCTAssertTrue(engine.acceptSlashItem(.divider), "the same acceptance used by slash Return")
             XCTAssertTrue(engine.document().blocks.contains { $0.kind == .divider })
             type("Text after divider", view)
             RunLoop.main.run(until: Date().addingTimeInterval(0.15))
