@@ -759,7 +759,6 @@ struct AtticTagPicker: View {
                                  onHover: hover(index), position: index + 1, itemCount: Self.rowCount(tags: tags.count, create: create)) {
                     onToggle(tag.name)
                 }
-                .atticTagColourMenu(tag.name)
                 .id(index)
             }
             if let create {
