@@ -11,6 +11,7 @@ final class DailyCleanupService {
     private let calendar: () -> Calendar
     private var timer: Timer?
     private var generation: UUID?
+    private(set) var queuedCleanupTask: Task<Void, Never>?
     private var notificationTokens: [NSObjectProtocol] = []
     private var workspaceTokens: [NSObjectProtocol] = []
 
@@ -39,7 +40,7 @@ final class DailyCleanupService {
         ]
         notificationTokens = refreshNotifications.map { name in
             center.addObserver(forName: name, object: nil, queue: .main) { [weak self] _ in
-                Task { @MainActor in self?.cleanupAndReschedule(for: generation) }
+                MainActor.assumeIsolated { self?.enqueueCleanup(for: generation) }
             }
         }
 
@@ -50,7 +51,7 @@ final class DailyCleanupService {
                 object: nil,
                 queue: .main
             ) { [weak self] _ in
-                Task { @MainActor in self?.cleanupAndReschedule(for: generation) }
+                MainActor.assumeIsolated { self?.enqueueCleanup(for: generation) }
             }
         ]
 
@@ -59,6 +60,8 @@ final class DailyCleanupService {
 
     func stop() {
         generation = nil
+        queuedCleanupTask?.cancel()
+        queuedCleanupTask = nil
         timer?.invalidate()
         timer = nil
         notificationTokens.forEach(NotificationCenter.default.removeObserver)
@@ -84,6 +87,12 @@ final class DailyCleanupService {
         return moved
     }
 
+    private func enqueueCleanup(for generation: UUID) {
+        queuedCleanupTask = Task { @MainActor [weak self] in
+            self?.cleanupAndReschedule(for: generation)
+        }
+    }
+
     private func cleanupAndReschedule(for generation: UUID) {
         guard self.generation == generation else { return }
         let timestamp = now()
@@ -107,7 +116,7 @@ final class DailyCleanupService {
         }
 
         let nextTimer = Timer(fire: nextDay, interval: 0, repeats: false) { [weak self] _ in
-            Task { @MainActor in self?.cleanupAndReschedule(for: generation) }
+            MainActor.assumeIsolated { self?.enqueueCleanup(for: generation) }
         }
         nextTimer.tolerance = 1
         RunLoop.main.add(nextTimer, forMode: .common)

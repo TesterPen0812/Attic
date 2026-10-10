@@ -787,22 +787,26 @@ final class PhaseXHunt1bTests: XCTestCase {
     }
 
     func testH6_04StoppedCleanupDiscardsQueuedObserverAndPreviousGeneration() async throws {
-        for restart in [false, true] {
-            let store = try makeTestStore()
-            var purges = 0
-            let service = DailyCleanupService(store: store, purgeRecentlyDeleted: { _, _ in purges += 1 })
-            service.start()
-            XCTAssertEqual(purges, 1)
-            NotificationCenter.default.post(name: .NSCalendarDayChanged, object: nil)
-            service.stop()
-            if restart { service.start() }
-            // Queued callbacks must run before the assertion, without touching windows.
-            await Task.yield()
-            await Task.yield()
-            do {
-                XCTAssertEqual(purges, restart ? 2 : 1, "Stopped and superseded generations do no work")
+        let notifications = [Notification.Name.NSCalendarDayChanged, .NSSystemTimeZoneDidChange,
+            NSApplication.didBecomeActiveNotification, NSWorkspace.didWakeNotification]
+        for name in notifications {
+            for restart in [false, true] {
+                let store = try makeTestStore()
+                var purges = 0
+                let service = DailyCleanupService(store: store, purgeRecentlyDeleted: { _, _ in purges += 1 })
+                service.start()
+                XCTAssertEqual(purges, 1)
+                let center = name == NSWorkspace.didWakeNotification
+                    ? NSWorkspace.shared.notificationCenter : NotificationCenter.default
+                center.post(name: name, object: nil)
+                let queued = try XCTUnwrap(service.queuedCleanupTask)
+                service.stop()
+                if restart { service.start() }
+                // Await the actual queued callback, rather than relying on actor scheduling/yields.
+                await queued.value
+                XCTAssertEqual(purges, restart ? 2 : 1, "Stopped and superseded generations do no work: \(name)")
+                service.stop()
             }
-            service.stop()
         }
     }
 
