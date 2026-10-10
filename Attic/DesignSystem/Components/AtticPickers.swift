@@ -585,14 +585,13 @@ struct AtticDateCard: View {
     private func todayButton(lit: Bool) -> some View {
         let d = AtticDropdownMetrics.self
         let tokens = design.tokens
-        let shape = RoundedRectangle(cornerRadius: d.todayRadius, style: .continuous)
+        let shape = RoundedRectangle(cornerRadius: d.todayRadius, style: .circular)
         return Button { onPick(calendar.startOfDay(for: today)) } label: {
             AtticText(verbatim: String(localized: "Today"), style: .shortcut, ink: .body)
                 .fixedSize()
                 .padding(.horizontal, d.todayPadding)
                 .frame(height: d.todayHeight)
-                .background(shape.fill(tokens.dropdownHighlight.color))
-                .overlay(shape.strokeBorder((lit ? tokens.ink(.heading) : .clear).color, lineWidth: AtticPickerMetrics.todayRing))
+                .background(AtticCalendarMark(radius: d.todayRadius, fill: tokens.dropdownHighlight.color, ring: lit ? tokens.ink(.heading).color : .clear))
                 .contentShape(shape)
         }
         .buttonStyle(AtticUndimmedButtonStyle())
@@ -632,15 +631,12 @@ struct AtticDateCard: View {
         let isSelected = selected.map { calendar.isDate(day, inSameDayAs: $0) } ?? false
         let isToday = calendar.isDate(day, inSameDayAs: today)
         let lit = state.isLit(day, calendar: calendar)
-        let shape = RoundedRectangle(cornerRadius: d.monthMarkRadius, style: .continuous)
         let fill: AtticRGBA = isSelected ? tokens.ink(.inverseFill) : (lit ? tokens.dropdownHighlight : .clear)
         let spokenState = [isToday ? String(localized: "today") : nil, isSelected ? String(localized: "chosen") : nil].compactMap { $0 }
         return Button { onPick(day) } label: {
             AtticText(verbatim: "\(calendar.component(.day, from: day))", style: .dropdownDay, ink: isSelected ? .onInverse : .body)
                 .frame(width: d.monthMark, height: d.monthMark)
-                .background(shape.fill(fill.color))
-                .overlay(shape.strokeBorder((isToday && !isSelected ? tokens.ink(.heading) : .clear).color,
-                                            lineWidth: AtticPickerMetrics.todayRing))
+                .background(AtticCalendarMark(radius: d.monthMarkRadius, fill: fill.color, ring: isToday && !isSelected ? tokens.ink(.heading).color : .clear))
                 .frame(width: d.monthCellWidth, height: d.monthCellHeight)
                 .contentShape(Rectangle())
         }
@@ -665,6 +661,31 @@ struct AtticDateCard: View {
     }
 
     private static func dayID(_ day: Date) -> String { "attic.date.\(Int(day.timeIntervalSinceReferenceDate))" }
+}
+
+/// Calendar marks share one pixel-aligned outer contour. Circular arcs
+/// keep the inset stroke concentric with the fill at these small sizes.
+private struct AtticCalendarMark: View {
+    let radius: CGFloat
+    let fill: Color
+    let ring: Color
+    @Environment(\.displayScale) private var scale
+
+    var body: some View {
+        GeometryReader { proxy in
+            let frame = proxy.frame(in: .global)
+            let rect = CGRect(x: (frame.minX * scale).rounded() / scale - frame.minX,
+                              y: (frame.minY * scale).rounded() / scale - frame.minY,
+                              width: (frame.width * scale).rounded() / scale,
+                              height: (frame.height * scale).rounded() / scale)
+            let width = max(1, (AtticPickerMetrics.todayRing * scale).rounded()) / scale
+            let r = (radius * scale).rounded() / scale
+            Path(roundedRect: rect, cornerRadius: r).fill(fill)
+            Path(roundedRect: rect.insetBy(dx: width / 2, dy: width / 2), cornerRadius: max(0, r - width / 2))
+                .stroke(ring, lineWidth: width)
+        }
+        .allowsHitTesting(false)
+    }
 }
 
 // MARK: - Tag picker
