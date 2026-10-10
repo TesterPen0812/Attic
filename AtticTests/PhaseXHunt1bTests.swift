@@ -2086,14 +2086,14 @@ extension PhaseXHunt6Tests {
                 var transform = try XCTUnwrap(session.images.first { $0.id == id }).transform
                 transform.center.x += 10
                 XCTAssertTrue(session.transformImage(id, to: transform))
-                XCTExpectFailure("H8-04") { XCTAssertNil(session.selectedSemanticObjectID) }
+                XCTAssertNil(session.selectedSemanticObjectID)
                 XCTAssertEqual(session.selectedImageID, id)
             } else {
                 let id = try XCTUnwrap(shapeID)
                 var transform = try XCTUnwrap(session.semanticObjects.first { $0.id == id }).transform
                 transform.center.x += 10
                 XCTAssertTrue(session.transformSemanticObject(id, to: transform))
-                XCTExpectFailure("H8-04") { XCTAssertNil(session.selectedImageID) }
+                XCTAssertNil(session.selectedImageID)
                 XCTAssertEqual(session.selectedSemanticObjectID, id)
             }
         }
