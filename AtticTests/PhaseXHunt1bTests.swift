@@ -2061,6 +2061,16 @@ extension PhaseXHunt6Tests {
                     XCTAssertFalse(session.completeStroke(points: [point, .init(x: point.x + 1, y: point.y + 1)]))
                     gate.shouldFail = false
                 }
+                if action <= 6 { XCTAssertTrue(changed, "valid creation seed=\(seed) step=\(step)") }
+                if action == 12 { XCTAssertEqual(changed, !before.isEmpty) }
+                if action == 7 || action == 8 || action == 11,
+                   let id = chosen, let value = before[id],
+                   action == 8 || (action == 7 && value.kind != "stroke") || (action == 11 && value.kind == "text") {
+                    XCTAssertTrue(changed, "valid edit seed=\(seed) step=\(step)")
+                }
+                if action == 13, let id = chosen, let value = before[id], value.kind != "stroke" {
+                    XCTAssertEqual(changed, value.layer != highest)
+                }
                 if changed {
                     for id in model.keys where !objectOrder.contains(id) { objectOrder.append(id) }
                     undo.append(before); redo = []
@@ -2305,11 +2315,9 @@ extension PhaseXHunt6Tests {
             XCTAssertTrue(session.engine.performEdit(NSRange(location: 2, length: 0), with: NSAttributedString(string: "C"), name: "Reentrant type"))
         }
         XCTAssertTrue(page.save(session))
-        XCTExpectFailure("H8-06 synchronous commit sibling") { XCTAssertEqual(session.state, .dirty) }
+        XCTAssertEqual(session.state, .dirty)
         await XCTAssertTrueAsync(await page.preserveAllDurably())
-        XCTExpectFailure("H8-06 synchronous commit preservation") {
-            XCTAssertEqual(store.loadDocument(noteID: id)?.content.document, session.engine.document())
-        }
+        XCTAssertEqual(store.loadDocument(noteID: id)?.content.document, session.engine.document())
     }
 
     func testH8_07PreparedProjectionCannotSubstituteAnotherDocument() throws {
@@ -2327,5 +2335,23 @@ extension PhaseXHunt6Tests {
             }
             XCTExpectFailure("H8-07") { XCTAssertEqual(store.loadDocument(noteID: id)?.content.document, b) }
         }
+    }
+}
+
+@MainActor
+extension PhaseXHunt6Tests {
+    func testH8_06OlderEmptyDraftSnapshotKeepsNewerContentPending() async throws {
+        let store = try makeTestNoteStore(attachmentFileStore: makeTestAttachmentFileStore())
+        let page = NotesPageController(store: store, journal: NoteDraftJournal(directory: ownedTemporaryDirectory(prefix: "H8EmptySnapshot")),
+            saveDelay: .seconds(600), durabilityDelay: .seconds(600))
+        await page.startAndWait()
+        await XCTAssertTrueAsync(await page.newNoteDurably())
+        let session = try XCTUnwrap(page.active), old = session.engine.document()
+        XCTAssertTrue(session.engine.performEdit(NSRange(location: 0, length: 0), with: NSAttributedString(string: "Newer"), name: "Type"))
+        XCTAssertTrue(page.save(session, snapshot: old))
+        XCTAssertEqual(session.state, .dirty)
+        XCTAssertFalse(session.isPersisted)
+        await XCTAssertTrueAsync(await page.preserveAllDurably())
+        XCTAssertEqual(store.loadDocument(noteID: session.noteID)?.content.document, session.engine.document())
     }
 }
