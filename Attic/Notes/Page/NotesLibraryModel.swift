@@ -201,6 +201,16 @@ final class NotesLibraryModel: ObservableObject {
         if let cache, cache.key == key, unsaved.isEmpty { return cache.groups }
 
         var notes = store.orderedNotes()
+        // One consistent proposal snapshot for every row in this render.
+        // A later row must not turn a partially failed read into cacheable rows.
+        if !notes.isEmpty, proposalIDs?.revision != store.revision {
+            do {
+                let edits = try store.fetchAuxiliary(FetchDescriptor<NotePendingEdit>())
+                proposalIDs = (store.revision, Set(edits.map(\.noteID)))
+            } catch {
+                store.reportAuxiliaryReadFailure("Proposals could not be read: \(error.localizedDescription)")
+            }
+        }
         let allNotes = notes
         if let tag = tagFilter {
             notes = notes.filter { $0.tags.contains(tag) }
@@ -244,7 +254,9 @@ final class NotesLibraryModel: ObservableObject {
                 Group(id: "earlier", title: String(localized: "Earlier"), rows: earlier)
             ].filter { !$0.rows.isEmpty }
         }
-        cache = (key, result)
+        // A failed proposal read is unknown, so neither its badge nor the
+        // enclosing rows may be cached as a successful absence.
+        cache = notes.isEmpty || proposalIDs?.revision == store.revision ? (key, result) : nil
         return result
     }
 
@@ -370,10 +382,6 @@ final class NotesLibraryModel: ObservableObject {
     private func row(_ note: NoteItem, store: NoteStore, attention: Set<UUID>) -> AtticNoteRowModel {
         let summary = NoteRowSummary(note: note, attachments: store.attachments(for: note.id), body: body(of: note))
         let time = Self.time(note.updatedAt, now: now(), calendar: calendar)
-        if proposalIDs?.revision != store.revision {
-            let edits = (try? store.fetchAuxiliary(FetchDescriptor<NotePendingEdit>())) ?? []
-            proposalIDs = (store.revision, Set(edits.map(\.noteID)))
-        }
         let hasProposal = proposalIDs?.ids.contains(note.id) == true
         return AtticNoteRowModel(
             id: note.id, title: summary.title, time: time, needsAttention: attention.contains(note.id), hasProposal: hasProposal,

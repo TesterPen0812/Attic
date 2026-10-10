@@ -678,7 +678,7 @@ final class PhaseXHunt1bTests: XCTestCase {
             if type == NoteVersion.self { throw NSError(domain: "H5-fetch", code: 1) }
         }
         let opened = await page.openHistoryDurably()
-        XCTExpectFailure("H5-01") {
+        do {
             XCTAssertFalse(opened, "A failed read must not be presented as empty history")
             XCTAssertNil(page.historyBrowser)
             XCTAssertNotNil(page.active?.notice)
@@ -706,14 +706,37 @@ final class PhaseXHunt1bTests: XCTestCase {
             if type == NoteVersion.self { throw NSError(domain: "H5-fetch", code: 1) }
         }
         let restored = store.restoreDocumentAttachment(attachment)
-        XCTExpectFailure("H5-01") {
+        do {
             XCTAssertFalse(restored, "An unavailable history must not be treated as absent placement")
             XCTAssertEqual(store.loadDocument(noteID: noteID)?.content.document, before)
         }
         store.auxiliaryFetchWillRead = nil
-        // This red run already changed the placement, so use the persisted
-        // current state only for the safety assertions above; retry is covered
-        // by the history repro and the area's existing restore tests.
+        // Retry is covered by the history repro and the area's restore tests.
+    }
+
+
+    func testH5_02FailOnceDuringMultipleRowsDoesNotCachePartialBadges() throws {
+        let store = try makeTestNoteStore(attachmentFileStore: makeTestAttachmentFileStore())
+        let ids = try [create(store, title: "One"), create(store, title: "Two")]
+        for id in ids {
+            _ = try store.agentWrite(noteID: id, baseRevisionToken: try XCTUnwrap(store.note(withID: id)).revisionToken,
+                document: NoteDocument(blocks: [.text("Proposed")]), agentName: "Agent", disposition: .proposal).get()
+        }
+        let library = NotesLibraryModel(search: { _ in [] }, store: store)
+        var attempts = 0
+        store.auxiliaryFetchWillRead = { type in
+            if type == NotePendingEdit.self {
+                attempts += 1
+                if attempts == 1 { throw NSError(domain: "H5-fetch", code: 2) }
+            }
+        }
+        _ = rows(library, store)
+        let revision = store.revision
+        let retried = rows(library, store)
+        XCTAssertEqual(store.revision, revision)
+        do {
+            XCTAssertEqual(retried.filter(\.hasProposal).count, 2, "A partial failed render must not be cached")
+        }
     }
 
     func testH5_02ProposalStatusDoesNotCacheAFailedFetchAsNoProposal() async throws {
@@ -731,15 +754,16 @@ final class PhaseXHunt1bTests: XCTestCase {
         _ = page.proposalAgent(for: session)
         store.auxiliaryFetchWillRead = nil
         let retried = page.proposalAgent(for: session)
+        await Task.yield()
         XCTAssertEqual(store.revision, revision, "Read recovery must not require a write")
-        XCTExpectFailure("H5-02") {
+        do {
             XCTAssertEqual(retried, "Hunt agent")
             XCTAssertNotNil(store.lastErrorMessage, "The failed fetch must be reported")
         }
         XCTAssertEqual(store.pendingEdits(noteID: id).count, 1)
     }
 
-    func testH5_02LibraryBadgeDoesNotCacheAFailedFetchAsNoProposal() throws {
+    func testH5_02LibraryBadgeDoesNotCacheAFailedFetchAsNoProposal() async throws {
         let store = try makeTestNoteStore(attachmentFileStore: makeTestAttachmentFileStore())
         let id = try create(store)
         _ = try store.agentWrite(noteID: id, baseRevisionToken: try XCTUnwrap(store.note(withID: id)).revisionToken,
@@ -752,8 +776,9 @@ final class PhaseXHunt1bTests: XCTestCase {
         _ = rows(library, store)
         store.auxiliaryFetchWillRead = nil
         let retried = try XCTUnwrap(rows(library, store).first { $0.id == id })
+        await Task.yield()
         XCTAssertEqual(store.revision, revision)
-        XCTExpectFailure("H5-02") {
+        do {
             XCTAssertTrue(retried.hasProposal)
             XCTAssertNotNil(store.lastErrorMessage)
         }

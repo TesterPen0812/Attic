@@ -277,7 +277,13 @@ extension NoteStore {
         let noteID = row.noteID
         guard let loaded = loadDocument(noteID: noteID), var document = loaded.content.document else { return false }
         if !document.attachmentIDs.contains(row.id) {
-            let past = versions(noteID: noteID).compactMap { version -> (NoteDocument, Int)? in
+            let history: [NoteVersion]
+            do { history = try readVersions(noteID: noteID) }
+            catch {
+                recordError("The attachment's saved placement could not be read: \(error.localizedDescription)")
+                return false
+            }
+            let past = history.compactMap { version -> (NoteDocument, Int)? in
                 guard let data = version.content, let historical = NoteContentCodec.decode(data).document,
                       let index = historical.blocks.firstIndex(where: { $0.attachmentID == row.id }) else { return nil }
                 return (historical, index)
@@ -933,10 +939,18 @@ extension NoteStore {
 
     /// Newest first, one per id.
     func versions(noteID: UUID) -> [NoteVersion] {
+        do { return try readVersions(noteID: noteID) }
+        catch {
+            reportAuxiliaryReadFailure("Version history could not be read: \(error.localizedDescription)")
+            return []
+        }
+    }
+
+    func readVersions(noteID: UUID) throws -> [NoteVersion] {
         let targetID = noteID
-        let rows = (try? fetchAuxiliary(FetchDescriptor<NoteVersion>(
+        let rows = try fetchAuxiliary(FetchDescriptor<NoteVersion>(
             predicate: #Predicate { $0.noteID == targetID }
-        ))) ?? []
+        ))
         var seen = Set<UUID>()
         return rows.sorted { lhs, rhs in
             lhs.createdAt != rhs.createdAt ? lhs.createdAt > rhs.createdAt : lhs.id.uuidString > rhs.id.uuidString
@@ -1171,11 +1185,19 @@ extension NoteStore {
 
     /// Oldest first, one per id.
     func pendingEdits(noteID: UUID) -> [NotePendingEdit] {
+        do { return try readPendingEdits(noteID: noteID) }
+        catch {
+            reportAuxiliaryReadFailure("Proposals could not be read: \(error.localizedDescription)")
+            return []
+        }
+    }
+
+    func readPendingEdits(noteID: UUID) throws -> [NotePendingEdit] {
         pendingEditFetchCount += 1
         let targetID = noteID
-        let rows = (try? fetchAuxiliary(FetchDescriptor<NotePendingEdit>(
+        let rows = try fetchAuxiliary(FetchDescriptor<NotePendingEdit>(
             predicate: #Predicate { $0.noteID == targetID }
-        ))) ?? []
+        ))
         var seen = Set<UUID>()
         return rows.sorted { lhs, rhs in
             lhs.createdAt != rhs.createdAt ? lhs.createdAt < rhs.createdAt : lhs.id.uuidString < rhs.id.uuidString

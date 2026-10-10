@@ -603,7 +603,12 @@ final class NotesPageController: ObservableObject {
     func proposalAgent(for session: NoteSession) -> String? {
         guard session.isPersisted else { return nil }
         if let cached = proposalStatusCache[session.noteID], cached.revision == store.revision { return cached.agent }
-        let edits = store.pendingEdits(noteID: session.noteID)
+        let edits: [NotePendingEdit]
+        do { edits = try store.readPendingEdits(noteID: session.noteID) }
+        catch {
+            store.reportAuxiliaryReadFailure("Proposals could not be read: \(error.localizedDescription)")
+            return proposalStatusCache[session.noteID]?.agent
+        }
         let agent = edits.first(where: { !$0.isDeletion }).map {
             $0.agentName.isEmpty ? String(localized: "Agent") : $0.agentName
         }
@@ -2549,7 +2554,13 @@ extension NotesPageController {
             return false
         }
         session.pauseTask?.cancel()
-        let entries = store.versions(noteID: session.noteID).map(NoteHistoryEntry.init)
+        let entries: [NoteHistoryEntry]
+        do { entries = try store.readVersions(noteID: session.noteID).map(NoteHistoryEntry.init) }
+        catch {
+            session.notice = "Version history could not be read. Try again. \(error.localizedDescription)"
+            store.recordError(session.notice!)
+            return false
+        }
         let browser = NoteHistoryBrowser(noteID: session.noteID, current: session.engine.document(),
             currentRevision: session.baseRevisionID, entries: entries)
         if let scroll = session.engine.scrollView {

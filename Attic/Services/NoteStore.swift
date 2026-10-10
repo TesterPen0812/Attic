@@ -1133,6 +1133,15 @@ final class NoteStore: ObservableObject {
         try auxiliaryFetchWillRead?(Model.self)
         return try modelContext.fetch(descriptor)
     }
+    /// Cache readers can be called during SwiftUI rendering. Report once on
+    /// the next actor turn rather than publish from inside a view update.
+    func reportAuxiliaryReadFailure(_ message: String) {
+        guard lastErrorMessage != message else { return }
+        Task { @MainActor [weak self] in
+            guard let self, self.lastErrorMessage != message else { return }
+            self.recordError(message)
+        }
+    }
     var currentDate: Date { now() }
 
     /// Saves staged changes; on failure rolls back, reloads and records the
