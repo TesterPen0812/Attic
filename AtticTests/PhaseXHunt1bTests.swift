@@ -1726,7 +1726,7 @@ extension PhaseXHunt5Tests {
                     context.insert(note)
                     context.insert(NoteAttachment(id: id, noteID: noteID, originalFilename: reference.filename,
                         contentTypeIdentifier: "public.plain-text", byteCount: Int64(bytes.count), sortIndex: 0,
-                        contentDigest: reference.digest, payload: bytes))
+                        contentDigest: reference.digest, payload: nil))
                     try context.save()
                     store.refresh()
                 }
