@@ -90,11 +90,12 @@ jobs:
             -derivedDataPath "$RUNNER_TEMP/AtticFKA" -resultBundlePath "$RUNNER_TEMP/AtticFKA.xcresult" \
             CODE_SIGNING_ALLOWED=NO -parallel-testing-enabled NO \
             -only-testing:AtticTests/AtticDropdownTests/testTheTagPickerWorksFromTheKeyboardWithFullKeyboardAccess \
+            -only-testing:AtticTests/AtticDropdownTests/testH5_04InitialFocusHonorsARequestAlreadyDeliveredBeforeAppearance \
             -only-testing:AtticTests/AtticDropdownTests/testH5_04TabTransfersExclusiveFocusBetweenFieldAndList \
             -only-testing:AtticTests/AtticDropdownTests/testH5_04ListFocusReleasesTheNativeFieldEditorWithoutOrderingAWindow
           xcrun xcresulttool get test-results summary --path "$RUNNER_TEMP/AtticFKA.xcresult" --format json > "$RUNNER_TEMP/fka-summary.json"
           cat "$RUNNER_TEMP/fka-summary.json"
-          python3 -c 'import json,sys; s=json.load(open(sys.argv[1])); assert s["passedTests"]==3 and s["skippedTests"]==0 and s["failedTests"]==0 and s["expectedFailures"]==0' "$RUNNER_TEMP/fka-summary.json"
+          python3 -c 'import json,sys; s=json.load(open(sys.argv[1])); assert s["passedTests"]==4 and s["skippedTests"]==0 and s["failedTests"]==0 and s["expectedFailures"]==0' "$RUNNER_TEMP/fka-summary.json"
       - name: Upload focused keyboard evidence
         if: always()
         uses: actions/upload-artifact@v4

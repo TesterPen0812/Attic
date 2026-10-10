@@ -13,7 +13,6 @@ final class AtticDropdownTests: XCTestCase {
     // MARK: The width rule
 
     func testH5_04InitialFocusHonorsARequestAlreadyDeliveredBeforeAppearance() {
-        XCTExpectFailure("H5-04")
         XCTAssertTrue(AtticDropdownInitialFocus.shouldRequest(enabled: true, request: nil))
         XCTAssertFalse(AtticDropdownInitialFocus.shouldRequest(enabled: true, request: 0), "measuring a detached host must not request focus")
         XCTAssertTrue(AtticDropdownInitialFocus.shouldRequest(enabled: true, request: 1), "installed host appearance must honor the initial request even if onChange was missed")

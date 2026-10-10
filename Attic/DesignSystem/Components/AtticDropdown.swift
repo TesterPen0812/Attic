@@ -238,23 +238,10 @@ private struct AtticDropdownTabs: ViewModifier {
         registerKeys { event in
             guard event.keyCode == 48,
                   event.modifierFlags.intersection([.command, .option, .control]).isEmpty else { return false }
-            let toList = !list.wrappedValue && NSApp.isFullKeyboardAccessEnabled && count > 0
-            if toList {
-                // These are separate SwiftUI focus owners. Let the field's
-                // pending reconciliation finish before asking the list; an
-                // immediate list request can be overwritten by a new editor.
-                field.wrappedValue = false
-                DispatchQueue.main.async {
-                    AtticDropdownTabFocus.transfer(listFocused: false, fullKeyboardAccess: true,
-                        setField: { field.wrappedValue = $0 }, setList: { list.wrappedValue = $0 },
-                        takeListKeyboard: takeListKeyboard)
-                }
-            } else {
-                AtticDropdownTabFocus.transfer(listFocused: list.wrappedValue,
-                    fullKeyboardAccess: NSApp.isFullKeyboardAccessEnabled,
-                    setField: { field.wrappedValue = $0 }, setList: { list.wrappedValue = $0 },
-                    listAvailable: count > 0, takeListKeyboard: takeListKeyboard)
-            }
+            AtticDropdownTabFocus.transfer(listFocused: list.wrappedValue,
+                fullKeyboardAccess: NSApp.isFullKeyboardAccessEnabled,
+                setField: { field.wrappedValue = $0 }, setList: { list.wrappedValue = $0 },
+                listAvailable: count > 0, takeListKeyboard: takeListKeyboard)
             return true
         }
     }
@@ -852,7 +839,7 @@ extension View {
 
 enum AtticDropdownInitialFocus {
     static func shouldRequest(enabled: Bool, request: Int?) -> Bool {
-        enabled && request == nil
+        enabled && (request == nil || (request ?? 0) > 0)
     }
 }
 
