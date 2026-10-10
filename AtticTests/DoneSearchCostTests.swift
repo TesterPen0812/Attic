@@ -210,6 +210,7 @@ final class DoneSearchCostTests: XCTestCase {
         // the 5000-task fixture; no Done data/query is warmed here.
         try measureNativeEditingStartupControl()
         var runs: [[Double]] = []
+        var keyPhases: [[[Double]]] = []
         var resultFrames: [Double] = []
         for run in 0..<3 {
             let host = try FrameCostHost()
@@ -223,12 +224,14 @@ final class DoneSearchCostTests: XCTestCase {
             XCTAssertTrue(NSApp.keyWindow === host.window)
             let field = try XCTUnwrap(host.window.firstResponder as? NSTextView)
             var times: [Double] = []
+            var phases: [[Double]] = []
             for character in "Finished task 12" {
                 let before = TasksPage.tabsEvaluations
                 let parts = host.framePhases {
                     field.insertText(String(character), replacementRange: field.selectedRange())
                 }
                 times.append(parts.reduce(0, +))
+                phases.append(parts)
                 XCTAssertEqual(TasksPage.tabsEvaluations, before, "typing must not rebuild the task page")
             }
             // The frame the results arrive in (PR prep, review P2-2): the
@@ -246,7 +249,15 @@ final class DoneSearchCostTests: XCTestCase {
             XCTAssertEqual(host.model.doneSearch, "Finished task 12")
             XCTAssertEqual(host.model.doneSearchCount()?.matches, 111)
             runs.append(times)
+            keyPhases.append(phases)
             host.close()
+        }
+        // Emit only after every input/results measurement and host close.
+        // Logging between keys can change idle publication and the next frame.
+        for (run, phases) in keyPhases.enumerated() {
+            for (key, parts) in phases.enumerated() {
+                print("ATTIC_DONE_KEY_PHASE run=\(run) key=\(key) change/runloop/layout/display/commit_ms=\(parts)")
+            }
         }
         // Keep the spec's per-character median budget. Individual samples
         // compare by median with the same-job reference in the CI comparator,
