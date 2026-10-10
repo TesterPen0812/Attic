@@ -135,13 +135,15 @@ struct NoteTextStyle: Equatable {
     var bodyColor: NSColor { tokens.ink(.heading).nsColor }
     var quoteColor: NSColor { bodyColor }
     var secondaryColor: NSColor { tokens.ink(.helper).nsColor }
-    /// List numbers are quieter than the text; bullets and the quote bar
-    /// are in the text's ink.
+    /// List numbers are quieter than the text; bullets are in the text's ink.
     var markerColor: NSColor { secondaryColor }
     var placeholderColor: NSColor { tokens.hintInk.nsColor }
-    /// The yellow marker (colour pass, owner 2026-10-10); code keeps its grey.
+    /// A plain grey wash behind proportional text (owner 2026-10-10); code keeps
+    /// its monospaced font and its own, lighter accent-tinted chip.
     var highlightColor: NSColor { tokens.highlightMarker.nsColor }
     var codeColor: NSColor { tokens.tagFill.nsColor }
+    /// A quote's bar: the quiet grey, with rounded ends (F-02).
+    var quoteBarColor: NSColor { tokens.quoteBar.nsColor }
     /// Links: blue, with their underline in the same blue at 55 %.
     var linkColor: NSColor { tokens.ink(.linkText).nsColor }
     var linkUnderlineColor: NSColor { tokens.linkUnderline.nsColor }

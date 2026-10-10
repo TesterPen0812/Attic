@@ -4,7 +4,7 @@ import SwiftUI
 
 /// A tag's colour (colour pass, owner 2026-10-10): seven hues that new tags
 /// are given automatically, and a neutral grey that is only ever chosen.
-/// Red (overdue), orange (High's "!!"), green and yellow (the highlight)
+/// Red (overdue), orange (High's "!!"), green and yellow (the find highlight)
 /// are left out on purpose. The raw value is what a tag stores
 /// (`TagColour.colourKey`), so cases are never renamed.
 enum AtticTagHue: String, CaseIterable, Sendable {

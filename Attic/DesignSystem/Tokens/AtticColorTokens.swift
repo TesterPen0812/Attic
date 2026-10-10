@@ -412,11 +412,22 @@ struct AtticColorTokens: Equatable, Sendable {
 
     // MARK: Note content (colour pass)
 
-    /// The highlight mark: a yellow marker at 40 % (Light) or 28 % (Dark),
-    /// decoration under body text that keeps 4.5 : 1 over it. 28 % is the
-    /// Dark ceiling (32 % drops the body text to 4.62 : 1 on Solid).
+    /// The highlight mark: a plain grey wash (black 16 % in Light, white
+    /// 22 % in Dark) in every palette and surface (owner 2026-10-10: back
+    /// to grey; a separate colour highlighter is later work). It is
+    /// stronger than inline code's accent tint (`tagFill`: 10 % / 16 %), and
+    /// code also keeps its monospaced font, so the two never read alike.
+    /// Decoration under body text, which keeps 4.5 : 1 over it.
     var highlightMarker: AtticRGBA {
-        context.mode == .dark ? AtticRGBA(0xFFCC00).withAlpha(0.28) : AtticRGBA(0xFFD60A).withAlpha(0.40)
+        context.mode == .dark ? AtticRGBA(0xFFFFFF).withAlpha(0.22) : AtticRGBA(0x000000).withAlpha(0.16)
+    }
+    /// A quote's bar (owner 2026-10-10, F-02): the quiet grey, never the
+    /// primary ink. The quietest text ink at 22 % (Light, about #E5E5E5 on
+    /// white: the owner's reference bar is #E6E7E7) or 32 % (Dark), 55 %
+    /// under Increase Contrast. Decoration only: the text's indent and the
+    /// line's own words carry the quote.
+    var quoteBar: AtticRGBA {
+        ink(.muted).withAlpha(context.increaseContrast ? 0.55 : (context.mode == .dark ? 0.32 : 0.22))
     }
     /// A link's underline: its blue at 55 %, kept so the link never depends
     /// on colour alone (the blue is only 1.5 : 1 against body text).
