@@ -179,6 +179,10 @@ struct TaskRowView: View, Equatable {
             beginTaskDrop: { uiState.endDragging() },
             attach: { TaskFileDrop.attach($0, $1, to: task.id, store: store, subtaskPanels: subtaskPanels) }
         ))
+        .onTaskFileDropEnded {
+            isFileDropTargeted = false
+            panelFileDrop?.end()
+        }
         .overlay {
             if isFileDropTargeted {
                 TaskDropOverlay(

@@ -554,3 +554,16 @@ struct TaskDropOverlay<S: Shape>: View {
     }
 
 }
+
+/// AppKit may terminate a drag without a destination exit (Escape, source
+/// cancellation, or a completed drop). Every task surface shares this end.
+extension View {
+    func onTaskFileDropEnded(_ clear: @escaping () -> Void) -> some View {
+        onDropSessionUpdated { session in
+            switch session.phase {
+            case .ended, .dataTransferCompleted: clear()
+            default: break
+            }
+        }
+    }
+}

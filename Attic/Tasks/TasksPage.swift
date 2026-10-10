@@ -207,7 +207,7 @@ struct TasksPage: View {
         // Files dropped on a row attach to its task (the "Add to page"
         // label shows on the row under them): one destination for the page,
         // which finds the row from the rows' frames.
-        .onDrop(of: TaskDropContent.dropTypes, delegate: TasksFileDropDelegate(
+        .tasksFileDrop(delegate: TasksFileDropDelegate(
             target: { point in fileDropTarget(at: point) },
             canAccept: { content, id in content == .files && store.attachmentOwnerID(for: id) != nil },
             setTargeted: { id in
@@ -3905,10 +3905,27 @@ struct TasksRowSnapshot<Content: View>: View, Equatable {
     }
 }
 
+/// DropDelegate has no cancellation callback. The drop session supplies
+/// its terminal event, including cancel without an exit.
+private struct TasksFileDropDestination: ViewModifier {
+    let delegate: TasksFileDropDelegate
+    func body(content: Content) -> some View {
+        content.onDrop(of: TaskDropContent.dropTypes, delegate: delegate)
+            .onTaskFileDropEnded { delegate.setTargeted(nil) }
+            .onDisappear { delegate.setTargeted(nil) }
+    }
+}
+
+extension View {
+    func tasksFileDrop(delegate: TasksFileDropDelegate) -> some View {
+        modifier(TasksFileDropDestination(delegate: delegate))
+    }
+}
+
 /// Files dropped on the Tasks page (round 11): the row under them takes
 /// them. Files are accepted anywhere on the page, so the drop is followed
 /// as it moves; only a row that can hold files highlights and takes them.
-private struct TasksFileDropDelegate: DropDelegate {
+struct TasksFileDropDelegate: DropDelegate {
     let target: (CGPoint) -> UUID?
     let canAccept: (TaskDropContent, UUID) -> Bool
     let setTargeted: (UUID?) -> Void

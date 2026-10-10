@@ -184,6 +184,7 @@ struct SubtaskPanelContent: View {
             setTargeted: { fileDrop.setTargeted($0, source: "surface") },
             perform: { fileDrop.perform($0, $1) }
         ))
+        .onTaskFileDropEnded { fileDrop.end() }
         .onAppear(perform: configureFileDrop)
         .onPreferenceChange(SubtaskChromeHeightKey.self) { values in
             var changed = false
