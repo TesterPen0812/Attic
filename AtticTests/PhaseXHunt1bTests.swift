@@ -732,7 +732,7 @@ final class PhaseXHunt1bTests: XCTestCase {
             // Queued callbacks must run before the assertion, without touching windows.
             await Task.yield()
             await Task.yield()
-            XCTExpectFailure("H6-04") {
+            do {
                 XCTAssertEqual(purges, restart ? 2 : 1, "Stopped and superseded generations do no work")
             }
             service.stop()
