@@ -734,7 +734,7 @@ final class PhaseXHunt1bTests: XCTestCase {
         let frame = window.frame
         workArea = CGRect(x: 600, y: 0, width: 1600, height: 1000)
         NotificationCenter.default.post(name: NSWindow.didChangeScreenNotification, object: window)
-        XCTExpectFailure("H6-05") {
+        do {
             XCTAssertGreaterThan(window.contentMaxSize.width, compactMaximum.width)
             XCTAssertGreaterThan(window.contentMaxSize.height, compactMaximum.height)
         }

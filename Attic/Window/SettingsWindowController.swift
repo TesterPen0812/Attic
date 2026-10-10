@@ -164,6 +164,15 @@ final class SettingsWindowController: NSWindowController {
             })
         }
 
+        observers.append(center.addObserver(forName: NSWindow.didChangeScreenNotification,
+            object: window, queue: .main) { [weak self] _ in
+                MainActor.assumeIsolated {
+                    guard let self, let window = self.window as? SettingsWindow else { return }
+                    // Refresh limits during a drag without relocating the window.
+                    self.fitToCurrentWorkArea(window, reposition: false)
+                }
+            })
+
         observers.append(center.addObserver(forName: NSApplication.didChangeScreenParametersNotification,
             object: nil, queue: .main) { [weak self] _ in
                 MainActor.assumeIsolated {
