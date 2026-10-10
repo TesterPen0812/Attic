@@ -667,6 +667,33 @@ final class PhaseXHunt1bTests: XCTestCase {
     }
 
 
+    func testR3_09FailedProposalReadsDoNotRepeatAtTheSameRevision() async throws {
+        let store = try makeTestNoteStore(attachmentFileStore: makeTestAttachmentFileStore())
+        _ = try create(store)
+        let library = NotesLibraryModel(search: { _ in [] }, store: store)
+        var attempts = 0
+        store.auxiliaryFetchWillRead = { type in
+            if type == NotePendingEdit.self {
+                attempts += 1
+                throw NSError(domain: "R3-read", code: 9)
+            }
+        }
+        _ = rows(library, store)
+        await Task.yield()
+        XCTAssertNotNil(store.lastErrorMessage)
+        store.dismissError()
+        for _ in 0..<8 { _ = rows(library, store) }
+        await Task.yield()
+        do {
+            XCTAssertEqual(attempts, 1)
+            XCTAssertNil(store.lastErrorMessage, "A dismissed notice stays dismissed at this revision")
+        }
+        let previousAttempts = attempts
+        store.refresh()
+        _ = rows(library, store)
+        XCTAssertEqual(attempts, previousAttempts + 1, "A new store revision retries the read")
+    }
+
     func testH5_01FailedHistoryFetchRefusesEmptyBrowserAndRetries() async throws {
         let store = try makeTestNoteStore(attachmentFileStore: makeTestAttachmentFileStore())
         let id = try create(store)
@@ -732,6 +759,7 @@ final class PhaseXHunt1bTests: XCTestCase {
         }
         _ = rows(library, store)
         let revision = store.revision
+        library.retry() // R3-09: retry explicitly; renders at a failed revision are suppressed.
         let retried = rows(library, store)
         XCTAssertEqual(store.revision, revision)
         do {
@@ -775,6 +803,7 @@ final class PhaseXHunt1bTests: XCTestCase {
         }
         _ = rows(library, store)
         store.auxiliaryFetchWillRead = nil
+        library.retry() // R3-09: a recovery read must be requested explicitly.
         let retried = try XCTUnwrap(rows(library, store).first { $0.id == id })
         await Task.yield()
         XCTAssertEqual(store.revision, revision)
