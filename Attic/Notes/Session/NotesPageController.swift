@@ -186,6 +186,17 @@ final class NoteSession: ObservableObject, Identifiable {
 /// - a never-saved draft with no content is discarded, nothing else is.
 @MainActor
 final class NotesPageController: ObservableObject {
+    isolated deinit {
+        for session in cache.values {
+            session.saveTask?.cancel()
+            session.durabilityTask?.cancel()
+            session.pauseTask?.cancel()
+        }
+        versionHistoryCommandTask?.cancel()
+        // Serialized recovery writes keep their owners until they finish.
+        // Teardown must not abandon a checkpoint or an admitted import.
+    }
+
     enum LeaveReason { case openNote, newNote, library, pageSwitch, hide, quit }
     @Published private(set) var active: NoteSession?
     @Published private(set) var historyBrowser: NoteHistoryBrowser?
@@ -490,29 +501,30 @@ final class NotesPageController: ObservableObject {
         store.agentWriteDisposition = { [weak self] id in
             self?.agentDisposition(for: id) ?? .direct
         }
-        store.recoveryReferencedAttachmentIDs = { [weak self] in
-            guard let self else { return [] }
+        store.recoveryReferencedAttachmentIDs = { [weak self, journal] in
             // One live-byte rule for purge: every checkpoint, open draft,
             // pending payload and both sides of editor history own bytes.
-            var ids = Set(self.cache.values.flatMap { self.liveAttachmentIDs(in: $0) })
-            guard let journal = self.journal else { return ids }
+            var ids = Set(self?.cache.values.flatMap { self?.liveAttachmentIDs(in: $0) ?? [] } ?? [])
+            guard let journal else { return ids }
             let entries: [NoteDraftRecoveryEntry]
             do { entries = try journal.recoveryEntries() }
             catch {
-                self.reportRecoveryRetentionWarning("Recovery copies could not be checked. Removed images are being kept until they can be checked.")
+                self?.reportRecoveryRetentionWarning("Recovery copies could not be checked. Removed images are being kept until they can be checked.")
                 throw error
             }
-            for item in entries {
-                guard case let .valid(entry, _, _) = item,
-                      let document = NoteContentCodec.decode(entry.content).document else {
-                    self.reportRecoveryRetentionWarning("A damaged recovery copy is keeping removed images safe until it is repaired.")
-                    throw DamagedNoteRecovery()
-                }
-                ids.formUnion(document.attachmentIDs)
-                ids.formUnion(entry.staged.map(\.id))
-                ids.formUnion(entry.pendingImport?.items.compactMap(\.stagedID) ?? [])
+            do { ids.formUnion(try Self.recoveryAttachmentIDs(in: entries)) }
+            catch {
+                self?.reportRecoveryRetentionWarning("A damaged recovery copy is keeping removed images safe until it is repaired.")
+                throw error
             }
             return ids
+        }
+        store.recoveryReferencedAttachmentIDsDurably = { [weak self, journal] in
+            // A live controller also owns unsaved session attachments. Its
+            // existing synchronous authority includes those without disk IO.
+            if let self { return try self.store.recoveryReferencedAttachmentIDs() }
+            guard let journal else { return [] }
+            return try Self.recoveryAttachmentIDs(in: try await journal.readRetentionEntries())
         }
         store.recoveryProtectedRevisionIDs = { [weak self] in
             guard let journal = self?.journal else { return [] }
@@ -527,6 +539,18 @@ final class NotesPageController: ObservableObject {
         // Retention is used by Settings before the Notes page is presented.
         // Warm recovery ownership once at startup without activating a page.
         if journal?.requiresAsyncIO == true { recoverAtLaunch() }
+    }
+
+    private static func recoveryAttachmentIDs(in entries: [NoteDraftRecoveryEntry]) throws -> Set<UUID> {
+        var ids = Set<UUID>()
+        for item in entries {
+            guard case let .valid(entry, _, _) = item,
+                  let document = NoteContentCodec.decode(entry.content).document else { throw DamagedNoteRecovery() }
+            ids.formUnion(document.attachmentIDs)
+            ids.formUnion(entry.staged.map(\.id))
+            ids.formUnion(entry.pendingImport?.items.compactMap(\.stagedID) ?? [])
+        }
+        return ids
     }
 
     func refreshRecoveryWarningsAfterResolution() async {
@@ -1053,8 +1077,8 @@ final class NotesPageController: ObservableObject {
             if !NoteSessionPolicy.hasPendingWork(session.state), session.engine.tags == session.baseTags { return }
             self.textDidChange(in: session)
         }
-        engine.onWritingToolsWillBegin = { [weak self, weak session] in
-            guard let self, let session else { return false }
+        engine.onWritingToolsWillBegin = { [weak self, weak session, weak engine] in
+            guard let self, let session, let engine else { return false }
             guard NoteSessionPolicy.writingToolsAvailable(session.state, activity: engine.activity,
                     refusedSinceLastStoreSave: session.refusedWritingToolsSinceSave,
                     hasMarkedText: engine.textView?.hasMarkedText() == true) else {

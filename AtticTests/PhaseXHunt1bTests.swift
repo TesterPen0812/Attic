@@ -1,4 +1,5 @@
 import AppKit
+import Combine
 import SwiftData
 import XCTest
 @testable import Attic
@@ -1031,5 +1032,717 @@ private final class H3BlockingJournal: NoteDraftJournaling {
     func readRecoveryEntries() async throws -> [NoteDraftRecoveryEntry] { try await base.readRecoveryEntries() }
     func discardOwnedDurably(noteID: UUID, claim: NoteRecoveryClaim) async throws {
         try await base.discardOwnedDurably(noteID: noteID, claim: claim)
+    }
+}
+
+/// No test here presents, orders, activates or keys a window.
+@MainActor
+final class PhaseXHunt5Tests: XCTestCase {
+    private final class WeakProbe<T: AnyObject> {
+        weak var value: T?
+        init(_ value: T?) { self.value = value }
+    }
+
+    private func field<T>(_ name: String, in owner: Any, as type: T.Type = T.self) throws -> T {
+        try XCTUnwrap(Mirror(reflecting: owner).children.first { $0.label == name }?.value as? T)
+    }
+
+    func testH7_01ReleasedStoreDoesNotPermanentlyVetoSharedFileCollector() async throws {
+        let files = makeTestAttachmentFileStore()
+        let container = try PersistenceController.makeContainer(inMemory: true, cloudSyncEnabled: false)
+        var former: NoteStore? = NoteStore(container: container, attachmentFileStore: files)
+        await former?.waitForAttachmentReconciliation()
+        let released = WeakProbe(former)
+        former = nil
+        XCTAssertNil(released.value)
+
+        // A replacement must still protect live and unreadable ownership.
+        let current = NoteStore(container: container, attachmentFileStore: files)
+        await current.waitForAttachmentReconciliation()
+        let bytes = Data("owned bytes".utf8)
+        let id = UUID()
+        let reference = AttachmentFileReference(id: id, digest: NotePayloadDigest.sha256(bytes),
+            filename: "kept.txt", payload: bytes)
+        let url = try await XCTUnwrapAsync(try await files.ensureMaterialized(reference))
+        current.recoveryReferencedAttachmentIDs = { [id] }
+        try await files.removeMaterializations([reference])
+        XCTAssertEqual(try Data(contentsOf: url), bytes)
+        current.recoveryReferencedAttachmentIDs = { throw PersistenceGate.Failure() }
+        try await files.removeMaterializations([reference])
+        XCTAssertEqual(try Data(contentsOf: url), bytes, "Unknown live ownership remains conservative")
+        current.recoveryReferencedAttachmentIDs = { [] }
+        try await files.removeMaterializations([reference])
+        do {
+            XCTAssertFalse(FileManager.default.fileExists(atPath: url.path),
+                "A dead store is not an unknown live byte owner")
+        }
+    }
+
+    func testH7_01ReleasedDurableSourcesKeepDocumentsVersionsProposalsAndOpaqueDataSafe() async throws {
+        let files = makeTestAttachmentFileStore()
+        let formerContainer = try PersistenceController.makeContainer(inMemory: true, cloudSyncEnabled: false)
+        var former: NoteStore? = NoteStore(container: formerContainer, attachmentFileStore: files)
+        await former?.waitForAttachmentReconciliation()
+        let seed = ModelContext(formerContainer)
+        let note = NoteItem(title: "Owner")
+        let bytes = Data("durable owner".utf8)
+        let id = UUID()
+        let document = NoteDocument(blocks: [.text("Owner"), .file(attachmentID: id, filename: "owned.txt",
+            contentTypeIdentifier: "public.plain-text", byteCount: Int64(bytes.count))])
+        note.content = try NoteContentCodec.encode(document)
+        seed.insert(note)
+        let version = NoteVersion(noteID: note.id, createdAt: Date(), reason: .leave,
+            content: note.content, contentFormat: 1, title: "Owner", body: "", attachmentIDs: [], sourceRevisionID: nil)
+        let proposal = NotePendingEdit(noteID: note.id, baseRevisionToken: "base", proposedContent: try XCTUnwrap(note.content),
+            agentName: "Agent", createdAt: Date())
+        seed.insert(version); seed.insert(proposal)
+        try seed.save()
+        let released = WeakProbe(former)
+        former = nil
+        XCTAssertNil(released.value)
+        let current = NoteStore(container: try PersistenceController.makeContainer(inMemory: true, cloudSyncEnabled: false),
+            attachmentFileStore: files)
+        await current.waitForAttachmentReconciliation()
+        let reference = AttachmentFileReference(id: id, digest: NotePayloadDigest.sha256(bytes), filename: "owned.txt", payload: bytes)
+        let url = try await XCTUnwrapAsync(try await files.ensureMaterialized(reference))
+        for owner in 0..<3 {
+            try await files.removeMaterializations([reference])
+            XCTAssertEqual(try Data(contentsOf: url), bytes, "remaining durable source \(owner)")
+            if owner == 0 { seed.delete(note) }
+            if owner == 1 { seed.delete(version) }
+            try seed.save()
+        }
+        proposal.proposedContent = Data("opaque future content".utf8)
+        try seed.save()
+        try await files.removeMaterializations([reference])
+        XCTAssertEqual(try Data(contentsOf: url), bytes, "An opaque released source remains unknown")
+        seed.delete(proposal); try seed.save()
+        try await files.removeMaterializations([reference])
+        do { XCTAssertFalse(FileManager.default.fileExists(atPath: url.path)) }
+    }
+
+    func testH7_01ReleasedControllerKeepsItsDurableJournalByteAuthority() async throws {
+        let files = makeTestAttachmentFileStore()
+        let store = try makeTestNoteStore(attachmentFileStore: files)
+        await store.waitForAttachmentReconciliation()
+        let bytes = Data("recovery bytes".utf8), id = UUID()
+        let staged = StagedNoteAttachment(id: id, filename: "recovery.txt", contentTypeIdentifier: "public.plain-text",
+            byteCount: Int64(bytes.count), digest: NotePayloadDigest.sha256(bytes), data: bytes)
+        let document = NoteDocument(blocks: [.text("Recovery"), .file(attachmentID: id, filename: staged.filename,
+            contentTypeIdentifier: staged.contentTypeIdentifier, byteCount: staged.byteCount)])
+        let journal = NoteDraftJournal(directory: ownedTemporaryDirectory(prefix: "H7Journal"))
+        _ = try await journal.writeDurably(NoteDraftJournalEntry(noteID: UUID(), isPersisted: false, baseRevisionID: nil,
+            content: try NoteContentCodec.encode(document), selectionLocation: 0, selectionLength: 0,
+            staged: [.init(id: id, filename: staged.filename, contentTypeIdentifier: staged.contentTypeIdentifier,
+                byteCount: staged.byteCount, digest: staged.digest)], savedAt: Date()), staged: [staged])
+        var page: NotesPageController? = NotesPageController(store: store, journal: journal)
+        let released = WeakProbe(page)
+        page = nil
+        XCTAssertNil(released.value)
+        let reference = AttachmentFileReference(id: id, digest: staged.digest, filename: staged.filename, payload: bytes)
+        let url = try await XCTUnwrapAsync(try await files.ensureMaterialized(reference))
+        try await files.removeMaterializations([reference])
+        do { XCTAssertTrue(FileManager.default.fileExists(atPath: url.path)) }
+        // The red repro still has recovery bytes; no actual user data loss is claimed.
+        XCTAssertEqual(try journal.entries().first?.1.first?.data, bytes)
+    }
+
+    func testH7_04ReleasedSourceReadsFreshJournalWithoutCollectingForeignStaging() async throws {
+        let files = makeTestAttachmentFileStore()
+        let container = try PersistenceController.makeContainer(inMemory: true, cloudSyncEnabled: false)
+        var store: NoteStore? = NoteStore(container: container, attachmentFileStore: files)
+        await store?.waitForAttachmentReconciliation()
+        let root = ownedTemporaryDirectory(prefix: "H7FreshJournal")
+        let formerJournal = NoteDraftJournal(directory: root)
+        _ = try await formerJournal.readRecoveryEntries()
+        var page: NotesPageController? = NotesPageController(store: try XCTUnwrap(store), journal: formerJournal)
+        await page?.waitForRecoveryWork()
+        let releasedPage = WeakProbe(page), releasedStore = WeakProbe(store)
+        page = nil; store = nil
+        XCTAssertNil(releasedPage.value); XCTAssertNil(releasedStore.value)
+        let bytes = Data("new recovery owner".utf8), id = UUID()
+        let staged = StagedNoteAttachment(id: id, filename: "fresh.txt", contentTypeIdentifier: "public.plain-text",
+            byteCount: Int64(bytes.count), digest: NotePayloadDigest.sha256(bytes), data: bytes)
+        let document = NoteDocument(blocks: [.text("Fresh recovery"), .file(attachmentID: id, filename: staged.filename,
+            contentTypeIdentifier: staged.contentTypeIdentifier, byteCount: staged.byteCount)])
+        let currentJournal = NoteDraftJournal(directory: root)
+        _ = try await currentJournal.writeDurably(NoteDraftJournalEntry(noteID: UUID(), isPersisted: false,
+            baseRevisionID: nil, content: try NoteContentCodec.encode(document), selectionLocation: 0, selectionLength: 0,
+            staged: [.init(id: id, filename: staged.filename, contentTypeIdentifier: staged.contentTypeIdentifier,
+                byteCount: staged.byteCount, digest: staged.digest)], savedAt: Date()), staged: [staged])
+        // Bytes admitted by another owner but not yet checkpointed must not
+        // be collected as a side effect of refreshing the old authority.
+        let pending = root.appendingPathComponent("staged").appendingPathComponent(UUID().uuidString)
+        try bytes.write(to: pending)
+        let reference = AttachmentFileReference(id: id, digest: staged.digest, filename: staged.filename, payload: bytes)
+        let url = try await XCTUnwrapAsync(try await files.ensureMaterialized(reference))
+        try await files.removeMaterializations([reference])
+        do { XCTAssertTrue(FileManager.default.fileExists(atPath: url.path)) }
+        XCTAssertEqual(try Data(contentsOf: pending), bytes, "A retention read must not collect another owner's staging")
+        let damaged = root.appendingPathComponent(UUID().uuidString + ".json")
+        try Data("damaged checkpoint".utf8).write(to: damaged)
+        let extraID = UUID()
+        let extra = AttachmentFileReference(id: extraID, digest: staged.digest, filename: staged.filename, payload: bytes)
+        let extraURL = try await XCTUnwrapAsync(try await files.ensureMaterialized(extra))
+        try await files.removeMaterializations([extra])
+        do { XCTAssertTrue(FileManager.default.fileExists(atPath: extraURL.path)) }
+        XCTAssertEqual(try Data(contentsOf: damaged), Data("damaged checkpoint".utf8))
+        XCTAssertEqual(try Data(contentsOf: pending), bytes)
+    }
+
+    func testH7_04LiveStoreReadsFreshJournalAfterOnlyItsControllerReleases() async throws {
+        let files = makeTestAttachmentFileStore()
+        let container = try PersistenceController.makeContainer(inMemory: true, cloudSyncEnabled: false)
+        var store: NoteStore? = NoteStore(container: container, attachmentFileStore: files)
+        await store?.waitForAttachmentReconciliation()
+        let root = ownedTemporaryDirectory(prefix: "H7FreshJournal")
+        let formerJournal = NoteDraftJournal(directory: root)
+        _ = try await formerJournal.readRecoveryEntries()
+        var page: NotesPageController? = NotesPageController(store: try XCTUnwrap(store), journal: formerJournal)
+        await page?.waitForRecoveryWork()
+        let releasedPage = WeakProbe(page), releasedStore = WeakProbe(store)
+        page = nil
+        XCTAssertNil(releasedPage.value); XCTAssertNotNil(releasedStore.value)
+        let bytes = Data("new recovery owner".utf8), id = UUID()
+        let staged = StagedNoteAttachment(id: id, filename: "fresh.txt", contentTypeIdentifier: "public.plain-text",
+            byteCount: Int64(bytes.count), digest: NotePayloadDigest.sha256(bytes), data: bytes)
+        let document = NoteDocument(blocks: [.text("Fresh recovery"), .file(attachmentID: id, filename: staged.filename,
+            contentTypeIdentifier: staged.contentTypeIdentifier, byteCount: staged.byteCount)])
+        let currentJournal = NoteDraftJournal(directory: root)
+        _ = try await currentJournal.writeDurably(NoteDraftJournalEntry(noteID: UUID(), isPersisted: false,
+            baseRevisionID: nil, content: try NoteContentCodec.encode(document), selectionLocation: 0, selectionLength: 0,
+            staged: [.init(id: id, filename: staged.filename, contentTypeIdentifier: staged.contentTypeIdentifier,
+                byteCount: staged.byteCount, digest: staged.digest)], savedAt: Date()), staged: [staged])
+        // Bytes admitted by another owner but not yet checkpointed must not
+        // be collected as a side effect of refreshing the old authority.
+        let pending = root.appendingPathComponent("staged").appendingPathComponent(UUID().uuidString)
+        try bytes.write(to: pending)
+        let reference = AttachmentFileReference(id: id, digest: staged.digest, filename: staged.filename, payload: bytes)
+        let url = try await XCTUnwrapAsync(try await files.ensureMaterialized(reference))
+        try await files.removeMaterializations([reference])
+        XCTAssertTrue(FileManager.default.fileExists(atPath: url.path))
+        XCTAssertEqual(try Data(contentsOf: pending), bytes, "A retention read must not collect another owner's staging")
+        let damaged = root.appendingPathComponent(UUID().uuidString + ".json")
+        try Data("damaged checkpoint".utf8).write(to: damaged)
+        let extraID = UUID()
+        let extra = AttachmentFileReference(id: extraID, digest: staged.digest, filename: staged.filename, payload: bytes)
+        let extraURL = try await XCTUnwrapAsync(try await files.ensureMaterialized(extra))
+        try await files.removeMaterializations([extra])
+        XCTAssertTrue(FileManager.default.fileExists(atPath: extraURL.path))
+        XCTAssertEqual(try Data(contentsOf: damaged), Data("damaged checkpoint".utf8))
+        XCTAssertEqual(try Data(contentsOf: pending), bytes)
+        await store?.waitForAttachmentReconciliation()
+        XCTAssertNotNil(store)
+    }
+
+    func testH7_02ReleasingCleanupInvalidatesItsMidnightTimer() throws {
+        let store = try makeTestStore()
+        for _ in 0..<12 {
+            var service: DailyCleanupService? = DailyCleanupService(store: store)
+            service?.start()
+            let timer: Timer = try field("timer", in: XCTUnwrap(service))
+            XCTAssertTrue(timer.isValid)
+            let released = WeakProbe(service)
+            service = nil
+            XCTAssertNil(released.value)
+            // Clean even the red repro's run-loop residue before leaving.
+            defer { timer.invalidate() }
+            do { XCTAssertFalse(timer.isValid) }
+        }
+    }
+
+    func testH7_03ReleasedNotesControllerCancelsItsSaveDeadlines() async throws {
+        let store = try makeTestNoteStore(attachmentFileStore: makeTestAttachmentFileStore())
+        let id = UUID()
+        _ = try store.createDocumentNote(id: id, document: NoteDocument(blocks: [.text("Draft")])).get()
+        var page: NotesPageController? = NotesPageController(store: store,
+            journal: NoteDraftJournal(directory: ownedTemporaryDirectory(prefix: "H7Deadlines")),
+            saveDelay: .seconds(600), durabilityDelay: .seconds(600), pauseVersionDelay: .seconds(600))
+        await page?.startAndWait()
+        XCTAssertTrue(try XCTUnwrap(page).open(noteID: id))
+        let session = try XCTUnwrap(page?.active)
+        XCTAssertTrue(session.engine.performEdit(NSRange(location: session.engine.textStorage.length, length: 0),
+            with: NSAttributedString(string: " unsaved"), name: "Type"))
+        let save: Task<Void, Never> = try field("saveTask", in: session)
+        let deadline: Task<Void, Never> = try field("durabilityTask", in: session)
+        await page?.waitForRecoveryWork()
+        let released = WeakProbe(page)
+        page = nil
+        XCTAssertNil(released.value)
+        defer { save.cancel(); deadline.cancel() }
+        // Retain the session as a displaced editor might: its old controller
+        // must not leave deadlines runnable just because that editor survives.
+        do {
+            XCTAssertTrue(save.isCancelled)
+            XCTAssertTrue(deadline.isCancelled)
+        }
+        session.engine.detachView()
+    }
+
+    func testH7_03ReleasedCanvasSessionCancelsItsViewStateDeadline() throws {
+        let store = try makeTestCanvasStore()
+        var session: CanvasSession? = CanvasSession(store: store)
+        session?.pan(byViewTranslation: CGSize(width: 12, height: -7))
+        let deadline: Task<Void, Never> = try field("viewStateSaveTask", in: XCTUnwrap(session))
+        let released = WeakProbe(session)
+        session = nil
+        XCTAssertNil(released.value)
+        defer { deadline.cancel() }
+        do { XCTAssertTrue(deadline.isCancelled) }
+    }
+}
+
+@MainActor
+extension PhaseXHunt5Tests {
+    private func isolatedRuntime(_ root: URL) throws -> AppRuntimeEnvironment {
+        let attachments = root.appendingPathComponent("Attachments")
+        try FileManager.default.createDirectory(at: attachments, withIntermediateDirectories: true)
+        let token = UUID().uuidString, suite = "H7Runtime." + UUID().uuidString
+        try Data(token.utf8).write(to: attachments.appendingPathComponent(AppRuntimeEnvironment.testAttachmentRootOwnerMarkerName))
+        addTeardownBlock { UserDefaults(suiteName: suite)?.removePersistentDomain(forName: suite) }
+        return AppRuntimeEnvironment(environment: ["ATTIC_TESTING": "1", "ATTIC_TEST_DEFAULTS_SUITE": suite,
+            "ATTIC_TEST_ATTACHMENT_ROOT": attachments.path, "ATTIC_TEST_ATTACHMENT_ROOT_OWNER_TOKEN": token],
+            arguments: [], applicationSupportURL: root)
+    }
+
+    func testRepeatedFailedCoordinatorOpensThenSameDiskSuccessNeverConstructEmptyFallback() async throws {
+        for failures in [1, 3, 7] {
+            let root = ownedTemporaryDirectory(prefix: "H7Startup"), disk = root.appendingPathComponent("Store")
+            let runtime = try isolatedRuntime(root), id = UUID()
+            var attempts = 0
+            let (startup, url) = try autoreleasepool {
+                let container = try PersistenceController.makeContainer(cloudSyncEnabled: false, storeDirectory: disk)
+                let context = ModelContext(container)
+                context.insert(TaskItem(id: id, title: "Durable before startup"))
+                try context.save()
+                let url = try XCTUnwrap(container.configurations.first?.url)
+                let bytes = try Data(contentsOf: url)
+                let startup = AppStartup<AppCoordinator> {
+                    try AppCoordinator(runtime: runtime, openStore: {
+                        attempts += 1
+                        if attempts <= failures { throw PersistenceGate.Failure() }
+                        return try PersistenceController.makeContainer(cloudSyncEnabled: false, storeDirectory: disk)
+                    })
+                }
+                // Keep seed teardown outside the measured failed-open interval:
+                // SwiftData may finish SQLite housekeeping after release.
+                try withExtendedLifetime((container, context)) {
+                    for attempt in 1...failures {
+                        XCTAssertEqual(attempts, attempt)
+                        XCTAssertNil(startup.value, "No coordinator/stores/interactive services before success")
+                        XCTAssertEqual(startup.failureMessage, "Attic could not open its local data. Try again. Your existing data is kept.")
+                        XCTAssertEqual(try Data(contentsOf: url), bytes)
+                        if attempt < failures { startup.retry() }
+                    }
+                }
+                return (startup, url)
+            }
+            // Both seed contexts are gone before a successful relaunch-style open.
+            startup.retry()
+            let coordinator = try XCTUnwrap(startup.value)
+            XCTAssertEqual(attempts, failures + 1)
+            XCTAssertNil(startup.failureMessage)
+            XCTAssertEqual(coordinator.store.container.configurations.first?.url, url)
+            XCTAssertEqual(coordinator.store.task(withID: id)?.title, "Durable before startup")
+            coordinator.start(); coordinator.start()
+            XCTAssertEqual(coordinator.globalShortcutRegistration, .notRegistered)
+            let cleanup: DailyCleanupService = try field("cleanupService", in: coordinator)
+            XCTAssertNil(Mirror(reflecting: cleanup).children.first { $0.label == "timer" }?.value as? Timer)
+            await coordinator.noteStore.waitForAttachmentReconciliation()
+            await coordinator.noteDraft.pages.waitForRecoveryWork()
+            coordinator.stop()
+            startup.retry()
+            XCTAssertEqual(attempts, failures + 1)
+        }
+        var attempts = 0
+        var failed: AppStartup<Int>? = AppStartup { attempts += 1; throw PersistenceGate.Failure() }
+        let released = WeakProbe(failed)
+        failed = nil
+        XCTAssertNil(released.value, "Quitting a failed loader does not retry or retain it")
+        XCTAssertEqual(attempts, 1)
+        // AppDelegate's failed-startup terminateNow branch is source audited;
+        // real menu/Quit delivery belongs to CI, not this headless seam.
+    }
+
+    func testRepeatedUnshownCoordinatorsReleasePanelsSettingsSessionsAndEngines() async throws {
+        for _ in 0..<12 {
+            let probes = try await releasedShellProbes()
+            try await Task.sleep(for: .milliseconds(50))
+            for (index, probe) in probes.enumerated() {
+                XCTAssertNil(probe.value, "owner index=\(index)")
+            }
+        }
+    }
+
+    private func releasedShellProbes() async throws -> [WeakProbe<AnyObject>] {
+        let root = ownedTemporaryDirectory(prefix: "H7ShellRelease")
+        let coordinator = try autoreleasepool {
+            try AppCoordinator(runtime: isolatedRuntime(root), openStore: {
+                try PersistenceController.makeContainer(inMemory: true, cloudSyncEnabled: false)
+            })
+        }
+        XCTAssertTrue(coordinator.noteDraft.pages.newNote())
+        let panel: AtticPanelController = try field("panelController", in: coordinator)
+        let settings: SettingsWindowController = try field("settingsWindowController", in: coordinator)
+        let probes = [WeakProbe<AnyObject>(coordinator), WeakProbe<AnyObject>(panel), WeakProbe<AnyObject>(settings),
+            WeakProbe<AnyObject>(coordinator.noteDraft), WeakProbe<AnyObject>(coordinator.noteDraft.pages),
+            WeakProbe<AnyObject>(coordinator.noteDraft.pages.active), WeakProbe<AnyObject>(coordinator.noteDraft.pages.active?.engine),
+            WeakProbe<AnyObject>(coordinator.canvasSession), WeakProbe<AnyObject>(coordinator.subtaskPanels),
+            WeakProbe<AnyObject>(coordinator.canvasEditFocus)]
+        await coordinator.noteStore.waitForAttachmentReconciliation()
+        await coordinator.noteDraft.pages.waitForRecoveryWork()
+        coordinator.stop()
+        settings.close()
+        panel.panelForTesting.close()
+        panel.panelForTesting.contentView = nil
+        return probes
+    }
+
+    private func diskRows(_ container: ModelContainer) throws -> [String: [String]] {
+        let context = ModelContext(container)
+        func data(_ value: Data?) -> String { value?.base64EncodedString() ?? "nil" }
+        func date(_ value: Date?) -> String { value.map { String($0.timeIntervalSince1970.bitPattern) } ?? "nil" }
+        return [
+            "tasks": try context.fetch(FetchDescriptor<TaskItem>()).map { "\($0.id)|\($0.title)|\($0.parentID?.uuidString ?? "nil")|\($0.statusRaw)|\($0.priorityRaw)|\(date($0.deletedAt))|\($0.tagsRaw)|\($0.deletionMembersRaw)" }.sorted(),
+            "notes": try context.fetch(FetchDescriptor<NoteItem>()).map { "\($0.id)|\(data($0.content))|\($0.revisionID?.uuidString ?? "nil")|\($0.revision)|\(date($0.deletedAt))|\($0.tagsRaw)" }.sorted(),
+            "attachments": try context.fetch(FetchDescriptor<NoteAttachment>()).map { "\($0.id)|\($0.noteID)|\(data($0.payload))|\($0.contentDigest)|\(date($0.deletedAt))" }.sorted(),
+            "versions": try context.fetch(FetchDescriptor<NoteVersion>()).map { "\($0.id)|\($0.noteID)|\(data($0.content))|\($0.attachmentIDsRaw)" }.sorted(),
+            "proposals": try context.fetch(FetchDescriptor<NotePendingEdit>()).map { "\($0.id)|\($0.noteID)|\(data($0.proposedContent))|\($0.baseRevisionToken)" }.sorted(),
+            "links": try context.fetch(FetchDescriptor<ItemLink>()).map { "\($0.id)|\($0.sourceKindRaw)|\($0.sourceID)|\($0.targetKindRaw)|\($0.targetID)|\(date($0.deletedAt))" }.sorted(),
+            "boards": try context.fetch(FetchDescriptor<CanvasBoardItem>()).map { "\($0.id)|\($0.name)|\($0.tombstoned)|\($0.clearGeneration)|\($0.mutationVersion)|\(date($0.deletedAt))" }.sorted(),
+            "objects": try context.fetch(FetchDescriptor<CanvasSemanticObjectItem>()).map { "\($0.id)|\($0.canvasID)|\(data($0.payload))|\($0.tombstoned)|\($0.centerX)|\($0.centerY)|\($0.mutationVersion)" }.sorted()
+        ]
+    }
+
+    private func mixedDiskSequence(_ root: URL, seed: UInt64) async throws -> [String: [String]] {
+        let container = try PersistenceController.makeContainer(cloudSyncEnabled: false, storeDirectory: root.appendingPathComponent("Store"))
+        let taskGate = PersistenceGate(), noteGate = PersistenceGate(), canvasGate = PersistenceGate()
+        let tasks = TaskStore(container: container, persist: taskGate.save)
+        let notes = NoteStore(container: container, persist: noteGate.save, attachmentFileStore: makeTestAttachmentFileStore(rootURL: root.appendingPathComponent("Files")))
+        let canvases = CanvasStore(container: container, persist: canvasGate.save)
+        let library = AtticLibrary(tasks: tasks, notes: notes, canvases: canvases)
+        let task = try XCTUnwrap(tasks.create(title: "Root")), child = try XCTUnwrap(tasks.create(title: "Child", parentID: task.id))
+        let noteID = UUID(), bytes = Data("file-\(seed)".utf8)
+        let file = StagedNoteAttachment(id: UUID(), filename: "roundtrip.txt", contentTypeIdentifier: "public.plain-text", byteCount: Int64(bytes.count), digest: NotePayloadDigest.sha256(bytes), data: bytes)
+        let initial = NoteDocument(blocks: [.text("Initial"), .file(attachmentID: file.id, filename: file.filename, contentTypeIdentifier: file.contentTypeIdentifier, byteCount: file.byteCount)])
+        _ = try notes.createDocumentNote(id: noteID, document: initial, staged: [file]).get()
+        XCTAssertTrue(notes.recordVersion(noteID: noteID, reason: .leave))
+        let originalVersion = try XCTUnwrap(notes.versions(noteID: noteID).first)
+        let versionID = originalVersion.id
+        let board = try XCTUnwrap(canvases.createCanvas(name: "Board"))
+        _ = try XCTUnwrap(canvases.createCanvas(name: "Spare"))
+        XCTAssertTrue(canvases.selectCanvas(board.id))
+        let object = try XCTUnwrap(canvases.addSemanticObject(content: CanvasSemanticContent(text: "Text", color: .ink, strokeWidth: 3), transform: CanvasImageTransform(center: .zero, width: 160, height: 48, zIndex: 0)))
+        let link = try XCTUnwrap(library.links.link(AtticItemRef(.task, task.id), to: AtticItemRef(.note, noteID), kind: .reference))
+        let replicaContext = ModelContext(container)
+        let taskReplica = TaskItem(id: task.id, title: task.title, createdAt: task.createdAt, updatedAt: task.updatedAt)
+        taskReplica.listOrderVersion = task.listOrderVersion; taskReplica.manualOrder = task.manualOrder
+        replicaContext.insert(taskReplica)
+        let originalNote = try XCTUnwrap(notes.note(withID: noteID))
+        let noteReplica = NoteItem(id: noteID, title: originalNote.title, body: originalNote.body, createdAt: originalNote.createdAt, updatedAt: originalNote.updatedAt)
+        noteReplica.content = originalNote.content; noteReplica.revisionID = originalNote.revisionID; noteReplica.revision = originalNote.revision
+        noteReplica.plainText = originalNote.plainText; noteReplica.fileCount = originalNote.fileCount; noteReplica.firstFileName = originalNote.firstFileName
+        replicaContext.insert(noteReplica)
+        let attachment = try XCTUnwrap(notes.attachmentFamily(file.id).first)
+        replicaContext.insert(NoteAttachment(id: file.id, noteID: noteID, originalFilename: attachment.originalFilename, contentTypeIdentifier: attachment.contentTypeIdentifier, byteCount: attachment.byteCount, sortIndex: attachment.sortIndex, contentDigest: attachment.contentDigest, createdAt: attachment.createdAt, updatedAt: attachment.updatedAt, payload: attachment.payload))
+        replicaContext.insert(CanvasBoardItem(id: board.id, name: board.name, sortIndex: board.sortIndex, clearGeneration: board.clearGeneration, mutationVersion: board.mutationVersion, createdAt: board.createdAt, updatedAt: board.updatedAt))
+        let objectReplica = CanvasSemanticObjectItem(id: object.id, canvasID: board.id)
+        objectReplica.payload = object.payload; objectReplica.width = object.transform.width; objectReplica.height = object.transform.height
+        replicaContext.insert(objectReplica)
+        replicaContext.insert(ItemLink(id: link.id, source: link.source, target: link.target, kind: link.kind, createdAt: link.createdAt))
+        replicaContext.insert(NoteVersion(id: versionID, noteID: noteID, createdAt: originalVersion.createdAt,
+            reason: try XCTUnwrap(originalVersion.reason), content: originalVersion.content,
+            contentFormat: originalVersion.contentFormat, title: originalVersion.title, body: originalVersion.body,
+            attachmentIDs: Array(originalVersion.attachmentIDs), sourceRevisionID: originalVersion.sourceRevisionID))
+        try replicaContext.save()
+        tasks.refresh(); notes.refresh(); canvases.refresh()
+        var taskTitle = "Root", noteTitle = "Initial", boardName = "Board"
+        var taskDeleted = false, noteDeleted = false, boardDeleted = false, linkDeleted = false
+        var random = seed
+        for cycle in 0..<2 {
+            var operations = Array(0..<12)
+            for index in stride(from: 11, through: 1, by: -1) {
+                random = random &* 6364136223846793005 &+ 1442695040888963407
+                operations.swapAt(index, Int((random >> 32) % UInt64(index + 1)))
+            }
+            for operation in operations {
+                let label = "seed=\(seed) cycle=\(cycle) operation=\(operation)"
+                if [0, 6, 7, 8].contains(operation), taskDeleted { XCTAssertTrue(tasks.restoreDeleted(taskID: task.id), label); taskDeleted = false }
+                if [1, 9, 10].contains(operation), noteDeleted { XCTAssertTrue(notes.restoreDeleted(noteID: noteID), label); noteDeleted = false }
+                if [2, 8].contains(operation), boardDeleted { XCTAssertTrue(canvases.restoreCanvas(board.id), label); boardDeleted = false }
+                switch operation {
+                case 0, 6:
+                    if operation == 6 { taskGate.shouldFail = true; XCTAssertNil(tasks.create(title: "Rolled-back task"), label); taskGate.shouldFail = false }
+                    taskTitle = "Task-\(seed)-\(cycle)-\(operation)"
+                    XCTAssertTrue(tasks.update(try XCTUnwrap(tasks.task(withID: task.id)), title: taskTitle), label)
+                case 1:
+                    noteTitle = "Note-\(seed)-\(cycle)"
+                    let changed = NoteDocument(blocks: [.text(noteTitle), initial.blocks[1]])
+                    _ = try notes.saveDocument(noteID: noteID, document: changed, baseRevisionID: notes.note(withID: noteID)?.revisionID).get()
+                case 2:
+                    boardName = "Board-\(seed)-\(cycle)"
+                    XCTAssertTrue(canvases.renameCanvas(board.id, to: boardName), label)
+                case 3:
+                    XCTAssertTrue(taskDeleted ? tasks.restoreDeleted(taskID: task.id) : tasks.delete(taskIDs: [task.id]), label)
+                    taskDeleted.toggle()
+                case 4:
+                    XCTAssertTrue(noteDeleted ? notes.restoreDeleted(noteID: noteID) : notes.delete(try XCTUnwrap(notes.note(withID: noteID))), label)
+                    noteDeleted.toggle()
+                case 5:
+                    XCTAssertTrue(boardDeleted ? canvases.restoreCanvas(board.id) : canvases.deleteCanvas(board.id), label)
+                    boardDeleted.toggle()
+                case 7:
+                    noteGate.shouldFail = true
+                    if case .success = notes.createDocumentNote(id: UUID(), document: NoteDocument(blocks: [.text("Rolled-back note")])) { XCTFail(label) }
+                    noteGate.shouldFail = false
+                    taskTitle = "After-note-rollback-\(seed)-\(cycle)"
+                    XCTAssertTrue(tasks.update(try XCTUnwrap(tasks.task(withID: task.id)), title: taskTitle), label)
+                case 8:
+                    canvasGate.shouldFail = true
+                    XCTAssertNil(canvases.createCanvas(name: "Rolled-back board"), label)
+                    canvasGate.shouldFail = false
+                    taskTitle = "After-board-rollback-\(seed)-\(cycle)"
+                    XCTAssertTrue(tasks.update(try XCTUnwrap(tasks.task(withID: task.id)), title: taskTitle), label)
+                case 9:
+                    _ = try notes.restoreVersion(versionID, noteID: noteID).get(); noteTitle = "Initial"
+                case 10:
+                    guard case let .success(.pending(proposal)) = notes.agentWrite(noteID: noteID, baseRevisionToken: try XCTUnwrap(notes.note(withID: noteID)).revisionToken, document: NoteDocument(blocks: [.text("Proposal"), initial.blocks[1]]), agentName: "Generated", disposition: .proposal) else { XCTFail(label); throw PersistenceGate.Failure() }
+                    let proposalContext = ModelContext(container)
+                    let proposalID = proposal
+                    let original = try XCTUnwrap(proposalContext.fetch(FetchDescriptor<NotePendingEdit>(predicate: #Predicate { $0.id == proposalID })).first)
+                    let duplicate = NotePendingEdit(id: original.id, noteID: original.noteID,
+                        baseRevisionToken: original.baseRevisionToken, proposedContent: try XCTUnwrap(original.proposedContent),
+                        agentName: original.agentName, createdAt: original.createdAt, baseVersionID: original.baseVersionID)
+                    duplicate.needsReview = original.needsReview; duplicate.isDeletion = original.isDeletion
+                    proposalContext.insert(duplicate); try proposalContext.save()
+                    if cycle == 0 {
+                        XCTAssertTrue(notes.discardProposal(proposal, noteID: noteID), label)
+                        XCTAssertEqual(try ModelContext(container).fetchCount(FetchDescriptor<NotePendingEdit>()), 0, label)
+                    }
+                default:
+                    XCTAssertTrue(linkDeleted ? library.links.restoreLink(link.id) : library.links.unlink(link.id), label)
+                    linkDeleted.toggle()
+                }
+                let check = ModelContext(container)
+                let taskRows = try check.fetch(FetchDescriptor<TaskItem>())
+                XCTAssertEqual(taskRows.count, 3, label)
+                XCTAssertTrue(taskRows.filter { $0.id == task.id }.allSatisfy { $0.title == taskTitle && ($0.deletedAt != nil) == taskDeleted }, label)
+                XCTAssertTrue(taskRows.filter { $0.id == child.id }.allSatisfy { $0.parentID == task.id && ($0.deletedAt != nil) == taskDeleted }, label)
+                let noteRows = try check.fetch(FetchDescriptor<NoteItem>())
+                XCTAssertEqual(noteRows.count, 2, label)
+                XCTAssertTrue(noteRows.allSatisfy { $0.title == noteTitle && ($0.deletedAt != nil) == noteDeleted }, label)
+                let boardRows = try check.fetch(FetchDescriptor<CanvasBoardItem>()).filter { $0.id == board.id }
+                XCTAssertEqual(boardRows.count, 2, label)
+                XCTAssertTrue(boardRows.allSatisfy { $0.name == boardName && $0.tombstoned == boardDeleted }, label)
+                XCTAssertEqual(try check.fetchCount(FetchDescriptor<NoteAttachment>()), 2, label)
+                XCTAssertEqual(try check.fetchCount(FetchDescriptor<CanvasSemanticObjectItem>()), 2, label)
+                XCTAssertTrue(try check.fetch(FetchDescriptor<ItemLink>()).allSatisfy { ($0.deletedAt != nil) == linkDeleted && $0.sourceID == task.id && $0.targetID == noteID }, label)
+                XCTAssertTrue(try check.fetch(FetchDescriptor<NoteVersion>()).allSatisfy { $0.noteID == noteID }, label)
+                let versionIDs = Set(try check.fetch(FetchDescriptor<NoteVersion>()).map(\.id))
+                XCTAssertTrue(try check.fetch(FetchDescriptor<NotePendingEdit>()).allSatisfy {
+                    $0.noteID == noteID && $0.baseVersionID.map { versionIDs.contains($0) } == true
+                }, label)
+                XCTAssertEqual(Set(tasks.tasks.map(\.id)).count, tasks.tasks.count, label)
+                XCTAssertEqual(Set(notes.notes.map(\.id)).count, notes.notes.count, label)
+                XCTAssertEqual(Set(canvases.canvases.map(\.id)).count, canvases.canvases.count, label)
+            }
+        }
+        await notes.waitForAttachmentReconciliation()
+        return try diskRows(container)
+    }
+
+    func testGeneratedTasksNotesCanvasSequencesSurviveClosingAllContextsAndRelaunch() async throws {
+        for seed in 1...8 {
+            let root = ownedTemporaryDirectory(prefix: "H7MixedRelaunch")
+            // The helper returns only value snapshots. Every context, store,
+            // library, container and attachment service is out of local scope.
+            let expected = try await mixedDiskSequence(root, seed: UInt64(seed))
+            let reopened = try PersistenceController.makeContainer(cloudSyncEnabled: false, storeDirectory: root.appendingPathComponent("Store"))
+            XCTAssertEqual(try diskRows(reopened), expected, "seed=\(seed)")
+        }
+    }
+}
+
+@MainActor
+extension PhaseXHunt5Tests {
+    func testH7_05EngineReleasedAfterItsPageAndSessionClose() async throws {
+        let probes = try await releasedNoteProbes()
+        XCTAssertNil(probes[0].value)
+        XCTAssertNil(probes[1].value)
+        XCTAssertNil(probes[2].value)
+    }
+
+    private func releasedNoteProbes() async throws -> [WeakProbe<AnyObject>] {
+        let store = try makeTestNoteStore(attachmentFileStore: makeTestAttachmentFileStore())
+        let page = NotesPageController(store: store, journal: nil)
+        XCTAssertTrue(page.newNote())
+        let probes = [WeakProbe<AnyObject>(page), WeakProbe<AnyObject>(page.active), WeakProbe<AnyObject>(page.active?.engine)]
+        await store.waitForAttachmentReconciliation()
+        await page.waitForRecoveryWork()
+        return probes
+    }
+}
+
+@MainActor
+extension PhaseXHunt5Tests {
+    func testOtherAreaRollbackAndRevisionPublishingKeepUnsavedNoteDraft() async throws {
+        let container = try PersistenceController.makeContainer(inMemory: true, cloudSyncEnabled: false)
+        let taskGate = PersistenceGate(), canvasGate = PersistenceGate()
+        let tasks = TaskStore(container: container, persist: taskGate.save)
+        let notes = NoteStore(container: container, attachmentFileStore: makeTestAttachmentFileStore())
+        let canvases = CanvasStore(container: container, persist: canvasGate.save)
+        let library = AtticLibrary(tasks: tasks, notes: notes, canvases: canvases)
+        let uiState = PanelUIState()
+        let note = try notes.createDocumentNote(id: UUID(), document: NoteDocument(blocks: [.text("Saved")])).get()
+        let page = NotesPageController(store: notes, journal: NoteDraftJournal(directory: ownedTemporaryDirectory(prefix: "H7Cross")),
+            saveDelay: .seconds(600), durabilityDelay: .seconds(600), pauseVersionDelay: .seconds(600))
+        await XCTAssertTrueAsync(await page.openDurably(noteID: note.noteID))
+        let session = try XCTUnwrap(page.active)
+        session.engine.performEdit(NSRange(location: session.engine.textStorage.length, length: 0),
+            with: NSAttributedString(string: " unsaved"), name: "Typing")
+        let draft = session.engine.document()
+        var taskRevisions = 0, noteRevisions = 0, canvasRevisions = 0
+        let observations = [tasks.$revision.dropFirst().sink { _ in taskRevisions += 1 },
+            notes.$revision.dropFirst().sink { _ in noteRevisions += 1 },
+            canvases.$revision.dropFirst().sink { _ in canvasRevisions += 1 }]
+        for index in 0..<12 {
+            taskGate.shouldFail = true; XCTAssertNil(tasks.create(title: "Rollback task")); taskGate.shouldFail = false
+            canvasGate.shouldFail = true; XCTAssertNil(canvases.createCanvas(name: "Rollback canvas")); canvasGate.shouldFail = false
+            _ = try XCTUnwrap(tasks.create(title: "Saved task \(index)"))
+            _ = try XCTUnwrap(canvases.createCanvas(name: "Saved board \(index)"))
+            uiState.selectSection(index % 2 == 0 ? .tasks : .canvas)
+            XCTAssertEqual(library.state(of: AtticItemRef(.note, note.noteID)), .live)
+            XCTAssertEqual(session.engine.document(), draft)
+            XCTAssertTrue(page.active === session)
+            XCTAssertEqual(notes.note(withID: note.noteID)?.title, "Saved", "Other contexts cannot commit the editor draft")
+        }
+        XCTAssertGreaterThan(taskRevisions, 0); XCTAssertGreaterThan(canvasRevisions, 0)
+        XCTAssertEqual(noteRevisions, 0, "Unrelated writes do not publish a Notes save")
+        await XCTAssertTrueAsync(await page.preserveAllDurably())
+        XCTAssertEqual(notes.note(withID: note.noteID)?.title, "Saved unsaved")
+        XCTAssertEqual(try ModelContext(container).fetchCount(FetchDescriptor<TaskItem>()), 12)
+        XCTAssertEqual(try ModelContext(container).fetchCount(FetchDescriptor<CanvasBoardItem>()), 12)
+        XCTAssertEqual(observations.count, 3)
+        await notes.waitForAttachmentReconciliation()
+    }
+
+    func testGeneratedCleanupRestartsTimeZoneAndWakeKeepOneTimerAndOneMove() async throws {
+        let notifications = [Notification.Name.NSCalendarDayChanged, .NSSystemTimeZoneDidChange,
+            NSWorkspace.didWakeNotification, NSApplication.didBecomeActiveNotification]
+        for identifier in ["Europe/London", "America/New_York", "Pacific/Auckland", "Asia/Kathmandu"] {
+            var calendar = Calendar(identifier: .gregorian)
+            calendar.timeZone = try XCTUnwrap(TimeZone(identifier: identifier))
+            var now = try XCTUnwrap(calendar.date(from: DateComponents(year: 2026, month: 10, day: 24, hour: 23, minute: 30)))
+            let store = try makeTestStore(now: { now })
+            let task = try XCTUnwrap(store.create(title: "Done")); XCTAssertTrue(store.markDone(task))
+            let service = DailyCleanupService(store: store, now: { now }, calendar: { calendar })
+            service.start()
+            for step in 0..<24 {
+                let oldTimer: Timer = try field("timer", in: service)
+                let name = notifications[step % notifications.count]
+                let center = name == NSWorkspace.didWakeNotification ? NSWorkspace.shared.notificationCenter : NotificationCenter.default
+                center.post(name: name, object: nil)
+                let callback = try XCTUnwrap(service.queuedCleanupTask)
+                if step % 3 == 0 {
+                    service.stop(); XCTAssertFalse(oldTimer.isValid)
+                    service.start()
+                }
+                now = now.addingTimeInterval(3_600)
+                if step % 4 == 0 { calendar.timeZone = try XCTUnwrap(TimeZone(identifier: step % 8 == 0 ? "Pacific/Auckland" : identifier)) }
+                await callback.value
+                center.post(name: name, object: nil)
+                await service.queuedCleanupTask?.value
+                XCTAssertFalse(oldTimer.isValid)
+                let current: Timer = try field("timer", in: service)
+                let next = try XCTUnwrap(calendar.date(byAdding: .day, value: 1, to: calendar.startOfDay(for: now)))
+                XCTAssertEqual(current.fireDate, next)
+                XCTAssertLessThanOrEqual(store.doneLog().count, 1)
+            }
+            XCTAssertEqual(store.doneLog().map(\.id), [task.id])
+            let last: Timer = try field("timer", in: service)
+            service.stop(); XCTAssertFalse(last.isValid)
+            XCTAssertEqual(try ModelContext(store.container).fetchCount(FetchDescriptor<TaskItem>()), 1)
+        }
+    }
+
+    func testSerializedGeometryReplaysGeneratedDisplayRemovalAndRelaunch() throws {
+        var random: UInt64 = 5489
+        var frame = CGRect(x: 2200, y: -150, width: 272, height: 300)
+        for step in 0..<192 {
+            random = random &* 6364136223846793005 &+ 1442695040888963407
+            let screen = CGRect(x: Double(Int(random % 4000) - 2000), y: Double(Int((random >> 8) % 1500) - 750),
+                width: Double(360 + (random >> 16) % 1800), height: Double(400 + (random >> 32) % 1000))
+            // Persist and deserialize value geometry as a new process would;
+            // the expected bounds come from the generated work area, not the helper.
+            let persisted = try JSONEncoder().encode(frame)
+            let restored = try JSONDecoder().decode(CGRect.self, from: persisted)
+            frame = SubtaskPanelLayout.pinnedResizedFrame(restored, newHeight: 280 + CGFloat(step % 4) * 20,
+                screenVisibleFrames: [screen]) ?? restored
+            XCTAssertTrue(screen.insetBy(dx: 12, dy: 12).contains(frame), "step=\(step)")
+            XCTAssertNil(SubtaskPanelLayout.pinnedResizedFrame(frame, newHeight: frame.height, screenVisibleFrames: [screen]))
+            let size = SettingsWindowLayout.fittedContentSize(to: screen)
+            let settings = SettingsWindowLayout.constrainedFrame(CGRect(origin: restored.origin, size: size), to: screen)
+            XCTAssertTrue(screen.insetBy(dx: 24, dy: 24).contains(settings))
+            let next = try JSONDecoder().decode(CGRect.self, from: JSONEncoder().encode(settings))
+            XCTAssertEqual(SettingsWindowLayout.constrainedFrame(next, to: screen), settings)
+        }
+    }
+
+    func testDeepAndMalformedUserJSONReturnsReadablePreservedErrorWithoutTrapping() {
+        for depth in [32, 256, 1024, 4096] {
+            let data = Data((String(repeating: "[", count: depth) + "0" + String(repeating: "]", count: depth)).utf8)
+            guard case let .readOnly(original, reason, _) = NoteContentCodec.decode(data) else { return XCTFail("Invalid document accepted") }
+            XCTAssertEqual(original, data); XCTAssertFalse(reason.message.isEmpty)
+        }
+        for text in ["{", String(repeating: "&", count: 4096), "{\"format\":-1,\"blocks\":[]}"] {
+            let data = Data(text.utf8)
+            guard case let .readOnly(original, reason, _) = NoteContentCodec.decode(data) else { return XCTFail("Malformed document accepted") }
+            XCTAssertEqual(original, data); XCTAssertTrue(reason.message.contains("kept"))
+        }
+    }
+}
+
+@MainActor
+extension PhaseXHunt5Tests {
+    func testH7_04LiveCollectorRevalidatesStoreAndRecoveryRegistrationAfterSuspension() async throws {
+        for replaceHook in [false, true] {
+            let files = makeTestAttachmentFileStore()
+            let container = try PersistenceController.makeContainer(inMemory: true, cloudSyncEnabled: false)
+            let store = NoteStore(container: container, attachmentFileStore: files)
+            await store.waitForAttachmentReconciliation()
+            let id = UUID(), bytes = Data("late owner".utf8)
+            let reference = AttachmentFileReference(id: id, digest: NotePayloadDigest.sha256(bytes), filename: "late.txt", payload: bytes)
+            let url = try await XCTUnwrapAsync(try await files.ensureMaterialized(reference))
+            var changed = false
+            store.recoveryReferencedAttachmentIDsDurably = { [weak store] in
+                guard !changed, let store else { return [] }
+                changed = true
+                await Task.yield()
+                if replaceHook {
+                    // A newly attached controller/authority can replace the
+                    // hook without changing the database revision.
+                    store.recoveryReferencedAttachmentIDs = { [id] }
+                } else {
+                    // Imported durable ownership arrives after the worker's
+                    // snapshot. Refresh replaces the stale store context.
+                    let context = ModelContext(container), noteID = UUID()
+                    let document = NoteDocument(blocks: [.text("Late durable owner"), .file(attachmentID: id,
+                        filename: reference.filename, contentTypeIdentifier: "public.plain-text", byteCount: Int64(bytes.count))])
+                    let note = NoteItem(id: noteID, title: "Late durable owner")
+                    note.content = try NoteContentCodec.encode(document)
+                    context.insert(note)
+                    context.insert(NoteAttachment(id: id, noteID: noteID, originalFilename: reference.filename,
+                        contentTypeIdentifier: "public.plain-text", byteCount: Int64(bytes.count), sortIndex: 0,
+                        contentDigest: reference.digest, payload: nil))
+                    try context.save()
+                    store.refresh()
+                }
+                return []
+            }
+            try await files.removeMaterializations([reference])
+            XCTAssertTrue(changed, "Durable recovery authority must participate")
+            XCTAssertTrue(FileManager.default.fileExists(atPath: url.path), "replaceHook=\(replaceHook)")
+            await store.waitForAttachmentReconciliation()
+        }
     }
 }

@@ -170,6 +170,11 @@ final class CanvasSession: ObservableObject {
     private var savedViewStates: [UUID: CanvasViewState] = [:]
     private var viewStateSaveTask: Task<Void, Never>?
 
+    isolated deinit {
+        viewStateSaveTask?.cancel()
+        imageImportTasks.values.forEach { $0.cancel() }
+    }
+
     private struct SemanticSnapshot: Equatable {
         struct BoardSignature: Equatable {
             let id: UUID

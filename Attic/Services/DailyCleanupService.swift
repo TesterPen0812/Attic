@@ -27,6 +27,10 @@ final class DailyCleanupService {
         self.calendar = calendar
     }
 
+    isolated deinit {
+        stop()
+    }
+
     func start() {
         guard generation == nil else { return }
         let generation = UUID()
