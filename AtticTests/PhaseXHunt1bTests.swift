@@ -1037,6 +1037,11 @@ private final class H3BlockingJournal: NoteDraftJournaling {
 /// No test here presents, orders, activates or keys a window.
 @MainActor
 final class PhaseXHunt5Tests: XCTestCase {
+    private final class WeakProbe<T: AnyObject> {
+        weak var value: T?
+        init(_ value: T?) { self.value = value }
+    }
+
     private func field<T>(_ name: String, in owner: Any, as type: T.Type = T.self) throws -> T {
         try XCTUnwrap(Mirror(reflecting: owner).children.first { $0.label == name }?.value as? T)
     }
@@ -1046,9 +1051,9 @@ final class PhaseXHunt5Tests: XCTestCase {
         let container = try PersistenceController.makeContainer(inMemory: true, cloudSyncEnabled: false)
         var former: NoteStore? = NoteStore(container: container, attachmentFileStore: files)
         await former?.waitForAttachmentReconciliation()
-        weak var released = former
+        let released = WeakProbe(former)
         former = nil
-        XCTAssertNil(released)
+        XCTAssertNil(released.value)
 
         // A replacement must still protect live and unreadable ownership.
         let current = NoteStore(container: container, attachmentFileStore: files)
@@ -1072,6 +1077,75 @@ final class PhaseXHunt5Tests: XCTestCase {
         }
     }
 
+    func testH7_01ReleasedDurableSourcesKeepDocumentsVersionsProposalsAndOpaqueDataSafe() async throws {
+        let files = makeTestAttachmentFileStore()
+        let formerContainer = try PersistenceController.makeContainer(inMemory: true, cloudSyncEnabled: false)
+        var former: NoteStore? = NoteStore(container: formerContainer, attachmentFileStore: files)
+        await former?.waitForAttachmentReconciliation()
+        let seed = ModelContext(formerContainer)
+        let note = NoteItem(title: "Owner")
+        let bytes = Data("durable owner".utf8)
+        let id = UUID()
+        let document = NoteDocument(blocks: [.text("Owner"), .file(attachmentID: id, filename: "owned.txt",
+            contentTypeIdentifier: "public.plain-text", byteCount: Int64(bytes.count))])
+        note.content = try NoteContentCodec.encode(document)
+        seed.insert(note)
+        let version = NoteVersion(noteID: note.id, createdAt: Date(), reason: .leave,
+            content: note.content, contentFormat: 1, title: "Owner", body: "", attachmentIDs: [], sourceRevisionID: nil)
+        let proposal = NotePendingEdit(noteID: note.id, baseRevisionToken: "base", proposedContent: try XCTUnwrap(note.content),
+            agentName: "Agent", createdAt: Date())
+        seed.insert(version); seed.insert(proposal)
+        try seed.save()
+        let released = WeakProbe(former)
+        former = nil
+        XCTAssertNil(released.value)
+        let current = NoteStore(container: try PersistenceController.makeContainer(inMemory: true, cloudSyncEnabled: false),
+            attachmentFileStore: files)
+        await current.waitForAttachmentReconciliation()
+        let reference = AttachmentFileReference(id: id, digest: NotePayloadDigest.sha256(bytes), filename: "owned.txt", payload: bytes)
+        let url = try await XCTUnwrapAsync(try await files.ensureMaterialized(reference))
+        for owner in 0..<3 {
+            try await files.removeMaterializations([reference])
+            XCTAssertEqual(try Data(contentsOf: url), bytes, "remaining durable source \(owner)")
+            if owner == 0 { seed.delete(note) }
+            if owner == 1 { seed.delete(version) }
+            try seed.save()
+        }
+        proposal.proposedContent = Data("opaque future content".utf8)
+        try seed.save()
+        try await files.removeMaterializations([reference])
+        XCTAssertEqual(try Data(contentsOf: url), bytes, "An opaque released source remains unknown")
+        seed.delete(proposal); try seed.save()
+        try await files.removeMaterializations([reference])
+        XCTExpectFailure("H7-01") { XCTAssertFalse(FileManager.default.fileExists(atPath: url.path)) }
+    }
+
+    func testH7_01ReleasedControllerKeepsItsDurableJournalByteAuthority() async throws {
+        let files = makeTestAttachmentFileStore()
+        let store = try makeTestNoteStore(attachmentFileStore: files)
+        await store.waitForAttachmentReconciliation()
+        let bytes = Data("recovery bytes".utf8), id = UUID()
+        let staged = StagedNoteAttachment(id: id, filename: "recovery.txt", contentTypeIdentifier: "public.plain-text",
+            byteCount: Int64(bytes.count), digest: NotePayloadDigest.sha256(bytes), data: bytes)
+        let document = NoteDocument(blocks: [.text("Recovery"), .file(attachmentID: id, filename: staged.filename,
+            contentTypeIdentifier: staged.contentTypeIdentifier, byteCount: staged.byteCount)])
+        let journal = NoteDraftJournal(directory: ownedTemporaryDirectory(prefix: "H7Journal"))
+        _ = try await journal.writeDurably(NoteDraftJournalEntry(noteID: UUID(), isPersisted: false, baseRevisionID: nil,
+            content: try NoteContentCodec.encode(document), selectionLocation: 0, selectionLength: 0,
+            staged: [.init(id: id, filename: staged.filename, contentTypeIdentifier: staged.contentTypeIdentifier,
+                byteCount: staged.byteCount, digest: staged.digest)], savedAt: Date()), staged: [staged])
+        var page: NotesPageController? = NotesPageController(store: store, journal: journal)
+        let released = WeakProbe(page)
+        page = nil
+        XCTAssertNil(released.value)
+        let reference = AttachmentFileReference(id: id, digest: staged.digest, filename: staged.filename, payload: bytes)
+        let url = try await XCTUnwrapAsync(try await files.ensureMaterialized(reference))
+        try await files.removeMaterializations([reference])
+        XCTExpectFailure("H7-01") { XCTAssertTrue(FileManager.default.fileExists(atPath: url.path)) }
+        // The red repro still has recovery bytes; no actual user data loss is claimed.
+        XCTAssertEqual(try journal.entries().first?.1.first?.data, bytes)
+    }
+
     func testH7_02ReleasingCleanupInvalidatesItsMidnightTimer() throws {
         let store = try makeTestStore()
         for _ in 0..<12 {
@@ -1079,9 +1153,9 @@ final class PhaseXHunt5Tests: XCTestCase {
             service?.start()
             let timer: Timer = try field("timer", in: XCTUnwrap(service))
             XCTAssertTrue(timer.isValid)
-            weak var released = service
+            let released = WeakProbe(service)
             service = nil
-            XCTAssertNil(released)
+            XCTAssertNil(released.value)
             // Clean even the red repro's run-loop residue before leaving.
             defer { timer.invalidate() }
             do { XCTAssertFalse(timer.isValid) }
@@ -1103,9 +1177,9 @@ final class PhaseXHunt5Tests: XCTestCase {
         let save: Task<Void, Never> = try field("saveTask", in: session)
         let deadline: Task<Void, Never> = try field("durabilityTask", in: session)
         await page?.waitForRecoveryWork()
-        weak var released = page
+        let released = WeakProbe(page)
         page = nil
-        XCTAssertNil(released)
+        XCTAssertNil(released.value)
         defer { save.cancel(); deadline.cancel() }
         // Retain the session as a displaced editor might: its old controller
         // must not leave deadlines runnable just because that editor survives.
@@ -1121,9 +1195,9 @@ final class PhaseXHunt5Tests: XCTestCase {
         var session: CanvasSession? = CanvasSession(store: store)
         session?.pan(byViewTranslation: CGSize(width: 12, height: -7))
         let deadline: Task<Void, Never> = try field("viewStateSaveTask", in: XCTUnwrap(session))
-        weak var released = session
+        let released = WeakProbe(session)
         session = nil
-        XCTAssertNil(released)
+        XCTAssertNil(released.value)
         defer { deadline.cancel() }
         do { XCTAssertTrue(deadline.isCancelled) }
     }
