@@ -214,7 +214,10 @@ extension NoteEditorEngine {
               let fragment = layoutManager.textLayoutFragment(for: contentStorage.documentRange.location)
                 as? NoteTitleLayoutFragment else { return }
         fragment.opacity = stepped
+        // A new fragment is made for the title and the viewport lays it out
+        // again now, so the change shows on this very scroll tick.
         layoutManager.invalidateLayout(for: fragment.rangeInElement)
+        layoutManager.textViewportLayoutController.layoutViewport()
     }
 }
 
