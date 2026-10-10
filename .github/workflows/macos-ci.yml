@@ -105,6 +105,7 @@ jobs:
             testH5_04OpeningGivesTheHostTheKeyboardAndOnlySwiftUIFocusesTheField \
             testH5_04AReusedPresenterOpensItsNextCardAsItOpenedTheFirst \
             testH5_04TabHandsTheKeyboardBetweenFieldAndRowsOnAReusedPresenter || status=1
+          run_tests diagnosis 1 testZZDiagnoseFullKeyboardAccessListFocus || true
           exit $status
       - name: Upload focused keyboard evidence
         if: always()

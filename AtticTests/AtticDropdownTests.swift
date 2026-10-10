@@ -168,6 +168,112 @@ final class AtticDropdownTests: XCTestCase {
         }
     }
 
+    // MARK: H5-04 diagnosis (CI, Full Keyboard Access only; prints, asserts nothing)
+
+    struct FKADiagnosisCard: View {
+        let variant: Int
+        let takeHost: () -> Void
+        let log: (String) -> Void
+        @State private var text = ""
+        @State private var highlighted: Int?
+        @FocusState private var focus: AtticDropdownFocusTarget?
+        @Environment(\.atticDropdownRegisterKeys) private var registerKeys
+
+        var body: some View {
+            VStack(spacing: 0) {
+                AtticDropdownField(text: $text, placeholder: "Find a thing", focus: $focus)
+                VStack(spacing: 0) {
+                    Text(highlighted == 0 ? "> one" : "one").frame(width: 140, height: 28)
+                    Text("two").frame(width: 140, height: 28)
+                }
+                .modifier(Variant(variant: variant, focus: $focus))
+            }
+            .atticDropdownFocus($focus)
+            .onChange(of: focus) { _, now in log("focus=\(String(describing: now))"); if now == .list, highlighted == nil { highlighted = 0 } }
+            .onKeyPress(phases: .down) { press in
+                log("keyPress \(press.characters.debugDescription) focus=\(String(describing: focus))")
+                return press.key == .space && focus == .list ? .handled : .ignored
+            }
+            .onAppear {
+                let focus = $focus
+                registerKeys { event in
+                    guard event.keyCode == 48 else { return false }
+                    let target: AtticDropdownFocusTarget = focus.wrappedValue == .list ? .field : .list
+                    switch variant {
+                    case 3: takeHost(); focus.wrappedValue = target
+                    case 4: focus.wrappedValue = nil; DispatchQueue.main.async { focus.wrappedValue = target }
+                    case 5: takeHost(); DispatchQueue.main.async { focus.wrappedValue = target }
+                    default: focus.wrappedValue = target
+                    }
+                    return true
+                }
+            }
+        }
+
+        struct Variant: ViewModifier {
+            let variant: Int
+            var focus: FocusState<AtticDropdownFocusTarget?>.Binding
+            func body(content: Content) -> some View {
+                if variant == 2 {
+                    content.focusable(true).focused(focus, equals: .list).focusEffectDisabled()
+                } else {
+                    content.focusable(true, interactions: .activate).focused(focus, equals: .list).focusEffectDisabled()
+                }
+            }
+        }
+    }
+
+    func testZZDiagnoseFullKeyboardAccessListFocus() throws {
+        guard ProcessInfo.processInfo.environment["ATTIC_FULL_KEYBOARD_ACCESS_TESTS"] == "1" else {
+            throw XCTSkip("CI only")
+        }
+        for keyWindow in [false, true] {
+            for variant in 1...5 {
+                let window: NSWindow
+                if keyWindow {
+                    let panel = KeyPanel(contentRect: NSRect(x: -4000, y: -4000, width: 320, height: 520),
+                                         styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
+                    panel.isReleasedWhenClosed = false
+                    panel.contentView = NSView(frame: NSRect(x: 0, y: 0, width: 320, height: 520))
+                    panel.orderFront(nil)
+                    panel.makeKey()
+                    window = panel
+                } else {
+                    window = makeUnshownWindow()
+                }
+                let anchor = NSView(frame: CGRect(x: 20, y: 400, width: 60, height: 28))
+                window.contentView?.addSubview(anchor)
+                var lines: [String] = []
+                func fr() -> String {
+                    let r = window.firstResponder
+                    if let t = r as? NSTextView, t.isFieldEditor { return "fieldEditor" }
+                    return r.map { String(describing: type(of: $0)) } ?? "nil"
+                }
+                let presenter = AtticDropdownPresenter()
+                presenter.design = AtticDesignContext(reduceMotion: true)
+                presenter.content = AnyView(FKADiagnosisCard(variant: variant, takeHost: { [weak presenter] in
+                    if let host = presenter?.host { _ = host.window?.makeFirstResponder(host) }
+                }, log: { lines.append($0) }))
+                presenter.present(from: anchor)
+                spin(0.3)
+                lines.append("open fr=\(fr())")
+                func send(_ c: String, _ code: UInt16) {
+                    let event = key(c, code: code, in: window)
+                    if presenter.handleKey(event) != nil { window.sendEvent(event) }
+                    spin(0.2)
+                }
+                send("\t", 48); lines.append("tab fr=\(fr())")
+                send(" ", 49); lines.append("space fr=\(fr())")
+                send("\t", 48); lines.append("tab2 fr=\(fr())")
+                print("FKADIAG key=\(keyWindow) isKey=\(window.isKeyWindow) v\(variant): " + lines.joined(separator: " | "))
+                presenter.close(restoreFocus: false, immediately: true)
+                window.close()
+                spin(0.1)
+            }
+        }
+    }
+
+
     // MARK: Focus sweep (H5-05 and on): the same two-owner pattern elsewhere
 
     /// H5-05: an explicit open on Tasks (the hotkey, the corner) asks the
