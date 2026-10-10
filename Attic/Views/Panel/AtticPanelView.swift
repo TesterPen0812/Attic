@@ -28,9 +28,6 @@ struct AtticPanelView: View {
     @State private var noticeHeight: CGFloat = 0
     @State private var noticeClearance = PanelPageNoticeClearancePreferenceKey.defaultValue
     @State var hasRestoredNoteSession = false
-    /// The current page's primary input (the Tasks add bar). The shell owns
-    /// it so a page switch can take focus out of the page.
-    @FocusState private var isQuickEntryFocused: Bool
 
     @MainActor
     init(
@@ -189,7 +186,7 @@ struct AtticPanelView: View {
                 state: tasksPageState,
                 layout: pageLayout,
                 chromeInteractionState: chromeInteractionState,
-                primaryInputFocus: $isQuickEntryFocused,
+                primaryInputFocusRequest: uiState.primaryInputFocusRequest,
                 isCurrent: page == currentPage
             )
             .transition(pageTransition(.tasks))
@@ -276,12 +273,6 @@ struct AtticPanelView: View {
                 chromeInteractionState.modeDockWidth = PanelHeaderLayout.pageSwitchWidth
                 syncBottomControlsHeight()
                 syncNoteDraftInteractionLocks()
-            }
-            .onChange(of: uiState.primaryInputFocusRequest) { _, _ in
-                // An explicit open on Tasks: the keyboard lands in the add
-                // bar. A plain text field draws no focus ring.
-                guard uiState.selectedSection.isTaskBased else { return }
-                isQuickEntryFocused = true
             }
             .onChange(of: noteDraft.isDirty) { _, _ in syncNoteDraftInteractionLocks() }
             .onChange(of: noteDraft.hasConflict) { _, _ in syncNoteDraftInteractionLocks() }
@@ -370,7 +361,6 @@ struct AtticPanelView: View {
             guard noteDraft.prepareToLeave(.pageSwitch) else { return }
         }
         PerformanceSignposts.beginPageSwitch()
-        isQuickEntryFocused = false
         uiState.setInteractionLock(.quickEntryFocus, isActive: false)
         if uiState.selectedSection.isCanvas {
             canvasSession.interruptActiveInteraction()

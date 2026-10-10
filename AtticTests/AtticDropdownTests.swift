@@ -1,5 +1,6 @@
 import AppKit
 import Combine
+import SwiftData
 import SwiftUI
 import XCTest
 @testable import Attic
@@ -166,6 +167,63 @@ final class AtticDropdownTests: XCTestCase {
             presenter.close(restoreFocus: false, immediately: true)
         }
     }
+
+    // MARK: Focus sweep (H5-05 and on): the same two-owner pattern elsewhere
+
+    /// H5-05: an explicit open on Tasks (the hotkey, the corner) asks the
+    /// shell to put the keyboard in the add bar. The shell relayed it
+    /// through a `@FocusState` no view was focused on, and SwiftUI drops a
+    /// write to such a state, so the add bar never heard the request.
+    func testH5_05AnExplicitOpenOnTasksPutsTheKeyboardInTheAddBar() throws {
+        let suite = "AtticDropdownTests.\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let container = try PersistenceController.makeContainer(inMemory: true, cloudSyncEnabled: false)
+        let store = TaskStore(container: container)
+        let notes = trackAttachmentReconciliation(of: NoteStore(container: container, attachmentFileStore: makeTestAttachmentFileStore()))
+        let state = PanelUIState()
+        state.updatePanelSize(CGSize(width: 340, height: 560))
+        state.loadPageContent()
+        let chrome = PanelChromeInteractionState()
+        let settings = AppSettings(defaults: defaults)
+        let host = AtticPanelHostingView(
+            rootView: AtticPanelView(
+                store: store, noteStore: notes,
+                canvasSession: CanvasSession(store: CanvasStore(container: container)),
+                noteDraft: NoteDraftController(noteStore: notes),
+                chromeInteractionState: chrome, uiState: state, settings: settings,
+                subtaskPanels: SubtaskPanelController(store: store, uiState: state, settings: settings),
+                tasksPageState: TasksPageState()
+            ),
+            panelCornerRadius: 52, dockedCorner: .topRight, chromeInteractionState: chrome
+        )
+        let window = makeUnshownWindow()
+        window.contentView = host
+        defer {
+            host.cancelActiveInteraction(reason: .lostWindow)
+            state.releasePageContent()
+            spin(0.3)
+            window.contentView = nil
+            window.close()
+        }
+        spin(1.5)
+        state.selectSection(.tasks)
+        spin(1.5)
+        func addBarHasKeyboard() -> Bool {
+            guard let view = window.firstResponder as? NSTextView else { return false }
+            return view.isDescendant(of: host)
+        }
+        for round in 1...2 {
+            window.makeFirstResponder(nil)
+            spin(0.2)
+            XCTAssertFalse(addBarHasKeyboard(), "round \(round): the keyboard is elsewhere")
+            state.requestPrimaryInputFocus()
+            spin(0.5)
+            XCTAssertTrue(addBarHasKeyboard(), "round \(round): the request puts the keyboard in the add bar (\(String(describing: window.firstResponder)))")
+        }
+        XCTAssertFalse(window.isVisible)
+    }
+
 
     func testTheWidthFitsItsContentNeverUnderTheMinimumNeverPastTheMargin() {
         let m = AtticDropdownMetrics.self
