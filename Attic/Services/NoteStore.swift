@@ -336,6 +336,7 @@ final class NoteStore: ObservableObject {
     private final class AttachmentRetentionSource {
         let container: ModelContainer
         var recoveryIDs: () throws -> Set<UUID> = { [] }
+        var durableRecoveryIDs: (() async throws -> Set<UUID>)?
 
         init(container: ModelContainer) { self.container = container }
 
@@ -343,7 +344,12 @@ final class NoteStore: ObservableObject {
             do {
                 var ids = try await NoteStore.readDurableAttachmentIDs(in: container)
                 guard !Task.isCancelled else { return nil }
-                ids.formUnion(try recoveryIDs())
+                if let durableRecoveryIDs {
+                    ids.formUnion(try await durableRecoveryIDs())
+                } else {
+                    ids.formUnion(try recoveryIDs())
+                }
+                guard !Task.isCancelled else { return nil }
                 return ids
             } catch { return nil }
         }
@@ -351,7 +357,14 @@ final class NoteStore: ObservableObject {
     private let attachmentRetentionSource: AttachmentRetentionSource
     var recoveryReferencedAttachmentIDs: () throws -> Set<UUID> {
         get { attachmentRetentionSource.recoveryIDs }
-        set { attachmentRetentionSource.recoveryIDs = newValue }
+        set {
+            attachmentRetentionSource.recoveryIDs = newValue
+            attachmentRetentionSource.durableRecoveryIDs = nil
+        }
+    }
+    var recoveryReferencedAttachmentIDsDurably: (() async throws -> Set<UUID>)? {
+        get { attachmentRetentionSource.durableRecoveryIDs }
+        set { attachmentRetentionSource.durableRecoveryIDs = newValue }
     }
 #else
     var recoveryReferencedAttachmentIDs: () throws -> Set<UUID> = { [] }

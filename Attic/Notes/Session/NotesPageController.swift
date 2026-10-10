@@ -512,17 +512,16 @@ final class NotesPageController: ObservableObject {
                 self?.reportRecoveryRetentionWarning("Recovery copies could not be checked. Removed images are being kept until they can be checked.")
                 throw error
             }
-            for item in entries {
-                guard case let .valid(entry, _, _) = item,
-                      let document = NoteContentCodec.decode(entry.content).document else {
-                    self?.reportRecoveryRetentionWarning("A damaged recovery copy is keeping removed images safe until it is repaired.")
-                    throw DamagedNoteRecovery()
-                }
-                ids.formUnion(document.attachmentIDs)
-                ids.formUnion(entry.staged.map(\.id))
-                ids.formUnion(entry.pendingImport?.items.compactMap(\.stagedID) ?? [])
+            do { ids.formUnion(try Self.recoveryAttachmentIDs(in: entries)) }
+            catch {
+                self?.reportRecoveryRetentionWarning("A damaged recovery copy is keeping removed images safe until it is repaired.")
+                throw error
             }
             return ids
+        }
+        store.recoveryReferencedAttachmentIDsDurably = { [journal] in
+            guard let journal else { return [] }
+            return try Self.recoveryAttachmentIDs(in: try await journal.readRetentionEntries())
         }
         store.recoveryProtectedRevisionIDs = { [weak self] in
             guard let journal = self?.journal else { return [] }
@@ -537,6 +536,18 @@ final class NotesPageController: ObservableObject {
         // Retention is used by Settings before the Notes page is presented.
         // Warm recovery ownership once at startup without activating a page.
         if journal?.requiresAsyncIO == true { recoverAtLaunch() }
+    }
+
+    private static func recoveryAttachmentIDs(in entries: [NoteDraftRecoveryEntry]) throws -> Set<UUID> {
+        var ids = Set<UUID>()
+        for item in entries {
+            guard case let .valid(entry, _, _) = item,
+                  let document = NoteContentCodec.decode(entry.content).document else { throw DamagedNoteRecovery() }
+            ids.formUnion(document.attachmentIDs)
+            ids.formUnion(entry.staged.map(\.id))
+            ids.formUnion(entry.pendingImport?.items.compactMap(\.stagedID) ?? [])
+        }
+        return ids
     }
 
     func refreshRecoveryWarningsAfterResolution() async {

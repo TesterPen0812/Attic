@@ -172,6 +172,9 @@ protocol NoteDraftJournaling: AnyObject {
     func retireDurably(noteID: UUID, claim: NoteRecoveryClaim?, saved: NoteRecoverySavedState?) async throws
     func discardOwnedDurably(noteID: UUID, claim: NoteRecoveryClaim) async throws
     func readRecoveryEntries() async throws -> [NoteDraftRecoveryEntry]
+    /// Fresh ownership evidence without retiring checkpoints or collecting
+    /// staging that may belong to a different live journal facade.
+    func readRetentionEntries() async throws -> [NoteDraftRecoveryEntry]
     func cancelPendingDurably(_ entry: NoteDraftJournalEntry, staged: [StagedNoteAttachment], replacing: NoteRecoveryClaim?) async throws -> NoteRecoveryClaim
     func damagedDetailsDurably(noteID: UUID) async throws -> NoteDamagedRecoveryDetails
     func listDamagedDurably() async throws -> [NoteDamagedRecoveryDetails]
@@ -213,6 +216,10 @@ extension NoteDraftJournaling {
     }
     func discardOwnedDurably(noteID: UUID, claim: NoteRecoveryClaim) async throws { try discardOwned(noteID: noteID, claim: claim) }
     func readRecoveryEntries() async throws -> [NoteDraftRecoveryEntry] { try recoveryEntries() }
+    func readRetentionEntries() async throws -> [NoteDraftRecoveryEntry] {
+        guard !requiresAsyncIO else { throw NoteDraftJournalError.asynchronousIORequired }
+        return try recoveryEntries()
+    }
     func entriesDurably() async throws -> [(NoteDraftJournalEntry, [StagedNoteAttachment])] {
         try await readRecoveryEntries().compactMap { if case let .valid(entry, bytes, _) = $0 { return (entry, bytes) }; return nil }
     }
@@ -525,6 +532,16 @@ private actor NoteDraftJournalIO {
 
     func recoveryEntries(collectRetired: Bool = true, live: NoteLiveReferenceSnapshot) throws -> [NoteDraftRecoveryEntry] {
         installLiveReferences(live)
+        let results = try readEntries(collectRetired: collectRetired)
+        removeUnreferencedStagedFiles()
+        return results
+    }
+
+    func retentionEntries() throws -> [NoteDraftRecoveryEntry] {
+        try readEntries(collectRetired: false)
+    }
+
+    private func readEntries(collectRetired: Bool) throws -> [NoteDraftRecoveryEntry] {
         guard fileManager.fileExists(atPath: directory.path) else { return [] }
         let files = try fileManager.contentsOfDirectory(at: directory, includingPropertiesForKeys: nil)
             .filter { $0.pathExtension == "json" }.sorted { $0.lastPathComponent < $1.lastPathComponent }
@@ -546,7 +563,6 @@ private actor NoteDraftJournalIO {
             case let (.damaged(left), .damaged(right)): left < right
             }
         }
-        removeUnreferencedStagedFiles()
         return results
     }
 
@@ -624,6 +640,9 @@ final class NoteDraftJournal: NoteDraftJournaling {
         let entries = try await io.recoveryEntries(live: snapshot)
         publish(entries, for: snapshot)
         return entries
+    }
+    func readRetentionEntries() async throws -> [NoteDraftRecoveryEntry] {
+        try await io.retentionEntries()
     }
     func writeDurably(_ entry: NoteDraftJournalEntry, staged: [StagedNoteAttachment], replacing: NoteRecoveryClaim? = nil) async throws -> NoteRecoveryClaim {
         let snapshot = try liveSnapshot()

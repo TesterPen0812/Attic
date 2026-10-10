@@ -1176,7 +1176,7 @@ final class PhaseXHunt5Tests: XCTestCase {
         let reference = AttachmentFileReference(id: id, digest: staged.digest, filename: staged.filename, payload: bytes)
         let url = try await XCTUnwrapAsync(try await files.ensureMaterialized(reference))
         try await files.removeMaterializations([reference])
-        XCTExpectFailure("H7-04") { XCTAssertTrue(FileManager.default.fileExists(atPath: url.path)) }
+        do { XCTAssertTrue(FileManager.default.fileExists(atPath: url.path)) }
         XCTAssertEqual(try Data(contentsOf: pending), bytes, "A retention read must not collect another owner's staging")
         let damaged = root.appendingPathComponent(UUID().uuidString + ".json")
         try Data("damaged checkpoint".utf8).write(to: damaged)
@@ -1184,7 +1184,7 @@ final class PhaseXHunt5Tests: XCTestCase {
         let extra = AttachmentFileReference(id: extraID, digest: staged.digest, filename: staged.filename, payload: bytes)
         let extraURL = try await XCTUnwrapAsync(try await files.ensureMaterialized(extra))
         try await files.removeMaterializations([extra])
-        XCTExpectFailure("H7-04") { XCTAssertTrue(FileManager.default.fileExists(atPath: extraURL.path)) }
+        do { XCTAssertTrue(FileManager.default.fileExists(atPath: extraURL.path)) }
         XCTAssertEqual(try Data(contentsOf: damaged), Data("damaged checkpoint".utf8))
         XCTAssertEqual(try Data(contentsOf: pending), bytes)
     }
