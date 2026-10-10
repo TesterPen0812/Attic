@@ -802,6 +802,10 @@ final class PhaseXHunt1bTests: XCTestCase {
         let version = try XCTUnwrap(store.versions(noteID: id).first { $0.reason == .beforeAgentEdit })
         XCTAssertEqual(version.attachmentIDs, [], "Exercise the silent metadata fallback")
         XCTAssertEqual(version.content, originalBytes, "The exact encoded base survives the metadata failure")
+        let versionOnly = NoteDocumentRetentionSnapshot(notes: [], versions: [
+            .init(format: version.contentFormat, content: version.content, attachmentIDsRaw: version.attachmentIDsRaw)
+        ], proposals: [])
+        XCTAssertEqual(try versionOnly.attachmentIDs(), [fileID], "Version bytes alone preserve ownership")
         XCTAssertTrue(try NoteDocumentRetentionSnapshot.read(in: ModelContext(store.container)).attachmentIDs().contains(fileID))
 
         let opaque = NoteItem(id: id, title: "Newer writer")
