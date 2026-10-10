@@ -482,7 +482,7 @@ struct AtticNoteLibraryLine: View {
                             .padding(.leading, AtticLayout.pageTabsX)
                     }
                     Spacer(minLength: 0)
-                    AtticSmallButton(systemName: "magnifyingglass", label: "Search notes (⌘F)", action: onBeginSearch)
+                    AtticSmallButton(systemName: "magnifyingglass", label: "Search notes (⌘F)", quietIcon: true, action: onBeginSearch)
                         .accessibilityIdentifier("notes-library-search-button")
                         .padding(.trailing, max(0, AtticLayout.rowHighlightInset + AtticTaskRowMetrics.dateInset
                             - (AtticControlSize.smallMinWidth - AtticSmallControlMetrics.iconSize) / 2))

@@ -306,6 +306,16 @@ struct AtticColorTokens: Equatable, Sendable {
     }
     func color(_ ink: AtticInk) -> Color { self.ink(ink).color }
 
+    /// The ink of an icon that sits beside page labels (design review D-10):
+    /// the secondary tier the inactive labels beside it are drawn in
+    /// (#7A7A7A Light, #A4A4A4 Dark on the default Solid panel; the review
+    /// sampled #737373 / #A7A7A7 for it), so it is never heavier than the
+    /// words. Where the secondary ink would be the stronger of the two it
+    /// keeps the primary glyph ink: never darker than before.
+    var quietIconInk: AtticInk {
+        ink(.helper).contrast(on: panel.base) <= ink(.glyph).contrast(on: panel.base) ? .helper : .glyph
+    }
+
     /// The quietest note text: a new note's "Title" and the empty line's
     /// "Type / for headings…" hint (A39 F10). On Glass and Frosted the
     /// design's placeholder ink is Phase 0's secondary grey, near the

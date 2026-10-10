@@ -704,8 +704,10 @@ struct TasksPage: View {
                     .padding(.leading, AtticLayout.pageTabsX)
                     Spacer(minLength: 0)
                     // Find (⌘F) on every page: Done's magnifier.
+                    // Quiet icons (D-10): the labels' own grey, primary only when on.
                     AtticSmallButton(systemName: "magnifyingglass",
-                                     label: model.tab == .done ? "Search done tasks (⌘F)" : "Find (⌘F)", action: beginSearch)
+                                     label: model.tab == .done ? "Search done tasks (⌘F)" : "Find (⌘F)",
+                                     quietIcon: true, action: beginSearch)
                         .accessibilityIdentifier(model.tab == .done ? "tasks-done-search-button" : "tasks-find-button")
                         .padding(.trailing, model.tab == .done ? lineEndInset : 0)
                     if model.tab != .done {
@@ -714,7 +716,8 @@ struct TasksPage: View {
                         let view = model.viewOptions(for: model.tab)
                         AtticMenuButton(systemName: "line.3.horizontal.decrease", label: "View Options (⌥⌘V)",
                                         commands: { viewCommands(for: model.tab) },
-                                        showsDot: view.filters, value: view.spokenValue)
+                                        showsDot: view.filters, value: view.spokenValue,
+                                        quietIcon: !view.filters)
                             .accessibilityIdentifier("tasks-view-options")
                             .padding(.trailing, lineEndInset)
                             // It pops in where it sits (a fade in Calm).

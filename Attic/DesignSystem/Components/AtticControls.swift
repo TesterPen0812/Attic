@@ -959,6 +959,11 @@ struct AtticSmallButton: View {
     let systemName: String?
     let title: String?
     let accessibilityLabel: String
+    /// A quiet icon sits beside page labels (the tabs line's Find and View
+    /// Options, design review D-10: icons are never darker than the words
+    /// next to them): the secondary tier's ink instead of the primary glyph's
+    /// (`AtticColorTokens.quietIconInk`).
+    let quietIcon: Bool
     let action: () -> Void
 
     @Environment(\.atticDesign) private var design
@@ -968,10 +973,12 @@ struct AtticSmallButton: View {
     @State private var hovered = false
     @State private var probeID = UUID()
 
-    init(systemName: String?, title: String.LocalizationValue? = nil, label: String.LocalizationValue, action: @escaping () -> Void) {
+    init(systemName: String?, title: String.LocalizationValue? = nil, label: String.LocalizationValue,
+         quietIcon: Bool = false, action: @escaping () -> Void) {
         self.systemName = systemName
         self.title = title.map { String(localized: $0) }
         self.accessibilityLabel = String(localized: label)
+        self.quietIcon = quietIcon
         self.action = action
     }
 
@@ -980,7 +987,7 @@ struct AtticSmallButton: View {
         let radius = AtticRadius.control(height: height)
         let shape = RoundedRectangle(cornerRadius: radius, style: .continuous)
         Button(action: action) {
-            AtticSmallButtonFace(systemName: systemName, title: title, radius: radius, hovered: hovered)
+            AtticSmallButtonFace(systemName: systemName, title: title, quietIcon: quietIcon, radius: radius, hovered: hovered)
                 .contentShape(shape)
         }
         .buttonStyle(AtticFlatPressStyle())
@@ -1023,6 +1030,7 @@ extension EnvironmentValues {
 private struct AtticSmallButtonFace: View {
     let systemName: String?
     let title: String?
+    let quietIcon: Bool
     let radius: CGFloat
     let hovered: Bool
 
@@ -1040,7 +1048,7 @@ private struct AtticSmallButtonFace: View {
         case .pressed: tokens.chipSelected
         default: .clear
         }
-        let ink: AtticInk = state == .disabled ? .disabledIcon : .glyph
+        let ink: AtticInk = state == .disabled ? .disabledIcon : (quietIcon ? tokens.quietIconInk : .glyph)
         HStack(spacing: AtticSmallControlMetrics.iconLabelGap) {
             if let systemName {
                 AtticIcon(systemName: systemName, size: AtticSmallControlMetrics.iconSize, weight: .regular, ink: ink)
@@ -1681,12 +1689,14 @@ struct AtticMenuButton: View {
     var showsDot = false
     /// What VoiceOver reads as the button's value (the current choice).
     var value: String? = nil
+    /// A quiet icon (see `AtticSmallButton.quietIcon`).
+    var quietIcon = false
 
     @State private var ownAnchor = AtticMenuAnchor.Holder()
 
     var body: some View {
         let anchor = holder ?? ownAnchor
-        AtticSmallButton(systemName: systemName, label: label) {
+        AtticSmallButton(systemName: systemName, label: label, quietIcon: quietIcon) {
             guard let view = anchor.view else { return }
             AtticNativeMenu.popUp(commands(), in: view)
         }
