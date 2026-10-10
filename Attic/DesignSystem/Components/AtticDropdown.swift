@@ -850,6 +850,12 @@ extension View {
     }
 }
 
+enum AtticDropdownInitialFocus {
+    static func shouldRequest(enabled: Bool, request: Int?) -> Bool {
+        enabled && request == nil
+    }
+}
+
 private struct AtticDropdownFocusModifier: ViewModifier {
     var focus: FocusState<Bool>.Binding
     let enabled: Bool
@@ -857,7 +863,7 @@ private struct AtticDropdownFocusModifier: ViewModifier {
 
     func body(content: Content) -> some View {
         content
-            .onAppear { if enabled, request == nil { focus.wrappedValue = true } }
+            .onAppear { if AtticDropdownInitialFocus.shouldRequest(enabled: enabled, request: request) { focus.wrappedValue = true } }
             .onChange(of: request) { _, _ in if enabled { focus.wrappedValue = true } }
     }
 }
