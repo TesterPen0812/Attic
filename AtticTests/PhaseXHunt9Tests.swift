@@ -222,9 +222,7 @@ final class PhaseXHunt9Tests: XCTestCase {
         XCTAssertTrue(library.delete(AtticItemRef(.canvas, first.id)))
         spin(0.35)
         XCTAssertEqual(session.selectedCanvasID, second.id)
-        XCTExpectFailure("H11-06") {
-            XCTAssertFalse(box.presented, "First's confirmation cannot survive to clear Second")
-        }
+        XCTAssertFalse(box.presented, "First's confirmation cannot survive to clear Second")
         box.presented = false
         host.rootView = CanvasRoot(session: session, box: box)
         spin()
