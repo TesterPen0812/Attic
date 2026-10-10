@@ -28,8 +28,12 @@ final class AtticLibrary {
     let canvases: CanvasStore?
     let links: LinkStore
     let tags: TagService
+    /// Each tag's colour (colour pass, owner 2026-10-10).
+    let tagColours: TagColourStore
     let undo: UndoRoute
     private var tagInventoryObservation: AnyCancellable?
+    private var tagColourObservation: AnyCancellable?
+    private var tagColourRefreshPending = false
     private let container: ModelContainer
     private(set) var lastErrorMessage: String?
     /// The last task command that changed nothing, and why (Astra 6). Also
@@ -56,6 +60,11 @@ final class AtticLibrary {
         container = tasks.container
         links = LinkStore(container: tasks.container, now: now, persist: persist)
         tags = TagService(container: tasks.container, persist: persist)
+        tagColours = TagColourStore(container: tasks.container, persist: persist, now: now)
+        let colours = tagColours
+        tags.carryColour = { [weak colours] sources, target, context in
+            try colours?.carry(from: sources, to: target, in: context)
+        }
         links.endpointState = { [weak self] ref in self?.state(of: ref) ?? .missing }
         tasks.commandLibrary = self
         let inventory = tags
@@ -71,6 +80,51 @@ final class AtticLibrary {
         canvases?.tagInventoryDidRefresh = { [weak inventory] in inventory?.invalidateInventory() }
         tagInventoryObservation = tags.inventoryChanges.sink { [weak notes] in notes?.objectWillChange.send() }
         tags.afterChange = { [weak self] in self?.refreshItemStores() }
+        // Tags come and go through every store and agents: whenever the set
+        // in use changes, new tags get their colour (once per change, after
+        // the save that changed it).
+        tagColourObservation = tags.inventoryChanges.sink { [weak self] in self?.scheduleTagColourRefresh() }
+        scheduleTagColourRefresh()
+    }
+
+    // MARK: - Tag colours
+
+    /// Gives every tag in use with no colour its colour and rebuilds the
+    /// palette. Runs on its own after any change to the tags in use.
+    func refreshTagColours() {
+        tagColours.refresh(inUse: tags.namesOldestFirst)
+    }
+
+    private func scheduleTagColourRefresh() {
+        guard !tagColourRefreshPending else { return }
+        tagColourRefreshPending = true
+        DispatchQueue.main.async { [weak self] in
+            guard let self else { return }
+            tagColourRefreshPending = false
+            refreshTagColours()
+        }
+    }
+
+    /// Changes a tag's colour (the tag menu's Colour row), as one undo step.
+    @discardableResult
+    func setTagHue(_ hue: AtticTagHue, for tag: String, in history: UndoHistoryID = .library) -> Bool {
+        guard let name = AtticTag.normalize(tag) else { return fail(TagServiceError.invalidTag(tag).localizedDescription) }
+        let previous = tagColours.palette.hue(for: name)
+        guard previous != hue else { return true }
+        var succeeded = false
+        undo.perform(in: history) {
+            guard tagColours.setHue(hue, for: name) else {
+                _ = fail(tagColours.lastErrorMessage)
+                return nil
+            }
+            succeeded = true
+            return UndoStep(
+                name: String(localized: "Tag Colour"),
+                undo: { [colours = tagColours] in colours.setHue(previous, for: name) },
+                redo: { [colours = tagColours] in colours.setHue(hue, for: name) }
+            )
+        }
+        return succeeded
     }
 
     // MARK: - Item state
