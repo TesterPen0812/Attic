@@ -167,7 +167,8 @@ final class OwnerTasks1010Tests: XCTestCase {
         var draggedImage: NSImage? { nil }
         let draggingPasteboard = NSPasteboard(name: NSPasteboard.Name("OwnerTasks1010.\(UUID().uuidString)"))
         var draggingSource: Any? { nil }
-        var draggingSequenceNumber: Int { 1 }
+        @MainActor private static var nextSequence = 0
+        let draggingSequenceNumber: Int
         var draggingFormation: NSDraggingFormation = .none
         var animatesToDestination = false
         var numberOfValidItemsForDrop = 1
@@ -175,12 +176,38 @@ final class OwnerTasks1010Tests: XCTestCase {
         func resetSpringLoading() {}
         func slideDraggedImage(to screenPoint: NSPoint) {}
         override func namesOfPromisedFilesDropped(atDestination dropDestination: URL) -> [String]? { nil }
-        func enumerateDraggingItems(options: NSDraggingItemEnumerationOptions = [], for view: NSView?, classes classArray: [AnyClass], searchOptions: [NSPasteboard.ReadingOptionKey: Any] = [:], using block: (NSDraggingItem, Int, UnsafeMutablePointer<ObjCBool>) -> Void) {}
-        override init() {
-            super.init()
-            draggingPasteboard.setString("file:///tmp/attic-owner-cancel-test.txt", forType: .fileURL)
+        func enumerateDraggingItems(options: NSDraggingItemEnumerationOptions = [], for view: NSView?, classes classArray: [AnyClass], searchOptions: [NSPasteboard.ReadingOptionKey: Any] = [:], using block: (NSDraggingItem, Int, UnsafeMutablePointer<ObjCBool>) -> Void) {
+            var stop = ObjCBool(false)
+            for (index, item) in (draggingPasteboard.readObjects(forClasses: classArray, options: searchOptions) ?? []).enumerated() {
+                guard let writer = item as? NSPasteboardWriting else { continue }
+                let dragging = NSDraggingItem(pasteboardWriter: writer)
+                let point = view?.convert(draggingLocation, from: nil)
+                    ?? draggingDestinationWindow?.convertPoint(toScreen: draggingLocation)
+                    ?? draggingLocation
+                dragging.draggingFrame = CGRect(origin: point, size: CGSize(width: 1, height: 1))
+                block(dragging, index, &stop)
+                if stop.boolValue { break }
+            }
         }
-        deinit { draggingPasteboard.releaseGlobally() }
+        let fixtureURL: URL
+        @MainActor init(fileURL: URL, transfersPDF: Bool = false) {
+            fixtureURL = fileURL
+            Self.nextSequence += 1
+            draggingSequenceNumber = Self.nextSequence
+            super.init()
+            if transfersPDF {
+                // NSURL payloads in a synthetic drag lack AppKit-issued sandbox
+                // extensions. PDF data exercises the same file-drop path.
+                let item = NSPasteboardItem()
+                let bounds = CGRect(x: 0, y: 0, width: 10, height: 10)
+                item.setData(NSView(frame: bounds).dataWithPDF(inside: bounds), forType: .pdf)
+                draggingPasteboard.writeObjects([item])
+            } else { draggingPasteboard.writeObjects([fileURL as NSURL]) }
+        }
+        deinit {
+            draggingPasteboard.releaseGlobally()
+            try? FileManager.default.trashItem(at: fixtureURL, resultingItemURL: nil)
+        }
     }
 
     func testCancellingANativeFileDragClearsTheTaskTarget() throws {
@@ -195,7 +222,9 @@ final class OwnerTasks1010Tests: XCTestCase {
         spin()
         func views(_ v: NSView) -> [NSView] { [v] + v.subviews.flatMap(views) }
         let destination = try XCTUnwrap(views(host).first { !$0.registeredDraggedTypes.isEmpty })
-        let drag = FileDrag()
+        let file = FileManager.default.temporaryDirectory.appendingPathComponent("OwnerTasks1010-\(UUID().uuidString).txt")
+        try Data("attachment fixture".utf8).write(to: file)
+        let drag = FileDrag(fileURL: file)
         drag.draggingDestinationWindow = window
         XCTAssertEqual(destination.draggingEntered(drag), .copy)
         spin()
@@ -218,7 +247,9 @@ final class OwnerTasks1010Tests: XCTestCase {
             spin()
             func views(_ v: NSView) -> [NSView] { [v] + v.subviews.flatMap(views) }
             let destination = try XCTUnwrap(views(host).first { !$0.registeredDraggedTypes.isEmpty })
-            let drag = FileDrag()
+            let file = FileManager.default.temporaryDirectory.appendingPathComponent("OwnerTasks1010-\(UUID().uuidString).txt")
+            try Data("attachment fixture".utf8).write(to: file)
+            let drag = FileDrag(fileURL: file, transfersPDF: complete)
             drag.draggingDestinationWindow = window
             XCTAssertEqual(destination.draggingEntered(drag), .copy)
             spin()
