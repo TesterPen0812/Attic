@@ -251,7 +251,7 @@ final class CornerHoverMonitor {
     /// Keep the real panel on screen through a performance sample, including
     /// a section change made while it is already visible.
     func revealForPerformanceProbe(section: PanelSection) {
-        guard let screen = NSScreen.main,
+        guard let screen = Self.uiTestingScreen,
               preparePresentation(openComposer: false, section: section) == nil else { return }
         PerformanceSignposts.beginReveal()
         refreshStoreForReveal()
@@ -274,7 +274,7 @@ final class CornerHoverMonitor {
     }
 
     func keepVisibleForUITesting(openComposer: Bool = false, makeKey: Bool = true) {
-        guard let screen = NSScreen.main else { return }
+        guard let screen = Self.uiTestingScreen else { return }
         guard preparePresentation(openComposer: openComposer, section: nil) == nil else { return }
         stateMachine.forceVisible(at: ProcessInfo.processInfo.systemUptime, grace: 86_400)
         refreshSamplingCadence(at: NSEvent.mouseLocation)
@@ -551,6 +551,23 @@ final class CornerHoverMonitor {
         cachedScreens = NSScreen.screens.map { ($0.frame, AtticDisplay.identifier(for: $0)) }
         revealPolicy = settings.cornerRevealPolicy
         cachedScreenFrames = cachedScreens.filter { revealPolicy.answers(displayID: $0.id) }.map(\.frame)
+    }
+
+    /// The screen a test launch shows the panel on: the key screen, unless
+    /// `ATTIC_UI_TEST_DISPLAY` names one ("external" for the first screen that
+    /// isn't built in, or a display UUID), so on-screen checks can stay off
+    /// the display the owner is working on.
+    static var uiTestingScreen: NSScreen? {
+        let request = ProcessInfo.processInfo.environment["ATTIC_UI_TEST_DISPLAY"] ?? ""
+        guard !request.isEmpty else { return NSScreen.main }
+        let named = NSScreen.screens.first { screen in
+            if request == "external" {
+                guard let number = screen.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? NSNumber else { return false }
+                return CGDisplayIsBuiltin(CGDirectDisplayID(number.uint32Value)) == 0
+            }
+            return AtticDisplay.identifier(for: screen) == request
+        }
+        return named ?? NSScreen.main
     }
 
     /// The identifier of the display at `screen`'s frame, from the cache.
