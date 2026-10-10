@@ -1071,7 +1071,7 @@ final class PhaseXHunt5Tests: XCTestCase {
         XCTAssertEqual(try Data(contentsOf: url), bytes, "Unknown live ownership remains conservative")
         current.recoveryReferencedAttachmentIDs = { [] }
         try await files.removeMaterializations([reference])
-        XCTExpectFailure("H7-01") {
+        do {
             XCTAssertFalse(FileManager.default.fileExists(atPath: url.path),
                 "A dead store is not an unknown live byte owner")
         }
@@ -1117,7 +1117,7 @@ final class PhaseXHunt5Tests: XCTestCase {
         XCTAssertEqual(try Data(contentsOf: url), bytes, "An opaque released source remains unknown")
         seed.delete(proposal); try seed.save()
         try await files.removeMaterializations([reference])
-        XCTExpectFailure("H7-01") { XCTAssertFalse(FileManager.default.fileExists(atPath: url.path)) }
+        do { XCTAssertFalse(FileManager.default.fileExists(atPath: url.path)) }
     }
 
     func testH7_01ReleasedControllerKeepsItsDurableJournalByteAuthority() async throws {
@@ -1141,7 +1141,7 @@ final class PhaseXHunt5Tests: XCTestCase {
         let reference = AttachmentFileReference(id: id, digest: staged.digest, filename: staged.filename, payload: bytes)
         let url = try await XCTUnwrapAsync(try await files.ensureMaterialized(reference))
         try await files.removeMaterializations([reference])
-        XCTExpectFailure("H7-01") { XCTAssertTrue(FileManager.default.fileExists(atPath: url.path)) }
+        do { XCTAssertTrue(FileManager.default.fileExists(atPath: url.path)) }
         // The red repro still has recovery bytes; no actual user data loss is claimed.
         XCTAssertEqual(try journal.entries().first?.1.first?.data, bytes)
     }

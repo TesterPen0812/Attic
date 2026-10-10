@@ -501,22 +501,21 @@ final class NotesPageController: ObservableObject {
         store.agentWriteDisposition = { [weak self] id in
             self?.agentDisposition(for: id) ?? .direct
         }
-        store.recoveryReferencedAttachmentIDs = { [weak self] in
-            guard let self else { return [] }
+        store.recoveryReferencedAttachmentIDs = { [weak self, journal] in
             // One live-byte rule for purge: every checkpoint, open draft,
             // pending payload and both sides of editor history own bytes.
-            var ids = Set(self.cache.values.flatMap { self.liveAttachmentIDs(in: $0) })
-            guard let journal = self.journal else { return ids }
+            var ids = Set(self?.cache.values.flatMap { self?.liveAttachmentIDs(in: $0) ?? [] } ?? [])
+            guard let journal else { return ids }
             let entries: [NoteDraftRecoveryEntry]
             do { entries = try journal.recoveryEntries() }
             catch {
-                self.reportRecoveryRetentionWarning("Recovery copies could not be checked. Removed images are being kept until they can be checked.")
+                self?.reportRecoveryRetentionWarning("Recovery copies could not be checked. Removed images are being kept until they can be checked.")
                 throw error
             }
             for item in entries {
                 guard case let .valid(entry, _, _) = item,
                       let document = NoteContentCodec.decode(entry.content).document else {
-                    self.reportRecoveryRetentionWarning("A damaged recovery copy is keeping removed images safe until it is repaired.")
+                    self?.reportRecoveryRetentionWarning("A damaged recovery copy is keeping removed images safe until it is repaired.")
                     throw DamagedNoteRecovery()
                 }
                 ids.formUnion(document.attachmentIDs)

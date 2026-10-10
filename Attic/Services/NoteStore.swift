@@ -329,7 +329,33 @@ final class NoteStore: ObservableObject {
         return proof
     }
 
+#if os(macOS)
+    /// The byte authority survives its presentation facade. A released store
+    /// still owns durable documents and recovery copies in a shared file root.
+    @MainActor
+    private final class AttachmentRetentionSource {
+        let container: ModelContainer
+        var recoveryIDs: () throws -> Set<UUID> = { [] }
+
+        init(container: ModelContainer) { self.container = container }
+
+        func retainedIDs() async -> Set<UUID>? {
+            do {
+                var ids = try await NoteStore.readDurableAttachmentIDs(in: container)
+                guard !Task.isCancelled else { return nil }
+                ids.formUnion(try recoveryIDs())
+                return ids
+            } catch { return nil }
+        }
+    }
+    private let attachmentRetentionSource: AttachmentRetentionSource
+    var recoveryReferencedAttachmentIDs: () throws -> Set<UUID> {
+        get { attachmentRetentionSource.recoveryIDs }
+        set { attachmentRetentionSource.recoveryIDs = newValue }
+    }
+#else
     var recoveryReferencedAttachmentIDs: () throws -> Set<UUID> = { [] }
+#endif
     var recoveryProtectedRevisionIDs: () throws -> Set<UUID> = { [] }
 #if os(macOS)
     private let attachmentFileStore: AttachmentFileStore
@@ -391,14 +417,15 @@ final class NoteStore: ObservableObject {
 #if os(macOS)
         let resolvedAttachmentFileStore = attachmentFileStore ?? AttachmentFileStore()
         self.attachmentFileStore = resolvedAttachmentFileStore
+        attachmentRetentionSource = AttachmentRetentionSource(container: container)
 #endif
         context = ModelContext(container)
         self.now = now
         self.persist = persist
         self.makeFreshContext = makeFreshContext ?? { ModelContext(container) }
 #if os(macOS)
-        resolvedAttachmentFileStore.registerByteOwners(UUID()) { [weak self] in
-            guard let owner = self else { return nil }
+        resolvedAttachmentFileStore.registerByteOwners(UUID()) { [weak self, source = attachmentRetentionSource] in
+            guard let owner = self else { return await source.retainedIDs() }
             return await owner.retainedAttachmentIDsForFiles()
         }
 #endif
@@ -412,6 +439,18 @@ final class NoteStore: ObservableObject {
     var retentionDecodeObserver: (@Sendable () -> Void)?
     var retentionContentReadObserver: (@Sendable (NoteDocumentRetentionSnapshot.Owner) -> Void)?
 
+    private static func readDurableAttachmentIDs(in container: ModelContainer,
+        observeDecode: (@Sendable () -> Void)? = nil,
+        observeRead: (@Sendable (NoteDocumentRetentionSnapshot.Owner) -> Void)? = nil) async throws -> Set<UUID> {
+        try await Task.detached(priority: .utility) {
+            let workerContext = ModelContext(container)
+            let snapshot = try NoteDocumentRetentionSnapshot.read(in: workerContext, observeRead: observeRead)
+            var ids = try snapshot.attachmentIDs(observeDecode: observeDecode)
+            ids.formUnion(try workerContext.fetch(FetchDescriptor<NoteAttachment>()).map(\.id))
+            return ids
+        }.value
+    }
+
     private func retainedAttachmentIDsForFiles() async -> Set<UUID>? {
         do {
             while !Task.isCancelled {
@@ -421,13 +460,8 @@ final class NoteStore: ObservableObject {
                 let generation = revision
                 let container = self.container
                 let observer = retentionDecodeObserver, readObserver = retentionContentReadObserver
-                var ids = try await Task.detached(priority: .utility) {
-                    let workerContext = ModelContext(container)
-                    let snapshot = try NoteDocumentRetentionSnapshot.read(in: workerContext, observeRead: readObserver)
-                    var ids = try snapshot.attachmentIDs(observeDecode: observer)
-                    ids.formUnion(try workerContext.fetch(FetchDescriptor<NoteAttachment>()).map(\.id))
-                    return ids
-                }.value
+                var ids = try await Self.readDurableAttachmentIDs(in: container,
+                    observeDecode: observer, observeRead: readObserver)
                 // Retry this requested sweep with fresh ownership if a save
                 // crossed the worker. Never authorize destruction from stale
                 // results or leave cleanup waiting for another unrelated event.
