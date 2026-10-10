@@ -277,6 +277,7 @@ actor AttachmentFileStore {
     }
 
     func removeMaterializations(_ references: [AttachmentFileReference]) async throws {
+        collectRetiredMaterializations()
         for reference in references {
             let directory = try validatedDirectory(for: reference)
             guard try await removeUnownedDirectory(directory) else { continue }
@@ -296,6 +297,7 @@ actor AttachmentFileStore {
     ) async throws -> AttachmentReconciliationReport {
         try Task.checkCancellation()
         try prepare()
+        collectRetiredMaterializations()
         var expected = Set<String>()
         var needsMaterialization: [AttachmentFileReference] = []
         var failures: [AttachmentReconciliationFailure] = []
@@ -386,6 +388,7 @@ actor AttachmentFileStore {
         modifiedBefore cutoff: Date,
         limit: Int
     ) async -> Int {
+        collectRetiredMaterializations()
         let keys: [URLResourceKey] = [
             .isDirectoryKey, .isSymbolicLinkKey, .creationDateKey, .contentModificationDateKey
         ]
@@ -451,6 +454,20 @@ actor AttachmentFileStore {
             return nil
         }
         return url
+    }
+
+    /// A committed rename releases live ownership even if unlinking fails or
+    /// the process exits. Retry those deletions off-main, with bounded work.
+    private func collectRetiredMaterializations() {
+        let root = rootURL.appendingPathComponent(".retired", isDirectory: true)
+        guard !Self.isSymbolicLink(root, fileManager: fileManager),
+              let entries = try? fileManager.contentsOfDirectory(at: root, includingPropertiesForKeys: [.isDirectoryKey]) else { return }
+        for entry in entries.prefix(64) {
+            guard UUID(uuidString: entry.lastPathComponent) != nil,
+                  !Self.isSymbolicLink(entry, fileManager: fileManager),
+                  (try? entry.resourceValues(forKeys: [.isDirectoryKey]).isDirectory) == true else { continue }
+            try? fileManager.removeItem(at: entry)
+        }
     }
 
     private func cleanOrphans(expected: Set<String>) async throws {

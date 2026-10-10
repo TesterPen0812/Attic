@@ -2099,3 +2099,39 @@ extension PhaseXHunt6Tests {
         }
     }
 }
+
+@MainActor
+extension PhaseXHunt6Tests {
+    private final class RetirementFailure: FileManager, @unchecked Sendable {
+        private let lock = NSLock()
+        private var shouldFail = true
+        override func removeItem(at url: URL) throws {
+            let fail = lock.withLock { () -> Bool in
+                guard url.deletingLastPathComponent().lastPathComponent == ".retired", shouldFail else { return false }
+                shouldFail = false
+                return true
+            }
+            if fail { throw PersistenceGate.Failure() }
+            try super.removeItem(at: url)
+        }
+    }
+
+    func testH8_05InterruptedRetirementIsCollectedByEveryCleanupEntry() async throws {
+        for route in 0..<3 {
+            let root = ownedTemporaryDirectory(prefix: "H8Retirement")
+            let files = AttachmentFileStore(rootURL: root, fileManager: RetirementFailure())
+            let ref = reference()
+            _ = try await files.ensureMaterialized(ref)
+            do { try await files.removeMaterializations([ref]); XCTFail("Injected retirement unlink must fail") }
+            catch { XCTAssertTrue(error is PersistenceGate.Failure) }
+            let retired = root.appendingPathComponent(".retired")
+            XCTAssertEqual(try FileManager.default.contentsOfDirectory(atPath: retired.path).count, 1)
+            switch route {
+            case 0: try await files.removeMaterializations([ref])
+            case 1: _ = try await files.reconcileMetadata([])
+            default: _ = await files.removeUnreferencedMaterializations(keeping: [], modifiedBefore: .distantFuture, limit: 10)
+            }
+            XCTAssertTrue((try? FileManager.default.contentsOfDirectory(atPath: retired.path).isEmpty) == true, "route=\(route)")
+        }
+    }
+}
