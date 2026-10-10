@@ -57,6 +57,69 @@ final class NoteEditorEngineTests: XCTestCase {
 
     // MARK: Drawing
 
+    /// Compressed workload, not one hour of wall time: ten cell revisions
+    /// per second for 60 minutes. Measures retention without timing gates.
+    func testPerf2TableMeasurementRetentionOverAnHourOfEdits() {
+        let cache = NoteTableTextCache()
+        let style = NoteTextStyle()
+        for minute in 0..<60 {
+            autoreleasepool {
+                for key in 0..<600 {
+                    let cell = NoteTable.Cell("Edit \(minute * 600 + key)")
+                    let string = NSAttributedString(string: cell.text, attributes: style.bodyAttributes)
+                    _ = cache.natural(cell, header: false) { string }
+                    _ = cache.minimum(cell, header: false) { string }
+                    _ = cache.height(cell, header: false, width: 120) { string }
+                }
+            }
+            if (minute + 1).isMultiple(of: 15) {
+                print("PERF2_TABLE_CACHE minutes=\(minute + 1) entries=\(cache.retainedMeasurementCount)")
+            }
+        }
+        XCTAssertLessThanOrEqual(cache.retainedMeasurementCount, 45_000)
+        cache.clear()
+        XCTAssertEqual(cache.retainedMeasurementCount, 0)
+    }
+
+    func testPerf2TableCacheKeepsAMaximumTableWarmAndRemeasuresEvictedText() {
+        let cache = NoteTableTextCache()
+        let string = NSAttributedString(string: "same measured text")
+        var measurements = 0
+        func read(_ index: Int) -> CGFloat {
+            cache.height(NoteTable.Cell("Cell \(index)"), header: false, width: 100) {
+                measurements += 1
+                return string
+            }
+        }
+        let first = read(0)
+        for index in 1..<15_000 { _ = read(index) }
+        let warm = measurements
+        for index in 0..<15_000 { XCTAssertEqual(read(index), first) }
+        XCTAssertEqual(measurements, warm, "a maximum table still fits without cache thrashing")
+        _ = read(15_000)
+        XCTAssertEqual(cache.retainedMeasurementCount, 15_000)
+        let beforeMiss = measurements
+        XCTAssertEqual(read(0), first, "an evicted entry is recomputed with the same result")
+        XCTAssertEqual(measurements, beforeMiss + 1)
+        let beforeHit = measurements
+        XCTAssertEqual(read(0), first)
+        XCTAssertEqual(measurements, beforeHit)
+        cache.clear()
+        XCTAssertEqual(cache.retainedMeasurementCount, 0)
+        XCTAssertEqual(read(0), first)
+        XCTAssertEqual(measurements, beforeHit + 1)
+
+        // A full grid editing its last cell must keep its other cells hot.
+        cache.clear()
+        for index in 0..<15_000 { _ = read(index) }
+        let beforeEdits = measurements
+        for edit in 0..<5 {
+            for index in 0..<14_999 { _ = read(index) }
+            _ = read(20_000 + edit)
+        }
+        XCTAssertEqual(measurements - beforeEdits, 5, "only the five changed cells are measured")
+    }
+
     func testPerf2EmptyFindDoesNoSearchOrLayoutWorkWhileTyping() throws {
         var blocks = (0..<5_000).map { NoteBlock.text("Line \($0) with ordinary text") }
         blocks.insert(.table(NoteTable(texts: [["needle", "cell"], ["other", "value"]])), at: 100)

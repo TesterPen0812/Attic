@@ -163,13 +163,82 @@ struct NoteTableLayout: Equatable {
 /// text width. Measuring caches by cell content and width.
 @MainActor
 final class NoteTableTextCache {
+    /// Each metric can retain a complete maximum-sized table. Historical
+    /// edits and widths must not grow a warm session without limit.
+    nonisolated static let measurementLimit = NoteTable.maxRows * NoteTable.maxColumns
+
     private struct Key: Hashable {
         let cell: Int
         let header: Bool
         let width: Int
     }
-    private var heights: [Key: CGFloat] = [:]
-    private var naturals: [Key: CGFloat] = [:]
+    /// An LRU backed by slots, not one heap object per entry. Reads and
+    /// evictions cost O(1); editing a full table evicts the obsolete cell,
+    /// rather than its still-visible neighbours.
+    private struct Measurements {
+        private struct Entry {
+            var key: Key
+            var value: CGFloat
+            var previous: Int?
+            var next: Int?
+        }
+        private var slots: [Key: Int] = [:]
+        private var entries: [Entry] = []
+        private var oldest: Int?
+        private var newest: Int?
+        var count: Int { slots.count }
+
+        subscript(key: Key) -> CGFloat? {
+            mutating get {
+                guard let slot = slots[key] else { return nil }
+                touch(slot)
+                return entries[slot].value
+            }
+            set {
+                guard let newValue else { return }
+                if let slot = slots[key] {
+                    entries[slot].value = newValue
+                    touch(slot)
+                } else if entries.count == NoteTableTextCache.measurementLimit, let slot = oldest {
+                    slots.removeValue(forKey: entries[slot].key)
+                    entries[slot].key = key
+                    entries[slot].value = newValue
+                    slots[key] = slot
+                    touch(slot)
+                } else {
+                    let slot = entries.count
+                    entries.append(Entry(key: key, value: newValue, previous: newest, next: nil))
+                    slots[key] = slot
+                    if let newest { entries[newest].next = slot }
+                    else { oldest = slot }
+                    newest = slot
+                }
+            }
+        }
+
+        private mutating func touch(_ slot: Int) {
+            guard newest != slot else { return }
+            let previous = entries[slot].previous, next = entries[slot].next
+            if let previous { entries[previous].next = next }
+            else { oldest = next }
+            if let next { entries[next].previous = previous }
+            entries[slot].previous = newest
+            entries[slot].next = nil
+            if let newest { entries[newest].next = slot }
+            newest = slot
+        }
+
+        mutating func removeAll() {
+            slots.removeAll()
+            entries.removeAll()
+            oldest = nil
+            newest = nil
+        }
+    }
+
+    private var heights = Measurements()
+    private var naturals = Measurements()
+    var retainedMeasurementCount: Int { heights.count + naturals.count + minimums.count }
 
     func clear() {
         heights.removeAll()
@@ -214,7 +283,7 @@ final class NoteTableTextCache {
         return widest
     }
 
-    private var minimums: [Key: CGFloat] = [:]
+    private var minimums = Measurements()
 
     /// The cell's longest word on one line (the narrowest its column can be
     /// without breaking a word).
