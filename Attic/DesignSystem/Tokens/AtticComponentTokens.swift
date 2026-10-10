@@ -621,8 +621,8 @@ enum AtticNoteType {
     /// block's own fill; shown on hover (or over the chip itself), while the
     /// caret is in the block, or for VoiceOver. It never moves the text.
     static let monoCopySize: CGFloat = 16
-    static let monoCopyInset: CGFloat = 4
-    static let monoCopyRise: CGFloat = 7
+    static let monoCopyInset: CGFloat = 6
+    static let monoCopyTop: CGFloat = 6
     static let monoCopyGlyph: CGFloat = 9
     /// Lists and checklists: their text 20 in (each level 20 more), a 4.5 pt
     /// dot centred 7 in (the checklist box's centre); numbers end 5 before
