@@ -371,7 +371,7 @@ final class NotesLibraryModel: ObservableObject {
         let summary = NoteRowSummary(note: note, attachments: store.attachments(for: note.id), body: body(of: note))
         let time = Self.time(note.updatedAt, now: now(), calendar: calendar)
         if proposalIDs?.revision != store.revision {
-            let edits = (try? store.modelContext.fetch(FetchDescriptor<NotePendingEdit>())) ?? []
+            let edits = (try? store.fetchAuxiliary(FetchDescriptor<NotePendingEdit>())) ?? []
             proposalIDs = (store.revision, Set(edits.map(\.noteID)))
         }
         let hasProposal = proposalIDs?.ids.contains(note.id) == true

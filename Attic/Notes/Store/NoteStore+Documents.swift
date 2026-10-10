@@ -934,7 +934,7 @@ extension NoteStore {
     /// Newest first, one per id.
     func versions(noteID: UUID) -> [NoteVersion] {
         let targetID = noteID
-        let rows = (try? modelContext.fetch(FetchDescriptor<NoteVersion>(
+        let rows = (try? fetchAuxiliary(FetchDescriptor<NoteVersion>(
             predicate: #Predicate { $0.noteID == targetID }
         ))) ?? []
         var seen = Set<UUID>()
@@ -1173,7 +1173,7 @@ extension NoteStore {
     func pendingEdits(noteID: UUID) -> [NotePendingEdit] {
         pendingEditFetchCount += 1
         let targetID = noteID
-        let rows = (try? modelContext.fetch(FetchDescriptor<NotePendingEdit>(
+        let rows = (try? fetchAuxiliary(FetchDescriptor<NotePendingEdit>(
             predicate: #Predicate { $0.noteID == targetID }
         ))) ?? []
         var seen = Set<UUID>()

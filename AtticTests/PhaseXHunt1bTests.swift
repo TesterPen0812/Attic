@@ -666,6 +666,74 @@ final class PhaseXHunt1bTests: XCTestCase {
         }
     }
 
+
+    func testH5_01FailedHistoryFetchRefusesEmptyBrowserAndRetries() async throws {
+        let store = try makeTestNoteStore(attachmentFileStore: makeTestAttachmentFileStore())
+        let id = try create(store)
+        XCTAssertTrue(store.recordVersion(noteID: id, reason: .pause))
+        let saved = store.versions(noteID: id).map(\.id)
+        let page = await controller(store)
+        XCTAssertTrue(page.open(noteID: id))
+        store.auxiliaryFetchWillRead = { type in
+            if type == NoteVersion.self { throw NSError(domain: "H5-fetch", code: 1) }
+        }
+        let opened = await page.openHistoryDurably()
+        XCTExpectFailure("H5-01") {
+            XCTAssertFalse(opened, "A failed read must not be presented as empty history")
+            XCTAssertNil(page.historyBrowser)
+            XCTAssertNotNil(page.active?.notice)
+        }
+        page.closeHistory()
+        store.auxiliaryFetchWillRead = nil
+        await XCTAssertTrueAsync(await page.openHistoryDurably())
+        XCTAssertTrue(Set(try XCTUnwrap(page.historyBrowser).entries.map(\.id)).isSuperset(of: saved))
+        page.closeHistory()
+    }
+
+    func testH5_02ProposalStatusDoesNotCacheAFailedFetchAsNoProposal() async throws {
+        let store = try makeTestNoteStore(attachmentFileStore: makeTestAttachmentFileStore())
+        let id = try create(store)
+        let page = await controller(store)
+        XCTAssertTrue(page.open(noteID: id))
+        _ = try store.agentWrite(noteID: id, baseRevisionToken: try XCTUnwrap(store.note(withID: id)).revisionToken,
+            document: NoteDocument(blocks: [.text("Proposed")]), agentName: "Hunt agent", disposition: .proposal).get()
+        let session = try XCTUnwrap(page.active)
+        let revision = store.revision
+        store.auxiliaryFetchWillRead = { type in
+            if type == NotePendingEdit.self { throw NSError(domain: "H5-fetch", code: 2) }
+        }
+        _ = page.proposalAgent(for: session)
+        store.auxiliaryFetchWillRead = nil
+        let retried = page.proposalAgent(for: session)
+        XCTAssertEqual(store.revision, revision, "Read recovery must not require a write")
+        XCTExpectFailure("H5-02") {
+            XCTAssertEqual(retried, "Hunt agent")
+            XCTAssertNotNil(store.lastErrorMessage, "The failed fetch must be reported")
+        }
+        XCTAssertEqual(store.pendingEdits(noteID: id).count, 1)
+    }
+
+    func testH5_02LibraryBadgeDoesNotCacheAFailedFetchAsNoProposal() throws {
+        let store = try makeTestNoteStore(attachmentFileStore: makeTestAttachmentFileStore())
+        let id = try create(store)
+        _ = try store.agentWrite(noteID: id, baseRevisionToken: try XCTUnwrap(store.note(withID: id)).revisionToken,
+            document: NoteDocument(blocks: [.text("Proposed")]), agentName: "Hunt agent", disposition: .proposal).get()
+        let library = NotesLibraryModel(search: { _ in [] }, store: store)
+        let revision = store.revision
+        store.auxiliaryFetchWillRead = { type in
+            if type == NotePendingEdit.self { throw NSError(domain: "H5-fetch", code: 2) }
+        }
+        _ = rows(library, store)
+        store.auxiliaryFetchWillRead = nil
+        let retried = try XCTUnwrap(rows(library, store).first { $0.id == id })
+        XCTAssertEqual(store.revision, revision)
+        XCTExpectFailure("H5-02") {
+            XCTAssertTrue(retried.hasProposal)
+            XCTAssertNotNil(store.lastErrorMessage)
+        }
+        XCTAssertEqual(store.pendingEdits(noteID: id).count, 1)
+    }
+
 }
 
 @MainActor
