@@ -110,9 +110,10 @@ jobs:
             -configuration Local -destination 'platform=macOS' -derivedDataPath "$RUNNER_TEMP/AtticFKA" \
             -resultBundlePath "$RUNNER_TEMP/AtticFKA-task-focus.xcresult" CODE_SIGNING_ALLOWED=NO \
             -parallel-testing-enabled NO \
-            -only-testing:AtticTests/TasksRound13Tests/testH12_06TabFocusMovesSelectionAndReturnEditsTheFocusedTask || status=1
+            -only-testing:AtticTests/TasksRound13Tests/testH12_06TabFocusMovesSelectionAndReturnEditsTheFocusedTask \
+            -only-testing:AtticTests/DeepReviewFixTests/testEveryTabStopIsAVisibleRowOrAField || status=1
           xcrun xcresulttool get test-results summary --path "$RUNNER_TEMP/AtticFKA-task-focus.xcresult" --format json > "$RUNNER_TEMP/fka-task-focus-summary.json"
-          python3 -c 'import json,sys; s=json.load(open(sys.argv[1])); assert s["passedTests"]==1 and s["skippedTests"]==0 and s["failedTests"]==0 and s["expectedFailures"]==0' "$RUNNER_TEMP/fka-task-focus-summary.json" || status=1
+          python3 -c 'import json,sys; s=json.load(open(sys.argv[1])); assert s["passedTests"]==2 and s["skippedTests"]==0 and s["failedTests"]==0 and s["expectedFailures"]==0' "$RUNNER_TEMP/fka-task-focus-summary.json" || status=1
           exit $status
       - name: Upload focused keyboard evidence
         if: always()
