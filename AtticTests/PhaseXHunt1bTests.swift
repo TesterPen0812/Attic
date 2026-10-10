@@ -1763,14 +1763,14 @@ final class PhaseXHunt6Tests: XCTestCase {
             let url = try await XCTUnwrapAsync(try await owner.ensureMaterialized(ref))
             let token = UUID()
             if timing == 0 {
-                owner.registerByteOwners(token) { [ref.id] }
+                owner.registerByteOwners(token) { .init(ids: [ref.id], isCurrent: { true }) }
             } else {
                 // During an awaited provider, a new facade/authority is installed
                 // (or the current provider is replaced). The old empty answer
                 // must never authorize removal under that new authority.
                 owner.registerByteOwners(token) {
-                    owner.registerByteOwners(timing == 1 ? UUID() : token) { [ref.id] }
-                    return []
+                    owner.registerByteOwners(timing == 1 ? UUID() : token) { .init(ids: [ref.id], isCurrent: { true }) }
+                    return .init(ids: [], isCurrent: { true })
                 }
             }
             try await collector.removeMaterializations([ref])
@@ -1861,3 +1861,62 @@ extension PhaseXHunt6Tests {
         XCTAssertFalse(FileManager.default.fileExists(atPath: url.path), "Cleanup eventually follows release of the last live owner")
     }
 }
+
+@MainActor
+extension PhaseXHunt6Tests {
+    func testH8_01EveryEarlierStoreIsRevalidatedAfterLaterProvidersAwait() async throws {
+        let files = makeTestAttachmentFileStore()
+        let a = try makeTestNoteStore(attachmentFileStore: files)
+        let b = try makeTestNoteStore(attachmentFileStore: files)
+        await a.waitForAttachmentReconciliation(); await b.waitForAttachmentReconciliation()
+        let ref = reference()
+        let url = try await XCTUnwrapAsync(try await files.ensureMaterialized(ref))
+        weak var first: NoteStore?
+        var calls = 0
+        for store in [a, b] {
+            store.recoveryReferencedAttachmentIDsDurably = { [weak store] in
+                calls += 1
+                if calls == 1 { first = store }
+                else if calls == 2 {
+                    await Task.yield()
+                    first?.recoveryReferencedAttachmentIDs = { [ref.id] }
+                }
+                return []
+            }
+        }
+        try await files.removeMaterializations([ref])
+        XCTAssertGreaterThanOrEqual(calls, 2)
+        XCTAssertTrue(FileManager.default.fileExists(atPath: url.path))
+        a.recoveryReferencedAttachmentIDs = { [] }; b.recoveryReferencedAttachmentIDs = { [] }
+        try await files.removeMaterializations([ref])
+        XCTAssertFalse(FileManager.default.fileExists(atPath: url.path), "No owner remains")
+    }
+
+    func testH8_02AdoptionAfterARecoveryReadIsProtectedFromAnotherFacade() async throws {
+        let root = ownedTemporaryDirectory(prefix: "H8Adoption")
+        var reader: NoteDraftJournal? = NoteDraftJournal(directory: root)
+        let writer = NoteDraftJournal(directory: root)
+        var liveIDs = Set<UUID>()
+        reader?.liveReferencedIDs = { liveIDs }
+        let bytes = Data("adopted recovery bytes".utf8), id = UUID(), noteID = UUID()
+        let item = StagedNoteAttachment(id: id, filename: "adopted.txt", contentTypeIdentifier: "public.plain-text",
+            byteCount: Int64(bytes.count), digest: NotePayloadDigest.sha256(bytes), data: bytes)
+        let entry = NoteDraftJournalEntry(noteID: noteID, isPersisted: false, baseRevisionID: nil,
+            content: try NoteContentCodec.encode(NoteDocument(blocks: [.text("Adopted"), .file(attachmentID: id,
+                filename: item.filename, contentTypeIdentifier: item.contentTypeIdentifier, byteCount: item.byteCount)])),
+            selectionLocation: 0, selectionLength: 0, staged: [.init(id: id, filename: item.filename,
+                contentTypeIdentifier: item.contentTypeIdentifier, byteCount: item.byteCount, digest: item.digest)], savedAt: Date())
+        let claim = try await writer.writeDurably(entry, staged: [item])
+        _ = try await reader?.readRecoveryEntries()
+        // This is the controller's read-then-adopt order. No new reader I/O
+        // occurs before the other facade's discard/collector.
+        liveIDs = [id]
+        try await writer.discardOwnedDurably(noteID: noteID, claim: claim)
+        let url = root.appendingPathComponent("staged").appendingPathComponent(id.uuidString)
+        XCTAssertTrue(FileManager.default.fileExists(atPath: url.path))
+        reader = nil
+        _ = try await writer.readRecoveryEntries()
+        XCTAssertFalse(FileManager.default.fileExists(atPath: url.path))
+    }
+}
+
