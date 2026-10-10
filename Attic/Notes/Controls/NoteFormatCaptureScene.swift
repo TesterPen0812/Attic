@@ -41,6 +41,10 @@ enum NoteFormatCaptureScene {
                 writeColourSample(controls: controls, textView: textView)
                 return
             }
+            if scene == "focus" {
+                writeFocusSample(controls: controls, textView: textView)
+                return
+            }
             if scene == "tables" {
                 writeTablesSample(controls: controls, chrome: chrome, textView: textView)
                 return
@@ -194,6 +198,39 @@ enum NoteFormatCaptureScene {
         if box.location != NSNotFound { controls.engine.toggleCheckbox(atLineOf: box.location) }
         textView.setSelectedRange(NSRange(location: (textView.string as NSString).length, length: 0))
         controls.engine.onNotice?(String(localized: "An attachment couldn’t be read. Nothing was pasted."))
+    }
+
+    /// The owner's first-round fixes (F-01 to F-04): every block style with a
+    /// caret to look at, quote bars (one line, wrapped, two paragraphs), and
+    /// a highlight beside inline code. `ATTIC_UI_TEST_CARET_AT=<text>` puts
+    /// the caret at the end of the line containing that text (the last line
+    /// when it is absent).
+    private static func writeFocusSample(controls: NoteFormatControls, textView: NoteEditorTextView) {
+        let router = controls.router
+        type("Focus note\n", into: textView)
+        line("A highlight beside some inline code, in body text.", .paragraph(.body), controls: controls, textView: textView)
+        line("A heading", .paragraph(.heading(2)), controls: controls, textView: textView)
+        line("A subheading", .paragraph(.heading(3)), controls: controls, textView: textView)
+        line("A short quote", .paragraph(.quote), controls: controls, textView: textView)
+        line("A longer quote that wraps onto a second line so the bar follows all of its text.", .paragraph(.quote),
+             controls: controls, textView: textView)
+        line("The second paragraph of that quote", .paragraph(.quote), controls: controls, textView: textView)
+        line("A bullet item", .paragraph(.bullet), controls: controls, textView: textView)
+        line("A checklist item", .paragraph(.checklist), controls: controls, textView: textView)
+        line("let total = 1 + 2", .paragraph(.mono), controls: controls, textView: textView)
+        type("A last body line", into: textView)
+        router.run(.paragraph(.body), from: .shortcut)
+        router.run(.mark(.highlight), from: .shortcut, selection: range(of: "highlight", in: textView))
+        router.run(.mark(.code), from: .shortcut, selection: range(of: "inline code", in: textView))
+        let environment = ProcessInfo.processInfo.environment
+        var caret = (textView.string as NSString).length
+        if let needle = environment["ATTIC_UI_TEST_CARET_AT"] {
+            let found = range(of: needle, in: textView)
+            if found.location != NSNotFound {
+                caret = NSMaxRange((textView.string as NSString).lineRange(for: found)) - 1
+            }
+        }
+        textView.setSelectedRange(NSRange(location: caret, length: 0))
     }
 
     private static func writeSample(controls: NoteFormatControls, textView: NoteEditorTextView, rich: Bool) {
