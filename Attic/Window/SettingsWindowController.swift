@@ -110,14 +110,17 @@ final class SettingsWindowController: NSWindowController {
     private static let frameAutosaveName = "AtticSettingsWindow"
     private var hasPositionedWindow = false
     private var observers: [NSObjectProtocol] = []
+    private let workArea: ((SettingsWindow) -> CGRect?)?
 
     init(
         settings: AppSettings,
         loginItemService: LoginItemService,
         agentServer: AgentServer,
         globalHotKey: GlobalHotKey,
-        library: AtticLibrary?
+        library: AtticLibrary?,
+        workArea: ((SettingsWindow) -> CGRect?)? = nil
     ) {
+        self.workArea = workArea
         // Sync controls are intentionally absent while Attic is macOS-first
         // and local-only.
         let rootView = SettingsView(
@@ -191,12 +194,12 @@ final class SettingsWindowController: NSWindowController {
 
     /// Reconciles size and position without changing ordering or focus.
     /// Screen removal and a stale autosaved frame use the same path as Show.
-    private func fitToCurrentWorkArea(_ window: SettingsWindow) {
+    func fitToCurrentWorkArea(_ window: SettingsWindow, reposition: Bool = true) {
         let screens = NSScreen.screens
         let screen = window.screen.flatMap { candidate in screens.first { $0 === candidate } }
             ?? NSScreen.main ?? screens.first
-        guard let screen else { return }
-        let safe = SettingsWindowLayout.constrainedFrame(screen.visibleFrame, to: screen.visibleFrame)
+        guard let visibleFrame = workArea?(window) ?? screen?.visibleFrame else { return }
+        let safe = SettingsWindowLayout.constrainedFrame(visibleFrame, to: visibleFrame)
         let available = window.contentRect(forFrameRect: safe).size
         window.contentMinSize = CGSize(
             width: min(SettingsWindowLayout.minimumContentSize.width, max(0, available.width)),
@@ -206,12 +209,13 @@ final class SettingsWindowController: NSWindowController {
             width: min(SettingsWindowLayout.maximumContentSize.width, max(0, available.width)),
             height: min(SettingsWindowLayout.maximumContentSize.height, max(0, available.height))
         )
+        guard reposition else { return }
         if !hasPositionedWindow {
-            window.setContentSize(SettingsWindowLayout.fittedContentSize(to: screen.visibleFrame))
+            window.setContentSize(SettingsWindowLayout.fittedContentSize(to: visibleFrame))
             window.center()
             hasPositionedWindow = true
         }
-        window.setFrame(SettingsWindowLayout.constrainedFrame(window.frame, to: screen.visibleFrame), display: false)
+        window.setFrame(SettingsWindowLayout.constrainedFrame(window.frame, to: visibleFrame), display: false)
     }
 
     deinit {

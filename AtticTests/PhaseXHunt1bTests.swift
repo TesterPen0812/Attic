@@ -719,6 +719,30 @@ final class PhaseXHunt1bTests: XCTestCase {
         }
     }
 
+    func testH6_05SettingsScreenChangeRefreshesNativeLimitsWithoutMovingWindow() throws {
+        let store = try makeTestStore()
+        var workArea = CGRect(x: 0, y: 0, width: 600, height: 420)
+        let defaults = UserDefaults(suiteName: "H6Settings." + UUID().uuidString)!
+        let server = AgentServer(port: 0, bearerToken: String(repeating: "a", count: 43),
+            handler: MCPRequestHandler(tools: AgentTaskTools(store: store)))
+        let controller = SettingsWindowController(settings: AppSettings(defaults: defaults),
+            loginItemService: LoginItemService(), agentServer: server,
+            globalHotKey: GlobalHotKey(combination: .newTask), library: nil, workArea: { _ in workArea })
+        let window = try XCTUnwrap(controller.window as? SettingsWindow)
+        controller.fitToCurrentWorkArea(window, reposition: false)
+        let compactMaximum = window.contentMaxSize
+        let frame = window.frame
+        workArea = CGRect(x: 600, y: 0, width: 1600, height: 1000)
+        NotificationCenter.default.post(name: NSWindow.didChangeScreenNotification, object: window)
+        XCTExpectFailure("H6-05") {
+            XCTAssertGreaterThan(window.contentMaxSize.width, compactMaximum.width)
+            XCTAssertGreaterThan(window.contentMaxSize.height, compactMaximum.height)
+        }
+        XCTAssertEqual(window.frame, frame, "Dragging between displays must preserve the user's position")
+        XCTAssertFalse(window.isVisible)
+        XCTAssertFalse(window.isKeyWindow)
+    }
+
     func testH6_04StoppedCleanupDiscardsQueuedObserverAndPreviousGeneration() async throws {
         for restart in [false, true] {
             let store = try makeTestStore()
