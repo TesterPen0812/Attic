@@ -25,6 +25,10 @@ final class AtticDropdownTests: XCTestCase {
         AtticDropdownTabFocus.transfer(listFocused: list, fullKeyboardAccess: false,
             setField: { field = $0 }, setList: { list = $0 })
         XCTAssertTrue(field); XCTAssertFalse(list, "Without FKA, Tab stays in the field")
+        AtticDropdownTabFocus.transfer(listFocused: false, fullKeyboardAccess: true,
+            setField: { field = $0 }, setList: { list = $0 }, listAvailable: false,
+            takeListKeyboard: { XCTFail("An empty list is not a keyboard stop") })
+        XCTAssertTrue(field); XCTAssertFalse(list)
     }
 
     func testH5_04ListFocusReleasesTheNativeFieldEditorWithoutOrderingAWindow() throws {
@@ -42,7 +46,6 @@ final class AtticDropdownTests: XCTestCase {
         AtticDropdownTabFocus.transfer(listFocused: false, fullKeyboardAccess: true,
             setField: { fieldFocused = $0 }, setList: { listFocused = $0 },
             takeListKeyboard: { XCTAssertTrue(window.makeFirstResponder(host)) })
-        XCTExpectFailure("H5-04")
         XCTAssertIdentical(window.firstResponder, host, "The actual field editor must release the keyboard")
         XCTAssertFalse(fieldFocused); XCTAssertTrue(listFocused)
         XCTAssertFalse(window.isVisible); XCTAssertFalse(window.isKeyWindow)
