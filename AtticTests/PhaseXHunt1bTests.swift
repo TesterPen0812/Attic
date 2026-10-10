@@ -1920,3 +1920,182 @@ extension PhaseXHunt6Tests {
     }
 }
 
+@MainActor
+extension PhaseXHunt6Tests {
+    private struct CanvasReferenceValue: Equatable {
+        var kind: String
+        var center: CanvasPoint = .zero
+        var width: Double = 0
+        var height: Double = 0
+        var layer: Int64 = 0
+        var text: String = ""
+        var points: [CanvasPoint] = []
+        var payload: Data = Data()
+    }
+    private func canvasValues(_ session: CanvasSession) -> [UUID: CanvasReferenceValue] {
+        var result: [UUID: CanvasReferenceValue] = [:]
+        for item in session.strokes { result[item.id] = .init(kind: "stroke", points: item.points) }
+        for item in session.images {
+            result[item.id] = .init(kind: "image", center: item.center, width: item.width, height: item.height,
+                                   layer: item.zIndex, payload: item.encodedData)
+        }
+        for item in session.semanticObjects {
+            let text = item.content?.text
+            result[item.id] = .init(kind: text == nil ? (item.content?.shape?.rawValue ?? "unknown") : "text",
+                center: item.transform.center, width: text == nil ? item.transform.width : 0,
+                height: text == nil ? item.transform.height : 0, layer: item.transform.zIndex, text: text ?? "")
+        }
+        return result
+    }
+    private struct Hunt6Random {
+        var state: UInt64
+        mutating func next(_ limit: Int) -> Int {
+            state = state &* 6364136223846793005 &+ 1442695040888963407
+            return Int((state >> 32) % UInt64(limit))
+        }
+    }
+
+    func testGeneratedCanvasEditingUsesIndependentHistoryAndRoundTripsEveryKind() async throws {
+        for seed in 1...16 {
+            let gate = PersistenceGate()
+            let store = try makeTestCanvasStore(persist: gate.save)
+            let session = CanvasSession(store: store, historyByteBudget: 64 * 1024 * 1024)
+            var rng = Hunt6Random(state: UInt64(seed))
+            var model: [UUID: CanvasReferenceValue] = [:]
+            var objectOrder: [UUID] = []
+            var undo: [[UUID: CanvasReferenceValue]] = [], redo: [[UUID: CanvasReferenceValue]] = []
+            for step in 0..<96 {
+                // Initial steps guarantee every supported kind is visited;
+                // random tails mix edits, layering, delete, clear and replay.
+                let action = step < 7 ? step : rng.next(15)
+                let before = model
+                var changed = false
+                let point = CanvasPoint(x: Double(rng.next(2000)) - 1000, y: Double(rng.next(2000)) - 1000)
+                let highest = model.values.filter { $0.kind != "stroke" }.map(\.layer).max() ?? -1
+                let keys = objectOrder.filter { model[$0] != nil }
+                let chosen = keys.isEmpty ? nil : keys[rng.next(keys.count)]
+                let shapeKinds = CanvasShapeKind.allCases
+                switch action {
+                case 0:
+                    let points = [point, CanvasPoint(x: point.x + 17, y: point.y - 13)]
+                    changed = session.completeStroke(points: points)
+                    if changed, let id = session.strokes.first(where: { model[$0.id] == nil })?.id {
+                        model[id] = .init(kind: "stroke", points: points)
+                    }
+                case 1...4:
+                    let shape = shapeKinds[action - 1]
+                    changed = session.insertShape(shape, from: point, to: .init(x: point.x + 80, y: point.y + 60))
+                    if changed, let id = session.selectedSemanticObjectID {
+                        model[id] = .init(kind: shape.rawValue, center: .init(x: point.x + 40, y: point.y + 30),
+                                          width: 80, height: 60, layer: highest + 1)
+                    }
+                case 5:
+                    let text = "seed \(seed) step \(step) 📝"
+                    changed = await session.insertText(text, at: point, prefersDarkSurface: false)
+                    if changed, let id = session.selectedSemanticObjectID {
+                        model[id] = .init(kind: "text", center: point, layer: highest + 1, text: text)
+                    }
+                case 6:
+                    let bytes = Data([UInt8(seed), UInt8(step), 3])
+                    changed = session.importPreparedImage(.init(encodedData: bytes, contentType: "public.png", pixelWidth: 96, pixelHeight: 64), at: point)
+                    if changed, let id = session.selectedImageID {
+                        model[id] = .init(kind: "image", center: point, width: 96, height: 64, layer: highest + 1, payload: bytes)
+                    }
+                case 7:
+                    if let id = chosen, var expected = model[id], expected.kind != "stroke" {
+                        let transform: CanvasImageTransform
+                        if expected.kind == "image" {
+                            let old = try XCTUnwrap(session.images.first { $0.id == id }).transform
+                            transform = .init(center: point, width: old.width, height: old.height, zIndex: old.zIndex)
+                            changed = session.transformImage(id, to: transform)
+                        } else {
+                            let old = try XCTUnwrap(session.semanticObjects.first { $0.id == id }).transform
+                            transform = .init(center: point, width: old.width, height: old.height, zIndex: old.zIndex)
+                            changed = session.transformSemanticObject(id, to: transform)
+                        }
+                        if changed { expected.center = point; model[id] = expected }
+                    }
+                case 8:
+                    if let id = chosen, let value = model[id] {
+                        if value.kind == "stroke" { changed = session.erase(strokeIDs: [id]) }
+                        else if value.kind == "image" { changed = session.deleteImage(id) }
+                        else { changed = session.deleteSemanticObject(id) }
+                        if changed { model[id] = nil }
+                    }
+                case 9:
+                    XCTAssertEqual(session.undo(), !undo.isEmpty, "seed=\(seed) step=\(step)")
+                    if let prior = undo.popLast() { redo.append(model); model = prior }
+                case 10:
+                    XCTAssertEqual(session.redo(), !redo.isEmpty, "seed=\(seed) step=\(step)")
+                    if let next = redo.popLast() { undo.append(model); model = next }
+                case 11:
+                    if let id = chosen, var value = model[id], value.kind == "text" {
+                        var content = try XCTUnwrap(session.semanticObjects.first { $0.id == id }?.content)
+                        content.text = "edited \(seed):\(step)"
+                        changed = session.editSemanticObject(id, content: content)
+                        if changed { value.text = try XCTUnwrap(content.text); model[id] = value }
+                    }
+                case 12:
+                    changed = session.clear()
+                    if changed { model = [:] }
+                case 13:
+                    if let id = chosen, var value = model[id], value.kind != "stroke" {
+                        if value.kind == "image" { session.selectImage(id); changed = session.bringSelectedImageForward() }
+                        else { session.selectSemanticObject(id); changed = session.moveSelectedSemanticLayer(forward: true) }
+                        if changed { value.layer = highest + 1; model[id] = value }
+                    }
+                default:
+                    gate.shouldFail = true
+                    XCTAssertFalse(session.completeStroke(points: [point, .init(x: point.x + 1, y: point.y + 1)]))
+                    gate.shouldFail = false
+                }
+                if changed {
+                    for id in model.keys where !objectOrder.contains(id) { objectOrder.append(id) }
+                    undo.append(before); redo = []
+                }
+                XCTAssertEqual(canvasValues(session), model, "seed=\(seed) step=\(step) action=\(action)")
+                XCTAssertEqual(session.undoCommandCount, undo.count, "seed=\(seed) step=\(step)")
+                XCTAssertEqual(session.redoCommandCount, redo.count)
+                if let id = session.selectedImageID { XCTAssertEqual(model[id]?.kind, "image") }
+                if let id = session.selectedSemanticObjectID { XCTAssertNotNil(model[id]); XCTAssertNil(session.selectedImageID) }
+                // A fresh ModelContext in another store must agree at every
+                // boundary, not just the final edited view.
+                let reopened = CanvasSession(store: CanvasStore(container: store.container))
+                XCTAssertEqual(canvasValues(reopened), model, "reopen seed=\(seed) step=\(step)")
+                XCTAssertFalse(reopened.canUndo)
+            }
+        }
+    }
+}
+
+@MainActor
+extension PhaseXHunt6Tests {
+    func testH8_04TransformsMaintainOneSelectedObjectKindWithoutCallerPreparation() throws {
+        for imageFirst in [false, true] {
+            let session = CanvasSession(store: try makeTestCanvasStore())
+            let image = CanvasPreparedImage(encodedData: Data([1, 2, 3]), contentType: "public.png", pixelWidth: 96, pixelHeight: 64)
+            var imageID: UUID?, shapeID: UUID?
+            func addImage() throws { XCTAssertTrue(session.importPreparedImage(image, at: .zero)); imageID = try XCTUnwrap(session.selectedImageID) }
+            func addShape() throws {
+                XCTAssertTrue(session.insertShape(.rectangle, from: .zero, to: .init(x: 80, y: 60)))
+                shapeID = try XCTUnwrap(session.selectedSemanticObjectID)
+            }
+            if imageFirst { try addImage(); try addShape() } else { try addShape(); try addImage() }
+            if imageFirst {
+                let id = try XCTUnwrap(imageID)
+                var transform = try XCTUnwrap(session.images.first { $0.id == id }).transform
+                transform.center.x += 10
+                XCTAssertTrue(session.transformImage(id, to: transform))
+                XCTExpectFailure("H8-04") { XCTAssertNil(session.selectedSemanticObjectID) }
+                XCTAssertEqual(session.selectedImageID, id)
+            } else {
+                let id = try XCTUnwrap(shapeID)
+                var transform = try XCTUnwrap(session.semanticObjects.first { $0.id == id }).transform
+                transform.center.x += 10
+                XCTAssertTrue(session.transformSemanticObject(id, to: transform))
+                XCTExpectFailure("H8-04") { XCTAssertNil(session.selectedImageID) }
+                XCTAssertEqual(session.selectedSemanticObjectID, id)
+            }
+        }
+    }
+}
