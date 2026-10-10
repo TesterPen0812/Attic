@@ -1072,4 +1072,59 @@ final class PhaseXHunt5Tests: XCTestCase {
         }
     }
 
+    func testH7_02ReleasingCleanupInvalidatesItsMidnightTimer() throws {
+        let store = try makeTestStore()
+        for _ in 0..<12 {
+            var service: DailyCleanupService? = DailyCleanupService(store: store)
+            service?.start()
+            let timer: Timer = try field("timer", in: XCTUnwrap(service))
+            XCTAssertTrue(timer.isValid)
+            weak var released = service
+            service = nil
+            XCTAssertNil(released)
+            // Clean even the red repro's run-loop residue before leaving.
+            defer { timer.invalidate() }
+            XCTExpectFailure("H7-02") { XCTAssertFalse(timer.isValid) }
+        }
+    }
+
+    func testH7_03ReleasedNotesControllerCancelsItsSaveDeadlines() async throws {
+        let store = try makeTestNoteStore(attachmentFileStore: makeTestAttachmentFileStore())
+        let id = UUID()
+        _ = try store.createDocumentNote(id: id, document: NoteDocument(blocks: [.text("Draft")])).get()
+        var page: NotesPageController? = NotesPageController(store: store,
+            journal: NoteDraftJournal(directory: ownedTemporaryDirectory(prefix: "H7Deadlines")),
+            saveDelay: .seconds(600), durabilityDelay: .seconds(600), pauseVersionDelay: .seconds(600))
+        await page?.startAndWait()
+        XCTAssertTrue(try XCTUnwrap(page).open(noteID: id))
+        let session = try XCTUnwrap(page?.active)
+        XCTAssertTrue(session.engine.performEdit(NSRange(location: session.engine.textStorage.length, length: 0),
+            with: NSAttributedString(string: " unsaved"), name: "Type"))
+        let save: Task<Void, Never> = try field("saveTask", in: session)
+        let deadline: Task<Void, Never> = try field("durabilityTask", in: session)
+        await page?.waitForRecoveryWork()
+        weak var released = page
+        page = nil
+        XCTAssertNil(released)
+        defer { save.cancel(); deadline.cancel() }
+        // Retain the session as a displaced editor might: its old controller
+        // must not leave deadlines runnable just because that editor survives.
+        XCTExpectFailure("H7-03") {
+            XCTAssertTrue(save.isCancelled)
+            XCTAssertTrue(deadline.isCancelled)
+        }
+        session.engine.detachView()
+    }
+
+    func testH7_03ReleasedCanvasSessionCancelsItsViewStateDeadline() throws {
+        let store = try makeTestCanvasStore()
+        var session: CanvasSession? = CanvasSession(store: store)
+        session?.pan(byViewTranslation: CGSize(width: 12, height: -7))
+        let deadline: Task<Void, Never> = try field("viewStateSaveTask", in: XCTUnwrap(session))
+        weak var released = session
+        session = nil
+        XCTAssertNil(released)
+        defer { deadline.cancel() }
+        XCTExpectFailure("H7-03") { XCTAssertTrue(deadline.isCancelled) }
+    }
 }
