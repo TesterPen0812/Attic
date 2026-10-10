@@ -163,6 +163,52 @@ final class PhaseXDesign1Tests: XCTestCase {
         }
     }
 
+    /// The owner's before/after sheet for D-05, off screen: the pill the
+    /// slot shows at 320 (and 380) and the details beside it, for the two
+    /// approved sentences and the image notice. Attached to the result when
+    /// `TEST_RUNNER_ATTIC_DESIGN1_RENDER=1` is set; otherwise it only checks
+    /// that the views lay out.
+    func testNoticePillsAndDetailsRenderForTheOwnersSheet() throws {
+        let notices = [
+            "An image is unavailable, so this draft remains in recovery until it can be restored.",
+            Self.approvedSentences[0],
+            Self.approvedSentences[1]
+        ]
+        for mode in [AtticDesignContext.Mode.light, .dark] {
+            for width in [320.0, 380.0] {
+                let context = design(mode)
+                let room = AtticNoteMetrics.pillMaxWidth(panelWidth: width, chromeInset: 16, showsFormat: true)
+                let rows = notices.map { sentence -> AnyView in
+                    let item = AtticStatusItem(id: "notice", systemName: "info.circle",
+                                               title: NoteStatusPresentation.headline(forNotice: sentence),
+                                               explanation: sentence, tone: .normal)
+                    return AnyView(VStack(alignment: .leading, spacing: 10) {
+                        AtticStatusPill(item: item, more: 0, inlineAction: nil, onCancel: {}, maxWidth: room, onOpen: {})
+                        AtticStatusDetails(items: [item])
+                            .background(context.tokens.popoverFill.color)
+                    })
+                }
+                let sheet = HStack(alignment: .top, spacing: 16) { ForEach(0..<rows.count, id: \.self) { rows[$0] } }
+                    .padding(16)
+                    .background(context.tokens.panel.base.color)
+                    .atticDesign(context)
+                let host = NSHostingView(rootView: AnyView(sheet))
+                host.appearance = NSAppearance(named: mode == .dark ? .darkAqua : .aqua)
+                host.frame = CGRect(origin: .zero, size: host.fittingSize)
+                host.layoutSubtreeIfNeeded()
+                XCTAssertGreaterThan(host.frame.width, 0)
+                guard ProcessInfo.processInfo.environment["ATTIC_DESIGN1_RENDER"] == "1",
+                      let rep = host.bitmapImageRepForCachingDisplay(in: host.bounds) else { continue }
+                host.cacheDisplay(in: host.bounds, to: rep)
+                let attachment = XCTAttachment(data: try XCTUnwrap(rep.representation(using: .png, properties: [:])),
+                                               uniformTypeIdentifier: "public.png")
+                attachment.name = "d05-notices-\(mode == .dark ? "dark" : "light")-\(Int(width)).png"
+                attachment.lifetime = .keepAlways
+                add(attachment)
+            }
+        }
+    }
+
     // MARK: D-07 · All notes on the shared column
 
     func testAllNotesTextHighlightAndEdgesSitOnTheSharedColumn() {
