@@ -1971,9 +1971,7 @@ extension AtticDropdownTests {
             state.requestPrimaryInputFocus()
             spin(1)
             let editor = window.firstResponder as? NSTextView
-            XCTExpectFailure("H8-03") {
-                XCTAssertTrue(editor?.isDescendant(of: host) == true, "entry from \(initial): request before Tasks mount")
-            }
+            XCTAssertTrue(editor?.isDescendant(of: host) == true, "entry from \(initial): request before Tasks mount")
             XCTAssertFalse(window.isVisible)
         }
     }
