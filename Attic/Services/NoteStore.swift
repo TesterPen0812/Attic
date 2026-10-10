@@ -1400,26 +1400,6 @@ final class NoteStore: ObservableObject {
         return try (sourceContext ?? context).fetch(descriptor)
     }
 
-    private func visibleAttachments(
-        forNoteID noteID: UUID,
-        in sourceContext: ModelContext? = nil
-    ) throws -> [NoteAttachment] {
-        let replicas = try storedAttachments(forNoteID: noteID, in: sourceContext)
-        return visibleUniqueAttachments(from: replicas)[noteID] ?? []
-    }
-
-    private func totalAttachmentBytes(_ attachments: [NoteAttachment]) -> Int64 {
-        totalAttachmentBytes(attachments.map(\.byteCount))
-    }
-
-    private func totalAttachmentBytes(_ attachments: [ImportedAttachment]) -> Int64 {
-        totalAttachmentBytes(attachments.map(\.byteCount))
-    }
-
-    private func totalAttachmentBytes(_ byteCounts: [Int64]) -> Int64 {
-        AttachmentLimits.cappedByteCount(byteCounts)
-    }
-
     private func visibleUniqueAttachments(
         from fetched: [NoteAttachment]
     ) -> [UUID: [NoteAttachment]] {

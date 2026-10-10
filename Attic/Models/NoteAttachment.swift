@@ -101,12 +101,6 @@ struct AttachmentReconciliationReport: Sendable, Equatable {
     let failures: [AttachmentReconciliationFailure]
 }
 
-enum AttachmentImportState: Equatable {
-    case idle
-    case importing(completed: Int, total: Int)
-    case failed(String)
-}
-
 enum AttachmentLimits {
     static let maxBytesPerAttachment: Int64 = 15 * 1024 * 1024
     static let maxBytesPerNote: Int64 = 100 * 1024 * 1024

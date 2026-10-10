@@ -333,4 +333,45 @@ final class NoLegacyNotesTests: XCTestCase {
         }
     }
 
+    func testH4_01RetiredImportStateHasNoDeclaration() throws {
+        let root = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
+        let source = try String(contentsOf: root.appendingPathComponent("Attic/Models/NoteAttachment.swift"), encoding: .utf8)
+        XCTAssertFalse(source.contains("enum AttachmentImportState"))
+        let store = try String(contentsOf: root.appendingPathComponent("Attic/Services/NoteStore.swift"), encoding: .utf8)
+        XCTAssertFalse(store.contains("private func visibleAttachments("))
+        XCTAssertFalse(store.contains("private func totalAttachmentBytes("))
+    }
+
+    func testH4_02PurgeRemovesLinksAtomicallyAndProtectsOtherFamilies() throws {
+        let container = try rawContainer(), context = ModelContext(container)
+        let id = UUID(), keptID = UUID(), taskID = UUID()
+        context.insert(old(id)); context.insert(NoteItem(id: keptID, title: "Keep"))
+        context.insert(TaskItem(id: id, title: "Task with same UUID"))
+        let doomed = ItemLink(source: AtticItemRef(.note, id), target: AtticItemRef(.task, taskID), kind: .card)
+        context.insert(doomed)
+        context.insert(ItemLink(id: doomed.id, source: AtticItemRef(.note, id), target: AtticItemRef(.task, taskID), kind: .card))
+        let inbound = ItemLink(source: AtticItemRef(.note, keptID), target: AtticItemRef(.note, id), kind: .reference)
+        context.insert(inbound)
+        let kept = ItemLink(source: AtticItemRef(.task, id), target: AtticItemRef(.task, taskID), kind: .reference)
+        context.insert(kept)
+        let divergentID = UUID()
+        context.insert(ItemLink(id: divergentID, source: AtticItemRef(.note, id), target: AtticItemRef(.task, taskID), kind: .card))
+        context.insert(ItemLink(id: divergentID, source: AtticItemRef(.note, keptID), target: AtticItemRef(.task, taskID), kind: .card))
+        try context.save()
+        struct Failure: Error {}
+        XCTAssertThrowsError(try OldNotesPurge.run(in: container, persist: { _ in throw Failure() }))
+        XCTAssertEqual(try ModelContext(container).fetchCount(FetchDescriptor<ItemLink>()), 6)
+        XCTAssertEqual(try ModelContext(container).fetchCount(FetchDescriptor<StoreMaintenance>()), 0)
+        _ = try OldNotesPurge.run(in: container)
+        let remaining = try ModelContext(container).fetch(FetchDescriptor<ItemLink>())
+        XCTAssertEqual(Set(remaining.map(\.id)), [kept.id, divergentID])
+        XCTAssertEqual(remaining.count, 3, "Every unambiguous physical replica must be removed")
+        XCTAssertEqual(try ModelContext(container).fetchCount(FetchDescriptor<TaskItem>()), 1)
+        // Marker remains one-time: later writers cannot reactivate the purge.
+        let fresh = ModelContext(container)
+        fresh.insert(NoteItem(id: id, title: "Reused UUID")); try fresh.save()
+        XCTAssertEqual(try OldNotesPurge.run(in: container).notes, 0)
+        XCTAssertFalse(try ModelContext(container).fetch(FetchDescriptor<ItemLink>()).contains { $0.id == doomed.id || $0.id == inbound.id })
+    }
+
 }

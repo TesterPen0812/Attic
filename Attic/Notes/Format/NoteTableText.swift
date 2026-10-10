@@ -34,9 +34,18 @@ enum NoteTableText {
     }
 
     static func escape(_ text: String) -> String {
-        text.replacingOccurrences(of: "|", with: "\\|")
+        let escaped = text.replacingOccurrences(of: "|", with: "\\|")
             .replacingOccurrences(of: "\r\n", with: "<br>")
             .replacingOccurrences(of: "\n", with: "<br>")
+        // GFM padding is trimmed on import. Quote only literal edge whitespace
+        // so cell text survives without changing external table parsing rules.
+        let scalars = Array(escaped.unicodeScalars)
+        let leading = scalars.prefix { CharacterSet.whitespaces.contains($0) }.count
+        let trailing = scalars.reversed().prefix { CharacterSet.whitespaces.contains($0) }.count
+        return scalars.enumerated().map { index, scalar in
+            index < leading || index >= scalars.count - trailing
+                ? "&#\(scalar.value);" : String(scalar)
+        }.joined()
     }
 
     /// Plain agent cell text has no inline parser: quote HTML and literal

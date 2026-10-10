@@ -251,4 +251,100 @@ final class PhaseXHunt1GeneratedTests: XCTestCase {
                      Step(kind: 15, a: 0, b: 1), Step(kind: 9, a: 0, b: 0)]
         XCTAssertNil(replay(steps))
     }
+    /// Generated endpoint checks complement the independent text/style model.
+    /// Each seed changes the selection and command order; no window is created.
+    func testHunt2GeneratedSelectionUndoAcrossAllEditKinds() throws {
+        for seed in 0..<80 {
+            try autoreleasepool {
+                var rng = RNG(value: UInt64(seed) + 0xF175)
+                let editor = NoteEditorEngine(noteID: UUID(), document: NoteDocument(blocks:
+                    [.text("Title"), .text("abcdefghij"), .text("tail"), .table(NoteTable(texts: [["a", "b"], ["c", "d"]]))]))
+                let (scroll, view) = editor.makeView()
+                defer { editor.detachView(); withExtendedLifetime(scroll) {} }
+                for step in 0..<24 {
+                    let body = (editor.textStorage.string as NSString).range(of: "abcdefghij")
+                    guard body.location != NSNotFound else { return XCTFail("seed=\(seed) missing body") }
+                    let offset = rng.next() % 8
+                    let selection = NSRange(location: body.location + offset, length: rng.next() % 3)
+                    view.setSelectedRange(selection)
+                    let before = editor.document(), tags = editor.tags
+                    let generation = editor.history.recordingGeneration
+                    let kind = (step + seed) % 19
+                    let table = try XCTUnwrap(editor.objects().compactMap { $0.0 as? NoteTableAttachment }.first)
+                    switch kind {
+                    case 0: view.insertText("XY", replacementRange: selection)
+                    case 1: view.deleteBackward(nil)
+                    case 2: _ = editor.performEdit(selection, with: NSAttributedString(string: "Z"), name: "Replace", selection: NSRange(location: body.location, length: 2))
+                    case 3: _ = editor.perform(.mark(.bold), selection: selection)
+                    case 4: _ = editor.perform(.paragraph(.bullet), selection: selection)
+                    case 5: _ = editor.perform(.paragraph(.checklist), selection: selection)
+                    case 6: editor.setTagsFromPicker(["tag\(seed)"])
+                    case 7: _ = editor.insertDate(NoteDay(year: 2026, month: 10, day: 10)!, at: selection)
+                    case 8: _ = editor.pastePlainText("P\r\nQ", at: selection)
+                    case 9: _ = editor.changeTable(table, name: "Cell") { $0.rows[1].cells[0].text += "X" }
+                    case 10: _ = editor.addRow(to: table, at: 1, focusing: 0)
+                    case 11: _ = editor.addColumn(to: table, at: 1, focusingRow: 0)
+                    case 12: _ = editor.deleteRow(of: table, at: 1)
+                    case 13: _ = editor.moveColumn(of: table, from: 0, to: 1)
+                    case 14: _ = editor.perform(.divider, selection: selection)
+                    case 15: _ = editor.perform(.moveDown, selection: selection)
+                    case 16: view.setMarkedText("字", selectedRange: NSRange(location: 1, length: 0), replacementRange: selection); view.unmarkText()
+                    case 17:
+                        editor.history.beginGroup()
+                        view.insertText("g", replacementRange: selection)
+                        view.insertText("h", replacementRange: view.selectedRange())
+                        editor.history.endGroup()
+                    default: _ = editor.perform(.link("https://example.com"), selection: selection)
+                    }
+                    guard editor.history.recordingGeneration != generation else { continue }
+                    let after = editor.document(), afterTags = editor.tags, afterSelection = view.selectedRange()
+                    let label = "seed=\(seed) step=\(step) kind=\(kind)"
+                    view.setSelectedRange(NSRange(location: 0, length: 0))
+                    XCTAssertTrue(editor.history.undo(), label)
+                    XCTAssertEqual(editor.document(), before, label)
+                    XCTAssertEqual(editor.tags, tags, label)
+                    XCTAssertEqual(view.selectedRange(), selection, label)
+                    view.setSelectedRange(NSRange(location: 1, length: 0))
+                    XCTAssertTrue(editor.history.redo(), label)
+                    XCTAssertEqual(editor.document(), after, label)
+                    XCTAssertEqual(editor.tags, afterTags, label)
+                    XCTAssertEqual(view.selectedRange(), afterSelection, label)
+                    // Return to the independent starting note for the next command.
+                    XCTAssertTrue(editor.history.undo(), label)
+                    editor.history.reset()
+                }
+            }
+        }
+    }
+
+    func testHunt2GeneratedMarkdownCellLiteralsAndMarksRoundTrip() throws {
+        let tokens = ["plain", " ", "  ", "\t", "|", "\\", "*", "_", "<br>", "&lt;br&gt;", "😀", "e\u{301}", "\n", "[x](y)", "`", "=="]
+        for seed in 0..<256 {
+            var rng = RNG(value: UInt64(seed) + 0xCA11)
+            let text = (0..<6).map { _ in tokens[rng.next() % tokens.count] }.joined()
+            var table = NoteTable(texts: [["Header"], [text]])
+            if seed % 2 == 0, !text.isEmpty {
+                table.rows[1].cells[0].marks = [NoteMark(.bold, offset: 0, length: text.utf16.count)]
+            }
+            let markdown = NoteTableText.markdown(table, cellText: NoteEditorEngine.markdownCellText)
+            let copy = try XCTUnwrap(NoteTableText.parseMarkdown(markdown), "seed=\(seed) \(markdown)")
+            XCTAssertEqual(copy.texts, table.texts, "seed=\(seed) \(markdown)")
+            XCTAssertEqual(copy.rows[1].cells[0].marks, table.rows[1].cells[0].marks, "seed=\(seed)")
+        }
+    }
+
+    func testH4_03MarkdownTableEdgeWhitespaceSurvivesEveryExporter() throws {
+        for text in [" a ", "\t", "  ", "\ta\t", "\u{00a0}a\u{00a0}", " \n ", " \u{2003}x\t"] {
+            let table = NoteTable(texts: [["Header"], [text]])
+            let document = NoteDocument(blocks: [.table(table)])
+            for markdown in [NoteTableText.markdown(table),
+                             NoteTableText.markdown(table, cellText: NoteEditorEngine.markdownCellText),
+                             NoteMarkdownExport.markdown(document),
+                             NoteTableText.markdown(table) { NoteTableText.plainCellMarkdown($0.displayText) }] {
+                let copy = try XCTUnwrap(NoteTableText.parseMarkdown(markdown))
+                XCTAssertTrue(copy.texts[1][0].utf16.elementsEqual(text.utf16), "\(text.debugDescription) via \(markdown)")
+            }
+        }
+    }
+
 }
