@@ -174,6 +174,28 @@ class CostRecheckTests(unittest.TestCase):
             self.assertEqual([paired_order(i) for i in (1, 2, 3)],
                              [('baseline', 'candidate'), ('candidate', 'baseline'), ('baseline', 'candidate')])
 
+    def test_integration_recheck_uses_all_eight_rendered_pairs_too(self):
+        with tempfile.TemporaryDirectory() as tmp, patch.dict(os.environ, RUNNER_TEMP=tmp, COST_FLAGS=''):
+            sampler = Sampler()
+            calls = []
+            def run(directory, side, build, tests, filename):
+                calls.append((side, filename))
+                text = rendered(4) if filename.startswith('rendered-') else ''.join(
+                    f'ATTIC_INTEGRATION_COST {name} median_ms=4\n' for name in METRICS) + 'NOTE_RECOVERY_CONTROL_MAIN_ACTOR_MS_MEDIAN=0\n'
+                (directory / filename).write_text(text)
+                return text
+            with patch.object(sampler, 'run', run):
+                retry = Path(tmp) / 'retry'
+                sampler('integration', retry)
+            paired = [side for side, name in calls if name.startswith('rendered-')]
+            self.assertEqual(paired, ['baseline', 'candidate', 'candidate', 'baseline'] * 4)
+            import check_integration_costs
+            with contextlib.redirect_stdout(io.StringIO()):
+                self.assertEqual(check_integration_costs.main(retry), 0)
+            rows = json.loads((retry / 'integration-cost-comparison.json').read_text())
+            self.assertEqual(len(rows['done-key-0']['before_ms']), 24)
+            self.assertEqual(len(rows['done-key-0']['after_ms']), 24)
+
     def test_reference_flag_and_lock_are_set_for_every_sampler_process(self):
         with tempfile.TemporaryDirectory() as tmp, patch.dict(os.environ, RUNNER_TEMP=tmp, COST_FLAGS=''):
             sampler = Sampler()
