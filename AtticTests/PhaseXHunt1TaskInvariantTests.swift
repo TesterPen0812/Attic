@@ -80,7 +80,7 @@ final class PhaseXHunt1TaskInvariantTests: XCTestCase {
         #if ATTIC_LOCAL_ONLY
         for environment in [AtticCloudKitEnvironment.development, .production] {
             let configuration = PersistenceController.makeConfiguration(cloudSyncEnabled: true, environment: environment)
-            XCTExpectFailure("H5-03") {
+            do {
                 XCTAssertNil(configuration.cloudKitContainerIdentifier,
                     "A compiled local-only build must ignore CloudKit opt-in")
             }
