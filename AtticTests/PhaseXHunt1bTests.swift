@@ -667,6 +667,78 @@ final class PhaseXHunt1bTests: XCTestCase {
     }
 
 
+    func testH6_01StartupRetainsFailureAndRetriesTheSameLoaderWithoutFallback() throws {
+        let root = ownedTemporaryDirectory(prefix: "Hunt4Startup")
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        let file = root.appendingPathComponent("store-sentinel")
+        let bytes = Data("existing store must remain".utf8)
+        try bytes.write(to: file)
+        var attempts = 0
+        let startup = AppStartup<ModelContainer> {
+            attempts += 1
+            XCTAssertEqual(try Data(contentsOf: file), bytes)
+            if attempts == 1 { throw NSError(domain: "Store cannot be opened", code: 1) }
+            return try PersistenceController.makeContainer(inMemory: true, cloudSyncEnabled: false)
+        }
+        XCTAssertEqual(attempts, 1)
+        XCTAssertNil(startup.value)
+        XCTExpectFailure("H6-01") {
+            XCTAssertEqual(startup.failureMessage, "Attic could not open its local data. Try again. Your existing data is kept.")
+        }
+        startup.retry()
+        XCTAssertEqual(attempts, 2)
+        XCTAssertNotNil(startup.value)
+        XCTAssertNil(startup.failureMessage)
+        startup.retry()
+        XCTAssertEqual(attempts, 2, "A successful startup is not opened twice")
+        XCTAssertEqual(try Data(contentsOf: file), bytes)
+    }
+
+    func testH6_02DisplayRemovalReclampsPinnedFrameEvenWhenHeightIsUnchanged() throws {
+        let frame = CGRect(x: 2200, y: 100, width: 272, height: 300)
+        let remaining = CGRect(x: -1000, y: 28, width: 1000, height: 720)
+        let result = SubtaskPanelLayout.pinnedResizedFrame(frame, newHeight: frame.height,
+            screenVisibleFrames: [remaining])
+        XCTExpectFailure("H6-02") {
+            XCTAssertNotNil(result, "Display reconciliation is independent of height changes")
+        }
+        if let result {
+            XCTAssertTrue(remaining.insetBy(dx: 12, dy: 12).contains(result))
+            XCTAssertEqual(result.size, frame.size)
+            XCTAssertNil(SubtaskPanelLayout.pinnedResizedFrame(result, newHeight: result.height,
+                screenVisibleFrames: [remaining]), "Reconciliation is idempotent")
+        }
+    }
+
+    func testH6_03SettingsSizeFitsAWorkAreaSmallerThanItsPreferredMinimum() {
+        let screen = CGRect(x: -600, y: 32, width: 600, height: 420)
+        let size = SettingsWindowLayout.fittedContentSize(to: screen)
+        XCTExpectFailure("H6-03") {
+            XCTAssertLessThanOrEqual(size.width, screen.width - 48)
+            XCTAssertLessThanOrEqual(size.height, screen.height - 48)
+        }
+    }
+
+    func testH6_04StoppedCleanupDiscardsQueuedObserverAndPreviousGeneration() async throws {
+        for restart in [false, true] {
+            let store = try makeTestStore()
+            var purges = 0
+            let service = DailyCleanupService(store: store, purgeRecentlyDeleted: { _, _ in purges += 1 })
+            service.start()
+            XCTAssertEqual(purges, 1)
+            NotificationCenter.default.post(name: .NSCalendarDayChanged, object: nil)
+            service.stop()
+            if restart { service.start() }
+            // Queued callbacks must run before the assertion, without touching windows.
+            await Task.yield()
+            await Task.yield()
+            XCTExpectFailure("H6-04") {
+                XCTAssertEqual(purges, restart ? 2 : 1, "Stopped and superseded generations do no work")
+            }
+            service.stop()
+        }
+    }
+
     func testR3_09FailedProposalReadsDoNotRepeatAtTheSameRevision() async throws {
         let store = try makeTestNoteStore(attachmentFileStore: makeTestAttachmentFileStore())
         _ = try create(store)

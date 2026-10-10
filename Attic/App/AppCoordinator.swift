@@ -299,6 +299,26 @@ enum AppTerminationPreparation {
     }
 }
 
+/// One store-open attempt, followed only by explicit retry. The failed
+/// store is retained; constructing an empty replacement is never a fallback.
+@MainActor
+final class AppStartup<Value>: ObservableObject {
+    @Published private(set) var value: Value?
+    @Published private(set) var failureMessage: String?
+    private let open: () throws -> Value
+
+    init(open: @escaping () throws -> Value) {
+        self.open = open
+        retry()
+    }
+
+    func retry() {
+        guard value == nil else { return }
+        do { value = try open() }
+        catch { /* H6-01 red seam: the old startup has no recoverable notice. */ }
+    }
+}
+
 @MainActor
 final class AppCoordinator: ObservableObject {
     static let shared = AppCoordinator()
