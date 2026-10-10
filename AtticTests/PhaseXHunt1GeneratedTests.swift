@@ -349,6 +349,65 @@ final class PhaseXHunt1GeneratedTests: XCTestCase {
         }
     }
 
+    func testHunt4GeneratedWorkAreaSequencesPreservePreferencesAndRecoverRemovedDisplays() {
+        let roomy = CGRect(x: -8000, y: -4000, width: 16000, height: 9000)
+        for seed in 1...64 {
+            var random = RNG(value: UInt64(seed))
+            let preferred = CGSize(width: 280 + random.next() % 2500, height: 460 + random.next() % 2400)
+            let original = PanelGeometry.workAreaPlacement(preferredSize: preferred, in: roomy, corner: .topRight)
+            for step in 0..<24 {
+                let width = CGFloat(320 + random.next() % 3600)
+                let height = CGFloat(240 + random.next() % 1900)
+                let origin = CGPoint(x: -4000 + random.next() % 8000, y: -2000 + random.next() % 4000)
+                // Independent menu-bar / Dock insets on all four edges.
+                let left = CGFloat(random.next() % 100), right = CGFloat(random.next() % 100)
+                let top = CGFloat(random.next() % 60), bottom = CGFloat(random.next() % 100)
+                let visible = CGRect(x: origin.x + left, y: origin.y + bottom,
+                    width: width - left - right, height: height - top - bottom)
+                let safe = visible.insetBy(dx: 12, dy: 12)
+                let message = "seed=\(seed) step=\(step)"
+                func fits(_ frame: CGRect, within area: CGRect) {
+                    XCTAssertTrue(frame.minX.isFinite && frame.minY.isFinite && frame.width.isFinite && frame.height.isFinite, message)
+                    XCTAssertGreaterThanOrEqual(frame.minX, area.minX - 0.001, message)
+                    XCTAssertGreaterThanOrEqual(frame.minY, area.minY - 0.001, message)
+                    XCTAssertLessThanOrEqual(frame.maxX, area.maxX + 0.001, message)
+                    XCTAssertLessThanOrEqual(frame.maxY, area.maxY + 0.001, message)
+                }
+                for corner in ScreenCorner.allCases {
+                    let placed = PanelGeometry.workAreaPlacement(preferredSize: original.preferredSize, in: visible, corner: corner)
+                    fits(placed.frame, within: safe)
+                    fits(PanelGeometry.hiddenFrame(from: placed.frame, corner: corner, in: visible), within: safe)
+                    XCTAssertEqual(placed.preferredSize, original.preferredSize, message)
+                    let restored = PanelGeometry.workAreaPlacement(preferredSize: placed.preferredSize, in: roomy, corner: .topRight)
+                    XCTAssertEqual(restored, original, message)
+                    let transient = SubtaskPanelLayout.transientFrame(size: CGSize(width: 272, height: 500),
+                        anchorScreenRect: placed.frame, panelScreenFrame: placed.frame, screenVisibleFrame: visible)
+                    fits(transient, within: safe)
+                }
+                let removed = CGRect(x: visible.maxX + 2000, y: visible.minY, width: 1800, height: 1000)
+                let saved = CGRect(x: removed.minX + 100, y: removed.minY + 80, width: 272, height: 300)
+                let pinned = SubtaskPanelLayout.restoredPinnedFrame(saved: saved, size: saved.size,
+                    screenVisibleFrames: [removed, visible])
+                fits(pinned, within: removed.insetBy(dx: 12, dy: 12))
+                let recovered = SubtaskPanelLayout.pinnedResizedFrame(pinned, newHeight: pinned.height,
+                    screenVisibleFrames: [visible])
+                XCTAssertNotNil(recovered, message)
+                if let recovered {
+                    fits(recovered, within: safe)
+                    XCTAssertNil(SubtaskPanelLayout.pinnedResizedFrame(recovered, newHeight: recovered.height,
+                        screenVisibleFrames: [visible]), message)
+                }
+                fits(SubtaskPanelLayout.restoredPinnedFrame(saved: saved, size: saved.size, screenVisibleFrames: [visible]), within: safe)
+                let settings = SettingsWindowLayout.constrainedFrame(saved, to: visible)
+                fits(settings, within: visible.insetBy(dx: 24, dy: 24))
+                XCTAssertEqual(SettingsWindowLayout.constrainedFrame(settings, to: visible), settings, message)
+                let settingsSize = SettingsWindowLayout.fittedContentSize(to: visible)
+                XCTAssertLessThanOrEqual(settingsSize.width, visible.width, message)
+                XCTAssertLessThanOrEqual(settingsSize.height, visible.height, message)
+            }
+        }
+    }
+
     func testHunt3GeneratedTaskReplicaMutationsRollbackAndFreshImports() throws {
         struct Failure: Error {}
         for seed in 0..<16 {

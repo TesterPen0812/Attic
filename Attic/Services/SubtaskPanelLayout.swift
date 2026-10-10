@@ -393,9 +393,10 @@ enum SubtaskPanelLayout {
         newHeight: CGFloat,
         screenVisibleFrames: [CGRect]
     ) -> CGRect? {
-        guard var resized = framePreservingTop(frame, height: newHeight) else {
-            return nil
-        }
+        guard newHeight.isFinite, newHeight > 0 else { return nil }
+        // Display removal and Dock changes can require a clamp even when
+        // the content height is unchanged.
+        var resized = framePreservingTop(frame, height: newHeight) ?? frame
         let center = CGPoint(x: resized.midX, y: resized.midY)
         let host = screenVisibleFrames.first(where: { $0.contains(center) })
             ?? screenVisibleFrames.first(where: { $0.intersects(resized) })
@@ -403,7 +404,7 @@ enum SubtaskPanelLayout {
         if let host {
             resized = PanelGeometry.constrainedFrame(resized, to: host)
         }
-        return resized
+        return resized == frame ? nil : resized
     }
 
     private static func frameWithOrigin(

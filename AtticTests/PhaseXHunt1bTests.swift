@@ -699,7 +699,7 @@ final class PhaseXHunt1bTests: XCTestCase {
         let remaining = CGRect(x: -1000, y: 28, width: 1000, height: 720)
         let result = SubtaskPanelLayout.pinnedResizedFrame(frame, newHeight: frame.height,
             screenVisibleFrames: [remaining])
-        XCTExpectFailure("H6-02") {
+        do {
             XCTAssertNotNil(result, "Display reconciliation is independent of height changes")
         }
         if let result {
@@ -713,7 +713,7 @@ final class PhaseXHunt1bTests: XCTestCase {
     func testH6_03SettingsSizeFitsAWorkAreaSmallerThanItsPreferredMinimum() {
         let screen = CGRect(x: -600, y: 32, width: 600, height: 420)
         let size = SettingsWindowLayout.fittedContentSize(to: screen)
-        XCTExpectFailure("H6-03") {
+        do {
             XCTAssertLessThanOrEqual(size.width, screen.width - 48)
             XCTAssertLessThanOrEqual(size.height, screen.height - 48)
         }
