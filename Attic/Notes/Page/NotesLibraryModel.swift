@@ -68,6 +68,7 @@ final class NotesLibraryModel: ObservableObject {
     /// Each stored note's preview body, read once per content identity,
     /// including fresh-context changes that keep the same revision token.
     private var proposalIDs: (revision: UInt64, ids: Set<UUID>)?
+    private var failedProposalRevision: UInt64?
     private var bodies: [UUID: (content: Data?, plainText: String, body: NoteRowSummary.Body)] = [:]
     /// How many note bodies the rows decoded (a profiling seam: a rebuild
     /// after one save decodes that note only).
@@ -96,6 +97,7 @@ final class NotesLibraryModel: ObservableObject {
             presentationSubscription = controller.$isLibraryPresented.sink { [weak self, weak controller] shown in
                 guard let self else { return }
                 if !shown { self.clearSearch(); return }
+                self.failedProposalRevision = nil
                 // Before the list is built: a filter that would hide the
                 // note you came from never shows for a frame.
                 if let store = self.observedStore {
@@ -108,6 +110,9 @@ final class NotesLibraryModel: ObservableObject {
     private func observeStore(_ store: NoteStore) {
         guard observedStore !== store else { return }
         observedStore = store
+        proposalIDs = nil
+        failedProposalRevision = nil
+        cache = nil
         storeRevision = store.revision
         storeSubscription = store.$revision.sink { [weak self] revision in
             guard let self, revision != self.storeRevision else { return }
@@ -129,7 +134,10 @@ final class NotesLibraryModel: ObservableObject {
     var isSearching: Bool { !query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
 
     /// Retry after "Couldn't search".
-    func retry() { scheduleSearch(immediately: true) }
+    func retry() {
+        failedProposalRevision = nil
+        scheduleSearch(immediately: true)
+    }
 
     func clearSearch() { query = "" }
 
@@ -201,6 +209,18 @@ final class NotesLibraryModel: ObservableObject {
         if let cache, cache.key == key, unsaved.isEmpty { return cache.groups }
 
         var notes = store.orderedNotes()
+        // One consistent proposal snapshot for every row in this render.
+        // A later row must not turn a partially failed read into cacheable rows.
+        if !notes.isEmpty, proposalIDs?.revision != store.revision, failedProposalRevision != store.revision {
+            do {
+                let edits = try store.fetchAuxiliary(FetchDescriptor<NotePendingEdit>())
+                proposalIDs = (store.revision, Set(edits.map(\.noteID)))
+                failedProposalRevision = nil
+            } catch {
+                failedProposalRevision = store.revision
+                store.reportAuxiliaryReadFailure("Proposals could not be read: \(error.localizedDescription)")
+            }
+        }
         let allNotes = notes
         if let tag = tagFilter {
             notes = notes.filter { $0.tags.contains(tag) }
@@ -244,7 +264,9 @@ final class NotesLibraryModel: ObservableObject {
                 Group(id: "earlier", title: String(localized: "Earlier"), rows: earlier)
             ].filter { !$0.rows.isEmpty }
         }
-        cache = (key, result)
+        // A failed proposal read is unknown, so neither its badge nor the
+        // enclosing rows may be cached as a successful absence.
+        cache = notes.isEmpty || proposalIDs?.revision == store.revision ? (key, result) : nil
         return result
     }
 
@@ -370,10 +392,6 @@ final class NotesLibraryModel: ObservableObject {
     private func row(_ note: NoteItem, store: NoteStore, attention: Set<UUID>) -> AtticNoteRowModel {
         let summary = NoteRowSummary(note: note, attachments: store.attachments(for: note.id), body: body(of: note))
         let time = Self.time(note.updatedAt, now: now(), calendar: calendar)
-        if proposalIDs?.revision != store.revision {
-            let edits = (try? store.modelContext.fetch(FetchDescriptor<NotePendingEdit>())) ?? []
-            proposalIDs = (store.revision, Set(edits.map(\.noteID)))
-        }
         let hasProposal = proposalIDs?.ids.contains(note.id) == true
         return AtticNoteRowModel(
             id: note.id, title: summary.title, time: time, needsAttention: attention.contains(note.id), hasProposal: hasProposal,

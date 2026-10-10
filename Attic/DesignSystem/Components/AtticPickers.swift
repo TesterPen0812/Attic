@@ -848,7 +848,7 @@ struct AtticTagPickerCard: View {
             onListHighlight: highlightIndex
         )
         .atticDropdownFocus($fieldFocused, when: focusField)
-        .atticDropdownTabs(field: $fieldFocused, list: $listFocused)
+        .atticDropdownTabs(field: $fieldFocused, list: $listFocused, count: filtered.count + (create == nil ? 0 : 1))
         // Typing highlights only what was typed (one rule for Tasks and
         // Notes): the exact tag, else "New tag" for the typed name. A
         // prefix never lights the first match ("launch" must not light

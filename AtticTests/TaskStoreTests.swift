@@ -722,6 +722,12 @@ final class TaskStoreTests: XCTestCase {
         XCTAssertEqual(production.url, legacy.url)
         XCTAssertNotEqual(development.url, production.url)
         XCTAssertEqual(development.url.lastPathComponent, "development.store")
+        #if ATTIC_LOCAL_ONLY
+        // AGENTS.md: deferred cloud configuration must remain dormant in
+        // every local-only build, even when a caller requests it.
+        XCTAssertNil(production.cloudKitContainerIdentifier)
+        XCTAssertNil(development.cloudKitContainerIdentifier)
+        #else
         XCTAssertEqual(
             production.cloudKitContainerIdentifier,
             PersistenceController.cloudKitContainerIdentifier
@@ -730,6 +736,7 @@ final class TaskStoreTests: XCTestCase {
             development.cloudKitContainerIdentifier,
             PersistenceController.cloudKitContainerIdentifier
         )
+        #endif
         XCTAssertNil(inMemory.cloudKitContainerIdentifier)
     }
 

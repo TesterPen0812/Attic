@@ -185,6 +185,9 @@ final class NoteStore: ObservableObject {
     /// Observes the editor's revision check in unit tests; absent in normal use.
     var documentSaveAttempt: ((UUID?, UUID?) -> Void)?
     var documentSaveCommitted: ((UUID?, UUID?) -> Void)?
+    /// Controlled read-failure injection; nil in normal use. It throws before
+    /// the real auxiliary fetch so tests exercise the caller's error path.
+    var auxiliaryFetchWillRead: ((Any.Type) throws -> Void)?
     /// Recovery checkpoints can reference image rows after the note itself
     /// disappears. A failed read must stop purging rather than guess.
     private struct AttachmentProofKey: Equatable {
@@ -1126,6 +1129,19 @@ final class NoteStore: ObservableObject {
 
     /// The long-lived context mutations stage into.
     var modelContext: ModelContext { context }
+    func fetchAuxiliary<Model: PersistentModel>(_ descriptor: FetchDescriptor<Model>) throws -> [Model] {
+        try auxiliaryFetchWillRead?(Model.self)
+        return try modelContext.fetch(descriptor)
+    }
+    /// Cache readers can be called during SwiftUI rendering. Report once on
+    /// the next actor turn rather than publish from inside a view update.
+    func reportAuxiliaryReadFailure(_ message: String) {
+        guard lastErrorMessage != message else { return }
+        Task { @MainActor [weak self] in
+            guard let self, self.lastErrorMessage != message else { return }
+            self.recordError(message)
+        }
+    }
     var currentDate: Date { now() }
 
     /// Saves staged changes; on failure rolls back, reloads and records the
@@ -1159,7 +1175,8 @@ final class NoteStore: ObservableObject {
 #if os(macOS)
     /// Every attachment row (shown or removed) a note owns.
     func attachmentRows(forNoteID noteID: UUID) throws -> [NoteAttachment] {
-        try storedAttachments(forNoteID: noteID)
+        try auxiliaryFetchWillRead?(NoteAttachment.self)
+        return try storedAttachments(forNoteID: noteID)
     }
 #endif
 

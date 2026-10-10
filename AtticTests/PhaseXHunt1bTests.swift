@@ -666,6 +666,208 @@ final class PhaseXHunt1bTests: XCTestCase {
         }
     }
 
+
+    func testR3_09FailedProposalReadsDoNotRepeatAtTheSameRevision() async throws {
+        let store = try makeTestNoteStore(attachmentFileStore: makeTestAttachmentFileStore())
+        _ = try create(store)
+        let library = NotesLibraryModel(search: { _ in [] }, store: store)
+        var attempts = 0
+        store.auxiliaryFetchWillRead = { type in
+            if type == NotePendingEdit.self {
+                attempts += 1
+                throw NSError(domain: "R3-read", code: 9)
+            }
+        }
+        _ = rows(library, store)
+        await Task.yield()
+        XCTAssertNotNil(store.lastErrorMessage)
+        store.dismissError()
+        for _ in 0..<8 { _ = rows(library, store) }
+        await Task.yield()
+        do {
+            XCTAssertEqual(attempts, 1)
+            XCTAssertNil(store.lastErrorMessage, "A dismissed notice stays dismissed at this revision")
+        }
+        let previousAttempts = attempts
+        store.refresh()
+        _ = rows(library, store)
+        XCTAssertEqual(attempts, previousAttempts + 1, "A new store revision retries the read")
+    }
+
+    func testR3_10HistoryReadFailureUsesOneReadableNotice() async throws {
+        let store = try makeTestNoteStore(attachmentFileStore: makeTestAttachmentFileStore())
+        let id = try create(store)
+        let page = await controller(store)
+        XCTAssertTrue(page.open(noteID: id))
+        store.auxiliaryFetchWillRead = { type in
+            if type == NoteVersion.self { throw NSError(domain: "Opaque database details", code: 10) }
+        }
+        await XCTAssertFalseAsync(await page.openHistoryDurably())
+        do {
+            XCTAssertEqual(page.active?.notice, "Version history could not be read. Try again. Your note is kept.")
+            XCTAssertNil(store.lastErrorMessage, "The session notice is the single history error surface")
+        }
+    }
+
+    func testH5_01FailedHistoryFetchRefusesEmptyBrowserAndRetries() async throws {
+        let store = try makeTestNoteStore(attachmentFileStore: makeTestAttachmentFileStore())
+        let id = try create(store)
+        XCTAssertTrue(store.recordVersion(noteID: id, reason: .pause))
+        let saved = store.versions(noteID: id).map(\.id)
+        let page = await controller(store)
+        XCTAssertTrue(page.open(noteID: id))
+        store.auxiliaryFetchWillRead = { type in
+            if type == NoteVersion.self { throw NSError(domain: "H5-fetch", code: 1) }
+        }
+        let opened = await page.openHistoryDurably()
+        do {
+            XCTAssertFalse(opened, "A failed read must not be presented as empty history")
+            XCTAssertNil(page.historyBrowser)
+            XCTAssertNotNil(page.active?.notice)
+        }
+        page.closeHistory()
+        store.auxiliaryFetchWillRead = nil
+        await XCTAssertTrueAsync(await page.openHistoryDurably())
+        XCTAssertTrue(Set(try XCTUnwrap(page.historyBrowser).entries.map(\.id)).isSuperset(of: saved))
+        page.closeHistory()
+    }
+
+
+    func testH5_01AttachmentRestoreCannotGuessPlacementAfterFailedHistoryRead() throws {
+        let store = try makeTestNoteStore(attachmentFileStore: makeTestAttachmentFileStore())
+        let bytes = Data("saved file".utf8), fileID = UUID(), noteID = UUID()
+        let staged = StagedNoteAttachment(id: fileID, filename: "file.txt", contentTypeIdentifier: "public.plain-text",
+            byteCount: Int64(bytes.count), digest: NotePayloadDigest.sha256(bytes), data: bytes)
+        let original = NoteDocument(blocks: [.text("Title"), .file(attachmentID: fileID, filename: "file.txt",
+            contentTypeIdentifier: "public.plain-text", byteCount: Int64(bytes.count)), .text("After file")])
+        _ = try store.createDocumentNote(id: noteID, document: original, staged: [staged]).get()
+        let attachment = try XCTUnwrap(store.attachmentFamily(fileID).first)
+        XCTAssertTrue(store.removeDocumentAttachment(fileID, noteID: noteID))
+        let before = try XCTUnwrap(store.loadDocument(noteID: noteID)).content.document
+        store.auxiliaryFetchWillRead = { type in
+            if type == NoteVersion.self { throw NSError(domain: "H5-fetch", code: 1) }
+        }
+        let restored = store.restoreDocumentAttachment(attachment)
+        do {
+            XCTAssertFalse(restored, "An unavailable history must not be treated as absent placement")
+            XCTAssertEqual(store.loadDocument(noteID: noteID)?.content.document, before)
+        }
+        store.auxiliaryFetchWillRead = nil
+        // Retry is covered by the history repro and the area's restore tests.
+    }
+
+
+    func testH5_02FailOnceDuringMultipleRowsDoesNotCachePartialBadges() throws {
+        let store = try makeTestNoteStore(attachmentFileStore: makeTestAttachmentFileStore())
+        let ids = try [create(store, title: "One"), create(store, title: "Two")]
+        for id in ids {
+            _ = try store.agentWrite(noteID: id, baseRevisionToken: try XCTUnwrap(store.note(withID: id)).revisionToken,
+                document: NoteDocument(blocks: [.text("Proposed")]), agentName: "Agent", disposition: .proposal).get()
+        }
+        let library = NotesLibraryModel(search: { _ in [] }, store: store)
+        var attempts = 0
+        store.auxiliaryFetchWillRead = { type in
+            if type == NotePendingEdit.self {
+                attempts += 1
+                if attempts == 1 { throw NSError(domain: "H5-fetch", code: 2) }
+            }
+        }
+        _ = rows(library, store)
+        let revision = store.revision
+        library.retry() // R3-09: retry explicitly; renders at a failed revision are suppressed.
+        let retried = rows(library, store)
+        XCTAssertEqual(store.revision, revision)
+        do {
+            XCTAssertEqual(retried.filter(\.hasProposal).count, 2, "A partial failed render must not be cached")
+        }
+    }
+
+    func testH5_02ProposalStatusDoesNotCacheAFailedFetchAsNoProposal() async throws {
+        let store = try makeTestNoteStore(attachmentFileStore: makeTestAttachmentFileStore())
+        let id = try create(store)
+        let page = await controller(store)
+        XCTAssertTrue(page.open(noteID: id))
+        _ = try store.agentWrite(noteID: id, baseRevisionToken: try XCTUnwrap(store.note(withID: id)).revisionToken,
+            document: NoteDocument(blocks: [.text("Proposed")]), agentName: "Hunt agent", disposition: .proposal).get()
+        let session = try XCTUnwrap(page.active)
+        let revision = store.revision
+        store.auxiliaryFetchWillRead = { type in
+            if type == NotePendingEdit.self { throw NSError(domain: "H5-fetch", code: 2) }
+        }
+        _ = page.proposalAgent(for: session)
+        store.auxiliaryFetchWillRead = nil
+        let retried = page.proposalAgent(for: session)
+        await Task.yield()
+        XCTAssertEqual(store.revision, revision, "Read recovery must not require a write")
+        do {
+            XCTAssertEqual(retried, "Hunt agent")
+            XCTAssertNotNil(store.lastErrorMessage, "The failed fetch must be reported")
+        }
+        XCTAssertEqual(store.pendingEdits(noteID: id).count, 1)
+    }
+
+    func testH5_02LibraryBadgeDoesNotCacheAFailedFetchAsNoProposal() async throws {
+        let store = try makeTestNoteStore(attachmentFileStore: makeTestAttachmentFileStore())
+        let id = try create(store)
+        _ = try store.agentWrite(noteID: id, baseRevisionToken: try XCTUnwrap(store.note(withID: id)).revisionToken,
+            document: NoteDocument(blocks: [.text("Proposed")]), agentName: "Hunt agent", disposition: .proposal).get()
+        let library = NotesLibraryModel(search: { _ in [] }, store: store)
+        let revision = store.revision
+        store.auxiliaryFetchWillRead = { type in
+            if type == NotePendingEdit.self { throw NSError(domain: "H5-fetch", code: 2) }
+        }
+        _ = rows(library, store)
+        store.auxiliaryFetchWillRead = nil
+        library.retry() // R3-09: a recovery read must be requested explicitly.
+        let retried = try XCTUnwrap(rows(library, store).first { $0.id == id })
+        await Task.yield()
+        XCTAssertEqual(store.revision, revision)
+        do {
+            XCTAssertTrue(retried.hasProposal)
+            XCTAssertNotNil(store.lastErrorMessage)
+        }
+        XCTAssertEqual(store.pendingEdits(noteID: id).count, 1)
+    }
+
+    func testHunt3FailedAttachmentMetadataReadKeepsDecodedOwnershipAndOpaqueVersionsProtected() throws {
+        let store = try makeTestNoteStore(attachmentFileStore: makeTestAttachmentFileStore())
+        let id = UUID(), fileID = UUID(), bytes = Data("retained bytes".utf8)
+        let document = NoteDocument(blocks: [.text("Title"), .file(attachmentID: fileID, filename: "file.txt",
+            contentTypeIdentifier: "public.plain-text", byteCount: Int64(bytes.count))])
+        let staged = StagedNoteAttachment(id: fileID, filename: "file.txt", contentTypeIdentifier: "public.plain-text",
+            byteCount: Int64(bytes.count), digest: NotePayloadDigest.sha256(bytes), data: bytes)
+        _ = try store.createDocumentNote(id: id, document: document, staged: [staged]).get()
+        let originalBytes = try XCTUnwrap(store.note(withID: id)?.content)
+        store.auxiliaryFetchWillRead = { type in
+            if type == NoteAttachment.self { throw NSError(domain: "Hunt3-fetch", code: 3) }
+        }
+        _ = try store.agentWrite(noteID: id, baseRevisionToken: try XCTUnwrap(store.note(withID: id)).revisionToken,
+            document: document, agentName: "Agent", disposition: .proposal).get()
+        let version = try XCTUnwrap(store.versions(noteID: id).first { $0.reason == .beforeAgentEdit })
+        XCTAssertEqual(version.attachmentIDs, [], "Exercise the silent metadata fallback")
+        XCTAssertEqual(version.content, originalBytes, "The exact encoded base survives the metadata failure")
+        let versionOnly = NoteDocumentRetentionSnapshot(notes: [], versions: [
+            .init(format: version.contentFormat, content: version.content, attachmentIDsRaw: version.attachmentIDsRaw)
+        ], proposals: [])
+        XCTAssertEqual(try versionOnly.attachmentIDs(), [fileID], "Version bytes alone preserve ownership")
+        XCTAssertTrue(try NoteDocumentRetentionSnapshot.read(in: ModelContext(store.container)).attachmentIDs().contains(fileID))
+
+        let opaque = NoteItem(id: id, title: "Newer writer")
+        opaque.contentFormat = 2; opaque.content = Data("unsupported bytes".utf8)
+        let opaqueID = UUID()
+        store.stageVersion(of: opaque, reason: .beforeAgentEdit, timestamp: Date(), context: store.modelContext, id: opaqueID)
+        try store.modelContext.save()
+        let retained = try XCTUnwrap(store.versions(noteID: id).first { $0.id == opaqueID })
+        XCTAssertEqual(retained.attachmentIDs, [])
+        XCTAssertEqual(retained.content, opaque.content)
+        XCTAssertFalse(NotePhysicalFamilyRetention.versionEligible([retained], noteIDs: [id], proposalBases: [], recoveryBases: []))
+        XCTAssertThrowsError(try NoteDocumentRetentionSnapshot.read(in: ModelContext(store.container)).attachmentIDs())
+        store.auxiliaryFetchWillRead = nil
+        store.thinVersions(noteID: id)
+        XCTAssertTrue(store.versions(noteID: id).contains { $0.id == opaqueID })
+        XCTAssertEqual(try XCTUnwrap(store.attachmentFamily(fileID).first).payload, bytes)
+    }
+
 }
 
 @MainActor

@@ -80,6 +80,30 @@ final class NoLegacyNotesTests: XCTestCase {
         XCTAssertEqual(try ModelContext(container).fetch(FetchDescriptor<NoteItem>()).map(\.id), [note.id])
         XCTAssertEqual(try OldNotesPurge.run(in: container).notes, 1)
     }
+    func testHunt3PurgeInterruptionBeforeAndAfterCommitReopensAtomically() throws {
+        struct Interruption: Error {}
+        for afterCommit in [false, true] {
+            let url = ownedTemporaryDirectory(prefix: "Hunt3PurgeInterruption").appendingPathComponent("notes.store")
+            let schema = Schema(PersistenceController.appModelTypes)
+            func open() throws -> ModelContainer {
+                try ModelContainer(for: schema, configurations: ModelConfiguration(schema: schema, url: url, cloudKitDatabase: .none))
+            }
+            let container = try open(), context = ModelContext(container), removed = old(), kept = NoteItem(title: "Keep")
+            context.insert(removed); context.insert(kept)
+            context.insert(ItemLink(source: AtticItemRef(.note, kept.id), target: AtticItemRef(.note, removed.id), kind: .reference))
+            try context.save()
+            XCTAssertThrowsError(try OldNotesPurge.run(in: container, persist: {
+                if afterCommit { try $0.save() }; throw Interruption()
+            }))
+            let reopened = try open(), fresh = ModelContext(reopened)
+            XCTAssertEqual(try fresh.fetch(FetchDescriptor<NoteItem>()).count, afterCommit ? 1 : 2)
+            XCTAssertEqual(try fresh.fetch(FetchDescriptor<ItemLink>()).count, afterCommit ? 0 : 1)
+            XCTAssertEqual(try fresh.fetch(FetchDescriptor<StoreMaintenance>()).count, afterCommit ? 1 : 0)
+            XCTAssertEqual(try OldNotesPurge.run(in: reopened).notes, afterCommit ? 0 : 1)
+            XCTAssertEqual(try ModelContext(reopened).fetch(FetchDescriptor<NoteItem>()).map(\.id), [kept.id])
+            XCTAssertEqual(try OldNotesPurge.run(in: reopened).notes, 0)
+        }
+    }
     func testEmptyAndNewOnlyStoresAreUntouched() throws {
         for newOnly in [false, true] {
             let container = try rawContainer(), context = ModelContext(container)

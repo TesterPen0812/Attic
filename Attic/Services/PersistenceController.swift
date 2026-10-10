@@ -11,7 +11,7 @@ enum PersistenceController {
     static let cloudKitContainerIdentifier = "iCloud.com.emanueledipietro.Attic"
     private static let cloudKitEnvironmentInfoKey = "AtticCloudKitEnvironment"
 
-    #if DEBUG
+    #if DEBUG && !ATTIC_LOCAL_ONLY
     /// Kept alive for the rest of the process because Core Data may finish
     /// CloudKit bookkeeping after `initializeCloudKitSchema` returns.
     @MainActor private static var retainedSchemaContainers: [NSPersistentCloudKitContainer] = []
@@ -56,10 +56,16 @@ enum PersistenceController {
         environment: AtticCloudKitEnvironment? = nil,
         storeDirectory: URL? = nil
     ) -> ModelConfiguration {
+        #if ATTIC_LOCAL_ONLY
+        // The compiled mode owns this boundary; a caller cannot opt a
+        // local-only build into the deferred cloud infrastructure.
+        let cloudDatabase: ModelConfiguration.CloudKitDatabase = .none
+        #else
         let cloudDatabase: ModelConfiguration.CloudKitDatabase =
             inMemory || !cloudSyncEnabled
                 ? .none
                 : .private(cloudKitContainerIdentifier)
+        #endif
 
         // `storeDirectory` relocates the store (tests open copies of
         // fixture stores through this exact path); nil is the app's default
@@ -105,9 +111,11 @@ enum PersistenceController {
             cloudSyncEnabled: cloudSyncEnabled,
             storeDirectory: storeDirectory
         )
+        #if !ATTIC_LOCAL_ONLY
         if !inMemory && cloudSyncEnabled {
             try createPreCloudKitBackupIfNeeded(for: configuration)
         }
+        #endif
         let container = try ModelContainer(
             for: Schema(appModelTypes),
             configurations: configuration
@@ -160,7 +168,7 @@ enum PersistenceController {
         return container
     }
 
-    #if DEBUG
+    #if DEBUG && !ATTIC_LOCAL_ONLY
     /// Creates the Core Data record types in CloudKit's Development
     /// environment before SwiftData starts using the same store. Apple
     /// requires this schema bootstrap to happen only in development builds.
@@ -281,7 +289,7 @@ enum PersistenceController {
     }
 }
 
-#if DEBUG
+#if DEBUG && !ATTIC_LOCAL_ONLY
 private enum CloudKitSchemaInitializationError: LocalizedError {
     case unableToCreateManagedObjectModel
 

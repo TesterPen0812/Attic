@@ -198,32 +198,61 @@ extension View {
     /// window's key-view loop, Tab from the field gave the keyboard to the
     /// card's host view, which cleared SwiftUI's focus, so the rows were
     /// never reached and Space pressed nothing (CI, Full Keyboard Access).
-    func atticDropdownTabs(field: FocusState<Bool>.Binding, list: FocusState<Bool>.Binding) -> some View {
-        modifier(AtticDropdownTabs(field: field, list: list))
+    func atticDropdownTabs(field: FocusState<Bool>.Binding, list: FocusState<Bool>.Binding, count: Int) -> some View {
+        modifier(AtticDropdownTabs(field: field, list: list, count: count))
+    }
+}
+
+enum AtticDropdownTabFocus {
+    static func transfer(listFocused: Bool, fullKeyboardAccess: Bool,
+                         setField: (Bool) -> Void, setList: (Bool) -> Void,
+                         listAvailable: Bool = true,
+                         takeListKeyboard: () -> Void = {}) {
+        if listFocused {
+            setList(false)
+            setField(true)
+        } else if fullKeyboardAccess, listAvailable {
+            setField(false)
+            takeListKeyboard()
+            setList(true)
+        }
     }
 }
 
 private struct AtticDropdownTabs: ViewModifier {
     var field: FocusState<Bool>.Binding
     var list: FocusState<Bool>.Binding
+    let count: Int
     @Environment(\.atticDropdownRegisterKeys) private var registerKeys
+    @Environment(\.atticDropdownTakeListKeyboard) private var takeListKeyboard
 
     func body(content: Content) -> some View {
         content
-            .onAppear {
-                let field = field, list = list
-                registerKeys { event in
-                    guard event.keyCode == 48,
-                          event.modifierFlags.intersection([.command, .option, .control]).isEmpty else { return false }
-                    if list.wrappedValue {
-                        field.wrappedValue = true
-                    } else if NSApp.isFullKeyboardAccessEnabled {
-                        list.wrappedValue = true
-                    }
-                    return true
-                }
+            .onAppear(perform: registerTabKeys)
+            .onChange(of: count) { _, _ in registerTabKeys() }
+            // Observe the actual focus owners in the view, not only inside
+            // the key callback. SwiftUI must adopt the initial field editor
+            // before Tab, and a native focus change must release its peer.
+            .onChange(of: field.wrappedValue) { _, now in
+                if now { list.wrappedValue = false }
+            }
+            .onChange(of: list.wrappedValue) { _, now in
+                if now { field.wrappedValue = false }
             }
             .onDisappear { registerKeys(nil) }
+    }
+
+    private func registerTabKeys() {
+        let field = field, list = list
+        registerKeys { event in
+            guard event.keyCode == 48,
+                  event.modifierFlags.intersection([.command, .option, .control]).isEmpty else { return false }
+            AtticDropdownTabFocus.transfer(listFocused: list.wrappedValue,
+                fullKeyboardAccess: NSApp.isFullKeyboardAccessEnabled,
+                setField: { field.wrappedValue = $0 }, setList: { list.wrappedValue = $0 },
+                listAvailable: count > 0, takeListKeyboard: takeListKeyboard)
+            return true
+        }
     }
 }
 
@@ -817,6 +846,12 @@ extension View {
     }
 }
 
+enum AtticDropdownInitialFocus {
+    static func shouldRequest(enabled: Bool, request: Int?) -> Bool {
+        enabled && (request == nil || (request ?? 0) > 0)
+    }
+}
+
 private struct AtticDropdownFocusModifier: ViewModifier {
     var focus: FocusState<Bool>.Binding
     let enabled: Bool
@@ -824,7 +859,7 @@ private struct AtticDropdownFocusModifier: ViewModifier {
 
     func body(content: Content) -> some View {
         content
-            .onAppear { if enabled, request == nil { focus.wrappedValue = true } }
+            .onAppear { if AtticDropdownInitialFocus.shouldRequest(enabled: enabled, request: request) { focus.wrappedValue = true } }
             .onChange(of: request) { _, _ in if enabled { focus.wrappedValue = true } }
     }
 }
@@ -919,6 +954,13 @@ final class AtticDropdownPresenter {
                 self?.grow(toWidth: width)
             } : nil)
             .environment(\.atticDropdownRegisterKeys, { [weak self] handler in self?.contentKeyHandler = handler })
+            .environment(\.atticDropdownTakeListKeyboard, { [weak self] in
+                guard let host = self?.host, let window = host.window else { return }
+                // A Bool focus request can highlight the list while AppKit's
+                // shared field editor still receives Space and arrow keys.
+                // Release it inside this card before requesting SwiftUI focus.
+                window.makeFirstResponder(host)
+            })
             .atticDesign(design))
     }
 
@@ -1312,7 +1354,15 @@ private struct AtticDropdownHeightKey: EnvironmentKey {
     static let defaultValue: CGFloat? = nil
 }
 
+private struct AtticDropdownTakeListKeyboardKey: EnvironmentKey {
+    static let defaultValue: () -> Void = {}
+}
+
 extension EnvironmentValues {
+    var atticDropdownTakeListKeyboard: () -> Void {
+        get { self[AtticDropdownTakeListKeyboardKey.self] }
+        set { self[AtticDropdownTakeListKeyboardKey.self] = newValue }
+    }
     /// The open card's command chords, routed before AppKit menu equivalents.
     var atticDropdownRegisterKeys: (((NSEvent) -> Bool)?) -> Void {
         get { self[AtticDropdownRegisterKeysKey.self] }

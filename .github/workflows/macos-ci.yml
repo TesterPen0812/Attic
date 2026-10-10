@@ -1,4 +1,4 @@
-# Dispatch lane=costs for only optimized cost gates; fast for build/analyzer/unit tests; full for milestones.
+# Dispatch fka for the focused native keyboard gate; costs for optimized costs; fast for build/analyzer/unit; full for milestones.
 name: Attic CI
 
 on:
@@ -10,11 +10,11 @@ on:
   workflow_dispatch:
     inputs:
       lane:
-        description: Verification scope (full, fast, or optimized cost job only)
+        description: Verification scope (full, fast, costs, or focused FKA)
         required: false
         default: full
         type: choice
-        options: [full, fast, costs]
+        options: [full, fast, costs, fka]
       headless_costs:
         description: Run integration costs without key-window or UI fixtures (lane=costs)
         required: false
@@ -59,8 +59,54 @@ env:
   DONE_SEARCH_BASELINE_COMMIT: dab5d2fb74b081529b0053797aca1af591b06e8b
 
 jobs:
+  fka:
+    if: ${{ inputs.lane == 'fka' }}
+    name: Focused Full Keyboard Access verification
+    runs-on: macos-26
+    timeout-minutes: 40
+    env:
+      DEVELOPER_DIR: /Applications/Xcode_26.6.app/Contents/Developer
+    steps:
+      - uses: actions/checkout@v5
+      - name: Build local-only test host
+        run: |
+          Scripts/xcodebuild_locked.sh build-for-testing -project Attic.xcodeproj -scheme Attic \
+            -configuration Local -destination 'platform=macOS' \
+            -derivedDataPath "$RUNNER_TEMP/AtticFKA" CODE_SIGNING_ALLOWED=NO \
+            SWIFT_STRICT_CONCURRENCY=complete
+      - name: Run native FKA and exclusive-focus regressions
+        env:
+          TEST_RUNNER_ATTIC_KEY_WINDOW_TESTS: "1"
+          TEST_RUNNER_ATTIC_FULL_KEYBOARD_ACCESS_TESTS: "1"
+        run: |
+          if old_keyboard_mode=$(defaults read -g AppleKeyboardUIMode 2>/dev/null); then
+            trap 'defaults write -g AppleKeyboardUIMode -int "$old_keyboard_mode"' EXIT
+          else
+            trap 'defaults delete -g AppleKeyboardUIMode >/dev/null 2>&1 || true' EXIT
+          fi
+          defaults write -g AppleKeyboardUIMode -int 3
+          Scripts/xcodebuild_locked.sh test-without-building -project Attic.xcodeproj -scheme Attic \
+            -configuration Local -destination 'platform=macOS' \
+            -derivedDataPath "$RUNNER_TEMP/AtticFKA" -resultBundlePath "$RUNNER_TEMP/AtticFKA.xcresult" \
+            CODE_SIGNING_ALLOWED=NO -parallel-testing-enabled NO \
+            -only-testing:AtticTests/AtticDropdownTests/testTheTagPickerWorksFromTheKeyboardWithFullKeyboardAccess \
+            -only-testing:AtticTests/AtticDropdownTests/testH5_04InitialFocusHonorsARequestAlreadyDeliveredBeforeAppearance \
+            -only-testing:AtticTests/AtticDropdownTests/testH5_04TabTransfersExclusiveFocusBetweenFieldAndList \
+            -only-testing:AtticTests/AtticDropdownTests/testH5_04ListFocusReleasesTheNativeFieldEditorWithoutOrderingAWindow
+          xcrun xcresulttool get test-results summary --path "$RUNNER_TEMP/AtticFKA.xcresult" --format json > "$RUNNER_TEMP/fka-summary.json"
+          cat "$RUNNER_TEMP/fka-summary.json"
+          python3 -c 'import json,sys; s=json.load(open(sys.argv[1])); assert s["passedTests"]==4 and s["skippedTests"]==0 and s["failedTests"]==0 and s["expectedFailures"]==0' "$RUNNER_TEMP/fka-summary.json"
+      - name: Upload focused keyboard evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: focused-fka-${{ github.sha }}
+          path: |
+            ${{ runner.temp }}/AtticFKA.xcresult
+            ${{ runner.temp }}/fka-summary.json
+
   macos:
-    if: ${{ inputs.lane != 'costs' }}
+    if: ${{ inputs.lane != 'costs' && inputs.lane != 'fka' }}
     name: Build, test, and analyze Attic for macOS
     runs-on: macos-26
     timeout-minutes: 180
@@ -355,7 +401,7 @@ jobs:
 
 
   ui:
-    if: ${{ inputs.lane != 'fast' && inputs.lane != 'costs' }}
+    if: ${{ inputs.lane != 'fast' && inputs.lane != 'costs' && inputs.lane != 'fka' }}
     name: macOS UI tests (${{ matrix.shard }} of 2)
     runs-on: macos-26
     timeout-minutes: 50
@@ -433,7 +479,7 @@ jobs:
 
 
   costs:
-    if: ${{ inputs.lane != 'fast' }}
+    if: ${{ inputs.lane != 'fast' && inputs.lane != 'fka' }}
     name: Optimized frame, row and Done search cost gates
     runs-on: macos-26
     timeout-minutes: 90
@@ -635,7 +681,7 @@ jobs:
           retention-days: 14
 
   performance:
-    if: ${{ inputs.lane != 'fast' && inputs.lane != 'costs' }}
+    if: ${{ inputs.lane != 'fast' && inputs.lane != 'costs' && inputs.lane != 'fka' }}
     name: Observe seeded performance on a fresh macOS runner
     runs-on: macos-26
     timeout-minutes: 180
@@ -721,7 +767,7 @@ jobs:
           test "$PERF_COMPARE" = success
 
   appearance:
-    if: ${{ inputs.lane != 'fast' && inputs.lane != 'costs' }}
+    if: ${{ inputs.lane != 'fast' && inputs.lane != 'costs' && inputs.lane != 'fka' }}
     name: Design system appearance matrix (${{ matrix.shard }} of 4)
     runs-on: macos-26
     timeout-minutes: 45
@@ -779,7 +825,7 @@ jobs:
 
   iphone:
     name: Build Attic for iPhone Simulator
-    if: ${{ github.event_name == 'workflow_dispatch' && inputs.run_iphone && inputs.lane != 'fast' && inputs.lane != 'costs' }}
+    if: ${{ github.event_name == 'workflow_dispatch' && inputs.run_iphone && inputs.lane != 'fast' && inputs.lane != 'costs' && inputs.lane != 'fka' }}
     runs-on: macos-26
     timeout-minutes: 45
     env:

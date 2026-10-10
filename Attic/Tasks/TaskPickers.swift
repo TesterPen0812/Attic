@@ -89,7 +89,7 @@ struct TaskMovePickerView: View {
             onListHighlight: $highlighted
         )
         .atticDropdownFocus($fieldFocused)
-        .atticDropdownTabs(field: $fieldFocused, list: $listFocused)
+        .atticDropdownTabs(field: $fieldFocused, list: $listFocused, count: filtered.count)
         // Typing highlights the first match, so Return chooses it.
         .onChange(of: query) { _, now in highlighted = now.isEmpty || Self.filter(choices, query: now).isEmpty ? nil : 0 }
         .onKeyPress(phases: .down) { press in

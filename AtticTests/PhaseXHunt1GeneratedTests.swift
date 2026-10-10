@@ -1,4 +1,5 @@
 import AppKit
+import SwiftData
 import XCTest
 @testable import Attic
 
@@ -343,6 +344,117 @@ final class PhaseXHunt1GeneratedTests: XCTestCase {
                              NoteTableText.markdown(table) { NoteTableText.plainCellMarkdown($0.displayText) }] {
                 let copy = try XCTUnwrap(NoteTableText.parseMarkdown(markdown))
                 XCTAssertTrue(copy.texts[1][0].utf16.elementsEqual(text.utf16), "\(text.debugDescription) via \(markdown)")
+                print("ATTIC_H3_MARKDOWN original=\(Data(text.utf8).base64EncodedString()) markdown=\(Data(markdown.utf8).base64EncodedString())")
+            }
+        }
+    }
+
+    func testHunt3GeneratedTaskReplicaMutationsRollbackAndFreshImports() throws {
+        struct Failure: Error {}
+        for seed in 0..<16 {
+            var rng = RNG(value: UInt64(seed) + 0x7A5C)
+            var rejectsSave = false
+            let clock = MutableNow(Date(timeIntervalSince1970: 1_790_000_000))
+            let store = try makeTestStore(now: { clock.value }, persist: {
+                if rejectsSave { throw Failure() }; try $0.save()
+            })
+            let id = UUID(), context = ModelContext(store.container)
+            for _ in 0..<2 {
+                let task = TaskItem(id: id, title: "Original", createdAt: clock.value, updatedAt: clock.value)
+                task.listOrderVersion = TaskItem.currentListOrderVersion
+                context.insert(task)
+            }
+            try context.save(); store.refresh()
+            var title = "Original", priority = TaskPriority.none, status = TaskStatus.todo
+            var tags: [String] = [], deleted = false
+            var completedAt: Date?
+            for step in 0..<40 {
+                clock.value = clock.value.addingTimeInterval(1)
+                let kind = rng.next() % 8, label = "seed=\(seed) step=\(step) kind=\(kind)"
+                if kind == 7 && !deleted {
+                    let stale = try XCTUnwrap(store.task(withID: id))
+                    let writer = ModelContext(store.container)
+                    title = "Imported \(seed)-\(step)"
+                    for row in try writer.fetch(FetchDescriptor<TaskItem>()) { row.title = title; row.updatedAt = clock.value }
+                    try writer.save(); store.refresh()
+                    XCTAssertFalse(try XCTUnwrap(store.task(withID: id)) === stale, label)
+                } else if deleted {
+                    XCTAssertTrue(store.restoreDeleted(taskID: id), label); deleted = false
+                } else {
+                    let row = try XCTUnwrap(store.task(withID: id))
+                    switch kind {
+                    case 0, 6:
+                        let next = "Title \(seed)-\(step)"
+                        rejectsSave = kind == 6
+                        XCTAssertEqual(store.rename(row, to: next), !rejectsSave, label)
+                        if !rejectsSave { title = next }
+                        rejectsSave = false
+                    case 1:
+                        priority = TaskPriority.allCases[rng.next() % TaskPriority.allCases.count]
+                        XCTAssertTrue(store.setPriority(priority, for: row), label)
+                    case 2:
+                        let next = TaskStatus.allCases[rng.next() % TaskStatus.allCases.count]
+                        if next != status { completedAt = next == .done ? clock.value : nil }
+                        status = next; XCTAssertTrue(store.setStatus(status, for: row), label)
+                    case 3:
+                        tags = ["tag\(rng.next() % 4)"]
+                        XCTAssertTrue(store.setTags(tags, for: row), label)
+                    case 4:
+                        XCTAssertTrue(store.delete(row), label); deleted = true
+                    default:
+                        store.refresh()
+                    }
+                }
+                let rows = try ModelContext(store.container).fetch(FetchDescriptor<TaskItem>())
+                XCTAssertEqual(rows.count, 2, label)
+                for row in rows {
+                    XCTAssertEqual(row.title, title, label); XCTAssertEqual(row.priority, priority, label)
+                    XCTAssertEqual(row.status, status, label); XCTAssertEqual(row.tags, tags, label)
+                    XCTAssertEqual(row.deletedAt != nil, deleted, label)
+                    XCTAssertEqual(row.completedAt, completedAt, label)
+                }
+                XCTAssertEqual(store.tasks.filter { $0.id == id }.count, deleted ? 0 : 1, label)
+            }
+        }
+    }
+
+    func testHunt3GeneratedAppearanceSettingsSurviveReload() throws {
+        for seed in 0..<16 {
+            var rng = RNG(value: UInt64(seed) + 0x5E771)
+            let suite = "AtticHunt3Settings-\(UUID().uuidString)"
+            let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+            defer { defaults.removePersistentDomain(forName: suite) }
+            let settings = AppSettings(defaults: defaults)
+            var appearance = settings.appearance, theme = settings.panelTheme
+            var surface = settings.panelSurfaceStyle, tint = settings.panelTint
+            var length = settings.panelTintLength, displays = settings.revealDisplayIDs
+            for step in 0..<32 {
+                switch rng.next() % 6 {
+                case 0:
+                    appearance = AppearancePreference.allCases[rng.next() % AppearancePreference.allCases.count]
+                    settings.appearance = appearance
+                case 1:
+                    theme = AtticPanelTheme.allCases[rng.next() % AtticPanelTheme.allCases.count]
+                    settings.panelTheme = theme
+                case 2:
+                    surface = PanelSurfaceStyle.allCases[rng.next() % PanelSurfaceStyle.allCases.count]
+                    settings.panelSurfaceStyle = surface
+                case 3:
+                    tint = PanelTintLevel.allCases[rng.next() % PanelTintLevel.allCases.count]
+                    settings.panelTint = tint
+                case 4:
+                    let raw = [Double.nan, .infinity, -1, 0.3, 0.5, 1, 2][rng.next() % 7]
+                    length = raw.isFinite ? min(1, max(0.3, raw)) : 1
+                    settings.panelTintLength = raw
+                default:
+                    let raw = ["", "display\(rng.next() % 4)", "display\(rng.next() % 4)"]
+                    displays = Array(Set(raw.filter { !$0.isEmpty })).sorted()
+                    settings.revealDisplayIDs = raw
+                }
+                let copy = AppSettings(defaults: defaults), label = "seed=\(seed) step=\(step)"
+                XCTAssertEqual(copy.appearance, appearance, label); XCTAssertEqual(copy.panelTheme, theme, label)
+                XCTAssertEqual(copy.panelSurfaceStyle, surface, label); XCTAssertEqual(copy.panelTint, tint, label)
+                XCTAssertEqual(copy.panelTintLength, length, label); XCTAssertEqual(copy.revealDisplayIDs, displays, label)
             }
         }
     }
