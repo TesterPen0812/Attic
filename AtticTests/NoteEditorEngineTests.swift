@@ -57,6 +57,69 @@ final class NoteEditorEngineTests: XCTestCase {
 
     // MARK: Drawing
 
+    private final class WeakEngine {
+        weak var value: NoteEditorEngine?
+        init(_ value: NoteEditorEngine) { self.value = value }
+    }
+
+    /// Sixty compressed minutes: rotate twelve notes, type 40 characters,
+    /// save/leave, and add/rename/complete a task per minute. No visible UI.
+    func testPerf2SimulatedHourRetainsOnlyTheWarmNoteSessions() async throws {
+        let notes = try makeTestNoteStore(attachmentFileStore: makeTestAttachmentFileStore())
+        let tasks = try makeTestStore()
+        let controller = NotesPageController(store: notes, journal: nil, saveDelay: .seconds(600), pauseVersionDelay: .seconds(600))
+        await controller.startAndWait()
+        var ids: [UUID] = []
+        for index in 0..<12 {
+            var blocks = (0..<(index == 0 ? 5_000 : 200)).map { NoteBlock.text("Note \(index), line \($0)") }
+            blocks.insert(.table(NoteTable(texts: [["Task", "Date"], ["Write", "Monday"]])), at: 10)
+            guard case let .success((id, _)) = notes.createDocumentNote(id: UUID(), document: NoteDocument(blocks: blocks)) else {
+                return XCTFail("could not create soak fixture")
+            }
+            ids.append(id)
+        }
+        var engines: [WeakEngine] = []
+        func footprint() -> UInt64 {
+            var info = task_vm_info_data_t()
+            var count = mach_msg_type_number_t(MemoryLayout<task_vm_info_data_t>.size / MemoryLayout<integer_t>.size)
+            let result = withUnsafeMutablePointer(to: &info) {
+                $0.withMemoryRebound(to: integer_t.self, capacity: Int(count)) {
+                    task_info(mach_task_self_, task_flavor_t(TASK_VM_INFO), $0, &count)
+                }
+            }
+            return result == KERN_SUCCESS ? info.phys_footprint : 0
+        }
+        for minute in 0..<60 {
+            await XCTAssertTrueAsync(await controller.openDurably(noteID: ids[minute % ids.count]))
+            let session = try XCTUnwrap(controller.active)
+            engines.append(WeakEngine(session.engine))
+            autoreleasepool {
+                let (_, view) = session.engine.makeView()
+                view.setSelectedRange(NSRange(location: session.engine.textStorage.length, length: 0))
+                let extractions = session.engine.documentExtractionCount
+                type(String(repeating: "a", count: 40), view)
+                XCTAssertEqual(session.engine.documentExtractionCount, extractions,
+                               "typing does not extract the whole document before the save boundary")
+                session.engine.detachView()
+            }
+            await XCTAssertTrueAsync(await controller.prepareToLeaveDurably(.quit))
+            let task = try XCTUnwrap(tasks.create(title: "Minute \(minute)"))
+            XCTAssertTrue(tasks.update(task, title: "Renamed minute \(minute)"))
+            XCTAssertTrue(tasks.setStatus(.done, for: task))
+            if (minute + 1).isMultiple(of: 15) {
+                await Task.yield()
+                let alive = engines.compactMap(\.value).count
+                print("PERF2_SOAK minutes=\(minute + 1) engines=\(alive) footprint_bytes=\(footprint())")
+                XCTAssertLessThanOrEqual(alive, 8, "clean sessions beyond the warm-cache limit must be released")
+            }
+        }
+        XCTAssertEqual(tasks.tasks.count, 60)
+        // Let AppKit's deferred layout and autorelease work drain. Raw
+        // snapshots during a compressed workload are not steady idle cost.
+        try await Task.sleep(for: .seconds(1))
+        print("PERF2_SOAK quiescent_footprint_bytes=\(footprint()) engines=\(engines.compactMap(\.value).count)")
+    }
+
     /// Compressed workload, not one hour of wall time: ten cell revisions
     /// per second for 60 minutes. Measures retention without timing gates.
     func testPerf2TableMeasurementRetentionOverAnHourOfEdits() {
@@ -147,7 +210,6 @@ final class NoteEditorEngineTests: XCTestCase {
         engine.find.refresh()
         XCTAssertEqual(engine.find.highlightLayoutPassCount, cleared)
     }
-
 
     func testPerf2TableRowOriginsDoNotResumPrefixesPerFrame() {
         let heights = (0..<500).map { CGFloat(21 + $0 % 7) }
