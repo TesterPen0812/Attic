@@ -64,8 +64,7 @@ struct TaskMovePickerView: View {
 
     @State private var query = ""
     @State private var highlighted: Int?
-    @FocusState private var fieldFocused: Bool
-    @FocusState private var listFocused: Bool
+    @FocusState private var focus: AtticDropdownFocusTarget?
 
     /// What `query` leaves, in list order (tests read it).
     static func filter(_ choices: [AtticTaskPicker.Choice], query: String) -> [AtticTaskPicker.Choice] {
@@ -80,16 +79,15 @@ struct TaskMovePickerView: View {
             choices: filtered,
             highlighted: highlighted,
             onChoose: onChoose,
-            fieldFocused: $fieldFocused,
+            focus: $focus,
             onHover: { index, inside in
                 let next = AtticListHighlight.hovered(index, inside: inside, current: highlighted)
                 if next != highlighted { highlighted = next }
             },
-            listFocus: $listFocused,
             onListHighlight: $highlighted
         )
-        .atticDropdownFocus($fieldFocused)
-        .atticDropdownTabs(field: $fieldFocused, list: $listFocused, count: filtered.count)
+        .atticDropdownFocus($focus)
+        .atticDropdownTabs(focus: $focus, count: filtered.count)
         // Typing highlights the first match, so Return chooses it.
         .onChange(of: query) { _, now in highlighted = now.isEmpty || Self.filter(choices, query: now).isEmpty ? nil : 0 }
         .onKeyPress(phases: .down) { press in
@@ -103,7 +101,7 @@ struct TaskMovePickerView: View {
                 highlighted = max((highlighted ?? filtered.count) - 1, 0)
                 return .handled
             case .return, .space:
-                if press.key == .space, !listFocused { return .ignored }
+                if press.key == .space, focus != .list { return .ignored }
                 guard let highlighted, filtered.indices.contains(highlighted) else { return .ignored }
                 onChoose(filtered[highlighted].id)
                 return .handled

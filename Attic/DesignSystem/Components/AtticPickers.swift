@@ -691,16 +691,21 @@ struct AtticTagPicker: View {
     var highlighted: Int?
     let onToggle: (String) -> Void
     let onCreate: (String) -> Void
-    var fieldFocused: FocusState<Bool>.Binding
+    /// The field's and the list's one focus.
+    var focus: FocusState<AtticDropdownFocusTarget?>.Binding
     /// The pointer entered (true) or left row `index`.
     var onHover: ((_ index: Int, _ inside: Bool) -> Void)? = nil
     /// The rows the list keeps room for (all the tags there are, as it
     /// opened); nil: the rows it shows now.
     var listRows: Int? = nil
-    /// The rows as one keyboard stop (`atticDropdownList`): Tab from the
-    /// field reaches them. Nil: the rows take no keyboard.
-    var listFocus: FocusState<Bool>.Binding? = nil
+    /// With a highlight to move, the rows are one keyboard stop
+    /// (`atticDropdownList`): Tab from the field reaches them. Nil: the
+    /// rows take no keyboard.
     var onListHighlight: Binding<Int?>? = nil
+
+    /// The rows the list shows: the tags, then "New tag" when there is one.
+    /// The one count the list's keyboard stop, Tab and the keys use.
+    static func rowCount(tags: Int, create: String?) -> Int { tags + (create == nil ? 0 : 1) }
 
     /// One row at least (No tags yet, or New tag), seven at most
     /// (`tagListMaxHeight`).
@@ -713,7 +718,7 @@ struct AtticTagPicker: View {
 
     var body: some View {
         let m = AtticDropdownMetrics.self
-        let shown = tags.count + (create == nil ? 0 : 1)
+        let shown = Self.rowCount(tags: tags.count, create: create)
         let room = Self.visibleRows(tagCount: listRows ?? shown)
         // A height that holds while typing filters the list, so the card
         // never jumps. Only a list longer than that scrolls: rows that fit
@@ -723,7 +728,7 @@ struct AtticTagPicker: View {
         let listHeight = min(normalHeight, cardHeight.map { max(0, $0 - m.inset * 2 - m.fieldHeight - m.fieldGap) } ?? normalHeight)
         VStack(alignment: .leading, spacing: 0) {
             AtticDropdownField(text: $query, placeholder: String(localized: "Find or add a tag"),
-                               systemName: "magnifyingglass", focus: fieldFocused)
+                               systemName: "magnifyingglass", focus: focus)
                 .padding(.bottom, m.fieldGap)
             Group {
                 if shown <= room && listHeight == normalHeight {
@@ -733,7 +738,7 @@ struct AtticTagPicker: View {
                     AtticDropdownViewport(height: listHeight) { rows }
                 }
             }
-            .modifier(AtticOptionalDropdownList(focus: listFocus, highlighted: onListHighlight, count: shown))
+            .modifier(AtticOptionalDropdownList(focus: focus, highlighted: onListHighlight, count: shown))
         }
         // In a card cut short the list keeps the field and shortens; the
         // card still measures its natural height: the list's full room.
@@ -748,7 +753,7 @@ struct AtticTagPicker: View {
         VStack(alignment: .leading, spacing: 0) {
             ForEach(Array(tags.enumerated()), id: \.element.id) { index, tag in
                 AtticDropdownRow(title: "#" + tag.name, check: tag.state, detail: tag.detail, isHighlighted: highlighted == index,
-                                 onHover: hover(index), position: index + 1, itemCount: tags.count + (create == nil ? 0 : 1)) {
+                                 onHover: hover(index), position: index + 1, itemCount: Self.rowCount(tags: tags.count, create: create)) {
                     onToggle(tag.name)
                 }
                 .id(index)
@@ -815,13 +820,13 @@ struct AtticTagPickerCard: View {
 
     @State private var query = ""
     @State private var highlight: AtticTagPickerHighlight?
-    @FocusState private var fieldFocused: Bool
-    @FocusState private var listFocused: Bool
+    @FocusState private var focus: AtticDropdownFocusTarget?
 
     var body: some View {
         let shown = rows(query)
         let filtered = shown.tags
         let create = shown.create
+        let count = AtticTagPicker.rowCount(tags: filtered.count, create: create)
         // The row the highlight is on now: found again by identity after
         // every change of the rows (a toggle moves the note's own tags up).
         let highlighted = highlight?.index(in: filtered, create: create)
@@ -838,17 +843,16 @@ struct AtticTagPickerCard: View {
                 let clear = { query = "" }
                 if onCreate(name, clear) { clear() }
             },
-            fieldFocused: $fieldFocused,
+            focus: $focus,
             onHover: { index, inside in
                 let next = AtticListHighlight.hovered(index, inside: inside, current: highlighted)
                 if next != highlighted { highlightIndex.wrappedValue = next }
             },
             listRows: listRows,
-            listFocus: $listFocused,
             onListHighlight: highlightIndex
         )
-        .atticDropdownFocus($fieldFocused, when: focusField)
-        .atticDropdownTabs(field: $fieldFocused, list: $listFocused, count: filtered.count + (create == nil ? 0 : 1))
+        .atticDropdownFocus($focus, when: focusField)
+        .atticDropdownTabs(focus: $focus, count: count)
         // Typing highlights only what was typed (one rule for Tasks and
         // Notes): the exact tag, else "New tag" for the typed name. A
         // prefix never lights the first match ("launch" must not light
@@ -860,7 +864,6 @@ struct AtticTagPickerCard: View {
             highlight = AtticTagPickerHighlight.typed(now, in: typed.tags, create: typed.create)
         }
         .onKeyPress(phases: .down) { press in
-            let count = filtered.count + (create == nil ? 0 : 1)
             switch press.key {
             case .downArrow:
                 guard count > 0 else { return .ignored }
@@ -873,7 +876,7 @@ struct AtticTagPickerCard: View {
             case .return, .space:
                 // Space presses the highlighted row only while the rows have
                 // the keyboard; in the field it types.
-                if press.key == .space, !listFocused { return .ignored }
+                if press.key == .space, focus != .list { return .ignored }
                 if let highlighted, highlighted < filtered.count {
                     onToggle(filtered[highlighted].name)
                 } else if let create {
@@ -956,16 +959,17 @@ struct AtticTaskPicker: View {
     /// No task at all to choose (not a query with no match).
     var emptyText = String(localized: "No other tasks")
     let onChoose: (UUID) -> Void
-    var fieldFocused: FocusState<Bool>.Binding
+    /// The field's and the list's one focus.
+    var focus: FocusState<AtticDropdownFocusTarget?>.Binding
     var onHover: ((_ index: Int, _ inside: Bool) -> Void)? = nil
-    /// The rows as one keyboard stop (`atticDropdownList`).
-    var listFocus: FocusState<Bool>.Binding? = nil
+    /// With a highlight to move, the rows are one keyboard stop
+    /// (`atticDropdownList`).
     var onListHighlight: Binding<Int?>? = nil
 
     var body: some View {
         let m = AtticDropdownMetrics.self
         VStack(alignment: .leading, spacing: 0) {
-            AtticDropdownField(text: $query, placeholder: String(localized: "Find a task"), focus: fieldFocused)
+            AtticDropdownField(text: $query, placeholder: String(localized: "Find a task"), focus: focus)
                 .padding(.bottom, m.fieldGap)
             if choices.isEmpty {
                 AtticText(verbatim: query.trimmingCharacters(in: .whitespaces).isEmpty ? emptyText : String(localized: "No task matches"),
@@ -985,7 +989,7 @@ struct AtticTaskPicker: View {
                         }
                     }
                 }
-                .modifier(AtticOptionalDropdownList(focus: listFocus, highlighted: onListHighlight, count: choices.count))
+                .modifier(AtticOptionalDropdownList(focus: focus, highlighted: onListHighlight, count: choices.count))
             }
         }
         .accessibilityElement(children: .contain)
@@ -997,14 +1001,14 @@ struct AtticTaskPicker: View {
     }
 }
 
-/// `atticDropdownList` when the picker's owner gives it a focus.
+/// `atticDropdownList` when the picker's owner gives it a highlight to move.
 private struct AtticOptionalDropdownList: ViewModifier {
-    var focus: FocusState<Bool>.Binding?
+    var focus: FocusState<AtticDropdownFocusTarget?>.Binding
     var highlighted: Binding<Int?>?
     let count: Int
 
     func body(content: Content) -> some View {
-        if let focus, let highlighted {
+        if let highlighted {
             content.atticDropdownList(focus: focus, highlighted: highlighted, count: count)
         } else {
             content

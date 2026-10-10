@@ -40,9 +40,9 @@ struct TasksPageHost: View {
     let state: TasksPageState
     let layout: PanelPageLayout
     let chromeInteractionState: PanelChromeInteractionState
-    /// The add bar's focus. The shell owns it so quick capture and page
-    /// switches can move focus into or out of the page.
-    let primaryInputFocus: FocusState<Bool>.Binding
+    /// The shell's request for the add bar's keyboard (an explicit open on
+    /// Tasks), as a value so each new one reaches this page.
+    let primaryInputFocusRequest: UInt64
     /// False while another page shows and this one is kept built behind it.
     var isCurrent = true
 
@@ -112,7 +112,7 @@ struct TasksPageHost: View {
             if model.isPageShown != isCurrent { model.isPageShown = isCurrent }
             // Only the page shown takes the shell's focus (a page built
             // behind Notes, or prepared on approach, never takes it).
-            if isCurrent, primaryInputFocus.wrappedValue || uiState.isComposerPresented { addBarFocused = true }
+            if isCurrent, uiState.isComposerPresented { addBarFocused = true }
             handleSearchRequest(model, request: uiState.searchRequest)
             showItemIfNeeded(model, uiState.shownItem)
             syncDraftLock(model)
@@ -154,7 +154,11 @@ struct TasksPageHost: View {
         // Only while this page is the one shown: the shell's composer is
         // also Notes' New Note, which a Tasks page kept behind must neither
         // take nor end (round 5's CI: New Note closed at once).
-        .onChange(of: primaryInputFocus.wrappedValue) { _, focused in if focused, isCurrent { addBarFocused = true } }
+        // An explicit open on Tasks (the hotkey, the corner): the keyboard
+        // lands in the add bar. The request is the shell's counter:
+        // relayed through a `@FocusState` no view was focused on, SwiftUI
+        // dropped it (H5-05).
+        .onChange(of: primaryInputFocusRequest) { _, _ in if isCurrent { addBarFocused = true } }
         .onChange(of: uiState.isComposerPresented) { _, presented in if presented, isCurrent { addBarFocused = true } }
         .onChange(of: addBarFocused) { _, focused in
             if !focused, isCurrent, uiState.isComposerPresented { uiState.endAdding() }
