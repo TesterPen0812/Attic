@@ -419,6 +419,9 @@ struct TasksPage: View {
         // A page or tab change ends a drag, closes a row's pickers and ends
         // a menu's binding.
         .onChange(of: model.hides) { _, _ in cancelTransientState() }
+        // A row's picker goes with its row (H10-03): its card closed with
+        // the anchor, and the page leaves edit mode with it.
+        .onChange(of: store.revision) { _, _ in closePickerOfAMissingRow() }
         // A menu opening decides whether the last press opened it: if not
         // (the keyboard, VoiceOver, another menu), no earlier binding holds.
         .onReceive(NotificationCenter.default.publisher(for: NSMenu.didBeginTrackingNotification)) { _ in
@@ -615,6 +618,16 @@ struct TasksPage: View {
         // only over a draft, which the composer lock holds.
         chrome.editLock(model.editingTitleID != nil || model.newSubtaskParentID != nil || model.renamingSubtaskID != nil
             || composerPickerOpen || metaPopover != nil || selectionPicker != nil)
+    }
+
+    /// When a change elsewhere (an agent's delete or move) takes the row of
+    /// an open date, tag or Move to Task list out of its page, the list is
+    /// closed: its card already left with the row, and an open one holds
+    /// the panel and the page's keys (H10-03).
+    private func closePickerOfAMissingRow() {
+        guard let open = metaPopover else { return }
+        let rows = open.tab == .done ? model.doneDays().flatMap(\.rows) : model.rows(for: open.tab)
+        if !rows.contains(where: { $0.id == open.id }) { metaPopover = nil }
     }
 
     /// A drag in progress and a row's pickers end when the panel hides or

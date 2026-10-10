@@ -1117,7 +1117,15 @@ private struct NoteComparisonPreview: NSViewRepresentable {
         return host
     }
     func updateNSView(_ host: NSView, context: Context) {
-        guard context.coordinator.document != document else { return }
+        guard context.coordinator.document != document else {
+            // A change of look or of the panel's width reaches the shown
+            // comparison, as it reaches the note and History (H10-02).
+            context.coordinator.engine?.update(design: design)
+            if let text = context.coordinator.engine?.textView, text.textContainerInset.width != columnInset {
+                text.textContainerInset = NSSize(width: columnInset, height: 0)
+            }
+            return
+        }
         let offset = (host.subviews.first as? NSScrollView)?.contentView.bounds.origin.y ?? scrollOffset
         install(in: host, coordinator: context.coordinator, offset: offset)
     }

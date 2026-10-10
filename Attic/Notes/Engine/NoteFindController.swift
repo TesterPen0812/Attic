@@ -89,6 +89,12 @@ final class NoteFindController: ObservableObject {
         }
     }
 
+    /// A change of look reaches an open bar (H10-01): its host is built
+    /// once, with the design the note had when Find opened.
+    func update(design: AtticDesignContext) {
+        host?.rootView = AnyView(NoteFindBar(find: self).atticDesign(design))
+    }
+
     func close(returnFocus: Bool = true) {
         guard isShown else { return }
         let selected = index.flatMap { matches.indices.contains($0) ? matches[$0] : nil }
