@@ -1159,7 +1159,7 @@ final class AtticDropdownTests: XCTestCase {
         let previous = NSApp.accessibilityAttributeValue(attribute)
         NSApp.accessibilitySetValue(true, forAttribute: attribute)
         defer { NSApp.accessibilitySetValue(previous, forAttribute: attribute) }
-        let window = KeyPanel(contentRect: NSRect(x: -4000, y: -4000, width: 320, height: 520),
+        let window = RecordingKeyPanel(contentRect: NSRect(x: -4000, y: -4000, width: 320, height: 520),
                               styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
         window.isReleasedWhenClosed = false
         window.contentView = NSView(frame: NSRect(x: 0, y: 0, width: 320, height: 520))
@@ -1210,9 +1210,14 @@ final class AtticDropdownTests: XCTestCase {
             items(host).filter { $0.isAccessibilitySelected() }.compactMap { $0.accessibilityLabel() }
         }
 
+        window.start = ProcessInfo.processInfo.systemUptime
+        window.log = ["app active=\(NSApp.isActive) key=\(window.isKeyWindow) keyWindow=\(String(describing: NSApp.keyWindow.map { type(of: $0) }))"]
         let presenter = try open()
         let host = try XCTUnwrap(presenter.host)
+        window.log.append("before tab: active=\(NSApp.isActive) key=\(window.isKeyWindow)")
         press("\t", 48)
+        window.log.append("after tab: active=\(NSApp.isActive) key=\(window.isKeyWindow)")
+        if (window.firstResponder as? NSTextView)?.isFieldEditor == true { window.log.forEach { print("FKANATIVE-FAIL " + $0) } }
         let afterTab = window.firstResponder as? NSView
         XCTAssertFalse((afterTab as? NSTextView)?.isFieldEditor == true, "Tab left the field")
         XCTAssertTrue(afterTab?.isDescendant(of: host) == true, "the keyboard is still in the card")
