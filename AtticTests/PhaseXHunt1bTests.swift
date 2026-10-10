@@ -690,6 +690,32 @@ final class PhaseXHunt1bTests: XCTestCase {
         page.closeHistory()
     }
 
+
+    func testH5_01AttachmentRestoreCannotGuessPlacementAfterFailedHistoryRead() throws {
+        let store = try makeTestNoteStore(attachmentFileStore: makeTestAttachmentFileStore())
+        let bytes = Data("saved file".utf8), fileID = UUID(), noteID = UUID()
+        let staged = StagedNoteAttachment(id: fileID, filename: "file.txt", contentTypeIdentifier: "public.plain-text",
+            byteCount: Int64(bytes.count), digest: NotePayloadDigest.sha256(bytes), data: bytes)
+        let original = NoteDocument(blocks: [.text("Title"), .file(attachmentID: fileID, filename: "file.txt",
+            contentTypeIdentifier: "public.plain-text", byteCount: Int64(bytes.count)), .text("After file")])
+        _ = try store.createDocumentNote(id: noteID, document: original, staged: [staged]).get()
+        let attachment = try XCTUnwrap(store.attachmentFamily(fileID).first)
+        XCTAssertTrue(store.removeDocumentAttachment(fileID, noteID: noteID))
+        let before = try XCTUnwrap(store.loadDocument(noteID: noteID)).content.document
+        store.auxiliaryFetchWillRead = { type in
+            if type == NoteVersion.self { throw NSError(domain: "H5-fetch", code: 1) }
+        }
+        let restored = store.restoreDocumentAttachment(attachment)
+        XCTExpectFailure("H5-01") {
+            XCTAssertFalse(restored, "An unavailable history must not be treated as absent placement")
+            XCTAssertEqual(store.loadDocument(noteID: noteID)?.content.document, before)
+        }
+        store.auxiliaryFetchWillRead = nil
+        // This red run already changed the placement, so use the persisted
+        // current state only for the safety assertions above; retry is covered
+        // by the history repro and the area's existing restore tests.
+    }
+
     func testH5_02ProposalStatusDoesNotCacheAFailedFetchAsNoProposal() async throws {
         let store = try makeTestNoteStore(attachmentFileStore: makeTestAttachmentFileStore())
         let id = try create(store)
