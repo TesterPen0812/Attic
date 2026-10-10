@@ -1486,14 +1486,6 @@ enum AtticNativeMenu {
         return menu
     }
 
-    private static func item(_ command: AtticMenuCommand) -> NSMenuItem {
-        let item = NSMenuItem(title: command.title, action: nil, keyEquivalent: "")
-        item.keyEquivalentModifierMask = []
-        if let systemImage = command.systemImage, command.state != .mixed {
-            item.image = NSImage(systemSymbolName: systemImage, accessibilityDescription: nil)
-        }
-        if !command.children.isEmpty {
-            item.submenu = make(command.children, title: command.title)
     /// A menu opened the way the system opens a right-click menu. AppKit
     /// appends the context-menu plug-ins to such a menu (the system's
     /// AutoFill submenu, Services) wherever a text input could be its
@@ -1506,6 +1498,14 @@ enum AtticNativeMenu {
         return menu
     }
 
+    private static func item(_ command: AtticMenuCommand) -> NSMenuItem {
+        let item = NSMenuItem(title: command.title, action: nil, keyEquivalent: "")
+        item.keyEquivalentModifierMask = []
+        if let systemImage = command.systemImage, command.state != .mixed {
+            item.image = NSImage(systemSymbolName: systemImage, accessibilityDescription: nil)
+        }
+        if !command.children.isEmpty {
+            item.submenu = make(command.children, title: command.title)
         } else {
             item.target = AtticMenuTarget.shared
             item.action = #selector(AtticMenuTarget.runCommand(_:))
