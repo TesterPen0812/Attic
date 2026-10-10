@@ -58,6 +58,146 @@ final class AtticDropdownTests: XCTestCase {
         XCTAssertFalse(window.isVisible); XCTAssertFalse(window.isKeyWindow)
     }
 
+    // MARK: H5-04: one focus owner per card (real presenter, unshown window)
+
+    /// A window that is never ordered on screen and records whom AppKit is
+    /// asked to give the keyboard.
+    final class FocusRecordingWindow: NSWindow {
+        var requests: [NSResponder?] = []
+        override func makeFirstResponder(_ responder: NSResponder?) -> Bool {
+            requests.append(responder)
+            return super.makeFirstResponder(responder)
+        }
+    }
+
+    private func makeUnshownWindow() -> FocusRecordingWindow {
+        let window = FocusRecordingWindow(contentRect: NSRect(x: -4000, y: -4000, width: 320, height: 520),
+                                          styleMask: [.titled], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        window.contentView = NSView(frame: NSRect(x: 0, y: 0, width: 320, height: 520))
+        return window
+    }
+
+    /// What a card's content sees of its presentation's focus request as it
+    /// appears.
+    struct FocusRequestProbe: View {
+        let log: (Int?) -> Void
+        @Environment(\.atticDropdownFocusRequest) private var request
+        var body: some View { Color.clear.frame(width: 120, height: 28).onAppear { log(request) } }
+    }
+
+    /// AppKit gives the opening card's host the keyboard; the card's own
+    /// SwiftUI focus alone puts it in the field. AppKit asked directly for
+    /// the SwiftUI field before, so two owners raced for it (H5-04).
+    func testH5_04OpeningGivesTheHostTheKeyboardAndOnlySwiftUIFocusesTheField() throws {
+        for picker in ["tags", "move"] {
+            let window = makeUnshownWindow()
+            defer { window.close() }
+            let original = NSTextField(frame: CGRect(x: 20, y: 470, width: 200, height: 24))
+            let anchor = NSView(frame: CGRect(x: 20, y: 400, width: 60, height: 28))
+            window.contentView?.addSubview(original)
+            window.contentView?.addSubview(anchor)
+            XCTAssertTrue(window.makeFirstResponder(original))
+            let presenter = AtticDropdownPresenter()
+            presenter.design = AtticDesignContext(reduceMotion: true)
+            presenter.content = picker == "tags"
+                ? AnyView(TaskTagPickerView(allTags: ["design", "home"], state: { _ in .off }, onToggle: { _ in }, onCreate: { _, _ in true }))
+                : AnyView(TaskMovePickerView(choices: [.init(id: UUID(), title: "Alpha", detail: nil)], onChoose: { _ in }))
+            window.requests = []
+            presenter.present(from: anchor)
+            spin(0.3)
+            let host = try XCTUnwrap(presenter.host)
+            let intoCard = window.requests.compactMap { $0 as? NSView }.filter { $0 === host || $0.isDescendant(of: host) }
+            XCTAssertTrue(intoCard.first === host, "\(picker): AppKit gives the host the keyboard first, not the SwiftUI field (\(intoCard))")
+            let editor = try XCTUnwrap(window.firstResponder as? NSTextView, picker)
+            XCTAssertTrue(editor.isFieldEditor && (editor.delegate as? NSView)?.isDescendant(of: host) == true,
+                          "\(picker): the card's field has the keyboard")
+            presenter.dismiss()
+            spin(0.1)
+            XCTAssertIdentical(AtticDropdownPresenter.owner(of: window.firstResponder), original, "\(picker): Esc gives the keyboard back")
+            presenter.close(restoreFocus: false, immediately: true)
+            XCTAssertFalse(window.isVisible)
+        }
+    }
+
+    /// One presenter (an anchor's coordinator) opens its card again: the
+    /// new card appears before its host takes the keyboard, so it must see
+    /// no request left from the last opening (R3-01), and Esc gives the
+    /// keyboard back every time.
+    func testH5_04AReusedPresenterOpensItsNextCardAsItOpenedTheFirst() throws {
+        let window = makeUnshownWindow()
+        defer { window.close() }
+        let original = NSTextField(frame: CGRect(x: 20, y: 470, width: 200, height: 24))
+        let anchor = NSView(frame: CGRect(x: 20, y: 400, width: 60, height: 28))
+        window.contentView?.addSubview(original)
+        window.contentView?.addSubview(anchor)
+        let presenter = AtticDropdownPresenter()
+        presenter.design = AtticDesignContext(reduceMotion: true)
+        var seen: [Int?] = []
+        presenter.content = AnyView(FocusRequestProbe { seen.append($0) })
+        for round in 1...3 {
+            XCTAssertTrue(window.makeFirstResponder(original))
+            presenter.present(from: anchor)
+            XCTAssertIdentical(AtticDropdownPresenter.owner(of: window.firstResponder), original, "round \(round): measuring takes no keyboard")
+            spin(0.3)
+            XCTAssertEqual(seen.count, round, "round \(round): the card appeared once")
+            XCTAssertTrue(presenter.host.map { window.firstResponder === $0 } == true, "round \(round): the host has the keyboard")
+            presenter.dismiss()
+            spin(0.1)
+            XCTAssertIdentical(AtticDropdownPresenter.owner(of: window.firstResponder), original, "round \(round): Esc gives the keyboard back")
+            presenter.close(restoreFocus: false, immediately: true)
+        }
+        XCTAssertEqual(seen, [0, 0, 0], "every opening's card appears before its host takes the keyboard")
+    }
+
+    /// Under Full Keyboard Access (CI only), Tab hands the keyboard from the
+    /// field to the rows and back, on one reused presenter, many times: the
+    /// list's focus and AppKit's first responder must agree every time.
+    func testH5_04TabHandsTheKeyboardBetweenFieldAndRowsOnAReusedPresenter() throws {
+        guard ProcessInfo.processInfo.environment["ATTIC_FULL_KEYBOARD_ACCESS_TESTS"] == "1" else {
+            throw XCTSkip("CI enables Full Keyboard Access; local tests preserve the user's setting")
+        }
+        XCTAssertTrue(NSApp.isFullKeyboardAccessEnabled)
+        let window = makeUnshownWindow()
+        defer { window.close() }
+        let original = NSTextField(frame: CGRect(x: 20, y: 470, width: 200, height: 24))
+        let anchor = NSView(frame: CGRect(x: 20, y: 400, width: 60, height: 28))
+        window.contentView?.addSubview(original)
+        window.contentView?.addSubview(anchor)
+        let presenter = AtticDropdownPresenter()
+        presenter.design = AtticDesignContext(reduceMotion: true)
+        presenter.content = AnyView(TaskTagPickerView(allTags: ["design", "home"], state: { _ in .off }, onToggle: { _ in }, onCreate: { _, _ in true }))
+        func fieldHasKeyboard() -> Bool {
+            guard let editor = window.firstResponder as? NSTextView, editor.isFieldEditor, let host = presenter.host else { return false }
+            return (editor.delegate as? NSView)?.isDescendant(of: host) == true
+        }
+        func selected() -> [String] {
+            guard let host = presenter.host else { return [] }
+            return accessibilityElements(host).compactMap { $0 as? AtticDropdownMenuItem.ItemView }
+                .filter { $0.isAccessibilitySelected() }.compactMap { $0.accessibilityLabel() }
+        }
+        for round in 1...10 {
+            XCTAssertTrue(window.makeFirstResponder(original))
+            presenter.present(from: anchor)
+            spin(0.3)
+            XCTAssertTrue(fieldHasKeyboard(), "round \(round): the field has the keyboard as the card opens")
+            XCTAssertNil(presenter.handleKey(key("\t", code: 48, in: window)), "round \(round): the card takes Tab")
+            spin(0.2)
+            let responder = window.firstResponder as? NSView
+            XCTAssertFalse(fieldHasKeyboard(), "round \(round): Tab left the field (\(String(describing: responder)))")
+            XCTAssertTrue(responder.map { v in presenter.host.map { v.isDescendant(of: $0) } ?? false } == true,
+                          "round \(round): the rows have the keyboard, inside the card")
+            XCTAssertEqual(selected(), ["#design"], "round \(round): arriving highlights the first row")
+            XCTAssertNil(presenter.handleKey(key("\t", code: 48, flags: .shift, in: window)))
+            spin(0.2)
+            XCTAssertTrue(fieldHasKeyboard(), "round \(round): Shift-Tab returns to the field")
+            XCTAssertNil(presenter.handleKey(key("\u{1b}", code: 53, in: window)))
+            spin(0.1)
+            XCTAssertIdentical(AtticDropdownPresenter.owner(of: window.firstResponder), original, "round \(round): Esc gives the keyboard back")
+            presenter.close(restoreFocus: false, immediately: true)
+        }
+    }
+
     func testTheWidthFitsItsContentNeverUnderTheMinimumNeverPastTheMargin() {
         let m = AtticDropdownMetrics.self
         let available: CGFloat = 320 - m.panelMargin * 2
