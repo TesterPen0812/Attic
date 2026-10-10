@@ -41,6 +41,15 @@ final class PhaseXHunt9Tests: XCTestCase {
         return Data(bytes: bytes, count: bitmap.bytesPerRow * bitmap.pixelsHigh)
     }
 
+    private func assertSameRaster(_ actual: Data, _ expected: Data, file: StaticString = #filePath, line: UInt = #line) {
+        XCTAssertEqual(actual.count, expected.count, file: file, line: line)
+        // ImageRenderer/ColorSync can round a channel by one byte between
+        // identical renders. Compare every channel, including alpha; the
+        // light/dark ink difference is orders of magnitude larger.
+        let error = zip(actual, expected).map { abs(Int($0) - Int($1)) }.max() ?? 0
+        XCTAssertLessThanOrEqual(error, 1, "maximum raster channel error", file: file, line: line)
+    }
+
     func testH11_01HoveredLinkAddressFollowsAppearanceWithoutRehover() throws {
         let light = AtticDesignContext(mode: .light), dark = AtticDesignContext(mode: .dark)
         let engine = NoteEditorEngine(noteID: UUID(), document: NoteDocument(blocks: [.text("Note"), .text("example")]), design: light)
@@ -62,15 +71,13 @@ final class PhaseXHunt9Tests: XCTestCase {
         controls.mouseMoved(with: event)
         spin(0.65)
         let address = try XCTUnwrap(descendants(scroll).compactMap { $0 as? AtticOverlayHostingView }.first { !$0.isHidden })
-        let expectedLight = try pixels(NoteLinkAddressView(address: "example.com").atticDesign(light))
-        let expectedDark = try pixels(NoteLinkAddressView(address: "example.com").atticDesign(dark))
+        let expectedLight = try pixels(AnyView(NoteLinkAddressView(address: "example.com").atticDesign(light)))
+        let expectedDark = try pixels(AnyView(NoteLinkAddressView(address: "example.com").atticDesign(dark)))
         XCTAssertNotEqual(expectedLight, expectedDark, "independent rendered consumer changes ink")
-        XCTAssertEqual(try pixels(address.rootView), expectedLight, "the actual mounted hover address opened")
+        assertSameRaster(try pixels(address.rootView), expectedLight)
         controls.update(design: dark)
         spin()
-        try XCTExpectFailure("H11-01") {
-            XCTAssertEqual(try pixels(address.rootView), expectedDark, "same host refreshes without a pointer move")
-        }
+        assertSameRaster(try pixels(address.rootView), expectedDark)
         XCTAssertFalse(window.isVisible)
         XCTAssertFalse(window.isKeyWindow)
     }

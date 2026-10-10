@@ -218,6 +218,11 @@ final class NoteFormatControls: NSObject {
             })
             .atticDesign(design))
         hintHost.rootView = AnyView(NoteSlashHintView().atticDesign(design))
+        // The address can stay under the pointer across a change of look.
+        // Keep its host and placement; refreshing must not require rehovering.
+        if let hoverURL {
+            addressHost.rootView = addressRoot(hoverURL)
+        }
     }
 
     /// Links read as body text with a quiet underline; the pointer shows a
@@ -1110,9 +1115,7 @@ final class NoteFormatControls: NSObject {
     private func showAddress(_ url: String, range: NSRange) {
         guard let textView, hoverURL == url,
               let rect = engine.rect(for: NSRange(location: NSMaxRange(range) - 1, length: 1)) else { return }
-        let design = design
-        let shown = url.replacingOccurrences(of: "https://", with: "").replacingOccurrences(of: "http://", with: "")
-        addressHost.rootView = AnyView(NoteLinkAddressView(address: shown).atticDesign(design))
+        addressHost.rootView = addressRoot(url)
         let size = addressHost.fittingSize
         let room = AtticNoteFormatMetrics.shadowRoom
         let x = max(0, min(rect.minX - room, textView.bounds.width - size.width))
@@ -1123,6 +1126,11 @@ final class NoteFormatControls: NSObject {
 
     private func hideAddress() {
         addressHost.isHidden = true
+    }
+
+    private func addressRoot(_ url: String) -> AnyView {
+        let shown = url.replacingOccurrences(of: "https://", with: "").replacingOccurrences(of: "http://", with: "")
+        return AnyView(NoteLinkAddressView(address: shown).atticDesign(design))
     }
 
     // MARK: Empty-line hint (OD-14, p2-36 draft 7)
