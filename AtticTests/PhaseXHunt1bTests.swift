@@ -2135,3 +2135,40 @@ extension PhaseXHunt6Tests {
         }
     }
 }
+
+@MainActor
+extension PhaseXHunt6Tests {
+    func testH8_06SavingAnOlderSnapshotCannotRetireNewerTextOrTags() async throws {
+        for tagsOnly in [false, true] {
+            let gate = PersistenceGate()
+            let store = try makeTestNoteStore(persist: gate.save, attachmentFileStore: makeTestAttachmentFileStore())
+            let id = try store.createDocumentNote(id: UUID(), document: NoteDocument(blocks: [.text("A")])).get().noteID
+            let journal = NoteDraftJournal(directory: ownedTemporaryDirectory(prefix: "H8Snapshot"))
+            let page = NotesPageController(store: store, journal: journal, saveDelay: .seconds(600), durabilityDelay: .seconds(600))
+            await page.startAndWait()
+            XCTAssertTrue(page.open(noteID: id))
+            let session = try XCTUnwrap(page.active)
+            let old = session.engine.document(), oldTags = session.engine.tags
+            if tagsOnly { session.engine.setTagsFromPicker(["newer"]) }
+            else { XCTAssertTrue(session.engine.performEdit(NSRange(location: 1, length: 0), with: NSAttributedString(string: "B"), name: "Type newer")) }
+            let newer = session.engine.document(), tags = session.engine.tags
+            gate.shouldFail = true
+            await XCTAssertTrueAsync(await page.preserveAllDurably())
+            gate.shouldFail = false
+            XCTAssertEqual(try journal.recoveryEntries().count, 1)
+            XCTAssertTrue(page.save(session, snapshot: old, tagsSnapshot: oldTags))
+            await page.waitForRecoveryWork()
+            XCTAssertEqual(session.engine.document(), newer)
+            XCTAssertEqual(session.engine.tags, tags)
+            XCTExpectFailure("H8-06") {
+                XCTAssertEqual(session.state, .dirty)
+                XCTAssertEqual(try? journal.recoveryEntries().count, 1)
+            }
+            await XCTAssertTrueAsync(await page.preserveAllDurably())
+            XCTExpectFailure("H8-06 preservation after stale save") {
+                XCTAssertEqual(store.loadDocument(noteID: id)?.content.document, newer)
+                XCTAssertEqual(store.note(withID: id)?.tags, tags)
+            }
+        }
+    }
+}
