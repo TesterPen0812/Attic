@@ -3885,7 +3885,11 @@ struct TasksRowKey: Equatable {
     static func == (lhs: Self, rhs: Self) -> Bool {
         !lhs.isLive && !rhs.isLive && lhs.model == rhs.model && lhs.isSelected == rhs.isSelected
             && lhs.selectionRun == rhs.selectionRun && lhs.isExpanded == rhs.isExpanded && lhs.isDropTarget == rhs.isDropTarget
-            && lhs.isFocused == rhs.isFocused && lhs.tab == rhs.tab && lhs.layout == rhs.layout
+            && lhs.isFocused == rhs.isFocused && lhs.tab == rhs.tab
+            // Native layout resizes the row. Its controls and callbacks
+            // change only when the chrome insets change, not every pixel
+            // of the panel size (owner F-14).
+            && lhs.layout.chromeInsets == rhs.layout.chromeInsets
     }
 }
 
