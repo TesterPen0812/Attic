@@ -963,7 +963,7 @@ private struct NoteStatusSlot: View {
                     removingDamaged: damaged.entries.map(\.confirmation.checkpointFilename)) else { return nil }
             if NoteStatusPresentation.isProgress(message) {
                 // Pending guidance: progress, quietly, clearing itself.
-                return AtticStatusItem(id: "pending", systemName: nil, title: message, tone: .quiet)
+                return AtticStatusItem(id: "pending", systemName: nil, title: NoteStatusPresentation.headline(forNotice: message), explanation: message, tone: .quiet)
             }
             var actions: [AtticStatusItem.Action] = []
             if message == NoteTablePasteOffer.notice, session.engine.tablePasteOffer != nil {
@@ -976,7 +976,10 @@ private struct NoteStatusSlot: View {
             }
             actions.append(.init(title: String(localized: "Dismiss"), identifier: "notes-notice-dismiss",
                                  handler: details { session.notice = nil }))
-            return AtticStatusItem(id: "notice", systemName: "info.circle", title: message, tone: .normal, actions: actions)
+            // The pill says the headline; the details say the sentence (D-05).
+            return AtticStatusItem(id: "notice", systemName: "info.circle",
+                                   title: NoteStatusPresentation.headline(forNotice: message),
+                                   explanation: message, tone: .normal, actions: actions)
         }
     }
 }
