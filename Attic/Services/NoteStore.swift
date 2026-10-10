@@ -1175,7 +1175,8 @@ final class NoteStore: ObservableObject {
 #if os(macOS)
     /// Every attachment row (shown or removed) a note owns.
     func attachmentRows(forNoteID noteID: UUID) throws -> [NoteAttachment] {
-        try storedAttachments(forNoteID: noteID)
+        try auxiliaryFetchWillRead?(NoteAttachment.self)
+        return try storedAttachments(forNoteID: noteID)
     }
 #endif
 

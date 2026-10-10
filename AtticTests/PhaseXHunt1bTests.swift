@@ -785,6 +785,41 @@ final class PhaseXHunt1bTests: XCTestCase {
         XCTAssertEqual(store.pendingEdits(noteID: id).count, 1)
     }
 
+    func testHunt3FailedAttachmentMetadataReadKeepsDecodedOwnershipAndOpaqueVersionsProtected() throws {
+        let store = try makeTestNoteStore(attachmentFileStore: makeTestAttachmentFileStore())
+        let id = UUID(), fileID = UUID(), bytes = Data("retained bytes".utf8)
+        let document = NoteDocument(blocks: [.text("Title"), .file(attachmentID: fileID, filename: "file.txt",
+            contentTypeIdentifier: "public.plain-text", byteCount: Int64(bytes.count))])
+        let staged = StagedNoteAttachment(id: fileID, filename: "file.txt", contentTypeIdentifier: "public.plain-text",
+            byteCount: Int64(bytes.count), digest: NotePayloadDigest.sha256(bytes), data: bytes)
+        _ = try store.createDocumentNote(id: id, document: document, staged: [staged]).get()
+        let originalBytes = try XCTUnwrap(store.note(withID: id)?.content)
+        store.auxiliaryFetchWillRead = { type in
+            if type == NoteAttachment.self { throw NSError(domain: "Hunt3-fetch", code: 3) }
+        }
+        _ = try store.agentWrite(noteID: id, baseRevisionToken: try XCTUnwrap(store.note(withID: id)).revisionToken,
+            document: document, agentName: "Agent", disposition: .proposal).get()
+        let version = try XCTUnwrap(store.versions(noteID: id).first { $0.reason == .beforeAgentEdit })
+        XCTAssertEqual(version.attachmentIDs, [], "Exercise the silent metadata fallback")
+        XCTAssertEqual(version.content, originalBytes, "The exact encoded base survives the metadata failure")
+        XCTAssertTrue(try NoteDocumentRetentionSnapshot.read(in: ModelContext(store.container)).attachmentIDs().contains(fileID))
+
+        let opaque = NoteItem(id: id, title: "Newer writer")
+        opaque.contentFormat = 2; opaque.content = Data("unsupported bytes".utf8)
+        let opaqueID = UUID()
+        store.stageVersion(of: opaque, reason: .beforeAgentEdit, timestamp: Date(), context: store.modelContext, id: opaqueID)
+        try store.modelContext.save()
+        let retained = try XCTUnwrap(store.versions(noteID: id).first { $0.id == opaqueID })
+        XCTAssertEqual(retained.attachmentIDs, [])
+        XCTAssertEqual(retained.content, opaque.content)
+        XCTAssertFalse(NotePhysicalFamilyRetention.versionEligible([retained], noteIDs: [id], proposalBases: [], recoveryBases: []))
+        XCTAssertThrowsError(try NoteDocumentRetentionSnapshot.read(in: ModelContext(store.container)).attachmentIDs())
+        store.auxiliaryFetchWillRead = nil
+        store.thinVersions(noteID: id)
+        XCTAssertTrue(store.versions(noteID: id).contains { $0.id == opaqueID })
+        XCTAssertEqual(try XCTUnwrap(store.attachmentFamily(fileID).first).payload, bytes)
+    }
+
 }
 
 @MainActor

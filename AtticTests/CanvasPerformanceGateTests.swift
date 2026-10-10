@@ -73,6 +73,29 @@ final class CanvasPerformanceGateTests: XCTestCase {
         )
     }
 
+    func testHunt3SemanticObjectSaveOnImageHeavyBoardRoundTripsWithoutReadingImages() throws {
+        let store = try makeOnDiskCanvasStore()
+        try seedImages(count: 50, byteCount: 96 * 1024, in: store)
+        let content = CanvasSemanticContent(text: "Saved text", shape: nil, color: .ink, strokeWidth: 3)
+        CanvasImagePayloadAccessCounter.reset()
+        let object = try XCTUnwrap(store.addSemanticObject(content: content,
+            transform: CanvasImageTransform(center: CanvasPoint(x: 20, y: 30), width: 200, height: 80, zIndex: 60)))
+        XCTAssertEqual(CanvasImagePayloadAccessCounter.count, 0)
+        var edited = object
+        edited.transform.center = CanvasPoint(x: 100, y: 150)
+        edited.rotation = 0.5
+        CanvasImagePayloadAccessCounter.reset()
+        XCTAssertTrue(store.updateSemanticObject(edited))
+        XCTAssertEqual(CanvasImagePayloadAccessCounter.count, 0)
+        let reopened = CanvasStore(container: store.container)
+        let copy = try XCTUnwrap(reopened.semanticObjects.first { $0.id == object.id })
+        XCTAssertEqual(copy.content, content)
+        XCTAssertEqual(copy.transform, edited.transform)
+        XCTAssertEqual(copy.rotation, edited.rotation)
+        XCTAssertEqual(reopened.images.count, 50)
+        XCTAssertEqual(try ModelContext(store.container).fetch(FetchDescriptor<CanvasImageItem>()).count, 50)
+    }
+
     func testTransformOnlySaveDoesNotTouchImagePayloads() throws {
         let store = try makeOnDiskCanvasStore()
         try seedImages(count: 8, byteCount: 64 * 1024, in: store)

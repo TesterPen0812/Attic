@@ -88,4 +88,48 @@ final class PhaseXHunt1TaskInvariantTests: XCTestCase {
         #endif
     }
 
+    func testHunt3CleanupMidnightDSTBoundariesRollbackAndReplicaAgreement() throws {
+        struct Failure: Error {}
+        for (zone, month, day) in [("Europe/London", 3, 29), ("Europe/London", 10, 25),
+                                   ("America/New_York", 3, 8), ("America/New_York", 11, 1), ("UTC", 10, 10)] {
+            var calendar = Calendar(identifier: .gregorian); calendar.timeZone = TimeZone(identifier: zone)!
+            let midnight = calendar.date(from: DateComponents(year: 2026, month: month, day: day))!
+            for offset in [-1.0, 0, 1, 43_200] {
+                let now = midnight.addingTimeInterval(offset), cutoff = calendar.startOfDay(for: now)
+                var rejectsSave = false
+                let store = try makeTestStore(now: { now }, persist: {
+                    if rejectsSave { throw Failure() }; try $0.save()
+                })
+                let context = ModelContext(store.container), sameID = UUID(), divergentID = UUID()
+                let old = TaskItem(title: "Old", status: .done, completedAt: cutoff.addingTimeInterval(-1))
+                let boundary = TaskItem(title: "Boundary", status: .done, completedAt: cutoff)
+                let future = TaskItem(title: "Future", status: .done, completedAt: cutoff.addingTimeInterval(1))
+                let missing = TaskItem(title: "No completion", status: .done)
+                [old, boundary, future, missing].forEach(context.insert)
+                for title in ["Same", "Same"] {
+                    context.insert(TaskItem(id: sameID, title: title, status: .done, createdAt: cutoff,
+                        updatedAt: cutoff, completedAt: cutoff.addingTimeInterval(-1)))
+                }
+                for completed in [cutoff.addingTimeInterval(-1), cutoff] {
+                    context.insert(TaskItem(id: divergentID, title: "Different completion", status: .done,
+                        createdAt: cutoff, updatedAt: cutoff, completedAt: completed))
+                }
+                try context.save(); store.refresh()
+                let cleanup = DailyCleanupService(store: store, now: { now }, calendar: { calendar })
+                rejectsSave = true
+                XCTAssertEqual(cleanup.performCleanup(), 0)
+                XCTAssertTrue(try ModelContext(store.container).fetch(FetchDescriptor<TaskItem>()).allSatisfy { $0.doneLoggedAt == nil })
+                rejectsSave = false
+                XCTAssertEqual(cleanup.performCleanup(), 2, "\(zone) \(month)/\(day) offset=\(offset)")
+                XCTAssertEqual(cleanup.performCleanup(), 0)
+                let rows = try ModelContext(store.container).fetch(FetchDescriptor<TaskItem>())
+                XCTAssertEqual(rows.count, 8)
+                for row in rows {
+                    XCTAssertEqual(row.doneLoggedAt != nil, row.id == old.id || row.id == sameID)
+                    XCTAssertNil(row.deletedAt)
+                }
+            }
+        }
+    }
+
 }
