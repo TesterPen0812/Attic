@@ -62,6 +62,7 @@ final class NotesLibraryModel: ObservableObject {
     private weak var observedStore: NoteStore?
     private var storeSubscription: AnyCancellable?
     private var presentationSubscription: AnyCancellable?
+    private var dateEnvironmentSubscription: AnyCancellable?
     private var storeRevision: UInt64 = 0
     private var searchGeneration: UInt64 = 0
     private var cache: (key: RowsKey, groups: [Group])?
@@ -82,6 +83,7 @@ final class NotesLibraryModel: ObservableObject {
         let attention: Set<UUID>
         let drafts: [UUID]
         let day: Int
+        let dateEnvironment: DatePresentationEnvironment
         let tag: String?
     }
 
@@ -90,6 +92,15 @@ final class NotesLibraryModel: ObservableObject {
         self.search = search
         self.now = now
         self.calendar = calendar
+        dateEnvironmentSubscription = Publishers.MergeMany(DatePresentationEnvironment.notifications.map {
+            NotificationCenter.default.publisher(for: $0)
+        }).sink { [weak self] _ in
+            DispatchQueue.main.async { [weak self] in
+                guard let self else { return }
+                self.cache = nil
+                self.objectWillChange.send()
+            }
+        }
         if let store { observeStore(store) }
         // Every exit route publishes here, including corner New Note and
         // Duplicate. Clear synchronously before hidden-editor autosaves.
@@ -205,6 +216,7 @@ final class NotesLibraryModel: ObservableObject {
         let searching = isSearching
         let key = RowsKey(revision: store.revision, matches: searching ? matches : nil, attention: attention,
                           drafts: unsaved.map(\.noteID), day: calendar.ordinality(of: .day, in: .era, for: now()) ?? 0,
+                          dateEnvironment: DatePresentationEnvironment(calendar: calendar),
                           tag: tagFilter)
         if let cache, cache.key == key, unsaved.isEmpty { return cache.groups }
 

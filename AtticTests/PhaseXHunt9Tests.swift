@@ -1,4 +1,5 @@
 import AppKit
+import Combine
 import SwiftData
 import SwiftUI
 import XCTest
@@ -187,11 +188,30 @@ final class PhaseXHunt9Tests: XCTestCase {
         NSTimeZone.default = try XCTUnwrap(TimeZone(secondsFromGMT: 3_600))
         XCTAssertEqual(DueDay(date: now, calendar: .current), DueDay(rawValue: "2026-10-10"))
         XCTAssertNotEqual(first.first?.id, Calendar.current.startOfDay(for: itemTime), "independent grouping oracle changed")
-        XCTExpectFailure("H11-05") {
-            XCTAssertEqual(model.doneDays().first?.id, Calendar.current.startOfDay(for: itemTime))
-            XCTAssertNotEqual(model.pageToken(.done), token, "hidden Done page invalidates for changed date environment")
-            XCTAssertTrue(list.groups(store: notes, drafts: []).contains { $0.id == "today" && $0.rows.contains { $0.id == id } })
+        XCTAssertEqual(model.doneDays().first?.id, Calendar.current.startOfDay(for: itemTime))
+        XCTAssertNotEqual(model.pageToken(.done), token, "hidden Done page invalidates for changed date environment")
+        XCTAssertTrue(list.groups(store: notes, drafts: []).contains { $0.id == "today" && $0.rows.contains { $0.id == id } })
+    }
+
+    func testCoverageDateEnvironmentNotificationsPublishWithoutMutatingStores() throws {
+        let tasks = try makeTestStore(), library = AtticLibrary(tasks: tasks)
+        let model = TasksPageModel(library: library, services: TasksPageServices())
+        let notes = try makeTestNoteStore(attachmentFileStore: makeTestAttachmentFileStore())
+        let list = NotesLibraryModel(search: { _ in [] }, store: notes)
+        var taskChanges = 0, noteChanges = 0
+        let taskSubscription = model.objectWillChange.sink { taskChanges += 1 }
+        let noteSubscription = list.objectWillChange.sink { noteChanges += 1 }
+        let taskRevision = tasks.revision, noteRevision = notes.revision
+        for name in DatePresentationEnvironment.notifications {
+            let previousTasks = taskChanges, previousNotes = noteChanges
+            NotificationCenter.default.post(name: name, object: nil)
+            spin()
+            XCTAssertGreaterThan(taskChanges, previousTasks)
+            XCTAssertGreaterThan(noteChanges, previousNotes)
         }
+        XCTAssertEqual(tasks.revision, taskRevision)
+        XCTAssertEqual(notes.revision, noteRevision)
+        withExtendedLifetime((taskSubscription, noteSubscription)) {}
     }
 
     func testH11_09ReopenedNoteDatePickerFollowsCurrentTimezone() throws {
@@ -203,9 +223,12 @@ final class PhaseXHunt9Tests: XCTestCase {
         card.openDate(fromSlash: false, today: now)
         NSTimeZone.default = try XCTUnwrap(TimeZone(secondsFromGMT: 43_200))
         card.openDate(fromSlash: false, today: now)
-        XCTExpectFailure("H11-09") {
-            XCTAssertEqual(card.candidateDate, Calendar.current.startOfDay(for: now), "Today must use the current local day")
-        }
+        XCTAssertEqual(card.candidateDate, Calendar.current.startOfDay(for: now), "Today must use the current local day")
+        card.dateText = "tomorrow"
+        NotificationCenter.default.post(name: .NSCalendarDayChanged, object: nil)
+        spin()
+        XCTAssertEqual(card.dateText, "tomorrow", "refresh preserves the date query")
+        XCTAssertEqual(card.candidateDate, Calendar.current.date(byAdding: .day, value: 1, to: Calendar.current.startOfDay(for: Date())))
     }
 
     private final class ClearBox: ObservableObject { @Published var presented = false }
@@ -257,13 +280,18 @@ final class PhaseXHunt9Tests: XCTestCase {
         XCTAssertTrue(engine.insertDate(today, at: NSRange(location: engine.textStorage.length, length: 0)))
         let date = try XCTUnwrap(engine.objects().compactMap { $0.0 as? NoteDateAttachment }.first)
         let opened = try XCTUnwrap(date.renderedImage)
+        let document = engine.document()
+        let historyCount = engine.history.undoOps.count
+        let revision = store.revision
         now.value = try XCTUnwrap(Calendar.current.date(byAdding: .day, value: 1, to: now.value))
         NotificationCenter.default.post(name: .NSCalendarDayChanged, object: nil)
-        spin()
-        XCTExpectFailure("H11-07") {
-            XCTAssertEqual(engine.today, NoteDay(date: now.value))
-            XCTAssertFalse(date.renderedImage === opened, "Today redraws as Yesterday without reopening")
-        }
+        try await Task.sleep(for: .milliseconds(150))
+        XCTAssertEqual(engine.today, NoteDay(date: now.value))
+        XCTAssertFalse(date.renderedImage === opened, "Today redraws as Yesterday without reopening")
+        XCTAssertTrue(controller.active?.engine === engine, "refresh preserves editor identity")
+        XCTAssertEqual(engine.document(), document)
+        XCTAssertEqual(engine.history.undoOps.count, historyCount)
+        XCTAssertEqual(store.revision, revision, "presentation refresh never saves")
     }
 
     func testH11_08DeletedSubtaskParentReleasesFailedCreationHold() throws {

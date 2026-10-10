@@ -950,7 +950,7 @@ final class NotesPageController: ObservableObject {
                             staged: [StagedNoteAttachment] = [], tags: [String] = []) -> NoteEditorEngine {
         let engine = NoteEditorEngine(noteID: noteID, document: document, readOnly: readOnly, design: design,
                                       today: NoteDay(date: now()), imageProvider: self, stagedAttachments: staged,
-                                      tags: tags)
+                                      tags: tags, relativeDateNow: now)
         if let editor = store.note(withID: noteID)?.externalEditorName {
             engine.history.outsideEditBarrier = editor
             engine.history.onOutsideEditBarrier = { [weak engine] editor in

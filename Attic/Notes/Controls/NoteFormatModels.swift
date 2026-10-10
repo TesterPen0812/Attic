@@ -1,4 +1,5 @@
 import AppKit
+import Combine
 import SwiftUI
 
 /// What every format command is at the selection (enabled, on/off/mixed),
@@ -366,8 +367,20 @@ final class NoteFormatCardModel: ObservableObject {
     @Published var dateText = ""
     @Published var linkText = ""
     @Published var linkError: String?
-    var today = Date()
-    var calendar = Calendar.current
+    @Published var today = Date()
+    @Published var calendar = Calendar.current
+    private var dateEnvironmentSubscription: AnyCancellable?
+
+    init() {
+        dateEnvironmentSubscription = Publishers.MergeMany(DatePresentationEnvironment.notifications.map {
+            NotificationCenter.default.publisher(for: $0)
+        }).sink { [weak self] _ in
+            DispatchQueue.main.async { [weak self] in
+                self?.calendar = .current
+                self?.today = Date()
+            }
+        }
+    }
 
     var onCommitDate: ((Date) -> Void)?
     var onCommitLink: ((String) -> Bool)?
@@ -386,6 +399,7 @@ final class NoteFormatCardModel: ObservableObject {
 
     func openDate(fromSlash: Bool, today: Date) {
         self.today = today
+        calendar = .current
         dateText = ""
         card = .date(fromSlash: fromSlash)
     }
