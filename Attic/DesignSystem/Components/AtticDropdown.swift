@@ -225,12 +225,20 @@ private struct AtticDropdownTabs: ViewModifier {
     let count: Int
     @Environment(\.atticDropdownRegisterKeys) private var registerKeys
     @Environment(\.atticDropdownTakeListKeyboard) private var takeListKeyboard
-    @Environment(\.atticDropdownKeyboardTrace) private var trace
 
     func body(content: Content) -> some View {
         content
             .onAppear(perform: registerTabKeys)
             .onChange(of: count) { _, _ in registerTabKeys() }
+            // Observe the actual focus owners in the view, not only inside
+            // the key callback. SwiftUI must adopt the initial field editor
+            // before Tab, and a native focus change must release its peer.
+            .onChange(of: field.wrappedValue) { _, now in
+                if now { list.wrappedValue = false }
+            }
+            .onChange(of: list.wrappedValue) { _, now in
+                if now { field.wrappedValue = false }
+            }
             .onDisappear { registerKeys(nil) }
     }
 
@@ -239,7 +247,6 @@ private struct AtticDropdownTabs: ViewModifier {
         registerKeys { event in
             guard event.keyCode == 48,
                   event.modifierFlags.intersection([.command, .option, .control]).isEmpty else { return false }
-            trace?("tab state field=\(field.wrappedValue) list=\(list.wrappedValue) count=\(count)")
             AtticDropdownTabFocus.transfer(listFocused: list.wrappedValue,
                 fullKeyboardAccess: NSApp.isFullKeyboardAccessEnabled,
                 setField: { field.wrappedValue = $0 }, setList: { list.wrappedValue = $0 },
@@ -253,7 +260,6 @@ private struct AtticDropdownListFocus: ViewModifier {
     var focus: FocusState<Bool>.Binding
     @Binding var highlighted: Int?
     let count: Int
-    @Environment(\.atticDropdownKeyboardTrace) private var trace
 
     func body(content: Content) -> some View {
         content
@@ -261,7 +267,6 @@ private struct AtticDropdownListFocus: ViewModifier {
             .focused(focus)
             .focusEffectDisabled()
             .onChange(of: focus.wrappedValue) { _, now in
-                trace?("list focus=\(now)")
                 if now, highlighted == nil, count > 0 { highlighted = 0 }
             }
     }
@@ -851,19 +856,11 @@ private struct AtticDropdownFocusModifier: ViewModifier {
     var focus: FocusState<Bool>.Binding
     let enabled: Bool
     @Environment(\.atticDropdownFocusRequest) private var request
-    @Environment(\.atticDropdownKeyboardTrace) private var trace
 
     func body(content: Content) -> some View {
         content
-            .onAppear {
-                trace?("field appear request=\(String(describing: request)) state=\(focus.wrappedValue)")
-                if AtticDropdownInitialFocus.shouldRequest(enabled: enabled, request: request) { focus.wrappedValue = true }
-            }
-            .onChange(of: request) { _, now in
-                trace?("field request=\(String(describing: now)) state=\(focus.wrappedValue)")
-                if enabled { focus.wrappedValue = true }
-            }
-            .onChange(of: focus.wrappedValue) { _, now in trace?("field focus=\(now)") }
+            .onAppear { if AtticDropdownInitialFocus.shouldRequest(enabled: enabled, request: request) { focus.wrappedValue = true } }
+            .onChange(of: request) { _, _ in if enabled { focus.wrappedValue = true } }
     }
 }
 
@@ -934,8 +931,6 @@ final class AtticDropdownPresenter {
     private var openIdealWidth: CGFloat = 0
     private var naturalHeight: CGFloat = 0
     private var contentKeyHandler: ((NSEvent) -> Bool)?
-    // Nil outside diagnostic tests; callers buffer observations until the interaction ends.
-    var keyboardTrace: ((String) -> Void)?
     var label = ""
     var design = AtticDesignContext()
     var content = AnyView(EmptyView())
@@ -958,19 +953,13 @@ final class AtticDropdownPresenter {
             .environment(\.atticDropdownContentWidthChanged, contentWidth == nil ? { [weak self] width in
                 self?.grow(toWidth: width)
             } : nil)
-            .environment(\.atticDropdownRegisterKeys, { [weak self] handler in
-                self?.keyboardTrace?("register handler=\(handler != nil)")
-                self?.contentKeyHandler = handler
-            })
-            .environment(\.atticDropdownKeyboardTrace, keyboardTrace)
+            .environment(\.atticDropdownRegisterKeys, { [weak self] handler in self?.contentKeyHandler = handler })
             .environment(\.atticDropdownTakeListKeyboard, { [weak self] in
                 guard let host = self?.host, let window = host.window else { return }
                 // A Bool focus request can highlight the list while AppKit's
                 // shared field editor still receives Space and arrow keys.
                 // Release it inside this card before requesting SwiftUI focus.
-                self?.keyboardTrace?("handoff before=\(String(describing: window.firstResponder))")
-                let accepted = window.makeFirstResponder(host)
-                self?.keyboardTrace?("handoff accepted=\(accepted) after=\(String(describing: window.firstResponder))")
+                window.makeFirstResponder(host)
             })
             .atticDesign(design))
     }
@@ -1167,7 +1156,6 @@ final class AtticDropdownPresenter {
             window.makeFirstResponder(host)
         }
         stage.focusRequest += 1
-        keyboardTrace?("initial keyboard request=\(stage.focusRequest) responder=\(String(describing: window.firstResponder))")
     }
 
     /// The view to give the keyboard back to: a field's own view, not the
@@ -1204,13 +1192,9 @@ final class AtticDropdownPresenter {
 
     /// Let the active input method cancel composition before dismissing.
     func handleKey(_ event: NSEvent) -> NSEvent? {
-        keyboardTrace?("key code=\(event.keyCode) open=\(isOpen) window=\(event.window === host?.window) handler=\(contentKeyHandler != nil) responder=\(String(describing: event.window?.firstResponder))")
         guard isOpen, event.type == .keyDown, event.window === host?.window,
               (event.window?.firstResponder as? NSTextInputClient)?.hasMarkedText() != true else { return event }
-        if contentKeyHandler?(event) == true {
-            keyboardTrace?("handled code=\(event.keyCode) responder=\(String(describing: event.window?.firstResponder))")
-            return nil
-        }
+        if contentKeyHandler?(event) == true { return nil }
         guard event.keyCode == 53,
               event.modifierFlags.intersection([.command, .option, .control, .shift]).isEmpty else { return event }
         dismiss()
@@ -1370,19 +1354,11 @@ private struct AtticDropdownHeightKey: EnvironmentKey {
     static let defaultValue: CGFloat? = nil
 }
 
-private struct AtticDropdownKeyboardTraceKey: EnvironmentKey {
-    static let defaultValue: ((String) -> Void)? = nil
-}
-
 private struct AtticDropdownTakeListKeyboardKey: EnvironmentKey {
     static let defaultValue: () -> Void = {}
 }
 
 extension EnvironmentValues {
-    var atticDropdownKeyboardTrace: ((String) -> Void)? {
-        get { self[AtticDropdownKeyboardTraceKey.self] }
-        set { self[AtticDropdownKeyboardTraceKey.self] = newValue }
-    }
     var atticDropdownTakeListKeyboard: () -> Void {
         get { self[AtticDropdownTakeListKeyboardKey.self] }
         set { self[AtticDropdownTakeListKeyboardKey.self] = newValue }
