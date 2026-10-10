@@ -101,8 +101,9 @@ jobs:
           status=0
           # The native key-window interaction runs alone in its own process first.
           run_tests native 1 testTheTagPickerWorksFromTheKeyboardWithFullKeyboardAccess || status=1
-          run_tests unit 3 \
+          run_tests unit 4 \
             testH5_04OpeningGivesTheHostTheKeyboardAndOnlySwiftUIFocusesTheField \
+            testH5_04ATabBeforeTheOpeningHandoffIsNotUndoneByIt \
             testH5_04AReusedPresenterOpensItsNextCardAsItOpenedTheFirst \
             testH5_04TabHandsTheKeyboardBetweenFieldAndRowsOnAReusedPresenter || status=1
           run_tests diagnosis 1 testZZDiagnoseNativeTagPickerTab || true
