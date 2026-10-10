@@ -160,7 +160,12 @@ final class NoteFormatControls: NSObject {
         // settling): its placement counts as layout.
         boundsObserver = NotificationCenter.default.addObserver(
             forName: NSView.boundsDidChangeNotification, object: clip, queue: .main
-        ) { [weak self] _ in MainActor.assumeIsolated { AtticOverlayHierarchy.layoutPass { self?.layoutDidChange() } } }
+        ) { [weak self] _ in MainActor.assumeIsolated {
+            AtticOverlayHierarchy.layoutPass { self?.layoutDidChange() }
+            // An offscreen selection's bar returns when the selection scrolls
+            // back into view. A caret-only scroll still does no snapshot work.
+            if (self?.selection.length ?? 0) > 0 { self?.scheduleRefresh() }
+        } }
         keyMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
             self?.handleKey(event) == true ? nil : event
         }
@@ -375,7 +380,7 @@ final class NoteFormatControls: NSObject {
         let key = formatModel.snapshot.cells.map { "cells:" + ($0.alignment?.title ?? "Align") }
             ?? NoteCommandCatalog.styleName(formatModel.snapshot.paragraph)
         barWidth = measuredBarWidth(styleName: key)
-        placeBar()
+        guard placeBar() else { return }
         barHost.isInteractive = true
         if barHost.isHidden { barHost.isHidden = false }
         if !formatModel.barShown { formatModel.barShown = true }
@@ -464,6 +469,10 @@ final class NoteFormatControls: NSObject {
         }
         let m = AtticNoteFormatMetrics.self
         let usable = usableRect()
+        // A selection persists while scrolling. Its floating controls must
+        // leave the screen when none of that selection is readable.
+        guard usable.height >= m.barHeight,
+              last.maxY > usable.minY, first.minY < usable.maxY else { return nil }
         let width = barWidth > 0 ? barWidth : Self.barWidth(styleName: NoteCommandCatalog.styleName(formatModel.snapshot.paragraph))
         var y = first.minY - m.barGap - m.barHeight
         var below = false
@@ -475,6 +484,7 @@ final class NoteFormatControls: NSObject {
                 y = usable.minY
             }
         }
+        y = min(max(y, usable.minY), usable.maxY - m.barHeight)
         let inset = textView.textContainerInset.width
         let preferred = min(first.minX, inset) - AtticControlSize.capsuleInset - m.barStylePadding
         let maxX = textView.bounds.width - width - m.barEdgeMargin
@@ -482,11 +492,13 @@ final class NoteFormatControls: NSObject {
         return (NSRect(x: x, y: y, width: width, height: m.barHeight), below)
     }
 
-    private func placeBar() {
-        guard let placement = barPlacement(selection: selection) else { hideBar(); return }
+    @discardableResult
+    private func placeBar() -> Bool {
+        guard let placement = barPlacement(selection: selection) else { hideBar(); return false }
         let room = AtticNoteFormatMetrics.shadowRoom
         placeOverlay(barHost, rect: placement.frame.insetBy(dx: -room, dy: -room))
         if formatModel.barBelow != placement.below { formatModel.barBelow = placement.below }
+        return true
     }
 
     // MARK: Keys

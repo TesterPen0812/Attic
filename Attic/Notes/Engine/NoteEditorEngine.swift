@@ -2111,6 +2111,18 @@ final class NoteEditorEngine: NSObject, NSTextViewDelegate, NSTextStorageDelegat
         guard let layoutManager, let textRange = textRange(for: range), let textView else { return nil }
         var rect: NSRect?
         layoutManager.ensureLayout(for: textRange)
+        // A standard text segment includes the line's descent/leading below
+        // an attachment. Object hit targets, rings and resize handles must
+        // use the face TextKit actually draws, with equal room on each side.
+        if range.length == 1, let object = object(at: range.location),
+           object is NoteImageAttachment || object is NoteFileAttachment,
+           let fragment = layoutManager.textLayoutFragment(for: textRange.location) {
+            let frame = fragment.frameForTextAttachment(at: textRange.location)
+            if !frame.isEmpty {
+                return frame.offsetBy(dx: fragment.layoutFragmentFrame.minX + textView.textContainerOrigin.x,
+                                      dy: fragment.layoutFragmentFrame.minY + textView.textContainerOrigin.y)
+            }
+        }
         layoutManager.enumerateTextSegments(in: textRange, type: .standard, options: []) { _, frame, _, _ in
             rect = rect.map { $0.union(frame) } ?? frame
             return true
@@ -2659,7 +2671,7 @@ extension NoteEditorEngine {
                 url = existing
             }
         }
-        guard range.length > 0 else { return nil }
+        guard range.length > 0, hasMarkableText(in: range) else { return nil }
         return NoteLinkTarget(noteID: noteID, range: range, selection: selection,
                               text: (textStorage.string as NSString).substring(with: range), url: url)
     }
@@ -2682,6 +2694,17 @@ extension NoteEditorEngine {
 
     func cancelLinkRequest() { pendingLinkTarget = nil }
 
+    /// A text command needs text: paragraph separators and object placeholders
+    /// alone cannot take a mark. Mixed text/object selections still format
+    /// their text through the same command routes.
+    private func hasMarkableText(in selection: NSRange) -> Bool {
+        if selection.length == 0 {
+            return selection.location > NSMaxRange(titleParagraphRange) && !isBlockObject(at: selection.location)
+        }
+        return (textStorage.string as NSString).rangeOfCharacter(
+            from: CharacterSet(charactersIn: "\n\u{FFFC}").inverted, options: [], range: selection).location != NSNotFound
+    }
+
     func validate(_ command: NoteFormatCommand, selection: NSRange? = nil) -> NoteCommandValidation {
         let selection = selection ?? textView?.selectedRange() ?? NSRange(location: textStorage.length, length: 0)
         guard !isReadOnly, activity == .idle, rangeIsInStorage(selection) else {
@@ -2695,7 +2718,7 @@ extension NoteEditorEngine {
                 (values.allSatisfy { $0 == style } ? .on : (values.contains(style) ? .mixed : .off))
             return NoteCommandValidation(enabled: !lines.isEmpty, state: state)
         case let .mark(kind):
-            let inBody = selection.location > titleParagraphRange.length || selection.length > 0
+            let inBody = hasMarkableText(in: selection)
             return NoteCommandValidation(enabled: inBody && (kind != .link || captureLinkTarget(selection: selection) != nil),
                                          state: markState(kind, selection: selection))
         case let .link(url):
