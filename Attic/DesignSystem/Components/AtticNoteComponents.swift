@@ -299,7 +299,7 @@ struct AtticNoteRow: View {
                 if let fill {
                     AtticHighlight(fill: fill)
                         .frame(height: AtticLayout.detailRowHighlightHeight)
-                        .padding(.horizontal, AtticLayout.rowHighlightInset)
+                        .padding(.horizontal, AtticNoteMetrics.libraryHighlightInset)
                         .padding(.top, (AtticLayout.detailRowPitch - AtticLayout.detailRowHighlightHeight) / 2)
                 }
                 VStack(alignment: .leading, spacing: AtticTaskRowMetrics.titleToDetails) {
@@ -556,7 +556,7 @@ struct AtticNoteLibraryLine: View {
             AtticIcon(systemName: "magnifyingglass", size: AtticTabsSearchMetrics.iconSize,
                       weight: AtticIconWeight.outline, ink: .helper)
                 .frame(width: AtticControlSize.statusCircle)
-                .padding(.leading, AtticNoteMetrics.searchIconX - AtticLayout.rowHighlightInset)
+                .padding(.leading, AtticNoteMetrics.searchIconX - AtticNoteMetrics.libraryHighlightInset)
             TextField("", text: $query, prompt: Text(verbatim: placeholder).foregroundStyle(tokens.color(.helper)))
                 .textFieldStyle(.plain)
                 .font(AtticTextStyle.listBody.font)
@@ -584,7 +584,7 @@ struct AtticNoteLibraryLine: View {
             .fill(tokens.recessed.color))
         .contentShape(Rectangle())
         .onTapGesture { fieldFocused.wrappedValue = true }
-        .padding(.horizontal, AtticLayout.rowHighlightInset)
+        .padding(.horizontal, AtticNoteMetrics.libraryHighlightInset)
     }
 }
 

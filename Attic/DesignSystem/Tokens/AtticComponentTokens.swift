@@ -724,6 +724,19 @@ enum AtticNoteMetrics {
     static let searchTextX: CGFloat = 36
     static let rowTextX: CGFloat = 16
     /// The ⋯ at the end of a row's title line (in the time's place).
+    /// All notes sits on the shared content column (design review D-07): the
+    /// page's edge is Tasks' (the text, 16 into it, lands 12 inside the
+    /// controls' line: 28 at the default corner), the rows' highlights and
+    /// the search field's edges are on the controls' own line (16 at the
+    /// default corner, 12 clear of the text), and the right-hand edges
+    /// mirror the left.
+    static func libraryPageEdge(chromeInset: CGFloat) -> CGFloat {
+        max(0, chromeInset + AtticLayout.contentFromChrome - AtticLayout.circleX)
+    }
+    /// How far a row's highlight (or the search field) sits inside the
+    /// library's page edge: `circleX - contentFromChrome`, so its edge is
+    /// the controls' line.
+    static let libraryHighlightInset: CGFloat = AtticLayout.circleX - AtticLayout.contentFromChrome
     static let rowActionsGlyphSize: CGFloat = 14
     static let countIconSize: CGFloat = 10
     static let countGap: CGFloat = 3

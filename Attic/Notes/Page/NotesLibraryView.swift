@@ -44,7 +44,7 @@ struct NotesLibraryView: View {
 
     static let space = NamedCoordinateSpace.named("AtticNotesLibrary")
 
-    private var pageEdge: CGFloat { max(0, layout.chromeInsets.leading - AtticSpacing.panelMargin) }
+    private var pageEdge: CGFloat { AtticNoteMetrics.libraryPageEdge(chromeInset: layout.chromeInsets.leading) }
 
     /// The label line's text top: the tabs' line, as on Tasks.
     private var labelsTop: CGFloat { layout.headerBottom + AtticLayout.pageTabsTop }
