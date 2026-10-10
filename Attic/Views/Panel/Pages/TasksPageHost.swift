@@ -9,6 +9,9 @@ final class TasksPageState: ObservableObject {
     private var model: TasksPageModel?
     /// The last Search request the page acted on (`PanelUIState.searchRequest`).
     var handledSearchRequest: UInt64 = 0
+    /// A request can precede the page's mount. Keep consumption with the
+    /// page state so rebuilding or returning never replays an old request.
+    var handledPrimaryInputFocusRequest: UInt64 = 0
     /// Where the page remembers its page and views across relaunch (L7);
     /// nil keeps them for the session only.
     let memory: TasksPageMemory?
@@ -87,6 +90,7 @@ struct TasksPageHost: View {
         .onChange(of: isCurrent) { _, current in
             guard current else { return }
             model.pageDidReturn()
+            handlePrimaryInputFocusRequest()
             chromeInteractionState.bottomControlsHeight = TasksPage.footerZone
             syncDraftLock(model)
         }
@@ -113,6 +117,7 @@ struct TasksPageHost: View {
             // Only the page shown takes the shell's focus (a page built
             // behind Notes, or prepared on approach, never takes it).
             if isCurrent, uiState.isComposerPresented { addBarFocused = true }
+            handlePrimaryInputFocusRequest()
             handleSearchRequest(model, request: uiState.searchRequest)
             showItemIfNeeded(model, uiState.shownItem)
             syncDraftLock(model)
@@ -158,7 +163,7 @@ struct TasksPageHost: View {
         // lands in the add bar. The request is the shell's counter:
         // relayed through a `@FocusState` no view was focused on, SwiftUI
         // dropped it (H5-05).
-        .onChange(of: primaryInputFocusRequest) { _, _ in if isCurrent { addBarFocused = true } }
+        .onChange(of: primaryInputFocusRequest) { _, _ in handlePrimaryInputFocusRequest() }
         .onChange(of: uiState.isComposerPresented) { _, presented in if presented, isCurrent { addBarFocused = true } }
         .onChange(of: addBarFocused) { _, focused in
             if !focused, isCurrent, uiState.isComposerPresented { uiState.endAdding() }
@@ -167,6 +172,12 @@ struct TasksPageHost: View {
 
     private func syncDraftLock(_ model: TasksPageModel) {
         uiState.setInteractionLock(.taskComposer, isActive: !model.addBar.text.isEmpty)
+    }
+
+    private func handlePrimaryInputFocusRequest() {
+        guard isCurrent, primaryInputFocusRequest != state.handledPrimaryInputFocusRequest else { return }
+        state.handledPrimaryInputFocusRequest = primaryInputFocusRequest
+        addBarFocused = true
     }
 
     /// `request` is the new value: a published value is sent before the

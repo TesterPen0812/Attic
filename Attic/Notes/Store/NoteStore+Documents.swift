@@ -165,6 +165,7 @@ struct StagedNoteAttachment: Equatable, Sendable {
 
 /// Immutable projection prepared away from the main actor for autosave.
 struct PreparedNoteDocument: Sendable {
+    private let source: NoteDocument
     let content: Data
     let title: String
     let body: String
@@ -175,6 +176,7 @@ struct PreparedNoteDocument: Sendable {
     let attachmentBlocks: [NoteBlock]
 
     init(_ document: NoteDocument) throws {
+        source = document
         content = try NoteContentCodec.encode(document)
         title = NoteStore.normalizedTitle(document.title)
         body = NoteTextExport.plainBody(document)
@@ -183,6 +185,11 @@ struct PreparedNoteDocument: Sendable {
         imageCount = attachmentBlocks.filter { $0.kind == .image }.count
         fileCount = attachmentBlocks.filter { $0.kind == .file }.count
         firstFileName = attachmentBlocks.first { $0.kind == .file }?.filename
+    }
+
+    /// Only a projection of these exact source values may bypass preparation.
+    func matching(_ document: NoteDocument) -> PreparedNoteDocument? {
+        source == document ? self : nil
     }
 }
 
@@ -477,7 +484,7 @@ extension NoteStore {
         let attachmentPlan: NoteAttachmentAdmission.Plan
         do {
             guard document.isWritableByThisBuild else { throw NoteDocumentStoreError.readOnly }
-            projection = try prepared ?? PreparedNoteDocument(document)
+            projection = try prepared?.matching(document) ?? PreparedNoteDocument(document)
             attachmentPlan = try attachmentStagePlan(staged, referencedBy: document, noteID: id)
         } catch let error as NoteDocumentStoreError {
             return .failure(error)
@@ -553,7 +560,7 @@ extension NoteStore {
         }
         let encodedTags = tags.map(AtticTag.encode)
         if staged.isEmpty, let encodedTags, let presentedRevisionID,
-           let projection = try? prepared ?? PreparedNoteDocument(document),
+           let projection = try? prepared?.matching(document) ?? PreparedNoteDocument(document),
            replicas.allSatisfy({ $0.content == projection.content && $0.contentFormat == document.format
                && $0.revisionID == presentedRevisionID }) {
             guard replicas.contains(where: { $0.tagsRaw != encodedTags }) else { return .success(presentedRevisionID) }
@@ -573,7 +580,7 @@ extension NoteStore {
         let placements: NoteDocument
         do {
             guard document.isWritableByThisBuild else { throw NoteDocumentStoreError.readOnly }
-            projection = try prepared ?? PreparedNoteDocument(document)
+            projection = try prepared?.matching(document) ?? PreparedNoteDocument(document)
             // Preflight already proved these exact bytes editable. Local
             // staging also records the placements with the bytes it writes.
             // Re-decoding the entire body here (and again for removed IDs)
@@ -626,7 +633,7 @@ extension NoteStore {
                        prepared: PreparedNoteDocument? = nil, tags: String? = nil) throws -> UUID {
         guard document.isWritableByThisBuild else { throw NoteDocumentStoreError.readOnly }
         let projection: PreparedNoteDocument
-        do { projection = try prepared ?? PreparedNoteDocument(document) }
+        do { projection = try prepared?.matching(document) ?? PreparedNoteDocument(document) }
         catch { throw NoteDocumentStoreError.encodingFailed(error.localizedDescription) }
         return stageValidated(document, on: replicas, timestamp: timestamp, revision: revision,
                               projection: projection, tags: tags)

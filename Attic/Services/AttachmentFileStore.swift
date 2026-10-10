@@ -2,6 +2,31 @@ import CryptoKit
 import Foundation
 import UniformTypeIdentifiers
 
+struct AttachmentByteOwnership: Sendable {
+    let ids: Set<UUID>
+    /// All asynchronous inventories are revalidated in the same main-actor
+    /// turn as the metadata move that commits removal from the live tree.
+    let isCurrent: @MainActor @Sendable () -> Bool
+}
+
+/// Journal writes run off-main. A collector must neither cross a write nor
+/// authorize deletion while recovery ownership is still being committed.
+final class AttachmentRecoveryEpoch: @unchecked Sendable {
+    static let shared = AttachmentRecoveryEpoch()
+    private let lock = NSLock()
+    private var generation: UInt64 = 0
+    private var writers = 0
+    func beginWrite() { lock.withLock { writers += 1; generation &+= 1 } }
+    func endWrite() { lock.withLock { writers -= 1; generation &+= 1 } }
+    func snapshot() -> UInt64? { lock.withLock { writers == 0 ? generation : nil } }
+    func commit<T>(at snapshot: UInt64, _ body: () throws -> T) rethrows -> T? {
+        try lock.withLock {
+            guard writers == 0, generation == snapshot else { return nil }
+            return try body()
+        }
+    }
+}
+
 enum AttachmentFileStoreError: LocalizedError, Equatable {
     case notAFile(URL)
     case inaccessible(URL, String)
@@ -48,32 +73,79 @@ actor AttachmentFileStore {
 
     private final class RetentionRegistry: @unchecked Sendable {
         let lock = NSLock()
-        var providers: [UUID: @Sendable () async -> Set<UUID>?] = [:]
-        func snapshot() -> [@Sendable () async -> Set<UUID>?] {
-            lock.lock(); defer { lock.unlock() }; return Array(providers.values)
+        var providers: [UUID: @Sendable () async -> AttachmentByteOwnership?] = [:]
+        var generation: UInt64 = 0
+        func snapshot() -> (UInt64, [@Sendable () async -> AttachmentByteOwnership?]) {
+            lock.lock(); defer { lock.unlock() }; return (generation, Array(providers.values))
+        }
+        func move(_ directory: URL, to retired: URL, ifCurrent generation: UInt64,
+                  recoveryEpoch: UInt64, using files: FileManager) throws -> Bool {
+            lock.lock(); defer { lock.unlock() }
+            guard self.generation == generation else { return false }
+            return try AttachmentRecoveryEpoch.shared.commit(at: recoveryEpoch) {
+                if files.fileExists(atPath: directory.path) { try files.moveItem(at: directory, to: retired) }
+                return true
+            } ?? false
         }
     }
-    private nonisolated let retention = RetentionRegistry()
+    private final class RetentionRegistries: @unchecked Sendable {
+        private final class Entry {
+            weak var registry: RetentionRegistry?
+            init(_ registry: RetentionRegistry) { self.registry = registry }
+        }
+        let lock = NSLock()
+        private var entries: [URL: Entry] = [:]
+        func registry(for root: URL) -> RetentionRegistry {
+            lock.lock(); defer { lock.unlock() }
+            let key = root.resolvingSymlinksInPath()
+            if let existing = entries[key]?.registry { return existing }
+            entries = entries.filter { $0.value.registry != nil }
+            let result = RetentionRegistry()
+            entries[key] = Entry(result)
+            return result
+        }
+    }
+    private static let registries = RetentionRegistries()
+    private nonisolated let retention: RetentionRegistry
 
     /// Registration is synchronous and thread-safe so the destructive
     /// primitive cannot race the store's initialization task.
-    nonisolated func registerByteOwners(_ owner: UUID, provider: @escaping @Sendable () async -> Set<UUID>?) {
-        retention.lock.lock(); retention.providers[owner] = provider; retention.lock.unlock()
+    nonisolated func registerByteOwners(_ owner: UUID, provider: @escaping @Sendable () async -> AttachmentByteOwnership?) {
+        retention.lock.lock()
+        retention.providers[owner] = provider
+        retention.generation &+= 1
+        retention.lock.unlock()
     }
 
     private func removeUnownedDirectory(_ directory: URL) async throws -> Bool {
         guard let id = UUID(uuidString: directory.deletingLastPathComponent().lastPathComponent) else { return false }
-        for provider in retention.snapshot() {
-            guard let ids = await provider(), !ids.contains(id) else { return false }
+        guard let recoveryEpoch = AttachmentRecoveryEpoch.shared.snapshot() else { return false }
+        let (generation, providers) = retention.snapshot()
+        var proofs: [AttachmentByteOwnership] = []
+        for provider in providers {
+            guard let proof = await provider(), !proof.ids.contains(id) else { return false }
+            proofs.append(proof)
         }
-        if fileManager.fileExists(atPath: directory.path) { try fileManager.removeItem(at: directory) }
-        return true
+        let retiredRoot = rootURL.appendingPathComponent(".retired", isDirectory: true)
+        try fileManager.createDirectory(at: retiredRoot, withIntermediateDirectories: true)
+        let retired = retiredRoot.appendingPathComponent(UUID().uuidString, isDirectory: true)
+        let retention = retention, files = fileManager
+        let removed = try await MainActor.run {
+            // No await between validating *every* source and the bounded
+            // same-filesystem rename. Recursive removal stays off-main.
+            guard proofs.allSatisfy({ $0.isCurrent() }) else { return false }
+            return try retention.move(directory, to: retired, ifCurrent: generation,
+                                      recoveryEpoch: recoveryEpoch, using: files)
+        }
+        if removed, fileManager.fileExists(atPath: retired.path) { try fileManager.removeItem(at: retired) }
+        return removed
     }
 
     init(rootURL: URL? = nil, fileManager: FileManager = .default) {
         self.fileManager = fileManager
         self.rootURL = (rootURL ?? Self.defaultRootURL(fileManager: fileManager))
             .standardizedFileURL
+        retention = Self.registries.registry(for: self.rootURL)
     }
 
     func prepare() throws {
@@ -205,6 +277,7 @@ actor AttachmentFileStore {
     }
 
     func removeMaterializations(_ references: [AttachmentFileReference]) async throws {
+        collectRetiredMaterializations()
         for reference in references {
             let directory = try validatedDirectory(for: reference)
             guard try await removeUnownedDirectory(directory) else { continue }
@@ -224,6 +297,7 @@ actor AttachmentFileStore {
     ) async throws -> AttachmentReconciliationReport {
         try Task.checkCancellation()
         try prepare()
+        collectRetiredMaterializations()
         var expected = Set<String>()
         var needsMaterialization: [AttachmentFileReference] = []
         var failures: [AttachmentReconciliationFailure] = []
@@ -314,6 +388,7 @@ actor AttachmentFileStore {
         modifiedBefore cutoff: Date,
         limit: Int
     ) async -> Int {
+        collectRetiredMaterializations()
         let keys: [URLResourceKey] = [
             .isDirectoryKey, .isSymbolicLinkKey, .creationDateKey, .contentModificationDateKey
         ]
@@ -379,6 +454,20 @@ actor AttachmentFileStore {
             return nil
         }
         return url
+    }
+
+    /// A committed rename releases live ownership even if unlinking fails or
+    /// the process exits. Retry those deletions off-main, with bounded work.
+    private func collectRetiredMaterializations() {
+        let root = rootURL.appendingPathComponent(".retired", isDirectory: true)
+        guard !Self.isSymbolicLink(root, fileManager: fileManager),
+              let entries = try? fileManager.contentsOfDirectory(at: root, includingPropertiesForKeys: [.isDirectoryKey]) else { return }
+        for entry in entries.prefix(64) {
+            guard UUID(uuidString: entry.lastPathComponent) != nil,
+                  !Self.isSymbolicLink(entry, fileManager: fileManager),
+                  (try? entry.resourceValues(forKeys: [.isDirectoryKey]).isDirectory) == true else { continue }
+            try? fileManager.removeItem(at: entry)
+        }
     }
 
     private func cleanOrphans(expected: Set<String>) async throws {

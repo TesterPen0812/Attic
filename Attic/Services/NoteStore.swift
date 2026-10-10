@@ -341,8 +341,9 @@ final class NoteStore: ObservableObject {
 
         init(container: ModelContainer) { self.container = container }
 
-        func retainedIDs() async -> Set<UUID>? {
+        func retainedIDs() async -> AttachmentByteOwnership? {
             do {
+                let generation = recoveryGeneration
                 var ids = try await NoteStore.readDurableAttachmentIDs(in: container)
                 guard !Task.isCancelled else { return nil }
                 if let durableRecoveryIDs {
@@ -351,7 +352,11 @@ final class NoteStore: ObservableObject {
                     ids.formUnion(try recoveryIDs())
                 }
                 guard !Task.isCancelled else { return nil }
-                return ids
+                let retained = ids
+                return AttachmentByteOwnership(ids: retained) { [self] in
+                    guard recoveryGeneration == generation, let current = try? recoveryIDs() else { return false }
+                    return current.isSubset(of: retained)
+                }
             } catch { return nil }
         }
     }
@@ -469,13 +474,14 @@ final class NoteStore: ObservableObject {
         }.value
     }
 
-    private func retainedAttachmentIDsForFiles() async -> Set<UUID>? {
+    private func retainedAttachmentIDsForFiles() async -> AttachmentByteOwnership? {
         do {
             while !Task.isCancelled {
                 // A worker context sees durable rows only. Pending ownership
                 // must keep all bytes, without faulting external blobs on main.
                 guard !context.hasChanges else { return nil }
                 let generation = revision
+                let context = self.context
                 let recoveryGeneration = attachmentRetentionSource.recoveryGeneration
                 let container = self.container
                 let observer = retentionDecodeObserver, readObserver = retentionContentReadObserver
@@ -496,7 +502,14 @@ final class NoteStore: ObservableObject {
                 guard !Task.isCancelled, !context.hasChanges else { return nil }
                 guard revision == generation,
                       attachmentRetentionSource.recoveryGeneration == recoveryGeneration else { continue }
-                return ids
+                let retained = ids
+                return AttachmentByteOwnership(ids: retained) { [weak self] in
+                    guard let self, self.context === context, !context.hasChanges,
+                          self.revision == generation,
+                          self.attachmentRetentionSource.recoveryGeneration == recoveryGeneration,
+                          let current = try? self.recoveryReferencedAttachmentIDs() else { return false }
+                    return current.isSubset(of: retained)
+                }
             }
             return nil
         } catch { return nil }

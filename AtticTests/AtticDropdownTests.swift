@@ -1934,3 +1934,45 @@ final class AtticDateCardTests: XCTestCase {
                          characters: characters, charactersIgnoringModifiers: characters, isARepeat: false, keyCode: keyCode)!
     }
 }
+
+@MainActor
+extension AtticDropdownTests {
+    func testH8_03PrimaryFocusRequestSurvivesFirstBuildAndSectionEntry() throws {
+        for initial in [PanelSection.tasks, .notes, .canvas] {
+            let suite = "H8FocusRoute.\(UUID().uuidString)"
+            let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+            defer { defaults.removePersistentDomain(forName: suite) }
+            let container = try PersistenceController.makeContainer(inMemory: true, cloudSyncEnabled: false)
+            let store = TaskStore(container: container)
+            let notes = trackAttachmentReconciliation(of: NoteStore(container: container, attachmentFileStore: makeTestAttachmentFileStore()))
+            let state = PanelUIState()
+            state.updatePanelSize(CGSize(width: 340, height: 560))
+            state.selectSection(initial)
+            let chrome = PanelChromeInteractionState()
+            let settings = AppSettings(defaults: defaults)
+            let host = AtticPanelHostingView(rootView: AtticPanelView(
+                store: store, noteStore: notes, canvasSession: CanvasSession(store: CanvasStore(container: container)),
+                noteDraft: NoteDraftController(noteStore: notes), chromeInteractionState: chrome,
+                uiState: state, settings: settings,
+                subtaskPanels: SubtaskPanelController(store: store, uiState: state, settings: settings),
+                tasksPageState: TasksPageState()), panelCornerRadius: 52, dockedCorner: .topRight, chromeInteractionState: chrome)
+            let window = makeUnshownWindow()
+            window.contentView = host
+            defer {
+                host.cancelActiveInteraction(reason: .lostWindow)
+                state.releasePageContent(); spin(0.3)
+                window.contentView = nil; window.close()
+            }
+            // A reveal/page shortcut loads/selects and requests in one turn,
+            // before SwiftUI mounts the target page (no window reveal here).
+            spin(0.3)
+            state.loadPageContent()
+            state.selectSection(.tasks)
+            state.requestPrimaryInputFocus()
+            spin(1)
+            let editor = window.firstResponder as? NSTextView
+            XCTAssertTrue(editor?.isDescendant(of: host) == true, "entry from \(initial): request before Tasks mount")
+            XCTAssertFalse(window.isVisible)
+        }
+    }
+}

@@ -1450,9 +1450,15 @@ final class NotesPageController: ObservableObject {
         guard NoteSessionPolicy.hasPendingWork(session.state) else { return true }
         guard !session.isReadOnly else { return true }
         let engine = session.engine
-        let document = snapshot ?? engine.document()
+        let generation = session.editGeneration
+        let liveDocument = engine.document()
+        let document = snapshot ?? liveDocument
         let staged = stagedSnapshot ?? engine.stagedAttachments(for: document)
         let tags = tagsSnapshot ?? session.engine.tags
+        // A caller flag is not proof that a captured snapshot covers the live
+        // draft. Keep newer text and tags owned even if the caller omits it.
+        let retainingNewerEdits = retainingNewerEdits
+            || document != liveDocument || tags != engine.tags
         if !session.isPersisted {
             guard !document.isEmpty || !document.objectIDs.isEmpty || !tags.isEmpty else {
                 session.state = retainingNewerEdits ? .dirty : .untouched
@@ -1464,7 +1470,7 @@ final class NotesPageController: ObservableObject {
                 session.isPersisted = true
                 session.baseRevisionID = revisionID
                 session.baseTags = tags
-                didSave(session, staged: staged, retainingNewerEdits: retainingNewerEdits)
+                didSave(session, staged: staged, retainingNewerEdits: retainingNewerEdits || generation != session.editGeneration)
                 remember(noteID)
                 return true
             case .failure(.noteMissing):
@@ -1491,7 +1497,7 @@ final class NotesPageController: ObservableObject {
             }
             session.baseRevisionID = revisionID
             if let pendingTags { session.baseTags = pendingTags }
-            didSave(session, staged: staged, retainingNewerEdits: retainingNewerEdits)
+            didSave(session, staged: staged, retainingNewerEdits: retainingNewerEdits || generation != session.editGeneration)
             return true
         case .failure(.noteMissing):
             session.state = .conflict(.deleted)

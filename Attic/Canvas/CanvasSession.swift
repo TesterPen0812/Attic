@@ -969,7 +969,7 @@ final class CanvasSession: ObservableObject {
               let after = images.first(where: { $0.id == id }) else {
             return false
         }
-        selectedImageID = id
+        selectImage(id)
         recordNewCommand(.transformImage(before: before, after: after))
         return true
     }
@@ -1324,7 +1324,7 @@ final class CanvasSession: ObservableObject {
         changed.transform = transform
         guard applyLocalMutation({ store.updateSemanticObject(changed) }),
               let after = semanticObjects.first(where: { $0.id == id }) else { return false }
-        selectedSemanticObjectID = id
+        selectSemanticObject(id)
         recordNewCommand(.changeSemantic(before: before, after: after))
         return true
     }
