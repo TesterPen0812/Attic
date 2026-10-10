@@ -1486,6 +1486,18 @@ enum AtticNativeMenu {
         }
         if !command.children.isEmpty {
             item.submenu = make(command.children, title: command.title)
+    /// A menu opened the way the system opens a right-click menu. AppKit
+    /// appends the context-menu plug-ins to such a menu (the system's
+    /// AutoFill submenu, Services) wherever a text input could be its
+    /// target; these are Attic's own menus, so they get none (design review
+    /// D-14: a stray "AutoFill ›" ended Notes' ⋯ menu).
+    static func makeContextMenu(_ commands: [AtticMenuCommand], appearance: NSAppearance?) -> NSMenu {
+        let menu = make(commands)
+        menu.allowsContextMenuPlugIns = false
+        menu.appearance = appearance
+        return menu
+    }
+
         } else {
             item.target = AtticMenuTarget.shared
             item.action = #selector(AtticMenuTarget.runCommand(_:))
@@ -1567,8 +1579,7 @@ enum AtticNativeMenu {
     /// submenus as the system does, names whole. Falls back to the pop-up
     /// style if no event can be made.
     static func popUpContextMenu(_ commands: [AtticMenuCommand], below rect: NSRect, in view: NSView) {
-        let menu = make(commands)
-        menu.appearance = view.window?.effectiveAppearance
+        let menu = makeContextMenu(commands, appearance: view.window?.effectiveAppearance)
         let location = NSPoint(x: rect.minX, y: view.isFlipped ? rect.maxY + 4 : rect.minY - 4)
         guard let window = view.window,
               let event = NSEvent.mouseEvent(with: .rightMouseDown, location: view.convert(location, to: nil),
@@ -1589,8 +1600,7 @@ enum AtticNativeMenu {
     /// More's Open Files…, Move Up and Move Down showed as "…"); a context
     /// menu places its submenus as the right-click menu does, titles whole.
     static func popUpContextMenu(_ commands: [AtticMenuCommand], in view: NSView, at point: CGPoint? = nil) {
-        let menu = make(commands)
-        menu.appearance = view.window?.effectiveAppearance
+        let menu = makeContextMenu(commands, appearance: view.window?.effectiveAppearance)
         let location = point ?? CGPoint(x: 0, y: view.isFlipped ? view.bounds.maxY + 4 : -4)
         DispatchQueue.main.async {
             guard let window = view.window else { return }
