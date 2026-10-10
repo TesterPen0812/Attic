@@ -2333,7 +2333,7 @@ extension PhaseXHunt6Tests {
                 _ = try store.saveDocument(noteID: id, document: b, baseRevisionID: revision, prepared: prepared,
                     tags: route == 2 ? ["tag"] : nil).get()
             }
-            XCTExpectFailure("H8-07") { XCTAssertEqual(store.loadDocument(noteID: id)?.content.document, b) }
+            XCTAssertEqual(store.loadDocument(noteID: id)?.content.document, b)
         }
     }
 }
