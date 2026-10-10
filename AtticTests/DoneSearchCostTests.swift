@@ -223,12 +223,13 @@ final class DoneSearchCostTests: XCTestCase {
             XCTAssertTrue(NSApp.keyWindow === host.window)
             let field = try XCTUnwrap(host.window.firstResponder as? NSTextView)
             var times: [Double] = []
-            for character in "Finished task 12" {
+            for (key, character) in "Finished task 12".enumerated() {
                 let before = TasksPage.tabsEvaluations
                 let parts = host.framePhases {
                     field.insertText(String(character), replacementRange: field.selectedRange())
                 }
                 times.append(parts.reduce(0, +))
+                print("ATTIC_DONE_KEY_PHASE run=\(run) key=\(key) change/runloop/layout/display/commit_ms=\(parts)")
                 XCTAssertEqual(TasksPage.tabsEvaluations, before, "typing must not rebuild the task page")
             }
             // The frame the results arrive in (PR prep, review P2-2): the
