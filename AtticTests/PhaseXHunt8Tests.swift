@@ -64,8 +64,10 @@ final class PhaseXHunt8Tests: XCTestCase {
         engine.update(design: dark)
         spin(0.2)
         scroll.layoutSubtreeIfNeeded()
-        XCTAssertEqual(rgba(engine.textView?.insertionPointColor), rgba(NoteTextStyle(design: dark).bodyColor),
-                       "the note itself took the dark look")
+        // The caret is the system's insertion colour (F-03c); the text's
+        // own ink shows the look.
+        XCTAssertEqual(rgba(engine.textStorage.attribute(.foregroundColor, at: 0, effectiveRange: nil) as? NSColor),
+                       rgba(NoteTextStyle(design: dark).bodyColor), "the note itself took the dark look")
         XCTAssertEqual(rgba(field()?.textColor), rgba(NSColor(dark.tokens.color(.heading))),
                        "the open find bar's field takes the dark ink")
         engine.find.close(returnFocus: false)
@@ -128,10 +130,14 @@ final class PhaseXHunt8Tests: XCTestCase {
             host.layoutSubtreeIfNeeded()
             return descendants(of: host).compactMap { $0 as? NoteEditorTextView }.first { !$0.isEditable }
         }
-        XCTAssertEqual(rgba(try XCTUnwrap(comparisonText()).insertionPointColor), rgba(NoteTextStyle(design: light).bodyColor))
+        func ink(_ view: NoteEditorTextView?) -> NSColor? {
+            guard let storage = view?.textStorage, storage.length > 0 else { return nil }
+            return storage.attribute(.foregroundColor, at: 0, effectiveRange: nil) as? NSColor
+        }
+        XCTAssertEqual(rgba(ink(try XCTUnwrap(comparisonText()))), rgba(NoteTextStyle(design: light).bodyColor))
         box.design = dark
         spin(0.3)
-        XCTAssertEqual(rgba(comparisonText()?.insertionPointColor), rgba(NoteTextStyle(design: dark).bodyColor),
+        XCTAssertEqual(rgba(ink(comparisonText())), rgba(NoteTextStyle(design: dark).bodyColor),
                        "the comparison redraws in the dark look")
         controller.endProposalReview()
         spin(0.1)
