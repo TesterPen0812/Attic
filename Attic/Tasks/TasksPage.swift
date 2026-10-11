@@ -12,6 +12,9 @@ struct TasksPageChrome {
     /// Edit mode: an editor, a picker or a popover is open. The host holds
     /// the panel open until it closes (then a short grace).
     var editLock: (Bool) -> Void = { _ in }
+    /// Visible inline files hold hover auto-hide without claiming typing
+    /// or blocking an agent show or a trackpad swipe.
+    var filesLock: (Bool) -> Void = { _ in }
 }
 
 /// The Tasks page (spec § Tasks, Direction A): the page tabs (Now · Later ·
@@ -623,7 +626,8 @@ struct TasksPage: View {
         // hold it through the shell's menu-tracking lock; suggestions show
         // only over a draft, which the composer lock holds.
         chrome.editLock(model.editingTitleID != nil || model.newSubtaskParentID != nil || model.renamingSubtaskID != nil
-            || composerPickerOpen || metaPopover != nil || selectionPicker != nil || model.hasVisibleInlineFiles)
+            || composerPickerOpen || metaPopover != nil || selectionPicker != nil)
+        chrome.filesLock(model.hasVisibleInlineFiles)
     }
 
     /// When a change elsewhere (an agent's delete or move) takes the row of
