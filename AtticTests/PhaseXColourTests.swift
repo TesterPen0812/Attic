@@ -103,6 +103,34 @@ final class PhaseXColourTokenTests: XCTestCase {
         }
     }
 
+    /// Full CI found teal below its floor on the drawn Solid tint, which
+    /// differs from the panel's untinted foundation colour.
+    func testTagFloorsIncludeTheDrawnSolidTint() {
+        for mode in Self.modes {
+            for palette in AtticPanelTheme.allCases {
+                for tint in PanelTintLevel.allCases {
+                    for ic in [false, true] {
+                        let context = AtticDesignContext(mode: mode, palette: palette, surface: .solid,
+                                                         tint: tint, increaseContrast: ic)
+                        let tokens = context.tokens
+                        for height in [AtticSurfaceModel.contentTop, 1] {
+                            let surface = tokens.panel.composite(.midGrey, at: height)
+                            for hue in AtticTagHue.allCases {
+                                let fill = tokens.tagFill(hue)
+                                let backgrounds = [surface, fill.over(surface), tokens.tagFillSelected(hue).over(surface),
+                                                   tokens.hover.over(fill.over(surface)), fill.over(tokens.hover.over(surface)),
+                                                   fill.over(tokens.selected.over(surface))]
+                                let worst = backgrounds.map { tokens.tagInk(hue).contrast(on: $0) }.min() ?? 0
+                                XCTAssertGreaterThanOrEqual(worst, ic ? 4.5 : 3,
+                                                            "\(context.caption) \(hue) height=\(height): \(worst)")
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
     /// A tag is learned by its colour: palettes re-tune each hue's
     /// lightness but never move it to another hue.
     func testPalettesKeepTheTagHues() {
