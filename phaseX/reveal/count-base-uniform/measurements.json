@@ -1,0 +1,62 @@
+{
+  "app": "/Users/taha/Developer/attic-px-mem/.build/CountBaseStates.app",
+  "bundle": "com.taha.Attic.preview.phasex",
+  "store": "/Users/taha/Library/Containers/com.taha.Attic.preview.phasex/Data/Library/Application Support/AtticPerformanceStores/attic-perf-smooth-y790yzbh",
+  "records": [
+    {
+      "phase": "hidden_idle",
+      "user_time_ns": 1708620291,
+      "system_time_ns": 566311291,
+      "package_idle_wakeups": 9,
+      "interrupt_wakeups": 68,
+      "physical_footprint_bytes": 71500976,
+      "pageins": 16196
+    },
+    {
+      "phase": "idle_sample_end",
+      "elapsed_seconds": 60.00424404100001,
+      "user_time_ns": 1709230750,
+      "system_time_ns": 570698791,
+      "package_idle_wakeups": 10,
+      "interrupt_wakeups": 88,
+      "physical_footprint_bytes": 71500976,
+      "pageins": 16203
+    },
+    {
+      "phase": "tasks_open",
+      "user_time_ns": 1827066166,
+      "system_time_ns": 771487291,
+      "package_idle_wakeups": 11,
+      "interrupt_wakeups": 195,
+      "physical_footprint_bytes": 78759160,
+      "pageins": 19510
+    }
+  ],
+  "timings": [
+    {
+      "name": "StoreOpen",
+      "milliseconds": 24.217041,
+      "timestamp": 1791725833.092795
+    },
+    {
+      "name": "CoordinatorInitToMenuStarted",
+      "milliseconds": 3111.450125,
+      "timestamp": 1791725836.177021
+    },
+    {
+      "name": "PanelRevealToOrderedFront",
+      "timestamp": 1791725933.142455,
+      "milliseconds": 381.184125
+    }
+  ],
+  "settings": {
+    "mode": "reveal",
+    "frame_monitor": false,
+    "settle_seconds": 20.0,
+    "idle_sample_seconds": 60.0,
+    "reveal_breakdown": false,
+    "reveal_counts": true,
+    "allocations": false,
+    "long_note": false
+  }
+}

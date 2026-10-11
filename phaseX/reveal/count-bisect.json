@@ -1,0 +1,142 @@
+[
+  {
+    "label": "base",
+    "revision": "76e427656c8418ec0590390fc4215d6113a49c92",
+    "evidence": "count-base-uniform",
+    "metrics": {
+      "hosting_roots": 1,
+      "views": 65,
+      "key_loop_views": 32,
+      "layer_backed_views": 36,
+      "hosting_environment_updates": 1,
+      "native_appearance_applications": 1,
+      "ca_transaction_commits": 0,
+      "appearance_callbacks": 10,
+      "global_environment_callbacks": 0,
+      "appearance_drawing_scopes": 3,
+      "explicit_ca_commits": 9,
+      "tasks_body_evaluations": 0,
+      "field_updates": 1
+    }
+  },
+  {
+    "label": "design1",
+    "revision": "890071aec4992c4d9aab978c31b2e803f6fc2015",
+    "evidence": "design1-order-trace",
+    "metrics": {
+      "hosting_roots": 1,
+      "views": 65,
+      "key_loop_views": 32,
+      "layer_backed_views": 36,
+      "hosting_environment_updates": 1,
+      "native_appearance_applications": 1,
+      "ca_transaction_commits": 0,
+      "appearance_callbacks": 10,
+      "global_environment_callbacks": 0,
+      "appearance_drawing_scopes": 3,
+      "explicit_ca_commits": 9,
+      "tasks_body_evaluations": 0,
+      "field_updates": 1
+    }
+  },
+  {
+    "label": "colour1",
+    "revision": "4b25a1fab3217e177dcd0f70d7f0628d496493d3",
+    "evidence": "count-colour1-uniform",
+    "metrics": {
+      "hosting_roots": 1,
+      "views": 65,
+      "key_loop_views": 32,
+      "layer_backed_views": 36,
+      "hosting_environment_updates": 1,
+      "native_appearance_applications": 1,
+      "ca_transaction_commits": 0,
+      "appearance_callbacks": 10,
+      "global_environment_callbacks": 0,
+      "appearance_drawing_scopes": 3,
+      "explicit_ca_commits": 9,
+      "tasks_body_evaluations": 0,
+      "field_updates": 1
+    }
+  },
+  {
+    "label": "owner1",
+    "revision": "5d5085881102a4bc10ec4e01a297078a869bae18",
+    "evidence": "count-owner1-uniform",
+    "metrics": {
+      "hosting_roots": 1,
+      "views": 65,
+      "key_loop_views": 32,
+      "layer_backed_views": 36,
+      "hosting_environment_updates": 1,
+      "native_appearance_applications": 1,
+      "ca_transaction_commits": 0,
+      "appearance_callbacks": 10,
+      "global_environment_callbacks": 0,
+      "appearance_drawing_scopes": 3,
+      "explicit_ca_commits": 9,
+      "tasks_body_evaluations": 0,
+      "field_updates": 1
+    }
+  },
+  {
+    "label": "int11",
+    "revision": "d0801287",
+    "evidence": "count-int11-uniform",
+    "metrics": {
+      "hosting_roots": 1,
+      "views": 68,
+      "key_loop_views": 32,
+      "layer_backed_views": 39,
+      "hosting_environment_updates": 1,
+      "native_appearance_applications": 1,
+      "ca_transaction_commits": 0,
+      "appearance_callbacks": 10,
+      "global_environment_callbacks": 0,
+      "appearance_drawing_scopes": 3,
+      "explicit_ca_commits": 9,
+      "tasks_body_evaluations": 0,
+      "field_updates": 1
+    }
+  },
+  {
+    "label": "smooth",
+    "revision": "a9745a53",
+    "evidence": "count-smooth-matched",
+    "metrics": {
+      "hosting_roots": 1,
+      "views": 68,
+      "key_loop_views": 32,
+      "layer_backed_views": 39,
+      "hosting_environment_updates": 1,
+      "native_appearance_applications": 1,
+      "ca_transaction_commits": 0,
+      "appearance_callbacks": 10,
+      "global_environment_callbacks": 0,
+      "appearance_drawing_scopes": 3,
+      "explicit_ca_commits": 9,
+      "tasks_body_evaluations": 0,
+      "field_updates": 1
+    }
+  },
+  {
+    "label": "fixed",
+    "revision": "e610deda",
+    "evidence": "count-fixed-uniform",
+    "metrics": {
+      "hosting_roots": 1,
+      "views": 65,
+      "key_loop_views": 32,
+      "layer_backed_views": 36,
+      "hosting_environment_updates": 1,
+      "native_appearance_applications": 1,
+      "ca_transaction_commits": 0,
+      "appearance_callbacks": 10,
+      "global_environment_callbacks": 0,
+      "appearance_drawing_scopes": 3,
+      "explicit_ca_commits": 9,
+      "tasks_body_evaluations": 0,
+      "field_updates": 1
+    }
+  }
+]

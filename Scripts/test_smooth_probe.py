@@ -1,8 +1,23 @@
 import unittest
+import tempfile
+from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
 
-from smooth_probe import check_retention, wait_for_owned_exit, quit_owned_preview
+from smooth_probe import check_retention, wait_for_owned_exit, quit_owned_preview, main
+
+
+class SmoothCountCaptureTests(unittest.TestCase):
+    def test_stale_debugger_readiness_cannot_be_reused(self):
+        with tempfile.TemporaryDirectory() as directory:
+            (Path(directory) / "lldb-counts.ready").write_text("old capture")
+            with patch('sys.argv', ['smooth_probe.py', '--app', '/absent-preview.app',
+                       '--output', directory, '--reveal-counts', '--lldb-counts']), \
+                    patch('smooth_probe.run') as command:
+                with self.assertRaises(SystemExit) as error:
+                    main()
+                self.assertEqual(error.exception.code, 2)
+                command.assert_not_called()
 
 
 class SmoothRetentionGateTests(unittest.TestCase):

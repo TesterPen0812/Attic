@@ -1,0 +1,6 @@
+{
+  "interactive": "blocked",
+  "reason": "Sky Computer Use native pipe startup failed twice, including after reset",
+  "captured": "uat-seeded-tasks.png",
+  "normal_optimized_preview": true
+}

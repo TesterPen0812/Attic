@@ -537,6 +537,89 @@ final class OwnerTasks1010Tests: XCTestCase {
         XCTAssertEqual(state.frames, originalFrames, "ending rename keeps the same geometry")
     }
 
+    /// An idle plain-controls mask is fully opaque. It must not create
+    /// another native graphics/layer wrapper around the scrolling content.
+    func testIdleComposerMaskUsesOnlyTheExistingNativeMaskLayer() throws {
+        let stack = TasksBottomStackHeight()
+        let content = ScrollView {
+            VStack(spacing: 0) {
+                ForEach(0..<20) { index in
+                    Text(verbatim: "Reveal row \(index)").frame(height: 34)
+                }
+            }
+        }
+        let reference = AnyView(content
+            .contentMargins(.top, 100, for: .scrollContent)
+            .contentMargins(.bottom, 48, for: .scrollContent)
+            .contentMargins(.top, 100, for: .scrollIndicators)
+            .contentMargins(.bottom, 64, for: .scrollIndicators)
+            .atticScrollEdgeEffect(.cleanCut)
+            .mask { Color.white })
+        let actual = AnyView(content.tasksListEdges(.cleanCut, top: 80, listTop: 100, bottomInset: 16,
+            bottomMargin: 48, bottomClearance: 64, stack: stack, mask: Color.white))
+        var windows: [NSWindow] = []
+        defer { for window in windows { window.contentView = nil; window.close() } }
+        func counts(_ root: AnyView) throws -> (layers: Int, graphics: Int) {
+            let window = NSWindow(contentRect: CGRect(x: -4000, y: -4000, width: 340, height: 520),
+                                  styleMask: [.borderless], backing: .buffered, defer: false)
+            window.isReleasedWhenClosed = false
+            windows.append(window)
+            let host = NSHostingView(rootView: root.frame(width: 340, height: 520))
+            window.contentView = host
+            spin()
+            _ = try bitmap(host)
+            var layers = 0, graphics = 0
+            func visit(_ view: NSView) {
+                if view.wantsLayer { layers += 1 }
+                if String(reflecting: type(of: view)) == "SwiftUI._NSGraphicsView" { graphics += 1 }
+                for child in view.subviews { visit(child) }
+            }
+            visit(host)
+            return (layers, graphics)
+        }
+        let before = try counts(reference), current = try counts(actual)
+        XCTAssertGreaterThan(before.graphics, 0, "the reference must render its native mask")
+        XCTAssertGreaterThan(before.layers, 0, "the reference must create backing layers")
+        XCTAssertLessThanOrEqual(current.graphics, before.graphics, "a full-opacity mask must not add a native graphics view")
+        XCTAssertLessThanOrEqual(current.layers, before.layers, "a full-opacity mask must not add a backing layer")
+    }
+
+    func testComposerMaskChangesKeepTheNativeScrollViewAndPosition() throws {
+        let stack = TasksBottomStackHeight()
+        let host = NSHostingView(rootView: ScrollView {
+            VStack(spacing: 0) {
+                ForEach(0..<40) { index in Text(verbatim: "Mask row \(index)").frame(height: 34) }
+            }
+        }.tasksListEdges(.cleanCut, top: 80, listTop: 100, bottomInset: 16,
+            bottomMargin: 48, bottomClearance: 64, stack: stack, mask: Color.white)
+            .frame(width: 340, height: 520))
+        let window = NSWindow(contentRect: CGRect(x: -4000, y: -4000, width: 340, height: 520),
+                              styleMask: [.borderless], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        window.contentView = host
+        defer { window.contentView = nil; window.close() }
+        func scrollView(in view: NSView) -> NSScrollView? {
+            if let scroll = view as? NSScrollView { return scroll }
+            for child in view.subviews { if let found = scrollView(in: child) { return found } }
+            return nil
+        }
+        spin()
+        _ = try bitmap(host)
+        let original = try XCTUnwrap(scrollView(in: host))
+        original.contentView.scroll(to: CGPoint(x: 0, y: 140))
+        original.reflectScrolledClipView(original.contentView)
+        spin()
+        let position = original.contentView.bounds.origin
+        XCTAssertGreaterThan(position.y, 0, "the fixture must actually scroll")
+        for height in [TasksViewport.reservedStack, AtticControlSize.addBarHeight] {
+            stack.height = height
+            spin(0.2)
+            _ = try bitmap(host)
+            XCTAssertTrue(scrollView(in: host) === original, "mask changes keep the native list alive")
+            XCTAssertEqual(original.contentView.bounds.origin, position, "mask changes preserve the scroll position")
+        }
+    }
+
     /// Run the real list modifier over coloured rows, rather than merely
     /// asserting a constant that the rendered list might never use.
     func testComposerStripExcludesRowsBehindItsPlainControls() throws {

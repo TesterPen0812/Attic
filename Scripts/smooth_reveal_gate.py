@@ -15,6 +15,8 @@ from pathlib import Path
 def reveal(document):
     if document.get('bundle') != 'com.taha.Attic.preview.phasex':
         raise ValueError('Expected the isolated phasex preview')
+    if (document.get('settings') or {}).get('reveal_counts'):
+        raise ValueError('Count-instrumented reveals cannot establish timing acceptance')
     values = [r['milliseconds'] for r in document['timings']
               if r['name'] == 'PanelRevealToOrderedFront']
     if len(values) != 1 or not math.isfinite(values[0]) or values[0] <= 0:
@@ -35,7 +37,7 @@ def compare(pairs):
     # on warm-up and instrumentation, including across the reversed pair.
     settings = pairs[0][0].get('settings')
     keys = ('mode', 'frame_monitor', 'settle_seconds', 'idle_sample_seconds', 'allocations',
-            'reveal_breakdown', 'sampled_reveal')
+            'reveal_breakdown', 'sampled_reveal', 'reveal_counts')
     expected = None if settings is None else {key: settings.get(key) for key in keys}
     for pair in pairs:
         for document in pair:

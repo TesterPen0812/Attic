@@ -1,0 +1,10 @@
+test_extra_root_layer_key_view_or_callback_fails (test_reveal_count_gate.RevealCountGateTests) ... ok
+test_missing_invalid_or_mismatched_evidence_rejected (test_reveal_count_gate.RevealCountGateTests) ... ok
+test_missing_or_unresolved_native_functions_cannot_pass (test_reveal_count_gate.RevealCountGateTests) ... ok
+test_unchanged_and_less_work_pass (test_reveal_count_gate.RevealCountGateTests) ... ok
+test_unmatched_native_key_state_is_rejected (test_reveal_count_gate.RevealCountGateTests) ... ok
+
+----------------------------------------------------------------------
+Ran 5 tests in 0.001s
+
+OK
