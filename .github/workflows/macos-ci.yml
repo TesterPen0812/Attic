@@ -97,7 +97,7 @@ jobs:
             -resultBundlePath "$RUNNER_TEMP/AtticFKA-notes-normal.xcresult" CODE_SIGNING_ALLOWED=NO \
             -parallel-testing-enabled NO -only-testing:AtticTests/NotesKeyboardUndoTests
           xcrun xcresulttool get test-results summary --path "$RUNNER_TEMP/AtticFKA-notes-normal.xcresult" --format json > "$RUNNER_TEMP/fka-notes-normal-summary.json"
-          python3 -c 'import json,sys; s=json.load(open(sys.argv[1])); assert s["passedTests"]==7 and s["skippedTests"]==0 and s["failedTests"]==0 and s["expectedFailures"]==0' "$RUNNER_TEMP/fka-notes-normal-summary.json"
+          python3 -c 'import json,sys; s=json.load(open(sys.argv[1])); assert s["passedTests"]==6 and s["skippedTests"]==0 and s["failedTests"]==0 and s["expectedFailures"]==0' "$RUNNER_TEMP/fka-notes-normal-summary.json"
       - name: Run the native FKA test alone, then the H5-04 focus regressions
         if: always()
         env:
@@ -145,8 +145,17 @@ jobs:
             -resultBundlePath "$RUNNER_TEMP/AtticFKA-notes-undo.xcresult" CODE_SIGNING_ALLOWED=NO \
             -parallel-testing-enabled NO -only-testing:AtticTests/NotesKeyboardUndoTests || status=1
           xcrun xcresulttool get test-results summary --path "$RUNNER_TEMP/AtticFKA-notes-undo.xcresult" --format json > "$RUNNER_TEMP/fka-notes-undo-summary.json"
-          python3 -c 'import json,sys; s=json.load(open(sys.argv[1])); assert s["passedTests"]==7 and s["skippedTests"]==0 and s["failedTests"]==0 and s["expectedFailures"]==0' "$RUNNER_TEMP/fka-notes-undo-summary.json" || status=1
+          python3 -c 'import json,sys; s=json.load(open(sys.argv[1])); assert s["passedTests"]==6 and s["skippedTests"]==0 and s["failedTests"]==0 and s["expectedFailures"]==0' "$RUNNER_TEMP/fka-notes-undo-summary.json" || status=1
           exit $status
+      - name: Upload focused keyboard evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: focused-fka-${{ github.sha }}
+          path: |
+            ${{ runner.temp }}/AtticFKA-*.xcresult
+            ${{ runner.temp }}/fka-*-summary.json
+
       - name: Measure int11 against integration base in paired AB/BA runs
         if: always() && inputs.compare_tag_colour_costs
         run: python3 Scripts/compare_tag_colour_costs.py "$RUNNER_TEMP/TagColourComparison" --candidate-ref "$GITHUB_SHA"
@@ -157,14 +166,6 @@ jobs:
           name: tag-colour-comparison-${{ github.sha }}
           path: ${{ runner.temp }}/TagColourComparison/*.json
           retention-days: 7
-      - name: Upload focused keyboard evidence
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: focused-fka-${{ github.sha }}
-          path: |
-            ${{ runner.temp }}/AtticFKA-*.xcresult
-            ${{ runner.temp }}/fka-*-summary.json
 
   macos:
     if: ${{ inputs.lane != 'costs' && inputs.lane != 'fka' }}

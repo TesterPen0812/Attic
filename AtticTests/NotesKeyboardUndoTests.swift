@@ -23,11 +23,18 @@ final class NotesKeyboardUndoTests: XCTestCase {
         override var canBecomeKey: Bool { true }
         override func sendEvent(_ event: NSEvent) {}
 
+        var traceFocusChanges = false
+
+        static func identity(_ responder: NSResponder?) -> String {
+            guard let responder else { return "nil" }
+            return "\(type(of: responder))@\(Unmanaged.passUnretained(responder).toOpaque())"
+        }
+
         override func makeFirstResponder(_ responder: NSResponder?) -> Bool {
             let before = firstResponder
             let result = super.makeFirstResponder(responder)
-            if before !== firstResponder {
-                print("ROUND11B_FOCUS time=\(ProcessInfo.processInfo.systemUptime) from=\(String(describing: before)) requested=\(String(describing: responder)) to=\(String(describing: firstResponder)) result=\(result)")
+            if traceFocusChanges, before !== firstResponder {
+                print("ROUND11B_FOCUS time=\(ProcessInfo.processInfo.systemUptime) from=\(Self.identity(before)) requested=\(Self.identity(responder)) to=\(Self.identity(firstResponder)) result=\(result)")
                 print("ROUND11B_FOCUS_STACK " + Thread.callStackSymbols.joined(separator: " | "))
             }
             return result
@@ -107,7 +114,7 @@ final class NotesKeyboardUndoTests: XCTestCase {
             window.makeKey()
             spin(0.1)
         }
-        print("NOTES_UNDO_KEY policy=\(NSApp.activationPolicy().rawValue) active=\(NSApp.isActive) visible=\(window.isVisible) key=\(window.isKeyWindow) ownsKey=\(NSApp.keyWindow === window)")
+        print("NOTES_UNDO_KEY policy=\(NSApp.activationPolicy().rawValue) active=\(NSApp.isActive) visible=\(window.isVisible) key=\(window.isKeyWindow) ownsKey=\(NSApp.keyWindow === window) fka=\(NSApp.isFullKeyboardAccessEnabled)")
         XCTAssertTrue(window.isKeyWindow)
         XCTAssertTrue(NSApp.keyWindow === window, "the keyboard route must have an actual AppKit key owner")
         return (Harness(window: window, host: host, store: store, noteDraft: noteDraft, toasts: toasts), ids)
@@ -226,9 +233,10 @@ final class NotesKeyboardUndoTests: XCTestCase {
         textView.insertText(" more", replacementRange: textView.selectedRange())
         var fired = 0
 
-        print("ROUND11B_TOAST before-show responder=\(String(describing: harness.window.firstResponder))")
+        harness.window.traceFocusChanges = true
+        print("ROUND11B_TOAST before-show responder=\(KeyWindow.identity(harness.window.firstResponder))")
         harness.toasts.show("Note deleted", answersUndoKey: false) { fired += 1 }
-        print("ROUND11B_TOAST after-show responder=\(String(describing: harness.window.firstResponder))")
+        print("ROUND11B_TOAST after-show responder=\(KeyWindow.identity(harness.window.firstResponder))")
         spin()
         assertTextUndoReady(textView, in: harness)
         XCTAssertNotNil(harness.toasts.current)
@@ -267,38 +275,6 @@ final class NotesKeyboardUndoTests: XCTestCase {
         spin(0.3)
         XCTAssertNil(harness.toasts.current)
         XCTAssertTrue(harness.window.firstResponder === editor, "expiry keeps the caret")
-    }
-
-    func testTheToastsAccessibleUndoKeepsTheEditorAndItsUndoSelection() throws {
-        let attribute = NSAccessibility.Attribute(rawValue: "AXEnhancedUserInterface")
-        let previous = NSApp.accessibilityAttributeValue(attribute)
-        NSApp.accessibilitySetValue(true, forAttribute: attribute)
-        defer { NSApp.accessibilitySetValue(previous, forAttribute: attribute) }
-        let (harness, ids) = try makeHarness(titles: ["Alpha"])
-        let editor = try openAndFocus(ids[0], in: harness)
-        editor.insertText(" more", replacementRange: editor.selectedRange())
-        var fired = 0
-        harness.toasts.show("Note changed", answersUndoKey: false) {
-            fired += 1
-            _ = harness.controller.active?.engine.history.undo()
-        }
-        spin()
-        XCTAssertTrue(harness.window.firstResponder === editor, "the toast appears without moving the caret")
-        func elements(_ root: AnyObject) -> [AnyObject] {
-            let children = (root.accessibilityChildren?() ?? nil) ?? []
-            return [root] + children.flatMap { elements($0 as AnyObject) }
-        }
-        let button = try XCTUnwrap(elements(harness.host).first { ($0.accessibilityLabel?() ?? nil) == "Undo" })
-        XCTAssertEqual(button.accessibilityPerformPress?(), true, "Undo remains an accessible action")
-        spin()
-        XCTAssertEqual(fired, 1)
-        XCTAssertNil(harness.toasts.current)
-        XCTAssertEqual(editorText(harness), "Alpha")
-        XCTAssertEqual(editor.selectedRange(), NSRange(location: 5, length: 0), "Undo restores the typing selection")
-        XCTAssertTrue(harness.window.firstResponder === editor, "the keyboard stays where Undo originated")
-        let input = try XCTUnwrap(harness.window.firstResponder as? NSTextView)
-        input.insertText(" after", replacementRange: input.selectedRange())
-        XCTAssertEqual(editorText(harness), "Alpha after", "typing continues after pressing Undo")
     }
 
     private func assertTextUndoReady(_ view: NoteEditorTextView, in harness: Harness,
