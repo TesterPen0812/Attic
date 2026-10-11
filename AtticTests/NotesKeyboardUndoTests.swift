@@ -130,7 +130,7 @@ final class NotesKeyboardUndoTests: XCTestCase {
     /// One key, through AppKit's order. Returns who took it.
     @discardableResult
     private func press(_ characters: String, keyCode: UInt16, _ flags: NSEvent.ModifierFlags = [], toTheLibrary: Bool = false,
-                       splitTextDispatchForRegression: Bool = false, in harness: Harness) throws -> Route {
+                       beforeTextDispatchForRegression: (() -> Void)? = nil, in harness: Harness) throws -> Route {
         let window = harness.window
         let event = try XCTUnwrap(NSEvent.keyEvent(
             with: .keyDown, location: .zero, modifierFlags: flags,
@@ -152,7 +152,11 @@ final class NotesKeyboardUndoTests: XCTestCase {
         NSApp.sendEvent(event)
         // The monitor now dispatches durable Undo/Redo asynchronously. Observe
         // its completion before inferring that the key fell through to AppKit.
-        if !textOwnsHistory || splitTextDispatchForRegression { spin(0.15) }
+        if !textOwnsHistory { spin(0.15) }
+        // The split-dispatch control sets the competing responder at this
+        // exact boundary. A timed run-loop gap cannot guarantee which focus
+        // handoff wins, particularly during native FKA traversal.
+        beforeTextDispatchForRegression?()
         defer { spin(0.15) }
         if toTheLibrary || libraryFingerprint(harness) != before { return .monitor }
         guard flags.contains(.command) else { return .nobody }
@@ -307,9 +311,10 @@ final class NotesKeyboardUndoTests: XCTestCase {
         XCTAssertTrue(engine?.history.canUndo == true, "a replayable typing step exists", file: file, line: line)
     }
 
-    /// Deterministic reproducer of the former split dispatch: the queued
-    /// focus update used to run during `press`'s pre-action sleep, so the
-    /// empty text view answered `undo:` and the note kept "more".
+    /// Control the former split dispatch's ordering explicitly: a focus
+    /// handoff between the monitor and the menu sends Undo to an empty view.
+    /// Then verify that an actual queued handoff runs only after the
+    /// synchronous dispatch has undone typing in the original editor.
     func testUndoDispatchUsesTheKeyResponderBeforeQueuedFocusChanges() throws {
         let (harness, ids) = try makeHarness(titles: ["Alpha"])
         let editor = try openAndFocus(ids[0], in: harness)
@@ -319,8 +324,10 @@ final class NotesKeyboardUndoTests: XCTestCase {
         assertTextUndoReady(editor, in: harness)
         let other = NSTextView(frame: NSRect(x: 0, y: 0, width: 10, height: 10))
         harness.host.addSubview(other)
-        DispatchQueue.main.async { harness.window.makeFirstResponder(other) }
-        XCTAssertEqual(try press("z", keyCode: 6, .command, splitTextDispatchForRegression: true, in: harness), .firstResponder)
+        XCTAssertEqual(try press("z", keyCode: 6, .command, beforeTextDispatchForRegression: {
+            XCTAssertTrue(harness.window.makeFirstResponder(other))
+            XCTAssertTrue(harness.window.firstResponder === other, "control: the competing responder owns dispatch")
+        }, in: harness), .firstResponder)
         XCTAssertTrue(editorText(harness).contains("more"), "positive control: the old split dispatch reproduces the failure")
         XCTAssertTrue(harness.window.makeFirstResponder(editor))
         DispatchQueue.main.async { harness.window.makeFirstResponder(other) }
