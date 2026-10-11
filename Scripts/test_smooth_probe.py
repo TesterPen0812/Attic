@@ -2,7 +2,7 @@ import unittest
 from types import SimpleNamespace
 from unittest.mock import patch
 
-from smooth_probe import check_retention, wait_for_owned_exit
+from smooth_probe import check_retention, wait_for_owned_exit, quit_owned_preview
 
 
 class SmoothRetentionGateTests(unittest.TestCase):
@@ -28,6 +28,23 @@ class SmoothRetentionGateTests(unittest.TestCase):
 
 
 class SmoothTeardownTests(unittest.TestCase):
+    def test_quit_refuses_an_exited_or_replaced_process(self):
+        for actual in ('', '/another/preview'):
+            with patch('smooth_probe.subprocess.run', return_value=SimpleNamespace(stdout=actual)), \
+                    patch('smooth_probe.run') as command, \
+                    patch('smooth_probe.wait_for_owned_exit') as wait:
+                quit_owned_preview(123, '/owned/preview')
+                command.assert_not_called()
+                wait.assert_not_called()
+
+    def test_quits_owned_preview_by_bundle_then_waits(self):
+        with patch('smooth_probe.subprocess.run', return_value=SimpleNamespace(stdout='/owned/preview\n')), \
+                patch('smooth_probe.run') as command, \
+                patch('smooth_probe.wait_for_owned_exit') as wait:
+            quit_owned_preview(123, '/owned/preview')
+            command.assert_called_once_with('/usr/bin/osascript', '-e', 'tell application id "com.taha.Attic.preview.phasex" to quit')
+            wait.assert_called_once_with(123, '/owned/preview')
+
     def test_waits_for_only_the_owned_executable_to_exit(self):
         with patch('smooth_probe.subprocess.run', side_effect=[
                 SimpleNamespace(stdout='/owned/preview\n'), SimpleNamespace(stdout='')]) as ps, \

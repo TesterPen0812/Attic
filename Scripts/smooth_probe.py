@@ -77,6 +77,16 @@ def wait_for_owned_exit(pid, executable, timeout=15):
     raise TimeoutError(f"Owned preview PID {pid} did not finish quitting")
 
 
+def quit_owned_preview(pid, executable):
+    """Recheck ownership at teardown; an exited/replaced PID is not ours."""
+    actual = subprocess.run(["/bin/ps", "-p", str(pid), "-o", "comm="],
+                            capture_output=True, text=True).stdout.strip()
+    if actual != str(executable):
+        return
+    run("/usr/bin/osascript", "-e", f'tell application id "{BUNDLE}" to quit')
+    wait_for_owned_exit(pid, executable)
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--app", type=Path, required=True)
@@ -174,8 +184,7 @@ def main():
                           "timing_count": len(timings)}), flush=True)
     finally:
         if pid is not None:
-            run("/usr/bin/osascript", "-e", f'tell application id "{BUNDLE}" to quit')
-            wait_for_owned_exit(pid, app / "Contents/MacOS" / info["CFBundleExecutable"])
+            quit_owned_preview(pid, app / "Contents/MacOS" / info["CFBundleExecutable"])
 
 
 if __name__ == "__main__":
