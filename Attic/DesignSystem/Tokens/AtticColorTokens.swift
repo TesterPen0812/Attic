@@ -832,7 +832,11 @@ struct AtticColorTokens: Equatable, Sendable {
         // Links in a note's body: blue at the text floor on the body's
         // surface, hovered and selected.
         inks[.linkText] = inks[.linkText]!.tuned(toContrast: textTarget, against: tagSurfaces.flatMap { [$0, hover.over($0), selected.over($0)] }, lighten: dark)
-        let tagBases = tagSurfaces + [recessed.over(panelBase), contentCard, popoverFill]
+        // Solid's tint is drawn over its foundation too. Base colours alone
+        // miss the darker Light tint under tag chips and selected rows.
+        let tagDrawnSurfaces = phase0Translucent ? tagSurfaces
+            : tagSurfaces + [AtticSurfaceModel.contentTop, 1].map { panel.composite(.midGrey, at: $0) }
+        let tagBases = tagDrawnSurfaces + [recessed.over(panelBase), contentCard, popoverFill]
         for hue in AtticTagHue.allCases {
             let start = tagStarts[hue] ?? inks[.helper]!
             var tagInk = start
@@ -845,7 +849,7 @@ struct AtticColorTokens: Equatable, Sendable {
                 // panel's rows also hover and select under it.
                 let backgrounds = tagBases.flatMap { base in
                     [base, fill.over(base), fillSelected.over(base), hover.over(fill.over(base))]
-                } + tagSurfaces.flatMap { surface in
+                } + tagDrawnSurfaces.flatMap { surface in
                     [fill.over(hover.over(surface)), fill.over(selected.over(surface))]
                 }
                 tagInk = start.tuned(toContrast: target(hue.ink), against: backgrounds, lighten: dark)
