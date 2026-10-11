@@ -95,7 +95,8 @@ jobs:
           Scripts/xcodebuild_locked.sh test-without-building -project Attic.xcodeproj -scheme Attic \
             -configuration Local -destination 'platform=macOS' -derivedDataPath "$RUNNER_TEMP/AtticFKA" \
             -resultBundlePath "$RUNNER_TEMP/AtticFKA-notes-normal.xcresult" CODE_SIGNING_ALLOWED=NO \
-            -parallel-testing-enabled NO -only-testing:AtticTests/NotesKeyboardUndoTests
+            -parallel-testing-enabled NO -only-testing:AtticTests/NotesKeyboardUndoTests \
+            -skip-testing:AtticTests/NotesKeyboardUndoTests/testTheToastNeverTakesKeyboardFocusDuringNativeFullKeyboardAccessTraversal
           xcrun xcresulttool get test-results summary --path "$RUNNER_TEMP/AtticFKA-notes-normal.xcresult" --format json > "$RUNNER_TEMP/fka-notes-normal-summary.json"
           python3 -c 'import json,sys; s=json.load(open(sys.argv[1])); assert s["passedTests"]==6 and s["skippedTests"]==0 and s["failedTests"]==0 and s["expectedFailures"]==0' "$RUNNER_TEMP/fka-notes-normal-summary.json"
       - name: Run the native FKA test alone, then the H5-04 focus regressions
@@ -145,7 +146,7 @@ jobs:
             -resultBundlePath "$RUNNER_TEMP/AtticFKA-notes-undo.xcresult" CODE_SIGNING_ALLOWED=NO \
             -parallel-testing-enabled NO -only-testing:AtticTests/NotesKeyboardUndoTests || status=1
           xcrun xcresulttool get test-results summary --path "$RUNNER_TEMP/AtticFKA-notes-undo.xcresult" --format json > "$RUNNER_TEMP/fka-notes-undo-summary.json"
-          python3 -c 'import json,sys; s=json.load(open(sys.argv[1])); assert s["passedTests"]==6 and s["skippedTests"]==0 and s["failedTests"]==0 and s["expectedFailures"]==0' "$RUNNER_TEMP/fka-notes-undo-summary.json" || status=1
+          python3 -c 'import json,sys; s=json.load(open(sys.argv[1])); assert s["passedTests"]==7 and s["skippedTests"]==0 and s["failedTests"]==0 and s["expectedFailures"]==0' "$RUNNER_TEMP/fka-notes-undo-summary.json" || status=1
           exit $status
       - name: Upload focused keyboard evidence
         if: always()
