@@ -603,7 +603,9 @@ final class NoteEditorEngine: NSObject, NSTextViewDelegate, NSTextStorageDelegat
             let apply = NSRange(location: 0, length: titleEnd)
             if apply.length > 0 {
                 textStorage.addAttributes(style.titleAttributes, range: apply)
-                restyleMarks(in: apply, base: style.titleAttributes)
+                for key in NoteMark.Kind.allCases.map(NSAttributedString.Key.noteMark) + [.link, .underlineStyle, .strikethroughStyle, .backgroundColor] {
+                    textStorage.removeAttribute(key, range: apply)
+                }
             }
         }
         let bodyStart = max(titleEnd, clamped.location)
@@ -2692,8 +2694,10 @@ extension NoteEditorEngine {
         if selection.length == 0 {
             return selection.location > NSMaxRange(titleParagraphRange) && !isBlockObject(at: selection.location)
         }
-        return (textStorage.string as NSString).rangeOfCharacter(
-            from: CharacterSet(charactersIn: "\n\u{FFFC}").inverted, options: [], range: selection).location != NSNotFound
+        let body = NSIntersectionRange(selection, NSRange(location: min(textStorage.length, NSMaxRange(titleParagraphRange) + 1),
+            length: max(0, textStorage.length - NSMaxRange(titleParagraphRange) - 1)))
+        return body.length > 0 && (textStorage.string as NSString).rangeOfCharacter(
+            from: CharacterSet(charactersIn: "\n\u{FFFC}").inverted, options: [], range: body).location != NSNotFound
     }
 
     func validate(_ command: NoteFormatCommand, selection: NSRange? = nil) -> NoteCommandValidation {
@@ -2786,6 +2790,8 @@ extension NoteEditorEngine {
         if selection.length == 0 {
             return textView?.typingAttributes[.noteMark(kind)] != nil ? .on : .off
         }
+        let selection = NSIntersectionRange(selection, NSRange(location: min(textStorage.length, NSMaxRange(titleParagraphRange) + 1),
+            length: max(0, textStorage.length - NSMaxRange(titleParagraphRange) - 1)))
         var marked = false
         var plain = false
         let string = textStorage.string as NSString
@@ -2816,7 +2822,7 @@ extension NoteEditorEngine {
             let unit = characters.character(at: start)
             let isObject = unit == NoteDocument.objectUnit || unit == 0x0A
             let range = characters.rangeOfComposedCharacterSequence(at: start)
-            if !isObject {
+            if !isObject && selection.location + start > NSMaxRange(titleParagraphRange) {
                 if turnOn { replacement.addAttribute(.noteMark(kind), value: url ?? true, range: range) }
                 else { replacement.removeAttribute(.noteMark(kind), range: range) }
             }

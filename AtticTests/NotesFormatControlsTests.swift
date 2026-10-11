@@ -156,7 +156,7 @@ final class NotesFormatControlsTests: XCTestCase {
             text.selectAll(nil)
             XCTAssertTrue(controls.router.run(.mark(kind), from: .shortcut))
             let doc = engine.document()
-            XCTAssertEqual(doc.blocks[0].marks.first?.kind, kind, "selected title text retains its existing inline-mark behavior")
+            XCTAssertTrue(doc.blocks[0].marks.isEmpty, "owner decision P3: titles stay plain even in mixed selections")
             XCTAssertEqual(doc.blocks[2], block, "formatting preserves the object")
             XCTAssertEqual(engine.validate(.mark(kind)).state, .on)
             let reopened = NoteEditorEngine(noteID: UUID(), document: try XCTUnwrap(NoteContentCodec.decode(NoteContentCodec.encode(doc)).document))
@@ -318,11 +318,12 @@ final class NotesFormatControlsTests: XCTestCase {
         XCTAssertGreaterThanOrEqual(controls.barFrame.width, NoteFormatControls.barWidth(styleName: "Body"))
 
         let (top, topEngine, topView) = make(topInset: 60)
-        let first = range("Pricing", topView)
+        // Owner P3 keeps titles plain; exercise placement on the first body line.
+        let first = range("Lead", topView)
         topView.setSelectedRange(first)
         top.refresh()
         let rect = try XCTUnwrap(topEngine.rect(for: first))
-        XCTAssertTrue(top.formatModel.barBelow, "no room under the header (the title's line): below")
+        XCTAssertTrue(top.formatModel.barBelow, "no room under the header: below")
         XCTAssertGreaterThanOrEqual(top.barFrame.minY, rect.maxY)
         XCTAssertLessThanOrEqual(top.barFrame.maxX, topView.bounds.width, "inside the panel")
         XCTAssertGreaterThanOrEqual(top.barFrame.minX, 0)
