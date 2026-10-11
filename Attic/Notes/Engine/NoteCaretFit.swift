@@ -18,21 +18,33 @@ final class NoteCaretFitter {
     private weak var textView: NSTextView?
     private var watched: [ObjectIdentifier: (indicator: Weak, token: NSObjectProtocol)] = [:]
     private var fitting = false
+    private let notifications: NotificationCenter
 
     private final class Weak {
         weak var view: NSView?
         init(_ view: NSView) { self.view = view }
     }
 
-    init(textView: NSTextView) { self.textView = textView }
+    init(textView: NSTextView, notifications: NotificationCenter = .default) {
+        self.textView = textView
+        self.notifications = notifications
+    }
 
     isolated deinit {
-        watched.values.forEach { NotificationCenter.default.removeObserver($0.token) }
+        watched.values.forEach { notifications.removeObserver($0.token) }
     }
 
     /// Finds the text view's insertion indicators and fits each one. Cheap
     /// when there is none (the view is not first responder).
     func refresh() {
+        // NotificationCenter owns block observers even after their weak
+        // indicator dies. Unregister before discarding the token, including
+        // the last indicator (when there is no replacement to watch).
+        let retired = watched.filter { $0.value.indicator.view == nil }
+        for (key, observation) in retired {
+            notifications.removeObserver(observation.token)
+            watched[key] = nil
+        }
         guard let textView, textView.textLayoutManager != nil else { return }
         for indicator in Self.indicators(in: textView) {
             watch(indicator)
@@ -73,10 +85,9 @@ final class NoteCaretFitter {
 
     private func watch(_ indicator: NSView) {
         let key = ObjectIdentifier(indicator)
-        watched = watched.filter { $0.value.indicator.view != nil }
         guard watched[key] == nil else { return }
         indicator.postsFrameChangedNotifications = true
-        let token = NotificationCenter.default.addObserver(forName: NSView.frameDidChangeNotification, object: indicator,
+        let token = notifications.addObserver(forName: NSView.frameDidChangeNotification, object: indicator,
                                                            queue: .main) { [weak self, weak indicator] _ in
             MainActor.assumeIsolated {
                 guard let self, let indicator else { return }
