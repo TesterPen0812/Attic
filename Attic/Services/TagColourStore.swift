@@ -11,9 +11,9 @@ import SwiftUI
 ///   in use has), oldest tag first, and that colour is stored, so it never
 ///   changes by itself. Until the store has it, the palette already shows
 ///   the colour it is about to store.
-/// - **Duplicate-safe.** Rows are keyed by the tag's name; every row of a
-///   name is a replica. Presentation picks one (`storedHues`); a change
-///   writes all of them.
+/// - **Duplicate-safe.** Presentation groups rows by name, picking newest time,
+///   lowest UUID, then lowest colour key. Writes reach both every same-name
+///   row and all physical replicas of their UUIDs, retaining divergent names.
 /// - **Atomic.** Each write is one save of its own context; a failed save
 ///   rolls back and leaves the palette as it was.
 @MainActor
@@ -46,7 +46,8 @@ final class TagColourStore: ObservableObject {
         for row in rows where row.hue != nil {
             guard let current = winners[row.name] else { winners[row.name] = row; continue }
             if row.modifiedAt > current.modifiedAt
-                || (row.modifiedAt == current.modifiedAt && row.id.uuidString < current.id.uuidString) {
+                || (row.modifiedAt == current.modifiedAt && (row.id.uuidString < current.id.uuidString
+                    || (row.id == current.id && row.colourKey! < current.colourKey!))) {
                 winners[row.name] = row
             }
         }
@@ -110,9 +111,16 @@ final class TagColourStore: ObservableObject {
             return false
         }
         guard save(context) else { return false }
-        var updated = palette
-        updated.hues[name] = hue
-        palette = updated
+        // A UUID replica can carry a divergent name. Publish every affected
+        // alias as well, without renaming or deleting any physical row.
+        do {
+            let stored = Self.storedHues(try context.fetch(FetchDescriptor<TagColour>()))
+            var updated = palette
+            for (name, hue) in stored { updated.hues[name] = hue }
+            palette = updated
+        } catch {
+            lastErrorMessage = error.localizedDescription
+        }
         return true
     }
 
@@ -121,18 +129,11 @@ final class TagColourStore: ObservableObject {
     /// otherwise it takes the first source's colour (a rename keeps the
     /// colour). The sources' rows stay, so undoing the rename brings the
     /// old name back in its colour.
-    func carry(from sources: [String], to target: String, in context: ModelContext) throws {
-        let hue: AtticTagHue
-        if palette.hues[target] != nil {
-            hue = palette.hue(for: target)
-            // Already stored: nothing to write.
-            let existing = try rows(named: target, in: context)
-            if existing.contains(where: { $0.hue == hue }) { return }
-        } else if let source = sources.first {
-            hue = palette.hue(for: source)
-        } else {
-            return
-        }
+    func carry(from sources: [String], to target: String, targetInUse: Bool, in context: ModelContext) throws {
+        let stored = Self.storedHues(try context.fetch(FetchDescriptor<TagColour>()))
+        guard let source = sources.first else { return }
+        let name = targetInUse ? target : source
+        let hue = stored[name] ?? AtticTagHue.assigned(to: name, avoiding: Set(stored.values))
         try write(hue, for: target, in: context)
     }
 
@@ -144,7 +145,9 @@ final class TagColourStore: ObservableObject {
 
     private func write(_ hue: AtticTagHue, for name: String, in context: ModelContext) throws {
         let date = now()
-        let existing = try rows(named: name, in: context)
+        let all = try context.fetch(FetchDescriptor<TagColour>())
+        let ids = Set(all.filter { $0.name == name }.map(\.id))
+        let existing = all.filter { $0.name == name || ids.contains($0.id) }
         if existing.isEmpty {
             context.insert(TagColour(name: name, hue: hue, at: date))
         }

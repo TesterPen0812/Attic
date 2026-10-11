@@ -74,7 +74,7 @@ final class TagService {
     /// Run inside a rename or merge's own save, before it: carries the
     /// sources' colour to the target in the same context, so the colour and
     /// the tags change together or not at all (`TagColourStore.carry`).
-    var carryColour: (@MainActor (_ sources: [String], _ target: String, _ context: ModelContext) throws -> Void)?
+    var carryColour: (@MainActor (_ sources: [String], _ target: String, _ targetInUse: Bool, _ context: ModelContext) throws -> Void)?
 
     /// Inspect only rows touched by this transaction, never the whole store.
     /// Divergent replicas can change the winning tag set through a content
@@ -216,7 +216,14 @@ final class TagService {
         guard !normalizedSources.isEmpty else { return TagChangeSnapshot(changesByRow: [:]) }
         let carry = carryColour
         let sourceOrder = sources.compactMap(AtticTag.normalize).filter { normalizedSources.contains($0) }
-        return rewrite(beforeSave: { context in try carry?(sourceOrder, target, context) }) { tags in
+        return rewrite(beforeRewrite: { context in
+            var rows: [PersistentIdentifier: RowState] = [:]
+            var divergent = Set<AtticItemRef>()
+            var firstUse: [String: Date] = [:]
+            let targetInUse = try self.liveTags(rows: &rows, divergent: &divergent, firstUse: &firstUse, in: context)
+                .values.contains { $0.contains(target) }
+            try carry?(sourceOrder, target, targetInUse, context)
+        }) { tags in
             guard !tags.isDisjoint(with: normalizedSources) else { return nil }
             return tags.subtracting(normalizedSources).union([target])
         }
@@ -268,7 +275,7 @@ final class TagService {
 
     /// Applies `transform` to every row's tag set; nil leaves a row alone.
     /// Returns what it removed and added on each row it changed.
-    private func rewrite(beforeSave: (ModelContext) throws -> Void = { _ in },
+    private func rewrite(beforeRewrite: (ModelContext) throws -> Void = { _ in },
                          _ transform: (Set<String>) -> Set<String>?) -> TagChangeSnapshot? {
         let context = ModelContext(container)
         var previous: [PersistentIdentifier: TagChangeSnapshot.Change] = [:]
@@ -282,6 +289,7 @@ final class TagService {
             return encoded
         }
         do {
+            try beforeRewrite(context)
             for task in try context.fetch(FetchDescriptor<TaskItem>(predicate: #Predicate { $0.tagsRaw != "" })) {
                 if let updated = apply(task.tagsRaw, task.persistentModelID) { task.tagsRaw = updated }
             }
@@ -292,17 +300,11 @@ final class TagService {
                 if let updated = apply(board.tagsRaw, board.persistentModelID) { board.tagsRaw = updated }
             }
         } catch {
-            lastErrorMessage = error.localizedDescription
-            return nil
-        }
-        guard !previous.isEmpty else { return TagChangeSnapshot(changesByRow: [:]) }
-        do {
-            try beforeSave(context)
-        } catch {
             context.rollback()
             lastErrorMessage = error.localizedDescription
             return nil
         }
+        guard !previous.isEmpty else { return TagChangeSnapshot(changesByRow: [:]) }
         guard save(context) else { return nil }
         return TagChangeSnapshot(changesByRow: previous)
     }
@@ -314,8 +316,8 @@ final class TagService {
     /// newer one that has no tags or is deleted.
     private func liveTags(rows metadata: inout [PersistentIdentifier: RowState],
                           divergent: inout Set<AtticItemRef>,
-                          firstUse: inout [String: Date]) throws -> [AtticItemRef: Set<String>] {
-        let context = ModelContext(container)
+                          firstUse: inout [String: Date], in suppliedContext: ModelContext? = nil) throws -> [AtticItemRef: Set<String>] {
+        let context = suppliedContext ?? ModelContext(container)
         var result: [AtticItemRef: Set<String>] = [:]
         var firstState: [AtticItemRef: RowState] = [:]
         func remember(_ identifier: PersistentIdentifier, _ ref: AtticItemRef, _ raw: String, _ unavailable: Bool) {

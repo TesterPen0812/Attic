@@ -62,8 +62,8 @@ final class AtticLibrary {
         tags = TagService(container: tasks.container, persist: persist)
         tagColours = TagColourStore(container: tasks.container, persist: persist, now: now)
         let colours = tagColours
-        tags.carryColour = { [weak colours] sources, target, context in
-            try colours?.carry(from: sources, to: target, in: context)
+        tags.carryColour = { [weak colours] sources, target, targetInUse, context in
+            try colours?.carry(from: sources, to: target, targetInUse: targetInUse, in: context)
         }
         links.endpointState = { [weak self] ref in self?.state(of: ref) ?? .missing }
         tasks.commandLibrary = self

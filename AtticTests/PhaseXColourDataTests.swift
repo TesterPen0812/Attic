@@ -92,6 +92,55 @@ final class PhaseXColourDataTests: XCTestCase {
 
     // MARK: Changing, renaming, merging
 
+    func testAR01BackToBackRenamesKeepStoredColourWithoutRefreshing() throws {
+        let library = try makeLibrary()
+        try tag(library, "One", ["launch"], created: .now)
+        library.refreshTagColours()
+        XCTAssertTrue(library.setTagHue(.pink, for: "launch"))
+        XCTAssertTrue(library.renameTag("launch", to: "release"))
+        XCTAssertTrue(library.renameTag("release", to: "final"))
+        XCTAssertEqual(try rows(library.tasks.container, named: "final").map(\.hue), [.pink])
+    }
+
+    func testAR01ColdLibraryRenameAndImmediateMergeUseAuthoritativeRows() throws {
+        let library = try makeLibrary()
+        try tag(library, "One", ["launch"], created: .now)
+        try tag(library, "Two", ["design"], created: .now)
+        let context = ModelContext(library.tasks.container)
+        context.insert(TagColour(name: "launch", hue: .pink))
+        context.insert(TagColour(name: "design", hue: .grey))
+        try context.save()
+        let cold = AtticLibrary(tasks: TaskStore(container: library.tasks.container))
+        XCTAssertTrue(cold.renameTag("launch", to: "release"))
+        XCTAssertEqual(try rows(library.tasks.container, named: "release").map(\.hue), [.pink])
+        XCTAssertTrue(cold.mergeTags(["release"], into: "design"))
+        XCTAssertEqual(try rows(library.tasks.container, named: "design").map(\.hue), [.grey])
+    }
+
+    func testAR02EqualIdentityAndTimeResolvePayloadIndependentlyOfFetchOrder() {
+        let id = UUID(), date = Date(timeIntervalSince1970: 1000)
+        let a = TagColour(id: id, name: "launch", hue: .pink, at: date)
+        let b = TagColour(id: id, name: "launch", hue: .blue, at: date)
+        XCTAssertEqual(TagColourStore.storedHues([a, b]), TagColourStore.storedHues([b, a]))
+        XCTAssertEqual(TagColourStore.storedHues([a, b])["launch"], .blue)
+    }
+
+    func testAR03ColourWriteReachesDivergentNameUUIDReplicas() throws {
+        let library = try makeLibrary()
+        let context = ModelContext(library.tasks.container), id = UUID()
+        context.insert(TagColour(id: id, name: "launch", hue: .pink))
+        context.insert(TagColour(id: id, name: "release", hue: .blue))
+        context.insert(TagColour(name: "launch", hue: .teal))
+        context.insert(TagColour(name: "unrelated", hue: .olive))
+        try context.save()
+        XCTAssertTrue(library.tagColours.setHue(.grey, for: "launch"))
+        let all = try rows(library.tasks.container)
+        XCTAssertEqual(all.count, 4)
+        XCTAssertTrue(all.filter { $0.name == "launch" || $0.id == id }.allSatisfy { $0.hue == .grey })
+        XCTAssertEqual(all.first { $0.name == "unrelated" }?.hue, .olive)
+        XCTAssertEqual(library.tagColours.palette.hue(for: "release"), .grey)
+    }
+
     func testChangingAColourIsOneUndoStepAndRenamingKeepsIt() throws {
         let library = try makeLibrary()
         try tag(library, "One", ["launch"], created: .now)
