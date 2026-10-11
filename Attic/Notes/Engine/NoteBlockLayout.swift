@@ -230,13 +230,17 @@ final class NoteBlockLayoutFragment: NSTextLayoutFragment {
 // MARK: - The engine's layout hooks
 
 extension NoteEditorEngine: NSTextLayoutManagerDelegate, NSTextContentStorageDelegate {
-    func textContentManager(_ textContentManager: NSTextContentManager,
+    nonisolated func textContentManager(_ textContentManager: NSTextContentManager,
                             shouldEnumerate textElement: NSTextElement,
                             options: NSTextContentManager.EnumerationOptions) -> Bool {
-        guard !foldedHeadingIDs.isEmpty, let range = textElement.elementRange else { return true }
-        let offset = contentStorage.offset(from: contentStorage.documentRange.location, to: range.location)
-        return !headingSections.contains { section in
-            section.id.map(foldedHeadingIDs.contains) == true && NSLocationInRange(offset, section.content)
+        // This editor owns and lays out its content on the main actor.
+        // Assert that boundary for TextKit's nonisolated delegate callback.
+        MainActor.assumeIsolated {
+            guard !foldedHeadingIDs.isEmpty, let range = textElement.elementRange else { return true }
+            let offset = contentStorage.offset(from: contentStorage.documentRange.location, to: range.location)
+            return !headingSections.contains { section in
+                section.id.map(foldedHeadingIDs.contains) == true && NSLocationInRange(offset, section.content)
+            }
         }
     }
 

@@ -319,6 +319,11 @@ final class NotesFormatControlsTests: XCTestCase {
 
         let (top, topEngine, topView) = make(topInset: 60)
         // Owner P3 keeps titles plain; exercise placement on the first body line.
+        // Scroll the body up beneath the header so there is still no room
+        // above the selection. Selecting the title used to supply this geometry.
+        let topScroll = try XCTUnwrap(topView.enclosingScrollView)
+        topScroll.contentView.setBoundsOrigin(.zero)
+        topScroll.reflectScrolledClipView(topScroll.contentView)
         let first = range("Lead", topView)
         topView.setSelectedRange(first)
         top.refresh()
@@ -1862,7 +1867,7 @@ extension NotesFormatControlsTests {
 @MainActor
 final class HeadingsBehaviourTests: XCTestCase {
     func testHeadingRenderingCaptures() throws {
-        guard let output = ProcessInfo.processInfo.environment["TEST_RUNNER_ATTIC_HEADINGS_CAPTURE_DIR"] else {
+        guard let output = ProcessInfo.processInfo.environment["ATTIC_HEADINGS_CAPTURE_DIR"] else {
             throw XCTSkip("explicit native capture run only")
         }
         var heading = NoteBlock.text("Research", style: "heading"); heading.level = 1
