@@ -1463,6 +1463,7 @@ final class NotesPageControllerTests: XCTestCase {
         XCTAssertFalse(FileManager.default.fileExists(atPath: file.path))
     }
 
+    #if !ATTIC_COST_REFERENCE_HOST
     func testAR05RecoveryCopyIOFailureCarriesItsSourceFlag() async throws {
         let controller = makeController(journal: FailingJournal())
         await controller.startAndWait()
@@ -1487,6 +1488,8 @@ final class NotesPageControllerTests: XCTestCase {
         XCTAssertEqual(session.engine.plainText, text)
         XCTAssertEqual(session.state, state)
     }
+
+    #endif
 
     func testProposalStatusOnLongNoteDoesNotFetchOrExtractOnTyping() async throws {
         let document = NoteDocument(blocks: (0..<5_000).map { .text("Line \($0)") })
@@ -1530,7 +1533,11 @@ final class NotesPageControllerTests: XCTestCase {
         print("NOTE_5000_NO_PROPOSAL_100_KEYS_MS=\(Double(DispatchTime.now().uptimeNanoseconds - baselineStart) / 1_000_000)")
         XCTAssertEqual(store.pendingEditFetchCount, baselineFetches)
         XCTAssertEqual(baselineSession.engine.documentExtractionCount, baselineExtractions)
+        #if ATTIC_COST_REFERENCE_HOST
+        session.notice = "Finish composing text before leaving this note."
+        #else
         session.showNotice(NoteNotice(kind: .finishFirst, detail: "Finish composing text before leaving this note."))
+        #endif
         XCTAssertEqual(controller.statusItems(for: session).map(\.label),
                        ["Claude has changes", "Finish first"])
     }
