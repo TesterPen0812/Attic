@@ -26,6 +26,12 @@ on:
         default: false
         type: boolean
 
+      compare_tag_colour_costs:
+        description: Record paired AB/BA colour1 and 76e4276 tag-open costs
+        required: false
+        default: false
+        type: boolean
+
       compare_note_save_gates:
         description: Record four interleaved d77ec80 and afebc3a save-gate runs
         required: false
@@ -111,9 +117,10 @@ jobs:
             -resultBundlePath "$RUNNER_TEMP/AtticFKA-task-focus.xcresult" CODE_SIGNING_ALLOWED=NO \
             -parallel-testing-enabled NO \
             -only-testing:AtticTests/TasksRound13Tests/testH12_06TabFocusMovesSelectionAndReturnEditsTheFocusedTask \
-            -only-testing:AtticTests/DeepReviewFixTests/testEveryTabStopIsAVisibleRowOrAField || status=1
+            -only-testing:AtticTests/DeepReviewFixTests/testEveryTabStopIsAVisibleRowOrAField \
+            -only-testing:AtticTests/TasksRound13Tests/testAR08NativeTabAndShiftTabPreserveExtendedSelectionAndReturnEditsFocus || status=1
           xcrun xcresulttool get test-results summary --path "$RUNNER_TEMP/AtticFKA-task-focus.xcresult" --format json > "$RUNNER_TEMP/fka-task-focus-summary.json"
-          python3 -c 'import json,sys; s=json.load(open(sys.argv[1])); assert s["passedTests"]==2 and s["skippedTests"]==0 and s["failedTests"]==0 and s["expectedFailures"]==0' "$RUNNER_TEMP/fka-task-focus-summary.json" || status=1
+          python3 -c 'import json,sys; s=json.load(open(sys.argv[1])); assert s["passedTests"]==3 and s["skippedTests"]==0 and s["failedTests"]==0 and s["expectedFailures"]==0' "$RUNNER_TEMP/fka-task-focus-summary.json" || status=1
           exit $status
       - name: Upload focused keyboard evidence
         if: always()
@@ -214,6 +221,18 @@ jobs:
             CODE_SIGNING_ALLOWED=NO \
             SWIFT_STRICT_CONCURRENCY=complete \
             clean build
+
+      - name: Measure pinned colour1 against integration base in paired AB/BA runs
+        if: inputs.compare_tag_colour_costs
+        run: python3 Scripts/compare_tag_colour_costs.py "$RUNNER_TEMP/TagColourComparison"
+
+      - name: Upload pinned tag-colour timing comparison
+        if: always() && inputs.compare_tag_colour_costs
+        uses: actions/upload-artifact@v4
+        with:
+          name: tag-colour-comparison-${{ github.sha }}
+          path: ${{ runner.temp }}/TagColourComparison/*.json
+          retention-days: 7
 
       - name: Run macOS unit tests
         id: unit_tests

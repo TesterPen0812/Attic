@@ -1601,7 +1601,7 @@ final class AtticDropdownTests: XCTestCase {
     /// `readAccessibility`, each sample also reads the shown list's
     /// accessibility tree, as VoiceOver does when a menu opens or changes
     /// (that is when SwiftUI builds each row's accessibility element).
-    private func measureDropdownCosts(in window: NSWindow, rounds: Int, readAccessibility: Bool = false) -> [Round] {
+    private func measureDropdownCosts(in window: NSWindow, rounds: Int, readAccessibility: Bool = false, priorityDelay: TimeInterval = 0) -> [Round] {
         let design = AtticDesignContext()
         let all = NoteSlashItem.Kind.allCases.map { NoteSlashItem(kind: $0) }
         let filtered = all.filter { $0.title.lowercased().contains("li") }
@@ -1629,44 +1629,58 @@ final class AtticDropdownTests: XCTestCase {
         let anchor = NSView(frame: NSRect(x: 40, y: 60, width: 60, height: 28))
         window.contentView?.addSubview(anchor)
         defer { anchor.removeFromSuperview() }
-        func pickerTimings() -> (legacyTag: [Double], tag: [Double], priority: [Double]) {
+        func pickerTimings(reversed: Bool) -> (legacyTag: [Double], tag: [Double], priority: [Double]) {
             var legacyTag: [Double] = [], tag: [Double] = [], priority: [Double] = []
-            for round in 0..<16 {
-                // Before E1 the Tasks pickers were native pop-overs.
+            func legacy() -> Double {
                 let popover = NSPopover()
                 popover.animates = false
                 popover.contentViewController = NSHostingController(rootView: LegacyTagPicker(tags: tags).atticDesign(design))
-                let legacy = ms {
+                let elapsed = ms {
                     popover.show(relativeTo: anchor.bounds, of: anchor, preferredEdge: .maxY)
                     popover.contentViewController?.view.window?.displayIfNeeded()
                     if readAccessibility, let view = popover.contentViewController?.view { _ = accessibilityElements(view) }
                 }
                 popover.close()
-                if round > 0 { legacyTag.append(legacy) }
+                return elapsed
+            }
+            func currentTag() -> Double {
                 let presenter = AtticDropdownPresenter()
                 presenter.design = design
                 presenter.prefer = .above
                 presenter.content = AnyView(TaskTagPickerView(allTags: tags, state: { $0 == "tag2" ? .on : .off }, onToggle: { _ in },
                                                               onCreate: { _, _ in true }, focusField: false))
-                let opened = ms {
+                let elapsed = ms {
                     presenter.present(from: anchor)
                     presenter.host?.layoutSubtreeIfNeeded(); window.displayIfNeeded()
                     if readAccessibility, let host = presenter.host { _ = accessibilityElements(host) }
                 }
-                if round > 0 { tag.append(opened) }
                 presenter.close(restoreFocus: false, immediately: true)
+                return elapsed
+            }
+            func currentPriority() -> Double {
                 let prio = AtticDropdownPresenter()
                 prio.design = design
-                // The real composer strip supplies this fixed four-row height.
                 prio.contentHeight = AtticDropdownMetrics.inset * 2 + AtticDropdownMetrics.rowHeight * 4
                 prio.content = AnyView(TaskPriorityPickerView(current: .high, onPick: { _ in }))
-                let prioOpened = ms {
+                let elapsed = ms {
                     prio.present(from: anchor)
                     prio.host?.layoutSubtreeIfNeeded(); window.displayIfNeeded()
                     if readAccessibility, let host = prio.host { _ = accessibilityElements(host) }
+                    if priorityDelay > 0 { Thread.sleep(forTimeInterval: priorityDelay) }
                 }
-                if round > 0 { priority.append(prioOpened) }
                 prio.close(restoreFocus: false, immediately: true)
+                return elapsed
+            }
+            // Two discarded warm-ups, then 16 samples: eight AB and eight BA.
+            for sample in 0..<18 {
+                let reverse = (sample % 2 == 1) != reversed
+                let operations: [() -> Double] = reverse ? [currentPriority, currentTag, legacy] : [legacy, currentTag, currentPriority]
+                let values = operations.map { $0() }
+                if sample >= 2 {
+                    legacyTag.append(values[reverse ? 2 : 0])
+                    tag.append(values[1])
+                    priority.append(values[reverse ? 0 : 2])
+                }
             }
             return (legacyTag, tag, priority)
         }
@@ -1674,11 +1688,17 @@ final class AtticDropdownTests: XCTestCase {
         // Warm both (first-use costs: fonts, symbols), then measure.
         _ = slashTimings { LegacySlashList(model: $0) }
         _ = slashTimings { NoteSlashListView(model: $0) }
-        return (0..<rounds).map { _ in
+        return (0..<rounds).map { index in
             var round = Round()
-            let legacy = slashTimings { LegacySlashList(model: $0) }
-            let slash = slashTimings { NoteSlashListView(model: $0) }
-            let pickers = pickerTimings()
+            let legacy, slash: (open: [Double], narrow: [Double], widen: [Double])
+            if index % 2 == 0 {
+                legacy = slashTimings { LegacySlashList(model: $0) }
+                slash = slashTimings { NoteSlashListView(model: $0) }
+            } else {
+                slash = slashTimings { NoteSlashListView(model: $0) }
+                legacy = slashTimings { LegacySlashList(model: $0) }
+            }
+            let pickers = pickerTimings(reversed: index % 2 == 1)
             round.legacy[.slashOpen] = median(legacy.open); round.new[.slashOpen] = median(slash.open)
             round.legacy[.slashNarrow] = median(legacy.narrow); round.new[.slashNarrow] = median(slash.narrow)
             round.legacy[.slashWiden] = median(legacy.widen); round.new[.slashWiden] = median(slash.widen)
@@ -1740,7 +1760,17 @@ final class AtticDropdownTests: XCTestCase {
     func testOpenAndFilterCostNoMoreThanBefore() {
         let window = makeWindow()
         defer { window.close() }
-        gate(measureDropdownCosts(in: window, rounds: 5), label: "", accepted: Self.acceptedRatios)
+        gate(measureDropdownCosts(in: window, rounds: 8), label: "", accepted: Self.acceptedRatios)
+    }
+
+    func testPairedSamplerRejectsARealPriorityOpeningSlowdown() {
+        let window = makeWindow()
+        defer { window.close() }
+        let delayed = measureDropdownCosts(in: window, rounds: 8, readAccessibility: true, priorityDelay: 0.008)
+        let ratio = median(delayed.map { $0.ratio(.priorityOpen) })
+        let limit = Self.acceptedRatiosWithAccessibility[.priorityOpen]!.limit
+        print("DROPDOWN_SENSITIVITY priorityOpen_AX delay_ms=8 ratio=\(ratio) unchanged_limit=\(limit)")
+        XCTAssertGreaterThan(ratio, limit, "the same paired estimator must reject an actual opening slowdown")
     }
 
     /// The same gate with accessibility on and the tree read (as VoiceOver
@@ -1753,7 +1783,7 @@ final class AtticDropdownTests: XCTestCase {
         defer { NSApp.accessibilitySetValue(previous, forAttribute: attribute) }
         let window = makeWindow()
         defer { window.close() }
-        gate(measureDropdownCosts(in: window, rounds: 5, readAccessibility: true), label: "_AX",
+        gate(measureDropdownCosts(in: window, rounds: 8, readAccessibility: true), label: "_AX",
              accepted: Self.acceptedRatiosWithAccessibility)
     }
 }
