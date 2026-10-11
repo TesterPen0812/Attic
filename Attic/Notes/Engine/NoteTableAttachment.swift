@@ -47,6 +47,10 @@ final class NoteTableAttachment: NoteObjectAttachment {
     @MainActor let textCache = NoteTableTextCache()
     private var layoutCache: NoteTableLayout?
 
+    /// The last row's height as last laid out (the caret after the table is
+    /// centred on it, D-24); nil before the first layout.
+    @MainActor var lastRowHeight: CGFloat? { layoutCache?.rowHeights.last }
+
     /// The table's layout in a column `width` wide.
     @MainActor func layout(width: CGFloat) -> NoteTableLayout {
         if let layoutCache, abs(layoutCache.viewportWidth - max(AtticNoteTableMetrics.minColumnWidth, width)) < 0.5 {

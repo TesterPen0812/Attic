@@ -93,16 +93,37 @@ final class NoteCaretFitter {
               let superview = indicator.superview, let font = Self.font(of: textView) else { return false }
         let current = textView.convert(indicator.frame, from: superview)
         guard let line = Self.line(at: current, in: textView) else { return false }
-        // A line of its own (an image, a file, a table) is not text: the
-        // system's full-height caret stays.
+        // A line of its own (an image, a file) is not text: the system's
+        // full-height caret stays. After a table it is a body-height caret
+        // centred on the last row (D-24: the full-height one read as a tall
+        // bright bar on the table's edge).
         let glyphHeight = font.ascender - font.descender
-        guard line.boxHeight <= glyphHeight + 8 else { return false }
-        let fitted = Self.fittedFrame(current: current, baseline: line.baseline, font: font)
+        let fitted: CGRect
+        if line.boxHeight <= glyphHeight + 8 {
+            fitted = Self.fittedFrame(current: current, baseline: line.baseline, font: font)
+        } else if let table = Self.table(before: textView.selectedRange().location, in: textView) {
+            fitted = Self.caretAfterTable(current: current, lastRow: table.lastRowHeight, font: font)
+        } else {
+            return false
+        }
         guard abs(fitted.minY - current.minY) > 0.01 || abs(fitted.height - current.height) > 0.01 else { return false }
         fitting = true
         indicator.frame = superview.convert(fitted, from: textView)
         fitting = false
         return true
+    }
+
+    /// The caret after a table: the glyph box's height, centred on the
+    /// table's last row (the line box's bottom `lastRow`).
+    nonisolated static func caretAfterTable(current: CGRect, lastRow: CGFloat?, font: NSFont) -> CGRect {
+        let height = font.ascender - font.descender
+        let row = min(current.height, max(height, lastRow ?? height))
+        return CGRect(x: current.minX, y: current.maxY - row / 2 - height / 2, width: current.width, height: height)
+    }
+
+    private static func table(before location: Int, in textView: NSTextView) -> NoteTableAttachment? {
+        guard let storage = textView.textStorage, location > 0, location <= storage.length else { return nil }
+        return storage.attribute(.attachment, at: location - 1, effectiveRange: nil) as? NoteTableAttachment
     }
 
     private static func indicators(in view: NSView) -> [NSView] {
