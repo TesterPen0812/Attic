@@ -161,7 +161,11 @@ final class TasksPageModel: ObservableObject {
         // Remembered across relaunch (L7), where the page has a memory.
         didSet { if tab != oldValue { memory?.savePage(tab) } }
     }
-    @Published private(set) var selection: Set<UUID> = []
+    @Published private(set) var selection: Set<UUID> = [] {
+        didSet { if selection != oldValue { selectionRevision += 1 } }
+    }
+    private var selectionRevision = 0
+    private var keyboardFocusSelectionRevision: Int?
     /// The row a Shift-extension grows from (readable for the tests).
     private(set) var selectionAnchor: UUID?
     /// Rows whose quick look is open (remembered per row for the session).
@@ -226,6 +230,23 @@ final class TasksPageModel: ObservableObject {
     /// it changes so the rows' cells read it as they draw (deep review
     /// P2-04). Not published: the page tells the cells (`cellUpdates`).
     var keyboardFocus: AtticRowFocusID?
+
+    /// Shared by native focus observation and the headless regression tests.
+    func receiveKeyboardFocus(_ focus: AtticRowFocusID?, keyboardDriving: Bool) {
+        if let focus, focus.page == tab.rawValue, keyboardDriving,
+           selection.count == 1, !selection.contains(focus.id) { selectOnly(focus.id) }
+        keyboardFocus = focus
+        keyboardFocusSelectionRevision = focus?.page == tab.rawValue && keyboardDriving ? selectionRevision : nil
+    }
+
+    func keyboardRow(focused: UUID?, visible: [UUID]) -> UUID? {
+        let live = Set(visible)
+        let selected = selection.intersection(live)
+        let focusIsLater = keyboardFocus?.id == focused && keyboardFocus?.page == tab.rawValue
+            && keyboardFocusSelectionRevision == selectionRevision
+        if let focused, live.contains(focused), focusIsLater || selected.isEmpty || selected.contains(focused) { return focused }
+        return selected.count == 1 ? selected.first : nil
+    }
     /// Finished rows held where they were for about a second, with the
     /// list and index they held (spec: "stays in place, then slides").
     @Published private(set) var held: [UUID: HeldPlace] = [:]

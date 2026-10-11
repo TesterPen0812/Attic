@@ -28,6 +28,30 @@ final class TasksRound13Tests: XCTestCase {
         XCTAssertEqual(hosted.model.editingTitleID, next.id, "Return edits the visibly focused task")
     }
 
+    func testAR08NativeTabAndShiftTabPreserveExtendedSelectionAndReturnEditsFocus() throws {
+        guard ProcessInfo.processInfo.environment["ATTIC_KEY_WINDOW_TESTS"] == "1" else {
+            throw XCTSkip("native keyboard interaction runs on CI only")
+        }
+        let hosted = try Hosted(height: 520)
+        defer { hosted.close() }
+        hosted.press("\u{F701}", keyCode: 125)
+        hosted.press("\u{F701}", keyCode: 125, modifiers: .shift)
+        let selection = hosted.model.selection
+        XCTAssertEqual(selection.count, 2)
+        for _ in 0..<6 {
+            hosted.press("\t", keyCode: 48)
+            XCTAssertEqual(hosted.model.selection, selection, "Tab never silently collapses a range")
+            if let focus = hosted.model.keyboardFocus, !selection.contains(focus.id) { break }
+        }
+        let outside = try XCTUnwrap(hosted.model.keyboardFocus)
+        XCTAssertFalse(selection.contains(outside.id))
+        hosted.press("\u{19}", keyCode: 48, modifiers: .shift)
+        XCTAssertEqual(hosted.model.selection, selection, "Shift-Tab preserves the range")
+        let back = try XCTUnwrap(hosted.model.keyboardFocus)
+        hosted.press("\r", keyCode: 36)
+        XCTAssertEqual(hosted.model.editingTitleID, back.id, "Return edits the visibly focused row")
+    }
+
     // MARK: - Bug 3: a Tab-focused subtask owns ⌘↑ ⌘↓ and Return
 
     /// The demo task with subtasks, expanded, and a Tab pressed until a

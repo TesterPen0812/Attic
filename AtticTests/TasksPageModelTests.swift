@@ -49,6 +49,22 @@ final class TasksPageModelTests: XCTestCase {
         return model.submitAddBar()
     }
 
+    func testAR08TabAndShiftTabPreserveExtendedSelectionButReturnUsesNewFocus() throws {
+        let a = try XCTUnwrap(add("A")), b = try XCTUnwrap(add("B")), c = try XCTUnwrap(add("C"))
+        let visible = [a, b, c]
+        model.selectOnly(a)
+        model.extendSelection(to: b, visible: visible)
+        XCTAssertEqual(model.selection, [a, b])
+        model.receiveKeyboardFocus(AtticRowFocusID(page: TasksTab.now.rawValue, id: c), keyboardDriving: true)
+        XCTAssertEqual(model.selection, [a, b], "Tab preserves the extended selection")
+        XCTAssertEqual(model.keyboardRow(focused: c, visible: visible), c, "the later key uses the visible focus")
+        model.receiveKeyboardFocus(AtticRowFocusID(page: TasksTab.now.rawValue, id: b), keyboardDriving: true)
+        XCTAssertEqual(model.selection, [a, b], "Shift-Tab preserves it too")
+        XCTAssertEqual(model.keyboardRow(focused: b, visible: visible), b)
+        model.selectOnly(a)
+        XCTAssertEqual(model.keyboardRow(focused: b, visible: visible), a, "a later menu selection supersedes old focus")
+    }
+
     // MARK: - Lists
 
     func testNowIsInProgressThenToDoThenDoneAndBacklogIsItsOwnList() throws {

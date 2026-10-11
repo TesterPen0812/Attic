@@ -470,11 +470,7 @@ struct TasksPage: View {
             // An existing selection follows a new keyboard row. Tab from no
             // selection stays focus-only; an extended selection is preserved.
             // Later menu/restore selections still win.
-            if let focus, focus.page == model.tab.rawValue, focusTracker.isKeyboardDriving,
-               !model.selection.isEmpty, !model.selection.contains(focus.id) {
-                model.selectOnly(focus.id)
-            }
-            model.keyboardFocus = focus
+            model.receiveKeyboardFocus(focus, keyboardDriving: focusTracker.isKeyboardDriving)
             model.cellUpdates.objectWillChange.send()
             pointer.keyboardRow = focus.flatMap { focus in
                 TasksTab(rawValue: focus.page).map { TasksRowID(tab: $0, id: focus.id) }
@@ -2365,11 +2361,7 @@ struct TasksPage: View {
     /// never acts from a stale row (round 12, CU bug 2). With no row focused,
     /// the one selected row.
     private func keyboardRow(visible: [UUID]) -> UUID? {
-        let live = Set(visible)
-        let selected = model.selection.intersection(live)
-        if let focused = focusedID, live.contains(focused), selected.isEmpty || selected.contains(focused) { return focused }
-        if selected.count == 1 { return selected.first }
-        return nil
+        model.keyboardRow(focused: focusedID, visible: visible)
     }
 
     /// The quick-look subtask that has the keyboard, with its parent row and
