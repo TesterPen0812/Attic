@@ -121,8 +121,7 @@ struct GalleryQuickLook: View {
         AtticQuickLook(
             subtasks: subtasks,
             onToggle: { demo.record("Toggle subtask", $0.title)() },
-            onAddSubtask: demo.record("Add subtask", task),
-            onOpenPage: demo.record("Open page", task)
+            onAddSubtask: demo.record("Add subtask", task)
         )
     }
 }

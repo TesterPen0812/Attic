@@ -42,10 +42,9 @@ struct TasksRowID: Hashable {
 /// What the page needs from outside itself. The shell (or the preview)
 /// supplies it; tests supply fixed clocks.
 struct TasksPageServices {
-    /// ⌘Return, "Open page", VoiceOver "Open page": the task's page. Task
-    /// pages arrive in Phase 3; until then the host opens today's detail
-    /// panel (the subtask panel, which also holds the task's files).
-    var openPage: (UUID) -> Void = { _ in }
+    /// "Attach file…": the host's file picker for the task (it keeps the
+    /// panel open while the picker is up). Nil where the page has none.
+    var chooseFiles: ((UUID) -> Void)?
     var now: () -> Date = Date.init
     var calendar: () -> Calendar = { Calendar.autoupdatingCurrent }
     var locale: Locale = .autoupdatingCurrent
@@ -61,6 +60,9 @@ struct TasksListRow: Identifiable, Equatable {
     let status: TaskStatus
     /// Only when the quick look is open.
     let subtasks: [AtticSubtaskModel]
+    /// The task's stored files, only when its files list is open (A1: the
+    /// files count opens them inline, apart from the subtasks).
+    var files: [TaskImageReference] = []
 
     static func == (lhs: TasksListRow, rhs: TasksListRow) -> Bool {
         lhs.id == rhs.id && lhs.status == rhs.status && lhs.model.title == rhs.model.title
@@ -72,6 +74,7 @@ struct TasksListRow: Identifiable, Equatable {
             && lhs.subtasks.map(\.id) == rhs.subtasks.map(\.id)
             && lhs.subtasks.map(\.isDone) == rhs.subtasks.map(\.isDone)
             && lhs.subtasks.map(\.title) == rhs.subtasks.map(\.title)
+            && lhs.files == rhs.files
     }
 }
 
@@ -170,6 +173,10 @@ final class TasksPageModel: ObservableObject {
     private(set) var selectionAnchor: UUID?
     /// Rows whose quick look is open (remembered per row for the session).
     @Published private(set) var expanded: Set<UUID> = []
+    /// Rows whose files list is open (A1, owner decision: the files count
+    /// opens only the files, the subtasks count only the subtasks; each
+    /// opens and closes on its own).
+    @Published private(set) var expandedFiles: Set<UUID> = []
     @Published private(set) var editingTitleID: UUID?
     /// The title being edited, with its shorthand (owner fix 4): what is
     /// typed as `#tag`, a date or `!` becomes a chip and applies on save.
@@ -418,6 +425,7 @@ final class TasksPageModel: ObservableObject {
             subtasks = doneLogChildren[task.id] ?? []
         }
         let open = expanded.contains(task.id)
+        let filesOpen = expandedFiles.contains(task.id)
         var model = TaskRowPresentation.row(for: task, subtasks: subtasks, today: today,
                                             calendar: services.calendar(), locale: services.locale)
         // Find's matches are marked in the title (item 6, as on Done).
@@ -426,7 +434,8 @@ final class TasksPageModel: ObservableObject {
             id: task.id,
             model: model,
             status: task.status,
-            subtasks: open ? quickLookSubtasks(of: task.id, subtasks).map { AtticSubtaskModel(id: $0.id, title: $0.title, isDone: $0.status == .done) } : []
+            subtasks: open ? quickLookSubtasks(of: task.id, subtasks).map { AtticSubtaskModel(id: $0.id, title: $0.title, isDone: $0.status == .done) } : [],
+            files: filesOpen ? task.attachments : []
         )
     }
 
@@ -435,6 +444,7 @@ final class TasksPageModel: ObservableObject {
         let revision: UInt64
         let held: [UUID: HeldPlace]
         let expanded: Set<UUID>
+        let expandedFiles: Set<UUID>
         let completedExpanded: Bool
         let today: DueDay
         let dateEnvironment: DatePresentationEnvironment
@@ -450,6 +460,7 @@ final class TasksPageModel: ObservableObject {
         let revision: UInt64
         let held: [UUID: HeldPlace]
         let expanded: Set<UUID>
+        let expandedFiles: Set<UUID>
         let completedExpanded: Bool
         let today: DueDay
         let dateEnvironment: DatePresentationEnvironment
@@ -465,7 +476,7 @@ final class TasksPageModel: ObservableObject {
 
     func pageToken(_ tab: TasksTab) -> PageToken {
         PageToken(tab: tab, revision: store.revision, held: held.filter { $0.value.tab == tab }, expanded: expanded,
-                  completedExpanded: tab == .now && completedTodayExpanded, today: today, dateEnvironment: dateEnvironment,
+                  expandedFiles: expandedFiles, completedExpanded: tab == .now && completedTodayExpanded, today: today, dateEnvironment: dateEnvironment,
                   doneLog: tab == .done ? doneLogTasks.map(\.id) : [], search: searchQuery(for: tab),
                   view: viewOptions(for: tab), owner: self.tab == tab && isPageShown)
     }
@@ -490,7 +501,7 @@ final class TasksPageModel: ObservableObject {
 
     private func cached(_ tab: TasksTab) -> (key: RowsKey, sections: TasksSections, rows: [TasksListRow]) {
         let key = RowsKey(tab: tab, revision: store.revision, held: held.filter { $0.value.tab == tab }, expanded: expanded,
-                          completedExpanded: tab == .now && completedTodayExpanded, today: today, dateEnvironment: dateEnvironment,
+                          expandedFiles: expandedFiles, completedExpanded: tab == .now && completedTodayExpanded, today: today, dateEnvironment: dateEnvironment,
                           view: viewOptions(for: tab), search: tab == .done ? "" : trimmedQuery(for: tab))
         if let cached = rowsCache[tab], cached.key == key { return cached }
         let all = buildRows(for: tab)
@@ -605,7 +616,7 @@ final class TasksPageModel: ObservableObject {
                 // The match is highlighted in the title (owner item 17).
                 var model = row.model
                 model.titleMatch = query
-                row = TasksListRow(id: row.id, model: model, status: row.status, subtasks: row.subtasks)
+                row = TasksListRow(id: row.id, model: model, status: row.status, subtasks: row.subtasks, files: row.files)
             }
             if current?.day == day {
                 current?.rows.append(row)
@@ -1426,6 +1437,7 @@ final class TasksPageModel: ObservableObject {
         selection.subtract(live)
         if let anchor = selectionAnchor, live.contains(anchor) { selectionAnchor = nil }
         expanded.subtract(live)
+        expandedFiles.subtract(live)
         if let title {
             showToast(String(localized: "Deleted “\(title)”"))
         } else {
@@ -1704,7 +1716,7 @@ final class TasksPageModel: ObservableObject {
         guard let draft = finished.draft(parser: parser, status: addStatus),
               let task = library.createTasks([draft])?.first else { return nil }
         addBarState.clearDraft()
-        if openingPage { services.openPage(task.id) }
+        if openingPage { expandedFiles.insert(task.id) }
         selectOnly(nil)
         addedRequest = ScrollRequest(id: task.id)
         // Added from Done, the task goes to Now, out of sight: say where.
@@ -1854,16 +1866,25 @@ final class TasksPageModel: ObservableObject {
 
     private var postedToastID: UUID?
 
-    /// "Open page" (⌘Return, the menu, VoiceOver). A task in the lists goes
-    /// to the host's detail route; a task in the Done log, which that route
-    /// can't show, opens its read-only details here: its subtasks and the
-    /// files it kept.
+    /// "Show files" (⌘Return, the menu, VoiceOver, the files count): a task
+    /// in the lists opens or closes its files inline, under the row (A1);
+    /// a task in the Done log opens its read-only details here: its
+    /// subtasks and the files it kept.
     func openPage(_ id: UUID) {
         if store.task(withID: id) != nil {
-            services.openPage(id)
+            toggleFiles(id)
         } else if store.listedTask(withID: id) != nil {
             doneDetailID = id
         }
+    }
+
+    /// The files list under a row opens or closes, apart from its subtasks.
+    func toggleFiles(_ id: UUID) {
+        if expandedFiles.contains(id) { expandedFiles.remove(id) } else { expandedFiles.insert(id) }
+    }
+
+    func setFilesExpanded(_ id: UUID, _ open: Bool) {
+        if open != expandedFiles.contains(id) { toggleFiles(id) }
     }
 
     /// The Done log task whose details are open.

@@ -1172,6 +1172,11 @@ struct AtticTaskRow: View {
     var isSelected = false
     var selectionRun: AtticSelectionRun = .single
     var isExpanded = false
+    /// The files list is open under the row (A1).
+    var isFilesExpanded = false
+    /// The files count's click: opens or closes the files list under the
+    /// row. nil draws the count as plain text.
+    var onToggleFiles: (() -> Void)? = nil
     /// "Add to page" while a file hovers over the row.
     var dropLabel: String?
     let actions: AtticTaskActions
@@ -1311,6 +1316,7 @@ struct AtticTaskRow: View {
                     // The tag popover points at the tags that were clicked
                     // (round 5), not the middle of the line.
                     AtticTaskDetails(model: model, disabled: disabled, isExpanded: isExpanded, onToggleExpanded: onToggleExpanded,
+                                     isFilesExpanded: isFilesExpanded, onToggleFiles: capture == nil ? onToggleFiles : nil,
                                      onTags: capture == nil ? meta?.onTags : nil,
                                      tagsPopover: meta.map { meta in
                                          AtticAnchoredPopover(isPresented: tagsPresented(twoLine: true), content: meta.tagPicker)
@@ -1530,6 +1536,10 @@ struct AtticTaskDetails: View {
     let disabled: Bool
     let isExpanded: Bool
     let onToggleExpanded: () -> Void
+    /// The files list is open under the row, and the files count's click
+    /// (A1); nil draws the count as plain text (captures, Done).
+    var isFilesExpanded = false
+    var onToggleFiles: (() -> Void)? = nil
     /// A click on the tags (the row's tag popover); nil draws plain text.
     var onTags: (() -> Void)? = nil
     /// The row's tag popover, anchored to the tags themselves so its arrow
@@ -1553,8 +1563,13 @@ struct AtticTaskDetails: View {
                 AtticDetailsTags(tags: model.tags, disabled: disabled, onTags: onTags, popover: tagsPopover)
             }
             if let subtasks = model.subtasks {
-                AtticSubtaskChecklistButton(
-                    done: subtasks.done, total: subtasks.total, isExpanded: isExpanded, disabled: disabled, action: onToggleExpanded
+                AtticDetailsCountButton(
+                    systemName: "checkmark.square", count: "\(subtasks.done)/\(subtasks.total)",
+                    isExpanded: isExpanded, disabled: disabled,
+                    help: (String(localized: "Hide subtasks"), String(localized: "Show subtasks")),
+                    spokenLabel: String(localized: "\(subtasks.done) of \(subtasks.total) subtasks"),
+                    hint: (String(localized: "Collapses the quick look"), String(localized: "Expands the quick look")),
+                    action: onToggleExpanded
                 )
                 .fixedSize()
                 .layoutPriority(1)
@@ -1568,12 +1583,27 @@ struct AtticTaskDetails: View {
                 .layoutPriority(1)
             }
             if model.attachments > 0 {
-                HStack(spacing: m.detailsIconGap) {
-                    AtticIcon(systemName: "paperclip", size: m.detailsIconSize, weight: .light, ink: icon)
-                    AtticText(verbatim: "\(model.attachments)", style: .rowMeta, ink: text)
+                if let onToggleFiles {
+                    // The files count opens the files list, apart from the
+                    // subtasks (A1).
+                    AtticDetailsCountButton(
+                        systemName: "paperclip", count: "\(model.attachments)",
+                        isExpanded: isFilesExpanded, disabled: disabled,
+                        help: (String(localized: "Hide files"), String(localized: "Show files")),
+                        spokenLabel: model.attachments == 1 ? String(localized: "1 file") : String(localized: "\(model.attachments) files"),
+                        hint: (String(localized: "Hides the files"), String(localized: "Shows the files")),
+                        action: onToggleFiles
+                    )
+                    .fixedSize()
+                    .layoutPriority(1)
+                } else {
+                    HStack(spacing: m.detailsIconGap) {
+                        AtticIcon(systemName: "paperclip", size: m.detailsIconSize, weight: .light, ink: icon)
+                        AtticText(verbatim: "\(model.attachments)", style: .rowMeta, ink: text)
+                    }
+                    .fixedSize()
+                    .layoutPriority(1)
                 }
-                .fixedSize()
-                .layoutPriority(1)
             }
             if model.links > 0 {
                 AtticText(verbatim: String(localized: "\(model.links) links"), style: .rowMeta, ink: text)
@@ -1662,14 +1692,19 @@ struct AtticMetaPill: View {
     }
 }
 
-/// "☑ 1/3" on the details line: the second click target, which opens and
-/// closes the quick look. A checklist glyph and the count, with a hover
-/// fill so it reads as a control; its text stays on the details line.
-private struct AtticSubtaskChecklistButton: View {
-    let done: Int
-    let total: Int
+/// "☑ 1/3" and "📎 3" on the details line: click targets that open and
+/// close the subtasks (the quick look) and the files, each on its own (A1).
+/// A glyph and the count, with a hover fill so it reads as a control; its
+/// text stays on the details line.
+private struct AtticDetailsCountButton: View {
+    let systemName: String
+    let count: String
     let isExpanded: Bool
     let disabled: Bool
+    /// Help and VoiceOver, for what the count opens.
+    let help: (open: String, closed: String)
+    let spokenLabel: String
+    let hint: (open: String, closed: String)
     let action: () -> Void
 
     @Environment(\.atticDesign) private var design
@@ -1682,9 +1717,9 @@ private struct AtticSubtaskChecklistButton: View {
         let hover = !disabled && (forced == .hover || hovered)
         Button(action: action) {
             HStack(spacing: m.iconGap) {
-                AtticIcon(systemName: "checkmark.square", size: m.iconSize, weight: .regular, ink: disabled ? .disabledIcon : .icon)
+                AtticIcon(systemName: systemName, size: m.iconSize, weight: .regular, ink: disabled ? .disabledIcon : .icon)
                     .frame(width: m.iconSlot)
-                AtticText(verbatim: "\(done)/\(total)", style: .count, ink: disabled ? .disabledText : .helper)
+                AtticText(verbatim: count, style: .count, ink: disabled ? .disabledText : .helper)
             }
             .padding(.horizontal, m.horizontalPadding)
             .frame(height: m.height)
@@ -1702,10 +1737,10 @@ private struct AtticSubtaskChecklistButton: View {
         .padding(.horizontal, -m.horizontalPadding)
         .frame(height: AtticTaskRowMetrics.detailsLineHeight)
         .atticRowControl()
-        .help(isExpanded ? String(localized: "Hide subtasks") : String(localized: "Show subtasks"))
-        .accessibilityLabel(String(localized: "\(done) of \(total) subtasks"))
+        .help(isExpanded ? help.open : help.closed)
+        .accessibilityLabel(spokenLabel)
         .accessibilityValue(isExpanded ? String(localized: "expanded") : String(localized: "collapsed"))
-        .accessibilityHint(isExpanded ? String(localized: "Collapses the quick look") : String(localized: "Expands the quick look"))
+        .accessibilityHint(isExpanded ? hint.open : hint.closed)
     }
 }
 
@@ -1946,13 +1981,12 @@ private struct AtticSubtaskCommands: ViewModifier {
     }
 }
 
-/// The quick look: the row expands in place into its subtasks, "Add
-/// subtask" and "Open page". Aligned to the row's text column.
+/// The quick look: the row expands in place into its subtasks and "Add
+/// subtask" (its files open apart, under it: `AtticFilesList`). Aligned to the row's text column.
 struct AtticQuickLook: View {
     let subtasks: [AtticSubtaskModel]
     let onToggle: (AtticSubtaskModel) -> Void
     let onAddSubtask: () -> Void
-    let onOpenPage: () -> Void
     /// Each subtask's commands (round 10: rename, delete, reorder); none
     /// draws plain lines (captures).
     var commands: (AtticSubtaskModel) -> [AtticMenuCommand] = { _ in [] }
@@ -2010,8 +2044,6 @@ struct AtticQuickLook: View {
             } else {
                 AtticQuietAction(systemName: "plus", title: String(localized: "Add subtask"), action: onAddSubtask)
             }
-            // A live task's files and details panel, until task pages arrive.
-            AtticQuietAction(systemName: nil, title: String(localized: "Open files"), trailingChevron: true, emphasised: true, action: onOpenPage)
         }
         .padding(.leading, AtticLayout.textX)
         .padding(.trailing, AtticLayout.rowHighlightInset)

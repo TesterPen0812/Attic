@@ -134,6 +134,16 @@ extension TasksPageModel {
         return outcome
     }
 
+    /// Removes a stored file from a row's files list, as one undoable step
+    /// (A1): its toast offers Undo, and it waits in Recently Deleted.
+    @discardableResult
+    func removeFile(_ file: TaskImageReference, from id: UUID) -> CommandOutcome {
+        let outcome = library.removeTaskAttachment(file.id, from: id)
+        guard outcome.isApplied else { return outcome }
+        showToast(String(localized: "Removed “\(file.filename)”"))
+        return outcome
+    }
+
     /// ⌘↑ ⌘↓ on a subtask: one place among its siblings in the same state,
     /// as one step. The open quick look shows the new order at once.
     @discardableResult

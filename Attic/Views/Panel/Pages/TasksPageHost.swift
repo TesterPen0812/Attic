@@ -104,13 +104,13 @@ struct TasksPageHost: View {
             DispatchQueue.main.async { uiState.setInteractionLock(.taskComposer, isActive: hasDraft) }
         }
         .onAppear {
-            // Task pages arrive in Phase 3; until then "Open page" opens the
-            // task's detail panel on its files (the old subpanel stays only
-            // for a task's files).
-            model.services.openPage = { [subtaskPanels] id in
-                // The old panel for the task's files only: subtasks live in
-                // the row's quick look (Done log tasks open in the page).
-                subtaskPanels.openFilesPanel(for: id)
+            // "Attach file…" in a row's files list (A1): the picker, which
+            // keeps the panel open while it is up; the list opens on what
+            // was attached.
+            model.services.chooseFiles = { [store, uiState, weak model] id in
+                TaskAttachmentPicker.choose(for: id, store: store, uiState: uiState) { _, ownerID in
+                    model?.setFilesExpanded(ownerID, true)
+                }
             }
             editHold.setSuspended(!isCurrent)
             if model.isPageShown != isCurrent { model.isPageShown = isCurrent }
