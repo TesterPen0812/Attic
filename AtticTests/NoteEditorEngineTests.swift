@@ -273,9 +273,17 @@ final class NoteEditorEngineTests: XCTestCase {
         init(_ value: AnyObject) { self.value = value }
     }
 
+    /// These heavy retention gates run in the CI costs lane (including full CI).
+    private func requireSoakTests() throws {
+        guard ProcessInfo.processInfo.environment["ATTIC_SOAK_TESTS"] == "1" else {
+            throw XCTSkip("Heavy retention gate: opt in with ATTIC_SOAK_TESTS=1 (TEST_RUNNER_ATTIC_SOAK_TESTS=1 for xcodebuild)")
+        }
+    }
+
     /// Sixty compressed minutes: rotate twelve notes, type 40 characters,
     /// save/leave, and add/rename/complete a task per minute. No visible UI.
     func testPerf2SimulatedHourRetainsOnlyTheWarmNoteSessions() async throws {
+        try requireSoakTests()
         let notes = try makeTestNoteStore(attachmentFileStore: makeTestAttachmentFileStore())
         let tasks = try makeTestStore()
         let controller = NotesPageController(store: notes, journal: nil, saveDelay: .seconds(600), pauseVersionDelay: .seconds(600))
@@ -343,7 +351,8 @@ final class NoteEditorEngineTests: XCTestCase {
 
     /// Compressed workload, not one hour of wall time: ten cell revisions
     /// per second for 60 minutes. Measures retention without timing gates.
-    func testPerf2TableMeasurementRetentionOverAnHourOfEdits() {
+    func testPerf2TableMeasurementRetentionOverAnHourOfEdits() throws {
+        try requireSoakTests()
         let cache = NoteTableTextCache()
         let style = NoteTextStyle()
         for minute in 0..<60 {
@@ -365,7 +374,8 @@ final class NoteEditorEngineTests: XCTestCase {
         XCTAssertEqual(cache.retainedMeasurementCount, 0)
     }
 
-    func testPerf2TableCacheKeepsAMaximumTableWarmAndRemeasuresEvictedText() {
+    func testPerf2TableCacheKeepsAMaximumTableWarmAndRemeasuresEvictedText() throws {
+        try requireSoakTests()
         let cache = NoteTableTextCache()
         let string = NSAttributedString(string: "same measured text")
         var measurements = 0

@@ -186,6 +186,7 @@ jobs:
         run: |
           PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover -s Scripts -p 'test_smooth*.py' -v
           PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover -s Scripts -p 'test_reveal*.py' -v
+          PYTHONDONTWRITEBYTECODE=1 python3 Scripts/test_soak_test_plumbing.py
 
       - name: Verify branch ancestry and initial cleanliness
         run: |
@@ -636,7 +637,7 @@ jobs:
 
   costs:
     if: ${{ inputs.lane != 'fast' && inputs.lane != 'fka' }}
-    name: Optimized frame, row and Done search cost gates
+    name: Optimized costs and opt-in soak retention gates
     runs-on: macos-26
     timeout-minutes: 90
     env:
@@ -671,6 +672,7 @@ jobs:
         run: |
           PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover -s Scripts -p 'test_smooth*.py' -v
           PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover -s Scripts -p 'test_reveal*.py' -v
+          PYTHONDONTWRITEBYTECODE=1 python3 Scripts/test_soak_test_plumbing.py
 
       - name: Verify cost gate plumbing
         run: python3 -m unittest discover -s Scripts -p 'test_*cost*.py' -v
@@ -711,6 +713,30 @@ jobs:
               > "$RUNNER_TEMP/AtticCosts/$name-build.log" 2>&1 \
               || { tail -n 80 "$RUNNER_TEMP/AtticCosts/$name-build.log"; exit 1; }
           done
+
+      # Keep XCTest's compressed-hour allocation workload out of the default
+      # unit suite; costs and every full CI still require all retention gates.
+      - name: Run opt-in soak and retention gates
+        if: always() && steps.cost_builds.outcome == 'success'
+        timeout-minutes: 15
+        env:
+          TEST_RUNNER_ATTIC_SOAK_TESTS: "1"
+        run: |
+          # shellcheck disable=SC2086
+          Scripts/xcodebuild_locked.sh test-without-building \
+            -project Attic.xcodeproj -scheme Attic -configuration Local -destination 'platform=macOS' \
+            -derivedDataPath "$RUNNER_TEMP/AtticCost-candidate" \
+            -resultBundlePath "$RUNNER_TEMP/AtticCosts/soak.xcresult" $COST_FLAGS \
+            -parallel-testing-enabled NO \
+            -only-testing:AtticTests/NoteEditorEngineTests/testPerf2SimulatedHourRetainsOnlyTheWarmNoteSessions \
+            -only-testing:AtticTests/NoteEditorEngineTests/testPerf2TableMeasurementRetentionOverAnHourOfEdits \
+            -only-testing:AtticTests/NoteEditorEngineTests/testPerf2TableCacheKeepsAMaximumTableWarmAndRemeasuresEvictedText \
+            > "$RUNNER_TEMP/AtticCosts/soak.log" 2>&1 \
+            || { tail -n 100 "$RUNNER_TEMP/AtticCosts/soak.log"; exit 1; }
+          xcrun xcresulttool get test-results summary --path "$RUNNER_TEMP/AtticCosts/soak.xcresult" \
+            --format json > "$RUNNER_TEMP/AtticCosts/soak-summary.json"
+          python3 -c 'import json,sys; s=json.load(open(sys.argv[1])); assert s["passedTests"] == 3 and s["skippedTests"] == 0 and s["failedTests"] == 0 and s["expectedFailures"] == 0' "$RUNNER_TEMP/AtticCosts/soak-summary.json"
+          grep -E 'PERF2_SOAK|SMOOTH_LIFETIME|PERF2_TABLE_CACHE' "$RUNNER_TEMP/AtticCosts/soak.log"
 
       - name: Record three interleaved frame and row samples
         if: ${{ !inputs.headless_costs }}

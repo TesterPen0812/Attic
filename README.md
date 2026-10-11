@@ -45,6 +45,15 @@ script handles that isolation automatically.
 Choose a corner and reveal delay in Settings. Press `Control–Option–Space` from anywhere in macOS to reveal Attic with the new-task field focused.
 Press `Command–,` while Attic is focused to open Settings.
 
+## Heavy retention tests
+
+The compressed-hour Notes soak and large table-cache retention gates are skipped
+by default. Run them explicitly with `TEST_RUNNER_ATTIC_SOAK_TESTS=1` when using
+`Scripts/xcodebuild_locked.sh test` (or `ATTIC_SOAK_TESTS=1` in the test process).
+The CI `costs` lane enables and requires all three gates on every full CI run;
+the `fast` lane keeps the default lighter suite. Other functional tests remain
+enabled.
+
 ## Deferred iPhone and CloudKit support
 
 Current builds compile with `ATTIC_LOCAL_ONLY` and do not request CloudKit or
