@@ -104,6 +104,20 @@ final class PhaseXColourDataTests: XCTestCase {
         XCTAssertEqual(try rows(library.tasks.container, named: "final").map(\.hue), [.pink])
     }
 
+    func testAR01DeletedOnlyRenameKeepsStoredColourWhenRestored() throws {
+        let library = try makeLibrary()
+        let task = try XCTUnwrap(library.tasks.create(title: "Deleted"))
+        let item = AtticItemRef(.task, task.id)
+        XCTAssertTrue(library.setTags(["launch"], on: item))
+        XCTAssertTrue(library.setTagHue(.pink, for: "launch"))
+        XCTAssertTrue(library.delete(item))
+        XCTAssertTrue(library.tags.counts().isEmpty)
+        XCTAssertTrue(library.renameTag("launch", to: "release"))
+        XCTAssertTrue(library.restore(item))
+        XCTAssertEqual(library.tasks.task(withID: task.id)?.tags, ["release"])
+        XCTAssertEqual(try rows(library.tasks.container, named: "release").map(\.hue), [.pink])
+    }
+
     func testAR01ColdLibraryRenameAndImmediateMergeUseAuthoritativeRows() throws {
         let library = try makeLibrary()
         try tag(library, "One", ["launch"], created: .now)

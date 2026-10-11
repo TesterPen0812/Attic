@@ -140,7 +140,7 @@ final class TagColourStore: ObservableObject {
         let stored = Self.storedHues(try context.fetch(FetchDescriptor<TagColour>()))
         guard let source = sources.first else { return }
         let name = targetInUse ? target : source
-        let hue = AtticTagPalette.resolve(inUse: inUse, stored: stored).hue(for: name)
+        let hue = stored[name] ?? AtticTagPalette.resolve(inUse: inUse, stored: stored).hue(for: name)
         try write(hue, for: target, in: context)
     }
 
