@@ -98,7 +98,6 @@ final class AppSettings: ObservableObject {
         static let panelCornerSize = "panelCornerSize"
         static let panelContentSize = "panelContentSize"
         static let panelHeight = "panelHeight"
-        static let pinnedSubtaskWindowFrame = "pinnedSubtaskWindowFrame"
         static let hapticsEnabled = "hapticsEnabled"
         static let animations = "animations"
         static let motionLabFeel = "motionLabFeel"
@@ -305,32 +304,6 @@ final class AppSettings: ObservableObject {
         }
     }
 
-    /// Last on-screen frame of the pinned subtask mini-window. Persisted as
-    /// a rect string so reopening restores position; invalid or stale values
-    /// fall back to anchored placement beside the main panel.
-    ///
-    /// The size is bounded the same way a restored panel dimension is. A
-    /// width of `.infinity` passes `>= 1`, and a finite `1e30` passes as well;
-    /// either one then reaches window placement and numeric formatting, which
-    /// cannot use it. A frame the user really chose on a display that is not
-    /// attached right now is far inside these limits, so it still restores.
-    var pinnedSubtaskWindowFrame: CGRect? {
-        get {
-            guard let stored = defaults.string(forKey: Key.pinnedSubtaskWindowFrame),
-                  !stored.isEmpty else { return nil }
-            let rect = NSRectFromString(stored)
-            guard Self.isRestorableFrame(rect) else { return nil }
-            return rect
-        }
-        set {
-            if let newValue {
-                defaults.set(NSStringFromRect(newValue), forKey: Key.pinnedSubtaskWindowFrame)
-            } else {
-                defaults.removeObject(forKey: Key.pinnedSubtaskWindowFrame)
-            }
-        }
-    }
-
     @Published private(set) var cloudSyncStartupErrorMessage: String?
 
     @Published var revealDelay: Double {
@@ -467,8 +440,8 @@ final class AppSettings: ObservableObject {
     }
 
     /// The one place the appearance settings become a drawable surface. The
-    /// main panel and the subtask checklist windows both call this, so they
-    /// can only ever render the same treatment.
+    /// main panel and its surfaces call this, so they can only ever render
+    /// the same treatment.
     func panelSurfaceTreatment(
         colorScheme: ColorScheme,
         contrast: ColorSchemeContrast,

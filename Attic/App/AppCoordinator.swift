@@ -371,31 +371,6 @@ final class AppCoordinator: ObservableObject {
 
     private let cleanupService: DailyCleanupService
     private let panelController: AtticPanelController
-    /// The auxiliary subtask surfaces (transient hover panel and the single
-    /// pinned mini-window) owned by the panel controller.
-    var subtaskPanels: SubtaskPanelController { panelController.subtaskPanels }
-
-    /// Capture seam for the appearance harness: seeds one family into the
-    /// in-memory UI-testing store and pins its checklist window, so the
-    /// auxiliary surface can be photographed hands-off next to the panel.
-    private func presentSampleSubtaskWindowsForUITesting() {
-        guard let parent = store.create(title: "Plan the launch") else { return }
-        _ = store.create(title: "Write the announcement", parentID: parent.id)
-        _ = store.create(title: "Check the build", parentID: parent.id)
-        DispatchQueue.main.async { [weak self] in
-            guard let self else { return }
-            subtaskPanels.pinFamily(parent.id)
-            // Clear of the panel, on the main display, so the checklist is
-            // photographed over the harness backdrop rather than the panel.
-            if let screen = NSScreen.main?.visibleFrame {
-                subtaskPanels.placePinnedWindowForUITesting(
-                    parent.id,
-                    visibleOrigin: CGPoint(x: screen.midX - SubtaskPanelLayout.panelWidth / 2,
-                                           y: screen.midY - 120)
-                )
-            }
-        }
-    }
     private let settingsWindowController: SettingsWindowController
     private let hoverMonitor: CornerHoverMonitor
     /// An agent's `show` over the real panel (the shell tools hold it weakly).
@@ -908,9 +883,6 @@ final class AppCoordinator: ObservableObject {
             } else {
                 hoverMonitor.keepVisibleForUITesting()
             }
-            if ProcessInfo.processInfo.environment["ATTIC_UI_TEST_PRESENT_SUBTASKS"] == "1" {
-                presentSampleSubtaskWindowsForUITesting()
-            }
             // Capture seam: open Settings on the remembered section (pass
             // `-AtticSettings.selectedSection <section>`) for screenshots.
             if ProcessInfo.processInfo.environment["ATTIC_UI_TEST_OPEN_SETTINGS"] == "1" {
@@ -964,7 +936,6 @@ final class AppCoordinator: ObservableObject {
         canvasSession.cancelActiveInteraction()
         _ = noteDraft.flush()
         cleanupService.stop()
-        panelController.subtaskPanels.tearDown()
         hoverMonitor.stop()
         newTaskHotKey.unregister()
         appearanceObservation = nil

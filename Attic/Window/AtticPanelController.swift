@@ -167,7 +167,6 @@ final class AtticPanelController: NSObject, NSWindowDelegate {
     private let chromeInteractionState: PanelChromeInteractionState
     private let settings: AppSettings
     private let uiState: PanelUIState
-    let subtaskPanels: SubtaskPanelController
     /// The panel's Undo toast; dismissed whenever the panel hides.
     let toasts: PanelToastCenter
     private var cancellables: Set<AnyCancellable> = []
@@ -230,11 +229,6 @@ final class AtticPanelController: NSObject, NSWindowDelegate {
             backing: .buffered,
             defer: true
         )
-        subtaskPanels = SubtaskPanelController(
-            store: store,
-            uiState: uiState,
-            settings: settings
-        )
         hostingView = AtticPanelHostingView(
             rootView: AtticPanelView(
                 store: store,
@@ -244,7 +238,6 @@ final class AtticPanelController: NSObject, NSWindowDelegate {
                 chromeInteractionState: chromeInteractionState,
                 uiState: uiState,
                 settings: settings,
-                subtaskPanels: subtaskPanels,
                 toasts: toasts,
                 // The Tasks page remembers its page and views (L7).
                 tasksPageState: TasksPageState(memory: tasksMemory)
@@ -273,7 +266,7 @@ final class AtticPanelController: NSObject, NSWindowDelegate {
         let top = corner == .topRight || corner == .topLeft
         let proposed = CGRect(x: right ? frame.maxX + 8 : frame.minX - 36,
                               y: top ? frame.maxY - 28 : frame.minY, width: 28, height: 28)
-        let target = SubtaskPanelLayout.avoidingOverlap(proposed, occupied: [frame],
+        let target = PanelGeometry.avoidingOverlap(proposed, occupied: [frame],
             within: screen.visibleFrame.insetBy(dx: 4, dy: 4), gap: 8)
         let indicator = dockingIndicator ?? NSPanel(contentRect: target,
             styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
@@ -306,13 +299,6 @@ final class AtticPanelController: NSObject, NSWindowDelegate {
 
     var visibleFrame: CGRect? {
         panel.isVisible ? panel.visibleContentFrame : nil
-    }
-
-    /// Pointer inside the open transient subtask surface counts as inside
-    /// the panel for auto-hide purposes: the checklist is useless without
-    /// its anchor. The pinned window is excluded — it is independent.
-    func auxiliarySurfaceContains(_ point: CGPoint) -> Bool {
-        subtaskPanels.containsTransientPoint(point)
     }
 
     func containsScreenPoint(_ point: CGPoint) -> Bool {
@@ -542,7 +528,6 @@ final class AtticPanelController: NSObject, NSWindowDelegate {
                 self.uiState.panelDidHide()
                 self.panel.alphaValue = 1
                 self.stopPointerPassthroughMonitoring()
-                self.subtaskPanels.mainPanelDidHide()
                 self.toasts.dismiss()
                 self.schedulePageRelease()
                 self.visibilityTransition.completeHideTransition(generation)
@@ -654,7 +639,6 @@ final class AtticPanelController: NSObject, NSWindowDelegate {
         }
         panel.delegate = self
         panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .transient]
-        subtaskPanels.attach(panel: panel, hostView: hostingView)
     }
 
     private func bindContentSize() {
@@ -824,12 +808,10 @@ final class AtticPanelController: NSObject, NSWindowDelegate {
     func windowDidResize(_ notification: Notification) {
         guard let resizedPanel = notification.object as? NSWindow else { return }
         uiState.updatePanelSize(((resizedPanel as? AtticPanel)?.visibleContentFrame ?? resizedPanel.frame).size)
-        subtaskPanels.mainPanelFrameDidChange()
         if !isPanelMotionActive { resamplePointerPassthrough() }
     }
 
     func windowDidMove(_ notification: Notification) {
-        subtaskPanels.mainPanelFrameDidChange()
         if !isPanelMotionActive { resamplePointerPassthrough() }
     }
 

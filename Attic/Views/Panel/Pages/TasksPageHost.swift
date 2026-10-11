@@ -39,7 +39,6 @@ struct TasksPageHost: View {
     let store: TaskStore
     let uiState: PanelUIState
     let settings: AppSettings
-    let subtaskPanels: SubtaskPanelController
     let state: TasksPageState
     let layout: PanelPageLayout
     let chromeInteractionState: PanelChromeInteractionState

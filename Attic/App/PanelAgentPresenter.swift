@@ -39,7 +39,7 @@ final class PanelAgentPresenter: AgentPanelPresenting {
     var isUserTypingInPanel: Bool {
         guard uiState.isPanelKey else { return false }
         let typing: Set<PanelInteractionLockReason> = [
-            .quickEntryFocus, .taskComposer, .taskEditing, .subtaskComposer, .notesEditorFocus, .notesDirty
+            .quickEntryFocus, .taskComposer, .taskEditing, .notesEditorFocus, .notesDirty
         ]
         if !uiState.interactionLockReasons.isDisjoint(with: typing) { return true }
         return uiState.selectedSection.isCanvas && canvasTextEditorIsActive()

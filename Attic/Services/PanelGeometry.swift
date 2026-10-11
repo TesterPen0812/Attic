@@ -279,6 +279,39 @@ enum PanelGeometry {
     static func preferredWorkspaceHeight(contentWidth: CGFloat) -> CGFloat {
         min(max(contentWidth * 1.45, minimumHeight), preferredHeightCeiling)
     }
+
+    /// Prefer the closest free position at an obstacle edge. The candidate
+    /// count depends on the obstacles, never on screen pixels or a timer.
+    static func avoidingOverlap(_ preferred: CGRect, occupied: [CGRect], within safe: CGRect, gap: CGFloat = 10) -> CGRect {
+        let proposed = CGRect(x: min(max(safe.minX, preferred.minX), max(safe.minX, safe.maxX - preferred.width)),
+                              y: min(max(safe.minY, preferred.minY), max(safe.minY, safe.maxY - preferred.height)),
+                              width: preferred.width, height: preferred.height)
+        let obstacles = occupied.filter { !$0.isEmpty && $0.intersects(safe) }
+        guard obstacles.contains(where: { $0.insetBy(dx: -gap, dy: -gap).intersects(proposed) }) else { return proposed }
+        let xs = [proposed.minX, safe.minX, safe.maxX - proposed.width]
+            + obstacles.flatMap { [$0.minX - gap - proposed.width, $0.maxX + gap] }
+        let ys = [proposed.minY, safe.minY, safe.maxY - proposed.height]
+            + obstacles.flatMap { [$0.minY - gap - proposed.height, $0.maxY + gap] }
+        var best = proposed
+        var bestOverlap = CGFloat.greatestFiniteMagnitude
+        var bestDistance = CGFloat.greatestFiniteMagnitude
+        for x in xs {
+            for y in ys {
+                let candidate = CGRect(x: min(max(safe.minX, x), max(safe.minX, safe.maxX - proposed.width)),
+                                       y: min(max(safe.minY, y), max(safe.minY, safe.maxY - proposed.height)),
+                                       width: proposed.width, height: proposed.height)
+                let overlap = obstacles.reduce(CGFloat.zero) { sum, obstacle in
+                    let intersection = candidate.intersection(obstacle.insetBy(dx: -gap / 2, dy: -gap / 2))
+                    return sum + (intersection.isNull ? 0 : intersection.width * intersection.height)
+                }
+                let distance = hypot(candidate.minX - proposed.minX, candidate.minY - proposed.minY)
+                if overlap < bestOverlap || (overlap == bestOverlap && distance < bestDistance) {
+                    best = candidate; bestOverlap = overlap; bestDistance = distance
+                }
+            }
+        }
+        return best
+    }
 }
 
 enum PanelDockingPolicy {
