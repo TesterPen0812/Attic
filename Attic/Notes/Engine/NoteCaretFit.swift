@@ -96,7 +96,17 @@ final class NoteCaretFitter {
             if (textView as? NoteEditorTextView)?.marquee?.isEmpty == false {
                 // TextKit 2's modern caret is a subview: suppressing the
                 // legacy insertion-point drawing alone does not hide it.
-                if suppressed[key] == nil { suppressed[key] = indicator.displayMode }
+                if suppressed[key] == nil {
+                    // AppKit can report a private blink state (100), even
+                    // immediately after setting .automatic in an unshown
+                    // window. Restore the public mode, not that transient
+                    // implementation value.
+                    switch indicator.displayMode {
+                    case .hidden: suppressed[key] = .hidden
+                    case .visible: suppressed[key] = .visible
+                    default: suppressed[key] = .automatic
+                    }
+                }
                 if indicator.displayMode != .hidden { indicator.displayMode = .hidden }
             } else if let mode = suppressed.removeValue(forKey: key) {
                 indicator.displayMode = mode

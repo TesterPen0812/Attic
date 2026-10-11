@@ -175,15 +175,18 @@ final class MarqueeInteractionTests: XCTestCase {
 
     func testBlockSelectionHidesModernInsertionIndicatorAndClearingRestoresIt() {
         let (_, text, selection) = editor([.text("Title"), .text("Body")])
-        let indicator = NSTextInsertionIndicator(frame: CGRect(x: 24, y: 50, width: 1, height: 18))
-        text.addSubview(indicator)
-        indicator.displayMode = .automatic
-        selection.select(offsets: [6])
-        text.caretFitter.refresh()
-        XCTAssertEqual(indicator.displayMode, .hidden)
-        selection.clear()
-        text.caretFitter.refresh()
-        XCTAssertEqual(indicator.displayMode, .automatic)
+        for mode: NSTextInsertionIndicator.DisplayMode in [.automatic, .visible, .hidden] {
+            let indicator = NSTextInsertionIndicator(frame: CGRect(x: 24, y: 50, width: 1, height: 18))
+            text.addSubview(indicator)
+            indicator.displayMode = mode
+            selection.select(offsets: [6])
+            text.caretFitter.refresh()
+            XCTAssertEqual(indicator.displayMode, .hidden)
+            selection.clear()
+            text.caretFitter.refresh()
+            XCTAssertEqual(indicator.displayMode, mode)
+            indicator.removeFromSuperview()
+        }
     }
 
     func testTasksMarginSelectionUsesExistingBatchCommandsAndLeavesRowGrabsAlone() throws {
