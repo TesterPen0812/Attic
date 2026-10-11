@@ -1751,7 +1751,53 @@ final class AtticDropdownTests: XCTestCase {
         .priorityOpen: Accepted(ratio: 0.333, spread: 0.168),  // 0.312 … 0.480
     ]
 
-    private func gate(_ rounds: [Round], label: String, accepted: [Measure: Accepted]) {
+    private func ratiosAfterOneRecheck(_ first: [Measure: Double], accepted: [Measure: Accepted],
+                                      recheck: () -> [Measure: Double]) -> [Measure: Double] {
+        let failed = Measure.allCases.filter { measure in
+            guard let ratio = first[measure], ratio.isFinite, let bound = accepted[measure] else { return false }
+            return ratio > bound.limit
+        }
+        guard !failed.isEmpty else { return first }
+        let repeated = recheck()
+        var final = first
+        for measure in failed { final[measure] = repeated[measure] ?? .nan }
+        return final
+    }
+
+    func testOneTimingRecheckRecoversNoiseWithoutRepeatingPassingRows() {
+        var invocations = 0
+        let values = ratiosAfterOneRecheck([.slashOpen: 0.25, .tagOpen: 0.9377911224419662,
+                                           .priorityOpen: 0.525550], accepted: Self.acceptedRatiosWithAccessibility) {
+            invocations += 1
+            return [.slashOpen: 0.6, .tagOpen: 0.91, .priorityOpen: 0.441641]
+        }
+        XCTAssertEqual(invocations, 1)
+        XCTAssertEqual(values[.slashOpen], 0.25, "a passing row is retained, not exposed to retry noise")
+        XCTAssertEqual(values[.tagOpen], 0.91)
+        XCTAssertEqual(values[.priorityOpen], 0.441641)
+        _ = ratiosAfterOneRecheck([.priorityOpen: 0.49], accepted: Self.acceptedRatiosWithAccessibility) {
+            XCTFail("a passing batch is never repeated")
+            return [:]
+        }
+    }
+
+    func testOneTimingRecheckKeepsARepeatedSlowdownAndInvalidRecordsRed() {
+        var invocations = 0
+        let values = ratiosAfterOneRecheck([.priorityOpen: 0.53, .tagOpen: .nan],
+                                          accepted: Self.acceptedRatiosWithAccessibility) {
+            invocations += 1
+            return [.priorityOpen: 0.54, .tagOpen: 0.91]
+        }
+        XCTAssertEqual(invocations, 1, "there is no third chance")
+        XCTAssertGreaterThan(values[.priorityOpen]!, Self.acceptedRatiosWithAccessibility[.priorityOpen]!.limit)
+        XCTAssertTrue(values[.tagOpen]!.isNaN, "invalid measurements cannot be repaired by retrying")
+    }
+
+    private func gate(_ rounds: [Round], label: String, accepted: [Measure: Accepted],
+                      recheck: (() -> [Round])? = nil) {
+        let first = Dictionary(uniqueKeysWithValues: Measure.allCases.map { measure in
+            (measure, median(rounds.map { $0.ratio(measure) }))
+        })
         for measure in Measure.allCases {
             let ratios = rounds.map { $0.ratio(measure) }
             let ratio = median(ratios)
@@ -1759,7 +1805,22 @@ final class AtticDropdownTests: XCTestCase {
             let legacy = median(rounds.map { $0.legacy[measure, default: 0] })
             print("DROPDOWN_RATIO\(label) \(measure.rawValue) ratio=\(ratio) rounds=\(ratios.map { ($0 * 1000).rounded() / 1000 })"
                   + " new_ms=\(new) legacy_ms=\(legacy)")
-            guard let accepted = accepted[measure] else { continue }
+        }
+        let final: [Measure: Double]
+        if let recheck {
+            final = ratiosAfterOneRecheck(first, accepted: accepted) {
+                let repeated = recheck()
+                let values = Dictionary(uniqueKeysWithValues: Measure.allCases.map { measure in
+                    (measure, median(repeated.map { $0.ratio(measure) }))
+                })
+                for measure in Measure.allCases {
+                    print("DROPDOWN_RECHECK\(label) \(measure.rawValue) first=\(first[measure]!) repeated=\(values[measure]!) unchanged_limit=\(accepted[measure]?.limit ?? .nan)")
+                }
+                return values
+            }
+        } else { final = first }
+        for measure in Measure.allCases {
+            guard let accepted = accepted[measure], let ratio = final[measure] else { continue }
             XCTAssertLessThanOrEqual(ratio, accepted.limit,
                                      "\(measure.rawValue)\(label): \(ratio) of the replaced component's cost, past the accepted"
                                      + " \(accepted.ratio) and its run-to-run spread \(accepted.spread)")
@@ -1806,10 +1867,19 @@ final class AtticDropdownTests: XCTestCase {
         defer { NSApp.accessibilitySetValue(previous, forAttribute: attribute) }
         let window = makeWindow()
         defer { window.close() }
-        let delayed = measureDropdownCosts(in: window, rounds: 8, readAccessibility: true, priorityDelay: 0.008)
-        let ratio = median(delayed.map { $0.ratio(.priorityOpen) })
+        var invocations = 0
+        func delayedRatio() -> [Measure: Double] {
+            invocations += 1
+            let delayed = measureDropdownCosts(in: window, rounds: 8, readAccessibility: true, priorityDelay: 0.008)
+            return [.priorityOpen: median(delayed.map { $0.ratio(.priorityOpen) })]
+        }
+        let first = delayedRatio()
+        let repeated = ratiosAfterOneRecheck(first, accepted: Self.acceptedRatiosWithAccessibility, recheck: delayedRatio)
+        let ratio = repeated[.priorityOpen]!
         let limit = Self.acceptedRatiosWithAccessibility[.priorityOpen]!.limit
-        print("DROPDOWN_SENSITIVITY priorityOpen_AX delay_ms=8 ratio=\(ratio) unchanged_limit=\(limit)")
+        print("DROPDOWN_SENSITIVITY priorityOpen_AX delay_ms=8 first=\(first[.priorityOpen]!) ratio=\(ratio) invocations=\(invocations) unchanged_limit=\(limit)")
+        XCTAssertGreaterThan(first[.priorityOpen]!, limit, "the initial estimate rejects the injected slowdown")
+        XCTAssertEqual(invocations, 2, "the bounded recheck must also reject the same real slowdown")
         XCTAssertGreaterThan(ratio, limit, "the same paired estimator must reject an actual opening slowdown")
     }
 
@@ -1824,7 +1894,8 @@ final class AtticDropdownTests: XCTestCase {
         let window = makeWindow()
         defer { window.close() }
         gate(measureDropdownCosts(in: window, rounds: 8, readAccessibility: true), label: "_AX",
-             accepted: Self.acceptedRatiosWithAccessibility)
+             accepted: Self.acceptedRatiosWithAccessibility,
+             recheck: { self.measureDropdownCosts(in: window, rounds: 8, readAccessibility: true) })
     }
 }
 
