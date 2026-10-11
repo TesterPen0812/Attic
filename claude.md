@@ -97,7 +97,7 @@ How to apply:
 - Bulk/mechanical work (clear-spec implementation, data analysis, migrations): gpt-5.6-sol — it's effectively free.
 - Anything user-facing (UI, copy, API design) needs taste ≥ 7.
 - Reviews of plans/implementations: fable-5 or opus-4.8, optionally gpt-5.6-sol as an extra independent perspective.
-- Never use Haiku.
+- Haiku 5.5 is allowed for cheap, bounded work (searches, mechanical lookups) where it saves cost; never for placeholder or no-op calls. Never use Fable.
 - Mechanics: gpt-5.6-sol is only reachable through the Codex CLI — `codex exec` / `codex review` (my `~/.codex/config.toml` defaults to gpt-5.6-sol). Use the codex-implementation, codex-review, and codex-computer-use skills; for work they don't cover (investigation, data analysis), run `codex exec -s read-only` directly with a self-contained prompt.
 - Claude models (sonnet-5, opus-4.8, fable-5) run via the Agent/Workflow model parameter.
 
