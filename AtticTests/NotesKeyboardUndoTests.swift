@@ -8,8 +8,8 @@ import XCTest
 /// history answers in All notes when that text has nothing to undo; and the
 /// delete toast never owns the key.
 ///
-/// The Notes page is hosted as the panel hosts it, in a transparent window
-/// behind everything, and real key events go through the same order AppKit uses: the
+/// The Notes page is hosted as the panel hosts it, in a transparent key
+/// window on CI, and real key events go through the same order AppKit uses: the
 /// local key monitor (`NotesLibraryKeys`) first, then the window's view
 /// hierarchy (`performKeyEquivalent`, where SwiftUI's `keyboardShortcut`
 /// lives), then the Edit menu's Undo, which reaches `undo:` on the first
@@ -17,11 +17,10 @@ import XCTest
 /// of these wins.
 @MainActor
 final class NotesKeyboardUndoTests: XCTestCase {
-    /// A window that counts as key without being made key. The test
-    /// dispatches what gets past the local monitors in AppKit's order itself.
+    /// A genuine key window on CI. The test dispatches what gets past the
+    /// local monitors in AppKit's order itself, so sendEvent does not duplicate it.
     private final class KeyWindow: NSWindow {
         override var canBecomeKey: Bool { true }
-        override var isKeyWindow: Bool { true }
         override func sendEvent(_ event: NSEvent) {}
     }
 
@@ -60,6 +59,9 @@ final class NotesKeyboardUndoTests: XCTestCase {
     /// Notes are created in the order given: the last one is the newest and
     /// the first row of All notes.
     private func makeHarness(titles: [String]) throws -> (Harness, [UUID]) {
+        guard ProcessInfo.processInfo.environment["ATTIC_KEY_WINDOW_TESTS"] == "1" else {
+            throw XCTSkip("native key-window Undo runs on CI only")
+        }
         let gate = gate
         let store = try makeTestNoteStore(persist: { try gate.save($0) }, attachmentFileStore: makeTestAttachmentFileStore())
         var ids: [UUID] = []
@@ -81,14 +83,18 @@ final class NotesKeyboardUndoTests: XCTestCase {
         let window = KeyWindow(contentRect: host.frame, styleMask: [.borderless], backing: .buffered, defer: false)
         window.isReleasedWhenClosed = false
         window.contentView = host
-        // Behind everything and fully transparent: SwiftUI only runs its
-        // update cycle for a window that is on screen, as other tests here do.
+        // Transparent and pointer-inert, but genuinely registered as AppKit's
+        // key window. Overriding isKeyWindow left NSApp.keyWindow pointing
+        // elsewhere; a later SwiftUI focus update could then discard this
+        // fixture's first responder without exercising a real app window.
         window.alphaValue = 0
         window.ignoresMouseEvents = true
-        window.orderBack(nil)
+        window.makeKeyAndOrderFront(nil)
         windows.append(window)
         host.layoutSubtreeIfNeeded()
         spin()
+        XCTAssertTrue(window.isKeyWindow)
+        XCTAssertTrue(NSApp.keyWindow === window, "the keyboard route must have an actual AppKit key owner")
         return (Harness(window: window, host: host, store: store, noteDraft: noteDraft, toasts: toasts), ids)
     }
 
@@ -229,6 +235,7 @@ final class NotesKeyboardUndoTests: XCTestCase {
                                      file: StaticString = #filePath, line: UInt = #line) {
         let engine = harness.controller.active?.engine
         print("A38_TOAST_UNDO currentView=\(engine?.textView === view) responder=\(harness.window.firstResponder === view) attached=\(view.engine != nil) marked=\(view.hasMarkedText()) activity=\(String(describing: engine?.activity)) canUndo=\(engine?.history.canUndo == true) history=\(engine?.history.log.suffix(4) ?? [])")
+        XCTAssertTrue(NSApp.keyWindow === harness.window, "the app has this genuine key window", file: file, line: line)
         XCTAssertTrue(engine?.textView === view, "the live editor", file: file, line: line)
         XCTAssertTrue(harness.window.firstResponder === view, "the editor has the key", file: file, line: line)
         XCTAssertFalse(view.hasMarkedText(), "no unfinished composition", file: file, line: line)
