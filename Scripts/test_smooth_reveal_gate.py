@@ -17,6 +17,19 @@ class SmoothRevealGateTests(unittest.TestCase):
     def test_slower_candidate_fails_without_an_added_allowance(self):
         self.assertFalse(compare([(self.sample(20), self.sample(21))] * 2)['passed'])
 
+    def test_different_warmup_or_instrumentation_cannot_pass(self):
+        settings = dict(mode='reveal', frame_monitor=False, settle_seconds=20,
+                        idle_sample_seconds=60, allocations=False)
+        before = {**self.sample(200), 'settings': settings}
+        after = {**self.sample(20), 'settings': settings.copy()}
+        self.assertTrue(compare([(before, after)] * 2)['passed'])
+        for key, value in (('frame_monitor', True), ('settle_seconds', 2),
+                           ('idle_sample_seconds', 0), ('allocations', True)):
+            with self.subTest(key=key), self.assertRaises(ValueError):
+                compare([(before, {**after, 'settings': {**settings, key: value}})] * 2)
+        with self.assertRaises(ValueError):
+            compare([(before, self.sample(20))] * 2)
+
     def test_missing_invalid_or_warm_data_cannot_pass(self):
         for value in (0, -1, float('inf'), float('nan')):
             with self.assertRaises(ValueError):

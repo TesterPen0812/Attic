@@ -83,7 +83,14 @@ def main():
     parser.add_argument("--mode", choices=["reveal", "soak"], default="reveal")
     parser.add_argument("--allocations", action="store_true")
     parser.add_argument("--long", action="store_true")
+    parser.add_argument("--settle-seconds", type=float, default=2)
+    parser.add_argument("--idle-sample-seconds", type=float, default=0)
+    parser.add_argument("--frame-monitor", action=argparse.BooleanOptionalAction, default=None,
+                        help="Default on for the soak, off for cold reveal (avoid prewarming it)")
     args = parser.parse_args()
+    if not (0 <= args.settle_seconds <= 120 and 0 <= args.idle_sample_seconds <= 120):
+        parser.error("settle and idle sample durations must be between 0 and 120 seconds")
+    frames = args.frame_monitor if args.frame_monitor is not None else args.mode == "soak"
     app = args.app.resolve()
     info = plistlib.loads((app / "Contents/Info.plist").read_bytes())
     if info["CFBundleIdentifier"] != BUNDLE:
@@ -102,7 +109,7 @@ def main():
         "ATTIC_UI_TEST_CANVAS_PERSISTENCE": "1", "ATTIC_PERF_STORE_ROOT": str(root),
         "ATTIC_PERF_OWNER_TOKEN": token, "ATTIC_PERF_PROBE": "1",
         "ATTIC_PERF_EXTERNAL_CONTROL": "1", "ATTIC_PERF_CORNER": "bottomLeft",
-        "ATTIC_FRAME_MONITOR": "1",
+        "ATTIC_FRAME_MONITOR": "1" if frames else "0",
     }
     if args.mode == "soak":
         env["ATTIC_PERF_SMOOTH"] = "1"
@@ -122,9 +129,14 @@ def main():
         executable = subprocess.check_output(["/bin/ps", "-p", str(pid), "-o", "comm="], text=True).strip()
         if executable != str(app / "Contents/MacOS" / info["CFBundleExecutable"]):
             raise RuntimeError(f"Unexpected executable for probe PID {pid}")
-        time.sleep(2)
+        time.sleep(args.settle_seconds)
         records.append({"phase": initial, **sample(pid)})
         print(json.dumps(records[-1]), flush=True)
+        if args.idle_sample_seconds:
+            start = time.monotonic()
+            time.sleep(args.idle_sample_seconds)
+            records.append({"phase": "idle_sample_end", "elapsed_seconds": time.monotonic() - start, **sample(pid)})
+            print(json.dumps(records[-1]), flush=True)
         if args.mode == "reveal":
             os.kill(pid, signal.SIGUSR1)
             wait_for_phase(root, "tasks_open", pid=pid)
@@ -146,6 +158,9 @@ def main():
         timings = [json.loads(line) for line in (root / "timings.ndjson").read_text().splitlines()]
         (args.output / "measurements.json").write_text(json.dumps({
             "app": str(app), "bundle": BUNDLE, "store": str(root), "records": records, "timings": timings,
+            "settings": {"mode": args.mode, "frame_monitor": frames,
+                         "settle_seconds": args.settle_seconds, "idle_sample_seconds": args.idle_sample_seconds,
+                         "allocations": args.allocations, "long_note": args.long},
         }, indent=2))
         if args.mode == "soak":
             check_retention(records)

@@ -25,6 +25,17 @@ def reveal(document):
 def compare(pairs):
     if len(pairs) < 2:
         raise ValueError('At least two interleaved AB/BA pairs are required')
+    # Legacy evidence predates settings metadata. New captures must agree
+    # on warm-up and instrumentation, including across the reversed pair.
+    settings = pairs[0][0].get('settings')
+    keys = ('mode', 'frame_monitor', 'settle_seconds', 'idle_sample_seconds', 'allocations')
+    expected = None if settings is None else {key: settings.get(key) for key in keys}
+    for pair in pairs:
+        for document in pair:
+            current = document.get('settings')
+            actual = None if current is None else {key: current.get(key) for key in keys}
+            if actual != expected:
+                raise ValueError('Paired reveals must use identical warm-up and instrumentation')
     before = [reveal(a) for a, _ in pairs]
     after = [reveal(b) for _, b in pairs]
     deltas = [b - a for a, b in zip(before, after)]
