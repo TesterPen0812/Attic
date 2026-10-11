@@ -348,7 +348,8 @@ struct AtticDropdownRow: View {
                         Circle()
                             .fill(tokens.color(dot))
                             .frame(width: m.dotSize, height: m.dotSize)
-                            .frame(width: m.dotSlot)
+                            .padding(.horizontal, (m.dotSlot - m.dotSize) / 2)
+                            .accessibilityHidden(true)
                     } else if let checkGlyph {
                         AtticIcon(systemName: checkGlyph, size: m.checkSize, weight: .semibold, ink: .glyph)
                             .frame(width: m.dotSlot)
@@ -367,16 +368,16 @@ struct AtticDropdownRow: View {
                     AtticText(verbatim: detail, style: .shortcut, ink: .helper)
                         .fixedSize()
                 }
-                if let check {
-                    Group {
-                        switch check {
-                        case .on: AtticIcon(systemName: "checkmark", size: m.checkSize, weight: .semibold, ink: .glyph)
-                        case .mixed: AtticIcon(systemName: "minus", size: m.checkSize, weight: .semibold, ink: .glyph)
-                        case .off: Color.clear
-                        }
-                    }
-                    .frame(width: m.checkSlot)
-                    .padding(.leading, detail == nil ? 0 : m.columnGap)
+                // An unticked row draws nothing there: its column is room the
+                // card's width already keeps (the tag picker opens with a row
+                // per tag, so every view a row saves counts).
+                if let check, check != .off {
+                    AtticIcon(systemName: check == .on ? "checkmark" : "minus", size: m.checkSize, weight: .semibold, ink: .glyph)
+                        .frame(width: m.checkSlot)
+                        .padding(.leading, detail == nil ? 0 : m.columnGap)
+                } else if check == .off, detail != nil {
+                    // Details stay in one column, ticked or not.
+                    Color.clear.frame(width: m.checkSlot + m.columnGap, height: 1)
                 }
             }
             .padding(.horizontal, m.rowPadding)

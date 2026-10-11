@@ -89,15 +89,15 @@ final class NotesV2ChromeTests: XCTestCase {
                                                              showsFormat: showsFormat)
                     let buttons = AtticControlSize.panelButton.width * (showsFormat ? 3 : 2)
                         + (showsFormat ? AtticNoteMetrics.formatButtonGap : 0)
-                    let row = layout.chromeInsets.leading * 2 + buttons + AtticSpacing.s12 * 2 + pill
+                    let row = layout.chromeInsets.leading * 2 + buttons + AtticNoteMetrics.pillMinGap * 2 + pill
                     XCTAssertLessThanOrEqual(row, width + 0.001, "width \(width), corner \(corner), Aa \(showsFormat)")
                     XCTAssertLessThanOrEqual(pill, AtticNoteMetrics.pillMaxWidth)
                 }
             }
         }
-        // The default 320 pt panel: 156 pt for the pill beside Aa (D-15's
-        // 12 pt between Aa and New note).
-        XCTAssertEqual(AtticNoteMetrics.pillMaxWidth(panelWidth: 320, chromeInset: 16, showsFormat: true), 156)
+        // The default 320 pt panel: 162 pt for the pill beside Aa (D-15's
+        // 12 pt between Aa and New note, 9 pt least around the pill).
+        XCTAssertEqual(AtticNoteMetrics.pillMaxWidth(panelWidth: 320, chromeInset: 16, showsFormat: true), 162)
     }
 
     // MARK: The root fills its window, whatever its content asks

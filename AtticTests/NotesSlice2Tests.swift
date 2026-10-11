@@ -864,7 +864,9 @@ final class AtticNativeMenuTests: XCTestCase {
             AtticMenuCommand("Delete Note", isDestructive: true, startsSection: true, identifier: "delete") { ran.append("delete") }
         ]
         let menu = AtticNativeMenu.make(commands)
-        XCTAssertEqual(menu.items.map(\.title), ["Insert", "", "Pin to Top", "", "Delete Note"])
+        // A chosen item ends in its tick (N-4); its name is unchanged.
+        XCTAssertEqual(menu.items.map { $0.title.components(separatedBy: "\t")[0] }, ["Insert", "", "Pin to Top", "", "Delete Note"])
+        XCTAssertEqual(menu.items[2].title, "Pin to Top\t\u{2713}")
         XCTAssertEqual(menu.items[2].state, .on)
         XCTAssertEqual(menu.items[0].submenu?.items.first?.title, "Image…")
         menu.performActionForItem(at: 4)

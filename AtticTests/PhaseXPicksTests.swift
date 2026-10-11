@@ -258,10 +258,10 @@ final class PhaseXPicksTests: XCTestCase {
                     let worst = backgrounds.map { helper.contrast(on: $0) }.min() ?? 0
                     XCTAssertGreaterThanOrEqual(worst, increaseContrast ? 4.5 : 3, "\(context.caption): \(worst)")
                     if !increaseContrast {
-                        // Dark steps to about white 70 %; Light only as far as
-                        // the black desktop allows (about #333 under #141414).
-                        XCTAssertGreaterThan(helper.contrast(on: tokens.ink(.heading)), mode == .dark ? 1.8 : 1.4,
-                                             "\(context.caption): a real step")
+                        // As far as the floors allow over every desktop and a
+                        // window the glass passes through (Light: about #333
+                        // under #141414).
+                        XCTAssertGreaterThan(helper.contrast(on: tokens.ink(.heading)), 1.4, "\(context.caption): a real step")
                     }
                 }
             }

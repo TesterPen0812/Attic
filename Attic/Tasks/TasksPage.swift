@@ -4214,16 +4214,17 @@ enum TasksViewport {
 
     /// The fade by position in the viewport (N-6 D, owner 2026-10-11): no
     /// overlay behind the tabs; rows are gone at the tabs line's lower edge
-    /// (Find's taller field included) and whole by the first row's words at
-    /// rest, so nothing sits under the header or the tabs. Static geometry.
+    /// (Find's taller field included) and whole where the first row rests,
+    /// so nothing sits under the header or the tabs. Static geometry.
     static func maskStops(height: CGFloat, tabsTop: CGFloat) -> [(location: CGFloat, opacity: Double)] {
         AtticControlsFade.stops(height: height, top: controlsBottom(tabsTop: tabsTop),
                                 topRamp: topRamp(tabsTop: tabsTop), bottom: 0)
     }
 
-    /// From the tabs line's lower edge to the first row's words at rest.
+    /// From the tabs line's lower edge to where the first row rests, so a
+    /// resting row (its highlight too) is whole.
     static func topRamp(tabsTop: CGFloat) -> CGFloat {
-        max(8, listTop(tabsTop: tabsTop) + AtticTaskRowMetrics.titleTop(twoLine: false) - controlsBottom(tabsTop: tabsTop))
+        max(6, listTop(tabsTop: tabsTop) - controlsBottom(tabsTop: tabsTop))
     }
 }
 

@@ -733,12 +733,17 @@ enum AtticNoteMetrics {
     /// gap and 12 clear on each side of the pill.
     static func pillMaxWidth(panelWidth: CGFloat, chromeInset: CGFloat, showsFormat: Bool) -> CGFloat {
         let buttons = AtticControlSize.panelButton.width * (showsFormat ? 3 : 2) + (showsFormat ? formatButtonGap : 0)
-        let room = panelWidth - 2 * chromeInset - buttons - 2 * AtticSpacing.s12
+        let room = panelWidth - 2 * chromeInset - buttons - 2 * pillMinGap
         return max(0, min(pillMaxWidth, room))
     }
     static let pillIconSize: CGFloat = 13
     static let pillGap: CGFloat = 6
     static let pillPadding: CGFloat = 12
+    /// The least room between the pill and All notes or Aa: 9, so every
+    /// notice headline still fits a 320 pt panel's 162 pt slot with D-15's
+    /// 12 pt between Aa and New note. It is only ever this tight beside the
+    /// longest headline; a shorter pill sits in more room.
+    static let pillMinGap: CGFloat = 9
     /// The details pop-over (p2-15 #2): 280 wide, items 14 apart.
     static let detailsWidth: CGFloat = 280
     static let detailsPadding: CGFloat = 16

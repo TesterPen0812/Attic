@@ -821,14 +821,16 @@ struct AtticColorTokens: Equatable, Sendable {
             // where the tint is strongest and where it is weakest. Inactive
             // tabs, dates, meta, placeholders and empty lines stop reading
             // as titles.
-            let softer = AtticRGBA(dark ? 0xB4B4B4 : 0x6B6B6B)
-            let desktops = AtticSurfaceModel.Desktop.allCases.flatMap { desktop in
-                [AtticSurfaceModel.contentTop, 1].map { panel.composite(desktop, at: $0) }
+            // Increase Contrast keeps Phase 0's near-primary secondary, which
+            // the readable backing and Dark's tint are solved for.
+            if !ic {
+                let softer = AtticRGBA(dark ? 0xB4B4B4 : 0x6B6B6B)
+                let heights = [AtticSurfaceModel.contentTop, 1]
+                let backgrounds = AtticSurfaceModel.Desktop.allCases.flatMap { desktop in heights.map { panel.composite(desktop, at: $0) } }
+                    + heights.map { panel.compositeOverPassedThroughWindow(at: $0) }
+                let stepped = softer.tuned(toContrast: secondaryTarget, against: backgrounds, lighten: dark)
+                for ink in [AtticInk.helper, .placeholder, .muted] { inks[ink] = stepped }
             }
-            let secondaryFloor = AtticSurfaceModel.floor(for: .helper, kind: key.surface, increaseContrast: ic)
-            let stepped = softer.tuned(toContrast: secondaryFloor * (secondaryFloor > 3 ? textTarget / 4.5 : secondaryTarget / 3),
-                                       against: desktops, lighten: dark)
-            for ink in [AtticInk.helper, .placeholder, .muted] { inks[ink] = stepped }
             // Tags: Original's grey is the secondary grey; a palette keeps its
             // hue at the secondary grey's lightness (Dark). The Light
             // palettes keep Phase 0's accent exactly (above).

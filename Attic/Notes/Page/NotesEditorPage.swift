@@ -360,7 +360,7 @@ struct NotesEditorPage: View {
                 .modifier(NotesKeyboardStop(stop: .allNotes, enabled: bottomStops, focus: $bottomFocus))
                 .accessibilityIdentifier("notes-all-notes")
                 .accessibilitySortPriority(1)
-                Spacer(minLength: AtticSpacing.s12)
+                Spacer(minLength: AtticNoteMetrics.pillMinGap)
                 if !controller.isLibraryPresented, let session = controller.active {
                     NoteStatusSlot(controller: controller, store: noteStore, session: session, damaged: damagedRecovery,
                                    maxWidth: AtticNoteMetrics.pillMaxWidth(
@@ -370,7 +370,7 @@ struct NotesEditorPage: View {
                         .accessibilitySortPriority(2)
                         .transition(.opacity)
                 }
-                Spacer(minLength: AtticSpacing.s12)
+                Spacer(minLength: AtticNoteMetrics.pillMinGap)
                 if showsFormatButton {
                     formatButton
                         .modifier(NotesKeyboardStop(stop: .format, enabled: bottomStops, focus: $bottomFocus))

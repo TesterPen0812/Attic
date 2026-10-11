@@ -135,14 +135,29 @@ final class NoteFindController: ObservableObject {
         }
     }
 
-    /// The bar's exit: an F/E fade, then it leaves the view.
+    /// The bar's exit: it leaves the view (and VoiceOver's tree) at once,
+    /// and a still picture of it fades out, F/E.
     private static func disappear(_ host: NSView) {
+        guard let superview = host.superview, host.bounds.width > 0, host.bounds.height > 0,
+              let bitmap = host.bitmapImageRepForCachingDisplay(in: host.bounds) else {
+            host.removeFromSuperview()
+            return
+        }
+        host.cacheDisplay(in: host.bounds, to: bitmap)
+        let image = NSImage(size: host.bounds.size)
+        image.addRepresentation(bitmap)
+        let picture = NSImageView(frame: host.frame)
+        picture.image = image
+        picture.imageScaling = .scaleNone
+        picture.setAccessibilityElement(false)
+        superview.addSubview(picture, positioned: .above, relativeTo: host)
+        host.removeFromSuperview()
         NSAnimationContext.runAnimationGroup { context in
             context.duration = AtticMotionScale.fast
             context.timingFunction = AtticMotionScale.easeOutTimingFunction
-            host.animator().alphaValue = 0
+            picture.animator().alphaValue = 0
         } completionHandler: {
-            MainActor.assumeIsolated { host.removeFromSuperview() }
+            MainActor.assumeIsolated { picture.removeFromSuperview() }
         }
     }
 
