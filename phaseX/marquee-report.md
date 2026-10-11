@@ -48,7 +48,7 @@ Preview identities:
 
 ## Motion acceptance still open
 
-`marquee/frames.log`, `frames-final.log` and `frames-done.log` contain real `MarqueeDragFrames` counters. CUA's short gestures yielded zero or one sampled display frame; there is no usable inter-frame interval from which to assess dropped frames. **This is not evidence of zero dropped frames or perfect smoothness.** Sustained pointer tracking, live box/fade appearance and edge auto-scroll still need a timed screen pass. Auto-scroll maths and selection behavior are tested independently.
+`marquee/frames.log`, `frames-final.log` and `frames-done.log` contain the real marquee begin/end and `MarqueeDragFrames` counters, extracted without changes from the raw preview logs; unrelated component frame events are omitted. CUA's short gestures yielded zero or one sampled display frame; there is no usable inter-frame interval from which to assess dropped frames. **This is not evidence of zero dropped frames or perfect smoothness.** Sustained pointer tracking, live box/fade appearance and edge auto-scroll still need a timed screen pass. Auto-scroll maths and selection behavior are tested independently.
 
 A bounded four-second event driver is prepared in `marquee/drive.swift`, restricted to the permitted bundle **and this worktree's exact app path**. Its synthesized-input mode was not run. The computer-use tool says, “Do not use other technologies besides cua_repl for computer interactions, unless specifically requested by the user”; the explicit request for that exception remains unanswered. No system setting or automation permission was changed.
 
