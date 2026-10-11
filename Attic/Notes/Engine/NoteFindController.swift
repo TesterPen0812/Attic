@@ -22,6 +22,9 @@ final class NoteFindController: ObservableObject {
     private var host: NSHostingView<AnyView>?
     private var topInset: CGFloat = 0
     private var columnInset: CGFloat = 16
+    /// Work counters for the headless performance gates.
+    private(set) var objectSearchPassCount = 0
+    private(set) var highlightLayoutPassCount = 0
     static var height: CGFloat { AtticControlSize.smallHeight * 2 + AtticSpacing.s4 + AtticSpacing.s8 * 2 }
     var clearance: CGFloat { isShown ? Self.height : 0 }
     let highlight = NSColor.systemYellow.withAlphaComponent(0.4)
@@ -146,8 +149,18 @@ final class NoteFindController: ObservableObject {
 
     func refresh(selectFirst: Bool = false) {
         guard isShown, let engine else { return }
+        // An empty bar has nothing to search or highlight. Clear a previous
+        // search once; subsequent edits need no document-wide layout pass.
+        if query.isEmpty {
+            guard !matches.isEmpty || index != nil else { return }
+            matches = []
+            index = nil
+            updateHighlights(clear: true)
+            return
+        }
         let old = index.flatMap { matches.indices.contains($0) ? matches[$0] : nil }
         var found = ranges(in: engine.textStorage.string).map { Match(noteRange: $0) }
+        objectSearchPassCount += 1
         for (object, range) in engine.objects() {
             guard let table = object as? NoteTableAttachment else { continue }
             for row in table.table.rows.indices {
@@ -208,6 +221,7 @@ final class NoteFindController: ObservableObject {
         guard isShown || clear else { return }
         guard let engine else { return }
         if let layout = engine.layoutManager {
+            highlightLayoutPassCount += 1
             layout.removeRenderingAttribute(.backgroundColor, for: engine.contentStorage.documentRange)
             for match in matches where match.tableID == nil {
                 if let range = engine.textRange(for: match.noteRange) {

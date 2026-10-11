@@ -11,6 +11,31 @@ import XCTest
 final class TasksKeystrokeCostTests: XCTestCase {
     private var window: NSWindow?
 
+    #if !ATTIC_COST_REFERENCE_HOST
+    func testPerf2DraftTypingDoesNotWriteTheStore() throws {
+        let store = try makeTestStore()
+        let task = try XCTUnwrap(store.create(title: "Original"))
+        let model = TasksPageModel(library: AtticLibrary(tasks: store))
+        let revision = store.revision
+        var pageChanges = 0
+        let observation = model.objectWillChange.sink { pageChanges += 1 }
+        defer { observation.cancel() }
+        for key in "twenty five ordinary keys" { model.addBar.text.append(key) }
+        print("PERF2_TASK_ADD keys=25 page_publications=\(pageChanges) store_revisions=\(store.revision - revision)")
+        XCTAssertEqual(pageChanges, 0, "the add bar owns its draft; the list does not observe each key")
+        XCTAssertEqual(store.revision, revision)
+
+        model.beginEditingTitle(task.id)
+        pageChanges = 0
+        for key in "twenty five ordinary keys" { model.editingTitle.append(key) }
+        print("PERF2_TASK_RENAME keys=25 page_publications=\(pageChanges) store_revisions=\(store.revision - revision)")
+        XCTAssertEqual(store.revision, revision, "typing a rename must not save per key")
+        XCTAssertEqual(task.title, "Original")
+        XCTAssertTrue(model.commitTitle())
+        XCTAssertEqual(store.task(withID: task.id)?.title, "Originaltwenty five ordinary keys")
+    }
+    #endif
+
     override func tearDown() async throws {
         window?.close()
         window = nil
