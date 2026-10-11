@@ -33,7 +33,7 @@ extension NotesPageController {
             case let .discardDamagedRecovery(confirmation):
                 let archive = try await journal.archiveDamagedDurably(confirmation, to: nil, resolving: true)
                 await refreshRecoveryWarningsAfterResolution()
-                active?.notice = "Damaged recovery was moved to quarantine. Its original data and files are preserved."
+                active?.showNotice(NoteNotice(kind: .quarantined, detail: "Damaged recovery was moved to quarantine. Its original data and files are preserved."))
                 return .archived(archive)
             }
         } catch { return .unavailable(error.localizedDescription) }
@@ -234,7 +234,7 @@ extension NoteEditorEngine {
             let candidate = NSMutableAttributedString(attributedString: textStorage)
             candidate.replaceCharacters(in: currentRange, with: text)
             if let failure = onFragmentAdmission?(NoteTextCodec.document(from: candidate,
-                template: checkpointDocument()), [item]) { onNotice?(failure); return false }
+                template: checkpointDocument()), [item]) { onNotice?(NoteNotice(kind: .notAdded, detail: failure)); return false }
             stageImported(item)
             let changed = performEdit(currentRange, with: text, name: "Replace Missing Attachment", selection: currentRange)
             if !changed { unstageImported(item.id) }
@@ -260,7 +260,7 @@ extension NoteEditorEngine {
                 let board = NSPasteboard.general
                 board.clearContents()
                 return board.writeObjects([url as NSURL])
-            } catch { onNotice?(error.localizedDescription); return false }
+            } catch { onNotice?(NoteNotice(kind: .notAdded, detail: error.localizedDescription)); return false }
         case let .exportCopy(destination):
             let name = objectFilename(object)
             let target: URL
@@ -275,7 +275,7 @@ extension NoteEditorEngine {
             let scoped = target.startAccessingSecurityScopedResource()
             defer { if scoped { target.stopAccessingSecurityScopedResource() } }
             do { try bytes.write(to: target, options: .atomic); return true }
-            catch { onNotice?(error.localizedDescription); return false }
+            catch { onNotice?(NoteNotice(kind: .notAdded, detail: error.localizedDescription)); return false }
         case .quickLook, .open, .openWith, .showInFinder:
             guard let bytes = await objectBytes(object) else { return false }
             do {
@@ -304,7 +304,7 @@ extension NoteEditorEngine {
                 return true
             } catch {
                 if command == .quickLook { markPreviewUnavailable(objectID) }
-                onNotice?(error.localizedDescription)
+                onNotice?(NoteNotice(kind: .notAdded, detail: error.localizedDescription))
                 return false
             }
         }
@@ -316,7 +316,7 @@ extension NoteEditorEngine {
         guard let (object, range) = objectPlacement(objectID), object is NoteFileAttachment,
               case .importFailed = objectState(objectID) else { return false }
         if let staged = imported.staged, let reason = onImportAdmission?(staged) {
-            onNotice?(reason)
+            onNotice?(NoteNotice(kind: .notAdded, detail: reason))
             return false
         }
         let replacement: NoteObjectAttachment

@@ -322,10 +322,10 @@ final class NotesSlice3bUITests: XCTestCase {
     }
 
     func testPendingGuidanceIsProgressAndTryAgainIsKeptForUnfinishedActions() {
-        XCTAssertTrue(NoteStatusPresentation.isProgress("Recovery data is still being saved."))
-        XCTAssertTrue(NoteStatusPresentation.isProgress("Saving recovery data…"))
-        XCTAssertTrue(NoteStatusPresentation.isProgress("Attachment data is still being read."))
-        XCTAssertFalse(NoteStatusPresentation.isProgress("Recovery data is still being saved. Try again when saving finishes."))
+        XCTAssertTrue(NoteNotice(kind: .stillSaving, detail: "Recovery data is still being saved.").severity == .progress)
+        XCTAssertTrue(NoteNotice(kind: .saving, detail: "Saving recovery data…").severity == .progress)
+        XCTAssertTrue(NoteNotice(kind: .stillReading, detail: "Attachment data is still being read.").severity == .progress)
+        XCTAssertFalse(NoteNotice(kind: .stillSaving, severity: .information, detail: "Recovery data is still being saved. Try again when saving finishes.").severity == .progress)
         XCTAssertEqual(NoteStatusPresentation.notice("Recovery data is damaged: A.json. Other.", removingDamaged: ["A.json"]),
                        "Other.")
         XCTAssertNil(NoteStatusPresentation.notice("Recovery data is damaged: A.json.", removingDamaged: ["A.json"]))

@@ -1505,7 +1505,7 @@ final class NotesPageControllerTests: XCTestCase {
         print("NOTE_5000_NO_PROPOSAL_100_KEYS_MS=\(Double(DispatchTime.now().uptimeNanoseconds - baselineStart) / 1_000_000)")
         XCTAssertEqual(store.pendingEditFetchCount, baselineFetches)
         XCTAssertEqual(baselineSession.engine.documentExtractionCount, baselineExtractions)
-        session.notice = "Finish composing text before leaving this note."
+        session.showNotice(NoteNotice(kind: .finishFirst, detail: "Finish composing text before leaving this note."))
         XCTAssertEqual(controller.statusItems(for: session).map(\.label),
                        ["Claude has changes", "Finish first"])
     }

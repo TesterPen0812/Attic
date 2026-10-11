@@ -20,7 +20,7 @@ extension NotesPageController {
               let engine = request.engine, engine === session.engine, engine.isPending(request) else { return }
         guard !session.isReadOnly else { request.cancel(); return }
         if let failure = sourceAdmissionFailure(url, in: session).1 {
-            session.notice = failure
+            session.showNotice(NoteNotice(kind: .notAdded, detail: failure))
             request.cancel()
             return
         }
@@ -36,7 +36,7 @@ extension NotesPageController {
             guard self?.active === session, session.engine === engine,
                   engine.activity == .idle, engine.commitSlashObject(item, for: request) else {
                 request.cancel()
-                session.notice = String(localized: "The file could not be added to this note.")
+                session.showNotice(NoteNotice(kind: .notAdded, detail: String(localized: "The file could not be added to this note.")))
                 return
             }
         }

@@ -3301,7 +3301,7 @@ extension NoteSlice3bTests {
         let engine = NoteEditorEngine(noteID: UUID(), document: NoteDocument(blocks: [.text("Before")]))
         engine.canPasteFragment = { false }
         var notice: String?
-        engine.onNotice = { notice = $0 }
+        engine.onNotice = { notice = $0.detail }
         let fragment = try NoteContentCodec.encode(NoteDocument(blocks: [.text("Pasted")]), context: .fragment)
         let before = engine.document()
         await XCTAssertFalseAsync(await engine.pasteDurably(fragmentData: fragment,

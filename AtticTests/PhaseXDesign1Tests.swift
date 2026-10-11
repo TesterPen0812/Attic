@@ -7,6 +7,16 @@ import XCTest
 /// (`phaseX/design-review.md`), checked without showing a window.
 @MainActor
 final class PhaseXDesign1Tests: XCTestCase {
+    func testAR05RecoverySaveFailureCannotBecomeProgressFromItsSystemDetail() {
+        for detail in ["The recovery copy couldn’t be saved: Saving recovery data…",
+                       "Die Datei konnte nicht gelesen werden", "Version history could not be read.json"] {
+            let notice = NoteNotice(kind: .copyFailed, detail: detail)
+            XCTAssertEqual(NoteStatusItem.notice(notice).label, "Copy failed")
+            XCTAssertEqual(notice.severity, .error)
+            XCTAssertEqual(NoteStatusItem.notice(notice).explanation, detail)
+        }
+    }
+
     // MARK: D-05 · notice headlines
 
     /// The two sentences the owner approved (commit bedb9323), word for word.
@@ -123,20 +133,14 @@ final class PhaseXDesign1Tests: XCTestCase {
     }
 
     func testEveryKnownNoticeGetsAShortHeadlineAndKeepsItsSentenceForTheDetails() {
-        let headlines = Set(NoteStatusPresentation.allNoticeHeadlines)
-        for sentence in Self.noticeSentences {
-            let headline = NoteStatusPresentation.headline(forNotice: sentence)
-            XCTAssertTrue(headlines.contains(headline), "“\(headline)” is listed")
-            XCTAssertLessThan(headline.count, sentence.count, sentence)
-            XCTAssertLessThanOrEqual(headline.count, 16, headline)
-            // The details say the sentence in full, unchanged.
-            XCTAssertEqual(NoteStatusItem.notice(sentence).explanation, sentence)
-            XCTAssertEqual(NoteStatusItem.notice(sentence).label, headline)
-        }
-        // Every rule is reached by a sentence the page can raise.
-        let reached = Set(Self.noticeSentences.map(NoteStatusPresentation.headline(forNotice:)))
-        for headline in NoteStatusPresentation.allNoticeHeadlines {
-            XCTAssertTrue(reached.contains(headline), "no sentence in the list gets “\(headline)”")
+        for kind in NoteNotice.Kind.allCases {
+            for sentence in Self.noticeSentences {
+                let notice = NoteNotice(kind: kind, detail: sentence)
+                XCTAssertLessThanOrEqual(kind.headline.count, 16)
+                XCTAssertEqual(NoteStatusItem.notice(notice).explanation, sentence)
+                XCTAssertEqual(NoteStatusItem.notice(notice).label, kind.headline)
+                XCTAssertEqual(notice.severity, kind.severity, "detail never changes severity")
+            }
         }
     }
 
@@ -145,13 +149,11 @@ final class PhaseXDesign1Tests: XCTestCase {
             "Proposals could not be read. Reopen Notes to try again. Your notes are kept.",
             "This attachment’s place in the note could not be read. Try again. Your note is kept."
         ])
-        XCTAssertEqual(NoteStatusPresentation.headline(forNotice: Self.approvedSentences[0]), "Read failed")
-        XCTAssertEqual(NoteStatusPresentation.headline(forNotice: Self.approvedSentences[1]), "Not readable")
-        XCTAssertEqual(NoteStatusPresentation.headline(forNotice: "An image is unavailable, so the note was not duplicated."),
-                       "Image gone")
-        // A sentence nothing knows still gets a short headline.
-        XCTAssertEqual(NoteStatusPresentation.headline(forNotice: "The disk exploded."), "Notice")
-        XCTAssertEqual(NoteStatusPresentation.headline(forNotice: "That did not work because it failed."), "Didn’t work")
+        XCTAssertEqual(NoteNotice.Kind.readFailed.headline, "Read failed")
+        XCTAssertEqual(NoteNotice.Kind.notReadable.headline, "Not readable")
+        XCTAssertEqual(NoteNotice.Kind.imageGone.headline, "Image gone")
+        XCTAssertEqual(NoteNotice.Kind.notice.headline, "Notice")
+        XCTAssertEqual(NoteNotice.Kind.didntWork.headline, "Didn’t work")
     }
 
     /// The other status words need no rewording: they fit the slot as they are.
@@ -170,18 +172,18 @@ final class PhaseXDesign1Tests: XCTestCase {
     /// that the views lay out.
     func testNoticePillsAndDetailsRenderForTheOwnersSheet() throws {
         let notices = [
-            "An image is unavailable, so this draft remains in recovery until it can be restored.",
-            Self.approvedSentences[0],
-            Self.approvedSentences[1]
+            NoteNotice(kind: .imageGone, detail: "An image is unavailable, so this draft remains in recovery until it can be restored."),
+            NoteNotice(kind: .readFailed, detail: Self.approvedSentences[0]),
+            NoteNotice(kind: .notReadable, detail: Self.approvedSentences[1])
         ]
         for mode in [AtticDesignContext.Mode.light, .dark] {
             for width in [320.0, 380.0] {
                 let context = design(mode)
                 let room = AtticNoteMetrics.pillMaxWidth(panelWidth: width, chromeInset: 16, showsFormat: true)
-                let rows = notices.map { sentence -> AnyView in
+                let rows = notices.map { notice -> AnyView in
                     let item = AtticStatusItem(id: "notice", systemName: "info.circle",
-                                               title: NoteStatusPresentation.headline(forNotice: sentence),
-                                               explanation: sentence, tone: .normal)
+                                               title: notice.kind.headline,
+                                               explanation: notice.detail, tone: .normal)
                     return AnyView(VStack(alignment: .leading, spacing: 10) {
                         AtticStatusPill(item: item, more: 0, inlineAction: nil, onCancel: {}, maxWidth: room, onOpen: {})
                         AtticStatusDetails(items: [item])

@@ -871,8 +871,8 @@ private struct NoteStatusSlot: View {
             .init(title: String(localized: "Save Recovery Copy…"), identifier: "notes-damaged-save",
                   handler: close {
                       switch await damaged.saveCopy(details) {
-                      case let .saved(url): session.notice = String(localized: "Recovery copy saved as “\(url.lastPathComponent)”.")
-                      case let .refused(message): session.notice = message
+                      case let .saved(url): session.showNotice(NoteNotice(kind: .copySaved, detail: String(localized: "Recovery copy saved as “\(url.lastPathComponent)”.")))
+                      case let .refused(message): session.showNotice(NoteNotice(kind: .copyFailed, detail: message))
                       default: break
                       }
                   })
@@ -880,7 +880,7 @@ private struct NoteStatusSlot: View {
         if details.confirmation.canDiscard {
             actions.append(.init(title: String(localized: "Discard Damaged Recovery…"), identifier: "notes-damaged-discard",
                                  handler: close {
-                                     if case let .refused(message) = await damaged.discard(details) { session.notice = message }
+                                     if case let .refused(message) = await damaged.discard(details) { session.showNotice(NoteNotice(kind: .notSaved, detail: message)) }
                                  }))
         }
         return AtticStatusItem(id: "damaged-\(details.confirmation.checkpointFilename)", systemName: "exclamationmark.circle",
@@ -929,7 +929,7 @@ private struct NoteStatusSlot: View {
                     .init(title: "Restore", identifier: "notes-restore-deletion", handler: details {
                         guard let id = displayedID else { return }
                         if !store.discardProposal(id, noteID: session.noteID) {
-                            session.notice = store.lastErrorMessage ?? "The deletion proposal could not be restored."
+                            session.showNotice(NoteNotice(kind: .notRestored, detail: store.lastErrorMessage ?? "The deletion proposal could not be restored."))
                         }
                     }),
                     .init(title: "Save as New Note", identifier: "notes-deletion-save-new", handler: details {
@@ -950,7 +950,7 @@ private struct NoteStatusSlot: View {
                 explanation: status.explanation, tone: .quiet, actions: [
                     .init(title: "Dismiss", identifier: "notes-attribution-dismiss", handler: details {
                         if !store.acknowledgeExternalEdit(noteID: session.noteID) {
-                            session.notice = store.lastErrorMessage ?? "Attribution could not be acknowledged."
+                            session.showNotice(NoteNotice(kind: .notCleared, detail: store.lastErrorMessage ?? "Attribution could not be acknowledged."))
                         }
                     })
                 ])
@@ -974,16 +974,16 @@ private struct NoteStatusSlot: View {
         case .readOnly:
             return AtticStatusItem(id: "readOnly", systemName: "lock", title: status.label,
                                    explanation: status.explanation, tone: .quiet)
-        case let .notice(message):
+        case let .notice(notice):
             // Damaged recovery has its own items; its sentence leaves the notice.
-            guard let message = NoteStatusPresentation.notice(message,
+            guard let message = NoteStatusPresentation.notice(notice.detail,
                     removingDamaged: damaged.entries.map(\.confirmation.checkpointFilename)) else { return nil }
-            if NoteStatusPresentation.isProgress(message) {
+            if notice.severity == .progress {
                 // Pending guidance: progress, quietly, clearing itself.
-                return AtticStatusItem(id: "pending", systemName: nil, title: NoteStatusPresentation.headline(forNotice: message), explanation: message, tone: .quiet)
+                return AtticStatusItem(id: "pending", systemName: nil, title: notice.kind.headline, explanation: message, tone: .quiet)
             }
             var actions: [AtticStatusItem.Action] = []
-            if message == NoteTablePasteOffer.notice, session.engine.tablePasteOffer != nil {
+            if notice.kind == .tablePasted, session.engine.tablePasteOffer != nil {
                 // A tabular paste became a table: one click gives its text instead.
                 actions.append(.init(title: String(localized: "Paste as Text"), identifier: "notes-paste-as-text",
                                      handler: details {
@@ -995,8 +995,8 @@ private struct NoteStatusSlot: View {
                                  handler: details { session.notice = nil }))
             // The pill says the headline; the details say the sentence (D-05).
             return AtticStatusItem(id: "notice", systemName: "info.circle",
-                                   title: NoteStatusPresentation.headline(forNotice: message),
-                                   explanation: message, tone: NoteStatusPresentation.isCaution(notice: message) ? .caution : .normal,
+                                   title: notice.kind.headline,
+                                   explanation: message, tone: notice.severity == .error ? .error : (notice.severity == .caution ? .caution : .normal),
                                    actions: actions)
         }
     }

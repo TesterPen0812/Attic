@@ -197,7 +197,7 @@ enum NoteFormatCaptureScene {
         let box = range(of: "Final copy", in: textView)
         if box.location != NSNotFound { controls.engine.toggleCheckbox(atLineOf: box.location) }
         textView.setSelectedRange(NSRange(location: (textView.string as NSString).length, length: 0))
-        controls.engine.onNotice?(String(localized: "An attachment couldn’t be read. Nothing was pasted."))
+        controls.engine.onNotice?(NoteNotice(kind: .notReadable, detail: String(localized: "An attachment couldn’t be read. Nothing was pasted.")))
     }
 
     /// The owner's first-round fixes (F-01 to F-04): every block style with a

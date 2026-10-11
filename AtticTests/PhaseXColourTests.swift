@@ -291,9 +291,9 @@ final class PhaseXColourTokenTests: XCTestCase {
             }
         }
         // Read failures are cautions; other notices stay grey.
-        XCTAssertTrue(NoteStatusPresentation.isCaution(notice: "An attachment couldn’t be read. Nothing was pasted."))
-        XCTAssertTrue(NoteStatusPresentation.isCaution(notice: "Copied. 2 image(s) couldn’t be read and are listed in its README."))
-        XCTAssertFalse(NoteStatusPresentation.isCaution(notice: "Recovery copy saved as “Note.md”."))
+        XCTAssertTrue(NoteNotice(kind: .notReadable, detail: "An attachment couldn’t be read. Nothing was pasted.").severity == .caution)
+        XCTAssertTrue(NoteNotice(kind: .copySaved, severity: .caution, detail: "Copied. 2 image(s) couldn’t be read and are listed in its README.").severity == .caution)
+        XCTAssertFalse(NoteNotice(kind: .copySaved, detail: "Recovery copy saved as “Note.md”.").severity == .caution)
     }
 
     // MARK: Helpers

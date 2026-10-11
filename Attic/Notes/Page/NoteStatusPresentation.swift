@@ -1,5 +1,71 @@
 import AppKit
 
+/// The event's meaning is chosen where it happens; localized details and
+/// filenames never determine a headline, severity, or available action.
+struct NoteNotice: Equatable, Sendable {
+    enum Severity: Sendable { case error, caution, information, progress }
+    enum Kind: CaseIterable, Sendable {
+        case saving, stillSaving, stillReading, damaged, quarantined, copySaved, copyFailed, notDeleted, copyKept, keptSafe, noteSaved, tablePasted, textRestored, notAvailable, notKept, finishFirst, stillAdding, importBusy, imageGone, notSaved, noDuplicate, cancelled, cantCancel, notAdded, historyError, saveFirst, readFailed, notReadable, notRestored, notCleared, textPasted, tableLimit, notPasted, pasteAgain, didntWork, notice
+        var headline: String {
+            switch self {
+            case .saving: String(localized: "Saving…")
+            case .stillSaving: String(localized: "Still saving")
+            case .stillReading: String(localized: "Still reading")
+            case .damaged: String(localized: "Damaged")
+            case .quarantined: String(localized: "Quarantined")
+            case .copySaved: String(localized: "Copy saved")
+            case .copyFailed: String(localized: "Copy failed")
+            case .notDeleted: String(localized: "Not deleted")
+            case .copyKept: String(localized: "Copy kept")
+            case .keptSafe: String(localized: "Kept safe")
+            case .noteSaved: String(localized: "Note saved")
+            case .tablePasted: String(localized: "Table pasted")
+            case .textRestored: String(localized: "Text restored")
+            case .notAvailable: String(localized: "Not available")
+            case .notKept: String(localized: "Not kept")
+            case .finishFirst: String(localized: "Finish first")
+            case .stillAdding: String(localized: "Still adding")
+            case .importBusy: String(localized: "Import busy")
+            case .imageGone: String(localized: "Image gone")
+            case .notSaved: String(localized: "Not saved")
+            case .noDuplicate: String(localized: "No duplicate")
+            case .cancelled: String(localized: "Cancelled")
+            case .cantCancel: String(localized: "Can’t cancel")
+            case .notAdded: String(localized: "Not added")
+            case .historyError: String(localized: "History error")
+            case .saveFirst: String(localized: "Save first")
+            case .readFailed: String(localized: "Read failed")
+            case .notReadable: String(localized: "Not readable")
+            case .notRestored: String(localized: "Not restored")
+            case .notCleared: String(localized: "Not cleared")
+            case .textPasted: String(localized: "Text pasted")
+            case .tableLimit: String(localized: "Table limit")
+            case .notPasted: String(localized: "Not pasted")
+            case .pasteAgain: String(localized: "Paste again")
+            case .didntWork: String(localized: "Didn’t work")
+            case .notice: String(localized: "Notice")
+            }
+        }
+        var severity: Severity {
+            switch self {
+            case .copyFailed, .notDeleted, .notSaved, .noDuplicate, .cantCancel, .notAdded, .notRestored, .notCleared, .didntWork: .error
+            case .damaged, .copyKept, .keptSafe, .notAvailable, .notKept, .imageGone, .historyError, .readFailed, .notReadable, .notPasted: .caution
+            case .quarantined, .copySaved, .noteSaved, .tablePasted, .textRestored, .finishFirst, .importBusy, .cancelled, .saveFirst, .textPasted, .tableLimit, .pasteAgain, .notice: .information
+            case .saving, .stillSaving, .stillReading, .stillAdding: .progress
+            }
+        }
+    }
+    let kind: Kind
+    let severity: Severity
+    let detail: String
+    init(kind: Kind, severity: Severity? = nil, detail: String) {
+        self.kind = kind
+        self.severity = severity ?? kind.severity
+        self.detail = detail
+    }
+}
+
+
 /// How the status slot words what the page controller reports (UX plan
 /// § 3.12): the import's progress, the engine's pending guidance, and the
 /// damaged-recovery exit. Pure, so the wording is tested without a view.
@@ -23,93 +89,7 @@ enum NoteStatusPresentation {
         return String(localized: "\(list). \(progress.completed) of \(progress.total) ready, \(copied) copied. You can keep writing; Cancel Batch leaves the note as it was.")
     }
 
-    /// The engine's guidance after a slow disk: an action that did finish
-    /// while its recovery write is still going. Said quietly, as progress
-    /// (a spinner, no Dismiss), never as "Try again": it clears itself when
-    /// the write lands. The "Try again" wording stays for an action that
-    /// did not finish.
-    static let progressNotices: Set<String> = [
-        "Saving recovery data…",
-        "Recovery data is still being saved.",
-        "Attachment data is still being read."
-    ]
-
-    static func isProgress(_ notice: String) -> Bool { progressNotices.contains(notice) }
-
-    // MARK: Notice headlines (design review D-05)
-
-    /// A notice is a full sentence, which the status pill cut off ("An image
-    /// is un…"). The pill says a short headline that fits the slot at the
-    /// default 320 pt panel, beside its glyph and close button, and the
-    /// details pop-over keeps the full sentence. Matching is by the words
-    /// that identify a notice (first rule wins), so a sentence that carries
-    /// a changing part (a file name, a system error) still finds its
-    /// headline; anything unrecognised gets one of the two fallbacks.
-    static let noticeRules: [(match: [String], headline: String)] = [
-        (["Saving recovery data"], "Saving…"),
-        (["Recovery data is still being saved"], "Still saving"),
-        (["Attachment data is still being read"], "Still reading"),
-        (["Recovery data is damaged"], "Damaged"),
-        (["Damaged recovery was moved"], "Quarantined"),
-        (["Recovery copy saved"], "Copy saved"),
-        (["recovery copy couldn’t be saved"], "Copy failed"),
-        (["old recovery copy of this note couldn’t be cleared"], "Not deleted"),
-        (["old recovery copy"], "Copy kept"),
-        (["Saved recovery is being kept"], "Kept safe"),
-        (["Saved as a new note"], "Note saved"),
-        (["Pasted as a table"], "Table pasted"),
-        (["Restored unsaved text"], "Text restored"),
-        (["Writing Tools unavailable"], "Not available"),
-        (["Writing Tools changed"], "Not kept"),
-        (["Writing Tools", "composing text"], "Finish first"),
-        (["Images are still being added"], "Still adding"),
-        (["current file import"], "Import busy"),
-        (["An image is unavailable"], "Image gone"),
-        (["Couldn’t save a new note"], "Not saved"),
-        (["was not deleted"], "Not deleted"),
-        (["before deleting it"], "Not deleted"),
-        (["before duplicating it", "can’t be duplicated", "couldn’t be duplicated"], "No duplicate"),
-        (["file batch was cancelled"], "Cancelled"),
-        (["could not be cancelled"], "Can’t cancel"),
-        (["clipboard image could not be staged"], "Not added"),
-        (["not added", "could not be added"], "Not added"),
-        (["Version history could not be read"], "History error"),
-        (["before opening version history"], "Save first"),
-        (["Proposals could not be read"], "Read failed"),
-        (["place in the note could not be read"], "Not readable"),
-        (["deletion proposal could not be restored"], "Not restored"),
-        (["Attribution could not be acknowledged"], "Not cleared"),
-        (["pasted as text"], "Text pasted"),
-        (["larger than", "A table can have at most"], "Table limit"),
-        (["Nothing was pasted", "nothing was pasted"], "Not pasted"),
-        (["Paste again"], "Paste again"),
-    ]
-
-    /// For a sentence no rule knows: a problem, or plain news.
-    static let problemFallbackHeadline = "Didn’t work"
-    static let newsFallbackHeadline = "Notice"
-
-    /// Every headline a notice can have: the rules' and the fallbacks'.
-    static var allNoticeHeadlines: [String] {
-        var seen = Set<String>()
-        return (noticeRules.map(\.headline) + [problemFallbackHeadline, newsFallbackHeadline]).filter { seen.insert($0).inserted }
-    }
-
-    /// A notice that needs a look but lost nothing: something couldn't be
-    /// read (an attachment, images in a copy). It takes the amber icon;
-    /// other notices keep the grey one (colour pass, owner 2026-10-10).
-    static func isCaution(notice message: String) -> Bool {
-        let lowered = message.localizedLowercase
-        return ["couldn’t be read", "couldn't be read", "could not be read", "can’t read", "can't read", "couldn’t read", "couldn't read"]
-            .contains(where: lowered.contains)
-    }
-
-    /// The pill's words for a notice: short, whatever the sentence.
-    static func headline(forNotice message: String) -> String {
-        for rule in noticeRules where rule.match.contains(where: message.contains) { return rule.headline }
-        let problem = ["couldn’t", "couldn't", "could not", "can’t", "can't", "cannot", "not ", "failed", "unavailable"]
-        return problem.contains(where: message.localizedLowercase.contains) ? problemFallbackHeadline : newsFallbackHeadline
-    }
+    static var allNoticeHeadlines: [String] { Array(Set(NoteNotice.Kind.allCases.map(\.headline))).sorted() }
 
     /// The page's notice without the damaged-recovery sentences the exit
     /// shows as their own items (nil when nothing else is left).

@@ -131,7 +131,7 @@ final class NoteEditorEngine: NSObject, NSTextViewDelegate, NSTextStorageDelegat
     var onActivityChanged: ((Activity, Activity) -> Void)?
     var onWritingToolsDidEnd: (() -> Void)?
     /// A short explanation for the status slot (a refused change).
-    var onNotice: ((String) -> Void)?
+    var onNotice: ((NoteNotice) -> Void)?
     /// Called before a Writing Tools session starts (the session saves and
     /// keeps a version first).
     var onWritingToolsWillBegin: (() -> Bool)?
@@ -964,7 +964,7 @@ final class NoteEditorEngine: NSObject, NSTextViewDelegate, NSTextStorageDelegat
                      selection: NSRange? = nil) -> Bool {
         guard !isReadOnly, rangeIsInStorage(range) else { return false }
         guard activity == .idle else {
-            return refuse(String(localized: "Finish Writing Tools or composing text before editing this note."))
+            return refuse(String(localized: "Finish Writing Tools or composing text before editing this note."), kind: .finishFirst)
         }
         var containsPayloadObject = false
         replacement.enumerateAttribute(.attachment, in: NSRange(location: 0, length: replacement.length)) { value, _, _ in
@@ -1158,7 +1158,7 @@ final class NoteEditorEngine: NSObject, NSTextViewDelegate, NSTextStorageDelegat
         candidateStorage.replaceCharacters(in: replacement, with: insertion)
         let candidate = NoteTextCodec.document(from: candidateStorage, template: template)
         if let failure = onFragmentAdmission?(candidate, items.compactMap(\.staged)) {
-            onNotice?(failure)
+            onNotice?(NoteNotice(kind: .notSaved, detail: failure))
             return false
         }
         // The exact candidate was admitted against the latest draft. Release
@@ -1376,9 +1376,9 @@ final class NoteEditorEngine: NSObject, NSTextViewDelegate, NSTextStorageDelegat
 
     // MARK: Guard
 
-    private func refuse(_ reason: String) -> Bool {
+    private func refuse(_ reason: String, kind: NoteNotice.Kind = .didntWork) -> Bool {
         refusals.append(reason)
-        onNotice?(reason)
+        onNotice?(NoteNotice(kind: kind, detail: reason))
         NSSound.beep()
         return false
     }
@@ -1562,7 +1562,7 @@ final class NoteEditorEngine: NSObject, NSTextViewDelegate, NSTextStorageDelegat
         isWritingToolsSessionActive = true
         setActivity(preserved ? .writingToolsSafe : .writingToolsRefused)
         if !preserved {
-            onNotice?(writingToolsRefusalReason ?? String(localized: "Writing Tools unavailable — couldn't save a safety copy."))
+            onNotice?(NoteNotice(kind: .notAvailable, detail: writingToolsRefusalReason ?? String(localized: "Writing Tools unavailable — couldn't save a safety copy.")))
         }
     }
 
@@ -1599,9 +1599,9 @@ final class NoteEditorEngine: NSObject, NSTextViewDelegate, NSTextStorageDelegat
             }
             if changed || lostObject {
                 writingToolsRecoveries += 1
-                onNotice?(wasBlocked
+                onNotice?(NoteNotice(kind: .notKept, detail: wasBlocked
                     ? String(localized: "Writing Tools changed this note without a safety copy, so its rewrite was not kept.")
-                    : String(localized: "Writing Tools changed an image, checklist or date, so its rewrite was not kept."))
+                    : String(localized: "Writing Tools changed an image, checklist or date, so its rewrite was not kept.")))
             }
         } else if changed {
             onTextChange?()
@@ -1906,7 +1906,7 @@ final class NoteEditorEngine: NSObject, NSTextViewDelegate, NSTextStorageDelegat
                     block.attachmentID = newID
                     block.id = fresh(nil)
                 } else {
-                    onNotice?(String(localized: "An attachment couldn’t be read. Nothing was pasted."))
+                    onNotice?(NoteNotice(kind: .notPasted, detail: String(localized: "An attachment couldn’t be read. Nothing was pasted.")))
                     return nil
                 }
             case .text, .opaque:
@@ -1936,7 +1936,7 @@ final class NoteEditorEngine: NSObject, NSTextViewDelegate, NSTextStorageDelegat
     func pasteDurably(fragmentData data: Data, at selection: NSRange) async -> Bool {
         guard !isReadOnly, activity == .idle, rangeIsInStorage(selection),
               canPasteFragment?() != false else {
-            onNotice?(String(localized: "The note or selection changed. Paste again at the new selection."))
+            onNotice?(NoteNotice(kind: .pasteAgain, detail: String(localized: "The note or selection changed. Paste again at the new selection.")))
             return false
         }
         guard case let .editable(decoded) = NoteContentCodec.decode(data, context: .fragment) else { return false }
@@ -1951,7 +1951,7 @@ final class NoteEditorEngine: NSObject, NSTextViewDelegate, NSTextStorageDelegat
             if let live = staged[id] { payload = live }
             else { payload = await imageProvider?.verifiedBytes(forAttachment: id) }
             guard let payload, payload.id == id, payload.payloadIsVerified else {
-                onNotice?(String(localized: "An attachment couldn’t be read. Nothing was pasted."))
+                onNotice?(NoteNotice(kind: .notPasted, detail: String(localized: "An attachment couldn’t be read. Nothing was pasted.")))
                 return false
             }
             resolved[id] = payload
@@ -1960,7 +1960,7 @@ final class NoteEditorEngine: NSObject, NSTextViewDelegate, NSTextStorageDelegat
               textView === view, view?.selectedRange() == viewSelection,
               canPasteFragment?() != false, document() == before,
               rangeIsInStorage(selection) else {
-            onNotice?(String(localized: "The note or selection changed. Paste again at the new selection."))
+            onNotice?(NoteNotice(kind: .pasteAgain, detail: String(localized: "The note or selection changed. Paste again at the new selection.")))
             return false
         }
         return insertFragment(decoded, at: selection, resolved: resolved)
@@ -1990,7 +1990,7 @@ final class NoteEditorEngine: NSObject, NSTextViewDelegate, NSTextStorageDelegat
         candidateText.replaceCharacters(in: paste.range, with: paste.text)
         let candidate = NoteTextCodec.document(from: candidateText, template: template)
         if let failure = onFragmentAdmission?(candidate, prepared.copied) {
-            onNotice?(failure)
+            onNotice?(NoteNotice(kind: .notSaved, detail: failure))
             return false
         }
         for item in prepared.copied { staged[item.id] = item }
@@ -3572,7 +3572,7 @@ extension NoteEditorEngine {
         guard isPending(request) else { return false }
         let session = request.target
         if let staged = item.staged, let reason = onImportAdmission?(staged) {
-            onNotice?(reason)
+            onNotice?(NoteNotice(kind: .notSaved, detail: reason))
             return false
         }
         pendingSlashFile = nil

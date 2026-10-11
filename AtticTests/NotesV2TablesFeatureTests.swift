@@ -549,7 +549,7 @@ final class NotesV2TablesFeatureTests: XCTestCase {
     func testTabularPasteBecomesATableInOneStepWithPasteAsText() throws {
         let (engine, textView) = makeEngine([.text("Note"), .text("Intro")])
         var notices: [String] = []
-        engine.onNotice = { notices.append($0) }
+        engine.onNotice = { notices.append($0.detail) }
         let end = engine.textStorage.length
         XCTAssertTrue(engine.pastePlainText("Pillar\tWhat happened\nIntegrity\tEncrypted\n", at: NSRange(location: end, length: 0)))
         settle(engine, textView)

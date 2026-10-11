@@ -136,7 +136,7 @@ extension NoteEditorEngine {
         change(&new)
         guard new != old else { return false }
         guard new.isRectangular, new.isWithinLimits else {
-            onNotice?(String(localized: "A table can have at most \(NoteTable.maxColumns) columns and \(NoteTable.maxRows) rows."))
+            onNotice?(NoteNotice(kind: .tableLimit, detail: String(localized: "A table can have at most \(NoteTable.maxColumns) columns and \(NoteTable.maxRows) rows.")))
             return false
         }
         if cell == nil { history.breakCoalescing() }
@@ -149,7 +149,7 @@ extension NoteEditorEngine {
     }
 
     private func refuseTableEdit() -> Bool {
-        onNotice?(String(localized: "Finish Writing Tools or composing text before editing this note."))
+        onNotice?(NoteNotice(kind: .finishFirst, detail: String(localized: "Finish Writing Tools or composing text before editing this note.")))
         NSSound.beep()
         return false
     }
@@ -604,13 +604,13 @@ extension NoteEditorEngine {
             isPastingAsPlainText = true
             defer { isPastingAsPlainText = false }
             let pasted = pastePlainText(sourceText, at: selection)
-            onNotice?(String(localized: "That table is larger than \(NoteTable.maxColumns) columns or \(NoteTable.maxRows) rows, so it was pasted as text."))
+            onNotice?(NoteNotice(kind: .textPasted, detail: String(localized: "That table is larger than \(NoteTable.maxColumns) columns or \(NoteTable.maxRows) rows, so it was pasted as text.")))
             return pasted
         }
         let marker = history.marker()
         guard insertTable(table, replacing: selection, name: String(localized: "Paste"), entering: false) else { return false }
         tablePasteOffer = NoteTablePasteOffer(text: sourceText, selection: selection, steps: marker + 1)
-        onNotice?(NoteTablePasteOffer.notice)
+        onNotice?(NoteNotice(kind: .notice, detail: NoteTablePasteOffer.notice))
         return true
     }
 
@@ -795,7 +795,7 @@ extension NoteEditorEngine {
         let cells = pasted.rows.map(\.cells)
         let height = cells.count, width = cells.map(\.count).max() ?? 0
         guard anchor.row + height <= NoteTable.maxRows, anchor.column + width <= NoteTable.maxColumns else {
-            onNotice?(String(localized: "That paste would make the table larger than \(NoteTable.maxColumns) columns by \(NoteTable.maxRows) rows, so nothing was pasted."))
+            onNotice?(NoteNotice(kind: .notPasted, detail: String(localized: "That paste would make the table larger than \(NoteTable.maxColumns) columns by \(NoteTable.maxRows) rows, so nothing was pasted.")))
             return false
         }
         let applied = changeTable(attachment, name: String(localized: "Paste")) { $0.fill(cells, at: anchor) }
