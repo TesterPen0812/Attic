@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
-"""Install OD-6's assertion policy into the pinned historical test fixtures.
+"""Adapt test-only fixtures for pinned cost hosts without changing their apps.
 
-Do not copy today's fixtures: historical measurement boundaries must stay intact.
+Frame/row and Done fixtures keep their historical measurement boundaries.
+The integration host uses today's overlaid fixtures with its old initializer.
 Exact replacements fail closed if the pinned tests change. App sources and
 correctness assertions are untouched; no Xcode project input is added.
 """
@@ -30,6 +31,19 @@ def policy():
 
 
 def prepare(directory, fixture):
+    if fixture == "integration":
+        # Today's functional fixture is overlaid on the pinned app alongside
+        # the timing fixtures. Its older initializer still needs this owner.
+        path = directory / "AtticTests/NotesPageControllerTests.swift"
+        source = path.read_text()
+        old = "uiState: state, settings: settings)\n"
+        if source.count(old) != 1:
+            raise ValueError(f"{path}: expected exactly one panel initializer")
+        source = source.replace(old, "uiState: state, settings: settings,\n"
+            "                                  subtaskPanels: SubtaskPanelController(store: taskStore, uiState: state, settings: settings))\n")
+        path.write_text(source)
+        print(f"Integration reference initializer adapter: {path}")
+        return
     names = ["TasksFrameCostTests.swift"]
     if fixture == "done":
         names.append("DoneSearchCostTests.swift")
@@ -51,6 +65,6 @@ def prepare(directory, fixture):
 
 if __name__ == "__main__":
     directory, fixture = sys.argv[1:]
-    if fixture not in ("frame-row", "done"):
-        raise ValueError("expected frame-row or done")
+    if fixture not in ("frame-row", "done", "integration"):
+        raise ValueError("expected frame-row, done or integration")
     prepare(Path(directory), fixture)

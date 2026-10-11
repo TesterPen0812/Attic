@@ -21,6 +21,21 @@ def command(args, **kwargs):
 
 
 class CostGatePlumbingTests(unittest.TestCase):
+    def test_integration_adapter_preserves_measurements_and_assertions(self):
+        original = (ROOT / "AtticTests/NotesPageControllerTests.swift").read_text()
+        with tempfile.TemporaryDirectory() as tmp:
+            directory = Path(tmp)
+            path = directory / "AtticTests/NotesPageControllerTests.swift"
+            path.parent.mkdir()
+            path.write_text(original)
+            prepare(directory, "integration")
+            adapted = path.read_text()
+            addition = ",\n                                  subtaskPanels: SubtaskPanelController(store: taskStore, uiState: state, settings: settings)"
+            self.assertEqual(adapted.replace(addition, ""), original)
+            with self.assertRaises(ValueError):
+                prepare(directory, "integration")
+            self.assertEqual(path.read_text(), adapted, "drift fails closed without further edits")
+
     @classmethod
     def setUpClass(cls):
         cls.scratch = tempfile.TemporaryDirectory(prefix="AtticCostPlumbing-")

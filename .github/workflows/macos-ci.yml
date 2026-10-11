@@ -279,6 +279,7 @@ jobs:
             cp "AtticTests/$fixture.swift" "$RUNNER_TEMP/AtticIntegrationPreflight/AtticTests/$fixture.swift"
           done
           git -C "$RUNNER_TEMP/AtticIntegrationPreflight" diff --exit-code -- Attic Attic.xcodeproj
+          python3 Scripts/prepare_cost_reference.py "$RUNNER_TEMP/AtticIntegrationPreflight" integration
           Scripts/xcodebuild_locked.sh build-for-testing -project "$RUNNER_TEMP/AtticIntegrationPreflight/Attic.xcodeproj" \
             -scheme Attic -configuration Local -destination 'platform=macOS' \
             -derivedDataPath "$RUNNER_TEMP/AtticIntegrationPreflightDD" CODE_SIGNING_ALLOWED=NO \
@@ -675,6 +676,7 @@ jobs:
             cp "AtticTests/$fixture.swift" "$RUNNER_TEMP/AtticIntegrationCostReference/AtticTests/$fixture.swift"
           done
           git -C "$RUNNER_TEMP/AtticIntegrationCostReference" diff --exit-code -- Attic Attic.xcodeproj
+          python3 Scripts/prepare_cost_reference.py "$RUNNER_TEMP/AtticIntegrationCostReference" integration
           # Retain the historical fixtures and all measurements. Adapt only
           # their absolute timing assertions to the shared OD-6 policy.
           python3 Scripts/prepare_cost_reference.py "$RUNNER_TEMP/AtticCostBaseline" frame-row
