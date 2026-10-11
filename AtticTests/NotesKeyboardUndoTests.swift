@@ -22,6 +22,23 @@ final class NotesKeyboardUndoTests: XCTestCase {
     private final class KeyWindow: NSPanel {
         override var canBecomeKey: Bool { true }
         override func sendEvent(_ event: NSEvent) {}
+
+        var traceFocusChanges = false
+
+        static func identity(_ responder: NSResponder?) -> String {
+            guard let responder else { return "nil" }
+            return "\(type(of: responder))@\(Unmanaged.passUnretained(responder).toOpaque())"
+        }
+
+        override func makeFirstResponder(_ responder: NSResponder?) -> Bool {
+            let before = firstResponder
+            let result = super.makeFirstResponder(responder)
+            if traceFocusChanges, before !== firstResponder {
+                print("ROUND11B_FOCUS time=\(ProcessInfo.processInfo.systemUptime) from=\(Self.identity(before)) requested=\(Self.identity(responder)) to=\(Self.identity(firstResponder)) result=\(result)")
+                print("ROUND11B_FOCUS_STACK " + Thread.callStackSymbols.joined(separator: " | "))
+            }
+            return result
+        }
     }
 
     /// Who took a key.
@@ -97,7 +114,7 @@ final class NotesKeyboardUndoTests: XCTestCase {
             window.makeKey()
             spin(0.1)
         }
-        print("NOTES_UNDO_KEY policy=\(NSApp.activationPolicy().rawValue) active=\(NSApp.isActive) visible=\(window.isVisible) key=\(window.isKeyWindow) ownsKey=\(NSApp.keyWindow === window)")
+        print("NOTES_UNDO_KEY policy=\(NSApp.activationPolicy().rawValue) active=\(NSApp.isActive) visible=\(window.isVisible) key=\(window.isKeyWindow) ownsKey=\(NSApp.keyWindow === window) fka=\(NSApp.isFullKeyboardAccessEnabled)")
         XCTAssertTrue(window.isKeyWindow)
         XCTAssertTrue(NSApp.keyWindow === window, "the keyboard route must have an actual AppKit key owner")
         return (Harness(window: window, host: host, store: store, noteDraft: noteDraft, toasts: toasts), ids)
@@ -216,7 +233,10 @@ final class NotesKeyboardUndoTests: XCTestCase {
         textView.insertText(" more", replacementRange: textView.selectedRange())
         var fired = 0
 
+        harness.window.traceFocusChanges = true
+        print("ROUND11B_TOAST before-show responder=\(KeyWindow.identity(harness.window.firstResponder))")
         harness.toasts.show("Note deleted", answersUndoKey: false) { fired += 1 }
+        print("ROUND11B_TOAST after-show responder=\(KeyWindow.identity(harness.window.firstResponder))")
         spin()
         assertTextUndoReady(textView, in: harness)
         XCTAssertNotNil(harness.toasts.current)
@@ -234,6 +254,27 @@ final class NotesKeyboardUndoTests: XCTestCase {
         XCTAssertEqual(try press("z", keyCode: 6, .command, in: harness), .firstResponder)
         XCTAssertEqual(fired, 0, "no toast's action ran on ⌘Z")
         XCTAssertFalse(editorText(harness).contains("again"), "the text's own typing was undone")
+    }
+
+    func testToastInsertionReplacementAndExpiryKeepTypingInTheEditor() throws {
+        let (harness, ids) = try makeHarness(titles: ["Alpha"])
+        let editor = try openAndFocus(ids[0], in: harness)
+        for message in ["Note changed", "Task moved"] {
+            harness.toasts.show(message, answersUndoKey: false) {}
+            spin()
+            XCTAssertTrue(harness.window.firstResponder === editor, "showing or replacing a toast keeps the caret")
+            let input = try XCTUnwrap(harness.window.firstResponder as? NSTextView)
+            input.insertText(" typed", replacementRange: input.selectedRange())
+        }
+        XCTAssertEqual(editorText(harness), "Alpha typed typed", "typing reaches the note while the toast is visible")
+        harness.toasts.dismiss()
+        spin()
+        XCTAssertTrue(harness.window.firstResponder === editor, "explicit removal keeps the caret")
+        harness.toasts.holdDuration = 0.05
+        harness.toasts.show("Note changed", answersUndoKey: false) {}
+        spin(0.3)
+        XCTAssertNil(harness.toasts.current)
+        XCTAssertTrue(harness.window.firstResponder === editor, "expiry keeps the caret")
     }
 
     private func assertTextUndoReady(_ view: NoteEditorTextView, in harness: Harness,
