@@ -4,7 +4,7 @@ Archived from `/Users/taha/Developer/attic-px-perf`, base `a1b663f3` plus perf2,
 
 The preserved files live under `/Users/taha/Developer/attic-redesign-assets/repo-archive/perf3/` with their original repository paths. This removes working-tree evidence only; Git history is unchanged. Canvas, sync and schema/migration evidence, mixed closeout bundles, general app-menu screenshots and mixed gallery indexes remain in the repo.
 
-Moved **192 files / 62,939,261 bytes**. Tracked file bytes before archival: **85,682,109**. Detailed post-change size is in the perf3 report.
+Moved **192 files / 62,939,261 bytes**. Tracked file bytes before archival: **85,681,231**. Detailed post-change size is in the perf3 report.
 
 | Original repository path | Bytes | SHA-256 | What it was |
 |---|---:|---|---|
