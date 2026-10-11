@@ -139,9 +139,11 @@ private extension AtticNoteObjectFace {
     var glyphInk: AtticInk { tone == .failure ? .warningText : .icon }
 }
 
-/// A file in a note (p2-13): a quiet content card with the type's glyph,
-/// the name and the size; a failure says so on its second line, with its
-/// actions after it.
+/// A file in a note (p2-13): the approved block shape (owner 2026-09-30,
+/// D-08), the Mono block's recessed fill with no rim at its 10 pt radius,
+/// with the type's glyph, the name and the size; a failure says so on its
+/// second line, with its actions after it. Increase Contrast adds the
+/// block's 1 pt edge, as the Mono block does.
 struct AtticNoteFileCard: View {
     let face: AtticNoteObjectFace
     var width: CGFloat = 300
@@ -155,8 +157,10 @@ struct AtticNoteFileCard: View {
         let shape = RoundedRectangle(cornerRadius: m.cardRadius, style: .continuous)
         let nameX = m.cardPadding + m.cardIconSlot + m.cardIconGap
         ZStack(alignment: .topLeading) {
-            shape.fill(design.tokens.contentCard.color)
-            shape.strokeBorder(design.tokens.contentCardRim.color, lineWidth: AtticHairline.width)
+            shape.fill(design.tokens.recessed.color)
+            if let border = design.tokens.recessedBorder {
+                shape.strokeBorder(border.color, lineWidth: 1)
+            }
             AtticIcon(systemName: face.systemImage, size: m.cardIcon, weight: .regular, ink: face.glyphInk)
                 .frame(width: m.cardIconSlot, height: size.height)
                 .offset(x: m.cardPadding)

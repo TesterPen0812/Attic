@@ -579,21 +579,19 @@ final class TasksRound12Tests: XCTestCase {
         return last.opacity
     }
 
-    /// Owner, 2026-10-06 (revising A15): rows scrolled behind the tabs stay
-    /// faint (never gone); under the bottom stack's glass, whatever its
-    /// height, they are whole, and so are the resting rows.
-    func testRowsShowFaintlyUnderTheTabsAndTheBottomStack() {
+    /// N-6 D (owner 2026-10-11, replacing 2026-10-06): rows scrolled behind
+    /// the tabs are gone; the resting rows are whole. The bottom stack's fade
+    /// is its own mask (`TasksPlainControlsMask`), so this one is whole there.
+    func testRowsAreGoneUnderTheTabsAndWholeAtRest() {
         let height: CGFloat = 520
         let stops = TasksViewport.maskStops(height: height, tabsTop: 80)
         XCTAssertEqual(stops.map(\.location), stops.map(\.location).sorted(), "stops in order")
         for y in stride(from: CGFloat(80), through: 96, by: 1) {
-            let opacity = maskOpacity(stops, at: y, height: height)
-            XCTAssertGreaterThan(opacity, 0.04, "faintly there behind the tabs at \(y)")
-            XCTAssertLessThanOrEqual(opacity, AtticScrollUnderFade.behindText + 0.001, "never readable behind the tabs at \(y)")
+            XCTAssertEqual(maskOpacity(stops, at: y, height: height), 0, accuracy: 0.001, "gone behind the tabs at \(y)")
         }
         for stack in [CGFloat(36), 60, 96, 136] {
             for y in stride(from: height - stack, through: height, by: 1) {
-                XCTAssertEqual(maskOpacity(stops, at: y, height: height), 1, accuracy: 0.001, "whole under the bar at \(y)")
+                XCTAssertEqual(maskOpacity(stops, at: y, height: height), 1, accuracy: 0.001, "the stack's own mask fades it at \(y)")
             }
         }
         XCTAssertEqual(maskOpacity(stops, at: 110, height: height), 1, accuracy: 0.001, "the resting row is whole")
@@ -677,7 +675,8 @@ final class TasksRound12Tests: XCTestCase {
         let shares = try bandShares(.cleanCut)
         XCTAssertGreaterThan(shares.moved, 0.02, "the long list scrolled between the captures (\(shares.moved))")
         XCTAssertLessThan(shares.strongTop, 0.002, "never readable behind the tabs' line (\(shares.strongTop))")
-        XCTAssertGreaterThan(shares.strongBottom, 0.002, "whole under the add bar's glass (\(shares.strongBottom))")
+        // N-6 D (owner 2026-10-11): rows fade out before the add bar.
+        XCTAssertLessThan(shares.strongBottom, 0.002, "nothing under the add bar's glass (\(shares.strongBottom))")
         // Negative control: the same band clipped fails it.
         let clipped = try bandShares(.cleanCut, clipBands: true)
         XCTAssertLessThan(clipped.bottom, 0.0005, "a clipped add bar's band shows nothing (\(clipped.bottom))")

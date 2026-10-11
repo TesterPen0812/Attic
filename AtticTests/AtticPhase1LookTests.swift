@@ -137,9 +137,15 @@ final class AtticPhase1LookTests: XCTestCase {
                 for surface in [PanelSurfaceStyle.glass, .frosted] {
                     let tokens = AtticDesignContext(mode: mode, palette: palette, surface: surface).tokens
                     let label = "\(mode) \(palette) \(surface)"
-                    for ink in [AtticInk.helper, .placeholder, .muted] {
-                        XCTAssertEqual(tokens.ink(ink), secondary, "\(label) \(ink)")
+                    // D-02 (owner, 2026-10-11): one stepped secondary for the
+                    // three roles, softer than Phase 0's near-primary grey;
+                    // Increase Contrast keeps Phase 0's.
+                    for ink in [AtticInk.placeholder, .muted] {
+                        XCTAssertEqual(tokens.ink(ink), tokens.ink(.helper), "\(label) \(ink)")
                     }
+                    XCTAssertNotEqual(tokens.ink(.helper), secondary, label)
+                    let contrasted = AtticDesignContext(mode: mode, palette: palette, surface: surface, increaseContrast: true).tokens
+                    XCTAssertEqual(contrasted.ink(.helper), secondary, "\(label) Increase Contrast")
                     if palette == .original {
                         XCTAssertEqual(tokens.ink(.accentText), secondary, label)
                     } else if mode == .light {

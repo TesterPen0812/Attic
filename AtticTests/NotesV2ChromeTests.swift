@@ -23,7 +23,7 @@ final class NotesV2ChromeTests: XCTestCase {
         XCTAssertEqual(AtticPageButtonMetrics.segment, 24)
         XCTAssertEqual(AtticNoteFormatMetrics.rowCellHeight, 24)
         XCTAssertEqual(AtticNoteMetrics.pillHeight, 32)
-        XCTAssertEqual(AtticNoteMetrics.formatButtonGap, 6)
+        XCTAssertEqual(AtticNoteMetrics.formatButtonGap, 12, "D-15: the spec's gap between separate controls")
         XCTAssertEqual(AtticControlSize.raisedGlyph, 13)
     }
 
@@ -89,13 +89,14 @@ final class NotesV2ChromeTests: XCTestCase {
                                                              showsFormat: showsFormat)
                     let buttons = AtticControlSize.panelButton.width * (showsFormat ? 3 : 2)
                         + (showsFormat ? AtticNoteMetrics.formatButtonGap : 0)
-                    let row = layout.chromeInsets.leading * 2 + buttons + AtticSpacing.s12 * 2 + pill
+                    let row = layout.chromeInsets.leading * 2 + buttons + AtticNoteMetrics.pillMinGap * 2 + pill
                     XCTAssertLessThanOrEqual(row, width + 0.001, "width \(width), corner \(corner), Aa \(showsFormat)")
                     XCTAssertLessThanOrEqual(pill, AtticNoteMetrics.pillMaxWidth)
                 }
             }
         }
-        // The default 320 pt panel: 162 pt for the pill beside Aa.
+        // The default 320 pt panel: 162 pt for the pill beside Aa (D-15's
+        // 12 pt between Aa and New note, 9 pt least around the pill).
         XCTAssertEqual(AtticNoteMetrics.pillMaxWidth(panelWidth: 320, chromeInset: 16, showsFormat: true), 162)
     }
 

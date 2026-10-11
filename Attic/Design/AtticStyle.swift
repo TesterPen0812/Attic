@@ -60,6 +60,10 @@ struct AtticPanelSurface: ViewModifier {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
 
+    /// One Reduced policy (A4 M-07): macOS Reduce Motion or Settings ›
+    /// Animations › Reduced.
+    private var reducesMotion: Bool { reduceMotion || AtticMotionPreference.level == .reduced }
+
     @ViewBuilder
     func body(content: Content) -> some View {
         let shape = Squircle(
@@ -74,7 +78,7 @@ struct AtticPanelSurface: ViewModifier {
                         .transition(.opacity)
                 }
                 .animation(
-                    (reduceMotion || reduceTransparency) ? nil : AtticMotion.background,
+                    (reducesMotion || reduceTransparency) ? nil : AtticMotion.background,
                     value: surfaceAnimationIdentity
                 )
                 // Keep the full glass surface in the native event region.
@@ -102,7 +106,7 @@ struct AtticPanelSurface: ViewModifier {
                     .allowsHitTesting(false)
                     .transition(.opacity)
                     .animation(
-                        (reduceMotion || reduceTransparency) ? nil : AtticMotion.background,
+                        (reducesMotion || reduceTransparency) ? nil : AtticMotion.background,
                         value: surfaceAnimationIdentity
                     )
                 }

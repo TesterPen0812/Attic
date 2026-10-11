@@ -43,16 +43,6 @@ struct AtticChoiceRow: View {
         let fill: AtticRGBA = lit ? design.tokens.selected : .clear
         Button(action: action) {
             HStack(spacing: m.rowGap) {
-                if let check {
-                    Group {
-                        switch check {
-                        case .on: AtticIcon(systemName: "checkmark", size: m.checkSize, weight: .semibold, ink: .glyph)
-                        case .mixed: AtticIcon(systemName: "minus", size: m.checkSize, weight: .semibold, ink: .glyph)
-                        case .off: Color.clear
-                        }
-                    }
-                    .frame(width: m.checkSlot)
-                }
                 if let systemName {
                     AtticIcon(systemName: systemName, size: AtticPopoverMetrics.rowIconSize, ink: .icon)
                         .frame(width: AtticPopoverMetrics.rowIconSlot)
@@ -62,6 +52,17 @@ struct AtticChoiceRow: View {
                 if let detail {
                     AtticText(verbatim: detail, style: .shortcut, ink: .helper)
                         .fixedSize()
+                }
+                // The tick after the item (N-4's card design).
+                if let check {
+                    Group {
+                        switch check {
+                        case .on: AtticIcon(systemName: "checkmark", size: m.checkSize, weight: .semibold, ink: .glyph)
+                        case .mixed: AtticIcon(systemName: "minus", size: m.checkSize, weight: .semibold, ink: .glyph)
+                        case .off: Color.clear
+                        }
+                    }
+                    .frame(width: m.checkSlot)
                 }
             }
             .padding(.horizontal, AtticPopoverMetrics.rowPadding)
@@ -763,17 +764,19 @@ struct AtticTagPicker: View {
     private var rows: some View {
         VStack(alignment: .leading, spacing: 0) {
             ForEach(Array(tags.enumerated()), id: \.element.id) { index, tag in
-                // Each tag in its colour (colour pass, owner 2026-10-10).
-                AtticDropdownRow(title: "#" + tag.name, check: tag.state, detail: tag.detail, isHighlighted: highlighted == index,
-                                 titleInk: colouring.hue(for: tag.name).ink,
+                // Each tag in its colour (colour pass, owner 2026-10-10), its
+                // dot before the name and its tick after (N-4's card).
+                let ink = colouring.hue(for: tag.name).ink
+                AtticDropdownRow(title: "#" + tag.name, check: tag.state, dot: ink, detail: tag.detail, isHighlighted: highlighted == index,
+                                 titleInk: ink,
                                  onHover: hover(index), position: index + 1, itemCount: Self.rowCount(tags: tags.count, create: create)) {
                     onToggle(tag.name)
                 }
                 .id(index)
             }
             if let create {
-                // The + sits in the check column: it lines up with the
-                // ticks, and the name starts where the tags' names do.
+                // The + sits in the dots' column, so the name starts where
+                // the tags' names do.
                 AtticDropdownRow(title: String(localized: "New tag “#\(create)”"), check: .off, checkGlyph: "plus",
                                  isHighlighted: highlighted == tags.count, onHover: hover(tags.count), position: tags.count + 1, itemCount: tags.count + 1) {
                     onCreate(create)
@@ -792,16 +795,16 @@ struct AtticTagPicker: View {
         onHover.map { report in { inside in report(index, inside) } }
     }
 
-    /// The widest row's width (check column, then the name; the create
-    /// row's + is in the check column), the card's insets excluded:
-    /// measured from the names, no layout pass.
+    /// The widest row's width (the dot column, the name, then the tick's
+    /// column at the end; the create row's + is in the dot column), the
+    /// card's insets excluded: measured from the names, no layout pass.
     static func rowsWidth(tags: [String], create: String?, details: [String] = []) -> CGFloat {
         let m = AtticDropdownMetrics.self
         let style = AtticTextStyle.dropdownRow
         let widestDetail = details.map { AtticTextStyle.shortcut.measuredWidth($0) }.max().map { m.detailGap + $0 } ?? 0
         let widestTag = (tags.map { style.measuredWidth("#" + $0) }.max() ?? 0) + widestDetail
         let createRow = create.map { style.measuredWidth(String(localized: "New tag “#\($0)”")) } ?? 0
-        return ceil(m.rowPadding * 2 + m.checkSlot + m.columnGap + max(widestTag, createRow))
+        return ceil(m.rowPadding * 2 + m.dotSlot + m.columnGap + max(widestTag, createRow) + m.columnGap + m.checkSlot)
     }
 }
 
@@ -1104,7 +1107,7 @@ struct AtticComposerStrip<DateContent: View, TagContent: View, PriorityContent: 
                 .atticDropdown(isPresented: $tagsPresented, prefer: .above, label: String(localized: "Tags")) {
                     tagPicker()
                 }
-            AtticStripButton(systemName: "flag", title: String(localized: "Priority"), value: priority, isOpen: priorityPresented,
+            AtticStripButton(systemName: "exclamationmark", title: String(localized: "Priority"), value: priority, isOpen: priorityPresented,
                              identifier: "composer-priority", compact: compact, showsTitle: !iconOnly.contains(2),
                              clearLabel: String(localized: "Clear priority"), open: { priorityPresented = true }, clear: onClearPriority)
                 .fixedSize(horizontal: true, vertical: false)
@@ -1207,6 +1210,19 @@ private struct AtticStripButton: View {
     /// navigation is on), which a page's Tab order can ask for (A10).
     @FocusState private var focused: Bool
 
+    /// The strip's glyphs at one visual density (D-21, icon audit A3-04):
+    /// the calendar's filled header made it the heaviest, so it is drawn
+    /// light; the tag a point smaller; Priority is the list's own "!"
+    /// mark, not a flag.
+    static func glyph(_ systemName: String, size: CGFloat) -> (size: CGFloat, weight: Font.Weight) {
+        switch systemName {
+        case "calendar": (13, .light)
+        case "tag": (12, .regular)
+        case "exclamationmark": (13, .regular)
+        default: (size, .regular)
+        }
+    }
+
     /// The least the button keeps: its name's minimum; a value's icon and
     /// the first characters of a long one (then "…").
     private var labelFloor: CGFloat {
@@ -1245,7 +1261,8 @@ private struct AtticStripButton: View {
         HStack(spacing: 0) {
             Button(action: open) {
                 HStack(spacing: iconLabelGap) {
-                    AtticIcon(systemName: systemName, size: m.iconSize, weight: .regular, ink: isEnabled ? .glyph : .disabledIcon)
+                    let glyph = Self.glyph(systemName, size: m.iconSize)
+                    AtticIcon(systemName: systemName, size: glyph.size, weight: glyph.weight, ink: isEnabled ? .glyph : .disabledIcon)
                     if let value {
                         // A long tag gives way first (the strip keeps to the
                         // bar's width); the full value is the tooltip.

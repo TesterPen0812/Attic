@@ -34,8 +34,9 @@ struct NoteTableFocus: Equatable {
 // MARK: - Drawing
 
 /// The grid as drawn on screen and on paper (sheet 3): a 0.5 pt grid in a
-/// 10 pt rounded card, the header row semibold on its fill, a selection's
-/// tint and the active cell's ring.
+/// 10 pt rounded card, the header row semibold on its fill, the active
+/// cell's soft fill (N-5), and a cell selection's tint with its outline
+/// (there is no caret then, so it keeps the stronger mark).
 @MainActor
 enum NoteTableDrawing {
     typealias M = AtticNoteTableMetrics
@@ -59,6 +60,10 @@ enum NoteTableDrawing {
         if let selection {
             tokens.tableSelectionFill.nsColor.setFill()
             for position in selection.positions { layout.cellRect(position).fill(using: .sourceOver) }
+        }
+        if let active, selection == nil {
+            tokens.tableActiveFill.nsColor.setFill()
+            layout.cellRect(active).fill(using: .sourceOver)
         }
         let visible = dirty ?? bounds
         for row in table.rows.indices {
@@ -87,9 +92,10 @@ enum NoteTableDrawing {
         tokens.tableGrid.nsColor.setStroke()
         card.lineWidth = hairline
         card.stroke()
-        if let active {
-            let ring = NSBezierPath(roundedRect: layout.cellRect(active).insetBy(dx: M.activeRingWidth / 2 - 0.5,
-                                                                                 dy: M.activeRingWidth / 2 - 0.5),
+        if let selection, let first = selection.positions.first {
+            let area = selection.positions.dropFirst().reduce(layout.cellRect(first)) { $0.union(layout.cellRect($1)) }
+            let ring = NSBezierPath(roundedRect: area.insetBy(dx: M.activeRingWidth / 2 - 0.5,
+                                                              dy: M.activeRingWidth / 2 - 0.5),
                                     xRadius: M.activeRingRadius, yRadius: M.activeRingRadius)
             ring.lineWidth = M.activeRingWidth
             tokens.tableActiveRing.nsColor.setStroke()

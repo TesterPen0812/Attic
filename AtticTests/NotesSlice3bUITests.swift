@@ -210,8 +210,9 @@ final class NotesSlice3bUITests: XCTestCase {
                           dy: fragment.layoutFragmentFrame.minY + text.textContainerOrigin.y)
             XCTAssertGreaterThan(attachment.height, 0)
             let m = AtticNoteObjectMetrics.self
-            let objectFrame = controls.ringFrame.insetBy(dx: m.ringOutset + m.ringWidth + m.resizeHitTarget / 2,
-                                                       dy: m.ringOutset + m.ringWidth + m.resizeHitTarget / 2)
+            // F-06b: the ring is on the object's own edge (its view only adds
+            // the resize corner's reach).
+            let objectFrame = controls.ringFrame.insetBy(dx: m.resizeHitTarget / 2, dy: m.resizeHitTarget / 2)
             XCTAssertEqual(objectFrame.minY, attachment.minY, accuracy: 0.5)
             XCTAssertEqual(objectFrame.maxY, attachment.maxY, accuracy: 0.5)
             XCTAssertEqual(objectFrame.minX, attachment.minX, accuracy: 0.5)

@@ -279,14 +279,38 @@ struct AtticDropdownGap: View {
 /// One highlight (fix 1): a list with a keyboard highlight owns it and the
 /// pointer moves it (`onHover`), as in a native menu; with no `onHover` the
 /// row lights while hovered.
+/// A tag row's inline colour dot: an image as wide as the dot column and
+/// the gap after it, the 7 pt dot centred in the column on the capitals'
+/// middle (it sits on the baseline in the text).
+@MainActor
+enum AtticDropdownDot {
+    private static var cache: [NSColor: NSImage] = [:]
+
+    static func image(_ color: NSColor, font: NSFont) -> NSImage {
+        if let image = cache[color] { return image }
+        let m = AtticDropdownMetrics.self
+        let height = max(m.dotSize, font.capHeight)
+        let image = NSImage(size: NSSize(width: m.dotSlot + m.columnGap, height: height), flipped: false) { _ in
+            color.setFill()
+            NSBezierPath(ovalIn: NSRect(x: (m.dotSlot - m.dotSize) / 2, y: (height - m.dotSize) / 2,
+                                        width: m.dotSize, height: m.dotSize)).fill()
+            return true
+        }
+        cache[color] = image
+        return image
+    }
+}
+
 struct AtticDropdownRow: View {
     let title: String
     var systemName: String?
-    /// nil: no check column.
+    /// nil: no check column. The tick sits after the item, at the row's
+    /// end (N-4's card design, owner 2026-10-11: on every dropdown).
     var check: AtticCheckState?
-    /// A glyph drawn in the check column of a row that is never ticked
-    /// (the tag picker's "New tag" +), so its name starts where the other
-    /// rows' names do.
+    /// A colour dot before the name (a tag's hue).
+    var dot: AtticInk?
+    /// A glyph in the dot's column of a row that has no dot (the tag
+    /// picker's "New tag" +), so its name starts where the tags' do.
     var checkGlyph: String?
     /// A priority's mark column (`.none` keeps the column empty).
     var mark: AtticPriority?
@@ -306,7 +330,7 @@ struct AtticDropdownRow: View {
     @Environment(\.atticDesign) private var design
     @State private var hovered = false
 
-    init(title: String, systemName: String? = nil, check: AtticCheckState? = nil, checkGlyph: String? = nil,
+    init(title: String, systemName: String? = nil, check: AtticCheckState? = nil, dot: AtticInk? = nil, checkGlyph: String? = nil,
          mark: AtticPriority? = nil,
          detail: String? = nil, match: String? = nil, isHighlighted: Bool = false, titleInk: AtticInk = .body,
          titleFont: Font? = nil, onHover: ((Bool) -> Void)? = nil, position: Int? = nil, itemCount: Int? = nil, scrollID: String? = nil, action: @escaping () -> Void) {
@@ -316,6 +340,7 @@ struct AtticDropdownRow: View {
         self.title = title
         self.systemName = systemName
         self.check = check
+        self.dot = dot
         self.checkGlyph = checkGlyph
         self.mark = mark
         self.detail = detail
@@ -341,20 +366,14 @@ struct AtticDropdownRow: View {
         Button(action: action) {
             HStack(spacing: 0) {
                 HStack(spacing: m.columnGap) {
-                    if let check {
-                        Group {
-                            switch check {
-                            case .on: AtticIcon(systemName: "checkmark", size: m.checkSize, weight: .semibold, ink: .glyph)
-                            case .mixed: AtticIcon(systemName: "minus", size: m.checkSize, weight: .semibold, ink: .glyph)
-                            case .off:
-                                if let checkGlyph {
-                                    AtticIcon(systemName: checkGlyph, size: m.checkSize, weight: .semibold, ink: .glyph)
-                                } else {
-                                    Color.clear
-                                }
-                            }
-                        }
-                        .frame(width: m.checkSlot)
+                    if dot != nil, titleFont == nil, match?.isEmpty ?? true {
+                        // The dot is set inline in the name's own text (one
+                        // view per row: the tag picker opens with a row per
+                        // tag and its open cost is gated).
+                        dottedName
+                    } else if let checkGlyph {
+                        AtticIcon(systemName: checkGlyph, size: m.checkSize, weight: .semibold, ink: .glyph)
+                            .frame(width: m.dotSlot)
                     }
                     if let mark {
                         AtticPriorityMark(priority: mark).frame(width: m.markSlot)
@@ -363,12 +382,25 @@ struct AtticDropdownRow: View {
                         AtticIcon(systemName: systemName, size: m.iconSize, ink: .icon)
                             .frame(width: m.iconSlot)
                     }
-                    name
+                    if !(dot != nil && titleFont == nil && (match?.isEmpty ?? true)) {
+                        name
+                    }
                 }
-                Spacer(minLength: detail == nil ? 0 : m.detailGap)
+                Spacer(minLength: detail == nil ? (check == nil ? 0 : m.columnGap) : m.detailGap)
                 if let detail {
                     AtticText(verbatim: detail, style: .shortcut, ink: .helper)
                         .fixedSize()
+                }
+                // An unticked row draws nothing there: its column is room the
+                // card's width already keeps (the tag picker opens with a row
+                // per tag, so every view a row saves counts).
+                if let check, check != .off {
+                    AtticIcon(systemName: check == .on ? "checkmark" : "minus", size: m.checkSize, weight: .semibold, ink: .glyph)
+                        .frame(width: m.checkSlot)
+                        .padding(.leading, detail == nil ? 0 : m.columnGap)
+                } else if check == .off, detail != nil {
+                    // Details stay in one column, ticked or not.
+                    Color.clear.frame(width: m.checkSlot + m.columnGap, height: 1)
                 }
             }
             .padding(.horizontal, m.rowPadding)
@@ -406,6 +438,20 @@ struct AtticDropdownRow: View {
                                   selected: isHighlighted, check: check,
                                   position: position, count: itemCount, action: action)
         }
+    }
+
+    /// A tag row's name with its colour dot set before it, in one text: the
+    /// dot's image is the dot column and the gap wide, so the name starts
+    /// where the "New tag" row's does.
+    private var dottedName: some View {
+        let style = AtticTextStyle.dropdownRow
+        let color = design.tokens.color(dot ?? titleInk)
+        return (Text(Image(nsImage: AtticDropdownDot.image(NSColor(color), font: style.nsFont))) + Text(verbatim: title))
+            .font(style.font)
+            .foregroundStyle(design.tokens.color(titleInk))
+            .lineLimit(1)
+            .truncationMode(.tail)
+            .accessibilityLabel(title)
     }
 
     @ViewBuilder
@@ -855,6 +901,8 @@ final class AtticOverlayHostingView: NSHostingView<AnyView> {
 @MainActor
 final class AtticDropdownStageModel: ObservableObject {
     @Published var shown = false
+    /// Uncovered (the reveal ran): set as it opens, kept while it fades out.
+    @Published var revealed = false
     @Published var side: AtticDropdownLayout.Side = .below
     /// The card's width once the width rule capped it (nil: its content's).
     @Published var width: CGFloat?
@@ -920,9 +968,94 @@ private struct AtticDropdownFocusModifier: ViewModifier {
     }
 }
 
-/// The card on screen, with the pop-over preset's motion: it springs in
-/// from the edge by its anchor (Lively by default) and tucks away; a fade
-/// under Reduce Motion or Animations: Reduced. Only transforms and opacity
+/// How a dropdown card opens (N-4, owner 2026-10-11). The owner picked
+/// B, the vertical unfold, as an experiment; A, the scale from the anchor,
+/// is kept: `current` is the one switch for every card (the E1 stage, the
+/// `/` list, the link and date cards).
+///
+/// - `unfold` (B): the card is uncovered from its anchor's edge down (or
+///   up, for a card above its anchor), M/E, as it fades in, F/E.
+/// - `scale` (A): it grows from 0.92 at its anchor's corner, M/E, as it
+///   fades in, F/E.
+///
+/// Both close with a plain F/E fade (no reverse motion). Reduced: the F/E
+/// fade both ways. Only the mask, the transform and the opacity animate;
+/// the card is measured once at its final size.
+enum AtticDropdownReveal: Sendable {
+    case unfold
+    case scale
+
+    static let current: AtticDropdownReveal = .unfold
+
+    /// Option A's starting scale (the drafted menu behaviour).
+    static let startScale: CGFloat = 0.92
+
+    /// The reveal (the unfold or the grow): M/E.
+    static var revealAnimation: Animation { AtticMotionScale.easeOut(AtticMotionScale.standard) }
+
+    /// The opacity: F/E in, F/E out (Reduced too).
+    static var fadeAnimation: Animation { AtticMotionScale.easeOut(AtticMotionScale.fast) }
+
+    /// The transition of a card that is inserted and removed (the `/` list,
+    /// the link and date cards): the reveal and the fade in, the fade out.
+    static func transition(fromTop: Bool, reduceMotion: Bool, style: AtticDropdownReveal = current) -> AnyTransition {
+        if reduceMotion { return .opacity.animation(fadeAnimation) }
+        let reveal = AnyTransition.modifier(active: AtticDropdownRevealEffect(progress: 0, fromTop: fromTop, style: style),
+                                            identity: AtticDropdownRevealEffect(progress: 1, fromTop: fromTop, style: style))
+        return .asymmetric(insertion: reveal.animation(revealAnimation).combined(with: .opacity.animation(fadeAnimation)),
+                           removal: .opacity.animation(AtticMotionScale.exit))
+    }
+}
+
+/// The reveal at `progress` (0 covered, 1 open). The unfold's mask reaches
+/// `AtticDropdownMetrics.shadowRoom` past the card on every side, so the
+/// open card's shadow is never cut.
+struct AtticDropdownRevealEffect: ViewModifier, Animatable {
+    var progress: CGFloat
+    let fromTop: Bool
+    let style: AtticDropdownReveal
+
+    var animatableData: CGFloat {
+        get { progress }
+        set { progress = newValue }
+    }
+
+    func body(content: Content) -> some View {
+        let room = AtticDropdownMetrics.shadowRoom
+        switch style {
+        case .unfold:
+            content.mask {
+                AtticDropdownUnfoldMask(progress: progress, fromTop: fromTop, edgeRoom: room)
+                    .padding(-room)
+            }
+        case .scale:
+            content.scaleEffect(AtticDropdownReveal.startScale + (1 - AtticDropdownReveal.startScale) * progress,
+                                anchor: fromTop ? .topLeading : .bottomLeading)
+        }
+    }
+}
+
+/// The unfold's mask: the room above the card (or below it, unfolding up)
+/// is always uncovered, then `progress` of the rest from that edge.
+struct AtticDropdownUnfoldMask: Shape {
+    var progress: CGFloat
+    let fromTop: Bool
+    let edgeRoom: CGFloat
+
+    var animatableData: CGFloat {
+        get { progress }
+        set { progress = newValue }
+    }
+
+    func path(in rect: CGRect) -> Path {
+        let shown = min(rect.height, edgeRoom + max(0, min(1, progress)) * max(0, rect.height - edgeRoom))
+        return Path(CGRect(x: rect.minX, y: fromTop ? rect.minY : rect.maxY - shown, width: rect.width, height: shown))
+    }
+}
+
+/// The card on screen, with the dropdown's reveal (`AtticDropdownReveal`):
+/// it unfolds (or grows) from the edge by its anchor and fades in, and
+/// fades out as it closes. Only the mask or transform and the opacity
 /// animate, in this host alone.
 struct AtticDropdownStage: View {
     @ObservedObject var model: AtticDropdownStageModel
@@ -932,7 +1065,6 @@ struct AtticDropdownStage: View {
     @Environment(\.atticDesign) private var design
 
     var body: some View {
-        let preset = AtticMotionPreset.popover
         let reduce = design.reduceMotion
         // A card below its anchor comes down from its top edge; above it, up
         // from its bottom edge.
@@ -943,11 +1075,15 @@ struct AtticDropdownStage: View {
         }
             .environment(\.atticDropdownHeight, model.height)
             .environment(\.atticDropdownWidth, model.width)
-            .scaleEffect(model.shown ? 1 : preset.hiddenScale(reduceMotion: reduce),
-                         anchor: fromTop ? .topLeading : .bottomLeading)
-            .offset(y: model.shown || reduce ? 0 : (fromTop ? -preset.rise : preset.rise))
-            .opacity(model.shown ? 1 : 0)
-            .animation(preset.animation(reduceMotion: reduce, showing: model.shown), value: model.shown)
+            // The reveal runs once, as it opens (it stays open while the
+            // card fades out); Reduced has none.
+            .animation(reduce ? nil : AtticDropdownReveal.revealAnimation) {
+                $0.modifier(AtticDropdownRevealEffect(progress: model.revealed || reduce ? 1 : 0, fromTop: fromTop,
+                                                      style: AtticDropdownReveal.current))
+            }
+            .animation(model.shown ? AtticDropdownReveal.fadeAnimation : AtticMotionScale.exit) {
+                $0.opacity(model.shown ? 1 : 0)
+            }
             .environment(\.atticDropdownFocusRequest, model.focusRequest)
             .padding(AtticDropdownMetrics.shadowRoom)
     }
@@ -989,6 +1125,7 @@ final class AtticDropdownPresenter {
     private var contentKeyHandler: ((NSEvent) -> Bool)?
     var label = ""
     var design = AtticDesignContext()
+    var tagColouring = AtticTagColouring()
     var content = AnyView(EmptyView())
 
     private weak var anchor: NSView?
@@ -1012,6 +1149,7 @@ final class AtticDropdownPresenter {
                 self?.grow(toWidth: width)
             } : nil)
             .environment(\.atticDropdownRegisterKeys, { [weak self] handler in self?.contentKeyHandler = handler })
+            .environment(\.atticTagColouring, tagColouring)
             .atticDesign(design))
     }
 
@@ -1027,6 +1165,7 @@ final class AtticDropdownPresenter {
         // opening's request must not focus the new card early (R3-01).
         stage.focusRequest = 0
         stage.shown = false
+        stage.revealed = false
         stage.width = nil
         stage.height = nil
         stage.side = prefer
@@ -1063,6 +1202,7 @@ final class AtticDropdownPresenter {
             guard let self, self.isOpen else { return }
             if self.takesKeyboard, self.stage.focusRequest == 0 { self.takeKeyboard() }
             self.stage.shown = true
+            self.stage.revealed = true
         }
     }
 
@@ -1362,6 +1502,9 @@ struct AtticDropdownAnchor: NSViewRepresentable {
         presenter.contentHeight = contentHeight
         presenter.contentWidth = contentWidth
         presenter.design = design
+        // The card is hosted apart from the page: it takes the tag colours
+        // from where it opens, so a tag's dot is the hue its row shows.
+        presenter.tagColouring = context.environment.atticTagColouring
         guard isPresented else {
             if presenter.isOpen || presenter.wantsOpen { presenter.closeAfterViewUpdate() }
             return

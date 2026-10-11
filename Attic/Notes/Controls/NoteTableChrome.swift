@@ -170,13 +170,12 @@ final class NoteTableChrome: NSObject {
     private func setShown(_ indicator: NSView, _ shown: Bool) {
         let target: CGFloat = shown ? 1 : 0
         guard abs(indicator.alphaValue - target) > 0.01 else { return }
-        if NSWorkspace.shared.accessibilityDisplayShouldReduceMotion {
-            indicator.alphaValue = target
-        } else {
-            NSAnimationContext.runAnimationGroup { context in
-                context.duration = shown ? 0.12 : 0.3
-                indicator.animator().alphaValue = target
-            }
+        // One Reduced policy (A4 M-07): the app's setting or macOS's; an
+        // indicator is a fade, so F/E either way.
+        NSAnimationContext.runAnimationGroup { context in
+            context.duration = AtticMotionScale.fast
+            context.timingFunction = AtticMotionScale.easeOutTimingFunction
+            indicator.animator().alphaValue = target
         }
     }
 

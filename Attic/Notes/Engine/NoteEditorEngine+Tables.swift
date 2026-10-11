@@ -840,7 +840,7 @@ extension NoteEditorEngine {
             }
             return changeTable(attachment, name: NoteFormatCommand.mark(kind).title) { table in
                 for position in range.positions where table.contains(position) {
-                    table[position] = Self.cell(table[position], settingMark: kind, on: !allOn, url: url)
+                    table[position] = Self.cell(table[position], settingMark: kind, on: forced ?? !allOn, url: url)
                 }
             }
         }
@@ -849,7 +849,7 @@ extension NoteEditorEngine {
         if selection.length == 0 {
             // No selection: the next characters typed take the mark.
             var typing = view.editor.typingAttributes
-            let on = typing[.noteMark(kind)] == nil
+            let on = forced ?? (typing[.noteMark(kind)] == nil)
             typing[.noteMark(kind)] = on ? (url ?? true) as Any : nil
             let base = (typing[.font] as? NSFont) ?? style.bodyFont
             var marks: [NoteMark.Kind: Any] = [:]
@@ -884,7 +884,7 @@ extension NoteEditorEngine {
         for mark in cell.marks where mark.kind == kind {
             for index in mark.offset..<min(units.count, mark.offset + mark.length) {
                 flags[index] = true
-                urls[index] = mark.url
+                urls[index] = mark.payload
             }
         }
         for index in max(0, span.location)..<min(units.count, NSMaxRange(span)) where units[index] != NoteDocument.objectUnit {
@@ -899,7 +899,7 @@ extension NoteEditorEngine {
             if marked, start == nil { start = index }
             let breaks = index == units.count || !marked || (start != nil && urls[index] != urls[start!])
             if breaks, let begin = start, index > begin {
-                result.marks.append(NoteMark(kind, offset: begin, length: index - begin, url: urls[begin]))
+                result.marks.append(NoteMark(kind, offset: begin, length: index - begin, value: urls[begin]))
                 start = marked ? index : nil
             }
         }

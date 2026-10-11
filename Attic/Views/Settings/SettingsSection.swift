@@ -153,8 +153,9 @@ enum SettingsVisibility {
     /// Under Haptics and Animations: what each does, and why motion is
     /// reduced whatever Animations says while the Mac's Reduce Motion is on.
     static func behaviourFootnote(systemReducesMotion: Bool) -> String {
+        // One line per row (D-22): what Haptics does, then Animations.
         systemReducesMotion
-            ? String(localized: "Haptics: a light tap on the trackpad when you complete a task or drop something into place. Reduce Motion is on in System Settings, so animations are reduced.")
-            : String(localized: "Haptics: a light tap on the trackpad when you complete a task or drop something into place. Lively springs things in and away, Subtle does the same more quietly, and Reduced fades instead of moving.")
+            ? String(localized: "Haptics: a light tap on the trackpad when you complete a task or drop something into place.\nAnimations: Reduce Motion is on in System Settings, so they are reduced.")
+            : String(localized: "Haptics: a light tap on the trackpad when you complete a task or drop something into place.\nAnimations: Lively springs things in and away, Subtle does the same more quietly, Reduced fades instead of moving.")
     }
 }

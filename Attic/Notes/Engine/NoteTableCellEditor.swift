@@ -74,7 +74,7 @@ final class NoteTableCellEditor: NSTextView, NSTextViewDelegate {
         isHeader = header
         guard let table else { return }
         let style = table.style
-        insertionPointColor = style.bodyColor
+        insertionPointColor = style.caretColor
         typingAttributes = style.tableCellAttributes(header: header, alignment: alignment(for: table))
         isEditable = table.engine?.isReadOnly == false
         if let engine = table.engine {

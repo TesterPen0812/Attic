@@ -475,7 +475,7 @@ final class NotesFormatControlsTests: XCTestCase {
         textView.setSelectedRange(NSRange(location: (textView.string as NSString).length, length: 0))
         type("\n/", textView)
         XCTAssertTrue(controls.slashModel.shown)
-        XCTAssertEqual(controls.slashModel.items.first?.kind, .checklist, "most used first")
+        XCTAssertEqual(controls.slashModel.items.first?.kind, .body, "D-18: the text styles first, Body then Title")
         XCTAssertTrue(controls.handleCommand(#selector(NSResponder.moveDown(_:))))
         XCTAssertEqual(controls.slashModel.highlightedKind, .title)
         XCTAssertTrue(controls.handleCommand(#selector(NSResponder.moveUp(_:))))
@@ -1334,23 +1334,24 @@ final class NotesFormatControlsTests: XCTestCase {
         XCTAssertFalse(controls.handleKey(escape(in: textView.window!)), "with the row closed, it isn't the chain's")
         XCTAssertTrue(textView.window?.firstResponder === textView, "the note keeps the keyboard")
 
-        // The selection bar first: Esc is the text view's (it hides the bar),
-        // and the row stays open.
+        // D-06: with the row open, a selection's marks are on the row and
+        // the selection bar stays away, so Esc closes the row.
         controls.isFormatBarOpen = true
         textView.setSelectedRange(range("most people", textView))
         controls.refresh()
-        XCTAssertTrue(controls.formatModel.barShown, "marks stay on the selection bar while the row is open")
-        XCTAssertFalse(controls.handleKey(escape(in: textView.window!)))
-        XCTAssertEqual(closed, 1)
-        XCTAssertTrue(controls.isFormatBarOpen)
+        XCTAssertFalse(controls.formatModel.barShown, "one format surface: the marks are on the row (D-06)")
+        XCTAssertTrue(controls.formatModel.snapshot.hasTextSelection)
+        XCTAssertTrue(controls.handleKey(escape(in: textView.window!)))
+        XCTAssertEqual(closed, 2)
 
         // The style list first: Esc closes the list only.
+        controls.isFormatBarOpen = true
         textView.setSelectedRange(NSRange(location: 20, length: 0))
         controls.refresh()
         controls.formatModel.rowStyleListOpen = true
         XCTAssertTrue(controls.handleKey(escape(in: textView.window!)))
         XCTAssertFalse(controls.formatModel.rowStyleListOpen)
-        XCTAssertEqual(closed, 1, "the row stays")
+        XCTAssertEqual(closed, 2, "the row stays")
     }
 
     func testEscInACardClosesTheCardOnlyAndIsUsedUp() throws {

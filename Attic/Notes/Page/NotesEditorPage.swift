@@ -75,10 +75,11 @@ struct NotesEditorPage: View {
     static let libraryEdge: Edge = .leading
     static let noteEdge: Edge = .trailing
 
-    /// The springy slide for a new or another note; nil for the note the
-    /// page opens on (its session starting, at once or after recovery).
+    /// The slide (L/S, the app's navigation; Notes' slower spring is gone,
+    /// A4 M-02) for a new or another note; nil for the note the page opens
+    /// on (its session starting, at once or after recovery).
     static func noteSlideAnimation(hasShownNote: Bool, reduceMotion: Bool) -> Animation? {
-        hasShownNote ? AtticMotionPreset.slide.springy(reduceMotion: reduceMotion) : nil
+        hasShownNote ? AtticMotionPreset.slide.animation(reduceMotion: reduceMotion) : nil
     }
 
     static func libraryButtonGlyph(libraryShown: Bool) -> String {
@@ -94,6 +95,8 @@ struct NotesEditorPage: View {
     private var topInset: CGFloat { layout.headerBottom + AtticNoteMetrics.titleTopGap }
     /// The last line rests 12 above the bottom row.
     private var bottomInset: CGFloat { AtticSpacing.s12 }
+    /// A fade's edge at the viewport's own end (the controls start there).
+    static let viewportEdge: CGFloat = 0.5
     /// The bottom row's top, up from the panel's bottom edge.
     private var bottomControls: CGFloat { layout.chromeInsets.bottom + buttonHeight }
     private var noticeClearance: CGFloat {
@@ -121,10 +124,11 @@ struct NotesEditorPage: View {
         // while text is being composed, as the button does).
         .background(NotesPageSwipeMonitor(isLibraryPresented: controller.isLibraryPresented) { toggleLibrary() }
             .accessibilityHidden(true))
-        // Springy slides between the note and All notes, and for a new or
-        // another note (keystrokes are never held back: the text view takes
-        // the keyboard at once, and nothing here animates per keystroke).
-        .animation(AtticMotionPreset.slide.springy(reduceMotion: design.reduceMotion), value: controller.isLibraryPresented)
+        // The app's navigation slide between the note and All notes, and
+        // for a new or another note (keystrokes are never held back: the
+        // text view takes the keyboard at once, and nothing here animates
+        // per keystroke).
+        .animation(AtticMotionPreset.slide.animation(reduceMotion: design.reduceMotion), value: controller.isLibraryPresented)
         .animation(Self.noteSlideAnimation(hasShownNote: hasShownNote, reduceMotion: design.reduceMotion),
                    value: controller.active?.id)
         .onChange(of: controller.active?.id) { _, id in
@@ -144,6 +148,7 @@ struct NotesEditorPage: View {
             chrome.leaveEditor = { forward in leaveEditor(forward: forward) }
             #if DEBUG
             chrome.captureToggleLibrary = { toggleLibrary() }
+            chrome.captureImport = { [controller] urls in controller.importFiles(urls) }
             #endif
             if keyMonitor == nil {
                 keyMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { event in
@@ -286,7 +291,10 @@ struct NotesEditorPage: View {
                 // F-13: the editor ends above the footer. Content insets alone
                 // only provide scroll-to-end room; they do not stop intermediate
                 // lines and attachment views drawing under the glass buttons.
-                .atticScrollUnderFade(plainText: [], topEdge: layout.scrollEdgeFadeTop, bottomEdge: 0)
+                // N-6 D: the text fades out before the header and before the
+                // bottom row, so none of it sits under the glass.
+                .atticControlsFade(top: layout.headerBottom, topRamp: AtticNoteMetrics.titleTopGap,
+                                   bottom: Self.viewportEdge, bottomRamp: bottomInset)
                 .padding(.bottom, bottomControls)
                 .accessibilityIdentifier("note-editor")
                 .accessibilitySortPriority(3)
@@ -338,9 +346,14 @@ struct NotesEditorPage: View {
     private var bottomButtons: some View {
         Group {
             HStack(spacing: 0) {
+                // The right chevron is the way back to the note, which sits
+                // to the right of All notes (the pages slide that way), so it
+                // says so (icon audit A3-09).
                 AtticRaisedButton(systemName: Self.libraryButtonGlyph(libraryShown: controller.isLibraryPresented),
-                                  label: controller.isLibraryPresented ? "Back" : "All notes",
-                                  help: allNotesHelp, emphasisedGlyph: darkGlyphs) {
+                                  label: controller.isLibraryPresented ? "Return to note" : "All notes",
+                                  help: allNotesHelp,
+                                  glyphOffsetY: controller.isLibraryPresented ? 0 : AtticRaisedButtonMetrics.stackGlyphOffsetY,
+                                  emphasisedGlyph: darkGlyphs) {
                     toggleLibrary()
                 }
                 .keyboardShortcut("l", modifiers: [.command, .shift])
@@ -348,24 +361,26 @@ struct NotesEditorPage: View {
                 .modifier(NotesKeyboardStop(stop: .allNotes, enabled: bottomStops, focus: $bottomFocus))
                 .accessibilityIdentifier("notes-all-notes")
                 .accessibilitySortPriority(1)
-                Spacer(minLength: AtticSpacing.s12)
+                Spacer(minLength: AtticNoteMetrics.pillMinGap)
                 if !controller.isLibraryPresented, let session = controller.active {
                     NoteStatusSlot(controller: controller, store: noteStore, session: session, damaged: damagedRecovery,
                                    maxWidth: AtticNoteMetrics.pillMaxWidth(
                                        panelWidth: layout.panelSize.width, chromeInset: layout.chromeInsets.leading,
-                                       showsFormat: showsEditor && controller.active?.isReadOnly == false))
+                                       showsFormat: showsFormatButton))
                         .noteFormatRowLeaving(.status)
                         .accessibilitySortPriority(2)
                         .transition(.opacity)
                 }
-                Spacer(minLength: AtticSpacing.s12)
-                if showsEditor, controller.active?.isReadOnly == false {
+                Spacer(minLength: AtticNoteMetrics.pillMinGap)
+                if showsFormatButton {
                     formatButton
                         .modifier(NotesKeyboardStop(stop: .format, enabled: bottomStops, focus: $bottomFocus))
                         .padding(.trailing, AtticNoteMetrics.formatButtonGap)
                         .transition(.opacity)
                 }
                 AtticRaisedButton(systemName: "square.and.pencil", label: "New note", help: String(localized: "New note (⌘N)"),
+                                  glyphOffsetY: AtticRaisedButtonMetrics.newNoteGlyphOffset.height,
+                                  glyphOffsetX: AtticRaisedButtonMetrics.newNoteGlyphOffset.width,
                                   emphasisedGlyph: darkGlyphs) {
                     newNote()
                 }
@@ -376,6 +391,13 @@ struct NotesEditorPage: View {
             }
             .frame(height: buttonHeight)
         }
+    }
+
+    /// Aa shows on an editable note with text under its title (owner,
+    /// 2026-10-11: on a title-only note it waits for the body), or while its
+    /// format row is open.
+    private var showsFormatButton: Bool {
+        showsEditor && controller.active?.isReadOnly == false && (chrome.hasBody || chrome.formatRow.isOpen)
     }
 
     /// Aa (OD-14, p2-36 draft 1): the bottom row turns into the format row
@@ -393,7 +415,7 @@ struct NotesEditorPage: View {
 
     /// The stops in order: the text, then the bottom row's controls.
     private var keyboardStops: [NotesKeyboardOrder.Stop] {
-        NotesKeyboardOrder.stops(format: showsEditor && controller.active?.isReadOnly == false)
+        NotesKeyboardOrder.stops(format: showsFormatButton)
     }
 
     /// ⌃Tab or ⌃⇧Tab with no selection bar: the next or previous control.
@@ -468,7 +490,7 @@ struct NotesEditorPage: View {
     private var allNotesHelp: String {
         guard controller.isLibraryPresented else { return String(localized: "All notes (⇧⌘L)") }
         let title = controller.active.map { $0.engine.lineText(at: 0).trimmingCharacters(in: .whitespaces) } ?? ""
-        return title.isEmpty ? String(localized: "Back (⇧⌘L)") : String(localized: "Back to \(title) (⇧⌘L)")
+        return title.isEmpty ? String(localized: "Return to note (⇧⌘L)") : String(localized: "Return to \(title) (⇧⌘L)")
     }
 
     /// Keys whose commands live in the note's menu (the menu shows them;
@@ -824,11 +846,12 @@ private struct NoteStatusSlot: View {
                     showingDetails = true
                 }
                 .id(key)
-                .transition(design.reduceMotion ? .opacity
-                    : .opacity.combined(with: .scale(scale: 0.86)).combined(with: .offset(y: 8)))
+                // The overlays' one recipe (A4 M-03): a 4 pt rise and a
+                // 0.96 grow (M/S), leaving by opacity (F/E).
+                .transition(AtticMotionScale.overlayTransition(reduceMotion: design.reduceMotion, from: .bottom))
             }
         }
-        .animation(AtticMotionPreset.popover.springy(reduceMotion: design.reduceMotion), value: key)
+        .animation(AtticMotionScale.overlayAnimation(reduceMotion: design.reduceMotion), value: key)
         .popover(isPresented: $showingDetails, arrowEdge: .top) {
             AtticStatusDetails(items: items)
         }

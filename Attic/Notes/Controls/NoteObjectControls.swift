@@ -123,15 +123,37 @@ final class NoteObjectControls: NSObject, NoteObjectInteraction {
     func updateSelection() {
         guard let textView else { return }
         guard let (object, range) = selected, let rect = engine.rect(for: range) else {
+            hideTextSelection(false)
             if !selectionView.isHidden { fade(selectionView, in: false) }
             return
         }
         ringUpdateCount += 1
+        hideTextSelection(true)
         let resizable = object is NoteImageAttachment && engine.validate(.size(1), objectID: object.objectID).enabled
         selectionView.show(objectRect: rect, resizable: resizable,
-                           cornerRadius: object is NoteFileAttachment ? AtticNoteObjectMetrics.cardRadius : AtticRadius.image,
+                           // The object's own corners (F-06b): the card's 10;
+                           // an image is drawn square, so its ring is too.
+                           cornerRadius: object is NoteFileAttachment ? AtticNoteObjectMetrics.cardRadius : 0,
                            in: textView)
         if selectionView.isHidden || selectionView.alphaValue < 1 { fade(selectionView, in: true) }
+    }
+
+    /// A selected object shows its ring only: the text selection's own
+    /// highlight behind the attachment showed round it as a second, blue
+    /// ring (F-06b). Any other selection keeps the system's highlight.
+    private var savedSelectionAttributes: [NSAttributedString.Key: Any]?
+
+    private func hideTextSelection(_ hide: Bool) {
+        guard let textView else { return }
+        if hide, savedSelectionAttributes == nil {
+            savedSelectionAttributes = textView.selectedTextAttributes
+            var clear = textView.selectedTextAttributes
+            clear[.backgroundColor] = NSColor.clear
+            textView.selectedTextAttributes = clear
+        } else if !hide, let saved = savedSelectionAttributes {
+            textView.selectedTextAttributes = saved
+            savedSelectionAttributes = nil
+        }
     }
 
     private func layoutDidChange() {
@@ -322,7 +344,8 @@ final class NoteObjectControls: NSObject, NoteObjectInteraction {
             return
         }
         NSAnimationContext.runAnimationGroup { context in
-            context.duration = AtticMotionPreset.hover.duration
+            context.duration = AtticMotionScale.fast
+            context.timingFunction = AtticMotionScale.easeOutTimingFunction
             view.animator().alphaValue = showing ? 1 : 0
         } completionHandler: {
             MainActor.assumeIsolated { if !showing, view.alphaValue == 0 { view.isHidden = true } }
@@ -383,24 +406,28 @@ final class NoteObjectSelectionView: NSView {
 
     private func place(_ objectRect: CGRect) {
         let m = AtticNoteObjectMetrics.self
-        let outset = m.ringOutset + m.ringWidth
         let room = m.resizeHitTarget / 2
-        frame = objectRect.insetBy(dx: -outset - room, dy: -outset - room)
+        frame = objectRect.insetBy(dx: -room, dy: -room)
         let size = m.resizeHitTarget
-        handle.frame = NSRect(x: bounds.maxX - room - outset - size / 2, y: bounds.maxY - room - outset - size / 2,
+        handle.frame = NSRect(x: bounds.maxX - room - size / 2, y: bounds.maxY - room - size / 2,
                               width: size, height: size)
         needsDisplay = true
     }
 
+    /// The ring's path: the object's own rounded rectangle, the stroke
+    /// wholly inside its edge (F-06b).
+    static func ringPath(objectRect: CGRect, cornerRadius: CGFloat) -> NSBezierPath {
+        let width = AtticNoteObjectMetrics.ringWidth
+        let path = NSBezierPath(roundedRect: objectRect.insetBy(dx: width / 2, dy: width / 2),
+                                xRadius: max(0, cornerRadius - width / 2), yRadius: max(0, cornerRadius - width / 2))
+        path.lineWidth = width
+        return path
+    }
+
     override func draw(_ dirtyRect: NSRect) {
-        let m = AtticNoteObjectMetrics.self
-        let room = m.resizeHitTarget / 2
-        let ring = bounds.insetBy(dx: room + m.ringWidth / 2, dy: room + m.ringWidth / 2)
-        let path = NSBezierPath(roundedRect: ring, xRadius: cornerRadius + m.ringOutset,
-                                yRadius: cornerRadius + m.ringOutset)
-        path.lineWidth = m.ringWidth
+        let room = AtticNoteObjectMetrics.resizeHitTarget / 2
         color.setStroke()
-        path.stroke()
+        Self.ringPath(objectRect: bounds.insetBy(dx: room, dy: room), cornerRadius: cornerRadius).stroke()
     }
 }
 

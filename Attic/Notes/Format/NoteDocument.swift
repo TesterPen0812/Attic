@@ -250,12 +250,61 @@ struct NoteMark: Equatable, Sendable {
     var offset: Int
     var length: Int
     var url: String?
+    /// A highlight's colour key (`NoteHighlightColour`); nil is the grey
+    /// highlight. A key this build doesn't know is kept verbatim.
+    var colour: String?
 
-    init(_ kind: Kind, offset: Int, length: Int, url: String? = nil) {
+    init(_ kind: Kind, offset: Int, length: Int, url: String? = nil, colour: String? = nil) {
         self.kind = kind
         self.offset = offset
         self.length = length
         self.url = url
+        self.colour = colour
+    }
+
+    /// A mark from its attribute value: a link's URL, a highlight's colour
+    /// key (a string; `true` is grey), nothing for the other marks.
+    init(_ kind: Kind, offset: Int, length: Int, value: Any?) {
+        self.init(kind, offset: offset, length: length,
+                  url: kind == .link ? value as? String : nil,
+                  colour: kind == .highlight ? value as? String : nil)
+    }
+
+    /// The attribute value that carries this mark in the editor.
+    var attributeValue: Any { url ?? colour ?? true }
+
+    /// The string a mark carries (a link's URL or a highlight's colour).
+    var payload: String? { url ?? colour }
+}
+
+/// A highlight's colour (N-2, owner 2026-10-11): grey, the normal one,
+/// which one click on the highlighter gives and which stores no colour, and
+/// colour set 1's clear hues (close to Apple Notes'). The tags use the same
+/// hues (`AtticTagHue`). The raw value is what a highlight stores.
+enum NoteHighlightColour: String, CaseIterable, Sendable {
+    case grey, yellow, green, blue, pink, purple
+
+    /// The hues the highlighter's menu offers after Grey.
+    static let hues: [NoteHighlightColour] = [.yellow, .green, .blue, .pink, .purple]
+
+    /// What a highlight of this colour stores: nil for grey.
+    var storedKey: String? { self == .grey ? nil : rawValue }
+
+    /// The colour a stored key shows: grey for none, or for a key this
+    /// build doesn't know.
+    init(storedKey: String?) {
+        self = storedKey.flatMap(NoteHighlightColour.init(rawValue:)) ?? .grey
+    }
+
+    var title: String {
+        switch self {
+        case .grey: String(localized: "Grey")
+        case .yellow: String(localized: "Yellow")
+        case .green: String(localized: "Green")
+        case .blue: String(localized: "Blue")
+        case .pink: String(localized: "Pink")
+        case .purple: String(localized: "Purple")
+        }
     }
 }
 

@@ -94,6 +94,23 @@ final class NoteCommandRouter {
         return applied
     }
 
+    /// The highlighter's colours (N-2): `colour` on the selection (or the
+    /// selected cells), or no highlight for nil. The one-click grey
+    /// highlight stays `run(.mark(.highlight))`, which toggles.
+    @discardableResult
+    func highlight(_ colour: NoteHighlightColour?, from surface: NoteCommandSurface, selection: NSRange? = nil) -> Bool {
+        let selection = selection ?? self.selection
+        onRun?(.mark(.highlight), surface)
+        let applied: Bool
+        if let table = engine.focusedTable {
+            applied = engine.applyCellMark(.highlight, in: table, url: colour?.storedKey, on: colour != nil)
+        } else {
+            applied = engine.setHighlight(colour, selection: selection)
+        }
+        onChange?()
+        return applied
+    }
+
     /// The link card's commit: the engine revalidates its captured target
     /// and refuses a stale one without editing.
     @discardableResult

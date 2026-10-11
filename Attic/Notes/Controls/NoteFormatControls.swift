@@ -52,6 +52,8 @@ final class NoteFormatControls: NSObject {
             } else {
                 formatModel.rowKeyboardIndex = nil
                 if formatModel.rowStyleListOpen { formatModel.rowStyleListOpen = false }
+                // A selection's marks go back to the selection bar (D-06).
+                if selection.length > 0 { scheduleRefresh() }
             }
         }
     }
@@ -290,7 +292,11 @@ final class NoteFormatControls: NSObject {
             snapshotCount += 1
             let snapshot = NoteFormatSnapshot.make(router: router, selection: current)
             formatModel.setSnapshot(snapshot)
-            if allowsBar, snapshot.hasEnabledCommand {
+            // D-06: take turns in one place. With Aa's row open, a text
+            // selection's marks are on the row, so the bar stays away (the
+            // cells' bar still comes: the row is then the table's tools).
+            let rowTakesMarks = isFormatBarOpen && snapshot.hasTextSelection && snapshot.table == nil
+            if allowsBar, snapshot.hasEnabledCommand, !rowTakesMarks {
                 showBar()
             } else {
                 hideBar()
@@ -378,7 +384,9 @@ final class NoteFormatControls: NSObject {
         return table.isEditingCell && table.editor.selectedRange().length > 0 && !table.editor.hasMarkedText()
     }
 
-    private var rowItems: [NoteFormatRowItem] { NoteFormatRowItem.items(inTable: formatModel.snapshot.table != nil) }
+    private var rowItems: [NoteFormatRowItem] {
+        NoteFormatRowItem.items(inTable: formatModel.snapshot.table != nil, textSelected: formatModel.snapshot.hasTextSelection)
+    }
 
     private func showBar() {
         // The cells' bar is measured under its own key (its pill names the alignment).
@@ -422,7 +430,7 @@ final class NoteFormatControls: NSObject {
         let font = AtticTextStyle.controlLabel.nsFont
         let label = ceil((styleName as NSString).size(withAttributes: [.font: font]).width)
         let style = label + 4 + m.barStyleChevron + 2 + m.barStylePadding * 2
-        let toggles = CGFloat(NoteFormatBarItem.all.count - 1) * m.barToggleWidth
+        let toggles = CGFloat(NoteFormatBarItem.all.count - 1) * m.barToggleWidth + m.highlightChevronWidth
         return ceil(AtticControlSize.capsuleInset * 2 + style + m.barGroupGap * 3 + toggles)
     }
 
@@ -686,6 +694,13 @@ final class NoteFormatControls: NSObject {
         case 124: formatModel.barKeyboardIndex = (index + 1) % count
         case 48: formatModel.barKeyboardIndex = flags.contains(.shift) ? (index - 1 + count) % count : (index + 1) % count
         case 36, 76, 49: pressBarItem(items[index]); return true
+        case 125 where items[index] == .command(.mark(.highlight)):
+            // ↓ on the highlighter opens its colours (the chevron's menu).
+            guard let textView, formatModel.snapshot.isEnabled(.mark(.highlight)) else { NSSound.beep(); return true }
+            let anchor = barFrame
+            AtticNativeMenu.popUp(formatModel.highlightMenu(from: .selectionBar),
+                                  below: NSRect(x: anchor.minX, y: anchor.minY, width: anchor.width, height: anchor.height), in: textView)
+            return true
         case 53: exitBarKeyboard(); return true
         default:
             exitBarKeyboard()
@@ -796,8 +811,18 @@ final class NoteFormatControls: NSObject {
     /// `anchor` in the text view: in the panel's overlay, within the panel
     /// less its margin (the text view's visible part outside a panel).
     private func placeDropdown(_ host: AtticOverlayHostingView, idealWidth: CGFloat, height: CGFloat, anchor: NSRect,
-                               current: AtticDropdownLayout.Placement?) -> AtticDropdownLayout.Placement? {
+                               current: AtticDropdownLayout.Placement?, alignsToColumn: Bool = true) -> AtticDropdownLayout.Placement? {
         guard let textView, let space = AtticDropdownSpace(around: textView, bounding: textView) else { return nil }
+        // D-16: a card over the text lines up its rows' text with the note's
+        // column (its edge one row padding further out), so it covers whole
+        // line starts instead of leaving their first letters peeking out
+        // beside it. Its height still follows the line it belongs to.
+        var anchor = anchor
+        if alignsToColumn {
+            let column = textView.textContainerOrigin.x + (textView.textContainer?.lineFragmentPadding ?? 0)
+            let d = AtticDropdownMetrics.self
+            anchor.origin.x = column - d.inset - d.rowPadding
+        }
         let placed = space.place(idealWidth: idealWidth, height: height, anchor: space.anchor(anchor, in: textView),
                                  prefer: .below, current: current?.side)
         space.show(host, at: placed)
@@ -890,7 +915,7 @@ final class NoteFormatControls: NSObject {
     private func placeCard() {
         if cellLinkTarget != nil, let anchor = cellCardAnchor {
             guard let placed = placeDropdown(cardHost, idealWidth: cardSize.width, height: cardSize.height,
-                                             anchor: anchor, current: cardPlacement) else { return }
+                                             anchor: anchor, current: cardPlacement, alignsToColumn: false) else { return }
             cardPlacement = placed
             if cardModel.viewportWidth != placed.width { cardModel.viewportWidth = placed.width }
             if cardModel.viewportHeight != placed.heightLimit { cardModel.viewportHeight = placed.heightLimit }
@@ -1177,7 +1202,15 @@ final class NoteFormatControls: NSObject {
             && engine.focusedTable == nil && !textView.hasMarkedText() && engine.slashSession == nil && cardModel.card == nil
         if show, let rect = caretRect() {
             let size = hintHost.fittingSize
-            let frame = NSRect(x: rect.minX, y: rect.minY + (rect.height - size.height) / 2, width: size.width, height: size.height).integral
+            // F-03b: the hint sits on the line's own baseline, as typed text
+            // would, so the caret (fitted to that baseline) matches its
+            // height and centre. Centred in the line box it sat lower.
+            var y = rect.minY + (rect.height - size.height) / 2
+            if let line = NoteCaretFitter.line(at: rect, in: textView) {
+                let font = AtticTextStyle.noteBody.nsFont
+                y = line.baseline - font.ascender - max(0, size.height - (font.ascender - font.descender)) / 2
+            }
+            let frame = NSRect(x: rect.minX, y: y, width: size.width, height: size.height).integral
             if hintHost.frame != frame { hintHost.frame = frame }
             if !hintShown {
                 hintHost.isHidden = false

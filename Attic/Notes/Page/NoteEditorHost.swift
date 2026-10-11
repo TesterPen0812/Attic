@@ -12,6 +12,10 @@ final class NotesPageChrome: ObservableObject {
     /// header title's opacity follows it 1:1 (UX plan § 7).
     @Published var headerTitleProgress: CGFloat = 0
     @Published var headerTitle = ""
+    /// The note has text under its title. On a title-only note Aa waits
+    /// until there is some (owner, 2026-10-11): there is nothing to format.
+    /// Published only when it flips, never per keystroke.
+    @Published var hasBody = true
     @Published var isMenuOpen = false
     /// The tag editor is open, from the tag line or from the menu button.
     @Published var tagEditor: TagEditorAnchor?
@@ -26,6 +30,8 @@ final class NotesPageChrome: ObservableObject {
     #if DEBUG
     /// The capture seam's All notes (UI-test launches only).
     var captureToggleLibrary: (() -> Void)?
+    /// The capture seam's file import (the `objects` scene).
+    var captureImport: (([URL]) -> Void)?
     #endif
     /// The open panel for Insert › Image or File…, the `/` row (one file),
     /// or a failed object's Retry and Locate… (one file, for that object).
@@ -409,7 +415,10 @@ final class NoteTitleAccessories: NotesKeyboardReturnTarget {
         }
         textView.accessoryViews = [tagHost, menuHost, suggestionHost]
         textView.suggestionCommand = { [weak self] selector in self?.handleSuggestionKey(selector) ?? false }
-        engine.onCaretChange = { [weak self] in self?.updateSuggestions() }
+        engine.onCaretChange = { [weak self] in
+            self?.updateSuggestions()
+            self?.updateHasBody()
+        }
         chrome.accessories = self
         rebuild()
         textView.onLayout = { [weak self] in self?.layout() }
@@ -506,6 +515,7 @@ final class NoteTitleAccessories: NotesKeyboardReturnTarget {
         DispatchQueue.main.async { [weak self] in
             self?.updateHeaderTitle()
             self?.updateSuggestions()
+            self?.updateHasBody()
         }
         // VoiceOver: "Note, Pricing page".
         let title = engine.lineText(at: 0).trimmingCharacters(in: .whitespaces)
@@ -651,6 +661,20 @@ final class NoteTitleAccessories: NotesKeyboardReturnTarget {
     /// The header title fades in as the title passes under the header, and
     /// the opaque body's title has left the visible top region (D-03).
     /// This path never invalidates TextKit's scrolling viewport.
+    /// Whether anything but white space follows the title line (an object
+    /// counts); it stops at the first such character.
+    static func hasBody(_ string: NSString, title: NSRange) -> Bool {
+        let start = NSMaxRange(title)
+        guard start < string.length else { return false }
+        return string.rangeOfCharacter(from: CharacterSet.whitespacesAndNewlines.inverted, options: [],
+                                       range: NSRange(location: start, length: string.length - start)).location != NSNotFound
+    }
+
+    func updateHasBody() {
+        let has = Self.hasBody(engine.textStorage.string as NSString, title: engine.titleParagraphRange)
+        if chrome.hasBody != has { chrome.hasBody = has }
+    }
+
     func updateHeaderTitle() {
         guard let scrollView, let rects = engine.titleLineRects() else { return }
         let clip = scrollView.contentView.bounds

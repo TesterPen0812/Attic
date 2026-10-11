@@ -81,6 +81,8 @@ struct AtticRaisedButton: View {
     /// An optical nudge of the glyph inside the button (the pin: −0.5,
     /// visual A), so its visible outline looks centred.
     var glyphOffsetY: CGFloat = 0
+    /// The same, sideways (New note: −0.5, icon audit A3-01).
+    var glyphOffsetX: CGFloat = 0
     /// The header's glyphs (Phase 0's qualities): the strong ink at regular
     /// weight, level with the page button's current page.
     var emphasisedGlyph = false
@@ -93,9 +95,10 @@ struct AtticRaisedButton: View {
 
     /// Icon only. `label` is what VoiceOver and the tooltip say.
     init(systemName: String, label: String.LocalizationValue, size: CGSize = AtticControlSize.panelButton, help: String? = nil,
-         isSelected: Bool = false, glyphOffsetY: CGFloat = 0, emphasisedGlyph: Bool = false, flat: Bool = false,
-         action: @escaping () -> Void) {
+         isSelected: Bool = false, glyphOffsetY: CGFloat = 0, glyphOffsetX: CGFloat = 0, emphasisedGlyph: Bool = false,
+         flat: Bool = false, action: @escaping () -> Void) {
         self.flat = flat
+        self.glyphOffsetX = glyphOffsetX
         self.systemName = systemName
         self.title = nil
         self.accessibilityLabel = String(localized: label)
@@ -122,7 +125,7 @@ struct AtticRaisedButton: View {
         let radius = AtticRadius.control(height: size.height)
         Button(action: action) {
             AtticRaisedButtonLabel(systemName: systemName, title: title, isSelected: isSelected || emphasisedGlyph)
-                .offset(y: glyphOffsetY)
+                .offset(x: glyphOffsetX, y: glyphOffsetY)
                 .padding(.horizontal, title == nil ? 0 : AtticRaisedButtonMetrics.labelPadding)
                 .frame(width: title == nil ? size.width : nil, height: size.height)
                 .background {
@@ -197,7 +200,7 @@ struct AtticSelectedChip: View {
 
 /// The header's page button (Phase 0's mode dock, brought into Direction
 /// A, 2026-09-26): at rest a square the size and shape of the pin, showing
-/// only the current page's icon on the selected inner chip. Under the
+/// only the current page's icon, plain as the pin's (D-11). Under the
 /// pointer or keyboard focus it opens leftward into all the pages' icons
 /// (the current one on the chip, each with a tooltip and its shortcut); a
 /// click goes there, and it folds back when the pointer leaves. 36 pt,
@@ -264,8 +267,11 @@ struct AtticPageButton<Page: Hashable>: View {
                     ZStack {
                         let shape = RoundedRectangle(cornerRadius: chipRadius, style: .continuous)
                         let accent = design.tokens.pageChipAccent
-                        if isSelected, flat, !open {
-                            // L3: shut, the glyph sits on the flat surface.
+                        if isSelected, !open {
+                            // Shut, the current page's glyph sits plain, as the
+                            // pin's does (D-11, owner 2026-10-11): the chip
+                            // means "on" only for a pinned pin, and marks the
+                            // current page only among the others once open.
                         } else if isSelected, let accent {
                             // Phase 0's Light palettes: the current page in the accent.
                             shape.fill(accent.fill.color)
@@ -275,15 +281,16 @@ struct AtticPageButton<Page: Hashable>: View {
                         } else if hoveredPage == item.page {
                             shape.fill(design.tokens.chipHover.color)
                         }
+                        let marked = isSelected && open
                         AtticIcon(systemName: item.systemName, size: M.iconSize,
-                                  weight: isSelected ? .regular : AtticIconWeight.outline,
+                                  weight: marked ? .regular : AtticIconWeight.outline,
                                   // On an opaque surface (including the
                                   // Reduce Transparency accessibility mode),
                                   // palette ink can fall below the icon's
                                   // floor on its tinted chip. Keep that
                                   // palette's fill/hairline; use the strong
                                   // selected-control glyph ink there.
-                                  ink: isSelected ? (accent == nil || design.effectiveSurface == .solid ? .glyph : .accent) : .icon)
+                                  ink: marked ? (accent == nil || design.effectiveSurface == .solid ? .glyph : .accent) : .icon)
                     }
                     .frame(width: M.segment, height: M.segment)
                     // 24 pt chips (chrome B) still answer a 28 pt target,
@@ -1161,6 +1168,8 @@ struct AtticMenuCommand: Identifiable {
     /// A tag colour's dot before the title (the tag menu's Colour row, tag
     /// filters and the multi-select tag action).
     var swatch: AtticTagHue?
+    /// Any other image before the title (the highlighter's colours).
+    var image: NSImage?
     let action: () -> Void
 
     init(
@@ -1332,10 +1341,25 @@ struct AtticCommandMenu<Label: View>: View {
     @ViewBuilder let label: Label
 
     @Environment(\.atticCapture) private var capture
+    @State private var anchor = AtticMenuAnchor.Holder()
 
     var body: some View {
         if capture != nil {
             label
+        } else if commands.contains(where: { $0.state != nil }) {
+            // A menu of choices (the style, the alignment): the native menu,
+            // which draws each tick after its item (N-4's card design).
+            Button {
+                guard let view = anchor.view else { return }
+                AtticNativeMenu.popUp(commands, in: view)
+            } label: {
+                label
+            }
+            .buttonStyle(.plain)
+            .fixedSize()
+            .background(AtticMenuAnchor(holder: anchor).accessibilityHidden(true))
+            .accessibilityLabel(accessibilityLabel)
+            .accessibilityHint(String(localized: "Opens a menu"))
         } else {
             Menu {
                 AtticMenuItems(commands: commands)
@@ -1444,6 +1468,8 @@ struct AtticMenuItems: View {
     private func label(_ command: AtticMenuCommand) -> some View {
         if let systemImage = command.systemImage {
             SwiftUI.Label(command.title, systemImage: systemImage)
+        } else if let image = command.image {
+            SwiftUI.Label { Text(verbatim: command.title) } icon: { Image(nsImage: image) }
         } else if let swatch = command.swatch {
             SwiftUI.Label { Text(verbatim: command.title) } icon: { Image(nsImage: AtticTagSwatch.image(swatch)) }
         } else {
@@ -1468,6 +1494,11 @@ private struct AtticMenuBadge: ViewModifier {
     }
 }
 
+/// A native menu's trailing tick: this far past the menu's widest title.
+enum AtticMenuTickMetrics {
+    static let gap: CGFloat = 16
+}
+
 /// The same commands as an `NSMenu` (round 10): what a row's actions
 /// button, ⇧⌘I and the selection bar open, anchored to a view. Native in
 /// every way (keyboard, type-to-select, VoiceOver), with each command's
@@ -1478,6 +1509,11 @@ enum AtticNativeMenu {
     static func make(_ commands: [AtticMenuCommand], title: String = "") -> NSMenu {
         let menu = NSMenu(title: title)
         menu.autoenablesItems = false
+        // The tick after the item (N-4's card design, owner 2026-10-11: on
+        // every dropdown): a menu with choices draws no leading tick column,
+        // and each chosen item ends in its tick, one column for the menu.
+        let tickColumn = trailingTickColumn(commands)
+        if tickColumn != nil { menu.showsStateColumn = false }
         var first = true
         for command in commands {
             if command.isHeader {
@@ -1488,9 +1524,28 @@ enum AtticNativeMenu {
             }
             if command.startsSection, !first { menu.addItem(.separator()) }
             first = false
-            menu.addItem(item(command))
+            menu.addItem(item(command, tickColumn: tickColumn))
         }
         return menu
+    }
+
+    /// Where a menu's trailing ticks go (from the titles' start): past its
+    /// widest title, or nil for a menu with no choice in it.
+    static func trailingTickColumn(_ commands: [AtticMenuCommand]) -> CGFloat? {
+        let items = commands.filter { !$0.isHeader }
+        guard items.contains(where: { $0.state != nil }) else { return nil }
+        let font = NSFont.menuFont(ofSize: 0)
+        let widest = items.map { ($0.title as NSString).size(withAttributes: [.font: font]).width }.max() ?? 0
+        return ceil(widest) + AtticMenuTickMetrics.gap
+    }
+
+    /// `title` with its tick (or the mixed dash) after it, at `column`.
+    static func tickedTitle(_ title: String, state: AtticCheckState, column: CGFloat) -> NSAttributedString {
+        let paragraph = NSMutableParagraphStyle()
+        paragraph.tabStops = [NSTextTab(textAlignment: .left, location: column)]
+        let mark = state == .mixed ? "\u{2013}" : "\u{2713}"
+        return NSAttributedString(string: title + "\t" + mark,
+                                  attributes: [.font: NSFont.menuFont(ofSize: 0), .paragraphStyle: paragraph])
     }
 
     /// A menu opened the way the system opens a right-click menu. AppKit
@@ -1505,11 +1560,13 @@ enum AtticNativeMenu {
         return menu
     }
 
-    private static func item(_ command: AtticMenuCommand) -> NSMenuItem {
+    private static func item(_ command: AtticMenuCommand, tickColumn: CGFloat? = nil) -> NSMenuItem {
         let item = NSMenuItem(title: command.title, action: nil, keyEquivalent: "")
         item.keyEquivalentModifierMask = []
         if let systemImage = command.systemImage, command.state != .mixed {
             item.image = NSImage(systemSymbolName: systemImage, accessibilityDescription: nil)
+        } else if let image = command.image {
+            item.image = image
         } else if let swatch = command.swatch, command.state != .mixed {
             item.image = AtticTagSwatch.image(swatch)
         }
@@ -1524,6 +1581,16 @@ enum AtticNativeMenu {
         case .on?: item.state = .on
         case .mixed?: item.state = .mixed
         case .off?, nil: item.state = .off
+        }
+        if let tickColumn {
+            // The state stays the item's (VoiceOver reads it); only where
+            // the tick is drawn moves, to the end.
+            item.onStateImage = nil
+            item.mixedStateImage = nil
+            if let state = command.state, state != .off {
+                item.attributedTitle = tickedTitle(command.title, state: state, column: tickColumn)
+                item.setAccessibilityTitle(command.title)
+            }
         }
         item.isEnabled = !command.isDisabled
         if let shortcut = command.menuShortcut, let key = keyEquivalent(shortcut.key) {
@@ -1791,6 +1858,9 @@ struct AtticPopoverRow: View {
     /// Keeps the icon column when this row has no icon, so a list of rows
     /// where only one is ticked stays aligned.
     var reservesIconSlot = false
+    /// nil: no tick column. Otherwise the tick's column at the row's end,
+    /// ticked when true (N-4's card design: the tick after the item).
+    var checked: Bool?
     let action: () -> Void
 
     @Environment(\.atticDesign) private var design
@@ -1800,12 +1870,13 @@ struct AtticPopoverRow: View {
     @State private var probeID = UUID()
 
     init(systemName: String?, title: String, detail: String? = nil, isHighlighted: Bool = false,
-         reservesIconSlot: Bool = false, action: @escaping () -> Void) {
+         reservesIconSlot: Bool = false, checked: Bool? = nil, action: @escaping () -> Void) {
         self.systemName = systemName
         self.title = title
         self.detail = detail
         self.isHighlighted = isHighlighted
         self.reservesIconSlot = reservesIconSlot
+        self.checked = checked
         self.action = action
     }
 
@@ -1834,6 +1905,17 @@ struct AtticPopoverRow: View {
                 if let detail {
                     AtticText(verbatim: detail, style: .shortcut, ink: state == .disabled ? .disabledText : .helper)
                 }
+                if let checked {
+                    Group {
+                        if checked {
+                            AtticIcon(systemName: "checkmark", size: AtticDropdownMetrics.checkSize, weight: .semibold, ink: .glyph)
+                        } else {
+                            Color.clear
+                        }
+                    }
+                    .frame(width: AtticDropdownMetrics.checkSlot)
+                    .accessibilityHidden(true)
+                }
             }
             .padding(.horizontal, m.rowPadding)
             .frame(height: height)
@@ -1843,6 +1925,7 @@ struct AtticPopoverRow: View {
         .buttonStyle(AtticUndimmedButtonStyle())
         .onHover { hovered = $0 }
         .accessibilityAddTraits(isHighlighted ? .isSelected : [])
+        .accessibilityValue(checked == true ? String(localized: "Selected") : "")
         .atticControlProbe("Pop-over row", id: probeID, expectedSize: nil, radius: radius, expectedRadius: 12)
     }
 }

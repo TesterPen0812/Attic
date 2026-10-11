@@ -270,11 +270,12 @@ struct AtticPopUpChoices<Choice: Hashable>: View {
     var body: some View {
         AtticPopover(width: AtticPopoverMetrics.defaultWidth) {
             ForEach(Array(choices.enumerated()), id: \.offset) { index, choice in
+                // The tick after the choice (N-4's card design).
                 AtticPopoverRow(
-                    systemName: choice.value == selection ? "checkmark" : nil,
+                    systemName: nil,
                     title: choice.title,
                     isHighlighted: highlighted == index,
-                    reservesIconSlot: true
+                    checked: choice.value == selection
                 ) { choose(choice.value) }
             }
         }

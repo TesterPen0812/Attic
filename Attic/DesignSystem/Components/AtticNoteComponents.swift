@@ -83,13 +83,14 @@ struct AtticNoteTagLine: View {
         AtticWrapLayout(spacing: AtticNoteMetrics.tagSpacing, lineSpacing: AtticNoteMetrics.tagLineSpacing) {
             ForEach(tags, id: \.self) { tag in
                 AtticNoteTagButton(name: tag) { onSelect(tag) }
-                    // A new tag pops in with a small spring; a removed one fades.
+                    // A new tag grows in (M/S, the overlays' 0.96); a removed
+                    // one fades (F/E). Reduced: the F/E fade.
                     .transition(design.reduceMotion ? .opacity
-                        : .asymmetric(insertion: .opacity.combined(with: .scale(scale: 0.6, anchor: .leading)),
-                                      removal: .opacity))
+                        : .asymmetric(insertion: .opacity.combined(with: .scale(scale: AtticMotionScale.overlayScale, anchor: .leading)),
+                                      removal: .opacity.animation(AtticMotionScale.exit)))
             }
         }
-        .animation(AtticMotionPreset.popover.springy(reduceMotion: design.reduceMotion), value: tags)
+        .animation(AtticMotionPreset.popover.animation(reduceMotion: design.reduceMotion), value: tags)
         .accessibilityElement(children: .contain)
         .accessibilityLabel(String(localized: "Tags"))
     }
@@ -284,7 +285,7 @@ struct AtticNoteRow: View {
         .opacity(shown ? 1 : 0)
         .allowsHitTesting(shown)
         .padding(.trailing, AtticNoteMetrics.rowTextX - 4)
-        .padding(.top, AtticTaskRowMetrics.titleTop(twoLine: true)
+        .padding(.top, AtticTaskRowMetrics.centredBlockTop(twoLine: true)
             + (AtticTaskRowMetrics.titleLineHeight - Self.actionsHeight) / 2)
         .help(String(localized: "Note actions (⇧⌘I)"))
         .accessibilityLabel(String(localized: "Actions for \(model.title)"))
@@ -331,7 +332,7 @@ struct AtticNoteRow: View {
                 }
                 .padding(.leading, m.rowTextX)
                 .padding(.trailing, m.rowTextX)
-                .padding(.top, AtticTaskRowMetrics.titleTop(twoLine: true))
+                .padding(.top, AtticTaskRowMetrics.centredBlockTop(twoLine: true))
             }
             .frame(height: AtticLayout.detailRowPitch, alignment: .top)
             .contentShape(Rectangle())
@@ -427,6 +428,8 @@ struct AtticTagSuggestionList: View {
         AtticDropdownCard() {
             ForEach(Array(suggestions.enumerated()), id: \.element.id) { index, suggestion in
                 AtticDropdownRow(title: suggestion.isNew ? String(localized: "New tag “#\(suggestion.name)”") : "#" + suggestion.name,
+                                dot: suggestion.isNew ? nil : colouring.hue(for: suggestion.name).ink,
+                                checkGlyph: suggestion.isNew ? "plus" : nil,
                                 detail: suggestion.isNew ? nil : "\(suggestion.count)",
                                 isHighlighted: index == highlighted,
                                 titleInk: suggestion.isNew ? .body : colouring.hue(for: suggestion.name).ink,
@@ -473,10 +476,9 @@ struct AtticNoteLibraryLine: View {
         let height = AtticControlSize.smallHeight
         ZStack(alignment: .trailing) {
             if searchShown {
+                // Exactly the Tasks search's motion (A4 M-01, the owner).
                 field
-                    .transition(design.reduceMotion ? .opacity
-                        : .asymmetric(insertion: .opacity.combined(with: .offset(x: 28)).combined(with: .scale(scale: 0.96, anchor: .trailing)),
-                                      removal: .opacity.combined(with: .scale(scale: 0.97, anchor: .trailing))))
+                    .transition(AtticSearchMotion.field(reduceMotion: design.reduceMotion))
             } else {
                 HStack(spacing: 0) {
                     if tags.isEmpty {
@@ -494,11 +496,11 @@ struct AtticNoteLibraryLine: View {
                         .padding(.trailing, max(0, AtticLayout.rowHighlightInset + AtticTaskRowMetrics.dateInset
                             - (AtticControlSize.smallMinWidth - AtticSmallControlMetrics.iconSize) / 2))
                 }
-                .transition(.opacity)
+                .transition(AtticSearchMotion.labels(reduceMotion: design.reduceMotion))
             }
         }
         .frame(height: height)
-        .animation(AtticMotionPreset.popover.springy(reduceMotion: design.reduceMotion), value: searchShown)
+        .animation(AtticSearchMotion.animation(shown: searchShown, reduceMotion: design.reduceMotion), value: searchShown)
     }
 
     /// The longest tag name a tab spells out: the active tag is always shown,
@@ -561,10 +563,12 @@ struct AtticNoteLibraryLine: View {
         let tokens = design.tokens
         let height = AtticControlSize.smallHeight
         return HStack(spacing: 0) {
+            // Tasks' search field's columns exactly (spacing audit S-06): the
+            // magnifier on the circles' line, the text on the titles' line.
             AtticIcon(systemName: "magnifyingglass", size: AtticTabsSearchMetrics.iconSize,
                       weight: AtticIconWeight.outline, ink: .helper)
                 .frame(width: AtticControlSize.statusCircle)
-                .padding(.leading, AtticNoteMetrics.searchIconX - AtticNoteMetrics.libraryHighlightInset)
+                .padding(.leading, AtticLayout.circleX - AtticLayout.rowHighlightInset)
             TextField("", text: $query, prompt: Text(verbatim: placeholder).foregroundStyle(tokens.color(.helper)))
                 .textFieldStyle(.plain)
                 .font(AtticTextStyle.listBody.font)
@@ -575,10 +579,10 @@ struct AtticNoteLibraryLine: View {
                 .accessibilityLabel(placeholder)
                 .accessibilityIdentifier("notes-library-search")
                 .frame(maxWidth: .infinity, alignment: .leading)
-                .padding(.leading, AtticNoteMetrics.searchTextX - AtticNoteMetrics.searchIconX - AtticControlSize.statusCircle)
+                .padding(.leading, AtticLayout.textX - AtticLayout.circleX - AtticControlSize.statusCircle)
             Button(action: onEndSearch) {
                 AtticText(verbatim: String(localized: "Esc"), style: .shortcut, ink: .helper)
-                    .padding(.horizontal, AtticNoteMetrics.searchHintPadding)
+                    .padding(.horizontal, AtticTabsSearchMetrics.hintPadding)
                     .frame(height: height)
                     .contentShape(Rectangle())
             }
@@ -592,7 +596,7 @@ struct AtticNoteLibraryLine: View {
             .fill(tokens.recessed.color))
         .contentShape(Rectangle())
         .onTapGesture { fieldFocused.wrappedValue = true }
-        .padding(.horizontal, AtticNoteMetrics.libraryHighlightInset)
+        .padding(.horizontal, AtticLayout.rowHighlightInset)
     }
 }
 

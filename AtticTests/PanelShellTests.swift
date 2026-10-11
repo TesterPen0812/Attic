@@ -67,16 +67,17 @@ final class PanelShellTests: XCTestCase {
         // note the page opens on, only for a new or another note.
         XCTAssertNil(NotesEditorPage.noteSlideAnimation(hasShownNote: false, reduceMotion: false))
         XCTAssertEqual(NotesEditorPage.noteSlideAnimation(hasShownNote: true, reduceMotion: false),
-                       AtticMotionPreset.slide.springy(reduceMotion: false))
+                       AtticMotionPreset.slide.animation(reduceMotion: false))
     }
 
-    /// A20: the "New tag" row's + sits in the check column, so its name
-    /// starts where the tags' names do and the card is no wider for it.
-    func testTheNewTagRowsPlusSitsInTheCheckColumn() {
+    /// A20 and N-4: the "New tag" row's + sits in the dots' column, so its
+    /// name starts where the tags' names do; the tick's column is at the end.
+    func testTheNewTagRowsPlusSitsInTheDotColumn() {
         let m = AtticDropdownMetrics.self
         let name = String(localized: "New tag “#plan”")
         XCTAssertEqual(AtticTagPicker.rowsWidth(tags: [], create: "plan"),
-                       ceil(m.rowPadding * 2 + m.checkSlot + m.columnGap + AtticTextStyle.dropdownRow.measuredWidth(name)))
+                       ceil(m.rowPadding * 2 + m.dotSlot + m.columnGap + AtticTextStyle.dropdownRow.measuredWidth(name)
+                            + m.columnGap + m.checkSlot))
     }
 
     func testSectionsMapToThreePagesAndTasksAlwaysOpensOnNow() {

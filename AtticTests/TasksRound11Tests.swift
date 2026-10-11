@@ -134,15 +134,14 @@ final class TasksRound11Tests: XCTestCase {
         }
     }
 
-    /// The fade behind the tabs (owner, 2026-10-06): rows behind the tab
-    /// labels stay faint, never gone or readable; whole from the first row.
-    func testRowsShowOnlyFaintlyUnderTheTabs() {
+    /// N-6 D: no overlay behind the tabs; rows behind the tab labels are
+    /// gone, and whole from the first row's rest.
+    func testRowsAreGoneUnderTheTabs() {
         let stops = TasksViewport.maskStops(height: 520, tabsTop: 80)
-        let underLabels = stops.filter { $0.location >= 80.0 / 520 - 0.0001 && $0.location <= 96.0 / 520 + 0.0001 }
-        XCTAssertFalse(underLabels.isEmpty)
-        XCTAssertTrue(underLabels.allSatisfy { $0.opacity > 0 && $0.opacity <= AtticScrollUnderFade.behindText + 0.001 },
-                      "rows behind the tab labels are faint, never gone or readable")
-        XCTAssertEqual(stops.first { $0.location >= 110.0 / 520 - 0.0001 }?.opacity, 1, "fully there from the first row's rest")
+        for y in stride(from: CGFloat(80), through: 96, by: 1) {
+            XCTAssertEqual(AtticScrollUnderFade.opacity(stops, at: y, height: 520), 0, accuracy: 0.001, "gone behind the tab labels at \(y)")
+        }
+        XCTAssertEqual(AtticScrollUnderFade.opacity(stops, at: 118, height: 520), 1, accuracy: 0.001, "fully there from the first row's words")
     }
 
     /// Files over the page land on the row under them, never on another.

@@ -41,10 +41,19 @@ final class NoteCaretFitter {
     }
 
     /// The caret's frame for text on `baseline` in `font`, keeping the
-    /// system's horizontal placement. The glyph box: ascender above the
-    /// baseline, descender below it.
+    /// system's horizontal placement (F-03c, owner 2026-10-11: the glyph
+    /// box, ascender to descender, still stood 2 pt over the letters and
+    /// read too tall beside "mmn"): from the letters' top (cap height and
+    /// the lowercase ascenders' 7 % more) to 18 % of the size below the
+    /// baseline (most of a descender). The same rule on every line kind, on
+    /// text and on an empty line, so it has one weight everywhere.
     nonisolated static func fittedFrame(current: CGRect, baseline: CGFloat, font: NSFont) -> CGRect {
-        CGRect(x: current.minX, y: baseline - font.ascender, width: current.width, height: font.ascender - font.descender)
+        let reach = caretReach(font)
+        return CGRect(x: current.minX, y: baseline - reach.above, width: current.width, height: reach.above + reach.below)
+    }
+
+    nonisolated static func caretReach(_ font: NSFont) -> (above: CGFloat, below: CGFloat) {
+        (font.capHeight + font.pointSize * 0.07, font.pointSize * 0.18)
     }
 
     /// The line's baseline in the text view's coordinates, for the line the
@@ -93,16 +102,38 @@ final class NoteCaretFitter {
               let superview = indicator.superview, let font = Self.font(of: textView) else { return false }
         let current = textView.convert(indicator.frame, from: superview)
         guard let line = Self.line(at: current, in: textView) else { return false }
-        // A line of its own (an image, a file, a table) is not text: the
-        // system's full-height caret stays.
+        // A line of its own (an image, a file) is not text: the system's
+        // full-height caret stays. After a table it is a body-height caret
+        // centred on the last row (D-24: the full-height one read as a tall
+        // bright bar on the table's edge).
         let glyphHeight = font.ascender - font.descender
-        guard line.boxHeight <= glyphHeight + 8 else { return false }
-        let fitted = Self.fittedFrame(current: current, baseline: line.baseline, font: font)
+        let fitted: CGRect
+        if line.boxHeight <= glyphHeight + 8 {
+            fitted = Self.fittedFrame(current: current, baseline: line.baseline, font: font)
+        } else if let table = Self.table(before: textView.selectedRange().location, in: textView) {
+            fitted = Self.caretAfterTable(current: current, lastRow: table.lastRowHeight, font: font)
+        } else {
+            return false
+        }
         guard abs(fitted.minY - current.minY) > 0.01 || abs(fitted.height - current.height) > 0.01 else { return false }
         fitting = true
         indicator.frame = superview.convert(fitted, from: textView)
         fitting = false
         return true
+    }
+
+    /// The caret after a table: the glyph box's height, centred on the
+    /// table's last row (the line box's bottom `lastRow`).
+    nonisolated static func caretAfterTable(current: CGRect, lastRow: CGFloat?, font: NSFont) -> CGRect {
+        let reach = caretReach(font)
+        let height = reach.above + reach.below
+        let row = min(current.height, max(height, lastRow ?? height))
+        return CGRect(x: current.minX, y: current.maxY - row / 2 - height / 2, width: current.width, height: height)
+    }
+
+    private static func table(before location: Int, in textView: NSTextView) -> NoteTableAttachment? {
+        guard let storage = textView.textStorage, location > 0, location <= storage.length else { return nil }
+        return storage.attribute(.attachment, at: location - 1, effectiveRange: nil) as? NoteTableAttachment
     }
 
     private static func indicators(in view: NSView) -> [NSView] {

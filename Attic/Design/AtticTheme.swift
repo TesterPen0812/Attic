@@ -2,10 +2,14 @@ import SwiftUI
 
 // Cross-platform design atoms shared by the macOS panel and the iOS app.
 
+/// The older views' motion, on the app's one scale (the macOS
+/// `AtticMotionScale`, repeated here as numbers because this file is shared
+/// with the iPhone app): M/S for a state change, F/E for hover and drops,
+/// M/E for a surface crossfade.
 enum AtticMotion {
-    static let spring = Animation.spring(response: 0.30, dampingFraction: 0.84)
-    static let quick = Animation.easeOut(duration: 0.14)
-    static let background = Animation.easeInOut(duration: 0.22)
+    static let spring = Animation.spring(duration: 0.20, bounce: 0.12)
+    static let quick = Animation.timingCurve(0.2, 0.8, 0.2, 1, duration: 0.12)
+    static let background = Animation.timingCurve(0.2, 0.8, 0.2, 1, duration: 0.20)
 }
 
 extension TaskPriority {
