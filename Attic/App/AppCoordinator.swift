@@ -792,6 +792,24 @@ final class AppCoordinator: ObservableObject {
                     DispatchQueue.main.asyncAfter(deadline: .now() + seconds, execute: action)
                 }
                 if ProcessInfo.processInfo.environment["ATTIC_PERF_EXTERNAL_CONTROL"] == "1" {
+                    #if DEBUG
+                    if ProcessInfo.processInfo.environment["ATTIC_PERF_SMOOTH"] == "1",
+                       Bundle.main.bundleIdentifier == "com.taha.Attic.preview.phasex" {
+                        let probe = SmoothPerformanceProbe(root: performanceRoot, notes: noteStore,
+                            tasks: store, pages: noteDraft.pages,
+                            reveal: { [weak self] section in self?.hoverMonitor.revealForPerformanceProbe(section: section) },
+                            hide: { [weak self] in
+                                _ = self?.hoverMonitor.hideForPerformanceProbe { _ in }
+                            })
+                        signal(SIGUSR1, SIG_IGN)
+                        let source = DispatchSource.makeSignalSource(signal: SIGUSR1, queue: .main)
+                        source.setEventHandler { probe.advance() }
+                        performanceSignalSource = source
+                        source.resume()
+                        PerformanceProbe.writePhase("smooth_ready", root: performanceRoot)
+                        return
+                    }
+                    #endif
                     // A signal arrives only after the sampler finishes its
                     // window. End markers and the next phase cannot race a
                     // slow reveal, footprint call, or AppKit hide completion.

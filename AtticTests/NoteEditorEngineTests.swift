@@ -164,6 +164,11 @@ final class NoteEditorEngineTests: XCTestCase {
         init(_ value: NoteEditorEngine) { self.value = value }
     }
 
+    private final class WeakObject {
+        weak var value: AnyObject?
+        init(_ value: AnyObject) { self.value = value }
+    }
+
     /// Sixty compressed minutes: rotate twelve notes, type 40 characters,
     /// save/leave, and add/rename/complete a task per minute. No visible UI.
     func testPerf2SimulatedHourRetainsOnlyTheWarmNoteSessions() async throws {
@@ -181,6 +186,8 @@ final class NoteEditorEngineTests: XCTestCase {
             ids.append(id)
         }
         var engines: [WeakEngine] = []
+        var views: [WeakObject] = []
+        var layouts: [WeakObject] = []
         func footprint() -> UInt64 {
             var info = task_vm_info_data_t()
             var count = mach_msg_type_number_t(MemoryLayout<task_vm_info_data_t>.size / MemoryLayout<integer_t>.size)
@@ -197,6 +204,8 @@ final class NoteEditorEngineTests: XCTestCase {
             engines.append(WeakEngine(session.engine))
             autoreleasepool {
                 let (_, view) = session.engine.makeView()
+                views.append(WeakObject(view))
+                if let layout = session.engine.layoutManager { layouts.append(WeakObject(layout)) }
                 view.setSelectedRange(NSRange(location: session.engine.textStorage.length, length: 0))
                 let extractions = session.engine.documentExtractionCount
                 type(String(repeating: "a", count: 40), view)
@@ -212,7 +221,13 @@ final class NoteEditorEngineTests: XCTestCase {
                 await Task.yield()
                 let alive = engines.compactMap(\.value).count
                 print("PERF2_SOAK minutes=\(minute + 1) engines=\(alive) footprint_bytes=\(footprint())")
+                print("SMOOTH_LIFETIME views=\(views.compactMap(\.value).count) layouts=\(layouts.compactMap(\.value).count) undo_ops=\(session.engine.history.undoOps.count) pid=\(ProcessInfo.processInfo.processIdentifier)")
                 XCTAssertLessThanOrEqual(alive, 8, "clean sessions beyond the warm-cache limit must be released")
+                XCTAssertEqual(layouts.compactMap(\.value).count, 0,
+                               "the measured detached baseline retains no editor layout managers")
+                if ProcessInfo.processInfo.environment["ATTIC_SMOOTH_ALLOCATION_PAUSE"] == "1" {
+                    try await Task.sleep(for: .seconds(45))
+                }
             }
         }
         XCTAssertEqual(tasks.tasks.count, 60)
