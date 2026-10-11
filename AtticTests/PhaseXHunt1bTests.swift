@@ -738,22 +738,6 @@ final class PhaseXHunt1bTests: XCTestCase {
         XCTAssertEqual(attempts, 2)
     }
 
-    func testH6_02DisplayRemovalReclampsPinnedFrameEvenWhenHeightIsUnchanged() throws {
-        let frame = CGRect(x: 2200, y: 100, width: 272, height: 300)
-        let remaining = CGRect(x: -1000, y: 28, width: 1000, height: 720)
-        let result = SubtaskPanelLayout.pinnedResizedFrame(frame, newHeight: frame.height,
-            screenVisibleFrames: [remaining])
-        do {
-            XCTAssertNotNil(result, "Display reconciliation is independent of height changes")
-        }
-        if let result {
-            XCTAssertTrue(remaining.insetBy(dx: 12, dy: 12).contains(result))
-            XCTAssertEqual(result.size, frame.size)
-            XCTAssertNil(SubtaskPanelLayout.pinnedResizedFrame(result, newHeight: result.height,
-                screenVisibleFrames: [remaining]), "Reconciliation is idempotent")
-        }
-    }
-
     func testH6_03SettingsSizeFitsAWorkAreaSmallerThanItsPreferredMinimum() {
         let screen = CGRect(x: -600, y: 32, width: 600, height: 420)
         let size = SettingsWindowLayout.fittedContentSize(to: screen)
@@ -1437,7 +1421,7 @@ extension PhaseXHunt5Tests {
         let probes = [WeakProbe<AnyObject>(coordinator), WeakProbe<AnyObject>(panel), WeakProbe<AnyObject>(settings),
             WeakProbe<AnyObject>(coordinator.noteDraft), WeakProbe<AnyObject>(coordinator.noteDraft.pages),
             WeakProbe<AnyObject>(coordinator.noteDraft.pages.active), WeakProbe<AnyObject>(coordinator.noteDraft.pages.active?.engine),
-            WeakProbe<AnyObject>(coordinator.canvasSession), WeakProbe<AnyObject>(coordinator.subtaskPanels),
+            WeakProbe<AnyObject>(coordinator.canvasSession),
             WeakProbe<AnyObject>(coordinator.canvasEditFocus)]
         await coordinator.noteStore.waitForAttachmentReconciliation()
         await coordinator.noteDraft.pages.waitForRecoveryWork()
@@ -1712,29 +1696,6 @@ extension PhaseXHunt5Tests {
             let last: Timer = try field("timer", in: service)
             service.stop(); XCTAssertFalse(last.isValid)
             XCTAssertEqual(try ModelContext(store.container).fetchCount(FetchDescriptor<TaskItem>()), 1)
-        }
-    }
-
-    func testSerializedGeometryReplaysGeneratedDisplayRemovalAndRelaunch() throws {
-        var random: UInt64 = 5489
-        var frame = CGRect(x: 2200, y: -150, width: 272, height: 300)
-        for step in 0..<192 {
-            random = random &* 6364136223846793005 &+ 1442695040888963407
-            let screen = CGRect(x: Double(Int(random % 4000) - 2000), y: Double(Int((random >> 8) % 1500) - 750),
-                width: Double(360 + (random >> 16) % 1800), height: Double(400 + (random >> 32) % 1000))
-            // Persist and deserialize value geometry as a new process would;
-            // the expected bounds come from the generated work area, not the helper.
-            let persisted = try JSONEncoder().encode(frame)
-            let restored = try JSONDecoder().decode(CGRect.self, from: persisted)
-            frame = SubtaskPanelLayout.pinnedResizedFrame(restored, newHeight: 280 + CGFloat(step % 4) * 20,
-                screenVisibleFrames: [screen]) ?? restored
-            XCTAssertTrue(screen.insetBy(dx: 12, dy: 12).contains(frame), "step=\(step)")
-            XCTAssertNil(SubtaskPanelLayout.pinnedResizedFrame(frame, newHeight: frame.height, screenVisibleFrames: [screen]))
-            let size = SettingsWindowLayout.fittedContentSize(to: screen)
-            let settings = SettingsWindowLayout.constrainedFrame(CGRect(origin: restored.origin, size: size), to: screen)
-            XCTAssertTrue(screen.insetBy(dx: 24, dy: 24).contains(settings))
-            let next = try JSONDecoder().decode(CGRect.self, from: JSONEncoder().encode(settings))
-            XCTAssertEqual(SettingsWindowLayout.constrainedFrame(next, to: screen), settings)
         }
     }
 

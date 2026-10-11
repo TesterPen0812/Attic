@@ -228,8 +228,7 @@ final class TasksRound6Tests: XCTestCase {
         let hosted = try Hosted(height: 520)
         defer { hosted.close() }
         hosted.window.makeKey()
-        var opened: [UUID] = []
-        hosted.model.services.openPage = { opened.append($0) }
+        var opened: [UUID] { Array(hosted.model.expandedFiles) }
         hosted.go(to: .backlog)
         let later = try XCTUnwrap(hosted.model.rows(for: .backlog).first?.id)
         hosted.model.selectOnly(later)
@@ -241,7 +240,7 @@ final class TasksRound6Tests: XCTestCase {
         hosted.spin(0.3)
         XCTAssertEqual(opened, [later], "⌘Return with no draft opens the selected row's files")
 
-        opened = []
+        for id in hosted.model.expandedFiles { hosted.model.setFilesExpanded(id, false) }
         hosted.model.addBar = TaskAddBarText(text: "Call the plumber")
         hosted.spin(0.3)
         let before = Set(hosted.model.rows(for: .backlog).map(\.id) + hosted.model.rows(for: .now).map(\.id))

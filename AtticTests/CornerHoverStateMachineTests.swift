@@ -12,7 +12,7 @@ final class CornerHoverStateMachineTests: XCTestCase {
             reasons: [.quickEntryFocus], pointerInside: false, secondsSinceKeyboardInput: 0.5))
         XCTAssertTrue(MainPanelAutoHidePolicy.isInteractionLocked(
             reasons: [.quickEntryFocus], pointerInside: true, secondsSinceKeyboardInput: 2))
-        for reason in [PanelInteractionLockReason.taskComposer, .notesDirty, .subtaskComposer, .taskEditing, .menuTracking] {
+        for reason in [PanelInteractionLockReason.taskComposer, .notesDirty, .taskEditing, .menuTracking] {
             XCTAssertTrue(MainPanelAutoHidePolicy.isInteractionLocked(
                 reasons: [reason], pointerInside: false, secondsSinceKeyboardInput: 20))
         }
