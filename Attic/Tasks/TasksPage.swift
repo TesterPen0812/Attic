@@ -364,6 +364,7 @@ struct TasksPage: View {
             if !shown, searchFocused { searchFocused = false }
         }
         .onChange(of: composerPickerOpen) { _, _ in updateTypingLock() }
+        .onChange(of: model.hasVisibleInlineFiles, initial: true) { _, _ in updateTypingLock() }
         .onChange(of: metaPopover) { old, new in
             updateTypingLock()
             // Move to Task… closed by Esc or a click outside, its subtask
@@ -622,7 +623,7 @@ struct TasksPage: View {
         // hold it through the shell's menu-tracking lock; suggestions show
         // only over a draft, which the composer lock holds.
         chrome.editLock(model.editingTitleID != nil || model.newSubtaskParentID != nil || model.renamingSubtaskID != nil
-            || composerPickerOpen || metaPopover != nil || selectionPicker != nil)
+            || composerPickerOpen || metaPopover != nil || selectionPicker != nil || model.hasVisibleInlineFiles)
     }
 
     /// When a change elsewhere (an agent's delete or move) takes the row of

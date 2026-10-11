@@ -382,7 +382,8 @@ final class Hosted {
     final class Focus { var addBar = false }
     let focus = Focus()
 
-    init(height: CGFloat, addBarFocused: Bool = false, long: Bool = false, keyWindow: Bool = true) throws {
+    init(height: CGFloat, addBarFocused: Bool = false, long: Bool = false, keyWindow: Bool = true,
+         chrome: TasksPageChrome = TasksPageChrome()) throws {
         focus.addBar = addBarFocused
         self.height = height
         let container = try PersistenceController.makeContainer(inMemory: true, cloudSyncEnabled: false)
@@ -393,7 +394,7 @@ final class Hosted {
         let focus = focus
         page = TasksPage(model: model, store: store, layout: PanelPageLayout(cornerSize: 52, panelSize: size),
                          addBarFocused: Binding(get: { focus.addBar }, set: { focus.addBar = $0 }),
-                         pointer: pointer)
+                         chrome: chrome, pointer: pointer)
         window = Panel(contentRect: CGRect(origin: CGPoint(x: -4_000, y: -4_000), size: size),
                        styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
         window.isReleasedWhenClosed = false

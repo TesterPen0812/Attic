@@ -96,6 +96,26 @@ final class TasksFilesInlineTests: XCTestCase {
 
     // MARK: - On the page
 
+    func testVisibleInlineFilesHoldThePanelAndClosingOrChangingTabReleasesIt() throws {
+        var held = false
+        let hosted = try Hosted(height: 560, keyWindow: false, chrome: TasksPageChrome(editLock: { held = $0 }))
+        defer { hosted.close() }
+        let task = try XCTUnwrap(hosted.model.rows(for: .now).first)
+        XCTAssertFalse(held)
+        hosted.model.toggleFiles(task.id)
+        hosted.spin(0.3)
+        XCTAssertTrue(held, "explicit files stay open after menu tracking ends")
+        hosted.model.select(tab: .backlog)
+        hosted.spin(0.3)
+        XCTAssertFalse(held, "another tab's invisible files hold nothing")
+        hosted.model.select(tab: .now)
+        hosted.spin(0.3)
+        XCTAssertTrue(held, "returning to the visible inline files restores their hold")
+        hosted.model.toggleFiles(task.id)
+        hosted.spin(0.3)
+        XCTAssertFalse(held, "closing the list releases the hold")
+    }
+
     func testOpeningTheFilesGrowsTheRowByItsListAndLeavesTheSubtasksShut() throws {
         let hosted = try Hosted(height: 560)
         defer { hosted.close() }

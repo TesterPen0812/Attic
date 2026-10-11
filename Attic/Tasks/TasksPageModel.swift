@@ -186,6 +186,11 @@ final class TasksPageModel: ObservableObject {
     /// opens only the files, the subtasks count only the subtasks; each
     /// opens and closes on its own).
     @Published private(set) var expandedFiles: Set<UUID> = []
+
+    /// Only a files list visible on this tab holds the panel open.
+    var hasVisibleInlineFiles: Bool {
+        !expandedFiles.isEmpty && rows(for: tab).contains { expandedFiles.contains($0.id) }
+    }
     @Published private(set) var editingTitleID: UUID?
     /// The title being edited, with its shorthand (owner fix 4): what is
     /// typed as `#tag`, a date or `!` becomes a chip and applies on save.
