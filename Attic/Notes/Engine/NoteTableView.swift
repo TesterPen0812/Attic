@@ -150,6 +150,17 @@ final class NoteTableView: NSView {
     var engine: NoteEditorEngine? { attachment?.engine }
     var style: NoteTextStyle { attachment?.style ?? NoteTextStyle() }
 
+    /// The native text editor can install an I-beam over its attachment
+    /// views after their cursor rectangles were evaluated. Resolve the
+    /// table's actual resize hit strip again at that hover point.
+    func edgeCursor(atWindowPoint point: CGPoint) -> NSCursor? {
+        guard engine?.isReadOnly == false else { return .arrow }
+        let local = canvas.convert(point, from: nil)
+        guard local.y >= 0, local.y <= grid.height,
+              let edge = grid.columnEdge(near: local.x), edge < table.columnCount - 1 || grid.scrolls else { return nil }
+        return .resizeLeftRight
+    }
+
     // MARK: Layout
 
     /// The text column's width, from the frame TextKit gave the view.
@@ -727,6 +738,7 @@ final class NoteTableCanvas: NSView {
 
     override func resetCursorRects() {
         guard let table else { return }
+        guard table.engine?.isReadOnly == false else { addCursorRect(bounds, cursor: .arrow); return }
         var x: CGFloat = 0
         for (index, width) in table.grid.columnWidths.enumerated() {
             x += width

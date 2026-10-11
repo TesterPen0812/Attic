@@ -137,6 +137,9 @@ struct TaskRowView: View, Equatable {
         .help(TaskRowClick.help(status: task.status, isTopLevel: isTopLevel, isFamilyPinned: isFamilyPinned))
         .contextMenu { taskActions }
         .onChange(of: showsChildAttachments) { _, _ in syncAttachmentInteraction() }
+        .onReceive(uiState.renameDraft.$focusRequest.dropFirst()) { _ in
+            if isEditing { DispatchQueue.main.async { isRenameFocused = true } }
+        }
         .onDisappear {
             // Only this row's own popover mark; the picker has its own.
             if showsChildAttachments, uiState.presentedTaskAttachmentsID == task.id { uiState.presentedTaskAttachmentsID = nil }
@@ -179,6 +182,10 @@ struct TaskRowView: View, Equatable {
             beginTaskDrop: { uiState.endDragging() },
             attach: { TaskFileDrop.attach($0, $1, to: task.id, store: store, subtaskPanels: subtaskPanels) }
         ))
+        .onTaskFileDropEnded {
+            isFileDropTargeted = false
+            panelFileDrop?.end()
+        }
         .overlay {
             if isFileDropTargeted {
                 TaskDropOverlay(
@@ -232,7 +239,14 @@ struct TaskRowView: View, Equatable {
     private var titleArea: some View {
         if isEditing {
             TaskRenameField(draft: uiState.renameDraft, taskID: task.id,
-                            commit: commitRename, cancel: cancelRename)
+                            commit: commitRename, cancel: cancelRename,
+                            structuralKeys: task.parentID.map { parent in
+                                SubtaskBackspace(text: { uiState.editingDraftTitle },
+                                    remove: { uiState.backspaceEmptySubtask(store: store, parentID: parent, childID: task.id) },
+                                    undo: { uiState.undoSubtaskEdit(store: store, nativeHasUndo: $0) },
+                                    redo: { uiState.redoSubtaskEdit(store: store, nativeHasRedo: $0) },
+                                    didEdit: { uiState.noteSubtaskTextEdit(store: store) })
+                            })
                 .focused($isRenameFocused)
         } else {
             HStack(spacing: TaskRowLayout.pinnedStatusSpacing) {
@@ -562,6 +576,7 @@ private struct TaskRenameField: View {
     let taskID: UUID
     let commit: () -> Void
     let cancel: () -> Void
+    let structuralKeys: SubtaskBackspace?
 
     var body: some View {
         TextField("Task title", text: $draft.title, axis: .vertical)
@@ -569,6 +584,7 @@ private struct TaskRenameField: View {
             .lineLimit(1...6)
             .onSubmit(commit)
             .onExitCommand(perform: cancel)
+            .background { if let structuralKeys { structuralKeys } }
             .accessibilityIdentifier("edit-task-title-\(taskID.uuidString)")
     }
 }

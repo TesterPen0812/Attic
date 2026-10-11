@@ -38,14 +38,18 @@ class AtticNoteTableControlView: NSView {
     /// A click (the pointer moved less than 3 pt).
     var onClick: (() -> Void)?
     /// A drag: the pointer in the window, and whether it ended.
-    var onDrag: ((_ windowPoint: CGPoint, _ ended: Bool) -> Void)?
+    var onDrag: ((_ windowPoint: CGPoint, _ ended: Bool) -> Void)? {
+        didSet { window?.invalidateCursorRects(for: self) }
+    }
+    var hoverCursor: NSCursor { .arrow }
 
     override func mouseDown(with event: NSEvent) {
         let start = event.locationInWindow
         var dragging = false
+        defer { if dragging { NSCursor.pop() }; window?.invalidateCursorRects(for: self) }
         while let next = window?.nextEvent(matching: [.leftMouseDragged, .leftMouseUp]) {
             let point = next.locationInWindow
-            if !dragging, hypot(point.x - start.x, point.y - start.y) >= 3, onDrag != nil { dragging = true }
+            if !dragging, hypot(point.x - start.x, point.y - start.y) >= 3, onDrag != nil { dragging = true; NSCursor.closedHand.push() }
             if dragging { onDrag?(point, next.type == .leftMouseUp) }
             if next.type == .leftMouseUp { break }
         }
@@ -57,13 +61,14 @@ class AtticNoteTableControlView: NSView {
         return onClick != nil
     }
 
-    override func resetCursorRects() { addCursorRect(bounds, cursor: .arrow) }
+    override func resetCursorRects() { addCursorRect(bounds, cursor: hoverCursor) }
 }
 
 /// A row's or a column's grip: a 5 × 14 (row) or 18 × 5 (column) pill with
 /// three dots along it.
 @MainActor
 final class AtticNoteTableGripView: AtticNoteTableControlView {
+    override var hoverCursor: NSCursor { onDrag == nil ? .arrow : .openHand }
     enum Axis { case row, column }
     let axis: Axis
 

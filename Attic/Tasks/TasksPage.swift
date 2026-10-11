@@ -207,7 +207,7 @@ struct TasksPage: View {
         // Files dropped on a row attach to its task (the "Add to page"
         // label shows on the row under them): one destination for the page,
         // which finds the row from the rows' frames.
-        .onDrop(of: TaskDropContent.dropTypes, delegate: TasksFileDropDelegate(
+        .tasksFileDrop(delegate: TasksFileDropDelegate(
             target: { point in fileDropTarget(at: point) },
             canAccept: { content, id in content == .files && store.attachmentOwnerID(for: id) != nil },
             setTargeted: { id in
@@ -1593,13 +1593,21 @@ struct TasksPage: View {
                     renaming: (active ? model.renamingSubtaskID : nil).map { renaming in
                         (renaming, AtticTitleEditing(text: $model.subtaskRename, commit: { model.commitSubtaskRename() },
                                                      cancel: { model.cancelSubtaskRename() },
-                                                     accessibilityLabel: String(localized: "Rename subtask")))
+                                                     accessibilityLabel: String(localized: "Rename subtask"),
+                                                     emptyBackspace: { model.backspaceEmptySubtask() },
+                                            pageUndo: { native in (model.taskChangeOwnsUndo || !native) && model.undo().isApplied },
+                                            pageRedo: { native in (model.taskChangeOwnsRedo || !native) && model.redo().isApplied },
+                                            didEdit: { model.noteTextEdit() }))
                     },
                     newSubtask: model.newSubtaskParentID == id && active
                         ? AtticTitleEditing(text: $model.newSubtaskTitle, commit: { model.commitNewSubtask() },
                                             cancel: { model.cancelEditing() },
                                             accessibilityLabel: String(localized: "New subtask of \(row.model.title)"),
-                                            placeholder: String(localized: "Add subtask…"))
+                                            placeholder: String(localized: "Add subtask…"),
+                                            emptyBackspace: { model.backspaceEmptySubtask() },
+                                            pageUndo: { native in (model.taskChangeOwnsUndo || !native) && model.undo().isApplied },
+                                            pageRedo: { native in (model.taskChangeOwnsRedo || !native) && model.redo().isApplied },
+                                            didEdit: { model.noteTextEdit() })
                         : nil,
                     popover: movePopover(parentID: id, open: live.metaPopover),
                     onReorder: { subtaskID, index, group in
@@ -3893,7 +3901,11 @@ struct TasksRowKey: Equatable {
     static func == (lhs: Self, rhs: Self) -> Bool {
         !lhs.isLive && !rhs.isLive && lhs.model == rhs.model && lhs.isSelected == rhs.isSelected
             && lhs.selectionRun == rhs.selectionRun && lhs.isExpanded == rhs.isExpanded && lhs.isDropTarget == rhs.isDropTarget
-            && lhs.isFocused == rhs.isFocused && lhs.tab == rhs.tab && lhs.layout == rhs.layout
+            && lhs.isFocused == rhs.isFocused && lhs.tab == rhs.tab
+            // Native layout resizes the row. Its controls and callbacks
+            // change only when the chrome insets change, not every pixel
+            // of the panel size (owner F-14).
+            && lhs.layout.chromeInsets == rhs.layout.chromeInsets
     }
 }
 
@@ -3909,10 +3921,27 @@ struct TasksRowSnapshot<Content: View>: View, Equatable {
     }
 }
 
+/// DropDelegate has no cancellation callback. The drop session supplies
+/// its terminal event, including cancel without an exit.
+private struct TasksFileDropDestination: ViewModifier {
+    let delegate: TasksFileDropDelegate
+    func body(content: Content) -> some View {
+        content.onDrop(of: TaskDropContent.dropTypes, delegate: delegate)
+            .onTaskFileDropEnded { delegate.setTargeted(nil) }
+            .onDisappear { delegate.setTargeted(nil) }
+    }
+}
+
+extension View {
+    func tasksFileDrop(delegate: TasksFileDropDelegate) -> some View {
+        modifier(TasksFileDropDestination(delegate: delegate))
+    }
+}
+
 /// Files dropped on the Tasks page (round 11): the row under them takes
 /// them. Files are accepted anywhere on the page, so the drop is followed
 /// as it moves; only a row that can hold files highlights and takes them.
-private struct TasksFileDropDelegate: DropDelegate {
+struct TasksFileDropDelegate: DropDelegate {
     let target: (CGPoint) -> UUID?
     let canAccept: (TaskDropContent, UUID) -> Bool
     let setTargeted: (UUID?) -> Void
@@ -4121,7 +4150,38 @@ private struct TasksListEdges<Mask: View>: ViewModifier {
                 .contentMargins(.bottom, bottomClearance, for: .scrollIndicators)
                 .atticScrollEdgeEffect(style)
                 .mask { cleanMask }
+                .mask { TasksPlainControlsMask(stackHeight: stack.height, bottomInset: bottomInset) }
         }
+    }
+}
+
+/// The strip, selection bar and failure/paste lines have plain labels,
+/// unlike the glass add bar. Rows disappear before those labels and may
+/// still run behind the add bar. The measured stack follows immediately;
+/// the delayed mask height must never leave two text lines superimposed.
+struct TasksPlainControlsMask: View {
+    let stackHeight: CGFloat
+    let bottomInset: CGFloat
+
+    var body: some View {
+        GeometryReader { proxy in
+            if stackHeight > AtticControlSize.addBarHeight + 0.5 {
+                let height = max(1, proxy.size.height)
+                let top = max(0, height - bottomInset - stackHeight)
+                let bottom = max(top, height - bottomInset - AtticControlSize.addBarHeight)
+                LinearGradient(stops: [
+                    .init(color: .black, location: 0),
+                    .init(color: .black, location: max(0, top - AtticSpacing.s8) / height),
+                    .init(color: .clear, location: top / height),
+                    .init(color: .clear, location: bottom / height),
+                    .init(color: .black, location: min(height, bottom + AtticSpacing.s8) / height),
+                    .init(color: .black, location: 1)
+                ], startPoint: .top, endPoint: .bottom)
+            } else {
+                Color.black
+            }
+        }
+        .allowsHitTesting(false)
     }
 }
 

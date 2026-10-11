@@ -39,11 +39,9 @@ final class NotesPageChrome: ObservableObject {
     @Published var fileRequest: FileRequest? {
         didSet { if let fileRequest { presentedFileRequest = fileRequest } }
     }
-    /// What the open panel on screen was opened for. SwiftUI sets the
-    /// presentation binding to false (clearing `fileRequest`) before it
-    /// calls the importer's completion, so the completion reads this (CU
-    /// P3-01: a `/` Image or File… pick was taken for a plain Insert and
-    /// left `/image` or `/file` in the text).
+    /// What the open panel was opened for, retained until its completion.
+    /// The picker checks this ticket before consuming it, so a superseded
+    /// `/` Image or File… completion never becomes a plain Insert.
     private(set) var presentedFileRequest: FileRequest?
 
     /// The open panel finished: what it was opened for, once.

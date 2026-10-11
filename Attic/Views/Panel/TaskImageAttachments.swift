@@ -118,6 +118,7 @@ final class TaskAttachmentPickerSession {
 
     let owner: UUID?
     private let panel: NSOpenPanel
+    private weak var ownerWindow: NSWindow?
     private var completion: (@MainActor ([URL]) -> Void)?
     private var closeObservation: NSObjectProtocol?
     private var screenObservation: NSObjectProtocol?
@@ -126,11 +127,13 @@ final class TaskAttachmentPickerSession {
     var panelForTesting: NSOpenPanel { panel }
     var isFinished: Bool { completion == nil }
 
-    static func present(owner: UUID?, completion: @escaping @MainActor ([URL]) -> Void) {
+    static func present(owner: UUID?, parentWindow: NSWindow? = nil, allowedTypes: [UTType] = [.data],
+                        allowsMultipleSelection: Bool = true, completion: @escaping @MainActor ([URL]) -> Void) {
         // One at a time by construction: the marks refuse a second picker,
         // and a stale session that somehow survived is cancelled first.
         current?.finish(urls: [])
-        let session = TaskAttachmentPickerSession(owner: owner, completion: completion)
+        let session = TaskAttachmentPickerSession(owner: owner, parentWindow: parentWindow, allowedTypes: allowedTypes,
+                                                  allowsMultipleSelection: allowsMultipleSelection, completion: completion)
         current = session
         session.begin()
     }
@@ -140,16 +143,18 @@ final class TaskAttachmentPickerSession {
         current.finish(urls: [])
     }
 
-    private init(owner: UUID?, completion: @escaping @MainActor ([URL]) -> Void) {
+    private init(owner: UUID?, parentWindow: NSWindow?, allowedTypes: [UTType], allowsMultipleSelection: Bool,
+                 completion: @escaping @MainActor ([URL]) -> Void) {
         self.owner = owner
         self.completion = completion
+        ownerWindow = parentWindow ?? NSApp.keyWindow ?? NSApp.mainWindow
         panel = NSOpenPanel()
         panel.title = "Add Attachment"
         panel.prompt = "Attach"
-        panel.allowsMultipleSelection = true
+        panel.allowsMultipleSelection = allowsMultipleSelection
         panel.canChooseDirectories = false
         panel.canChooseFiles = true
-        panel.allowedContentTypes = [.data]
+        panel.allowedContentTypes = allowedTypes
         panel.level = Self.windowLevel
         panel.collectionBehavior = [.moveToActiveSpace, .fullScreenAuxiliary]
     }
@@ -179,6 +184,7 @@ final class TaskAttachmentPickerSession {
                 self.finish(urls: response == .OK ? self.panel.urls : [])
             }
         }
+        positionBesideOwner()
         panel.makeKeyAndOrderFront(nil)
         DispatchQueue.main.asyncAfter(deadline: .now() + Self.presentationCheckDelay) { [weak self] in
             self?.ensureReachable(finishIfHidden: true)
@@ -197,8 +203,33 @@ final class TaskAttachmentPickerSession {
         if !onScreen {
             panel.center()
         }
+        positionBesideOwner()
         panel.level = Self.windowLevel
         panel.makeKeyAndOrderFront(nil)
+    }
+
+    private func positionBesideOwner() {
+        guard let ownerWindow, let screen = ownerWindow.screen ?? NSScreen.main,
+              let frame = Self.placement(size: panel.frame.size, beside: ownerWindow.frame, in: screen.visibleFrame) else { return }
+        panel.setFrame(frame, display: panel.isVisible)
+    }
+
+    /// Detached from the utility panel so AppKit cannot resize or reanchor
+    /// its owner to accommodate a sheet. Prefer an unchanged picker size;
+    /// on narrower displays, fit the largest adjacent usable rectangle.
+    static func placement(size: CGSize, beside owner: CGRect, in screen: CGRect) -> CGRect? {
+        let gap: CGFloat = 12
+        let areas = [
+            CGRect(x: screen.minX, y: screen.minY, width: max(0, owner.minX - gap - screen.minX), height: screen.height),
+            CGRect(x: owner.maxX + gap, y: screen.minY, width: max(0, screen.maxX - owner.maxX - gap), height: screen.height),
+            CGRect(x: screen.minX, y: owner.maxY + gap, width: screen.width, height: max(0, screen.maxY - owner.maxY - gap)),
+            CGRect(x: screen.minX, y: screen.minY, width: screen.width, height: max(0, owner.minY - gap - screen.minY))
+        ].map { $0.intersection(screen) }.filter { !$0.isNull && $0.width >= 500 && $0.height >= 320 }
+        guard let area = areas.first(where: { $0.width >= size.width && $0.height >= size.height })
+                ?? areas.max(by: { $0.width * $0.height < $1.width * $1.height }) else { return nil }
+        let width = min(size.width, area.width), height = min(size.height, area.height)
+        return CGRect(x: min(max(owner.midX - width / 2, area.minX), area.maxX - width),
+                      y: min(max(owner.maxY - height, area.minY), area.maxY - height), width: width, height: height)
     }
 
     /// The single exit. Idempotent: the first caller wins, later ones are

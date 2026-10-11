@@ -1573,6 +1573,49 @@ final class TasksPageModel: ObservableObject {
         if open != expanded.contains(id) { toggleExpanded(id) }
     }
 
+    /// An empty editor's Backspace removes its own line, then edits the
+    /// previous visible sibling at its end. Store deletion remains the
+    /// library's duplicate-safe, fallible, undoable operation.
+    @discardableResult
+    func backspaceEmptySubtask() -> Bool {
+        if let parent = newSubtaskParentID {
+            guard newSubtaskTitle.isEmpty else { return false }
+            let previous = quickLookSubtasks(of: parent, store.subtasks(of: parent)).last?.id
+            newSubtaskParentID = nil
+            if let previous { beginRenamingSubtask(previous) }
+            library.undo.record(UndoStep(name: String(localized: "Remove empty subtask"), undoOutcome: { [weak self] in
+                guard let self, self.store.task(withID: parent) != nil else { return .obsolete }
+                guard self.canRestoreEmptySubtaskLine else { return .failed }
+                self.cancelEditing()
+                self.beginAddingSubtask(to: parent)
+                return .applied
+            }, redoOutcome: { [weak self] in
+                guard let self, self.store.task(withID: parent) != nil else { return .obsolete }
+                guard self.canRestoreEmptySubtaskLine else { return .failed }
+                self.cancelEditing()
+                if let previous { self.beginRenamingSubtask(previous) }
+                return .applied
+            }), in: .tasks)
+            return true
+        }
+        guard let id = renamingSubtaskID, subtaskRename.isEmpty,
+              let parent = store.task(withID: id)?.parentID else { return false }
+        let siblings = quickLookSubtasks(of: parent, store.subtasks(of: parent))
+        let previous = siblings.firstIndex(where: { $0.id == id }).flatMap { $0 > 0 ? siblings[$0 - 1].id : nil }
+        guard deleteSubtask(id).isApplied else { return false }
+        if let previous { beginRenamingSubtask(previous) }
+        return true
+    }
+
+    /// Undo closures must never save/record another history step while
+    /// UndoRoute is applying one. Dirty native typing keeps its own Undo
+    /// first; a direct page Undo also preserves that draft and its history.
+    private var canRestoreEmptySubtaskLine: Bool {
+        if hasUnsavedEdit { return false }
+        if let id = renamingSubtaskID, subtaskRename != store.task(withID: id)?.title { return false }
+        return newSubtaskTitle.isEmpty
+    }
+
     func beginAddingSubtask(to id: UUID) {
         guard newSubtaskParentID != id else { return }
         guard finishEditing() else { return }

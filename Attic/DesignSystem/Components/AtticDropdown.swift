@@ -628,7 +628,7 @@ struct AtticDropdownSpace {
         while let current = candidate {
             if let container = current as? AtticPanelContentContainer {
                 parent = container.overlayLayer
-                bounds = AtticDropdownLayout.topDown(container.hostingView.frame, in: parent).insetBy(dx: margin, dy: margin)
+                bounds = Self.visibleBounds(AtticDropdownLayout.topDown(container.hostingView.frame, in: parent).insetBy(dx: margin, dy: margin), parent: parent)
                 return
             }
             candidate = current.superview
@@ -642,7 +642,17 @@ struct AtticDropdownSpace {
         parent = commonParent
         let visible = bounding.map { commonParent.convert($0.visibleRect, from: $0) }
             ?? commonParent.convert(content.bounds, from: content)
-        bounds = AtticDropdownLayout.topDown(visible, in: commonParent).insetBy(dx: margin, dy: margin)
+        bounds = Self.visibleBounds(AtticDropdownLayout.topDown(visible, in: commonParent).insetBy(dx: margin, dy: margin), parent: commonParent)
+    }
+
+    private static func visibleBounds(_ bounds: CGRect, parent: NSView) -> CGRect {
+        guard let window = parent.window, let screen = window.screen else { return bounds }
+        let screenRect = parent.convert(window.convertFromScreen(screen.visibleFrame), from: nil)
+        let visible = bounds.intersection(AtticDropdownLayout.topDown(screenRect, in: parent)
+            .insetBy(dx: AtticDropdownMetrics.panelMargin, dy: AtticDropdownMetrics.panelMargin))
+        // An unshown/offscreen host has no usable screen intersection;
+        // its own bounds still define headless layout.
+        return visible.isNull || visible.isEmpty ? bounds : visible
     }
 
     /// `rect` in `view`, top-down in this space.
@@ -985,6 +995,8 @@ final class AtticDropdownPresenter {
     private weak var previousResponder: NSResponder?
     private var monitors: [Any] = []
     private var resignObserver: NSObjectProtocol?
+    private var geometryObservers: [NSObjectProtocol] = []
+    private var placementScheduled = false
     private var removal: DispatchWorkItem?
     private var updateScheduled = false
     private var pendingClose: DispatchWorkItem?
@@ -1230,6 +1242,46 @@ final class AtticDropdownPresenter {
         resignObserver = NotificationCenter.default.addObserver(
             forName: NSWindow.didResignKeyNotification, object: window, queue: .main
         ) { [weak self] _ in MainActor.assumeIsolated { self?.dismiss() } }
+        // Content height can stay exactly the same while the panel or its
+        // anchor moves. Refitting cannot depend on a new height preference.
+        let center = NotificationCenter.default
+        for name in [NSWindow.didResizeNotification, NSWindow.didMoveNotification, NSWindow.didChangeScreenNotification] {
+            geometryObservers.append(center.addObserver(forName: name, object: window, queue: .main) { [weak self] _ in
+                MainActor.assumeIsolated { self?.schedulePlacementUpdate() }
+            })
+        }
+        geometryObservers.append(center.addObserver(forName: NSApplication.didChangeScreenParametersNotification, object: nil, queue: .main) { [weak self] _ in
+            MainActor.assumeIsolated { self?.schedulePlacementUpdate() }
+        })
+        var ancestor = anchor
+        while let view = ancestor {
+            view.postsFrameChangedNotifications = true
+            view.postsBoundsChangedNotifications = true
+            for name in [NSView.frameDidChangeNotification, NSView.boundsDidChangeNotification] {
+                geometryObservers.append(center.addObserver(forName: name, object: view, queue: .main) { [weak self] _ in
+                    MainActor.assumeIsolated { self?.schedulePlacementUpdate() }
+                })
+            }
+            ancestor = view.superview
+        }
+    }
+
+    private func schedulePlacementUpdate() {
+        guard isOpen, !placementScheduled else { return }
+        placementScheduled = true
+        DispatchQueue.main.async { [weak self] in
+            guard let self else { return }
+            self.placementScheduled = false
+            if AtticOverlayHierarchy.isInLayoutPass { self.schedulePlacementUpdate(); return }
+            guard self.isOpen, let host = self.host, let anchor = self.anchor,
+                  let space = AtticDropdownSpace(around: anchor) else { return }
+            let placed = space.place(idealWidth: self.openIdealWidth, height: self.naturalHeight,
+                                     anchor: space.anchor(anchor.bounds, in: anchor), prefer: self.prefer, current: self.stage.side)
+            if self.stage.side != placed.side { self.stage.side = placed.side }
+            if self.stage.height != placed.heightLimit { self.stage.height = placed.heightLimit }
+            if self.openWidth != placed.width { self.openWidth = placed.width; self.stage.width = placed.width }
+            space.show(host, at: placed)
+        }
     }
 
     /// Let the active input method cancel composition before dismissing.
@@ -1263,6 +1315,8 @@ final class AtticDropdownPresenter {
         monitors = []
         if let resignObserver { NotificationCenter.default.removeObserver(resignObserver) }
         resignObserver = nil
+        geometryObservers.forEach { NotificationCenter.default.removeObserver($0) }
+        geometryObservers = []
     }
 }
 

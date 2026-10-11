@@ -92,6 +92,49 @@ final class NoteEditorTextView: NSTextView, NSAccessibilityCustomRotorItemSearch
     override func mouseMoved(with event: NSEvent) {
         super.mouseMoved(with: event)
         updateMonoCopy(at: convert(event.locationInWindow, from: nil))
+        hostedCursor(atWindowPoint: event.locationInWindow)?.set()
+    }
+
+    override func cursorUpdate(with event: NSEvent) {
+        super.cursorUpdate(with: event)
+        hostedCursor(atWindowPoint: event.locationInWindow)?.set()
+    }
+
+    private func hostedCursor(atWindowPoint point: CGPoint) -> NSCursor? {
+        var target = super.hitTest(convert(point, from: nil))
+        while let view = target, view !== self {
+            if let control = view as? AtticNoteTableControlView { return control.hoverCursor }
+            if view is NoteResizeHandleView { return NSCursor.frameResize(position: .bottomRight, directions: .all) }
+            if view is NoteMonoCopyButton { return .arrow }
+            if let table = view as? NoteTableView { return table.edgeCursor(atWindowPoint: point) }
+            target = view.superview
+        }
+        let local = convert(point, from: nil)
+        if isEditable, checkboxLocation(at: local) != nil { return .arrow }
+        let index = characterIndexForInsertion(at: local)
+        if let engine {
+            for location in [index, max(0, index - 1)] {
+                if let object = engine.object(at: location),
+                   object is NoteImageAttachment || object is NoteFileAttachment,
+                   let rect = engine.rect(for: NSRange(location: location, length: 1)), rect.contains(local) {
+                    return .arrow
+                }
+            }
+        }
+        if !isEditable {
+            // Insertion indices also resolve in the blank margin. Only the
+            // linked glyph itself is a link target; check both sides of a caret.
+            if let storage = textStorage, let engine {
+                for location in [index, max(0, index - 1)] where location < storage.length {
+                    if storage.attribute(.link, at: location, effectiveRange: nil) != nil {
+                        let range = (storage.string as NSString).rangeOfComposedCharacterSequence(at: location)
+                        if let rect = engine.rect(for: range), rect.contains(local) { return .pointingHand }
+                    }
+                }
+            }
+            return .arrow
+        }
+        return nil
     }
 
     override func mouseExited(with event: NSEvent) {

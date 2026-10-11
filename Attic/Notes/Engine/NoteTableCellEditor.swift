@@ -36,6 +36,16 @@ final class NoteTableCellEditor: NSTextView, NSTextViewDelegate {
         return editor
     }
 
+    override func mouseMoved(with event: NSEvent) {
+        super.mouseMoved(with: event)
+        table?.edgeCursor(atWindowPoint: event.locationInWindow)?.set()
+    }
+
+    override func cursorUpdate(with event: NSEvent) {
+        super.cursorUpdate(with: event)
+        table?.edgeCursor(atWindowPoint: event.locationInWindow)?.set()
+    }
+
     private func configure() {
         delegate = self
         isRichText = false
