@@ -150,8 +150,11 @@ final class PhaseXDesign1Tests: XCTestCase {
             "This attachment’s place in the note could not be read. Try again. Your note is kept."
         ])
         XCTAssertEqual(NoteNotice.Kind.readFailed.headline, "Can’t read")
-        XCTAssertEqual(NoteNotice.Kind.notReadable.headline, "File issue")
-        XCTAssertEqual(NoteNotice.Kind.imageGone.headline, "Not found")
+        XCTAssertEqual(NoteNotice.Kind.notReadable.headline, "Can’t read")
+        XCTAssertEqual(NoteNotice.Kind.imageGone.headline, "Missing file")
+        XCTAssertEqual(NoteNotice.Kind.notKept.headline, "Kept original")
+        XCTAssertEqual(NoteNotice.Kind.importBusy.headline, "Still adding")
+        XCTAssertEqual(NoteNotice.Kind.damaged.headline, "Damaged")
         XCTAssertEqual(NoteNotice.Kind.notice.headline, "Heads up")
         XCTAssertEqual(NoteNotice.Kind.didntWork.headline, "Didn’t work")
     }
