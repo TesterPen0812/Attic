@@ -1087,6 +1087,7 @@ final class AtticDropdownPresenter {
     private var contentKeyHandler: ((NSEvent) -> Bool)?
     var label = ""
     var design = AtticDesignContext()
+    var tagColouring = AtticTagColouring()
     var content = AnyView(EmptyView())
 
     private weak var anchor: NSView?
@@ -1110,6 +1111,7 @@ final class AtticDropdownPresenter {
                 self?.grow(toWidth: width)
             } : nil)
             .environment(\.atticDropdownRegisterKeys, { [weak self] handler in self?.contentKeyHandler = handler })
+            .environment(\.atticTagColouring, tagColouring)
             .atticDesign(design))
     }
 
@@ -1462,6 +1464,9 @@ struct AtticDropdownAnchor: NSViewRepresentable {
         presenter.contentHeight = contentHeight
         presenter.contentWidth = contentWidth
         presenter.design = design
+        // The card is hosted apart from the page: it takes the tag colours
+        // from where it opens, so a tag's dot is the hue its row shows.
+        presenter.tagColouring = context.environment.atticTagColouring
         guard isPresented else {
             if presenter.isOpen || presenter.wantsOpen { presenter.closeAfterViewUpdate() }
             return
