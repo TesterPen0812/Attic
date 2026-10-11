@@ -146,6 +146,15 @@ final class TasksAddBarState: ObservableObject {
     }
 }
 
+/// A rename's draft is observed only by the row being edited. Page state
+/// still publishes begin/commit/cancel, but typing and caret movement do not
+/// invalidate the page, other rows, or the kept pager pages.
+@MainActor
+final class TasksTitleDraftState: ObservableObject {
+    @Published var text = TaskAddBarText()
+    @Published var caret: Int?
+}
+
 /// The Tasks page's state and every action it takes. All changes go through
 /// `AtticLibrary`, so each is one undoable step in the Tasks history (the
 /// same route ⌘Z, the toast and agents use). Lives as long as the panel
@@ -173,8 +182,15 @@ final class TasksPageModel: ObservableObject {
     @Published private(set) var editingTitleID: UUID?
     /// The title being edited, with its shorthand (owner fix 4): what is
     /// typed as `#tag`, a date or `!` becomes a chip and applies on save.
-    @Published var titleEdit = TaskAddBarText()
-    @Published var titleEditCaret: Int?
+    let titleDraft = TasksTitleDraftState()
+    var titleEdit: TaskAddBarText {
+        get { titleDraft.text }
+        set { titleDraft.text = newValue }
+    }
+    var titleEditCaret: Int? {
+        get { titleDraft.caret }
+        set { titleDraft.caret = newValue }
+    }
     /// The title editor's undo history, text and pieces together (round 4).
     var titleHistory = TaskDraftHistory()
 

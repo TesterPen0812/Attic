@@ -1519,23 +1519,30 @@ struct TasksPage: View {
             TasksRowSnapshot(key: TasksRowKey(model: row.model, isSelected: isSelected, selectionRun: run, isExpanded: isExpanded,
                                               isDropTarget: live.isDropTarget, isFocused: live.focus.isFocused, tab: tab,
                                               layout: layout, isLive: editing || live.metaPopover != nil)) {
-                AtticTaskRow(
-                    model: row.model,
-                    isSelected: isSelected,
-                    selectionRun: run,
-                    isExpanded: isExpanded,
-                    dropLabel: live.isDropTarget ? String(localized: "Add to page") : nil,
-                    actions: actions(for: id, in: tab),
-                    onToggleExpanded: { toggleExpanded(id) },
-                    onSelect: { rowClicked(id, tab: tab) },
-                    focus: live.focus,
-                    titleEditing: editing ? titleEditing(for: id) : nil,
-                    // Every row, done ones too (round 10): a finished task shows
-                    // no date or tags, but its pickers open from its row.
-                    meta: rowMeta(for: id, open: live.metaPopover),
-                    onActions: { anchor in showActions(for: id, anchor: anchor, tab: tab) }
-                )
-                .contextMenu { rowMenu(row, tab: tab) }
+                let drawRow = {
+                    AtticTaskRow(
+                        model: row.model,
+                        isSelected: isSelected,
+                        selectionRun: run,
+                        isExpanded: isExpanded,
+                        dropLabel: live.isDropTarget ? String(localized: "Add to page") : nil,
+                        actions: actions(for: id, in: tab),
+                        onToggleExpanded: { toggleExpanded(id) },
+                        onSelect: { rowClicked(id, tab: tab) },
+                        focus: live.focus,
+                        titleEditing: editing ? titleEditing(for: id) : nil,
+                        // Every row, done ones too (round 10): a finished task shows
+                        // no date or tags, but its pickers open from its row.
+                        meta: rowMeta(for: id, open: live.metaPopover),
+                        onActions: { anchor in showActions(for: id, anchor: anchor, tab: tab) }
+                    )
+                    .contextMenu { rowMenu(row, tab: tab) }
+                }
+                if editing {
+                    TasksTitleDraftView(draft: model.titleDraft, content: drawRow)
+                } else {
+                    drawRow()
+                }
             }
             .equatable()
         } below: { live in
@@ -4392,4 +4399,13 @@ enum TasksTabOrder {
         for stop in stops[..<index].reversed() { if case let .row(row) = stop { return row } }
         return nil
     }
+}
+
+/// The editor's shorthand chips and text refresh at the row boundary.
+/// The closure reads the live draft each time this observer redraws.
+private struct TasksTitleDraftView<Content: View>: View {
+    @ObservedObject var draft: TasksTitleDraftState
+    @ViewBuilder let content: () -> Content
+
+    var body: some View { content() }
 }

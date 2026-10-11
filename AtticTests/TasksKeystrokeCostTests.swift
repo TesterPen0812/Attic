@@ -29,10 +29,40 @@ final class TasksKeystrokeCostTests: XCTestCase {
         pageChanges = 0
         for key in "twenty five ordinary keys" { model.editingTitle.append(key) }
         print("PERF2_TASK_RENAME keys=25 page_publications=\(pageChanges) store_revisions=\(store.revision - revision)")
+        XCTAssertEqual(pageChanges, 0, "only the edited row observes rename keys")
         XCTAssertEqual(store.revision, revision, "typing a rename must not save per key")
         XCTAssertEqual(task.title, "Original")
         XCTAssertTrue(model.commitTitle())
         XCTAssertEqual(store.task(withID: task.id)?.title, "Originaltwenty five ordinary keys")
+
+        let (hostModel, _, hosting) = try page(tasks: 500, addBarFocused: false)
+        let id = try XCTUnwrap(hostModel.rows(for: .now).first?.id)
+        hostModel.beginEditingTitle(id)
+        RunLoop.current.run(until: Date().addingTimeInterval(0.3))
+        hosting.layoutSubtreeIfNeeded()
+        func titleField(in view: NSView) -> AtticTokenTextView? {
+            if let field = view as? AtticTokenTextView, field.accessibilityIdentifier() == "AtticTitleField" { return field }
+            for child in view.subviews { if let field = titleField(in: child) { return field } }
+            return nil
+        }
+        let field = try XCTUnwrap(titleField(in: hosting))
+        window?.makeFirstResponder(field)
+        field.setSelectedRange(NSRange(location: field.string.utf16.count, length: 0))
+        RunLoop.current.run(until: Date().addingTimeInterval(0.1))
+        hosting.layoutSubtreeIfNeeded()
+        var hostChanges = 0
+        var cellChanges = 0
+        let pageObservation = hostModel.objectWillChange.sink { hostChanges += 1 }
+        let cellsObservation = hostModel.cellUpdates.objectWillChange.sink { cellChanges += 1 }
+        defer { pageObservation.cancel(); cellsObservation.cancel() }
+        let times = "twenty five ordinary keys".map { keystroke(String($0), into: field, hosting: hosting) }
+        print("PERF3_RENAME_FRAME keys=25 page_publications=\(hostChanges) all_cells_publications=\(cellChanges) median_ms=\(TasksFrameCostTests.median(times)) raw_ms=\(times)")
+        XCTAssertEqual(hostChanges, 0)
+        XCTAssertEqual(cellChanges, 0)
+        XCTAssertTrue(hostModel.editingTitle.hasSuffix("twenty five ordinary keys"))
+        XCTAssertTrue(hostModel.commitTitle())
+        XCTAssertTrue(hostModel.store.task(withID: id)?.title.hasSuffix("twenty five ordinary keys") == true)
+
     }
     #endif
 
@@ -46,14 +76,14 @@ final class TasksKeystrokeCostTests: XCTestCase {
         override var isKeyWindow: Bool { true }
     }
 
-    private func page(tasks count: Int) throws -> (model: TasksPageModel, field: AtticTokenTextView, hosting: NSView) {
+    private func page(tasks count: Int, addBarFocused: Bool = true) throws -> (model: TasksPageModel, field: AtticTokenTextView, hosting: NSView) {
         let store = try makeTestStore()
         for index in 0..<count { _ = store.create(title: "Task number \(index)") }
         let library = AtticLibrary(tasks: store)
         let model = TasksPageModel(library: library)
         let size = CGSize(width: 344, height: 520)
         let root = TasksPage(model: model, store: store, layout: PanelPageLayout(cornerSize: 52, panelSize: size),
-                             addBarFocused: .constant(true))
+                             addBarFocused: .constant(addBarFocused))
             .frame(width: size.width, height: size.height)
             .atticDesign(.default)
         let hosting = NSHostingView(rootView: root)

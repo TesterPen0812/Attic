@@ -252,8 +252,25 @@ struct AtticTokenField: NSViewRepresentable {
             reportSelection(of: textView)
         }
 
+        private var modelSelectionReportPending = false
+
         func textViewDidChangeSelection(_ notification: Notification) {
             guard let textView = view?.textView, !isEditPending else { return }
+            if isApplyingModel {
+                // AppKit reports the replacement's selection synchronously
+                // inside updateNSView. Refresh the draft after that SwiftUI
+                // update, using the final selection rather than publishing
+                // back into the view that is still being updated.
+                guard !modelSelectionReportPending else { return }
+                modelSelectionReportPending = true
+                DispatchQueue.main.async { [weak self, weak textView] in
+                    guard let self else { return }
+                    self.modelSelectionReportPending = false
+                    guard let textView, textView.delegate === self, !self.isEditPending else { return }
+                    self.reportSelection(of: textView)
+                }
+                return
+            }
             reportSelection(of: textView)
         }
 
