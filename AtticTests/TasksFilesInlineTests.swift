@@ -96,9 +96,25 @@ final class TasksFilesInlineTests: XCTestCase {
 
     // MARK: - On the page
 
+    func testR12VisibleInlineFilesAreNotATypingOrEditingLock() throws {
+        let state = PanelUIState()
+        let hosted = try Hosted(height: 560, keyWindow: false,
+            chrome: TasksPageChrome(editLock: { state.setInteractionLock(.taskEditing, isActive: $0) },
+                filesLock: { state.setInteractionLock(.taskFilesVisible, isActive: $0) }))
+        defer { hosted.close() }
+        let task = try XCTUnwrap(hosted.model.rows(for: .now).first)
+        hosted.model.toggleFiles(task.id)
+        hosted.spin(0.3)
+        XCTAssertTrue(hosted.model.hasVisibleInlineFiles)
+        XCTAssertFalse(state.interactionLockReasons.contains(.taskEditing), "a files list is not someone editing")
+        XCTAssertEqual(state.interactionLockReasons, [.taskFilesVisible])
+        XCTAssertTrue(MainPanelAutoHidePolicy.isInteractionLocked(reasons: state.interactionLockReasons,
+            pointerInside: false, secondsSinceKeyboardInput: 60))
+    }
+
     func testVisibleInlineFilesHoldThePanelAndClosingOrChangingTabReleasesIt() throws {
         var held = false
-        let hosted = try Hosted(height: 560, keyWindow: false, chrome: TasksPageChrome(editLock: { held = $0 }))
+        let hosted = try Hosted(height: 560, keyWindow: false, chrome: TasksPageChrome(filesLock: { held = $0 }))
         defer { hosted.close() }
         let task = try XCTUnwrap(hosted.model.rows(for: .now).first)
         XCTAssertFalse(held)

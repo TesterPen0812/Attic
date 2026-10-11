@@ -90,6 +90,21 @@ final class PanelIntegrationTests: XCTestCase {
         XCTAssertTrue(hidden)
     }
 
+    func testR12FilesHoldAllowsAgentShowAndTrackpadSwipeWhileThePanelIsKey() throws {
+        let panel = try makePanel()
+        panel.uiState.setPanelKey(true)
+        panel.uiState.setInteractionLock(.taskFilesVisible, isActive: true)
+        XCTAssertFalse(panel.presenter.isUserTypingInPanel)
+        XCTAssertTrue(MainPanelAutoHidePolicy.isInteractionLocked(reasons: panel.uiState.interactionLockReasons,
+            pointerInside: false, secondsSinceKeyboardInput: 60))
+        let event = try XCTUnwrap(NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: [],
+            timestamp: 0, windowNumber: 0, context: nil, characters: "", charactersIgnoringModifiers: "", isARepeat: false, keyCode: 0))
+        XCTAssertEqual(panel.controller.panelForTesting.canBeginTrackpadSwipe?(event), true)
+        panel.uiState.setInteractionLock(.taskEditing, isActive: true)
+        XCTAssertTrue(panel.presenter.isUserTypingInPanel, "real editing still protects the user")
+        XCTAssertEqual(panel.controller.panelForTesting.canBeginTrackpadSwipe?(event), false)
+    }
+
     // MARK: Agent `show` over the real panel
 
     /// A canvas text editor sets no interaction lock; `show` must still see

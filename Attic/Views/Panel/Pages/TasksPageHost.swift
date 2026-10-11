@@ -50,6 +50,7 @@ struct TasksPageHost: View {
 
     @State private var addBarFocused = false
     @State private var editHold = PanelEditHold()
+    @State private var filesHold = PanelEditHold()
     /// The shell's one toast host: the page's Undo toasts show there.
     @Environment(\.atticPanelToasts) private var toasts
 
@@ -66,6 +67,10 @@ struct TasksPageHost: View {
                 editLock: { [editHold] editing in
                     editHold.apply = { uiState.setInteractionLock(.taskEditing, isActive: $0) }
                     editHold.set(editing)
+                },
+                filesLock: { [filesHold] visible in
+                    filesHold.apply = { uiState.setInteractionLock(.taskFilesVisible, isActive: $0) }
+                    filesHold.set(visible)
                 }
             )
         )
@@ -80,9 +85,13 @@ struct TasksPageHost: View {
         // 5): an editor left open behind Notes never keeps Notes up.
         .onChange(of: isCurrent) { _, current in
             editHold.setSuspended(!current)
+            filesHold.setSuspended(!current)
             model.isPageShown = current
         }
-        .onDisappear { editHold.setSuspended(true) }
+        .onDisappear {
+            editHold.setSuspended(true)
+            filesHold.setSuspended(true)
+        }
         // Kept built behind another page, it shows again where it was left
         // (its tab, its selection): only a reveal of the panel starts it on
         // Now (`revealCount`, below).
@@ -112,6 +121,7 @@ struct TasksPageHost: View {
                 }
             }
             editHold.setSuspended(!isCurrent)
+            filesHold.setSuspended(!isCurrent)
             if model.isPageShown != isCurrent { model.isPageShown = isCurrent }
             // Only the page shown takes the shell's focus (a page built
             // behind Notes, or prepared on approach, never takes it).

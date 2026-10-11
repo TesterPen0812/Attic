@@ -351,6 +351,39 @@ final class NotesShortcutMetadataTests: XCTestCase {
 
 @MainActor
 final class PlainNoteTitleTests: XCTestCase {
+    func testR12UndoTitleJoinRestoresBodyMarksAndLinkTargetsEvenAfterSave() throws {
+        for command in ["backspace", "forward", "selection", "replace"] {
+            for saveBeforeUndo in [false, true] {
+                var body = NoteBlock.text("see site")
+                body.marks = [.init(.bold, offset: 4, length: 4),
+                    .init(.link, offset: 4, length: 4, url: "https://example.com/original?q=1")]
+                let engine = NoteEditorEngine(noteID: UUID(), document: NoteDocument(blocks: [.text("Plan"), body, .text("Tail")]))
+                let (_, text) = engine.makeView()
+                let original = engine.document()
+                if command == "backspace" {
+                    text.setSelectedRange(NSRange(location: 5, length: 0))
+                    text.deleteBackward(nil)
+                } else if command == "forward" {
+                    text.setSelectedRange(NSRange(location: 4, length: 0))
+                    text.deleteForward(nil)
+                } else {
+                    text.setSelectedRange(NSRange(location: 3, length: 4))
+                    text.insertText(command == "replace" ? "X" : "", replacementRange: text.selectedRange())
+                }
+                XCTAssertEqual(engine.document().blocks.count, 2)
+                XCTAssertTrue(engine.document().blocks[0].marks.isEmpty, "titles remain plain")
+                if saveBeforeUndo { _ = try NoteContentCodec.encode(engine.document()) }
+                XCTAssertTrue(engine.undoCommand(), "\(command), save=\(saveBeforeUndo)")
+                XCTAssertEqual(engine.document(), original, "\(command), save=\(saveBeforeUndo)")
+                if command == "backspace", !saveBeforeUndo { try r12Capture(text, name: "title-join-undo.png") }
+                XCTAssertTrue(engine.redoCommand())
+                XCTAssertTrue(engine.document().blocks[0].marks.isEmpty)
+                XCTAssertTrue(engine.undoCommand())
+                XCTAssertEqual(engine.document().blocks[1].marks, original.blocks[1].marks)
+            }
+        }
+    }
+
     func testTitleSelectionCannotAcquireAnyInlineMark() {
         let engine = NoteEditorEngine(noteID: UUID(), document: NoteDocument(blocks: [.text("Plain title"), .text("Body")]))
         let (_, text) = engine.makeView()

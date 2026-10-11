@@ -772,15 +772,15 @@ final class NoteEditorEngine: NSObject, NSTextViewDelegate, NSTextStorageDelegat
         let range = NSIntersectionRange(NSRange(location: max(0, location), length: max(0, end - location)),
                                         NSRange(location: 0, length: textStorage.length))
         guard range.length > 0 else { return }
-        textStorage.enumerateAttribute(.attachment, in: range) { value, _, _ in
-            guard let image = value as? NoteImageAttachment, image.renderedImage == nil else { return }
+        textStorage.enumerateAttribute(.attachment, in: range) { value, run, _ in
+            guard let image = value as? NoteImageAttachment, image.renderedImage == nil, !isRangeFolded(run) else { return }
             loadImage(image, requireViewport: true)
         }
     }
 
     private func imageIsInViewport(_ image: NoteImageAttachment) -> Bool {
         guard let viewport = layoutManager?.textViewportLayoutController.viewportRange,
-              let range = range(of: image), let imageRange = textRange(for: range) else { return false }
+              let range = range(of: image), !isRangeFolded(range), let imageRange = textRange(for: range) else { return false }
         return viewport.intersects(imageRange)
     }
 
@@ -1043,14 +1043,21 @@ final class NoteEditorEngine: NSObject, NSTextViewDelegate, NSTextStorageDelegat
         }
         history.breakCoalescing()
         engineEditDepth += 1
-        defer { engineEditDepth -= 1 }
+        defer {
+            engineEditDepth -= 1
+            // Internal swaps can temporarily move the native caret into a
+            // folded section. Only the command's final caret may unfold it.
+            if engineEditDepth == 0, !history.isReplaying, let selection = textView?.selectedRange(), selection.length == 0 {
+                unfoldHeadings(containing: selection)
+            }
+        }
         if let textView {
             guard textView.shouldChangeText(in: range, replacementString: replacement.string) else { return false }
             pendingImportEdit = (range, replacement.length)
             textStorage.replaceCharacters(in: range, with: replacement)
             textView.didChangeText()
         } else {
-            history.willChange(ranges: [range], strings: [replacement.string])
+            recordTextChange(ranges: [range], strings: [replacement.string])
             pendingImportEdit = (range, replacement.length)
             textStorage.replaceCharacters(in: range, with: replacement)
             history.didChange()
@@ -1465,6 +1472,29 @@ final class NoteEditorEngine: NSObject, NSTextViewDelegate, NSTextStorageDelegat
         return refuse(String(localized: "Replace can’t remove images, checklists or dates, so nothing was replaced."))
     }
 
+    /// Joining body text into the plain title also restyles the retained
+    /// suffix. Capture that suffix before its marks are stripped, so Undo
+    /// restores the original body and its link targets, even after a save.
+    private func recordTextChange(ranges: [NSRange], strings: [String]?) {
+        let string = textStorage.string as NSString
+        let titleEnd = string.range(of: "\n").location
+        guard let strings, strings.count == ranges.count, titleEnd != NSNotFound,
+              let join = ranges.first(where: { $0.location <= titleEnd && NSMaxRange($0) > titleEnd }) else {
+            history.willChange(ranges: ranges, strings: strings)
+            return
+        }
+        let start = ranges.map(\.location).min() ?? join.location
+        let suffixEnd = NSMaxRange(string.paragraphRange(for: NSRange(location: NSMaxRange(join), length: 0)))
+        let end = max(suffixEnd, ranges.map { NSMaxRange($0) }.max() ?? suffixEnd)
+        let recorded = NSRange(location: start, length: end - start)
+        let replacement = NSMutableString(string: string.substring(with: recorded))
+        for index in ranges.indices.sorted(by: { ranges[$0].location > ranges[$1].location }) {
+            replacement.replaceCharacters(in: NSRange(location: ranges[index].location - start, length: ranges[index].length),
+                                          with: strings[index])
+        }
+        history.willChange(ranges: [recorded], strings: [replacement as String])
+    }
+
     // MARK: NSTextViewDelegate
 
     func textView(_ textView: NSTextView, shouldChangeTextInRanges affectedRanges: [NSValue],
@@ -1472,7 +1502,7 @@ final class NoteEditorEngine: NSObject, NSTextViewDelegate, NSTextStorageDelegat
         let ranges = affectedRanges.map(\.rangeValue)
         guard allowsChange(ranges: ranges) else { return false }
         newlineEditInFlight = replacementStrings == ["\n"]
-        history.willChange(ranges: ranges, strings: replacementStrings)
+        recordTextChange(ranges: ranges, strings: replacementStrings)
         if ranges.count == 1 {
             pendingImportEdit = (ranges[0], replacementStrings?.first?.utf16.count ?? 0)
         }
@@ -1504,7 +1534,9 @@ final class NoteEditorEngine: NSObject, NSTextViewDelegate, NSTextStorageDelegat
         guard let textView = textView else { return }
         let selection = textView.selectedRange()
         // A caret may arrive through arrows, VoiceOver or native Find.
-        if selection.length == 0 { unfoldHeadings(containing: selection) }
+        // Replay restores its own final caret. AppKit can briefly report
+        // the old offset inside restored folded text during a storage swap.
+        if selection.length == 0, !history.isReplaying, engineEditDepth == 0 { unfoldHeadings(containing: selection) }
         if userEditDepth == 0 && engineEditDepth == 0 && !history.isChangeInFlight {
             if let session = slashSession,
                selection != NSRange(location: NSMaxRange(session.range), length: 0) { slashSession = nil }

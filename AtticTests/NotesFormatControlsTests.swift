@@ -1960,6 +1960,28 @@ final class HeadingsBehaviourTests: XCTestCase {
         (engine.textStorage.string as NSString).range(of: text).location
     }
 
+    func testR12SplittingAHeadingGivesTheSecondFoldAnIndependentIdentity() throws {
+        let engine = NoteEditorEngine(noteID: UUID(), document: NoteDocument(blocks: [
+            .text("Title"), heading("AlphaBeta", level: 2), .text("Body")]))
+        let (_, text) = engine.makeView()
+        XCTAssertTrue(engine.toggleHeadingFold(at: 6))
+        XCTAssertTrue(engine.toggleHeadingFold(at: 6))
+        text.setSelectedRange(NSRange(location: 11, length: 0))
+        text.insertText("\n", replacementRange: text.selectedRange())
+        XCTAssertEqual(engine.headingSections.count, 2)
+        let second = try XCTUnwrap(engine.headingSections.last)
+        XCTAssertTrue(engine.toggleHeadingFold(at: second.heading.location))
+        let sections = engine.headingSections
+        XCTAssertNotEqual(sections.first?.id, sections.last?.id)
+        XCTAssertFalse(try XCTUnwrap(sections.first?.id.map(engine.foldedHeadingIDs.contains)))
+        XCTAssertFalse(engine.isRangeFolded(try XCTUnwrap(sections.first).content))
+        XCTAssertTrue(engine.isRangeFolded(try XCTUnwrap(sections.last).content))
+        let saved = try NoteContentCodec.encode(engine.document())
+        let reopened = NoteEditorEngine(noteID: engine.noteID, document: try XCTUnwrap(NoteContentCodec.decode(saved).document))
+        XCTAssertFalse(reopened.isRangeFolded(try XCTUnwrap(reopened.headingSections.first).content))
+        XCTAssertTrue(reopened.isRangeFolded(try XCTUnwrap(reopened.headingSections.last).content))
+    }
+
     func testNestedFoldBoundariesKeepEveryKindOfContentAndNextPeerVisible() throws {
         let h1 = heading("Research", level: 1), h2 = heading("Sources", level: 2)
         let next = heading("Next section", level: 1)

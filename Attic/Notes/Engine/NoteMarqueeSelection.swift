@@ -9,6 +9,8 @@ final class NoteMarqueeSelection {
     private var geometry: [MarqueeItem] = []
     private var blockRanges: [Int: NSRange] = [:]
     private var geometryWidth: CGFloat = 0
+    private var geometryViewport = CGRect.null
+    private var geometryNeedsRefresh = true
     private(set) var controller: AtticMarqueeController?
     private(set) var isSettingNativeSelection = false
     var isEmpty: Bool { ranges.isEmpty }
@@ -49,6 +51,7 @@ final class NoteMarqueeSelection {
 
     private func press(at point: CGPoint, event: NSEvent) -> AtticMarqueeController.Press {
         guard let textView, let engine = textView.engine else { return .ignore }
+        geometry = []
         if !event.modifierFlags.contains(.shift), !isEmpty,
            items().contains(where: { item in ranges.contains { AnyHashable($0.location) == item.id } && item.rect.contains(point) }),
            textView.isEditable { return .move }
@@ -71,29 +74,45 @@ final class NoteMarqueeSelection {
         return .ignore
     }
 
-    /// Paragraph geometry is cached for the drag, never extracted from the
-    /// NoteDocument on each frame. Layout invalidates it on width or edits.
+    /// Measure only the viewport and the auto-scroll band. During a drag,
+    /// retain visited blocks so scrolling does not drop earlier selections.
+    /// Layout changes refresh the visible positions; folding and edits reset
+    /// the whole gesture before old geometry can select hidden text.
     func items() -> [MarqueeItem] {
-        guard let textView, let engine = textView.engine else { return [] }
-        if !geometry.isEmpty, geometryWidth == textView.bounds.width { return geometry }
+        guard let textView, let engine = textView.engine, let layout = engine.layoutManager else { return [] }
+        let viewport = textView.visibleRect.insetBy(dx: 0, dy: -24)
+        if !geometry.isEmpty, !geometryNeedsRefresh,
+           geometryWidth == textView.bounds.width, geometryViewport == viewport { return geometry }
+        let retainVisited = controller?.isDragging == true && geometryWidth == textView.bounds.width
         geometryWidth = textView.bounds.width
-        geometry = []; blockRanges = [:]
+        geometryViewport = viewport
+        geometryNeedsRefresh = false
+        if !retainVisited { geometry = []; blockRanges = [:] }
+        var measured = Dictionary(uniqueKeysWithValues: geometry.map { ($0.id, $0) })
         let string = engine.textStorage.string as NSString
-        var start = 0
-        while start < string.length {
-            let newline = string.range(of: "\n", range: NSRange(location: start, length: string.length - start))
-            let end = newline.location == NSNotFound ? string.length : newline.location
-            let range = NSRange(location: start, length: min(string.length, end + 1) - start)
-            let inkRange = NSRange(location: start, length: end - start)
-            if let ink = engine.rect(for: inkRange) ?? engine.caretRect(at: start) {
-                let rect = CGRect(x: textView.textContainerOrigin.x - 4, y: ink.minY,
-                                  width: (textView.textContainer?.size.width ?? ink.width) + 8,
-                                  height: max(ink.height, 18))
-                geometry.append(MarqueeItem(id: start, rect: rect))
-                blockRanges[start] = range
-            }
-            start = NSMaxRange(range)
+        let origin = textView.textContainerOrigin
+        let top = CGPoint(x: 0, y: max(0, viewport.minY - origin.y))
+        let start = layout.textLayoutFragment(for: top)?.rangeInElement.location
+            ?? layout.textViewportLayoutController.viewportRange?.location
+            ?? engine.contentStorage.documentRange.location
+        layout.enumerateTextLayoutFragments(from: start, options: [.ensuresLayout]) { fragment in
+            let frame = fragment.layoutFragmentFrame.offsetBy(dx: origin.x, dy: origin.y)
+            if frame.minY > viewport.maxY { return false }
+            guard frame.maxY >= viewport.minY else { return true }
+            let offset = engine.contentStorage.offset(from: engine.contentStorage.documentRange.location,
+                                                      to: fragment.rangeInElement.location)
+            guard offset >= 0, offset < string.length else { return true }
+            let range = string.paragraphRange(for: NSRange(location: offset, length: 0))
+            guard !engine.isRangeFolded(range) else { return true }
+            let ink = fragment.textLineFragments.reduce(CGRect.null) { $0.union($1.typographicBounds) }
+            let rect = CGRect(x: origin.x - 4, y: frame.minY + (ink.isNull ? 0 : ink.minY),
+                              width: (textView.textContainer?.size.width ?? frame.width) + 8,
+                              height: max(ink.isNull ? frame.height : ink.height, 18))
+            measured[AnyHashable(range.location)] = MarqueeItem(id: range.location, rect: rect)
+            blockRanges[range.location] = self.blockRange(at: range.location)
+            return true
         }
+        geometry = measured.values.sorted { ($0.id.base as? Int ?? 0) < ($1.id.base as? Int ?? 0) }
         // Give the inter-paragraph space to the preceding block: adjacent
         // selected blocks meet, with no stripes across the column.
         for index in geometry.indices.dropLast() {
@@ -105,9 +124,19 @@ final class NoteMarqueeSelection {
         return geometry
     }
 
+    private func blockRange(at offset: Int) -> NSRange? {
+        guard let engine = textView?.engine, offset >= 0, offset < engine.textStorage.length else { return nil }
+        let range = engine.paragraphRange(at: offset)
+        guard !engine.isRangeFolded(range) else { return nil }
+        if let section = engine.headingSection(at: offset), section.id.map(engine.foldedHeadingIDs.contains) == true {
+            return NSRange(location: range.location, length: NSMaxRange(section.content) - range.location)
+        }
+        return range
+    }
+
     func select(offsets: Set<Int>) {
         _ = items()
-        ranges = offsets.sorted().compactMap { blockRanges[$0] }
+        ranges = offsets.sorted().compactMap { blockRanges[$0] ?? blockRange(at: $0) }
         // Save the real caret mode before TextKit's collapsed-selection
         // transition temporarily changes the indicator's display mode.
         textView?.caretFitter.refresh()
@@ -126,6 +155,11 @@ final class NoteMarqueeSelection {
         ranges = []
         textView?.updateInsertionPointStateAndRestartTimer(true)
         controller?.refresh()
+    }
+
+    func layoutChanged() {
+        geometryNeedsRefresh = true
+        if !ranges.isEmpty { controller?.refresh() }
     }
 
     func textChanged() {

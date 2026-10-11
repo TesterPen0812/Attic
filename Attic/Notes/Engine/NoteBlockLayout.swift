@@ -566,6 +566,7 @@ extension NoteEditorEngine {
         let string = textStorage.string as NSString
         var headings: [(NSRange, Int, UUID?)] = []
         var seen = Set<Int>()
+        var usedIDs = Set<UUID>()
         textStorage.enumerateAttribute(.noteBlockStyle, in: NSRange(location: 0, length: string.length)) { value, run, _ in
             guard value as? String == "heading" else { return }
             var offset = run.location
@@ -574,7 +575,12 @@ extension NoteEditorEngine {
                 if paragraph.location > 0, seen.insert(paragraph.location).inserted {
                     var id: UUID?
                     textStorage.enumerateAttribute(.noteBlockID, in: paragraph) { value, _, stop in
-                        if let found = value as? UUID { id = found; stop.pointee = true }
+                        if let found = value as? UUID {
+                            // A split can leave the same ID on both halves.
+                            // Match the codec: only the first paragraph owns it.
+                            id = usedIDs.insert(found).inserted ? found : nil
+                            stop.pointee = true
+                        }
                     }
                     headings.append((paragraph, textStorage.attribute(.noteBlockLevel, at: offset, effectiveRange: nil) as? Int ?? 2, id))
                 }
@@ -637,6 +643,7 @@ extension NoteEditorEngine {
         }
         if folded { foldedHeadingIDs.insert(id) } else { foldedHeadingIDs.remove(id) }
         invalidateDocumentCache()
+        textView?.marquee?.textChanged()
         // A focused attachment must not be parked over its hidden paragraph.
         if folded, let section = headingSections.first(where: { $0.id == id }),
            let table = activeTableView?.attachment, let range = range(ofTable: table),
