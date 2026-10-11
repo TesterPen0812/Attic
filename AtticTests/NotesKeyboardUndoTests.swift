@@ -8,8 +8,8 @@ import XCTest
 /// history answers in All notes when that text has nothing to undo; and the
 /// delete toast never owns the key.
 ///
-/// The Notes page is hosted as the panel hosts it, in a transparent key
-/// window on CI, and real key events go through the same order AppKit uses: the
+/// The Notes page is hosted as the panel hosts it, in an offscreen nonactivating
+/// key panel on CI, and real key events go through the same order AppKit uses: the
 /// local key monitor (`NotesLibraryKeys`) first, then the window's view
 /// hierarchy (`performKeyEquivalent`, where SwiftUI's `keyboardShortcut`
 /// lives), then the Edit menu's Undo, which reaches `undo:` on the first
@@ -19,9 +19,26 @@ import XCTest
 final class NotesKeyboardUndoTests: XCTestCase {
     /// A genuine key window on CI. The test dispatches what gets past the
     /// local monitors in AppKit's order itself, so sendEvent does not duplicate it.
-    private final class KeyWindow: NSWindow {
+    private final class KeyWindow: NSPanel {
         override var canBecomeKey: Bool { true }
         override func sendEvent(_ event: NSEvent) {}
+
+        var traceFocusChanges = false
+
+        static func identity(_ responder: NSResponder?) -> String {
+            guard let responder else { return "nil" }
+            return "\(type(of: responder))@\(Unmanaged.passUnretained(responder).toOpaque())"
+        }
+
+        override func makeFirstResponder(_ responder: NSResponder?) -> Bool {
+            let before = firstResponder
+            let result = super.makeFirstResponder(responder)
+            if traceFocusChanges, before !== firstResponder {
+                print("ROUND11B_FOCUS time=\(ProcessInfo.processInfo.systemUptime) from=\(Self.identity(before)) requested=\(Self.identity(responder)) to=\(Self.identity(firstResponder)) result=\(result)")
+                print("ROUND11B_FOCUS_STACK " + Thread.callStackSymbols.joined(separator: " | "))
+            }
+            return result
+        }
     }
 
     /// Who took a key.
@@ -80,19 +97,24 @@ final class NotesKeyboardUndoTests: XCTestCase {
             .atticDesign(AtticDesignContext(controls: .craft))
         let host = NSHostingView(rootView: AnyView(root))
         host.frame = CGRect(origin: .zero, size: size)
-        let window = KeyWindow(contentRect: host.frame, styleMask: [.borderless], backing: .buffered, defer: false)
+        let window = KeyWindow(contentRect: CGRect(origin: CGPoint(x: -4_000, y: -4_000), size: size),
+                               styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
         window.isReleasedWhenClosed = false
         window.contentView = host
-        // Transparent and pointer-inert, but genuinely registered as AppKit's
-        // key window. Overriding isKeyWindow left NSApp.keyWindow pointing
-        // elsewhere; a later SwiftUI focus update could then discard this
-        // fixture's first responder without exercising a real app window.
-        window.alphaValue = 0
+        // Match Attic's nonactivating panel and the working Tasks hosts.
+        // An ordinary NSWindow cannot acquire the key in the unit host's
+        // prohibited activation policy; overriding isKeyWindow concealed that.
         window.ignoresMouseEvents = true
-        window.makeKeyAndOrderFront(nil)
+        window.orderFront(nil)
+        window.makeKey()
         windows.append(window)
         host.layoutSubtreeIfNeeded()
-        spin()
+        let deadline = Date().addingTimeInterval(2)
+        while NSApp.keyWindow !== window, Date() < deadline {
+            window.makeKey()
+            spin(0.1)
+        }
+        print("NOTES_UNDO_KEY policy=\(NSApp.activationPolicy().rawValue) active=\(NSApp.isActive) visible=\(window.isVisible) key=\(window.isKeyWindow) ownsKey=\(NSApp.keyWindow === window) fka=\(NSApp.isFullKeyboardAccessEnabled)")
         XCTAssertTrue(window.isKeyWindow)
         XCTAssertTrue(NSApp.keyWindow === window, "the keyboard route must have an actual AppKit key owner")
         return (Harness(window: window, host: host, store: store, noteDraft: noteDraft, toasts: toasts), ids)
@@ -211,7 +233,10 @@ final class NotesKeyboardUndoTests: XCTestCase {
         textView.insertText(" more", replacementRange: textView.selectedRange())
         var fired = 0
 
+        harness.window.traceFocusChanges = true
+        print("ROUND11B_TOAST before-show responder=\(KeyWindow.identity(harness.window.firstResponder))")
         harness.toasts.show("Note deleted", answersUndoKey: false) { fired += 1 }
+        print("ROUND11B_TOAST after-show responder=\(KeyWindow.identity(harness.window.firstResponder))")
         spin()
         assertTextUndoReady(textView, in: harness)
         XCTAssertNotNil(harness.toasts.current)
@@ -229,6 +254,27 @@ final class NotesKeyboardUndoTests: XCTestCase {
         XCTAssertEqual(try press("z", keyCode: 6, .command, in: harness), .firstResponder)
         XCTAssertEqual(fired, 0, "no toast's action ran on ⌘Z")
         XCTAssertFalse(editorText(harness).contains("again"), "the text's own typing was undone")
+    }
+
+    func testToastInsertionReplacementAndExpiryKeepTypingInTheEditor() throws {
+        let (harness, ids) = try makeHarness(titles: ["Alpha"])
+        let editor = try openAndFocus(ids[0], in: harness)
+        for message in ["Note changed", "Task moved"] {
+            harness.toasts.show(message, answersUndoKey: false) {}
+            spin()
+            XCTAssertTrue(harness.window.firstResponder === editor, "showing or replacing a toast keeps the caret")
+            let input = try XCTUnwrap(harness.window.firstResponder as? NSTextView)
+            input.insertText(" typed", replacementRange: input.selectedRange())
+        }
+        XCTAssertEqual(editorText(harness), "Alpha typed typed", "typing reaches the note while the toast is visible")
+        harness.toasts.dismiss()
+        spin()
+        XCTAssertTrue(harness.window.firstResponder === editor, "explicit removal keeps the caret")
+        harness.toasts.holdDuration = 0.05
+        harness.toasts.show("Note changed", answersUndoKey: false) {}
+        spin(0.3)
+        XCTAssertNil(harness.toasts.current)
+        XCTAssertTrue(harness.window.firstResponder === editor, "expiry keeps the caret")
     }
 
     private func assertTextUndoReady(_ view: NoteEditorTextView, in harness: Harness,
