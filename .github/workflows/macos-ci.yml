@@ -33,7 +33,7 @@ on:
         type: boolean
 
       compare_tag_colour_costs:
-        description: Record paired AB/BA colour1 and 76e4276 tag-open costs
+        description: Record paired AB/BA this revision and 76e4276 tag-open costs
         required: false
         default: false
         type: boolean
@@ -80,13 +80,26 @@ jobs:
       DEVELOPER_DIR: /Applications/Xcode_26.6.app/Contents/Developer
     steps:
       - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
       - name: Build local-only test host
         run: |
           Scripts/xcodebuild_locked.sh build-for-testing -project Attic.xcodeproj -scheme Attic \
             -configuration Local -destination 'platform=macOS' \
             -derivedDataPath "$RUNNER_TEMP/AtticFKA" CODE_SIGNING_ALLOWED=NO \
             SWIFT_STRICT_CONCURRENCY=complete
+      - name: Run Notes Undo before enabling Full Keyboard Access
+        env:
+          TEST_RUNNER_ATTIC_KEY_WINDOW_TESTS: "1"
+        run: |
+          Scripts/xcodebuild_locked.sh test-without-building -project Attic.xcodeproj -scheme Attic \
+            -configuration Local -destination 'platform=macOS' -derivedDataPath "$RUNNER_TEMP/AtticFKA" \
+            -resultBundlePath "$RUNNER_TEMP/AtticFKA-notes-normal.xcresult" CODE_SIGNING_ALLOWED=NO \
+            -parallel-testing-enabled NO -only-testing:AtticTests/NotesKeyboardUndoTests
+          xcrun xcresulttool get test-results summary --path "$RUNNER_TEMP/AtticFKA-notes-normal.xcresult" --format json > "$RUNNER_TEMP/fka-notes-normal-summary.json"
+          python3 -c 'import json,sys; s=json.load(open(sys.argv[1])); assert s["passedTests"]==6 and s["skippedTests"]==0 and s["failedTests"]==0 and s["expectedFailures"]==0' "$RUNNER_TEMP/fka-notes-normal-summary.json"
       - name: Run the native FKA test alone, then the H5-04 focus regressions
+        if: always()
         env:
           TEST_RUNNER_ATTIC_KEY_WINDOW_TESTS: "1"
           TEST_RUNNER_ATTIC_FULL_KEYBOARD_ACCESS_TESTS: "1"
@@ -127,6 +140,12 @@ jobs:
             -only-testing:AtticTests/TasksRound13Tests/testAR08NativeTabAndShiftTabPreserveExtendedSelectionAndReturnEditsFocus || status=1
           xcrun xcresulttool get test-results summary --path "$RUNNER_TEMP/AtticFKA-task-focus.xcresult" --format json > "$RUNNER_TEMP/fka-task-focus-summary.json"
           python3 -c 'import json,sys; s=json.load(open(sys.argv[1])); assert s["passedTests"]==3 and s["skippedTests"]==0 and s["failedTests"]==0 and s["expectedFailures"]==0' "$RUNNER_TEMP/fka-task-focus-summary.json" || status=1
+          Scripts/xcodebuild_locked.sh test-without-building -project Attic.xcodeproj -scheme Attic \
+            -configuration Local -destination 'platform=macOS' -derivedDataPath "$RUNNER_TEMP/AtticFKA" \
+            -resultBundlePath "$RUNNER_TEMP/AtticFKA-notes-undo.xcresult" CODE_SIGNING_ALLOWED=NO \
+            -parallel-testing-enabled NO -only-testing:AtticTests/NotesKeyboardUndoTests || status=1
+          xcrun xcresulttool get test-results summary --path "$RUNNER_TEMP/AtticFKA-notes-undo.xcresult" --format json > "$RUNNER_TEMP/fka-notes-undo-summary.json"
+          python3 -c 'import json,sys; s=json.load(open(sys.argv[1])); assert s["passedTests"]==6 and s["skippedTests"]==0 and s["failedTests"]==0 and s["expectedFailures"]==0' "$RUNNER_TEMP/fka-notes-undo-summary.json" || status=1
           exit $status
       - name: Upload focused keyboard evidence
         if: always()
@@ -136,6 +155,17 @@ jobs:
           path: |
             ${{ runner.temp }}/AtticFKA-*.xcresult
             ${{ runner.temp }}/fka-*-summary.json
+
+      - name: Measure int11 against integration base in paired AB/BA runs
+        if: always() && inputs.compare_tag_colour_costs
+        run: python3 Scripts/compare_tag_colour_costs.py "$RUNNER_TEMP/TagColourComparison" --candidate-ref "$GITHUB_SHA"
+      - name: Upload int11 tag timing comparison
+        if: always() && inputs.compare_tag_colour_costs
+        uses: actions/upload-artifact@v4
+        with:
+          name: tag-colour-comparison-${{ github.sha }}
+          path: ${{ runner.temp }}/TagColourComparison/*.json
+          retention-days: 7
 
   macos:
     if: ${{ inputs.lane != 'costs' && inputs.lane != 'fka' }}
@@ -230,7 +260,7 @@ jobs:
 
       - name: Measure pinned colour1 against integration base in paired AB/BA runs
         if: inputs.compare_tag_colour_costs
-        run: python3 Scripts/compare_tag_colour_costs.py "$RUNNER_TEMP/TagColourComparison"
+        run: python3 Scripts/compare_tag_colour_costs.py "$RUNNER_TEMP/TagColourComparison" --candidate-ref "$GITHUB_SHA"
 
       - name: Upload pinned tag-colour timing comparison
         if: always() && inputs.compare_tag_colour_costs
@@ -283,7 +313,42 @@ jobs:
             -skip-testing:AtticTests/DoneSearchCostTests \
             -skip-testing:AtticTests/TasksFrameCostTests \
             -skip-testing:AtticTests/TasksRowBuildCostTests \
+            -skip-testing:AtticTests/AtticDropdownTests/testOpenAndFilterCostNoMoreThanBefore \
+            -skip-testing:AtticTests/AtticDropdownTests/testOpenAndFilterCostNoMoreThanBeforeWithAccessibilityOn \
+            -skip-testing:AtticTests/AtticDropdownTests/testPairedSamplerRejectsARealPriorityOpeningSlowdown \
             test
+
+      # Native timing collection has its own bounded step. Its required
+      # outcome retains all three assertions without consuming the functional
+      # suite's unchanged 25-minute watchdog on a slower virtual machine.
+      - name: Run native dropdown timing gates
+        id: dropdown_tests
+        if: always() && steps.strict_build.outcome == 'success'
+        continue-on-error: true
+        timeout-minutes: 10
+        env:
+          TEST_RUNNER_ATTIC_KEY_WINDOW_TESTS: "1"
+        run: |
+          Scripts/xcodebuild_locked.sh test-without-building -project Attic.xcodeproj -scheme Attic \
+            -configuration Local -destination 'platform=macOS' -derivedDataPath "$RUNNER_TEMP/AtticUnitTests" \
+            -resultBundlePath "$RUNNER_TEMP/AtticDropdownTimingTests.xcresult" \
+            CODE_SIGNING_ALLOWED=NO -parallel-testing-enabled NO \
+            -only-testing:AtticTests/AtticDropdownTests/testOpenAndFilterCostNoMoreThanBefore \
+            -only-testing:AtticTests/AtticDropdownTests/testOpenAndFilterCostNoMoreThanBeforeWithAccessibilityOn \
+            -only-testing:AtticTests/AtticDropdownTests/testPairedSamplerRejectsARealPriorityOpeningSlowdown
+          summary=$(xcrun xcresulttool get test-results summary \
+            --path "$RUNNER_TEMP/AtticDropdownTimingTests.xcresult" --format json)
+          echo "$summary"
+          python3 -c 'import json, sys; s = json.load(sys.stdin); sys.exit(0 if s.get("passedTests") == 3 and s.get("skippedTests", 0) == 0 else 1)' <<<"$summary"
+
+      - name: Upload native dropdown timing results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: macos-dropdown-timing-results-${{ github.sha }}
+          path: ${{ runner.temp }}/AtticDropdownTimingTests.xcresult
+          if-no-files-found: ignore
+          retention-days: 7
 
       - name: Record repeated old and paired dropdown estimates
         if: always() && inputs.inspect_dropdown_sampling && steps.strict_build.outcome == 'success'
@@ -456,6 +521,7 @@ jobs:
           MAC_BUILD: ${{ steps.mac_build.outcome }}
           STRICT_BUILD: ${{ steps.strict_build.outcome }}
           UNIT_TESTS: ${{ steps.unit_tests.outcome }}
+          DROPDOWN_TESTS: ${{ steps.dropdown_tests.outcome }}
           FKA_TESTS: ${{ steps.fka_tests.outcome }}
           PERF_UI_TESTS: ${{ steps.perf_ui_tests.outcome }}
           ANALYZER: ${{ steps.analyzer.outcome }}
@@ -466,6 +532,7 @@ jobs:
             mac-build "$MAC_BUILD" \
             strict-concurrency "$STRICT_BUILD" \
             unit-tests "$UNIT_TESTS" \
+            dropdown-timing "$DROPDOWN_TESTS" \
             full-keyboard-access "$FKA_TESTS" \
             performance-ui-tests "$PERF_UI_TESTS" \
             analyzer "$ANALYZER" \
@@ -474,6 +541,7 @@ jobs:
           test "$MAC_BUILD" = success
           test "$STRICT_BUILD" = success
           test "$UNIT_TESTS" = success
+          test "$DROPDOWN_TESTS" = success
           if [ "$LANE" != fast ]; then test "$FKA_TESTS" = success; fi
           if [ "$LANE" != fast ]; then test "$PERF_UI_TESTS" = success; fi
           test "$ANALYZER" = success
