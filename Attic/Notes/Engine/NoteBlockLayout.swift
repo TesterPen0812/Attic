@@ -99,11 +99,38 @@ final class NoteBlockLayoutFragment: NSTextLayoutFragment {
         }
     }
 
-    private var quoteBar: CGRect? {
+    /// The quote's bar, in this fragment's coordinates (F-04): it spans its
+    /// text, from the first line's ascender to the last line's descender,
+    /// centred on the glyphs and never longer. Where the quote goes on in
+    /// the paragraph above or below, the bar runs to this fragment's edge
+    /// and meets the neighbour's across the gap.
+    var quoteBar: CGRect? {
         guard case let .quote(x, joinsAbove, joinsBelow) = decoration else { return nil }
-        let top = joinsAbove ? 0 : spacingBefore + boxShift
-        let bottom = layoutFragmentFrame.height + (joinsBelow ? 0 : boxShift)
+        let lines = textLineFragments
+        let first = lines.first
+        let last = lines.last(where: { $0.characterRange.length > 0 }) ?? first
+        let top: CGFloat
+        if joinsAbove {
+            top = 0
+        } else if let first {
+            top = Self.baseline(of: first) - markerFont.ascender
+        } else {
+            top = spacingBefore
+        }
+        let bottom: CGFloat
+        if joinsBelow {
+            bottom = layoutFragmentFrame.height
+        } else if let last {
+            bottom = Self.baseline(of: last) - markerFont.descender
+        } else {
+            bottom = layoutFragmentFrame.height
+        }
         return CGRect(x: x - layoutFragmentFrame.minX, y: top, width: T.quoteBar, height: max(0, bottom - top))
+    }
+
+    /// A line's baseline in the fragment's coordinates.
+    private static func baseline(of line: NSTextLineFragment) -> CGFloat {
+        line.typographicBounds.minY + line.glyphOrigin.y
     }
 
     override var renderingSurfaceBounds: CGRect {
@@ -144,12 +171,33 @@ final class NoteBlockLayoutFragment: NSTextLayoutFragment {
                                     y: point.y + baseline - markerFont.ascender))
             NSGraphicsContext.restoreGraphicsState()
         case .quote:
-            guard let bar = quoteBar else { return }
-            context.saveGState()
-            context.setFillColor(ink.cgColor)
-            context.fill(bar.offsetBy(dx: point.x, dy: point.y))
-            context.restoreGState()
+            guard let bar = quoteBar, case let .quote(_, joinsAbove, joinsBelow) = decoration else { return }
+            drawQuoteBar(bar.offsetBy(dx: point.x, dy: point.y), joinsAbove: joinsAbove, joinsBelow: joinsBelow, in: context)
         }
+    }
+
+    /// A pill: rounded at the top and the bottom of the whole quote. A slice
+    /// that joins its neighbour extends past its own edge, so the cap falls
+    /// outside the clip and the seam is square; the seam sits on a device
+    /// pixel so the two slices never blend into a hairline.
+    private func drawQuoteBar(_ bar: CGRect, joinsAbove: Bool, joinsBelow: Bool, in context: CGContext) {
+        func snapped(_ y: CGFloat) -> CGFloat {
+            let device = context.convertToDeviceSpace(CGPoint(x: bar.minX, y: y))
+            return context.convertToUserSpace(CGPoint(x: device.x, y: device.y.rounded())).y
+        }
+        let top = joinsAbove ? snapped(bar.minY) : bar.minY
+        let bottom = joinsBelow ? snapped(bar.maxY) : bar.maxY
+        guard bottom > top else { return }
+        let radius = bar.width / 2
+        let slice = CGRect(x: bar.minX, y: top, width: bar.width, height: bottom - top)
+        let full = CGRect(x: bar.minX, y: top - (joinsAbove ? radius * 2 : 0), width: bar.width,
+                          height: slice.height + (joinsAbove ? radius * 2 : 0) + (joinsBelow ? radius * 2 : 0))
+        context.saveGState()
+        context.clip(to: slice)
+        context.addPath(CGPath(roundedRect: full, cornerWidth: radius, cornerHeight: radius, transform: nil))
+        context.setFillColor(ink.cgColor)
+        context.fillPath()
+        context.restoreGState()
     }
 
     /// The block's continuous rounded rectangle, cut to this slice: a slice
@@ -272,7 +320,10 @@ extension NoteEditorEngine: NSTextLayoutManagerDelegate, NSTextContentStorageDel
         case .number:
             fragment.ink = style.markerColor
             fragment.markerFont = NSFont.monospacedDigitSystemFont(ofSize: AtticNoteType.body.size, weight: .regular)
-        case .bullet, .quote, .history:
+        case .quote:
+            fragment.ink = style.quoteBarColor
+            fragment.markerFont = style.font(for: kind)
+        case .bullet, .history:
             fragment.ink = style.bodyColor
             fragment.markerFont = style.font(for: kind)
         }

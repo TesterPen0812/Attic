@@ -361,6 +361,24 @@ final class NoteTableCellEditor: NSTextView, NSTextViewDelegate {
         return became
     }
 
+    /// The caret, fitted to the glyphs (F-03).
+    private(set) lazy var caretFitter = NoteCaretFitter(textView: self)
+
+    override func updateInsertionPointStateAndRestartTimer(_ restartFlag: Bool) {
+        super.updateInsertionPointStateAndRestartTimer(restartFlag)
+        caretFitter.refresh()
+    }
+
+    override func setSelectedRanges(_ ranges: [NSValue], affinity: NSSelectionAffinity, stillSelecting: Bool) {
+        super.setSelectedRanges(ranges, affinity: affinity, stillSelecting: stillSelecting)
+        caretFitter.refresh()
+    }
+
+    override func layout() {
+        super.layout()
+        caretFitter.refresh()
+    }
+
     override func resignFirstResponder() -> Bool {
         let resigned = super.resignFirstResponder()
         if resigned, let table {
