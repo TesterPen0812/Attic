@@ -20,6 +20,7 @@ final class TasksMarqueeSelection {
         self.tab = tab
         controller = AtticMarqueeController(scrollView: scroll)
         controller.drawsHighlights = false // the rows already draw merged selection runs
+        controller.consumesSelectionEscape = false // Tasks closes expanded content before clearing selection
         controller.enabled = { [weak model] in model?.isPageShown == true && model?.isHidden == false && model?.tab == tab && model?.editingTitleID == nil }
         controller.items = { [weak self] in self?.items() ?? [] }
         controller.selection = { [weak model] in Set(model?.selection.map(AnyHashable.init) ?? []) }
@@ -45,6 +46,8 @@ final class TasksMarqueeSelection {
 
     private func press(at point: CGPoint) -> AtticMarqueeController.Press {
         guard let scroll, let document = scroll.documentView else { return .ignore }
+        if let page = pointer?.view, let control = pointer?.completedTodayFrames[tab],
+           document.convert(control, from: page).contains(point) { return .ignore }
         measured = [:]
         let rows = items()
         let margin = AtticLayout.rowHighlightInset

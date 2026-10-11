@@ -57,6 +57,9 @@ final class AtticMarqueeController: NSObject {
     var selectionEnded: (CGPoint) -> Void = { _ in }
     var enabled: () -> Bool = { true }
     var drawsHighlights = true
+    /// Notes clears its block selection here; Tasks owns a close-before-clear
+    /// Escape chain. Both still cancel an in-progress marquee first.
+    var consumesSelectionEscape = true
     private(set) var isDragging = false
     private(set) var box: CGRect?
     private var origin: CGPoint?
@@ -135,7 +138,7 @@ final class AtticMarqueeController: NSObject {
         if event.type == .keyDown {
             let focus = scroll.window?.firstResponder as? NSView
             guard origin != nil || focus?.isDescendant(of: scroll) == true else { return event }
-            if event.keyCode == 53, origin != nil || !selection().isEmpty {
+            if event.keyCode == 53, origin != nil || (consumesSelectionEscape && !selection().isEmpty) {
                 clear()
                 origin = nil; isDragging = false; insertion = nil
                 released = box == nil ? nil : CACurrentMediaTime()
@@ -152,8 +155,17 @@ final class AtticMarqueeController: NSObject {
             guard viewport.contains(scroll.convert(event.locationInWindow, from: nil)) else { return event }
             // Embedded table/subtask editors and native controls keep their
             // clicks, even if their frame lies in nominal document whitespace.
-            if let root = scroll.window?.contentView {
-                var hit = root.hitTest(root.convert(event.locationInWindow, from: nil))
+            if let content = scroll.window?.contentView {
+                // Standalone dropdowns are siblings of the content view.
+                // Hit-test their common frame view so the list underneath
+                // an overlay never mistakes its click for document space.
+                let root = content.superview ?? content
+                guard let target = root.hitTest(root.convert(event.locationInWindow, from: nil)),
+                      target === document || target.isDescendant(of: document) else {
+                    embeddedClick()
+                    return event
+                }
+                var hit: NSView? = target
                 while let view = hit, view !== document {
                     if view is NSControl || view is NSTextView { embeddedClick(); return event }
                     hit = view.superview

@@ -1404,6 +1404,10 @@ struct TasksPage: View {
                             }
                         }
                         .accessibilityIdentifier("tasks-completed-today")
+                        .onGeometryChange(for: CGRect.self) { $0.frame(in: Self.space) } action: { [pointer, tab] frame in
+                            pointer.completedTodayFrames[tab] = frame
+                        }
+                        .onDisappear { [pointer, tab] in pointer.completedTodayFrames[tab] = nil }
                         // Under an empty message it is the next row (one
                         // row apart); after tasks, 12 below the last one.
                         .padding(.top, sections.open.isEmpty
@@ -3804,6 +3808,8 @@ final class TasksPointer {
     /// that two pages list (Now's "Completed today" and Done) is two rows
     /// with two frames (round 12).
     var frames: [TasksRowID: CGRect] = [:]
+    /// This SwiftUI button lives between rows and must keep its native click.
+    var completedTodayFrames: [TasksTab: CGRect] = [:]
     /// The card a reorder lifts, over the whole page.
     let liftedCard = TasksLiftedCard()
     /// Tests: receives a drag out of the panel instead of AppKit.

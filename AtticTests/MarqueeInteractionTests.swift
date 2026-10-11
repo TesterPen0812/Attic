@@ -35,6 +35,77 @@ final class MarqueeInteractionTests: XCTestCase {
                            context: nil, eventNumber: 1, clickCount: 1, pressure: 1)!
     }
 
+    func testOverlayAboveTheDocumentKeepsItsClick() throws {
+        let (_, text, selection) = editor([.text("Title"), .text("Body")])
+        let controller = try XCTUnwrap(selection.controller)
+        let window = try XCTUnwrap(text.window)
+        let scroll = try XCTUnwrap(text.enclosingScrollView)
+        let root = NSView(frame: scroll.frame)
+        window.contentView = root
+        root.addSubview(scroll)
+        let card = NSView(frame: CGRect(x: 0, y: 20, width: 120, height: 60))
+        // Standalone SwiftUI dropdowns are siblings of the content view,
+        // matching AtticDropdownSpace's supported overlay placement.
+        let parent = try XCTUnwrap(root.superview)
+        card.frame = parent.convert(card.frame, from: root)
+        parent.addSubview(card)
+        var pressed = false
+        controller.press = { _, _ in pressed = true; return .select }
+        let click = event(.leftMouseDown, point: CGPoint(x: 60, y: 30), in: card)
+        XCTAssertTrue(controller.handle(click) === click, "an overlay receives its native click")
+        XCTAssertFalse(pressed, "overlay coordinates are never document whitespace")
+    }
+
+    func testTasksEscapeReachesThePageBeforeClearingSelection() throws {
+        let store = try makeTestStore()
+        let task = try XCTUnwrap(store.create(title: "Selected"))
+        let model = TasksPageModel(library: AtticLibrary(tasks: store))
+        model.selectOnly(task.id)
+        model.setExpanded(task.id, true)
+        let scroll = NSScrollView(frame: CGRect(x: 0, y: 0, width: 320, height: 240))
+        let document = FlippedView(frame: scroll.bounds)
+        scroll.documentView = document
+        let window = NSWindow(contentRect: scroll.frame, styleMask: [.borderless], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        window.contentView = scroll
+        windows.append(window)
+        XCTAssertTrue(window.makeFirstResponder(document))
+        XCTAssertIdentical(window.firstResponder, document)
+        let pointer = TasksPointer()
+        pointer.view = document
+        let adapter = TasksMarqueeSelection(scroll: scroll, model: model, pointer: pointer, tab: .now)
+        let escape = try XCTUnwrap(NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: [],
+            timestamp: 0, windowNumber: window.windowNumber, context: nil, characters: "\u{1b}",
+            charactersIgnoringModifiers: "\u{1b}", isARepeat: false, keyCode: 53))
+        XCTAssertTrue(adapter.controller.handle(escape) === escape, "Tasks owns its close-before-clear Escape chain")
+        XCTAssertEqual(model.selection, [task.id])
+        XCTAssertTrue(model.expanded.contains(task.id))
+    }
+
+    func testCompletedTodayDisclosureKeepsItsNativeClickInListWhitespace() throws {
+        let store = try makeTestStore()
+        let task = try XCTUnwrap(store.create(title: "Selected"))
+        let model = TasksPageModel(library: AtticLibrary(tasks: store))
+        model.selectOnly(task.id)
+        let scroll = NSScrollView(frame: CGRect(x: 0, y: 0, width: 320, height: 240))
+        let document = FlippedView(frame: scroll.bounds)
+        scroll.documentView = document
+        let window = NSWindow(contentRect: scroll.frame, styleMask: [.borderless], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        window.contentView = scroll
+        windows.append(window)
+        let pointer = TasksPointer()
+        pointer.view = document
+        pointer.frames[TasksRowID(tab: .now, id: task.id)] = CGRect(x: 0, y: 20, width: 320, height: 40)
+        pointer.completedTodayFrames[.now] = CGRect(x: 12, y: 80, width: 296, height: 28)
+        let adapter = TasksMarqueeSelection(scroll: scroll, model: model, pointer: pointer, tab: .now)
+        let click = event(.leftMouseDown, point: CGPoint(x: 140, y: 94), in: document)
+        XCTAssertTrue(adapter.controller.handle(click) === click, "the disclosure owns its native click")
+        XCTAssertEqual(model.selection, [task.id], "the press never starts an empty-space marquee")
+        let blank = event(.leftMouseDown, point: CGPoint(x: 140, y: 160), in: document)
+        XCTAssertNil(adapter.controller.handle(blank), "genuine whitespace still starts a marquee")
+    }
+
     func testThresholdReverseDirectionAndTouchingEdges() {
         XCTAssertFalse(MarqueeGeometry.activated(from: .zero, to: CGPoint(x: 0, y: 3.99)))
         XCTAssertTrue(MarqueeGeometry.activated(from: .zero, to: CGPoint(x: 0, y: 4)))
@@ -265,4 +336,5 @@ final class MarqueeInteractionTests: XCTestCase {
 
 private final class FlippedView: NSView {
     override var isFlipped: Bool { true }
+    override var acceptsFirstResponder: Bool { true }
 }

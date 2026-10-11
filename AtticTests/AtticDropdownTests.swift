@@ -60,7 +60,7 @@ final class AtticDropdownTests: XCTestCase {
     /// SwiftUI focus alone puts it in the field. AppKit asked directly for
     /// the SwiftUI field before, so two owners raced for it (H5-04).
     func testH5_04OpeningGivesTheHostTheKeyboardAndOnlySwiftUIFocusesTheField() throws {
-        for picker in ["tags", "move"] {
+        for (picker, reduceMotion) in [("tags", true), ("move", true), ("tags", false), ("move", false)] {
             let window = makeUnshownWindow()
             defer { window.close() }
             let original = NSTextField(frame: CGRect(x: 20, y: 470, width: 200, height: 24))
@@ -69,7 +69,7 @@ final class AtticDropdownTests: XCTestCase {
             window.contentView?.addSubview(anchor)
             XCTAssertTrue(window.makeFirstResponder(original))
             let presenter = AtticDropdownPresenter()
-            presenter.design = AtticDesignContext(reduceMotion: true)
+            presenter.design = AtticDesignContext(reduceMotion: reduceMotion)
             presenter.content = picker == "tags"
                 ? AnyView(TaskTagPickerView(allTags: ["design", "home"], state: { _ in .off }, onToggle: { _ in }, onCreate: { _, _ in true }))
                 : AnyView(TaskMovePickerView(choices: [.init(id: UUID(), title: "Alpha", detail: nil)], onChoose: { _ in }))
