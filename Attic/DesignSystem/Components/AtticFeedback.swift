@@ -696,7 +696,7 @@ private struct AtticErrorAnnouncementModifier: ViewModifier {
     func body(content: Content) -> some View {
         content.onChange(of: messages, initial: true) { _, messages in
             for message in state.update(messages) {
-                NSAccessibility.post(element: NSApp, notification: .announcementRequested, userInfo: [
+                NSAccessibility.post(element: NSApplication.shared, notification: .announcementRequested, userInfo: [
                     .announcement: message, .priority: NSAccessibilityPriorityLevel.low.rawValue
                 ])
             }
