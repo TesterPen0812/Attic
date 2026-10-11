@@ -248,6 +248,59 @@ final class NotesKeyboardUndoTests: XCTestCase {
         XCTAssertFalse(editorText(harness).contains("again"), "the text's own typing was undone")
     }
 
+    func testToastInsertionReplacementAndExpiryKeepTypingInTheEditor() throws {
+        let (harness, ids) = try makeHarness(titles: ["Alpha"])
+        let editor = try openAndFocus(ids[0], in: harness)
+        for message in ["Note changed", "Task moved"] {
+            harness.toasts.show(message, answersUndoKey: false) {}
+            spin()
+            XCTAssertTrue(harness.window.firstResponder === editor, "showing or replacing a toast keeps the caret")
+            let input = try XCTUnwrap(harness.window.firstResponder as? NSTextView)
+            input.insertText(" typed", replacementRange: input.selectedRange())
+        }
+        XCTAssertEqual(editorText(harness), "Alpha typed typed", "typing reaches the note while the toast is visible")
+        harness.toasts.dismiss()
+        spin()
+        XCTAssertTrue(harness.window.firstResponder === editor, "explicit removal keeps the caret")
+        harness.toasts.holdDuration = 0.05
+        harness.toasts.show("Note changed", answersUndoKey: false) {}
+        spin(0.3)
+        XCTAssertNil(harness.toasts.current)
+        XCTAssertTrue(harness.window.firstResponder === editor, "expiry keeps the caret")
+    }
+
+    func testTheToastsAccessibleUndoKeepsTheEditorAndItsUndoSelection() throws {
+        let attribute = NSAccessibility.Attribute(rawValue: "AXEnhancedUserInterface")
+        let previous = NSApp.accessibilityAttributeValue(attribute)
+        NSApp.accessibilitySetValue(true, forAttribute: attribute)
+        defer { NSApp.accessibilitySetValue(previous, forAttribute: attribute) }
+        let (harness, ids) = try makeHarness(titles: ["Alpha"])
+        let editor = try openAndFocus(ids[0], in: harness)
+        editor.insertText(" more", replacementRange: editor.selectedRange())
+        var fired = 0
+        harness.toasts.show("Note changed", answersUndoKey: false) {
+            fired += 1
+            _ = harness.controller.active?.engine.history.undo()
+        }
+        spin()
+        XCTAssertTrue(harness.window.firstResponder === editor, "the toast appears without moving the caret")
+        func elements(_ root: AnyObject) -> [AnyObject] {
+            let children = (root.accessibilityChildren?() ?? nil) ?? []
+            return [root] + children.flatMap { elements($0 as AnyObject) }
+        }
+        let button = try XCTUnwrap(elements(harness.host).first { ($0.accessibilityLabel?() ?? nil) == "Undo" })
+        XCTAssertEqual(button.accessibilityPerformPress?(), true, "Undo remains an accessible action")
+        spin()
+        XCTAssertEqual(fired, 1)
+        XCTAssertNil(harness.toasts.current)
+        XCTAssertEqual(editorText(harness), "Alpha")
+        XCTAssertEqual(editor.selectedRange(), NSRange(location: 5, length: 0), "Undo restores the typing selection")
+        XCTAssertTrue(harness.window.firstResponder === editor, "the keyboard stays where Undo originated")
+        let input = try XCTUnwrap(harness.window.firstResponder as? NSTextView)
+        input.insertText(" after", replacementRange: input.selectedRange())
+        XCTAssertEqual(editorText(harness), "Alpha after", "typing continues after pressing Undo")
+    }
+
     private func assertTextUndoReady(_ view: NoteEditorTextView, in harness: Harness,
                                      file: StaticString = #filePath, line: UInt = #line) {
         let engine = harness.controller.active?.engine

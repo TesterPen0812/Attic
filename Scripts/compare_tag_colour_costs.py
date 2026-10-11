@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""CI-only paired colour1/base tag-picker measurements; functional gates stay intact."""
+"""CI-only paired revision/base tag-picker measurements with identical fixtures."""
 import argparse, json, os, re, statistics, subprocess
 from pathlib import Path
 
@@ -16,9 +16,14 @@ def main():
     root = Path.cwd()
     builds = {}
     refs = {**REFS, "colour": args.candidate_ref}
+    fixture_path = "AtticTests/AtticDropdownTests.swift"
+    fixture = subprocess.check_output(["git", "show", f"{args.candidate_ref}:{fixture_path}"])
     for side, ref in refs.items():
         checkout = args.output / side
         subprocess.run(["git", "worktree", "add", "--detach", str(checkout), ref], check=True)
+        # Compare product revisions using the same sampler, warm-ups, oracle,
+        # bounds and bounded recheck. No product source is overlaid.
+        (checkout / fixture_path).write_bytes(fixture)
         dd = args.output / (side + "-dd")
         common = [str(root / "Scripts/xcodebuild_locked.sh"), "-project", str(checkout / "Attic.xcodeproj"), "-scheme", "Attic", "-configuration", "Local", "-destination", "platform=macOS", "-derivedDataPath", str(dd), "CODE_SIGNING_ALLOWED=NO"]
         with (args.output / (side + "-build.log")).open("w") as log:
