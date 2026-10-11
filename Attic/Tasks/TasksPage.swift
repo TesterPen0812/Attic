@@ -29,6 +29,7 @@ struct TasksPage: View {
     var chrome = TasksPageChrome()
 
     @Environment(\.atticDesign) private var design
+    @Environment(\.atticTagColouring) private var tagColouring
     /// How the lists meet the floating controls: Clean cut with the
     /// scroll-under fade (A15, owner 2026-10-04, replacing D1's fade before
     /// the controls); the native soft edge stays off everywhere.
@@ -712,8 +713,10 @@ struct TasksPage: View {
                     .padding(.leading, AtticLayout.pageTabsX)
                     Spacer(minLength: 0)
                     // Find (⌘F) on every page: Done's magnifier.
+                    // Quiet icons (D-10): the labels' own grey, primary only when on.
                     AtticSmallButton(systemName: "magnifyingglass",
-                                     label: model.tab == .done ? "Search done tasks (⌘F)" : "Find (⌘F)", action: beginSearch)
+                                     label: model.tab == .done ? "Search done tasks (⌘F)" : "Find (⌘F)",
+                                     quietIcon: true, action: beginSearch)
                         .accessibilityIdentifier(model.tab == .done ? "tasks-done-search-button" : "tasks-find-button")
                         .padding(.trailing, model.tab == .done ? lineEndInset : 0)
                     if model.tab != .done {
@@ -722,7 +725,8 @@ struct TasksPage: View {
                         let view = model.viewOptions(for: model.tab)
                         AtticMenuButton(systemName: "line.3.horizontal.decrease", label: "View Options (⌥⌘V)",
                                         commands: { viewCommands(for: model.tab) },
-                                        showsDot: view.filters, value: view.spokenValue)
+                                        showsDot: view.filters, value: view.spokenValue,
+                                        quietIcon: !view.filters)
                             .accessibilityIdentifier("tasks-view-options")
                             .padding(.trailing, lineEndInset)
                             // It pops in where it sits (a fade in Calm).
@@ -2065,7 +2069,7 @@ struct TasksPage: View {
     /// All Tags… opens the searchable picker with every tag and creation.
     private func tagCommands(_ key: TasksRowID, targets: [UUID]) -> [AtticMenuCommand] {
         var list = model.tagChoices(for: targets).prefix(12).map { tag in
-            AtticMenuCommand(verbatim: "#" + tag, state: model.tagState(tag, for: targets)) {
+            AtticMenuCommand(verbatim: "#" + tag, state: model.tagState(tag, for: targets), swatch: tagColouring.hue(for: tag)) {
                 menuCommand(key) { model.toggleTag(tag, for: $0) }
             }
         }

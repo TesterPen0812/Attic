@@ -93,7 +93,7 @@ final class NotesV2TypographyTests: XCTestCase {
         XCTAssertEqual([T.aboveTitleStyle, T.aboveHeading, T.aboveSubheading], [11, 9, 8])
         XCTAssertEqual([T.belowTitleStyle, T.belowHeading, T.belowSubheading], [1, 1, 1])
         XCTAssertEqual([T.monoPaddingV, T.monoPaddingH, T.monoRadius], [9, 8.5, 10])
-        XCTAssertEqual([T.monoCopySize, T.monoCopyInset, T.monoCopyRise], [16, 4, 7])
+        XCTAssertEqual([T.monoCopySize, T.monoCopyInset, T.monoCopyTop], [16, 6, 6])
         XCTAssertEqual([T.listTextInset, T.bulletDot, T.quoteBar, T.quoteTextInset], [20, 4.5, 3, 13])
 
         let style = NoteTextStyle()
@@ -366,11 +366,11 @@ final class NotesV2TypographyTests: XCTestCase {
         let button = view.monoCopyButton.frame
         XCTAssertEqual(button.size, CGSize(width: 16, height: 16))
         XCTAssertEqual(button.maxX, origin.x + rect.maxX - T.monoCopyInset, accuracy: 0.01)
-        XCTAssertEqual(button.minY, origin.y + rect.minY - T.monoCopyRise, accuracy: 0.01)
-        // It ends where the text's padding ends: never over a character.
-        XCTAssertLessThanOrEqual(button.maxY, origin.y + rect.minY + T.monoPaddingV + 0.01, "above the first line")
+        XCTAssertEqual(button.minY, origin.y + rect.minY + T.monoCopyTop, accuracy: 0.01)
+        // Inside the block (D-12): the chip never crosses its outline.
+        XCTAssertTrue(rect.offsetBy(dx: origin.x, dy: origin.y).contains(button), "the chip sits inside the block")
         XCTAssertEqual(NoteMonoCopyButton.radius, T.monoCopySize / 3, accuracy: 0.001)
-        // The pointer reaching the chip above the block keeps it.
+        // The pointer reaching the chip keeps it.
         view.updateMonoCopy(at: NSPoint(x: button.midX, y: button.minY + 1))
         XCTAssertFalse(view.monoCopyButton.isHidden, "the chip is still the block's Copy under the pointer")
         // An icon in a chip of the block's own fill, opaque; the text never moves.

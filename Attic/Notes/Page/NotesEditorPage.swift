@@ -24,6 +24,7 @@ struct NotesEditorPage: View {
     let layout: PanelPageLayout
 
     @Environment(\.atticDesign) private var design
+    @Environment(\.atticTagColouring) private var tagColouring
     @Environment(\.atticPanelToasts) private var toasts
     @StateObject private var chrome = NotesPageChrome()
     @StateObject private var library: NotesLibraryModel
@@ -659,7 +660,7 @@ struct NotesEditorPage: View {
                              identifier: "notes-row-pin") {
                 controller.setPinned(!pinned, noteID: id)
             },
-            NotesLibraryView.tagsSubmenu(tags: stored?.tags ?? [], activeTag: library.tagFilter) { [library] tag in
+            NotesLibraryView.tagsSubmenu(tags: stored?.tags ?? [], activeTag: library.tagFilter, hue: tagColouring.hue(for:)) { [library] tag in
                 library.tagFilter = tag
             },
             AtticMenuCommand("Copy as Markdown", shortcut: KeyboardShortcut("c", modifiers: [.command, .option, .shift]),
@@ -867,7 +868,7 @@ private struct NoteStatusSlot: View {
                                  }))
         }
         return AtticStatusItem(id: "damaged-\(details.confirmation.checkpointFilename)", systemName: "exclamationmark.circle",
-                               title: details.title, explanation: details.explanation, tone: .warning, actions: actions)
+                               title: details.title, explanation: details.explanation, tone: .error, actions: actions)
     }
 
     /// The same command as ⇧⌘S and the note's menu: one identifier, one
@@ -882,7 +883,7 @@ private struct NoteStatusSlot: View {
         switch status {
         case .onlyInMemory:
             return AtticStatusItem(id: "onlyInMemory", systemName: "exclamationmark.circle", title: status.label,
-                                   explanation: status.explanation, tone: .warning, actions: [
+                                   explanation: status.explanation, tone: .error, actions: [
                                        .init(title: String(localized: "Retry"), handler: details(controller.retry)),
                                        .init(title: String(localized: "Copy Text"), identifier: "notes-copy-text",
                                              handler: details(controller.copyActiveText)),
@@ -890,7 +891,7 @@ private struct NoteStatusSlot: View {
                                    ])
         case .notSaved:
             return AtticStatusItem(id: "notSaved", systemName: "exclamationmark.circle", title: status.label,
-                                   explanation: status.explanation, tone: .warning, actions: [
+                                   explanation: status.explanation, tone: .error, actions: [
                                        .init(title: String(localized: "Retry"), identifier: "notes-retry",
                                              handler: details(controller.retry)),
                                        .init(title: String(localized: "Copy Text"), identifier: "notes-copy-text",
@@ -899,7 +900,7 @@ private struct NoteStatusSlot: View {
                                    ])
         case .changedElsewhere, .deletedElsewhere:
             return AtticStatusItem(id: "conflict", systemName: "exclamationmark.circle", title: status.label,
-                                   explanation: status.explanation, tone: .warning, actions: [
+                                   explanation: status.explanation, tone: .caution, actions: [
                                        .init(title: String(localized: "Keep as new note"), identifier: "notes-keep-as-new",
                                              handler: details { Task { @MainActor in _ = await controller.keepAsNewNoteDurably() } }),
                                        .init(title: String(localized: "Review"), identifier: "notes-review-conflict",
@@ -908,7 +909,7 @@ private struct NoteStatusSlot: View {
         case .deletionProposal:
             let displayedID = controller.proposalID(for: session, deletion: true)
             return AtticStatusItem(id: "deletionProposal", systemName: "exclamationmark.circle", title: status.label,
-                explanation: status.explanation, tone: .warning, actions: [
+                explanation: status.explanation, tone: .caution, actions: [
                     .init(title: "Restore", identifier: "notes-restore-deletion", handler: details {
                         guard let id = displayedID else { return }
                         if !store.discardProposal(id, noteID: session.noteID) {
@@ -963,7 +964,7 @@ private struct NoteStatusSlot: View {
                     removingDamaged: damaged.entries.map(\.confirmation.checkpointFilename)) else { return nil }
             if NoteStatusPresentation.isProgress(message) {
                 // Pending guidance: progress, quietly, clearing itself.
-                return AtticStatusItem(id: "pending", systemName: nil, title: message, tone: .quiet)
+                return AtticStatusItem(id: "pending", systemName: nil, title: NoteStatusPresentation.headline(forNotice: message), explanation: message, tone: .quiet)
             }
             var actions: [AtticStatusItem.Action] = []
             if message == NoteTablePasteOffer.notice, session.engine.tablePasteOffer != nil {
@@ -976,7 +977,11 @@ private struct NoteStatusSlot: View {
             }
             actions.append(.init(title: String(localized: "Dismiss"), identifier: "notes-notice-dismiss",
                                  handler: details { session.notice = nil }))
-            return AtticStatusItem(id: "notice", systemName: "info.circle", title: message, tone: .normal, actions: actions)
+            // The pill says the headline; the details say the sentence (D-05).
+            return AtticStatusItem(id: "notice", systemName: "info.circle",
+                                   title: NoteStatusPresentation.headline(forNotice: message),
+                                   explanation: message, tone: NoteStatusPresentation.isCaution(notice: message) ? .caution : .normal,
+                                   actions: actions)
         }
     }
 }

@@ -959,6 +959,11 @@ struct AtticSmallButton: View {
     let systemName: String?
     let title: String?
     let accessibilityLabel: String
+    /// A quiet icon sits beside page labels (the tabs line's Find and View
+    /// Options, design review D-10: icons are never darker than the words
+    /// next to them): the secondary tier's ink instead of the primary glyph's
+    /// (`AtticColorTokens.quietIconInk`).
+    let quietIcon: Bool
     let action: () -> Void
 
     @Environment(\.atticDesign) private var design
@@ -968,10 +973,12 @@ struct AtticSmallButton: View {
     @State private var hovered = false
     @State private var probeID = UUID()
 
-    init(systemName: String?, title: String.LocalizationValue? = nil, label: String.LocalizationValue, action: @escaping () -> Void) {
+    init(systemName: String?, title: String.LocalizationValue? = nil, label: String.LocalizationValue,
+         quietIcon: Bool = false, action: @escaping () -> Void) {
         self.systemName = systemName
         self.title = title.map { String(localized: $0) }
         self.accessibilityLabel = String(localized: label)
+        self.quietIcon = quietIcon
         self.action = action
     }
 
@@ -980,7 +987,7 @@ struct AtticSmallButton: View {
         let radius = AtticRadius.control(height: height)
         let shape = RoundedRectangle(cornerRadius: radius, style: .continuous)
         Button(action: action) {
-            AtticSmallButtonFace(systemName: systemName, title: title, radius: radius, hovered: hovered)
+            AtticSmallButtonFace(systemName: systemName, title: title, quietIcon: quietIcon, radius: radius, hovered: hovered)
                 .contentShape(shape)
         }
         .buttonStyle(AtticFlatPressStyle())
@@ -1023,6 +1030,7 @@ extension EnvironmentValues {
 private struct AtticSmallButtonFace: View {
     let systemName: String?
     let title: String?
+    let quietIcon: Bool
     let radius: CGFloat
     let hovered: Bool
 
@@ -1040,7 +1048,7 @@ private struct AtticSmallButtonFace: View {
         case .pressed: tokens.chipSelected
         default: .clear
         }
-        let ink: AtticInk = state == .disabled ? .disabledIcon : .glyph
+        let ink: AtticInk = state == .disabled ? .disabledIcon : (quietIcon ? tokens.quietIconInk : .glyph)
         HStack(spacing: AtticSmallControlMetrics.iconLabelGap) {
             if let systemName {
                 AtticIcon(systemName: systemName, size: AtticSmallControlMetrics.iconSize, weight: .regular, ink: ink)
@@ -1150,6 +1158,9 @@ struct AtticMenuCommand: Identifiable {
     var isHeader = false
     /// For UI tests and automation (Notes' menus): the item's identifier.
     var identifier: String?
+    /// A tag colour's dot before the title (the tag menu's Colour row, tag
+    /// filters and the multi-select tag action).
+    var swatch: AtticTagHue?
     let action: () -> Void
 
     init(
@@ -1178,9 +1189,11 @@ struct AtticMenuCommand: Identifiable {
         startsSection: Bool = false,
         state: AtticCheckState? = nil,
         detail: String? = nil,
+        swatch: AtticTagHue? = nil,
         action: @escaping () -> Void
     ) {
         self.title = title
+        self.swatch = swatch
         self.systemImage = systemImage
         self.shortcut = shortcut
         self.isDestructive = isDestructive
@@ -1431,6 +1444,8 @@ struct AtticMenuItems: View {
     private func label(_ command: AtticMenuCommand) -> some View {
         if let systemImage = command.systemImage {
             SwiftUI.Label(command.title, systemImage: systemImage)
+        } else if let swatch = command.swatch {
+            SwiftUI.Label { Text(verbatim: command.title) } icon: { Image(nsImage: AtticTagSwatch.image(swatch)) }
         } else {
             Text(verbatim: command.title)
         }
@@ -1478,11 +1493,25 @@ enum AtticNativeMenu {
         return menu
     }
 
+    /// A menu opened the way the system opens a right-click menu. AppKit
+    /// appends the context-menu plug-ins to such a menu (the system's
+    /// AutoFill submenu, Services) wherever a text input could be its
+    /// target; these are Attic's own menus, so they get none (design review
+    /// D-14: a stray "AutoFill ›" ended Notes' ⋯ menu).
+    static func makeContextMenu(_ commands: [AtticMenuCommand], appearance: NSAppearance?) -> NSMenu {
+        let menu = make(commands)
+        menu.allowsContextMenuPlugIns = false
+        menu.appearance = appearance
+        return menu
+    }
+
     private static func item(_ command: AtticMenuCommand) -> NSMenuItem {
         let item = NSMenuItem(title: command.title, action: nil, keyEquivalent: "")
         item.keyEquivalentModifierMask = []
         if let systemImage = command.systemImage, command.state != .mixed {
             item.image = NSImage(systemSymbolName: systemImage, accessibilityDescription: nil)
+        } else if let swatch = command.swatch, command.state != .mixed {
+            item.image = AtticTagSwatch.image(swatch)
         }
         if !command.children.isEmpty {
             item.submenu = make(command.children, title: command.title)
@@ -1567,8 +1596,7 @@ enum AtticNativeMenu {
     /// submenus as the system does, names whole. Falls back to the pop-up
     /// style if no event can be made.
     static func popUpContextMenu(_ commands: [AtticMenuCommand], below rect: NSRect, in view: NSView) {
-        let menu = make(commands)
-        menu.appearance = view.window?.effectiveAppearance
+        let menu = makeContextMenu(commands, appearance: view.window?.effectiveAppearance)
         let location = NSPoint(x: rect.minX, y: view.isFlipped ? rect.maxY + 4 : rect.minY - 4)
         guard let window = view.window,
               let event = NSEvent.mouseEvent(with: .rightMouseDown, location: view.convert(location, to: nil),
@@ -1589,8 +1617,7 @@ enum AtticNativeMenu {
     /// More's Open Files…, Move Up and Move Down showed as "…"); a context
     /// menu places its submenus as the right-click menu does, titles whole.
     static func popUpContextMenu(_ commands: [AtticMenuCommand], in view: NSView, at point: CGPoint? = nil) {
-        let menu = make(commands)
-        menu.appearance = view.window?.effectiveAppearance
+        let menu = makeContextMenu(commands, appearance: view.window?.effectiveAppearance)
         let location = point ?? CGPoint(x: 0, y: view.isFlipped ? view.bounds.maxY + 4 : -4)
         DispatchQueue.main.async {
             guard let window = view.window else { return }
@@ -1671,12 +1698,14 @@ struct AtticMenuButton: View {
     var showsDot = false
     /// What VoiceOver reads as the button's value (the current choice).
     var value: String? = nil
+    /// A quiet icon (see `AtticSmallButton.quietIcon`).
+    var quietIcon = false
 
     @State private var ownAnchor = AtticMenuAnchor.Holder()
 
     var body: some View {
         let anchor = holder ?? ownAnchor
-        AtticSmallButton(systemName: systemName, label: label) {
+        AtticSmallButton(systemName: systemName, label: label, quietIcon: quietIcon) {
             guard let view = anchor.view else { return }
             AtticNativeMenu.popUp(commands(), in: view)
         }

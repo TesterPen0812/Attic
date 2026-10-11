@@ -552,6 +552,13 @@ enum AtticPaletteTileMetrics {
 /// Tag chips (18 tall, control corner rule).
 enum AtticTagMetrics {
     static let horizontalPadding: CGFloat = 6
+    /// A tag set in a line of text (a row's details, a note's tag line):
+    /// its hue's fill reaches this far past the words on each side, so the
+    /// fill changes no layout (colour pass sheet: 4 px padding, -2 px margin).
+    static let inlineFillOutset: CGFloat = 4
+    static let inlineFillRadius: CGFloat = 5
+    /// The tag menu's colour dot and Settings' tag dot.
+    static let dotDiameter: CGFloat = 8
 }
 
 // MARK: - Notes (Phase 2, slice 2)
@@ -614,15 +621,16 @@ enum AtticNoteType {
     static let monoPaddingV: CGFloat = 9
     static let monoPaddingH: CGFloat = 8.5
     static let monoRadius: CGFloat = AtticRadius.contentCard
-    /// Copy: an 18 pt icon chip (`doc.on.doc`) on the block's top-right
-    /// corner, 4 in from the right edge and rising 6 above the top edge, so
-    /// its bottom is the text's own top (the 12 pt padding) and it never
-    /// covers a character, even on a full first line (A39). Opaque in the
-    /// block's own fill; shown on hover (or over the chip itself), while the
-    /// caret is in the block, or for VoiceOver. It never moves the text.
+    /// Copy: a 16 pt icon chip (`doc.on.doc`) inside the block's top-right
+    /// corner, 6 in from the right edge and 6 down from the top edge (design
+    /// review D-12: it no longer straddles the block's outline). Its radius
+    /// is a third of its size (5.3), close to concentric with the block's
+    /// 10. Opaque in the block's own fill; shown on hover (or over the chip
+    /// itself), while the caret is in the block, or for VoiceOver. It never
+    /// moves the text.
     static let monoCopySize: CGFloat = 16
-    static let monoCopyInset: CGFloat = 4
-    static let monoCopyRise: CGFloat = 7
+    static let monoCopyInset: CGFloat = 6
+    static let monoCopyTop: CGFloat = 6
     static let monoCopyGlyph: CGFloat = 9
     /// Lists and checklists: their text 20 in (each level 20 more), a 4.5 pt
     /// dot centred 7 in (the checklist box's centre); numbers end 5 before
@@ -723,6 +731,19 @@ enum AtticNoteMetrics {
     static let searchHintPadding: CGFloat = 10
     static let searchTextX: CGFloat = 36
     static let rowTextX: CGFloat = 16
+    /// All notes sits on the shared content column (design review D-07): the
+    /// page's edge is Tasks' (the text, 16 into it, lands 12 inside the
+    /// controls' line: 28 at the default corner), the rows' highlights and
+    /// the search field's edges are on the controls' own line (16 at the
+    /// default corner, 12 clear of the text), and the right-hand edges
+    /// mirror the left.
+    static func libraryPageEdge(chromeInset: CGFloat) -> CGFloat {
+        max(0, chromeInset + AtticLayout.contentFromChrome - AtticLayout.circleX)
+    }
+    /// How far a row's highlight (or the search field) sits inside the
+    /// library's page edge: `circleX - contentFromChrome`, so its edge is
+    /// the controls' line.
+    static let libraryHighlightInset: CGFloat = AtticLayout.circleX - AtticLayout.contentFromChrome
     /// The ⋯ at the end of a row's title line (in the time's place).
     static let rowActionsGlyphSize: CGFloat = 14
     static let countIconSize: CGFloat = 10

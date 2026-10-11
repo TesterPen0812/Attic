@@ -21,13 +21,25 @@ enum AtticInk: String, CaseIterable, Sendable {
     /// for overdue). Secondary text, like a tag: 3 : 1, 4.5 : 1 under
     /// Increase Contrast.
     case priorityMark
-    /// The old filled Done and its white check. Nothing draws them since the
-    /// quiet Done (`doneDisc` and `doneCheck`); they stay only because the
-    /// PR #5 surface coverage was measured with them.
+    /// Done (colour pass, owner 2026-10-10): the filled mark is the title's
+    /// own ink (near-black in Light, near-white in Dark), and its tick the
+    /// inverse. The same mark on tasks, subtasks and note checklists.
     case doneFill, onDone
-    /// The check on a done task's quiet grey disc (`doneDisc`): the disc is
-    /// decoration, the check carries the state and keeps 3 : 1 on it.
-    case doneCheck
+    /// A tag's hue (`AtticTagHue`): its text and dot. Secondary text, like
+    /// the grey tags they replace: 3 : 1 on the surface, the tag's own fill,
+    /// and that fill under hover and selection; 4.5 : 1 under Increase
+    /// Contrast. Grey is the manual-only neutral.
+    case tagBlue, tagIndigo, tagViolet, tagPink, tagTeal, tagOlive, tagOchre, tagGrey
+    /// A link in a note's body: blue, at the text floor; its underline
+    /// (`linkUnderline`) carries the difference from body text too.
+    case linkText
+    /// The amber icon of a notice that needs attention but lost nothing
+    /// (a read failure, an edit conflict, a deletion proposal). Errors take
+    /// the overdue red (`dueText`). Only the icon is coloured.
+    case noticeCaution
+    /// The red icon of an error notice ("Not saved", a failed toast): the
+    /// overdue red, held as an icon (3 : 1) on the pill and toast faces.
+    case noticeError
     /// The one near-black (Light) / near-white (Dark) primary fill: the send
     /// button and the drag-stack count. Near-black is never used for chips.
     case inverseFill, onInverse
@@ -56,11 +68,12 @@ enum AtticInk: String, CaseIterable, Sendable {
         switch self {
         case .heading, .body, .label, .helper, .muted, .placeholder,
              .chromeHeading, .chromeBody, .chromeHint,
-             .accentText, .dueText, .warningText, .onInverse, .disabledText, .priorityMark:
+             .accentText, .dueText, .warningText, .onInverse, .disabledText, .priorityMark,
+             .tagBlue, .tagIndigo, .tagViolet, .tagPink, .tagTeal, .tagOlive, .tagOchre, .tagGrey, .linkText:
             .text
         case .icon, .chromeIcon, .glyph, .chevron, .accent,
              .priorityNone, .priorityLow, .priorityMedium, .priorityHigh,
-             .doneFill, .onDone, .doneCheck, .inverseFill, .disabledIcon:
+             .doneFill, .onDone, .inverseFill, .disabledIcon, .noticeCaution, .noticeError:
             .nonText
         }
     }
@@ -73,7 +86,8 @@ enum AtticInk: String, CaseIterable, Sendable {
     /// Contrast every text keeps 4.5 : 1.
     var isSecondaryText: Bool {
         switch self {
-        case .helper, .muted, .placeholder, .chromeHint, .disabledText, .accentText, .priorityMark: true
+        case .helper, .muted, .placeholder, .chromeHint, .disabledText, .accentText, .priorityMark,
+             .tagBlue, .tagIndigo, .tagViolet, .tagPink, .tagTeal, .tagOlive, .tagOchre, .tagGrey: true
         default: false
         }
     }
@@ -240,9 +254,6 @@ struct AtticColorTokens: Equatable, Sendable {
         let stroke: AtticRGBA
     }
     let skeleton: AtticRGBA
-    /// A done task's quiet disc: opaque, a step off the surface, not a
-    /// colour of meaning (the `doneCheck` on it is what must read).
-    let doneDisc: AtticRGBA
 
     // MARK: Materials
 
@@ -306,6 +317,16 @@ struct AtticColorTokens: Equatable, Sendable {
     }
     func color(_ ink: AtticInk) -> Color { self.ink(ink).color }
 
+    /// The ink of an icon that sits beside page labels (design review D-10):
+    /// the secondary tier the inactive labels beside it are drawn in
+    /// (#7A7A7A Light, #A4A4A4 Dark on the default Solid panel; the review
+    /// sampled #737373 / #A7A7A7 for it), so it is never heavier than the
+    /// words. Where the secondary ink would be the stronger of the two it
+    /// keeps the primary glyph ink: never darker than before.
+    var quietIconInk: AtticInk {
+        ink(.helper).contrast(on: panel.base) <= ink(.glyph).contrast(on: panel.base) ? .helper : .glyph
+    }
+
     /// The quietest note text: a new note's "Title" and the empty line's
     /// "Type / for headings…" hint (A39 F10). On Glass and Frosted the
     /// design's placeholder ink is Phase 0's secondary grey, near the
@@ -365,8 +386,41 @@ struct AtticColorTokens: Equatable, Sendable {
     var tableAddFill: AtticRGBA { ink(.heading).withAlpha(context.mode == .dark ? 0.16 : 0.105) }
 
     var focusRing: AtticRGBA { ink(.accent) }
-    var tagFill: AtticRGBA { ink(.accent).withAlpha(context.mode == .dark ? 0.16 : 0.10) }
-    var tagFillSelected: AtticRGBA { ink(.accent).withAlpha(context.mode == .dark ? 0.26 : 0.18) }
+    /// The accent at a tag's fill alphas: the note date chip, the code
+    /// chip's grey and the table selection (tags draw in their own hue,
+    /// `tagFill(_:)`).
+    var tagFill: AtticRGBA { ink(.accent).withAlpha(Self.tagFillAlpha(dark: context.mode == .dark)) }
+    var tagFillSelected: AtticRGBA { ink(.accent).withAlpha(Self.tagFillSelectedAlpha(dark: context.mode == .dark)) }
+
+    // MARK: Tag hues (colour pass, owner 2026-10-10)
+
+    /// Today's tag-fill alphas, applied to each tag's own hue.
+    static func tagFillAlpha(dark: Bool) -> Double { dark ? 0.16 : 0.10 }
+    static func tagFillSelectedAlpha(dark: Bool) -> Double { dark ? 0.26 : 0.18 }
+
+    /// A tag's text and dot.
+    func tagInk(_ hue: AtticTagHue) -> AtticRGBA { ink(hue.ink) }
+    /// A tag chip's fill: the hue at 10 % (Light) or 16 % (Dark). Under
+    /// Increase Contrast, the neutral chip fill: the hue stays in the text.
+    func tagFill(_ hue: AtticTagHue) -> AtticRGBA {
+        context.increaseContrast ? tagFill : tagInk(hue).withAlpha(Self.tagFillAlpha(dark: context.mode == .dark))
+    }
+    /// A selected (filtering) tag chip's fill: the hue at 18 % / 26 %.
+    func tagFillSelected(_ hue: AtticTagHue) -> AtticRGBA {
+        context.increaseContrast ? tagFillSelected : tagInk(hue).withAlpha(Self.tagFillSelectedAlpha(dark: context.mode == .dark))
+    }
+
+    // MARK: Note content (colour pass)
+
+    /// The highlight mark: a yellow marker at 40 % (Light) or 28 % (Dark),
+    /// decoration under body text that keeps 4.5 : 1 over it. 28 % is the
+    /// Dark ceiling (32 % drops the body text to 4.62 : 1 on Solid).
+    var highlightMarker: AtticRGBA {
+        context.mode == .dark ? AtticRGBA(0xFFCC00).withAlpha(0.28) : AtticRGBA(0xFFD60A).withAlpha(0.40)
+    }
+    /// A link's underline: its blue at 55 %, kept so the link never depends
+    /// on colour alone (the blue is only 1.5 : 1 against body text).
+    var linkUnderline: AtticRGBA { ink(.linkText).withAlpha(0.55) }
 
     func priority(_ priority: AtticPriority) -> AtticRGBA {
         switch priority {
@@ -545,21 +599,26 @@ struct AtticColorTokens: Equatable, Sendable {
         inks[.dueText] = pri.high.tuned(toContrast: textTarget, against: meaning, lighten: dark)
         inks[.priorityMark] = (dark ? AtticRGBA(0xF0A04E) : AtticRGBA(0xE2711D)).tuned(toContrast: target(.priorityMark), against: meaning, lighten: dark)
         inks[.warningText] = (dark ? AtticRGBA(0xFFB35C) : AtticRGBA(0xC2570C)).tuned(toContrast: textTarget, against: meaning, lighten: dark)
-        // Done is faded as in v4 (#C9CBCE / a dim fill), held at 3 : 1.
-        inks[.doneFill] = (dark ? AtticRGBA(0x6E6F72) : AtticRGBA(0xC9CBCE)).tuned(toContrast: nonTextTarget, against: meaning, lighten: dark)
+        // The PR #5 coverage was measured with the old faded Done (#C9CBCE /
+        // a dim fill, at 3 : 1); it keeps setting the coverage, so the new
+        // ink mark never changes how see-through a surface is.
+        // The tick: white on the Light mark, near-black on the Dark one.
         inks[.onDone] = dark ? AtticRGBA(0x1E1E1F) : AtticRGBA(0xFFFFFF)
-        // The check mark keeps 3 : 1 on the fills it is drawn on (the done
-        // fill, and the disabled icon colour on a disabled row): a fill that
-        // would leave it fainter steps away from the check.
-        for fill in [AtticInk.doneFill, .disabledIcon] {
-            inks[fill] = inks[fill]!.tuned(toContrast: nonTextTarget, against: [inks[.onDone]!], lighten: dark)
-        }
-        // A done task: a quiet grey disc (about 0.88 white in Light, 0.32 in
-        // Dark) with a darker (Light) or lighter (Dark) grey check at 3 : 1.
-        let doneDisc: AtticRGBA = calmStates ? Calm.doneDisc(dark: dark)
-            : (dark ? AtticRGBA(ic ? 0x5A5A5D : 0x525254) : AtticRGBA(ic ? 0xD8D8DA : 0xE1E1E3))
-        inks[.doneCheck] = calmStates ? Calm.doneCheck(dark: dark) : (dark ? AtticRGBA(0xA9A9AC) : AtticRGBA(0x737376))
-            .tuned(toContrast: ic ? 4.5 : nonTextTarget, against: [doneDisc], lighten: dark)
+        let legacyDoneFill = (dark ? AtticRGBA(0x6E6F72) : AtticRGBA(0xC9CBCE))
+            .tuned(toContrast: nonTextTarget, against: meaning, lighten: dark)
+            .tuned(toContrast: nonTextTarget, against: [inks[.onDone]!], lighten: dark)
+        // A disabled done task's mark is the disabled icon colour; the tick
+        // keeps 3 : 1 on it, so that fill steps away from the tick.
+        inks[.disabledIcon] = inks[.disabledIcon]!.tuned(toContrast: nonTextTarget, against: [inks[.onDone]!], lighten: dark)
+        inks[.doneFill] = legacyDoneFill
+
+        // Colour pass (owner, 2026-10-10). Notices: amber for "needs a look,
+        // nothing lost", tuned on the pill faces and the details pop-over.
+        let pillFaces = [recipes.rest.face.over(basePanel), glassFace.over(panelBase), popoverFill, contentCard]
+        inks[.noticeCaution] = (dark ? AtticRGBA(0xF0AD2E) : AtticRGBA(0xB37B09)).tuned(toContrast: nonTextTarget, against: pillFaces, lighten: dark)
+        inks[.noticeError] = inks[.dueText]!.tuned(toContrast: nonTextTarget, against: pillFaces, lighten: dark)
+        // Links in a note's body: blue (tuned with the tags, below).
+        inks[.linkText] = dark ? AtticRGBA(0x93B6F7) : AtticRGBA(0x2760BF)
 
         // Visual A's exact inks on the default surface (the review's colour
         // table; Increase Contrast takes its stronger secondary grey and
@@ -599,7 +658,7 @@ struct AtticColorTokens: Equatable, Sendable {
             AtticSurfaceModel.readabilityPairs(
                 inks: inks, hover: hover, selected: selected, pressed: pressed,
                 controlFace: recipes.rest.face.over(basePanel), glassFace: glassFace, glassDisabled: glassDisabled, glassPressed: glassPressed,
-                chipSelected: chipSelected, chipHover: chipHover, doneDisc: doneDisc,
+                chipSelected: chipSelected, chipHover: chipHover,
                 recessed: recessed,
                 tagFill: inks[.accent]!.withAlpha(dark ? 0.16 : 0.10),
                 tagFillSelected: inks[.accent]!.withAlpha(dark ? 0.26 : 0.18)
@@ -621,6 +680,7 @@ struct AtticColorTokens: Equatable, Sendable {
         // measured; the greys that replaced them are never harder, and the
         // coverage keeps the colours it was set with.
         let legacyPriority: [AtticInk: AtticRGBA] = [
+            .doneFill: legacyDoneFill,
             .priorityNone: inks[.icon]!,
             .priorityLow: pri.low.tuned(toContrast: nonTextTarget, against: meaning, lighten: dark),
             .priorityMedium: pri.medium.tuned(toContrast: nonTextTarget, against: meaning, lighten: dark)
@@ -629,7 +689,7 @@ struct AtticColorTokens: Equatable, Sendable {
             // Labels on Liquid Glass are kept readable by their inks (tuned
             // against the worst glass face), never by making the surface
             // less see-through: the coverage stays the PR #5 look.
-            let pairs = pairs.filter { !$0.onGlass && $0.ink != .doneCheck }.map { pair in
+            let pairs = pairs.filter { !$0.onGlass }.map { pair in
                 legacyPriority[pair.ink].map { AtticSurfaceModel.Pair(ink: pair.ink, foreground: $0, overlays: pair.overlays, onGlass: pair.onGlass) } ?? pair
             }
             guard !ic else { return pairs }
@@ -741,12 +801,57 @@ struct AtticColorTokens: Equatable, Sendable {
             // High's orange "!!" would have to go almost white to reach the
             // 4.5 : 1 Increase Contrast asks of it here, and stop reading as
             // orange: under Increase Contrast it stays in the exception.
-            for ink in [AtticInk.dueText, .priorityMark, .warningText] where !(ink == .priorityMark && ic) {
+            for ink in [AtticInk.dueText, .priorityMark, .warningText, .linkText, .noticeCaution, .noticeError] where !(ink == .priorityMark && ic) {
                 let floor = AtticSurfaceModel.floor(for: ink, kind: key.surface, increaseContrast: ic)
                 inks[ink] = inks[ink]!.tuned(toContrast: floor * (floor > 3 ? textTarget / 4.5 : secondaryTarget / 3),
                                              against: surfaces, lighten: dark)
             }
         }
+        // Tags (colour pass, owner 2026-10-10): seven hues and a grey, each
+        // a starting value tuned per palette, mode and surface to the tag
+        // floor (secondary text: 3 : 1, 4.5 : 1 under Increase Contrast) on
+        // the surface, on its own fill (at rest, hovered, selected) and on
+        // that fill over a hovered or selected row, in the panel, a card and
+        // a menu. Palettes keep the hues: a tag is learned by its colour.
+        // Grey (manual only) starts from the secondary grey, as tags were.
+        // Under Increase Contrast the fill is the neutral chip fill
+        // (`tagFill(_:)`): a tint of the text's own hue behind it would
+        // force every hue to near white or black to keep 4.5 : 1.
+        let tagStarts = Ladder.tagHues(dark: dark, ic: ic)
+        let tagSurfaces: [AtticRGBA] = phase0Translucent
+            ? [AtticSurfaceModel.contentTop, 1].map { panel.composite(.midGrey, at: $0) }
+            : [panelBase, panel.base]
+        // Links in a note's body: blue at the text floor on the body's
+        // surface, hovered and selected.
+        inks[.linkText] = inks[.linkText]!.tuned(toContrast: textTarget, against: tagSurfaces.flatMap { [$0, hover.over($0), selected.over($0)] }, lighten: dark)
+        let tagBases = tagSurfaces + [recessed.over(panelBase), contentCard, popoverFill]
+        for hue in AtticTagHue.allCases {
+            let start = tagStarts[hue] ?? inks[.helper]!
+            var tagInk = start
+            // Twice: the fills move with the ink they are made of.
+            for _ in 0..<2 {
+                let tint = ic ? inks[.accent]! : tagInk
+                let fill = tint.withAlpha(Self.tagFillAlpha(dark: dark))
+                let fillSelected = tint.withAlpha(Self.tagFillSelectedAlpha(dark: dark))
+                // Every base: the tag at rest, hovered and filtering. The
+                // panel's rows also hover and select under it.
+                let backgrounds = tagBases.flatMap { base in
+                    [base, fill.over(base), fillSelected.over(base), hover.over(fill.over(base))]
+                } + tagSurfaces.flatMap { surface in
+                    [fill.over(hover.over(surface)), fill.over(selected.over(surface))]
+                }
+                tagInk = start.tuned(toContrast: target(hue.ink), against: backgrounds, lighten: dark)
+            }
+            inks[hue.ink] = tagInk
+        }
+
+        // Done (owner, 2026-10-10): the filled mark is the title's own ink
+        // (the status ring's), so open, in progress and done read as one
+        // ink: a ring, a ring and pie, a filled disc with its tick. The tick
+        // keeps 3 : 1 on the mark (4.5 : 1 under Increase Contrast).
+        inks[.doneFill] = inks[.heading]!
+        inks[.onDone] = inks[.onDone]!.tuned(toContrast: ic ? textTarget : nonTextTarget, against: [inks[.doneFill]!], lighten: !dark)
+
         // The surface tuning can bring the priority greys together (each
         // stops at the floor): keep Low and Medium a step beyond None.
         let noneOnPanel = inks[.priorityNone]!.contrast(on: basePanel)
@@ -775,7 +880,6 @@ struct AtticColorTokens: Equatable, Sendable {
                 stroke: AtticRGBA(phase0Treatment.palette.accent).withAlpha(min(phase0Treatment.palette.selectedStrokeOpacity + (ic ? 0.14 : 0), 1))
             ) : nil,
             skeleton: dark ? .white(0.08) : .black(0.06),
-            doneDisc: doneDisc,
             controlBase: basePanel,
             raised: recipes.rest,
             raisedHover: recipes.hover,
@@ -935,6 +1039,19 @@ struct AtticColorTokens: Equatable, Sendable {
         static func legacyChromeHint(dark: Bool) -> AtticRGBA { dark ? AtticRGBA(0xC4C4C4) : AtticRGBA(0x676867) }
         static func legacyPlaceholder(dark: Bool) -> AtticRGBA { dark ? AtticRGBA(0xB0B0B0) : AtticRGBA(0x676867) }
 
+        /// Starting values for the tag hues (`colour-final.md` § 1), measured
+        /// to pass on every Solid, Glass and Frosted surface already; the
+        /// build tunes each only as far as a surface needs.
+        static func tagHues(dark: Bool, ic: Bool) -> [AtticTagHue: AtticRGBA] {
+            let values: [UInt32] = switch (dark, ic) {
+            case (false, false): [0x3975D7, 0x5A62D6, 0x8C55C8, 0xC24C8C, 0x218384, 0x6E7F28, 0x9A7023]
+            case (true, false): [0x7CA9F2, 0x9EA3F5, 0xC29AF0, 0xF08FC4, 0x5CC9C6, 0xB4C766, 0xE2B65A]
+            case (false, true): [0x2358AD, 0x3D47CF, 0x753AB5, 0x98346A, 0x196363, 0x53601E, 0x74551A]
+            case (true, true): [0xC7DAF9, 0xD5D8FB, 0xE4D2F8, 0xF8CCE4, 0xABE3E1, 0xD3DEA5, 0xEFD6A2]
+            }
+            return Dictionary(uniqueKeysWithValues: zip(AtticTagHue.automatic, values.map { AtticRGBA($0) }))
+        }
+
         /// Starting hues for priority; each is tuned per palette and mode to
         /// 3 : 1 on the surface, its hover and its selection.
         static func priorityHues(dark: Bool) -> (high: AtticRGBA, medium: AtticRGBA, low: AtticRGBA) {
@@ -1033,6 +1150,4 @@ enum Calm {
     static func rowHover(dark: Bool) -> AtticRGBA { dark ? AtticRGBA(0x383838) : AtticRGBA(0xF1F1F1) }
     static func rowSelection(dark: Bool) -> AtticRGBA { dark ? AtticRGBA(0x454545) : AtticRGBA(0xE7E7E7) }
     static func highPriority(dark: Bool) -> AtticRGBA { dark ? AtticRGBA(0xD9A16C) : AtticRGBA(0xB35D27) }
-    static func doneDisc(dark: Bool) -> AtticRGBA { dark ? AtticRGBA(0x464646) : AtticRGBA(0xE4E4E4) }
-    static func doneCheck(dark: Bool) -> AtticRGBA { dark ? AtticRGBA(0xB8B8B8) : AtticRGBA(0x797979) }
 }

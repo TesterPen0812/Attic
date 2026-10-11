@@ -207,7 +207,7 @@ final class NoteFormatControls: NSObject {
 
     private func rebuildRoots() {
         let design = design
-        formatModel.highlightSwatch = AtticColorTokens.resolve(design).tagFill
+        formatModel.highlightSwatch = AtticColorTokens.resolve(design).highlightMarker
         barHost.rootView = AnyView(NoteFormatBarView(model: formatModel).atticDesign(design))
         slashHost.rootView = AnyView(NoteSlashListView(model: slashModel).atticDesign(design))
         cardHost.rootView = AnyView(NoteFormatCardView(model: cardModel)
@@ -225,14 +225,15 @@ final class NoteFormatControls: NSObject {
         }
     }
 
-    /// Links read as body text with a quiet underline; the pointer shows a
-    /// hand over them and a click opens them.
+    /// Links read in blue with an underline in the same blue at 55 %
+    /// (colour pass, owner 2026-10-10); the pointer shows a hand over them
+    /// and a click opens them.
     private func applyLinkLook() {
         let style = NoteTextStyle(design: design)
         textView?.linkTextAttributes = [
-            .foregroundColor: style.bodyColor,
+            .foregroundColor: style.linkColor,
             .underlineStyle: NSUnderlineStyle.single.rawValue,
-            .underlineColor: style.secondaryColor,
+            .underlineColor: style.linkUnderlineColor,
             .cursor: NSCursor.pointingHand
         ]
     }

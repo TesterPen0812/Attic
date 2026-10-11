@@ -715,6 +715,7 @@ struct AtticTagPicker: View {
     }
 
     @Environment(\.atticDropdownHeight) private var cardHeight
+    @Environment(\.atticTagColouring) private var colouring
 
     var body: some View {
         let m = AtticDropdownMetrics.self
@@ -752,7 +753,9 @@ struct AtticTagPicker: View {
     private var rows: some View {
         VStack(alignment: .leading, spacing: 0) {
             ForEach(Array(tags.enumerated()), id: \.element.id) { index, tag in
+                // Each tag in its colour (colour pass, owner 2026-10-10).
                 AtticDropdownRow(title: "#" + tag.name, check: tag.state, detail: tag.detail, isHighlighted: highlighted == index,
+                                 titleInk: colouring.hue(for: tag.name).ink,
                                  onHover: hover(index), position: index + 1, itemCount: Self.rowCount(tags: tags.count, create: create)) {
                     onToggle(tag.name)
                 }

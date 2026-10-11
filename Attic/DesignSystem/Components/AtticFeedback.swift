@@ -14,13 +14,13 @@ enum AtticToastHold: Hashable {
 ///
 /// Its button has no shortcut of its own (Astra 23): ⌘Z goes to the text
 /// being edited first, then to the page's history, which the toast's step
-/// is the top of. A failed action keeps the toast, in the warning colour,
-/// with its reason. The pointer, the button's keyboard focus and VoiceOver
+/// is the top of. A failed action keeps the toast, with the error's red
+/// icon before its reason in the toast's own ink (owner, 2026-10-10). The pointer, the button's keyboard focus and VoiceOver
 /// each hold it open (`onHold`).
 struct AtticUndoToast: View {
     let message: String
     var actionTitle: String = String(localized: "Undo")
-    /// The action failed: the message is its reason (warning ink).
+    /// The action failed: the message is its reason, after a red icon.
     var isFailure = false
     /// Keyboard focus or VoiceOver arrived on the toast (true) or left.
     var onHold: (AtticToastHold, Bool) -> Void = { _, _ in }
@@ -34,7 +34,13 @@ struct AtticUndoToast: View {
         let height = AtticControlSize.toastHeight
         let radius = AtticRadius.control(height: height)
         HStack(spacing: AtticToastMetrics.gap) {
-            AtticText(verbatim: message, style: .toast, ink: isFailure ? .warningText : .body)
+            HStack(spacing: AtticErrorLineMetrics.gap) {
+                if isFailure {
+                    AtticIcon(systemName: "exclamationmark.circle", size: AtticErrorLineMetrics.iconSize, weight: .medium,
+                              ink: AtticStatusItem.Tone.error.iconInk)
+                }
+                AtticText(verbatim: message, style: .toast, ink: .body)
+            }
                 .accessibilityFocused($voiceOverOnMessage)
             AtticToastButton(title: actionTitle, outerRadius: radius, onFocus: { onHold(.keyboard, $0) }, action: onUndo)
                 .accessibilityFocused($voiceOverOnButton)
@@ -81,8 +87,8 @@ private struct AtticToastButton: View {
 // MARK: - Notice
 
 /// A problem that concerns the whole panel (a failed save, an import that
-/// could not finish): raised over content like the toast, in the warning
-/// colour, with the next step as a button. It stays until it is resolved or
+/// could not finish): raised over content like the toast, with the error's
+/// red icon, the store's sentence in body ink and the next step as a button. It stays until it is resolved or
 /// dismissed; a problem is never hidden. The message is the store's own
 /// sentence, so it may take two lines (the only wrapping panel text), and
 /// the full text is its tooltip and VoiceOver label.
@@ -100,10 +106,11 @@ struct AtticNotice: View {
         let tokens = design.tokens
         let radius = AtticRadius.control(height: AtticControlSize.toastHeight)
         HStack(alignment: .center, spacing: AtticNoticeMetrics.gap) {
-            AtticIcon(systemName: "exclamationmark.circle", size: AtticErrorLineMetrics.iconSize, weight: .medium, ink: .warningText)
+            AtticIcon(systemName: "exclamationmark.circle", size: AtticErrorLineMetrics.iconSize, weight: .medium,
+                      ink: AtticStatusItem.Tone.error.iconInk)
             Text(verbatim: message)
                 .font(AtticTextStyle.toast.font)
-                .foregroundStyle(tokens.ink(.warningText).color)
+                .foregroundStyle(tokens.ink(.body).color)
                 .lineLimit(2)
                 .truncationMode(.tail)
                 .fixedSize(horizontal: false, vertical: true)
@@ -139,7 +146,7 @@ private struct AtticNoticeButton: View {
         let inner = AtticRadius.nested(outer: outerRadius, gap: AtticControlSize.capsuleInset) ?? outerRadius
         let hover = forced == .hover || hovered
         Button(action: action) {
-            AtticText(verbatim: title, style: .controlLabel, ink: .warningText)
+            AtticText(verbatim: title, style: .controlLabel, ink: .heading)
                 .padding(.horizontal, AtticToastMetrics.buttonPadding)
                 .frame(height: AtticControlSize.smallHeight)
                 .background(RoundedRectangle(cornerRadius: inner, style: .continuous).fill((hover ? design.tokens.chipSelected : design.tokens.chipHover).color))
@@ -195,8 +202,10 @@ struct AtticViewLine: View {
     }
 }
 
-/// A problem is never hidden: "Not saved · Retry" in the warning colour,
-/// shown in place of the quiet state, with the next step as a button.
+/// A problem is never hidden: "Not saved · Retry" after the error's red
+/// icon, in grey (owner, 2026-10-10: one error style, the icon carries the
+/// colour), shown in place of the quiet state, with the next step as a
+/// button.
 struct AtticErrorLine: View {
     let message: String
     var actionTitle: String = String(localized: "Retry")
@@ -209,12 +218,13 @@ struct AtticErrorLine: View {
     var body: some View {
         let hover = forced == .hover || hovered
         HStack(spacing: AtticErrorLineMetrics.gap) {
-            AtticIcon(systemName: "exclamationmark.circle", size: AtticErrorLineMetrics.iconSize, weight: .medium, ink: .warningText)
-            AtticText(verbatim: message, style: .controlLabel, ink: .warningText)
-            AtticText(verbatim: "·", style: .controlLabel, ink: .warningText)
+            AtticIcon(systemName: "exclamationmark.circle", size: AtticErrorLineMetrics.iconSize, weight: .medium,
+                      ink: AtticStatusItem.Tone.error.iconInk)
+            AtticText(verbatim: message, style: .controlLabel, ink: .helper)
+            AtticText(verbatim: "·", style: .controlLabel, ink: .helper)
             Button(action: onRetry) {
-                AtticText(verbatim: actionTitle, style: .controlLabel, ink: .warningText)
-                    .underline(hover, color: design.tokens.color(.warningText))
+                AtticText(verbatim: actionTitle, style: .controlLabel, ink: .body)
+                    .underline(hover, color: design.tokens.color(.body))
                     .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
@@ -426,7 +436,25 @@ struct AtticReorderLift<Content: View>: View {
 /// why, and what can be done. The slot's pill shows the most urgent; the
 /// details pop-over lists every one.
 struct AtticStatusItem: Identifiable {
-    enum Tone: Equatable { case warning, normal, quiet }
+    /// Notice severity (colour pass, owner 2026-10-10). Only the icon takes
+    /// the colour; the words keep the pill's inks.
+    enum Tone: Equatable {
+        /// Something was not saved or is at risk: the overdue red icon.
+        case error
+        /// Needs a look, nothing lost (a read failure, an edit conflict, an
+        /// agent's deletion proposal): the amber icon.
+        case caution
+        case normal, quiet
+
+        /// The icon's ink.
+        var iconInk: AtticInk {
+            switch self {
+            case .error: .noticeError
+            case .caution: .noticeCaution
+            case .normal, .quiet: .icon
+            }
+        }
+    }
     struct Action: Identifiable {
         let title: String
         var identifier: String?
@@ -445,7 +473,7 @@ struct AtticStatusItem: Identifiable {
 
 /// The status slot's pill between the Notes bottom buttons (p2-05, p2-15):
 /// a raised capsule, 36 tall, at most 176 wide, with the most urgent
-/// state's glyph and label (the warning colour for a problem), then the
+/// state's glyph (red for an error, amber for a caution) and label, then the
 /// state's inline action ("Retry"), or "+N" when there is more, or ✕ for a
 /// batch that can be cancelled. A click, Return or VoiceOver opens the
 /// details; nothing needs hover.
@@ -470,13 +498,12 @@ struct AtticStatusPill: View {
         // A quiet state (Read only) is said by its glyph; its words keep the
         // body ink, since the secondary grey falls under 3 : 1 on raised
         // material in some Dark palettes (the appearance matrix).
-        let ink: AtticInk = item.tone == .warning ? .warningText : .body
+        let ink: AtticInk = .body
         HStack(spacing: m.pillGap) {
             Button(action: onOpen) {
                 HStack(spacing: m.pillGap) {
                     if let systemName = item.systemName {
-                        AtticIcon(systemName: systemName, size: m.pillIconSize, weight: .medium,
-                                  ink: item.tone == .warning ? .warningText : .icon)
+                        AtticIcon(systemName: systemName, size: m.pillIconSize, weight: .medium, ink: item.tone.iconInk)
                     } else {
                         AtticSpinner()
                     }
@@ -536,15 +563,14 @@ struct AtticStatusDetails: View {
                 HStack(alignment: .firstTextBaseline, spacing: m.pillGap + 2) {
                     Group {
                         if let systemName = item.systemName {
-                            AtticIcon(systemName: systemName, size: m.pillIconSize, weight: .medium,
-                                      ink: item.tone == .warning ? .warningText : .icon)
+                            AtticIcon(systemName: systemName, size: m.pillIconSize, weight: .medium, ink: item.tone.iconInk)
                         } else {
                             AtticSpinner()
                         }
                     }
                     .frame(width: 16)
                     VStack(alignment: .leading, spacing: 4) {
-                        AtticText(verbatim: item.title, style: .panelHeading, ink: item.tone == .warning ? .warningText : .heading)
+                        AtticText(verbatim: item.title, style: .panelHeading, ink: .heading)
                         if let explanation = item.explanation {
                             Text(verbatim: explanation)
                                 .font(AtticTextStyle.settingsHelper.font)

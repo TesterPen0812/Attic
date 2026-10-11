@@ -158,7 +158,7 @@ final class NoteEditorTextView: NSTextView, NSAccessibilityCustomRotorItemSearch
     }
 
     /// Puts Copy on the hovered block, else the caret's, else hides it.
-    /// Its chip is opaque in the block's own fill, 3 pt inside the corner.
+    /// Its chip is opaque in the block's own fill, inside the corner.
     func placeMonoCopy() {
         #if DEBUG
         if pinsMonoCopy, !monoCopyButton.isHidden { return }
@@ -180,7 +180,7 @@ final class NoteEditorTextView: NSTextView, NSAccessibilityCustomRotorItemSearch
         monoCopyButton.ink = style.secondaryColor
         let origin = textContainerOrigin
         let size = NoteMonoCopyButton.size, inset = AtticNoteType.monoCopyInset
-        let frame = NSRect(x: origin.x + rect.maxX - inset - size, y: origin.y + rect.minY - AtticNoteType.monoCopyRise,
+        let frame = NSRect(x: origin.x + rect.maxX - inset - size, y: origin.y + rect.minY + AtticNoteType.monoCopyTop,
                            width: size, height: size)
         if monoCopyButton.frame != frame { monoCopyButton.frame = frame }
         let wasHidden = monoCopyButton.isHidden

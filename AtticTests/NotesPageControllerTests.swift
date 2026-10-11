@@ -1507,7 +1507,7 @@ final class NotesPageControllerTests: XCTestCase {
         XCTAssertEqual(baselineSession.engine.documentExtractionCount, baselineExtractions)
         session.notice = "Finish composing text before leaving this note."
         XCTAssertEqual(controller.statusItems(for: session).map(\.label),
-                       ["Claude has changes", "Finish composing text before leaving this note."])
+                       ["Claude has changes", "Finish first"])
     }
 
     func testStagedImageIsCommittedWithTheSaveThatShowsIt() async throws {

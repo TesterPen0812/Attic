@@ -17,7 +17,7 @@ enum NoteStatusItem: Equatable {
         case let .deletionProposal(agent): "Deleted by \(agent)"
         case let .editedBy(agent, date): "\(agent) edited \(date.formatted(date: .omitted, time: .shortened))"
         case .importing: String(localized: "Adding files")
-        case let .notice(message): message
+        case let .notice(message): NoteStatusPresentation.headline(forNotice: message)
         case .readOnly: String(localized: "Read only")
         }
     }

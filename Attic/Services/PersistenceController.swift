@@ -36,7 +36,9 @@ enum PersistenceController {
             // Phase 2: note versions and agents' pending note edits.
             NoteVersion.self,
             NotePendingEdit.self,
-            StoreMaintenance.self
+            StoreMaintenance.self,
+            // Colour pass (2026-10-10): each tag's stored colour.
+            TagColour.self
         ]
         #else
         [

@@ -53,6 +53,9 @@ final class TagService {
         let counts: [TagCount]
         let countsByName: [String: Int]
         let names: [String]
+        /// Tags in use by when they were first used (the oldest item that
+        /// carries them), then by name: the order new colours are given in.
+        let oldestFirst: [String]
         let rows: [PersistentIdentifier: RowState]
         let divergent: Set<AtticItemRef>
     }
@@ -66,6 +69,12 @@ final class TagService {
 
     var names: [String] { _ = counts(); return inventory?.names ?? [] }
     var countsByName: [String: Int] { _ = counts(); return inventory?.countsByName ?? [:] }
+    /// Tags in use, oldest first (`TagColourStore` gives colours in this order).
+    var namesOldestFirst: [String] { _ = counts(); return inventory?.oldestFirst ?? [] }
+    /// Run inside a rename or merge's own save, before it: carries the
+    /// sources' colour to the target in the same context, so the colour and
+    /// the tags change together or not at all (`TagColourStore.carry`).
+    var carryColour: (@MainActor (_ sources: [String], _ target: String, _ context: ModelContext) throws -> Void)?
 
     /// Inspect only rows touched by this transaction, never the whole store.
     /// Divergent replicas can change the winning tag set through a content
@@ -147,15 +156,20 @@ final class TagService {
         do {
             var rows: [PersistentIdentifier: RowState] = [:]
             var divergent = Set<AtticItemRef>()
+            var firstUse: [String: Date] = [:]
             var itemsByTag: [String: Set<AtticItemRef>] = [:]
-            for (ref, tags) in try liveTags(rows: &rows, divergent: &divergent) {
+            for (ref, tags) in try liveTags(rows: &rows, divergent: &divergent, firstUse: &firstUse) {
                 for tag in tags { itemsByTag[tag, default: []].insert(ref) }
             }
             let counts = itemsByTag
                 .map { TagCount(name: $0.key, count: $0.value.count) }
                 .sorted { $0.count != $1.count ? $0.count > $1.count : $0.name < $1.name }
+            let oldestFirst = counts.map(\.name).sorted {
+                let (a, b) = (firstUse[$0] ?? .distantFuture, firstUse[$1] ?? .distantFuture)
+                return a != b ? a < b : $0 < $1
+            }
             inventory = Inventory(counts: counts, countsByName: Dictionary(uniqueKeysWithValues: counts.map { ($0.name, $0.count) }),
-                                  names: counts.map(\.name), rows: rows, divergent: divergent)
+                                  names: counts.map(\.name), oldestFirst: oldestFirst, rows: rows, divergent: divergent)
             inventoryBuildCount += 1
             return counts
         } catch {
@@ -171,7 +185,8 @@ final class TagService {
         do {
             var rows: [PersistentIdentifier: RowState] = [:]
             var divergent = Set<AtticItemRef>()
-            return Set(try liveTags(rows: &rows, divergent: &divergent).filter { $0.value.contains(tag) }.map(\.key))
+            var firstUse: [String: Date] = [:]
+            return Set(try liveTags(rows: &rows, divergent: &divergent, firstUse: &firstUse).filter { $0.value.contains(tag) }.map(\.key))
         } catch {
             lastErrorMessage = error.localizedDescription
             return []
@@ -199,7 +214,9 @@ final class TagService {
         }
         normalizedSources.remove(target)
         guard !normalizedSources.isEmpty else { return TagChangeSnapshot(changesByRow: [:]) }
-        return rewrite { tags in
+        let carry = carryColour
+        let sourceOrder = sources.compactMap(AtticTag.normalize).filter { normalizedSources.contains($0) }
+        return rewrite(beforeSave: { context in try carry?(sourceOrder, target, context) }) { tags in
             guard !tags.isDisjoint(with: normalizedSources) else { return nil }
             return tags.subtracting(normalizedSources).union([target])
         }
@@ -251,7 +268,8 @@ final class TagService {
 
     /// Applies `transform` to every row's tag set; nil leaves a row alone.
     /// Returns what it removed and added on each row it changed.
-    private func rewrite(_ transform: (Set<String>) -> Set<String>?) -> TagChangeSnapshot? {
+    private func rewrite(beforeSave: (ModelContext) throws -> Void = { _ in },
+                         _ transform: (Set<String>) -> Set<String>?) -> TagChangeSnapshot? {
         let context = ModelContext(container)
         var previous: [PersistentIdentifier: TagChangeSnapshot.Change] = [:]
         func apply(_ raw: String, _ identifier: PersistentIdentifier) -> String? {
@@ -278,6 +296,13 @@ final class TagService {
             return nil
         }
         guard !previous.isEmpty else { return TagChangeSnapshot(changesByRow: [:]) }
+        do {
+            try beforeSave(context)
+        } catch {
+            context.rollback()
+            lastErrorMessage = error.localizedDescription
+            return nil
+        }
         guard save(context) else { return nil }
         return TagChangeSnapshot(changesByRow: previous)
     }
@@ -288,7 +313,8 @@ final class TagService {
     /// live and tag filters, so an older tagged copy never answers for a
     /// newer one that has no tags or is deleted.
     private func liveTags(rows metadata: inout [PersistentIdentifier: RowState],
-                          divergent: inout Set<AtticItemRef>) throws -> [AtticItemRef: Set<String>] {
+                          divergent: inout Set<AtticItemRef>,
+                          firstUse: inout [String: Date]) throws -> [AtticItemRef: Set<String>] {
         let context = ModelContext(container)
         var result: [AtticItemRef: Set<String>] = [:]
         var firstState: [AtticItemRef: RowState] = [:]
@@ -303,9 +329,10 @@ final class TagService {
             inventoryFetchCount += 1
             return try context.fetch(descriptor)
         }
-        func record(_ ref: AtticItemRef, _ raw: String) {
+        func record(_ ref: AtticItemRef, _ raw: String, _ created: Date) {
             let tags = Set(AtticTag.decode(raw))
             if !tags.isEmpty { result[ref] = tags }
+            for tag in tags where created < firstUse[tag] ?? .distantFuture { firstUse[tag] = created }
         }
 
         inventoryFetchCount += 1
@@ -314,7 +341,7 @@ final class TagService {
             let rows = try fetch(FetchDescriptor<TaskItem>(predicate: #Predicate { taskIDs.contains($0.id) }))
             for task in rows { remember(task.persistentModelID, AtticItemRef(.task, task.id), task.tagsRaw, task.deletedAt != nil) }
             for task in TaskStore.canonicalReplicas(from: rows) where task.deletedAt == nil {
-                record(AtticItemRef(.task, task.id), task.tagsRaw)
+                record(AtticItemRef(.task, task.id), task.tagsRaw, task.createdAt)
             }
         }
 
@@ -325,7 +352,7 @@ final class TagService {
             let rows = try fetch(FetchDescriptor<NoteItem>(predicate: #Predicate { noteIDs.contains($0.id) }))
             for note in rows { remember(note.persistentModelID, AtticItemRef(.note, note.id), note.tagsRaw, note.deletedAt != nil) }
             for note in NoteStore.canonicalReplicas(from: rows) where note.deletedAt == nil {
-                record(AtticItemRef(.note, note.id), note.tagsRaw)
+                record(AtticItemRef(.note, note.id), note.tagsRaw, note.createdAt)
             }
         }
 
@@ -340,7 +367,7 @@ final class TagService {
             for replicas in Dictionary(grouping: rows, by: \.id).values {
                 let board = CanvasStore.winningBoardReplica(in: replicas)
                 guard !board.tombstoned, board.purgedAt == nil else { continue }
-                record(AtticItemRef(.canvas, board.id), board.tagsRaw)
+                record(AtticItemRef(.canvas, board.id), board.tagsRaw, board.createdAt)
             }
         }
         return result

@@ -37,6 +37,10 @@ enum NoteFormatCaptureScene {
                 writeTypographySample(controls: controls, textView: textView)
                 return
             }
+            if scene == "colour" {
+                writeColourSample(controls: controls, textView: textView)
+                return
+            }
             if scene == "tables" {
                 writeTablesSample(controls: controls, chrome: chrome, textView: textView)
                 return
@@ -170,6 +174,26 @@ enum NoteFormatCaptureScene {
                 break
             }
         }
+    }
+
+    /// The colour pass sheet's note: tags in their colours, a highlight,
+    /// a link, a checklist with its first box ticked, and a caution notice
+    /// (a read failure) for the notice icon.
+    private static func writeColourSample(controls: NoteFormatControls, textView: NoteEditorTextView) {
+        let router = controls.router
+        type("Launch plan #launch #pricing \n", into: textView)
+        type("Pricing goes live Friday. The annual plan gets two months free; see the competitor page for reference.", into: textView)
+        textView.insertNewline(nil)
+        line("Before launch", .paragraph(.heading(2)), controls: controls, textView: textView)
+        line("Final copy from Sam", .paragraph(.checklist), controls: controls, textView: textView)
+        line("One screenshot per plan", nil, controls: controls, textView: textView)
+        type("Student pricing", into: textView)
+        router.run(.mark(.highlight), from: .shortcut, selection: range(of: "two months free", in: textView))
+        router.run(.link("https://example.com/competitors"), from: .linkPopover, selection: range(of: "competitor page", in: textView))
+        let box = range(of: "Final copy", in: textView)
+        if box.location != NSNotFound { controls.engine.toggleCheckbox(atLineOf: box.location) }
+        textView.setSelectedRange(NSRange(location: (textView.string as NSString).length, length: 0))
+        controls.engine.onNotice?(String(localized: "An attachment couldn’t be read. Nothing was pasted."))
     }
 
     private static func writeSample(controls: NoteFormatControls, textView: NoteEditorTextView, rich: Bool) {

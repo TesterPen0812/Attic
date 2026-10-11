@@ -120,8 +120,9 @@ final class AtticDesignSystemTests: XCTestCase {
         XCTAssertEqual(light.ink(.helper).hexString, "#7A7A7A")
         XCTAssertEqual(light.ink(.priorityNone).hexString, "#838383")
         XCTAssertEqual(light.ink(.priorityMark).hexString, "#B35D27")
-        XCTAssertEqual(light.doneDisc.hexString, "#E4E4E4")
-        XCTAssertEqual(light.ink(.doneCheck).hexString, "#797979")
+        // Done (owner, 2026-10-10): the title's ink, the tick its inverse.
+        XCTAssertEqual(light.ink(.doneFill).hexString, "#272727")
+        XCTAssertEqual(light.ink(.onDone).hexString, "#FFFFFF")
         XCTAssertEqual(light.hover.over(light.panel.base).hexString, "#F1F1F1")
         XCTAssertEqual(light.selected.over(light.panel.base).hexString, "#E7E7E7")
         // Phase 0's drawn control look (as before visual A) over this surface.
@@ -135,8 +136,8 @@ final class AtticDesignSystemTests: XCTestCase {
         XCTAssertEqual(dark.ink(.helper).hexString, "#A4A4A4")
         XCTAssertEqual(dark.ink(.priorityNone).hexString, "#959595")
         XCTAssertEqual(dark.ink(.priorityMark).hexString, "#D9A16C")
-        XCTAssertEqual(dark.doneDisc.hexString, "#464646")
-        XCTAssertEqual(dark.ink(.doneCheck).hexString, "#B8B8B8")
+        XCTAssertEqual(dark.ink(.doneFill).hexString, "#F1F1F1")
+        XCTAssertEqual(dark.ink(.onDone).hexString, "#1E1E1F")
         XCTAssertEqual(dark.hover.over(dark.panel.base).hexString, "#383838")
         XCTAssertEqual(dark.selected.over(dark.panel.base).hexString, "#454545")
         XCTAssertEqual(dark.controlFace.hexString, "#454545")
@@ -148,8 +149,8 @@ final class AtticDesignSystemTests: XCTestCase {
             // No green cast: every grey the default look draws is neutral.
         for tokens in [light, dark] {
             let base = tokens.panel.base
-            let greys = [tokens.ink(.heading), tokens.ink(.body), tokens.ink(.helper), tokens.ink(.priorityNone), tokens.doneDisc,
-                         tokens.ink(.doneCheck), tokens.controlFace,
+            let greys = [tokens.ink(.heading), tokens.ink(.body), tokens.ink(.helper), tokens.ink(.priorityNone), tokens.ink(.doneFill),
+                         tokens.ink(.onDone), tokens.controlFace,
                          tokens.hover.over(base), tokens.selected.over(base)]
             for grey in greys {
                 XCTAssertTrue(abs(grey.red - grey.green) < 0.006 && abs(grey.green - grey.blue) < 0.006, "\(grey.hexString) is not neutral")
@@ -220,8 +221,7 @@ final class AtticDesignSystemTests: XCTestCase {
             let tokens = context.tokens
             let pairs = AtticSurfaceModel.readabilityPairs(
                 inks: tokens.inks, hover: tokens.hover, selected: tokens.selected, pressed: tokens.pressed,
-                controlFace: tokens.controlFace, glassFace: tokens.glassFace, glassDisabled: tokens.glassDisabled, glassPressed: tokens.glassPressed, chipSelected: tokens.chipSelected, chipHover: tokens.chipHover, doneDisc: tokens.doneDisc,
-                recessed: tokens.recessed, tagFill: tokens.tagFill, tagFillSelected: tokens.tagFillSelected
+                controlFace: tokens.controlFace, glassFace: tokens.glassFace, glassDisabled: tokens.glassDisabled, glassPressed: tokens.glassPressed, chipSelected: tokens.chipSelected, chipHover: tokens.chipHover, recessed: tokens.recessed, tagFill: tokens.tagFill, tagFillSelected: tokens.tagFillSelected
             )
             let onControls = pairs.filter { $0.overlays.first == tokens.controlFace || $0.onGlass }
             XCTAssertEqual(onControls.filter(\.onGlass).count, onControls.count / 2, context.caption)
@@ -336,8 +336,7 @@ final class AtticDesignSystemTests: XCTestCase {
             let tokens = context.tokens
             let pairs = AtticSurfaceModel.readabilityPairs(
                 inks: tokens.inks, hover: tokens.hover, selected: tokens.selected, pressed: tokens.pressed,
-                controlFace: tokens.controlFace, glassFace: tokens.glassFace, glassDisabled: tokens.glassDisabled, glassPressed: tokens.glassPressed, chipSelected: tokens.chipSelected, chipHover: tokens.chipHover, doneDisc: tokens.doneDisc,
-                recessed: tokens.recessed, tagFill: tokens.tagFill, tagFillSelected: tokens.tagFillSelected
+                controlFace: tokens.controlFace, glassFace: tokens.glassFace, glassDisabled: tokens.glassDisabled, glassPressed: tokens.glassPressed, chipSelected: tokens.chipSelected, chipHover: tokens.chipHover, recessed: tokens.recessed, tagFill: tokens.tagFill, tagFillSelected: tokens.tagFillSelected
             )
             for pair in pairs where tokens.panel.worstMargin([pair]) < 0.999 {
                 XCTAssertEqual(pair.ink, .accentText, context.caption)
@@ -650,12 +649,11 @@ final class AtticDesignSystemTests: XCTestCase {
 
     func testCheckMarksAreMeasuredAgainstTheirFill() throws {
         for context in [AtticDesignContext(mode: .light), AtticDesignContext(mode: .dark), AtticDesignContext(mode: .light, surface: .glass, tint: .bold)] {
-            // The model: the done check keeps 3 : 1 on the quiet disc (the
-            // old filled Done's pairs still hold for the coverage).
+            // The model: the done tick keeps 3 : 1 on the ink mark, and on
+            // the disabled mark.
             let tokens = context.tokens
             XCTAssertGreaterThanOrEqual(tokens.ink(.onDone).contrast(on: tokens.ink(.doneFill)), 3, context.caption)
             XCTAssertGreaterThanOrEqual(tokens.ink(.onDone).contrast(on: tokens.ink(.disabledIcon)), 3, context.caption)
-            XCTAssertGreaterThanOrEqual(tokens.ink(.doneCheck).contrast(on: tokens.doneDisc), 3, context.caption)
             // The pixels: a drawn check is measured and passes. Done's fill
             // (the task's disc, the subtask's square) is decoration: the
             // check is judged.
@@ -722,7 +720,9 @@ final class AtticDesignSystemTests: XCTestCase {
         XCTAssertNil(AtticStatusCircle.pieShare((0, 0)))
         XCTAssertEqual(AtticStatusCircle.pieShare((1, 3))!, 1.0 / 3, accuracy: 1e-9)
         XCTAssertEqual(AtticStatusCircle.pieShare((1, 10))!, 0.1, accuracy: 1e-9, "no minimum")
-        XCTAssertEqual(AtticStatusCircle.pieShare((3, 3)), 1)
+        // Capped at 92 % (colour pass, owner 2026-10-10): all ticked keeps
+        // a sliver of ring, so only done is a full filled disc.
+        XCTAssertEqual(AtticStatusCircle.pieShare((3, 3)), 0.92)
     }
 
     /// In progress is a ring with a centre dot, never a share: VoiceOver

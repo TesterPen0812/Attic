@@ -918,13 +918,13 @@ private struct FeedbackBoard: View {
         }
         BoardHeading(title: "Notes status slot · the most urgent state between the bottom buttons")
         AtticSpecimen("Not saved, with Retry", fullWidth: true) {
-            AtticStatusPill(item: AtticStatusItem(id: "notSaved", systemName: "exclamationmark.circle", title: "Not saved", tone: .warning),
+            AtticStatusPill(item: AtticStatusItem(id: "notSaved", systemName: "exclamationmark.circle", title: "Not saved", tone: .error),
                             inlineAction: AtticStatusItem.Action(title: "Retry", handler: demo.record("Retry")),
                             onOpen: demo.record("Details"))
                 .padding(.horizontal, 16)
         }
         AtticSpecimen("Several at once", fullWidth: true) {
-            AtticStatusPill(item: AtticStatusItem(id: "notSaved", systemName: "exclamationmark.circle", title: "Not saved", tone: .warning),
+            AtticStatusPill(item: AtticStatusItem(id: "notSaved", systemName: "exclamationmark.circle", title: "Not saved", tone: .error),
                             more: 2, onOpen: demo.record("Details"))
                 .padding(.horizontal, 16)
         }
@@ -942,7 +942,7 @@ private struct FeedbackBoard: View {
             AtticStatusDetails(items: [
                 AtticStatusItem(id: "notSaved", systemName: "exclamationmark.circle", title: "Not saved",
                                 explanation: "The disk is full. Every change is in the recovery copy; Attic keeps trying.",
-                                tone: .warning, actions: [.init(title: "Retry", handler: demo.record("Retry")),
+                                tone: .error, actions: [.init(title: "Retry", handler: demo.record("Retry")),
                                                           .init(title: "Copy Text", handler: demo.record("Copy Text"))]),
                 AtticStatusItem(id: "proposal", systemName: "sparkle", title: "Claude has changes",
                                 explanation: "Proposed at 14:10, based on an older version.",

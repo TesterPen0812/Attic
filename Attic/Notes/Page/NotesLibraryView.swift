@@ -44,7 +44,7 @@ struct NotesLibraryView: View {
 
     static let space = NamedCoordinateSpace.named("AtticNotesLibrary")
 
-    private var pageEdge: CGFloat { max(0, layout.chromeInsets.leading - AtticSpacing.panelMargin) }
+    private var pageEdge: CGFloat { AtticNoteMetrics.libraryPageEdge(chromeInset: layout.chromeInsets.leading) }
 
     /// The label line's text top: the tabs' line, as on Tasks.
     private var labelsTop: CGFloat { layout.headerBottom + AtticLayout.pageTabsTop }
@@ -246,9 +246,10 @@ struct NotesLibraryView: View {
     /// A row's Tags ▸ (right-click): the note's tags, since rows don't
     /// repeat them. In All notes a tag filters (D3); the active one is
     /// ticked and choosing it again shows every note. Dimmed with none.
-    static func tagsSubmenu(tags: [String], activeTag: String?, onSelect: @escaping (String?) -> Void) -> AtticMenuCommand {
+    static func tagsSubmenu(tags: [String], activeTag: String?, hue: (String) -> AtticTagHue? = { _ in nil },
+                            onSelect: @escaping (String?) -> Void) -> AtticMenuCommand {
         var command = AtticMenuCommand.submenu(String(localized: "Tags"), tags.map { tag in
-            AtticMenuCommand(verbatim: "#\(tag)", state: tag == activeTag ? .on : nil) {
+            AtticMenuCommand(verbatim: "#\(tag)", state: tag == activeTag ? .on : nil, swatch: hue(tag)) {
                 onSelect(tag == activeTag ? nil : tag)
             }
         })

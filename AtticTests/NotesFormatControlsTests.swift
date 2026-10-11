@@ -753,11 +753,14 @@ final class NotesFormatControlsTests: XCTestCase {
         XCTAssertEqual(controls.link(at: textView.convert(point, from: nil))?.0, "https://example.com")
     }
 
-    func testLinksReadAsBodyTextWithAQuietUnderline() {
+    /// Colour pass (owner, 2026-10-10): links in blue, their underline in
+    /// the same blue at 55 %.
+    func testLinksReadInBlueWithTheirUnderline() {
         let (_, _, textView) = make()
         let style = NoteTextStyle(design: .default)
-        XCTAssertEqual(textView.linkTextAttributes?[.foregroundColor] as? NSColor, style.bodyColor)
-        XCTAssertEqual(textView.linkTextAttributes?[.underlineColor] as? NSColor, style.secondaryColor)
+        XCTAssertEqual(textView.linkTextAttributes?[.foregroundColor] as? NSColor, style.linkColor)
+        XCTAssertEqual(textView.linkTextAttributes?[.underlineColor] as? NSColor, style.linkUnderlineColor)
+        XCTAssertNotNil(textView.linkTextAttributes?[.underlineStyle])
     }
 
     // MARK: Hint and dates
