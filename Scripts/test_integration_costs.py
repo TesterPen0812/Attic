@@ -69,7 +69,7 @@ class IntegrationCostsTests(unittest.TestCase):
             calls = []
             def run(directory, side, build, tests, filename):
                 calls.append((side, build, tests, filename))
-                text = self.rendered_log(4)
+                text = self.rendered_log(4) + self.phase_log()
                 (directory / filename).write_text(text)
                 return text
             collect(root, run)
@@ -78,6 +78,24 @@ class IntegrationCostsTests(unittest.TestCase):
             self.assertTrue(all(tests == [RENDERED] for _, _, tests, _ in calls))
             self.assertTrue(all(build == ('integrationbase' if side == 'baseline' else 'candidate') for side, build, _, _ in calls))
             self.assertEqual(json.loads((root / 'done-paired-diagnostics.json').read_text())['samples_per_side'], 24)
+
+    def phase_log(self):
+        return ''.join(f'ATTIC_DONE_KEY_PHASE run={s} key={k} change/runloop/layout/display/commit_ms=[1, 2, 3, 4, 5]\n'
+                       for s in range(3) for k in range(16))
+
+    def test_ar09_incomplete_duplicate_or_invalid_phases_fail_closed(self):
+        from sample_done_costs import collect
+        full = self.phase_log()
+        cases = ['', full.split('\n', 1)[1], full + full.splitlines()[0] + '\n',
+                 full.replace('[1, 2, 3, 4, 5]', '[1, 2, 3, 4]'),
+                 full.replace('[1, 2, 3, 4, 5]', '[-1, 2, 3, 4, 5]'),
+                 full.replace('[1, 2, 3, 4, 5]', '[1e999, 2, 3, 4, 5]')]
+        for phases in cases:
+            with self.subTest(phases=phases[:90]), tempfile.TemporaryDirectory() as tmp:
+                def run(directory, side, build, tests, filename):
+                    (directory / filename).write_text(self.rendered_log(4) + phases)
+                with self.assertRaises(ValueError):
+                    collect(Path(tmp), run)
 
     def test_every_notes_save_gate_uses_same_job_reference_range_and_raw_resolution(self):
         notes = {name for name in METRICS if name.startswith('note-')}

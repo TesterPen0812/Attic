@@ -6,6 +6,7 @@ uses the same median + max(reference range, resolution) + 0.2 ms formula on
 all 24 raw readings; paired deltas do not replace the acceptance oracle.
 """
 import json
+import math
 from pathlib import Path
 import statistics
 import sys
@@ -38,15 +39,25 @@ def collect(directory, run):
     import ast
     import re
     pattern = r'ATTIC_DONE_KEY_PHASE run=(\d+) key=(\d+) change/runloop/layout/display/commit_ms=(\[[^\n]+?\])'
+    expected = {(session, key) for session in range(3) for key in range(16)}
     for pair in range(1, PAIRS + 1):
-        sides = [{(int(run), int(key)): ast.literal_eval(raw) for run, key, raw in re.findall(pattern, text)}
-                 for text in texts[(pair - 1) * 2:pair * 2]]
-        if set(sides[0]) != set(sides[1]):
-            raise ValueError('incomplete paired Done phases')
+        sides = []
+        for text in texts[(pair - 1) * 2:pair * 2]:
+            records = {}
+            for run, key, raw in re.findall(pattern, text):
+                identity = (int(run), int(key))
+                if identity in records:
+                    raise ValueError('duplicate Done phase record')
+                values = ast.literal_eval(raw)
+                if (not isinstance(values, list) or len(values) != 5
+                        or any(type(v) not in (int, float) or not math.isfinite(v) or v < 0 for v in values)):
+                    raise ValueError('expected five finite nonnegative Done phases')
+                records[identity] = values
+            if set(records) != expected:
+                raise ValueError('incomplete paired Done phases')
+            sides.append(records)
         for (session, key), reference in sorted(sides[0].items()):
             candidate = sides[1][session, key]
-            if len(reference) != 5 or len(candidate) != 5:
-                raise ValueError('expected five Done phases')
             phases.append(dict(pair=pair, session=session, key=key,
                                delta_ms=[b - a for a, b in zip(reference, candidate)]))
     diagnostics = dict(samples_per_side=PAIRS * 3, phase_deltas=phases,
