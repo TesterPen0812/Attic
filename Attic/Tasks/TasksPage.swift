@@ -464,6 +464,14 @@ struct TasksPage: View {
             // on the model's changes only (round 11), and a focus change is
             // not one, so they are told here; each compares its snapshot,
             // and only the rows whose focus changed rebuild.
+            // H12-06: Tab moves the visible ring before a row key arrives.
+            // An existing selection follows a new keyboard row. Tab from no
+            // selection stays focus-only; an extended selection is preserved.
+            // Later menu/restore selections still win.
+            if let focus, focus.page == model.tab.rawValue, focusTracker.isKeyboardDriving,
+               !model.selection.isEmpty, !model.selection.contains(focus.id) {
+                model.selectOnly(focus.id)
+            }
             model.keyboardFocus = focus
             model.cellUpdates.objectWillChange.send()
             pointer.keyboardRow = focus.flatMap { focus in

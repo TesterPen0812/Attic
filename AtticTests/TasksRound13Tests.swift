@@ -10,6 +10,24 @@ import XCTest
 /// a real menu, never by calling the handlers.
 @MainActor
 final class TasksRound13Tests: XCTestCase {
+    // H12-06: native Tab focus must supersede a previous arrow selection.
+    func testH12_06TabFocusMovesSelectionAndReturnEditsTheFocusedTask() throws {
+        guard ProcessInfo.processInfo.environment["ATTIC_KEY_WINDOW_TESTS"] == "1" else {
+            throw XCTSkip("native keyboard interaction runs on CI only")
+        }
+        let hosted = try Hosted(height: 520)
+        defer { hosted.close() }
+        hosted.press("\u{F701}", keyCode: 125)
+        let first = try XCTUnwrap(hosted.model.keyboardFocus)
+        XCTAssertEqual(hosted.model.selection, [first.id])
+        hosted.press("\t", keyCode: 48)
+        let next = try XCTUnwrap(hosted.model.keyboardFocus)
+        XCTAssertNotEqual(next.id, first.id, "Tab reached the next row's visible focus ring")
+        XCTAssertEqual(hosted.model.selection, [next.id], "selection follows keyboard focus")
+        hosted.press("\r", keyCode: 36)
+        XCTAssertEqual(hosted.model.editingTitleID, next.id, "Return edits the visibly focused task")
+    }
+
     // MARK: - Bug 3: a Tab-focused subtask owns ⌘↑ ⌘↓ and Return
 
     /// The demo task with subtasks, expanded, and a Tab pressed until a
