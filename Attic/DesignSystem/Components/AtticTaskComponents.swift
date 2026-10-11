@@ -1982,7 +1982,7 @@ private struct AtticSubtaskCommands: ViewModifier {
 }
 
 /// The quick look: the row expands in place into its subtasks and "Add
-/// subtask" (its files open apart, under it: `AtticFilesList`). Aligned to the row's text column.
+/// subtask" (its files open apart, under it: `TasksFilesList`). Aligned to the row's text column.
 struct AtticQuickLook: View {
     let subtasks: [AtticSubtaskModel]
     let onToggle: (AtticSubtaskModel) -> Void

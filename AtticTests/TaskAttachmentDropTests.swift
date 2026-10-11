@@ -351,6 +351,75 @@ final class TaskAttachmentDropTests: XCTestCase {
         XCTAssertEqual(store.tasks.first { $0.id == parent.id }?.attachments.count, 1)
     }
 
+    // MARK: - A file row dragged onto another task (A1, restored)
+
+    /// The old window's cards copied to another task; the inline files
+    /// list's rows do the same through the page's one drop destination.
+    func testAFileRowCopiesIntoAnotherTaskButNeverIntoItsOwnOwner() async throws {
+        let (store, container, files) = try makeStore()
+        let trip = try XCTUnwrap(store.create(title: "Trip"))
+        let pack = try XCTUnwrap(store.create(title: "Pack", parentID: trip.id))
+        let other = try XCTUnwrap(store.create(title: "Other"))
+        let photo = try pngFile()
+        _ = await store.attachStagedFiles(to: trip.id) { TaskAttachmentStaging(urls: [photo]) }
+        let source = try XCTUnwrap(store.tasks.first { $0.id == trip.id }?.attachments.first)
+
+        // The row records its identity and owner when the drag begins.
+        TaskAttachmentCardDrag.begin(source, store: store)
+        XCTAssertEqual(TaskAttachmentCardDrag.current, TaskAttachmentSource(reference: source, ownerID: trip.id))
+        XCTAssertFalse(TasksPage.canAcceptDrop(.attachmentCard, onto: trip.id, store: store), "its own owner refuses it")
+        XCTAssertFalse(TasksPage.canAcceptDrop(.attachmentCard, onto: pack.id, store: store), "a child resolves to that owner")
+        XCTAssertTrue(TasksPage.canAcceptDrop(.attachmentCard, onto: other.id, store: store))
+        XCTAssertTrue(TasksPage.canAcceptDrop(.files, onto: trip.id, store: store), "files still attach to the owner")
+        XCTAssertFalse(TasksPage.canAcceptDrop(.task, onto: other.id, store: store))
+        XCTAssertTrue(TasksFileDropDelegate.takes(.attachmentCard) && TasksFileDropDelegate.takes(.files))
+
+        // Dropped on another task: a verified, separately owned copy.
+        let row = TaskAttachmentDragItem(reference: source, files: files).itemProvider()
+        let expected = TaskAttachmentCardDrag.current
+        let ids = await store.attachCopies(to: other.id) {
+            try await TaskAttachmentCardDrag.sources(from: [row], expected: expected)
+        }
+        let copyID = try XCTUnwrap(ids?.first)
+        XCTAssertNil(store.lastErrorMessage)
+        let copy = try XCTUnwrap(store.tasks.first { $0.id == other.id }?.attachments.first)
+        XCTAssertEqual(copy.id, copyID)
+        XCTAssertNotEqual(copy.id, source.id, "the copy has its own identity")
+        XCTAssertEqual(copy.digest, source.digest)
+        XCTAssertEqual(store.tasks.first { $0.id == trip.id }?.attachments, [source], "the source is unchanged")
+        XCTAssertEqual(Set(privateDirectories()), [source.id.uuidString, copy.id.uuidString], "no shared storage")
+        let relaunched = TaskStore(container: container, taskImageFiles: files)
+        XCTAssertEqual(relaunched.tasks.first { $0.id == other.id }?.attachments, [copy])
+
+        // Released over its own family anyway (a stale proposal): refused calmly.
+        let before = privateDirectories()
+        let own = await store.attachCopies(to: pack.id) {
+            try await TaskAttachmentCardDrag.sources(from: [row], expected: expected)
+        }
+        XCTAssertNil(own)
+        XCTAssertEqual(store.lastErrorMessage, "Couldn’t attach files. That attachment already belongs to this task.")
+        XCTAssertEqual(privateDirectories(), before)
+    }
+
+    func testAFileRowDropRevalidatesTheMarker() async throws {
+        let (store, _, files) = try makeStore()
+        let trip = try XCTUnwrap(store.create(title: "Trip"))
+        let other = try XCTUnwrap(store.create(title: "Other"))
+        _ = await store.attachStagedFiles(to: trip.id) { [self] in
+            TaskAttachmentStaging(urls: [try pngFile(), try textFile(named: "List.txt")])
+        }
+        let attachments = try XCTUnwrap(store.tasks.first { $0.id == trip.id }?.attachments)
+        // A marker that doesn't name the recorded row copies nothing.
+        TaskAttachmentCardDrag.begin(attachments[1], store: store)
+        let mismatched = await store.attachCopies(to: other.id) {
+            try await TaskAttachmentCardDrag.sources(from: [TaskAttachmentDragItem(reference: attachments[0], files: files).itemProvider()],
+                                                     expected: TaskAttachmentCardDrag.current)
+        }
+        XCTAssertNil(mismatched)
+        XCTAssertEqual(store.lastErrorMessage, "Couldn’t attach files. The attachment is no longer available.")
+        XCTAssertTrue(store.tasks.first { $0.id == other.id }?.attachments.isEmpty == true)
+    }
+
     // MARK: - R2/R3 storage lifecycle
 
     /// Dates a private copy (or any item) as if written `age` seconds ago.

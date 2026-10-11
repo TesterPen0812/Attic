@@ -141,6 +141,48 @@ enum TaskDropError: LocalizedError {
     }
 }
 
+/// The file row being dragged in this process (A1: a row of a task's files
+/// list). Drop validation is synchronous and cannot load the row's marker,
+/// so a row records which attachment it is, and the task that owns it, when
+/// its drag begins; every row drag replaces the record. It is consulted only
+/// while a drag carries the own-process marker, and a drop checks the marker
+/// against it, and the store against both, before anything is copied.
+@MainActor
+enum TaskAttachmentCardDrag {
+    private(set) static var current: TaskAttachmentSource?
+
+    static func begin(_ reference: TaskImageReference, store: TaskStore) {
+        current = store.attachmentSource(for: reference.id)
+    }
+
+    /// A file may be copied to any task except the owner it came from. An
+    /// unresolvable file is refused everywhere.
+    static func canCopy(toOwner ownerID: UUID?) -> Bool {
+        guard let current else { return false }
+        return current.ownerID != ownerID
+    }
+
+    /// The dragged file, confirmed by its marker: one provider whose marker
+    /// names the attachment `expected` recorded when the drag began.
+    static func sources(from providers: [NSItemProvider],
+                        expected: TaskAttachmentSource?) async throws -> [TaskAttachmentSource] {
+        guard let expected, providers.count == 1, let provider = providers.first else {
+            throw TaskDropError.attachmentUnavailable
+        }
+        let data: Data = try await withCheckedThrowingContinuation { continuation in
+            _ = provider.loadDataRepresentation(forTypeIdentifier: TaskDropContent.attachmentCardType.identifier) { data, error in
+                if let data { continuation.resume(returning: data) }
+                else { continuation.resume(throwing: error ?? TaskDropError.attachmentUnavailable) }
+            }
+        }
+        guard let marker = String(data: data, encoding: .utf8).flatMap(UUID.init(uuidString:)),
+              marker == expected.reference.id else {
+            throw TaskDropError.attachmentUnavailable
+        }
+        return [expected]
+    }
+}
+
 /// Turns dropped item providers into importable files, one provider at a
 /// time. A file URL is used as is. Promised or in-memory content is loaded by
 /// the system into a temporary file that exists only during its callback, so

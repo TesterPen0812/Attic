@@ -209,7 +209,7 @@ struct TasksPage: View {
         // which finds the row from the rows' frames.
         .tasksFileDrop(delegate: TasksFileDropDelegate(
             target: { point in fileDropTarget(at: point) },
-            canAccept: { content, id in content == .files && store.attachmentOwnerID(for: id) != nil },
+            canAccept: { content, id in Self.canAcceptDrop(content, onto: id, store: store) },
             setTargeted: { id in
                 let row = id.map { TasksRowID(tab: model.tab, id: $0) }
                 if fileDropRow != row { fileDropRow = row }
@@ -2544,7 +2544,7 @@ struct TasksPage: View {
             height += CGFloat(row.subtasks.count + 1) * AtticLayout.subtaskPitch + AtticQuickLookMetrics.bottomPadding
         }
         if model.expandedFiles.contains(id) {
-            height += CGFloat(row.files.count + 1) * AtticLayout.subtaskPitch + AtticQuickLookMetrics.bottomPadding
+            height += CGFloat(TasksFilesList.lineCount(files: row.files.count)) * AtticLayout.subtaskPitch + AtticQuickLookMetrics.bottomPadding
         }
         return height
     }
@@ -2754,6 +2754,18 @@ struct TasksPage: View {
         return Self.row(at: point, frames: pointer.frames, tab: model.tab, among: Set(model.rows(for: model.tab).map(\.id)))
     }
 
+    /// Whether the task can take what is dragged over it: files from
+    /// outside, or another task's file row (copied; its own task refuses
+    /// it, so releasing a row over its list never duplicates it).
+    static func canAcceptDrop(_ content: TaskDropContent, onto id: UUID, store: TaskStore) -> Bool {
+        guard let owner = store.attachmentOwnerID(for: id) else { return false }
+        switch content {
+        case .files: return true
+        case .attachmentCard: return TaskAttachmentCardDrag.canCopy(toOwner: owner)
+        case .task, .unsupported: return false
+        }
+    }
+
     /// The row among `ids` on `tab`'s page whose frame holds `point` (pure,
     /// tested). Frames are keyed by page and task: a task drawn on two
     /// pages is two rows, and only the page shown answers (round 12).
@@ -2763,9 +2775,21 @@ struct TasksPage: View {
 
     private func attachDroppedFiles(_ content: TaskDropContent, _ providers: [NSItemProvider], to id: UUID) {
         fileDropRow = nil
-        guard content == .files, let owner = store.attachmentOwnerID(for: id) else { return }
+        guard let owner = store.attachmentOwnerID(for: id) else { return }
+        // A file row dragged from another task's files list is copied (the
+        // drag recorded its source when it began).
+        let card = TaskAttachmentCardDrag.current
         Task { @MainActor in
-            guard let ids = await store.attachStagedFiles(to: owner, stage: { try await TaskDroppedFiles.stage(providers) }) else { return }
+            let added: [UUID]?
+            switch content {
+            case .files:
+                added = await store.attachStagedFiles(to: owner, stage: { try await TaskDroppedFiles.stage(providers) })
+            case .attachmentCard:
+                added = await store.attachCopies(to: owner) { try await TaskAttachmentCardDrag.sources(from: providers, expected: card) }
+            case .task, .unsupported:
+                return
+            }
+            guard let ids = added else { return }
             // The files list opens to show what arrived (A1).
             withAnimation(design.reduceMotion ? nil : AtticMotionPreset.expand.animation(reduceMotion: false)) {
                 model.setFilesExpanded(owner, true)
@@ -3995,12 +4019,17 @@ struct TasksFileDropDelegate: DropDelegate {
 
     private func row(for info: DropInfo) -> (content: TaskDropContent, id: UUID)? {
         let content = TaskDropContent.classify(info)
-        guard content == .files, let id = target(info.location), canAccept(content, id) else { return nil }
+        guard Self.takes(content), let id = target(info.location), canAccept(content, id) else { return nil }
         return (content, id)
     }
 
+    /// Files from outside, and a file row from another task's files list.
+    static func takes(_ content: TaskDropContent) -> Bool {
+        content == .files || content == .attachmentCard
+    }
+
     func validateDrop(info: DropInfo) -> Bool {
-        TaskDropContent.classify(info) == .files
+        Self.takes(TaskDropContent.classify(info))
     }
 
     func dropEntered(info: DropInfo) {

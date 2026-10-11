@@ -27,27 +27,6 @@ struct TaskImageThumbnail: View {
     }
 }
 
-/// A small square preview for passive row metadata: the image thumbnail, or
-/// the file type's system icon.
-struct TaskAttachmentGlyph: View {
-    let reference: TaskImageReference
-    let files: TaskImageFiles
-
-    var body: some View {
-        if reference.isImage {
-            TaskImageThumbnail(reference: reference, files: files)
-        } else {
-            ZStack {
-                Color.primary.opacity(0.06)
-                Image(nsImage: NSWorkspace.shared.icon(for: reference.contentType))
-                    .resizable()
-                    .scaledToFit()
-                    .padding(2)
-            }
-        }
-    }
-}
-
 /// The one Add attachment picker: images and general files together. The
 /// owner is marked while the picker is up, so the owning panel and the main
 /// panel stay open underneath it.

@@ -1,5 +1,6 @@
 import AppKit
 import SwiftUI
+import UniformTypeIdentifiers
 
 /// A task's stored files, inline under its row (A1, owner decision B): the
 /// files count opens it, apart from the subtasks. It replaces the old
@@ -34,6 +35,13 @@ struct TasksFilesList: View {
         showsAll || files.count <= Self.collapsedCount + 1 ? files : Array(files.prefix(Self.collapsedCount))
     }
 
+    /// Lines the collapsed list draws for `files` files: the first few,
+    /// "N more…" when it caps, and "Attach file…" (the page's estimate of
+    /// a row's height before it is measured).
+    static func lineCount(files: Int) -> Int {
+        files > collapsedCount + 1 ? collapsedCount + 2 : files + 1
+    }
+
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             ForEach(shown) { file in
@@ -41,7 +49,8 @@ struct TasksFilesList: View {
             }
             if files.count > Self.collapsedCount + 1 {
                 AtticQuietAction(
-                    systemName: nil,
+                    // Its label lines up with the names above it.
+                    systemName: showsAll ? "chevron.up" : "chevron.down",
                     title: showsAll ? String(localized: "Show fewer") : String(localized: "\(files.count - Self.collapsedCount) more…"),
                     action: { withAnimation(design.reduceMotion ? nil : AtticMotionPreset.expand.animation(reduceMotion: false)) { showsAll.toggle() } }
                 )
@@ -56,7 +65,9 @@ struct TasksFilesList: View {
             .accessibilityIdentifier("tasks-files-attach")
         }
         .padding(.leading, AtticLayout.textX)
-        .padding(.trailing, AtticLayout.rowHighlightInset)
+        // Sizes line up with the row's date column; a hover fill (8 pt
+        // wider each side) ends where the row's own highlight does.
+        .padding(.trailing, AtticLayout.rowHighlightInset + AtticTaskRowMetrics.dateInset)
         .padding(.bottom, AtticQuickLookMetrics.bottomPadding)
         .accessibilityElement(children: .contain)
         .accessibilityLabel(String(localized: "Files"))
@@ -85,10 +96,21 @@ private struct TasksFileRow: View {
         let m = AtticSubtaskMetrics.self
         let showsControls = hovered || (focused && keyboardFocusVisible)
         HStack(spacing: m.titleGap) {
-            TaskAttachmentGlyph(reference: file, files: store.taskImageFiles)
-                .frame(width: AtticQuietActionMetrics.iconSlot, height: AtticQuietActionMetrics.iconSlot)
-                .clipShape(RoundedRectangle(cornerRadius: 3, style: .continuous))
-                .accessibilityHidden(true)
+            Group {
+                if file.isImage {
+                    // An image shows itself (the A1 sheet).
+                    TaskImageThumbnail(reference: file, files: store.taskImageFiles)
+                        .frame(width: AtticQuietActionMetrics.iconSlot, height: AtticQuietActionMetrics.iconSlot)
+                        .clipShape(RoundedRectangle(cornerRadius: 3, style: .continuous))
+                } else {
+                    // Other kinds: the app's outline type icon, in the
+                    // quiet actions' ink and size ("Attach file…" under it).
+                    AtticIcon(systemName: Self.symbol(for: file.contentType), size: AtticQuietActionMetrics.iconSize,
+                              weight: .medium, ink: .icon)
+                }
+            }
+            .frame(width: AtticQuietActionMetrics.iconSlot, height: AtticQuietActionMetrics.iconSlot)
+            .accessibilityHidden(true)
             AtticText(verbatim: file.filename, style: .listBody, ink: .body, truncates: true)
                 .frame(maxWidth: .infinity, alignment: .leading)
             if showsControls {
@@ -119,9 +141,12 @@ private struct TasksFileRow: View {
         .onKeyPress(.return) { if canOpen { open() } else { preview() }; return .handled }
         .onKeyPress(.delete) { remove(); return .handled }
         .onKeyPress(.deleteForward) { remove(); return .handled }
-        // The file leaves as itself: a drag to Finder or another app copies it.
+        // The file leaves as itself: a drag to Finder or another app copies
+        // it, and so does a drop on another task (as the old window's cards
+        // did); its own task refuses it.
         .onDrag {
-            TaskAttachmentDragItem(reference: file, files: store.taskImageFiles).itemProvider()
+            MainActor.assumeIsolated { TaskAttachmentCardDrag.begin(file, store: store) }
+            return TaskAttachmentDragItem(reference: file, files: store.taskImageFiles).itemProvider()
         }
         .contextMenu {
             Button(String(localized: "Quick Look"), systemImage: "eye", action: preview)
@@ -155,6 +180,19 @@ private struct TasksFileRow: View {
         .focusable(false)
         .help(help)
         .accessibilityHidden(true)
+    }
+
+    /// The outline symbol for a file that is not an image.
+    static func symbol(for type: UTType) -> String {
+        if type.conforms(to: .pdf) { return "doc.richtext" }
+        if type.conforms(to: .movie) || type.conforms(to: .video) { return "film" }
+        if type.conforms(to: .audio) { return "waveform" }
+        // Office documents are zip archives too: their own kind first.
+        if type.conforms(to: .spreadsheet) || type.conforms(to: .commaSeparatedText) { return "tablecells" }
+        if type.conforms(to: .presentation) { return "rectangle.on.rectangle" }
+        if type.conforms(to: .text) || type.conforms(to: .compositeContent) { return "doc.text" }
+        if type.conforms(to: .archive) { return "doc.zipper" }
+        return "doc"
     }
 
     private func preview() { TaskAttachmentActions.preview(file, store: store, owner: owner) }
