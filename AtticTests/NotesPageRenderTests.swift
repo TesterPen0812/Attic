@@ -249,7 +249,12 @@ final class NotesPageRenderTests: XCTestCase {
                     let rest = -scroll.contentInsets.top
                     func titleInk() throws -> Double {
                         let lines = try XCTUnwrap(engine.titleLineRects())
-                        let rect = lines.first.union(lines.last).insetBy(dx: -1, dy: -2)
+                        // The middle wrapped line can be wider than either end.
+                        // Capture the whole title column, through its last glyph line.
+                        let origin = text.textContainerOrigin
+                        let rect = NSRect(x: origin.x - 1, y: lines.first.minY - 2,
+                                          width: max(1, text.bounds.width - 2 * origin.x + 2),
+                                          height: lines.last.maxY - lines.first.minY + 4)
                         let rep = try XCTUnwrap(text.bitmapImageRepForCachingDisplay(in: rect))
                         text.cacheDisplay(in: rect, to: rep)
                         var sum = 0.0
