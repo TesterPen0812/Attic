@@ -180,7 +180,9 @@ class CostRecheckTests(unittest.TestCase):
             calls = []
             def run(directory, side, build, tests, filename):
                 calls.append((side, filename))
-                text = rendered(4) if filename.startswith('rendered-') else ''.join(
+                phases = ''.join(f'ATTIC_DONE_KEY_PHASE run={s} key={k} change/runloop/layout/display/commit_ms=[1, 2, 3, 4, 5]\n'
+                                for s in range(3) for k in range(16))
+                text = (rendered(4) + phases) if filename.startswith('rendered-') else ''.join(
                     f'ATTIC_INTEGRATION_COST {name} median_ms=4\n' for name in METRICS) + 'NOTE_RECOVERY_CONTROL_MAIN_ACTOR_MS_MEDIAN=0\n'
                 (directory / filename).write_text(text)
                 return text
