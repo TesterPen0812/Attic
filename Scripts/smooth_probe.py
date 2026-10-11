@@ -61,6 +61,21 @@ def allocation_summary(pid, output, label):
         print(f"{label} {name} exit={result.returncode}", flush=True)
 
 
+def wait_for_owned_exit(pid, executable, timeout=15):
+    """Keep the screen lock until LaunchServices' asynchronous quit finishes.
+
+    A reused PID is not ours; never send it a signal or quit a second app.
+    """
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        result = subprocess.run(["/bin/ps", "-p", str(pid), "-o", "comm="],
+                                capture_output=True, text=True)
+        if result.stdout.strip() != str(executable):
+            return
+        time.sleep(0.1)
+    raise TimeoutError(f"Owned preview PID {pid} did not finish quitting")
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--app", type=Path, required=True)
@@ -140,6 +155,7 @@ def main():
     finally:
         if pid is not None:
             run("/usr/bin/osascript", "-e", f'tell application id "{BUNDLE}" to quit')
+            wait_for_owned_exit(pid, app / "Contents/MacOS" / info["CFBundleExecutable"])
 
 
 if __name__ == "__main__":

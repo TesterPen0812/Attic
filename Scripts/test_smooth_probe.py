@@ -1,6 +1,8 @@
 import unittest
+from types import SimpleNamespace
+from unittest.mock import patch
 
-from smooth_probe import check_retention
+from smooth_probe import check_retention, wait_for_owned_exit
 
 
 class SmoothRetentionGateTests(unittest.TestCase):
@@ -23,6 +25,22 @@ class SmoothRetentionGateTests(unittest.TestCase):
             records[-1][field] = value
             with self.assertRaises(ValueError):
                 check_retention(records)
+
+
+class SmoothTeardownTests(unittest.TestCase):
+    def test_waits_for_only_the_owned_executable_to_exit(self):
+        with patch('smooth_probe.subprocess.run', side_effect=[
+                SimpleNamespace(stdout='/owned/preview\n'), SimpleNamespace(stdout='')]) as ps, \
+                patch('smooth_probe.time.sleep') as sleep:
+            wait_for_owned_exit(123, '/owned/preview')
+            self.assertEqual(ps.call_count, 2)
+            sleep.assert_called_once_with(0.1)
+        with patch('smooth_probe.subprocess.run', return_value=SimpleNamespace(stdout='/another/process')):
+            wait_for_owned_exit(123, '/owned/preview')
+
+    def test_stalled_quit_fails_instead_of_force_quitting_anything(self):
+        with self.assertRaises(TimeoutError):
+            wait_for_owned_exit(123, '/owned/preview', timeout=0)
 
 
 if __name__ == "__main__":
