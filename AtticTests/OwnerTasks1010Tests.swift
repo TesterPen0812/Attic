@@ -319,6 +319,36 @@ final class OwnerTasks1010Tests: XCTestCase {
         XCTAssertEqual(try XCTUnwrap(presenter.host).frame.minY, after.minY - 20, accuracy: 1)
     }
 
+    func testReadOnlyLinkCursorStopsAtTheGlyphBounds() throws {
+        var block = NoteBlock.text("Link")
+        block.marks = [NoteMark(.link, offset: 0, length: 4, url: "https://example.com")]
+        let engine = NoteEditorEngine(noteID: UUID(), document: NoteDocument(blocks: [block]), readOnly: true)
+        let (scroll, textView) = engine.makeView()
+        scroll.frame = CGRect(x: 0, y: 0, width: 340, height: 520)
+        textView.textContainerInset = CGSize(width: 28, height: 0)
+        let window = NSWindow(contentRect: CGRect(x: -4000, y: -4000, width: 340, height: 520), styleMask: [.borderless], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        window.contentView = scroll
+        defer { window.contentView = nil; window.close() }
+        engine.layoutManager?.ensureLayout(for: engine.contentStorage.documentRange)
+        textView.textLayoutManager?.textViewportLayoutController.layoutViewport()
+        spin()
+        let rect = try XCTUnwrap(engine.rect(for: NSRange(location: 0, length: 1)))
+        XCTAssertGreaterThan(rect.minX, 8)
+        XCTAssertNotNil(textView.textStorage?.attribute(.link, at: 0, effectiveRange: nil))
+        let previous = NSCursor.current
+        defer { previous.set() }
+        for (local, cursor) in [(CGPoint(x: rect.minX - 8, y: rect.midY), NSCursor.arrow),
+                                (CGPoint(x: rect.midX, y: rect.midY), NSCursor.pointingHand),
+                                (CGPoint(x: rect.maxX - 0.25, y: rect.midY), NSCursor.pointingHand)] {
+            let event = try XCTUnwrap(NSEvent.mouseEvent(with: .mouseMoved, location: textView.convert(local, to: nil), modifierFlags: [], timestamp: 0,
+                                                        windowNumber: window.windowNumber, context: nil, eventNumber: 1, clickCount: 0, pressure: 0))
+            NSCursor.iBeam.set()
+            textView.mouseMoved(with: event)
+            XCTAssertTrue(NSCursor.current === cursor, "read-only links use the hand only within their glyphs at \(local)")
+        }
+    }
+
     func testTheInlineNoteCheckboxUsesTheControlCursor() throws {
         let engine = NoteEditorEngine(noteID: UUID(), document: NoteDocument(blocks: [.checklist("Check this"), .text("Editable text")]))
         let (scroll, textView) = engine.makeView()

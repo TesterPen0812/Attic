@@ -122,9 +122,16 @@ final class NoteEditorTextView: NSTextView, NSAccessibilityCustomRotorItemSearch
             }
         }
         if !isEditable {
-            // NSTextView still supplies the pointing hand over links.
-            if let storage = textStorage, index < storage.length,
-               storage.attribute(.link, at: index, effectiveRange: nil) != nil { return .pointingHand }
+            // Insertion indices also resolve in the blank margin. Only the
+            // linked glyph itself is a link target; check both sides of a caret.
+            if let storage = textStorage, let engine {
+                for location in [index, max(0, index - 1)] where location < storage.length {
+                    if storage.attribute(.link, at: location, effectiveRange: nil) != nil {
+                        let range = (storage.string as NSString).rangeOfComposedCharacterSequence(at: location)
+                        if let rect = engine.rect(for: range), rect.contains(local) { return .pointingHand }
+                    }
+                }
+            }
             return .arrow
         }
         return nil
