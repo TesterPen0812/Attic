@@ -714,8 +714,14 @@ struct TasksPage: View {
                                      label: model.tab == .done ? "Search done tasks (⌘F)" : "Find (⌘F)",
                                      quietIcon: true, action: beginSearch)
                         .accessibilityIdentifier(model.tab == .done ? "tasks-done-search-button" : "tasks-find-button")
-                        .padding(.trailing, model.tab == .done ? lineEndInset : 0)
-                    if model.tab != .done {
+                    if model.tab == .done {
+                        // Fixed slots (D-20): Done keeps View Options' place
+                        // empty, so the magnifier never moves.
+                        Color.clear
+                            .frame(width: AtticControlSize.smallMinWidth, height: AtticControlSize.smallHeight)
+                            .padding(.trailing, lineEndInset)
+                            .accessibilityHidden(true)
+                    } else {
                         // View Options (⌥⌘V): a second quiet icon, its dot
                         // while a filter hides tasks.
                         let view = model.viewOptions(for: model.tab)
@@ -1452,14 +1458,12 @@ struct TasksPage: View {
         }
     }
 
-    /// Clean cut (the default since 2026-10-03): the viewport's fade, by
-    /// position in the viewport, not per row (owner fix 8, review 9), so an
-    /// open quick look fades line by line as it passes under the tabs and
-    /// header, or under the add bar (A15: the scroll-under fade). The system
-    /// soft edge uses no mask.
+    /// The viewport's fade, by position in the viewport, not per row (owner
+    /// fix 8, review 9), so an open quick look fades line by line. N-6 D
+    /// (owner 2026-10-11): rows fade out before the tabs line (and the
+    /// header above it); the bottom stack's fade is `TasksPlainControlsMask`.
     private var viewportMask: some View {
-        TasksViewportMask(tabsTop: tabsTop, topEdge: layout.scrollEdgeFadeTop,
-                          bottomEdge: bottomInset + AtticControlSize.panelButton.height / 2)
+        TasksViewportMask(tabsTop: tabsTop)
     }
 
     // MARK: - Row
@@ -2229,7 +2233,7 @@ struct TasksPage: View {
                 // The feel's spring when things spring in; otherwise (Calm,
                 // Reduced) the short fade it always was.
                 let pops = !AtticMotionPreference.reducesMotion && AtticMotionTuning.current.appear == .spring
-                withAnimation(pops ? AtticMotionPreset.settle.animation(reduceMotion: false) : .easeOut(duration: 0.16)) {
+                withAnimation(pops ? AtticMotionPreset.settle.animation(reduceMotion: false) : AtticMotionScale.exit) {
                     fade.wrappedValue = []
                 }
             }
@@ -4011,14 +4015,11 @@ final class TasksBottomStackHeight: ObservableObject {
 /// header and the bottom stack are glass (owner, 2026-10-06).
 private struct TasksViewportMask: View {
     let tabsTop: CGFloat
-    var topEdge: CGFloat = 0
-    var bottomEdge: CGFloat = 0
 
     var body: some View {
         GeometryReader { proxy in
             LinearGradient(
-                stops: TasksViewport.maskStops(height: proxy.size.height, tabsTop: tabsTop,
-                                               topEdge: topEdge, bottomEdge: bottomEdge)
+                stops: TasksViewport.maskStops(height: proxy.size.height, tabsTop: tabsTop)
                     .map { Gradient.Stop(color: .black.opacity($0.opacity), location: $0.location) },
                 startPoint: .top, endPoint: .bottom
             )
@@ -4125,33 +4126,16 @@ private struct TasksListEdges<Mask: View>: ViewModifier {
     }
 }
 
-/// The strip, selection bar and failure/paste lines have plain labels,
-/// unlike the glass add bar. Rows disappear before those labels and may
-/// still run behind the add bar. The measured stack follows immediately;
+/// N-6 D (owner 2026-10-11): rows fade out before the bottom stack's top
+/// (the add bar, or the strip, a selection bar or a paste offer over it),
+/// so nothing runs under the glass. The measured stack follows at once;
 /// the delayed mask height must never leave two text lines superimposed.
 struct TasksPlainControlsMask: View {
     let stackHeight: CGFloat
     let bottomInset: CGFloat
 
     var body: some View {
-        GeometryReader { proxy in
-            if stackHeight > AtticControlSize.addBarHeight + 0.5 {
-                let height = max(1, proxy.size.height)
-                let top = max(0, height - bottomInset - stackHeight)
-                let bottom = max(top, height - bottomInset - AtticControlSize.addBarHeight)
-                LinearGradient(stops: [
-                    .init(color: .black, location: 0),
-                    .init(color: .black, location: max(0, top - AtticSpacing.s8) / height),
-                    .init(color: .clear, location: top / height),
-                    .init(color: .clear, location: bottom / height),
-                    .init(color: .black, location: min(height, bottom + AtticSpacing.s8) / height),
-                    .init(color: .black, location: 1)
-                ], startPoint: .top, endPoint: .bottom)
-            } else {
-                Color.black
-            }
-        }
-        .allowsHitTesting(false)
+        AtticControlsFadeMask(top: 0, bottom: TasksViewport.controlsInset(stack: stackHeight, bottomInset: bottomInset))
     }
 }
 
@@ -4228,18 +4212,18 @@ enum TasksViewport {
         return .bottom(min(max((visible - room - height) / (visible - height), 0), 1))
     }
 
-    /// The fade by position in the viewport (owner, 2026-10-06: no fade
-    /// behind glass): rows run under the header and the bottom stack (the
-    /// composer and the strip are glass) at full strength, and are faint
-    /// only behind the Now · Later · Done line, plain text with no glass of
-    /// its own, back to full a few points either side
-    /// (`AtticScrollUnderFade`). Static geometry.
-    /// Round 4: rows also dissolve into the panel's top and bottom edges
-    /// (`topEdge`, `bottomEdge`; 0 for none).
-    static func maskStops(height: CGFloat, tabsTop: CGFloat,
-                          topEdge: CGFloat = 0, bottomEdge: CGFloat = 0) -> [(location: CGFloat, opacity: Double)] {
-        AtticScrollUnderFade.stops(height: height, plainText: [tabsTop...(tabsTop + AtticLayout.pageTabsHeight)],
-                                   topEdge: topEdge, bottomEdge: bottomEdge)
+    /// The fade by position in the viewport (N-6 D, owner 2026-10-11): no
+    /// overlay behind the tabs; rows are gone at the tabs line's lower edge
+    /// (Find's taller field included) and whole by the first row's words at
+    /// rest, so nothing sits under the header or the tabs. Static geometry.
+    static func maskStops(height: CGFloat, tabsTop: CGFloat) -> [(location: CGFloat, opacity: Double)] {
+        AtticControlsFade.stops(height: height, top: controlsBottom(tabsTop: tabsTop),
+                                topRamp: topRamp(tabsTop: tabsTop), bottom: 0)
+    }
+
+    /// From the tabs line's lower edge to the first row's words at rest.
+    static func topRamp(tabsTop: CGFloat) -> CGFloat {
+        max(8, listTop(tabsTop: tabsTop) + AtticTaskRowMetrics.titleTop(twoLine: false) - controlsBottom(tabsTop: tabsTop))
     }
 }
 

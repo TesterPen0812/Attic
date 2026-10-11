@@ -353,7 +353,7 @@ struct NotesLibraryView: View {
                         }
                     }
                 }
-                .animation(AtticMotionPreset.settle.springy(reduceMotion: design.reduceMotion),
+                .animation(AtticMotionPreset.settle.animation(reduceMotion: design.reduceMotion),
                            value: model.orderedIDs(groups))
             }
             .contentMargins(.top, restTop, for: .scrollContent)
@@ -362,8 +362,11 @@ struct NotesLibraryView: View {
             .scrollIndicators(.automatic)
             .scrollEdgeEffectHidden(true, for: .all)
             // F-13: the library shares the editor's reserved footer band.
-            .atticScrollUnderFade(plainText: [labelsTop...(labelsTop + AtticLayout.pageTabsHeight)],
-                                  topEdge: layout.scrollEdgeFadeTop, bottomEdge: 0)
+            // N-6 D: rows fade out before the label line (and the header
+            // above it) and before the bottom row, as on Tasks.
+            .atticControlsFade(top: TasksViewport.controlsBottom(tabsTop: labelsTop),
+                               topRamp: TasksViewport.topRamp(tabsTop: labelsTop),
+                               bottom: NotesEditorPage.viewportEdge, bottomRamp: bottomClearance)
             .padding(.bottom, bottomControls)
             .coordinateSpace(Self.space)
             // Right-click anywhere the rows are not (all of it, with none):

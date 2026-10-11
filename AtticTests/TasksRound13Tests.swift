@@ -443,25 +443,21 @@ final class TasksRound13Tests: XCTestCase {
 
     // MARK: - Item 5, revised by A15: faint under the controls, whole at rest
 
-    /// Owner, 2026-10-06 (revising A15): no fade behind glass. Rows are
-    /// whole under the header and the bottom stack, whatever its height,
-    /// and faint only behind the Now · Later · Done line, back to full
-    /// within `textRamp` either side.
-    func testTheListsMaskKeepsRowsFaintUnderTheBandsAndWholeAtRest() {
+    /// N-6 D (owner 2026-10-11, replacing 2026-10-06's "full strength under
+    /// the glass"): rows are gone under the header and the tabs line, whole
+    /// from the first row's words at rest down to the bottom stack, whose
+    /// own mask fades them before it.
+    func testTheListsMaskHidesRowsBeforeTheTabsAndKeepsThemWholeAtRest() {
         let height: CGFloat = 520
         let stops = TasksViewport.maskStops(height: height, tabsTop: 80)
         func opacity(_ y: CGFloat) -> Double { AtticScrollUnderFade.opacity(stops, at: y, height: height) }
-        for y in stride(from: CGFloat(0), through: 80 - AtticScrollUnderFade.textRamp, by: 1) {
-            XCTAssertEqual(opacity(y), 1, accuracy: 0.001, "whole under the header's glass at \(y)")
+        for y in stride(from: CGFloat(0), through: TasksViewport.controlsBottom(tabsTop: 80), by: 1) {
+            XCTAssertEqual(opacity(y), 0, accuracy: 0.001, "gone under the header and the tabs at \(y)")
         }
-        for y in stride(from: CGFloat(80), through: 96, by: 1) {
-            XCTAssertEqual(opacity(y), AtticScrollUnderFade.behindText, accuracy: 0.001, "faint behind the tabs at \(y)")
+        let rest = TasksViewport.listTop(tabsTop: 80) + AtticTaskRowMetrics.titleTop(twoLine: false)
+        for y in stride(from: rest, through: height, by: 1) {
+            XCTAssertEqual(opacity(y), 1, accuracy: 0.001, "whole from the first row's words at \(y)")
         }
-        for y in stride(from: 96 + AtticScrollUnderFade.textRamp, through: height, by: 1) {
-            XCTAssertEqual(opacity(y), 1, accuracy: 0.001, "whole down to the bottom stack and under it at \(y)")
-        }
-        XCTAssertLessThanOrEqual(AtticScrollUnderFade.textRamp * 2 + AtticLayout.pageTabsHeight, 2 * AtticLayout.pageTabsHeight,
-                                 "short: about the text's own height")
     }
 
     // MARK: - Item 6: the new-subtask field says what it is

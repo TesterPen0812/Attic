@@ -146,3 +146,78 @@ extension View {
         mask { AtticScrollUnderMask(plainText: plainText, topEdge: topEdge, bottomEdge: bottomEdge) }
     }
 }
+
+// MARK: - Content fades before the controls (N-6 option D, owner 2026-10-11)
+
+/// N-6 option D: nothing is drawn behind the controls (no shadow, line or
+/// overlay), and scrolling content fades out before it reaches each top
+/// and bottom control (the tabs line and the header above, the add bar
+/// and its strip or Notes' bottom row below), so no text sits under glass
+/// any more. It replaces the 2026-10-06 "content under the controls at full
+/// strength" rule. Static geometry: an opacity mask over the scroll view,
+/// gone (0) at the control's edge and whole (1) `ramp` points away, eased.
+/// Resting content sits where it is whole.
+enum AtticControlsFade {
+    /// From gone at a control's edge to whole: about a row's text above
+    /// its resting place (the tabs line to the first row's words).
+    static let ramp: CGFloat = 22
+    private static let samples: [CGFloat] = [0, 0.2, 0.4, 0.6, 0.8, 1]
+
+    /// The mask's stops for a view `height` tall: gone above `top` (the
+    /// top controls' lower edge, in the view's space) and below
+    /// `height - bottom` (the bottom controls' upper edge); 0 for an edge
+    /// with no control.
+    static func stops(height: CGFloat, top: CGFloat, topRamp: CGFloat = ramp,
+                      bottom: CGFloat, bottomRamp: CGFloat = ramp) -> [(location: CGFloat, opacity: Double)] {
+        guard height > 0 else { return [(0, 1), (1, 1)] }
+        var ys: [CGFloat] = [0, height]
+        if top > 0 { ys += [top] + samples.map { top + $0 * topRamp } }
+        if bottom > 0 { ys += [height - bottom] + samples.map { height - bottom - $0 * bottomRamp } }
+        return Set(ys.filter { $0 >= 0 && $0 <= height }).sorted().map { y in
+            (y / height, opacity(at: y, height: height, top: top, topRamp: topRamp, bottom: bottom, bottomRamp: bottomRamp))
+        }
+    }
+
+    static func opacity(at y: CGFloat, height: CGFloat, top: CGFloat, topRamp: CGFloat = ramp,
+                        bottom: CGFloat, bottomRamp: CGFloat = ramp) -> Double {
+        var value = 1.0
+        if top > 0 {
+            value = min(value, y <= top ? 0 : AtticScrollUnderFade.ease(min(1, (y - top) / max(topRamp, 1))))
+        }
+        if bottom > 0 {
+            let edge = height - bottom
+            value = min(value, y >= edge ? 0 : AtticScrollUnderFade.ease(min(1, (edge - y) / max(bottomRamp, 1))))
+        }
+        return value
+    }
+}
+
+/// The mask of `AtticControlsFade`, sized to the view it masks.
+struct AtticControlsFadeMask: View {
+    let top: CGFloat
+    var topRamp: CGFloat = AtticControlsFade.ramp
+    let bottom: CGFloat
+    var bottomRamp: CGFloat = AtticControlsFade.ramp
+
+    var body: some View {
+        GeometryReader { proxy in
+            LinearGradient(
+                stops: AtticControlsFade.stops(height: proxy.size.height, top: top, topRamp: topRamp,
+                                               bottom: bottom, bottomRamp: bottomRamp)
+                    .map { Gradient.Stop(color: .black.opacity($0.opacity), location: $0.location) },
+                startPoint: .top, endPoint: .bottom
+            )
+        }
+        .allowsHitTesting(false)
+        .accessibilityHidden(true)
+    }
+}
+
+extension View {
+    /// This scrolling content fades out before the controls above and
+    /// below it (N-6 D; see `AtticControlsFade`).
+    func atticControlsFade(top: CGFloat, topRamp: CGFloat = AtticControlsFade.ramp,
+                           bottom: CGFloat, bottomRamp: CGFloat = AtticControlsFade.ramp) -> some View {
+        mask { AtticControlsFadeMask(top: top, topRamp: topRamp, bottom: bottom, bottomRamp: bottomRamp) }
+    }
+}

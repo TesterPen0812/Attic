@@ -23,8 +23,10 @@ struct NoteHistoryPage: View {
                     tagEditor: { AnyView(EmptyView()) }, tagCounts: { [:] },
                     scrollOverride: browser.scrollOffset - layout.headerBottom - 76)
                     .id(session.id)
-                    .atticScrollUnderFade(plainText: [(layout.headerBottom + 32)...(layout.headerBottom + 52)], topEdge: layout.scrollEdgeFadeTop,
-                                         bottomEdge: 0)
+                    // N-6 D: the preview fades out before the version line
+                    // above it and the bottom row below.
+                    .atticControlsFade(top: layout.headerBottom + 52, topRamp: 24,
+                                       bottom: NotesEditorPage.viewportEdge, bottomRamp: AtticSpacing.s12)
                     .padding(.bottom, layout.chromeInsets.bottom + AtticControlSize.panelButton.height)
                     .accessibilityIdentifier("notes-history-preview")
             }
