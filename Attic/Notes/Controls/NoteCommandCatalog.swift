@@ -250,7 +250,11 @@ enum NoteCommandCatalog {
     static func slashSymbol(_ kind: NoteSlashItem.Kind) -> String {
         switch kind {
         case .checklist: "checklist"
-        case .title, .heading, .subheading: "textformat.size"
+        // Three sizes of one glyph (D-18, A3-07): the styles no longer
+        // share one icon.
+        case .title: "textformat.size.larger"
+        case .heading: "textformat.size"
+        case .subheading: "textformat.size.smaller"
         case .body: "text.alignleft"
         case .bullet: "list.bullet"
         case .number: "list.number"

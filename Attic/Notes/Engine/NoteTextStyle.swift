@@ -140,6 +140,11 @@ struct NoteTextStyle: Equatable {
     /// A plain grey wash behind proportional text (owner 2026-10-10); code keeps
     /// its monospaced font and its own, lighter accent-tinted chip.
     var highlightColor: NSColor { tokens.highlightMarker.nsColor }
+    /// A highlight's wash in its colour (N-2): a stored key, or `true` for
+    /// the grey one.
+    func highlightColor(for value: Any?) -> NSColor {
+        tokens.highlightMarker(NoteHighlightColour(storedKey: value as? String)).nsColor
+    }
     var codeColor: NSColor { tokens.tagFill.nsColor }
     /// A quote's bar: the quiet grey, with rounded ends (F-02).
     var quoteBarColor: NSColor { tokens.quoteBar.nsColor }
@@ -203,6 +208,11 @@ struct NoteTextStyle: Equatable {
 
     /// The width of a Mono line's leading spaces and tabs: its soft wraps
     /// hang from there.
+    /// How much shorter a Mono block's first line is than the block's
+    /// text width: the chip, its inset and a 2 pt gap, less the side
+    /// padding the text already keeps.
+    static var monoCopyReserve: CGFloat { T.monoCopyInset + T.monoCopySize + 2 - T.monoPaddingH }
+
     func monoHang(for line: String) -> CGFloat {
         let leading = line.prefix { $0 == " " || $0 == "\t" }
         guard !leading.isEmpty else { return 0 }
@@ -240,6 +250,10 @@ struct NoteTextStyle: Equatable {
         case .mono:
             paragraph.firstLineHeadIndent = 0
             paragraph.headIndent = monoHang
+            // The block's first line keeps the Copy chip's room at its end,
+            // so the chip never covers code (owner's call, 2026-10-11): it
+            // wraps before the chip instead of running under it.
+            if previous != .mono { paragraph.tailIndent = -Self.monoCopyReserve }
             if monoExitsAtEnd {
                 // The block's bottom padding goes before the note's empty
                 // last line, which TextKit lays out in this paragraph
@@ -284,7 +298,7 @@ struct NoteTextStyle: Equatable {
         }
         var result: [NSAttributedString.Key: Any] = [.font: font]
         if marks[.code] != nil { result[.backgroundColor] = codeColor }
-        if marks[.highlight] != nil { result[.backgroundColor] = highlightColor }
+        if let highlight = marks[.highlight] { result[.backgroundColor] = highlightColor(for: highlight) }
         if marks[.underline] != nil || marks[.link] != nil {
             result[.underlineStyle] = NSUnderlineStyle.single.rawValue
         }

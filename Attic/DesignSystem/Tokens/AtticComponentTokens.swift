@@ -124,9 +124,16 @@ enum AtticTaskRowMetrics {
     static let titleLineHeight: CGFloat = 18
     static let detailsLineHeight: CGFloat = 16
     static let titleToDetails: CGFloat = 2
-    /// The text block (title, or title + 2 + details) is centred in the
-    /// row: 8 from the top of a 34 pt row, 6 in a 48 pt one.
+    /// The title line sits 8 from the row's top in a 34 pt row and in a
+    /// 48 pt two-line one alike (D-13: centring the two-line block put its
+    /// title 2 pt high, so the circles' pitch read 32 then 50 around it;
+    /// now it is exactly 34 and 48).
     static func titleTop(twoLine: Bool) -> CGFloat {
+        (AtticLayout.rowPitch - titleLineHeight) / 2
+    }
+    /// The text block centred in its row (All notes' rows keep it: 6 from
+    /// the top of a 48 pt row).
+    static func centredBlockTop(twoLine: Bool) -> CGFloat {
         let block = titleLineHeight + (twoLine ? titleToDetails + detailsLineHeight : 0)
         return ((twoLine ? AtticLayout.detailRowPitch : AtticLayout.rowPitch) - block) / 2
     }
@@ -206,7 +213,14 @@ enum AtticTaskCardMetrics {
 enum AtticRaisedButtonMetrics {
     /// The pin's glyph sits half a point up in its button (visual A), so
     /// its visible outline reads as centred.
-    static let pinGlyphOffsetY: CGFloat = -0.5
+    /// The pin sits on its bounds' centre (icon audit A3-03: the −0.5 nudge
+    /// left its bounds 0.62 pt high; at 0 they are 0.12 pt high, and its
+    /// broad head keeps its mass high either way).
+    static let pinGlyphOffsetY: CGFloat = 0
+    /// New note's `square.and.pencil` (A3-01: measured low and right).
+    static let newNoteGlyphOffset = CGSize(width: -0.5, height: -0.5)
+    /// All notes' `rectangle.stack` (A3-02: measured high).
+    static let stackGlyphOffsetY: CGFloat = 0.5
     /// Icon and label buttons: padding each side and icon-to-label gap.
     static let labelPadding: CGFloat = 12
     static let iconLabelGap: CGFloat = 6
@@ -343,7 +357,12 @@ enum AtticDropdownMetrics {
     /// Between a row's columns (check, mark, icon, name).
     static let columnGap: CGFloat = 10
     static let checkSize: CGFloat = 10.5
+    /// The tick's column, at the row's end (N-4's card design).
     static let checkSlot: CGFloat = 12
+    /// A tag's colour dot before its name (N-4's card: 7 pt), in a column
+    /// as wide as the tick's.
+    static let dotSize: CGFloat = 7
+    static let dotSlot: CGFloat = 12
     /// A priority's mark (↓, !, !!).
     static let markSlot: CGFloat = 15
     /// The least room before a trailing detail (⌥⌘2, 2 Oct).
@@ -706,8 +725,9 @@ enum AtticNoteMetrics {
     /// never outgrow the panel and push its corner buttons off its edges.
     static let pillHeight: CGFloat = AtticControlSize.headerControl
     static let pillMaxWidth: CGFloat = 176
-    /// Aa to New note (chrome B: 6, it was 8 between the 36 pt buttons).
-    static let formatButtonGap: CGFloat = 6
+    /// Aa to New note: the spec's 12 pt between separate controls (D-15:
+    /// at chrome B's 6 they read as two glass blobs almost touching).
+    static let formatButtonGap: CGFloat = 12
     /// The status pill's room between the bottom row's buttons: the panel
     /// less the chrome insets, the buttons (All notes, Aa, New note), Aa's
     /// gap and 12 clear on each side of the pill.
@@ -723,12 +743,8 @@ enum AtticNoteMetrics {
     static let detailsWidth: CGFloat = 280
     static let detailsPadding: CGFloat = 16
     static let detailsItemGap: CGFloat = 14
-    /// All notes: the search row's magnifier and text, and the rows' text,
-    /// on the note column (16 inside the list's 12 pt page edge).
-    static let searchIconX: CGFloat = 14
-    /// The "Esc" hint at the end of the search field.
-    static let searchHintPadding: CGFloat = 10
-    static let searchTextX: CGFloat = 36
+    /// All notes: the rows' text on the note column (16 inside the list's
+    /// 12 pt page edge). Its search field uses Tasks' columns (S-06).
     static let rowTextX: CGFloat = 16
     /// All notes sits on the shared content column (design review D-07): the
     /// page's edge is Tasks' (the text, 16 into it, lands 12 inside the
@@ -761,6 +777,10 @@ enum AtticNoteMetrics {
 enum AtticNoteFormatMetrics {
     static let barHeight: CGFloat = AtticControlSize.smallHeight + AtticControlSize.capsuleInset * 2
     static let barToggleWidth: CGFloat = 24
+    /// The highlighter's chevron (N-2 option A): a narrow second half of
+    /// the highlight cell, its glyph 7 pt.
+    static let highlightChevronWidth: CGFloat = 12
+    static let highlightChevronSize: CGFloat = 7
     static let barGroupGap: CGFloat = 4
     static let barStylePadding: CGFloat = 7
     static let barStyleChevron: CGFloat = 8

@@ -23,7 +23,7 @@ final class NotesV2ChromeTests: XCTestCase {
         XCTAssertEqual(AtticPageButtonMetrics.segment, 24)
         XCTAssertEqual(AtticNoteFormatMetrics.rowCellHeight, 24)
         XCTAssertEqual(AtticNoteMetrics.pillHeight, 32)
-        XCTAssertEqual(AtticNoteMetrics.formatButtonGap, 6)
+        XCTAssertEqual(AtticNoteMetrics.formatButtonGap, 12, "D-15: the spec's gap between separate controls")
         XCTAssertEqual(AtticControlSize.raisedGlyph, 13)
     }
 
@@ -95,8 +95,9 @@ final class NotesV2ChromeTests: XCTestCase {
                 }
             }
         }
-        // The default 320 pt panel: 162 pt for the pill beside Aa.
-        XCTAssertEqual(AtticNoteMetrics.pillMaxWidth(panelWidth: 320, chromeInset: 16, showsFormat: true), 162)
+        // The default 320 pt panel: 156 pt for the pill beside Aa (D-15's
+        // 12 pt between Aa and New note).
+        XCTAssertEqual(AtticNoteMetrics.pillMaxWidth(panelWidth: 320, chromeInset: 16, showsFormat: true), 156)
     }
 
     // MARK: The root fills its window, whatever its content asks

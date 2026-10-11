@@ -739,8 +739,9 @@ final class AtticUITests: XCTestCase {
         )).firstMatch
         XCTAssertTrue(savedTitle.waitForExistence(timeout: 5))
 
-        // The same control becomes Back; returning restores the draft and caret.
-        XCTAssertEqual(browse.label, "Back")
+        // The same control becomes Return to note (icon audit A3-09);
+        // returning restores the draft and caret.
+        XCTAssertEqual(browse.label, "Return to note")
         browse.click()
         XCTAssertTrue(body.waitForExistence(timeout: 5))
         waitForValue(text, in: body)
