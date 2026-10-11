@@ -1,3 +1,5 @@
+Historical non-Canvas evidence referenced below has moved; use the [perf3 archive manifest](Repo-Archive-Manifest-perf3.md) for original paths, descriptions, checksums, and the external archive location. Canvas and sync evidence remain here.
+
 # Rolling Requirements Audit — 2026-09-14
 
 Requirements reconciliation for the Attic working tree. Read-only audit lane
@@ -23,7 +25,7 @@ this document.
   files were read earlier and are unchanged per that mtime sweep.
 - **Stale-evidence rule applied.** `Docs/ConsolidatedDefectChecklist-2026-09-13.md`
   items are all unchecked, but unchecked ≠ current defect. The five concurrent
-  review lanes and the native captures in `ConcurrentSWEReview-NativeUX-Evidence/`
+  review lanes and the native captures in [perf3 archive manifest](Repo-Archive-Manifest-perf3.md)
   predate the fix batches and root's Sep-14 chrome work; each item was re-judged
   against current source. Conversely, the checkpoint's recorded test run
   (`chrome-final-serial.log`: 182 tests, 2 skipped, exit 0 across

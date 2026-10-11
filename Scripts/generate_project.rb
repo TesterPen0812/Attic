@@ -169,6 +169,15 @@ app.build_configurations.each do |config|
   settings['OTHER_SWIFT_FLAGS'] = '$(inherited) -DATTIC_LOCAL_ONLY'
   settings['MARKETING_VERSION'] = '1.1'
   settings['CURRENT_PROJECT_VERSION'] = '11'
+  if config.name == 'Release'
+    # Generate the dSYM before postprocessing, then strip the shipping
+    # executable before signing. Local/Debug keep their usual symbols.
+    settings['DEBUG_INFORMATION_FORMAT'] = 'dwarf-with-dsym'
+    settings['DEPLOYMENT_POSTPROCESSING'] = 'YES'
+    settings['STRIP_INSTALLED_PRODUCT'] = 'YES'
+    settings['STRIP_STYLE'] = 'all'
+  end
+
 end
 
 unit_host.build_configurations.each do |config|

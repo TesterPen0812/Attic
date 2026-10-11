@@ -495,15 +495,6 @@ private struct RaisedControlsBoard: View {
                 AtticRaisedButton(systemName: "square.and.pencil", title: "New note", action: demo.record("New note")).atticForcedState(.hover)
             }
         }
-        BoardHeading(title: "Settings back button · 38 × 34, radius 14.5")
-        SpecimenRow {
-            ForEach([AtticControlState.rest, .hover, .pressed, .focused], id: \.self) { state in
-                AtticSpecimen(state.title) {
-                    AtticRaisedButton(systemName: "chevron.left", label: "Back", size: AtticControlSize.settingsBackButton, action: demo.record("Back"))
-                        .atticForcedState(state)
-                }
-            }
-        }
     }
 }
 
@@ -1256,7 +1247,7 @@ struct AtticGallerySettingsWindow: View {
                 .frame(width: AtticLayout.settingsSidebarWidth)
             AtticContentCard {
                 VStack(alignment: .leading, spacing: 0) {
-                    AtticSettingsHeader(title: String(localized: "Appearance"), onBack: demo.record("Back"))
+                    AtticSettingsHeader(title: String(localized: "Appearance"))
                     Color.clear.frame(height: AtticSpacing.settingsBelowHeader - AtticSpacing.s12)
                     content
                         .padding(.horizontal, AtticSpacing.settingsGroupInset)

@@ -1,3 +1,5 @@
+Historical evidence referenced below has moved; use the [perf3 archive manifest](Repo-Archive-Manifest-perf3.md) for original paths, descriptions, checksums, and the external archive location. Canvas and sync evidence remain here.
+
 # Task panel V2 — user contract, September 13
 
 Preserve the approved dark Attic visual language, current proportions, main-panel motion,

@@ -1,3 +1,5 @@
+Historical non-Canvas evidence referenced below has moved; use the [perf3 archive manifest](Repo-Archive-Manifest-perf3.md) for original paths, descriptions, checksums, and the external archive location. Canvas and sync evidence remain here.
+
 # Consolidated Attic defect and repair checklist — 2026-09-13
 
 This is the single repair list assembled from Taha's reports, the independent root audit, the first SWE source/native reviews, Astra's pinned visual audit, the earlier Luna review, the five-lane concurrent SWE-2 Max audit, and the existing Canvas/Notes resolution ledgers.

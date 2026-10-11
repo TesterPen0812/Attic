@@ -30,10 +30,10 @@ enum AgentSetupPrompt {
 /// traffic lights are moved onto the page title's line
 /// (`SettingsWindowController`), so these also place them.
 enum SettingsChromeLayout {
-    /// The back button's centre, from the window's top edge: the content
-    /// card's 8 pt inset, the header's 12 pt padding, half the 34 pt button.
+    /// The title line's centre: the content card's 8 pt inset, the
+    /// header's 12 pt padding, half the 34 pt header.
     static let titleLineCenterY: CGFloat = AtticSpacing.settingsCardInset + AtticSpacing.s12
-        + AtticControlSize.settingsBackButton.height / 2
+        + AtticControlSize.settingsHeaderHeight / 2
     /// The close button's leading edge.
     static let trafficLightsLeading: CGFloat = 20
     /// The sidebar's first heading starts below the traffic lights.

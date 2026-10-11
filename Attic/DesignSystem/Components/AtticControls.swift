@@ -64,9 +64,8 @@ private struct AtticRaisedButtonBody: View {
     }
 }
 
-/// A single raised button: pin, All notes, New note, the Settings back
-/// button. Icon only (36 × 32 in the panel, 38 × 34 in Settings), or icon
-/// and label at the same height.
+/// A single raised button: pin, All notes or New note. Icon only, or
+/// icon and label at the same height.
 struct AtticRaisedButton: View {
     let systemName: String?
     let title: String?

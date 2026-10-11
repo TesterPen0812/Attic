@@ -39,6 +39,107 @@ final class NoteEditorEngineTests: XCTestCase {
         return (engine, textView)
     }
 
+    func testPerf3OpeningFiftyImagesWithoutAViewportReadsNoFiles() async {
+        let provider = StubImages(bytes: [:])
+        let blocks = [NoteBlock.text("Image heavy")] + (0..<50).map { _ in
+            NoteBlock.image(attachmentID: UUID(), pixelWidth: 800, pixelHeight: 400)
+        }
+        let engine = NoteEditorEngine(noteID: UUID(), document: NoteDocument(blocks: blocks), imageProvider: provider)
+        try? await Task.sleep(for: .milliseconds(200))
+        print("PERF3_IMAGE_OPEN images=50 file_requests=\(provider.fileRequests)")
+        XCTAssertEqual(provider.fileRequests, 0, "opening without a viewport must not request or decode all images")
+        XCTAssertEqual(engine.document().blocks.count, 51)
+    }
+
+    func testPerf3OnlyViewportImagesDecodeAndScrollingLoadsTheLastImage() async throws {
+        let bitmap = try XCTUnwrap(NSBitmapImageRep(bitmapDataPlanes: nil, pixelsWide: 800, pixelsHigh: 400,
+            bitsPerSample: 8, samplesPerPixel: 4, hasAlpha: true, isPlanar: false, colorSpaceName: .deviceRGB,
+            bytesPerRow: 0, bitsPerPixel: 0))
+        bitmap.setColor(.systemBlue, atX: 0, y: 0)
+        let data = try XCTUnwrap(bitmap.representation(using: .png, properties: [:]))
+        let items = (0..<50).map { index in
+            StagedNoteAttachment(id: UUID(), filename: "viewport-\(index).png", contentTypeIdentifier: "public.png",
+                byteCount: Int64(data.count), digest: NotePayloadDigest.sha256(data), data: data)
+        }
+        let document = NoteDocument(blocks: [.text("Viewport images")] + items.map {
+            .image(attachmentID: $0.id, pixelWidth: 800, pixelHeight: 400)
+        })
+        let (engine, view) = makeEngine(document, window: true, staged: items)
+        view.layoutSubtreeIfNeeded()
+        engine.layoutManager?.textViewportLayoutController.layoutViewport()
+        view.viewWillDraw()
+        try await Task.sleep(for: .milliseconds(300))
+        let images = engine.objects().compactMap { $0.0 as? NoteImageAttachment }
+        let loaded = images.filter { $0.renderedImage != nil && !$0.isMissing }
+        print("PERF3_IMAGE_VIEWPORT images=50 initial_decoded=\(loaded.count)")
+        XCTAssertGreaterThan(loaded.count, 0, "the visible image decodes without an edit")
+        XCTAssertLessThanOrEqual(loaded.count, 6, "only the viewport and TextKit overdraw decode")
+        let last = try XCTUnwrap(images.last)
+        XCTAssertNil(last.renderedImage, "the last image is still offscreen")
+        let range = try XCTUnwrap(engine.range(of: last))
+        view.scrollRangeToVisible(range)
+        engine.layoutManager?.textViewportLayoutController.layoutViewport()
+        view.viewWillDraw()
+        try await Task.sleep(for: .milliseconds(300))
+        XCTAssertNotNil(last.renderedImage, "scrolling loads an image that has never been drawn")
+        XCTAssertFalse(last.isMissing)
+        XCTAssertEqual(last.pixelSize, CGSize(width: 800, height: 400))
+        XCTAssertEqual(last.filename, items.last?.filename)
+        XCTAssertEqual(engine.checkpointDocument().attachmentIDs, document.attachmentIDs, "lazy previews never remove recovery payload references")
+        let beforeDetach = images.filter { $0.renderedImage != nil }.count
+        engine.detachView()
+        try await Task.sleep(for: .milliseconds(100))
+        XCTAssertEqual(images.filter { $0.renderedImage != nil }.count, beforeDetach)
+        let printed = await engine.preparedPrintView()
+        let printedImages = try XCTUnwrap(printed.textStorage).length
+        XCTAssertGreaterThan(printedImages, 50, "printing still projects the complete document")
+        var printCount = 0
+        printed.textStorage?.enumerateAttribute(.attachment, in: NSRange(location: 0, length: printedImages)) { value, _, _ in
+            if let image = value as? NoteImageAttachment {
+                XCTAssertNotNil(image.renderedImage?.cgImage(forProposedRect: nil, context: nil, hints: nil))
+                XCTAssertEqual(image.renderedImage?.size, CGSize(width: 800, height: 400), "print has the decoded pixels, including offscreen images")
+                printCount += 1
+            }
+        }
+        XCTAssertEqual(printCount, 50, "print decoding is independent of viewport loading")
+    }
+
+    func testPerf3DetachedViewportDropsPendingPreviewAndCanRetryOnReturn() async throws {
+        let provider = GatedViewportImages()
+        let engine = NoteEditorEngine(noteID: UUID(), document: NoteDocument(blocks: [.text("Pending"),
+            .image(attachmentID: UUID(), pixelWidth: 800, pixelHeight: 400)]), imageProvider: provider)
+        func present() {
+            let (scroll, view) = engine.makeView()
+            scroll.frame = NSRect(x: 0, y: 0, width: 400, height: 600)
+            let host = NSWindow(contentRect: scroll.frame, styleMask: [.titled], backing: .buffered, defer: false)
+            host.isReleasedWhenClosed = false
+            host.contentView = scroll
+            windows.append(host)
+            view.layoutSubtreeIfNeeded()
+            engine.layoutManager?.textViewportLayoutController.layoutViewport()
+            view.viewWillDraw()
+        }
+        present()
+        for _ in 0..<50 {
+            if provider.requested { break }
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        XCTAssertTrue(provider.requested)
+        let image = try XCTUnwrap(engine.objects().compactMap { $0.0 as? NoteImageAttachment }.first)
+        engine.detachView()
+        provider.release()
+        try await Task.sleep(for: .milliseconds(100))
+        XCTAssertNil(image.renderedImage, "a departed viewport must not install a late preview or missing-image placeholder")
+        present()
+        for _ in 0..<50 {
+            if image.renderedImage != nil { break }
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        XCTAssertNotNil(image.renderedImage, "cancelled requests do not block loading when the note returns")
+        XCTAssertTrue(image.isMissing, "the missing file still has a recoverable placeholder")
+        XCTAssertTrue(image.accessibilityDescription.contains("pending.png"))
+    }
+
     private var windows: [NSWindow] = []
 
     override func tearDown() async throws {
@@ -131,6 +232,9 @@ final class NoteEditorEngineTests: XCTestCase {
         scroll.frame.size = NSSize(width: 320, height: 464)
         scroll.automaticallyAdjustsContentInsets = false
         scroll.contentInsets = NSEdgeInsets(top: 80, left: 0, bottom: 92, right: 0)
+        view.layoutSubtreeIfNeeded()
+        engine.layoutManager?.textViewportLayoutController.layoutViewport()
+        view.viewWillDraw()
         let image = try XCTUnwrap(engine.objects().compactMap { $0.0 as? NoteImageAttachment }.first)
         let deadline = Date().addingTimeInterval(3)
         while image.renderedImage == nil, Date() < deadline { RunLoop.main.run(until: Date().addingTimeInterval(0.01)) }
@@ -158,6 +262,176 @@ final class NoteEditorEngineTests: XCTestCase {
     }
 
     // MARK: Drawing
+
+    private final class WeakEngine {
+        weak var value: NoteEditorEngine?
+        init(_ value: NoteEditorEngine) { self.value = value }
+    }
+
+    /// Sixty compressed minutes: rotate twelve notes, type 40 characters,
+    /// save/leave, and add/rename/complete a task per minute. No visible UI.
+    func testPerf2SimulatedHourRetainsOnlyTheWarmNoteSessions() async throws {
+        let notes = try makeTestNoteStore(attachmentFileStore: makeTestAttachmentFileStore())
+        let tasks = try makeTestStore()
+        let controller = NotesPageController(store: notes, journal: nil, saveDelay: .seconds(600), pauseVersionDelay: .seconds(600))
+        await controller.startAndWait()
+        var ids: [UUID] = []
+        for index in 0..<12 {
+            var blocks = (0..<(index == 0 ? 5_000 : 200)).map { NoteBlock.text("Note \(index), line \($0)") }
+            blocks.insert(.table(NoteTable(texts: [["Task", "Date"], ["Write", "Monday"]])), at: 10)
+            guard case let .success((id, _)) = notes.createDocumentNote(id: UUID(), document: NoteDocument(blocks: blocks)) else {
+                return XCTFail("could not create soak fixture")
+            }
+            ids.append(id)
+        }
+        var engines: [WeakEngine] = []
+        func footprint() -> UInt64 {
+            var info = task_vm_info_data_t()
+            var count = mach_msg_type_number_t(MemoryLayout<task_vm_info_data_t>.size / MemoryLayout<integer_t>.size)
+            let result = withUnsafeMutablePointer(to: &info) {
+                $0.withMemoryRebound(to: integer_t.self, capacity: Int(count)) {
+                    task_info(mach_task_self_, task_flavor_t(TASK_VM_INFO), $0, &count)
+                }
+            }
+            return result == KERN_SUCCESS ? info.phys_footprint : 0
+        }
+        for minute in 0..<60 {
+            await XCTAssertTrueAsync(await controller.openDurably(noteID: ids[minute % ids.count]))
+            let session = try XCTUnwrap(controller.active)
+            engines.append(WeakEngine(session.engine))
+            autoreleasepool {
+                let (_, view) = session.engine.makeView()
+                view.setSelectedRange(NSRange(location: session.engine.textStorage.length, length: 0))
+                let extractions = session.engine.documentExtractionCount
+                type(String(repeating: "a", count: 40), view)
+                XCTAssertEqual(session.engine.documentExtractionCount, extractions,
+                               "typing does not extract the whole document before the save boundary")
+                session.engine.detachView()
+            }
+            await XCTAssertTrueAsync(await controller.prepareToLeaveDurably(.quit))
+            let task = try XCTUnwrap(tasks.create(title: "Minute \(minute)"))
+            XCTAssertTrue(tasks.update(task, title: "Renamed minute \(minute)"))
+            XCTAssertTrue(tasks.setStatus(.done, for: task))
+            if (minute + 1).isMultiple(of: 15) {
+                await Task.yield()
+                let alive = engines.compactMap(\.value).count
+                print("PERF2_SOAK minutes=\(minute + 1) engines=\(alive) footprint_bytes=\(footprint())")
+                XCTAssertLessThanOrEqual(alive, 8, "clean sessions beyond the warm-cache limit must be released")
+            }
+        }
+        XCTAssertEqual(tasks.tasks.count, 60)
+        // Let AppKit's deferred layout and autorelease work drain. Raw
+        // snapshots during a compressed workload are not steady idle cost.
+        try await Task.sleep(for: .seconds(1))
+        print("PERF2_SOAK quiescent_footprint_bytes=\(footprint()) engines=\(engines.compactMap(\.value).count)")
+    }
+
+    /// Compressed workload, not one hour of wall time: ten cell revisions
+    /// per second for 60 minutes. Measures retention without timing gates.
+    func testPerf2TableMeasurementRetentionOverAnHourOfEdits() {
+        let cache = NoteTableTextCache()
+        let style = NoteTextStyle()
+        for minute in 0..<60 {
+            autoreleasepool {
+                for key in 0..<600 {
+                    let cell = NoteTable.Cell("Edit \(minute * 600 + key)")
+                    let string = NSAttributedString(string: cell.text, attributes: style.bodyAttributes)
+                    _ = cache.natural(cell, header: false) { string }
+                    _ = cache.minimum(cell, header: false) { string }
+                    _ = cache.height(cell, header: false, width: 120) { string }
+                }
+            }
+            if (minute + 1).isMultiple(of: 15) {
+                print("PERF2_TABLE_CACHE minutes=\(minute + 1) entries=\(cache.retainedMeasurementCount)")
+            }
+        }
+        XCTAssertLessThanOrEqual(cache.retainedMeasurementCount, 45_000)
+        cache.clear()
+        XCTAssertEqual(cache.retainedMeasurementCount, 0)
+    }
+
+    func testPerf2TableCacheKeepsAMaximumTableWarmAndRemeasuresEvictedText() {
+        let cache = NoteTableTextCache()
+        let string = NSAttributedString(string: "same measured text")
+        var measurements = 0
+        func read(_ index: Int) -> CGFloat {
+            cache.height(NoteTable.Cell("Cell \(index)"), header: false, width: 100) {
+                measurements += 1
+                return string
+            }
+        }
+        let first = read(0)
+        for index in 1..<15_000 { _ = read(index) }
+        let warm = measurements
+        for index in 0..<15_000 { XCTAssertEqual(read(index), first) }
+        XCTAssertEqual(measurements, warm, "a maximum table still fits without cache thrashing")
+        _ = read(15_000)
+        XCTAssertEqual(cache.retainedMeasurementCount, 15_000)
+        let beforeMiss = measurements
+        XCTAssertEqual(read(0), first, "an evicted entry is recomputed with the same result")
+        XCTAssertEqual(measurements, beforeMiss + 1)
+        let beforeHit = measurements
+        XCTAssertEqual(read(0), first)
+        XCTAssertEqual(measurements, beforeHit)
+        cache.clear()
+        XCTAssertEqual(cache.retainedMeasurementCount, 0)
+        XCTAssertEqual(read(0), first)
+        XCTAssertEqual(measurements, beforeHit + 1)
+
+        // A full grid editing its last cell must keep its other cells hot.
+        cache.clear()
+        for index in 0..<15_000 { _ = read(index) }
+        let beforeEdits = measurements
+        for edit in 0..<5 {
+            for index in 0..<14_999 { _ = read(index) }
+            _ = read(20_000 + edit)
+        }
+        XCTAssertEqual(measurements - beforeEdits, 5, "only the five changed cells are measured")
+    }
+
+    func testPerf2EmptyFindDoesNoSearchOrLayoutWorkWhileTyping() throws {
+        var blocks = (0..<5_000).map { NoteBlock.text("Line \($0) with ordinary text") }
+        blocks.insert(.table(NoteTable(texts: [["needle", "cell"], ["other", "value"]])), at: 100)
+        blocks.insert(.image(attachmentID: UUID(), pixelWidth: 800, pixelHeight: 400), at: 200)
+        let (engine, view) = makeEngine(NoteDocument(blocks: blocks), window: true)
+        engine.find.show()
+        view.setSelectedRange(NSRange(location: engine.textStorage.length, length: 0))
+        let searches = engine.find.objectSearchPassCount
+        let layouts = engine.find.highlightLayoutPassCount
+        type("twenty five ordinary keys", view)
+        print("PERF2_EMPTY_FIND searches=\(engine.find.objectSearchPassCount - searches) layouts=\(engine.find.highlightLayoutPassCount - layouts)")
+        XCTAssertEqual(engine.find.objectSearchPassCount, searches)
+        XCTAssertEqual(engine.find.highlightLayoutPassCount, layouts)
+        XCTAssertTrue(engine.find.matches.isEmpty)
+        // Clearing a real search must still remove its highlights once.
+        engine.find.query = "needle"
+        XCTAssertEqual(engine.find.matches.count, 1)
+        XCTAssertNotNil(engine.find.matches.first?.tableID)
+        let beforeClear = engine.find.highlightLayoutPassCount
+        engine.find.query = ""
+        XCTAssertTrue(engine.find.matches.isEmpty)
+        XCTAssertNil(engine.find.index)
+        XCTAssertEqual(engine.find.highlightLayoutPassCount, beforeClear + 1)
+        let cleared = engine.find.highlightLayoutPassCount
+        engine.find.refresh()
+        XCTAssertEqual(engine.find.highlightLayoutPassCount, cleared)
+    }
+
+    func testPerf2TableRowOriginsDoNotResumPrefixesPerFrame() {
+        let heights = (0..<500).map { CGFloat(21 + $0 % 7) }
+        let layout = NoteTableLayout(columnWidths: [56, 72], rowHeights: heights, viewportWidth: 128)
+        NoteTableLayout.rowOriginAdditionCount = 0
+        var expected: CGFloat = 0
+        for row in heights.indices {
+            XCTAssertEqual(layout.rowY(row), expected)
+            expected += heights[row]
+        }
+        XCTAssertEqual(layout.rowY(-1), 0)
+        XCTAssertEqual(layout.rowY(heights.count + 1), expected)
+        print("PERF2_ROW_ORIGINS additions=\(NoteTableLayout.rowOriginAdditionCount)")
+        XCTAssertEqual(NoteTableLayout.rowOriginAdditionCount, 0,
+                       "a draw reads existing row origins; it never sums prefixes again")
+    }
 
     func testObjectsAreDrawnFromTheDesignSystem() {
         let (engine, _) = makeEngine()
@@ -1432,10 +1706,30 @@ private final class StockUndoDelegate: NSObject, NSTextViewDelegate {
 private final class StubImages: NoteImageProviding {
     let bytes: [UUID: Data]
     init(bytes: [UUID: Data]) { self.bytes = bytes }
-    func fileURL(forAttachment id: UUID) async -> URL? { nil }
+    private(set) var fileRequests = 0
+    func fileURL(forAttachment id: UUID) async -> URL? { fileRequests += 1; return nil }
     func filename(forAttachment id: UUID) -> String? { bytes[id] == nil ? nil : "shot.png" }
     func imageBytes(forAttachment id: UUID) -> StagedNoteAttachment? {
         bytes[id].map { StagedNoteAttachment(id: id, filename: "shot.png", contentTypeIdentifier: "public.png",
                                              byteCount: Int64($0.count), digest: NotePayloadDigest.sha256($0), data: $0) }
+    }
+}
+
+@MainActor
+private final class GatedViewportImages: NoteImageProviding {
+    private var continuation: CheckedContinuation<URL?, Never>?
+    private var released = false
+    private(set) var requested = false
+    func fileURL(forAttachment id: UUID) async -> URL? {
+        requested = true
+        if released { return nil }
+        return await withCheckedContinuation { continuation = $0 }
+    }
+    func filename(forAttachment id: UUID) -> String? { "pending.png" }
+    func imageBytes(forAttachment id: UUID) -> StagedNoteAttachment? { nil }
+    func release() {
+        released = true
+        continuation?.resume(returning: nil)
+        continuation = nil
     }
 }

@@ -1,10 +1,12 @@
+Historical non-Canvas evidence referenced below has moved; use the [perf3 archive manifest](Repo-Archive-Manifest-perf3.md) for original paths, descriptions, checksums, and the external archive location. Canvas and sync evidence remain here.
+
 # Concurrent SWE Review — Lane 5: Native UX (partial evidence report)
 
 - **Checkout under review:** `/Users/taha/Developer/attic-task-panels-v2`, baseline `ae6418c1` plus the existing dirty tree.
 - **Preview:** `AtticTaskPanelsV2.app`, process `AtticTaskPanelsV2`, bundle `com.taha.Attic.taskpanels.v2`.
 - **Method:** Hands-on native interaction and screenshot capture by the assigned SWE-2 Max lane.
 - **Completion limitation:** The provider stopped the lane after 153 messages with an overall Devin message-rate-limit error before it wrote its own final report. This document preserves only transcript-backed and screenshot-backed evidence; unfinished areas remain unverified.
-- **Evidence directory:** `Docs/ConcurrentSWEReview-NativeUX-Evidence/` (45 screenshots).
+- **Evidence directory:** [perf3 archive manifest](Repo-Archive-Manifest-perf3.md) (45 screenshots).
 
 ## Confirmed defects
 

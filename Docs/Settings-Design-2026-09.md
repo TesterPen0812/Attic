@@ -1,3 +1,5 @@
+Historical non-Canvas evidence referenced below has moved; use the [perf3 archive manifest](Repo-Archive-Manifest-perf3.md) for original paths, descriptions, checksums, and the external archive location. Canvas and sync evidence remain here.
+
 # Attic Settings redesign (September 2026)
 
 The Settings window was rebuilt around one idea: it should feel like a

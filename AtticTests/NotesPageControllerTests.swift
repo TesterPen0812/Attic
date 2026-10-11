@@ -36,6 +36,20 @@ final class NotesPageControllerTests: XCTestCase {
                            with: NSAttributedString(string: text), name: "Typing")
     }
 
+    /// Reopen/recovery tests exercise decoding only once the note has a
+    /// viewport, matching presentation rather than eager session creation.
+    private func imageViewport(_ engine: NoteEditorEngine) -> NSWindow {
+        let (scroll, view) = engine.makeView()
+        scroll.frame = NSRect(x: 0, y: 0, width: 400, height: 600)
+        let window = NSWindow(contentRect: scroll.frame, styleMask: [.titled], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        window.contentView = scroll
+        view.layoutSubtreeIfNeeded()
+        engine.layoutManager?.textViewportLayoutController.layoutViewport()
+        view.viewWillDraw()
+        return window
+    }
+
     private func realImage() throws -> StagedNoteAttachment {
         let bitmap = try XCTUnwrap(NSBitmapImageRep(bitmapDataPlanes: nil, pixelsWide: 2, pixelsHigh: 2,
                                                    bitsPerSample: 8, samplesPerPixel: 4, hasAlpha: true,
@@ -1568,6 +1582,8 @@ final class NotesPageControllerTests: XCTestCase {
         let reopened = makeController()
         await XCTAssertTrueAsync(await reopened.openDurably(noteID: id))
         let reopenedEngine = try XCTUnwrap(reopened.active?.engine)
+        let viewport = imageViewport(reopenedEngine)
+        defer { reopenedEngine.detachView(); viewport.close() }
         for _ in 0..<30 {
             if reopenedEngine.objects().compactMap({ $0.0 as? NoteImageAttachment }).first?.renderedImage != nil { break }
             try await Task.sleep(for: .milliseconds(50))
@@ -2127,6 +2143,9 @@ final class NotesPageControllerTests: XCTestCase {
         XCTAssertEqual(third.active?.engine.document().attachmentIDs.count, 1)
         XCTAssertNotNil(try thirdStore.attachmentRows(forNoteID: newID).first?.payload)
         let restoredImage = try XCTUnwrap(third.active?.engine.objects().compactMap { $0.0 as? NoteImageAttachment }.first)
+        let recoveredEngine = try XCTUnwrap(third.active?.engine)
+        let viewport = imageViewport(recoveredEngine)
+        defer { recoveredEngine.detachView(); viewport.close() }
         for _ in 0..<40 {
             if restoredImage.renderedImage != nil { break }
             try await Task.sleep(for: .milliseconds(50))

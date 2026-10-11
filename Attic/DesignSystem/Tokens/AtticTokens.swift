@@ -89,7 +89,7 @@ enum AtticControlSize {
     /// and Tasks is 32 pt (it was 36), 16 pt from the panel's edges
     /// (`AtticStyle.chromeMinimumInset`), the page switch's capsule height.
     static let headerControl: CGFloat = 32
-    static let settingsBackButton = CGSize(width: 38, height: 34)
+    static let settingsHeaderHeight: CGFloat = 34
     /// The page switch: 32 tall (visual A), chips 24 inside a 4 pt inset.
     static let capsuleHeight: CGFloat = 32
     static let capsuleInset: CGFloat = 4

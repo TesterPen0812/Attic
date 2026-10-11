@@ -60,14 +60,14 @@ final class AtticDesignSystemTests: XCTestCase {
 
     /// Phase 0's qualities in Direction A (2026-09-26): the pin and the
     /// page button are equal 36 pt squares (radius 15; the page button opens
-    /// to 96); Settings' back button keeps 38 × 34. Rows are 44 / 56 with
+    /// to 96); Settings keeps a 34 pt title line. Rows are 44 / 56 with
     /// highlights 2 shorter, text blocks centred; circles 16 at 28, titles
     /// at 56 (12 apart).
     func testControlSizesFollowPhase0Room() {
         // Chrome B (Notes v2, owner 2026-10-08): 32 pt, radius 13.5.
         XCTAssertEqual(AtticControlSize.panelButton, CGSize(width: 32, height: 32))
         XCTAssertEqual(AtticRadius.control(height: AtticControlSize.headerControl), 13.5)
-        XCTAssertEqual(AtticControlSize.settingsBackButton, CGSize(width: 38, height: 34))
+        XCTAssertEqual(AtticControlSize.settingsHeaderHeight, 34)
         XCTAssertEqual(AtticPageButton<Int>.width(open: false, count: 3), 32)
         XCTAssertEqual(AtticPageButton<Int>.width(open: true, count: 3), 84)
         // Compact round (owner): rows 36 / 50, highlights 30 / 44.

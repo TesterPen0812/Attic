@@ -1,3 +1,5 @@
+Historical evidence referenced below has moved; use the [perf3 archive manifest](Repo-Archive-Manifest-perf3.md) for original paths, descriptions, checksums, and the external archive location. Canvas and sync evidence remain here.
+
 # Devin handoff: hover and pinned subtask windows
 
 ## Assignment and exact baseline

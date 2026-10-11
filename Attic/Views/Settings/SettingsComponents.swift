@@ -7,15 +7,13 @@ import SwiftUI
 // sections, each an optional heading, a group card and an optional
 // footnote. Nothing here draws a look of its own.
 
-/// One page in the content card: the back button and the page title, then
+/// One page in the content card: the page title, then
 /// the page's sections, which scroll and blur out at the bottom.
 struct SettingsPage<Content: View>: View {
     let section: SettingsSection
     /// 24 pt under the header instead of 52 (Compact Appearance).
     var compact = false
     @ViewBuilder let content: Content
-
-    @EnvironmentObject private var navigation: SettingsNavigation
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -29,22 +27,13 @@ struct SettingsPage<Content: View>: View {
     }
 }
 
-/// The content card's top bar. The back button returns to the page shown
-/// before (⌘[), and is a disabled ghost when there is none; the rest of the
-/// bar moves the window, as a title bar does.
+/// The content card's title bar; dragging it moves the window.
 struct SettingsHeader: View {
     let title: String
 
-    @EnvironmentObject private var navigation: SettingsNavigation
-
     var body: some View {
         HStack(spacing: 0) {
-            AtticSettingsHeader(title: title) {
-                navigation.goBack()
-            }
-            .disabled(!navigation.canGoBack)
-            .help(String(localized: "Back (⌘[)"))
-            .accessibilityIdentifier("settings-back")
+            AtticSettingsHeader(title: title)
             Spacer(minLength: 0)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
@@ -52,15 +41,6 @@ struct SettingsHeader: View {
             Color.clear
                 .contentShape(Rectangle())
                 .gesture(WindowDragGesture())
-        }
-        .background {
-            // ⌘[ goes back wherever focus is in the window.
-            Button("Back") { navigation.goBack() }
-                .keyboardShortcut("[", modifiers: .command)
-                .disabled(!navigation.canGoBack)
-                .opacity(0)
-                .frame(width: 0, height: 0)
-                .accessibilityHidden(true)
         }
     }
 }

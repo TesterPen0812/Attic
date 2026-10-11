@@ -146,6 +146,24 @@ final class TasksRound4Tests: XCTestCase {
         return LiveBar(window: window, view: view, editor: editor, coordinator: coordinator)
     }
 
+    func testPerf3ModelAppliedSelectionIsReportedAfterTheUpdate() {
+        let bar = liveBar()
+        defer { bar.window.close() }
+        let state = model.addBarState
+        state.text = TaskAddBarText(text: "Restored #tag")
+        state.caret = nil
+        bar.coordinator.isApplyingModel = true
+        bar.view.textView.string = state.text.text
+        let end = state.text.text.utf16.count
+        bar.view.textView.setSelectedRange(NSRange(location: end, length: 0))
+        XCTAssertNil(state.caret, "a model update must not publish into its active SwiftUI update")
+        bar.coordinator.isApplyingModel = false
+        RunLoop.current.run(until: Date().addingTimeInterval(0.02))
+        XCTAssertEqual(state.caret, end, "the restored selection still reaches draft/chip state")
+        bar.view.textView.setSelectedRange(NSRange(location: 3, length: 0))
+        XCTAssertEqual(state.caret, 3, "native caret movement remains synchronous")
+    }
+
     private var liveField: AtticTokenField?
     private var chipDismissals = 0
 

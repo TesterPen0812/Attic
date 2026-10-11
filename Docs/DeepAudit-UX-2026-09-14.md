@@ -1,3 +1,5 @@
+Historical non-Canvas evidence referenced below has moved; use the [perf3 archive manifest](Repo-Archive-Manifest-perf3.md) for original paths, descriptions, checksums, and the external archive location. Canvas and sync evidence remain here.
+
 # Deep UX/UI Audit — Attic — 2026-09-14
 
 **Domain:** all rendered UI and interaction state machines — main/subpanel open/close/pin/move/idle/scroll, titles/metadata/hover menus, composer/attachments/error messages, Notes drawer/editor, Settings, themes/translucency/Liquid Glass, keyboard/focus/accessibility/Reduce Motion, Canvas visible tool states, native pointer behavior.

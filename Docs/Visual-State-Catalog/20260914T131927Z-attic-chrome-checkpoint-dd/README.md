@@ -1,3 +1,5 @@
+Historical evidence referenced below has moved; use the [perf3 archive manifest](../../Repo-Archive-Manifest-perf3.md) for original paths, descriptions, checksums, and the external archive location. Canvas and sync evidence remain here.
+
 # Attic live visual-state catalog
 
 Capture session: `2026-09-14T14:19:34+01:00` to `2026-09-14T14:46:24+01:00`
@@ -45,46 +47,46 @@ All times below are local London time during the single capture session. Provena
 
 | State | Image | Reproduction and state | Limitations / notes |
 |---|---|---|---|
-| TP-001 | [baseline-window](./TP-001-main-tasks-baseline-window.png) | Open the pinned Tasks section at session start. | Correct Attic-window baseline. |
-| TP-001-X | [baseline-excluded](./TP-001-main-tasks-baseline.png) | Accidental first screenshot before switching to the explicit Attic window ID. | Excluded: full-screen Codex capture. |
-| TP-002 | [unpinned](./TP-002-main-tasks-unpinned.png) | Toggle the panel pin control and capture the unpinned panel state. | Window visibility is transient when unpinned. |
-| TP-010 | [empty-backlog](./TP-010-backlog-empty-pinned.png) | Switch to Backlog with no backlog ideas and leave the panel pinned. | Existing task data was preserved. |
-| TP-012 | [task metadata](./TP-012-main-task-attachment-subtask-metadata.png) | Return to Tasks and show `Chrome check — plan weekend` with attachment and subtask metadata. | Existing task used as visual fixture. |
-| TP-013 | [completion warning](./TP-013-parent-completion-warning.png) | Attempt to complete the parent with unfinished subtasks; capture the warning sheet, then cancel. | No parent completion was committed. |
-| TP-020 | [subtasks populated](./TP-020-subpanel-subtasks-populated.png) | Click the task row’s Show subtasks action. | Transient subpanel. |
-| TP-021 | [subpanel pinned](./TP-021-subpanel-pinned.png) | Pin the task subpanel and capture its populated Subtasks mode. | Existing subtasks retained. |
-| TP-022 | [subtask composer](./TP-022-subpanel-composer-empty.png) | Open Add subtask in the pinned subpanel without entering text. | Composer was dismissed. |
-| TP-023 | [nine subtasks](./TP-023-subpanel-nine-subtasks.png) | Add `[QA] Added from catalog` to the fixture parent. | QA subtask intentionally retained and later marked done. |
-| TP-024 | [attachments empty](./TP-024-subpanel-attachments-empty.png) | Switch the pinned subpanel to Attachments before adding fixture files. | Empty state only. |
-| TP-025 | [native task picker](./TP-025-native-task-picker-fixture.png) | Open Add attachment and navigate to `.build/batch3-live/fixtures`. | Native picker includes the two disposable fixture files. |
-| TP-026 | [one attachment](./TP-026-subpanel-attachment-image.png) | Attach `batch3-image.png`, then open the subpanel Attachments view. | QA fixture attachment. |
-| TP-027 | [image and file](./TP-027-subpanel-attachments-image-file.png) | Attach `batch3-normal-file.txt` as well and recapture Attachments. | QA fixture attachments. |
-| TP-028 | [partial completion](./TP-028-subpanel-partial-completion.png) | Mark the QA subtask done and return to Subtasks. | Parent remains incomplete at `1 of 9`. |
-| TP-030 | [composer add menu](./TP-030-composer-add-menu.png) | Open the task composer Add menu. | Menu dismissed after capture. |
-| TP-031 | [priority expanded](./TP-031-composer-priority-expanded.png) | Expand Task options in the composer to show None/Low/Medium/High. | No task submitted in this state. |
-| TP-032 | [long title focused](./TP-032-composer-long-title-focused.png) | Focus the composer with the long QA title. | Draft state. |
-| TP-033 | [High priority title](./TP-033-composer-high-priority-long-title.png) | Select High priority for the long QA draft. | Draft state. |
-| TP-034 | [pending image](./TP-034-composer-pending-image.png) | Stage the disposable image in the composer. | Not yet submitted at capture time. |
-| TP-035 | [pending image and file](./TP-035-composer-pending-image-file.png) | Stage both disposable attachments with the long title and High priority. | Captured before submission; the final fixture task was later submitted. |
-| TP-040 | [task context menu](./TP-040-task-context-menu.png) | Secondary-click the existing fixture parent row. | Destructive Delete item was not selected. |
-| TP-041 | [context-menu supplemental](./TP-041-task-context-submenus.png) | Supplemental capture from the same task context-menu interaction. | Root menu duplicate retained for provenance; see TP-042/043 for nested menus. |
-| TP-042 | [Priority submenu](./TP-042-task-priority-submenu.png) | Open Priority from the task context menu. | Options were dismissed without changing the parent. |
-| TP-043 | [Move-to submenu](./TP-043-task-move-to-submenu.png) | Open Move to from the task context menu. | Options were dismissed without moving the parent. |
-| TP-044 | [composer options with attachments](./TP-044-composer-options-with-pending-attachments.png) | Reopen the composer Add menu while both fixture attachments were pending. | Menu dismissed. |
-| TP-045 | [composer priority with attachments](./TP-045-composer-priority-dropdown-with-attachments.png) | Open Task options while the long title and both pending files were present. | High remained selected; menu dismissed. |
-| TP-046 | [long-title task](./TP-046-main-long-title-task-added.png) | Submit the marked QA draft and capture the new High-priority task in progress. | Disposable task intentionally retained. |
-| TP-047 | [completed task](./TP-047-main-completed-qa-task.png) | Click the QA task completion control and capture it under Done. | Disposable completed task intentionally retained. |
+| TP-001 | [baseline-window](../../Repo-Archive-Manifest-perf3.md) | Open the pinned Tasks section at session start. | Correct Attic-window baseline. |
+| TP-001-X | [baseline-excluded](../../Repo-Archive-Manifest-perf3.md) | Accidental first screenshot before switching to the explicit Attic window ID. | Excluded: full-screen Codex capture. |
+| TP-002 | [unpinned](../../Repo-Archive-Manifest-perf3.md) | Toggle the panel pin control and capture the unpinned panel state. | Window visibility is transient when unpinned. |
+| TP-010 | [empty-backlog](../../Repo-Archive-Manifest-perf3.md) | Switch to Backlog with no backlog ideas and leave the panel pinned. | Existing task data was preserved. |
+| TP-012 | [task metadata](../../Repo-Archive-Manifest-perf3.md) | Return to Tasks and show `Chrome check — plan weekend` with attachment and subtask metadata. | Existing task used as visual fixture. |
+| TP-013 | [completion warning](../../Repo-Archive-Manifest-perf3.md) | Attempt to complete the parent with unfinished subtasks; capture the warning sheet, then cancel. | No parent completion was committed. |
+| TP-020 | [subtasks populated](../../Repo-Archive-Manifest-perf3.md) | Click the task row’s Show subtasks action. | Transient subpanel. |
+| TP-021 | [subpanel pinned](../../Repo-Archive-Manifest-perf3.md) | Pin the task subpanel and capture its populated Subtasks mode. | Existing subtasks retained. |
+| TP-022 | [subtask composer](../../Repo-Archive-Manifest-perf3.md) | Open Add subtask in the pinned subpanel without entering text. | Composer was dismissed. |
+| TP-023 | [nine subtasks](../../Repo-Archive-Manifest-perf3.md) | Add `[QA] Added from catalog` to the fixture parent. | QA subtask intentionally retained and later marked done. |
+| TP-024 | [attachments empty](../../Repo-Archive-Manifest-perf3.md) | Switch the pinned subpanel to Attachments before adding fixture files. | Empty state only. |
+| TP-025 | [native task picker](../../Repo-Archive-Manifest-perf3.md) | Open Add attachment and navigate to `.build/batch3-live/fixtures`. | Native picker includes the two disposable fixture files. |
+| TP-026 | [one attachment](../../Repo-Archive-Manifest-perf3.md) | Attach `batch3-image.png`, then open the subpanel Attachments view. | QA fixture attachment. |
+| TP-027 | [image and file](../../Repo-Archive-Manifest-perf3.md) | Attach `batch3-normal-file.txt` as well and recapture Attachments. | QA fixture attachments. |
+| TP-028 | [partial completion](../../Repo-Archive-Manifest-perf3.md) | Mark the QA subtask done and return to Subtasks. | Parent remains incomplete at `1 of 9`. |
+| TP-030 | [composer add menu](../../Repo-Archive-Manifest-perf3.md) | Open the task composer Add menu. | Menu dismissed after capture. |
+| TP-031 | [priority expanded](../../Repo-Archive-Manifest-perf3.md) | Expand Task options in the composer to show None/Low/Medium/High. | No task submitted in this state. |
+| TP-032 | [long title focused](../../Repo-Archive-Manifest-perf3.md) | Focus the composer with the long QA title. | Draft state. |
+| TP-033 | [High priority title](../../Repo-Archive-Manifest-perf3.md) | Select High priority for the long QA draft. | Draft state. |
+| TP-034 | [pending image](../../Repo-Archive-Manifest-perf3.md) | Stage the disposable image in the composer. | Not yet submitted at capture time. |
+| TP-035 | [pending image and file](../../Repo-Archive-Manifest-perf3.md) | Stage both disposable attachments with the long title and High priority. | Captured before submission; the final fixture task was later submitted. |
+| TP-040 | [task context menu](../../Repo-Archive-Manifest-perf3.md) | Secondary-click the existing fixture parent row. | Destructive Delete item was not selected. |
+| TP-041 | [context-menu supplemental](../../Repo-Archive-Manifest-perf3.md) | Supplemental capture from the same task context-menu interaction. | Root menu duplicate retained for provenance; see TP-042/043 for nested menus. |
+| TP-042 | [Priority submenu](../../Repo-Archive-Manifest-perf3.md) | Open Priority from the task context menu. | Options were dismissed without changing the parent. |
+| TP-043 | [Move-to submenu](../../Repo-Archive-Manifest-perf3.md) | Open Move to from the task context menu. | Options were dismissed without moving the parent. |
+| TP-044 | [composer options with attachments](../../Repo-Archive-Manifest-perf3.md) | Reopen the composer Add menu while both fixture attachments were pending. | Menu dismissed. |
+| TP-045 | [composer priority with attachments](../../Repo-Archive-Manifest-perf3.md) | Open Task options while the long title and both pending files were present. | High remained selected; menu dismissed. |
+| TP-046 | [long-title task](../../Repo-Archive-Manifest-perf3.md) | Submit the marked QA draft and capture the new High-priority task in progress. | Disposable task intentionally retained. |
+| TP-047 | [completed task](../../Repo-Archive-Manifest-perf3.md) | Click the QA task completion control and capture it under Done. | Disposable completed task intentionally retained. |
 
 ### Notes
 
 | State | Image | Reproduction and state | Limitations / notes |
 |---|---|---|---|
-| NT-001 | [new empty note](./NT-001-new-note-empty.png) | Create a new note and capture before entering body text. | QA note fixture. |
-| NT-002 | [long unsaved note](./NT-002-note-long-unsaved.png) | Enter long safe QA text before autosave settles. | QA note fixture. |
-| NT-003 | [long saved note](./NT-003-note-long-saved.png) | Wait for the saved indicator. | QA note fixture. |
-| NT-004 | [note bottom](./NT-004-note-long-scrolled-bottom.png) | Scroll the note body to its lower boundary. | Scroll position is intentional. |
-| NT-005 | [Saved Notes drawer](./NT-005-saved-notes-drawer.png) | Open Saved notes from the Notes controls. | Includes pre-existing saved-note content; local-only. |
-| NT-006 | [native picker quota warning](./NT-006-native-picker-quota-warning.png) | Open Attach files and capture the Documents picker showing the iCloud paused/quota/error presentation. | Native OS state; no file was selected. |
+| NT-001 | [new empty note](../../Repo-Archive-Manifest-perf3.md) | Create a new note and capture before entering body text. | QA note fixture. |
+| NT-002 | [long unsaved note](../../Repo-Archive-Manifest-perf3.md) | Enter long safe QA text before autosave settles. | QA note fixture. |
+| NT-003 | [long saved note](../../Repo-Archive-Manifest-perf3.md) | Wait for the saved indicator. | QA note fixture. |
+| NT-004 | [note bottom](../../Repo-Archive-Manifest-perf3.md) | Scroll the note body to its lower boundary. | Scroll position is intentional. |
+| NT-005 | [Saved Notes drawer](../../Repo-Archive-Manifest-perf3.md) | Open Saved notes from the Notes controls. | Includes pre-existing saved-note content; local-only. |
+| NT-006 | [native picker quota warning](../../Repo-Archive-Manifest-perf3.md) | Open Attach files and capture the Documents picker showing the iCloud paused/quota/error presentation. | Native OS state; no file was selected. |
 
 ### Canvas
 
@@ -117,12 +119,12 @@ All times below are local London time during the single capture session. Provena
 | MENU-003 | [View menu](./MENU-003-view-menu.png) | Open View from the menu bar. | Native macOS menu. |
 | MENU-004 | [Window menu](./MENU-004-window-menu.png) | Open Window from the menu bar. | Native macOS menu. |
 | MENU-005 | [Help menu](./MENU-005-help-menu.png) | Open Help from the menu bar. | Native macOS menu. |
-| SET-001 | [Appearance](./SET-001-settings-appearance.png) | Open Settings > Appearance. | Captures translucency, glass-style, palette, gradient, and radio controls in their current state. |
-| SET-002 | [General](./SET-002-settings-general.png) | Open Settings > General. | Startup toggle left unchanged. |
-| SET-003 | [Panel](./SET-003-settings-panel.png) | Open Settings > Panel. | Docking, timing, shape, and size controls left unchanged. |
-| SET-004 | [Agent Access](./SET-004-settings-agent-access.png) | Open Settings > Agent Access. | Access remained off. |
-| SET-005 | [About](./SET-005-settings-about.png) | Open Settings > About. | Repository link not opened. |
-| SET-006 | [native Colors panel](./SET-006-native-colors-panel.png) | Capture the native Colors panel surfaced during the menu/palette interaction. | OS-level panel; no color change was committed. |
+| SET-001 | [Appearance](../../Repo-Archive-Manifest-perf3.md) | Open Settings > Appearance. | Captures translucency, glass-style, palette, gradient, and radio controls in their current state. |
+| SET-002 | [General](../../Repo-Archive-Manifest-perf3.md) | Open Settings > General. | Startup toggle left unchanged. |
+| SET-003 | [Panel](../../Repo-Archive-Manifest-perf3.md) | Open Settings > Panel. | Docking, timing, shape, and size controls left unchanged. |
+| SET-004 | [Agent Access](../../Repo-Archive-Manifest-perf3.md) | Open Settings > Agent Access. | Access remained off. |
+| SET-005 | [About](../../Repo-Archive-Manifest-perf3.md) | Open Settings > About. | Repository link not opened. |
+| SET-006 | [native Colors panel](../../Repo-Archive-Manifest-perf3.md) | Capture the native Colors panel surfaced during the menu/palette interaction. | OS-level panel; no color change was committed. |
 
 ## Verification performed
 
