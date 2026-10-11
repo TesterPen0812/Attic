@@ -277,6 +277,24 @@ final class NotesKeyboardUndoTests: XCTestCase {
         XCTAssertTrue(harness.window.firstResponder === editor, "expiry keeps the caret")
     }
 
+    func testTheToastNeverTakesKeyboardFocusDuringNativeFullKeyboardAccessTraversal() throws {
+        guard NSApp.isFullKeyboardAccessEnabled else { throw XCTSkip("native toast traversal requires Full Keyboard Access") }
+        let (harness, ids) = try makeHarness(titles: ["Alpha"])
+        let editor = try openAndFocus(ids[0], in: harness)
+        harness.window.traceFocusChanges = true
+        harness.toasts.show("Note changed", answersUndoKey: false) {}
+        spin()
+        var traversed = false
+        for index in 0..<12 {
+            harness.window.selectNextKeyView(nil)
+            spin(0.1)
+            traversed = traversed || harness.window.firstResponder !== editor
+            print("ROUND11B_TOAST_TAB index=\(index) responder=\(KeyWindow.identity(harness.window.firstResponder)) expiryPending=\(harness.toasts.hasPendingDismissalForTesting)")
+            XCTAssertTrue(harness.toasts.hasPendingDismissalForTesting, "native Tab must not give the toast keyboard focus or its keyboard hold")
+        }
+        XCTAssertTrue(traversed, "positive control: native keyboard traversal reached controls outside the editor")
+    }
+
     private func assertTextUndoReady(_ view: NoteEditorTextView, in harness: Harness,
                                      file: StaticString = #filePath, line: UInt = #line) {
         let engine = harness.controller.active?.engine

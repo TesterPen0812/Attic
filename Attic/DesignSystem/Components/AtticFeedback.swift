@@ -2,8 +2,8 @@ import SwiftUI
 
 // MARK: - Undo toast
 
-/// What holds a toast on screen past its 6 s (Astra 23): the pointer on
-/// it, its button's keyboard focus, or VoiceOver on it.
+/// What holds a toast on screen past its 6 s: the pointer or VoiceOver.
+/// Keyboard holds remain supported by the center for existing callers.
 enum AtticToastHold: Hashable {
     case pointer, keyboard, accessibility
 }
@@ -15,14 +15,15 @@ enum AtticToastHold: Hashable {
 /// Its button has no shortcut of its own (Astra 23): ⌘Z goes to the text
 /// being edited first, then to the page's history, which the toast's step
 /// is the top of. A failed action keeps the toast, with the error's red
-/// icon before its reason in the toast's own ink (owner, 2026-10-10). The pointer, the button's keyboard focus and VoiceOver
-/// each hold it open (`onHold`).
+/// icon before its reason in the toast's own ink (owner, 2026-10-10).
+/// The toast never takes keyboard focus; the pointer and VoiceOver hold
+/// it open (`onHold`).
 struct AtticUndoToast: View {
     let message: String
     var actionTitle: String = String(localized: "Undo")
     /// The action failed: the message is its reason, after a red icon.
     var isFailure = false
-    /// Keyboard focus or VoiceOver arrived on the toast (true) or left.
+    /// VoiceOver arrived on the toast (true) or left.
     var onHold: (AtticToastHold, Bool) -> Void = { _, _ in }
     let onUndo: () -> Void
 
@@ -42,7 +43,7 @@ struct AtticUndoToast: View {
                 AtticText(verbatim: message, style: .toast, ink: .body)
             }
                 .accessibilityFocused($voiceOverOnMessage)
-            AtticToastButton(title: actionTitle, outerRadius: radius, onFocus: { onHold(.keyboard, $0) }, action: onUndo)
+            AtticToastButton(title: actionTitle, outerRadius: radius, acceptsKeyboardFocus: false, action: onUndo)
                 .accessibilityFocused($voiceOverOnButton)
         }
         .onChange(of: voiceOverOnMessage || voiceOverOnButton) { _, focused in onHold(.accessibility, focused) }
@@ -59,6 +60,7 @@ struct AtticUndoToast: View {
 private struct AtticToastButton: View {
     let title: String
     let outerRadius: CGFloat
+    var acceptsKeyboardFocus = true
     var onFocus: (Bool) -> Void = { _ in }
     let action: () -> Void
 
@@ -68,9 +70,21 @@ private struct AtticToastButton: View {
     @FocusState private var focused: Bool
 
     var body: some View {
+        if acceptsKeyboardFocus {
+            button
+                .focused($focused)
+                .onChange(of: focused) { _, now in onFocus(now) }
+        } else {
+            // Do not register a FocusState for transient Undo chrome:
+            // SwiftUI's native key proxy would take the editor's responder.
+            button.focusable(false)
+        }
+    }
+
+    private var button: some View {
         let inner = AtticRadius.nested(outer: outerRadius, gap: AtticControlSize.capsuleInset) ?? outerRadius
         let hover = forced == .hover || hovered
-        Button(action: action) {
+        return Button(action: action) {
             AtticText(verbatim: title, style: .controlLabel, ink: .heading)
                 .padding(.horizontal, AtticToastMetrics.buttonPadding)
                 .frame(height: AtticControlSize.smallHeight)
@@ -78,8 +92,6 @@ private struct AtticToastButton: View {
                 .contentShape(RoundedRectangle(cornerRadius: inner, style: .continuous))
         }
         .buttonStyle(.plain)
-        .focused($focused)
-        .onChange(of: focused) { _, now in onFocus(now) }
         .onHover { hovered = $0 }
     }
 }
