@@ -22,6 +22,16 @@ final class NotesKeyboardUndoTests: XCTestCase {
     private final class KeyWindow: NSPanel {
         override var canBecomeKey: Bool { true }
         override func sendEvent(_ event: NSEvent) {}
+
+        override func makeFirstResponder(_ responder: NSResponder?) -> Bool {
+            let before = firstResponder
+            let result = super.makeFirstResponder(responder)
+            if before !== firstResponder {
+                print("ROUND11B_FOCUS time=\(ProcessInfo.processInfo.systemUptime) from=\(String(describing: before)) requested=\(String(describing: responder)) to=\(String(describing: firstResponder)) result=\(result)")
+                print("ROUND11B_FOCUS_STACK " + Thread.callStackSymbols.joined(separator: " | "))
+            }
+            return result
+        }
     }
 
     /// Who took a key.
@@ -216,7 +226,9 @@ final class NotesKeyboardUndoTests: XCTestCase {
         textView.insertText(" more", replacementRange: textView.selectedRange())
         var fired = 0
 
+        print("ROUND11B_TOAST before-show responder=\(String(describing: harness.window.firstResponder))")
         harness.toasts.show("Note deleted", answersUndoKey: false) { fired += 1 }
+        print("ROUND11B_TOAST after-show responder=\(String(describing: harness.window.firstResponder))")
         spin()
         assertTextUndoReady(textView, in: harness)
         XCTAssertNotNil(harness.toasts.current)

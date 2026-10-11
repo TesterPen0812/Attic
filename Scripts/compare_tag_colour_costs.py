@@ -10,11 +10,13 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("output", type=Path)
     parser.add_argument("--pairs", type=int, default=8)
+    parser.add_argument("--candidate-ref", default=REFS["colour"])
     args = parser.parse_args()
     args.output.mkdir(parents=True, exist_ok=True)
     root = Path.cwd()
     builds = {}
-    for side, ref in REFS.items():
+    refs = {**REFS, "colour": args.candidate_ref}
+    for side, ref in refs.items():
         checkout = args.output / side
         subprocess.run(["git", "worktree", "add", "--detach", str(checkout), ref], check=True)
         dd = args.output / (side + "-dd")
@@ -44,7 +46,7 @@ def main():
     for pair in range(1,args.pairs+1):
         sample = {r["side"]:r["measures"]["tagOpen"] for r in records if r["pair"] == pair}
         ratios.append(sample["colour"]["new_ms"] / sample["base"]["new_ms"])
-    summary = {"pairs": args.pairs, "colour_over_base_tag_ms": ratios, "median": statistics.median(ratios), "records": records}
+    summary = {"refs": refs, "pairs": args.pairs, "colour_over_base_tag_ms": ratios, "median": statistics.median(ratios), "records": records}
     (args.output / "summary.json").write_text(json.dumps(summary, indent=2))
     print("TAG_COLOUR_COMPARISON", json.dumps({k:v for k,v in summary.items() if k != "records"}), flush=True)
 
