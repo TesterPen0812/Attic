@@ -2713,7 +2713,7 @@ extension NotesPageController {
               !current.isImporting, !current.isConflict, !current.isReadOnly,
               current.engine.activity == .idle,
               store.note(withID: step.noteID)?.revisionID == step.restoredRevisionID else { return false }
-        return current.engine.document() == step.document
+        return current.engine.matchesContentIgnoringFolds(step.document)
             && current.engine.history.undoOps.map(ObjectIdentifier.init) == step.historyPosition
             && current.engine.tags == step.tags
     }
@@ -2740,7 +2740,7 @@ extension NotesPageController {
         if let current {
             guard current.noteID == undo.noteID, !current.isImporting, !current.isConflict, !current.isReadOnly,
                   historyBrowser == nil, canLeaveComposition(in: current),
-                  current.engine.document() == undo.document,
+                  current.engine.matchesContentIgnoringFolds(undo.document),
                   current.engine.history.undoOps.map(ObjectIdentifier.init) == undo.historyPosition,
                   store.note(withID: undo.noteID)?.revisionID == expectedRevision else { return false }
             let generation = current.editGeneration
@@ -2757,7 +2757,7 @@ extension NotesPageController {
             // Never interpret their newer save as permission to replace them.
             guard active === current, historyBrowser == nil, generation == current.editGeneration,
                   !current.isImporting, !current.isConflict, !current.isReadOnly,
-                  canLeaveComposition(in: current), current.engine.document() == undo.document,
+                  canLeaveComposition(in: current), current.engine.matchesContentIgnoringFolds(undo.document),
                   current.engine.history.undoOps.map(ObjectIdentifier.init) == undo.historyPosition,
                   current.engine.tags == tags, let latest = versionRestoreUndo,
                   latest.id == expectedID, latest.isUndo == isUndo,
@@ -2778,7 +2778,7 @@ extension NotesPageController {
                 returned.baseTags = note.tags
                 // The displaced session can receive late callbacks while retained
                 // for Undo. Its text and tags remain owned until actually saved.
-                returned.state = returned.engine.document() == store.loadDocument(noteID: undo.noteID)?.content.document
+                returned.state = returned.engine.matchesContentIgnoringFolds(store.loadDocument(noteID: undo.noteID)?.content.document)
                     && returned.engine.tags == note.tags ? .clean : .dirty
                 activate(returned)
                 if returned.state == .dirty {

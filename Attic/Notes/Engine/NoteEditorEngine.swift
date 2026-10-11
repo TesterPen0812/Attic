@@ -122,6 +122,7 @@ final class NoteEditorEngine: NSObject, NSTextViewDelegate, NSTextStorageDelegat
     private var template: NoteDocument
     var foldedHeadingIDs = Set<UUID>()
     var foldMetadataWasEdited = false
+    var foldAssignedHeadingIDs = Set<UUID>()
     var headingSectionsCache: [NoteHeadingSection]?
     var headingControls: [Int: NoteHeadingButton] = [:]
     var updatingHeadingControls = false
@@ -347,6 +348,23 @@ final class NoteEditorEngine: NSObject, NSTextViewDelegate, NSTextStorageDelegat
     }
 
     // MARK: Document
+
+    /// Restore replay checks editable content, while retaining this session's view hints.
+    /// Only identities assigned by folding are ignored; imported identities still compare.
+    func matchesContentIgnoringFolds(_ expected: NoteDocument?) -> Bool {
+        guard let expected else { return false }
+        func content(_ source: NoteDocument) -> NoteDocument {
+            var result = source
+            result.extras["foldedHeadings"] = nil
+            for index in result.blocks.indices {
+                if let id = result.blocks[index].id, foldAssignedHeadingIDs.contains(id) {
+                    result.blocks[index].id = nil
+                }
+            }
+            return result
+        }
+        return content(document()) == content(expected)
+    }
 
     func document() -> NoteDocument {
         // Display-only, additive format-1 metadata; exports use all blocks.

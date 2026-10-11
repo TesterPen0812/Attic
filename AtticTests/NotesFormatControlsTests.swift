@@ -1929,6 +1929,24 @@ final class HeadingsBehaviourTests: XCTestCase {
         XCTAssertTrue(engine.foldedHeadingIDs.isEmpty)
     }
 
+    func testR12FoldingLeavesContentUndoAndRedoIntact() {
+        let engine = NoteEditorEngine(noteID: UUID(), document: NoteDocument(blocks: [
+            .text("Title"), .text("Heading", style: "heading"), .text("Body")]))
+        let (_, text) = engine.makeView()
+        text.setSelectedRange(NSRange(location: 8, length: 0))
+        text.insertText("X", replacementRange: text.selectedRange())
+        XCTAssertTrue(engine.undoCommand())
+        let undoCount = engine.history.undoOps.count, redoCount = engine.history.redoOps.count
+        XCTAssertTrue(engine.toggleHeadingFold(at: 6))
+        XCTAssertEqual(engine.history.undoOps.count, undoCount)
+        XCTAssertEqual(engine.history.redoOps.count, redoCount)
+        XCTAssertTrue(engine.redoCommand())
+        XCTAssertEqual(engine.document().blocks[1].text, "HeXading")
+        XCTAssertTrue(engine.toggleHeadingFold(at: 6))
+        XCTAssertTrue(engine.undoCommand())
+        XCTAssertEqual(engine.document().blocks[1].text, "Heading")
+    }
+
     func testPersistedFoldSkipsNativeLayoutWithoutLosingText() {
         let id = UUID()
         var heading = NoteBlock.text("Heading", id: id, style: "heading"); heading.level = 1
@@ -2017,9 +2035,11 @@ final class HeadingsBehaviourTests: XCTestCase {
         XCTAssertTrue(NoteTextExport.plainText(engine.document()).contains("Hidden prose"))
         XCTAssertTrue(NotePrint.printView(document: engine.document()).string.contains("Hidden prose"))
         text.setSelectedRange(NSRange(location: section.heading.location + 1, length: 0))
-        XCTAssertTrue(engine.history.undo())
+        // R12-09: folds are view state, so only a toggle changes them.
+        XCTAssertFalse(engine.history.undo())
+        XCTAssertTrue(engine.toggleHeadingFold(at: section.heading.location))
         XCTAssertTrue(engine.foldedHeadingIDs.isEmpty)
-        XCTAssertTrue(engine.history.redo())
+        XCTAssertTrue(engine.toggleHeadingFold(at: section.heading.location))
         XCTAssertEqual(engine.foldedHeadingIDs, [try XCTUnwrap(h1.id)])
     }
 
@@ -2050,9 +2070,7 @@ final class HeadingsBehaviourTests: XCTestCase {
         XCTAssertTrue(engine.history.undo())
         XCTAssertEqual(engine.foldedHeadingIDs, [id])
         XCTAssertEqual(engine.document().blocks[1].text, "Heading")
-        XCTAssertTrue(engine.history.undo())
-        XCTAssertTrue(engine.foldedHeadingIDs.isEmpty)
-        XCTAssertTrue(engine.history.redo())
+        XCTAssertFalse(engine.history.undo(), "R12-09: folding creates no Undo entry")
         XCTAssertEqual(engine.foldedHeadingIDs, [id])
         XCTAssertTrue(engine.history.redo())
         XCTAssertEqual(engine.document().blocks[1].text, "Heaxding")

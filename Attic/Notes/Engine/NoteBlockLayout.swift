@@ -619,6 +619,7 @@ extension NoteEditorEngine {
             // Assign paragraph identity once. Typed characters do not copy it;
             // surviving paragraph runs keep it through edits and undo.
             textStorage.addAttribute(.noteBlockID, value: id, range: section.heading)
+            foldAssignedHeadingIDs.insert(id)
             headingSectionsCache = nil
         }
         let wasFolded = foldedHeadingIDs.contains(id)
@@ -629,9 +630,6 @@ extension NoteEditorEngine {
             textView?.setSelectedRange(NSRange(location: section.heading.location, length: 0))
         }
         setHeadingFold(id: id, folded: !wasFolded)
-        history.recordExternalChange(name: wasFolded ? "Unfold Heading" : "Fold Heading",
-            undo: { [weak self] in self?.setHeadingFold(id: id, folded: wasFolded); return self != nil },
-            redo: { [weak self] in self?.setHeadingFold(id: id, folded: !wasFolded); return self != nil })
         return true
     }
 
@@ -654,7 +652,7 @@ extension NoteEditorEngine {
         }
         invalidateLayout(NSRange(location: 0, length: textStorage.length))
         textView?.needsLayout = true
-        onTextChange?()
+        // Fold hints ride on the next content save; this view change never dirties a note.
         onCaretChange?()
     }
 

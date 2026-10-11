@@ -36,6 +36,39 @@ final class NoteHistoryBrowserTests: XCTestCase {
         return (original, id)
     }
 
+    func testR12FoldingCaretAndFindKeepTimestampHistoryAndRestoreRedo() async throws {
+        for route in ["toggle", "caret", "find"] {
+            var heading = NoteBlock.text("Section", style: "heading")
+            heading.level = 1
+            guard case let .success((id, _)) = store.createDocumentNote(id: UUID(),
+                document: NoteDocument(blocks: [.text("Title"), heading, .text("Needle")])) else { return XCTFail() }
+            await XCTAssertTrueAsync(await controller.openDurably(noteID: id))
+            XCTAssertTrue(store.recordVersion(noteID: id, reason: .pause))
+            try type(" latest")
+            await XCTAssertTrueAsync(await controller.openHistoryDurably())
+            let original = try XCTUnwrap(controller.active)
+            await XCTAssertTrueAsync(await controller.restoreHistoryVersionDurably())
+            await XCTAssertTrueAsync(await controller.undoVersionRestoreDurably(expectedID: controller.versionRestoreUndoID))
+            XCTAssertTrue(controller.active === original)
+            let engine = original.engine
+            let (_, text) = engine.makeView()
+            let timestamp = try XCTUnwrap(store.note(withID: id)).updatedAt
+            let undoCount = engine.history.undoOps.count, redoCount = engine.history.redoOps.count
+            XCTAssertTrue(engine.toggleHeadingFold(at: 6))
+            if route == "toggle" { XCTAssertTrue(engine.toggleHeadingFold(at: 6)) }
+            else if route == "caret" { text.setSelectedRange(NSRange(location: 14, length: 0)) }
+            else { engine.find.show(); engine.find.query = "Needle" }
+            XCTAssertTrue(engine.foldedHeadingIDs.isEmpty, route)
+            XCTAssertEqual(engine.history.undoOps.count, undoCount, route)
+            XCTAssertEqual(engine.history.redoOps.count, redoCount, route)
+            XCTAssertEqual(original.state, .clean, route)
+            await XCTAssertTrueAsync(await controller.preserveAllDurably())
+            XCTAssertEqual(store.note(withID: id)?.updatedAt, timestamp, route)
+            await XCTAssertTrueAsync(await controller.redoVersionRestoreDurably())
+            XCTAssertEqual(controller.active?.engine.document().blocks.last?.text, "Needle", route)
+        }
+    }
+
     func testNavigationIsReadOnlyNamesMissingTextAndKeepsLiveUndo() async throws {
         let (original, _) = try await history()
         let browser = try XCTUnwrap(controller.historyBrowser)
