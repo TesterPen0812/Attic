@@ -1,0 +1,1200 @@
+{
+  "bundle": "com.taha.Attic.preview.phasex",
+  "app": "/Users/taha/Developer/attic-px-mem/.build/CountSmoothStates.app",
+  "counts": {
+    "after": {
+      "accepts_first_responder_views": 4,
+      "app_key_is_panel": true,
+      "hosting_roots": 1,
+      "key_loop_views": 32,
+      "layer_backed_views": 39,
+      "panel_is_key": true,
+      "root_types": [
+        "Attic.AtticPanelHostingView"
+      ],
+      "view_tree": [
+        {
+          "frame": "{{0, 0}, {376, 516}}",
+          "hidden": false,
+          "layer_backed": false,
+          "parent": "NSNextStepFrame",
+          "type": "Attic.AtticPanelContentContainer"
+        },
+        {
+          "frame": "{{0, 0}, {376, 516}}",
+          "hidden": false,
+          "layer_backed": true,
+          "parent": "Attic.AtticPanelContentContainer",
+          "type": "NSView"
+        },
+        {
+          "frame": "{{28, 28}, {320, 460}}",
+          "hidden": false,
+          "layer_backed": true,
+          "parent": "NSView",
+          "type": "Attic.AtticPanelHostingView"
+        },
+        {
+          "frame": "{{160, 230}, {0, 0}}",
+          "hidden": false,
+          "layer_backed": true,
+          "parent": "Attic.AtticPanelHostingView",
+          "type": "SwiftUI.AppKitPlatformViewHost<SwiftUI.(unknown context at $1cbb2f508).PlatformViewRepresentableAdaptor<Attic.(unknown context at $101645d68).AtticWindowAppearanceSetter>>"
+        },
+        {
+          "frame": "{{0, 0}, {0, 0}}",
+          "hidden": false,
+          "layer_backed": false,
+          "parent": "SwiftUI.AppKitPlatformViewHost<SwiftUI.(unknown context at $1cbb2f508).PlatformViewRepresentableAdaptor<Attic.(unknown context at $101645d68).AtticWindowAppearanceSetter>>",
+          "type": "Attic.AtticWindowAppearanceView"
+        },
+        {
+          "frame": "{{0, 0}, {320, 460}}",
+          "hidden": false,
+          "layer_backed": true,
+          "parent": "Attic.AtticPanelHostingView",
+          "type": "SwiftUI._NSGraphicsView"
+        },
+        {
+          "frame": "{{0, 0}, {320, 460}}",
+          "hidden": false,
+          "layer_backed": true,
+          "parent": "SwiftUI._NSGraphicsView",
+          "type": "SwiftUI.AppKitPlatformViewHost<SwiftUI.(unknown context at $1cbb2f508).PlatformViewRepresentableAdaptor<Attic.(unknown context at $10164baa8).TasksPointerProbe>>"
+        },
+        {
+          "frame": "{{0, 0}, {320, 460}}",
+          "hidden": false,
+          "layer_backed": false,
+          "parent": "SwiftUI.AppKitPlatformViewHost<SwiftUI.(unknown context at $1cbb2f508).PlatformViewRepresentableAdaptor<Attic.(unknown context at $10164baa8).TasksPointerProbe>>",
+          "type": "Attic.(unknown context at $10164baa8).TasksPointerProbe.ProbeView"
+        },
+        {
+          "frame": "{{0, 0}, {320, 460}}",
+          "hidden": false,
+          "layer_backed": true,
+          "parent": "Attic.AtticPanelHostingView",
+          "type": "SwiftUI._NSGraphicsView"
+        },
+        {
+          "frame": "{{0, 0}, {320, 460}}",
+          "hidden": false,
+          "layer_backed": true,
+          "parent": "SwiftUI._NSGraphicsView",
+          "type": "SwiftUI.AppKitPlatformViewHost<SwiftUI.(unknown context at $1cbb2f508).PlatformViewRepresentableAdaptor<SwiftUI.(unknown context at $1cbb3a444).DraggingDestinationView>>"
+        },
+        {
+          "frame": "{{0, 0}, {320, 460}}",
+          "hidden": false,
+          "layer_backed": true,
+          "parent": "SwiftUI.AppKitPlatformViewHost<SwiftUI.(unknown context at $1cbb2f508).PlatformViewRepresentableAdaptor<SwiftUI.(unknown context at $1cbb3a444).DraggingDestinationView>>",
+          "type": "SwiftUI.(unknown context at $1cbb39ffc)._PlatformDraggingDestinationView"
+        },
+        {
+          "frame": "{{0, 0}, {296, 460}}",
+          "hidden": false,
+          "layer_backed": true,
+          "parent": "Attic.AtticPanelHostingView",
+          "type": "SwiftUI._NSGraphicsView"
+        },
+        {
+          "frame": "{{12, 0}, {296, 460}}",
+          "hidden": false,
+          "layer_backed": true,
+          "parent": "SwiftUI._NSGraphicsView",
+          "type": "SwiftUI._NSGraphicsView"
+        },
+        {
+          "frame": "{{0, 0}, {296, 460}}",
+          "hidden": false,
+          "layer_backed": true,
+          "parent": "SwiftUI._NSGraphicsView",
+          "type": "SwiftUI._NSGraphicsView"
+        },
+        {
+          "frame": "{{0, 0}, {296, 460}}",
+          "hidden": false,
+          "layer_backed": true,
+          "parent": "SwiftUI._NSGraphicsView",
+          "type": "SwiftUI.HostingScrollView.PlatformContainer"
+        },
+        {
+          "frame": "{{0, 0}, {296, 460}}",
+          "hidden": false,
+          "layer_backed": false,
+          "parent": "SwiftUI.HostingScrollView.PlatformContainer",
+          "type": "SwiftUI.HostingScrollView"
+        },
+        {
+          "frame": "{{0, 0}, {296, 460}}",
+          "hidden": false,
+          "layer_backed": false,
+          "parent": "SwiftUI.HostingScrollView",
+          "type": "SwiftUI.HostingClipView"
+        },
+        {
+          "frame": "{{0, 0}, {296, 86}}",
+          "hidden": false,
+          "layer_backed": false,
+          "parent": "SwiftUI.HostingClipView",
+          "type": "SwiftUI.(unknown context at $1cbb583a8).DocumentView"
+        },
+        {
+          "frame": "{{0, 0}, {296, 86}}",
+          "hidden": false,
+          "layer_backed": true,
+          "parent": "SwiftUI.(unknown context at $1cbb583a8).DocumentView",
+          "type": "SwiftUI.HostingScrollView.PlatformGroupContainer"
+        },
+        {
+          "frame": "{{0, 0}, {296, 34}}",
+          "hidden": false,
+          "layer_backed": true,
+          "parent": "SwiftUI.HostingScrollView.PlatformGroupContainer",
+          "type": "SwiftUI.AppKitPlatformViewHost<SwiftUI.(unknown context at $1cbb2f508).PlatformViewRepresentableAdaptor<Attic.TasksScrollKeeper>>"
+        },
+        {
+          "frame": "{{0, 0}, {296, 34}}",
+          "hidden": false,
+          "layer_backed": false,
+          "parent": "SwiftUI.AppKitPlatformViewHost<SwiftUI.(unknown context at $1cbb2f508).PlatformViewRepresentableAdaptor<Attic.TasksScrollKeeper>>",
+          "type": "Attic.TasksScrollKeeper.KeeperView"
+        },
+        {
+          "frame": "{{0, 0}, {0, 100}}",
+          "hidden": true,
+          "layer_backed": true,
+          "parent": "SwiftUI.HostingScrollView",
+          "type": "NSScroller"
+        },
+        {
+          "frame": "{{0, 0}, {296, 460}}",
+          "hidden": false,
+          "layer_backed": true,
+          "parent": "Attic.AtticPanelHostingView",
+          "type": "SwiftUI._NSGraphicsView"
+        },
+        {
+          "frame": "{{332, 0}, {296, 460}}",
+          "hidden": false,
+          "layer_backed": true,
+          "parent": "SwiftUI._NSGraphicsView",
+          "type": "SwiftUI._NSGraphicsView"
+        },
+        {
+          "frame": "{{0, 0}, {296, 460}}",
+          "hidden": false,
+          "layer_backed": true,
+          "parent": "SwiftUI._NSGraphicsView",
+          "type": "SwiftUI._NSGraphicsView"
+        },
+        {
+          "frame": "{{0, 0}, {296, 460}}",
+          "hidden": false,
+          "layer_backed": true,
+          "parent": "SwiftUI._NSGraphicsView",
+          "type": "SwiftUI.HostingScrollView.PlatformContainer"
+        },
+        {
+          "frame": "{{0, 0}, {296, 460}}",
+          "hidden": true,
+          "layer_backed": false,
+          "parent": "SwiftUI.HostingScrollView.PlatformContainer",
+          "type": "SwiftUI.HostingScrollView"
+        },
+        {
+          "frame": "{{0, 0}, {296, 460}}",
+          "hidden": false,
+          "layer_backed": false,
+          "parent": "SwiftUI.HostingScrollView",
+          "type": "SwiftUI.HostingClipView"
+        },
+        {
+          "frame": "{{0, 0}, {296, 86}}",
+          "hidden": false,
+          "layer_backed": false,
+          "parent": "SwiftUI.HostingClipView",
+          "type": "SwiftUI.(unknown context at $1cbb583a8).DocumentView"
+        },
+        {
+          "frame": "{{0, 0}, {296, 86}}",
+          "hidden": false,
+          "layer_backed": true,
+          "parent": "SwiftUI.(unknown context at $1cbb583a8).DocumentView",
+          "type": "SwiftUI.HostingScrollView.PlatformGroupContainer"
+        },
+        {
+          "frame": "{{0, 0}, {296, 34}}",
+          "hidden": false,
+          "layer_backed": true,
+          "parent": "SwiftUI.HostingScrollView.PlatformGroupContainer",
+          "type": "SwiftUI.AppKitPlatformViewHost<SwiftUI.(unknown context at $1cbb2f508).PlatformViewRepresentableAdaptor<Attic.TasksScrollKeeper>>"
+        },
+        {
+          "frame": "{{0, 0}, {296, 34}}",
+          "hidden": false,
+          "layer_backed": false,
+          "parent": "SwiftUI.AppKitPlatformViewHost<SwiftUI.(unknown context at $1cbb2f508).PlatformViewRepresentableAdaptor<Attic.TasksScrollKeeper>>",
+          "type": "Attic.TasksScrollKeeper.KeeperView"
+        },
+        {
+          "frame": "{{0, 0}, {0, 100}}",
+          "hidden": true,
+          "layer_backed": true,
+          "parent": "SwiftUI.HostingScrollView",
+          "type": "NSScroller"
+        },
+        {
+          "frame": "{{0, 0}, {296, 460}}",
+          "hidden": false,
+          "layer_backed": true,
+          "parent": "Attic.AtticPanelHostingView",
+          "type": "SwiftUI._NSGraphicsView"
+        },
+        {
+          "frame": "{{652, 0}, {296, 460}}",
+          "hidden": false,
+          "layer_backed": true,
+          "parent": "SwiftUI._NSGraphicsView",
+          "type": "SwiftUI._NSGraphicsView"
+        },
+        {
+          "frame": "{{0, 0}, {296, 460}}",
+          "hidden": false,
+          "layer_backed": true,
+          "parent": "SwiftUI._NSGraphicsView",
+          "type": "SwiftUI._NSGraphicsView"
+        },
+        {
+          "frame": "{{0, 0}, {296, 460}}",
+          "hidden": false,
+          "layer_backed": true,
+          "parent": "SwiftUI._NSGraphicsView",
+          "type": "SwiftUI.HostingScrollView.PlatformContainer"
+        },
+        {
+          "frame": "{{0, 0}, {296, 460}}",
+          "hidden": true,
+          "layer_backed": false,
+          "parent": "SwiftUI.HostingScrollView.PlatformContainer",
+          "type": "SwiftUI.HostingScrollView"
+        },
+        {
+          "frame": "{{0, 0}, {296, 460}}",
+          "hidden": false,
+          "layer_backed": false,
+          "parent": "SwiftUI.HostingScrollView",
+          "type": "SwiftUI.HostingClipView"
+        },
+        {
+          "frame": "{{0, 0}, {296, 86}}",
+          "hidden": false,
+          "layer_backed": false,
+          "parent": "SwiftUI.HostingClipView",
+          "type": "SwiftUI.(unknown context at $1cbb583a8).DocumentView"
+        },
+        {
+          "frame": "{{0, 0}, {296, 86}}",
+          "hidden": false,
+          "layer_backed": true,
+          "parent": "SwiftUI.(unknown context at $1cbb583a8).DocumentView",
+          "type": "SwiftUI.HostingScrollView.PlatformGroupContainer"
+        },
+        {
+          "frame": "{{0, 0}, {296, 86}}",
+          "hidden": false,
+          "layer_backed": true,
+          "parent": "SwiftUI.HostingScrollView.PlatformGroupContainer",
+          "type": "SwiftUI.AppKitPlatformViewHost<SwiftUI.(unknown context at $1cbb2f508).PlatformViewRepresentableAdaptor<Attic.TasksScrollKeeper>>"
+        },
+        {
+          "frame": "{{0, 0}, {296, 86}}",
+          "hidden": false,
+          "layer_backed": false,
+          "parent": "SwiftUI.AppKitPlatformViewHost<SwiftUI.(unknown context at $1cbb2f508).PlatformViewRepresentableAdaptor<Attic.TasksScrollKeeper>>",
+          "type": "Attic.TasksScrollKeeper.KeeperView"
+        },
+        {
+          "frame": "{{0, 0}, {0, 100}}",
+          "hidden": true,
+          "layer_backed": true,
+          "parent": "SwiftUI.HostingScrollView",
+          "type": "NSScroller"
+        },
+        {
+          "frame": "{{12, 0}, {32, 28}}",
+          "hidden": false,
+          "layer_backed": true,
+          "parent": "Attic.AtticPanelHostingView",
+          "type": "SwiftUI._NSGraphicsView"
+        },
+        {
+          "frame": "{{257.5, 62}, {32, 28}}",
+          "hidden": false,
+          "layer_backed": true,
+          "parent": "SwiftUI._NSGraphicsView",
+          "type": "SwiftUI.AppKitPlatformViewHost<SwiftUI.(unknown context at $1cbb2f508).PlatformViewRepresentableAdaptor<Attic.AtticMenuAnchor>>"
+        },
+        {
+          "frame": "{{0, 0}, {32, 28}}",
+          "hidden": false,
+          "layer_backed": false,
+          "parent": "SwiftUI.AppKitPlatformViewHost<SwiftUI.(unknown context at $1cbb2f508).PlatformViewRepresentableAdaptor<Attic.AtticMenuAnchor>>",
+          "type": "Attic.AtticMenuAnchor.AnchorView"
+        },
+        {
+          "frame": "{{269.5, 62}, {32, 28}}",
+          "hidden": false,
+          "layer_backed": true,
+          "parent": "Attic.AtticPanelHostingView",
+          "type": "SwiftUI._NSGraphicsView"
+        },
+        {
+          "frame": "{{0, 0}, {32, 28}}",
+          "hidden": false,
+          "layer_backed": true,
+          "parent": "SwiftUI._NSGraphicsView",
+          "type": "SwiftUI.AppKitPlatformViewHost<SwiftUI.(unknown context at $1cbb2f508).PlatformViewRepresentableAdaptor<Attic.AtticMenuAnchor>>"
+        },
+        {
+          "frame": "{{0, 0}, {32, 28}}",
+          "hidden": false,
+          "layer_backed": false,
+          "parent": "SwiftUI.AppKitPlatformViewHost<SwiftUI.(unknown context at $1cbb2f508).PlatformViewRepresentableAdaptor<Attic.AtticMenuAnchor>>",
+          "type": "Attic.AtticMenuAnchor.AnchorView"
+        },
+        {
+          "frame": "{{56, 418}, {212, 20}}",
+          "hidden": false,
+          "layer_backed": true,
+          "parent": "Attic.AtticPanelHostingView",
+          "type": "SwiftUI._NSGraphicsView"
+        },
+        {
+          "frame": "{{0, 0}, {212, 20}}",
+          "hidden": false,
+          "layer_backed": true,
+          "parent": "SwiftUI._NSGraphicsView",
+          "type": "SwiftUI.AppKitPlatformViewHost<SwiftUI.(unknown context at $1cbb2f508).PlatformViewRepresentableAdaptor<Attic.AtticTokenField>>"
+        },
+        {
+          "frame": "{{0, 0}, {212, 20}}",
+          "hidden": false,
+          "layer_backed": false,
+          "parent": "SwiftUI.AppKitPlatformViewHost<SwiftUI.(unknown context at $1cbb2f508).PlatformViewRepresentableAdaptor<Attic.AtticTokenField>>",
+          "type": "Attic.AtticTokenFieldView"
+        },
+        {
+          "frame": "{{0, 0}, {212, 20}}",
+          "hidden": false,
+          "layer_backed": false,
+          "parent": "Attic.AtticTokenFieldView",
+          "type": "NSScrollView"
+        },
+        {
+          "frame": "{{0, 0}, {212, 20}}",
+          "hidden": false,
+          "layer_backed": false,
+          "parent": "NSScrollView",
+          "type": "NSClipView"
+        },
+        {
+          "frame": "{{0, 0}, {212, 20}}",
+          "hidden": false,
+          "layer_backed": false,
+          "parent": "NSClipView",
+          "type": "Attic.AtticTokenTextView"
+        },
+        {
+          "frame": "{{32, 32}, {0, 0}}",
+          "hidden": false,
+          "layer_backed": true,
+          "parent": "Attic.AtticPanelHostingView",
+          "type": "SwiftUI._NSGraphicsView"
+        },
+        {
+          "frame": "{{0, 0}, {0, 0}}",
+          "hidden": false,
+          "layer_backed": true,
+          "parent": "SwiftUI._NSGraphicsView",
+          "type": "SwiftUI.(unknown context at $1cbb20274)._FocusRingView"
+        },
+        {
+          "frame": "{{32, 32}, {0, 0}}",
+          "hidden": false,
+          "layer_backed": true,
+          "parent": "Attic.AtticPanelHostingView",
+          "type": "SwiftUI._NSGraphicsView"
+        },
+        {
+          "frame": "{{0, 0}, {0, 0}}",
+          "hidden": false,
+          "layer_backed": true,
+          "parent": "SwiftUI._NSGraphicsView",
+          "type": "SwiftUI.(unknown context at $1cbb20274)._FocusRingView"
+        },
+        {
+          "frame": "{{16, 16}, {32, 32}}",
+          "hidden": false,
+          "layer_backed": false,
+          "parent": "Attic.AtticPanelHostingView",
+          "type": "SwiftUI.KeyViewProxy"
+        },
+        {
+          "frame": "{{272, 16}, {32, 32}}",
+          "hidden": false,
+          "layer_backed": false,
+          "parent": "Attic.AtticPanelHostingView",
+          "type": "SwiftUI.KeyViewProxy"
+        },
+        {
+          "frame": "{{28, 68}, {115.5, 16}}",
+          "hidden": false,
+          "layer_backed": false,
+          "parent": "Attic.AtticPanelHostingView",
+          "type": "SwiftUI.KeyViewProxy"
+        },
+        {
+          "frame": "{{237.5, 62}, {32, 28}}",
+          "hidden": false,
+          "layer_backed": false,
+          "parent": "Attic.AtticPanelHostingView",
+          "type": "SwiftUI.KeyViewProxy"
+        },
+        {
+          "frame": "{{269.5, 62}, {32, 28}}",
+          "hidden": false,
+          "layer_backed": false,
+          "parent": "Attic.AtticPanelHostingView",
+          "type": "SwiftUI.KeyViewProxy"
+        },
+        {
+          "frame": "{{12.779999999999999, 409.51999999999998}, {62.099999999999994, 25.759999999999991}}",
+          "hidden": false,
+          "layer_backed": false,
+          "parent": "Attic.AtticPanelHostingView",
+          "type": "SwiftUI.KeyViewProxy"
+        },
+        {
+          "frame": "{{78.560000000000002, 409.51999999999998}, {57.04000000000002, 25.759999999999991}}",
+          "hidden": false,
+          "layer_backed": false,
+          "parent": "Attic.AtticPanelHostingView",
+          "type": "SwiftUI.KeyViewProxy"
+        },
+        {
+          "frame": "{{139.28, 409.51999999999998}, {75.439999999999998, 25.759999999999991}}",
+          "hidden": false,
+          "layer_backed": false,
+          "parent": "Attic.AtticPanelHostingView",
+          "type": "SwiftUI.KeyViewProxy"
+        }
+      ],
+      "view_types": {
+        "Attic.(unknown context at $10164baa8).TasksPointerProbe.ProbeView": 1,
+        "Attic.AtticMenuAnchor.AnchorView": 2,
+        "Attic.AtticPanelContentContainer": 1,
+        "Attic.AtticPanelHostingView": 1,
+        "Attic.AtticTokenFieldView": 1,
+        "Attic.AtticTokenTextView": 1,
+        "Attic.AtticWindowAppearanceView": 1,
+        "Attic.TasksScrollKeeper.KeeperView": 3,
+        "NSClipView": 1,
+        "NSScroller": 3,
+        "NSScrollView": 1,
+        "NSView": 1,
+        "SwiftUI._NSGraphicsView": 16,
+        "SwiftUI.(unknown context at $1cbb39ffc)._PlatformDraggingDestinationView": 1,
+        "SwiftUI.(unknown context at $1cbb583a8).DocumentView": 3,
+        "SwiftUI.(unknown context at $1cbb20274)._FocusRingView": 2,
+        "SwiftUI.AppKitPlatformViewHost<SwiftUI.(unknown context at $1cbb2f508).PlatformViewRepresentableAdaptor<Attic.(unknown context at $10164baa8).TasksPointerProbe>>": 1,
+        "SwiftUI.AppKitPlatformViewHost<SwiftUI.(unknown context at $1cbb2f508).PlatformViewRepresentableAdaptor<Attic.(unknown context at $101645d68).AtticWindowAppearanceSetter>>": 1,
+        "SwiftUI.AppKitPlatformViewHost<SwiftUI.(unknown context at $1cbb2f508).PlatformViewRepresentableAdaptor<Attic.AtticMenuAnchor>>": 2,
+        "SwiftUI.AppKitPlatformViewHost<SwiftUI.(unknown context at $1cbb2f508).PlatformViewRepresentableAdaptor<Attic.AtticTokenField>>": 1,
+        "SwiftUI.AppKitPlatformViewHost<SwiftUI.(unknown context at $1cbb2f508).PlatformViewRepresentableAdaptor<Attic.TasksScrollKeeper>>": 3,
+        "SwiftUI.AppKitPlatformViewHost<SwiftUI.(unknown context at $1cbb2f508).PlatformViewRepresentableAdaptor<SwiftUI.(unknown context at $1cbb3a444).DraggingDestinationView>>": 1,
+        "SwiftUI.HostingClipView": 3,
+        "SwiftUI.HostingScrollView": 3,
+        "SwiftUI.HostingScrollView.PlatformContainer": 3,
+        "SwiftUI.HostingScrollView.PlatformGroupContainer": 3,
+        "SwiftUI.KeyViewProxy": 8
+      },
+      "views": 68
+    },
+    "available_selectors": [
+      "AppKit.NSCoreHostingViewBase.externalEnvironmentDidChange v16@0:8",
+      "AppKit.OrbitalColorView.viewDidChangeEffectiveAppearance v16@0:8",
+      "AppKit._NSCampoTextFormattingBackgroundView.viewDidChangeEffectiveAppearance v16@0:8",
+      "AppKit._NSRefreshControlProgressIndicator.viewDidChangeEffectiveAppearance v16@0:8",
+      "AppKit._NSSoftOutlineView.viewDidChangeEffectiveAppearance v16@0:8",
+      "Attic.CanvasNSView.viewDidChangeEffectiveAppearance v16@0:8",
+      "CNTabSegmentedControl.viewDidChangeEffectiveAppearance v16@0:8",
+      "MSVSQLDatabaseTransaction.commit B16@0:8",
+      "NSAppearance.appearanceByApplyingTintColor: @24@0:8@16",
+      "NSBuiltinAppearance.appearanceByApplyingTintColor: @24@0:8@16",
+      "NSCollectionView.viewDidChangeEffectiveAppearance v16@0:8",
+      "NSColorAppearanceTintedModifier.colorByApplyingToColor: @24@0:8@16",
+      "NSCompositeAppearance.appearanceByApplyingTintColor: @24@0:8@16",
+      "NSControl.viewDidChangeEffectiveAppearance v16@0:8",
+      "NSGlassEffectView.viewDidChangeEffectiveAppearance v16@0:8",
+      "NSHardPocketView.viewDidChangeEffectiveAppearance v16@0:8",
+      "NSPopoverFrame.viewDidChangeEffectiveAppearance v16@0:8",
+      "NSRemoteView.viewDidChangeEffectiveAppearance v16@0:8",
+      "NSSceneHostingView.viewDidChangeEffectiveAppearance v16@0:8",
+      "NSScrollPocket.viewDidChangeEffectiveAppearance v16@0:8",
+      "NSScrollView.viewDidChangeEffectiveAppearance v16@0:8",
+      "NSScrubberItemView.viewDidChangeEffectiveAppearance v16@0:8",
+      "NSSegmentItemBezelView.viewDidChangeEffectiveAppearance v16@0:8",
+      "NSSegmentItemImageView.viewDidChangeEffectiveAppearance v16@0:8",
+      "NSSegmentItemLabelView.viewDidChangeEffectiveAppearance v16@0:8",
+      "NSSegmentItemView.viewDidChangeEffectiveAppearance v16@0:8",
+      "NSStatusItemHostingView.viewDidChangeEffectiveAppearance v16@0:8",
+      "NSTabBarNewTabButton.viewDidChangeEffectiveAppearance v16@0:8",
+      "NSTabBarTrackInversionView.viewDidChangeEffectiveAppearance v16@0:8",
+      "NSTableRowView.viewDidChangeEffectiveAppearance v16@0:8",
+      "NSTableView.viewDidChangeEffectiveAppearance v16@0:8",
+      "NSTableViewActionButton.viewDidChangeEffectiveAppearance v16@0:8",
+      "NSTextView.viewDidChangeEffectiveAppearance v16@0:8",
+      "NSThemeFrame.viewDidChangeEffectiveAppearance v16@0:8",
+      "NSTitlebarContainerView.viewDidChangeEffectiveAppearance v16@0:8",
+      "NSToolbarClippedItemsIndicator.viewDidChangeEffectiveAppearance v16@0:8",
+      "NSToolbarFullScreenContentView.viewDidChangeEffectiveAppearance v16@0:8",
+      "NSToolbarView.viewDidChangeEffectiveAppearance v16@0:8",
+      "NSView.viewDidChangeEffectiveAppearance v16@0:8",
+      "NSVisualEffectView.viewDidChangeEffectiveAppearance v16@0:8",
+      "NSWindowSharingSessionRecipientIndicator.viewDidChangeEffectiveAppearance v16@0:8",
+      "PDFView.viewDidChangeEffectiveAppearance v16@0:8",
+      "PKGCoreUITransaction.commit v16@0:8",
+      "PKTextAttachmentDrawingView.viewDidChangeEffectiveAppearance v16@0:8",
+      "QCSCN_Transaction.commit v16@0:8",
+      "QLIndexSheetView.viewDidChangeEffectiveAppearance v16@0:8",
+      "QLOverlayBorderView.viewDidChangeEffectiveAppearance v16@0:8",
+      "QLOverlayView.viewDidChangeEffectiveAppearance v16@0:8",
+      "QLPreviewPageNavigationView.viewDidChangeEffectiveAppearance v16@0:8",
+      "QLPreviewView.viewDidChangeEffectiveAppearance v16@0:8",
+      "SFAuthorizationView.viewDidChangeEffectiveAppearance v16@0:8",
+      "STCAPackageView.viewDidChangeEffectiveAppearance v16@0:8",
+      "SwiftUI.NSHostingViewFocusProxy.preferredFocusEnvironments @16@0:8",
+      "TKTokenConfigurationTransaction.commit v16@0:8",
+      "VKCGlassContentView.viewDidChangeEffectiveAppearance v16@0:8",
+      "WKView.viewDidChangeEffectiveAppearance v16@0:8",
+      "WKWebView.viewDidChangeEffectiveAppearance v16@0:8",
+      "WebView.viewDidChangeEffectiveAppearance v16@0:8",
+      "_MSVSQLDatabaseTransactionSavepoint.commit B16@0:8",
+      "_NSSplitViewItemAccessoryViewWrapper.viewDidChangeEffectiveAppearance v16@0:8",
+      "_NSSplitViewItemViewWrapper.viewDidChangeEffectiveAppearance v16@0:8",
+      "_NSTextViewportSelectionLineView.viewDidChangeEffectiveAppearance v16@0:8",
+      "_NSThemeLockButton.viewDidChangeEffectiveAppearance v16@0:8",
+      "_NSTouchBarGroupButton.viewDidChangeEffectiveAppearance v16@0:8",
+      "_TtC6AppKitP33_3D641B2843142AA8DCCE043DDCE6387B34_NSAppearanceBasedVisualEffectView.viewDidChangeEffectiveAppearance v16@0:8",
+      "_TtC6AppKitP33_C7B8466D3EAE829EF20F43530A1CD21C24NSSubduedGlassEffectView.viewDidChangeEffectiveAppearance v16@0:8",
+      "_TtC6AppKitP33_EC3F85FAB7755D56E669206D2B17725B26_NSLayerBasedFillColorView.viewDidChangeEffectiveAppearance v16@0:8",
+      "_TtCC6AppKit14NSScrollPocketP33_EC3F85FAB7755D56E669206D2B17725B19LuminanceAdjustment.viewDidChangeEffectiveAppearance v16@0:8",
+      "_TtCC7SwiftUI17HostingScrollView10FocusProxy.preferredFocusEnvironments @16@0:8",
+      "_TtCE6AppKitCSo17NSGlassEffectViewP33_92F0BB6107B916AA04C9A991F505A16417ContentHolderView.viewDidChangeEffectiveAppearance v16@0:8",
+      "_TtCO6AppKit14IntelligenceUI15PromptEntryView.viewDidChangeEffectiveAppearance v16@0:8",
+      "_TtCV7SwiftUI19AppKitPocketElement13ContainerView.viewDidChangeEffectiveAppearance v16@0:8",
+      "_TtCV7SwiftUIP33_2144E363A5C573328950F48844B228C423AppKitPocketContainerV813ContainerView.viewDidChangeEffectiveAppearance v16@0:8",
+      "_TtGC6AppKit18_NSCoreHostingViewVS_15ThemeWidgetView_.viewDidChangeEffectiveAppearance v16@0:8",
+      "_TtGC6AppKit18_NSCoreHostingViewVS_22AppKitSegmentedControl_.viewDidChangeEffectiveAppearance v16@0:8",
+      "_TtGC6AppKit18_NSCoreHostingViewVS_P10$197b3525012AppKitSwitch_.viewDidChangeEffectiveAppearance v16@0:8",
+      "_TtGC7SwiftUI13NSHostingViewV5Attic12SettingsView_.globalEnvironmentDidChange v16@0:8",
+      "_TtGC7SwiftUI13NSHostingViewV5Attic12SettingsView_.viewDidChangeEffectiveAppearance v16@0:8",
+      "_TtGC7SwiftUI13NSHostingViewV5Attic14AtticPanelView_.globalEnvironmentDidChange v16@0:8",
+      "_TtGC7SwiftUI13NSHostingViewV5Attic14AtticPanelView_.viewDidChangeEffectiveAppearance v16@0:8",
+      "_TtGC7SwiftUI13NSHostingViewVOS_20_IntelligenceSupport22AnimatingSummarySymbol_.globalEnvironmentDidChange v16@0:8",
+      "_TtGC7SwiftUI13NSHostingViewVOS_20_IntelligenceSupport22AnimatingSummarySymbol_.viewDidChangeEffectiveAppearance v16@0:8",
+      "_TtGC7SwiftUI13NSHostingViewVS_7AnyView_.globalEnvironmentDidChange v16@0:8",
+      "_TtGC7SwiftUI13NSHostingViewVS_7AnyView_.viewDidChangeEffectiveAppearance v16@0:8"
+    ],
+    "before": {
+      "accepts_first_responder_views": 3,
+      "app_key_is_panel": false,
+      "hosting_roots": 1,
+      "key_loop_views": 1,
+      "layer_backed_views": 39,
+      "panel_is_key": false,
+      "root_types": [
+        "Attic.AtticPanelHostingView"
+      ],
+      "view_tree": [
+        {
+          "frame": "{{0, 0}, {376, 516}}",
+          "hidden": false,
+          "layer_backed": false,
+          "parent": "NSNextStepFrame",
+          "type": "Attic.AtticPanelContentContainer"
+        },
+        {
+          "frame": "{{0, 0}, {376, 516}}",
+          "hidden": false,
+          "layer_backed": true,
+          "parent": "Attic.AtticPanelContentContainer",
+          "type": "NSView"
+        },
+        {
+          "frame": "{{28, 28}, {320, 460}}",
+          "hidden": false,
+          "layer_backed": true,
+          "parent": "NSView",
+          "type": "Attic.AtticPanelHostingView"
+        },
+        {
+          "frame": "{{160, 230}, {0, 0}}",
+          "hidden": false,
+          "layer_backed": true,
+          "parent": "Attic.AtticPanelHostingView",
+          "type": "SwiftUI.AppKitPlatformViewHost<SwiftUI.(unknown context at $1cbb2f508).PlatformViewRepresentableAdaptor<Attic.(unknown context at $101645d68).AtticWindowAppearanceSetter>>"
+        },
+        {
+          "frame": "{{0, 0}, {0, 0}}",
+          "hidden": false,
+          "layer_backed": false,
+          "parent": "SwiftUI.AppKitPlatformViewHost<SwiftUI.(unknown context at $1cbb2f508).PlatformViewRepresentableAdaptor<Attic.(unknown context at $101645d68).AtticWindowAppearanceSetter>>",
+          "type": "Attic.AtticWindowAppearanceView"
+        },
+        {
+          "frame": "{{0, 0}, {320, 460}}",
+          "hidden": false,
+          "layer_backed": true,
+          "parent": "Attic.AtticPanelHostingView",
+          "type": "SwiftUI._NSGraphicsView"
+        },
+        {
+          "frame": "{{0, 0}, {320, 460}}",
+          "hidden": false,
+          "layer_backed": true,
+          "parent": "SwiftUI._NSGraphicsView",
+          "type": "SwiftUI.AppKitPlatformViewHost<SwiftUI.(unknown context at $1cbb2f508).PlatformViewRepresentableAdaptor<Attic.(unknown context at $10164baa8).TasksPointerProbe>>"
+        },
+        {
+          "frame": "{{0, 0}, {320, 460}}",
+          "hidden": false,
+          "layer_backed": false,
+          "parent": "SwiftUI.AppKitPlatformViewHost<SwiftUI.(unknown context at $1cbb2f508).PlatformViewRepresentableAdaptor<Attic.(unknown context at $10164baa8).TasksPointerProbe>>",
+          "type": "Attic.(unknown context at $10164baa8).TasksPointerProbe.ProbeView"
+        },
+        {
+          "frame": "{{0, 0}, {320, 460}}",
+          "hidden": false,
+          "layer_backed": true,
+          "parent": "Attic.AtticPanelHostingView",
+          "type": "SwiftUI._NSGraphicsView"
+        },
+        {
+          "frame": "{{0, 0}, {320, 460}}",
+          "hidden": false,
+          "layer_backed": true,
+          "parent": "SwiftUI._NSGraphicsView",
+          "type": "SwiftUI.AppKitPlatformViewHost<SwiftUI.(unknown context at $1cbb2f508).PlatformViewRepresentableAdaptor<SwiftUI.(unknown context at $1cbb3a444).DraggingDestinationView>>"
+        },
+        {
+          "frame": "{{0, 0}, {320, 460}}",
+          "hidden": false,
+          "layer_backed": true,
+          "parent": "SwiftUI.AppKitPlatformViewHost<SwiftUI.(unknown context at $1cbb2f508).PlatformViewRepresentableAdaptor<SwiftUI.(unknown context at $1cbb3a444).DraggingDestinationView>>",
+          "type": "SwiftUI.(unknown context at $1cbb39ffc)._PlatformDraggingDestinationView"
+        },
+        {
+          "frame": "{{0, 0}, {296, 460}}",
+          "hidden": false,
+          "layer_backed": true,
+          "parent": "Attic.AtticPanelHostingView",
+          "type": "SwiftUI._NSGraphicsView"
+        },
+        {
+          "frame": "{{12, 0}, {296, 460}}",
+          "hidden": false,
+          "layer_backed": true,
+          "parent": "SwiftUI._NSGraphicsView",
+          "type": "SwiftUI._NSGraphicsView"
+        },
+        {
+          "frame": "{{0, 0}, {296, 460}}",
+          "hidden": false,
+          "layer_backed": true,
+          "parent": "SwiftUI._NSGraphicsView",
+          "type": "SwiftUI._NSGraphicsView"
+        },
+        {
+          "frame": "{{0, 0}, {296, 460}}",
+          "hidden": false,
+          "layer_backed": true,
+          "parent": "SwiftUI._NSGraphicsView",
+          "type": "SwiftUI.HostingScrollView.PlatformContainer"
+        },
+        {
+          "frame": "{{0, 0}, {296, 460}}",
+          "hidden": false,
+          "layer_backed": false,
+          "parent": "SwiftUI.HostingScrollView.PlatformContainer",
+          "type": "SwiftUI.HostingScrollView"
+        },
+        {
+          "frame": "{{0, 0}, {296, 460}}",
+          "hidden": false,
+          "layer_backed": false,
+          "parent": "SwiftUI.HostingScrollView",
+          "type": "SwiftUI.HostingClipView"
+        },
+        {
+          "frame": "{{0, 0}, {296, 86}}",
+          "hidden": false,
+          "layer_backed": false,
+          "parent": "SwiftUI.HostingClipView",
+          "type": "SwiftUI.(unknown context at $1cbb583a8).DocumentView"
+        },
+        {
+          "frame": "{{0, 0}, {296, 86}}",
+          "hidden": false,
+          "layer_backed": true,
+          "parent": "SwiftUI.(unknown context at $1cbb583a8).DocumentView",
+          "type": "SwiftUI.HostingScrollView.PlatformGroupContainer"
+        },
+        {
+          "frame": "{{0, 0}, {296, 34}}",
+          "hidden": false,
+          "layer_backed": true,
+          "parent": "SwiftUI.HostingScrollView.PlatformGroupContainer",
+          "type": "SwiftUI.AppKitPlatformViewHost<SwiftUI.(unknown context at $1cbb2f508).PlatformViewRepresentableAdaptor<Attic.TasksScrollKeeper>>"
+        },
+        {
+          "frame": "{{0, 0}, {296, 34}}",
+          "hidden": false,
+          "layer_backed": false,
+          "parent": "SwiftUI.AppKitPlatformViewHost<SwiftUI.(unknown context at $1cbb2f508).PlatformViewRepresentableAdaptor<Attic.TasksScrollKeeper>>",
+          "type": "Attic.TasksScrollKeeper.KeeperView"
+        },
+        {
+          "frame": "{{0, 0}, {0, 100}}",
+          "hidden": true,
+          "layer_backed": true,
+          "parent": "SwiftUI.HostingScrollView",
+          "type": "NSScroller"
+        },
+        {
+          "frame": "{{0, 0}, {296, 460}}",
+          "hidden": false,
+          "layer_backed": true,
+          "parent": "Attic.AtticPanelHostingView",
+          "type": "SwiftUI._NSGraphicsView"
+        },
+        {
+          "frame": "{{332, 0}, {296, 460}}",
+          "hidden": false,
+          "layer_backed": true,
+          "parent": "SwiftUI._NSGraphicsView",
+          "type": "SwiftUI._NSGraphicsView"
+        },
+        {
+          "frame": "{{0, 0}, {296, 460}}",
+          "hidden": false,
+          "layer_backed": true,
+          "parent": "SwiftUI._NSGraphicsView",
+          "type": "SwiftUI._NSGraphicsView"
+        },
+        {
+          "frame": "{{0, 0}, {296, 460}}",
+          "hidden": false,
+          "layer_backed": true,
+          "parent": "SwiftUI._NSGraphicsView",
+          "type": "SwiftUI.HostingScrollView.PlatformContainer"
+        },
+        {
+          "frame": "{{0, 0}, {296, 460}}",
+          "hidden": true,
+          "layer_backed": false,
+          "parent": "SwiftUI.HostingScrollView.PlatformContainer",
+          "type": "SwiftUI.HostingScrollView"
+        },
+        {
+          "frame": "{{0, 0}, {296, 460}}",
+          "hidden": false,
+          "layer_backed": false,
+          "parent": "SwiftUI.HostingScrollView",
+          "type": "SwiftUI.HostingClipView"
+        },
+        {
+          "frame": "{{0, 0}, {296, 86}}",
+          "hidden": false,
+          "layer_backed": false,
+          "parent": "SwiftUI.HostingClipView",
+          "type": "SwiftUI.(unknown context at $1cbb583a8).DocumentView"
+        },
+        {
+          "frame": "{{0, 0}, {296, 86}}",
+          "hidden": false,
+          "layer_backed": true,
+          "parent": "SwiftUI.(unknown context at $1cbb583a8).DocumentView",
+          "type": "SwiftUI.HostingScrollView.PlatformGroupContainer"
+        },
+        {
+          "frame": "{{0, 0}, {296, 34}}",
+          "hidden": false,
+          "layer_backed": true,
+          "parent": "SwiftUI.HostingScrollView.PlatformGroupContainer",
+          "type": "SwiftUI.AppKitPlatformViewHost<SwiftUI.(unknown context at $1cbb2f508).PlatformViewRepresentableAdaptor<Attic.TasksScrollKeeper>>"
+        },
+        {
+          "frame": "{{0, 0}, {296, 34}}",
+          "hidden": false,
+          "layer_backed": false,
+          "parent": "SwiftUI.AppKitPlatformViewHost<SwiftUI.(unknown context at $1cbb2f508).PlatformViewRepresentableAdaptor<Attic.TasksScrollKeeper>>",
+          "type": "Attic.TasksScrollKeeper.KeeperView"
+        },
+        {
+          "frame": "{{0, 0}, {0, 100}}",
+          "hidden": true,
+          "layer_backed": true,
+          "parent": "SwiftUI.HostingScrollView",
+          "type": "NSScroller"
+        },
+        {
+          "frame": "{{0, 0}, {296, 460}}",
+          "hidden": false,
+          "layer_backed": true,
+          "parent": "Attic.AtticPanelHostingView",
+          "type": "SwiftUI._NSGraphicsView"
+        },
+        {
+          "frame": "{{652, 0}, {296, 460}}",
+          "hidden": false,
+          "layer_backed": true,
+          "parent": "SwiftUI._NSGraphicsView",
+          "type": "SwiftUI._NSGraphicsView"
+        },
+        {
+          "frame": "{{0, 0}, {296, 460}}",
+          "hidden": false,
+          "layer_backed": true,
+          "parent": "SwiftUI._NSGraphicsView",
+          "type": "SwiftUI._NSGraphicsView"
+        },
+        {
+          "frame": "{{0, 0}, {296, 460}}",
+          "hidden": false,
+          "layer_backed": true,
+          "parent": "SwiftUI._NSGraphicsView",
+          "type": "SwiftUI.HostingScrollView.PlatformContainer"
+        },
+        {
+          "frame": "{{0, 0}, {296, 460}}",
+          "hidden": true,
+          "layer_backed": false,
+          "parent": "SwiftUI.HostingScrollView.PlatformContainer",
+          "type": "SwiftUI.HostingScrollView"
+        },
+        {
+          "frame": "{{0, 0}, {296, 460}}",
+          "hidden": false,
+          "layer_backed": false,
+          "parent": "SwiftUI.HostingScrollView",
+          "type": "SwiftUI.HostingClipView"
+        },
+        {
+          "frame": "{{0, 0}, {296, 86}}",
+          "hidden": false,
+          "layer_backed": false,
+          "parent": "SwiftUI.HostingClipView",
+          "type": "SwiftUI.(unknown context at $1cbb583a8).DocumentView"
+        },
+        {
+          "frame": "{{0, 0}, {296, 86}}",
+          "hidden": false,
+          "layer_backed": true,
+          "parent": "SwiftUI.(unknown context at $1cbb583a8).DocumentView",
+          "type": "SwiftUI.HostingScrollView.PlatformGroupContainer"
+        },
+        {
+          "frame": "{{0, 0}, {296, 86}}",
+          "hidden": false,
+          "layer_backed": true,
+          "parent": "SwiftUI.HostingScrollView.PlatformGroupContainer",
+          "type": "SwiftUI.AppKitPlatformViewHost<SwiftUI.(unknown context at $1cbb2f508).PlatformViewRepresentableAdaptor<Attic.TasksScrollKeeper>>"
+        },
+        {
+          "frame": "{{0, 0}, {296, 86}}",
+          "hidden": false,
+          "layer_backed": false,
+          "parent": "SwiftUI.AppKitPlatformViewHost<SwiftUI.(unknown context at $1cbb2f508).PlatformViewRepresentableAdaptor<Attic.TasksScrollKeeper>>",
+          "type": "Attic.TasksScrollKeeper.KeeperView"
+        },
+        {
+          "frame": "{{0, 0}, {0, 100}}",
+          "hidden": true,
+          "layer_backed": true,
+          "parent": "SwiftUI.HostingScrollView",
+          "type": "NSScroller"
+        },
+        {
+          "frame": "{{12, 0}, {32, 28}}",
+          "hidden": false,
+          "layer_backed": true,
+          "parent": "Attic.AtticPanelHostingView",
+          "type": "SwiftUI._NSGraphicsView"
+        },
+        {
+          "frame": "{{257.5, 62}, {32, 28}}",
+          "hidden": false,
+          "layer_backed": true,
+          "parent": "SwiftUI._NSGraphicsView",
+          "type": "SwiftUI.AppKitPlatformViewHost<SwiftUI.(unknown context at $1cbb2f508).PlatformViewRepresentableAdaptor<Attic.AtticMenuAnchor>>"
+        },
+        {
+          "frame": "{{0, 0}, {32, 28}}",
+          "hidden": false,
+          "layer_backed": false,
+          "parent": "SwiftUI.AppKitPlatformViewHost<SwiftUI.(unknown context at $1cbb2f508).PlatformViewRepresentableAdaptor<Attic.AtticMenuAnchor>>",
+          "type": "Attic.AtticMenuAnchor.AnchorView"
+        },
+        {
+          "frame": "{{269.5, 62}, {32, 28}}",
+          "hidden": false,
+          "layer_backed": true,
+          "parent": "Attic.AtticPanelHostingView",
+          "type": "SwiftUI._NSGraphicsView"
+        },
+        {
+          "frame": "{{0, 0}, {32, 28}}",
+          "hidden": false,
+          "layer_backed": true,
+          "parent": "SwiftUI._NSGraphicsView",
+          "type": "SwiftUI.AppKitPlatformViewHost<SwiftUI.(unknown context at $1cbb2f508).PlatformViewRepresentableAdaptor<Attic.AtticMenuAnchor>>"
+        },
+        {
+          "frame": "{{0, 0}, {32, 28}}",
+          "hidden": false,
+          "layer_backed": false,
+          "parent": "SwiftUI.AppKitPlatformViewHost<SwiftUI.(unknown context at $1cbb2f508).PlatformViewRepresentableAdaptor<Attic.AtticMenuAnchor>>",
+          "type": "Attic.AtticMenuAnchor.AnchorView"
+        },
+        {
+          "frame": "{{56, 418}, {212, 20}}",
+          "hidden": false,
+          "layer_backed": true,
+          "parent": "Attic.AtticPanelHostingView",
+          "type": "SwiftUI._NSGraphicsView"
+        },
+        {
+          "frame": "{{0, 0}, {212, 20}}",
+          "hidden": false,
+          "layer_backed": true,
+          "parent": "SwiftUI._NSGraphicsView",
+          "type": "SwiftUI.AppKitPlatformViewHost<SwiftUI.(unknown context at $1cbb2f508).PlatformViewRepresentableAdaptor<Attic.AtticTokenField>>"
+        },
+        {
+          "frame": "{{0, 0}, {212, 20}}",
+          "hidden": false,
+          "layer_backed": false,
+          "parent": "SwiftUI.AppKitPlatformViewHost<SwiftUI.(unknown context at $1cbb2f508).PlatformViewRepresentableAdaptor<Attic.AtticTokenField>>",
+          "type": "Attic.AtticTokenFieldView"
+        },
+        {
+          "frame": "{{0, 0}, {212, 20}}",
+          "hidden": false,
+          "layer_backed": false,
+          "parent": "Attic.AtticTokenFieldView",
+          "type": "NSScrollView"
+        },
+        {
+          "frame": "{{0, 0}, {212, 20}}",
+          "hidden": false,
+          "layer_backed": false,
+          "parent": "NSScrollView",
+          "type": "NSClipView"
+        },
+        {
+          "frame": "{{0, 0}, {212, 20}}",
+          "hidden": false,
+          "layer_backed": false,
+          "parent": "NSClipView",
+          "type": "Attic.AtticTokenTextView"
+        },
+        {
+          "frame": "{{32, 32}, {0, 0}}",
+          "hidden": false,
+          "layer_backed": true,
+          "parent": "Attic.AtticPanelHostingView",
+          "type": "SwiftUI._NSGraphicsView"
+        },
+        {
+          "frame": "{{0, 0}, {0, 0}}",
+          "hidden": false,
+          "layer_backed": true,
+          "parent": "SwiftUI._NSGraphicsView",
+          "type": "SwiftUI.(unknown context at $1cbb20274)._FocusRingView"
+        },
+        {
+          "frame": "{{32, 32}, {0, 0}}",
+          "hidden": false,
+          "layer_backed": true,
+          "parent": "Attic.AtticPanelHostingView",
+          "type": "SwiftUI._NSGraphicsView"
+        },
+        {
+          "frame": "{{0, 0}, {0, 0}}",
+          "hidden": false,
+          "layer_backed": true,
+          "parent": "SwiftUI._NSGraphicsView",
+          "type": "SwiftUI.(unknown context at $1cbb20274)._FocusRingView"
+        }
+      ],
+      "view_types": {
+        "Attic.(unknown context at $10164baa8).TasksPointerProbe.ProbeView": 1,
+        "Attic.AtticMenuAnchor.AnchorView": 2,
+        "Attic.AtticPanelContentContainer": 1,
+        "Attic.AtticPanelHostingView": 1,
+        "Attic.AtticTokenFieldView": 1,
+        "Attic.AtticTokenTextView": 1,
+        "Attic.AtticWindowAppearanceView": 1,
+        "Attic.TasksScrollKeeper.KeeperView": 3,
+        "NSClipView": 1,
+        "NSScroller": 3,
+        "NSScrollView": 1,
+        "NSView": 1,
+        "SwiftUI._NSGraphicsView": 16,
+        "SwiftUI.(unknown context at $1cbb39ffc)._PlatformDraggingDestinationView": 1,
+        "SwiftUI.(unknown context at $1cbb583a8).DocumentView": 3,
+        "SwiftUI.(unknown context at $1cbb20274)._FocusRingView": 2,
+        "SwiftUI.AppKitPlatformViewHost<SwiftUI.(unknown context at $1cbb2f508).PlatformViewRepresentableAdaptor<Attic.(unknown context at $10164baa8).TasksPointerProbe>>": 1,
+        "SwiftUI.AppKitPlatformViewHost<SwiftUI.(unknown context at $1cbb2f508).PlatformViewRepresentableAdaptor<Attic.(unknown context at $101645d68).AtticWindowAppearanceSetter>>": 1,
+        "SwiftUI.AppKitPlatformViewHost<SwiftUI.(unknown context at $1cbb2f508).PlatformViewRepresentableAdaptor<Attic.AtticMenuAnchor>>": 2,
+        "SwiftUI.AppKitPlatformViewHost<SwiftUI.(unknown context at $1cbb2f508).PlatformViewRepresentableAdaptor<Attic.AtticTokenField>>": 1,
+        "SwiftUI.AppKitPlatformViewHost<SwiftUI.(unknown context at $1cbb2f508).PlatformViewRepresentableAdaptor<Attic.TasksScrollKeeper>>": 3,
+        "SwiftUI.AppKitPlatformViewHost<SwiftUI.(unknown context at $1cbb2f508).PlatformViewRepresentableAdaptor<SwiftUI.(unknown context at $1cbb3a444).DraggingDestinationView>>": 1,
+        "SwiftUI.HostingClipView": 3,
+        "SwiftUI.HostingScrollView": 3,
+        "SwiftUI.HostingScrollView.PlatformContainer": 3,
+        "SwiftUI.HostingScrollView.PlatformGroupContainer": 3
+      },
+      "views": 60
+    },
+    "calls": {
+      "AtticTokenField.updateNSView": 1,
+      "CATransaction.commit": 15,
+      "NSAppearance.performAsCurrentDrawingAppearance": 3,
+      "NSView.viewDidChangeEffectiveAppearance": 10
+    },
+    "hooks": [
+      "AppKit.NSCoreHostingViewBase.externalEnvironmentDidChange",
+      "AppKit.OrbitalColorView.viewDidChangeEffectiveAppearance",
+      "AppKit._NSCampoTextFormattingBackgroundView.viewDidChangeEffectiveAppearance",
+      "AppKit._NSRefreshControlProgressIndicator.viewDidChangeEffectiveAppearance",
+      "AppKit._NSSoftOutlineView.viewDidChangeEffectiveAppearance",
+      "Attic.CanvasNSView.viewDidChangeEffectiveAppearance",
+      "CATransaction.commit",
+      "CNTabSegmentedControl.viewDidChangeEffectiveAppearance",
+      "NSAppearance.performAsCurrentDrawingAppearance",
+      "NSCollectionView.viewDidChangeEffectiveAppearance",
+      "NSControl.viewDidChangeEffectiveAppearance",
+      "NSGlassEffectView.viewDidChangeEffectiveAppearance",
+      "NSHardPocketView.viewDidChangeEffectiveAppearance",
+      "NSPopoverFrame.viewDidChangeEffectiveAppearance",
+      "NSRemoteView.viewDidChangeEffectiveAppearance",
+      "NSSceneHostingView.viewDidChangeEffectiveAppearance",
+      "NSScrollPocket.viewDidChangeEffectiveAppearance",
+      "NSScrollView.viewDidChangeEffectiveAppearance",
+      "NSScrubberItemView.viewDidChangeEffectiveAppearance",
+      "NSSegmentItemBezelView.viewDidChangeEffectiveAppearance",
+      "NSSegmentItemImageView.viewDidChangeEffectiveAppearance",
+      "NSSegmentItemLabelView.viewDidChangeEffectiveAppearance",
+      "NSSegmentItemView.viewDidChangeEffectiveAppearance",
+      "NSStatusItemHostingView.viewDidChangeEffectiveAppearance",
+      "NSTabBarNewTabButton.viewDidChangeEffectiveAppearance",
+      "NSTabBarTrackInversionView.viewDidChangeEffectiveAppearance",
+      "NSTableRowView.viewDidChangeEffectiveAppearance",
+      "NSTableView.viewDidChangeEffectiveAppearance",
+      "NSTableViewActionButton.viewDidChangeEffectiveAppearance",
+      "NSTextView.viewDidChangeEffectiveAppearance",
+      "NSThemeFrame.viewDidChangeEffectiveAppearance",
+      "NSTitlebarContainerView.viewDidChangeEffectiveAppearance",
+      "NSToolbarClippedItemsIndicator.viewDidChangeEffectiveAppearance",
+      "NSToolbarFullScreenContentView.viewDidChangeEffectiveAppearance",
+      "NSToolbarView.viewDidChangeEffectiveAppearance",
+      "NSView.viewDidChangeEffectiveAppearance",
+      "NSVisualEffectView.viewDidChangeEffectiveAppearance",
+      "NSWindowSharingSessionRecipientIndicator.viewDidChangeEffectiveAppearance",
+      "PDFView.viewDidChangeEffectiveAppearance",
+      "PKGCoreUITransaction.commit",
+      "PKTextAttachmentDrawingView.viewDidChangeEffectiveAppearance",
+      "QCSCN_Transaction.commit",
+      "QLIndexSheetView.viewDidChangeEffectiveAppearance",
+      "QLOverlayBorderView.viewDidChangeEffectiveAppearance",
+      "QLOverlayView.viewDidChangeEffectiveAppearance",
+      "QLPreviewPageNavigationView.viewDidChangeEffectiveAppearance",
+      "QLPreviewView.viewDidChangeEffectiveAppearance",
+      "SFAuthorizationView.viewDidChangeEffectiveAppearance",
+      "STCAPackageView.viewDidChangeEffectiveAppearance",
+      "TKTokenConfigurationTransaction.commit",
+      "VKCGlassContentView.viewDidChangeEffectiveAppearance",
+      "WKView.viewDidChangeEffectiveAppearance",
+      "WKWebView.viewDidChangeEffectiveAppearance",
+      "WebView.viewDidChangeEffectiveAppearance",
+      "_NSSplitViewItemAccessoryViewWrapper.viewDidChangeEffectiveAppearance",
+      "_NSSplitViewItemViewWrapper.viewDidChangeEffectiveAppearance",
+      "_NSTextViewportSelectionLineView.viewDidChangeEffectiveAppearance",
+      "_NSThemeLockButton.viewDidChangeEffectiveAppearance",
+      "_NSTouchBarGroupButton.viewDidChangeEffectiveAppearance",
+      "_TtC6AppKitP33_3D641B2843142AA8DCCE043DDCE6387B34_NSAppearanceBasedVisualEffectView.viewDidChangeEffectiveAppearance",
+      "_TtC6AppKitP33_C7B8466D3EAE829EF20F43530A1CD21C24NSSubduedGlassEffectView.viewDidChangeEffectiveAppearance",
+      "_TtC6AppKitP33_EC3F85FAB7755D56E669206D2B17725B26_NSLayerBasedFillColorView.viewDidChangeEffectiveAppearance",
+      "_TtCC6AppKit14NSScrollPocketP33_EC3F85FAB7755D56E669206D2B17725B19LuminanceAdjustment.viewDidChangeEffectiveAppearance",
+      "_TtCE6AppKitCSo17NSGlassEffectViewP33_92F0BB6107B916AA04C9A991F505A16417ContentHolderView.viewDidChangeEffectiveAppearance",
+      "_TtCO6AppKit14IntelligenceUI15PromptEntryView.viewDidChangeEffectiveAppearance",
+      "_TtCV7SwiftUI19AppKitPocketElement13ContainerView.viewDidChangeEffectiveAppearance",
+      "_TtCV7SwiftUIP33_2144E363A5C573328950F48844B228C423AppKitPocketContainerV813ContainerView.viewDidChangeEffectiveAppearance",
+      "_TtGC6AppKit18_NSCoreHostingViewVS_15ThemeWidgetView_.viewDidChangeEffectiveAppearance",
+      "_TtGC6AppKit18_NSCoreHostingViewVS_22AppKitSegmentedControl_.viewDidChangeEffectiveAppearance",
+      "_TtGC6AppKit18_NSCoreHostingViewVS_P10$197b3525012AppKitSwitch_.viewDidChangeEffectiveAppearance",
+      "_TtGC7SwiftUI13NSHostingViewV5Attic12SettingsView_.globalEnvironmentDidChange",
+      "_TtGC7SwiftUI13NSHostingViewV5Attic12SettingsView_.viewDidChangeEffectiveAppearance",
+      "_TtGC7SwiftUI13NSHostingViewV5Attic14AtticPanelView_.globalEnvironmentDidChange",
+      "_TtGC7SwiftUI13NSHostingViewV5Attic14AtticPanelView_.viewDidChangeEffectiveAppearance",
+      "_TtGC7SwiftUI13NSHostingViewVOS_20_IntelligenceSupport22AnimatingSummarySymbol_.globalEnvironmentDidChange",
+      "_TtGC7SwiftUI13NSHostingViewVOS_20_IntelligenceSupport22AnimatingSummarySymbol_.viewDidChangeEffectiveAppearance",
+      "_TtGC7SwiftUI13NSHostingViewVS_7AnyView_.globalEnvironmentDidChange",
+      "_TtGC7SwiftUI13NSHostingViewVS_7AnyView_.viewDidChangeEffectiveAppearance"
+    ],
+    "limitations": [
+      "Objective-C counters cover main-thread ordering only. Swift-only updateEnvironment and private NSAppearance.apply are not Objective-C selectors.",
+      "Implicit Core Animation C++ commits are not CATransaction.commit calls."
+    ],
+    "ordering_calls": {
+      "AtticTokenField.updateNSView": 1,
+      "CATransaction.commit": 9,
+      "NSAppearance.performAsCurrentDrawingAppearance": 3,
+      "NSView.viewDidChangeEffectiveAppearance": 10
+    },
+    "native_function_counts": {
+      "hosting_environment_updates": {
+        "locations": 1,
+        "calls": 1,
+        "functions": [
+          "SwiftUI.NSHostingView.updateEnvironment() -> ()"
+        ]
+      },
+      "native_appearance_applications": {
+        "locations": 1,
+        "calls": 1,
+        "functions": [
+          "__C.NSAppearance.apply(to: inout SwiftUI.EnvironmentValues, vibrantBlendingStyle: __C.NSViewVibrantBlendingStyle, materialContext: Swift.Optional<__C._NSGlassEffectViewMaterialContext>) -> ()"
+        ]
+      },
+      "ca_transaction_commits": {
+        "locations": 1,
+        "calls": 0,
+        "functions": [
+          "CA::Transaction::commit()"
+        ]
+      }
+    }
+  },
+  "settings": {
+    "mode": "reveal",
+    "frame_monitor": false,
+    "settle_seconds": 20.0,
+    "idle_sample_seconds": 60.0,
+    "allocations": false,
+    "reveal_counts": true
+  }
+}

@@ -1,0 +1,351 @@
+{
+  "conclusion": "success",
+  "headSha": "8f132385d556b731c326fe340140aa11174c6271",
+  "jobs": [
+    {
+      "completedAt": "2026-10-11T13:53:22Z",
+      "conclusion": "success",
+      "databaseId": 114479415704,
+      "name": "Build, test, and analyze Attic for macOS",
+      "startedAt": "2026-10-11T13:18:13Z",
+      "status": "completed",
+      "steps": [
+        {
+          "completedAt": "2026-10-11T13:18:16Z",
+          "conclusion": "success",
+          "name": "Set up job",
+          "number": 1,
+          "startedAt": "2026-10-11T13:18:14Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-10-11T13:18:22Z",
+          "conclusion": "success",
+          "name": "Check out repository",
+          "number": 2,
+          "startedAt": "2026-10-11T13:18:16Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-10-11T13:18:24Z",
+          "conclusion": "success",
+          "name": "Verify reveal probe and count gate plumbing",
+          "number": 3,
+          "startedAt": "2026-10-11T13:18:22Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-10-11T13:18:24Z",
+          "conclusion": "success",
+          "name": "Verify branch ancestry and initial cleanliness",
+          "number": 4,
+          "startedAt": "2026-10-11T13:18:24Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-10-11T13:18:29Z",
+          "conclusion": "success",
+          "name": "Verify Xcode 26 toolchain",
+          "number": 5,
+          "startedAt": "2026-10-11T13:18:24Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-10-11T13:18:30Z",
+          "conclusion": "success",
+          "name": "Set up Ruby",
+          "number": 6,
+          "startedAt": "2026-10-11T13:18:29Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-10-11T13:18:32Z",
+          "conclusion": "success",
+          "name": "Install Ruby dependencies outside the checkout",
+          "number": 7,
+          "startedAt": "2026-10-11T13:18:30Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-10-11T13:18:33Z",
+          "conclusion": "success",
+          "name": "Regenerate checked-in Xcode project",
+          "number": 8,
+          "startedAt": "2026-10-11T13:18:32Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-10-11T13:18:33Z",
+          "conclusion": "success",
+          "name": "Archive generated project evidence",
+          "number": 9,
+          "startedAt": "2026-10-11T13:18:33Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-10-11T13:18:34Z",
+          "conclusion": "success",
+          "name": "Upload generated project",
+          "number": 10,
+          "startedAt": "2026-10-11T13:18:33Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-10-11T13:18:37Z",
+          "conclusion": "success",
+          "name": "Verify generated Xcode project",
+          "number": 11,
+          "startedAt": "2026-10-11T13:18:34Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-10-11T13:21:28Z",
+          "conclusion": "success",
+          "name": "Build macOS target",
+          "number": 12,
+          "startedAt": "2026-10-11T13:18:37Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-10-11T13:23:38Z",
+          "conclusion": "success",
+          "name": "Build with strict concurrency checking",
+          "number": 13,
+          "startedAt": "2026-10-11T13:21:28Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-10-11T13:23:38Z",
+          "conclusion": "skipped",
+          "name": "Measure pinned colour1 against integration base in paired AB/BA runs",
+          "number": 14,
+          "startedAt": "2026-10-11T13:23:38Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-10-11T13:23:38Z",
+          "conclusion": "skipped",
+          "name": "Upload pinned tag-colour timing comparison",
+          "number": 15,
+          "startedAt": "2026-10-11T13:23:38Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-10-11T13:23:38Z",
+          "conclusion": "skipped",
+          "name": "Preflight the pinned integration cost host with current fixtures",
+          "number": 16,
+          "startedAt": "2026-10-11T13:23:38Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-10-11T13:48:21Z",
+          "conclusion": "success",
+          "name": "Run macOS unit tests",
+          "number": 17,
+          "startedAt": "2026-10-11T13:23:38Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-10-11T13:51:24Z",
+          "conclusion": "success",
+          "name": "Run native dropdown timing gates",
+          "number": 18,
+          "startedAt": "2026-10-11T13:48:21Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-10-11T13:51:26Z",
+          "conclusion": "success",
+          "name": "Upload native dropdown timing results",
+          "number": 19,
+          "startedAt": "2026-10-11T13:51:24Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-10-11T13:51:26Z",
+          "conclusion": "skipped",
+          "name": "Record repeated old and paired dropdown estimates",
+          "number": 20,
+          "startedAt": "2026-10-11T13:51:26Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-10-11T13:51:26Z",
+          "conclusion": "skipped",
+          "name": "Upload repeated dropdown timing evidence",
+          "number": 21,
+          "startedAt": "2026-10-11T13:51:26Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-10-11T13:51:26Z",
+          "conclusion": "skipped",
+          "name": "Run Full Keyboard Access unit tests",
+          "number": 22,
+          "startedAt": "2026-10-11T13:51:26Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-10-11T13:51:29Z",
+          "conclusion": "success",
+          "name": "Print macOS unit-test summary",
+          "number": 23,
+          "startedAt": "2026-10-11T13:51:26Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-10-11T13:51:38Z",
+          "conclusion": "success",
+          "name": "Upload macOS unit-test results",
+          "number": 24,
+          "startedAt": "2026-10-11T13:51:29Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-10-11T13:51:38Z",
+          "conclusion": "success",
+          "name": "Upload Full Keyboard Access test results",
+          "number": 25,
+          "startedAt": "2026-10-11T13:51:38Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-10-11T13:51:38Z",
+          "conclusion": "skipped",
+          "name": "Compare baseline and Fix 2 save gates on this runner",
+          "number": 26,
+          "startedAt": "2026-10-11T13:51:38Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-10-11T13:51:38Z",
+          "conclusion": "skipped",
+          "name": "Upload baseline and Fix 2 save-gate evidence",
+          "number": 27,
+          "startedAt": "2026-10-11T13:51:38Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-10-11T13:51:38Z",
+          "conclusion": "skipped",
+          "name": "Run seeded macOS performance UI tests",
+          "number": 28,
+          "startedAt": "2026-10-11T13:51:38Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-10-11T13:51:39Z",
+          "conclusion": "success",
+          "name": "Upload performance UI-test metrics",
+          "number": 29,
+          "startedAt": "2026-10-11T13:51:38Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-10-11T13:53:14Z",
+          "conclusion": "success",
+          "name": "Run macOS static analyzer",
+          "number": 30,
+          "startedAt": "2026-10-11T13:51:39Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-10-11T13:53:16Z",
+          "conclusion": "success",
+          "name": "Verify final project and worktree state",
+          "number": 31,
+          "startedAt": "2026-10-11T13:53:14Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-10-11T13:53:16Z",
+          "conclusion": "success",
+          "name": "Require established macOS verifications",
+          "number": 32,
+          "startedAt": "2026-10-11T13:53:16Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-10-11T13:53:17Z",
+          "conclusion": "success",
+          "name": "Post Check out repository",
+          "number": 64,
+          "startedAt": "2026-10-11T13:53:16Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-10-11T13:53:18Z",
+          "conclusion": "success",
+          "name": "Complete job",
+          "number": 65,
+          "startedAt": "2026-10-11T13:53:17Z",
+          "status": "completed"
+        }
+      ],
+      "url": "https://github.com/TesterPen0812/Attic/actions/runs/38142622429/job/114479415704"
+    },
+    {
+      "completedAt": "2026-10-11T13:18:03Z",
+      "conclusion": "skipped",
+      "databaseId": 114479416326,
+      "name": "Observe seeded performance on a fresh macOS runner",
+      "startedAt": "2026-10-11T13:18:04Z",
+      "status": "completed",
+      "steps": [],
+      "url": "https://github.com/TesterPen0812/Attic/actions/runs/38142622429/job/114479416326"
+    },
+    {
+      "completedAt": "2026-10-11T13:18:03Z",
+      "conclusion": "skipped",
+      "databaseId": 114479416371,
+      "name": "Optimized frame, row and Done search cost gates",
+      "startedAt": "2026-10-11T13:18:04Z",
+      "status": "completed",
+      "steps": [],
+      "url": "https://github.com/TesterPen0812/Attic/actions/runs/38142622429/job/114479416371"
+    },
+    {
+      "completedAt": "2026-10-11T13:18:03Z",
+      "conclusion": "skipped",
+      "databaseId": 114479416462,
+      "name": "Build Attic for iPhone Simulator",
+      "startedAt": "2026-10-11T13:18:04Z",
+      "status": "completed",
+      "steps": [],
+      "url": "https://github.com/TesterPen0812/Attic/actions/runs/38142622429/job/114479416462"
+    },
+    {
+      "completedAt": "2026-10-11T13:18:03Z",
+      "conclusion": "skipped",
+      "databaseId": 114479416476,
+      "name": "Focused Full Keyboard Access verification",
+      "startedAt": "2026-10-11T13:18:04Z",
+      "status": "completed",
+      "steps": [],
+      "url": "https://github.com/TesterPen0812/Attic/actions/runs/38142622429/job/114479416476"
+    },
+    {
+      "completedAt": "2026-10-11T13:18:03Z",
+      "conclusion": "skipped",
+      "databaseId": 114479416639,
+      "name": "macOS UI tests (${{ matrix.shard }} of 2)",
+      "startedAt": "2026-10-11T13:18:04Z",
+      "status": "completed",
+      "steps": [],
+      "url": "https://github.com/TesterPen0812/Attic/actions/runs/38142622429/job/114479416639"
+    },
+    {
+      "completedAt": "2026-10-11T13:18:03Z",
+      "conclusion": "skipped",
+      "databaseId": 114479416857,
+      "name": "Design system appearance matrix (${{ matrix.shard }} of 4)",
+      "startedAt": "2026-10-11T13:18:04Z",
+      "status": "completed",
+      "steps": [],
+      "url": "https://github.com/TesterPen0812/Attic/actions/runs/38142622429/job/114479416857"
+    }
+  ],
+  "status": "completed",
+  "url": "https://github.com/TesterPen0812/Attic/actions/runs/38142622429"
+}

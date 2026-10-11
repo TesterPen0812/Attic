@@ -1,0 +1,18 @@
+[
+  "function signature specialization <Arg[0] = Dead> of static Attic.RevealCounts.beginOrder() -> ()",
+  "static Attic.RevealCounts.beginOrder() -> ()",
+  "Attic.AtticPanelController.show(on: __C.NSScreen, corner: Attic.ScreenCorner, makeKey: Swift.Bool) -> Swift.Bool",
+  "Attic.CornerHoverMonitor.revealForPerformanceProbe(section: Attic.PanelSection) -> ()",
+  "closure #7 () -> () in Attic.AppCoordinator.start() -> ()",
+  "reabstraction thunk helper from @escaping @callee_guaranteed @Sendable () -> () to @escaping @callee_unowned @convention(block) @Sendable () -> ()",
+  "_dispatch_client_callout",
+  "_dispatch_continuation_pop",
+  "_dispatch_source_latch_and_call",
+  "_dispatch_source_invoke",
+  "_dispatch_main_queue_drain.cold.6",
+  "_dispatch_main_queue_drain",
+  "_dispatch_main_queue_callback_4CF",
+  "__CFRUNLOOP_IS_SERVICING_THE_MAIN_DISPATCH_QUEUE__",
+  "__CFRunLoopRun",
+  "_CFRunLoopRunSpecificWithOptions"
+]

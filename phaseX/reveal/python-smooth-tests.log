@@ -1,0 +1,27 @@
+test_stale_debugger_readiness_cannot_be_reused (test_smooth_probe.SmoothCountCaptureTests) ... usage: smooth_probe.py [-h] --app APP --output OUTPUT [--mode {reveal,soak}]
+                       [--allocations] [--long]
+                       [--settle-seconds SETTLE_SECONDS]
+                       [--idle-sample-seconds IDLE_SAMPLE_SECONDS]
+                       [--frame-monitor | --no-frame-monitor]
+                       [--reveal-breakdown] [--reveal-counts]
+                       [--capture-panel] [--lldb-counts]
+smooth_probe.py: error: Count captures require a fresh output directory
+ok
+test_complete_bounded_workload_passes (test_smooth_probe.SmoothRetentionGateTests) ... ok
+test_missing_duplicate_and_out_of_order_visits_fail (test_smooth_probe.SmoothRetentionGateTests) ... ok
+test_retained_engine_or_layout_and_incomplete_task_fail (test_smooth_probe.SmoothRetentionGateTests) ... ok
+test_quit_refuses_an_exited_or_replaced_process (test_smooth_probe.SmoothTeardownTests) ... ok
+test_quits_owned_preview_by_bundle_then_waits (test_smooth_probe.SmoothTeardownTests) ... ok
+test_stalled_quit_fails_instead_of_force_quitting_anything (test_smooth_probe.SmoothTeardownTests) ... ok
+test_waits_for_only_the_owned_executable_to_exit (test_smooth_probe.SmoothTeardownTests) ... ok
+test_count_instrumentation_cannot_establish_timing_acceptance (test_smooth_reveal_gate.SmoothRevealGateTests) ... ok
+test_different_warmup_or_instrumentation_cannot_pass (test_smooth_reveal_gate.SmoothRevealGateTests) ... ok
+test_missing_invalid_or_warm_data_cannot_pass (test_smooth_reveal_gate.SmoothRevealGateTests) ... ok
+test_paired_difference_and_spread_are_reported (test_smooth_reveal_gate.SmoothRevealGateTests) ... ok
+test_requested_stage_instrumentation_must_have_been_recorded (test_smooth_reveal_gate.SmoothRevealGateTests) ... ok
+test_slower_candidate_fails_without_an_added_allowance (test_smooth_reveal_gate.SmoothRevealGateTests) ... ok
+
+----------------------------------------------------------------------
+Ran 14 tests in 0.004s
+
+OK

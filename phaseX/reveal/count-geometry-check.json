@@ -1,0 +1,61 @@
+{
+  "passed": true,
+  "geometry": [
+    {
+      "revision": "base",
+      "root_frames": [
+        "{{28, 28}, {320, 460}}"
+      ],
+      "panel_is_key": true,
+      "app_key_is_panel": true
+    },
+    {
+      "revision": "design1",
+      "root_frames": [
+        "{{28, 28}, {320, 460}}"
+      ],
+      "panel_is_key": true,
+      "app_key_is_panel": true
+    },
+    {
+      "revision": "colour1",
+      "root_frames": [
+        "{{28, 28}, {320, 460}}"
+      ],
+      "panel_is_key": true,
+      "app_key_is_panel": true
+    },
+    {
+      "revision": "owner1",
+      "root_frames": [
+        "{{28, 28}, {320, 460}}"
+      ],
+      "panel_is_key": true,
+      "app_key_is_panel": true
+    },
+    {
+      "revision": "int11",
+      "root_frames": [
+        "{{28, 28}, {320, 460}}"
+      ],
+      "panel_is_key": true,
+      "app_key_is_panel": true
+    },
+    {
+      "revision": "smooth",
+      "root_frames": [
+        "{{28, 28}, {320, 460}}"
+      ],
+      "panel_is_key": true,
+      "app_key_is_panel": true
+    },
+    {
+      "revision": "fixed",
+      "root_frames": [
+        "{{28, 28}, {320, 460}}"
+      ],
+      "panel_is_key": true,
+      "app_key_is_panel": true
+    }
+  ]
+}

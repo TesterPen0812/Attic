@@ -1,0 +1,34 @@
+{
+  "reference": {
+    "hosting_roots": 1,
+    "views": 65,
+    "key_loop_views": 32,
+    "layer_backed_views": 36,
+    "hosting_environment_updates": 1,
+    "native_appearance_applications": 1,
+    "ca_transaction_commits": 0,
+    "appearance_callbacks": 10,
+    "global_environment_callbacks": 0,
+    "appearance_drawing_scopes": 3,
+    "explicit_ca_commits": 9,
+    "tasks_body_evaluations": 0,
+    "field_updates": 1
+  },
+  "candidate": {
+    "hosting_roots": 1,
+    "views": 65,
+    "key_loop_views": 32,
+    "layer_backed_views": 36,
+    "hosting_environment_updates": 1,
+    "native_appearance_applications": 1,
+    "ca_transaction_commits": 0,
+    "appearance_callbacks": 10,
+    "global_environment_callbacks": 0,
+    "appearance_drawing_scopes": 3,
+    "explicit_ca_commits": 9,
+    "tasks_body_evaluations": 0,
+    "field_updates": 1
+  },
+  "regressions": {},
+  "passed": true
+}
