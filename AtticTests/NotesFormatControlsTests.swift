@@ -58,6 +58,14 @@ final class NotesFormatControlsTests: XCTestCase {
         (textView.string as NSString).range(of: text)
     }
 
+    func testTrackingOwnerRespondsToAppKitsNativeMouseSelectors() {
+        let (controls, _, _) = make()
+        for selector in [#selector(NSResponder.mouseEntered(with:)), #selector(NSResponder.mouseMoved(with:)),
+                         #selector(NSResponder.mouseExited(with:))] {
+            XCTAssertTrue(controls.responds(to: selector), "tracking areas send \(NSStringFromSelector(selector))")
+        }
+    }
+
     private func type(_ text: String, _ textView: NoteEditorTextView) {
         for character in text {
             if character == "\n" { textView.insertNewline(nil) } else {

@@ -1133,7 +1133,7 @@ final class NoteFormatControls: NSObject {
 
     // MARK: Link address on hover
 
-    @objc func mouseMoved(with event: NSEvent) {
+    @objc(mouseMoved:) func mouseMoved(with event: NSEvent) {
         guard let textView else { return }
         let point = textView.convert(event.locationInWindow, from: nil)
         let found = link(at: point)
@@ -1147,13 +1147,13 @@ final class NoteFormatControls: NSObject {
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.45, execute: work)
     }
 
-    @objc func mouseExited(with event: NSEvent) {
+    @objc(mouseExited:) func mouseExited(with event: NSEvent) {
         hoverWork?.cancel()
         hoverURL = nil
         hideAddress()
     }
 
-    @objc func mouseEntered(with event: NSEvent) {}
+    @objc(mouseEntered:) func mouseEntered(with event: NSEvent) {}
 
     private func showAddress(_ url: String, range: NSRange) {
         guard let textView, hoverURL == url,
