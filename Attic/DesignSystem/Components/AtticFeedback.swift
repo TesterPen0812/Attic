@@ -1,4 +1,5 @@
 import SwiftUI
+import AppKit
 
 // MARK: - Undo toast
 
@@ -52,6 +53,7 @@ struct AtticUndoToast: View {
         .background(AtticPopoverBackground(cornerRadius: radius))
         .accessibilityElement(children: .contain)
         .accessibilityLabel(message)
+        .atticAnnounceErrors(isFailure ? [message] : [])
         .atticControlProbe("Toast", id: probeID, expectedSize: nil, radius: radius, expectedRadius: 15)
     }
 }
@@ -129,6 +131,7 @@ struct AtticNotice: View {
         .background(AtticPopoverBackground(cornerRadius: radius))
         .accessibilityElement(children: .contain)
         .accessibilityLabel(message)
+        .atticAnnounceErrors([message])
         .atticControlProbe("Notice", id: probeID, expectedSize: nil, radius: radius, expectedRadius: 15)
     }
 }
@@ -231,6 +234,7 @@ struct AtticErrorLine: View {
             .onHover { hovered = $0 }
         }
         .frame(height: AtticErrorLineMetrics.height)
+        .atticAnnounceErrors([message])
         .accessibilityElement(children: .combine)
         .accessibilityLabel(message)
         .accessibilityAction(named: Text(actionTitle), onRetry)
@@ -669,5 +673,39 @@ struct AtticReorderLiftModifier: ViewModifier {
                 .padding(.vertical, AtticTaskRowMetrics.pitchTopInset)
                 }
             }
+    }
+}
+
+
+/// One delivery per active notice, including multiple simultaneous errors.
+/// Removing a notice allows a later occurrence of the same error to speak.
+struct AtticErrorAnnouncementState {
+    private var active = Set<String>()
+    mutating func update(_ messages: [String]) -> [String] {
+        let current = Set(messages)
+        var delivered = active
+        let new = messages.filter { delivered.insert($0).inserted }
+        active = current
+        return new
+    }
+}
+
+private struct AtticErrorAnnouncementModifier: ViewModifier {
+    let messages: [String]
+    @State private var state = AtticErrorAnnouncementState()
+    func body(content: Content) -> some View {
+        content.onChange(of: messages, initial: true) { _, messages in
+            for message in state.update(messages) {
+                NSAccessibility.post(element: NSApp, notification: .announcementRequested, userInfo: [
+                    .announcement: message, .priority: NSAccessibilityPriorityLevel.low.rawValue
+                ])
+            }
+        }
+    }
+}
+
+extension View {
+    func atticAnnounceErrors(_ messages: [String]) -> some View {
+        modifier(AtticErrorAnnouncementModifier(messages: messages))
     }
 }

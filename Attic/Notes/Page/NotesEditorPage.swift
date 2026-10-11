@@ -828,6 +828,9 @@ private struct NoteStatusSlot: View {
                     : .opacity.combined(with: .scale(scale: 0.86)).combined(with: .offset(y: 8)))
             }
         }
+        .atticAnnounceErrors(items.filter { $0.tone == .error }.map {
+            [$0.title, $0.explanation].compactMap { $0 }.joined(separator: ". ")
+        })
         .animation(AtticMotionPreset.popover.springy(reduceMotion: design.reduceMotion), value: key)
         .popover(isPresented: $showingDetails, arrowEdge: .top) {
             AtticStatusDetails(items: items)
