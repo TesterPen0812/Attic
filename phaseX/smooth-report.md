@@ -1,9 +1,9 @@
 # Smooth — memory and responsiveness investigation
 
-Status: final verification in progress. The dominant spike allocation producer is identified and the caret-observer fix is verified; the exact private XCTest retaining graph and reveal repair remain unresolved. **Not an “absolutely smooth” acceptance claim.**
+Status: verified observer fix and investigation evidence delivered. Final fast and costs CI pass; local hosted-interaction and reveal gates remain red. The dominant spike allocation producer is identified and the caret-observer fix is verified; the exact private XCTest retaining graph and reveal repair remain unresolved. **Not an “absolutely smooth” acceptance claim.**
 
 Worktree `/Users/taha/Developer/attic-px-mem`, branch `phase-x/smooth`.
-The full measurement archive and captures are in `/Users/taha/Developer/attic-redesign-assets/phaseX/smooth/`; a copy of this report is in that directory's parent. Evidence paths below are relative to the assets `phaseX` directory.
+The full measurement archive and captures are in `/Users/taha/Developer/attic-redesign-assets/phaseX/smooth/`; a copy of this report is in that directory's parent. Bare evidence filenames refer to that archive; `smooth/...` paths are relative to the assets `phaseX` directory.
 Starting base `57c85724`; perf2 `c2814a94` merged first (`3dc361d8`).
 Int11 `a1b663f3` merged before verification (`f88513cd`), then latest `e8f92570` merged again (`9d154bb6`) after its test-fixture/CI updates arrived. The second merge changes no application source. A third merge brings int11 `75d1dbfb` into `9f6d4121` (test/CI diagnostics only). The final merge `67129c00` brings int11 `d0801287`, including its production Undo-toast focus fix; a fresh fetch before final verification confirmed that endpoint. Latest verification is recorded below.
 Local environment: macOS 27.0 (26A5425a), Xcode 27.0 (27A5252f), arm64.
@@ -207,6 +207,20 @@ The long orchestrator fair gate was not run. “Every source of jank fixed” is
 
 ## Verification
 
+Final checks, application source `67129c00`, diagnostic scripts `a28728e1`:
+
+| Check | Outcome |
+|---|---|
+| Local strict build | Pass |
+| Local full headless | 2,557 passed / 27 skipped / 12 failed; 2,596 total |
+| Local native subset | 11 passed / 1 skipped / 1 failed |
+| Fresh isolation of all broad-run failures | 4 passed / 8 failed |
+| Final fast CI | Pass; 2,586 unit tests passed / 10 skipped / 0 failed; separate dropdown timing 3/3 |
+| Final costs CI | Pass; 65 unique rows accepted, one prescribed recheck |
+| Final paired reveal gate | Fail; median paired +23.815 ms |
+
+Earlier and focused verification evidence follows; it does not replace these final outcomes.
+
 - Red observer test: failed exactly on missing removals; one test / two assertions.
 - Caret + NoteEditorEngine suites: **72 passed, zero failed/skipped**.
 - Python smooth gates: **12 passed** (includes asynchronous owned-preview teardown).
@@ -225,7 +239,17 @@ The long orchestrator fair gate was not run. “Every source of jank fixed” is
 
 ### Latest integration and rejected viewport experiment
 
-Final application source is `67129c00`; script-only teardown hardening is `a28728e1`. Post-merge strict build **passed**. The final full headless run completed **2,557 passed / 27 skipped / 12 failed**, 2,596 total, exit 65. Xcode restarted after a missing-row-frame force unwrap at `TasksRound6Tests.swift:49` and completed the remaining tests. `postmerge-failures.md` lists the failed cases; `postmerge-verification.json` preserves the complete result. The separate screen-locked native invocation had **11 passed / 1 skipped / 1 failed**, 13 total. All three dropdown timing cases, Notes Undo, ordinary Tab/Shift-Tab and priority shortcuts passed; the long/filtered viewport case still failed at row 18, y = −56. The skipped case requires the dedicated native FKA lane. The file-tile TIFF comparison passed alone (**1/1**) with its original byte-for-byte assertion; the broad-run failure remains recorded and its cause is unproved (`file-isolation-verification.json`). Fresh-process isolation of all 12 broad-run failures, under the screen lock with the key-window opt-in, finished **4 passed / 8 failed / 0 skipped**. Eight failures persist: drag-out; Command-F on Done; ordinary Tab traversal; Add Subtask via the actions menu; a highlighted submenu command; long/filtered viewport visibility; Tasks page restoration; and text Undo after a task-menu change. The file-tile comparison, Done-row click/restore, highlighted Start Working menu case, and bottom-stack click shielding passed. These results do not make the full suite green. Details: `failures-isolated-verification.json`. No production or fixture patch was retained for these unresolved cases. No claim is made that all failures are environmental or inherited. The required int11 merge imported production code after the original fast/costs pair, so a final changed-source fast run [38131251632](https://github.com/TesterPen0812/Attic/actions/runs/38131251632) was dispatched. It **passed**: strict build, unit tests (**2,586 passed / 10 skipped / 0 failed**, 2,596 total), all three separate native dropdown timing gates, and static analysis. Exact unit summary: `postmerge-ci-unit-summary.json`. The final costs run [38134603830](https://github.com/TesterPen0812/Attic/actions/runs/38134603830) was dispatched only after fast completed and is pending. These are explicitly additional dispatches for the changed integration, not retries of an unchanged failing result; the original pair remains reported above.
+Final application source is `67129c00`; script-only teardown hardening is `a28728e1`. Post-merge strict build **passed**. The final full headless run completed **2,557 passed / 27 skipped / 12 failed**, 2,596 total, exit 65. Xcode restarted after a missing-row-frame force unwrap at `TasksRound6Tests.swift:49` and completed the remaining tests. `postmerge-failures.md` lists the failed cases; `postmerge-verification.json` preserves the complete result.
+
+The separate screen-locked native invocation had **11 passed / 1 skipped / 1 failed**, 13 total. All three dropdown timing cases, Notes Undo, ordinary Tab/Shift-Tab and priority shortcuts passed; the long/filtered viewport case still failed at row 18, y = −56. The skipped case requires the dedicated native FKA lane.
+
+The file-tile TIFF comparison passed alone (**1/1**) with its original byte-for-byte assertion; the broad-run failure remains recorded and its cause is unproved (`file-isolation-verification.json`).
+
+Fresh-process isolation of all 12 broad-run failures, under the screen lock with the key-window opt-in, finished **4 passed / 8 failed / 0 skipped**. Eight failures persist: drag-out; Command-F on Done; ordinary Tab traversal; Add Subtask via the actions menu; a highlighted submenu command; long/filtered viewport visibility; Tasks page restoration; and text Undo after a task-menu change. The file-tile comparison, Done-row click/restore, highlighted Start Working menu case, and bottom-stack click shielding passed. These results do not make the full suite green. Details: `failures-isolated-verification.json`. No production or fixture patch was retained for these unresolved cases. No claim is made that all failures are environmental or inherited.
+
+The required int11 merge imported production code after the original fast/costs pair, so a final changed-source fast run [38131251632](https://github.com/TesterPen0812/Attic/actions/runs/38131251632) was dispatched. It **passed**: strict build, unit tests (**2,586 passed / 10 skipped / 0 failed**, 2,596 total), all three separate native dropdown timing gates, and static analysis. Exact unit summary: `postmerge-ci-unit-summary.json`.
+
+The final costs run [38134603830](https://github.com/TesterPen0812/Attic/actions/runs/38134603830) was dispatched only after fast completed and **passed**. All **65 unique comparison rows** passed under the unchanged protocol; one row required the prescribed same-job recheck (66 ledger entries total). The independent budget checks passed. No bound, row, oracle, or recheck rule changed. Full attempt ledger: `smooth/postmerge-costs-ci-ledger.md`; exact run metadata: `smooth/postmerge-ci.json`. This green costs lane does not supersede the failed local reveal gate or local hosted-interaction results. These are explicitly additional dispatches for the changed integration, not retries of an unchanged failing result; the original pair remains reported above.
 
 At `8e9d030a`, strict passed; the complete headless invocation had **2,566 passed / 26 skipped / 3 failed** (2,595 total). Failures were the two existing Tab cases and the priority-shortcut case. A separate native invocation passed **9/9** with zero skips. A fresh-process, screen-locked isolation passed ordinary Tab/Shift-Tab/Return and all priority shortcuts, but reproduced the long/filtered viewport case at **row 18, y = −56**. Thus the other two failures are context-dependent observations, not proved environmental failures or fixed defects. See `latest-verification.json` and `tab-isolation-verification.json`.
 
@@ -247,11 +271,11 @@ The prescribed [attic-bug-hunt skill](/Users/taha/.agents/skills/attic-bug-hunt/
 
 ## Boundaries and provenance
 
-Protected owner identities were not launched, quit, captured, or opened for plist/data access. Exact phasex executable paths and control-plane PIDs are checked; executable-name matching is unsafe because another preview can share the same process name. Only this job's owned fixture stores are used. No other worktree, system setting, CloudKit entitlement or iPhone behavior changed. No subagents. Full headless tests include existing Canvas unit coverage by suite membership; manual/performance probing excludes Canvas.
+Protected owner identities were not launched, quit, captured, or opened for plist/data access. Exact phasex executable paths and control-plane PIDs are checked; executable-name matching is unsafe because another preview can share the same process name. Only this job's owned fixture stores are used. No other worktree, system setting, CloudKit entitlement or iPhone behavior changed. No subagents. Full headless tests include existing Canvas unit coverage by suite membership; manual UI checks and custom performance probes exclude Canvas.
 
 The advertised Hindsight tools were absent from the callable tool inventory. Architecture and decisions were grounded in current source, AGENTS.md, perf2's report and the owner/orchestrator records. No Hindsight writes were attempted.
 
-Build outputs measured **2.2 GB**, plus about **64 MB** across the 58 recorded owned diagnostic stores and about **7 MB** of report evidence, below the 3 GB active-output cap. Read xcresults are summarized then moved to Trash. Evidence summaries and captures live here; raw profiling files are not required for app operation.
+Measured active output is **2.52 GB** in total, including `.build`, both evidence copies, the 58 recorded owned stores and owned `/tmp` files, below the 3 GB cap (`smooth/final-disk-usage.json`). Read xcresults are summarized then moved to Trash. Evidence summaries and captures live here; raw profiling files are not required for app operation.
 
 ## Reproduction commands
 
