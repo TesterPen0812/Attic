@@ -322,7 +322,8 @@ final class NoteObjectControls: NSObject, NoteObjectInteraction {
             return
         }
         NSAnimationContext.runAnimationGroup { context in
-            context.duration = AtticMotionPreset.hover.duration
+            context.duration = AtticMotionScale.fast
+            context.timingFunction = AtticMotionScale.easeOutTimingFunction
             view.animator().alphaValue = showing ? 1 : 0
         } completionHandler: {
             MainActor.assumeIsolated { if !showing, view.alphaValue == 0 { view.isHidden = true } }

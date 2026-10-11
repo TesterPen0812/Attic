@@ -349,6 +349,96 @@ enum AtticTextStyle: String, CaseIterable, Sendable {
 
 // MARK: - Motion
 
+/// The one motion scale (Astra A4 §6, adopted 2026-10-11): three durations
+/// and two curves, so the same kind of motion takes the same time on every
+/// page. A feel (Lively, Subtle) only changes the spring's bounce.
+///
+/// - F, `fast` (120 ms): hover and focus, every exit and dismissal, and the
+///   Reduced fade.
+/// - M, `standard` (200 ms): things that appear (search, dropdowns and
+///   pop-overs, notices, the status pill, completion feedback, toasts).
+/// - L, `spatial` (280 ms): navigation, expansion, the Aa row's geometry,
+///   a drag settling, the panel.
+///
+/// Curves: S, the feel's spring at one of those durations (positions and
+/// geometry, which must reverse from where they are), and E, an ease-out
+/// cubic (.2, .8, .2, 1) for opacity, the dropdown's reveal and exits.
+///
+/// Reduced (Settings › Animations › Reduced or macOS Reduce Motion), one
+/// policy everywhere: no scaling, sliding or geometry interpolation; a
+/// F/E fade where a fade helps, an instant change for pages, expansion and
+/// the Aa row.
+enum AtticMotionScale {
+    static let fast: Double = 0.12
+    static let standard: Double = 0.20
+    static let spatial: Double = 0.28
+    static let durations: [Double] = [fast, standard, spatial]
+
+    /// E's control points (for Core Animation and AppKit callers).
+    static let easeOutControlPoints: (Float, Float, Float, Float) = (0.2, 0.8, 0.2, 1)
+
+    /// E: the ease-out curve at `duration`.
+    static func easeOut(_ duration: Double) -> Animation {
+        .timingCurve(0.2, 0.8, 0.2, 1, duration: duration)
+    }
+
+    /// The exit: F/E, in every feel.
+    static var exit: Animation { easeOut(fast) }
+
+    /// Reduced's fade: F/E.
+    static var reducedFade: Animation { easeOut(fast) }
+
+    /// E as a Core Animation timing function (the Find bar, the table's
+    /// scroll indicator).
+    static var easeOutTimingFunction: CAMediaTimingFunction {
+        let p = easeOutControlPoints
+        return CAMediaTimingFunction(controlPoints: p.0, p.1, p.2, p.3)
+    }
+
+    /// The small overlays' recipe (notices, the status pill, the selection
+    /// bar, the format row): a 4 pt rise (spec) and a 0.96 grow from the
+    /// edge they come from, M/S in, F/E out by opacity only. Reduced: the
+    /// F/E fade.
+    static let overlayRise: CGFloat = 4
+    static let overlayScale: CGFloat = 0.96
+
+    static func overlayTransition(reduceMotion: Bool, from edge: VerticalEdge) -> AnyTransition {
+        if reduceMotion { return .opacity.animation(reducedFade) }
+        let insertion = AnyTransition.opacity
+            .combined(with: .offset(y: edge == .bottom ? overlayRise : -overlayRise))
+            .combined(with: .scale(scale: overlayScale, anchor: edge == .bottom ? .bottom : .top))
+        return .asymmetric(insertion: insertion, removal: .opacity.animation(exit))
+    }
+
+    /// The overlays' animation while showing: M/S (the Reduced fade).
+    static func overlayAnimation(reduceMotion: Bool) -> Animation? {
+        reduceMotion ? reducedFade : AtticMotionPreset.popover.animation(reduceMotion: false)
+    }
+}
+
+/// The search takeover, one recipe for Tasks and All notes (A4 M-01; the
+/// owner: Notes' search must move exactly as Tasks' does): the field comes
+/// in from the magnifier's end, 12 pt, growing from the feel's appear scale
+/// (M/S); the tabs or the notes' heading leave toward the other end. It
+/// ends at once (F/E), so the field lets the keyboard go. Reduced: the F/E
+/// fade.
+enum AtticSearchMotion {
+    static let travel: CGFloat = 12
+
+    static func field(reduceMotion: Bool) -> AnyTransition {
+        AtticMotionPreset.popover.transition(reduceMotion: reduceMotion, edge: .trailing, distance: travel)
+    }
+
+    static func labels(reduceMotion: Bool) -> AnyTransition {
+        AtticMotionPreset.popover.transition(reduceMotion: reduceMotion, edge: .leading, distance: travel)
+    }
+
+    static func animation(shown: Bool, reduceMotion: Bool) -> Animation? {
+        shown ? AtticMotionPreset.popover.animation(reduceMotion: reduceMotion)
+              : AtticMotionPreset.popover.exit(reduceMotion: reduceMotion)
+    }
+}
+
 /// The small set of interruptible springs every animation comes from
 /// (spec § Motion). A SwiftUI spring retargets from its current value and
 /// velocity when it is interrupted, so each one reverses from where it is.
@@ -398,7 +488,7 @@ enum AtticMotionPreset: String, CaseIterable, Sendable {
     /// feel's slide (A20: it was a 180 ms crossfade whatever the feel).
     func spring(in tuning: AtticMotionTuning) -> AtticMotionSpring {
         switch self {
-        case .hover: AtticMotionSpring(response: 0.10, bounce: 0)
+        case .hover: AtticMotionSpring(response: AtticMotionScale.fast, bounce: 0)
         case .slide, .pageSwitch: tuning.slide
         case .expand: tuning.expand
         case .doneSlide: tuning.doneSlide
@@ -431,9 +521,7 @@ enum AtticMotionPreset: String, CaseIterable, Sendable {
     /// rises into or out of its place by `settle`'s).
     var rise: CGFloat {
         switch self {
-        case .popover: 6
-        case .toast: 12
-        case .settle: 6
+        case .popover, .toast, .settle: AtticMotionScale.overlayRise
         default: 0
         }
     }
@@ -454,41 +542,30 @@ enum AtticMotionPreset: String, CaseIterable, Sendable {
         }
     }
 
-    /// The livelier spring Notes uses (owner, 2026-09-28: "springy, alive"):
-    /// the preset's motion in the current feel a little longer, with a soft
-    /// overshoot. Reduce Motion (and Animations: Reduced) gives the preset's
-    /// own fade or instant change.
-    func springy(reduceMotion: Bool) -> Animation? {
-        if reduceMotion { return animation(reduceMotion: true) }
-        return .spring(duration: duration * 1.5, bounce: Self.springyBounce)
-    }
-
-    static let springyBounce: Double = 0.24
-
-    /// The animation to use, or nil for an instant change.
+    /// The animation to use, or nil for an instant change: the feel's
+    /// spring at the preset's duration on the scale (hover: F/E). Notes no
+    /// longer has a slower spring of its own (A4 M-02).
     func animation(reduceMotion: Bool) -> Animation? {
         if reduceMotion { return reducedAnimation }
+        if self == .hover { return AtticMotionScale.easeOut(AtticMotionScale.fast) }
         let spring = spring(in: .current)
         return .spring(duration: spring.response, bounce: spring.bounce)
     }
 
-    /// Reduce Motion's fallback: the same in every feel (Calm's timings),
-    /// so the feel never reaches Reduced motion.
+    /// Reduced's fallback, the same in every feel: the F/E fade, or an
+    /// instant change for a page switch and an expansion.
     private var reducedAnimation: Animation? {
         switch reducedMotion {
         case .instant: nil
-        case .fade: .easeOut(duration: min(spring(in: .calm).response, 0.18))
+        case .fade: AtticMotionScale.reducedFade
         }
     }
 
-    /// Something leaving: in the spring leave style a quick critically
-    /// damped tuck (`leaveResponse`), else the preset's own animation (as
-    /// before the Motion Lab). Reduce Motion: the fallback.
+    /// Something leaving: F/E in every feel (exits fade; they never
+    /// bounce). Reduced: the fallback.
     func leaveAnimation(reduceMotion: Bool) -> Animation? {
         if reduceMotion { return reducedAnimation }
-        let tuning = AtticMotionTuning.current
-        guard tuning.leave == .spring else { return animation(reduceMotion: false) }
-        return .spring(duration: tuning.leaveResponse, bounce: 0)
+        return AtticMotionScale.exit
     }
 
     /// `animation` while something shows, `leaveAnimation` while it goes.
@@ -501,12 +578,8 @@ enum AtticMotionPreset: String, CaseIterable, Sendable {
     /// the spring leave style's quick tuck, which has no bounce either.
     /// Reduce Motion: the same fade, or instant for the instant presets.
     func exit(reduceMotion: Bool) -> Animation? {
-        if reduceMotion {
-            return reducedMotion == .instant ? nil : .easeOut(duration: min(spring(in: .calm).response, 0.12))
-        }
-        let tuning = AtticMotionTuning.current
-        if tuning.leave == .spring { return .spring(duration: tuning.leaveResponse, bounce: 0) }
-        return .easeOut(duration: min(duration, 0.12))
+        if reduceMotion { return reducedAnimation }
+        return AtticMotionScale.exit
     }
 
     /// The insertion/removal transition.
@@ -521,9 +594,11 @@ enum AtticMotionPreset: String, CaseIterable, Sendable {
     ///   seen as a small pop rather than a fade.
     /// - Spring leave style: it tucks toward its anchor (`leaveScale`) as
     ///   it fades, with half the move.
-    func transition(reduceMotion: Bool, edge: Edge? = .bottom, anchor: UnitPoint? = nil) -> AnyTransition {
+    func transition(reduceMotion: Bool, edge: Edge? = .bottom, anchor: UnitPoint? = nil,
+                    distance: CGFloat? = nil) -> AnyTransition {
         if reduceMotion { return .opacity }
-        let fade = move(edge, by: rise)
+        let travel = distance ?? rise
+        let fade = move(edge, by: travel, doublesSideways: distance == nil)
         let tuning = AtticMotionTuning.current
         guard scaleWeight > 0, tuning.appear == .spring || tuning.leave == .spring else { return fade }
         let anchor = anchor ?? edge.map(Self.anchor(for:)) ?? .center
@@ -531,7 +606,8 @@ enum AtticMotionPreset: String, CaseIterable, Sendable {
             ? fade.combined(with: .scale(scale: scale(from: tuning.appearScale), anchor: anchor))
             : fade
         let removal = tuning.leave == .spring
-            ? move(edge, by: rise / 2).combined(with: .scale(scale: scale(from: tuning.leaveScale), anchor: anchor))
+            ? move(edge, by: travel / 2, doublesSideways: distance == nil)
+                .combined(with: .scale(scale: scale(from: tuning.leaveScale), anchor: anchor))
             : fade
         return .asymmetric(insertion: insertion, removal: removal)
     }
@@ -550,13 +626,14 @@ enum AtticMotionPreset: String, CaseIterable, Sendable {
         CGFloat(1 - (1 - feelScale) * scaleWeight)
     }
 
-    private func move(_ edge: Edge?, by distance: CGFloat) -> AnyTransition {
+    private func move(_ edge: Edge?, by distance: CGFloat, doublesSideways: Bool = true) -> AnyTransition {
         guard let edge, distance > 0 else { return .opacity }
+        let sideways = doublesSideways ? distance * 2 : distance
         switch edge {
         case .bottom: return .opacity.combined(with: .offset(y: distance))
         case .top: return .opacity.combined(with: .offset(y: -distance))
-        case .leading: return .opacity.combined(with: .offset(x: -distance * 2))
-        case .trailing: return .opacity.combined(with: .offset(x: distance * 2))
+        case .leading: return .opacity.combined(with: .offset(x: -sideways))
+        case .trailing: return .opacity.combined(with: .offset(x: sideways))
         }
     }
 
@@ -734,52 +811,34 @@ enum AtticMotionFeel: String, CaseIterable, Codable, Sendable {
 }
 
 extension AtticMotionTuning {
-    /// Round 11's values (the CHANGELOG, "Phase 1 round 11"), with its fades.
-    static let calm = AtticMotionTuning(
-        slide: .init(response: 0.25, bounce: 0), expand: .init(response: 0.22, bounce: 0),
-        doneSlide: .init(response: 0.25, bounce: 0),
-        popover: .init(response: 0.22, bounce: 0.15), toast: .init(response: 0.24, bounce: 0.12),
-        complete: .init(response: 0.22, bounce: 0.15), settle: .init(response: 0.24, bounce: 0.08),
-        failReturn: .init(response: 0.28, bounce: 0.1),
-        appearScale: 1, leaveResponse: 0.12, leaveScale: 1, appear: .fade, leave: .fade
-    )
+    /// Every feel on the one scale (`AtticMotionScale`): navigation, the
+    /// quick look, the done row's slide, settling and a failed drop's
+    /// return take L (280 ms); pop-overs, toasts and completions take M
+    /// (200 ms). Feels differ only in bounce and in how much things grow.
+    private static func scaled(bounce: Double, appearScale: Double, leaveScale: Double,
+                               appear: AtticMotionStyle, leave: AtticMotionStyle) -> AtticMotionTuning {
+        let spatial = AtticMotionSpring(response: AtticMotionScale.spatial, bounce: bounce)
+        let standard = AtticMotionSpring(response: AtticMotionScale.standard, bounce: bounce)
+        return AtticMotionTuning(
+            slide: spatial, expand: spatial, doneSlide: spatial,
+            popover: standard, toast: standard, complete: standard, settle: spatial, failReturn: spatial,
+            appearScale: appearScale, leaveResponse: AtticMotionScale.fast, leaveScale: leaveScale,
+            appear: appear, leave: leave
+        )
+    }
 
-    /// Calm's timings with a small bounce (navigation 0.04, things that
-    /// appear about 0.10), springing in from 0.96 of their size and tucking
-    /// away to 0.98 in 0.12 s. Quieter than Lively, but never a plain fade.
-    static let subtle = AtticMotionTuning(
-        slide: .init(response: 0.25, bounce: 0.04), expand: .init(response: 0.22, bounce: 0.04),
-        doneSlide: .init(response: 0.25, bounce: 0.04),
-        popover: .init(response: 0.22, bounce: 0.10), toast: .init(response: 0.24, bounce: 0.10),
-        complete: .init(response: 0.22, bounce: 0.10), settle: .init(response: 0.24, bounce: 0.08),
-        failReturn: .init(response: 0.28, bounce: 0.08),
-        appearScale: 0.96, leaveResponse: 0.12, leaveScale: 0.98, appear: .spring, leave: .spring
-    )
+    /// No bounce, fades (the Motion Lab's quiet reference).
+    static let calm = scaled(bounce: 0, appearScale: 1, leaveScale: 1, appear: .fade, leave: .fade)
 
-    /// Navigation about 0.3 s with bounce 0.12, things that appear about
-    /// 0.27 s with bounce 0.22 from 0.92 of their size, leaving in a 0.14 s
-    /// tuck to 0.96. Each spring was chosen to reach 95 % of its way within
-    /// a frame of Calm's (measured: `MotionLabTests`), so the bounce adds
-    /// no delay: a bouncier spring starts faster.
-    static let lively = AtticMotionTuning(
-        slide: .init(response: 0.30, bounce: 0.12), expand: .init(response: 0.26, bounce: 0.12),
-        doneSlide: .init(response: 0.30, bounce: 0.12),
-        popover: .init(response: 0.26, bounce: 0.22), toast: .init(response: 0.28, bounce: 0.22),
-        complete: .init(response: 0.26, bounce: 0.22), settle: .init(response: 0.27, bounce: 0.16),
-        failReturn: .init(response: 0.30, bounce: 0.15),
-        appearScale: 0.92, leaveResponse: 0.14, leaveScale: 0.96, appear: .spring, leave: .spring
-    )
+    /// Bounce 0.04, growing from 0.96 of their size.
+    static let subtle = scaled(bounce: 0.04, appearScale: 0.96, leaveScale: 0.98, appear: .spring, leave: .spring)
 
-    /// Round 9's values (the CHANGELOG, "Phase 1 round 9" and round 11's
-    /// "was" values), popping from 0.88 and tucking to 0.94.
-    static let playful = AtticMotionTuning(
-        slide: .init(response: 0.32, bounce: 0.15), expand: .init(response: 0.30, bounce: 0.2),
-        doneSlide: .init(response: 0.34, bounce: 0.2),
-        popover: .init(response: 0.26, bounce: 0.3), toast: .init(response: 0.32, bounce: 0.25),
-        complete: .init(response: 0.26, bounce: 0.3), settle: .init(response: 0.30, bounce: 0.25),
-        failReturn: .init(response: 0.34, bounce: 0.15),
-        appearScale: 0.88, leaveResponse: 0.20, leaveScale: 0.94, appear: .spring, leave: .spring
-    )
+    /// The default: bounce 0.12, growing from 0.92 of their size.
+    static let lively = scaled(bounce: 0.12, appearScale: 0.92, leaveScale: 0.96, appear: .spring, leave: .spring)
+
+    /// The Motion Lab's lively extreme (preview builds only): bounce 0.2,
+    /// growing from 0.88.
+    static let playful = scaled(bounce: 0.2, appearScale: 0.88, leaveScale: 0.94, appear: .spring, leave: .spring)
 }
 
 /// The Motion Lab (preview builds only): whether this process may show it

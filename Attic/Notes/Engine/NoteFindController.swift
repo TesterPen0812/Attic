@@ -77,9 +77,12 @@ final class NoteFindController: ObservableObject {
         if !isShown {
             topInset = scroll.contentInsets.top
             isShown = true
+            // The note makes room at once (one layout change, never
+            // animated over a long document); only the bar moves.
             scroll.contentInsets.top = topInset + Self.height
             layoutBar()
             refresh(selectFirst: false)
+            if let host { Self.appear(host) }
         }
         // Finish mounting and take the keyboard in this key event. Waiting
         // for SwiftUI's focus update lets fast typing after ⌘F edit the note.
@@ -103,7 +106,7 @@ final class NoteFindController: ObservableObject {
         matches = []
         index = nil
         engine?.scrollView?.contentInsets.top = topInset
-        host?.removeFromSuperview()
+        if let host { Self.disappear(host) }
         host = nil
         updateHighlights(clear: true)
         if returnFocus, let engine {
@@ -111,6 +114,35 @@ final class NoteFindController: ObservableObject {
                let (table, _) = engine.tableAttachment(id: id) {
                 engine.enterTable(table, at: cell, caret: .range(range))
             } else { engine.textView?.window?.makeFirstResponder(engine.textView) }
+        }
+    }
+
+    /// The bar's appearance (A4: Find had none): it fades in and comes
+    /// down its last 4 pt, M/E; Reduced, the F/E fade alone. The keyboard
+    /// is the field's at once, whatever the motion.
+    private static func appear(_ host: NSView) {
+        let reduce = AtticMotionPreference.reducesMotion
+        let rest = host.frame.origin
+        let rise = reduce ? 0 : AtticMotionScale.overlayRise
+        host.alphaValue = 0
+        host.setFrameOrigin(NSPoint(x: rest.x, y: rest.y + (host.superview?.isFlipped == false ? rise : -rise)))
+        NSAnimationContext.runAnimationGroup { context in
+            context.duration = reduce ? AtticMotionScale.fast : AtticMotionScale.standard
+            context.timingFunction = AtticMotionScale.easeOutTimingFunction
+            context.allowsImplicitAnimation = false
+            host.animator().alphaValue = 1
+            host.animator().setFrameOrigin(rest)
+        }
+    }
+
+    /// The bar's exit: an F/E fade, then it leaves the view.
+    private static func disappear(_ host: NSView) {
+        NSAnimationContext.runAnimationGroup { context in
+            context.duration = AtticMotionScale.fast
+            context.timingFunction = AtticMotionScale.easeOutTimingFunction
+            host.animator().alphaValue = 0
+        } completionHandler: {
+            MainActor.assumeIsolated { host.removeFromSuperview() }
         }
     }
 

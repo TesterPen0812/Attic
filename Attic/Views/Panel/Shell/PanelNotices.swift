@@ -29,7 +29,7 @@ struct PanelNoticeStack: View {
                 }
                 .onHover { toasts.holdOpen($0) }
                 .accessibilityIdentifier("panel-undo-toast")
-                .transition(AtticMotionPreset.toast.transition(reduceMotion: design.reduceMotion))
+                .transition(AtticMotionScale.overlayTransition(reduceMotion: design.reduceMotion, from: .bottom))
                 .id(toast.id)
             }
             if let notice {
@@ -40,12 +40,12 @@ struct PanelNoticeStack: View {
                     onDismiss: onDismissNotice
                 )
                 .accessibilityIdentifier("panel-error-message")
-                .transition(AtticMotionPreset.popover.transition(reduceMotion: design.reduceMotion))
+                .transition(AtticMotionScale.overlayTransition(reduceMotion: design.reduceMotion, from: .bottom))
             }
         }
-        // They spring in and tuck away with the feel (the Motion Lab).
-        .animation(AtticMotionPreset.toast.animation(reduceMotion: design.reduceMotion, showing: toasts.current != nil),
-                   value: toasts.current)
-        .animation(AtticMotionPreset.popover.animation(reduceMotion: design.reduceMotion, showing: notice != nil), value: notice)
+        // The overlays' one recipe (A4 M-03), as Notes' status pill and the
+        // selection bar: M/S in with a 4 pt rise, F/E out.
+        .animation(AtticMotionScale.overlayAnimation(reduceMotion: design.reduceMotion), value: toasts.current)
+        .animation(AtticMotionScale.overlayAnimation(reduceMotion: design.reduceMotion), value: notice)
     }
 }
