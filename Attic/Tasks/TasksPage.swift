@@ -1316,6 +1316,8 @@ struct TasksPage: View {
                               revealRow: { id, proxy in revealRow(id, in: .done, proxy: proxy, animation: nil) },
                               cell: { row in cell(row, tab: .done, group: [], drawn: drawn) },
                               proxies: listProxies,
+                              pointer: pointer,
+                              focusSelection: { id in setFocus(id) },
                               registerList: { proxy in
                                   listProxies.lists[.done] = proxy
                                   takeScrollRequest(in: .done)
@@ -1418,7 +1420,8 @@ struct TasksPage: View {
                 }
                 .animation(reorderFade.isEmpty ? travel : nil, value: rows.map(\.id))
                 // The list's place is kept while its page is not built.
-                .background(TasksScrollKeeper(model: model, tab: tab, proxies: listProxies, drawn: drawn).accessibilityHidden(true))
+                .background(TasksScrollKeeper(model: model, tab: tab, proxies: listProxies, pointer: pointer,
+                    focusSelection: { id in setFocus(id) }, drawn: drawn).accessibilityHidden(true))
                 // The clearance past the add bar's zone is room at the end
                 // of the list, not margin (see `TasksViewport.bottomMargin`).
                 .padding(.bottom, edgeStyle == .cleanCut ? bottomClearance - bottomMargin : 0)

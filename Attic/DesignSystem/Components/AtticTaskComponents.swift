@@ -1244,6 +1244,7 @@ struct AtticTaskRow: View {
             }
             .frame(height: highlightHeight)
             .padding(.horizontal, AtticLayout.rowHighlightInset)
+            .animation(.linear(duration: isSelected ? 0.08 : 0.06), value: isSelected)
 
             // The circle, centred on the title line (row top + 17), its
             // 28 pt hit area around the 14 pt drawing.

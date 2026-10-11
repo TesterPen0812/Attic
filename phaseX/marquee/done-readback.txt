@@ -1,0 +1,46 @@
+Window: "", App: Attic Phase X.
+0 system dialog Secondary Actions: Raise
+	1 container
+		2 scroll area Secondary Actions: Scroll Up, Scroll Down
+			3 scroll bar (settable, float) 0
+		4 text Description: key, Value: key began 0 ended 0, ID: panel-key-state
+		5 button Description: Pin panel, Help: Pin (⇧⌘P), ID: panel-pin-button
+		6 container Description: Pages, ID: panel-section-picker
+			7 button (selected) Description: Tasks, Help: Tasks (⌘1), ID: panel-section-tasks
+			8 button Description: Notes, Help: Notes (⌘2), ID: panel-section-notes
+			9 button Description: Canvas, Help: Canvas (⌘3), ID: panel-section-canvas
+		10 container Description: Pages, ID: tasks-page-tabs
+			11 button Description: Now, ID: tasks-page-now
+			12 button Description: Later, ID: tasks-page-backlog
+			13 button (selected) Description: Done, ID: tasks-page-done
+		14 button Description: Search done tasks (⌘F), ID: tasks-done-search-button
+		15 scroll area
+			16 list Secondary Actions: AXScrollToTop, AXScrollToBottom
+				17 heading Today
+				18 button Description: Renew domain, done, Help: Mark as not done, Renew domain, Value: done, Secondary Actions: Change tags, Change date, Delete, Show actions, Duplicate, Copy, Change priority, Edit title, Show details, Restore to Now, Mark as not done, Status
+				19 heading Yesterday
+				20 button Description: Send invoice, done, Help: Mark as not done, Send invoice, Value: done, Secondary Actions: Change tags, Change date, Delete, Show actions, Duplicate, Copy, Change priority, Edit title, Show details, Restore to Now, Mark as not done, Status
+				21 button Description: Water the plants, done, Help: Mark as not done, Water the plants, Value: done, Secondary Actions: Change tags, Change date, Delete, Show actions, Duplicate, Copy, Change priority, Edit title, Show details, Restore to Now, Mark as not done, Status
+				22 heading Fri 9 Oct
+				23 button Description: Call the bank, done, Help: Mark as not done, Call the bank, Value: done, Secondary Actions: Change tags, Change date, Delete, Show actions, Duplicate, Copy, Change priority, Edit title, Show details, Restore to Now, Mark as not done, Status
+				24 heading Mon 5 Oct
+				25 button Description: Pay rent, done, Help: Mark as not done, Pay rent, Value: done, Secondary Actions: Change tags, Change date, Delete, Show actions, Duplicate, Copy, Change priority, Edit title, Show details, Restore to Now, Mark as not done, Status
+				26 heading Tue 1 Sep
+				27 button Description: Renew passport, done, Help: Mark as not done, Renew passport, Value: done, Secondary Actions: Change tags, Change date, Delete, Show actions, Duplicate, Copy, Change priority, Edit title, Show details, Restore to Now, Mark as not done, Status
+		28 container Date, tag and priority
+			29 button Description: Date, ID: composer-date
+			30 button Description: Tag, ID: composer-tag
+			31 button Description: Priority, ID: composer-priority
+		32 scroll area
+			33 text field (settable) Description: Add a task, ID: AtticTokenField
+		34 image Description: Add, ID: plus
+		35 text Add a task
+		36 button (disabled) Description: Add, Help: Add (Return)
+37 menu bar
+	38 AtticPhaseX
+	39 Edit
+	40 View
+	41 Window
+	42 Help
+
+The focused UI element is 0 system dialog Secondary Actions: Raise
