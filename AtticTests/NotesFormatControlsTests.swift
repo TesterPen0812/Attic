@@ -1857,3 +1857,289 @@ extension NotesFormatControlsTests {
         XCTAssertFalse(clock.isRunning)
     }
 }
+
+
+@MainActor
+final class HeadingsBehaviourTests: XCTestCase {
+    func testHeadingRenderingCaptures() throws {
+        guard let output = ProcessInfo.processInfo.environment["TEST_RUNNER_ATTIC_HEADINGS_CAPTURE_DIR"] else {
+            throw XCTSkip("explicit native capture run only")
+        }
+        var heading = NoteBlock.text("Research", style: "heading"); heading.level = 1
+        var sub = NoteBlock.text("Sources", style: "heading"); sub.level = 2
+        var next = NoteBlock.text("Next section", style: "heading"); next.level = 1
+        let engine = NoteEditorEngine(noteID: UUID(), document: NoteDocument(blocks: [
+            .text("Heading review"), heading, .text("The section keeps all of its text."), sub,
+            .text("Nested content stays with Research."), .table(.blank()), next, .text("This stays visible.")
+        ]))
+        let (scroll, text) = engine.makeView()
+        scroll.frame = NSRect(x: 0, y: 0, width: 320, height: 650)
+        scroll.drawsBackground = true
+        scroll.backgroundColor = .white
+        text.textContainerInset = NSSize(width: 28, height: 8)
+        let window = NSWindow(contentRect: scroll.frame, styleMask: [.borderless], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        window.contentView = scroll
+        defer { window.close() }
+        engine.layoutManager?.ensureLayout(for: engine.contentStorage.documentRange)
+        text.layoutSubtreeIfNeeded()
+        text.textLayoutManager?.textViewportLayoutController.layoutViewport()
+        RunLoop.main.run(until: Date().addingTimeInterval(0.1))
+        func capture(_ name: String) throws {
+            engine.layoutManager?.ensureLayout(for: engine.contentStorage.documentRange)
+            text.layoutSubtreeIfNeeded()
+            text.textLayoutManager?.textViewportLayoutController.layoutViewport()
+            engine.updateHeadingControls()
+            RunLoop.main.run(until: Date().addingTimeInterval(0.1))
+            let bitmap = try XCTUnwrap(scroll.bitmapImageRepForCachingDisplay(in: scroll.bounds))
+            scroll.cacheDisplay(in: scroll.bounds, to: bitmap)
+            let png = try XCTUnwrap(bitmap.representation(using: .png, properties: [:]))
+            try png.write(to: URL(fileURLWithPath: output).appendingPathComponent(name))
+        }
+        try capture("after-open-native.png")
+        XCTAssertEqual(engine.headingControls.count, 3)
+        let button = try XCTUnwrap(engine.headingControls.values.first { $0.headingOffset == (text.string as NSString).range(of: "Research").location })
+        let glyph = try XCTUnwrap(engine.rect(for: NSRange(location: (text.string as NSString).range(of: "Research").location + 7, length: 1)))
+        XCTAssertEqual(button.frame.minX, glyph.maxX + 3, accuracy: 0.5)
+        button.performClick(nil)
+        try capture("after-folded-native.png")
+        XCTAssertEqual(engine.headingControls.count, 2)
+        XCTAssertEqual(engine.foldedHeadingIDs.count, 1)
+        button.performClick(nil)
+        try capture("after-unfolded-native.png")
+        XCTAssertEqual(engine.headingControls.count, 3)
+        XCTAssertTrue(engine.foldedHeadingIDs.isEmpty)
+    }
+
+    func testPersistedFoldSkipsNativeLayoutWithoutLosingText() {
+        let id = UUID()
+        var heading = NoteBlock.text("Heading", id: id, style: "heading"); heading.level = 1
+        let engine = NoteEditorEngine(noteID: UUID(), document: NoteDocument(
+            blocks: [.text("Title"), heading, .text("Retained folded text")],
+            extras: ["foldedHeadings": .array([.string(id.uuidString)])]))
+        let (scroll, text) = engine.makeView()
+        scroll.frame.size = CGSize(width: 320, height: 500)
+        text.layoutSubtreeIfNeeded()
+        let layout = engine.layoutManager!
+        layout.ensureLayout(for: engine.contentStorage.documentRange)
+        var starts: [Int] = []
+        layout.enumerateTextLayoutFragments(from: engine.contentStorage.documentRange.location, options: [.ensuresLayout]) { fragment in
+            starts.append(engine.contentStorage.offset(from: engine.contentStorage.documentRange.location, to: fragment.rangeInElement.location))
+            return true
+        }
+        let body = (text.string as NSString).range(of: "Retained folded text")
+        XCTAssertFalse(starts.contains(body.location), "folded paragraphs must not participate in layout")
+        XCTAssertTrue(text.string.contains("Retained folded text"))
+    }
+
+    private func heading(_ text: String, level: Int, id: UUID = UUID()) -> NoteBlock {
+        var block = NoteBlock.text(text, id: id, style: "heading")
+        block.level = level
+        return block
+    }
+
+    private func location(_ text: String, in engine: NoteEditorEngine) -> Int {
+        (engine.textStorage.string as NSString).range(of: text).location
+    }
+
+    func testNestedFoldBoundariesKeepEveryKindOfContentAndNextPeerVisible() throws {
+        let h1 = heading("Research", level: 1), h2 = heading("Sources", level: 2)
+        let next = heading("Next section", level: 1)
+        let image = NoteBlock.image(attachmentID: UUID(), pixelWidth: 80, pixelHeight: 40)
+        let file = NoteBlock.file(filename: "reference.txt", contentTypeIdentifier: "public.text", byteCount: 12, importFailure: "Unavailable")
+        let document = NoteDocument(blocks: [.text("Title"), h1, .text("Hidden prose"), h2, .table(.blank()), image, file, next, .text("Visible prose")])
+        let engine = NoteEditorEngine(noteID: UUID(), document: document)
+        let (scroll, text) = engine.makeView()
+        scroll.frame.size = CGSize(width: 320, height: 800)
+        let original = engine.textStorage.string
+        let peerRange = (original as NSString).range(of: "Next section")
+        let beforeY = try XCTUnwrap(engine.rect(for: peerRange)).minY
+        let section = try XCTUnwrap(engine.headingSection(at: location("Research", in: engine)))
+        XCTAssertEqual(NSMaxRange(section.content), location("Next section", in: engine))
+        XCTAssertTrue(engine.toggleHeadingFold(at: section.heading.location))
+        XCTAssertEqual(engine.textStorage.string, original)
+        XCTAssertEqual(engine.document().blocks, document.blocks)
+        let layout = try XCTUnwrap(engine.layoutManager)
+        layout.ensureLayout(for: engine.contentStorage.documentRange)
+        var starts: [Int] = []
+        layout.enumerateTextLayoutFragments(from: engine.contentStorage.documentRange.location, options: [.ensuresLayout]) { fragment in
+            starts.append(engine.contentStorage.offset(from: engine.contentStorage.documentRange.location, to: fragment.rangeInElement.location))
+            return true
+        }
+        XCTAssertFalse(starts.contains(location("Hidden prose", in: engine)))
+        XCTAssertFalse(starts.contains(location("Sources", in: engine)))
+        XCTAssertTrue(starts.contains(location("Next section", in: engine)))
+        let afterY = try XCTUnwrap(engine.rect(for: peerRange)).minY
+        XCTAssertLessThan(afterY, beforeY - 100, "folding removes layout height, including attachment height")
+        let reopened = NoteEditorEngine(noteID: UUID(), document: try XCTUnwrap(NoteContentCodec.decode(NoteContentCodec.encode(engine.document())).document))
+        XCTAssertEqual(reopened.foldedHeadingIDs, [try XCTUnwrap(h1.id)])
+        XCTAssertTrue(NoteMarkdownExport.markdown(engine.document()).contains("Hidden prose"))
+        XCTAssertTrue(NoteTextExport.plainText(engine.document()).contains("Hidden prose"))
+        XCTAssertTrue(NotePrint.printView(document: engine.document()).string.contains("Hidden prose"))
+        text.setSelectedRange(NSRange(location: section.heading.location + 1, length: 0))
+        XCTAssertTrue(engine.history.undo())
+        XCTAssertTrue(engine.foldedHeadingIDs.isEmpty)
+        XCTAssertTrue(engine.history.redo())
+        XCTAssertEqual(engine.foldedHeadingIDs, [try XCTUnwrap(h1.id)])
+    }
+
+    func testHeadingTypingKeepsFoldAndCaretEntryUnfoldsAllAncestors() throws {
+        let parent = heading("Parent", level: 1), child = heading("Child", level: 2)
+        let engine = NoteEditorEngine(noteID: UUID(), document: NoteDocument(blocks: [.text("Title"), parent, child, .text("Needle"), heading("Peer", level: 1)]))
+        let (_, text) = engine.makeView()
+        XCTAssertTrue(engine.toggleHeadingFold(at: location("Child", in: engine)))
+        XCTAssertTrue(engine.toggleHeadingFold(at: location("Parent", in: engine)))
+        text.setSelectedRange(NSRange(location: location("Parent", in: engine), length: 0))
+        text.insertText("Edited ", replacementRange: text.selectedRange())
+        XCTAssertEqual(engine.foldedHeadingIDs.count, 2)
+        XCTAssertEqual(engine.document().blocks[1].id, parent.id)
+        text.setSelectedRange(NSRange(location: location("Needle", in: engine) + 1, length: 0))
+        XCTAssertTrue(engine.foldedHeadingIDs.isEmpty)
+        XCTAssertTrue(text.string.contains("Edited Parent"))
+    }
+
+    func testFoldIdentitySurvivesTypingUndoRedoAndReopening() throws {
+        let engine = NoteEditorEngine(noteID: UUID(), document: NoteDocument(blocks: [.text("Title"), .text("Heading", style: "heading"), .text("Body")]))
+        let (_, text) = engine.makeView()
+        let start = location("Heading", in: engine)
+        XCTAssertTrue(engine.toggleHeadingFold(at: start))
+        let id = try XCTUnwrap(engine.document().blocks[1].id)
+        text.setSelectedRange(NSRange(location: start + 3, length: 0))
+        text.insertText("x", replacementRange: text.selectedRange())
+        XCTAssertEqual(engine.foldedHeadingIDs, [id])
+        XCTAssertTrue(engine.history.undo())
+        XCTAssertEqual(engine.foldedHeadingIDs, [id])
+        XCTAssertEqual(engine.document().blocks[1].text, "Heading")
+        XCTAssertTrue(engine.history.undo())
+        XCTAssertTrue(engine.foldedHeadingIDs.isEmpty)
+        XCTAssertTrue(engine.history.redo())
+        XCTAssertEqual(engine.foldedHeadingIDs, [id])
+        XCTAssertTrue(engine.history.redo())
+        XCTAssertEqual(engine.document().blocks[1].text, "Heaxding")
+        let reopened = NoteEditorEngine(noteID: UUID(), document: try XCTUnwrap(NoteContentCodec.decode(NoteContentCodec.encode(engine.document())).document))
+        XCTAssertEqual(reopened.foldedHeadingIDs, [id])
+    }
+
+    func testFindUnfoldsBodyAndTableCellMatches() throws {
+        let h = heading("Section", level: 1)
+        var table = NoteTable.blank()
+        table[.init(row: 1, column: 0)].text = "Cell needle"
+        let engine = NoteEditorEngine(noteID: UUID(), document: NoteDocument(blocks: [.text("Title"), h, .text("Body needle"), .table(table)]))
+        let (scroll, text) = engine.makeView()
+        scroll.frame.size = CGSize(width: 320, height: 700)
+        let window = NSWindow(contentRect: scroll.frame, styleMask: [.borderless], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false; window.contentView = scroll
+        defer { window.close() }
+        engine.layoutManager?.ensureLayout(for: engine.contentStorage.documentRange)
+        text.layoutSubtreeIfNeeded()
+        XCTAssertTrue(engine.toggleHeadingFold(at: location("Section", in: engine)))
+        engine.find.show()
+        engine.find.query = "Body needle"
+        XCTAssertTrue(engine.foldedHeadingIDs.isEmpty)
+        XCTAssertTrue(engine.toggleHeadingFold(at: location("Section", in: engine)))
+        engine.find.query = "Cell needle"
+        XCTAssertTrue(engine.foldedHeadingIDs.isEmpty)
+        XCTAssertEqual(engine.find.matches.count, 1)
+        engine.find.close()
+    }
+
+    func testFoldMenuShortcutAndReadOnlyValidationUseSharedCommand() {
+        let engine = NoteEditorEngine(noteID: UUID(), document: NoteDocument(blocks: [.text("Title"), heading("Heading", level: 2), .text("Body")]))
+        let (_, text) = engine.makeView()
+        text.setSelectedRange(NSRange(location: location("Heading", in: engine), length: 0))
+        let router = NoteCommandRouter(engine: engine)
+        XCTAssertTrue(NoteCommandCatalog.formatSections.flatMap { $0 }.contains(.toggleHeadingFold))
+        XCTAssertEqual(NoteCommandCatalog.shortcutLabel(.toggleHeadingFold), "⌃⌘H")
+        let event = NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: [.control, .command], timestamp: 0,
+            windowNumber: 0, context: nil, characters: "h", charactersIgnoringModifiers: "h", isARepeat: false, keyCode: 4)!
+        XCTAssertEqual(NoteCommandCatalog.command(for: event), .toggleHeadingFold)
+        XCTAssertTrue(engine.handleShortcut(event))
+        XCTAssertEqual(router.validation(.toggleHeadingFold).state, .on)
+        XCTAssertTrue(router.run(.toggleHeadingFold, from: .menuBar))
+        XCTAssertTrue(engine.foldedHeadingIDs.isEmpty)
+        text.setSelectedRange(NSRange(location: 0, length: 0))
+        XCTAssertFalse(router.validation(.toggleHeadingFold).enabled)
+        let readOnly = NoteEditorEngine(noteID: UUID(), document: engine.document(), readOnly: true)
+        XCTAssertFalse(readOnly.toggleHeadingFold(at: location("Heading", in: readOnly)))
+    }
+
+    func testFoldMetadataSurvivesStoreSaveAndFreshLoad() throws {
+        let store = try makeTestNoteStore(attachmentFileStore: makeTestAttachmentFileStore())
+        let document = NoteDocument(blocks: [.text("Title"), heading("Heading", level: 1), .text("Stored body")])
+        guard case let .success((id, revision)) = store.createDocumentNote(id: UUID(), document: document) else { return XCTFail("create") }
+        let engine = NoteEditorEngine(noteID: id, document: document)
+        _ = engine.makeView()
+        XCTAssertTrue(engine.toggleHeadingFold(at: location("Heading", in: engine)))
+        guard case .success = store.saveDocument(noteID: id, document: engine.document(), baseRevisionID: revision) else { return XCTFail("save") }
+        let loaded = try XCTUnwrap(store.loadDocument(noteID: id)?.content.document)
+        let reopened = NoteEditorEngine(noteID: id, document: loaded)
+        XCTAssertEqual(reopened.foldedHeadingIDs, engine.foldedHeadingIDs)
+        XCTAssertEqual(reopened.document().blocks[2].text, "Stored body")
+    }
+
+    func testCopiedFoldedHeadingGetsIndependentIdentityAndIncludesItsBody() throws {
+        let original = heading("Heading", level: 1)
+        let engine = NoteEditorEngine(noteID: UUID(), document: NoteDocument(blocks: [
+            .text("Title"), original, .text("Copied hidden body"), heading("Peer", level: 1), .text("")
+        ]))
+        _ = engine.makeView()
+        let section = try XCTUnwrap(engine.headingSection(at: location("Heading", in: engine)))
+        XCTAssertTrue(engine.toggleHeadingFold(at: section.heading.location))
+        let range = NSRange(location: section.heading.location, length: NSMaxRange(section.content) - section.heading.location)
+        let fragment = engine.fragment(for: range)
+        XCTAssertTrue(NoteTextExport.plainText(fragment).contains("Copied hidden body"))
+        let data = try NoteContentCodec.encode(fragment, context: .fragment)
+        XCTAssertTrue(engine.paste(fragmentData: data, at: NSRange(location: engine.textStorage.length, length: 0)))
+        let copies = engine.headingSections.filter { engine.lineText(at: $0.heading.location) == "Heading" }
+        XCTAssertEqual(copies.count, 2)
+        XCTAssertEqual(Set(copies.compactMap(\.id)).count, 2, "copying must not couple two headings' fold states")
+        XCTAssertFalse(engine.isRangeFolded(try XCTUnwrap(copies.last).content))
+    }
+
+    func testCaretAtEndOfFoldedFinalParagraphUnfoldsIt() {
+        let engine = NoteEditorEngine(noteID: UUID(), document: NoteDocument(blocks: [
+            .text("Title"), heading("Heading", level: 1), .text("Final folded body")
+        ]))
+        let (_, text) = engine.makeView()
+        XCTAssertTrue(engine.toggleHeadingFold(at: location("Heading", in: engine)))
+        text.setSelectedRange(NSRange(location: engine.textStorage.length, length: 0))
+        XCTAssertTrue(engine.foldedHeadingIDs.isEmpty, "the insertion point at the final paragraph's end must be visible")
+    }
+
+    func testEmptyFinalBodyUnfoldsButTypingAtFinalHeadingEndKeepsFold() {
+        let engine = NoteEditorEngine(noteID: UUID(), document: NoteDocument(blocks: [
+            .text("Title"), heading("Heading", level: 1), .text("")
+        ]))
+        let (_, text) = engine.makeView()
+        XCTAssertTrue(engine.toggleHeadingFold(at: location("Heading", in: engine)))
+        text.setSelectedRange(NSRange(location: engine.textStorage.length, length: 0))
+        XCTAssertTrue(engine.foldedHeadingIDs.isEmpty)
+
+        let lastHeading = NoteEditorEngine(noteID: UUID(), document: NoteDocument(blocks: [
+            .text("Title"), heading("Final heading", level: 1)
+        ]))
+        let (_, lastText) = lastHeading.makeView()
+        XCTAssertTrue(lastHeading.toggleHeadingFold(at: location("Final heading", in: lastHeading)))
+        lastText.setSelectedRange(NSRange(location: lastHeading.textStorage.length, length: 0))
+        lastText.insertText(" edited", replacementRange: lastText.selectedRange())
+        XCTAssertEqual(lastHeading.foldedHeadingIDs.count, 1)
+        XCTAssertEqual(lastHeading.document().blocks.last?.text, "Final heading edited")
+    }
+
+    func testHeadingCacheTracksFormattingAndAttributeChanges() {
+        let engine = NoteEditorEngine(noteID: UUID(), document: NoteDocument(blocks: [
+            .text("Title"), .text("First"), .text("Second"), .text("Body")
+        ]))
+        _ = engine.makeView()
+        XCTAssertTrue(engine.headingSections.isEmpty)
+        let first = location("First", in: engine)
+        XCTAssertTrue(engine.perform(.paragraph(.heading(1)), selection: NSRange(location: first, length: 0)))
+        XCTAssertEqual(engine.headingSections.count, 1)
+        let second = engine.paragraphRange(at: location("Second", in: engine))
+        engine.textStorage.addAttribute(.noteBlockStyle, value: "heading", range: second)
+        engine.textStorage.addAttribute(.noteBlockLevel, value: 1, range: second)
+        XCTAssertEqual(engine.headingSections.count, 2)
+        XCTAssertEqual(NSMaxRange(engine.headingSections[0].content), second.location)
+    }
+
+}

@@ -332,6 +332,7 @@ final class NoteEditorTextView: NSTextView, NSAccessibilityCustomRotorItemSearch
             super.layout()
             PerformanceSignposts.noteDidLayout()
             updatePlaceholder()
+            engine?.updateHeadingControls()
             onLayout?()
         }
         caretFitter.refresh()
@@ -392,6 +393,7 @@ final class NoteEditorTextView: NSTextView, NSAccessibilityCustomRotorItemSearch
 
     override func viewWillDraw() {
         super.viewWillDraw()
+        engine?.updateHeadingControls()
         PerformanceSignposts.noteDidLayout()
     }
 
@@ -831,11 +833,17 @@ final class NoteEditorTextView: NSTextView, NSAccessibilityCustomRotorItemSearch
         let base = super.accessibilityChildren() ?? []
         guard let engine else { return base }
         var accessories = accessoryViews.filter { view in !view.isHidden && !base.contains { ($0 as AnyObject) === view } }
+        accessories += engine.headingControls.values.filter { button in
+            !base.contains { ($0 as AnyObject) === button }
+        }
         // Copy, while it shows (the caret in a block, or the pointer over one).
         if !monoCopyButton.isHidden, !base.contains(where: { ($0 as AnyObject) === monoCopyButton }) {
             accessories.append(monoCopyButton)
         }
-        let tables = engine.tableViews().filter { table in !base.contains { ($0 as AnyObject) === table } }
+        let tables = engine.tableViews().filter { table in
+            guard let attachment = table.attachment, let range = engine.range(ofTable: attachment) else { return false }
+            return !engine.isRangeFolded(range) && !base.contains { ($0 as AnyObject) === table }
+        }
         return base + engine.accessibilityElements(for: self) + tables + accessories
     }
 

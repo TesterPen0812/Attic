@@ -218,6 +218,7 @@ final class NoteCommandRouter {
         case .moveDown: "move-down"
         case .date: "date"
         case .table: "table"
+        case .toggleHeadingFold: "heading-fold"
         }
         return "notes-format-\(name)"
     }

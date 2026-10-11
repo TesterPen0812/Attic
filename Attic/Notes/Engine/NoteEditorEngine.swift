@@ -120,6 +120,11 @@ final class NoteEditorEngine: NSObject, NSTextViewDelegate, NSTextStorageDelegat
     private var dateEnvironmentSubscription: AnyCancellable?
     /// Document-level fields the text doesn't hold (format, requires, extras).
     private var template: NoteDocument
+    var foldedHeadingIDs = Set<UUID>()
+    var foldMetadataWasEdited = false
+    var headingSectionsCache: [NoteHeadingSection]?
+    var headingControls: [Int: NoteHeadingButton] = [:]
+    var updatingHeadingControls = false
     private(set) weak var textView: NoteEditorTextView?
     private(set) var scrollView: NSScrollView?
     private(set) var layoutManager: NSTextLayoutManager?
@@ -279,6 +284,9 @@ final class NoteEditorEngine: NSObject, NSTextViewDelegate, NSTextStorageDelegat
         self.today = today
         self.relativeDateNow = relativeDateNow
         self.template = document
+        foldedHeadingIDs = Set((document.extras["foldedHeadings"]?.arrayValue ?? []).compactMap {
+            $0.stringValue.flatMap(UUID.init(uuidString:))
+        })
         self.imageProvider = imageProvider
         self.staged = Dictionary(uniqueKeysWithValues: stagedAttachments.map { ($0.id, $0) })
         contentStorage = NSTextContentStorage()
@@ -339,6 +347,10 @@ final class NoteEditorEngine: NSObject, NSTextViewDelegate, NSTextStorageDelegat
     // MARK: Document
 
     func document() -> NoteDocument {
+        // Display-only, additive format-1 metadata; exports use all blocks.
+        if foldMetadataWasEdited {
+            template.extras["foldedHeadings"] = .array(foldedHeadingIDs.map(\.uuidString).sorted().map(NoteJSON.string))
+        }
         if var cached = documentCache {
             if !cached.finalParagraphDirty { return cached.document }
             let range = NSRange(location: cached.finalParagraphStart,
@@ -426,6 +438,8 @@ final class NoteEditorEngine: NSObject, NSTextViewDelegate, NSTextStorageDelegat
     /// A text view bound to this note's storage (TextKit 2). Only one view
     /// at a time: making a new one detaches the old.
     func makeView() -> (NSScrollView, NoteEditorTextView) {
+        headingControls.values.forEach { AtticOverlayHierarchy.remove($0) }
+        headingControls.removeAll()
         detachView()
         let layoutManager = NSTextLayoutManager()
         // The Mono block, list markers and quote bars (`NoteBlockLayoutFragment`).
@@ -1434,6 +1448,8 @@ final class NoteEditorEngine: NSObject, NSTextViewDelegate, NSTextStorageDelegat
     func textViewDidChangeSelection(_ notification: Notification) {
         guard let textView = textView else { return }
         let selection = textView.selectedRange()
+        // A caret may arrive through arrows, VoiceOver or native Find.
+        if selection.length == 0 { unfoldHeadings(containing: selection) }
         if userEditDepth == 0 && engineEditDepth == 0 && !history.isChangeInFlight {
             if let session = slashSession,
                selection != NSRange(location: NSMaxRange(session.range), length: 0) { slashSession = nil }
@@ -1619,6 +1635,7 @@ final class NoteEditorEngine: NSObject, NSTextViewDelegate, NSTextStorageDelegat
     /// processEditing allows here).
     func textStorage(_ textStorage: NSTextStorage, didProcessEditing editedMask: NSTextStorageEditActions,
                      range editedRange: NSRange, changeInLength delta: Int) {
+        headingSectionsCache = nil
         guard editedMask.contains(.editedCharacters) else { return }
         // An edit that empties the note or fills an empty one (an Undo, a
         // paste, an agent's change included): "Title" comes or goes.
@@ -1861,6 +1878,7 @@ final class NoteEditorEngine: NSObject, NSTextViewDelegate, NSTextStorageDelegat
     private func preparePaste(_ fragment: NoteDocument, resolved: [UUID: StagedNoteAttachment]? = nil) -> (document: NoteDocument, copied: [StagedNoteAttachment])? {
         let sameNote = fragment.extras["sourceNoteID"]?.stringValue.flatMap(UUID.init(uuidString:)) == noteID
         var present = Set(objectIDs())
+        present.formUnion(headingSections.compactMap(\.id))
         var result = fragment
         result.extras = [:]
         var blocks: [NoteBlock] = []
@@ -1906,7 +1924,9 @@ final class NoteEditorEngine: NSObject, NSTextViewDelegate, NSTextStorageDelegat
                     onNotice?(NoteNotice(kind: .notPasted, detail: String(localized: "An attachment couldn’t be read. Nothing was pasted.")))
                     return nil
                 }
-            case .text, .opaque:
+            case .text:
+                if block.style == "heading", let id = block.id { block.id = fresh(id) }
+            case .opaque:
                 break
             }
             block.inlines = block.inlines.map { inline in
@@ -2071,7 +2091,7 @@ final class NoteEditorEngine: NSObject, NSTextViewDelegate, NSTextStorageDelegat
     /// One element per object, in reading order, for VoiceOver (stock
     /// TextKit 2 exposes none).
     func accessibilityElements(for textView: NSTextView) -> [NSAccessibilityElement] {
-        objects().filter { !($0.0 is NoteTableAttachment) }.map { object, range in
+        objects().filter { !($0.0 is NoteTableAttachment) && !isRangeFolded($0.1) }.map { object, range in
             NoteObjectAccessibilityElement(engine: self, textView: textView, object: object, range: range)
         }
     }
@@ -2492,6 +2512,7 @@ enum NoteFormatCommand: Hashable {
     case indent, outdent, divider, toggleChecklist, moveUp, moveDown, date(NoteDay)
     /// Insert a table (2 × 3, with its header row) after the caret's line.
     case table
+    case toggleHeadingFold
 
     var title: String {
         switch self {
@@ -2520,6 +2541,7 @@ enum NoteFormatCommand: Hashable {
         case .moveDown: "Move Line Down"
         case .date: "Date"
         case .table: "Table"
+        case .toggleHeadingFold: "Fold or Unfold Heading"
         }
     }
 
@@ -2545,6 +2567,7 @@ enum NoteFormatCommand: Hashable {
         case .moveDown: "arrow.down"
         case .date: "calendar"
         case .table: "tablecells"
+        case .toggleHeadingFold: "chevron.down"
         }
     }
 
@@ -2571,6 +2594,7 @@ enum NoteFormatCommand: Hashable {
         case .moveUp: "⌥⌘↑"
         case .moveDown: "⌥⌘↓"
         case .table: "⌥⌘T"
+        case .toggleHeadingFold: "⌃⌘H"
         default: nil
         }
     }
@@ -2707,6 +2731,10 @@ extension NoteEditorEngine {
         }
         let lines = formattableParagraphs(in: selection)
         switch command {
+        case .toggleHeadingFold:
+            let heading = headingSection(at: selection.location)
+            return NoteCommandValidation(enabled: heading != nil,
+                state: heading?.id.map { foldedHeadingIDs.contains($0) ? .on : .off } ?? .off)
         case let .paragraph(style):
             let values = lines.compactMap { paragraphStyle(at: $0.location) }
             let state: NoteFormatState = values.isEmpty ? .off :
@@ -2752,6 +2780,7 @@ extension NoteEditorEngine {
         let selection = selection ?? textView?.selectedRange() ?? NSRange(location: textStorage.length, length: 0)
         guard validate(command, selection: selection).enabled else { return false }
         switch command {
+        case .toggleHeadingFold: return toggleHeadingFold(at: selection.location)
         case let .paragraph(style): return applyStyle(style, selection: selection)
         case let .mark(kind):
             if kind == .link {

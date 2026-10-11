@@ -181,6 +181,7 @@ final class NoteFindController: ObservableObject {
     private func reveal(activateCell: Bool) {
         guard let engine, let index, matches.indices.contains(index) else { return }
         let match = matches[index]
+        engine.unfoldHeadings(containing: match.noteRange)
         if let id = match.tableID, let cell = match.cell, let range = match.cellRange,
            let (table, _) = engine.tableAttachment(id: id) {
             engine.textView?.scrollRangeToVisible(match.noteRange)

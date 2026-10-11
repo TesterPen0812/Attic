@@ -51,6 +51,9 @@ struct NoteDocument: Equatable, Sendable {
     var format: Int = NoteDocument.currentFormat
     var requires: [String] = []
     var blocks: [NoteBlock]
+    /// Optional document field `foldedHeadings`: an array of stable text-block
+    /// UUID strings. It is a display hint carried in extras by format-1 readers;
+    /// all underlying blocks remain available for copy, Markdown and print.
     /// Unknown document-level fields, written back as they were.
     var extras: [String: NoteJSON] = [:]
 

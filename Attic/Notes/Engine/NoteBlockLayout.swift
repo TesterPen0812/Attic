@@ -230,6 +230,16 @@ final class NoteBlockLayoutFragment: NSTextLayoutFragment {
 // MARK: - The engine's layout hooks
 
 extension NoteEditorEngine: NSTextLayoutManagerDelegate, NSTextContentStorageDelegate {
+    func textContentManager(_ textContentManager: NSTextContentManager,
+                            shouldEnumerate textElement: NSTextElement,
+                            options: NSTextContentManager.EnumerationOptions) -> Bool {
+        guard !foldedHeadingIDs.isEmpty, let range = textElement.elementRange else { return true }
+        let offset = contentStorage.offset(from: contentStorage.documentRange.location, to: range.location)
+        return !headingSections.contains { section in
+            section.id.map(foldedHeadingIDs.contains) == true && NSLocationInRange(offset, section.content)
+        }
+    }
+
     /// List paragraphs keep their `NSTextList`s in storage (copy as rich
     /// text and print use them), but TextKit 2 would lay its own marker and
     /// fixed 36 pt indent into the line. The editor shows them without:
@@ -238,12 +248,15 @@ extension NoteEditorEngine: NSTextLayoutManagerDelegate, NSTextContentStorageDel
     func textContentStorage(_ textContentStorage: NSTextContentStorage, textParagraphWith range: NSRange) -> NSTextParagraph? {
         guard range.length > 0, NSMaxRange(range) <= textStorage.length,
               let style = textStorage.attribute(.paragraphStyle, at: range.location, effectiveRange: nil) as? NSParagraphStyle,
-              !style.textLists.isEmpty else { return nil }
+              !style.textLists.isEmpty || textStorage.attribute(.noteBlockStyle, at: range.location, effectiveRange: nil) as? String == "heading" else { return nil }
         let text = NSMutableAttributedString(attributedString: textStorage.attributedSubstring(from: range))
         text.enumerateAttribute(.paragraphStyle, in: NSRange(location: 0, length: text.length)) { value, part, _ in
-            guard let style = value as? NSParagraphStyle, !style.textLists.isEmpty,
+            guard let style = value as? NSParagraphStyle,
                   let plain = style.mutableCopy() as? NSMutableParagraphStyle else { return }
             plain.textLists = []
+            if textStorage.attribute(.noteBlockStyle, at: range.location, effectiveRange: nil) as? String == "heading" {
+                plain.tailIndent = -24
+            }
             text.addAttribute(.paragraphStyle, value: plain, range: part)
         }
         return NSTextParagraph(attributedString: text)
@@ -521,5 +534,203 @@ extension NoteEditorEngine {
         let topRect = top.offsetBy(dx: first.layoutFragmentFrame.minX, dy: first.layoutFragmentFrame.minY)
         let bottomRect = bottom.offsetBy(dx: last.layoutFragmentFrame.minX, dy: last.layoutFragmentFrame.minY)
         return topRect.union(bottomRect)
+    }
+}
+
+
+/// A heading and the paragraphs it owns, in retained storage coordinates.
+struct NoteHeadingSection {
+    let heading: NSRange
+    let content: NSRange
+    let level: Int
+    let id: UUID?
+}
+
+extension NoteEditorEngine {
+    var headingSections: [NoteHeadingSection] {
+        if let cached = headingSectionsCache { return cached }
+        let string = textStorage.string as NSString
+        var headings: [(NSRange, Int, UUID?)] = []
+        var seen = Set<Int>()
+        textStorage.enumerateAttribute(.noteBlockStyle, in: NSRange(location: 0, length: string.length)) { value, run, _ in
+            guard value as? String == "heading" else { return }
+            var offset = run.location
+            while offset < NSMaxRange(run) {
+                let paragraph = string.paragraphRange(for: NSRange(location: offset, length: 0))
+                if paragraph.location > 0, seen.insert(paragraph.location).inserted {
+                    var id: UUID?
+                    textStorage.enumerateAttribute(.noteBlockID, in: paragraph) { value, _, stop in
+                        if let found = value as? UUID { id = found; stop.pointee = true }
+                    }
+                    headings.append((paragraph, textStorage.attribute(.noteBlockLevel, at: offset, effectiveRange: nil) as? Int ?? 2, id))
+                }
+                offset = NSMaxRange(paragraph)
+            }
+        }
+        // Resolve section ends in one backwards pass (including nested levels).
+        var stack: [Int] = []
+        var ends = Array(repeating: string.length, count: headings.count)
+        for i in headings.indices.reversed() {
+            while let next = stack.last, headings[next].1 > headings[i].1 { stack.removeLast() }
+            if let next = stack.last { ends[i] = headings[next].0.location }
+            stack.append(i)
+        }
+        let sections = headings.indices.map { i in
+            let start = NSMaxRange(headings[i].0)
+            return NoteHeadingSection(heading: headings[i].0,
+                content: NSRange(location: start, length: max(0, ends[i] - start)),
+                level: headings[i].1, id: headings[i].2)
+        }
+        headingSectionsCache = sections
+        return sections
+    }
+
+    func headingSection(at location: Int) -> NoteHeadingSection? {
+        headingSections.first { NSLocationInRange(location, $0.heading) ||
+            (location == textStorage.length && NSMaxRange($0.heading) == location && location > 0 &&
+             (textStorage.string as NSString).character(at: location - 1) != 0x0A) }
+    }
+
+    @discardableResult
+    func toggleHeadingFold(at location: Int) -> Bool {
+        guard !isReadOnly, activity == .idle, let section = headingSection(at: location) else { return false }
+        let id = section.id ?? UUID()
+        if section.id == nil {
+            // Assign paragraph identity once. Typed characters do not copy it;
+            // surviving paragraph runs keep it through edits and undo.
+            textStorage.addAttribute(.noteBlockID, value: id, range: section.heading)
+            headingSectionsCache = nil
+        }
+        let wasFolded = foldedHeadingIDs.contains(id)
+        if !wasFolded, let selection = textView?.selectedRange(),
+           headingContentContainsCaret(section, at: selection.location) {
+            activeTableView?.deactivate()
+            textView?.window?.makeFirstResponder(textView)
+            textView?.setSelectedRange(NSRange(location: section.heading.location, length: 0))
+        }
+        setHeadingFold(id: id, folded: !wasFolded)
+        history.recordExternalChange(name: wasFolded ? "Unfold Heading" : "Fold Heading",
+            undo: { [weak self] in self?.setHeadingFold(id: id, folded: wasFolded); return self != nil },
+            redo: { [weak self] in self?.setHeadingFold(id: id, folded: !wasFolded); return self != nil })
+        return true
+    }
+
+    func setHeadingFold(id: UUID, folded: Bool) {
+        foldMetadataWasEdited = true
+        if folded, let section = headingSections.first(where: { $0.id == id }),
+           let selection = textView?.selectedRange(), headingContentContainsCaret(section, at: selection.location) {
+            textView?.setSelectedRange(NSRange(location: section.heading.location, length: 0))
+        }
+        if folded { foldedHeadingIDs.insert(id) } else { foldedHeadingIDs.remove(id) }
+        invalidateDocumentCache()
+        // A focused attachment must not be parked over its hidden paragraph.
+        if folded, let section = headingSections.first(where: { $0.id == id }),
+           let table = activeTableView?.attachment, let range = range(ofTable: table),
+           NSLocationInRange(range.location, section.content) {
+            activeTableView?.deactivate()
+            textView?.window?.makeFirstResponder(textView)
+            textView?.setSelectedRange(NSRange(location: section.heading.location, length: 0))
+        }
+        invalidateLayout(NSRange(location: 0, length: textStorage.length))
+        textView?.needsLayout = true
+        onTextChange?()
+        onCaretChange?()
+    }
+
+    func isRangeFolded(_ range: NSRange) -> Bool {
+        guard !foldedHeadingIDs.isEmpty else { return false }
+        return headingSections.contains { $0.id.map(foldedHeadingIDs.contains) == true && NSLocationInRange(range.location, $0.content) }
+    }
+
+    /// An insertion point at EOF belongs to the final body paragraph too.
+    /// An empty body after a trailing newline is distinct from the end of
+    /// a final heading with no following paragraph (typing there stays folded).
+    private func headingContentContainsCaret(_ section: NoteHeadingSection, at location: Int) -> Bool {
+        if NSLocationInRange(location, section.content) { return true }
+        guard location == textStorage.length, NSMaxRange(section.content) == location else { return false }
+        return section.content.length > 0 || (location > 0 &&
+            (textStorage.string as NSString).character(at: location - 1) == 0x0A)
+    }
+
+    func unfoldHeadings(containing range: NSRange) {
+        guard !foldedHeadingIDs.isEmpty else { return }
+        let ids = headingSections.compactMap { section -> UUID? in
+            guard let id = section.id, foldedHeadingIDs.contains(id),
+                  headingContentContainsCaret(section, at: range.location) || NSIntersectionRange(range, section.content).length > 0 else { return nil }
+            return id
+        }
+        for id in ids { setHeadingFold(id: id, folded: false) }
+    }
+
+    /// Viewport-only controls: their bounds follow the final glyph's line,
+    /// including wrapped headings, without forcing offscreen layout.
+    func updateHeadingControls() {
+        guard !updatingHeadingControls, let textView, let layoutManager,
+              let viewport = layoutManager.textViewportLayoutController.viewportRange else { return }
+        updatingHeadingControls = true
+        defer { updatingHeadingControls = false }
+        let start = contentStorage.offset(from: contentStorage.documentRange.location, to: viewport.location)
+        let end = contentStorage.offset(from: contentStorage.documentRange.location, to: viewport.endLocation)
+        var visible = Set<Int>()
+        for section in headingSections where section.heading.location >= start && section.heading.location < end {
+            guard foldedHeadingIDs.isEmpty || !headingSections.contains(where: { outer in
+                outer.id.map(foldedHeadingIDs.contains) == true && NSLocationInRange(section.heading.location, outer.content)
+            }) else { continue }
+            let line = lineRange(at: section.heading.location)
+            let glyphRange = line.length == 0 ? line : (textStorage.string as NSString).rangeOfComposedCharacterSequence(at: NSMaxRange(line) - 1)
+            guard let glyph = rect(for: glyphRange), glyph.intersects(textView.visibleRect) else { continue }
+            let key = section.heading.location
+            visible.insert(key)
+            let button = headingControls[key] ?? NoteHeadingButton(frame: .zero)
+            button.engine = self
+            button.headingOffset = key
+            button.folded = section.id.map(foldedHeadingIDs.contains) == true
+            button.ink = style.markerColor
+            button.isEnabled = !isReadOnly && activity == .idle
+            button.frame = CGRect(x: glyph.maxX + 3, y: glyph.midY - 10, width: 20, height: 20)
+            button.setAccessibilityLabel("\(button.folded ? "Unfold" : "Fold") \((textStorage.string as NSString).substring(with: line))")
+            button.setAccessibilityIdentifier("note-heading-fold-\(key)")
+            button.toolTip = button.folded ? "Unfold heading (⌃⌘H)" : "Fold heading (⌃⌘H)"
+            AtticOverlayHierarchy.attach(button, to: textView)
+            headingControls[key] = button
+            button.needsDisplay = true
+        }
+        for key in Array(headingControls.keys) where !visible.contains(key) {
+            if let button = headingControls.removeValue(forKey: key) { AtticOverlayHierarchy.remove(button) }
+        }
+    }
+}
+
+/// The owner's thin, round-ended chevron (o22), rotated from down to right.
+final class NoteHeadingButton: NSButton {
+    weak var engine: NoteEditorEngine?
+    var headingOffset = 0
+    var folded = false
+    var ink = NSColor.secondaryLabelColor
+    override var isFlipped: Bool { true }
+
+    override init(frame: NSRect) {
+        super.init(frame: frame)
+        isBordered = false
+        title = ""
+        target = self
+        action = #selector(toggle)
+    }
+    required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
+    @objc private func toggle() { _ = engine?.toggleHeadingFold(at: headingOffset) }
+    override func draw(_ dirtyRect: NSRect) {
+        guard let context = NSGraphicsContext.current?.cgContext else { return }
+        context.saveGState()
+        context.translateBy(x: bounds.midX, y: bounds.midY)
+        if folded { context.rotate(by: -.pi / 2) }
+        context.setStrokeColor(ink.cgColor)
+        context.setLineWidth(1)
+        context.setLineCap(.round)
+        context.setLineJoin(.round)
+        context.move(to: CGPoint(x: -4.5, y: -2))
+        context.addLine(to: CGPoint(x: 0, y: 2))
+        context.addLine(to: CGPoint(x: 4.5, y: -2))
+        context.strokePath()
+        context.restoreGState()
     }
 }
