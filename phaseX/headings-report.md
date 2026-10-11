@@ -12,7 +12,7 @@ Scope: owner N-1 option C, plain note titles, table Select All including empty c
 
 ## Verification
 
-Local strict build and wider Notes suites are queued behind the machine-wide build lock. Hindsight tools advertised by repository instruction are not callable in this session; supplied TextKit attachment memory and owner decision files read directly. No subagents.
+The strict macOS build passes. Final relevant local verification passes: 114 tests, 108 passed and 6 explicit key-window skips; the later policy-fixture check adds 3 passes with no skips. Optimized native UAT was completed. Fast CI is failed; all three focused FKA runs pass (8 checks each, no skips). Hindsight tools advertised by repository instruction are not callable in this session; supplied TextKit attachment memory and owner decision files were read directly. No subagents.
 
 ## Baseline evidence
 
@@ -31,9 +31,15 @@ Local strict build and wider Notes suites are queued behind the machine-wide bui
 - Empty cells track the first Select All explicitly, then escalate on the second press. Mouse, typing, cell changes and other commands reset this state.
 - Error notices, error lines, failed toasts and Notes error status deliver one low-priority accessibility announcement per active error message, allowing a later occurrence after dismissal.
 
-## Checks in progress
+## Local checks
 
-Project generation verification passes. The first implementation test build (`green1`) stopped on two fixture API mistakes (`show`, and the test attachment store), corrected from declarations before rerunning. `focused2` compiled and ran 14 tests: 11 passed, one capture-only test skipped, and two edge-case tests failed (three assertions). Those counterexamples confirmed that copying retained a heading ID and EOF fell outside a half-open folded range. The fixes give copied headings independent IDs and include final body insertion points without unfolding an edited final heading. The strict macOS build in `wide` passed; 496 tests ran, with 483 passes, 12 intentional skips and one failed placement fixture (two assertions). The title policy changed that fixture to body text, which had enough space above it; it now scrolls the body under the header while retaining every geometry assertion. Native capture activation also now reads Xcode's unprefixed environment key. The `wide2` strict build passed; all 12 folding tests, including native captures, passed. Across 496 tests: 484 passes, 11 explicit skips and the same placement fixture failure. A short document constrains the attempted scroll; the final fixture uses enough body lines to scroll and asserts that precondition. The final TextKit bridge uses the compiler-supported `@preconcurrency` storage-delegate conformance, which keeps runtime actor isolation checking; a strict SDK probe passes. Final focused strict verification (`/tmp/attic-headings-final.log`) passes at source commit `c6da88f4`: macOS build plus 114 tests, 108 passed, 6 explicit key-window skips, no failures. The scrollable placement fixture passes; all 12 folding tests and native captures pass. The rerun includes full NotesFormatControls and NotesV2TablesFeature suites, plain-title and notice tests. The wider suites' other cases passed in `wide2`; its sole failed fixture is green in the final run. Finished result summary: `headings/local-final-summary.json`. Strict mode still emits warnings in unchanged delegate/layout code and other repository code; no warning-free claim is made. No app identities or settings outside scope have been used. No subagents were launched, per the job's explicit restriction; the skill's different-model review recommendation is therefore not followed.
+- Final strict local invocation uses `Scripts/xcodebuild_locked.sh build test`, Local configuration, `SWIFT_STRICT_CONCURRENCY=complete`, `.build/dd-headings`, and serial testing. macOS build passes. At `c6da88f4`, 114 relevant tests ran: 108 passed, 6 explicit key-window skips, no failures. This includes all 12 heading tests and native captures, full NotesFormatControls and NotesV2TablesFeature suites, plain-title and notice tests. `headings/local-final-summary.json` preserves the result; `/tmp/attic-headings-final.log` is the build/test log.
+- The wider Notes invocation ran 496 tests: 484 passed, 11 explicit skips and one failed format-bar placement fixture. The title policy moved its selection into the body, but its short document could not scroll that body beneath the header. The corrected fixture uses enough body lines and asserts scrollability while retaining every geometry assertion; it passes in the final invocation. Other wider-suite cases passed in `wide2`; this is not a claim that the original 496-test invocation was green.
+- Earlier focused counterexamples exposed copied headings sharing fold IDs and EOF caret positions falling outside a half-open folded range. Both causes are fixed and covered. The initial implementation test builds stopped on fixture API mistakes; those stops were not product regressions or valid red evidence.
+- The final TextKit bridge uses compiler-supported `@preconcurrency` storage-delegate conformance, retaining runtime actor isolation checks. A strict SDK probe passes. Strict builds still emit warnings in unchanged delegate/layout and other repository code; no warning-free claim is made.
+- `Scripts/verify_project_generation.rb` passes with the repository Ruby/Bundler environment. No project inputs changed. Finished xcresults were read, summarized and moved to Trash.
+- The later body-link policy-fixture test runs through the same locked wrapper, strict concurrency and derived data: 3 passed, no skips/failures. `headings/local-cursor-summary.json` preserves it.
+- No subagents were launched, per the job's explicit restriction; the skill's different-model review recommendation is therefore not followed.
 
 ## Commits
 
@@ -45,8 +51,10 @@ Project generation verification passes. The first implementation test build (`gr
 - `e5bf00f3`: runtime-checked TextKit delegate conformance, verified by SDK probe.
 - `c6da88f4`: scrollable placement fixture with its scrollability assertion.
 - `896b09c6`: retained-range TextKit folds, trailing chevrons, menu/shortcut, persistence, exports, Find, caret, identity and undo coverage.
+- `eff23be5`: report, captures and final local summary; CI source revision.
+- `9f732ce0`: move the read-only link-cursor fixture into the body under the new plain-title policy, preserving its assertions. Its test and both plain-title tests pass (3/3, no skips); `headings/local-cursor-summary.json`.
 
-## Manual UAT and CI
+## Manual UAT
 
 Optimized preview built and was inspected on screen under `/tmp/attic-screen.lock`, then quit by bundle ID and the lock released. Only the job preview was launched or captured.
 
@@ -59,7 +67,23 @@ Optimized preview built and was inspected on screen under `/tmp/attic-screen.loc
 - The Notes Format submenu exposes the enabled Fold or Unfold Heading command; engine/router menu execution is covered by the tests. A selected title rejected Cmd-I on screen. Full mark-kind validation and persisted title cleanup are covered by unit tests.
 - Captures: `after-open-preview.png`, `after-folded-preview.png`, `after-typing-folded-preview.png`, `after-find-preview.png`, `after-empty-cell-first-select-all-preview.png`, `after-empty-cell-second-select-all-preview.png`, `after-table-folded-preview.png`, `after-table-find-preview.png`, `after-reopen-preview.png`.
 - Durable fold storage is established by the store save/fresh-load test, not by the in-memory UI-testing launch. Audible VoiceOver speech remains unverified; deduplication and low-priority delivery are checked without changing a system setting.
-CI dispatches starting after local verification and push: one fast run and three sequential FKA runs (same-ref concurrency cancels overlapping runs). Final conclusions will be added after completion.
+
+## CI
+
+Exactly one fast and three sequential FKA dispatches completed after push. Same-ref concurrency makes simultaneous runs cancel each other. CI uses `eff23be5b4a84b37792e78a540e118f2cc7ce4ea`; subsequent changes are the read-only link test fixture and evidence/report files, with no product-code changes.
+
+- [Fast run 38126936746](https://github.com/TesterPen0812/Attic/actions/runs/38126936746): **failed**. Regular and strict builds, project generation, static analysis and final worktree checks passed. Full unit suite: 2,604 tests, 2,587 passed, 10 skipped, 7 failed (29 assertions). The unit step's displayed success is masked by `continue-on-error`; the required final gate correctly fails. `headings/ci-fast-unit-summary.json` preserves the actual result.
+- `OwnerTasks1010Tests.testReadOnlyLinkCursorStopsAtTheGlyphBounds` expected a linked title. The owner now requires plain titles, so its link belongs in a body paragraph. Corrected in `9f732ce0` without weakening cursor-boundary assertions; local strict test invocation passes it and both plain-title tests. This correction was made after the requested fast dispatch and has not had another remote fast run.
+- Five unchanged `NotesKeyboardUndoTests` fail the fixture's initial `window.isKeyWindow` / `NSApp.keyWindow` checks, followed by cascading responder/delete/undo assertions: `testAToastThatDoesNotClaimTheKeyLeavesCommandZToTheText`, `testSearchFieldUndoWhileTheDeleteToastShowsUndoesTheSearchTextThenTheLibrary`, `testTypingUndoAfterDeletingAnotherNoteAndReturningToTheSameNoteUndoesTheTyping`, `testUndoDispatchUsesTheKeyResponderBeforeQueuedFocusChanges`, `testUndoOfDeletingTheLastNoteWorksFromTheEmptyLibraryAfterTheToastExpires`. These fixture assertions remain intact; this job does not change them. Their failures remain unresolved; a pinned-base run was not performed, so no pre-existing-cause claim is made.
+- Unchanged `AtticDropdownTests.testOpenAndFilterCostNoMoreThanBeforeWithAccessibilityOn` fails `tagOpen_AX`: measured ratio `0.9405855631133273`, accepted maximum `0.932` (`0.727 + 0.205`). Its threshold remains intact. This failure remains unresolved; this run alone does not establish causality.
+
+| Lane | Run | Result | Tests |
+| --- | --- | --- | --- |
+| FKA 1 | [38128680374](https://github.com/TesterPen0812/Attic/actions/runs/38128680374) | Passed | 8 passed, no skips/failures |
+| FKA 2 | [38128944003](https://github.com/TesterPen0812/Attic/actions/runs/38128944003) | Passed | 8 passed, no skips/failures |
+| FKA 3 | [38129235338](https://github.com/TesterPen0812/Attic/actions/runs/38129235338) | Passed | 8 passed, no skips/failures |
+
+Each FKA run requires the native Full Keyboard Access test, four H5-04 unit focus regressions and three task-focus regressions. Hosted CI changes its runner's FKA setting; this job never changed the owner's macOS settings. Run conclusions, tested SHAs and job evidence are recorded in `headings/ci-results.json`; individual passing FKA tests are in `headings/ci-fka-tests.json`.
 
 ## Review and limits
 
