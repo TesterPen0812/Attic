@@ -39,13 +39,12 @@ final class NotesPageRenderTests: XCTestCase {
 
     private let gate = PersistenceGate()
 
-    private func makeHarness(context: AtticDesignContext, seed: (NoteStore) throws -> Void) throws -> Harness {
+    private func makeHarness(context: AtticDesignContext, size: CGSize = CGSize(width: 320, height: 520), seed: (NoteStore) throws -> Void) throws -> Harness {
         let gate = gate
         let store = try makeTestNoteStore(persist: { try gate.save($0) }, attachmentFileStore: makeTestAttachmentFileStore())
         try seed(store)
         let noteDraft = NoteDraftController(noteStore: store)
         let uiState = PanelUIState()
-        let size = CGSize(width: 320, height: 520)
         let toasts = PanelToastCenter()
         let root = NotesRenderRoot(noteDraft: noteDraft, store: store, uiState: uiState, toasts: toasts, size: size)
             .atticDesign(context)
@@ -208,7 +207,7 @@ final class NotesPageRenderTests: XCTestCase {
 
     func testAR04TitleUsesOpaqueNativeFragmentsThroughFastReversalsAndWraps() throws {
         for width: CGFloat in [320, 420] {
-            let harness = try makeHarness(context: AtticDesignContext(controls: .craft)) { store in
+            let harness = try makeHarness(context: AtticDesignContext(controls: .craft), size: CGSize(width: width, height: 520)) { store in
                 _ = store.createDocumentNote(id: UUID(), document: NoteDocument(blocks:
                     [.text("A long wrapped title with descenders gyp across several lines for fast reverse scrolling")] +
                     (0..<80).map { .text("Body line \($0)") }))
@@ -228,6 +227,59 @@ final class NotesPageRenderTests: XCTestCase {
                     let fragment = try XCTUnwrap(engine.layoutManager?.textLayoutFragment(for: engine.contentStorage.documentRange.location))
                     XCTAssertTrue(type(of: fragment) == NSTextLayoutFragment.self,
                                   "scrolling must use the opaque native fragment, without an alpha/invalidation path")
+                }
+            }
+        }
+    }
+
+    func testAR04SettledTitlePixelsSurviveFastReversalsInBothAppearances() throws {
+        for mode in AtticDesignContext.Mode.allCases {
+            for width: CGFloat in [320, 420] {
+                for title in ["Glyph gyp", "A long wrapped title with descenders gyp across several lines for rapid reverse scrolling"] {
+                    let harness = try makeHarness(context: AtticDesignContext(mode: mode, controls: .craft), size: CGSize(width: width, height: 520)) { store in
+                        _ = store.createDocumentNote(id: UUID(), document: NoteDocument(blocks:
+                            [.text(title)] + (0..<80).map { .text("Body line \($0)") }))
+                    }
+                    harness.window.setContentSize(NSSize(width: width, height: 520))
+                    harness.host.frame.size.width = width
+                    XCTAssertTrue(harness.controller.open(noteID: try XCTUnwrap(harness.store.notes.first).id))
+                    spin(0.3)
+                    let engine = try XCTUnwrap(harness.controller.active?.engine)
+                    let scroll = try XCTUnwrap(engine.scrollView), text = try XCTUnwrap(engine.textView)
+                    let rest = -scroll.contentInsets.top
+                    func titleInk() throws -> Double {
+                        let lines = try XCTUnwrap(engine.titleLineRects())
+                        // The middle wrapped line can be wider than either end.
+                        // Capture the whole title column, through its last glyph line.
+                        let origin = text.textContainerOrigin
+                        let rect = NSRect(x: origin.x - 1, y: lines.first.minY - 2,
+                                          width: max(1, text.bounds.width - 2 * origin.x + 2),
+                                          height: lines.last.maxY - lines.first.minY + 4)
+                        let rep = try XCTUnwrap(text.bitmapImageRepForCachingDisplay(in: rect))
+                        text.cacheDisplay(in: rect, to: rep)
+                        var sum = 0.0
+                        for y in 0..<rep.pixelsHigh {
+                            for x in 0..<rep.pixelsWide {
+                                if let pixel = rep.colorAt(x: x, y: y)?.usingColorSpace(.deviceRGB) {
+                                    let luma = (pixel.redComponent + pixel.greenComponent + pixel.blueComponent) / 3
+                                    sum += pixel.alphaComponent * (mode == .light ? 1 - luma : luma)
+                                }
+                            }
+                        }
+                        return sum
+                    }
+                    let baseline = try titleInk()
+                    XCTAssertGreaterThan(baseline, 20, "the actual text-view bitmap contains the title")
+                    for _ in 0..<4 {
+                        for y: CGFloat in [650, 40, 800, 70, 500, 0] {
+                            scroll.contentView.scroll(to: NSPoint(x: 0, y: rest + y))
+                            scroll.reflectScrolledClipView(scroll.contentView)
+                            harness.host.layoutSubtreeIfNeeded()
+                        }
+                        spin(0.03)
+                        XCTAssertEqual(try titleInk(), baseline, accuracy: baseline * 0.03,
+                                       "settled title ink remains whole and opaque, \(mode) at \(width)")
+                    }
                 }
             }
         }

@@ -26,6 +26,12 @@ on:
         default: false
         type: boolean
 
+      inspect_dropdown_sampling:
+        description: Record repeated old/paired priority estimates on the same runner
+        required: false
+        default: false
+        type: boolean
+
       compare_tag_colour_costs:
         description: Record paired AB/BA colour1 and 76e4276 tag-open costs
         required: false
@@ -234,6 +240,21 @@ jobs:
           path: ${{ runner.temp }}/TagColourComparison/*.json
           retention-days: 7
 
+      - name: Preflight the pinned integration cost host with current fixtures
+        if: inputs.inspect_dropdown_sampling
+        run: |
+          git worktree add --detach "$RUNNER_TEMP/AtticIntegrationPreflight" "$INTEGRATION_COST_REFERENCE_COMMIT"
+          for fixture in DoneSearchCostTests NotesPageControllerTests TaskPerformanceGateTests TasksKeystrokeCostTests NoteSlice3bTests; do
+            cp "AtticTests/$fixture.swift" "$RUNNER_TEMP/AtticIntegrationPreflight/AtticTests/$fixture.swift"
+          done
+          git -C "$RUNNER_TEMP/AtticIntegrationPreflight" diff --exit-code -- Attic Attic.xcodeproj
+          Scripts/xcodebuild_locked.sh build-for-testing -project "$RUNNER_TEMP/AtticIntegrationPreflight/Attic.xcodeproj" \
+            -scheme Attic -configuration Local -destination 'platform=macOS' \
+            -derivedDataPath "$RUNNER_TEMP/AtticIntegrationPreflightDD" CODE_SIGNING_ALLOWED=NO \
+            SWIFT_OPTIMIZATION_LEVEL=-O SWIFT_COMPILATION_MODE=wholemodule ENABLE_DEBUG_DYLIB=NO \
+            ENABLE_TESTABILITY=YES ENABLE_HARDENED_RUNTIME=NO \
+            'OTHER_SWIFT_FLAGS=$(inherited) -DATTIC_COST_REFERENCE_HOST'
+
       - name: Run macOS unit tests
         id: unit_tests
         continue-on-error: true
@@ -263,6 +284,27 @@ jobs:
             -skip-testing:AtticTests/TasksFrameCostTests \
             -skip-testing:AtticTests/TasksRowBuildCostTests \
             test
+
+      - name: Record repeated old and paired dropdown estimates
+        if: always() && inputs.inspect_dropdown_sampling && steps.strict_build.outcome == 'success'
+        env:
+          TEST_RUNNER_ATTIC_KEY_WINDOW_TESTS: "1"
+          TEST_RUNNER_ATTIC_DROPDOWN_SAMPLING_DIAGNOSTIC: "1"
+        run: |
+          Scripts/xcodebuild_locked.sh test-without-building -project Attic.xcodeproj -scheme Attic \
+            -configuration Local -destination 'platform=macOS' -derivedDataPath "$RUNNER_TEMP/AtticUnitTests" \
+            CODE_SIGNING_ALLOWED=NO -parallel-testing-enabled NO \
+            -only-testing:AtticTests/AtticDropdownTests/testRepeatedOldAndPairedPriorityEstimatesOnTheSameRunner \
+            | tee "$RUNNER_TEMP/dropdown-sampling.log"
+          python3 -c 'import sys; assert "DROPDOWN_SAMPLING priorityOpen_AX old=" in open(sys.argv[1]).read()' "$RUNNER_TEMP/dropdown-sampling.log"
+
+      - name: Upload repeated dropdown timing evidence
+        if: always() && inputs.inspect_dropdown_sampling
+        uses: actions/upload-artifact@v4
+        with:
+          name: dropdown-sampling-${{ github.sha }}
+          path: ${{ runner.temp }}/dropdown-sampling.log
+          retention-days: 7
 
       - name: Run Full Keyboard Access unit tests
         id: fka_tests
@@ -483,6 +525,7 @@ jobs:
             -destination 'platform=macOS' \
             -derivedDataPath "$RUNNER_TEMP/AtticUITests" \
             -resultBundlePath "$RUNNER_TEMP/AtticUITests.xcresult" \
+            ATTIC_MACOS_BUNDLE_IDENTIFIER=com.taha.Attic.ci.ui \
             CODE_SIGNING_ALLOWED=NO \
             "${shard_flags[@]}" \
             -skip-testing:AtticUITests/PerformanceUITests \

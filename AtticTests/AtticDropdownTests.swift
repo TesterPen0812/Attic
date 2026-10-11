@@ -1530,7 +1530,16 @@ final class AtticDropdownTests: XCTestCase {
         return Double(DispatchTime.now().uptimeNanoseconds - start) / 1_000_000
     }
 
-    private func median(_ samples: [Double]) -> Double { samples.sorted()[samples.count / 2] }
+    private func median(_ samples: [Double]) -> Double {
+        precondition(!samples.isEmpty)
+        let values = samples.sorted(), middle = values.count / 2
+        return values.count.isMultiple(of: 2) ? (values[middle - 1] + values[middle]) / 2 : values[middle]
+    }
+
+    func testTimingMedianBalancesTheMiddlePairForAnEvenSampleCount() {
+        XCTAssertEqual(median([0.48, 0.49, 0.52, 0.56]), 0.505, accuracy: 0.000001)
+        XCTAssertEqual(median([1, 9, 3]), 3)
+    }
 
     /// Before E1: the `/` list was `AtticPopover` with 28 pt `AtticPopoverRow`s
     /// and a hint column, 256 wide.
@@ -1601,7 +1610,7 @@ final class AtticDropdownTests: XCTestCase {
     /// `readAccessibility`, each sample also reads the shown list's
     /// accessibility tree, as VoiceOver does when a menu opens or changes
     /// (that is when SwiftUI builds each row's accessibility element).
-    private func measureDropdownCosts(in window: NSWindow, rounds: Int, readAccessibility: Bool = false, priorityDelay: TimeInterval = 0) -> [Round] {
+    private func measureDropdownCosts(in window: NSWindow, rounds: Int, readAccessibility: Bool = false, priorityDelay: TimeInterval = 0, paired: Bool = true) -> [Round] {
         let design = AtticDesignContext()
         let all = NoteSlashItem.Kind.allCases.map { NoteSlashItem(kind: $0) }
         let filtered = all.filter { $0.title.lowercased().contains("li") }
@@ -1672,11 +1681,11 @@ final class AtticDropdownTests: XCTestCase {
                 return elapsed
             }
             // Two discarded warm-ups, then 16 samples: eight AB and eight BA.
-            for sample in 0..<18 {
-                let reverse = (sample % 2 == 1) != reversed
+            for sample in 0..<(paired ? 18 : 16) {
+                let reverse = paired && ((sample % 2 == 1) != reversed)
                 let operations: [() -> Double] = reverse ? [currentPriority, currentTag, legacy] : [legacy, currentTag, currentPriority]
                 let values = operations.map { $0() }
-                if sample >= 2 {
+                if sample >= (paired ? 2 : 1) {
                     legacyTag.append(values[reverse ? 2 : 0])
                     tag.append(values[1])
                     priority.append(values[reverse ? 0 : 2])
@@ -1691,7 +1700,7 @@ final class AtticDropdownTests: XCTestCase {
         return (0..<rounds).map { index in
             var round = Round()
             let legacy, slash: (open: [Double], narrow: [Double], widen: [Double])
-            if index % 2 == 0 {
+            if !paired || index % 2 == 0 {
                 legacy = slashTimings { LegacySlashList(model: $0) }
                 slash = slashTimings { NoteSlashListView(model: $0) }
             } else {
@@ -1763,7 +1772,38 @@ final class AtticDropdownTests: XCTestCase {
         gate(measureDropdownCosts(in: window, rounds: 8), label: "", accepted: Self.acceptedRatios)
     }
 
+    /// Opt-in evidence, separate from the normal gates and their unit timeout.
+    func testRepeatedOldAndPairedPriorityEstimatesOnTheSameRunner() throws {
+        guard ProcessInfo.processInfo.environment["ATTIC_DROPDOWN_SAMPLING_DIAGNOSTIC"] == "1" else {
+            throw XCTSkip("repeated native timing evidence runs in its dedicated CI step")
+        }
+        let attribute = NSAccessibility.Attribute(rawValue: "AXEnhancedUserInterface")
+        let previous = NSApp.accessibilityAttributeValue(attribute)
+        NSApp.accessibilitySetValue(true, forAttribute: attribute)
+        defer { NSApp.accessibilitySetValue(previous, forAttribute: attribute) }
+        let window = makeWindow()
+        defer { window.close() }
+        var old: [Double] = [], paired: [Double] = []
+        for pair in 0..<3 {
+            let order = pair % 2 == 0 ? [false, true] : [true, false]
+            for balanced in order {
+                let rounds = measureDropdownCosts(in: window, rounds: balanced ? 8 : 5, readAccessibility: true, paired: balanced)
+                let ratio = median(rounds.map { $0.ratio(.priorityOpen) })
+                XCTAssertTrue(ratio.isFinite && ratio > 0)
+                if balanced { paired.append(ratio) } else { old.append(ratio) }
+            }
+        }
+        func spread(_ values: [Double]) -> Double { values.max()! - values.min()! }
+        print("DROPDOWN_SAMPLING priorityOpen_AX old=\(old) paired=\(paired) old_spread=\(spread(old)) paired_spread=\(spread(paired)) unchanged_limit=\(Self.acceptedRatiosWithAccessibility[.priorityOpen]!.limit)")
+        XCTAssertEqual(old.count, 3)
+        XCTAssertEqual(paired.count, 3)
+    }
+
     func testPairedSamplerRejectsARealPriorityOpeningSlowdown() {
+        let attribute = NSAccessibility.Attribute(rawValue: "AXEnhancedUserInterface")
+        let previous = NSApp.accessibilityAttributeValue(attribute)
+        NSApp.accessibilitySetValue(true, forAttribute: attribute)
+        defer { NSApp.accessibilitySetValue(previous, forAttribute: attribute) }
         let window = makeWindow()
         defer { window.close() }
         let delayed = measureDropdownCosts(in: window, rounds: 8, readAccessibility: true, priorityDelay: 0.008)

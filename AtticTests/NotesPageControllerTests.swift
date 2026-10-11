@@ -1463,6 +1463,34 @@ final class NotesPageControllerTests: XCTestCase {
         XCTAssertFalse(FileManager.default.fileExists(atPath: file.path))
     }
 
+    #if !ATTIC_COST_REFERENCE_HOST
+    func testAR05RecoveryCopyIOFailureCarriesItsSourceFlag() async throws {
+        let controller = makeController(journal: FailingJournal())
+        await controller.startAndWait()
+        let session = try XCTUnwrap(controller.active)
+        type("Draft", into: session)
+        gate.shouldFail = true
+        await XCTAssertFalseAsync(await controller.newNoteDurably())
+        let state = session.state
+        let text = session.engine.plainText
+        guard case .onlyInMemory = state else { return XCTFail("fixture must retain an unsaved draft") }
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        let parent = directory.appendingPathComponent("Saving recovery data…")
+        try Data("this is a file, not a writable destination directory".utf8).write(to: parent)
+        let destination = parent.appendingPathComponent("Recovery copy")
+        controller.recoveryCopyDestination = { _ in destination }
+        await XCTAssertFalseAsync(await controller.saveRecoveryCopy(of: session))
+        let notice = try XCTUnwrap(session.noticeValue)
+        XCTAssertEqual(notice.kind, .copyFailed)
+        XCTAssertEqual(notice.severity, .error)
+        XCTAssertEqual(notice.kind.headline, "Copy failed")
+        XCTAssertFalse(notice.detail.isEmpty, "the actual IO failure remains available as details")
+        XCTAssertEqual(session.engine.plainText, text)
+        XCTAssertEqual(session.state, state)
+    }
+
+    #endif
+
     func testProposalStatusOnLongNoteDoesNotFetchOrExtractOnTyping() async throws {
         let document = NoteDocument(blocks: (0..<5_000).map { .text("Line \($0)") })
         guard case let .success((id, _)) = store.createDocumentNote(id: UUID(), document: document) else {
@@ -1505,7 +1533,11 @@ final class NotesPageControllerTests: XCTestCase {
         print("NOTE_5000_NO_PROPOSAL_100_KEYS_MS=\(Double(DispatchTime.now().uptimeNanoseconds - baselineStart) / 1_000_000)")
         XCTAssertEqual(store.pendingEditFetchCount, baselineFetches)
         XCTAssertEqual(baselineSession.engine.documentExtractionCount, baselineExtractions)
+        #if ATTIC_COST_REFERENCE_HOST
+        session.notice = "Finish composing text before leaving this note."
+        #else
         session.showNotice(NoteNotice(kind: .finishFirst, detail: "Finish composing text before leaving this note."))
+        #endif
         XCTAssertEqual(controller.statusItems(for: session).map(\.label),
                        ["Claude has changes", "Finish first"])
     }
