@@ -438,6 +438,20 @@ final class NotesV2TablesFeatureTests: XCTestCase {
         XCTAssertTrue(engine.document().blocks.contains { $0.kind == .table })
     }
 
+    func testEmptyCellSelectAllRequiresTwoPresses() throws {
+        let (engine, textView) = makeEngine([.text("Title"), .table(.blank()), .text("After")])
+        let attachment = try table(engine)
+        engine.enterTable(attachment, at: .init(row: 1, column: 0), caret: .start)
+        let tableView = try view(engine)
+        XCTAssertEqual(tableView.editor.string, "")
+        tableView.editor.selectAll(nil)
+        XCTAssertTrue(textView.window?.firstResponder === tableView.editor, "the first press keeps the keyboard in the empty cell")
+        tableView.editor.selectAll(nil)
+        XCTAssertTrue(textView.window?.firstResponder === textView)
+        XCTAssertNil(tableView.activeCell)
+        XCTAssertEqual(textView.selectedRange(), engine.range(ofTable: attachment))
+    }
+
     func testBackspaceIntoATableFromBelowSelectsItFirst() throws {
         let (engine, textView) = makeEngine(blocks())
         let attachment = try table(engine)

@@ -20,6 +20,7 @@ final class NoteTableCellEditor: NSTextView, NSTextViewDelegate {
     var isApplyingOwnEdit = false
     private var selectionBeforeEdit = NSRange(location: 0, length: 0)
     private var isHeader = false
+    private var selectedEmptyCellText = false
 
     static func make(table: NoteTableView) -> NoteTableCellEditor {
         let content = NSTextContentStorage()
@@ -34,6 +35,11 @@ final class NoteTableCellEditor: NSTextView, NSTextViewDelegate {
         editor.table = table
         editor.configure()
         return editor
+    }
+
+    override func mouseDown(with event: NSEvent) {
+        selectedEmptyCellText = false
+        super.mouseDown(with: event)
     }
 
     override func mouseMoved(with event: NSEvent) {
@@ -71,6 +77,7 @@ final class NoteTableCellEditor: NSTextView, NSTextViewDelegate {
 
     /// Fonts and inks for the cell about to be edited.
     func prepare(header: Bool) {
+        selectedEmptyCellText = false
         isHeader = header
         guard let table else { return }
         let style = table.style
@@ -202,6 +209,8 @@ final class NoteTableCellEditor: NSTextView, NSTextViewDelegate {
     override func keyDown(with event: NSEvent) {
         if table?.engine?.find.handleKey(event) == true { return }
         if let table, let engine = table.engine, !hasMarkedText(), engine.handleTableShortcut(event, in: table) { return }
+        if !(event.modifierFlags.intersection([.command, .shift, .option, .control]) == .command &&
+             event.charactersIgnoringModifiers?.lowercased() == "a") { selectedEmptyCellText = false }
         let typing = event.charactersIgnoringModifiers?.isEmpty == false
             && !event.modifierFlags.contains(.command) && !event.modifierFlags.contains(.control)
         guard typing else { return super.keyDown(with: event) }
@@ -213,6 +222,7 @@ final class NoteTableCellEditor: NSTextView, NSTextViewDelegate {
     }
 
     override func doCommand(by selector: Selector) {
+        if selector != #selector(selectAll(_:)) { selectedEmptyCellText = false }
         guard !hasMarkedText(), let table else { return super.doCommand(by: selector) }
         let selection = selectedRange()
         let length = textStorage?.length ?? 0
@@ -244,11 +254,7 @@ final class NoteTableCellEditor: NSTextView, NSTextViewDelegate {
             if let cell = table.activeCell { table.selectCells(NoteTableCellRange(anchor: cell, head: cell)) }
             return
         case #selector(selectAll(_:)):
-            // ⌘A: the cell's text, then the whole table.
-            if selection.location == 0, selection.length == length, let attachment = table.attachment {
-                table.engine?.selectWholeTable(attachment)
-                return
-            }
+            return selectAll(nil)
         default:
             break
         }
@@ -261,11 +267,14 @@ final class NoteTableCellEditor: NSTextView, NSTextViewDelegate {
     override func cancelOperation(_ sender: Any?) { doCommand(by: #selector(cancelOperation(_:))) }
     override func selectAll(_ sender: Any?) {
         let selection = selectedRange()
-        if selection.location == 0, selection.length == (textStorage?.length ?? 0), let table, let attachment = table.attachment {
+        let length = textStorage?.length ?? 0
+        if selection.location == 0, selection.length == length, (length > 0 || selectedEmptyCellText),
+           let table, let attachment = table.attachment {
             table.engine?.selectWholeTable(attachment)
             return
         }
         super.selectAll(sender)
+        selectedEmptyCellText = length == 0
     }
 
     // MARK: Changes
@@ -278,6 +287,7 @@ final class NoteTableCellEditor: NSTextView, NSTextViewDelegate {
     }
 
     func textDidChange(_ notification: Notification) {
+        selectedEmptyCellText = false
         table?.editorTextDidChange(selectionBefore: selectionBeforeEdit)
     }
 
@@ -299,6 +309,7 @@ final class NoteTableCellEditor: NSTextView, NSTextViewDelegate {
     }
 
     func textViewDidChangeSelection(_ notification: Notification) {
+        selectedEmptyCellText = false
         table?.engine?.tableSelectionDidChange(table)
     }
 
