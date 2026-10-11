@@ -352,7 +352,7 @@ final class PanelTintCalibrationTests: XCTestCase {
         XCTAssertEqual(PanelNeutralShade.profile.map(\.location), [0, 0.25, 0.5, 0.75, 1])
         XCTAssertEqual(PanelTintLevel.allCases.map(PanelNeutralShade.strength(for:)), [0, 0.35, 0.65, 1])
         XCTAssertEqual(PanelNeutralShade.color(for: .dark), .init(red: 0, green: 0, blue: 0))
-        XCTAssertEqual(PanelNeutralShade.color(for: .light), .init(red: 0.84, green: 0.84, blue: 0.84))
+        XCTAssertEqual(PanelNeutralShade.color(for: .light), .init(red: 0.88, green: 0.88, blue: 0.88))
         XCTAssertTrue(PanelNeutralShade.stops(level: .off, length: 1).isEmpty)
         XCTAssertEqual(PanelNeutralShade.stops(level: .vivid, length: 0.5).map(\.location), [0, 0.125, 0.25, 0.375, 0.5])
         XCTAssertEqual(PanelNeutralShade.rampOpacity(level: .bold, length: 0.5, at: 0.9), 0.25, accuracy: 1e-12)
@@ -463,8 +463,10 @@ final class PanelTintCalibrationTests: XCTestCase {
             let bold = treatment(.original, .light, kind, tint: .bold)
             let top = bold.compositedSurface(over: white, location: 0).red * 255
             let bottom = bold.compositedSurface(over: white, location: 1).red * 255
-            XCTAssertLessThan(top, off - 20, "\(kind.rawValue)")
-            XCTAssertGreaterThan(bottom, top + 15, "\(kind.rawValue)")
+            // Softened (owner's call, 2026-10-11: the old grey read as a
+            // smudge on Light Glass), still a visible shade.
+            XCTAssertLessThan(top, off - 12, "\(kind.rawValue)")
+            XCTAssertGreaterThan(bottom, top + 8, "\(kind.rawValue)")
         }
     }
 

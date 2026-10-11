@@ -77,9 +77,9 @@ final class AtticDesignSystemTests: XCTestCase {
         XCTAssertEqual(AtticLayout.textX - AtticLayout.circleX - AtticControlSize.statusCircle, 12)
         let m = AtticTaskRowMetrics.self
         XCTAssertEqual(m.titleTop(twoLine: false), 8, "18 pt title centred in 34")
-        XCTAssertEqual(m.titleTop(twoLine: true), 6, "18 + 2 + 16 centred in 48")
+        XCTAssertEqual(m.titleTop(twoLine: true), 8, "D-13: the title line where a one-line row has it")
         XCTAssertEqual(m.circleCentreY(twoLine: false), 17)
-        XCTAssertEqual(m.circleCentreY(twoLine: true), 15)
+        XCTAssertEqual(m.circleCentreY(twoLine: true), 17)
     }
 
     /// Round 9 (owner item 26): springy by default, pages firm (never a
@@ -390,8 +390,11 @@ final class AtticDesignSystemTests: XCTestCase {
                     for ink in [AtticInk.heading, .body, .label] {
                         XCTAssertEqual(tokens.ink(ink), AtticRGBA(p0.primaryForeground), "\(mode) \(palette) \(surface) \(ink)")
                     }
-                    XCTAssertEqual(tokens.ink(.helper), AtticRGBA(p0.secondaryForeground), "\(mode) \(palette) \(surface)")
-                    XCTAssertEqual(tokens.ink(.placeholder), AtticRGBA(p0.secondaryForeground), "\(mode) \(palette) \(surface)")
+                    // D-02 (owner, 2026-10-11): the secondary is a real step
+                    // under Phase 0's primary, not Phase 0's near-primary grey
+                    // (its floors: `PhaseXPicksTests`).
+                    XCTAssertNotEqual(tokens.ink(.helper), AtticRGBA(p0.secondaryForeground), "\(mode) \(palette) \(surface)")
+                    XCTAssertEqual(tokens.ink(.placeholder), tokens.ink(.helper), "\(mode) \(palette) \(surface)")
                 }
             }
         }
@@ -412,8 +415,13 @@ final class AtticDesignSystemTests: XCTestCase {
                 XCTAssertEqual(tokens.panel.base, AtticRGBA(p0.opaqueSurface), "\(palette) \(surface)")
                 XCTAssertEqual(tokens.ink(.heading), AtticRGBA(p0.primaryForeground))
                 XCTAssertEqual(tokens.ink(.body), AtticRGBA(p0.primaryForeground))
-                XCTAssertEqual(tokens.ink(.helper), AtticRGBA(p0.secondaryForeground))
-                XCTAssertEqual(tokens.ink(.placeholder), AtticRGBA(p0.secondaryForeground))
+                // Glass and Frosted step the secondary (D-02); Solid keeps Phase 0's.
+                if surface == .solid {
+                    XCTAssertEqual(tokens.ink(.helper), AtticRGBA(p0.secondaryForeground))
+                    XCTAssertEqual(tokens.ink(.placeholder), AtticRGBA(p0.secondaryForeground))
+                } else {
+                    XCTAssertEqual(tokens.ink(.placeholder), tokens.ink(.helper))
+                }
                 XCTAssertEqual(tokens.ink(.accent), AtticRGBA(p0.accent))
                 XCTAssertEqual(tokens.ink(.accentText), AtticRGBA(p0.accent))
                 XCTAssertNotNil(tokens.pageChipAccent)
