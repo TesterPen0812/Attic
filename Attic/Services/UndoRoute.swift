@@ -2,7 +2,7 @@ import Combine
 import Foundation
 
 /// A named undo history: each page keeps its own for the session.
-enum UndoHistoryID: Hashable {
+enum UndoHistoryID: Hashable, Sendable {
     /// The Tasks list.
     case tasks
     case note(UUID)

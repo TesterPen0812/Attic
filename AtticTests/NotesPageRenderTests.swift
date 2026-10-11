@@ -151,6 +151,61 @@ final class NotesPageRenderTests: XCTestCase {
         write(harness.host, name: "writing-scrolled-light")
     }
 
+    func testAR06NativeTitleTagsAndSuggestionsReceiveAndRefreshStoredColours() throws {
+        let store = try makeTestNoteStore(attachmentFileStore: makeTestAttachmentFileStore())
+        let id = UUID()
+        guard case .success = store.createDocumentNote(id: id, document: NoteDocument(blocks: [.text("Plan"), .text("Body")]), tags: ["design"]) else {
+            return XCTFail("seed")
+        }
+        let controller = NoteDraftController(noteStore: store).pages
+        XCTAssertTrue(controller.open(noteID: id))
+        let session = try XCTUnwrap(controller.active)
+        let chrome = NotesPageChrome()
+        let design = AtticDesignContext(mode: .light, controls: .craft)
+        func root(_ hue: AtticTagHue) -> AnyView {
+            AnyView(NoteEditorRepresentable(session: session, chrome: chrome, columnInset: 24,
+                topInset: 70, bottomInset: 48, headerBottom: 40, design: design,
+                tagEditor: { AnyView(EmptyView()) }, tagCounts: { ["launch": 2] })
+                .environment(\.atticTagColouring, AtticTagColouring(palette: .init(hues: ["design": hue, "launch": hue]), setHue: { _, _ in }))
+                .atticDesign(design))
+        }
+        let host = NSHostingView(rootView: root(.pink))
+        host.frame = NSRect(x: 0, y: 0, width: 320, height: 420)
+        let window = NSWindow(contentRect: host.frame, styleMask: [.borderless], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        window.contentView = host
+        windows.append(window)
+        host.layoutSubtreeIfNeeded(); spin()
+        let text = try XCTUnwrap(session.engine.textView)
+        func pinkInk(_ view: NSView) throws -> Int {
+            view.layoutSubtreeIfNeeded()
+            let bitmap = try XCTUnwrap(view.bitmapImageRepForCachingDisplay(in: view.bounds))
+            view.cacheDisplay(in: view.bounds, to: bitmap)
+            var count = 0
+            // Hue, independent of antialias coverage and HDR/ColorSync's
+            // luminance conversion: pink has red > blue > green. The
+            // deliberately non-hash fixture is blue/teal without forwarding.
+            for y in 0..<bitmap.pixelsHigh { for x in 0..<bitmap.pixelsWide {
+                if let c = bitmap.colorAt(x: x, y: y)?.usingColorSpace(.deviceRGB), c.alphaComponent > 0.5,
+                   c.redComponent > c.blueComponent + 0.08,
+                   c.blueComponent > c.greenComponent + 0.08 { count += 1 }
+            } }
+            return count
+        }
+        let tags = try XCTUnwrap(text.accessoryViews.first)
+        XCTAssertGreaterThan(try pinkInk(tags), 10, "stored non-hash pink reaches the native title tag root")
+        text.setSelectedRange(NSRange(location: 4, length: 0))
+        text.insertText(" #la", replacementRange: text.selectedRange())
+        host.layoutSubtreeIfNeeded(); spin()
+        let suggestions = try XCTUnwrap(text.accessoryViews.last)
+        XCTAssertFalse(suggestions.isHidden)
+        XCTAssertGreaterThan(try pinkInk(suggestions), 10, "hashtag suggestions receive the same stored hue")
+        host.rootView = root(.grey)
+        host.layoutSubtreeIfNeeded(); spin()
+        XCTAssertLessThan(try pinkInk(tags), 3, "palette-only changes rebuild the existing native roots")
+        XCTAssertLessThan(try pinkInk(suggestions), 3)
+    }
+
     func testAR04TitleUsesOpaqueNativeFragmentsThroughFastReversalsAndWraps() throws {
         for width: CGFloat in [320, 420] {
             let harness = try makeHarness(context: AtticDesignContext(controls: .craft)) { store in

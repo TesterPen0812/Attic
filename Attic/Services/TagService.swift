@@ -74,7 +74,7 @@ final class TagService {
     /// Run inside a rename or merge's own save, before it: carries the
     /// sources' colour to the target in the same context, so the colour and
     /// the tags change together or not at all (`TagColourStore.carry`).
-    var carryColour: (@MainActor (_ sources: [String], _ target: String, _ targetInUse: Bool, _ context: ModelContext) throws -> Void)?
+    var carryColour: (@MainActor (_ sources: [String], _ target: String, _ targetInUse: Bool, _ inUse: [String], _ context: ModelContext) throws -> Void)?
 
     /// Inspect only rows touched by this transaction, never the whole store.
     /// Divergent replicas can change the winning tag set through a content
@@ -222,7 +222,11 @@ final class TagService {
             var firstUse: [String: Date] = [:]
             let targetInUse = try self.liveTags(rows: &rows, divergent: &divergent, firstUse: &firstUse, in: context)
                 .values.contains { $0.contains(target) }
-            try carry?(sourceOrder, target, targetInUse, context)
+            let inUse = firstUse.keys.sorted {
+                let a = firstUse[$0]!, b = firstUse[$1]!
+                return a != b ? a < b : $0 < $1
+            }
+            try carry?(sourceOrder, target, targetInUse, inUse, context)
         }) { tags in
             guard !tags.isDisjoint(with: normalizedSources) else { return nil }
             return tags.subtracting(normalizedSources).union([target])

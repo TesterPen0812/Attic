@@ -174,6 +174,7 @@ struct TasksPage: View {
             }
             .equatable()
         }
+        .atticTagColourOrigin(.page(.tasks))
     }
 
     /// The page, its overlays, its keys and its monitors.

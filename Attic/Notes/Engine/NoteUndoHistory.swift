@@ -56,10 +56,11 @@ final class NoteUndoHistory {
         /// selection each side returns to. `cell` is the cell whose typing
         /// this step coalesces.
         fileprivate var tableSnapshot: TableSnapshot?
+        fileprivate var externalChange: (undo: () -> Bool, redo: () -> Bool, undoNext: Bool)?
 
         /// Steps that change something other than characters at a range.
         fileprivate var isSnapshot: Bool {
-            tagPickerDelta != nil || paragraphStyleSnapshot != nil || typingMarkSnapshot != nil || tableSnapshot != nil
+            externalChange != nil || tagPickerDelta != nil || paragraphStyleSnapshot != nil || typingMarkSnapshot != nil || tableSnapshot != nil
         }
 
         fileprivate init(range: NSRange, current: NSAttributedString, other: NSAttributedString, name: String, group: Int) {
@@ -467,6 +468,17 @@ final class NoteUndoHistory {
     }
 
     /// A tag picker edit is metadata only, but shares the editor's Undo stack.
+    /// Store-backed metadata belongs at this point in the editor's history.
+    /// A refused save keeps the step and its direction for a later retry.
+    func recordExternalChange(name: String, undo: @escaping () -> Bool, redo: @escaping () -> Bool) {
+        open = nil
+        let empty = NSAttributedString()
+        let op = Op(range: NSRange(location: 0, length: 0), current: empty, other: empty,
+                    name: name, group: nextOwnGroup())
+        op.externalChange = (undo, redo, true)
+        append(op)
+    }
+
     func recordTagChange(before: [String], after: [String]) {
         guard before != after else { return }
         open = nil
@@ -597,6 +609,12 @@ final class NoteUndoHistory {
             log.append("skipped an inert step (\(op.name)): an outside edit overlapped it")
             return false
         }
+        if var change = op.externalChange {
+            guard (change.undoNext ? change.undo : change.redo)() else { return false }
+            change.undoNext.toggle()
+            op.externalChange = change
+            return true
+        }
         if let delta = op.tagPickerDelta {
             flipSelection(op)
             op.tagPickerDelta = (delta.removes, delta.adds)
@@ -711,7 +729,7 @@ final class NoteUndoHistory {
         op.selectionAfter = moved(op.selectionAfter, by: edit)
         op.selectionBefore = moved(op.selectionBefore, by: map(edit, at: op.range.location,
             oldLength: op.current.length, newLength: op.other.length))
-        if op.tagPickerDelta != nil || op.typingMarkSnapshot != nil || op.tableSnapshot != nil { return true }
+        if op.externalChange != nil || op.tagPickerDelta != nil || op.typingMarkSnapshot != nil || op.tableSnapshot != nil { return true }
         if var snapshot = op.paragraphStyleSnapshot {
             if edit.location + edit.old < snapshot.location {
                 snapshot.location += edit.new - edit.old

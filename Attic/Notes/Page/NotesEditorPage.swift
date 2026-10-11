@@ -134,6 +134,7 @@ struct NotesEditorPage: View {
 
     var body: some View {
         pageContent
+        .atticTagColourOrigin(.page(.notesLibrary))
         .onAppear {
             hasShownNote = controller.active != nil
             controller.update(design: design)

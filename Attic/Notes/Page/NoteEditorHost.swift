@@ -349,6 +349,9 @@ final class NoteTitleAccessories: NotesKeyboardReturnTarget {
     private var boundsObserver: NSObjectProtocol?
     private var shownTags: [String] = []
     var design: AtticDesignContext { didSet { if design != oldValue { rebuild() } } }
+    var colouring = AtticTagColouring() {
+        didSet { rebuild(); if !suggestionHost.isHidden { renderSuggestions() } }
+    }
     var headerBottom: CGFloat
     /// A never-saved, empty draft shows no ⋯.
     var isUntouched: () -> Bool
@@ -456,10 +459,10 @@ final class NoteTitleAccessories: NotesKeyboardReturnTarget {
         menuHost.rootView = AnyView(NoteMenuButtonRoot(chrome: chrome, tagEditor: tagEditor) { [weak self] in
             self?.presentMenu(fromHeader: false)
         }
-        .atticDesign(design))
+        .atticDesign(design).environment(\.atticTagColouring, colouring))
         tagHost.rootView = AnyView(NoteTagLineRoot(chrome: chrome, tags: shownTags, tagEditor: tagEditor)
-            .atticDesign(design))
-        tagMeasure.rootView = AnyView(AtticNoteTagLine(tags: shownTags) { _ in }.atticDesign(design))
+            .atticDesign(design).environment(\.atticTagColouring, colouring))
+        tagMeasure.rootView = AnyView(AtticNoteTagLine(tags: shownTags) { _ in }.atticDesign(design).environment(\.atticTagColouring, colouring))
     }
 
     /// Keeps the ⋯ on the title's first line and the tags under its last,
@@ -584,6 +587,7 @@ final class NoteTitleAccessories: NotesKeyboardReturnTarget {
             .environment(\.atticDropdownWidth, suggestionPlacement?.width)
             .padding(room)
             .atticDesign(design)
+            .environment(\.atticTagColouring, colouring)
         )
     }
 
@@ -730,6 +734,7 @@ private struct NoteTagLineRoot: View {
 /// released on dismantle; the text, caret and undo history stay in the
 /// session.
 struct NoteEditorRepresentable: NSViewRepresentable {
+    @Environment(\.atticTagColouring) private var colouring
     let session: NoteSession
     let chrome: NotesPageChrome
     /// The text column's inset from each side of the panel.
@@ -772,6 +777,7 @@ struct NoteEditorRepresentable: NSViewRepresentable {
                     && !session.isImporting
             },
             tagEditor: tagEditor)
+        context.coordinator.accessories?.colouring = colouring.routed(to: .editor(session.engine.history))
         context.coordinator.accessories?.tagCounts = tagCounts
         let controls = NoteFormatControls(engine: engine, textView: textView, scrollView: scrollView, design: design,
                                           noteID: session.noteID,
@@ -838,6 +844,7 @@ struct NoteEditorRepresentable: NSViewRepresentable {
         if let textView = scrollView.documentView as? NSTextView, textView.textContainerInset.width != columnInset {
             textView.textContainerInset = NSSize(width: columnInset, height: 0)
         }
+        context.coordinator.accessories?.colouring = colouring.routed(to: .editor(session.engine.history))
         context.coordinator.accessories?.design = design
         context.coordinator.accessories?.headerBottom = headerBottom
         context.coordinator.controls?.update(design: design)

@@ -100,9 +100,23 @@ struct AtticTagPalette: Equatable, Sendable {
 /// What a view needs to draw a tag in its colour and to change it: the
 /// palette, and the tag menu's Colour action (nil where tags can't change,
 /// such as the gallery, which then shows each tag's hashed hue).
+enum TagColourUndoOrigin: Sendable {
+    case page(UndoHistoryID)
+    case editor(NoteUndoHistory)
+}
+
 struct AtticTagColouring {
     var palette: AtticTagPalette = .empty
     var setHue: (@MainActor @Sendable (_ tag: String, _ hue: AtticTagHue) -> Void)?
+
+    var routeHue: (@MainActor @Sendable (String, AtticTagHue, TagColourUndoOrigin) -> Void)?
+
+    func routed(to origin: TagColourUndoOrigin) -> Self {
+        guard let routeHue else { return self }
+        var copy = self
+        copy.setHue = { tag, hue in routeHue(tag, hue, origin) }
+        return copy
+    }
 
     func hue(for tag: String) -> AtticTagHue { palette.hue(for: tag) }
 
@@ -145,5 +159,19 @@ enum AtticTagSwatch {
         image.accessibilityDescription = hue.title
         cache[hue] = image
         return image
+    }
+}
+
+private struct AtticTagColourOrigin: ViewModifier {
+    @Environment(\.atticTagColouring) private var colouring
+    let origin: TagColourUndoOrigin
+    func body(content: Content) -> some View {
+        content.environment(\.atticTagColouring, colouring.routed(to: origin))
+    }
+}
+
+extension View {
+    func atticTagColourOrigin(_ origin: TagColourUndoOrigin) -> some View {
+        modifier(AtticTagColourOrigin(origin: origin))
     }
 }

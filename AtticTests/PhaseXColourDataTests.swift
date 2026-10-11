@@ -1,3 +1,5 @@
+import AppKit
+import SwiftUI
 import SwiftData
 import XCTest
 @testable import Attic
@@ -115,6 +117,129 @@ final class PhaseXColourDataTests: XCTestCase {
         XCTAssertEqual(try rows(library.tasks.container, named: "release").map(\.hue), [.pink])
         XCTAssertTrue(cold.mergeTags(["release"], into: "design"))
         XCTAssertEqual(try rows(library.tasks.container, named: "design").map(\.hue), [.grey])
+    }
+
+    func testAR01ColdColourChangeAndUndoReadTheStoredValue() throws {
+        let library = try makeLibrary()
+        let context = ModelContext(library.tasks.container)
+        context.insert(TagColour(name: "launch", hue: .pink))
+        try context.save()
+        XCTAssertTrue(library.setTagHue(.teal, for: "launch"))
+        XCTAssertEqual(try rows(library.tasks.container, named: "launch").map(\.hue), [.teal])
+        XCTAssertTrue(library.undo.undo(in: .library))
+        XCTAssertEqual(try rows(library.tasks.container, named: "launch").map(\.hue), [.pink])
+    }
+
+    func testAR03AutomaticAssignmentReachesColourlessUUIDReplicas() throws {
+        let library = try makeLibrary()
+        let context = ModelContext(library.tasks.container), id = UUID()
+        context.insert(TagColour(id: id, name: "launch", hue: nil))
+        context.insert(TagColour(id: id, name: "release", hue: nil))
+        try context.save()
+        XCTAssertTrue(library.tagColours.refresh(inUse: ["launch"]))
+        let all = try rows(library.tasks.container)
+        XCTAssertEqual(all.count, 2)
+        XCTAssertTrue(all.allSatisfy { $0.hue == .teal })
+    }
+
+    func testAR01UnstoredRenameIgnoresDormantColoursAndUsesLiveAssignment() throws {
+        let library = try makeLibrary()
+        try tag(library, "One", ["pricing"], created: .now)
+        let context = ModelContext(library.tasks.container)
+        context.insert(TagColour(name: "launch", hue: .teal))
+        try context.save()
+        XCTAssertTrue(library.renameTag("pricing", to: "quote"))
+        XCTAssertEqual(try rows(library.tasks.container, named: "quote").map(\.hue), [.teal])
+    }
+
+    func testAR03AutomaticAssignmentUsesKnownUUIDHueAndPreservesUnknownKeys() throws {
+        for names in [["launch"], ["launch", "release"]] {
+            let library = try makeLibrary()
+            let context = ModelContext(library.tasks.container), knownID = UUID(), unknownID = UUID()
+            context.insert(TagColour(id: knownID, name: "launch", hue: nil))
+            context.insert(TagColour(id: knownID, name: "release", hue: .pink))
+            context.insert(TagColour(id: unknownID, name: "future", hue: nil))
+            let unknown = TagColour(id: unknownID, name: "future-alias", hue: nil)
+            unknown.colourKey = "future-magenta"
+            context.insert(unknown)
+            try context.save()
+            XCTAssertTrue(library.tagColours.refresh(inUse: names + ["future"]))
+            let all = try rows(library.tasks.container)
+            XCTAssertTrue(all.filter { $0.id == knownID }.allSatisfy { $0.hue == .pink })
+            XCTAssertEqual(library.tagColours.palette.hue(for: "launch"), .pink)
+            XCTAssertEqual(all.first { $0.name == "future-alias" }?.colourKey, "future-magenta")
+            XCTAssertNil(all.first { $0.name == "future" }?.colourKey)
+        }
+    }
+
+    private final class ColourProbeState {
+        var colouring = AtticTagColouring()
+    }
+    private struct ColourProbe: View {
+        @Environment(\.atticTagColouring) var colouring
+        let state: ColourProbeState
+        var body: some View {
+            let _ = state.colouring = colouring
+            Color.clear.frame(width: 10, height: 10)
+        }
+    }
+
+    func testAR07ColourMenuUsesTheOriginatingPagesUndoAndRedo() throws {
+        for history: UndoHistoryID in [.tasks, .notesLibrary] {
+            let library = try makeLibrary()
+            try tag(library, "One", ["launch"], created: .now)
+            library.refreshTagColours()
+            let state = ColourProbeState()
+            let host = NSHostingView(rootView: ColourProbe(state: state)
+                .atticTagColourOrigin(.page(history)).atticTagColours(library))
+            host.frame = NSRect(x: 0, y: 0, width: 20, height: 20)
+            host.layoutSubtreeIfNeeded()
+            RunLoop.main.run(until: Date().addingTimeInterval(0.1))
+            let colour = try XCTUnwrap(state.colouring.colourCommands(for: "launch").first?.children.first { $0.swatch == .pink })
+            colour.action()
+            XCTAssertEqual(library.undo.undoCount(in: .library), 0)
+            if history == .tasks {
+                let model = TasksPageModel(library: library)
+                XCTAssertEqual(model.undo(), .applied)
+                XCTAssertEqual(library.tagColours.palette.hue(for: "launch"), .teal)
+                XCTAssertEqual(model.redo(), .applied)
+            } else {
+                XCTAssertTrue(library.undo.undo(in: history))
+                XCTAssertEqual(library.tagColours.palette.hue(for: "launch"), .teal)
+                XCTAssertTrue(library.undo.redo(in: history))
+            }
+            XCTAssertEqual(library.tagColours.palette.hue(for: "launch"), .pink)
+        }
+    }
+
+    func testAR07NoteColourMenuSharesTextHistoryAndFailedUndoCanRetry() throws {
+        let gate = PersistenceGate()
+        let library = try makeLibrary(persist: gate.save)
+        try tag(library, "One", ["launch"], created: .now)
+        library.refreshTagColours()
+        let engine = NoteEditorEngine(noteID: UUID(), document: NoteDocument(blocks: [.text("Title"), .text("Body")]))
+        let state = ColourProbeState()
+        let host = NSHostingView(rootView: ColourProbe(state: state)
+            .atticTagColourOrigin(.editor(engine.history)).atticTagColours(library))
+        host.frame = NSRect(x: 0, y: 0, width: 20, height: 20)
+        host.layoutSubtreeIfNeeded()
+        RunLoop.main.run(until: Date().addingTimeInterval(0.1))
+        let colour = try XCTUnwrap(state.colouring.colourCommands(for: "launch").first?.children.first { $0.swatch == .pink })
+        colour.action()
+        XCTAssertEqual(engine.history.undoActionName, "Tag Colour")
+        XCTAssertEqual(library.undo.undoCount(in: .library), 0)
+        let doc = engine.document()
+        gate.shouldFail = true
+        XCTAssertFalse(engine.history.undo())
+        XCTAssertEqual(engine.history.undoOps.count, 1)
+        XCTAssertTrue(engine.history.redoOps.isEmpty)
+        XCTAssertEqual(library.tagColours.palette.hue(for: "launch"), .pink)
+        gate.shouldFail = false
+        XCTAssertTrue(engine.history.undo())
+        XCTAssertEqual(library.tagColours.palette.hue(for: "launch"), .teal)
+        XCTAssertTrue(engine.history.redo())
+        XCTAssertEqual(library.tagColours.palette.hue(for: "launch"), .pink)
+        XCTAssertEqual(engine.document(), doc, "metadata history never changes text or selection")
     }
 
     func testAR02EqualIdentityAndTimeResolvePayloadIndependentlyOfFetchOrder() {

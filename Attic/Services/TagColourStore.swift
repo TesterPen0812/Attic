@@ -45,9 +45,7 @@ final class TagColourStore: ObservableObject {
         var winners: [String: TagColour] = [:]
         for row in rows where row.hue != nil {
             guard let current = winners[row.name] else { winners[row.name] = row; continue }
-            if row.modifiedAt > current.modifiedAt
-                || (row.modifiedAt == current.modifiedAt && (row.id.uuidString < current.id.uuidString
-                    || (row.id == current.id && row.colourKey! < current.colourKey!))) {
+            if precedes(row, current) {
                 winners[row.name] = row
             }
         }
@@ -61,7 +59,7 @@ final class TagColourStore: ObservableObject {
     @discardableResult
     func refresh(inUse names: [String]) -> Bool {
         let context = ModelContext(container)
-        let rows: [TagColour]
+        var rows: [TagColour]
         do {
             rows = try context.fetch(FetchDescriptor<TagColour>())
         } catch {
@@ -75,23 +73,32 @@ final class TagColourStore: ObservableObject {
         // Store what was resolved: fill a name's colourless rows, or add a
         // row for a name that has none. A row holding an unknown colour is
         // a newer Attic's choice and stays as it is.
-        let rowsByName = Dictionary(grouping: rows, by: \.name)
         let date = now()
         var changed = false
         for name in names where stored[name] == nil {
-            guard let hue = resolved.hues[name] else { continue }
-            let existing = rowsByName[name] ?? []
+            let ids = Set(rows.filter { $0.name == name }.map(\.id))
+            let existing = rows.filter { $0.name == name || ids.contains($0.id) }
+            guard let assigned = AtticTagPalette.resolve(inUse: names, stored: Self.storedHues(rows)).hues[name] else { continue }
             if existing.isEmpty {
-                context.insert(TagColour(name: name, hue: hue, at: date))
+                let row = TagColour(name: name, hue: assigned, at: date)
+                context.insert(row)
+                rows.append(row)
                 changed = true
-            } else if existing.allSatisfy({ $0.colourKey == nil }) {
-                for row in existing {
+            } else if existing.allSatisfy({ $0.colourKey == nil || $0.hue != nil }) {
+                // A divergent-name UUID may already have a stored colour.
+                // Keep its deterministic winner; otherwise first use assigns
+                // the entire closure once, never a different hue per alias.
+                let hue = existing.filter { $0.hue != nil }.sorted(by: Self.precedes).first?.hue ?? assigned
+                for row in existing where row.hue != hue {
                     row.colourKey = hue.rawValue
                     row.modifiedAt = date
+                    changed = true
                 }
-                changed = true
             }
         }
+        // Publish aliases using the same authoritative rows changed above.
+        let final = AtticTagPalette.resolve(inUse: names, stored: Self.storedHues(rows))
+        if final != palette { palette = final }
         guard changed else { return true }
         return save(context)
     }
@@ -129,18 +136,26 @@ final class TagColourStore: ObservableObject {
     /// otherwise it takes the first source's colour (a rename keeps the
     /// colour). The sources' rows stay, so undoing the rename brings the
     /// old name back in its colour.
-    func carry(from sources: [String], to target: String, targetInUse: Bool, in context: ModelContext) throws {
+    func carry(from sources: [String], to target: String, targetInUse: Bool, inUse: [String], in context: ModelContext) throws {
         let stored = Self.storedHues(try context.fetch(FetchDescriptor<TagColour>()))
         guard let source = sources.first else { return }
         let name = targetInUse ? target : source
-        let hue = stored[name] ?? AtticTagHue.assigned(to: name, avoiding: Set(stored.values))
+        let hue = AtticTagPalette.resolve(inUse: inUse, stored: stored).hue(for: name)
         try write(hue, for: target, in: context)
     }
 
     // MARK: Private
 
-    private func rows(named name: String, in context: ModelContext) throws -> [TagColour] {
-        try context.fetch(FetchDescriptor<TagColour>(predicate: #Predicate { $0.name == name }))
+    func currentHue(for name: String, inUse: [String]) throws -> AtticTagHue {
+        let rows = try ModelContext(container).fetch(FetchDescriptor<TagColour>())
+        let stored = Self.storedHues(rows)
+        return stored[name] ?? AtticTagPalette.resolve(inUse: inUse, stored: stored).hue(for: name)
+    }
+
+    private static func precedes(_ row: TagColour, _ current: TagColour) -> Bool {
+        if row.modifiedAt != current.modifiedAt { return row.modifiedAt > current.modifiedAt }
+        if row.id != current.id { return row.id.uuidString < current.id.uuidString }
+        return (row.colourKey ?? "") < (current.colourKey ?? "")
     }
 
     private func write(_ hue: AtticTagHue, for name: String, in context: ModelContext) throws {
@@ -186,6 +201,13 @@ private struct AtticTagColourEnvironment: ViewModifier {
         content
             .environment(\.atticTagColouring, AtticTagColouring(palette: palette, setHue: library.map { library in
                 { [weak library] tag, hue in library?.setTagHue(hue, for: tag) }
+            }, routeHue: library.map { library in
+                { [weak library] tag, hue, origin in
+                    switch origin {
+                    case let .page(history): library?.setTagHue(hue, for: tag, in: history)
+                    case let .editor(history): library?.setTagHue(hue, for: tag, in: history)
+                    }
+                }
             }))
             .onReceive(changes) { if $0 != palette { palette = $0 } }
     }

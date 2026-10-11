@@ -62,8 +62,8 @@ final class AtticLibrary {
         tags = TagService(container: tasks.container, persist: persist)
         tagColours = TagColourStore(container: tasks.container, persist: persist, now: now)
         let colours = tagColours
-        tags.carryColour = { [weak colours] sources, target, targetInUse, context in
-            try colours?.carry(from: sources, to: target, targetInUse: targetInUse, in: context)
+        tags.carryColour = { [weak colours] sources, target, targetInUse, inUse, context in
+            try colours?.carry(from: sources, to: target, targetInUse: targetInUse, inUse: inUse, in: context)
         }
         links.endpointState = { [weak self] ref in self?.state(of: ref) ?? .missing }
         tasks.commandLibrary = self
@@ -108,23 +108,32 @@ final class AtticLibrary {
     /// Changes a tag's colour (the tag menu's Colour row), as one undo step.
     @discardableResult
     func setTagHue(_ hue: AtticTagHue, for tag: String, in history: UndoHistoryID = .library) -> Bool {
-        guard let name = AtticTag.normalize(tag) else { return fail(TagServiceError.invalidTag(tag).localizedDescription) }
-        let previous = tagColours.palette.hue(for: name)
-        guard previous != hue else { return true }
-        var succeeded = false
-        undo.perform(in: history) {
-            guard tagColours.setHue(hue, for: name) else {
-                _ = fail(tagColours.lastErrorMessage)
-                return nil
-            }
-            succeeded = true
-            return UndoStep(
-                name: String(localized: "Tag Colour"),
-                undo: { [colours = tagColours] in colours.setHue(previous, for: name) },
-                redo: { [colours = tagColours] in colours.setHue(hue, for: name) }
-            )
+        let change = tagHueChange(hue, for: tag)
+        if let step = change.step { undo.record(step, in: history) }
+        return change.succeeded
+    }
+
+    @discardableResult
+    func setTagHue(_ hue: AtticTagHue, for tag: String, in history: NoteUndoHistory) -> Bool {
+        let change = tagHueChange(hue, for: tag)
+        if let step = change.step {
+            history.recordExternalChange(name: step.name, undo: { step.undo() == .applied }, redo: { step.redo() == .applied })
         }
-        return succeeded
+        return change.succeeded
+    }
+
+    private func tagHueChange(_ hue: AtticTagHue, for tag: String) -> (succeeded: Bool, step: UndoStep?) {
+        guard let name = AtticTag.normalize(tag) else {
+            return (fail(TagServiceError.invalidTag(tag).localizedDescription), nil)
+        }
+        let previous: AtticTagHue
+        do { previous = try tagColours.currentHue(for: name, inUse: tags.namesOldestFirst) }
+        catch { return (fail(error.localizedDescription), nil) }
+        guard previous != hue else { return (true, nil) }
+        guard tagColours.setHue(hue, for: name) else { return (fail(tagColours.lastErrorMessage), nil) }
+        return (true, UndoStep(name: String(localized: "Tag Colour"),
+            undo: { [colours = tagColours] in colours.setHue(previous, for: name) },
+            redo: { [colours = tagColours] in colours.setHue(hue, for: name) }))
     }
 
     // MARK: - Item state
