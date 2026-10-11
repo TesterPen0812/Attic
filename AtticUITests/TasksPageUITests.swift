@@ -721,7 +721,7 @@ final class TasksPageUITests: XCTestCase {
         openItem("More").hover()
         XCTAssertTrue(openItem("Move Down").waitForExistence(timeout: 3), "More holds Move Down")
         waitFor(openItem("Move Down").frame.width > 0, "More's submenu opens")
-        XCTAssertTrue(openItem("Open Files…").exists && openItem("Move Up").exists, "and Open Files… and Move Up")
+        XCTAssertTrue(openItem("Show Files").exists && openItem("Move Up").exists, "and Show Files and Move Up")
         openItem("Move Down").click()
         waitFor(!menuItem("Move Down").exists, "the menu closes")
         waitFor(row("Email beta testers").exists && row("Email beta testers").frame.minY > row("Book dentist").frame.minY,

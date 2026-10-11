@@ -293,8 +293,7 @@ final class TasksReviewFixTests: XCTestCase {
         let container = try PersistenceController.makeContainer(inMemory: true)
         let clock = MutableNow(base)
         let store = TaskStore(container: container, now: { clock.value }, taskImageFiles: files)
-        var opened: [UUID] = []
-        let model = TasksPageModel(library: AtticLibrary(tasks: store), services: TasksPageServices(openPage: { opened.append($0) }))
+        let model = TasksPageModel(library: AtticLibrary(tasks: store), services: TasksPageServices())
         let task = try XCTUnwrap(store.create(title: "Ship"))
         _ = try XCTUnwrap(store.create(title: "Pack", parentID: task.id))
         let attached = await store.attachFiles([source], to: task.id)
@@ -305,7 +304,7 @@ final class TasksReviewFixTests: XCTestCase {
         XCTAssertNil(store.task(withID: task.id))
 
         model.openPage(task.id)
-        XCTAssertTrue(opened.isEmpty, "the host's route can't show a logged task")
+        XCTAssertTrue(model.expandedFiles.isEmpty, "a logged task opens its read-only details, not a files list")
         XCTAssertEqual(model.doneDetailID, task.id)
         let detail = try XCTUnwrap(model.doneDetail(for: task.id))
         XCTAssertEqual(detail.title, "Ship")
@@ -316,7 +315,9 @@ final class TasksReviewFixTests: XCTestCase {
 
         let live = try XCTUnwrap(store.create(title: "Live"))
         model.openPage(live.id)
-        XCTAssertEqual(opened, [live.id], "a task in the lists still goes to the host's route")
+        XCTAssertEqual(model.expandedFiles, [live.id], "a task in the lists opens its files under its row")
+        model.openPage(live.id)
+        XCTAssertTrue(model.expandedFiles.isEmpty, "and the same command closes them")
     }
 
     // MARK: 6. Own focus rings only for the keyboard

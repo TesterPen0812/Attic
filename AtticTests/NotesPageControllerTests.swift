@@ -912,9 +912,7 @@ final class NotesPageControllerTests: XCTestCase {
         let view = AtticPanelView(store: taskStore, noteStore: noteStore,
                                   canvasSession: CanvasSession(store: CanvasStore(container: container)),
                                   noteDraft: noteDraft, chromeInteractionState: PanelChromeInteractionState(),
-                                  uiState: state, settings: settings,
-                                  subtaskPanels: SubtaskPanelController(store: taskStore, uiState: state,
-                                                                         settings: settings))
+                                  uiState: state, settings: settings)
         await noteDraft.pages.startAndWait()
         let draft = try XCTUnwrap(noteDraft.pages.active)
         type("Only in memory", into: draft)
@@ -1539,7 +1537,7 @@ final class NotesPageControllerTests: XCTestCase {
         session.showNotice(NoteNotice(kind: .finishFirst, detail: "Finish composing text before leaving this note."))
         #endif
         XCTAssertEqual(controller.statusItems(for: session).map(\.label),
-                       ["Claude has changes", "Finish first"])
+                       ["Claude has changes", "Finish editing"])
     }
 
     func testStagedImageIsCommittedWithTheSaveThatShowsIt() async throws {

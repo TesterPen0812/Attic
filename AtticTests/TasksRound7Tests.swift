@@ -292,8 +292,7 @@ final class TasksRound7ShellTests: XCTestCase {
                 store: store, noteStore: notes,
                 canvasSession: CanvasSession(store: CanvasStore(container: container)),
                 noteDraft: NoteDraftController(noteStore: notes),
-                chromeInteractionState: chrome, uiState: state, settings: settings,
-                subtaskPanels: SubtaskPanelController(store: store, uiState: state, settings: settings)
+                chromeInteractionState: chrome, uiState: state, settings: settings
             ),
             panelCornerRadius: 52, dockedCorner: .topRight, chromeInteractionState: chrome
         )

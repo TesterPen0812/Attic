@@ -39,7 +39,6 @@ struct TasksPageHost: View {
     let store: TaskStore
     let uiState: PanelUIState
     let settings: AppSettings
-    let subtaskPanels: SubtaskPanelController
     let state: TasksPageState
     let layout: PanelPageLayout
     let chromeInteractionState: PanelChromeInteractionState
@@ -104,13 +103,13 @@ struct TasksPageHost: View {
             DispatchQueue.main.async { uiState.setInteractionLock(.taskComposer, isActive: hasDraft) }
         }
         .onAppear {
-            // Task pages arrive in Phase 3; until then "Open page" opens the
-            // task's detail panel on its files (the old subpanel stays only
-            // for a task's files).
-            model.services.openPage = { [subtaskPanels] id in
-                // The old panel for the task's files only: subtasks live in
-                // the row's quick look (Done log tasks open in the page).
-                subtaskPanels.openFilesPanel(for: id)
+            // "Attach file…" in a row's files list (A1): the picker, which
+            // keeps the panel open while it is up; the list opens on what
+            // was attached.
+            model.services.chooseFiles = { [store, uiState, weak model] id in
+                TaskAttachmentPicker.choose(for: id, store: store, uiState: uiState) { _, ownerID in
+                    model?.setFilesExpanded(ownerID, true)
+                }
             }
             editHold.setSuspended(!isCurrent)
             if model.isPageShown != isCurrent { model.isPageShown = isCurrent }
@@ -135,6 +134,16 @@ struct TasksPageHost: View {
                 if environment["ATTIC_UI_TEST_EXPAND_FIRST"] == "1",
                    let row = model.rows(for: model.tab).first(where: { $0.model.subtasks != nil }) {
                     model.setExpanded(row.id, true)
+                }
+                // The first row with subtasks gets N generated files of
+                // different kinds (in-memory store only), its files list open.
+                if let count = environment["ATTIC_UI_TEST_SEED_FILES"].flatMap(Int.init), count > 0,
+                   let row = model.rows(for: model.tab).first(where: { $0.model.subtasks != nil }) {
+                    Task { @MainActor in
+                        guard let urls = try? TasksCaptureFiles.make(count) else { return }
+                        _ = await store.attachStagedFiles(to: row.id) { TaskAttachmentStaging(urls: urls) }
+                        model.setFilesExpanded(row.id, true)
+                    }
                 }
             }
             #endif
@@ -200,3 +209,55 @@ struct TasksPageHost: View {
         DispatchQueue.main.async { if uiState.shownItem == ref { uiState.showItem(nil) } }
     }
 }
+
+#if DEBUG
+import AppKit
+
+/// Capture seam files (`ATTIC_UI_TEST_SEED_FILES`): small real files of
+/// different kinds, written to the app's own temporary folder so the
+/// in-memory UI-testing store can attach them. Never the owner's data.
+enum TasksCaptureFiles {
+    static func make(_ count: Int) throws -> [URL] {
+        let folder = FileManager.default.temporaryDirectory.appendingPathComponent("attic-capture-files-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        let kinds: [(String, () -> Data)] = [
+            ("Launch brief.pdf", pdf),
+            ("Moodboard.png", { image(.systemTeal, type: .png) }),
+            ("Press release draft.docx", { Data("Draft".utf8) }),
+            ("Venue photo.jpg", { image(.systemOrange, type: .jpeg) }),
+            ("Budget.csv", { Data("item,cost\nvenue,1200\n".utf8) }),
+            ("Assets.zip", { Data([0x50, 0x4B, 0x05, 0x06] + Array(repeating: 0, count: 18)) }),
+            ("Meeting notes.txt", { Data("Agenda\n- intro\n".utf8) })
+        ]
+        return try (0..<count).map { index in
+            let (name, data) = kinds[index % kinds.count]
+            let prefix = index < kinds.count ? "" : "\(index / kinds.count + 1) "
+            let url = folder.appendingPathComponent(prefix + name)
+            try data().write(to: url)
+            return url
+        }
+    }
+
+    private static func image(_ color: NSColor, type: NSBitmapImageRep.FileType) -> Data {
+        let rep = NSBitmapImageRep(bitmapDataPlanes: nil, pixelsWide: 320, pixelsHigh: 200, bitsPerSample: 8, samplesPerPixel: 4,
+                                   hasAlpha: true, isPlanar: false, colorSpaceName: .deviceRGB, bytesPerRow: 0, bitsPerPixel: 0)!
+        NSGraphicsContext.saveGraphicsState()
+        NSGraphicsContext.current = NSGraphicsContext(bitmapImageRep: rep)
+        NSGradient(starting: color, ending: .white)?.draw(in: NSRect(x: 0, y: 0, width: 320, height: 200), angle: 45)
+        NSGraphicsContext.restoreGraphicsState()
+        return rep.representation(using: type, properties: [:]) ?? Data()
+    }
+
+    private static func pdf() -> Data {
+        let data = NSMutableData()
+        var box = CGRect(x: 0, y: 0, width: 612, height: 792)
+        guard let consumer = CGDataConsumer(data: data), let context = CGContext(consumer: consumer, mediaBox: &box, nil) else { return Data() }
+        context.beginPDFPage(nil)
+        context.setFillColor(NSColor.systemBlue.cgColor)
+        context.fill(CGRect(x: 72, y: 600, width: 468, height: 120))
+        context.endPDFPage()
+        context.closePDF()
+        return data as Data
+    }
+}
+#endif

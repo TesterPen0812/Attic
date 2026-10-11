@@ -73,7 +73,7 @@ final class TasksFollowup2Tests: XCTestCase {
 
     // MARK: - L5: the rarer commands under More
 
-    /// The top level keeps the common actions; Open Files…, Move Up and
+    /// The top level keeps the common actions; Show Files, Move Up and
     /// Move Down sit under More with their keys, and the keys still find
     /// them in the one list.
     func testTheRarerCommandsSitUnderMoreWithTheirKeys() throws {
@@ -86,7 +86,7 @@ final class TasksFollowup2Tests: XCTestCase {
         XCTAssertEqual(top, ["Complete", "Start Working", "Edit Title", "Date", "Tags", "Priority", "Move to Later",
                              "Add Subtask", "Copy", "Duplicate", "More", "Delete"])
         let more = try XCTUnwrap(commands.first { $0.title == "More" })
-        XCTAssertEqual(more.children.map(\.title), ["Open Files…", "Move Up", "Move Down"])
+        XCTAssertEqual(more.children.map(\.title), ["Show Files", "Move Up", "Move Down"])
         XCTAssertEqual(more.children.map(\.shortcut), [AtticTaskShortcut.openPage, AtticTaskShortcut.moveUp, AtticTaskShortcut.moveDown])
         // Call the plumber is the last to do: Move Down is off, Move Up runs.
         XCTAssertEqual(more.children.map(\.isDisabled), [false, false, true])
@@ -95,7 +95,7 @@ final class TasksFollowup2Tests: XCTestCase {
         // The native menu keeps the sections inside More.
         let menu = AtticNativeMenu.make(commands)
         let submenu = try XCTUnwrap(menu.items.first { $0.title == "More" }?.submenu)
-        XCTAssertEqual(submenu.items.map { $0.isSeparatorItem ? "—" : $0.title }, ["Open Files…", "—", "Move Up", "Move Down"])
+        XCTAssertEqual(submenu.items.map { $0.isSeparatorItem ? "—" : $0.title }, ["Show Files", "—", "Move Up", "Move Down"])
     }
 
     // MARK: - L6: a Done task's details show its metadata

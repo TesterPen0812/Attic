@@ -252,7 +252,6 @@ final class AtticDropdownTests: XCTestCase {
                 canvasSession: CanvasSession(store: CanvasStore(container: container)),
                 noteDraft: NoteDraftController(noteStore: notes),
                 chromeInteractionState: chrome, uiState: state, settings: settings,
-                subtaskPanels: SubtaskPanelController(store: store, uiState: state, settings: settings),
                 tasksPageState: TasksPageState()
             ),
             panelCornerRadius: 52, dockedCorner: .topRight, chromeInteractionState: chrome
@@ -2095,7 +2094,6 @@ extension AtticDropdownTests {
                 store: store, noteStore: notes, canvasSession: CanvasSession(store: CanvasStore(container: container)),
                 noteDraft: NoteDraftController(noteStore: notes), chromeInteractionState: chrome,
                 uiState: state, settings: settings,
-                subtaskPanels: SubtaskPanelController(store: store, uiState: state, settings: settings),
                 tasksPageState: TasksPageState()), panelCornerRadius: 52, dockedCorner: .topRight, chromeInteractionState: chrome)
             let window = makeUnshownWindow()
             window.contentView = host

@@ -1,4 +1,5 @@
 import AppKit
+import Combine
 import SwiftUI
 import XCTest
 @testable import Attic
@@ -232,8 +233,7 @@ final class DeepReviewFixTests: XCTestCase {
     func testOpenFilesOpensFromTheRightClickMenuTheActionsMenuAndCommandReturn() throws {
         let hosted = try Hosted(height: 520)
         defer { hosted.close() }
-        var opened: [UUID] = []
-        hosted.model.services.openPage = { opened.append($0) }
+        var opened: [UUID] { Array(hosted.model.expandedFiles) }
         let row = try XCTUnwrap(hosted.model.rows(for: .now).first { $0.model.title == "Book dentist" }?.id)
         // The right-click menu: the menu SwiftUI shows for a secondary click
         // on the row, its More › Open Files… chosen as AppKit chooses an
@@ -251,13 +251,13 @@ final class DeepReviewFixTests: XCTestCase {
         menu.update()
         let more = try XCTUnwrap(menu.items.first { $0.title == "More" }?.submenu, "with More")
         more.update()
-        let open = try XCTUnwrap(more.items.firstIndex { $0.title.hasPrefix("Open Files") }, "holding Open Files…")
+        let open = try XCTUnwrap(more.items.firstIndex { $0.title.hasPrefix("Show Files") }, "holding Show Files")
         more.performActionForItem(at: open)
         hosted.spin(0.5)
         XCTAssertEqual(opened, [row], "the right-click menu's Open Files… opens the row's files")
 
         // ⇧⌘I's menu: down to More (its eleventh item), into it, Return.
-        opened = []
+        for id in hosted.model.expandedFiles { hosted.model.setFilesExpanded(id, false) }
         try hosted.clickRow(row, tab: .now)
         let down: (characters: String, keyCode: UInt16) = ("\u{F701}", 125)
         let actionTimers = schedule(Array(repeating: down, count: 11) + [("\u{F703}", 124), ("\r", 36)], in: hosted)
@@ -267,7 +267,7 @@ final class DeepReviewFixTests: XCTestCase {
         XCTAssertEqual(opened, [row], "⇧⌘I's Open Files… opens them the same way")
 
         // ⌘Return on the selected row.
-        opened = []
+        for id in hosted.model.expandedFiles { hosted.model.setFilesExpanded(id, false) }
         try hosted.clickRow(row, tab: .now)
         hosted.press("\r", keyCode: 36, modifiers: .command)
         hosted.spin(0.3)
@@ -315,8 +315,7 @@ final class DeepReviewFixTests: XCTestCase {
     func testOpenFilesChosenWithReturnOpensWhileSomethingHasTheKeyboard() throws {
         let hosted = try Hosted(height: 520)
         defer { hosted.close() }
-        var opened: [UUID] = []
-        hosted.model.services.openPage = { opened.append($0) }
+        var opened: [UUID] { Array(hosted.model.expandedFiles) }
         let row = try XCTUnwrap(hosted.model.rows(for: .now).first { $0.model.title == "Book dentist" }?.id)
 
         let keyboardOwner = NSPanel(contentRect: CGRect(x: -6_000, y: -6_000, width: 40, height: 40),
@@ -337,7 +336,7 @@ final class DeepReviewFixTests: XCTestCase {
             menu.update()
             let more = try XCTUnwrap(menu.items.first { $0.title == "More" }?.submenu, "with More")
             more.update()
-            more.performActionForItem(at: try XCTUnwrap(more.items.firstIndex { $0.title.hasPrefix("Open Files") }))
+            more.performActionForItem(at: try XCTUnwrap(more.items.firstIndex { $0.title.hasPrefix("Show Files") }))
             hosted.spin(0.3)
         }
 
@@ -355,7 +354,7 @@ final class DeepReviewFixTests: XCTestCase {
         XCTAssertEqual(opened, [row], "the right-click menu's Open Files…, chosen with Return, opens the row's files")
 
         // ⇧⌘I's menu (the same commands as an NSMenu), on a Later row.
-        opened = []
+        for id in hosted.model.expandedFiles { hosted.model.setFilesExpanded(id, false) }
         hosted.go(to: .backlog)
         let later = try XCTUnwrap(hosted.model.rows(for: .backlog).first?.id, "Later lists a task")
         makeCurrent(try keyEvent("\r", keyCode: 36))
@@ -363,7 +362,7 @@ final class DeepReviewFixTests: XCTestCase {
         XCTAssertEqual(opened, [later], "⇧⌘I's Open Files…, chosen with Return, opens them too")
 
         // The item's own ⌘Return while something types stays with it.
-        opened = []
+        for id in hosted.model.expandedFiles { hosted.model.setFilesExpanded(id, false) }
         makeCurrent(try keyEvent("\r", keyCode: 36, modifiers: .command))
         try chooseOpenFiles(in: AtticNativeMenu.make(hosted.page.taskCommands(later, tab: .backlog)))
         XCTAssertEqual(opened, [], "a typing field keeps its own ⌘Return")
@@ -377,10 +376,13 @@ final class DeepReviewFixTests: XCTestCase {
                                                             in: hosted.page.taskCommands(row, tab: .now)))
         var openedMode: CFRunLoopMode?
         let opened = expectation(description: "Open Files is delivered")
-        hosted.model.services.openPage = { _ in
+        // The files list opens in the model's own turn: the mode it opens
+        // in is the mode of the presentation.
+        let observation = hosted.model.$expandedFiles.dropFirst().sink { _ in
             openedMode = CFRunLoopCopyCurrentMode(CFRunLoopGetMain())
             opened.fulfill()
         }
+        defer { observation.cancel() }
         // Enter the native tracking mode from a run-loop source, not from
         // a main-dispatch callback (which forbids nested queue servicing).
         let invoke = Timer(timeInterval: 0.01, repeats: false) { _ in

@@ -46,9 +46,9 @@ final class OwnerTasks1010Tests: XCTestCase {
         let a = PanelPageLayout(cornerSize: 52, panelSize: CGSize(width: 340, height: 520))
         let b = PanelPageLayout(cornerSize: 52, panelSize: CGSize(width: 420, height: 650))
         XCTAssertEqual(a.chromeInsets, b.chromeInsets)
-        let before = TasksRowKey(model: model, isSelected: false, selectionRun: .single, isExpanded: false,
+        let before = TasksRowKey(model: model, isSelected: false, selectionRun: .single, isExpanded: false, isFilesExpanded: false,
                                  isDropTarget: false, isFocused: false, tab: .now, layout: a, isLive: false)
-        let after = TasksRowKey(model: model, isSelected: false, selectionRun: .single, isExpanded: false,
+        let after = TasksRowKey(model: model, isSelected: false, selectionRun: .single, isExpanded: false, isFilesExpanded: false,
                                 isDropTarget: false, isFocused: false, tab: .now, layout: b, isLive: false)
         XCTAssertEqual(before, after, "resizing the native row frame must not rebuild its unchanged controls")
     }
@@ -370,101 +370,6 @@ final class OwnerTasks1010Tests: XCTestCase {
         NSCursor.iBeam.set()
         textView.mouseMoved(with: event)
         XCTAssertTrue(NSCursor.current === NSCursor.arrow)
-    }
-
-    func testFamilyPanelEmptyEntryAndSavedChildBackspaceAreUndoable() throws {
-        let container = try PersistenceController.makeContainer(inMemory: true, cloudSyncEnabled: false)
-        let parent = TaskItem(title: "Parent")
-        let previous = TaskItem(title: "Previous", parentID: parent.id)
-        let empty = TaskItem(title: "", parentID: parent.id)
-        for task in [parent, previous, empty] { container.mainContext.insert(task) }
-        try container.mainContext.save()
-        let store = TaskStore(container: container)
-        let library = AtticLibrary(tasks: store)
-        let ui = PanelUIState()
-        ui.activateSubtaskEntry(for: parent.id)
-        ui.subtaskDrafts[parent.id] = "Keep this"
-        XCTAssertFalse(ui.backspaceEmptySubtask(store: store, parentID: parent.id))
-        ui.subtaskDrafts[parent.id] = ""
-        XCTAssertTrue(ui.backspaceEmptySubtask(store: store, parentID: parent.id))
-        XCTAssertFalse(ui.subtaskEntryActiveIDs.contains(parent.id))
-        XCTAssertEqual(ui.editingTaskID, store.subtasks(of: parent.id).last?.id)
-        XCTAssertTrue(ui.undoSubtaskEdit(store: store, nativeHasUndo: true))
-        XCTAssertTrue(ui.subtaskEntryActiveIDs.contains(parent.id))
-        XCTAssertTrue(ui.redoSubtaskEdit(store: store, nativeHasRedo: true))
-        ui.beginEditing(empty)
-        ui.editingDraftTitle = "Keep this"
-        XCTAssertFalse(ui.backspaceEmptySubtask(store: store, parentID: parent.id, childID: empty.id))
-        ui.editingDraftTitle = ""
-        let order = store.subtasks(of: parent.id)
-        let i = try XCTUnwrap(order.firstIndex { $0.id == empty.id })
-        XCTAssertTrue(ui.backspaceEmptySubtask(store: store, parentID: parent.id, childID: empty.id))
-        XCTAssertNil(store.task(withID: empty.id))
-        XCTAssertEqual(ui.editingTaskID, i > 0 ? order[i - 1].id : nil)
-        XCTAssertTrue(ui.undoSubtaskEdit(store: store, nativeHasUndo: true))
-        XCTAssertEqual(store.task(withID: empty.id)?.title, "")
-        withExtendedLifetime(library) {}
-    }
-
-    func testFamilyBackspaceBridgeIsScopedToItsEmptyField() throws {
-        let window = NSWindow(contentRect: CGRect(x: -4000, y: -4000, width: 340, height: 520), styleMask: [.borderless], backing: .buffered, defer: false)
-        window.isReleasedWhenClosed = false
-        let root = NSView(frame: CGRect(x: 0, y: 0, width: 340, height: 520))
-        window.contentView = root
-        defer { window.contentView = nil; window.close() }
-        let editor = NSTextView(frame: CGRect(x: 30, y: 30, width: 220, height: 30))
-        root.addSubview(editor)
-        let bridge = SubtaskBackspace.Bridge(frame: editor.frame)
-        root.addSubview(bridge)
-        var removes = 0
-        bridge.remove = { removes += 1; return true }
-        bridge.text = { editor.string }
-        XCTAssertTrue(window.makeFirstResponder(editor))
-        let event = try XCTUnwrap(NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: [], timestamp: 0,
-            windowNumber: window.windowNumber, context: nil, characters: "\u{7f}", charactersIgnoringModifiers: "\u{7f}", isARepeat: false, keyCode: 51))
-        XCTAssertTrue(bridge.handle(event))
-        XCTAssertEqual(removes, 1)
-        editor.string = "Do not remove"
-        XCTAssertFalse(bridge.handle(event))
-        editor.string = ""
-        bridge.frame.origin.y += 100
-        XCTAssertFalse(bridge.handle(event))
-        XCTAssertEqual(removes, 1)
-    }
-
-    func testFamilyEmptyEntryBackspacePreservesAnOlderDirtyRename() throws {
-        let container = try PersistenceController.makeContainer(inMemory: true, cloudSyncEnabled: false)
-        let store = TaskStore(container: container)
-        let library = AtticLibrary(tasks: store)
-        let parent = try XCTUnwrap(store.create(title: "Parent"))
-        let a = try XCTUnwrap(store.create(title: "First", parentID: parent.id))
-        _ = try XCTUnwrap(store.create(title: "Last", parentID: parent.id))
-        let ui = PanelUIState()
-        ui.beginEditing(a)
-        ui.editingDraftTitle = "Unsaved title"
-        ui.activateSubtaskEntry(for: parent.id)
-        XCTAssertTrue(ui.backspaceEmptySubtask(store: store, parentID: parent.id))
-        XCTAssertFalse(ui.subtaskEntryActiveIDs.contains(parent.id))
-        XCTAssertEqual(ui.editingTaskID, a.id)
-        XCTAssertEqual(ui.editingDraftTitle, "Unsaved title")
-        XCTAssertTrue(library.undo(in: .tasks).isApplied)
-        XCTAssertTrue(ui.subtaskEntryActiveIDs.contains(parent.id))
-        XCTAssertEqual(ui.editingDraftTitle, "Unsaved title")
-    }
-
-    func testFamilyEntryUndoLeavesOtherFamiliesDraftsAlone() throws {
-        let container = try PersistenceController.makeContainer(inMemory: true, cloudSyncEnabled: false)
-        let store = TaskStore(container: container)
-        let library = AtticLibrary(tasks: store)
-        let a = try XCTUnwrap(store.create(title: "A"))
-        let b = try XCTUnwrap(store.create(title: "B"))
-        let ui = PanelUIState()
-        ui.subtaskDrafts[a.id] = "Retained draft"
-        ui.activateSubtaskEntry(for: b.id)
-        XCTAssertTrue(ui.backspaceEmptySubtask(store: store, parentID: b.id))
-        XCTAssertTrue(library.undo(in: .tasks).isApplied)
-        XCTAssertTrue(ui.subtaskEntryActiveIDs.contains(b.id))
-        XCTAssertEqual(ui.subtaskDrafts[a.id], "Retained draft")
     }
 
     func testAttachmentPickerRecoveryFromAnOffscreenOwnerStaysOnscreen() throws {

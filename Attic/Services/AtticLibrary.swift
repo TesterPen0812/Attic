@@ -588,6 +588,30 @@ final class AtticLibrary {
         }
     }
 
+    /// Removes a task's attachment as one undoable step (A1: a row's files
+    /// list): the file goes to Recently Deleted, Undo puts it back, Redo
+    /// removes it again. Nothing is deleted permanently here.
+    @discardableResult
+    func removeTaskAttachment(_ attachmentID: UUID, from taskID: UUID, in history: UndoHistoryID = .tasks) -> CommandOutcome {
+        let serial = tasks.errorSerial
+        var removed: DeletedAttachmentSummary?
+        let done = undo.perform(in: history) {
+            guard tasks.removeAttachment(attachmentID, from: taskID) else { return nil }
+            removed = tasks.recentlyDeletedAttachments().first { $0.attachmentID == attachmentID }
+            guard let summary = removed else { return nil }
+            return UndoStep(
+                name: "Remove Attachment",
+                undoOutcome: { [weak self] in
+                    guard let self else { return .obsolete }
+                    if self.performRestoreAttachment(summary) { return .applied }
+                    return self.recentlyDeletedAttachments().contains { $0.attachmentID == summary.attachmentID } ? .failed : .obsolete
+                },
+                redoOutcome: { [weak self] in self?.removeAttachmentOutcome(summary) ?? .obsolete }
+            )
+        }
+        return taskOutcome(done, since: serial, ids: [taskID])
+    }
+
     /// Undo of an attachment restore: remove it again, if it is still shown
     /// on its live task or note.
     func removeAttachmentOutcome(_ summary: DeletedAttachmentSummary) -> UndoOutcome {

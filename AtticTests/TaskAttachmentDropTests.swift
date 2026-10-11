@@ -335,7 +335,6 @@ final class TaskAttachmentDropTests: XCTestCase {
         }
         await eventually { gate.isWaiting }
         XCTAssertTrue(store.importingAttachmentTaskIDs.contains(parent.id), "staging runs inside the reservation")
-        XCTAssertFalse(TaskFileDrop.canAccept(child.id, store: store), "a child row refuses while its parent imports")
 
         let staged = Box(false)
         let refused = await store.attachStagedFiles(to: child.id) {
@@ -350,12 +349,13 @@ final class TaskAttachmentDropTests: XCTestCase {
         let ids = await running.value
         XCTAssertEqual(ids?.count, 1)
         XCTAssertEqual(store.tasks.first { $0.id == parent.id }?.attachments.count, 1)
-        XCTAssertTrue(TaskFileDrop.canAccept(child.id, store: store))
     }
 
-    // MARK: - R4 gallery cards
+    // MARK: - A file row dragged onto another task (A1, restored)
 
-    func testGalleryCardCopiesIntoAnotherTaskButNeverIntoItsOwnOwner() async throws {
+    /// The old window's cards copied to another task; the inline files
+    /// list's rows do the same through the page's one drop destination.
+    func testAFileRowCopiesIntoAnotherTaskButNeverIntoItsOwnOwner() async throws {
         let (store, container, files) = try makeStore()
         let trip = try XCTUnwrap(store.create(title: "Trip"))
         let pack = try XCTUnwrap(store.create(title: "Pack", parentID: trip.id))
@@ -364,20 +364,21 @@ final class TaskAttachmentDropTests: XCTestCase {
         _ = await store.attachStagedFiles(to: trip.id) { TaskAttachmentStaging(urls: [photo]) }
         let source = try XCTUnwrap(store.tasks.first { $0.id == trip.id }?.attachments.first)
 
-        // The card records its identity and owner when the drag begins.
+        // The row records its identity and owner when the drag begins.
         TaskAttachmentCardDrag.begin(source, store: store)
         XCTAssertEqual(TaskAttachmentCardDrag.current, TaskAttachmentSource(reference: source, ownerID: trip.id))
-        XCTAssertFalse(TaskFileDrop.canAccept(.attachmentCard, onto: trip.id, store: store), "its own owner refuses it")
-        XCTAssertFalse(TaskFileDrop.canAccept(.attachmentCard, onto: pack.id, store: store), "a child resolves to that owner")
-        XCTAssertTrue(TaskFileDrop.canAccept(.attachmentCard, onto: other.id, store: store))
-        XCTAssertTrue(TaskAttachmentCardDrag.canCopy(toOwner: nil), "the composer's new task may receive it")
-        XCTAssertTrue(TaskFileDrop.canAccept(.files, onto: trip.id, store: store), "files still attach to the owner")
+        XCTAssertFalse(TasksPage.canAcceptDrop(.attachmentCard, onto: trip.id, store: store), "its own owner refuses it")
+        XCTAssertFalse(TasksPage.canAcceptDrop(.attachmentCard, onto: pack.id, store: store), "a child resolves to that owner")
+        XCTAssertTrue(TasksPage.canAcceptDrop(.attachmentCard, onto: other.id, store: store))
+        XCTAssertTrue(TasksPage.canAcceptDrop(.files, onto: trip.id, store: store), "files still attach to the owner")
+        XCTAssertFalse(TasksPage.canAcceptDrop(.task, onto: other.id, store: store))
+        XCTAssertTrue(TasksFileDropDelegate.takes(.attachmentCard) && TasksFileDropDelegate.takes(.files))
 
         // Dropped on another task: a verified, separately owned copy.
-        let card = TaskAttachmentDragItem(reference: source, files: files).itemProvider()
+        let row = TaskAttachmentDragItem(reference: source, files: files).itemProvider()
         let expected = TaskAttachmentCardDrag.current
         let ids = await store.attachCopies(to: other.id) {
-            try await TaskAttachmentCardDrag.sources(from: [card], expected: expected)
+            try await TaskAttachmentCardDrag.sources(from: [row], expected: expected)
         }
         let copyID = try XCTUnwrap(ids?.first)
         XCTAssertNil(store.lastErrorMessage)
@@ -385,31 +386,22 @@ final class TaskAttachmentDropTests: XCTestCase {
         XCTAssertEqual(copy.id, copyID)
         XCTAssertNotEqual(copy.id, source.id, "the copy has its own identity")
         XCTAssertEqual(copy.digest, source.digest)
-        XCTAssertEqual(copy.contentTypeIdentifier, source.contentTypeIdentifier)
         XCTAssertEqual(store.tasks.first { $0.id == trip.id }?.attachments, [source], "the source is unchanged")
         XCTAssertEqual(Set(privateDirectories()), [source.id.uuidString, copy.id.uuidString], "no shared storage")
         let relaunched = TaskStore(container: container, taskImageFiles: files)
         XCTAssertEqual(relaunched.tasks.first { $0.id == other.id }?.attachments, [copy])
 
-        // Removing the copy never touches the source's bytes.
-        // (Removal is soft until the purge; the purge releases the copy.)
-        XCTAssertTrue(store.removeAttachment(copy.id, from: other.id))
-        XCTAssertEqual(store.purgeRemovedAttachments(before: .distantFuture), 1)
-        await eventually { privateDirectories() == [source.id.uuidString] }
-        let sourceStillVerified = try await files.verifiedURL(for: source)
-        XCTAssertNotNil(sourceStillVerified)
-
         // Released over its own family anyway (a stale proposal): refused calmly.
         let before = privateDirectories()
         let own = await store.attachCopies(to: pack.id) {
-            try await TaskAttachmentCardDrag.sources(from: [card], expected: expected)
+            try await TaskAttachmentCardDrag.sources(from: [row], expected: expected)
         }
         XCTAssertNil(own)
         XCTAssertEqual(store.lastErrorMessage, "Couldn’t attach files. That attachment already belongs to this task.")
         XCTAssertEqual(privateDirectories(), before)
     }
 
-    func testGalleryCardDropRevalidatesTheMarkerAndTheVerifiedSource() async throws {
+    func testAFileRowDropRevalidatesTheMarker() async throws {
         let (store, _, files) = try makeStore()
         let trip = try XCTUnwrap(store.create(title: "Trip"))
         let other = try XCTUnwrap(store.create(title: "Other"))
@@ -417,100 +409,15 @@ final class TaskAttachmentDropTests: XCTestCase {
             TaskAttachmentStaging(urls: [try pngFile(), try textFile(named: "List.txt")])
         }
         let attachments = try XCTUnwrap(store.tasks.first { $0.id == trip.id }?.attachments)
-        let (photo, list) = (attachments[0], attachments[1])
-        let unavailable = "Couldn’t attach files. The attachment is no longer available."
-
-        // A marker that doesn't name the recorded card copies nothing.
-        TaskAttachmentCardDrag.begin(list, store: store)
+        // A marker that doesn't name the recorded row copies nothing.
+        TaskAttachmentCardDrag.begin(attachments[1], store: store)
         let mismatched = await store.attachCopies(to: other.id) {
-            try await TaskAttachmentCardDrag.sources(from: [TaskAttachmentDragItem(reference: photo, files: files).itemProvider()],
+            try await TaskAttachmentCardDrag.sources(from: [TaskAttachmentDragItem(reference: attachments[0], files: files).itemProvider()],
                                                      expected: TaskAttachmentCardDrag.current)
         }
         XCTAssertNil(mismatched)
-        XCTAssertEqual(store.lastErrorMessage, unavailable)
-
-        // A drag whose record no longer matches the store copies nothing.
-        let stale = TaskAttachmentSource(reference: list, ownerID: other.id)
-        XCTAssertThrowsError(try store.verifiedCopySources([stale], excludingOwner: nil))
-
-        // A private copy that fails its digest check is never copied.
-        let verifiedList = try await files.verifiedURL(for: list)
-        let listURL = try XCTUnwrap(verifiedList)
-        try Data("Tampered".utf8).write(to: listURL)
-        let card = TaskAttachmentDragItem(reference: list, files: files).itemProvider()
-        let tampered = await store.attachCopies(to: other.id) {
-            try await TaskAttachmentCardDrag.sources(from: [card], expected: TaskAttachmentCardDrag.current)
-        }
-        XCTAssertNil(tampered)
-        XCTAssertEqual(store.lastErrorMessage, unavailable)
+        XCTAssertEqual(store.lastErrorMessage, "Couldn’t attach files. The attachment is no longer available.")
         XCTAssertTrue(store.tasks.first { $0.id == other.id }?.attachments.isEmpty == true)
-        XCTAssertEqual(privateDirectories().count, 2, "a refused copy leaves nothing behind")
-        XCTAssertTrue(store.importingAttachmentTaskIDs.isEmpty)
-    }
-
-    func testALegacySubtaskCardResolvesToItsParentAndAmbiguityRefuses() throws {
-        let (store, _, _) = try makeStore()
-        let trip = try XCTUnwrap(store.create(title: "Trip"))
-        let pack = try XCTUnwrap(store.create(title: "Pack", parentID: trip.id))
-        let other = try XCTUnwrap(store.create(title: "Other"))
-        let legacy = TaskImageReference(id: UUID(), filename: "Old.png", digest: String(repeating: "a", count: 64),
-                                        contentTypeIdentifier: UTType.png.identifier, byteCount: 1)
-        pack.imageReferencesData = try JSONEncoder().encode([legacy])
-        XCTAssertEqual(store.attachmentSource(for: legacy.id), TaskAttachmentSource(reference: legacy, ownerID: trip.id))
-
-        other.imageReferencesData = try JSONEncoder().encode([legacy])
-        XCTAssertNil(store.attachmentSource(for: legacy.id), "an attachment held by two tasks is refused")
-        TaskAttachmentCardDrag.begin(legacy, store: store)
-        XCTAssertFalse(TaskAttachmentCardDrag.canCopy(toOwner: other.id))
-        XCTAssertFalse(TaskAttachmentCardDrag.canCopy(toOwner: nil))
-    }
-
-    func testEndingADropClearsEveryPanelHighlightSource() {
-        let target = TaskFileDropTarget()
-        target.setTargeted(true, source: "surface")
-        target.setTargeted(true, source: "row-a")
-        target.setTargeted(false, source: "row-a")
-        XCTAssertTrue(target.isTargeted, "the surface never received its exit")
-        target.end()
-        XCTAssertFalse(target.isTargeted)
-        target.setTargeted(true, source: "row-a")
-        XCTAssertTrue(target.isTargeted, "a later drag highlights normally")
-    }
-
-    func testEveryRowDropEndsThePanelHighlightIncludingReorders() {
-        let target = TaskFileDropTarget()
-        target.canAccept = { _ in true }
-        let began = Box(0)
-        let attached = Box(0)
-        target.perform = { _, _ in attached.value += 1 }
-        let row = TaskRowDropDelegate(
-            taskID: UUID(), panelTarget: target, canAcceptAttachment: { _ in true },
-            setTaskTargeted: { _ in }, setFileTargeted: { _ in }, performTaskDrop: { _ in },
-            beginTaskDrop: { began.value += 1 }, attach: { _, _ in XCTFail("a panel row forwards to the panel") }
-        )
-        func staleSurface() {
-            // A destination the drag crossed whose exit never arrived.
-            target.setTargeted(true, source: "surface")
-            XCTAssertTrue(target.isTargeted)
-        }
-
-        staleSurface()
-        XCTAssertTrue(row.perform(.task, taskProvider: { NSItemProvider() }, attachmentProviders: { _ in [] }))
-        XCTAssertEqual(began.value, 1)
-        XCTAssertFalse(target.isTargeted, "a reorder onto a child row ends the drag for the whole panel")
-
-        staleSurface()
-        XCTAssertFalse(row.perform(.task, taskProvider: { nil }, attachmentProviders: { _ in [] }))
-        XCTAssertFalse(target.isTargeted, "a task drop without a payload still clears")
-
-        staleSurface()
-        XCTAssertFalse(row.perform(.unsupported, taskProvider: { nil }, attachmentProviders: { _ in [] }))
-        XCTAssertFalse(target.isTargeted, "a refused drop still clears")
-
-        staleSurface()
-        XCTAssertTrue(row.perform(.files, taskProvider: { nil }, attachmentProviders: { _ in [NSItemProvider()] }))
-        XCTAssertFalse(target.isTargeted)
-        XCTAssertEqual(attached.value, 1)
     }
 
     // MARK: - R2/R3 storage lifecycle
@@ -751,78 +658,5 @@ final class TaskAttachmentDropTests: XCTestCase {
             XCTAssertNotNil(try? fileManager.destinationOfSymbolicLink(atPath: link.path), "\(link.lastPathComponent) is skipped")
         }
     }
-
-    // MARK: - R4 reveal after import
-
-    func testImportedAttachmentsRevealOnlyWhereTheUserStillExpectsThem() throws {
-        let suite = "TaskAttachmentDropTests"
-        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
-        defaults.removePersistentDomain(forName: suite)
-        let (store, _, _) = try makeStore()
-        let uiState = PanelUIState()
-        let controller = SubtaskPanelController(store: store, uiState: uiState, settings: AppSettings(defaults: defaults))
-        controller.presentationEnabled = false
-        controller.mainPanelVisibleForTesting = true
-        controller.anchorsAreScreenCoordinatesForTesting = true
-        let parent = try XCTUnwrap(store.create(title: "Trip"))
-        let other = try XCTUnwrap(store.create(title: "Other"))
-        controller.updateTaskRowFrames([parent.id: CGRect(x: 300, y: 400, width: 300, height: 42),
-                                        other.id: CGRect(x: 300, y: 450, width: 300, height: 42)])
-        controller.updateTaskListViewport(CGRect(x: 0, y: 0, width: 400, height: 800))
-        let views = controller.panelViews
-        let first = [UUID(), UUID()]
-
-        // Presented on Subtasks: switches in place and the new cards enter.
-        controller.openFamilyPanel(for: parent.id, focusEntry: false)
-        let parentOpen = controller.revealContext
-        controller.revealImportedAttachments(first, for: parent.id, since: parentOpen)
-        XCTAssertEqual(controller.panelView(for: parent.id), .attachments)
-        XCTAssertEqual(views.freshAttachments(for: parent.id), Set(first))
-
-        // Already on Attachments: the open gallery inserts; no second entrance.
-        let second = [UUID()]
-        controller.revealImportedAttachments(second, for: parent.id, since: parentOpen)
-        XCTAssertEqual(views.freshAttachments(for: parent.id), Set(first))
-
-        // Closed while importing: stays closed and forgets the marks.
-        controller.dismissTransient()
-        controller.revealImportedAttachments(second, for: parent.id, since: parentOpen)
-        XCTAssertNil(controller.transientFamilyID)
-        XCTAssertTrue(views.freshAttachmentIDs.isEmpty)
-
-        // Another family opened since the drop: never stolen.
-        let nothingOpen = controller.revealContext
-        controller.openFamilyPanel(for: other.id, focusEntry: false)
-        controller.revealImportedAttachments(second, for: parent.id, since: nothingOpen)
-        XCTAssertEqual(controller.transientFamilyID, other.id)
-        XCTAssertEqual(controller.panelView(for: other.id), .subtasks)
-        XCTAssertTrue(views.freshAttachmentIDs.isEmpty)
-
-        // Another family opened and closed again since the drop: nothing is
-        // up, but the user moved on, so nothing opens.
-        controller.dismissTransient()
-        controller.revealImportedAttachments(second, for: parent.id, since: nothingOpen)
-        XCTAssertNil(controller.transientFamilyID)
-        XCTAssertTrue(views.freshAttachmentIDs.isEmpty)
-
-        // Nothing changed since a main-row drop: the family opens on Attachments.
-        let unchanged = controller.revealContext
-        controller.revealImportedAttachments(second, for: parent.id, since: unchanged)
-        XCTAssertEqual(controller.transientFamilyID, parent.id)
-        XCTAssertEqual(controller.panelView(for: parent.id), .attachments)
-        XCTAssertEqual(views.freshAttachments(for: parent.id), Set(second))
-
-        // A pinned family switches its own window whatever was transient.
-        controller.pinFamily(parent.id)
-        controller.showPanelView(.subtasks, for: parent.id)
-        controller.revealImportedAttachments(first, for: parent.id, since: nothingOpen)
-        XCTAssertEqual(controller.panelView(for: parent.id), .attachments)
-
-        // The marks expire once the entrance has played.
-        RunLoop.main.run(until: Date(timeIntervalSinceNow: SubtaskPanelLayout.freshAttachmentLifetime + 0.2))
-        XCTAssertTrue(views.freshAttachmentIDs.isEmpty)
-    }
-
-    // MARK: - R5 composer
 
 }

@@ -18,14 +18,12 @@ final class TasksPageModelTests: XCTestCase {
     private var store: TaskStore!
     private var library: AtticLibrary!
     private var model: TasksPageModel!
-    private var opened: [UUID] = []
 
     override func setUp() async throws {
         store = try makeTestStore(now: { [clock] in clock.value })
         library = AtticLibrary(tasks: store, now: { [clock] in clock.value })
         let calendar = self.calendar
         model = TasksPageModel(library: library, services: TasksPageServices(
-            openPage: { [weak self] in self?.opened.append($0) },
             now: { [clock] in clock.value },
             calendar: { calendar },
             locale: Locale(identifier: "en_GB"),
@@ -248,7 +246,7 @@ final class TasksPageModelTests: XCTestCase {
         model.select(tab: .now)
         model.addBar.text = "Ship it"
         let opened = try XCTUnwrap(model.submitAddBar(openingPage: true))
-        XCTAssertEqual(self.opened, [opened], "⌘Return adds and opens the task's page")
+        XCTAssertEqual(model.expandedFiles, [opened], "⌘Return adds the task and opens its files")
 
         // On Done the bar still adds, to Now, and says so.
         model.select(tab: .done)

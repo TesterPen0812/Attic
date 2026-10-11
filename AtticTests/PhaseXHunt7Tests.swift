@@ -354,7 +354,7 @@ final class PhaseXHunt7Tests: XCTestCase {
             settings.animations = .reduced
             let view = AtticPanelView(store: tasks, noteStore: notes, canvasSession: canvas,
                 noteDraft: facade, chromeInteractionState: PanelChromeInteractionState(), uiState: ui,
-                settings: settings, subtaskPanels: SubtaskPanelController(store: tasks, uiState: ui, settings: settings))
+                settings: settings)
             var random = Random(state: UInt64(seed))
             var expectedBody = "Body", expectedTags: [String] = []
             var expectedBuilt: Set<PanelPage> = [.notes]

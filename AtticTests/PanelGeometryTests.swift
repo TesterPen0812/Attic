@@ -1728,12 +1728,7 @@ final class PanelGeometryTests: XCTestCase {
                 canvasSession: CanvasSession(store: CanvasStore(container: container)),
                 noteDraft: NoteDraftController(noteStore: notes),
                 chromeInteractionState: chrome, uiState: state,
-                settings: AppSettings(defaults: defaults),
-                subtaskPanels: SubtaskPanelController(
-                    store: store,
-                    uiState: state,
-                    settings: AppSettings(defaults: defaults)
-                )
+                settings: AppSettings(defaults: defaults)
             ),
             panelCornerRadius: 80, dockedCorner: .topRight, chromeInteractionState: chrome
         )

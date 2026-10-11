@@ -414,7 +414,7 @@ final class TasksRound10Tests: XCTestCase {
         let commands = hosted.page.taskCommands(row.id, tab: .now)
         let titles = AtticMenuCommand.titles(in: commands)
         for title in ["Complete", "Start Working", "Edit Title", "Date", "Tags", "Priority", "Move to Later", "Add Subtask",
-                      "Open Files…", "Move Up", "Move Down", "Copy", "Duplicate", "Delete", "Pick a Date…", "All Tags…"] {
+                      "Show Files", "Move Up", "Move Down", "Copy", "Duplicate", "Delete", "Pick a Date…", "All Tags…"] {
             XCTAssertTrue(titles.contains(title), "\(title) in \(titles)")
         }
         func key(_ title: String) -> KeyboardShortcut? {

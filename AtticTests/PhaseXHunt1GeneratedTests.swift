@@ -380,24 +380,9 @@ final class PhaseXHunt1GeneratedTests: XCTestCase {
                     XCTAssertEqual(placed.preferredSize, original.preferredSize, message)
                     let restored = PanelGeometry.workAreaPlacement(preferredSize: placed.preferredSize, in: roomy, corner: .topRight)
                     XCTAssertEqual(restored, original, message)
-                    let transient = SubtaskPanelLayout.transientFrame(size: CGSize(width: 272, height: 500),
-                        anchorScreenRect: placed.frame, panelScreenFrame: placed.frame, screenVisibleFrame: visible)
-                    fits(transient, within: safe)
                 }
                 let removed = CGRect(x: visible.maxX + 2000, y: visible.minY, width: 1800, height: 1000)
                 let saved = CGRect(x: removed.minX + 100, y: removed.minY + 80, width: 272, height: 300)
-                let pinned = SubtaskPanelLayout.restoredPinnedFrame(saved: saved, size: saved.size,
-                    screenVisibleFrames: [removed, visible])
-                fits(pinned, within: removed.insetBy(dx: 12, dy: 12))
-                let recovered = SubtaskPanelLayout.pinnedResizedFrame(pinned, newHeight: pinned.height,
-                    screenVisibleFrames: [visible])
-                XCTAssertNotNil(recovered, message)
-                if let recovered {
-                    fits(recovered, within: safe)
-                    XCTAssertNil(SubtaskPanelLayout.pinnedResizedFrame(recovered, newHeight: recovered.height,
-                        screenVisibleFrames: [visible]), message)
-                }
-                fits(SubtaskPanelLayout.restoredPinnedFrame(saved: saved, size: saved.size, screenVisibleFrames: [visible]), within: safe)
                 let settings = SettingsWindowLayout.constrainedFrame(saved, to: visible)
                 fits(settings, within: visible.insetBy(dx: 24, dy: 24))
                 XCTAssertEqual(SettingsWindowLayout.constrainedFrame(settings, to: visible), settings, message)

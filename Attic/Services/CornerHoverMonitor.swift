@@ -337,11 +337,7 @@ final class CornerHoverMonitor {
         // Mouse passthrough and resize cursors belong to the panel
         // controller's own pointer monitors, which run only while the panel
         // is visible; sampling here must not duplicate that work.
-        // The transient subtask surface extends "inside" coverage: the open
-        // checklist is useless without its anchor, so hovering it keeps the
-        // main panel alive. The pinned window is independent and excluded.
         let isInPanel = panelController.containsScreenPoint(location)
-            || panelController.auxiliarySurfaceContains(location)
         let isMouseButtonPressed = NSEvent.pressedMouseButtons != 0
         if isMouseButtonPressed {
             dragReleaseTask?.cancel()

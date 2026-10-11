@@ -9,8 +9,6 @@ enum PanelInteractionLockReason: Hashable, Sendable {
     case quickEntryFocus
     case taskComposer
     case taskEditing
-    case taskFiles
-    case subtaskComposer
     case taskConfirmation
     case notesEditorFocus
     case notesDirty
@@ -53,20 +51,9 @@ final class PanelUIState: ObservableObject {
         get { renameDraft.title }
         set { renameDraft.title = newValue }
     }
-    @Published var subtaskDrafts: [UUID: String] = [:]
-    /// Families whose inline Add entry is activated. Separate from drafts: an
-    /// activated-but-empty entry stays visible, a draft reactivates the entry
-    /// on any surface that presents the family, and only an explicit cancel
-    /// (Escape) deactivates.
-    @Published private(set) var subtaskEntryActiveIDs: Set<UUID> = []
-    @Published var focusedSubtaskParentID: UUID?
-    @Published private(set) var subtaskEntryRequest: UInt64 = 0
     @Published var confirmingTaskDeletionID: UUID?
     @Published var confirmingTaskCompletionID: UUID?
-    /// A child row's legacy attachments popover.
-    @Published var presentedTaskAttachmentsID: UUID?
-    /// The owner whose Add attachment picker is up. Kept apart from the
-    /// popover mark so neither interaction can overwrite the other's; only
+    /// The owner whose Add attachment picker is up. Only
     /// the picker's own completion clears it, because the picker stays up
     /// across section switches and task reconciliation.
     @Published var taskAttachmentPickerOwnerID: UUID?
@@ -91,14 +78,10 @@ final class PanelUIState: ObservableObject {
         if editingTaskID != nil {
             reasons.insert(.taskEditing)
         }
-        if confirmingTaskDeletionID != nil || confirmingTaskCompletionID != nil || presentedTaskAttachmentsID != nil
+        if confirmingTaskDeletionID != nil || confirmingTaskCompletionID != nil
             || taskAttachmentPickerOwnerID != nil || isComposerAttachmentPickerPresented {
             reasons.insert(.taskConfirmation)
         }
-        // .subtaskComposer is a managed lock owned by SubtaskPanelController:
-        // it only engages while a TRANSIENT surface holds a draft or focused
-        // entry — a draft typed into the independent pinned window, or one
-        // retained after dismissal, must never hold the main panel open.
         if isCanvasConfirmationPresented {
             reasons.insert(.canvasConfirmation)
         }
@@ -219,36 +202,6 @@ final class PanelUIState: ObservableObject {
         isComposerPresented = true
     }
 
-    /// Focused entry lives in the auxiliary subtask surface (transient or
-    /// pinned), which watches `subtaskEntryRequest` for re-focus bumps.
-    func focusSubtaskEntry(for parentID: UUID) {
-        focusedSubtaskParentID = parentID
-        subtaskEntryRequest &+= 1
-    }
-
-    /// The '+ Add subtask' affordance opens the entry field and focuses it.
-    func activateSubtaskEntry(for parentID: UUID) {
-        subtaskEntryActiveIDs.insert(parentID)
-        focusSubtaskEntry(for: parentID)
-    }
-
-    /// Commit/save paths keep the entry active for chain-adding; the focus
-    /// pointer simply moves on.
-    func deactivateSubtaskEntry(for parentID: UUID) {
-        subtaskEntryActiveIDs.remove(parentID)
-        if focusedSubtaskParentID == parentID {
-            focusedSubtaskParentID = nil
-        }
-    }
-
-    /// Escape cancels the entry deliberately: deactivates it and discards the
-    /// unsubmitted draft. Incidental focus loss, pin/unpin and surface hide
-    /// all preserve the draft — only this path drops it.
-    func cancelSubtaskEntry(for parentID: UUID) {
-        deactivateSubtaskEntry(for: parentID)
-        subtaskDrafts[parentID] = nil
-    }
-
     /// The last page switch. Not published: the pages' transitions read it
     /// as they run (a page leaving was last drawn before the switch, so its
     /// own copy of where to go would be stale).
@@ -279,91 +232,18 @@ final class PanelUIState: ObservableObject {
         managedInteractionLocks.remove(.quickEntryFocus)
         managedInteractionLocks.remove(.notesEditorFocus)
         managedInteractionLocks.remove(.notesPopover)
-        managedInteractionLocks.remove(.subtaskComposer)
         isComposerPresented = false
         editingTaskID = nil
         editingDraftTitle = ""
         draggedTaskID = nil
-        focusedSubtaskParentID = nil
         confirmingTaskDeletionID = nil
         confirmingTaskCompletionID = nil
-        presentedTaskAttachmentsID = nil
         isCanvasConfirmationPresented = false
         selectedSection = section
     }
 
     func endAdding() {
         isComposerPresented = false
-    }
-
-    private var subtaskStepAtLastTyping: UUID?
-    private var subtaskRedoIsNext = false
-
-    func noteSubtaskTextEdit(store: TaskStore) {
-        subtaskStepAtLastTyping = store.commandLibrary?.undo.undoStepID(in: .tasks)
-        subtaskRedoIsNext = false
-    }
-
-    func undoSubtaskEdit(store: TaskStore, nativeHasUndo: Bool) -> Bool {
-        guard let library = store.commandLibrary,
-              !nativeHasUndo || library.undo.undoStepID(in: .tasks) != subtaskStepAtLastTyping else { return false }
-        guard library.undo(in: .tasks).isApplied else { return false }
-        subtaskStepAtLastTyping = library.undo.undoStepID(in: .tasks)
-        subtaskRedoIsNext = true
-        return true
-    }
-
-    func redoSubtaskEdit(store: TaskStore, nativeHasRedo: Bool) -> Bool {
-        guard let library = store.commandLibrary, subtaskRedoIsNext || !nativeHasRedo,
-              library.redo(in: .tasks).isApplied else { return false }
-        subtaskStepAtLastTyping = library.undo.undoStepID(in: .tasks)
-        return true
-    }
-
-    /// Family-panel sibling of the Tasks quick-look handler. Saved children
-    /// use the same duplicate-safe library command and history.
-    func backspaceEmptySubtask(store: TaskStore, parentID: UUID, childID: UUID? = nil) -> Bool {
-        guard let library = store.commandLibrary, store.task(withID: parentID) != nil else { return false }
-        let siblings = store.subtasks(of: parentID)
-        if let childID {
-            guard editingTaskID == childID, editingDraftTitle.isEmpty,
-                  store.task(withID: childID)?.parentID == parentID else { return false }
-            let previous = siblings.firstIndex { $0.id == childID }.flatMap { $0 > 0 ? siblings[$0 - 1].id : nil }
-            guard library.deleteTasks([childID]).isApplied else { return false }
-            endEditing()
-            if let previous, let task = store.task(withID: previous) { beginEditing(task) }
-        } else {
-            guard subtaskEntryActiveIDs.contains(parentID), (subtaskDrafts[parentID] ?? "").isEmpty else { return false }
-            let previous = siblings.last?.id
-            let preservesRename = editingTaskID.map { editingDraftTitle != store.task(withID: $0)?.title } ?? false
-            cancelSubtaskEntry(for: parentID)
-            if preservesRename { renameDraft.focusRequest &+= 1 }
-            else if let previous, let task = store.task(withID: previous) { beginEditing(task) }
-            let clean: () -> Bool = { [weak self, weak store] in
-                guard let self, let store else { return false }
-                if !preservesRename, let id = self.editingTaskID, self.editingDraftTitle != store.task(withID: id)?.title { return false }
-                return (self.subtaskDrafts[parentID] ?? "").isEmpty
-            }
-            library.undo.record(UndoStep(name: String(localized: "Remove empty subtask"), undoOutcome: { [weak self, weak store] in
-                guard let self, let store, store.task(withID: parentID) != nil else { return .obsolete }
-                guard clean() else { return .failed }
-                if !preservesRename { self.endEditing() }
-                self.activateSubtaskEntry(for: parentID)
-                return .applied
-            }, redoOutcome: { [weak self, weak store] in
-                guard let self, let store, store.task(withID: parentID) != nil else { return .obsolete }
-                guard clean() else { return .failed }
-                self.cancelSubtaskEntry(for: parentID)
-                if preservesRename { self.renameDraft.focusRequest &+= 1 }
-                else {
-                    self.endEditing()
-                    if let previous, let task = store.task(withID: previous) { self.beginEditing(task) }
-                }
-                return .applied
-            }), in: .tasks)
-        }
-        subtaskRedoIsNext = false
-        return true
     }
 
     func beginEditing(_ task: TaskItem) {
@@ -386,21 +266,13 @@ final class PanelUIState: ObservableObject {
         if let taskAttachmentPickerOwnerID, !availableIDs.contains(taskAttachmentPickerOwnerID) {
             TaskAttachmentPicker.cancelIfOwned(by: taskAttachmentPickerOwnerID)
         }
-        if let presentedTaskAttachmentsID, !availableIDs.contains(presentedTaskAttachmentsID) {
-            self.presentedTaskAttachmentsID = nil
-        }
         if let confirmingTaskDeletionID, !availableIDs.contains(confirmingTaskDeletionID) {
             self.confirmingTaskDeletionID = nil
-        }
-        subtaskDrafts = subtaskDrafts.filter { availableIDs.contains($0.key) }
-        if let focusedSubtaskParentID, !availableIDs.contains(focusedSubtaskParentID) {
-            self.focusedSubtaskParentID = nil
         }
         if let editingTaskID, !availableIDs.contains(editingTaskID) {
             self.editingTaskID = nil
             editingDraftTitle = ""
         }
-        subtaskEntryActiveIDs = subtaskEntryActiveIDs.intersection(availableIDs)
         if let draggedTaskID, !availableIDs.contains(draggedTaskID) {
             self.draggedTaskID = nil
         }

@@ -141,6 +141,48 @@ enum TaskDropError: LocalizedError {
     }
 }
 
+/// The file row being dragged in this process (A1: a row of a task's files
+/// list). Drop validation is synchronous and cannot load the row's marker,
+/// so a row records which attachment it is, and the task that owns it, when
+/// its drag begins; every row drag replaces the record. It is consulted only
+/// while a drag carries the own-process marker, and a drop checks the marker
+/// against it, and the store against both, before anything is copied.
+@MainActor
+enum TaskAttachmentCardDrag {
+    private(set) static var current: TaskAttachmentSource?
+
+    static func begin(_ reference: TaskImageReference, store: TaskStore) {
+        current = store.attachmentSource(for: reference.id)
+    }
+
+    /// A file may be copied to any task except the owner it came from. An
+    /// unresolvable file is refused everywhere.
+    static func canCopy(toOwner ownerID: UUID?) -> Bool {
+        guard let current else { return false }
+        return current.ownerID != ownerID
+    }
+
+    /// The dragged file, confirmed by its marker: one provider whose marker
+    /// names the attachment `expected` recorded when the drag began.
+    static func sources(from providers: [NSItemProvider],
+                        expected: TaskAttachmentSource?) async throws -> [TaskAttachmentSource] {
+        guard let expected, providers.count == 1, let provider = providers.first else {
+            throw TaskDropError.attachmentUnavailable
+        }
+        let data: Data = try await withCheckedThrowingContinuation { continuation in
+            _ = provider.loadDataRepresentation(forTypeIdentifier: TaskDropContent.attachmentCardType.identifier) { data, error in
+                if let data { continuation.resume(returning: data) }
+                else { continuation.resume(throwing: error ?? TaskDropError.attachmentUnavailable) }
+            }
+        }
+        guard let marker = String(data: data, encoding: .utf8).flatMap(UUID.init(uuidString:)),
+              marker == expected.reference.id else {
+            throw TaskDropError.attachmentUnavailable
+        }
+        return [expected]
+    }
+}
+
 /// Turns dropped item providers into importable files, one provider at a
 /// time. A file URL is used as is. Promised or in-memory content is loaded by
 /// the system into a temporary file that exists only during its callback, so
@@ -245,314 +287,6 @@ enum TaskDroppedFiles {
             }
         }
     }
-}
-
-/// The gallery card being dragged in this process. Drop validation is
-/// synchronous and cannot load the card's marker, so a card records which
-/// attachment it is, and the task that owns it, when its drag begins; every
-/// card drag replaces the record. It is consulted only while a drag carries
-/// the own-process card marker, and a drop checks the marker against it, and
-/// the store against both, before anything is copied.
-@MainActor
-enum TaskAttachmentCardDrag {
-    private(set) static var current: TaskAttachmentSource?
-
-    static func begin(_ reference: TaskImageReference, store: TaskStore) {
-        current = store.attachmentSource(for: reference.id)
-    }
-
-    /// A card may be copied anywhere except into the owner it came from
-    /// (`nil` is the main composer's new task). An unresolvable card is
-    /// refused everywhere.
-    static func canCopy(toOwner ownerID: UUID?) -> Bool {
-        guard let current else { return false }
-        return current.ownerID != ownerID
-    }
-
-    /// The dragged card, confirmed by its marker: one provider whose marker
-    /// names the attachment `expected` recorded when the drag began.
-    static func sources(from providers: [NSItemProvider],
-                        expected: TaskAttachmentSource?) async throws -> [TaskAttachmentSource] {
-        guard let expected, providers.count == 1, let provider = providers.first else {
-            throw TaskDropError.attachmentUnavailable
-        }
-        let data: Data = try await withCheckedThrowingContinuation { continuation in
-            _ = provider.loadDataRepresentation(forTypeIdentifier: TaskDropContent.attachmentCardType.identifier) { data, error in
-                if let data { continuation.resume(returning: data) }
-                else { continuation.resume(throwing: error ?? TaskDropError.attachmentUnavailable) }
-            }
-        }
-        guard let marker = String(data: data, encoding: .utf8).flatMap(UUID.init(uuidString:)),
-              marker == expected.reference.id else {
-            throw TaskDropError.attachmentUnavailable
-        }
-        return [expected]
-    }
-}
-
-/// Dropping onto a task: the store reserves the owner, then stages and
-/// imports files, or copies a card from another task; success reveals the
-/// new cards, failure leaves the store's calm message and changes nothing
-/// else.
-@MainActor
-enum TaskFileDrop {
-    static func message(for title: String) -> String {
-        "Drop to attach to “\(title)”"
-    }
-
-    static func canAccept(_ taskID: UUID, store: TaskStore) -> Bool {
-        canAccept(.files, onto: taskID, store: store)
-    }
-
-    static func canAccept(_ content: TaskDropContent, onto taskID: UUID, store: TaskStore) -> Bool {
-        guard let ownerID = store.attachmentOwnerID(for: taskID),
-              !store.importingAttachmentTaskIDs.contains(ownerID) else { return false }
-        switch content {
-        case .files: return true
-        case .attachmentCard: return TaskAttachmentCardDrag.canCopy(toOwner: ownerID)
-        case .task, .unsupported: return false
-        }
-    }
-
-    static func attach(_ content: TaskDropContent, _ providers: [NSItemProvider], to taskID: UUID,
-                       store: TaskStore, subtaskPanels: SubtaskPanelController) {
-        guard let ownerID = store.attachmentOwnerID(for: taskID) else { return }
-        // The panel state at drop time decides whether revealing the result
-        // later is still expected (see revealImportedAttachments).
-        let atDrop = subtaskPanels.revealContext
-        let card = TaskAttachmentCardDrag.current
-        Task { @MainActor in
-            let ids: [UUID]?
-            switch content {
-            case .files:
-                ids = await store.attachStagedFiles(to: ownerID) { try await TaskDroppedFiles.stage(providers) }
-            case .attachmentCard:
-                ids = await store.attachCopies(to: ownerID) {
-                    try await TaskAttachmentCardDrag.sources(from: providers, expected: card)
-                }
-            case .task, .unsupported:
-                return
-            }
-            guard let ids else { return }
-            subtaskPanels.revealImportedAttachments(ids, for: ownerID, since: atDrop)
-            let title = store.tasks.first { $0.id == ownerID }?.title ?? "task"
-            AccessibilityNotification.Announcement(
-                ids.count == 1 ? "Attached 1 file to \(title)" : "Attached \(ids.count) files to \(title)"
-            ).post()
-        }
-    }
-}
-
-/// A family panel's file-drop state. The panel surface and each child row
-/// inside it are separate drop destinations; all of them report here, so the
-/// whole panel reads as one target wherever the pointer is.
-@MainActor
-final class TaskFileDropTarget: ObservableObject {
-    @Published private(set) var isTargeted = false
-    private var sources: Set<AnyHashable> = []
-    /// Set by the panel for the family it currently shows.
-    var perform: (TaskDropContent, [NSItemProvider]) -> Void = { _, _ in }
-    var canAccept: (TaskDropContent) -> Bool = { _ in false }
-
-    func setTargeted(_ targeted: Bool, source: AnyHashable) {
-        if targeted { sources.insert(source) } else { sources.remove(source) }
-        let now = !sources.isEmpty
-        if now != isTargeted { isTargeted = now }
-    }
-
-    /// Forgets every source. A drop ends the drag for the whole panel, even
-    /// if a destination it crossed never received its exit.
-    func end() {
-        sources.removeAll()
-        if isTargeted { isTargeted = false }
-    }
-}
-
-private struct TaskFileDropTargetKey: EnvironmentKey {
-    static let defaultValue: TaskFileDropTarget? = nil
-}
-
-extension EnvironmentValues {
-    /// Set by a family panel: rows inside it hand file drops to the panel.
-    var taskFileDropTarget: TaskFileDropTarget? {
-        get { self[TaskFileDropTargetKey.self] }
-        set { self[TaskFileDropTargetKey.self] = newValue }
-    }
-}
-
-/// Drop destination for attachments only (a panel surface or the main
-/// composer): files, or a card the destination may copy. Task drags are
-/// refused even when they also carry files.
-struct TaskFileDropDelegate: DropDelegate {
-    let canAccept: (TaskDropContent) -> Bool
-    let setTargeted: (Bool) -> Void
-    let perform: (TaskDropContent, [NSItemProvider]) -> Void
-
-    private func accepted(_ info: DropInfo) -> TaskDropContent? {
-        let content = TaskDropContent.classify(info)
-        switch content {
-        case .files, .attachmentCard: return canAccept(content) ? content : nil
-        case .task, .unsupported: return nil
-        }
-    }
-
-    func validateDrop(info: DropInfo) -> Bool {
-        accepted(info) != nil
-    }
-
-    func dropEntered(info: DropInfo) {
-        if validateDrop(info: info) { setTargeted(true) }
-    }
-
-    func dropUpdated(info: DropInfo) -> DropProposal? {
-        DropProposal(operation: validateDrop(info: info) ? .copy : .forbidden)
-    }
-
-    func dropExited(info: DropInfo) {
-        setTargeted(false)
-    }
-
-    func performDrop(info: DropInfo) -> Bool {
-        setTargeted(false)
-        guard let content = accepted(info) else { return false }
-        let providers = TaskDropContent.providers(for: content, in: info)
-        guard !providers.isEmpty else { return false }
-        perform(content, providers)
-        return true
-    }
-}
-
-/// A task row's single drop destination, so routing is decided in one place:
-/// task drags keep the existing reorder/status drop; files and cards from
-/// other tasks attach to the row's owner. Inside a family panel the row
-/// forwards them to the panel's target instead of highlighting itself.
-struct TaskRowDropDelegate: DropDelegate {
-    let taskID: UUID
-    let panelTarget: TaskFileDropTarget?
-    let canAcceptAttachment: (TaskDropContent) -> Bool
-    let setTaskTargeted: (Bool) -> Void
-    let setFileTargeted: (Bool) -> Void
-    let performTaskDrop: (UUID) -> Void
-    let beginTaskDrop: () -> Void
-    let attach: (TaskDropContent, [NSItemProvider]) -> Void
-
-    private var source: AnyHashable { "row-\(taskID.uuidString)" }
-
-    private func acceptsAttachment(_ content: TaskDropContent) -> Bool {
-        panelTarget?.canAccept(content) ?? canAcceptAttachment(content)
-    }
-
-    func validateDrop(info: DropInfo) -> Bool {
-        accepts(TaskDropContent.classify(info))
-    }
-
-    func accepts(_ content: TaskDropContent) -> Bool {
-        switch content {
-        case .task: return true
-        case .files, .attachmentCard: return acceptsAttachment(content)
-        case .unsupported: return false
-        }
-    }
-
-    func dropEntered(info: DropInfo) {
-        guard validateDrop(info: info) else { return }
-        switch TaskDropContent.classify(info) {
-        case .task: setTaskTargeted(true)
-        case .files, .attachmentCard:
-            if let panelTarget { panelTarget.setTargeted(true, source: source) } else { setFileTargeted(true) }
-        case .unsupported: break
-        }
-    }
-
-    func dropUpdated(info: DropInfo) -> DropProposal? {
-        guard validateDrop(info: info) else { return DropProposal(operation: .forbidden) }
-        return DropProposal(operation: TaskDropContent.classify(info) == .task ? .move : .copy)
-    }
-
-    func dropExited(info: DropInfo) {
-        clearTargets()
-    }
-
-    func performDrop(info: DropInfo) -> Bool {
-        perform(
-            TaskDropContent.classify(info),
-            taskProvider: { info.itemProviders(for: [TaskDragPayload.internalTaskType]).first },
-            attachmentProviders: { TaskDropContent.providers(for: $0, in: info) }
-        )
-    }
-
-    /// The body of `performDrop` without `DropInfo`, which tests cannot build.
-    func perform(
-        _ content: TaskDropContent,
-        taskProvider: () -> NSItemProvider?,
-        attachmentProviders: (TaskDropContent) -> [NSItemProvider]
-    ) -> Bool {
-        clearTargets()
-        // Any drop ends the drag for the whole panel, a reorder included: a
-        // destination it crossed may never have received its exit.
-        panelTarget?.end()
-        guard accepts(content) else { return false }
-        switch content {
-        case .task:
-            guard let provider = taskProvider() else { return false }
-            // The shell's drag-release watcher must see the drag consumed
-            // now, not after the payload loads.
-            beginTaskDrop()
-            let perform = performTaskDrop
-            _ = provider.loadTransferable(type: TaskDragPayload.self) { result in
-                guard let taskID = try? result.get().taskID else { return }
-                Task { @MainActor in perform(taskID) }
-            }
-            return true
-        case .files, .attachmentCard:
-            let providers = attachmentProviders(content)
-            guard !providers.isEmpty else { return false }
-            if let panelTarget { panelTarget.perform(content, providers) } else { attach(content, providers) }
-            return true
-        case .unsupported:
-            return false
-        }
-    }
-
-    private func clearTargets() {
-        setTaskTargeted(false)
-        setFileTargeted(false)
-        panelTarget?.setTargeted(false, source: source)
-    }
-}
-
-/// Restrained drop feedback: a faint tint and edge over content that stays
-/// visible, with one small label naming where the files will go.
-struct TaskDropOverlay<S: Shape>: View {
-    let message: String
-    let shape: S
-    var labelAlignment: Alignment = .center
-    var compact = false
-
-    var body: some View {
-        ZStack(alignment: labelAlignment) {
-            shape.fill(Color.accentColor.opacity(0.07))
-            shape.stroke(Color.accentColor.opacity(0.55), lineWidth: 1.25)
-                .padding(0.75)
-            Label {
-                Text(message)
-                    .lineLimit(1)
-                    .truncationMode(.middle)
-            } icon: {
-                Image(systemName: "paperclip")
-            }
-            .font(.system(size: compact ? 11 : 12, weight: .medium, design: .rounded))
-            .foregroundStyle(Color.primary.opacity(0.9))
-            .padding(.horizontal, compact ? 9 : 12)
-            .padding(.vertical, compact ? 4 : 6)
-            .atticGlassControl(in: Capsule(), interactive: false)
-            .padding(.horizontal, compact ? 6 : 14)
-        }
-        .allowsHitTesting(false)
-        .accessibilityHidden(true)
-        .transition(.opacity)
-    }
-
 }
 
 /// AppKit may terminate a drag without a destination exit (Escape, source

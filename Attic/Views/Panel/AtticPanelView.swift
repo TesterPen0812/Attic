@@ -12,7 +12,6 @@ struct AtticPanelView: View {
     let chromeInteractionState: PanelChromeInteractionState
     @ObservedObject var uiState: PanelUIState
     @ObservedObject var settings: AppSettings
-    @ObservedObject var subtaskPanels: SubtaskPanelController
     @ObservedObject var toasts: PanelToastCenter
 
     @Environment(\.colorSchemeContrast) private var colorSchemeContrast
@@ -38,7 +37,6 @@ struct AtticPanelView: View {
         chromeInteractionState: PanelChromeInteractionState,
         uiState: PanelUIState,
         settings: AppSettings,
-        subtaskPanels: SubtaskPanelController,
         toasts: PanelToastCenter? = nil,
         tasksPageState: TasksPageState? = nil
     ) {
@@ -49,7 +47,6 @@ struct AtticPanelView: View {
         self.chromeInteractionState = chromeInteractionState
         self.uiState = uiState
         self.settings = settings
-        self.subtaskPanels = subtaskPanels
         self.toasts = toasts ?? PanelToastCenter()
         // A test hands one in to reach the page's model (round 12).
         _tasksPageState = StateObject(wrappedValue: tasksPageState ?? TasksPageState())
@@ -116,7 +113,6 @@ struct AtticPanelView: View {
                 }
             }
         }
-        .coordinateSpace(name: AtticPanelCoordinateSpaceName.taskWorkspace)
         .coordinateSpace(PanelPageLayout.coordinateSpace)
         .overlay(alignment: .top) {
             header
@@ -182,7 +178,6 @@ struct AtticPanelView: View {
                 store: store,
                 uiState: uiState,
                 settings: settings,
-                subtaskPanels: subtaskPanels,
                 state: tasksPageState,
                 layout: pageLayout,
                 chromeInteractionState: chromeInteractionState,
@@ -255,15 +250,6 @@ struct AtticPanelView: View {
             // every page, as it always has, and leaves with that page.
             .onChange(of: store.revision) { _, _ in
                 uiState.reconcileTaskIDs(Set(store.tasks.map(\.id)))
-            }
-            .onPreferenceChange(TaskRowAnchorPreferenceKey.self) { frames in
-                subtaskPanels.updateTaskRowFrames(frames)
-            }
-            .onPreferenceChange(TaskSubtaskControlFramePreferenceKey.self) { frames in
-                subtaskPanels.updateSubtaskControlFrames(frames)
-            }
-            .onPreferenceChange(TaskListViewportPreferenceKey.self) { viewport in
-                subtaskPanels.updateTaskListViewport(viewport)
             }
     }
 

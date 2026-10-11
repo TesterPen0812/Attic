@@ -38,9 +38,7 @@ enum TasksPagePreview {
         }
         let store = TaskStore(container: container)
         let library = AtticLibrary(tasks: store)
-        let model = TasksPageModel(library: library, services: TasksPageServices(openPage: { id in
-            NSLog("Attic Tasks preview: open page for %@ (task pages arrive in Phase 3)", id.uuidString)
-        }))
+        let model = TasksPageModel(library: library, services: TasksPageServices())
         retained = [store, library, model]
         let dark = ProcessInfo.processInfo.arguments.contains("--dark")
         let root = TasksPagePreviewRoot(model: model, store: store, mode: dark ? .dark : .light)

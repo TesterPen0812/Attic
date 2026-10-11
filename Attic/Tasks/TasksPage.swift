@@ -209,7 +209,7 @@ struct TasksPage: View {
         // which finds the row from the rows' frames.
         .tasksFileDrop(delegate: TasksFileDropDelegate(
             target: { point in fileDropTarget(at: point) },
-            canAccept: { content, id in content == .files && store.attachmentOwnerID(for: id) != nil },
+            canAccept: { content, id in Self.canAcceptDrop(content, onto: id, store: store) },
             setTargeted: { id in
                 let row = id.map { TasksRowID(tab: model.tab, id: $0) }
                 if fileDropRow != row { fileDropRow = row }
@@ -1045,6 +1045,15 @@ struct TasksPage: View {
             setFocus(open)
             return true
         }
+        // Then an open files list (A1), the same way.
+        let openFilesRow = current.flatMap { model.expandedFiles.contains($0) ? $0 : nil }
+            ?? (model.expandedFiles.count == 1 ? model.expandedFiles.first.flatMap { visible.contains($0) ? $0 : nil } : nil)
+            ?? model.selection.first { model.expandedFiles.contains($0) && visible.contains($0) }
+        if let openFilesRow {
+            toggleFiles(openFilesRow)
+            setFocus(openFilesRow)
+            return true
+        }
         if model.selection.count > 1 { model.clearSelection(); return true }
         return false
     }
@@ -1476,6 +1485,9 @@ struct TasksPage: View {
         // Read when the cell draws (the closures below run in the cell's
         // own body), never captured when the list built it.
         let expanded = { model.expanded.contains(id) && row.status != .done }
+        // The files list opens on its own (A1), a finished row's too (its
+        // menu and ⌘Return reach it).
+        let filesExpanded = { model.expandedFiles.contains(id) }
         // Every row drags, out of the panel as a copy (owner-approved,
         // 2026-10-01); only Now's and Later's manual order reorders. A
         // sorted view (item 6) and Done have no place to drag to: there the
@@ -1510,6 +1522,7 @@ struct TasksPage: View {
             let isSelected = model.selection.contains(id)
             let run = selectionRun(for: id, in: tab)
             let isExpanded = expanded()
+            let isFilesExpanded = filesExpanded()
             // Only the page that answers the keyboard opens an editor: the
             // copy a kept page draws of the same task shows none (round 12).
             let editing = model.editingTitleID == id && live.isActive
@@ -1521,13 +1534,15 @@ struct TasksPage: View {
             // each rebuilt its whole row. An editor or a picker open on the
             // row always redraws it (they show live state).
             TasksRowSnapshot(key: TasksRowKey(model: row.model, isSelected: isSelected, selectionRun: run, isExpanded: isExpanded,
-                                              isDropTarget: live.isDropTarget, isFocused: live.focus.isFocused, tab: tab,
+                                              isFilesExpanded: isFilesExpanded, isDropTarget: live.isDropTarget, isFocused: live.focus.isFocused, tab: tab,
                                               layout: layout, isLive: editing || live.metaPopover != nil)) {
                 AtticTaskRow(
                     model: row.model,
                     isSelected: isSelected,
                     selectionRun: run,
                     isExpanded: isExpanded,
+                    isFilesExpanded: isFilesExpanded,
+                    onToggleFiles: { toggleFiles(id) },
                     dropLabel: live.isDropTarget ? String(localized: "Add to page") : nil,
                     actions: actions(for: id, in: tab),
                     onToggleExpanded: { toggleExpanded(id) },
@@ -1579,7 +1594,6 @@ struct TasksPage: View {
                     subtasks: row.subtasks,
                     onToggle: { subtask in model.report(model.toggleSubtask(subtask.id), on: id) { model.toggleSubtask(subtask.id) } },
                     onAddSubtask: { model.beginAddingSubtask(to: id) },
-                    onOpenPage: { openFiles(id) },
                     commands: { subtask in subtaskCommands(subtask, of: id, in: row.subtasks) },
                     onFocusChange: { subtaskID, focused in
                         if focused { model.focusedSubtaskID = subtaskID } else if model.focusedSubtaskID == subtaskID { model.focusedSubtaskID = nil }
@@ -1623,6 +1637,21 @@ struct TasksPage: View {
                         .padding(.leading, AtticLayout.textX)
                 }
             }
+            if filesExpanded() {
+                TasksFilesList(
+                    files: row.files,
+                    store: store,
+                    owner: id,
+                    canAttach: model.services.chooseFiles != nil && !store.importingAttachmentTaskIDs.contains(id),
+                    isImporting: store.importingAttachmentTaskIDs.contains(id),
+                    onAttach: { model.services.chooseFiles?(id) },
+                    onRemove: { file in
+                        model.report(model.removeFile(file, from: id), on: id) { model.removeFile(file, from: id) }
+                    }
+                )
+                // It opens from under its row, as the quick look does.
+                .transition(AtticMotionPreset.expand.transition(reduceMotion: design.reduceMotion, edge: nil, anchor: .top))
+            }
         }
         // Files dropped on a row: one drop destination for the page
         // (`fileDropTarget(at:)`), not one per row (round 11: a drop
@@ -1635,6 +1664,15 @@ struct TasksPage: View {
         PerformanceSignposts.watchFrames("QuickLookMotion", seconds: 0.35)
         withAnimation(design.reduceMotion ? nil : AtticMotionPreset.expand.animation(reduceMotion: false)) {
             model.toggleExpanded(id)
+        }
+    }
+
+    /// The files list opens and closes the same way, apart from the quick
+    /// look (A1).
+    private func toggleFiles(_ id: UUID) {
+        PerformanceSignposts.watchFrames("QuickLookMotion", seconds: 0.35)
+        withAnimation(design.reduceMotion ? nil : AtticMotionPreset.expand.animation(reduceMotion: false)) {
+            model.toggleFiles(id)
         }
     }
 
@@ -1747,8 +1785,8 @@ struct TasksPage: View {
         guard model.selection.contains(id), model.selection.count > 1 else { return .single }
         let ids = tab == .done ? model.doneDays().flatMap { $0.rows.map(\.id) } : model.rows(for: tab).map(\.id)
         guard let index = ids.firstIndex(of: id) else { return .single }
-        let above = index > 0 && model.selection.contains(ids[index - 1]) && !model.expanded.contains(ids[index - 1])
-        let below = index + 1 < ids.count && model.selection.contains(ids[index + 1]) && !model.expanded.contains(id)
+        let above = index > 0 && model.selection.contains(ids[index - 1]) && !model.expanded.contains(ids[index - 1]) && !model.expandedFiles.contains(ids[index - 1])
+        let below = index + 1 < ids.count && model.selection.contains(ids[index + 1]) && !model.expanded.contains(id) && !model.expandedFiles.contains(id)
         switch (above, below) {
         case (false, false): return .single
         case (false, true): return .first
@@ -1857,7 +1895,7 @@ struct TasksPage: View {
             duplicate: { runCommand(on: id) { model.duplicate($0) } },
             changePriority: { showPriority(for: id) },
             showActions: { showActions(for: id, anchor: nil, tab: tab) },
-            names: .init(openPage: String(localized: "Open files"))
+            names: .init(openPage: filesActionName(for: id))
         )
     }
 
@@ -1870,14 +1908,19 @@ struct TasksPage: View {
     /// Return that chose Open Files… is never mistaken for a typing field's
     /// key (PR prep, P2). The queued block does not wake a sleeping run
     /// loop by itself (`CFRunLoopPerformBlock`), so the loop is woken.
+    private static let log = Logger(subsystem: "com.taha.Attic", category: "TaskFiles")
+
     private func openFiles(_ id: UUID) {
         guard !AtticTextInput.ownsCurrentKey else {
-            SubtaskPanelController.log.notice("Open Files \(id, privacy: .public) refused: the key belongs to a typing field")
+            Self.log.notice("Show Files \(id, privacy: .public) refused: the key belongs to a typing field")
             return
         }
         pointer.endInvocation()
         RunLoop.main.perform(inModes: [.default]) { [model] in
-            MainActor.assumeIsolated { model.openPage(id) }
+            MainActor.assumeIsolated {
+                // A live task's files open or close under its row (A1).
+                if store.task(withID: id) != nil { toggleFiles(id) } else { model.openPage(id) }
+            }
         }
         CFRunLoopWakeUp(CFRunLoopGetMain())
     }
@@ -1895,6 +1938,11 @@ struct TasksPage: View {
     /// there, with its files).
     private func toggleDetails(_ id: UUID) {
         model.doneDetailID = model.doneDetailID == id ? nil : id
+    }
+
+    /// VoiceOver's name for the files command (⌘Return).
+    private func filesActionName(for id: UUID) -> String {
+        model.expandedFiles.contains(id) ? String(localized: "Hide files") : String(localized: "Show files")
     }
 
     /// VoiceOver's name for `toggleDetails`.
@@ -2017,7 +2065,8 @@ struct TasksPage: View {
             menuCommand(key) { model.duplicate($0) }
         })
         if single, tab != .done {
-            var more = [AtticMenuCommand(verbatim: String(localized: "Open Files…"), shortcut: AtticTaskShortcut.openPage) {
+            var more = [AtticMenuCommand(verbatim: model.expandedFiles.contains(id) ? String(localized: "Hide Files") : String(localized: "Show Files"),
+                                         shortcut: AtticTaskShortcut.openPage) {
                 openFiles(menuRowID(key))
             }]
             // Reorder (round 10): the same rule as ⌘↑ ⌘↓ and a drag.
@@ -2494,8 +2543,14 @@ struct TasksPage: View {
         if let measured = pointer.frames[TasksRowID(tab: tab, id: id)]?.height, measured > 0 { return measured }
         guard let row = model.rows(for: tab).first(where: { $0.id == id }) else { return AtticLayout.rowPitch }
         let pitch = row.model.hasDetails ? AtticLayout.detailRowPitch : AtticLayout.rowPitch
-        guard model.expanded.contains(id), row.status != .done else { return pitch }
-        return pitch + CGFloat(row.subtasks.count + 2) * AtticLayout.subtaskPitch + AtticQuickLookMetrics.bottomPadding
+        var height = pitch
+        if model.expanded.contains(id), row.status != .done {
+            height += CGFloat(row.subtasks.count + 1) * AtticLayout.subtaskPitch + AtticQuickLookMetrics.bottomPadding
+        }
+        if model.expandedFiles.contains(id) {
+            height += CGFloat(TasksFilesList.lineCount(files: row.files.count)) * AtticLayout.subtaskPitch + AtticQuickLookMetrics.bottomPadding
+        }
+        return height
     }
 
     /// A drag began: a timer while it lasts reads Esc (SwiftUI's mouse
@@ -2703,6 +2758,18 @@ struct TasksPage: View {
         return Self.row(at: point, frames: pointer.frames, tab: model.tab, among: Set(model.rows(for: model.tab).map(\.id)))
     }
 
+    /// Whether the task can take what is dragged over it: files from
+    /// outside, or another task's file row (copied; its own task refuses
+    /// it, so releasing a row over its list never duplicates it).
+    static func canAcceptDrop(_ content: TaskDropContent, onto id: UUID, store: TaskStore) -> Bool {
+        guard let owner = store.attachmentOwnerID(for: id) else { return false }
+        switch content {
+        case .files: return true
+        case .attachmentCard: return TaskAttachmentCardDrag.canCopy(toOwner: owner)
+        case .task, .unsupported: return false
+        }
+    }
+
     /// The row among `ids` on `tab`'s page whose frame holds `point` (pure,
     /// tested). Frames are keyed by page and task: a task drawn on two
     /// pages is two rows, and only the page shown answers (round 12).
@@ -2712,9 +2779,25 @@ struct TasksPage: View {
 
     private func attachDroppedFiles(_ content: TaskDropContent, _ providers: [NSItemProvider], to id: UUID) {
         fileDropRow = nil
-        guard content == .files, let owner = store.attachmentOwnerID(for: id) else { return }
+        guard let owner = store.attachmentOwnerID(for: id) else { return }
+        // A file row dragged from another task's files list is copied (the
+        // drag recorded its source when it began).
+        let card = TaskAttachmentCardDrag.current
         Task { @MainActor in
-            guard let ids = await store.attachStagedFiles(to: owner, stage: { try await TaskDroppedFiles.stage(providers) }) else { return }
+            let added: [UUID]?
+            switch content {
+            case .files:
+                added = await store.attachStagedFiles(to: owner, stage: { try await TaskDroppedFiles.stage(providers) })
+            case .attachmentCard:
+                added = await store.attachCopies(to: owner) { try await TaskAttachmentCardDrag.sources(from: providers, expected: card) }
+            case .task, .unsupported:
+                return
+            }
+            guard let ids = added else { return }
+            // The files list opens to show what arrived (A1).
+            withAnimation(design.reduceMotion ? nil : AtticMotionPreset.expand.animation(reduceMotion: false)) {
+                model.setFilesExpanded(owner, true)
+            }
             let title = store.task(withID: owner)?.title ?? ""
             AccessibilityNotification.Announcement(
                 ids.count == 1 ? String(localized: "Added 1 file to \(title)") : String(localized: "Added \(ids.count) files to \(title)")
@@ -3881,6 +3964,7 @@ struct TasksRowKey: Equatable {
     let isSelected: Bool
     let selectionRun: AtticSelectionRun
     let isExpanded: Bool
+    let isFilesExpanded: Bool
     let isDropTarget: Bool
     let isFocused: Bool
     let tab: TasksTab
@@ -3890,7 +3974,7 @@ struct TasksRowKey: Equatable {
 
     static func == (lhs: Self, rhs: Self) -> Bool {
         !lhs.isLive && !rhs.isLive && lhs.model == rhs.model && lhs.isSelected == rhs.isSelected
-            && lhs.selectionRun == rhs.selectionRun && lhs.isExpanded == rhs.isExpanded && lhs.isDropTarget == rhs.isDropTarget
+            && lhs.selectionRun == rhs.selectionRun && lhs.isExpanded == rhs.isExpanded && lhs.isFilesExpanded == rhs.isFilesExpanded && lhs.isDropTarget == rhs.isDropTarget
             && lhs.isFocused == rhs.isFocused && lhs.tab == rhs.tab
             // Native layout resizes the row. Its controls and callbacks
             // change only when the chrome insets change, not every pixel
@@ -3939,12 +4023,17 @@ struct TasksFileDropDelegate: DropDelegate {
 
     private func row(for info: DropInfo) -> (content: TaskDropContent, id: UUID)? {
         let content = TaskDropContent.classify(info)
-        guard content == .files, let id = target(info.location), canAccept(content, id) else { return nil }
+        guard Self.takes(content), let id = target(info.location), canAccept(content, id) else { return nil }
         return (content, id)
     }
 
+    /// Files from outside, and a file row from another task's files list.
+    static func takes(_ content: TaskDropContent) -> Bool {
+        content == .files || content == .attachmentCard
+    }
+
     func validateDrop(info: DropInfo) -> Bool {
-        TaskDropContent.classify(info) == .files
+        Self.takes(TaskDropContent.classify(info))
     }
 
     func dropEntered(info: DropInfo) {

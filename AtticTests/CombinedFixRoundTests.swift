@@ -515,7 +515,6 @@ final class CombinedFixRoundTests: XCTestCase {
                 canvasSession: CanvasSession(store: CanvasStore(container: container)),
                 noteDraft: noteDraft,
                 chromeInteractionState: chrome, uiState: state, settings: settings,
-                subtaskPanels: SubtaskPanelController(store: store, uiState: state, settings: settings),
                 tasksPageState: TasksPageState()
             ),
             panelCornerRadius: 52, dockedCorner: .topRight, chromeInteractionState: chrome
