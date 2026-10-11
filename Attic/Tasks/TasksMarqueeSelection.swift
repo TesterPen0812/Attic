@@ -25,7 +25,7 @@ final class TasksMarqueeSelection {
         controller.selection = { [weak model] in Set(model?.selection.map(AnyHashable.init) ?? []) }
         controller.apply = { [weak model] ids in
             guard let model else { return }
-            let ordered = model.rows(for: tab).map(\.id).filter { ids.contains(AnyHashable($0)) }
+            let ordered = Self.rowIDs(in: model, tab: tab).filter { ids.contains(AnyHashable($0)) }
             if Set(ordered) != model.selection { model.selectCopies(ordered) }
         }
         controller.clear = { [weak model] in model?.clearSelection() }
@@ -61,7 +61,7 @@ final class TasksMarqueeSelection {
 
     func items() -> [MarqueeItem] {
         guard let model, let pointer, let page = pointer.view, let document = scroll?.documentView else { return [] }
-        let live = Set(model.rows(for: tab).map(\.id))
+        let live = Set(Self.rowIDs(in: model, tab: tab))
         measured = measured.filter { ($0.key.base as? UUID).map(live.contains) == true }
         for (row, rect) in pointer.frames where row.tab == tab && live.contains(row.id) {
             measured[AnyHashable(row.id)] = document.convert(rect, from: page)
@@ -69,5 +69,12 @@ final class TasksMarqueeSelection {
         // Keep offscreen measurements while auto-scrolling: lazy rows leave
         // the hierarchy but must remain selectable back to the drag origin.
         return measured.map { MarqueeItem(id: $0.key, rect: $0.value) }
+    }
+
+    private static func rowIDs(in model: TasksPageModel, tab: TasksTab) -> [UUID] {
+        // Done includes its paged archive and today's finished rows. The
+        // Now/Later row source is empty there: treating that as no rows
+        // would take normal row clicks and drag-out as empty-space drags.
+        tab == .done ? model.doneDays().flatMap { $0.rows.map(\.id) } : model.rows(for: tab).map(\.id)
     }
 }

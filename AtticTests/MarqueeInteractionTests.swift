@@ -228,6 +228,39 @@ final class MarqueeInteractionTests: XCTestCase {
         let hidden = event(.leftMouseDown, point: CGPoint(x: 2, y: 30), in: document)
         XCTAssertTrue(controller.handle(hidden) === hidden, "a hidden Tasks page never takes Notes input")
     }
+
+    func testDoneRowsRemainClickableAndSelectableAcrossTheArchiveAndToday() throws {
+        let store = try makeTestStore()
+        let archivedID = try XCTUnwrap(store.create(title: "Archived", status: .done)).id
+        XCTAssertEqual(store.moveCompletedToDoneLog(before: Date().addingTimeInterval(60)), 1)
+        let todayID = try XCTUnwrap(store.create(title: "Today", status: .done)).id
+        let model = TasksPageModel(library: AtticLibrary(tasks: store))
+        model.select(tab: .done)
+        model.loadDoneLogIfNeeded()
+        let rows = model.doneDays().flatMap(\.rows)
+        XCTAssertEqual(Set(rows.map(\.id)), [archivedID, todayID])
+        let scroll = NSScrollView(frame: CGRect(x: 0, y: 0, width: 320, height: 240))
+        let document = FlippedView(frame: CGRect(x: 0, y: 0, width: 320, height: 600))
+        scroll.documentView = document
+        let window = NSWindow(contentRect: scroll.frame, styleMask: [.borderless], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        window.contentView = scroll
+        windows.append(window)
+        let pointer = TasksPointer()
+        pointer.view = document
+        for (index, row) in rows.enumerated() {
+            pointer.frames[TasksRowID(tab: .done, id: row.id)] = CGRect(x: 0, y: 20 + index * 40, width: 320, height: 40)
+        }
+        let adapter = TasksMarqueeSelection(scroll: scroll, model: model, pointer: pointer, tab: .done)
+        XCTAssertEqual(Set(adapter.items().compactMap { $0.id.base as? UUID }), [archivedID, todayID])
+        let grab = event(.leftMouseDown, point: CGPoint(x: 100, y: 35), in: document)
+        XCTAssertTrue(adapter.controller.handle(grab) === grab, "Done row clicks and drag-out keep their native route")
+        _ = adapter.controller.handle(event(.leftMouseDown, point: CGPoint(x: 2, y: 30), in: document))
+        _ = adapter.controller.handle(event(.leftMouseDragged, point: CGPoint(x: 150, y: 80), in: document))
+        _ = adapter.controller.handle(event(.leftMouseUp, point: CGPoint(x: 150, y: 80), in: document))
+        XCTAssertEqual(model.selection, [archivedID, todayID])
+        XCTAssertEqual(model.orderedSelection(), rows.map(\.id))
+    }
 }
 
 private final class FlippedView: NSView {
