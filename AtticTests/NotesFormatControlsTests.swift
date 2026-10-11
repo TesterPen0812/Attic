@@ -317,12 +317,16 @@ final class NotesFormatControlsTests: XCTestCase {
         XCTAssertLessThanOrEqual(controls.barFrame.width, 320 - 2 * AtticNoteFormatMetrics.barEdgeMargin, "fits a 320 pt panel")
         XCTAssertGreaterThanOrEqual(controls.barFrame.width, NoteFormatControls.barWidth(styleName: "Body"))
 
-        let (top, topEngine, topView) = make(topInset: 60)
+        let scrollable = NoteDocument(blocks: Self.sample.blocks + (0..<40).map { .text("Further body line \($0)") })
+        let (top, topEngine, topView) = make(scrollable, topInset: 60)
         // Owner P3 keeps titles plain; exercise placement on the first body line.
         // Scroll the body up beneath the header so there is still no room
         // above the selection. Selecting the title used to supply this geometry.
         let topScroll = try XCTUnwrap(topView.enclosingScrollView)
-        topScroll.contentView.setBoundsOrigin(.zero)
+        topEngine.layoutManager?.ensureLayout(for: topEngine.contentStorage.documentRange)
+        topView.layoutSubtreeIfNeeded()
+        XCTAssertGreaterThan(topView.frame.height, topScroll.contentView.bounds.height, "the fixture must be scrollable")
+        topScroll.contentView.scroll(to: .zero)
         topScroll.reflectScrolledClipView(topScroll.contentView)
         let first = range("Lead", topView)
         topView.setSelectedRange(first)
