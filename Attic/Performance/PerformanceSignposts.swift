@@ -225,10 +225,10 @@ enum PerformanceSignposts {
     /// Counts the frames drawn (and missed) while something moves: a swipe,
     /// or `seconds` after an animation starts. Only with `framesEnabled`.
     @discardableResult
-    static func watchFrames(_ name: StaticString, seconds: Double? = nil) -> AtticFrameWatch? {
+    static func watchFrames(_ name: StaticString, seconds: Double? = nil, view: NSView? = nil) -> AtticFrameWatch? {
         guard framesEnabled, signposter.isEnabled else { return nil }
         let watch = AtticFrameWatch(name: name, signposter: signposter)
-        watch.start(seconds: seconds)
+        watch.start(seconds: seconds, view: view)
         return watch
     }
 
@@ -274,11 +274,12 @@ final class AtticFrameWatch: NSObject {
         self.signposter = signposter
     }
 
-    func start(seconds: Double?) {
+    func start(seconds: Double?, view: NSView? = nil) {
         guard let screen = NSScreen.main else { return }
         state = signposter.beginInterval(name)
         until = seconds.map { CACurrentMediaTime() + $0 }
-        let link = screen.displayLink(target: self, selector: #selector(frame(_:)))
+        let link = view?.displayLink(target: self, selector: #selector(frame(_:)))
+            ?? screen.displayLink(target: self, selector: #selector(frame(_:)))
         link.add(to: .main, forMode: .common)
         self.link = link
     }
@@ -301,6 +302,7 @@ final class AtticFrameWatch: NSObject {
         link = nil
         guard let state else { return }
         let frames = frames, late = late, worst = Int(worst * 1_000)
+        PerformanceSignposts.noteInput("\(name) frames=\(frames) late=\(late) worstGapMs=\(worst)")
         signposter.endInterval(name, state, "frames=\(frames) late=\(late) worstGapMs=\(worst)")
         self.state = nil
     }

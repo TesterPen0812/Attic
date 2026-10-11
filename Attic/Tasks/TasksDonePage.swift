@@ -45,6 +45,8 @@ struct TasksDonePage<Cell: View, Mask: View>: View {
     let cell: (TasksListRow) -> Cell
     /// Where the page keeps the log's scroll view and proxy (round 10).
     var proxies: TasksListProxies?
+    var pointer: TasksPointer?
+    var focusSelection: (UUID?) -> Void = { _ in }
     var registerList: (ScrollViewProxy) -> Void = { _ in }
     /// Which view draws each line (`TasksDoneSlots`); the page scrolls to
     /// a row through it.
@@ -122,7 +124,8 @@ struct TasksDonePage<Cell: View, Mask: View>: View {
             }
             .padding(.bottom, edges == .cleanCut ? bottomClearance - bottomMargin : 0)
             // The log's place is kept while its page is not built (round 10).
-            .background(TasksScrollKeeper(model: model, tab: .done, proxies: proxies, drawn: drawn).accessibilityHidden(true))
+            .background(TasksScrollKeeper(model: model, tab: .done, proxies: proxies, pointer: pointer,
+                focusSelection: focusSelection, drawn: drawn).accessibilityHidden(true))
         }
         .tasksListEdges(edges, top: viewportTop, listTop: listTop, bottomInset: bottomInset,
                         bottomMargin: bottomMargin, bottomClearance: bottomClearance, stack: bottomStack, mask: mask)

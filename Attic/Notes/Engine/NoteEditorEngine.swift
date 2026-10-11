@@ -451,6 +451,7 @@ final class NoteEditorEngine: NSObject, NSTextViewDelegate, NSTextStorageDelegat
         self.layoutManager = layoutManager
         self.textView = textView
         self.scrollView = scrollView
+        textView.marquee = NoteMarqueeSelection(textView: textView, scrollView: scrollView)
         history.textView = textView
         find.attach()
         return (scrollView, textView)
@@ -458,6 +459,7 @@ final class NoteEditorEngine: NSObject, NSTextViewDelegate, NSTextStorageDelegat
 
     func detachView() {
         find.detach()
+        textView?.marquee = nil
         let wasComposing = activity == .composing
         if let layoutManager { contentStorage.removeTextLayoutManager(layoutManager) }
         textView?.engine = nil
@@ -1410,6 +1412,7 @@ final class NoteEditorEngine: NSObject, NSTextViewDelegate, NSTextStorageDelegat
     }
 
     func textDidChange(_ notification: Notification) {
+        textView?.marquee?.textChanged()
         history.didChange()
         find.refresh()
         pendingImportEdit = nil
@@ -1809,11 +1812,19 @@ final class NoteEditorEngine: NSObject, NSTextViewDelegate, NSTextStorageDelegat
     }
 
     func writeSelection(_ range: NSRange, to pasteboard: NSPasteboard, types: [NSPasteboard.PasteboardType]) -> Bool {
-        guard range.length > 0 else { return false }
-        let fragment = fragment(for: range)
+        guard range.length > 0, rangeIsInStorage(range) else { return false }
+        return writeSelection(textStorage.attributedSubstring(from: range), to: pasteboard, types: types)
+    }
+
+    /// Also accepts a discontiguous block selection assembled in document
+    /// order, preserving the same private fragment, table and RTF routes.
+    func writeSelection(_ text: NSAttributedString, to pasteboard: NSPasteboard, types: [NSPasteboard.PasteboardType]) -> Bool {
+        guard text.length > 0 else { return false }
+        var fragment = NoteTextCodec.document(from: text, template: NoteDocument(blocks: []), firstBlockIsTitle: false)
+        fragment.extras = ["sourceNoteID": .string(noteID.uuidString)]
         // A whole table on its own: other apps get it as a table (HTML,
         // tab-separated, Markdown as its text), Attic as itself.
-        if range.length == 1, let table = tableAttachment(at: range.location) {
+        if text.length == 1, let table = text.attribute(.attachment, at: 0, effectiveRange: nil) as? NoteTableAttachment {
             NoteTablePaste.write(table.table, to: pasteboard)
             if types.contains(Self.fragmentType), let data = try? NoteContentCodec.encode(fragment, context: .fragment) {
                 pasteboard.addTypes([Self.fragmentType], owner: nil)
@@ -1829,8 +1840,12 @@ final class NoteEditorEngine: NSObject, NSTextViewDelegate, NSTextStorageDelegat
                 if let data = try? NoteContentCodec.encode(fragment, context: .fragment) { wrote = pasteboard.setData(data, forType: type) || wrote }
             case .string:
                 wrote = pasteboard.setString(NoteTextExport.plainText(fragment), forType: .string) || wrote
+            case TasksTextExport.markdownType:
+                // A fragment's first paragraph is body text, not a title.
+                let body = NoteDocument(blocks: [.text("")] + fragment.blocks)
+                wrote = pasteboard.setString(NoteMarkdownExport.markdown(body), forType: type) || wrote
             case .rtf:
-                let selected = NSMutableAttributedString(attributedString: textStorage.attributedSubstring(from: range))
+                let selected = NSMutableAttributedString(attributedString: text)
                 // Tables read as their rows of tab-separated text in rich text.
                 var tables: [(NSRange, NoteTable)] = []
                 selected.enumerateAttribute(.attachment, in: NSRange(location: 0, length: selected.length)) { value, part, _ in

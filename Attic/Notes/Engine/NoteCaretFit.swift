@@ -17,6 +17,7 @@ import AppKit
 final class NoteCaretFitter {
     private weak var textView: NSTextView?
     private var watched: [ObjectIdentifier: (indicator: Weak, token: NSObjectProtocol)] = [:]
+    private var suppressed: [ObjectIdentifier: NSTextInsertionIndicator.DisplayMode] = [:]
     private var fitting = false
 
     private final class Weak {
@@ -74,6 +75,7 @@ final class NoteCaretFitter {
     private func watch(_ indicator: NSView) {
         let key = ObjectIdentifier(indicator)
         watched = watched.filter { $0.value.indicator.view != nil }
+        suppressed = suppressed.filter { watched[$0.key] != nil }
         guard watched[key] == nil else { return }
         indicator.postsFrameChangedNotifications = true
         let token = NotificationCenter.default.addObserver(forName: NSView.frameDidChangeNotification, object: indicator,
@@ -89,6 +91,17 @@ final class NoteCaretFitter {
     /// Reframes one indicator; true when the frame changed.
     @discardableResult
     func fit(_ indicator: NSView) -> Bool {
+        if let indicator = indicator as? NSTextInsertionIndicator {
+            let key = ObjectIdentifier(indicator)
+            if (textView as? NoteEditorTextView)?.marquee?.isEmpty == false {
+                // TextKit 2's modern caret is a subview: suppressing the
+                // legacy insertion-point drawing alone does not hide it.
+                if suppressed[key] == nil { suppressed[key] = indicator.displayMode }
+                if indicator.displayMode != .hidden { indicator.displayMode = .hidden }
+            } else if let mode = suppressed.removeValue(forKey: key) {
+                indicator.displayMode = mode
+            }
+        }
         guard !fitting, let textView, textView.selectedRange().length == 0,
               let superview = indicator.superview, let font = Self.font(of: textView) else { return false }
         let current = textView.convert(indicator.frame, from: superview)

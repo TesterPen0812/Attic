@@ -15,6 +15,8 @@ import UniformTypeIdentifiers
 /// - Marks keystroke-to-commit for the performance trace.
 final class NoteEditorTextView: NSTextView, NSAccessibilityCustomRotorItemSearchDelegate {
     weak var engine: NoteEditorEngine?
+    var marquee: NoteMarqueeSelection?
+    override var shouldDrawInsertionPoint: Bool { marquee?.isEmpty != false && super.shouldDrawInsertionPoint }
     var proseTextCompletionEnabled = false
     private(set) lazy var undoShim = NoteUndoManagerShim(textView: self)
     /// After each layout pass: the page keeps the title's accessories (the
@@ -190,6 +192,7 @@ final class NoteEditorTextView: NSTextView, NSAccessibilityCustomRotorItemSearch
     }
 
     override func setSelectedRanges(_ ranges: [NSValue], affinity: NSSelectionAffinity, stillSelecting: Bool) {
+        if marquee?.isSettingNativeSelection == false { marquee?.clear() }
         super.setSelectedRanges(ranges, affinity: affinity, stillSelecting: stillSelecting)
         caretFitter.refresh()
         guard engine != nil, !stillSelecting else { return }
@@ -291,6 +294,11 @@ final class NoteEditorTextView: NSTextView, NSAccessibilityCustomRotorItemSearch
     }
 
     override func keyDown(with event: NSEvent) {
+        if marquee?.isEmpty == false {
+            if event.keyCode == 51 || event.keyCode == 117 { _ = marquee?.delete(); return }
+            if event.keyCode == 53 { marquee?.clear(); return }
+            if !event.modifierFlags.contains(.command) { marquee?.clear() }
+        }
         engine?.updateTextChecking()
         if engine?.find.handleKey(event) == true { return }
         if let engine, selectedRange().length == 1,
@@ -488,6 +496,7 @@ final class NoteEditorTextView: NSTextView, NSAccessibilityCustomRotorItemSearch
     }
 
     override func deleteBackward(_ sender: Any?) {
+        if marquee?.isEmpty == false { _ = marquee?.delete(); return }
         if let engine, selectedRange().length == 1,
            let object = engine.object(at: selectedRange().location),
            object is NoteImageAttachment || object is NoteFileAttachment {
@@ -499,6 +508,7 @@ final class NoteEditorTextView: NSTextView, NSAccessibilityCustomRotorItemSearch
     }
 
     override func deleteForward(_ sender: Any?) {
+        if marquee?.isEmpty == false { _ = marquee?.delete(); return }
         if engine?.handleDeleteForward() == true { return }
         asUserEdit { super.deleteForward(sender) }
     }
@@ -513,6 +523,7 @@ final class NoteEditorTextView: NSTextView, NSAccessibilityCustomRotorItemSearch
     /// closes; then, with nothing left to close, the panel hides. The text
     /// view's own completion list is not used in notes.
     override func cancelOperation(_ sender: Any?) {
+        if marquee?.isEmpty == false { marquee?.clear(); return }
         // NSTextView has no cancelOperation of its own (calling super would
         // raise): what it doesn't take goes up the responder chain.
         guard engine != nil else { return passEscapeOn(sender) }
@@ -537,8 +548,15 @@ final class NoteEditorTextView: NSTextView, NSAccessibilityCustomRotorItemSearch
         _ = nextResponder?.tryToPerform(#selector(NSResponder.cancelOperation(_:)), with: sender)
     }
 
-    override func cut(_ sender: Any?) { asUserEdit { super.cut(sender) } }
+    override func cut(_ sender: Any?) {
+        if marquee?.isEmpty == false {
+            if isEditable, marquee?.copy(to: .general) == true { _ = marquee?.delete() }
+            return
+        }
+        asUserEdit { super.cut(sender) }
+    }
     override func delete(_ sender: Any?) {
+        if marquee?.isEmpty == false { _ = marquee?.delete(); return }
         if let engine, selectedRange().length == 1,
            let object = engine.object(at: selectedRange().location),
            object is NoteImageAttachment || object is NoteFileAttachment {
@@ -548,6 +566,7 @@ final class NoteEditorTextView: NSTextView, NSAccessibilityCustomRotorItemSearch
         asUserEdit { super.delete(sender) }
     }
     override func copy(_ sender: Any?) {
+        if marquee?.isEmpty == false { _ = marquee?.copy(to: .general); return }
         if let engine, selectedRange().length == 1,
            let object = engine.object(at: selectedRange().location),
            object is NoteImageAttachment || object is NoteFileAttachment {
@@ -622,10 +641,11 @@ final class NoteEditorTextView: NSTextView, NSAccessibilityCustomRotorItemSearch
     // MARK: Pasteboard
 
     override var writablePasteboardTypes: [NSPasteboard.PasteboardType] {
-        engine == nil ? super.writablePasteboardTypes : [NoteEditorEngine.fragmentType, .rtf, .string]
+        engine == nil ? super.writablePasteboardTypes : [NoteEditorEngine.fragmentType, .rtf, .string, TasksTextExport.markdownType]
     }
 
     override func writeSelection(to pboard: NSPasteboard, types: [NSPasteboard.PasteboardType]) -> Bool {
+        if marquee?.isEmpty == false { return marquee?.copy(to: pboard) ?? false }
         guard let engine else { return super.writeSelection(to: pboard, types: types) }
         return engine.writeSelection(selectedRange(), to: pboard, types: types)
     }
@@ -689,6 +709,10 @@ final class NoteEditorTextView: NSTextView, NSAccessibilityCustomRotorItemSearch
     }
 
     override func validateUserInterfaceItem(_ item: any NSValidatedUserInterfaceItem) -> Bool {
+        if marquee?.isEmpty == false {
+            if item.action == #selector(copy(_:)) { return true }
+            if item.action == #selector(cut(_:)) || item.action == #selector(delete(_:)) { return isEditable }
+        }
         if let engine {
             if item.action == #selector(undo(_:)) {
                 let name = engine.undoCommandName
@@ -826,6 +850,16 @@ final class NoteEditorTextView: NSTextView, NSAccessibilityCustomRotorItemSearch
     @objc func insertTodaysDate(_ sender: Any?) { _ = engine?.perform(.date(NoteDay(date: Date()))) }
 
     // MARK: Accessibility
+
+    override func accessibilitySelectedTextRanges() -> [NSValue]? {
+        guard let marquee, !marquee.isEmpty else { return super.accessibilitySelectedTextRanges() }
+        return marquee.ranges.map { NSValue(range: $0) }
+    }
+
+    override func accessibilitySelectedText() -> String? {
+        guard let marquee, !marquee.isEmpty, let engine else { return super.accessibilitySelectedText() }
+        return marquee.ranges.map { NoteTextExport.plainText(engine.fragment(for: $0)) }.joined(separator: "\n")
+    }
 
     override func accessibilityChildren() -> [Any]? {
         let base = super.accessibilityChildren() ?? []
