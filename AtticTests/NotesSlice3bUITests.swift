@@ -188,6 +188,37 @@ final class NotesSlice3bUITests: XCTestCase {
         XCTAssertTrue(submenu.children.contains { $0.title == "Quick Look" })
     }
 
+    func testH13ObjectRingUsesTheAttachmentFrameWithoutTextLineLeading() throws {
+        let item = try pngStaged()
+        let blocks: [NoteBlock] = [
+            .image(attachmentID: item.id, widthFraction: 0.5, pixelWidth: 400, pixelHeight: 200),
+            .file(attachmentID: UUID(), filename: "H13.txt", contentTypeIdentifier: "public.plain-text", byteCount: 12)
+        ]
+        for block in blocks {
+            let engine = NoteEditorEngine(noteID: UUID(), document: NoteDocument(blocks: [.text("H13"), block, .text("after")]),
+                                          stagedAttachments: [item])
+            let (_, text, controls) = hosted(engine)
+            defer { controls.invalidate() }
+            let range = try XCTUnwrap(engine.objectPlacement(block.id!)?.1)
+            text.setSelectedRange(range)
+            controls.updateSelection()
+            let layout = try XCTUnwrap(engine.layoutManager)
+            let location = try XCTUnwrap(engine.contentStorage.location(engine.contentStorage.documentRange.location, offsetBy: range.location))
+            let fragment = try XCTUnwrap(layout.textLayoutFragment(for: location))
+            let attachment = fragment.frameForTextAttachment(at: location)
+                .offsetBy(dx: fragment.layoutFragmentFrame.minX + text.textContainerOrigin.x,
+                          dy: fragment.layoutFragmentFrame.minY + text.textContainerOrigin.y)
+            XCTAssertGreaterThan(attachment.height, 0)
+            let m = AtticNoteObjectMetrics.self
+            let objectFrame = controls.ringFrame.insetBy(dx: m.ringOutset + m.ringWidth + m.resizeHitTarget / 2,
+                                                       dy: m.ringOutset + m.ringWidth + m.resizeHitTarget / 2)
+            XCTAssertEqual(objectFrame.minY, attachment.minY, accuracy: 0.5)
+            XCTAssertEqual(objectFrame.maxY, attachment.maxY, accuracy: 0.5)
+            XCTAssertEqual(objectFrame.minX, attachment.minX, accuracy: 0.5)
+            XCTAssertEqual(objectFrame.maxX, attachment.maxX, accuracy: 0.5)
+        }
+    }
+
     // MARK: Clicks and the ring
 
     func testAClickOnADrawnActionRunsItsCommand() throws {

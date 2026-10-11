@@ -186,6 +186,81 @@ final class NotesPageRenderTests: XCTestCase {
         XCTAssertEqual(engine.titleOpacity, 1)
     }
 
+    func testH13ScrollingTextCannotEnterTheBottomControlsBand() throws {
+        let harness = try makeHarness(context: AtticDesignContext(controls: .craft)) { try Self.seedPricing($0) }
+        let note = try XCTUnwrap(harness.store.notes.first)
+        XCTAssertTrue(harness.controller.open(noteID: note.id))
+        spin(0.3)
+        let scroll = try XCTUnwrap(harness.controller.active?.engine.scrollView)
+        let frame = scroll.convert(scroll.bounds, to: harness.host)
+        let layout = PanelPageLayout(cornerSize: 52, panelSize: harness.host.bounds.size)
+        let bottomBand = layout.chromeInsets.bottom + AtticControlSize.panelButton.height
+        let clearance = harness.host.isFlipped ? harness.host.bounds.maxY - frame.maxY : frame.minY - harness.host.bounds.minY
+        XCTAssertGreaterThanOrEqual(clearance, bottomBand - 0.5,
+                                   "scrolling content must stay out from under All notes, Aa and New note")
+    }
+
+    func testH13LibraryAndHistoryAlsoKeepTextOutOfTheFooter() async throws {
+        let harness = try makeHarness(context: AtticDesignContext(controls: .craft)) { try Self.seedPricing($0) }
+        let note = try XCTUnwrap(harness.store.notes.first)
+        XCTAssertTrue(harness.controller.open(noteID: note.id))
+        XCTAssertTrue(harness.controller.showLibrary())
+        spin(0.4)
+        func check(_ scroll: NSScrollView) {
+            let frame = scroll.convert(scroll.bounds, to: harness.host)
+            let layout = PanelPageLayout(cornerSize: 52, panelSize: harness.host.bounds.size)
+            let clearance = harness.host.isFlipped ? harness.host.bounds.maxY - frame.maxY : frame.minY - harness.host.bounds.minY
+            XCTAssertGreaterThanOrEqual(clearance, layout.chromeInsets.bottom + AtticControlSize.panelButton.height - 0.5)
+        }
+        let library = try XCTUnwrap(descendants(of: harness.host).compactMap { $0 as? NSScrollView }.first { $0.bounds.height > 200 })
+        check(library)
+        XCTAssertTrue(harness.controller.open(noteID: note.id))
+        XCTAssertTrue(harness.store.recordVersion(noteID: note.id, reason: .pause))
+        let opened = await harness.controller.openHistoryDurably()
+        XCTAssertTrue(opened)
+        spin(0.4)
+        let history = try XCTUnwrap(harness.controller.historyBrowser?.preview?.engine.scrollView)
+        check(history)
+    }
+
+    func testH13FastScrollBackRestoresEveryTitleLine() throws {
+        let harness = try makeHarness(context: AtticDesignContext(controls: .craft)) { store in
+            _ = store.createDocumentNote(id: UUID(), document: NoteDocument(blocks:
+                [.text("H13 fast scrolling title across several lines")] + (0..<80).map { .text("Body line \($0)") }))
+        }
+        let note = try XCTUnwrap(harness.store.notes.first)
+        XCTAssertTrue(harness.controller.open(noteID: note.id))
+        spin(0.3)
+        let engine = try XCTUnwrap(harness.controller.active?.engine)
+        let text = try XCTUnwrap(engine.textView)
+        let scroll = try XCTUnwrap(engine.scrollView)
+        text.setSelectedRange(NSRange(location: engine.textStorage.length, length: 0))
+        let rest = -scroll.contentInsets.top
+        func top() {
+            scroll.contentView.scroll(to: NSPoint(x: 0, y: rest))
+            scroll.reflectScrolledClipView(scroll.contentView)
+            harness.host.layoutSubtreeIfNeeded()
+            spin(0.1)
+        }
+        top()
+        let before = try XCTUnwrap(engine.titleLineRects())
+        for _ in 0..<12 {
+            for y: CGFloat in [800, 160, 30, 500, 70, 0] {
+                scroll.contentView.scroll(to: NSPoint(x: 0, y: rest + y))
+                scroll.reflectScrolledClipView(scroll.contentView)
+                harness.host.layoutSubtreeIfNeeded()
+            }
+            top()
+            XCTAssertEqual(engine.titleOpacity, 1)
+            let after = try XCTUnwrap(engine.titleLineRects())
+            XCTAssertEqual(after.first, before.first, "the title's geometry survives viewport recycling")
+            XCTAssertEqual(after.last, before.last)
+            let layout = try XCTUnwrap(engine.layoutManager)
+            let fragment = try XCTUnwrap(layout.textLayoutFragment(for: engine.contentStorage.documentRange.location) as? NoteTitleLayoutFragment)
+            XCTAssertEqual(fragment.opacity, 1)
+        }
+    }
+
     /// The title's fragment draws at the engine's opacity (and not at all
     /// at 0): half the opacity is about half the ink.
     func testTheTitleFragmentDrawsAtTheEnginesOpacity() throws {

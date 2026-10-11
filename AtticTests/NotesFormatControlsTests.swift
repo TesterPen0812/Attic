@@ -99,6 +99,103 @@ final class NotesFormatControlsTests: XCTestCase {
         return nil
     }
 
+    // H13: owner feedback, 11 October 2026.
+    func testH13ObjectOnlySelectionOffersNoTextFormatting() {
+        for object: NoteBlock in [
+            .file(attachmentID: UUID(), filename: "H13.txt", contentTypeIdentifier: "public.plain-text", byteCount: 12),
+            .image(attachmentID: UUID(), pixelWidth: 240, pixelHeight: 120)
+        ] {
+            let (controls, engine, text) = make(NoteDocument(blocks: [.text("H13"), object, .text("Body")]))
+            let selection = (text.string as NSString).range(of: "\u{FFFC}")
+            text.setSelectedRange(selection)
+            controls.refresh()
+            XCTAssertFalse(controls.formatModel.barShown, "object controls belong in the object's menu")
+            for command in NoteCommandCatalog.marks + NoteCommandCatalog.inline {
+                XCTAssertFalse(engine.validate(command).enabled, "\(command) cannot format an object")
+            }
+        }
+    }
+
+    func testH13SelectionBelowViewportDoesNotPutAFormatBarOutsideTheEditor() throws {
+        let document = NoteDocument(blocks: [.text("H13")] + (0..<100).map { .text("Line \($0)") })
+        let (controls, engine, text) = make(document, topInset: 64)
+        let target = range("Line 99", text)
+        text.setSelectedRange(target)
+        engine.scrollView?.contentView.scroll(to: NSPoint(x: 0, y: -64))
+        controls.refresh()
+        XCTAssertNil(controls.barPlacement(selection: target), "an offscreen selection has no floating bar")
+        XCTAssertFalse(controls.formatModel.barShown)
+        text.scrollRangeToVisible(target)
+        spin()
+        XCTAssertTrue(controls.formatModel.barShown, "the controls return with the visible selection")
+        let reads = controls.snapshotCount
+        for _ in 0..<3 {
+            let clip = try XCTUnwrap(engine.scrollView?.contentView)
+            clip.scroll(to: NSPoint(x: 0, y: clip.bounds.minY - 1))
+            spin()
+        }
+        XCTAssertEqual(controls.snapshotCount, reads, "scrolling a visible selection only repositions its bar")
+    }
+
+    func testH13EveryMarkOnMixedTextTogglesAndUndoesWithoutChangingObjects() throws {
+        for kind in NoteMark.Kind.allCases where kind != .link {
+            let block = NoteBlock.image(attachmentID: UUID(), pixelWidth: 80, pixelHeight: 40)
+            let (controls, engine, text) = make(NoteDocument(blocks: [.text("H13"), .text("Alpha Beta"), block, .text("Gamma")]))
+            text.setSelectedRange(range("Alpha", text))
+            XCTAssertTrue(controls.router.run(.mark(kind), from: .selectionBar))
+            text.setSelectedRange(range("Alpha Beta", text))
+            XCTAssertEqual(engine.validate(.mark(kind)).state, .mixed)
+            XCTAssertTrue(controls.router.run(.mark(kind), from: .selectionBar))
+            XCTAssertEqual(engine.validate(.mark(kind)).state, .on)
+            XCTAssertTrue(controls.router.run(.mark(kind), from: .selectionBar))
+            XCTAssertEqual(engine.validate(.mark(kind)).state, .off)
+            XCTAssertTrue(engine.history.undo())
+            XCTAssertEqual(engine.validate(.mark(kind)).state, .on)
+            XCTAssertTrue(engine.history.redo())
+            XCTAssertEqual(engine.validate(.mark(kind)).state, .off)
+            text.selectAll(nil)
+            XCTAssertTrue(controls.router.run(.mark(kind), from: .shortcut))
+            let doc = engine.document()
+            XCTAssertEqual(doc.blocks[0].marks.first?.kind, kind, "selected title text retains its existing inline-mark behavior")
+            XCTAssertEqual(doc.blocks[2], block, "formatting preserves the object")
+            XCTAssertEqual(engine.validate(.mark(kind)).state, .on)
+            let reopened = NoteEditorEngine(noteID: UUID(), document: try XCTUnwrap(NoteContentCodec.decode(NoteContentCodec.encode(doc)).document))
+            XCTAssertEqual(reopened.document(), doc)
+            XCTAssertTrue(engine.history.undo())
+            XCTAssertTrue(engine.history.redo())
+            XCTAssertEqual(engine.document(), doc)
+        }
+    }
+
+    func testH13TitleFadeRefreshesTheTextViewsCachedPixels() throws {
+        let (_, engine, text) = make(NoteDocument(blocks: [.text("H13 title pixels"), .text("Body")]))
+        text.setSelectedRange(NSRange(location: text.string.utf16.count, length: 0))
+        text.layoutSubtreeIfNeeded()
+        let rect = try XCTUnwrap(engine.titleLineRects()).first.insetBy(dx: -2, dy: -2)
+        func ink() throws -> Int {
+            let bitmap = try XCTUnwrap(text.bitmapImageRepForCachingDisplay(in: rect))
+            text.cacheDisplay(in: rect, to: bitmap)
+            var count = 0
+            for y in 0..<bitmap.pixelsHigh {
+                for x in 0..<bitmap.pixelsWide {
+                    if let color = bitmap.colorAt(x: x, y: y)?.usingColorSpace(.deviceRGB),
+                       color.alphaComponent > 0.1, color.redComponent < 0.5 { count += 1 }
+                }
+            }
+            return count
+        }
+        let full = try ink()
+        XCTAssertGreaterThan(full, 20)
+        engine.setTitleOpacity(0)
+        text.layoutSubtreeIfNeeded()
+        spin()
+        XCTAssertLessThan(try ink(), full / 10, "cached title pixels leave when the header takes over")
+        engine.setTitleOpacity(1)
+        text.layoutSubtreeIfNeeded()
+        spin()
+        XCTAssertGreaterThan(try ink(), full * 9 / 10, "the title returns without missing ink")
+    }
+
     // MARK: Routing: every surface runs the same engine command
 
     func testEverySurfaceRunsTheSameBoldCommandWithTheSameResult() throws {

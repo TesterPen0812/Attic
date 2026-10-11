@@ -408,6 +408,19 @@ final class NotesV2TablesFeatureTests: XCTestCase {
         XCTAssertTrue(engine.handleTableShortcut(keyEvent(11, "b", [.command], window: window), in: view), "⌘B in a cell")
     }
 
+    func testH13SelectAllFromTitleBodyAndObjectIncludesTheWholeNote() throws {
+        let image = NoteBlock.image(attachmentID: UUID(), pixelWidth: 80, pixelHeight: 40)
+        let (engine, text) = makeEngine(blocks() + [image])
+        let all = NSRange(location: 0, length: engine.textStorage.length)
+        for selection in [NSRange(location: 2, length: 0), NSRange(location: 15, length: 0),
+                          try XCTUnwrap(engine.range(ofTable: table(engine))),
+                          try XCTUnwrap(engine.objectPlacement(image.id!)?.1)] {
+            text.setSelectedRange(selection)
+            text.selectAll(nil)
+            XCTAssertEqual(text.selectedRange(), all)
+        }
+    }
+
     func testCommandAOnceSelectsTheCellsTextThenTheWholeTable() throws {
         let (engine, textView) = makeEngine(blocks())
         let attachment = try table(engine)

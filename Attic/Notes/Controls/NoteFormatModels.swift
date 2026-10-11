@@ -57,9 +57,13 @@ struct NoteFormatSnapshot: Equatable {
         }
     }
 
-    /// Anything to offer at all (a title-only or read-only selection shows
-    /// no bar).
-    var hasEnabledCommand: Bool { validations.values.contains { $0.enabled } }
+    /// Anything this text bar can offer (an object-only or read-only
+    /// selection shows no bar).
+    var hasEnabledCommand: Bool {
+        // Insert Table is available on any selection but is not on this bar.
+        (NoteCommandCatalog.styles + NoteCommandCatalog.barMarks + NoteCommandCatalog.barInline)
+            .contains { isEnabled($0) }
+    }
 }
 
 /// The bar's controls in keyboard order (← → move, Return or Space press).

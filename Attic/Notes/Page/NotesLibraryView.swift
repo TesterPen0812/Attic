@@ -361,11 +361,10 @@ struct NotesLibraryView: View {
             .contentMargins(.top, restTop, for: .scrollIndicators)
             .scrollIndicators(.automatic)
             .scrollEdgeEffectHidden(true, for: .all)
-            // Rows run under the header and the bottom row (glass) at full
-            // strength; only the label line, plain text, keeps a short fade
-            // (owner, 2026-10-06). No native soft edge.
+            // F-13: the library shares the editor's reserved footer band.
             .atticScrollUnderFade(plainText: [labelsTop...(labelsTop + AtticLayout.pageTabsHeight)],
-                                  topEdge: layout.scrollEdgeFadeTop, bottomEdge: layout.scrollEdgeFadeBottom)
+                                  topEdge: layout.scrollEdgeFadeTop, bottomEdge: 0)
+            .padding(.bottom, bottomControls)
             .coordinateSpace(Self.space)
             // Right-click anywhere the rows are not (all of it, with none):
             // the library's history, so Undo never depends on a row.
