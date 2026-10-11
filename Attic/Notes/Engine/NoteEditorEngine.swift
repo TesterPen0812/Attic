@@ -629,7 +629,7 @@ final class NoteEditorEngine: NSObject, NSTextViewDelegate, NSTextStorageDelegat
             let apply = NSRange(location: 0, length: titleEnd)
             if apply.length > 0 {
                 textStorage.addAttributes(style.titleAttributes, range: apply)
-                for key in NoteMark.Kind.allCases.map(NSAttributedString.Key.noteMark) + [.link, .underlineStyle, .strikethroughStyle, .backgroundColor] {
+                for key in [NSAttributedString.Key.link, .underlineStyle, .strikethroughStyle, .backgroundColor] {
                     textStorage.removeAttribute(key, range: apply)
                 }
             }

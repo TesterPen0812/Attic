@@ -351,6 +351,34 @@ final class NotesShortcutMetadataTests: XCTestCase {
 
 @MainActor
 final class PlainNoteTitleTests: XCTestCase {
+    func testR12StoredTitleMarksSurviveLoadRestyleEditSaveAndReopen() throws {
+        var title = NoteBlock.text("Plain title")
+        title.marks = [.init(.italic, offset: 0, length: 5),
+            .init(.underline, offset: 6, length: 5),
+            .init(.link, offset: 6, length: 5, url: "https://example.com/original?q=1")]
+        let original = NoteDocument(blocks: [title, .text("Body")])
+        let engine = NoteEditorEngine(noteID: UUID(), document: original)
+        let (_, text) = engine.makeView()
+        func assertPlain(_ engine: NoteEditorEngine) {
+            XCTAssertEqual(engine.textStorage.attribute(.font, at: 0, effectiveRange: nil) as? NSFont, engine.style.titleFont)
+            for key in [NSAttributedString.Key.link, .underlineStyle, .strikethroughStyle, .backgroundColor] {
+                XCTAssertNil(engine.textStorage.attribute(key, at: 6, effectiveRange: nil))
+            }
+        }
+        assertPlain(engine)
+        XCTAssertEqual(engine.document().blocks[0].marks, title.marks)
+        engine.restyle(NSRange(location: 0, length: engine.textStorage.length))
+        text.setSelectedRange(NSRange(location: text.string.utf16.count, length: 0))
+        text.insertText(" edited", replacementRange: text.selectedRange())
+        XCTAssertEqual(engine.document().blocks[0].marks, title.marks)
+        let saved = try NoteContentCodec.encode(engine.document())
+        let reopened = NoteEditorEngine(noteID: UUID(), document: try XCTUnwrap(NoteContentCodec.decode(saved).document))
+        _ = reopened.makeView()
+        XCTAssertEqual(reopened.document().blocks[0].marks, title.marks)
+        assertPlain(reopened)
+        try r12Capture(text, name: "stored-title-plain.png")
+    }
+
     func testR12UndoTitleJoinRestoresBodyMarksAndLinkTargetsEvenAfterSave() throws {
         for command in ["backspace", "forward", "selection", "replace"] {
             for saveBeforeUndo in [false, true] {
@@ -371,13 +399,13 @@ final class PlainNoteTitleTests: XCTestCase {
                     text.insertText(command == "replace" ? "X" : "", replacementRange: text.selectedRange())
                 }
                 XCTAssertEqual(engine.document().blocks.count, 2)
-                XCTAssertTrue(engine.document().blocks[0].marks.isEmpty, "titles remain plain")
+                XCTAssertNil(engine.textStorage.attribute(.link, at: 0, effectiveRange: nil), "titles render plain; joined marks remain stored")
                 if saveBeforeUndo { _ = try NoteContentCodec.encode(engine.document()) }
                 XCTAssertTrue(engine.undoCommand(), "\(command), save=\(saveBeforeUndo)")
                 XCTAssertEqual(engine.document(), original, "\(command), save=\(saveBeforeUndo)")
                 if command == "backspace", !saveBeforeUndo { try r12Capture(text, name: "title-join-undo.png") }
                 XCTAssertTrue(engine.redoCommand())
-                XCTAssertTrue(engine.document().blocks[0].marks.isEmpty)
+                XCTAssertNil(engine.textStorage.attribute(.link, at: 0, effectiveRange: nil))
                 XCTAssertTrue(engine.undoCommand())
                 XCTAssertEqual(engine.document().blocks[1].marks, original.blocks[1].marks)
             }
@@ -400,14 +428,15 @@ final class PlainNoteTitleTests: XCTestCase {
         title.marks = [.init(.bold, offset: 0, length: 5), .init(.link, offset: 6, length: 5, url: "https://example.com")]
         let engine = NoteEditorEngine(noteID: UUID(), document: NoteDocument(blocks: [title, .text("Body")]))
         let (_, text) = engine.makeView()
-        XCTAssertTrue(engine.document().blocks[0].marks.isEmpty)
+        XCTAssertEqual(engine.document().blocks[0].marks, title.marks)
         text.selectAll(nil)
         XCTAssertTrue(engine.perform(.mark(.italic)))
-        XCTAssertTrue(engine.document().blocks[0].marks.isEmpty)
+        XCTAssertEqual(engine.document().blocks[0].marks, title.marks)
         XCTAssertEqual(engine.document().blocks[1].marks.first?.kind, .italic)
         text.setSelectedRange(NSRange(location: 2, length: 0))
         text.insertText(NSAttributedString(string: "X", attributes: [.noteMark(.underline): true]), replacementRange: text.selectedRange())
-        XCTAssertTrue(engine.document().blocks[0].marks.isEmpty)
-        XCTAssertNil(engine.textStorage.attribute(.noteMark(.underline), at: 2, effectiveRange: nil))
+        XCTAssertNotNil(engine.textStorage.attribute(.noteMark(.underline), at: 2, effectiveRange: nil), "pasted data survives")
+        XCTAssertNil(engine.textStorage.attribute(.underlineStyle, at: 2, effectiveRange: nil))
+        XCTAssertEqual(engine.document().blocks[0].marks.first(where: { $0.kind == .link })?.url, "https://example.com")
     }
 }

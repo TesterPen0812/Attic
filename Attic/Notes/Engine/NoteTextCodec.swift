@@ -54,9 +54,8 @@ enum NoteTextCodec {
             let paragraph = NSMutableAttributedString()
             switch block.kind {
             case .text:
-                var plain = block
-                if isTitle { plain.marks = [] }
-                paragraph.append(inlineText(plain, attributes: attributes, style: style))
+                // Stored semantic marks survive; the title only suppresses their rendering.
+                paragraph.append(inlineText(block, attributes: attributes, style: style, rendersMarks: !isTitle))
             case .checklist:
                 let box = NoteChecklistAttachment(objectID: block.id ?? UUID(), isChecked: block.checked)
                 paragraph.append(attachmentString(box, attributes: attributes))
@@ -106,7 +105,7 @@ enum NoteTextCodec {
         return string
     }
 
-    static func inlineText(_ block: NoteBlock, attributes: [NSAttributedString.Key: Any], style: NoteTextStyle) -> NSAttributedString {
+    static func inlineText(_ block: NoteBlock, attributes: [NSAttributedString.Key: Any], style: NoteTextStyle, rendersMarks: Bool = true) -> NSAttributedString {
         let result = NSMutableAttributedString()
         var run = ""
         var inlineIndex = 0
@@ -134,6 +133,7 @@ enum NoteTextCodec {
             let range = NSRange(location: mark.offset, length: mark.length)
             result.addAttribute(.noteMark(mark.kind), value: mark.attributeValue, range: range)
         }
+        guard rendersMarks else { return result }
         let baseFont = attributes[.font] as? NSFont ?? style.bodyFont
         var runs: [([NoteMark.Kind: Any], NSRange)] = []
         result.enumerateAttributes(in: NSRange(location: 0, length: result.length)) { values, range, _ in
@@ -177,7 +177,6 @@ enum NoteTextCodec {
             blocks.insert(.text(""), at: 0)
         }
         if firstBlockIsTitle, !blocks.isEmpty {
-            blocks[0].marks = []
             blocks[0].style = nil
             blocks[0].level = nil
             blocks[0].indent = nil
