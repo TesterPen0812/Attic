@@ -51,6 +51,36 @@ final class NoteEditorEngineTests: XCTestCase {
         XCTAssertEqual(engine.document().blocks.count, 51)
     }
 
+    func testR12FoldedViewportImagesReadNoFilesUntilUnfolded() async throws {
+        let provider = StubImages(bytes: [:])
+        let id = UUID()
+        var heading = NoteBlock.text("Hidden", id: id, style: "heading")
+        heading.level = 2
+        var peer = NoteBlock.text("Visible", style: "heading")
+        peer.level = 2
+        let document = NoteDocument(blocks: [.text("Title"), heading,
+            .image(attachmentID: UUID(), pixelWidth: 800, pixelHeight: 400), peer, .text("Body")],
+            extras: ["foldedHeadings": .array([.string(id.uuidString)])])
+        let engine = NoteEditorEngine(noteID: UUID(), document: document, imageProvider: provider)
+        let (scroll, text) = engine.makeView()
+        scroll.frame = NSRect(x: 0, y: 0, width: 400, height: 600)
+        let host = NSWindow(contentRect: scroll.frame, styleMask: [.borderless], backing: .buffered, defer: false)
+        host.isReleasedWhenClosed = false
+        host.contentView = scroll
+        windows.append(host)
+        text.layoutSubtreeIfNeeded()
+        engine.layoutManager?.textViewportLayoutController.layoutViewport()
+        text.viewWillDraw()
+        try await Task.sleep(for: .milliseconds(200))
+        XCTAssertEqual(provider.fileRequests, 0, "a hidden image inside the viewport's storage range is not visible")
+        XCTAssertTrue(engine.toggleHeadingFold(at: 6))
+        text.layoutSubtreeIfNeeded()
+        engine.layoutManager?.textViewportLayoutController.layoutViewport()
+        text.viewWillDraw()
+        try await Task.sleep(for: .milliseconds(200))
+        XCTAssertGreaterThan(provider.fileRequests, 0, "unfolding admits the now-visible image")
+    }
+
     func testPerf3OnlyViewportImagesDecodeAndScrollingLoadsTheLastImage() async throws {
         let bitmap = try XCTUnwrap(NSBitmapImageRep(bitmapDataPlanes: nil, pixelsWide: 800, pixelsHigh: 400,
             bitsPerSample: 8, samplesPerPixel: 4, hasAlpha: true, isPlanar: false, colorSpaceName: .deviceRGB,

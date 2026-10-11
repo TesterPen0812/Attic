@@ -772,15 +772,15 @@ final class NoteEditorEngine: NSObject, NSTextViewDelegate, NSTextStorageDelegat
         let range = NSIntersectionRange(NSRange(location: max(0, location), length: max(0, end - location)),
                                         NSRange(location: 0, length: textStorage.length))
         guard range.length > 0 else { return }
-        textStorage.enumerateAttribute(.attachment, in: range) { value, _, _ in
-            guard let image = value as? NoteImageAttachment, image.renderedImage == nil else { return }
+        textStorage.enumerateAttribute(.attachment, in: range) { value, run, _ in
+            guard let image = value as? NoteImageAttachment, image.renderedImage == nil, !isRangeFolded(run) else { return }
             loadImage(image, requireViewport: true)
         }
     }
 
     private func imageIsInViewport(_ image: NoteImageAttachment) -> Bool {
         guard let viewport = layoutManager?.textViewportLayoutController.viewportRange,
-              let range = range(of: image), let imageRange = textRange(for: range) else { return false }
+              let range = range(of: image), !isRangeFolded(range), let imageRange = textRange(for: range) else { return false }
         return viewport.intersects(imageRange)
     }
 
