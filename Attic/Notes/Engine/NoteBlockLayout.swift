@@ -113,7 +113,10 @@ final class NoteBlockLayoutFragment: NSTextLayoutFragment {
         if joinsAbove {
             top = 0
         } else if let first {
-            top = Self.baseline(of: first) - markerFont.ascender
+            // F-04b: from what the eye reads as the text's top (the cap
+            // height and a little over, the lowercase ascenders), not the
+            // font's ascender, which stood 3 pt over the letters.
+            top = Self.baseline(of: first) - Self.quoteBarAbove(markerFont)
         } else {
             top = spacingBefore
         }
@@ -121,12 +124,20 @@ final class NoteBlockLayoutFragment: NSTextLayoutFragment {
         if joinsBelow {
             bottom = layoutFragmentFrame.height
         } else if let last {
-            bottom = Self.baseline(of: last) - markerFont.descender
+            // Just under the last baseline, with or without descenders.
+            bottom = Self.baseline(of: last) + Self.quoteBarBelow(markerFont)
         } else {
             bottom = layoutFragmentFrame.height
         }
         return CGRect(x: x - layoutFragmentFrame.minX, y: top, width: T.quoteBar, height: max(0, bottom - top))
     }
+
+    /// The quote bar's reach above a baseline: the cap height and 7 % of
+    /// the size (the lowercase ascenders' height in SF).
+    static func quoteBarAbove(_ font: NSFont) -> CGFloat { font.capHeight + font.pointSize * 0.07 }
+    /// Its reach below the last baseline: 11 % of the size, about a third
+    /// of the descender, so it reads as ending with the text.
+    static func quoteBarBelow(_ font: NSFont) -> CGFloat { font.pointSize * 0.11 }
 
     /// A line's baseline in the fragment's coordinates.
     private static func baseline(of line: NSTextLineFragment) -> CGFloat {

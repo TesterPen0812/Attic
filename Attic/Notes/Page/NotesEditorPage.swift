@@ -148,6 +148,7 @@ struct NotesEditorPage: View {
             chrome.leaveEditor = { forward in leaveEditor(forward: forward) }
             #if DEBUG
             chrome.captureToggleLibrary = { toggleLibrary() }
+            chrome.captureImport = { [controller] urls in controller.importFiles(urls) }
             #endif
             if keyMonitor == nil {
                 keyMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { event in

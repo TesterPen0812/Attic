@@ -496,7 +496,7 @@ final class NoteEditorEngine: NSObject, NSTextViewDelegate, NSTextStorageDelegat
         textView.minSize = .zero
         textView.maxSize = NSSize(width: CGFloat.greatestFiniteMagnitude, height: CGFloat.greatestFiniteMagnitude)
         textView.typingAttributes = style.titleAttributes
-        textView.insertionPointColor = style.bodyColor
+        textView.insertionPointColor = style.caretColor
         // Writing Tools: inline, plain-text results only, objects protected.
         textView.writingToolsBehavior = writingToolsAvailable ? .complete : .none
         textView.allowedWritingToolsResultOptions = [.plainText]
@@ -563,7 +563,7 @@ final class NoteEditorEngine: NSObject, NSTextViewDelegate, NSTextStorageDelegat
                               titleTrailingReserve: style.titleTrailingReserve)
         restyle(NSRange(location: 0, length: textStorage.length))
         renderObjects(in: NSRange(location: 0, length: textStorage.length), force: true)
-        textView?.insertionPointColor = style.bodyColor
+        textView?.insertionPointColor = style.caretColor
         find.update(design: design)
         invalidateLayout(NSRange(location: 0, length: textStorage.length))
         // Restyling invalidates TextKit's attachment providers too. Finish

@@ -72,20 +72,19 @@ final class PhaseXCaretTests: XCTestCase {
             textView.caretFitter.refresh()
             let after = textView.convert(indicator.frame, from: selectionHost)
             let line = try XCTUnwrap(NoteCaretFitter.line(at: before, in: textView), text)
-            let glyphHeight = font.ascender - font.descender
-
-            XCTAssertEqual(after.height, glyphHeight, accuracy: 0.01, "\(text): ascender to descender")
-            XCTAssertEqual(after.maxY - line.baseline, -font.descender, accuracy: 0.01, "\(text): the descender ends the caret")
-            XCTAssertEqual(line.baseline - after.minY, font.ascender, accuracy: 0.01, "\(text): the ascender starts it")
+            // F-03c: from the letters' top (cap height + 7 %) to 18 % below
+            // the baseline, shorter than the glyph box.
+            let above = font.capHeight + font.pointSize * 0.07, below = font.pointSize * 0.18
+            XCTAssertEqual(after.height, above + below, accuracy: 0.01, "\(text): the letters' height")
+            XCTAssertEqual(after.maxY - line.baseline, below, accuracy: 0.01, "\(text): most of a descender below")
+            XCTAssertEqual(line.baseline - after.minY, above, accuracy: 0.01, "\(text): the letters' top starts it")
+            XCTAssertLessThan(after.height, font.ascender - font.descender, "\(text): shorter than the glyph box")
             XCTAssertLessThanOrEqual(after.height, before.height + 0.01, "\(text): never taller than the line")
             // The font's descender can pass the box's floor by a fraction of a point (TextKit rounds the box).
             XCTAssertGreaterThanOrEqual(after.minY, before.minY - 0.5, "\(text): inside the line's box")
             XCTAssertLessThanOrEqual(after.maxY, before.maxY + 0.5, "\(text): inside the line's box")
             XCTAssertEqual(after.minX, before.minX, accuracy: 0.01, "\(text): x stays the system's")
             XCTAssertEqual(after.width, before.width, accuracy: 0.01)
-            // Centred on the glyph box: equal room above the ascender and
-            // below the descender, around the baseline.
-            XCTAssertEqual((line.baseline - after.minY) - font.ascender, after.maxY - line.baseline + font.descender, accuracy: 0.01)
             rows += String(format: "%@ | box %.2f at %.2f | glyph box %.2f at %.2f\n", text, before.height, before.minY, after.height, after.minY)
             indicator.removeFromSuperview()
         }
@@ -148,8 +147,9 @@ final class PhaseXCaretTests: XCTestCase {
         let line = try XCTUnwrap(NoteCaretFitter.line(at: before, in: editor))
         XCTAssertEqual(font.pointSize, NoteTextStyle(design: .default).bodyFont.pointSize)
         XCTAssertEqual(before.height, AtticNoteType.body.lineHeight, accuracy: 0.01, "the system's caret is the 17.5 line")
-        XCTAssertEqual(after.height, font.ascender - font.descender, accuracy: 0.01)
-        XCTAssertEqual(line.baseline - after.minY, font.ascender, accuracy: 0.01)
+        let reach = NoteCaretFitter.caretReach(font)
+        XCTAssertEqual(after.height, reach.above + reach.below, accuracy: 0.01)
+        XCTAssertEqual(line.baseline - after.minY, reach.above, accuracy: 0.01)
         XCTAssertLessThan(after.height, before.height)
         print("CARET", String(format: "table cell | box %.2f at %.2f | glyph box %.2f at %.2f", before.height, before.minY, after.height, after.minY))
     }

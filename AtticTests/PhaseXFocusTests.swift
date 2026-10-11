@@ -53,9 +53,10 @@ final class PhaseXFocusTests: XCTestCase {
 
     private func baseline(_ line: NSTextLineFragment) -> CGFloat { line.typographicBounds.minY + line.glyphOrigin.y }
 
-    /// The bar spans exactly its text: first line's ascender to the last
-    /// line's descender, centred on the glyphs, not longer; a quote of
-    /// several paragraphs or wrapped lines is one bar without a gap.
+    /// F-04b: the bar spans what reads as the text, from the first line's
+    /// letters (cap height + 7 %) to just below the last baseline (11 %),
+    /// with or without descenders; a quote of several paragraphs or wrapped
+    /// lines is one bar without a gap.
     func testQuoteBarSpansItsTextLinesAndNoMore() throws {
         let long = String(repeating: "A quote that wraps across lines. ", count: 6)
         let (_, textView) = makeEditor([.text("Title"), .text("Before"),
@@ -71,11 +72,12 @@ final class PhaseXFocusTests: XCTestCase {
         let single = try XCTUnwrap(slices.first)
         let bar = try XCTUnwrap(single.quoteBar)
         let line = try XCTUnwrap(single.textLineFragments.first)
-        XCTAssertEqual(bar.minY, baseline(line) - font.ascender, accuracy: 0.01)
-        XCTAssertEqual(bar.maxY, baseline(line) - font.descender, accuracy: 0.01)
-        XCTAssertEqual(bar.height, font.ascender - font.descender, accuracy: 0.01)
-        XCTAssertLessThan(bar.height, line.typographicBounds.height, "shorter than the line's box")
-        XCTAssertEqual(bar.midY, baseline(line) - (font.ascender + font.descender) / 2, accuracy: 0.01, "centred on the glyphs")
+        let above = NoteBlockLayoutFragment.quoteBarAbove(font), below = NoteBlockLayoutFragment.quoteBarBelow(font)
+        XCTAssertEqual(bar.minY, baseline(line) - above, accuracy: 0.01)
+        XCTAssertEqual(bar.maxY, baseline(line) + below, accuracy: 0.01)
+        XCTAssertLessThan(bar.height, font.ascender - font.descender, "shorter than the glyph box")
+        XCTAssertGreaterThan(above, font.capHeight, "past the capitals")
+        XCTAssertLessThan(below, -font.descender * 0.6, "just below the baseline, well short of the descender")
         XCTAssertEqual(bar.width, AtticNoteType.quoteBar)
 
         // A wrapped quote of two paragraphs: one bar, first ascender to last descender.
@@ -85,14 +87,14 @@ final class PhaseXFocusTests: XCTestCase {
         let firstLine = try XCTUnwrap(top.textLineFragments.first)
         let lastLine = try XCTUnwrap(bottom.textLineFragments.last)
         XCTAssertEqual(top.layoutFragmentFrame.minY + topBar.minY,
-                       top.layoutFragmentFrame.minY + baseline(firstLine) - font.ascender, accuracy: 0.01)
+                       top.layoutFragmentFrame.minY + baseline(firstLine) - above, accuracy: 0.01)
         XCTAssertEqual(bottom.layoutFragmentFrame.minY + bottomBar.maxY,
-                       bottom.layoutFragmentFrame.minY + baseline(lastLine) - font.descender, accuracy: 0.01)
+                       bottom.layoutFragmentFrame.minY + baseline(lastLine) + below, accuracy: 0.01)
         XCTAssertEqual(topBar.maxY + top.layoutFragmentFrame.minY, bottomBar.minY + bottom.layoutFragmentFrame.minY, accuracy: 0.01,
                        "the two slices meet without a gap")
         let spanned = (bottom.layoutFragmentFrame.minY + bottomBar.maxY) - (top.layoutFragmentFrame.minY + topBar.minY)
-        let textSpan = (bottom.layoutFragmentFrame.minY + baseline(lastLine) - font.descender)
-            - (top.layoutFragmentFrame.minY + baseline(firstLine) - font.ascender)
+        let textSpan = (bottom.layoutFragmentFrame.minY + baseline(lastLine) + below)
+            - (top.layoutFragmentFrame.minY + baseline(firstLine) - above)
         XCTAssertEqual(spanned, textSpan, accuracy: 0.01, "not longer than the text")
     }
 

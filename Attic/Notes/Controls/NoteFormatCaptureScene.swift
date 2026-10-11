@@ -45,6 +45,10 @@ enum NoteFormatCaptureScene {
                 writeFocusSample(controls: controls, textView: textView)
                 return
             }
+            if scene == "objects" {
+                writeObjectsSample(chrome: chrome, controls: controls, textView: textView)
+                return
+            }
             if scene == "tables" {
                 writeTablesSample(controls: controls, chrome: chrome, textView: textView)
                 return
@@ -205,6 +209,38 @@ enum NoteFormatCaptureScene {
     /// a highlight beside inline code. `ATTIC_UI_TEST_CARET_AT=<text>` puts
     /// the caret at the end of the line containing that text (the last line
     /// when it is absent).
+    /// A file card and an image, one of them selected (F-06b's ring):
+    /// `ATTIC_UI_TEST_OBJECT=file|image` picks which.
+    private static func writeObjectsSample(chrome: NotesPageChrome, controls: NoteFormatControls, textView: NoteEditorTextView) {
+        type("Objects\nA file and an image below.\n", into: textView)
+        let folder = FileManager.default.temporaryDirectory.appendingPathComponent("attic-capture-objects", isDirectory: true)
+        try? FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        let file = folder.appendingPathComponent("Quarterly notes.txt")
+        try? Data("Capture fixture\n".utf8).write(to: file)
+        let image = folder.appendingPathComponent("Swatch.png")
+        let picture = NSImage(size: NSSize(width: 480, height: 240), flipped: false) { rect in
+            NSColor.systemTeal.setFill(); rect.fill()
+            NSColor.white.setFill(); NSBezierPath(ovalIn: rect.insetBy(dx: 180, dy: 60)).fill()
+            return true
+        }
+        if let tiff = picture.tiffRepresentation, let png = NSBitmapImageRep(data: tiff)?.representation(using: .png, properties: [:]) {
+            try? png.write(to: image)
+        }
+        chrome.captureImport?([file, image])
+        let which = ProcessInfo.processInfo.environment["ATTIC_UI_TEST_OBJECT"] ?? "file"
+        DispatchQueue.main.asyncAfter(deadline: .now() + 2) {
+            let engine = controls.engine
+            let length = engine.textStorage.length
+            for location in 0..<length {
+                guard let object = engine.object(at: location) else { continue }
+                if (which == "image") == (object is NoteImageAttachment) {
+                    textView.setSelectedRange(NSRange(location: location, length: 1))
+                    break
+                }
+            }
+        }
+    }
+
     private static func writeFocusSample(controls: NoteFormatControls, textView: NoteEditorTextView) {
         let router = controls.router
         type("Focus note\n", into: textView)

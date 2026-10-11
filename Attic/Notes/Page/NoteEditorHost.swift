@@ -30,6 +30,8 @@ final class NotesPageChrome: ObservableObject {
     #if DEBUG
     /// The capture seam's All notes (UI-test launches only).
     var captureToggleLibrary: (() -> Void)?
+    /// The capture seam's file import (the `objects` scene).
+    var captureImport: (([URL]) -> Void)?
     #endif
     /// The open panel for Insert › Image or File…, the `/` row (one file),
     /// or a failed object's Retry and Locate… (one file, for that object).

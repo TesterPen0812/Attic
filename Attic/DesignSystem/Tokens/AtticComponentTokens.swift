@@ -837,10 +837,13 @@ enum AtticNoteObjectMetrics {
     static let failureGlyph: CGFloat = 14
     static let failureRowGap: CGFloat = 6
     static let failureStackMinHeight: CGFloat = 64
-    /// The selected object: a 2 pt ring 2 outside it, and a resize corner
-    /// (a 10 pt disc on the ring's bottom-trailing corner, 20 pt to grab).
-    static let ringWidth: CGFloat = 2
-    static let ringOutset: CGFloat = 2
+    /// The selected object: a ring, and a resize corner (a 10 pt disc on
+    /// the object's bottom-trailing corner, 20 pt to grab).
+    /// The selected object's ring (F-06b, owner 2026-10-11): one 1.5 pt
+    /// ring on the object's own edge, inside it, on its own corner radius,
+    /// so it hugs the card or image with no gap and no second ring.
+    static let ringWidth: CGFloat = 1.5
+    static let ringOutset: CGFloat = 0
     static let resizeHandle: CGFloat = 10
     static let resizeHitTarget: CGFloat = 20
     /// The drop line: 2 pt, with a 6 pt disc at its leading end, across

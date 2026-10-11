@@ -1202,7 +1202,15 @@ final class NoteFormatControls: NSObject {
             && engine.focusedTable == nil && !textView.hasMarkedText() && engine.slashSession == nil && cardModel.card == nil
         if show, let rect = caretRect() {
             let size = hintHost.fittingSize
-            let frame = NSRect(x: rect.minX, y: rect.minY + (rect.height - size.height) / 2, width: size.width, height: size.height).integral
+            // F-03b: the hint sits on the line's own baseline, as typed text
+            // would, so the caret (fitted to that baseline) matches its
+            // height and centre. Centred in the line box it sat lower.
+            var y = rect.minY + (rect.height - size.height) / 2
+            if let line = NoteCaretFitter.line(at: rect, in: textView) {
+                let font = AtticTextStyle.noteBody.nsFont
+                y = line.baseline - font.ascender - max(0, size.height - (font.ascender - font.descender)) / 2
+            }
+            let frame = NSRect(x: rect.minX, y: y, width: size.width, height: size.height).integral
             if hintHost.frame != frame { hintHost.frame = frame }
             if !hintShown {
                 hintHost.isHidden = false

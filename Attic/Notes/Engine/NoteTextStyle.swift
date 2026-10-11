@@ -140,6 +140,10 @@ struct NoteTextStyle: Equatable {
     /// A plain grey wash behind proportional text (owner 2026-10-10); code keeps
     /// its monospaced font and its own, lighter accent-tinted chip.
     var highlightColor: NSColor { tokens.highlightMarker.nsColor }
+    /// The caret: the system's insertion point colour (the accent), as in
+    /// Apple's own text views, so it reads lighter than the near-black text
+    /// beside it (F-03c: the body-ink caret read heavy).
+    var caretColor: NSColor { .textInsertionPointColor }
     /// A highlight's wash in its colour (N-2): a stored key, or `true` for
     /// the grey one.
     func highlightColor(for value: Any?) -> NSColor {
