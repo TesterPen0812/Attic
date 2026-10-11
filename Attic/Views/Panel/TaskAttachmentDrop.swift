@@ -16,7 +16,7 @@ enum TaskDropContent: Equatable {
     case files
     case unsupported
 
-    /// Marks a gallery card drag (own process only). Declared in Info.plist.
+    /// Marks a gallery card drag; visible only to this process.
     static let attachmentCardType = UTType(exportedAs: "com.taha.attic.task-attachment")
 
     /// File URLs, plus content that apps commonly provide or promise without
@@ -163,16 +163,30 @@ enum TaskAttachmentCardDrag {
     }
 
     /// The dragged file, confirmed by its marker: one provider whose marker
-    /// names the attachment `expected` recorded when the drag began.
+    /// names the attachment `expected` recorded when the drag began. macOS
+    /// can reconstruct an empty SwiftUI provider for a file-promise drag;
+    /// in that case its own-process marker remains on the native pasteboard.
     static func sources(from providers: [NSItemProvider],
-                        expected: TaskAttachmentSource?) async throws -> [TaskAttachmentSource] {
+                        expected: TaskAttachmentSource?,
+                        nativePasteboard: NSPasteboard = NSPasteboard(name: .drag)) async throws -> [TaskAttachmentSource] {
         guard let expected, providers.count == 1, let provider = providers.first else {
             throw TaskDropError.attachmentUnavailable
         }
-        let data: Data = try await withCheckedThrowingContinuation { continuation in
-            _ = provider.loadDataRepresentation(forTypeIdentifier: TaskDropContent.attachmentCardType.identifier) { data, error in
-                if let data { continuation.resume(returning: data) }
-                else { continuation.resume(throwing: error ?? TaskDropError.attachmentUnavailable) }
+        let data: Data
+        if provider.registeredTypeIdentifiers.isEmpty {
+            // Read synchronously on the main actor while the native drag is
+            // alive. Never substitute a recorded source without its marker.
+            guard let nativeData = nativePasteboard.data(forType:
+                NSPasteboard.PasteboardType(TaskDropContent.attachmentCardType.identifier)) else {
+                throw TaskDropError.attachmentUnavailable
+            }
+            data = nativeData
+        } else {
+            data = try await withCheckedThrowingContinuation { continuation in
+                _ = provider.loadDataRepresentation(forTypeIdentifier: TaskDropContent.attachmentCardType.identifier) { data, error in
+                    if let data { continuation.resume(returning: data) }
+                    else { continuation.resume(throwing: error ?? TaskDropError.attachmentUnavailable) }
+                }
             }
         }
         guard let marker = String(data: data, encoding: .utf8).flatMap(UUID.init(uuidString:)),

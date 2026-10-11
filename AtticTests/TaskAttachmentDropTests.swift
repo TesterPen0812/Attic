@@ -401,6 +401,47 @@ final class TaskAttachmentDropTests: XCTestCase {
         XCTAssertEqual(privateDirectories(), before)
     }
 
+    /// H14-01: SwiftUI reconstructs an empty provider for a native file drag,
+    /// while its own-process marker is still on the native drag pasteboard.
+    func testH14_01EmptyNativeProviderCopiesOnlyTheMatchingRecordedAttachment() async throws {
+        let (store, _, _) = try makeStore()
+        let sourceTask = try XCTUnwrap(store.create(title: "Source"))
+        let destination = try XCTUnwrap(store.create(title: "Destination"))
+        _ = await store.attachStagedFiles(to: sourceTask.id) { [self] in
+            TaskAttachmentStaging(urls: [try pngFile()])
+        }
+        let source = try XCTUnwrap(store.tasks.first { $0.id == sourceTask.id }?.attachments.first)
+        TaskAttachmentCardDrag.begin(source, store: store)
+        let expected = TaskAttachmentCardDrag.current
+        let pasteboard = NSPasteboard.withUniqueName()
+        defer { pasteboard.releaseGlobally() }
+        let markerType = NSPasteboard.PasteboardType(TaskDropContent.attachmentCardType.identifier)
+        pasteboard.setData(Data(source.id.uuidString.utf8), forType: markerType)
+        let ids = await store.attachCopies(to: destination.id) {
+            try await TaskAttachmentCardDrag.sources(from: [NSItemProvider()], expected: expected,
+                                                     nativePasteboard: pasteboard)
+        }
+        let copyID = try XCTUnwrap(ids?.first)
+        let copy = try XCTUnwrap(store.tasks.first { $0.id == destination.id }?.attachments.first)
+        XCTAssertEqual(copy.id, copyID)
+        XCTAssertNotEqual(copy.id, source.id)
+        XCTAssertEqual(copy.digest, source.digest)
+        XCTAssertEqual(store.tasks.first { $0.id == sourceTask.id }?.attachments, [source])
+        XCTAssertEqual(Set(privateDirectories()), [source.id.uuidString, copy.id.uuidString])
+
+        // A stale or forged marker must never fall back to the recorded source.
+        for data in [Data(UUID().uuidString.utf8), Data("invalid".utf8), Data()] {
+            pasteboard.clearContents()
+            pasteboard.setData(data, forType: markerType)
+            let refused = await store.attachCopies(to: destination.id) {
+                try await TaskAttachmentCardDrag.sources(from: [NSItemProvider()], expected: expected,
+                                                         nativePasteboard: pasteboard)
+            }
+            XCTAssertNil(refused)
+            XCTAssertEqual(store.tasks.first { $0.id == destination.id }?.attachments, [copy])
+        }
+    }
+
     func testAFileRowDropRevalidatesTheMarker() async throws {
         let (store, _, files) = try makeStore()
         let trip = try XCTUnwrap(store.create(title: "Trip"))
