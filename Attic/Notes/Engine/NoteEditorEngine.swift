@@ -1043,7 +1043,14 @@ final class NoteEditorEngine: NSObject, NSTextViewDelegate, NSTextStorageDelegat
         }
         history.breakCoalescing()
         engineEditDepth += 1
-        defer { engineEditDepth -= 1 }
+        defer {
+            engineEditDepth -= 1
+            // Internal swaps can temporarily move the native caret into a
+            // folded section. Only the command's final caret may unfold it.
+            if engineEditDepth == 0, !history.isReplaying, let selection = textView?.selectedRange(), selection.length == 0 {
+                unfoldHeadings(containing: selection)
+            }
+        }
         if let textView {
             guard textView.shouldChangeText(in: range, replacementString: replacement.string) else { return false }
             pendingImportEdit = (range, replacement.length)
@@ -1504,7 +1511,9 @@ final class NoteEditorEngine: NSObject, NSTextViewDelegate, NSTextStorageDelegat
         guard let textView = textView else { return }
         let selection = textView.selectedRange()
         // A caret may arrive through arrows, VoiceOver or native Find.
-        if selection.length == 0 { unfoldHeadings(containing: selection) }
+        // Replay restores its own final caret. AppKit can briefly report
+        // the old offset inside restored folded text during a storage swap.
+        if selection.length == 0, !history.isReplaying, engineEditDepth == 0 { unfoldHeadings(containing: selection) }
         if userEditDepth == 0 && engineEditDepth == 0 && !history.isChangeInFlight {
             if let session = slashSession,
                selection != NSRange(location: NSMaxRange(session.range), length: 0) { slashSession = nil }

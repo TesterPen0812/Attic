@@ -637,6 +637,7 @@ extension NoteEditorEngine {
         }
         if folded { foldedHeadingIDs.insert(id) } else { foldedHeadingIDs.remove(id) }
         invalidateDocumentCache()
+        textView?.marquee?.textChanged()
         // A focused attachment must not be parked over its hidden paragraph.
         if folded, let section = headingSections.first(where: { $0.id == id }),
            let table = activeTableView?.attachment, let range = range(ofTable: table),

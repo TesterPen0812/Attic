@@ -106,6 +106,116 @@ final class MarqueeInteractionTests: XCTestCase {
         XCTAssertNil(adapter.controller.handle(blank), "genuine whitespace still starts a marquee")
     }
 
+    func testR12GeometryTracksFoldAndUnfoldBeforeDeletingTheHitBlock() throws {
+        for initiallyFolded in [false, true] {
+            var heading = NoteBlock.text("A", style: "heading")
+            heading.level = 2
+            let (engine, text, selection) = editor([.text("Title"), heading, .text("a1"),
+                .text("B", style: "heading"), .text("Q")])
+            if initiallyFolded { XCTAssertTrue(engine.toggleHeadingFold(at: 6)) }
+            _ = selection.items() // Cache the old layout.
+            XCTAssertTrue(engine.toggleHeadingFold(at: 6))
+            let target = initiallyFolded ? 8 : 11 // Revealed a1, or visible B after folding A.
+            let ink = try XCTUnwrap(engine.rect(for: engine.lineRange(at: target)))
+            let hit = try XCTUnwrap(selection.items().first { $0.rect.minY <= ink.midY && $0.rect.maxY > ink.midY })
+            selection.select(offsets: [try XCTUnwrap(hit.id.base as? Int)])
+            try r12Capture(text, name: initiallyFolded ? "unfold-hit.png" : "fold-hit.png")
+            XCTAssertEqual(selection.ranges, [engine.paragraphRange(at: target)])
+            XCTAssertTrue(selection.delete())
+            XCTAssertEqual(engine.document().blocks.map(\.text), initiallyFolded ? ["Title", "A", "B", "Q"] : ["Title", "A", "a1", "Q"])
+        }
+    }
+
+    func testR12FoldedMarqueeCopiesMovesAndDeletesTheWholeSection() throws {
+        for command in ["copy", "move", "delete"] {
+            var heading = NoteBlock.text("A", style: "heading")
+            heading.level = 2
+            let (engine, _, selection) = editor([.text("Title"), heading, .text("a1"),
+                .text("B", style: "heading"), .text("b1")])
+            XCTAssertTrue(engine.toggleHeadingFold(at: 6))
+            let original = engine.document()
+            XCTAssertFalse(selection.items().contains { $0.id == AnyHashable(8) }, "hidden body has no hit target")
+            selection.select(offsets: [6])
+            XCTAssertEqual(selection.ranges, [NSRange(location: 6, length: 5)])
+            if command == "copy" {
+                let board = NSPasteboard.withUniqueName()
+                defer { board.releaseGlobally() }
+                XCTAssertTrue(selection.copy(to: board))
+                let data = try XCTUnwrap(board.data(forType: NoteEditorEngine.fragmentType))
+                let copied = try XCTUnwrap(NoteContentCodec.decode(data, context: .fragment).document)
+                XCTAssertEqual(copied.blocks.map(\.text), ["A", "a1", ""], "the copied section includes its paragraph separator")
+            } else {
+                XCTAssertTrue(command == "move" ? selection.move(to: engine.textStorage.length) : selection.delete())
+                XCTAssertEqual(engine.document().blocks.map(\.text), command == "move" ? ["Title", "B", "b1", "A", "a1"] : ["Title", "B", "b1"])
+                XCTAssertTrue(engine.undoCommand())
+                XCTAssertEqual(engine.document(), original, command)
+                XCTAssertTrue(engine.isRangeFolded(NSRange(location: 8, length: 2)), command)
+            }
+        }
+    }
+
+    func testR12MarginPressKeepsFiveThousandLinesLazilyLaidOut() throws {
+        let (engine, text, selection) = editor([.text("Title")] + (0..<5_000).map { .text("Line \($0)") })
+        let layout = try XCTUnwrap(engine.layoutManager)
+        func laidOut() -> Int {
+            var count = 0
+            layout.enumerateTextLayoutFragments(from: engine.contentStorage.documentRange.location, options: []) { fragment in
+                if fragment.state == .layoutAvailable { count += 1 }
+                return true
+            }
+            return count
+        }
+        let before = laidOut()
+        var passes = 0
+        text.onLayout = { passes += 1 }
+        let point = CGPoint(x: 4, y: 70)
+        let start = DispatchTime.now().uptimeNanoseconds
+        let press = try XCTUnwrap(selection.controller).press(point, event(.leftMouseDown, point: point, in: text))
+        let milliseconds = Double(DispatchTime.now().uptimeNanoseconds - start) / 1_000_000
+        let after = laidOut()
+        print("R12_MARGIN lines=5000 before=\(before) after=\(after) noteDidLayoutPasses=\(passes) ms=\(milliseconds)")
+        XCTAssertEqual(press, .select)
+        XCTAssertLessThan(after, 5_000, "one margin press must not lay out the whole note")
+        XCTAssertLessThan(selection.items().count, 5_000, "only visible blocks receive hit targets")
+    }
+
+    func testR12PreDrawLayoutChangeRefreshesMarqueeWithoutATextEdit() throws {
+        let (engine, text, selection) = editor([.text("Title"),
+            .text("A long body paragraph that wraps differently when the column gets narrower."), .text("After")])
+        let after = (engine.textStorage.string as NSString).range(of: "After")
+        let old = try XCTUnwrap(selection.items().first { $0.id == AnyHashable(after.location) })
+        let container = try XCTUnwrap(text.textContainer)
+        container.widthTracksTextView = false
+        container.size.width = 140
+        engine.invalidateLayout(NSRange(location: 0, length: engine.textStorage.length))
+        let ink = try XCTUnwrap(engine.rect(for: after))
+        text.viewWillDraw() // TextKit's pre-draw layout path, with unchanged view bounds.
+        let refreshed = try XCTUnwrap(selection.items().first { $0.id == AnyHashable(after.location) })
+        XCTAssertGreaterThan(ink.minY, old.rect.minY)
+        XCTAssertEqual(refreshed.rect.minY, ink.minY, accuracy: 1)
+    }
+
+    func testR12MarqueeKeepsVisitedBlocksSelectedWhileTheViewportScrolls() throws {
+        let (engine, text, selection) = editor([.text("Title")] + (0..<80).map { .text("Line \($0)") })
+        let controller = try XCTUnwrap(selection.controller)
+        let scroll = try XCTUnwrap(text.enclosingScrollView)
+        let first = try XCTUnwrap(selection.items().first { $0.id == AnyHashable(6) })
+        let down = CGPoint(x: 4, y: first.rect.midY)
+        _ = controller.handle(event(.leftMouseDown, point: down, in: text))
+        _ = controller.handle(event(.leftMouseDragged, point: CGPoint(x: 30, y: 200), in: text))
+        for y in stride(from: 120, through: 480, by: 120) {
+            scroll.contentView.scroll(to: CGPoint(x: 0, y: y))
+            engine.layoutManager?.textViewportLayoutController.layoutViewport()
+            text.layoutSubtreeIfNeeded()
+            _ = controller.handle(event(.leftMouseDragged, point: CGPoint(x: 30, y: CGFloat(y) + 200), in: text))
+            XCTAssertEqual(selection.ranges.first?.location, 6, "scrolling keeps the starting block")
+        }
+        XCTAssertGreaterThan(selection.ranges.count, 20)
+        let last = CGPoint(x: 30, y: 680)
+        _ = controller.handle(event(.leftMouseUp, point: last, in: text))
+        XCTAssertEqual(selection.ranges.first?.location, 6)
+    }
+
     func testThresholdReverseDirectionAndTouchingEdges() {
         XCTAssertFalse(MarqueeGeometry.activated(from: .zero, to: CGPoint(x: 0, y: 3.99)))
         XCTAssertTrue(MarqueeGeometry.activated(from: .zero, to: CGPoint(x: 0, y: 4)))
@@ -254,10 +364,21 @@ final class MarqueeInteractionTests: XCTestCase {
             text.caretFitter.refresh()
             XCTAssertEqual(indicator.displayMode, .hidden)
             selection.clear()
-            text.caretFitter.refresh()
             XCTAssertEqual(indicator.displayMode, mode)
             indicator.removeFromSuperview()
         }
+    }
+
+    func testR12TextChangeClearsBlockSelectionAndRestoresTheCaretWithoutAManualRefresh() {
+        let (_, text, selection) = editor([.text("Title"), .text("Body")])
+        let indicator = NSTextInsertionIndicator(frame: CGRect(x: 24, y: 50, width: 1, height: 18))
+        text.addSubview(indicator)
+        indicator.displayMode = .visible
+        selection.select(offsets: [6])
+        XCTAssertEqual(indicator.displayMode, .hidden)
+        selection.textChanged()
+        XCTAssertTrue(selection.isEmpty)
+        XCTAssertEqual(indicator.displayMode, .visible)
     }
 
     func testTasksMarginSelectionUsesExistingBatchCommandsAndLeavesRowGrabsAlone() throws {
@@ -337,4 +458,28 @@ final class MarqueeInteractionTests: XCTestCase {
 private final class FlippedView: NSView {
     override var isFlipped: Bool { true }
     override var acceptsFirstResponder: Bool { true }
+}
+
+/// Explicit native render evidence from disposable editor fixtures only.
+@MainActor
+func r12Capture(_ text: NoteEditorTextView, name: String) throws {
+    guard let output = ProcessInfo.processInfo.environment["ATTIC_R12_CAPTURE_DIR"] else { return }
+    let scroll = text.enclosingScrollView ?? NSScrollView(frame: CGRect(x: 0, y: 0, width: 320, height: 250))
+    if scroll.documentView == nil { scroll.documentView = text }
+    var window: NSWindow?
+    if scroll.window == nil {
+        window = NSWindow(contentRect: scroll.frame, styleMask: [.borderless], backing: .buffered, defer: false)
+        window?.isReleasedWhenClosed = false
+        window?.contentView = scroll
+    }
+    defer { window?.close() }
+    scroll.drawsBackground = true
+    scroll.backgroundColor = .white
+    text.layoutSubtreeIfNeeded()
+    text.textLayoutManager?.textViewportLayoutController.layoutViewport()
+    RunLoop.main.run(until: Date().addingTimeInterval(0.15))
+    let bitmap = try XCTUnwrap(scroll.bitmapImageRepForCachingDisplay(in: scroll.bounds))
+    scroll.cacheDisplay(in: scroll.bounds, to: bitmap)
+    try XCTUnwrap(bitmap.representation(using: .png, properties: [:])).write(to:
+        URL(fileURLWithPath: output).appendingPathComponent(name))
 }
