@@ -158,7 +158,6 @@ struct TasksPage: View {
     private var footerZone: CGFloat { Self.footerZone }
     /// The list clears the add bar by at least 16 pt (visual A); the rest
     /// of the height flexes.
-    static let listFooter: CGFloat = AtticControlSize.addBarHeight + AtticStyle.chromeMinimumInset + AtticLayout.contentToAddBar
 
     var body: some View {
         // The page's own state changed (or it is new): its content redraws.
@@ -1321,9 +1320,6 @@ struct TasksPage: View {
         max(0, layout.chromeInsets.leading + AtticLayout.contentFromChrome - AtticLayout.circleX)
     }
 
-    private func listSpace(_ tab: TasksTab) -> NamedCoordinateSpace {
-        .named("AtticTasksList\(tab.rawValue)")
-    }
 
     private func listPage(_ tab: TasksTab, drawn: Bool) -> some View {
         let rows = model.rows(for: tab)
@@ -1403,9 +1399,6 @@ struct TasksPage: View {
                                     .id(row.id)
                             }
                         }
-                    }
-                    if edgeStyle == .systemSoft {
-                        TasksListTailClearance(stack: bottomStack, bottomInset: bottomInset, bottomClearance: bottomClearance)
                     }
                 }
                 .animation(reorderFade.isEmpty ? travel : nil, value: rows.map(\.id))
@@ -4121,21 +4114,6 @@ private struct TasksListEdges<Mask: View>: ViewModifier {
 
     @ViewBuilder
     func body(content: Content) -> some View {
-        switch style {
-        case .systemSoft:
-            let bottom = TasksViewport.controlsInset(stack: stack.height, bottomInset: bottomInset)
-            content
-                // Keep the first and last rows' resting clearance. Only
-                // these small empty gaps form native edge pockets now.
-                .atticScrollEdgeEffect(style)
-                .safeAreaBar(edge: .top, spacing: 0) { AtticScrollEdgeBar(height: max(0, listTop - top)) }
-                .safeAreaBar(edge: .bottom, spacing: 0) { AtticScrollEdgeBar(height: AtticLayout.contentToAddBar) }
-                // The system pocket may extend beyond its scroll view.
-                // Clip it here, before the padding that excludes controls.
-                .clipped()
-                .padding(.top, top)
-                .padding(.bottom, bottom)
-        case .cleanCut:
             content
                 .contentMargins(.top, listTop, for: .scrollContent)
                 .contentMargins(.bottom, bottomMargin, for: .scrollContent)
@@ -4144,7 +4122,6 @@ private struct TasksListEdges<Mask: View>: ViewModifier {
                 .atticScrollEdgeEffect(style)
                 .mask { cleanMask }
                 .mask { TasksPlainControlsMask(stackHeight: stack.height, bottomInset: bottomInset) }
-        }
     }
 }
 
@@ -4180,20 +4157,6 @@ struct TasksPlainControlsMask: View {
 
 /// Resting room at the document's end, not a scroll content margin: a
 /// content margin would enlarge the native pocket along with the gap.
-struct TasksListTailClearance: View {
-    @ObservedObject var stack: TasksBottomStackHeight
-    let bottomInset: CGFloat
-    let bottomClearance: CGFloat
-
-    var body: some View {
-        Color.clear
-            .frame(height: max(0, bottomClearance
-                               - TasksViewport.controlsInset(stack: stack.height, bottomInset: bottomInset)
-                               - AtticLayout.contentToAddBar))
-            .accessibilityHidden(true)
-            .allowsHitTesting(false)
-    }
-}
 
 /// The list viewport's geometry (owner fix 8, review 9), pure so the
 /// clearance and the fade are tested directly.

@@ -1,12 +1,5 @@
 import SwiftUI
 
-extension View {
-    /// Applies a shortcut when there is one.
-    @ViewBuilder
-    func noteShortcut(_ shortcut: KeyboardShortcut?) -> some View {
-        if let shortcut { keyboardShortcut(shortcut) } else { self }
-    }
-}
 
 /// The springy entrance the bar, the format row and the `/` list share: a fade, a 4 pt
 /// rise and a slight grow from the anchored edge; a plain fade under

@@ -351,7 +351,6 @@ final class AppCoordinator: ObservableObject {
 
     /// The hot key itself, for Settings' recorder (it releases the claim
     /// while a new combination is typed).
-    var quickCaptureHotKey: GlobalHotKey { newTaskHotKey }
 
     let settings: AppSettings
     let store: TaskStore

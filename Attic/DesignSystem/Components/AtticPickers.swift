@@ -123,17 +123,6 @@ enum AtticListHighlight {
 }
 
 /// A picker's divider: a hairline inset like the rows' text.
-struct AtticPickerDivider: View {
-    @Environment(\.atticDesign) private var design
-
-    var body: some View {
-        Rectangle().fill(design.tokens.divider.color)
-            .frame(height: AtticHairline.width)
-            .padding(.horizontal, AtticPopoverMetrics.rowPadding)
-            .padding(.vertical, AtticPickerMetrics.dividerGap)
-            .accessibilityHidden(true)
-    }
-}
 
 // MARK: - Date card
 
@@ -1040,14 +1029,6 @@ private struct AtticOptionalDropdownList: ViewModifier {
     }
 }
 
-private struct AtticPickerFieldBackground: View {
-    @Environment(\.atticDesign) private var design
-
-    var body: some View {
-        RoundedRectangle(cornerRadius: AtticRadius.control(height: AtticControlSize.smallHeight), style: .continuous)
-            .fill(design.tokens.recessed.color)
-    }
-}
 
 // MARK: - Composer strip
 

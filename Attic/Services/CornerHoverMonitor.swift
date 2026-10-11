@@ -523,9 +523,6 @@ final class CornerHoverMonitor {
         }
     }
 
-    var scheduledCadenceForTesting: CornerHoverSamplingCadence? { scheduledCadence }
-    var holdsResponsivenessActivityForTesting: Bool { responsivenessActivity != nil }
-    var hasPendingFollowUpForTesting: Bool { followUpWork != nil }
     /// Test seam: how many one-shot follow-ups were scheduled.
     private(set) var followUpCountForTesting = 0
 

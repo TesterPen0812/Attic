@@ -338,7 +338,6 @@ enum AtticDropdownMetrics {
     /// The pill: the whole row.
     static let highlightRadius: CGFloat = 8
     /// Native soft scroll edges overlap this small inset in cramped lists.
-    static let scrollEdgeInset: CGFloat = 5
     static let iconSize: CGFloat = 13
     static let iconSlot: CGFloat = 16
     /// Between a row's columns (check, mark, icon, name).
@@ -752,8 +751,6 @@ enum AtticNoteMetrics {
     /// Tag suggestions under a title hashtag: 220 wide, 6 below its line,
     /// the row text on the hashtag's first letter.
     static let suggestionWidth: CGFloat = 220
-    static let suggestionGap: CGFloat = 6
-    static let suggestionShadowRoom: CGFloat = 10
 }
 
 /// Notes' format controls (Phase 2 slice 3, mockups p2-16 D and p2-03):
@@ -783,9 +780,7 @@ enum AtticNoteFormatMetrics {
     /// "Subheading" fits a 320 pt panel's 288 pt row whole (A39 F11).
     static let rowCompactSeparatorPadding: CGFloat = 2
     /// The `/` list, the date card and the link card, 6 below the line.
-    static let slashMaxVisibleRows = 9
     static let linkCardWidth: CGFloat = 272
-    static let cardGap: CGFloat = 6
     /// Room around a floating control for its shadow.
     static let shadowRoom: CGFloat = 12
 }
@@ -847,7 +842,6 @@ enum AtticPickerMetrics {
     static let tagListMaxHeight: CGFloat = 196
     /// Move to Task… (control audit item 5): wider than the tag list, for
     /// task titles and where each is listed; seven rows before it scrolls.
-    static let taskWidth: CGFloat = 260
     static let taskListMaxHeight: CGFloat = 196
     static let suggestionWidth: CGFloat = 220
     static let todayRing: CGFloat = 1.2

@@ -247,7 +247,7 @@ final class NoteUndoHistory {
 
     // MARK: Markers
 
-    /// Where the history stands now; `discardSteps(since:)` returns to it.
+    /// Where the history stands now; table conversion uses this marker.
     func marker() -> Int {
         open = nil
         return undoOps.count
@@ -257,16 +257,6 @@ final class NoteUndoHistory {
     /// has been put back to what it was at the marker, so no step can
     /// re-apply what was undone (a Writing Tools recovery can never be
     /// redone or undone back into object loss).
-    func discardSteps(since marker: Int) {
-        let keep = min(max(0, marker), undoOps.count)
-        undoOps.removeSubrange(keep...)
-        redoOps.removeAll()
-        open = nil
-        pending.removeAll()
-        selectionCompletion = nil
-        composition = nil
-        log.append("discarded steps since \(keep)")
-    }
 
     // MARK: Recording
 
@@ -542,10 +532,6 @@ final class NoteUndoHistory {
     }
 
     /// The open step is typing in this table's cell.
-    func isTypingInTable(_ id: UUID, cell: NoteTable.Position) -> Bool {
-        guard let snapshot = open?.tableSnapshot else { return false }
-        return snapshot.id == id && snapshot.cell == cell
-    }
 
     /// Runs a storage change that must not become a step (a restore the
     /// history is being rewound to).

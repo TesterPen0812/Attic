@@ -94,7 +94,6 @@ enum TaskAttachmentPicker {
     }
 
     /// Test seam: whether a picker session is currently up.
-    static var isSessionActiveForTesting: Bool { TaskAttachmentPickerSession.current != nil }
 }
 
 /// One presented `NSOpenPanel` with exactly one way to finish. OK, cancel,

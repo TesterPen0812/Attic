@@ -67,7 +67,6 @@ enum NoteCommandCatalog {
         styles, marks + [.mark(.highlight), .mark(.code)], [.mark(.link), .removeLink], lists, [.indent, .outdent], lineActions
     ]
     /// The Format menus' rows, without Table (it is in Insert there).
-    static var formatMenuSections: [[NoteFormatCommand]] { formatSections.map { $0.filter { $0 != .table } } }
 
     /// Every command a person can reach (the five-route check iterates it).
     static let allCommands: [NoteFormatCommand] = formatSections.flatMap { $0 } + [.divider]

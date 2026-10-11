@@ -14,8 +14,6 @@ enum AtticSpacing {
     static let s12: CGFloat = 12
     static let s16: CGFloat = 16
     static let s20: CGFloat = 20
-    static let s24: CGFloat = 24
-    static let s32: CGFloat = 32
 
     /// Grouped-row text inset in Settings (spec: "text inset 14").
     static let inset14: CGFloat = 14
@@ -23,8 +21,6 @@ enum AtticSpacing {
     static let gap10: CGFloat = 10
 
     /// Inside a group (spec: 8–12 pt). Between groups: 20–24 pt.
-    static let insideGroup: CGFloat = 8
-    static let betweenGroups: CGFloat = 24
     /// Separate controls in a bar (spec: "separate controls sit 12 pt apart").
     static let betweenControls: CGFloat = 12
 
@@ -99,7 +95,6 @@ enum AtticControlSize {
     static let capsuleInset: CGFloat = 4
     static let chipHeight: CGFloat = capsuleHeight - 2 * capsuleInset
     /// An icon-only chip, 24 tall and 1.15 × as wide (28).
-    static let chipIconWidth: CGFloat = (chipHeight * 1.15).rounded()
     /// The add bar matches the corner controls (chrome B: 32, was 36).
     static let addBarHeight: CGFloat = headerControl
     /// The send button: 24 × 24 (chrome B; 28 × 28 in the 36 pt bar),
@@ -170,7 +165,6 @@ enum AtticLayout {
     static let sidebarHighlightInset: CGFloat = 8
     static let subtaskPitch: CGFloat = 28
     /// Subtask text column: checkbox at the row's text column, text after it.
-    static let subtaskTextX: CGFloat = textX + 14 + 8
 
     /// Direction A's page tabs ("Now · Later · Done") in place of the
     /// title: the chip row on the panel's 18 pt line (12 inside the page),
@@ -268,7 +262,6 @@ enum AtticTextStyle: String, CaseIterable, Sendable {
 
     /// Note text is SF Pro (Notes v2, text direction 5, owner 2026-10-08;
     /// it was SF Pro Rounded). Tasks keeps its own Rounded voice.
-    var isNoteText: Bool { self == .noteTitle || self == .noteBody }
 
     var spec: Spec {
         let base = baseSpec

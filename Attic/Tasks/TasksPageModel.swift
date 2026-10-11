@@ -1689,9 +1689,6 @@ final class TasksPageModel: ObservableObject {
     /// The Done page's search field.
     var searchPlaceholder: String { String(localized: "Search done tasks") }
 
-    var addBarChips: [NSRange] {
-        addBar.chips(parser: parser, caret: addBarCaret)
-    }
 
     /// Return adds and keeps the bar focused; ⌘Return adds and opens the
     /// task's page. Returns the new task.

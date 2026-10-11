@@ -12,12 +12,6 @@ enum AtticScrollEdgeStyle: String, CaseIterable, Sendable {
     case cleanCut
 
     /// The developer panel's words (preview-only, not localized).
-    var title: String {
-        switch self {
-        case .systemSoft: "System soft edge"
-        case .cleanCut: "Clean cut"
-        }
-    }
 }
 
 /// The app's edge policy: always initialize to Clean cut, without reading
@@ -38,23 +32,6 @@ final class AtticScrollEdgeLab: ObservableObject {
     static let styleKey = "AtticScrollEdgeStyle"
 
     init(defaults: UserDefaults, environment: [String: String] = [:], isPreview: Bool) {}
-}
-
-/// Activates Apple's native edge in an empty gap inside the viewport.
-/// The tiny fill remains necessary: a clear bar produces no pocket on the
-/// installed SDK/runtime. This is a compatibility dependency; the hosted
-/// tests assert native pockets, while CI checks actual rendered row ink.
-/// Controls are hosted separately, preserving their native hit points.
-struct AtticScrollEdgeBar: View {
-    let height: CGFloat
-
-    var body: some View {
-        Color.black.opacity(0.001)
-            .frame(maxWidth: .infinity)
-            .frame(height: height)
-            .allowsHitTesting(false)
-            .accessibilityHidden(true)
-    }
 }
 
 extension View {

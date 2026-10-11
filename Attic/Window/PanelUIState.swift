@@ -107,10 +107,6 @@ final class PanelUIState: ObservableObject {
 
     var isInteractionLocked: Bool { !interactionLockReasons.isEmpty }
 
-    var isWindowInteractionActive: Bool {
-        managedInteractionLocks.contains(.windowMove)
-            || managedInteractionLocks.contains(.windowResize)
-    }
 
     /// Shared shell hook for focused editors, attachment imports, popovers,
     /// conflict UI, and blocking saves. Notes owns when its asynchronous work

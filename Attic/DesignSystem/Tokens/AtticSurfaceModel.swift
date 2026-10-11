@@ -90,9 +90,6 @@ struct AtticSurfaceModel: Equatable, Sendable {
     static func calmSheen(dark: Bool) -> AtticRGBA { dark ? .white(0.025) : .clear }
 
     /// The porcelain face, top to bottom (Light only; before visual A).
-    static let porcelainStops: [(colour: AtticRGBA, location: Double)] = [
-        (AtticRGBA(0xFFFFFE), 0), (AtticRGBA(0xFCFCFA), 0.42), (AtticRGBA(0xFBFBF9), 1)
-    ]
 
     struct Pair: Equatable, Sendable {
         let ink: AtticInk

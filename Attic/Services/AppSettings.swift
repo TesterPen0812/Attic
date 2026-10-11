@@ -18,13 +18,6 @@ enum AppearancePreference: String, CaseIterable, Identifiable {
         }
     }
 
-    var nsAppearance: NSAppearance? {
-        switch self {
-        case .system: return nil
-        case .light: return NSAppearance(named: .aqua)
-        case .dark: return NSAppearance(named: .darkAqua)
-        }
-    }
 }
 
 /// User-adjustable corner radius of the panel squircle, in points.

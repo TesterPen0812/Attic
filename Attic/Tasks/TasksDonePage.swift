@@ -119,9 +119,6 @@ struct TasksDonePage<Cell: View, Mask: View>: View {
                         .padding(.leading, AtticLayout.textX)
                         .accessibilityIdentifier("tasks-done-search-count")
                 }
-                if edges == .systemSoft {
-                    TasksListTailClearance(stack: bottomStack, bottomInset: bottomInset, bottomClearance: bottomClearance)
-                }
             }
             .padding(.bottom, edges == .cleanCut ? bottomClearance - bottomMargin : 0)
             // The log's place is kept while its page is not built (round 10).

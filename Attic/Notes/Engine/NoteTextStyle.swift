@@ -86,7 +86,6 @@ struct NoteTextStyle: Equatable {
     typealias T = AtticNoteType
     static let titleLineHeight: CGFloat = T.title.lineHeight
     static let bodyLineHeight: CGFloat = T.body.lineHeight
-    static let bodyParagraphGap: CGFloat = T.paragraphGap
     static let titleToBody: CGFloat = T.titleToText
     static let titleToTags: CGFloat = 3
     static let tagsToBody: CGFloat = T.titleToText - titleToTags

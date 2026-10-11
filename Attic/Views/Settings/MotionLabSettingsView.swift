@@ -17,9 +17,6 @@ struct MotionLabSettingsGroup: View {
 
     @State private var showsFineTuning = false
     @State private var copied = false
-    /// How lists meet the floating controls: Clean cut (the default, owner
-    /// 2026-10-03), or the system's soft scroll edge, to compare.
-    @ObservedObject private var scrollEdges = AtticScrollEdgeLab.shared
     /// The header's corner buttons (owner, 2026-10-02): Liquid Glass, or
     /// L3's flat surface, to compare.
     @ObservedObject private var cornerButtons = AtticCornerButtonsLab.shared
@@ -51,17 +48,6 @@ struct MotionLabSettingsGroup: View {
                 identifier: "setting-motion-leave"
             )
             AtticGroupDivider()
-            // A strict preview only: the Motion Lab's broader policy (a
-            // launch argument) does not show it.
-            if scrollEdges.offersChoice {
-                AtticSegmentedRow(
-                    title: "Scroll edges",
-                    choices: AtticScrollEdgeStyle.allCases.map { ($0, $0.title) },
-                    selection: $scrollEdges.style,
-                    identifier: "setting-scroll-edges"
-                )
-                AtticGroupDivider()
-            }
             if cornerButtons.offersChoice {
                 AtticSegmentedRow(
                     title: "Corner buttons",

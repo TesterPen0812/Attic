@@ -165,8 +165,6 @@ struct NoteTableToolsState: Equatable {
     var rows: Int
     var columns: Int
     /// Delete Row / Column delete the table when it has one left.
-    var canDeleteRow: Bool { rows > 1 }
-    var canDeleteColumn: Bool { columns > 1 }
 }
 
 /// The table tools in Aa's row (sheet 3, panel 2).

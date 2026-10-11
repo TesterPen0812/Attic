@@ -68,13 +68,10 @@ final class AtticGalleryDemo {
     var addTextFilled = "Call the printer #office fri"
     var liveState: AtticTaskState = .todo
     var expandedRow = true
-    var expandedCard = true
     var toastShown = true
     var surface = 0
     var tint = 2
     var haptics = true
-    var dropPhase = 0
-    var subtasksDone: Set<String> = []
     /// The last action a specimen fired ("Complete · Book dentist"), shown in
     /// the gallery's toolbar: proof that every drawn control is wired.
     var lastAction = "None yet"

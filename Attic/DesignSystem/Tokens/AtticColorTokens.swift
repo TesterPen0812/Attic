@@ -312,9 +312,6 @@ struct AtticColorTokens: Equatable, Sendable {
 
     /// Every face a control's label can sit on over `surface`: the Craft
     /// style's, and the worst Liquid Glass leaves on that surface.
-    func controlFaces(over surface: AtticRGBA) -> [AtticRGBA] {
-        [controlFace, glassFace.over(surface)]
-    }
     func color(_ ink: AtticInk) -> Color { self.ink(ink).color }
 
     /// The ink of an icon that sits beside page labels (design review D-10):
@@ -1134,10 +1131,6 @@ final class AtticColorTokenCache: @unchecked Sendable {
     }
 }
 
-extension EnvironmentValues {
-    /// Resolved colour tokens for the current `atticDesign` context.
-    var atticTokens: AtticColorTokens { atticDesign.tokens }
-}
 
 // MARK: - Visual A ("Calm")
 

@@ -2599,21 +2599,8 @@ final class TaskStore: ObservableObject {
     /// Puts a family that `restoreToNow` brought back into the Done log
     /// again, when every row is still finished; a family changed since
     /// stays in the list. Written on every replica, in one save.
-    @discardableResult
-    func returnToDoneLog(taskID: UUID, loggedAt: Date) -> Bool {
-        do {
-            guard try stageReturnToDoneLog(taskID: taskID, loggedAt: loggedAt) else { return false }
-        } catch {
-            context.rollback()
-            report(error.localizedDescription, owner: nil)
-            return false
-        }
-        guard save(owner: nil) else { return false }
-        do { try reloadTasks() } catch { report(error.localizedDescription, owner: nil) }
-        return true
-    }
 
-    /// `returnToDoneLog` without saving. False (nothing written) when a row
+    /// Stages a return to the Done log without saving. False when a row
     /// of the family is no longer finished, or is already in the log.
     private func stageReturnToDoneLog(taskID: UUID, loggedAt: Date) throws -> Bool {
         let family = try context.fetch(FetchDescriptor<TaskItem>(
@@ -2737,11 +2724,8 @@ final class TaskStore: ObservableObject {
     ///
     /// The same undoes reopening a Done log task with the circle: `after`
     /// and `before` then hold its family.
-    func undoRestoreToNow(taskID: UUID, from after: [TaskEditableState], to before: [TaskEditableState], loggedAt: Date?) -> UndoOutcome {
-        undoReturnFromDoneLog(from: after, to: before, logging: loggedAt.map { [taskID: $0] } ?? [:])
-    }
 
-    /// `undoRestoreToNow` for several tasks: `logging` maps each main task
+    /// Undoes a return from the Done log: `logging` maps each main task
     /// that came from the Done log to the time it was logged. One save.
     func undoReturnFromDoneLog(from after: [TaskEditableState], to before: [TaskEditableState], logging: [UUID: Date]) -> UndoOutcome {
         let staged: EditableTransitionStage

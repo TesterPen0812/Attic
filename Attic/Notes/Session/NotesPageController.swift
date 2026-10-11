@@ -51,7 +51,6 @@ struct NoteProposalReview: Identifiable, Equatable {
     let revision: String
     let savedContent: Data?
     let signature: NoteProposalSignature
-    var proposalContent: Data? { signature.content }
 
     var summary: String {
         if isDeletion { return "The whole note would move to Recently Deleted." }

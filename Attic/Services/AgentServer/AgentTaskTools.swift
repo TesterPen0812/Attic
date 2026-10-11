@@ -1055,11 +1055,6 @@ final class AgentTaskTools {
         return note
     }
 
-    private func performNote(_ change: () throws -> Bool) throws {
-        guard try change() else {
-            throw AgentToolError.storeFailure(noteStore?.lastErrorMessage ?? "Unknown error.")
-        }
-    }
 
     private func serializeNote(_ note: NoteItem) -> [String: Any] {
         var payload: [String: Any] = [

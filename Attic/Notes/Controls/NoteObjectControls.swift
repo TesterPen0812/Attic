@@ -31,9 +31,6 @@ final class NoteObjectControls: NSObject, NoteObjectInteraction {
     var isRingShown: Bool { !selectionView.isHidden && selectionView.alphaValue > 0 }
     var isResizeCornerShown: Bool { isRingShown && selectionView.isResizable }
     var ringFrame: NSRect { selectionView.frame }
-    var isDropLineShown: Bool { !dropView.isHidden && dropView.alphaValue > 0 }
-    var dropLineFrame: NSRect { dropView.frame }
-    var currentDropBoundary: Int? { dropBoundary }
 
     init(engine: NoteEditorEngine, textView: NoteEditorTextView) {
         self.engine = engine

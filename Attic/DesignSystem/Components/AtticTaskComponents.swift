@@ -2263,18 +2263,6 @@ struct AtticTagLabel: View {
 }
 
 /// A tag's colour dot (the tag picker's rows, Settings).
-struct AtticTagDot: View {
-    let hue: AtticTagHue
-    var diameter: CGFloat = AtticTagMetrics.dotDiameter
-
-    @Environment(\.atticDesign) private var design
-
-    var body: some View {
-        Circle().fill(design.tokens.tagInk(hue).color)
-            .frame(width: diameter, height: diameter)
-            .accessibilityHidden(true)
-    }
-}
 
 /// A tag in its colour, sentence of `#word`. `inline` sits in a details
 /// line; `chip` is a pill of the tag's hue that follows the control corner

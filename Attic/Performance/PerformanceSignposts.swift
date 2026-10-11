@@ -117,12 +117,6 @@ enum PerformanceSignposts {
         noteStart = nil
     }
 
-    static func cancelNoteKey() {
-        noteDidLayout()
-        if let noteKey { signposter.endInterval("NoteKeystrokeToDraw", noteKey) }
-        noteKey = nil
-        noteStart = nil
-    }
 
     static func beginCanvasDrag() {
         guard canvasDrag == nil, canvasStart == nil else { return }

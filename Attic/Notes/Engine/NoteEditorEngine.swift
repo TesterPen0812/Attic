@@ -230,7 +230,6 @@ final class NoteEditorEngine: NSObject, NSTextViewDelegate, NSTextStorageDelegat
         onActivityChanged?(previous, next)
     }
     private var writingToolsBlocked = false
-    var isWritingToolsBlocked: Bool { writingToolsBlocked }
     var writingToolsRefusalReason: String?
     private var writingToolsSnapshot: NSAttributedString?
     private var writingToolsEmptyParagraph: NoteBlock?
@@ -251,7 +250,6 @@ final class NoteEditorEngine: NSObject, NSTextViewDelegate, NSTextStorageDelegat
     private var documentCache: (document: NoteDocument, finalParagraphStart: Int, finalParagraphDirty: Bool)?
     private var pendingImageLoads = Set<ObjectIdentifier>()
     private var importAnchor: Int?
-    var currentImportAnchor: Int? { importAnchor }
     private var importReplacementLength = 0
     private var importIsBoundary = false
     var currentImportTarget: (anchor: Int, replacementLength: Int, isBoundary: Bool)? {
@@ -422,9 +420,6 @@ final class NoteEditorEngine: NSObject, NSTextViewDelegate, NSTextStorageDelegat
         for id in ids { staged[id] = nil }
     }
 
-    func restoreStaged(_ items: [StagedNoteAttachment]) {
-        for item in items { staged[item.id] = item }
-    }
 
     // MARK: Views
 
