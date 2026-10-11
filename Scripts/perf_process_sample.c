@@ -22,11 +22,12 @@ int main(int argc, char **argv) {
     uint64_t system_ns = (uint64_t)((__uint128_t)usage.ri_system_time * timebase.numer / timebase.denom);
     printf("{\"user_time_ns\":%llu,\"system_time_ns\":%llu,"
            "\"package_idle_wakeups\":%llu,\"interrupt_wakeups\":%llu,"
-           "\"physical_footprint_bytes\":%llu}\n",
+           "\"physical_footprint_bytes\":%llu,\"pageins\":%llu}\n",
            (unsigned long long)user_ns,
            (unsigned long long)system_ns,
            (unsigned long long)usage.ri_pkg_idle_wkups,
            (unsigned long long)usage.ri_interrupt_wkups,
-           (unsigned long long)usage.ri_phys_footprint);
+           (unsigned long long)usage.ri_phys_footprint,
+           (unsigned long long)usage.ri_pageins);
     return 0;
 }

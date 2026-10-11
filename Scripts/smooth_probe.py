@@ -44,8 +44,9 @@ def run(*args, **kwargs):
 
 def sample(pid):
     helper = Path(__file__).resolve().parent.parent / ".build/smooth-process-sample"
-    if not helper.exists():
-        run("/usr/bin/clang", str(Path(__file__).with_name("perf_process_sample.c")), "-o", str(helper))
+    source = Path(__file__).with_name("perf_process_sample.c")
+    if not helper.exists() or helper.stat().st_mtime_ns < source.stat().st_mtime_ns:
+        run("/usr/bin/clang", str(source), "-o", str(helper))
     return json.loads(subprocess.check_output([str(helper), str(pid)], text=True))
 
 
@@ -87,6 +88,8 @@ def main():
     parser.add_argument("--idle-sample-seconds", type=float, default=0)
     parser.add_argument("--frame-monitor", action=argparse.BooleanOptionalAction, default=None,
                         help="Default on for the soak, off for cold reveal (avoid prewarming it)")
+    parser.add_argument("--reveal-breakdown", action="store_true",
+                        help="Requires a stage-instrumented diagnostic build; standard previews do not emit stages")
     args = parser.parse_args()
     if not (0 <= args.settle_seconds <= 120 and 0 <= args.idle_sample_seconds <= 120):
         parser.error("settle and idle sample durations must be between 0 and 120 seconds")
@@ -110,6 +113,7 @@ def main():
         "ATTIC_PERF_OWNER_TOKEN": token, "ATTIC_PERF_PROBE": "1",
         "ATTIC_PERF_EXTERNAL_CONTROL": "1", "ATTIC_PERF_CORNER": "bottomLeft",
         "ATTIC_FRAME_MONITOR": "1" if frames else "0",
+        "ATTIC_REVEAL_BREAKDOWN": "1" if args.reveal_breakdown else "0",
     }
     if args.mode == "soak":
         env["ATTIC_PERF_SMOOTH"] = "1"
@@ -160,6 +164,7 @@ def main():
             "app": str(app), "bundle": BUNDLE, "store": str(root), "records": records, "timings": timings,
             "settings": {"mode": args.mode, "frame_monitor": frames,
                          "settle_seconds": args.settle_seconds, "idle_sample_seconds": args.idle_sample_seconds,
+                         "reveal_breakdown": args.reveal_breakdown,
                          "allocations": args.allocations, "long_note": args.long},
         }, indent=2))
         if args.mode == "soak":

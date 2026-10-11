@@ -24,11 +24,24 @@ class SmoothRevealGateTests(unittest.TestCase):
         after = {**self.sample(20), 'settings': settings.copy()}
         self.assertTrue(compare([(before, after)] * 2)['passed'])
         for key, value in (('frame_monitor', True), ('settle_seconds', 2),
-                           ('idle_sample_seconds', 0), ('allocations', True)):
+                           ('idle_sample_seconds', 0), ('allocations', True),
+                           ('reveal_breakdown', True), ('sampled_reveal', True)):
             with self.subTest(key=key), self.assertRaises(ValueError):
                 compare([(before, {**after, 'settings': {**settings, key: value}})] * 2)
         with self.assertRaises(ValueError):
             compare([(before, self.sample(20))] * 2)
+
+    def test_requested_stage_instrumentation_must_have_been_recorded(self):
+        doc = {**self.sample(20), 'settings': {'reveal_breakdown': True}}
+        with self.assertRaises(ValueError):
+            reveal(doc)
+        doc['timings'] += [dict(name='RevealStage.' + name, milliseconds=1)
+                           for name in ('BuildPages', 'PrepareGeometry', 'SetColdFrame',
+                                        'OrderFront', 'Pointer', 'Animate')]
+        self.assertEqual(reveal(doc), 20)
+        doc['timings'][-1]['milliseconds'] = float('nan')
+        with self.assertRaises(ValueError):
+            reveal(doc)
 
     def test_missing_invalid_or_warm_data_cannot_pass(self):
         for value in (0, -1, float('inf'), float('nan')):

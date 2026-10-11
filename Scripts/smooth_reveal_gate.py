@@ -19,6 +19,12 @@ def reveal(document):
               if r['name'] == 'PanelRevealToOrderedFront']
     if len(values) != 1 or not math.isfinite(values[0]) or values[0] <= 0:
         raise ValueError('Expected exactly one finite cold reveal')
+    if (document.get('settings') or {}).get('reveal_breakdown'):
+        for name in ('BuildPages', 'PrepareGeometry', 'SetColdFrame', 'OrderFront', 'Pointer', 'Animate'):
+            stages = [r['milliseconds'] for r in document['timings']
+                      if r['name'] == 'RevealStage.' + name]
+            if len(stages) != 1 or not math.isfinite(stages[0]) or stages[0] < 0:
+                raise ValueError('Requested reveal instrumentation is missing or invalid: ' + name)
     return values[0]
 
 
@@ -28,7 +34,8 @@ def compare(pairs):
     # Legacy evidence predates settings metadata. New captures must agree
     # on warm-up and instrumentation, including across the reversed pair.
     settings = pairs[0][0].get('settings')
-    keys = ('mode', 'frame_monitor', 'settle_seconds', 'idle_sample_seconds', 'allocations')
+    keys = ('mode', 'frame_monitor', 'settle_seconds', 'idle_sample_seconds', 'allocations',
+            'reveal_breakdown', 'sampled_reveal')
     expected = None if settings is None else {key: settings.get(key) for key in keys}
     for pair in pairs:
         for document in pair:
