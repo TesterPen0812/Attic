@@ -1,3 +1,5 @@
+Historical non-Canvas evidence referenced below has moved; use the [perf3 archive manifest](Repo-Archive-Manifest-perf3.md) for original paths, descriptions, checksums, and the external archive location. Canvas and sync evidence remain here.
+
 # Concurrent SWE Review — Requirements Traceability, Regression Tests, Accessibility Contracts, Cross-Feature Integration
 
 **Lane:** 4 of 5 (requirements ↔ tests ↔ accessibility ↔ integration)
