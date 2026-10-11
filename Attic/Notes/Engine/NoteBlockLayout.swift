@@ -229,18 +229,17 @@ final class NoteBlockLayoutFragment: NSTextLayoutFragment {
 
 // MARK: - The engine's layout hooks
 
-extension NoteEditorEngine: NSTextLayoutManagerDelegate, NSTextContentStorageDelegate {
-    nonisolated func textContentManager(_ textContentManager: NSTextContentManager,
+// AppKit calls this editor's content-storage delegate on its owning main
+// actor. The bridge retains the runtime isolation check for the SDK's
+// nonisolated protocol, rather than sending text elements across actors.
+extension NoteEditorEngine: NSTextLayoutManagerDelegate, @preconcurrency NSTextContentStorageDelegate {
+    func textContentManager(_ textContentManager: NSTextContentManager,
                             shouldEnumerate textElement: NSTextElement,
                             options: NSTextContentManager.EnumerationOptions) -> Bool {
-        // This editor owns and lays out its content on the main actor.
-        // Assert that boundary for TextKit's nonisolated delegate callback.
-        MainActor.assumeIsolated {
-            guard !foldedHeadingIDs.isEmpty, let range = textElement.elementRange else { return true }
-            let offset = contentStorage.offset(from: contentStorage.documentRange.location, to: range.location)
-            return !headingSections.contains { section in
-                section.id.map(foldedHeadingIDs.contains) == true && NSLocationInRange(offset, section.content)
-            }
+        guard !foldedHeadingIDs.isEmpty, let range = textElement.elementRange else { return true }
+        let offset = contentStorage.offset(from: contentStorage.documentRange.location, to: range.location)
+        return !headingSections.contains { section in
+            section.id.map(foldedHeadingIDs.contains) == true && NSLocationInRange(offset, section.content)
         }
     }
 
