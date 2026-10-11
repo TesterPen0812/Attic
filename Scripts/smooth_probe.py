@@ -100,7 +100,18 @@ def main():
                         help="Default on for the soak, off for cold reveal (avoid prewarming it)")
     parser.add_argument("--reveal-breakdown", action="store_true",
                         help="Requires a stage-instrumented diagnostic build; standard previews do not emit stages")
+    parser.add_argument("--reveal-counts", action="store_true",
+                        help="Requires the diagnostic count overlay; excluded from timing acceptance")
+    parser.add_argument("--capture-panel", action="store_true",
+                        help="Capture only the verified preview PID, using the local window-id helper")
+    parser.add_argument("--lldb-counts", action="store_true",
+                        help="Count Swift-only environment/appearance/CA functions with LLDB; requires --reveal-counts")
     args = parser.parse_args()
+    if args.lldb_counts and not args.reveal_counts:
+        parser.error("--lldb-counts requires --reveal-counts")
+    if args.reveal_counts and any((args.output / name).exists() for name in
+                                 ("lldb-counts.ready", "lldb-counts.json", "reveal-counts.json", "measurements.json")):
+        parser.error("Count captures require a fresh output directory")
     if not (0 <= args.settle_seconds <= 120 and 0 <= args.idle_sample_seconds <= 120):
         parser.error("settle and idle sample durations must be between 0 and 120 seconds")
     frames = args.frame_monitor if args.frame_monitor is not None else args.mode == "soak"
@@ -124,6 +135,7 @@ def main():
         "ATTIC_PERF_EXTERNAL_CONTROL": "1", "ATTIC_PERF_CORNER": "bottomLeft",
         "ATTIC_FRAME_MONITOR": "1" if frames else "0",
         "ATTIC_REVEAL_BREAKDOWN": "1" if args.reveal_breakdown else "0",
+        "ATTIC_REVEAL_COUNTS": "1" if args.reveal_counts else "0",
     }
     if args.mode == "soak":
         env["ATTIC_PERF_SMOOTH"] = "1"
@@ -132,6 +144,8 @@ def main():
         env["MallocStackLogging"] = "1"
     park_pointer()
     pid = None
+    debugger = None
+    debugger_log = None
     records = []
     try:
         run("/usr/bin/open", "-n", "--stdout", str(args.output.resolve() / "frames.log"),
@@ -143,6 +157,20 @@ def main():
         executable = subprocess.check_output(["/bin/ps", "-p", str(pid), "-o", "comm="], text=True).strip()
         if executable != str(app / "Contents/MacOS" / info["CFBundleExecutable"]):
             raise RuntimeError(f"Unexpected executable for probe PID {pid}")
+        if args.lldb_counts:
+            module = Path(__file__).with_name("reveal_lldb_counts.py").resolve()
+            destination = args.output.resolve() / "lldb-counts.json"
+            debugger_log = (args.output / "lldb.log").open("w")
+            debugger = subprocess.Popen(["/usr/bin/xcrun", "lldb", "-b", "-p", str(pid),
+                "-o", "command script import " + str(module),
+                "-o", "script reveal_lldb_counts.start(lldb.debugger, " + repr(str(destination)) + ")",
+                "-o", "process handle -p true -s false -n false SIGUSR1",
+                "-o", "process continue", "-o", "script reveal_lldb_counts.finish_and_detach(lldb.debugger)"], stdout=debugger_log, stderr=subprocess.STDOUT)
+            deadline = time.monotonic() + 30
+            while not destination.with_suffix(".ready").exists():
+                if debugger.poll() is not None or time.monotonic() > deadline:
+                    raise RuntimeError("LLDB did not attach and install the count markers; inspect lldb.log")
+                time.sleep(0.1)
         time.sleep(args.settle_seconds)
         records.append({"phase": initial, **sample(pid)})
         print(json.dumps(records[-1]), flush=True)
@@ -152,6 +180,8 @@ def main():
             records.append({"phase": "idle_sample_end", "elapsed_seconds": time.monotonic() - start, **sample(pid)})
             print(json.dumps(records[-1]), flush=True)
         if args.mode == "reveal":
+            if debugger is not None and (args.output / "lldb-counts.json").exists():
+                raise RuntimeError("Preview ordered before the commanded cold reveal; discard this run")
             os.kill(pid, signal.SIGUSR1)
             wait_for_phase(root, "tasks_open", pid=pid)
             records.append({"phase": "tasks_open", **sample(pid)})
@@ -169,12 +199,38 @@ def main():
                 if args.allocations and phase in {"smooth_seeded", "smooth_visit_15", "smooth_visit_30", "smooth_visit_45", "smooth_visit_60", "smooth_hidden"}:
                     allocation_summary(pid, args.output, phase)
                 time.sleep(0.25)
+        if debugger is not None:
+            debugger.wait(timeout=30)
+            if debugger.returncode != 0:
+                raise RuntimeError("LLDB count collection failed")
+        if args.capture_panel:
+            # Ordering is the measurement boundary; the 0.24-second reveal
+            # animation finishes afterward. Capture its settled presentation.
+            time.sleep(0.5)
+            helper = Path(__file__).resolve().parent.parent / ".build/reveal-window-id"
+            source = Path(__file__).with_name("reveal_window_id.swift")
+            if not helper.exists() or helper.stat().st_mtime_ns < source.stat().st_mtime_ns:
+                run("/usr/bin/xcrun", "swiftc", str(source), "-o", str(helper))
+            if subprocess.check_output(["/bin/ps", "-p", str(pid), "-o", "comm="], text=True).strip() != str(app / "Contents/MacOS" / info["CFBundleExecutable"]):
+                raise RuntimeError("Preview executable ownership changed before capture")
+            window_id = subprocess.check_output([str(helper), str(pid)], text=True).strip()
+            run("/usr/sbin/screencapture", "-x", "-o", "-l" + window_id, str(args.output / "panel.png"))
+        if args.reveal_counts:
+            counts = json.loads((root / "reveal-counts.json").read_text())
+            if args.lldb_counts:
+                counts["native_function_counts"] = json.loads((args.output / "lldb-counts.json").read_text())
+            (args.output / "reveal-counts.json").write_text(json.dumps({
+                "bundle": BUNDLE, "app": str(app), "counts": counts,
+                "settings": {"mode": args.mode, "frame_monitor": frames,
+                             "settle_seconds": args.settle_seconds, "idle_sample_seconds": args.idle_sample_seconds,
+                             "allocations": args.allocations, "reveal_counts": True},
+            }, indent=2))
         timings = [json.loads(line) for line in (root / "timings.ndjson").read_text().splitlines()]
         (args.output / "measurements.json").write_text(json.dumps({
             "app": str(app), "bundle": BUNDLE, "store": str(root), "records": records, "timings": timings,
             "settings": {"mode": args.mode, "frame_monitor": frames,
                          "settle_seconds": args.settle_seconds, "idle_sample_seconds": args.idle_sample_seconds,
-                         "reveal_breakdown": args.reveal_breakdown,
+                         "reveal_breakdown": args.reveal_breakdown, "reveal_counts": args.reveal_counts,
                          "allocations": args.allocations, "long_note": args.long},
         }, indent=2))
         if args.mode == "soak":
@@ -183,6 +239,13 @@ def main():
         print(json.dumps({"first_reveal": next((row for row in timings if row["name"] == "PanelRevealToOrderedFront"), None),
                           "timing_count": len(timings)}), flush=True)
     finally:
+        if debugger is not None and debugger.poll() is None:
+            # Interrupt the debugger so its finally block detaches the
+            # owned preview; application shutdown remains bundle-ID-only.
+            debugger.send_signal(signal.SIGINT)
+            debugger.wait(timeout=30)
+        if debugger_log is not None:
+            debugger_log.close()
         if pid is not None:
             quit_owned_preview(pid, app / "Contents/MacOS" / info["CFBundleExecutable"])
 

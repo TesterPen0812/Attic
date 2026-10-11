@@ -25,11 +25,16 @@ class SmoothRevealGateTests(unittest.TestCase):
         self.assertTrue(compare([(before, after)] * 2)['passed'])
         for key, value in (('frame_monitor', True), ('settle_seconds', 2),
                            ('idle_sample_seconds', 0), ('allocations', True),
-                           ('reveal_breakdown', True), ('sampled_reveal', True)):
+                           ('reveal_breakdown', True), ('sampled_reveal', True), ('reveal_counts', True)):
             with self.subTest(key=key), self.assertRaises(ValueError):
                 compare([(before, {**after, 'settings': {**settings, key: value}})] * 2)
         with self.assertRaises(ValueError):
             compare([(before, self.sample(20))] * 2)
+
+    def test_count_instrumentation_cannot_establish_timing_acceptance(self):
+        doc = {**self.sample(20), 'settings': {'reveal_counts': True}}
+        with self.assertRaises(ValueError):
+            compare([(doc, doc)] * 2)
 
     def test_requested_stage_instrumentation_must_have_been_recorded(self):
         doc = {**self.sample(20), 'settings': {'reveal_breakdown': True}}

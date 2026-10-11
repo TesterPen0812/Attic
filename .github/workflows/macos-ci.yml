@@ -182,6 +182,11 @@ jobs:
         with:
           fetch-depth: 0
 
+      - name: Verify reveal probe and count gate plumbing
+        run: |
+          PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover -s Scripts -p 'test_smooth*.py' -v
+          PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover -s Scripts -p 'test_reveal*.py' -v
+
       - name: Verify branch ancestry and initial cleanliness
         run: |
           git merge-base --is-ancestor "$LUNA_REPAIRED_COMMIT" HEAD
@@ -660,6 +665,11 @@ jobs:
           git merge-base --is-ancestor "$DONE_SEARCH_BASELINE_COMMIT" HEAD
           git merge-base --is-ancestor "$INTEGRATION_COST_REFERENCE_COMMIT" HEAD
           mkdir -p "$RUNNER_TEMP/AtticCosts"
+
+      - name: Verify reveal probe and count gate plumbing
+        run: |
+          PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover -s Scripts -p 'test_smooth*.py' -v
+          PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover -s Scripts -p 'test_reveal*.py' -v
 
       - name: Verify cost gate plumbing
         run: python3 -m unittest discover -s Scripts -p 'test_*cost*.py' -v
