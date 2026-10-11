@@ -89,7 +89,6 @@ final class CornerHoverMonitor {
     private var cornerObservation: AnyCancellable?
     private var responsivenessActivity: NSObjectProtocol?
     private var revealRefreshTask: Task<Void, Never>?
-    private var dragReleaseTask: Task<Void, Never>?
     private var isRunning = false
     private var lastKeyboardInputAt: TimeInterval = -.infinity
     /// Sampling is event-driven: bursts of pointer events near the corner or
@@ -187,8 +186,6 @@ final class CornerHoverMonitor {
         stopPointerActivityMonitoring()
         revealRefreshTask?.cancel()
         revealRefreshTask = nil
-        dragReleaseTask?.cancel()
-        dragReleaseTask = nil
         if let screenChangeToken { NotificationCenter.default.removeObserver(screenChangeToken) }
         screenChangeToken = nil
         cornerObservation = nil
@@ -339,25 +336,6 @@ final class CornerHoverMonitor {
         // is visible; sampling here must not duplicate that work.
         let isInPanel = panelController.containsScreenPoint(location)
         let isMouseButtonPressed = NSEvent.pressedMouseButtons != 0
-        if isMouseButtonPressed {
-            dragReleaseTask?.cancel()
-            dragReleaseTask = nil
-        } else if uiState.isDraggingTask, dragReleaseTask == nil {
-            // SwiftUI dispatches performDrop just after mouse-up. Give an
-            // in-panel destination a short chance to consume draggedTaskID
-            // before treating the release as a cancelled or external drag.
-            dragReleaseTask = Task { @MainActor [weak self] in
-                try? await Task.sleep(for: .milliseconds(150))
-                guard let self, !Task.isCancelled else { return }
-                let releasedInPanel = panelController.containsScreenPoint(NSEvent.mouseLocation)
-                if let draggedTaskID = uiState.finishDragging(
-                    releasedOutsidePanel: !releasedInPanel
-                ) {
-                    store.startAfterExternalDrag(taskID: draggedTaskID)
-                }
-                dragReleaseTask = nil
-            }
-        }
 
         let isInteractionLocked = MainPanelAutoHidePolicy.isInteractionLocked(
             reasons: uiState.interactionLockReasons, pointerInside: isInPanel,

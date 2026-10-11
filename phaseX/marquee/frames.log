@@ -1,9 +1,0 @@
-ATTIC_EVENT 94398.9155 marquee-begin
-ATTIC_EVENT 94398.9304 MarqueeDragFrames frames=0 late=0 worstGapMs=0
-ATTIC_EVENT 94398.9306 marquee-end selected=2
-ATTIC_EVENT 94454.0377 marquee-begin
-ATTIC_EVENT 94454.0395 MarqueeDragFrames frames=0 late=0 worstGapMs=0
-ATTIC_EVENT 94454.0396 marquee-end selected=11
-ATTIC_EVENT 94500.3674 marquee-begin
-ATTIC_EVENT 94500.3677 MarqueeDragFrames frames=0 late=0 worstGapMs=0
-ATTIC_EVENT 94500.3677 marquee-end selected=3

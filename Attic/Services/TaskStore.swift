@@ -3203,19 +3203,6 @@ final class TaskStore: ObservableObject {
         return snapshot
     }
 
-    @discardableResult
-    func startAfterExternalDrag(taskID: UUID) -> Bool {
-        guard let task = tasks.first(where: { $0.id == taskID }) else { return false }
-        switch task.status {
-        case .todo, .backlog:
-            return setStatus(.inProgress, for: task)
-        case .inProgress:
-            return true
-        case .done:
-            return false
-        }
-    }
-
     /// Drop onto another row: same section reorders, a different section
     /// adopts that section's status (placing the task near the target row
     /// when their priorities allow it).

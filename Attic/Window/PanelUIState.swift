@@ -64,14 +64,12 @@ final class PanelUIState: ObservableObject {
     @Published var dockingPreviewCorner: ScreenCorner?
     @Published private(set) var panelSize = PanelGeometry.defaultPanelSize
     @Published private(set) var selectedSection: PanelSection = .tasks
-    private(set) var draggedTaskID: UUID?
     @Published private var managedInteractionLocks: Set<PanelInteractionLockReason> = []
 
     /// Tasks/Backlog still drive `TaskStore`; Notes and Canvas use their own
     /// focused stores and surfaces.
     var selectedScope: TaskScope { selectedSection.taskScope ?? .tasks }
 
-    var isDraggingTask: Bool { draggedTaskID != nil }
 
     var interactionLockReasons: Set<PanelInteractionLockReason> {
         var reasons = managedInteractionLocks
@@ -235,7 +233,6 @@ final class PanelUIState: ObservableObject {
         isComposerPresented = false
         editingTaskID = nil
         editingDraftTitle = ""
-        draggedTaskID = nil
         confirmingTaskDeletionID = nil
         confirmingTaskCompletionID = nil
         isCanvasConfirmationPresented = false
@@ -273,24 +270,8 @@ final class PanelUIState: ObservableObject {
             self.editingTaskID = nil
             editingDraftTitle = ""
         }
-        if let draggedTaskID, !availableIDs.contains(draggedTaskID) {
-            self.draggedTaskID = nil
-        }
     }
 
-    func beginDragging(_ task: TaskItem) {
-        draggedTaskID = task.id
-    }
-
-    func endDragging() {
-        draggedTaskID = nil
-    }
-
-    func finishDragging(releasedOutsidePanel: Bool) -> UUID? {
-        guard let draggedTaskID else { return nil }
-        self.draggedTaskID = nil
-        return releasedOutsidePanel ? draggedTaskID : nil
-    }
 }
 
 /// Edit mode's hold on the panel (round 5, the owner's item 2): while an
