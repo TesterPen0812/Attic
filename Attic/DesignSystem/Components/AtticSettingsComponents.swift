@@ -139,22 +139,16 @@ struct AtticContentCard<Content: View>: View {
     }
 }
 
-/// The page's top bar: a rim-lit back button (sub-pages only) and the
-/// 16 pt bold title.
+/// The page's 16 pt bold title, aligned with the traffic lights.
 struct AtticSettingsHeader: View {
     let title: String
-    var showsBack = true
-    let onBack: () -> Void
 
     var body: some View {
         HStack(spacing: AtticSpacing.s12) {
-            if showsBack {
-                AtticRaisedButton(systemName: "chevron.left", label: "Back", size: AtticControlSize.settingsBackButton, action: onBack)
-            }
             AtticText(verbatim: title, style: .pageTitle, ink: .heading)
                 .accessibilityAddTraits(.isHeader)
         }
-        .frame(height: AtticControlSize.settingsBackButton.height)
+        .frame(height: AtticControlSize.settingsHeaderHeight)
         .padding(AtticSpacing.s12)
     }
 }

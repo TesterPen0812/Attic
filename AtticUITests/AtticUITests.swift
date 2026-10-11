@@ -592,9 +592,8 @@ final class AtticUITests: XCTestCase {
     }
 
     /// The sidebar lists every page (Recently Deleted included), each opens
-    /// its page in the content card, and the back button (⌘[) returns to the
-    /// page before; it is a disabled ghost with no history.
-    func testSettingsSidebarOpensEveryPageAndBackReturns() throws {
+    /// its page in the content card; Settings has sidebar-only navigation.
+    func testSettingsSidebarOpensEveryPageWithoutBackHistory() throws {
         let settings = openSettings(section: "settings-nav-general")
         let back = settings.buttons["settings-back"]
         XCTAssertTrue(settings.descendants(matching: .any)["settings-page-general"].waitForExistence(timeout: 3))
@@ -605,11 +604,9 @@ final class AtticUITests: XCTestCase {
             XCTAssertTrue(settings.descendants(matching: .any)["settings-page-\(section)"].waitForExistence(timeout: 3),
                           "\(section) opens its page")
         }
-        XCTAssertTrue(back.isEnabled)
-        back.click()
-        XCTAssertTrue(settings.descendants(matching: .any)["settings-page-about"].waitForExistence(timeout: 3))
+        XCTAssertFalse(back.exists)
         settings.typeKey("[", modifierFlags: .command)
-        XCTAssertTrue(settings.descendants(matching: .any)["settings-page-agentAccess"].waitForExistence(timeout: 3))
+        XCTAssertTrue(settings.descendants(matching: .any)["settings-page-general"].exists, "⌘[ does not navigate Settings")
 
         // General: Haptics is a switch that remembers its state.
         settings.descendants(matching: .any)["settings-nav-general"].click()

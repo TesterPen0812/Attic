@@ -255,14 +255,11 @@ enum AtticGeometryCheck {
         let noop = demo.record("Geometry check")
         let tokens = AtticDesignContext.default.tokens
         let panelButton = AtticControlSize.panelButton
-        let back = AtticControlSize.settingsBackButton
         let row = CGSize(width: AtticLayout.panelSize.width - 2 * AtticLayout.rowHighlightInset, height: AtticLayout.rowHighlightHeight)
         let checkbox = AtticControlSize.subtaskCheckbox
         return [
             Specimen(name: "Single button", view: AnyView(AtticRaisedButton(systemName: "pin", label: "Pin", action: noop)),
                      expectedSize: panelButton, expectedRadius: AtticRadius.control(height: panelButton.height)),
-            Specimen(name: "Settings back button", view: AnyView(AtticRaisedButton(systemName: "chevron.left", label: "Back", size: back, action: noop)),
-                     expectedSize: back, expectedRadius: 14.5),
             Specimen(name: "Label button", view: AnyView(AtticRaisedButton(systemName: "list.bullet", title: "All notes", action: noop)),
                      expectedSize: CGSize(width: 0, height: panelButton.height), expectedRadius: AtticRadius.control(height: panelButton.height)),
             Specimen(name: "Page button", view: AnyView(AtticPageButton(items: AtticGallerySamples.pages, selection: .constant(0), pinnedOpen: false)),
