@@ -108,6 +108,9 @@ final class NoteMarqueeSelection {
     func select(offsets: Set<Int>) {
         _ = items()
         ranges = offsets.sorted().compactMap { blockRanges[$0] }
+        // Save the real caret mode before TextKit's collapsed-selection
+        // transition temporarily changes the indicator's display mode.
+        textView?.caretFitter.refresh()
         // A collapsed native range avoids native blue character highlights;
         // the caret fitter hides its modern indicator until selection clears.
         isSettingNativeSelection = true
