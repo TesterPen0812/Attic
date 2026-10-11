@@ -141,6 +141,22 @@ final class TasksRound12Tests: XCTestCase {
         XCTAssertFalse(model.selection.contains(ids[20]) && model.selection.count > 4, "no jump across a row that has left the list")
     }
 
+    func testCompletedTodayDisclosureAndRestorationKeepTheirNativeMouseClicks() throws {
+        let hosted = try Hosted(height: 520)
+        defer { hosted.close() }
+        let model = hosted.model
+        let plumber = try XCTUnwrap(model.rows(for: .now).first { $0.model.title == "Call the plumber" }?.id)
+        try hosted.clickRow(plumber, tab: .now)
+        let disclosure = try XCTUnwrap(hosted.pointer.completedTodayFrames[.now])
+        hosted.click(y: disclosure.midY, x: disclosure.midX)
+        XCTAssertTrue(model.completedTodayExpanded, "the disclosure receives its actual laid-out click")
+        hosted.spin(0.4)
+        let done = try XCTUnwrap(model.rows(for: .now).first { $0.model.title == "Renew domain" }?.id)
+        try hosted.clickRow(done, tab: .now, x: AtticLayout.circleX + AtticControlSize.statusCircle / 2)
+        hosted.spin(0.5)
+        XCTAssertEqual(hosted.store.task(withID: done)?.status, .todo, "the circle restores the completed row")
+    }
+
     // MARK: - P2-2 and CU bug 1: one row, one identity per (tab, task)
 
     /// "Renew domain", done today: Now's "Completed today" (opened) lists it
