@@ -279,6 +279,28 @@ struct AtticDropdownGap: View {
 /// One highlight (fix 1): a list with a keyboard highlight owns it and the
 /// pointer moves it (`onHover`), as in a native menu; with no `onHover` the
 /// row lights while hovered.
+/// A tag row's inline colour dot: an image as wide as the dot column and
+/// the gap after it, the 7 pt dot centred in the column on the capitals'
+/// middle (it sits on the baseline in the text).
+@MainActor
+enum AtticDropdownDot {
+    private static var cache: [NSColor: NSImage] = [:]
+
+    static func image(_ color: NSColor, font: NSFont) -> NSImage {
+        if let image = cache[color] { return image }
+        let m = AtticDropdownMetrics.self
+        let height = max(m.dotSize, font.capHeight)
+        let image = NSImage(size: NSSize(width: m.dotSlot + m.columnGap, height: height), flipped: false) { _ in
+            color.setFill()
+            NSBezierPath(ovalIn: NSRect(x: (m.dotSlot - m.dotSize) / 2, y: (height - m.dotSize) / 2,
+                                        width: m.dotSize, height: m.dotSize)).fill()
+            return true
+        }
+        cache[color] = image
+        return image
+    }
+}
+
 struct AtticDropdownRow: View {
     let title: String
     var systemName: String?
@@ -344,12 +366,11 @@ struct AtticDropdownRow: View {
         Button(action: action) {
             HStack(spacing: 0) {
                 HStack(spacing: m.columnGap) {
-                    if let dot {
-                        Circle()
-                            .fill(tokens.color(dot))
-                            .frame(width: m.dotSize, height: m.dotSize)
-                            .padding(.horizontal, (m.dotSlot - m.dotSize) / 2)
-                            .accessibilityHidden(true)
+                    if dot != nil, titleFont == nil, match?.isEmpty ?? true {
+                        // The dot is set inline in the name's own text (one
+                        // view per row: the tag picker opens with a row per
+                        // tag and its open cost is gated).
+                        dottedName
                     } else if let checkGlyph {
                         AtticIcon(systemName: checkGlyph, size: m.checkSize, weight: .semibold, ink: .glyph)
                             .frame(width: m.dotSlot)
@@ -361,7 +382,9 @@ struct AtticDropdownRow: View {
                         AtticIcon(systemName: systemName, size: m.iconSize, ink: .icon)
                             .frame(width: m.iconSlot)
                     }
-                    name
+                    if !(dot != nil && titleFont == nil && (match?.isEmpty ?? true)) {
+                        name
+                    }
                 }
                 Spacer(minLength: detail == nil ? (check == nil ? 0 : m.columnGap) : m.detailGap)
                 if let detail {
@@ -415,6 +438,20 @@ struct AtticDropdownRow: View {
                                   selected: isHighlighted, check: check,
                                   position: position, count: itemCount, action: action)
         }
+    }
+
+    /// A tag row's name with its colour dot set before it, in one text: the
+    /// dot's image is the dot column and the gap wide, so the name starts
+    /// where the "New tag" row's does.
+    private var dottedName: some View {
+        let style = AtticTextStyle.dropdownRow
+        let color = design.tokens.color(dot ?? titleInk)
+        return (Text(Image(nsImage: AtticDropdownDot.image(NSColor(color), font: style.nsFont))) + Text(verbatim: title))
+            .font(style.font)
+            .foregroundStyle(design.tokens.color(titleInk))
+            .lineLimit(1)
+            .truncationMode(.tail)
+            .accessibilityLabel(title)
     }
 
     @ViewBuilder
