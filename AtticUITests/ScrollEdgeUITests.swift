@@ -178,10 +178,12 @@ final class ScrollEdgeUITests: XCTestCase {
             // A particular phase can put a gap between glyphs in a band.
             // The sweep must contain real ink there; every phase must obey
             // the label/edge upper bounds and keep the pills clear.
-            XCTAssertGreaterThan(faintLabels, 0.0005, "\(surface) \(mode): faint moving ink survives behind the plain label line")
+            // N-6 D (owner 2026-10-11): rows fade out before the tabs line and
+            // the panel's edges, so no moving ink reaches them at all.
+            XCTAssertLessThanOrEqual(faintLabels, 0.0005, "\(surface) \(mode): no moving ink behind the plain label line")
             XCTAssertLessThanOrEqual(strongChangesUnderPills, 0.002, "\(surface) \(mode): no readable row ink sits under glass metadata pills")
             for (index, faint) in faintEdges.enumerated() {
-                XCTAssertGreaterThan(faint, 0.0005, "\(surface) \(mode): faint moving ink survives at edge \(index), rather than clipping")
+                XCTAssertLessThanOrEqual(faint, 0.0005, "\(surface) \(mode): no moving ink at edge \(index)")
             }
         }
     }
