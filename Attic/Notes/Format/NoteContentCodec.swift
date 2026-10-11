@@ -146,7 +146,8 @@ enum NoteContentCodec {
                 isScalarBoundary(mark.offset, in: units) &&
                 isScalarBoundary(mark.offset + mark.length, in: units) &&
                 !units[mark.offset..<(mark.offset + mark.length)].contains(NoteDocument.objectUnit) &&
-                (mark.kind == .link) == (mark.url != nil)
+                (mark.kind == .link) == (mark.url != nil) &&
+                (mark.colour == nil || (mark.kind == .highlight && !mark.colour!.isEmpty))
         }
     }
 
@@ -242,10 +243,12 @@ enum NoteContentCodec {
                   isScalarBoundary(offset + length, in: units),
                   !units[offset..<(offset + length)].contains(NoteDocument.objectUnit) else { return nil }
             let url = object["url"]?.stringValue
+            let colour = object["colour"]?.stringValue
             guard (kind == .link) == (url != nil),
-                  Set(object.keys).isSubset(of: ["kind", "offset", "length", "url"]),
+                  object["colour"] == nil || (kind == .highlight && colour.map { !$0.isEmpty } == true),
+                  Set(object.keys).isSubset(of: ["kind", "offset", "length", "url", "colour"]),
                   !marks.contains(where: { $0.kind == kind && $0.offset < offset + length && offset < $0.offset + $0.length }) else { return nil }
-            marks.append(NoteMark(kind, offset: offset, length: length, url: url))
+            marks.append(NoteMark(kind, offset: offset, length: length, url: url, colour: colour))
         }
         return marks
     }
@@ -407,6 +410,7 @@ enum NoteContentCodec {
                                                   "offset": .int(Int64(mark.offset)),
                                                   "length": .int(Int64(mark.length))]
                 fields["url"] = mark.url.map(NoteJSON.string)
+                fields["colour"] = mark.colour.map(NoteJSON.string)
                 return .object(fields)
             })
             if !block.inlines.isEmpty {
@@ -484,6 +488,7 @@ enum NoteContentCodec {
                                           "offset": .int(Int64(mark.offset)),
                                           "length": .int(Int64(mark.length))]
         fields["url"] = mark.url.map(NoteJSON.string)
+        fields["colour"] = mark.colour.map(NoteJSON.string)
         return .object(fields)
     }
 

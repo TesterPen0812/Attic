@@ -36,30 +36,22 @@ final class PhaseXColourTokenTests: XCTestCase {
 
     // MARK: Tags
 
-    /// The sheet's values are starting points the build tunes only as far
-    /// as a surface needs: on the default look each lands within a few
-    /// steps of its sheet value, in the same hue.
-    func testTagHuesStartFromTheSheetsValuesOnTheDefaultLook() {
-        let expected: [(AtticDesignContext, [String])] = [
-            (AtticDesignContext(mode: .light), ["#3975D7", "#5A62D6", "#8C55C8", "#C24C8C", "#218384", "#6E7F28", "#9A7023"]),
-            (AtticDesignContext(mode: .dark), ["#7CA9F2", "#9EA3F5", "#C29AF0", "#F08FC4", "#5CC9C6", "#B4C766", "#E2B65A"]),
-            (AtticDesignContext(mode: .light, increaseContrast: true), ["#2358AD", "#3D47CF", "#753AB5", "#98346A", "#196363", "#53601E", "#74551A"]),
-            (AtticDesignContext(mode: .dark, increaseContrast: true), ["#C7DAF9", "#D5D8FB", "#E4D2F8", "#F8CCE4", "#ABE3E1", "#D3DEA5", "#EFD6A2"])
-        ]
-        for (context, hexes) in expected {
+    /// The tags use the highlighter's clear hues (N-2, owner 2026-10-11):
+    /// each starts from that hue as text and is tuned only in lightness, so
+    /// it keeps its hue on every look.
+    func testTagHuesAreTheClearSetOnTheDefaultLook() {
+        let contexts = [AtticDesignContext(mode: .light), AtticDesignContext(mode: .dark),
+                        AtticDesignContext(mode: .light, increaseContrast: true),
+                        AtticDesignContext(mode: .dark, increaseContrast: true)]
+        // Yellow, green, blue, pink and purple, as the highlighter's set.
+        let hues: [Double] = [45, 135, 215, 330, 268]
+        for context in contexts {
             let tokens = context.tokens
-            for (hue, hex) in zip(AtticTagHue.automatic, hexes) {
-                let sheet = AtticRGBA(UInt32(hex.dropFirst(), radix: 16)!)
+            for (hue, expected) in zip(AtticTagHue.palette, hues) {
                 let built = tokens.tagInk(hue)
-                print("ATTIC_TAG_HUE \(context.caption) \(hue) sheet \(hex) built \(built.hexString)")
-                // Without Increase Contrast they are the sheet's (Dark blue
-                // a step lighter for its filtering fill); Increase
-                // Contrast's stronger hover and selection step them further.
-                if !context.increaseContrast {
-                    XCTAssertLessThanOrEqual(built.distance(to: sheet), 3, "\(context.caption) \(hue): \(built.hexString) vs \(hex)")
-                }
-                let delta = abs(built.hsl.hue - sheet.hsl.hue) * 360
-                XCTAssertLessThan(min(delta, 360 - delta), 3, "\(context.caption) \(hue) keeps its hue")
+                print("ATTIC_TAG_HUE \(context.caption) \(hue) built \(built.hexString)")
+                let delta = abs(built.hsl.hue * 360 - expected)
+                XCTAssertLessThan(min(delta, 360 - delta), 14, "\(context.caption) \(hue): \(built.hexString)")
             }
             // Grey is about the secondary grey on the default look (#7A7A7A / #A4A4A4).
             if !context.increaseContrast {
@@ -67,6 +59,27 @@ final class PhaseXColourTokenTests: XCTestCase {
                 XCTAssertLessThanOrEqual(tokens.tagInk(.grey).distance(to: grey), 12, context.caption)
             }
         }
+    }
+
+    /// The colour pass's stored keys still work: each shows as its nearest
+    /// clear hue, nothing stored is rewritten, and the menu offers only the
+    /// clear set and Grey.
+    func testLegacyTagKeysShowAsTheirClearHue() {
+        XCTAssertEqual(AtticTagHue(rawValue: "indigo")?.canonical, .blue)
+        XCTAssertEqual(AtticTagHue(rawValue: "violet")?.canonical, .purple)
+        XCTAssertEqual(AtticTagHue(rawValue: "teal")?.canonical, .green)
+        XCTAssertEqual(AtticTagHue(rawValue: "olive")?.canonical, .green)
+        XCTAssertEqual(AtticTagHue(rawValue: "ochre")?.canonical, .yellow)
+        for raw in ["blue", "pink", "grey"] { XCTAssertEqual(AtticTagHue(rawValue: raw)?.canonical.rawValue, raw) }
+        let tokens = AtticDesignContext(mode: .light).tokens
+        XCTAssertEqual(tokens.tagInk(.teal), tokens.tagInk(.green))
+        XCTAssertEqual(tokens.tagInk(.indigo), tokens.tagInk(.blue))
+        XCTAssertEqual(AtticTagHue.violet.title, AtticTagHue.purple.title)
+        var colouring = AtticTagColouring(palette: AtticTagPalette(hues: ["launch": .teal]))
+        colouring.setHue = { _, _ in }
+        XCTAssertEqual(colouring.colourCommands(for: "launch").first?.children.map(\.title),
+                       ["Yellow", "Green", "Blue", "Pink", "Purple", "Grey"])
+        XCTAssertEqual(colouring.colourCommands(for: "launch").first?.children.first { $0.state == .on }?.title, "Green")
     }
 
     /// 3 : 1 (4.5 : 1 under Increase Contrast) on the surface, the tag's own
@@ -97,24 +110,25 @@ final class PhaseXColourTokenTests: XCTestCase {
             let original = AtticDesignContext(mode: mode).tokens
             for palette in AtticPanelTheme.allCases {
                 let tokens = AtticDesignContext(mode: mode, palette: palette).tokens
-                for hue in AtticTagHue.automatic {
+                for hue in AtticTagHue.palette {
                     let delta = abs(tokens.tagInk(hue).hsl.hue - original.tagInk(hue).hsl.hue) * 360
                     XCTAssertLessThan(min(delta, 360 - delta), 4, "\(mode) \(palette) \(hue)")
                 }
             }
         }
-        // The sheet's Sea Glass Light moves four hues by 1 % or less.
+        // Sea Glass Light moves the hues' lightness by 3 % or less.
         let seaGlass = AtticDesignContext(mode: .light, palette: .seaGlass).tokens
         let original = AtticDesignContext(mode: .light).tokens
-        for hue in AtticTagHue.automatic {
+        for hue in AtticTagHue.palette {
             XCTAssertLessThan(abs(seaGlass.tagInk(hue).hsl.lightness - original.tagInk(hue).hsl.lightness), 0.03, "\(hue)")
         }
     }
 
     func testTheHashIsExplicitFNV1aOfTheFoldedName() {
-        // The sheet's examples: launch and pricing both hash to teal.
-        XCTAssertEqual(AtticTagHue.hashed("launch"), .teal)
-        XCTAssertEqual(AtticTagHue.hashed("pricing"), .teal)
+        // The colour pass's examples, unchanged in family: launch and
+        // pricing hashed to teal, which shows as green; design to blue.
+        XCTAssertEqual(AtticTagHue.hashed("launch"), .green)
+        XCTAssertEqual(AtticTagHue.hashed("pricing"), .green)
         XCTAssertEqual(AtticTagHue.hashed("design"), .blue)
         // Folded: case, surrounding space and Unicode normalisation.
         XCTAssertEqual(AtticTagHue.hashed("  Launch "), AtticTagHue.hashed("launch"))
@@ -123,23 +137,26 @@ final class PhaseXColourTokenTests: XCTestCase {
         for index in 0..<200 {
             let name = "tag-\(index)"
             XCTAssertNotEqual(AtticTagHue.hashed(name), .grey)
+            XCTAssertTrue(AtticTagHue.palette.contains(AtticTagHue.hashed(name)), name)
             XCTAssertEqual(AtticTagHue.hashed(name), AtticTagHue.hashed(String(name)))
         }
     }
 
     func testANewTagTakesTheNextFreeHueOnACollision() {
-        // The sheet: launch teal, design blue, pricing steps to olive.
+        // launch green, design blue, pricing (green) steps past blue to pink.
         let palette = AtticTagPalette.resolve(inUse: ["launch", "design", "pricing"], stored: [:])
-        XCTAssertEqual(palette.hues, ["launch": .teal, "design": .blue, "pricing": .olive])
-        // Wrapping round: ochre's next free hue is blue.
+        XCTAssertEqual(palette.hues, ["launch": .green, "design": .blue, "pricing": .pink])
+        // Wrapping round: purple's next free hue is yellow.
         XCTAssertEqual(AtticTagHue.assigned(to: "x", avoiding: []), AtticTagHue.hashed("x"))
-        let ochreName = (0..<500).map { "o\($0)" }.first { AtticTagHue.hashed($0) == .ochre }!
-        XCTAssertEqual(AtticTagHue.assigned(to: ochreName, avoiding: [.ochre]), .blue)
-        // All seven in use: the hash hue stays.
-        XCTAssertEqual(AtticTagHue.assigned(to: "pricing", avoiding: Set(AtticTagHue.automatic)), .teal)
+        let purpleName = (0..<500).map { "o\($0)" }.first { AtticTagHue.hashed($0) == .purple }!
+        XCTAssertEqual(AtticTagHue.assigned(to: purpleName, avoiding: [.purple]), .yellow)
+        // A legacy key in use counts as the hue it shows.
+        XCTAssertEqual(AtticTagHue.assigned(to: purpleName, avoiding: [.violet]), .yellow)
+        // All five in use: the hash hue stays.
+        XCTAssertEqual(AtticTagHue.assigned(to: "pricing", avoiding: Set(AtticTagHue.palette)), .green)
         // A stored hue is never taken from its tag, even by an older tag.
         let stored = AtticTagPalette.resolve(inUse: ["launch", "pricing"], stored: ["pricing": .teal])
-        XCTAssertEqual(stored.hues, ["pricing": .teal, "launch": .olive])
+        XCTAssertEqual(stored.hues, ["pricing": .teal, "launch": .blue])
         // An unknown tag shows the colour it is about to be given.
         XCTAssertEqual(palette.hue(for: "health"), AtticTagHue.assigned(to: "health", avoiding: Set(palette.hues.values)))
     }

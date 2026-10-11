@@ -69,11 +69,11 @@ extension AtticFormatToggle where Face == AtticIcon {
     /// A glyph toggle (B, I, a list).
     init(systemName: String, value: Value, label: String, help: String? = nil,
          width: CGFloat = AtticNoteFormatMetrics.barToggleWidth, height: CGFloat = AtticControlSize.smallHeight,
-         isKeyboardFocused: Bool = false,
+         isKeyboardFocused: Bool = false, glyphSize: CGFloat = AtticSmallControlMetrics.iconSize,
          disabledReason: String? = nil, announcesState: Bool = true, action: @escaping () -> Void) {
         self.init(value: value, label: label, help: help, width: width, height: height, isKeyboardFocused: isKeyboardFocused,
                   disabledReason: disabledReason, announcesState: announcesState, action: action) { ink in
-            AtticIcon(systemName: systemName, size: AtticSmallControlMetrics.iconSize, weight: .regular, ink: ink)
+            AtticIcon(systemName: systemName, size: glyphSize, weight: .regular, ink: ink)
         }
     }
 }
@@ -125,9 +125,10 @@ struct AtticHighlightGlyph: View {
     let swatch: AtticRGBA
 
     var body: some View {
-        AtticText(verbatim: "A", style: .controlLabel, ink: ink)
+        // The highlighter's nib (icon audit A3-10): the menu's own glyph; the
+        // "A" on a swatch read as a text colour.
+        AtticIcon(systemName: "highlighter", size: AtticSmallControlMetrics.iconSize, weight: .regular, ink: ink)
             .frame(width: 16, height: 16)
-            .background(RoundedRectangle(cornerRadius: 4, style: .continuous).fill(swatch.color))
             .accessibilityHidden(true)
     }
 }

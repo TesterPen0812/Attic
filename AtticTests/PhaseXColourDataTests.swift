@@ -77,10 +77,10 @@ final class PhaseXColourDataTests: XCTestCase {
         XCTAssertEqual(try ModelContext(container).fetchCount(FetchDescriptor<TaskItem>()), 3)
         let library = AtticLibrary(tasks: TaskStore(container: container))
         library.refreshTagColours()
-        // The sheet: launch teal, design blue, pricing (also teal) olive.
-        XCTAssertEqual(library.tagColours.palette.hues, ["launch": .teal, "design": .blue, "pricing": .olive])
+        // launch green, design blue, pricing (also green) steps to pink.
+        XCTAssertEqual(library.tagColours.palette.hues, ["launch": .green, "design": .blue, "pricing": .pink])
         XCTAssertEqual(Dictionary(uniqueKeysWithValues: try rows(container).map { ($0.name, $0.hue) }),
-                       ["launch": .teal, "design": .blue, "pricing": .olive])
+                       ["launch": .green, "design": .blue, "pricing": .pink])
         // Given once: another refresh, or a new tag, writes nothing more
         // for them and changes no colour.
         library.refreshTagColours()
@@ -88,7 +88,7 @@ final class PhaseXColourDataTests: XCTestCase {
         try tag(library, "Health", ["health"], created: .now)
         library.refreshTagColours()
         XCTAssertEqual(try rows(container).count, 4)
-        XCTAssertEqual(library.tagColours.palette.hue(for: "pricing"), .olive)
+        XCTAssertEqual(library.tagColours.palette.hue(for: "pricing"), .pink)
         XCTAssertNotEqual(library.tagColours.palette.hue(for: "health"), .grey)
     }
 
@@ -153,7 +153,7 @@ final class PhaseXColourDataTests: XCTestCase {
         XCTAssertTrue(library.tagColours.refresh(inUse: ["launch"]))
         let all = try rows(library.tasks.container)
         XCTAssertEqual(all.count, 2)
-        XCTAssertTrue(all.allSatisfy { $0.hue == .teal })
+        XCTAssertTrue(all.allSatisfy { $0.hue == .green })
     }
 
     func testAR01UnstoredRenameIgnoresDormantColoursAndUsesLiveAssignment() throws {
@@ -163,7 +163,7 @@ final class PhaseXColourDataTests: XCTestCase {
         context.insert(TagColour(name: "launch", hue: .teal))
         try context.save()
         XCTAssertTrue(library.renameTag("pricing", to: "quote"))
-        XCTAssertEqual(try rows(library.tasks.container, named: "quote").map(\.hue), [.teal])
+        XCTAssertEqual(try rows(library.tasks.container, named: "quote").map(\.hue), [.green])
     }
 
     func testAR03AutomaticAssignmentUsesKnownUUIDHueAndPreservesUnknownKeys() throws {
@@ -215,11 +215,11 @@ final class PhaseXColourDataTests: XCTestCase {
             if history == .tasks {
                 let model = TasksPageModel(library: library)
                 XCTAssertEqual(model.undo(), .applied)
-                XCTAssertEqual(library.tagColours.palette.hue(for: "launch"), .teal)
+                XCTAssertEqual(library.tagColours.palette.hue(for: "launch"), .green)
                 XCTAssertEqual(model.redo(), .applied)
             } else {
                 XCTAssertTrue(library.undo.undo(in: history))
-                XCTAssertEqual(library.tagColours.palette.hue(for: "launch"), .teal)
+                XCTAssertEqual(library.tagColours.palette.hue(for: "launch"), .green)
                 XCTAssertTrue(library.undo.redo(in: history))
             }
             XCTAssertEqual(library.tagColours.palette.hue(for: "launch"), .pink)
@@ -250,7 +250,7 @@ final class PhaseXColourDataTests: XCTestCase {
         XCTAssertEqual(library.tagColours.palette.hue(for: "launch"), .pink)
         gate.shouldFail = false
         XCTAssertTrue(engine.history.undo())
-        XCTAssertEqual(library.tagColours.palette.hue(for: "launch"), .teal)
+        XCTAssertEqual(library.tagColours.palette.hue(for: "launch"), .green)
         XCTAssertTrue(engine.history.redo())
         XCTAssertEqual(library.tagColours.palette.hue(for: "launch"), .pink)
         XCTAssertEqual(engine.document(), doc, "metadata history never changes text or selection")
@@ -291,7 +291,7 @@ final class PhaseXColourDataTests: XCTestCase {
         XCTAssertEqual(library.tagColours.palette.hue(for: "launch"), .pink)
         XCTAssertEqual(library.undo.undoCount(in: .library), steps + 1)
         XCTAssertTrue(library.undo.undo(in: .library))
-        XCTAssertEqual(library.tagColours.palette.hue(for: "launch"), .teal)
+        XCTAssertEqual(library.tagColours.palette.hue(for: "launch"), .green)
         XCTAssertTrue(library.undo.redo(in: .library))
         XCTAssertEqual(library.tagColours.palette.hue(for: "launch"), .pink)
 
@@ -375,13 +375,13 @@ final class PhaseXColourDataTests: XCTestCase {
         let container = library.tasks.container
         try tag(library, "One", ["launch"], created: .now)
         library.refreshTagColours()
-        XCTAssertEqual(try rows(container, named: "launch").first?.hue, .teal)
+        XCTAssertEqual(try rows(container, named: "launch").first?.hue, .green)
         let steps = library.undo.undoCount(in: .library)
 
         gate.shouldFail = true
         XCTAssertFalse(library.setTagHue(.pink, for: "launch"))
-        XCTAssertEqual(library.tagColours.palette.hue(for: "launch"), .teal)
-        XCTAssertEqual(try rows(container, named: "launch").map(\.hue), [.teal])
+        XCTAssertEqual(library.tagColours.palette.hue(for: "launch"), .green)
+        XCTAssertEqual(try rows(container, named: "launch").map(\.hue), [.green])
         XCTAssertEqual(library.undo.undoCount(in: .library), steps)
 
         // A failed rename leaves no colour behind for the new name.
@@ -411,7 +411,7 @@ final class PhaseXColourDataTests: XCTestCase {
         let given = expectation(description: "colour stored")
         DispatchQueue.main.async { given.fulfill() }
         wait(for: [given], timeout: 2)
-        XCTAssertEqual(try rows(library.tasks.container, named: "launch").map(\.hue), [.teal])
-        XCTAssertEqual(library.tagColours.palette.hues["launch"], .teal)
+        XCTAssertEqual(try rows(library.tasks.container, named: "launch").map(\.hue), [.green])
+        XCTAssertEqual(library.tagColours.palette.hues["launch"], .green)
     }
 }

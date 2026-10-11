@@ -130,7 +130,7 @@ enum NoteTextCodec {
         flush()
         for mark in block.marks where mark.offset >= 0 && mark.length > 0 && mark.offset + mark.length <= result.length {
             let range = NSRange(location: mark.offset, length: mark.length)
-            result.addAttribute(.noteMark(mark.kind), value: mark.url ?? true, range: range)
+            result.addAttribute(.noteMark(mark.kind), value: mark.attributeValue, range: range)
         }
         let baseFont = attributes[.font] as? NSFont ?? style.bodyFont
         var runs: [([NoteMark.Kind: Any], NSRange)] = []
@@ -253,11 +253,10 @@ enum NoteTextCodec {
                     text.enumerateAttribute(.noteMark(kind), in: runRange) { value, markedRange, _ in
                         guard let value else { return }
                         let offset = baseOffset + markedRange.location - index
-                        let url = kind == .link ? value as? String : nil
-                        let mark = NoteMark(kind, offset: offset, length: markedRange.length, url: url)
+                        let mark = NoteMark(kind, offset: offset, length: markedRange.length, value: value)
                         if let last = current.marks.indices.last,
                            current.marks[last].kind == mark.kind,
-                           current.marks[last].url == mark.url,
+                           current.marks[last].payload == mark.payload,
                            current.marks[last].offset + current.marks[last].length == mark.offset {
                             current.marks[last].length += mark.length
                         } else { current.marks.append(mark) }
@@ -381,10 +380,9 @@ enum NoteTextCodec {
                 text.enumerateAttribute(.noteMark(kind), in: run.source) { value, marked, _ in
                     guard let value else { return }
                     let offset = run.offset + marked.location - run.source.location
-                    let mark = NoteMark(kind, offset: offset, length: marked.length,
-                                        url: kind == .link ? value as? String : nil)
+                    let mark = NoteMark(kind, offset: offset, length: marked.length, value: value)
                     if let last = cell.marks.indices.last, cell.marks[last].kind == kind,
-                       cell.marks[last].url == mark.url, cell.marks[last].offset + cell.marks[last].length == offset {
+                       cell.marks[last].payload == mark.payload, cell.marks[last].offset + cell.marks[last].length == offset {
                         cell.marks[last].length += mark.length
                     } else {
                         cell.marks.append(mark)

@@ -1604,11 +1604,13 @@ private struct AtticDetailsTags: View {
             if tags.count > 1 {
                 HStack(spacing: AtticTaskRowMetrics.detailsItemSpacing) {
                     AtticTagLabel(name: tags[0], disabled: disabled).fixedSize()
+                        .atticTagColourMenu(tags[0])
                     more()
                 }
             }
             HStack(spacing: AtticTaskRowMetrics.detailsItemSpacing) {
                 AtticTagLabel(name: tags[0], disabled: disabled, truncates: true)
+                    .atticTagColourMenu(tags[0])
                 if tags.count > 1 { more() }
             }
         }
@@ -1634,7 +1636,9 @@ private struct AtticDetailsTags: View {
     private func all() -> some View {
         HStack(spacing: AtticTaskRowMetrics.detailsItemSpacing) {
             ForEach(tags, id: \.self) { tag in
+                // A right-click on a tag: its Colour ▸ (owner's call, 10-11).
                 AtticTagLabel(name: tag, disabled: disabled).fixedSize()
+                    .atticTagColourMenu(tag)
             }
         }
     }

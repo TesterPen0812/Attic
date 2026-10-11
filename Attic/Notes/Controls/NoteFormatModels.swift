@@ -13,6 +13,9 @@ struct NoteFormatSnapshot: Equatable {
     var table: NoteTableToolsState?
     /// Whole cells are selected: the selection bar is the cells' bar.
     var cells: NoteCellSelectionState?
+    /// Text is selected (outside a table): with Aa's row open, the row
+    /// shows the marks and the selection bar stays away (D-06).
+    var hasTextSelection = false
 
     static let empty = NoteFormatSnapshot()
 
@@ -44,7 +47,7 @@ struct NoteFormatSnapshot: Equatable {
         let paragraph: NoteParagraphStyle? = if case let .paragraph(style)? = styles.first { style } else { nil }
         return NoteFormatSnapshot(paragraph: paragraph, validations: validations,
                                   disabledReason: router.disabledReason(selection: selection),
-                                  table: router.engine.tableToolsState())
+                                  table: router.engine.tableToolsState(), hasTextSelection: selection.length > 0)
     }
 
     func isEnabled(_ command: NoteFormatCommand) -> Bool { validations[command]?.enabled ?? false }
@@ -109,6 +112,16 @@ enum NoteCellAction: Hashable, CaseIterable {
         }
     }
 
+    /// Copy and Cut a step smaller (icon audit A3-05: at the bar's 13 pt
+    /// they had about twice the ink of their neighbours).
+    var glyphSize: CGFloat {
+        switch self {
+        case .copy: 11
+        case .cut: 12
+        case .clear: AtticSmallControlMetrics.iconSize
+        }
+    }
+
     var shortcut: String? {
         switch self {
         case .copy: "⌘C"
@@ -150,8 +163,16 @@ enum NoteFormatRowItem: Hashable {
     static let all: [NoteFormatRowItem] = [.style]
         + (NoteCommandCatalog.lists + NoteCommandCatalog.indents).map { .command($0) } + [.close]
     static let table: [NoteFormatRowItem] = [.tableMenu] + NoteTableTool.allCases.map { .tableTool($0) } + [.close]
+    /// With text selected (D-06: one format surface at a time): B I U S,
+    /// link, highlight and code, then ✕. The selection's marks take the
+    /// whole row: with the style pill as well it is 322 pt wide at
+    /// "Subheading", past a 320 pt panel's 288 pt row; the style comes back
+    /// with the caret.
+    static let marks: [NoteFormatRowItem] = (NoteCommandCatalog.barMarks + NoteCommandCatalog.barInline).map { .command($0) } + [.close]
 
-    static func items(inTable: Bool) -> [NoteFormatRowItem] { inTable ? table : all }
+    static func items(inTable: Bool, textSelected: Bool = false) -> [NoteFormatRowItem] {
+        inTable ? table : (textSelected ? marks : all)
+    }
 
     /// The index after `index`, `forward` or back, round the row.
     static func step(_ index: Int, forward: Bool, count: Int = all.count) -> Int {
@@ -271,6 +292,27 @@ final class NoteFormatModel: ObservableObject {
         router?.run(command, from: surface)
     }
 
+    /// The highlighter's menu (N-2 option A: the split button's chevron):
+    /// Grey, colour set 1's five clear hues, then None; the selection's
+    /// colour ticked after its name. Built as it opens, so the tick is
+    /// always the selection's now.
+    func highlightMenu(from surface: NoteCommandSurface) -> [AtticMenuCommand] {
+        let highlighted = snapshot.value(.mark(.highlight)) != .off
+        let current = highlighted ? router?.engine.highlightColour() : nil
+        let enabled = snapshot.isEnabled(.mark(.highlight))
+        var list = NoteHighlightColour.allCases.map { colour in
+            AtticMenuCommand(verbatim: colour.title, isDisabled: !enabled, state: current == colour ? .on : .off) { [weak self] in
+                self?.router?.highlight(colour, from: surface)
+            }
+        }
+        for index in list.indices { list[index].image = NoteHighlightSwatch.image(NoteHighlightColour.allCases[index]) }
+        list.append(AtticMenuCommand(verbatim: String(localized: "None"), isDisabled: !enabled || !highlighted,
+                                     startsSection: true) { [weak self] in
+            self?.router?.highlight(nil, from: surface)
+        })
+        return list
+    }
+
     /// The bar's style menu (Title … Mono, the current one checked).
     func styleMenu(from surface: NoteCommandSurface) -> [AtticMenuCommand] {
         NoteCommandCatalog.styles.map { command in
@@ -287,6 +329,35 @@ final class NoteFormatModel: ObservableObject {
         let title = NoteCommandCatalog.menuTitle(command).replacingOccurrences(of: "…", with: "")
         guard let shortcut = NoteCommandCatalog.shortcutLabel(command) else { return title }
         return "\(title) \(shortcut)"
+    }
+}
+
+/// A highlight colour's chip for the highlighter's menu: its wash as a
+/// 12 pt rounded square with a hairline rim (a clear hue on a light menu
+/// still shows its edge), drawn when the menu draws, in its Light or Dark.
+@MainActor
+enum NoteHighlightSwatch {
+    static let size: CGFloat = 12
+    private static var cache: [NoteHighlightColour: NSImage] = [:]
+
+    static func image(_ colour: NoteHighlightColour) -> NSImage {
+        if let image = cache[colour] { return image }
+        let image = NSImage(size: NSSize(width: size, height: size), flipped: false) { rect in
+            let dark = NSAppearance.currentDrawing().bestMatch(from: [.aqua, .darkAqua]) == .darkAqua
+            let tokens = AtticDesignContext(mode: dark ? .dark : .light).tokens
+            let shape = NSBezierPath(roundedRect: rect.insetBy(dx: 0.5, dy: 0.5), xRadius: 3, yRadius: 3)
+            let menu = AtticRGBA(dark ? 0x2A2A2A : 0xFFFFFF)
+            tokens.highlightMarker(colour).over(menu).nsColor.setFill()
+            shape.fill()
+            NSColor(white: dark ? 1 : 0, alpha: 0.18).setStroke()
+            shape.lineWidth = 0.5
+            shape.stroke()
+            return true
+        }
+        image.isTemplate = false
+        image.accessibilityDescription = colour.title
+        cache[colour] = image
+        return image
     }
 }
 

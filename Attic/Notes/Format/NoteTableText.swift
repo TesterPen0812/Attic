@@ -165,7 +165,7 @@ enum NoteTableText {
                 flush()
                 let offset = cell.text.utf16.count
                 cell.text += inner.text
-                cell.marks += inner.marks.map { NoteMark($0.kind, offset: offset + $0.offset, length: $0.length, url: $0.url) }
+                cell.marks += inner.marks.map { NoteMark($0.kind, offset: offset + $0.offset, length: $0.length, url: $0.url, colour: $0.colour) }
                 if !inner.text.isEmpty { cell.marks.append(NoteMark(kind, offset: offset, length: inner.text.utf16.count, url: url)) }
             }
             while index < input.count {
@@ -219,9 +219,10 @@ enum NoteTableText {
         // Export splits marks at overlap boundaries; join their adjacent runs.
         var merged: [NoteMark] = []
         for mark in cell.marks {
-            if let last = merged.last, last.kind == mark.kind, last.url == mark.url,
+            if let last = merged.last, last.kind == mark.kind, last.payload == mark.payload,
                last.offset + last.length == mark.offset {
-                merged[merged.count - 1] = NoteMark(last.kind, offset: last.offset, length: last.length + mark.length, url: last.url)
+                merged[merged.count - 1] = NoteMark(last.kind, offset: last.offset, length: last.length + mark.length,
+                                                    url: last.url, colour: last.colour)
             } else { merged.append(mark) }
         }
         cell.marks = merged

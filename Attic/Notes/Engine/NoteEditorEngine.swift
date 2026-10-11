@@ -2799,15 +2799,47 @@ extension NoteEditorEngine {
         return plain ? .mixed : .on
     }
 
-    private func applyMark(_ kind: NoteMark.Kind, url: String?, selection: NSRange) -> Bool {
+    /// The highlighter's colours (N-2, owner 2026-10-11): `colour` over
+    /// the selection, replacing any other highlight there (grey is the one
+    /// click's highlight), or no highlight for nil. One undo step. With no
+    /// selection, what is typed next takes it.
+    @discardableResult
+    func setHighlight(_ colour: NoteHighlightColour?, selection: NSRange? = nil) -> Bool {
+        let selection = selection ?? textView?.selectedRange() ?? NSRange(location: textStorage.length, length: 0)
+        guard validate(.mark(.highlight), selection: selection).enabled else { return false }
+        return applyMark(.highlight, url: colour?.storedKey, selection: selection, forced: colour != nil)
+    }
+
+    /// The highlight's colour over `selection` (or the typing attributes'):
+    /// nil when there is none or the selection mixes colours.
+    func highlightColour(selection: NSRange? = nil) -> NoteHighlightColour? {
+        let selection = selection ?? textView?.selectedRange() ?? NSRange(location: textStorage.length, length: 0)
+        if selection.length == 0 {
+            guard let value = textView?.typingAttributes[.noteMark(.highlight)] else { return nil }
+            return NoteHighlightColour(storedKey: value as? String)
+        }
+        guard rangeIsInStorage(selection) else { return nil }
+        var found: NoteHighlightColour?
+        var mixed = false
+        textStorage.enumerateAttribute(.noteMark(.highlight), in: selection) { value, _, stop in
+            guard let value else { mixed = true; stop.pointee = true; return }
+            let colour = NoteHighlightColour(storedKey: value as? String)
+            if let found, found != colour { mixed = true; stop.pointee = true }
+            found = colour
+        }
+        return mixed ? nil : found
+    }
+
+    private func applyMark(_ kind: NoteMark.Kind, url: String?, selection: NSRange, forced: Bool? = nil) -> Bool {
         if selection.length == 0, let textView {
             let wasOn = textView.typingAttributes[.noteMark(kind)] != nil
-            history.recordTypingMarkChange(kind, before: wasOn, after: !wasOn)
-            setTypingMark(kind, enabled: !wasOn)
+            let turnOn = forced ?? !wasOn
+            history.recordTypingMarkChange(kind, before: wasOn, after: turnOn)
+            setTypingMark(kind, enabled: turnOn, value: url)
             history.breakCoalescing()
             return true
         }
-        let turnOn = kind == .link || markState(kind, selection: selection) != .on
+        let turnOn = forced ?? (kind == .link || markState(kind, selection: selection) != .on)
         let original = textStorage.attributedSubstring(from: selection)
         let replacement = NSMutableAttributedString(attributedString: original)
         var start = 0
@@ -2823,7 +2855,11 @@ extension NoteEditorEngine {
             start = NSMaxRange(range)
         }
         // Restyle will reapply surviving marks. Remove presentation attrs
-        // of the turned-off mark before replacing so they cannot linger.
+        // of the turned-off mark before replacing so they cannot linger (a
+        // highlight's wash too when it changes colour).
+        if kind == .highlight, turnOn {
+            replacement.removeAttribute(.backgroundColor, range: NSRange(location: 0, length: replacement.length))
+        }
         if !turnOn {
             switch kind {
             case .bold, .italic, .code: replacement.removeAttribute(.font, range: NSRange(location: 0, length: replacement.length))
@@ -2838,10 +2874,10 @@ extension NoteEditorEngine {
 
     private func commandName(_ kind: NoteMark.Kind) -> String { NoteFormatCommand.mark(kind).title }
 
-    private func setTypingMark(_ kind: NoteMark.Kind, enabled: Bool) {
+    private func setTypingMark(_ kind: NoteMark.Kind, enabled: Bool, value: String? = nil) {
         guard let textView else { return }
         var attributes = textView.typingAttributes
-        attributes[.noteMark(kind)] = enabled ? true : nil
+        attributes[.noteMark(kind)] = enabled ? (value ?? true) as Any : nil
         for key in [NSAttributedString.Key.link, .underlineStyle, .strikethroughStyle, .backgroundColor] { attributes[key] = nil }
         let base = self.attributes(forParagraphAt: textView.selectedRange().location)
         let marks = Dictionary(uniqueKeysWithValues: NoteMark.Kind.allCases.compactMap { mark in
@@ -3085,7 +3121,11 @@ struct NoteSlashItem: Hashable, Identifiable {
         case .table: ["table", "grid", "cells"]
         }
     }
-    static let all = Kind.allCases.map(NoteSlashItem.init(kind:))
+    /// The list's order (D-18): the text styles, the lists, the blocks,
+    /// then what is inserted.
+    static let order: [Kind] = [.body, .title, .heading, .subheading, .checklist, .bullet, .number,
+                                .quote, .mono, .table, .divider, .imageOrFile, .date]
+    static let all = order.map(NoteSlashItem.init(kind:))
 }
 
 /// One `/` Image or File… request: the engine it was made in, the command
