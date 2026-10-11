@@ -39,6 +39,107 @@ final class NoteEditorEngineTests: XCTestCase {
         return (engine, textView)
     }
 
+    func testPerf3OpeningFiftyImagesWithoutAViewportReadsNoFiles() async {
+        let provider = StubImages(bytes: [:])
+        let blocks = [NoteBlock.text("Image heavy")] + (0..<50).map { _ in
+            NoteBlock.image(attachmentID: UUID(), pixelWidth: 800, pixelHeight: 400)
+        }
+        let engine = NoteEditorEngine(noteID: UUID(), document: NoteDocument(blocks: blocks), imageProvider: provider)
+        try? await Task.sleep(for: .milliseconds(200))
+        print("PERF3_IMAGE_OPEN images=50 file_requests=\(provider.fileRequests)")
+        XCTAssertEqual(provider.fileRequests, 0, "opening without a viewport must not request or decode all images")
+        XCTAssertEqual(engine.document().blocks.count, 51)
+    }
+
+    func testPerf3OnlyViewportImagesDecodeAndScrollingLoadsTheLastImage() async throws {
+        let bitmap = try XCTUnwrap(NSBitmapImageRep(bitmapDataPlanes: nil, pixelsWide: 800, pixelsHigh: 400,
+            bitsPerSample: 8, samplesPerPixel: 4, hasAlpha: true, isPlanar: false, colorSpaceName: .deviceRGB,
+            bytesPerRow: 0, bitsPerPixel: 0))
+        bitmap.setColor(.systemBlue, atX: 0, y: 0)
+        let data = try XCTUnwrap(bitmap.representation(using: .png, properties: [:]))
+        let items = (0..<50).map { index in
+            StagedNoteAttachment(id: UUID(), filename: "viewport-\(index).png", contentTypeIdentifier: "public.png",
+                byteCount: Int64(data.count), digest: NotePayloadDigest.sha256(data), data: data)
+        }
+        let document = NoteDocument(blocks: [.text("Viewport images")] + items.map {
+            .image(attachmentID: $0.id, pixelWidth: 800, pixelHeight: 400)
+        })
+        let (engine, view) = makeEngine(document, window: true, staged: items)
+        view.layoutSubtreeIfNeeded()
+        engine.layoutManager?.textViewportLayoutController.layoutViewport()
+        view.viewWillDraw()
+        try await Task.sleep(for: .milliseconds(300))
+        let images = engine.objects().compactMap { $0.0 as? NoteImageAttachment }
+        let loaded = images.filter { $0.renderedImage != nil && !$0.isMissing }
+        print("PERF3_IMAGE_VIEWPORT images=50 initial_decoded=\(loaded.count)")
+        XCTAssertGreaterThan(loaded.count, 0, "the visible image decodes without an edit")
+        XCTAssertLessThanOrEqual(loaded.count, 6, "only the viewport and TextKit overdraw decode")
+        let last = try XCTUnwrap(images.last)
+        XCTAssertNil(last.renderedImage, "the last image is still offscreen")
+        let range = try XCTUnwrap(engine.range(of: last))
+        view.scrollRangeToVisible(range)
+        engine.layoutManager?.textViewportLayoutController.layoutViewport()
+        view.viewWillDraw()
+        try await Task.sleep(for: .milliseconds(300))
+        XCTAssertNotNil(last.renderedImage, "scrolling loads an image that has never been drawn")
+        XCTAssertFalse(last.isMissing)
+        XCTAssertEqual(last.pixelSize, CGSize(width: 800, height: 400))
+        XCTAssertEqual(last.filename, items.last?.filename)
+        XCTAssertEqual(engine.checkpointDocument().attachmentIDs, document.attachmentIDs, "lazy previews never remove recovery payload references")
+        let beforeDetach = images.filter { $0.renderedImage != nil }.count
+        engine.detachView()
+        try await Task.sleep(for: .milliseconds(100))
+        XCTAssertEqual(images.filter { $0.renderedImage != nil }.count, beforeDetach)
+        let printed = await engine.preparedPrintView()
+        let printedImages = try XCTUnwrap(printed.textStorage).length
+        XCTAssertGreaterThan(printedImages, 50, "printing still projects the complete document")
+        var printCount = 0
+        printed.textStorage?.enumerateAttribute(.attachment, in: NSRange(location: 0, length: printedImages)) { value, _, _ in
+            if let image = value as? NoteImageAttachment {
+                XCTAssertNotNil(image.renderedImage?.cgImage(forProposedRect: nil, context: nil, hints: nil))
+                XCTAssertEqual(image.renderedImage?.size, CGSize(width: 800, height: 400), "print has the decoded pixels, including offscreen images")
+                printCount += 1
+            }
+        }
+        XCTAssertEqual(printCount, 50, "print decoding is independent of viewport loading")
+    }
+
+    func testPerf3DetachedViewportDropsPendingPreviewAndCanRetryOnReturn() async throws {
+        let provider = GatedViewportImages()
+        let engine = NoteEditorEngine(noteID: UUID(), document: NoteDocument(blocks: [.text("Pending"),
+            .image(attachmentID: UUID(), pixelWidth: 800, pixelHeight: 400)]), imageProvider: provider)
+        func present() {
+            let (scroll, view) = engine.makeView()
+            scroll.frame = NSRect(x: 0, y: 0, width: 400, height: 600)
+            let host = NSWindow(contentRect: scroll.frame, styleMask: [.titled], backing: .buffered, defer: false)
+            host.isReleasedWhenClosed = false
+            host.contentView = scroll
+            windows.append(host)
+            view.layoutSubtreeIfNeeded()
+            engine.layoutManager?.textViewportLayoutController.layoutViewport()
+            view.viewWillDraw()
+        }
+        present()
+        for _ in 0..<50 {
+            if provider.requested { break }
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        XCTAssertTrue(provider.requested)
+        let image = try XCTUnwrap(engine.objects().compactMap { $0.0 as? NoteImageAttachment }.first)
+        engine.detachView()
+        provider.release()
+        try await Task.sleep(for: .milliseconds(100))
+        XCTAssertNil(image.renderedImage, "a departed viewport must not install a late preview or missing-image placeholder")
+        present()
+        for _ in 0..<50 {
+            if image.renderedImage != nil { break }
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        XCTAssertNotNil(image.renderedImage, "cancelled requests do not block loading when the note returns")
+        XCTAssertTrue(image.isMissing, "the missing file still has a recoverable placeholder")
+        XCTAssertTrue(image.accessibilityDescription.contains("pending.png"))
+    }
+
     private var windows: [NSWindow] = []
 
     override func tearDown() async throws {
@@ -131,6 +232,9 @@ final class NoteEditorEngineTests: XCTestCase {
         scroll.frame.size = NSSize(width: 320, height: 464)
         scroll.automaticallyAdjustsContentInsets = false
         scroll.contentInsets = NSEdgeInsets(top: 80, left: 0, bottom: 92, right: 0)
+        view.layoutSubtreeIfNeeded()
+        engine.layoutManager?.textViewportLayoutController.layoutViewport()
+        view.viewWillDraw()
         let image = try XCTUnwrap(engine.objects().compactMap { $0.0 as? NoteImageAttachment }.first)
         let deadline = Date().addingTimeInterval(3)
         while image.renderedImage == nil, Date() < deadline { RunLoop.main.run(until: Date().addingTimeInterval(0.01)) }
@@ -1602,10 +1706,30 @@ private final class StockUndoDelegate: NSObject, NSTextViewDelegate {
 private final class StubImages: NoteImageProviding {
     let bytes: [UUID: Data]
     init(bytes: [UUID: Data]) { self.bytes = bytes }
-    func fileURL(forAttachment id: UUID) async -> URL? { nil }
+    private(set) var fileRequests = 0
+    func fileURL(forAttachment id: UUID) async -> URL? { fileRequests += 1; return nil }
     func filename(forAttachment id: UUID) -> String? { bytes[id] == nil ? nil : "shot.png" }
     func imageBytes(forAttachment id: UUID) -> StagedNoteAttachment? {
         bytes[id].map { StagedNoteAttachment(id: id, filename: "shot.png", contentTypeIdentifier: "public.png",
                                              byteCount: Int64($0.count), digest: NotePayloadDigest.sha256($0), data: $0) }
+    }
+}
+
+@MainActor
+private final class GatedViewportImages: NoteImageProviding {
+    private var continuation: CheckedContinuation<URL?, Never>?
+    private var released = false
+    private(set) var requested = false
+    func fileURL(forAttachment id: UUID) async -> URL? {
+        requested = true
+        if released { return nil }
+        return await withCheckedContinuation { continuation = $0 }
+    }
+    func filename(forAttachment id: UUID) -> String? { "pending.png" }
+    func imageBytes(forAttachment id: UUID) -> StagedNoteAttachment? { nil }
+    func release() {
+        released = true
+        continuation?.resume(returning: nil)
+        continuation = nil
     }
 }

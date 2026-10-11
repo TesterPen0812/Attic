@@ -249,6 +249,8 @@ final class NoteEditorEngine: NSObject, NSTextViewDelegate, NSTextStorageDelegat
     private(set) var documentExtractionCount = 0
     private var documentCache: (document: NoteDocument, finalParagraphStart: Int, finalParagraphDirty: Bool)?
     private var pendingImageLoads = Set<ObjectIdentifier>()
+    private var imageViewportSubscription: AnyCancellable?
+    private var hasImageAttachments = false
     private var importAnchor: Int?
     private var importReplacementLength = 0
     private var importIsBoundary = false
@@ -453,10 +455,18 @@ final class NoteEditorEngine: NSObject, NSTextViewDelegate, NSTextStorageDelegat
         self.scrollView = scrollView
         history.textView = textView
         find.attach()
+        scrollView.contentView.postsBoundsChangedNotifications = true
+        imageViewportSubscription = NotificationCenter.default.publisher(
+            for: NSView.boundsDidChangeNotification, object: scrollView.contentView
+        ).sink { [weak self] _ in
+            // TextKit updates its viewport after the clip bounds move.
+            DispatchQueue.main.async { [weak self] in self?.refreshViewportImages() }
+        }
         return (scrollView, textView)
     }
 
     func detachView() {
+        imageViewportSubscription = nil
         find.detach()
         let wasComposing = activity == .composing
         if let layoutManager { contentStorage.removeTextLayoutManager(layoutManager) }
@@ -698,9 +708,16 @@ final class NoteEditorEngine: NSObject, NSTextViewDelegate, NSTextStorageDelegat
             if let table = object as? NoteTableAttachment {
                 adoptTable(table, force: force)
             } else if let image = object as? NoteImageAttachment {
+                hasImageAttachments = true
                 // A decoded image looks the same in every appearance: only a
                 // missing one's placeholder is drawn again.
-                if image.renderedImage == nil || (force && image.isMissing) { loadImage(image) }
+                image.filename = staged[image.attachmentID]?.filename
+                    ?? imageProvider?.filename(forAttachment: image.attachmentID) ?? image.filename
+                if force && image.isMissing, let face = objectFace(for: image) {
+                    image.renderedImage = renderer.imageFailure(size: image.displaySize(columnWidth: objectColumnWidth), face: face)
+                }
+                // Pixel dimensions reserve layout without decoding. The
+                // viewport's layout/draw pass requests the preview later.
             } else if let file = object as? NoteFileAttachment {
                 if let id = file.attachmentID {
                     file.originalMissing = staged[id] == nil && imageProvider?.hasAttachmentBytes(id) != true
@@ -727,7 +744,29 @@ final class NoteEditorEngine: NSObject, NSTextViewDelegate, NSTextStorageDelegat
 
     // MARK: Images
 
-    private func loadImage(_ image: NoteImageAttachment) {
+    /// TextKit's active viewport includes its small overdraw region. Never
+    /// force whole-note layout to discover images; only inspect that range.
+    func refreshViewportImages() {
+        guard hasImageAttachments, let viewport = layoutManager?.textViewportLayoutController.viewportRange else { return }
+        let start = contentStorage.documentRange.location
+        let location = contentStorage.offset(from: start, to: viewport.location)
+        let end = contentStorage.offset(from: start, to: viewport.endLocation)
+        let range = NSIntersectionRange(NSRange(location: max(0, location), length: max(0, end - location)),
+                                        NSRange(location: 0, length: textStorage.length))
+        guard range.length > 0 else { return }
+        textStorage.enumerateAttribute(.attachment, in: range) { value, _, _ in
+            guard let image = value as? NoteImageAttachment, image.renderedImage == nil else { return }
+            loadImage(image, requireViewport: true)
+        }
+    }
+
+    private func imageIsInViewport(_ image: NoteImageAttachment) -> Bool {
+        guard let viewport = layoutManager?.textViewportLayoutController.viewportRange,
+              let range = range(of: image), let imageRange = textRange(for: range) else { return false }
+        return viewport.intersects(imageRange)
+    }
+
+    private func loadImage(_ image: NoteImageAttachment, requireViewport: Bool = false) {
         let key = ObjectIdentifier(image)
         guard !pendingImageLoads.contains(key) else { return }
         if let reserved = staged[image.attachmentID], reserved.byteCount == 0, reserved.digest.isEmpty {
@@ -753,8 +792,13 @@ final class NoteEditorEngine: NSObject, NSTextViewDelegate, NSTextStorageDelegat
                 guard let url else { return nil }
                 return NoteImageDecoder.pixelSize(at: url)
             }.value
-            guard let self, let image else { return }
-            if image.pixelSize == nil, let header {
+            guard let image else { self?.pendingImageLoads.remove(key); return }
+            guard self?.range(of: image) != nil,
+                  !requireViewport || self?.imageIsInViewport(image) == true else {
+                self?.pendingImageLoads.remove(key)
+                return
+            }
+            if image.pixelSize == nil, let header, let self {
                 image.pixelSize = header
                 image.renderedImage = self.renderer.placeholder(
                     size: image.displaySize(columnWidth: self.textView?.textContainer?.size.width ?? 320),
@@ -766,9 +810,17 @@ final class NoteEditorEngine: NSObject, NSTextViewDelegate, NSTextStorageDelegat
                 guard let url else { return nil }
                 return NoteImageDecoder.thumbnail(at: url, maxPixel: maxPixel)
             }.value
-            self.pendingImageLoads.remove(ObjectIdentifier(image))
+            guard let self else { return }
+            self.pendingImageLoads.remove(key)
+            guard self.range(of: image) != nil,
+                  !requireViewport || self.imageIsInViewport(image) else {
+                // An unknown-size image may now hold a Loading placeholder.
+                // Clear it so returning to this viewport can request again.
+                image.renderedImage = nil
+                return
+            }
             if self.staged[attachmentID]?.data != stagedData {
-                self.loadImage(image)
+                self.loadImage(image, requireViewport: requireViewport)
                 return
             }
             self.finishImageLoad(image, cgImage: decoded, pixelSize: header)

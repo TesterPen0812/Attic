@@ -330,6 +330,7 @@ final class NoteEditorTextView: NSTextView, NSAccessibilityCustomRotorItemSearch
         // join or leave a parent only after this pass (P1-01 hypothesis).
         AtticOverlayHierarchy.layoutPass {
             super.layout()
+            engine?.refreshViewportImages()
             PerformanceSignposts.noteDidLayout()
             updatePlaceholder()
             onLayout?()
@@ -392,6 +393,7 @@ final class NoteEditorTextView: NSTextView, NSAccessibilityCustomRotorItemSearch
 
     override func viewWillDraw() {
         super.viewWillDraw()
+        engine?.refreshViewportImages()
         PerformanceSignposts.noteDidLayout()
     }
 
