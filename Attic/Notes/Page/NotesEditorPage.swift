@@ -851,6 +851,9 @@ private struct NoteStatusSlot: View {
                 .transition(AtticMotionScale.overlayTransition(reduceMotion: design.reduceMotion, from: .bottom))
             }
         }
+        .atticAnnounceErrors(items.filter { $0.tone == .error }.map {
+            [$0.title, $0.explanation].compactMap { $0 }.joined(separator: ". ")
+        })
         .animation(AtticMotionScale.overlayAnimation(reduceMotion: design.reduceMotion), value: key)
         .popover(isPresented: $showingDetails, arrowEdge: .top) {
             AtticStatusDetails(items: items)

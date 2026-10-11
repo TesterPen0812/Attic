@@ -55,7 +55,7 @@ enum NoteCommandCatalog {
         .paragraph(.bullet), .paragraph(.number), .paragraph(.checklist), .table
     ]
     static let indents: [NoteFormatCommand] = [.outdent, .indent]
-    static let lineActions: [NoteFormatCommand] = [.toggleChecklist, .moveUp, .moveDown]
+    static let lineActions: [NoteFormatCommand] = [.toggleChecklist, .moveUp, .moveDown, .toggleHeadingFold]
 
     /// The selection bar (mockup p2-16 D as p2-36 draws it): style, B I U
     /// S, link, highlight, inline code. The lists are on the format row.

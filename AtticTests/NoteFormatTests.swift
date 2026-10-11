@@ -348,3 +348,33 @@ final class NotesShortcutMetadataTests: XCTestCase {
         }
     }
 }
+
+@MainActor
+final class PlainNoteTitleTests: XCTestCase {
+    func testTitleSelectionCannotAcquireAnyInlineMark() {
+        let engine = NoteEditorEngine(noteID: UUID(), document: NoteDocument(blocks: [.text("Plain title"), .text("Body")]))
+        let (_, text) = engine.makeView()
+        text.setSelectedRange(NSRange(location: 0, length: 5))
+        for kind in NoteMark.Kind.allCases {
+            XCTAssertFalse(engine.validate(.mark(kind)).enabled, "title: \(kind)")
+            XCTAssertFalse(engine.perform(.mark(kind)))
+        }
+        XCTAssertTrue(engine.document().blocks[0].marks.isEmpty)
+    }
+
+    func testLoadedAndPastedTitlesStayPlainAndMixedSelectionMarksOnlyBody() {
+        var title = NoteBlock.text("Plain title")
+        title.marks = [.init(.bold, offset: 0, length: 5), .init(.link, offset: 6, length: 5, url: "https://example.com")]
+        let engine = NoteEditorEngine(noteID: UUID(), document: NoteDocument(blocks: [title, .text("Body")]))
+        let (_, text) = engine.makeView()
+        XCTAssertTrue(engine.document().blocks[0].marks.isEmpty)
+        text.selectAll(nil)
+        XCTAssertTrue(engine.perform(.mark(.italic)))
+        XCTAssertTrue(engine.document().blocks[0].marks.isEmpty)
+        XCTAssertEqual(engine.document().blocks[1].marks.first?.kind, .italic)
+        text.setSelectedRange(NSRange(location: 2, length: 0))
+        text.insertText(NSAttributedString(string: "X", attributes: [.noteMark(.underline): true]), replacementRange: text.selectedRange())
+        XCTAssertTrue(engine.document().blocks[0].marks.isEmpty)
+        XCTAssertNil(engine.textStorage.attribute(.noteMark(.underline), at: 2, effectiveRange: nil))
+    }
+}

@@ -250,3 +250,17 @@ private struct OwnerFeedbackRoot: View {
             .atticDesign(design.design)
     }
 }
+
+@MainActor
+final class NoticeAnnouncementTests: XCTestCase {
+    func testErrorAnnouncementDeliversOnceAndAllowsALaterOccurrence() {
+        var state = AtticErrorAnnouncementState()
+        XCTAssertEqual(state.update(["Not saved"]), ["Not saved"])
+        XCTAssertEqual(state.update(["Not saved", "Not saved"]), [])
+        XCTAssertEqual(state.update(["Not saved", "Import failed"]), ["Import failed"])
+        XCTAssertEqual(state.update(["Import failed"]), [])
+        XCTAssertEqual(state.update(["Not saved", "Import failed"]), ["Not saved"])
+        XCTAssertEqual(state.update([]), [])
+        XCTAssertEqual(state.update(["Import failed"]), ["Import failed"])
+    }
+}

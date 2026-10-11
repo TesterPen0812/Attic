@@ -54,7 +54,9 @@ enum NoteTextCodec {
             let paragraph = NSMutableAttributedString()
             switch block.kind {
             case .text:
-                paragraph.append(inlineText(block, attributes: attributes, style: style))
+                var plain = block
+                if isTitle { plain.marks = [] }
+                paragraph.append(inlineText(plain, attributes: attributes, style: style))
             case .checklist:
                 let box = NoteChecklistAttachment(objectID: block.id ?? UUID(), isChecked: block.checked)
                 paragraph.append(attachmentString(box, attributes: attributes))
@@ -175,6 +177,7 @@ enum NoteTextCodec {
             blocks.insert(.text(""), at: 0)
         }
         if firstBlockIsTitle, !blocks.isEmpty {
+            blocks[0].marks = []
             blocks[0].style = nil
             blocks[0].level = nil
             blocks[0].indent = nil

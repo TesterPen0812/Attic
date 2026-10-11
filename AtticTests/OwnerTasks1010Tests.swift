@@ -322,7 +322,8 @@ final class OwnerTasks1010Tests: XCTestCase {
     func testReadOnlyLinkCursorStopsAtTheGlyphBounds() throws {
         var block = NoteBlock.text("Link")
         block.marks = [NoteMark(.link, offset: 0, length: 4, url: "https://example.com")]
-        let engine = NoteEditorEngine(noteID: UUID(), document: NoteDocument(blocks: [block]), readOnly: true)
+        // P3 titles stay plain; test the read-only cursor on a body link.
+        let engine = NoteEditorEngine(noteID: UUID(), document: NoteDocument(blocks: [.text("Title"), block]), readOnly: true)
         let (scroll, textView) = engine.makeView()
         scroll.frame = CGRect(x: 0, y: 0, width: 340, height: 520)
         textView.textContainerInset = CGSize(width: 28, height: 0)
@@ -333,9 +334,10 @@ final class OwnerTasks1010Tests: XCTestCase {
         engine.layoutManager?.ensureLayout(for: engine.contentStorage.documentRange)
         textView.textLayoutManager?.textViewportLayoutController.layoutViewport()
         spin()
-        let rect = try XCTUnwrap(engine.rect(for: NSRange(location: 0, length: 1)))
+        let link = (textView.string as NSString).range(of: "Link")
+        let rect = try XCTUnwrap(engine.rect(for: NSRange(location: link.location, length: 1)))
         XCTAssertGreaterThan(rect.minX, 8)
-        XCTAssertNotNil(textView.textStorage?.attribute(.link, at: 0, effectiveRange: nil))
+        XCTAssertNotNil(textView.textStorage?.attribute(.link, at: link.location, effectiveRange: nil))
         let previous = NSCursor.current
         defer { previous.set() }
         for (local, cursor) in [(CGPoint(x: rect.minX - 8, y: rect.midY), NSCursor.arrow),
