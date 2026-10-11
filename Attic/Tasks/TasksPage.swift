@@ -4120,8 +4120,13 @@ private struct TasksListEdges<Mask: View>: ViewModifier {
                 .contentMargins(.top, listTop, for: .scrollIndicators)
                 .contentMargins(.bottom, bottomClearance, for: .scrollIndicators)
                 .atticScrollEdgeEffect(style)
-                .mask { cleanMask }
-                .mask { TasksPlainControlsMask(stackHeight: stack.height, bottomInset: bottomInset) }
+                .mask {
+                    // Compose the masks before applying them to the native list:
+                    // a second list mask adds another AppKit view and layer.
+                    cleanMask.mask {
+                        TasksPlainControlsMask(stackHeight: stack.height, bottomInset: bottomInset)
+                    }
+                }
     }
 }
 
