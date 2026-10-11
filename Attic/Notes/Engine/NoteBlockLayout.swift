@@ -227,48 +227,6 @@ final class NoteBlockLayoutFragment: NSTextLayoutFragment {
     }
 }
 
-/// The title paragraph's fragment. It draws as TextKit does, at the
-/// engine's `titleOpacity`: the body title dissolves as the header's own
-/// title comes in, scroll-linked, so exactly one of them is on screen.
-final class NoteTitleLayoutFragment: NSTextLayoutFragment {
-    /// Set on the main thread (`setTitleOpacity`, and when the fragment is
-    /// made); read while drawing, which TextKit does on the main thread.
-    nonisolated(unsafe) var opacity: CGFloat = 1
-
-    override func draw(at point: CGPoint, in context: CGContext) {
-        guard opacity < 1 else {
-            super.draw(at: point, in: context)
-            return
-        }
-        guard opacity > 0 else { return }
-        context.saveGState()
-        context.setAlpha(opacity)
-        context.beginTransparencyLayer(auxiliaryInfo: nil)
-        super.draw(at: point, in: context)
-        context.endTransparencyLayer()
-        context.restoreGState()
-    }
-}
-
-extension NoteEditorEngine {
-    /// Fades the body's title line (1 = drawn fully, 0 = not drawn). Only a
-    /// visible change redraws the title's fragment.
-    func setTitleOpacity(_ opacity: CGFloat) {
-        // In 64 steps: a scroll tick that changes nothing visible redraws nothing.
-        let stepped = (min(max(opacity, 0), 1) * 64).rounded() / 64
-        guard stepped != titleOpacity else { return }
-        titleOpacity = stepped
-        guard let layoutManager, textStorage.length > 0,
-              let fragment = layoutManager.textLayoutFragment(for: contentStorage.documentRange.location)
-                as? NoteTitleLayoutFragment else { return }
-        fragment.opacity = stepped
-        // A new fragment is made for the title and the viewport lays it out
-        // again now, so the change shows on this very scroll tick.
-        layoutManager.invalidateLayout(for: fragment.rangeInElement)
-        layoutManager.textViewportLayoutController.layoutViewport()
-    }
-}
-
 // MARK: - The engine's layout hooks
 
 extension NoteEditorEngine: NSTextLayoutManagerDelegate, NSTextContentStorageDelegate {
@@ -299,11 +257,6 @@ extension NoteEditorEngine: NSTextLayoutManagerDelegate, NSTextContentStorageDel
         let native = offset > 0 && offset < textStorage.length ? decoration(forParagraphAt: offset) : nil
         guard offset >= 0, offset < textStorage.length,
               let decoration = native ?? (changed ? .history : nil) else {
-            if offset == 0, textStorage.length > 0 {
-                let title = NoteTitleLayoutFragment(textElement: textElement, range: nil)
-                title.opacity = titleOpacity
-                return title
-            }
             return NSTextLayoutFragment(textElement: textElement, range: nil)
         }
         let fragment = NoteBlockLayoutFragment(textElement: textElement, range: nil)

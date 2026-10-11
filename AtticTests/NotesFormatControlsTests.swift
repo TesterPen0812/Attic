@@ -167,7 +167,7 @@ final class NotesFormatControlsTests: XCTestCase {
         }
     }
 
-    func testH13TitleFadeRefreshesTheTextViewsCachedPixels() throws {
+    func testAR04NativeTitleKeepsItsCachedPixelsAfterRelayout() throws {
         let (_, engine, text) = make(NoteDocument(blocks: [.text("H13 title pixels"), .text("Body")]))
         text.setSelectedRange(NSRange(location: text.string.utf16.count, length: 0))
         text.layoutSubtreeIfNeeded()
@@ -186,11 +186,6 @@ final class NotesFormatControlsTests: XCTestCase {
         }
         let full = try ink()
         XCTAssertGreaterThan(full, 20)
-        engine.setTitleOpacity(0)
-        text.layoutSubtreeIfNeeded()
-        spin()
-        XCTAssertLessThan(try ink(), full / 10, "cached title pixels leave when the header takes over")
-        engine.setTitleOpacity(1)
         text.layoutSubtreeIfNeeded()
         spin()
         XCTAssertGreaterThan(try ink(), full * 9 / 10, "the title returns without missing ink")

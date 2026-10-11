@@ -434,8 +434,6 @@ final class NoteTitleAccessories: NotesKeyboardReturnTarget {
         boundsObserver = nil
         engine.onTagsDisplayChange = nil
         engine.onCaretChange = nil
-        // The session keeps its engine: the title shows in full again.
-        engine.setTitleOpacity(1)
         textView?.onLayout = nil
         textView?.suggestionCommand = nil
         textView?.accessoryViews = []
@@ -647,23 +645,28 @@ final class NoteTitleAccessories: NotesKeyboardReturnTarget {
     }
 
     /// The header title fades in as the title passes under the header, and
-    /// the body's own title fades out by the same amount (D-03): one title
-    /// at a time.
+    /// the opaque body's title has left the visible top region (D-03).
+    /// This path never invalidates TextKit's scrolling viewport.
     func updateHeaderTitle() {
         guard let scrollView, let rects = engine.titleLineRects() else { return }
         let clip = scrollView.contentView.bounds
-        let titleBottom = rects.last.minY + NoteTextStyle.titleLineHeight - clip.minY
-        let progress = min(max((headerBottom + 4 - titleBottom) / NoteTextStyle.titleLineHeight, 0), 1)
+        let titleBottom = rects.last.maxY - clip.minY
+        // Native title fragments remain opaque. The header starts only after
+        // the last wrapped glyph line has left the visible top region.
+        let progress = Self.headerProgress(titleBottom: titleBottom, visibleTop: headerBottom)
         if progress > 0 {
             let title = engine.lineText(at: 0).trimmingCharacters(in: .whitespaces)
             let shown = title.isEmpty ? String(localized: "Untitled note") : title
             if chrome.headerTitle != shown { chrome.headerTitle = shown }
         }
-        engine.setTitleOpacity(1 - progress)
         let current = chrome.headerTitleProgress
         if abs(progress - current) >= 0.02 || ((progress == 0 || progress == 1) && progress != current) {
             chrome.headerTitleProgress = progress
         }
+    }
+
+    static func headerProgress(titleBottom: CGFloat, visibleTop: CGFloat) -> CGFloat {
+        min(max((visibleTop - titleBottom) / NoteTextStyle.titleLineHeight, 0), 1)
     }
 
     /// The note's native menu under the ⋯, or under the header title.

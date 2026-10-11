@@ -151,39 +151,39 @@ final class NotesPageRenderTests: XCTestCase {
         write(harness.host, name: "writing-scrolled-light")
     }
 
-    /// Design review D-03: the body's title dissolves as the header's title
-    /// comes in (it used to stay in full behind the header's capsule, so the
-    /// name showed twice). One title at a time, scroll-linked.
-    func testTheBodyTitleFadesWhileTheHeaderTitleComesIn() throws {
-        let harness = try makeHarness(context: AtticDesignContext(controls: .craft)) { try Self.seedPricing($0) }
-        let pricing = try XCTUnwrap(harness.store.notes.first { $0.title.hasPrefix("Pricing") })
-        XCTAssertTrue(harness.controller.open(noteID: pricing.id))
-        spin(0.4)
-        harness.host.layoutSubtreeIfNeeded()
-        spin()
-        let engine = try XCTUnwrap(harness.controller.active?.engine)
-        let scroll = try XCTUnwrap(engine.scrollView)
-        XCTAssertEqual(engine.titleOpacity, 1, "at rest the title is drawn in full")
-
-        // The note at rest sits at the top inset, above the content's origin.
-        let rest = -scroll.contentInsets.top
-        var opacities: [CGFloat] = []
-        for y in stride(from: 0, through: 300, by: 6) {
-            scroll.contentView.scroll(to: NSPoint(x: 0, y: rest + CGFloat(y)))
-            scroll.reflectScrolledClipView(scroll.contentView)
-            spin(0.03)
-            opacities.append(engine.titleOpacity)
+    func testAR04TitleUsesOpaqueNativeFragmentsThroughFastReversalsAndWraps() throws {
+        for width: CGFloat in [320, 420] {
+            let harness = try makeHarness(context: AtticDesignContext(controls: .craft)) { store in
+                _ = store.createDocumentNote(id: UUID(), document: NoteDocument(blocks:
+                    [.text("A long wrapped title with descenders gyp across several lines for fast reverse scrolling")] +
+                    (0..<80).map { .text("Body line \($0)") }))
+            }
+            harness.window.setContentSize(NSSize(width: width, height: 520))
+            harness.host.frame.size.width = width
+            XCTAssertTrue(harness.controller.open(noteID: try XCTUnwrap(harness.store.notes.first).id))
+            spin(0.3)
+            let engine = try XCTUnwrap(harness.controller.active?.engine)
+            let scroll = try XCTUnwrap(engine.scrollView)
+            let rest = -scroll.contentInsets.top
+            for _ in 0..<8 {
+                for y: CGFloat in [0, 60, 700, 130, 30, 500, 0] {
+                    scroll.contentView.scroll(to: NSPoint(x: 0, y: rest + y))
+                    scroll.reflectScrolledClipView(scroll.contentView)
+                    harness.host.layoutSubtreeIfNeeded()
+                    let fragment = try XCTUnwrap(engine.layoutManager?.textLayoutFragment(for: engine.contentStorage.documentRange.location))
+                    XCTAssertTrue(type(of: fragment) == NSTextLayoutFragment.self,
+                                  "scrolling must use the opaque native fragment, without an alpha/invalidation path")
+                }
+            }
         }
-        XCTAssertEqual(opacities.first, 1)
-        XCTAssertEqual(opacities.last, 0, "scrolled away: the header's title is the only one")
-        XCTAssertTrue(zip(opacities, opacities.dropFirst()).allSatisfy { $0 >= $1 }, "it only fades as the page scrolls on: \(opacities)")
-        XCTAssertTrue(opacities.contains { $0 > 0.05 && $0 < 0.95 }, "a fade, not a switch: \(opacities)")
+    }
 
-        // Back to the top: the title is back in full.
-        scroll.contentView.scroll(to: NSPoint(x: 0, y: rest))
-        scroll.reflectScrolledClipView(scroll.contentView)
-        spin(0.1)
-        XCTAssertEqual(engine.titleOpacity, 1)
+    func testAR04HeaderAppearsOnlyAfterTheLastTitleLineLeavesTheVisibleTop() {
+        for bottom: CGFloat in [90, 70, 50, 40] {
+            XCTAssertEqual(NoteTitleAccessories.headerProgress(titleBottom: bottom, visibleTop: 40), 0)
+        }
+        XCTAssertGreaterThan(NoteTitleAccessories.headerProgress(titleBottom: 30, visibleTop: 40), 0)
+        XCTAssertEqual(NoteTitleAccessories.headerProgress(titleBottom: 0, visibleTop: 40), 1)
     }
 
     func testH13ScrollingTextCannotEnterTheBottomControlsBand() throws {
@@ -251,47 +251,13 @@ final class NotesPageRenderTests: XCTestCase {
                 harness.host.layoutSubtreeIfNeeded()
             }
             top()
-            XCTAssertEqual(engine.titleOpacity, 1)
             let after = try XCTUnwrap(engine.titleLineRects())
             XCTAssertEqual(after.first, before.first, "the title's geometry survives viewport recycling")
             XCTAssertEqual(after.last, before.last)
             let layout = try XCTUnwrap(engine.layoutManager)
-            let fragment = try XCTUnwrap(layout.textLayoutFragment(for: engine.contentStorage.documentRange.location) as? NoteTitleLayoutFragment)
-            XCTAssertEqual(fragment.opacity, 1)
+            let fragment = try XCTUnwrap(layout.textLayoutFragment(for: engine.contentStorage.documentRange.location) )
+            XCTAssertTrue(type(of: fragment) == NSTextLayoutFragment.self)
         }
-    }
-
-    /// The title's fragment draws at the engine's opacity (and not at all
-    /// at 0): half the opacity is about half the ink.
-    func testTheTitleFragmentDrawsAtTheEnginesOpacity() throws {
-        let harness = try makeHarness(context: AtticDesignContext(controls: .craft)) { try Self.seedPricing($0) }
-        let pricing = try XCTUnwrap(harness.store.notes.first { $0.title.hasPrefix("Pricing") })
-        XCTAssertTrue(harness.controller.open(noteID: pricing.id))
-        spin(0.4)
-        let engine = try XCTUnwrap(harness.controller.active?.engine)
-        let layout = try XCTUnwrap(engine.layoutManager)
-        layout.ensureLayout(for: NSTextRange(location: engine.contentStorage.documentRange.location))
-        let fragment = try XCTUnwrap(layout.textLayoutFragment(for: engine.contentStorage.documentRange.location) as? NoteTitleLayoutFragment,
-                                     "the title paragraph has its own fragment")
-        func ink() -> Int {
-            let width = 400, height = 160
-            let context = CGContext(data: nil, width: width, height: height, bitsPerComponent: 8, bytesPerRow: width * 4,
-                                    space: CGColorSpaceCreateDeviceRGB(),
-                                    bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue)!
-            fragment.draw(at: CGPoint(x: 10, y: 10), in: context)
-            let bytes = context.data!.assumingMemoryBound(to: UInt8.self)
-            return stride(from: 3, to: width * height * 4, by: 4).reduce(0) { $0 + Int(bytes[$1]) }
-        }
-        engine.setTitleOpacity(1)
-        let full = ink()
-        XCTAssertGreaterThan(full, 0, "the title draws")
-        engine.setTitleOpacity(0.5)
-        let half = ink()
-        XCTAssertEqual(Double(half), Double(full) * 0.5, accuracy: Double(full) * 0.12)
-        engine.setTitleOpacity(0)
-        XCTAssertEqual(ink(), 0)
-        engine.setTitleOpacity(1)
-        XCTAssertEqual(ink(), full)
     }
 
     /// Notes v2 tables, sheet 3's sample in the real page, off screen (drawn
