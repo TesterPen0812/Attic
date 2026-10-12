@@ -27,6 +27,8 @@ struct NotesEditorPage: View {
     @Environment(\.atticTagColouring) private var tagColouring
     @Environment(\.atticPanelToasts) private var toasts
     @StateObject private var chrome = NotesPageChrome()
+    /// The header blur lab's choice (preview-only; Today elsewhere).
+    @ObservedObject private var headerBlur = AtticHeaderBlurLab.shared
     @StateObject private var library: NotesLibraryModel
     @StateObject private var damagedRecovery: NoteDamagedRecoveryExit
     @State private var searchFocused = false
@@ -293,8 +295,17 @@ struct NotesEditorPage: View {
                 // lines and attachment views drawing under the glass buttons.
                 // N-6 D: the text fades out before the header and before the
                 // bottom row, so none of it sits under the glass.
-                .atticControlsFade(top: layout.headerBottom, topRamp: AtticNoteMetrics.titleTopGap,
+                // Header blur lab: the text runs on under the header, into
+                // the variable blur, and dissolves only at the panel's edge.
+                .atticControlsFade(top: headerBlur.blursHeader ? 0 : layout.headerBottom,
+                                   topRamp: headerBlur.blursHeader ? AtticHeaderBlurMetrics.edgeRamp : AtticNoteMetrics.titleTopGap,
                                    bottom: Self.viewportEdge, bottomRamp: bottomInset)
+                .overlay(alignment: .top) {
+                    if headerBlur.blursHeader {
+                        AtticHeaderBlurBackdrop(height: layout.headerBottom + headerBlur.reach,
+                                                radius: headerBlur.radius, design: design)
+                    }
+                }
                 .padding(.bottom, bottomControls)
                 .accessibilityIdentifier("note-editor")
                 .accessibilitySortPriority(3)
