@@ -426,6 +426,9 @@ enum NoteFormatCaptureScene {
                                   below: NSRect(x: 24, y: rect.maxY, width: 10, height: 1), in: textView)
         case "notemenu":
             chrome.presentMenu()
+        case "notetags":
+            // The note's tag editor (Attic's tag picker; ⋯ itself is native).
+            chrome.presentTagEditor()
         case "fadecheck":
             // A long note scrolled so text sits under the header and the
             // bottom row (round 3's no-fade-behind-glass check).
