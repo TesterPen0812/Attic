@@ -283,6 +283,7 @@ final class AtticDropdownTests: XCTestCase {
         XCTAssertFalse(window.isVisible)
     }
 
+
     func testTheWidthFitsItsContentNeverUnderTheMinimumNeverPastTheMargin() {
         let m = AtticDropdownMetrics.self
         let available: CGFloat = 320 - m.panelMargin * 2
@@ -2267,4 +2268,19 @@ extension AtticDropdownTests {
         XCTAssertEqual(hidden, shown, accuracy: 0.01)
     }
 
+    /// O14-09: the weekday letters are quieter than the dates, and the
+    /// month sits evenly in its card: the title, Today and ‹ › on the grid's
+    /// columns, the marks as far from every edge, and as far apart across
+    /// as down.
+    func testR13TheCalendarIsQuieterAndEvenlyInset() {
+        let d = AtticDropdownMetrics.self
+        XCTAssertEqual(AtticTextStyle.dropdownWeekday.spec.weight, .regular)
+        XCTAssertLessThan(AtticTextStyle.dropdownWeekday.spec.size, AtticTextStyle.dropdownDay.spec.size)
+        let halfGap = (d.monthCellWidth - d.monthMark) / 2
+        let side = d.inset + d.monthGridInset + halfGap
+        XCTAssertEqual(d.inset + d.monthTitleLeading, side, "the month title starts at the first column's mark")
+        XCTAssertEqual(d.monthCellHeight, d.monthCellWidth, "a square grid: marks as far apart across as down")
+        XCTAssertEqual(d.inset + d.monthHeaderTop + (d.monthCellHeight - d.monthMark) / 2, side, "the header's marks as far from the top")
+        XCTAssertEqual(d.inset + d.monthGridBottom + halfGap, side, "the last week as far from the bottom")
+    }
 }

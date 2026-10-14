@@ -281,7 +281,9 @@ enum AtticTextStyle: String, CaseIterable, Sendable {
         case .dropdownRow: Spec(size: 13, weight: .regular, italic: false, monospacedDigits: false)
         case .dropdownHeading: Spec(size: 13, weight: .semibold, italic: false, monospacedDigits: false)
         case .dropdownDay: Spec(size: 12.5, weight: .regular, italic: false, monospacedDigits: true)
-        case .dropdownWeekday: Spec(size: 10, weight: .medium, italic: false, monospacedDigits: false)
+        // O14-09: the weekday letters read apart from the dates (owner
+        // 2026-10-14: "too strong"): secondary ink, smaller, regular.
+        case .dropdownWeekday: Spec(size: 10, weight: .regular, italic: false, monospacedDigits: false)
         case .rowMeta, .helper: Spec(size: 11.5, weight: .regular, italic: false, monospacedDigits: false)
         case .count: Spec(size: 11.5, weight: .regular, italic: false, monospacedDigits: true)
         case .rowMetaEmphasis: Spec(size: 11.5, weight: .medium, italic: false, monospacedDigits: false)

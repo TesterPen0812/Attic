@@ -430,6 +430,8 @@ struct AtticDateCard: View {
     var onCancel: (() -> Void)?
 
     @State private var state: AtticDateCardState?
+    /// ‹ (-1) or › (1) under the pointer.
+    @State private var hoveredMonthStep: Int?
     @FocusState private var focused: Bool
     @Environment(\.atticDesign) private var design
     @Environment(\.atticDropdownRegisterKeys) private var registerKeys
@@ -566,10 +568,12 @@ struct AtticDateCard: View {
             monthButton(-1, systemName: "chevron.left", label: String(localized: "Previous month"))
             monthButton(1, systemName: "chevron.right", label: String(localized: "Next month"))
         }
-        .padding(.leading, d.rowPadding)
-        .padding(.trailing, d.monthHeaderTrailing)
+        // A row of the grid (O14-09): the title starts at the first
+        // column's mark, ‹ › are the last two columns'.
+        .padding(.leading, d.monthTitleLeading)
+        .padding(.trailing, d.monthGridInset)
         .padding(.top, d.monthHeaderTop)
-        .frame(height: d.monthHeaderHeight + d.monthHeaderTop)
+        .frame(height: d.monthCellHeight + d.monthHeaderTop)
     }
 
     private func todayButton(lit: Bool) -> some View {
@@ -577,11 +581,14 @@ struct AtticDateCard: View {
         let tokens = design.tokens
         let shape = RoundedRectangle(cornerRadius: d.todayRadius, style: .circular)
         return Button { onPick(calendar.startOfDay(for: today)) } label: {
+            // Lit (the pointer or the keyboard) as a day is: the highlight
+            // fill; at rest only its words (O14-09: at rest it wore the
+            // highlight, so it read as hovered).
             AtticText(verbatim: String(localized: "Today"), style: .shortcut, ink: .body)
                 .fixedSize()
                 .padding(.horizontal, d.todayPadding)
                 .frame(height: d.todayHeight)
-                .background(AtticCalendarMark(radius: d.todayRadius, fill: tokens.dropdownHighlight.color, ring: lit ? tokens.ink(.heading).color : .clear))
+                .background(AtticCalendarMark(radius: d.todayRadius, fill: (lit ? tokens.dropdownHighlight : .clear).color, ring: .clear))
                 .contentShape(shape)
         }
         .buttonStyle(AtticUndimmedButtonStyle())
@@ -601,16 +608,24 @@ struct AtticDateCard: View {
         .accessibilityValue(AtticDateCardFormat.spoken(today, calendar: calendar))
     }
 
+    /// ‹ or ›: a grid cell, its mark lit under the pointer as a day's is.
     private func monthButton(_ step: Int, systemName: String, label: String) -> some View {
         let d = AtticDropdownMetrics.self
+        let lit = hoveredMonthStep == step
         return Button { update { _ = $0.apply(.month(step), calendar: calendar, suggestions: 0, typing: false, hasRemove: false) } } label: {
             AtticIcon(systemName: systemName, size: d.monthChevron, weight: .regular, ink: .icon)
-                .frame(width: d.monthButton, height: d.monthHeaderHeight)
+                .frame(width: d.monthMark, height: d.monthMark)
+                .background(AtticCalendarMark(radius: d.monthMarkRadius, fill: (lit ? design.tokens.dropdownHighlight : .clear).color,
+                                              ring: .clear))
+                .frame(width: d.monthCellWidth, height: d.monthCellHeight)
                 .contentShape(Rectangle())
         }
-        .buttonStyle(.plain)
+        .buttonStyle(AtticUndimmedButtonStyle())
         .focusable(false)
         .focusEffectDisabled()
+        .onHover { inside in
+            if inside { hoveredMonthStep = step } else if hoveredMonthStep == step { hoveredMonthStep = nil }
+        }
         .help(label)
         .accessibilityLabel(label)
     }
