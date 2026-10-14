@@ -188,6 +188,30 @@ final class NoteEditorEngineTests: XCTestCase {
         XCTAssertTrue(tip.document().blocks.dropFirst().allSatisfy { $0.callout == "💡" })
     }
 
+    func testR14MarkdownExportRoundTripsCodeCalloutsStartsAndBreaks() throws {
+        var code = NoteBlock.text("const n = 4;", style: "mono"); code.language = "javascript"
+        var nextCode = NoteBlock.text("``` inside", style: "mono"); nextCode.language = "javascript"
+        var tip = NoteBlock.text("Advice\u{2028}Next", style: "quote"); tip.callout = "💡"
+        var tip2 = NoteBlock.text("Other paragraph", style: "quote"); tip2.callout = "💡"
+        var item = NoteBlock.text("Step\u{2028}Continuation", style: "number"); item.start = 12
+        var child = NoteBlock.text("Child", style: "number"); child.indent = 1
+        var heading = NoteBlock.text("Small", style: "heading"); heading.level = 6
+        let document = NoteDocument(blocks: [.text("T"), code, nextCode, tip, tip2, item, child, .text("Next", style: "number"), heading])
+        let markdown = NoteMarkdownExport.markdown(document)
+        XCTAssertTrue(markdown.contains("````javascript\nconst n = 4;\n``` inside\n````"))
+        XCTAssertTrue(markdown.contains("> [!NOTE]\n> 💡 Advice\\\n> Next\n>\n> Other paragraph"))
+        XCTAssertTrue(markdown.contains("12. Step\\\n    Continuation\n    1. Child\n13. Next"))
+        XCTAssertTrue(markdown.contains("###### Small"))
+        let imported = try NoteMarkdownImport.document(markdown)
+        XCTAssertEqual(imported.blocks.map(\.text), document.blocks.map(\.text))
+        XCTAssertEqual(imported.blocks[1].language, "javascript")
+        XCTAssertEqual(imported.blocks[3].callout, "💡")
+        XCTAssertEqual(imported.blocks[5].start, 12)
+        XCTAssertEqual(imported.blocks[6].indent, 1)
+        XCTAssertEqual(NoteTextExport.plainLine(tip), "💡 Advice\u{2028}Next")
+        XCTAssertEqual(NoteTextExport.plainLine(code), "const n = 4;")
+    }
+
     private let checklistID = UUID()
     private let dateID = UUID()
     private let imageID = UUID()
