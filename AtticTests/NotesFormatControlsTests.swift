@@ -484,6 +484,14 @@ final class NotesFormatControlsTests: XCTestCase {
         XCTAssertLessThanOrEqual(compact, 288, "the longest style name fits the narrowest panel")
         XCTAssertGreaterThan(NoteFormatRowView.minimumWidth(snapshot: subheading, toggleWidth: AtticNoteFormatMetrics.rowToggleWidth), 288,
                              "with 28 pt cells it would not")
+        // R14: Small Heading and Callout fit too.
+        for style in [NoteParagraphStyle.heading(4), .callout(icon: "💡")] {
+            var snapshot = NoteFormatSnapshot.empty
+            snapshot.paragraph = style
+            XCTAssertLessThanOrEqual(NoteFormatRowView.minimumWidth(snapshot: snapshot, toggleWidth: AtticNoteFormatMetrics.rowCompactToggleWidth),
+                                     288, "\(style) fits the narrowest panel's row")
+            XCTAssertLessThanOrEqual(NoteFormatControls.barWidth(styleName: NoteCommandCatalog.styleName(style)), 320 - 8)
+        }
     }
 
     // MARK: The / list

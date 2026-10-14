@@ -1057,7 +1057,7 @@ enum NoteCalloutIcons {
 /// of 2 pt, 4 apart both ways, in the table grips' quiet ink, in a 24 × 28
 /// hit area. A click selects the block; a drag moves it. VoiceOver moves it
 /// with Move Block Up and Move Block Down.
-final class NoteBlockHandleView: NSView {
+final class NoteBlockHandleView: NSControl {
     private typealias T = AtticNoteType
     var ink: NSColor = .tertiaryLabelColor { didSet { needsDisplay = true } }
     var onPress: ((NSEvent) -> Void)?

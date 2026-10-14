@@ -97,7 +97,9 @@ enum NoteCommandCatalog {
         case .heading(1): String(localized: "Title")
         case .heading(2): String(localized: "Heading")
         case .heading(3): String(localized: "Subheading")
-        case .heading: String(localized: "Small Heading")
+        // "Small Heading" would overflow a 320 pt panel's row (301 > 288 pt);
+        // the list keeps the full name, as Mono stands for Code Block.
+        case .heading: String(localized: "Small")
         case .mono: String(localized: "Mono")
         case .bullet: String(localized: "List")
         case .number: String(localized: "List")
