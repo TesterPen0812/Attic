@@ -27,6 +27,8 @@ struct NotesEditorPage: View {
     @Environment(\.atticTagColouring) private var tagColouring
     @Environment(\.atticPanelToasts) private var toasts
     @StateObject private var chrome = NotesPageChrome()
+    /// The header blur lab's choice (preview-only; Today elsewhere).
+    @ObservedObject private var headerBlur = AtticHeaderBlurLab.shared
     @StateObject private var library: NotesLibraryModel
     @StateObject private var damagedRecovery: NoteDamagedRecoveryExit
     @State private var searchFocused = false
@@ -256,6 +258,13 @@ struct NotesEditorPage: View {
         .accessibilityIdentifier("notes-editor-page")
     }
 
+    /// The header blur lab's text fade, or nil for Today's fade (N-6 D).
+    private var headerBlurFade: (top: CGFloat, ramp: CGFloat)? {
+        headerBlur.blursHeader
+            ? AtticHeaderBlurMetrics.textFade(headerBottom: layout.headerBottom, translucent: design.isTranslucent)
+            : nil
+    }
+
     private var showsEditor: Bool {
         !controller.isLibraryPresented && controller.proposalReview == nil && controller.active != nil
     }
@@ -293,8 +302,17 @@ struct NotesEditorPage: View {
                 // lines and attachment views drawing under the glass buttons.
                 // N-6 D: the text fades out before the header and before the
                 // bottom row, so none of it sits under the glass.
-                .atticControlsFade(top: layout.headerBottom, topRamp: AtticNoteMetrics.titleTopGap,
+                // Header blur lab: the text runs on under the header, into
+                // the variable blur, and dissolves only at the panel's edge.
+                .atticControlsFade(top: headerBlurFade?.top ?? layout.headerBottom,
+                                   topRamp: headerBlurFade?.ramp ?? AtticNoteMetrics.titleTopGap,
                                    bottom: Self.viewportEdge, bottomRamp: bottomInset)
+                .overlay(alignment: .top) {
+                    if headerBlur.blursHeader {
+                        AtticHeaderBlurBackdrop(height: layout.headerBottom + headerBlur.reach,
+                                                radius: headerBlur.radius, design: design)
+                    }
+                }
                 .padding(.bottom, bottomControls)
                 .accessibilityIdentifier("note-editor")
                 .accessibilitySortPriority(3)
