@@ -205,6 +205,24 @@ final class O14FirstClickKeyLookTests: XCTestCase {
     }
 }
 
+/// O14-05 (owner, 2026-10-14): the pinned pin is filled, and under the
+/// pointer it shows the unpin glyph; unpinned it stays the outline pin.
+final class O14PinGlyphTests: XCTestCase {
+    func testThePinsGlyphForEachState() {
+        typealias M = AtticRaisedButtonMetrics
+        let pinned = { (state: AtticControlState) in M.shownSymbol("pin", on: M.pinnedSymbol, onHover: M.unpinSymbol, state: state) }
+        XCTAssertEqual(M.shownSymbol("pin", on: nil, onHover: nil, state: .rest), "pin", "unpinned")
+        XCTAssertEqual(M.shownSymbol("pin", on: nil, onHover: nil, state: .hover), "pin", "unpinned, hovered")
+        XCTAssertEqual(pinned(.rest), "pin.fill")
+        XCTAssertEqual(pinned(.focused), "pin.fill")
+        XCTAssertEqual(pinned(.hover), "pin.slash")
+        XCTAssertEqual(pinned(.pressed), "pin.slash")
+        for name in [M.pinnedSymbol, M.unpinSymbol] {
+            XCTAssertNotNil(NSImage(systemSymbolName: name, accessibilityDescription: nil), name)
+        }
+    }
+}
+
 // MARK: - 3. Thin overlay scrollers, hidden during page swipes
 
 @MainActor
