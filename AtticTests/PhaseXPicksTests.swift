@@ -163,35 +163,9 @@ final class PhaseXPicksTests: XCTestCase {
         XCTAssertEqual(AtticDropdownReveal.revealAnimation, AtticDropdownReveal.openAnimation)
     }
 
-    // MARK: - N-6: content fades before the controls
-
-    /// Gone at a control's edge, whole a ramp away, whole in between.
-    func testContentFadesOutBeforeEachControl() {
-        let height: CGFloat = 500
-        let stops = AtticControlsFade.stops(height: height, top: 80, topRamp: 20, bottom: 60, bottomRamp: 20)
-        func opacity(_ y: CGFloat) -> Double { AtticScrollUnderFade.opacity(stops, at: y, height: height) }
-        XCTAssertEqual(opacity(0), 0, accuracy: 0.001, "nothing under the header")
-        XCTAssertEqual(opacity(80), 0, accuracy: 0.001, "gone at the control's edge")
-        XCTAssertEqual(opacity(100), 1, accuracy: 0.001)
-        XCTAssertEqual(opacity(250), 1, accuracy: 0.001)
-        XCTAssertEqual(opacity(420), 1, accuracy: 0.001)
-        XCTAssertEqual(opacity(440), 0, accuracy: 0.001, "gone at the bottom control's edge")
-        XCTAssertEqual(opacity(500), 0, accuracy: 0.001, "nothing under the add bar")
-        let ramp = stride(from: CGFloat(80), through: 100, by: 1).map(opacity)
-        XCTAssertEqual(ramp, ramp.sorted())
-    }
-
-    /// Tasks: rows are gone at the tabs line (Find's field included) and
-    /// whole by the first row's words at rest.
-    func testTasksRowsFadeBeforeTheTabsAndAreWholeAtRest() {
-        let tabsTop: CGFloat = 80, height: CGFloat = 520
-        let stops = TasksViewport.maskStops(height: height, tabsTop: tabsTop)
-        func opacity(_ y: CGFloat) -> Double { AtticScrollUnderFade.opacity(stops, at: y, height: height) }
-        XCTAssertEqual(opacity(TasksViewport.controlsBottom(tabsTop: tabsTop)), 0, accuracy: 0.001)
-        let words = TasksViewport.listTop(tabsTop: tabsTop) + AtticTaskRowMetrics.titleTop(twoLine: false)
-        XCTAssertEqual(opacity(words), 1, accuracy: 0.001, "the first row's words are whole at rest")
-        XCTAssertEqual(opacity(height), 1, accuracy: 0.001, "the bottom stack's fade is its own mask")
-    }
+    // N-6 D (content fades before the controls) was replaced by the
+    // floating controls with the variable blur (owner, 2026-10-14):
+    // `FloatingControlsTests`.
 
     // MARK: - N-5: the active cell
 

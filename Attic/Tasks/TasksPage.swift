@@ -185,10 +185,11 @@ struct TasksPage: View {
         // controls retain their page-level layer and hit points; the lifted
         // card stays above both.
         ZStack(alignment: .top) {
-            // Clean cut with the scroll-under fade (A15). The native soft
-            // edge stays off. Round 4 (owner): the rows dissolve into the
-            // panel's top and bottom edges, once for the whole pager.
+            // Floating controls (owner, 2026-10-14): the rows run on under
+            // the controls, into the variable blur, drawn once for the whole
+            // pager. The native soft edge stays off.
             pager
+            TasksEdgeBackdrops(top: viewportTop, stack: bottomStack, bottomInset: bottomInset)
             // The controls float over the lists in both, in the page's own
             // layer.
             tabsBand
@@ -4198,15 +4199,17 @@ final class TasksBottomStackHeight: ObservableObject {
     }
 }
 
-/// The viewport's fade: only the tabs line (plain text) has one; the
-/// header and the bottom stack are glass (owner, 2026-10-06).
+/// The viewport's top fade (floating controls, owner 2026-10-14): rows run
+/// on under the header and the tabs line, faint behind the tabs' plain
+/// text; on a see-through panel they fade out behind the controls.
 private struct TasksViewportMask: View {
     let tabsTop: CGFloat
+    @Environment(\.atticDesign) private var design
 
     var body: some View {
         GeometryReader { proxy in
             LinearGradient(
-                stops: TasksViewport.maskStops(height: proxy.size.height, tabsTop: tabsTop)
+                stops: TasksViewport.maskStops(height: proxy.size.height, tabsTop: tabsTop, translucent: design.isTranslucent)
                     .map { Gradient.Stop(color: .black.opacity($0.opacity), location: $0.location) },
                 startPoint: .top, endPoint: .bottom
             )
@@ -4318,16 +4321,31 @@ private struct TasksListEdges<Mask: View>: ViewModifier {
     }
 }
 
-/// N-6 D (owner 2026-10-11): rows fade out before the bottom stack's top
-/// (the add bar, or the strip, a selection bar or a paste offer over it),
-/// so nothing runs under the glass. The measured stack follows at once;
-/// the delayed mask height must never leave two text lines superimposed.
+/// The bottom stack's fade (floating controls, owner 2026-10-14): rows
+/// run on under the add bar (and the strip, a selection bar or a paste
+/// offer over it), into the variable blur; faint behind the composer's
+/// plain strip; on a see-through panel they fade out behind the stack.
+/// The measured stack follows at once; the delayed mask height must never
+/// leave two text lines superimposed.
 struct TasksPlainControlsMask: View {
     let stackHeight: CGFloat
     let bottomInset: CGFloat
 
     var body: some View {
-        AtticControlsFadeMask(top: 0, bottom: TasksViewport.controlsInset(stack: stackHeight, bottomInset: bottomInset))
+        AtticFloatingEdgesMask(edges: TasksViewport.bottomEdges(stack: stackHeight, bottomInset: bottomInset))
+    }
+}
+
+/// The page's two backdrops, once for the whole pager (not per list): the
+/// variable blur behind the header and the tabs line, and behind the
+/// bottom stack as it is measured.
+struct TasksEdgeBackdrops: View {
+    let top: CGFloat
+    @ObservedObject var stack: TasksBottomStackHeight
+    let bottomInset: CGFloat
+
+    var body: some View {
+        AtticEdgeBlurBackdrops(top: top, bottom: TasksViewport.controlsInset(stack: stack.height, bottomInset: bottomInset))
     }
 }
 
@@ -4352,6 +4370,19 @@ enum TasksViewport {
         let idle = AtticControlSize.addBarHeight + AtticPickerMetrics.stripToBar
         let visible = stack <= idle + 0.5 ? AtticControlSize.addBarHeight : stack
         return max(visible, AtticControlSize.addBarHeight) + bottomInset
+    }
+
+    /// The tabs' plain text line, down from the page's top.
+    static func plainLine(tabsTop: CGFloat) -> ClosedRange<CGFloat> {
+        tabsTop...(tabsTop + AtticLayout.pageTabsHeight)
+    }
+
+    /// The bottom stack's floating edge: its top, and the composer's plain
+    /// strip (when shown) over the add bar.
+    static func bottomEdges(stack: CGFloat, bottomInset: CGFloat) -> AtticFloatingEdges {
+        let bar = AtticControlSize.addBarHeight + bottomInset
+        let top = controlsInset(stack: stack, bottomInset: bottomInset)
+        return AtticFloatingEdges(bottom: top, bottomPlain: top > bar + 0.5 ? bar...top : nil)
     }
 
     /// Where the first row rests: the tabs, then 14.
@@ -4404,19 +4435,17 @@ enum TasksViewport {
         return .bottom(min(max((visible - room - height) / (visible - height), 0), 1))
     }
 
-    /// The fade by position in the viewport (N-6 D, owner 2026-10-11): no
-    /// overlay behind the tabs; rows are gone at the tabs line's lower edge
-    /// (Find's taller field included) and whole where the first row rests,
-    /// so nothing sits under the header or the tabs. Static geometry.
-    static func maskStops(height: CGFloat, tabsTop: CGFloat) -> [(location: CGFloat, opacity: Double)] {
-        AtticControlsFade.stops(height: height, top: controlsBottom(tabsTop: tabsTop),
-                                topRamp: topRamp(tabsTop: tabsTop), bottom: 0)
+    /// The fade by position in the viewport (floating controls, owner
+    /// 2026-10-14; it replaces N-6 D): rows run on under the header and the
+    /// tabs line, into the variable blur, faint behind the tabs' plain text
+    /// and, on a see-through panel, gone behind the controls (Find's taller
+    /// field included). Static geometry.
+    static func maskStops(height: CGFloat, tabsTop: CGFloat, translucent: Bool = false) -> [(location: CGFloat, opacity: Double)] {
+        topEdges(tabsTop: tabsTop).stops(height: height, translucent: translucent)
     }
 
-    /// From the tabs line's lower edge to where the first row rests, so a
-    /// resting row (its highlight too) is whole.
-    static func topRamp(tabsTop: CGFloat) -> CGFloat {
-        max(6, listTop(tabsTop: tabsTop) - controlsBottom(tabsTop: tabsTop))
+    static func topEdges(tabsTop: CGFloat) -> AtticFloatingEdges {
+        AtticFloatingEdges(top: controlsBottom(tabsTop: tabsTop), topPlain: plainLine(tabsTop: tabsTop))
     }
 }
 

@@ -357,17 +357,18 @@ struct NotesLibraryView: View {
                            value: model.orderedIDs(groups))
             }
             .contentMargins(.top, restTop, for: .scrollContent)
-            .contentMargins(.bottom, bottomClearance, for: .scrollContent)
+            .contentMargins(.bottom, bottomControls + bottomClearance, for: .scrollContent)
             .contentMargins(.top, restTop, for: .scrollIndicators)
+            .contentMargins(.bottom, bottomControls, for: .scrollIndicators)
             .scrollIndicators(.automatic)
             .scrollEdgeEffectHidden(true, for: .all)
-            // F-13: the library shares the editor's reserved footer band.
-            // N-6 D: rows fade out before the label line (and the header
-            // above it) and before the bottom row, as on Tasks.
-            .atticControlsFade(top: TasksViewport.controlsBottom(tabsTop: labelsTop),
-                               topRamp: TasksViewport.topRamp(tabsTop: labelsTop),
-                               bottom: NotesEditorPage.viewportEdge, bottomRamp: bottomClearance)
-            .padding(.bottom, bottomControls)
+            // Floating controls (owner, 2026-10-14), as in the note: the
+            // rows run on under the header, the label line and the bottom
+            // row, into the variable blur; faint behind the label line.
+            .atticFloatingControls(AtticFloatingEdges(top: TasksViewport.controlsBottom(tabsTop: labelsTop),
+                                                      bottom: bottomControls,
+                                                      topPlain: TasksViewport.plainLine(tabsTop: labelsTop)))
+            .overlay { AtticFloatingControlsBand(height: bottomControls) }
             .coordinateSpace(Self.space)
             // Right-click anywhere the rows are not (all of it, with none):
             // the library's history, so Undo never depends on a row.

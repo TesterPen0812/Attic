@@ -20,8 +20,8 @@ struct MotionLabSettingsGroup: View {
     /// The header's corner buttons (owner, 2026-10-02): Liquid Glass, or
     /// L3's flat surface, to compare.
     @ObservedObject private var cornerButtons = AtticCornerButtonsLab.shared
-    /// The Notes header's scrolled-text treatment (owner, 2026-10-12).
-    @ObservedObject private var headerBlur = AtticHeaderBlurLab.shared
+    /// The floating controls' edge blur, tuned live (owner, 2026-10-14).
+    @ObservedObject private var edgeBlur = AtticEdgeBlurLab.shared
 
     var body: some View {
         SettingsGroup(
@@ -50,21 +50,14 @@ struct MotionLabSettingsGroup: View {
                 identifier: "setting-motion-leave"
             )
             AtticGroupDivider()
-            if headerBlur.offersChoice {
-                AtticSegmentedRow(
-                    title: "Notes header",
-                    choices: AtticHeaderBlurStyle.allCases.map { ($0, $0.title) },
-                    selection: $headerBlur.style,
-                    identifier: "setting-header-blur"
-                )
+            if edgeBlur.offersTuning {
+                AtticSliderRow(label: "Edge blur strength", valueText: String(format: "%.1f pt", edgeBlur.radius),
+                               value: $edgeBlur.radius, range: AtticEdgeBlurLab.radiusRange, step: 0.5,
+                               identifier: "setting-edge-blur-radius")
                 AtticGroupDivider()
-                AtticSliderRow(label: "Blur strength", valueText: String(format: "%.0f pt", headerBlur.radius),
-                               value: $headerBlur.radius, range: AtticHeaderBlurLab.radiusRange, step: 0.5,
-                               identifier: "setting-header-blur-radius")
-                AtticGroupDivider()
-                AtticSliderRow(label: "Blur reach below header", valueText: String(format: "%.0f pt", headerBlur.reach),
-                               value: $headerBlur.reach, range: AtticHeaderBlurLab.reachRange, step: 1,
-                               identifier: "setting-header-blur-reach")
+                AtticSliderRow(label: "Edge blur reach", valueText: String(format: "%.0f pt", edgeBlur.reach),
+                               value: $edgeBlur.reach, range: AtticEdgeBlurLab.reachRange, step: 1,
+                               identifier: "setting-edge-blur-reach")
                 AtticGroupDivider()
             }
             if cornerButtons.offersChoice {

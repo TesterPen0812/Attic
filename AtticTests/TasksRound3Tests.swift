@@ -336,14 +336,17 @@ final class TasksRound3Tests: XCTestCase {
         XCTAssertEqual(TasksViewport.bottomClearance(stackHeight: 0, bottomInset: 12),
                        AtticControlSize.addBarHeight + 12 + AtticLayout.contentToAddBar, "never less than the bar")
         let stops = TasksViewport.maskStops(height: 520, tabsTop: 80)
-        // N-6 D (owner 2026-10-11): gone under the header and the tabs, whole
-        // from the first row's rest; the add bar's fade is the stack's mask.
-        XCTAssertEqual(stops.first?.opacity ?? 1, 0, accuracy: 0.001, "nothing under the header")
+        // Floating controls (owner 2026-10-14, replacing N-6 D): whole under
+        // the glass header (the blur covers it), faint behind the tabs'
+        // plain text, whole from the first row's rest; the add bar's edge
+        // is the stack's mask.
+        XCTAssertEqual(stops.first?.opacity ?? 0, 1, accuracy: 0.001, "runs on under the header")
         XCTAssertEqual(stops.first { $0.location >= 110.0 / 520 - 0.0001 }?.opacity, 1, "fully there from the first row's rest")
         XCTAssertEqual(stops.last?.opacity ?? 0, 1, accuracy: 0.001, "this mask is whole at the bottom")
         XCTAssertEqual(stops.map(\.location), stops.map(\.location).sorted(), "stops in order")
         for y in stride(from: CGFloat(80), through: 96, by: 1) {
-            XCTAssertEqual(AtticScrollUnderFade.opacity(stops, at: y, height: 520), 0, accuracy: 0.001, "gone behind the tabs")
+            XCTAssertEqual(AtticScrollUnderFade.opacity(stops, at: y, height: 520), AtticScrollUnderFade.behindText,
+                           accuracy: 0.001, "faint behind the tabs")
         }
     }
 

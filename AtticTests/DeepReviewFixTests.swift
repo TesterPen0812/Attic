@@ -175,17 +175,17 @@ final class DeepReviewFixTests: XCTestCase {
             }
             XCTAssertGreaterThan(difference(top: bodyTop, bottom: bodyBottom), 0.02,
                                  "\(state): rows actually moved between captures")
-            // N-6 D (owner 2026-10-11, replacing 2026-10-06's full ink under
-            // the glass): nothing moves under the header, behind the tabs
-            // line (Find's field included) or under the bottom stack. The
-            // body's movement above is the positive control.
-            let controlsBottom = TasksViewport.controlsBottom(tabsTop: tabsTop)
+            // Floating controls (owner 2026-10-14, replacing N-6 D): nothing
+            // readable moves behind the tabs' plain line (Find's field
+            // included), and the rows run on under the bottom stack, into
+            // the blur behind it. The body's movement above is the positive
+            // control.
             for phase in [CGFloat(0), AtticLayout.rowPitch / 3, AtticLayout.rowPitch * 2 / 3] {
                 if phase > 0 { first = try capture(260 - phase); second = try capture(200 - phase) }
-                XCTAssertLessThan(difference(top: 0, bottom: controlsBottom), 0.0005,
-                                  "\(state): no ink under the header or the tabs at phase \(phase)")
-                XCTAssertLessThan(difference(top: bottom, bottom: hosted.height), 0.0005,
-                                  "\(state): no ink under the bottom stack at phase \(phase)")
+                XCTAssertLessThan(difference(top: tabsTop, bottom: tabsTop + AtticLayout.pageTabsHeight, threshold: 0.2), 0.0005,
+                                  "\(state): nothing readable behind the tabs at phase \(phase)")
+                XCTAssertGreaterThan(difference(top: bottom, bottom: hosted.height), 0.0005,
+                                     "\(state): rows run on under the bottom stack at phase \(phase)")
             }
             _ = negativeControl
             XCTAssertTrue(ScrollEdgeTests.pockets(in: list).isEmpty, "\(state): no native edge")
