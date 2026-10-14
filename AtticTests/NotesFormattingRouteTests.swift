@@ -83,7 +83,7 @@ final class NotesFormattingRouteTests: XCTestCase {
         let typed = view.selectedRange().location - 1
         XCTAssertEqual(engine.paragraphStyle(at: typed), expected, "\(label) typed block")
         let actual = engine.textStorage.attribute(.font, at: typed, effectiveRange: nil) as? NSFont
-        let base = engine.style.paragraphAttributes(style: expected.storageName, level: expected.level, indent: nil)
+        let base = engine.style.paragraphAttributes(style: expected.storageName, level: expected.level, indent: nil, callout: expected.calloutIcon)
         XCTAssertEqual(actual?.fontName, (base[.font] as? NSFont)?.fontName, "\(label) typed font")
         XCTAssertEqual(actual?.pointSize, (base[.font] as? NSFont)?.pointSize, "\(label) typed size")
         if expected == .quote {
@@ -100,8 +100,8 @@ final class NotesFormattingRouteTests: XCTestCase {
         view.insertNewline(nil)
         let expected: NoteParagraphStyle = if case .heading = style { .body } else { style }
         XCTAssertEqual(engine.paragraphStyle(at: view.selectedRange().location), expected, "\(label) Return block")
-        if style == .quote || style == .mono {
-            XCTAssertEqual(engine.history.undoActionName, style == .quote ? "Continue Quote" : "Continue Mono", label)
+        if style == .quote || style.isCode || style.isCallout {
+            XCTAssertEqual(engine.history.undoActionName, style == .quote ? "Continue Quote" : (style.isCallout ? "Continue Callout" : "Continue Mono"), label)
         }
         engine.history.breakCoalescing()
         type("R", into: view)
@@ -181,7 +181,8 @@ final class NotesFormattingRouteTests: XCTestCase {
     func testEverySlashEntryInEveryStateThroughAcceptanceTypingReturnAndUndo() {
         let styles: [NoteSlashItem.Kind: NoteParagraphStyle] = [.title: .heading(1), .heading: .heading(2), .subheading: .heading(3),
             .body: .body, .bullet: .bullet,
-            .number: .number, .checklist: .checklist, .quote: .quote, .mono: .mono]
+            .number: .number, .checklist: .checklist, .quote: .quote, .mono: .mono,
+            .smallHeading: .heading(4), .callout: .callout(icon: "💡"), .diagram: .mono(language: "mermaid")]
         for kind in NoteSlashItem.Kind.allCases {
             for state in State.allCases {
                 let label = "slash/\(kind.rawValue)/\(state.rawValue)"
@@ -227,7 +228,7 @@ final class NotesFormattingRouteTests: XCTestCase {
     }
 
     func testMarkdownRoutesTypeReturnAndLiteralUndoInEveryState() {
-        let habits: [(String, NoteParagraphStyle?)] = [("# ", .heading(2)), ("## ", .heading(2)), ("### ", .heading(3)), ("- ", .bullet),
+        let habits: [(String, NoteParagraphStyle?)] = [("# ", .heading(1)), ("## ", .heading(2)), ("### ", .heading(3)), ("- ", .bullet),
             ("* ", .bullet), ("1. ", .number), ("> ", .quote), ("-[] ", .checklist),
             ("- [ ] ", .checklist), ("- [x] ", .checklist), ("``` ", .mono), ("[] ", .checklist)]
         for (prefix, expected) in habits {
@@ -333,7 +334,10 @@ final class NotesFormattingRouteTests: XCTestCase {
                     let (engine, view, router) = make(state)
                     if command == .indent || command == .outdent {
                         XCTAssertTrue(router.run(.paragraph(.bullet), from: surface))
-                        if command == .outdent { XCTAssertTrue(router.run(.indent, from: surface)) }
+                        if command == .outdent {
+                            let mayIndent = router.validation(.indent).enabled
+                            XCTAssertEqual(router.run(.indent, from: surface), mayIndent)
+                        }
                     } else if command == .toggleChecklist {
                         XCTAssertTrue(router.run(.paragraph(.checklist), from: surface))
                     }
@@ -674,8 +678,8 @@ final class A38NotesRegressionTests: XCTestCase {
             let result = engine.document()
             XCTAssertEqual(result.blocks.map(\.text), ["T", "Prefix one", "two", "threeTail \u{FFFC}", "Neighbor"], style)
             XCTAssertEqual(result.blocks[1].style, style)
-            XCTAssertNil(result.blocks[2].style)
-            XCTAssertNil(result.blocks[3].style)
+            XCTAssertEqual(result.blocks[2].style, style == "mono" ? "mono" : nil)
+            XCTAssertEqual(result.blocks[3].style, style == "mono" ? "mono" : nil)
             XCTAssertEqual(result.blocks[3].inlines, block.inlines)
             XCTAssertEqual(result.blocks[4].style, "heading")
             let encoded = try NoteContentCodec.encode(result)

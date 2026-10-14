@@ -316,7 +316,7 @@ final class NotesShortcutMetadataTests: XCTestCase {
         for surface: NoteCommandSurface in [.noteMenu, .contextMenu, .menuBar, .formatBar, .selectionBar] {
             let menu = router.formatMenuCommands(from: surface)
             let expected: [(String, KeyEquivalent, EventModifiers)] = [
-                ("Quote", "4", [.command, .option]), ("Mono", "5", [.command, .option]),
+                ("Quote", "4", [.command, .option]), ("Code Block", "5", [.command, .option]),
                 ("Checklist", "9", [.command, .shift])
             ]
             for (title, key, modifiers) in expected {

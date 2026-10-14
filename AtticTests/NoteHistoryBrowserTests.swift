@@ -5,6 +5,25 @@ import XCTest
 
 @MainActor
 final class NoteHistoryBrowserTests: XCTestCase {
+    func testR14VersionRestoreKeepsLineBreakAndRunFields() async throws {
+        var number = NoteBlock.text("item", style: "number"); number.start = 12
+        var code = NoteBlock.text("a\u{2028}b", style: "mono"); code.language = "swift"
+        var callout = NoteBlock.text("Tip", style: "quote"); callout.callout = "💡"
+        let document = NoteDocument(blocks: [.text("T"), number, code, callout])
+        guard case let .success((id, _)) = store.createDocumentNote(id: UUID(), document: document) else { return XCTFail() }
+        await XCTAssertTrueAsync(await controller.openDurably(noteID: id))
+        XCTAssertTrue(store.recordVersion(noteID: id, reason: .pause))
+        try type(" latest")
+        await XCTAssertTrueAsync(await controller.openHistoryDurably())
+        await XCTAssertTrueAsync(await controller.restoreHistoryVersionDurably())
+        let restored = try XCTUnwrap(controller.active?.engine.document())
+        XCTAssertEqual(restored.blocks, document.blocks)
+        XCTAssertTrue(restored.blocks[2].text.contains("\u{2028}"))
+        XCTAssertEqual(restored.blocks[1].start, 12)
+        XCTAssertEqual(restored.blocks[2].language, "swift")
+        XCTAssertEqual(restored.blocks[3].callout, "💡")
+    }
+
     private var gate: PersistenceGate!
     private var store: NoteStore!
     private var controller: NotesPageController!

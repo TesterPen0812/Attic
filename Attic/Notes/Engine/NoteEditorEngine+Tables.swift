@@ -633,7 +633,7 @@ extension NoteEditorEngine {
     func convertPipeRowToTable(line: NSRange) -> Bool {
         let typed = (textStorage.string as NSString).substring(with: line)
         let text = typed.trimmingCharacters(in: .whitespaces)
-        guard text.hasPrefix("|"), text.hasSuffix("|"), text.count > 2, paragraphStyle(at: line.location) != .mono,
+        guard text.hasPrefix("|"), text.hasSuffix("|"), text.count > 2, paragraphStyle(at: line.location) == .body,
               let cells = NoteTableText.pipeCells(text), cells.count >= 2,
               cells.count <= NoteTable.maxColumns, NoteTableText.delimiterAlignments(text) == nil else { return false }
         let table = NoteTable(texts: [cells] + Array(repeating: Array(repeating: "", count: cells.count), count: 2))

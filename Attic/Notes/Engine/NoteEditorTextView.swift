@@ -593,7 +593,10 @@ final class NoteEditorTextView: NSTextView, NSAccessibilityCustomRotorItemSearch
         guard engine != nil else { return super.printView(sender) }
         printNote(sender)
     }
-    override func paste(_ sender: Any?) { asUserEdit { super.paste(sender) } }
+    override func paste(_ sender: Any?) {
+        if engine?.handlePaste(.general) == true { return }
+        asUserEdit { super.paste(sender) }
+    }
     override func pasteAsPlainText(_ sender: Any?) {
         engine?.isPastingAsPlainText = true
         defer { engine?.isPastingAsPlainText = false }

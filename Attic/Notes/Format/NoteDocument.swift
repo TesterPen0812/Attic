@@ -188,6 +188,21 @@ struct NoteBlock: Equatable, Sendable {
     /// The whole JSON value of an unreadable block.
     var opaque: NoteJSON?
 
+    /// R14 display hints deliberately live in extras. Int12 reads, edits and
+    /// writes these fields without recognizing any new style or capability.
+    var start: Int? {
+        get { extras["start"]?.intValue.flatMap { $0 >= 2 ? $0 : nil } }
+        set { extras["start"] = newValue.flatMap { $0 >= 2 ? .int(Int64($0)) : nil } }
+    }
+    var language: String? {
+        get { extras["language"]?.stringValue }
+        set { extras["language"] = newValue.map(NoteJSON.string) }
+    }
+    var callout: String? {
+        get { extras["callout"]?.stringValue }
+        set { extras["callout"] = newValue.map(NoteJSON.string) }
+    }
+
     static func text(_ text: String, id: UUID? = nil, style: String? = nil) -> NoteBlock {
         NoteBlock(kind: .text, id: id, text: text, style: style)
     }

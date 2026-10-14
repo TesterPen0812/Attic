@@ -100,6 +100,7 @@ enum NoteCommandCatalog {
         case .number: String(localized: "List")
         case .checklist: String(localized: "Checklist")
         case .quote: String(localized: "Quote")
+        case .callout: String(localized: "Callout")
         }
     }
 
@@ -243,7 +244,7 @@ enum NoteCommandCatalog {
         case .quote: ">"
         case .imageOrFile: String(localized: "paste or drop")
         case .table: "2 × 3"
-        case .title, .subheading, .body, .date, .divider, .mono: nil
+        case .title, .subheading, .body, .date, .divider, .mono, .smallHeading, .callout, .codeBlock, .diagram: nil
         }
     }
 
@@ -254,15 +255,15 @@ enum NoteCommandCatalog {
         // share one icon.
         case .title: "textformat.size.larger"
         case .heading: "textformat.size"
-        case .subheading: "textformat.size.smaller"
+        case .subheading, .smallHeading: "textformat.size.smaller"
         case .body: "text.alignleft"
         case .bullet: "list.bullet"
         case .number: "list.number"
         case .imageOrFile: "photo"
         case .date: "calendar"
-        case .quote: "text.quote"
+        case .quote, .callout: "text.quote"
         case .divider: "minus"
-        case .mono: "chevron.left.forwardslash.chevron.right"
+        case .mono, .codeBlock, .diagram: "chevron.left.forwardslash.chevron.right"
         case .table: "tablecells"
         }
     }

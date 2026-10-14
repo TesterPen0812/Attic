@@ -8,6 +8,9 @@ extension NSAttributedString.Key {
     /// A text paragraph's style name (`NoteBlock.style`).
     static let noteBlockStyle = NSAttributedString.Key("com.taha.attic.note.blockStyle")
     static let noteBlockLevel = NSAttributedString.Key("com.taha.attic.note.blockLevel")
+    static let noteCodeLanguage = NSAttributedString.Key("com.taha.attic.note.codeLanguage")
+    static let noteCalloutIcon = NSAttributedString.Key("com.taha.attic.note.calloutIcon")
+    static let noteListStart = NSAttributedString.Key("com.taha.attic.note.listStart")
     static let noteBlockIndent = NSAttributedString.Key("com.taha.attic.note.blockIndent")
     static func noteMark(_ kind: NoteMark.Kind) -> NSAttributedString.Key {
         NSAttributedString.Key("com.taha.attic.note.mark.\(kind.rawValue)")
@@ -29,14 +32,14 @@ final class NoteBlockExtras: NSObject {
 enum NoteParagraphKind: Equatable, Sendable {
     /// The note's first line.
     case title
-    case titleStyle, heading, subheading
+    case titleStyle, heading, subheading, smallHeading
     /// Body text, and list and checklist items.
     case body
-    case quote, mono
+    case quote, mono, callout
     /// An image, a file or a divider on its own line.
     case blockObject
 
-    var isHeading: Bool { self == .titleStyle || self == .heading || self == .subheading }
+    var isHeading: Bool { self == .titleStyle || self == .heading || self == .subheading || self == .smallHeading }
 
     var role: AtticNoteType.Role {
         switch self {
@@ -44,18 +47,18 @@ enum NoteParagraphKind: Equatable, Sendable {
         case .titleStyle: AtticNoteType.titleStyle
         case .heading: AtticNoteType.heading
         case .subheading: AtticNoteType.subheading
-        case .body, .blockObject: AtticNoteType.body
+        case .body, .blockObject, .smallHeading, .callout: AtticNoteType.body
         case .quote: AtticNoteType.quote
         case .mono: AtticNoteType.mono
         }
     }
 
     /// A paragraph's kind from its stored style name and heading level.
-    static func of(style name: String?, level: Int?) -> NoteParagraphKind {
+    static func of(style name: String?, level: Int?, callout: String? = nil) -> NoteParagraphKind {
         switch name {
-        case "heading": (level ?? 2) <= 1 ? .titleStyle : (level == 2 ? .heading : .subheading)
+        case "heading": (level ?? 2) <= 1 ? .titleStyle : (level == 2 ? .heading : ((level ?? 2) <= 3 ? .subheading : .smallHeading))
         case "mono": .mono
-        case "quote": .quote
+        case "quote": callout == nil ? .quote : .callout
         default: .body
         }
     }
@@ -238,8 +241,8 @@ struct NoteTextStyle: Equatable {
     /// paragraph and its neighbours with the real one).
     func paragraphAttributes(style name: String?, level: Int?, indent: Int?, previous: NoteParagraphKind? = .body,
                              isChecklist: Bool = false, isBlockObject: Bool = false,
-                             monoHang: CGFloat = 0, monoExitsAtEnd: Bool = false) -> [NSAttributedString.Key: Any] {
-        let kind: NoteParagraphKind = isBlockObject ? .blockObject : NoteParagraphKind.of(style: name, level: level)
+                             monoHang: CGFloat = 0, monoExitsAtEnd: Bool = false, callout: String? = nil) -> [NSAttributedString.Key: Any] {
+        let kind: NoteParagraphKind = isBlockObject ? .blockObject : NoteParagraphKind.of(style: name, level: level, callout: callout)
         var result = bodyAttributes
         result[.font] = font(for: kind)
         result[.foregroundColor] = kind == .quote ? quoteColor : bodyColor

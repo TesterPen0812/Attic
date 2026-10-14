@@ -12,61 +12,99 @@ enum NoteMarkdownExport {
                          filename: (UUID) -> String? = { _ in nil }) -> String {
         var lines: [(text: String, isListItem: Bool)] = []
         var numbered: [Int: Int] = [:]
-        for (index, block) in document.blocks.enumerated() {
-            if index == 0, block.kind == .text {
+        var listColumns: [Int: Int] = [:]
+        var listWidths: [Int: Int] = [:]
+        var index = 0
+        while index < document.blocks.count {
+            let block = document.blocks[index]
+            index += 1
+            if index == 1, block.kind == .text {
                 let title = inlineText(block, calendar: calendar, locale: locale).trimmingCharacters(in: .whitespaces)
                 if !title.isEmpty { lines.append(("# " + title, false)) }
                 continue
             }
+            if block.kind == .text, block.style == "mono" {
+                numbered.removeAll(); listColumns.removeAll(); listWidths.removeAll()
+                var code = [block.text]
+                while index < document.blocks.count, document.blocks[index].kind == .text, document.blocks[index].style == "mono" {
+                    code.append(document.blocks[index].text); index += 1
+                }
+                let source = code.joined(separator: "\n")
+                // A fence must be longer than any backtick run in the source.
+                var longest = 0, current = 0
+                for character in source {
+                    if character == "`" { current += 1; longest = max(longest, current) } else { current = 0 }
+                }
+                let fence = String(repeating: "`", count: max(3, longest + 1))
+                let language = block.language ?? ""
+                // CommonMark forbids backticks in a backtick fence's info.
+                let actualFence = language.contains("`") ? String(repeating: "~", count: max(3, source.split(whereSeparator: { $0 != "~" }).map(\.count).max().map { $0 + 1 } ?? 3)) : fence
+                lines.append((actualFence + language + "\n" + source + "\n" + actualFence, false))
+                continue
+            }
+            if block.kind == .text, block.style == "quote", let icon = block.callout {
+                numbered.removeAll(); listColumns.removeAll(); listWidths.removeAll()
+                var box = [block]
+                while index < document.blocks.count, document.blocks[index].kind == .text,
+                      document.blocks[index].style == "quote", document.blocks[index].callout == icon {
+                    box.append(document.blocks[index]); index += 1
+                }
+                var text = "> [!NOTE]"
+                for (offset, paragraph) in box.enumerated() {
+                    if offset > 0 { text += "\n>" }
+                    let content = inlineText(paragraph, calendar: calendar, locale: locale)
+                        .replacingOccurrences(of: "\u{2028}", with: "\\\n> ")
+                    text += "\n> " + (offset == 0 && !icon.isEmpty ? icon + " " : "") + content
+                }
+                lines.append((text, false)); continue
+            }
+            let isList = block.kind == .checklist || block.style == "bullet" || block.style == "number"
+            let depth = block.indent ?? 0
+            if !isList { numbered.removeAll(); listColumns.removeAll(); listWidths.removeAll() }
+            let column = depth == 0 ? 0 : (listColumns[depth - 1] ?? (depth - 1) * 2) + (listWidths[depth - 1] ?? 2)
+            let nesting = String(repeating: " ", count: column)
+            var prefix = ""
             switch block.kind {
             case .text:
-                let text = inlineText(block, calendar: calendar, locale: locale)
-                if text.trimmingCharacters(in: .whitespaces).isEmpty { continue }
-                let nesting = String(repeating: "  ", count: block.indent ?? 0)
-                if block.style == "number" {
-                    let depth = block.indent ?? 0
-                    numbered[depth, default: 0] += 1
+                switch block.style {
+                case "heading": prefix = String(repeating: "#", count: min(6, max(1, block.level ?? 2))) + " "
+                case "bullet": prefix = "- "
+                case "number":
                     numbered = numbered.filter { $0.key <= depth }
-                } else { numbered.removeAll() }
-                let prefix: String = switch block.style {
-                case "heading": String(repeating: "#", count: max(1, block.level ?? 2)) + " "
-                case "bullet": "- "
-                case "number": "\(numbered[block.indent ?? 0] ?? 1). "
-                case "quote": "> "
-                case "mono": "    "
-                default: ""
+                    let old = numbered[depth] ?? 0
+                    let number = block.start ?? (old < Int.max ? old + 1 : old)
+                    numbered[depth] = number; prefix = "\(number). "
+                case "quote": prefix = "> "
+                default: break
                 }
-                lines.append((nesting + prefix + text, block.style == "bullet" || block.style == "number"))
+                if block.style == "bullet" { numbered = numbered.filter { $0.key < depth } }
             case .checklist:
-                numbered.removeAll()
-                lines.append((String(repeating: "  ", count: block.indent ?? 0) +
-                              (block.checked ? "- [x] " : "- [ ] ") +
-                              inlineText(block, calendar: calendar, locale: locale), true))
+                numbered = numbered.filter { $0.key < depth }
+                prefix = block.checked ? "- [x] " : "- [ ] "
+            default: break
+            }
+            if isList {
+                listColumns = listColumns.filter { $0.key <= depth }; listWidths = listWidths.filter { $0.key <= depth }
+                listColumns[depth] = column; listWidths[depth] = prefix.count
+            }
+            switch block.kind {
+            case .text, .checklist:
+                let continuation = isList ? String(repeating: " ", count: column + prefix.count) : (block.style == "quote" ? nesting + "> " : "")
+                let text = inlineText(block, calendar: calendar, locale: locale)
+                    .replacingOccurrences(of: "\u{2028}", with: "\\\n" + continuation)
+                if !text.trimmingCharacters(in: .whitespaces).isEmpty { lines.append((nesting + prefix + text, isList)) }
             case .image:
-                numbered.removeAll()
-                let name = block.attachmentID.flatMap(filename) ?? String(localized: "image")
-                lines.append(("[image: \(name)]", false))
-            case .file:
-                numbered.removeAll()
-                lines.append(("[file: \(block.filename ?? "file")]", false))
-            case .divider:
-                numbered.removeAll()
-                lines.append(("---", false))
+                lines.append(("[image: \(block.attachmentID.flatMap(filename) ?? String(localized: "image"))]", false))
+            case .file: lines.append(("[file: \(block.filename ?? "file")]", false))
+            case .divider: lines.append(("---", false))
             case .table:
-                numbered.removeAll()
-                if let table = block.table {
-                    lines.append((NoteTableText.markdown(table) { inlineMarkdown($0.block, calendar: calendar, locale: locale) }, false))
-                }
-            case .opaque:
-                numbered.removeAll()
-                lines.append((String(localized: "[content that needs a newer Attic]"), false))
+                if let table = block.table { lines.append((NoteTableText.markdown(table) { inlineMarkdown($0.block, calendar: calendar, locale: locale) }, false)) }
+            case .opaque: lines.append((String(localized: "[content that needs a newer Attic]"), false))
             }
         }
         var result = ""
         for (index, line) in lines.enumerated() {
-            if index > 0 {
-                result += line.isListItem && lines[index - 1].isListItem ? "\n" : "\n\n"
-            }
+            if index > 0 { result += line.isListItem && lines[index - 1].isListItem ? "\n" : "\n\n" }
             result += line.text
         }
         return result

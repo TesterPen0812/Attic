@@ -117,7 +117,10 @@ final class PhaseXHunt1GeneratedTests: XCTestCase {
                     let head = (line.text as NSString).substring(to: offset)
                     let tail = (line.text as NSString).substring(from: offset)
                     model.lines[lineIndex].text = head + "P"
-                    model.lines.insert(Line(text: "Q" + tail), at: lineIndex + 1)
+                    // R14 paste stays in a code run; prose still resets its tail to Body.
+                    var continuation = line.style == "mono" ? line : Line(text: "")
+                    continuation.text = "Q" + tail
+                    model.lines.insert(continuation, at: lineIndex + 1)
                 }
                 _ = editor.pastePlainText(value, at: NSRange(location: location, length: 0))
             case 5: // table cell edit

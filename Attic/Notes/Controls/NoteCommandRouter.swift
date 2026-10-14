@@ -222,6 +222,7 @@ final class NoteCommandRouter {
             case .number: "number"
             case .checklist: "checklist"
             case .quote: "quote"
+            case .callout: "callout"
             case .mono: "mono"
             }
         case let .mark(kind): kind.rawValue

@@ -19,7 +19,7 @@ enum NoteLineBreaks {
                     index += 2
                     continue
                 }
-            } else if unit == 0x2029 || unit == 0x2028 {
+            } else if unit == 0x2029 {
                 output.append(0x0A)
                 breaks += 1
             } else {

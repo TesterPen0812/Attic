@@ -17,6 +17,10 @@ enum NoteTextExport {
     static func plainLine(_ block: NoteBlock) -> String {
         switch block.kind {
         case .text:
+            if let icon = block.callout, block.style == "quote" {
+                return (icon.isEmpty ? "" : icon + " ") + block.displayText
+            }
+            if block.style == "mono" { return block.displayText }
             let prefix: String = switch block.style {
             case "heading": String(repeating: "#", count: max(1, block.level ?? 2)) + " "
             case "bullet": "- "
