@@ -1234,8 +1234,33 @@ extension AtticDropdownReveal {
     static func presence(fromTop: Bool) -> AnyTransition {
         let close = AnyTransition.modifier(active: AtticUnfoldEffect(clock: 0, closing: true, fromTop: fromTop, carriesState: false),
                                            identity: AtticUnfoldEffect(clock: 1, closing: true, fromTop: fromTop, carriesState: false))
-        return .asymmetric(insertion: .opacity.animation(openOpacityAnimation), removal: close.animation(closeAnimation))
+        let insertion = AnyTransition.modifier(active: AtticUnfoldInsertion(shown: 0), identity: AtticUnfoldInsertion(shown: 1))
+            .combined(with: .opacity)
+        return .asymmetric(insertion: insertion.animation(openOpacityAnimation), removal: close.animation(closeAnimation))
     }
+}
+
+/// An inserted card's first frame draws nothing: it is cut to an empty
+/// rectangle until its insertion has begun to animate (N-4's reveal did the
+/// same with its mask). Clear anyway at that moment (its opacity is 0), so
+/// nothing changes on screen; on a renderer that still draws clear content
+/// (CI's), it keeps the inserting turn cheap.
+struct AtticUnfoldInsertion: ViewModifier, Animatable {
+    var shown: CGFloat
+
+    var animatableData: CGFloat {
+        get { shown }
+        set { shown = newValue }
+    }
+
+    func body(content: Content) -> some View {
+        content.mask { AtticInsertionCut(open: shown > 0) }
+    }
+}
+
+private struct AtticInsertionCut: Shape {
+    let open: Bool
+    func path(in rect: CGRect) -> Path { Path(open ? rect.insetBy(dx: -AtticDropdownMetrics.shadowRoom, dy: -AtticDropdownMetrics.shadowRoom) : .zero) }
 }
 
 extension AtticDropdownReveal {
