@@ -139,6 +139,10 @@ struct TasksPageHost: View {
                    let tab = TasksTab.allCases.first(where: { $0.identifier == raw }) {
                     model.openForCapture(tab)
                 }
+                // Search results on the shown tab (blur rollout captures).
+                if let query = environment["ATTIC_UI_TEST_TASKS_SEARCH"], !query.isEmpty {
+                    model.setSearchQuery(query, for: model.tab)
+                }
                 if environment["ATTIC_UI_TEST_COMPLETED_OPEN"] == "1" { model.completedTodayExpanded = true }
                 // The first row with subtasks, its quick look open.
                 if environment["ATTIC_UI_TEST_EXPAND_FIRST"] == "1",

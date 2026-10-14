@@ -48,6 +48,22 @@ enum NoteHistoryCaptureScene {
         guard case .success = store.saveDocument(noteID: created.noteID, document: current, baseRevisionID: created.revisionID) else { return }
         _ = await controller.openDurably(noteID: created.noteID)
         if environment["ATTIC_UI_TEST_NOTES_SCENE"] == "history-failure" { store.s7FailNextRestoreForUITesting = true }
+        // Floating-controls captures (blur rollout): `history-open` opens the
+        // history browser itself; `history-library` adds a long list of
+        // notes and shows All notes, so both edges have rows under them.
+        switch environment["ATTIC_UI_TEST_NOTES_SCENE"] {
+        case "history-open":
+            try? await Task.sleep(for: .seconds(0.6))
+            _ = await controller.openHistoryDurably()
+        case "history-library":
+            for index in 1...40 {
+                _ = store.createDocumentNote(id: UUID(), document: NoteDocument(blocks: [
+                    .text("Library note \(index)"), .text("A line of body text for the row's preview (\(index)).")]))
+            }
+            _ = controller.showLibrary()
+        default:
+            break
+        }
     }
 }
 #endif

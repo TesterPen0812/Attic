@@ -55,12 +55,12 @@ final class FloatingControlsTests: XCTestCase {
     /// is gone above its lower edge, on every surface, and whole `topRamp`
     /// below it; the blur starts at its lower edge.
     func testAPlainTopLineIsPartOfTheTopControls() {
-        let edges = AtticFloatingEdges(top: 82, topPlain: 60...79, topRamp: 11)
+        let edges = AtticFloatingEdges(top: 82, topPlain: 60...79, topRamp: 8)
         XCTAssertEqual(edges.topBlurStart, 79)
         for translucent in [false, true] {
             let stops = edges.stops(height: 500, translucent: translucent)
             func opacity(_ y: CGFloat) -> Double { AtticScrollUnderFade.opacity(stops, at: y, height: 500) }
-            for y in stride(from: CGFloat(0), through: 79, by: 1) {
+            for y in stride(from: CGFloat(0), through: 79 + AtticEdgeBlurMetrics.plainClearance, by: 1) {
                 XCTAssertEqual(opacity(y), 0, accuracy: 0.001, "gone at \(y) (translucent \(translucent))")
             }
             XCTAssertEqual(opacity(90), 1, accuracy: 0.001, "whole where the first row rests")
@@ -125,6 +125,9 @@ final class FloatingControlsTests: XCTestCase {
         func opacity(_ y: CGFloat) -> Double { AtticScrollUnderFade.opacity(stops, at: y, height: 520) }
         XCTAssertEqual(opacity(tabsTop + AtticLayout.pageTabsHeight / 2), 0, accuracy: 0.001, "never behind the tabs")
         XCTAssertEqual(opacity(tabsTop / 2), 0, accuracy: 0.001, "nor above them, under the header")
+        XCTAssertEqual(opacity(TasksViewport.controlsBottom(tabsTop: tabsTop)), 0, accuracy: 0.001,
+                       "a row is gone before it touches the tabs (Find's field included)")
+        XCTAssertEqual(opacity(TasksViewport.listTop(tabsTop: tabsTop)), 1, accuracy: 0.001, "a resting row is whole")
         let words = TasksViewport.listTop(tabsTop: tabsTop) + AtticTaskRowMetrics.titleTop(twoLine: false)
         XCTAssertEqual(opacity(words), 1, accuracy: 0.001, "the first row's words are whole at rest")
 

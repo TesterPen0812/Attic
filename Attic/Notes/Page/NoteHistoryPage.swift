@@ -22,7 +22,7 @@ struct NoteHistoryPage: View {
     /// The page's floating edges.
     static func edges(_ layout: PanelPageLayout) -> AtticFloatingEdges {
         AtticFloatingEdges(top: versionLineBottom(layout), bottom: bottomControls(layout),
-                           topPlain: versionLine(layout), topRamp: 24)
+                           topPlain: versionLine(layout), topRamp: 24 - AtticEdgeBlurMetrics.plainClearance)
     }
 
     /// The bottom row's top, up from the panel's bottom edge.

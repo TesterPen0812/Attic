@@ -44,6 +44,9 @@ enum AtticEdgeBlurMetrics {
     /// (a share of their extent from the panel's edge: by their middle)
     /// and whole again at their inner edge.
     static let translucentGoneShare: CGFloat = 0.6
+    /// Content is still gone this far below a plain top line, so a row
+    /// never touches the line (it is gone before it gets there).
+    static let plainClearance: CGFloat = 3
 }
 
 /// The blur's live tuning. Only a strict preview identity offers it
@@ -91,13 +94,14 @@ struct AtticFloatingEdges: Equatable, Sendable {
     /// The bottom controls' upper edge, up from the panel's bottom (0: none).
     var bottom: CGFloat = 0
     /// A plain-text line among the top controls, down from the top:
-    /// content is gone above its lower edge and whole `topRamp` below it.
+    /// content is gone above its lower edge and `plainClearance` below it,
+    /// then whole `topRamp` further down.
     var topPlain: ClosedRange<CGFloat>? = nil
     /// Plain controls among the bottom controls (Tasks' composer strip),
     /// up from the bottom: content is gone behind them (o16, F-13).
     var bottomPlain: ClosedRange<CGFloat>? = nil
     /// Below a plain top line: from gone to whole (to the first row's rest).
-    var topRamp: CGFloat = AtticLayout.pageTabsToList
+    var topRamp: CGFloat = AtticLayout.pageTabsToList - AtticEdgeBlurMetrics.plainClearance
 
     /// Where the top blur begins: the plain line's lower edge, or the
     /// panel's edge.
@@ -122,7 +126,10 @@ struct AtticFloatingEdges: Equatable, Sendable {
                 value = min(value, Self.ramp(height - y, gone: bottom * AtticEdgeBlurMetrics.translucentGoneShare, whole: bottom))
             }
         }
-        if let topPlain { value = min(value, Self.ramp(y, gone: topPlain.upperBound, whole: topPlain.upperBound + topRamp)) }
+        if let topPlain {
+            let gone = topPlain.upperBound + AtticEdgeBlurMetrics.plainClearance
+            value = min(value, Self.ramp(y, gone: gone, whole: gone + topRamp))
+        }
         if let bottomPlain { value = min(value, Self.faint(height - y, behind: bottomPlain, floor: 0)) }
         return value
     }
@@ -144,7 +151,7 @@ struct AtticFloatingEdges: Equatable, Sendable {
         }
         let ramp = AtticScrollUnderFade.textRamp
         if let topPlain {
-            ys += samples.map { topPlain.upperBound + $0 * topRamp }
+            ys += samples.map { topPlain.upperBound + AtticEdgeBlurMetrics.plainClearance + $0 * topRamp }
         }
         if let bottomPlain {
             ys += [bottomPlain.lowerBound - ramp, bottomPlain.lowerBound, bottomPlain.upperBound, bottomPlain.upperBound + ramp]

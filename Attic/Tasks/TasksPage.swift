@@ -4452,7 +4452,7 @@ enum TasksViewport {
 
     static func topEdges(tabsTop: CGFloat) -> AtticFloatingEdges {
         AtticFloatingEdges(top: controlsBottom(tabsTop: tabsTop), topPlain: plainLine(tabsTop: tabsTop),
-                           topRamp: listTop(tabsTop: tabsTop) - plainLine(tabsTop: tabsTop).upperBound)
+                           topRamp: listTop(tabsTop: tabsTop) - plainLine(tabsTop: tabsTop).upperBound - AtticEdgeBlurMetrics.plainClearance)
     }
 }
 
