@@ -2231,4 +2231,40 @@ extension AtticDropdownTests {
         presenter.close(restoreFocus: false, immediately: true)
     }
 
+    /// O14-08: a menu's shortcut column shows only while ⌥ is held; other
+    /// trailing details (a date, a count) always show.
+    func testR13ShortcutHintsShowOnlyWhileOptionIsHeld() {
+        XCTAssertTrue(AtticOptionHints.isShortcut("⌥⌘2"))
+        XCTAssertTrue(AtticOptionHints.isShortcut("⇧⌘K"))
+        XCTAssertTrue(AtticOptionHints.isShortcut("⌃⌥↓"))
+        XCTAssertFalse(AtticOptionHints.isShortcut("2 Oct"))
+        XCTAssertFalse(AtticOptionHints.isShortcut("3"))
+        let hints = AtticOptionHints()
+        XCTAssertFalse(hints.shown, "hidden by default")
+        hints.update([.option, .command])
+        XCTAssertTrue(hints.shown)
+        hints.update([.command])
+        XCTAssertFalse(hints.shown, "released, they hide again")
+        hints.update([.option])
+        XCTAssertTrue(hints.shown)
+        hints.update([])
+        XCTAssertFalse(hints.shown)
+    }
+
+    /// The hints fade in place: a row is as wide with them as without.
+    func testR13ShortcutHintsNeverChangeARowsWidth() {
+        func width() -> CGFloat {
+            let row = AtticDropdownRow(title: "Medium", mark: .medium, detail: "⌥⌘2") {}
+            return NSHostingView(rootView: row.atticDesign(AtticDesignContext())).fittingSize.width
+        }
+        let shared = AtticOptionHints.shared
+        shared.update([])
+        let hidden = width()
+        shared.update([.option])
+        let shown = width()
+        shared.update([])
+        XCTAssertGreaterThan(hidden, 60)
+        XCTAssertEqual(hidden, shown, accuracy: 0.01)
+    }
+
 }

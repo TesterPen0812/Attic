@@ -310,6 +310,91 @@ enum AtticDropdownDot {
     }
 }
 
+/// Shortcut hints in Attic's own menus (O14-08, owner 2026-10-14: "you
+/// don't need to have these controls visible all the time"): a row's
+/// shortcut (⌥⌘1) is hidden until ⌥ is held, fades in while it is and out
+/// on release. The shortcuts themselves always work. One shared watch of
+/// the modifier keys, kept only while a hint is on screen.
+@MainActor
+final class AtticOptionHints: ObservableObject {
+    static let shared = AtticOptionHints()
+
+    /// The hints show (⌥ is held).
+    @Published private(set) var shown = false
+
+    private var users = 0
+    private var monitor: Any?
+    private var observers: [NSObjectProtocol] = []
+
+    /// A trailing detail that is a keyboard shortcut ("⌥⌘2", "⇧⌘K"), not
+    /// a date or a count.
+    nonisolated static func isShortcut(_ text: String) -> Bool {
+        text.contains { "⌘⌥⌃⇧".contains($0) }
+    }
+
+    #if DEBUG
+    /// Capture seam (`ATTIC_UI_TEST_OPTION_HELD=1`, UI testing in a preview
+    /// identity only): the hints show as if ⌥ were held.
+    nonisolated static let forced: Bool = {
+        let environment = ProcessInfo.processInfo.environment
+        return environment["ATTIC_UI_TESTING"] == "1" && environment["ATTIC_UI_TEST_OPTION_HELD"] == "1"
+            && AtticPreviewOverrides.isPreviewIdentity(Bundle.main.bundleIdentifier)
+    }()
+    #else
+    nonisolated static let forced = false
+    #endif
+
+    func update(_ flags: NSEvent.ModifierFlags) {
+        let held = flags.intersection(.deviceIndependentFlagsMask).contains(.option)
+        if held != shown { shown = held }
+    }
+
+    /// A hint appeared: watch ⌥ while any hint shows.
+    func retain() {
+        users += 1
+        guard users == 1 else { return }
+        update(Self.forced ? .option : NSEvent.modifierFlags)
+        guard !Self.forced else { return }
+        monitor = NSEvent.addLocalMonitorForEvents(matching: .flagsChanged) { [weak self] event in
+            MainActor.assumeIsolated { self?.update(event.modifierFlags) }
+            return event
+        }
+        // ⌥ let go in another app never reaches this one.
+        let center = NotificationCenter.default
+        for name in [NSApplication.didResignActiveNotification, NSWindow.didResignKeyNotification] {
+            observers.append(center.addObserver(forName: name, object: nil, queue: .main) { [weak self] _ in
+                MainActor.assumeIsolated { self?.update([]) }
+            })
+        }
+    }
+
+    func release() {
+        users = max(0, users - 1)
+        guard users == 0 else { return }
+        if let monitor { NSEvent.removeMonitor(monitor) }
+        monitor = nil
+        observers.forEach { NotificationCenter.default.removeObserver($0) }
+        observers = []
+        update([])
+    }
+}
+
+/// A menu row's shortcut, shown while ⌥ is held (`AtticOptionHints`). It
+/// keeps its room either way, so the row never changes width.
+struct AtticShortcutHint: View {
+    let text: String
+    @ObservedObject private var hints = AtticOptionHints.shared
+
+    var body: some View {
+        AtticText(verbatim: text, style: .shortcut, ink: .helper)
+            .fixedSize()
+            .opacity(hints.shown ? 1 : 0)
+            .animation(AtticMotionScale.easeOut(AtticMotionScale.fast), value: hints.shown)
+            .onAppear { hints.retain() }
+            .onDisappear { hints.release() }
+    }
+}
+
 struct AtticDropdownRow: View {
     let title: String
     var systemName: String?
@@ -397,8 +482,13 @@ struct AtticDropdownRow: View {
                 }
                 Spacer(minLength: detail == nil ? (check == nil ? 0 : m.columnGap) : m.detailGap)
                 if let detail {
-                    AtticText(verbatim: detail, style: .shortcut, ink: .helper)
-                        .fixedSize()
+                    if AtticOptionHints.isShortcut(detail) {
+                        // O14-08: shortcuts show while ⌥ is held.
+                        AtticShortcutHint(text: detail)
+                    } else {
+                        AtticText(verbatim: detail, style: .shortcut, ink: .helper)
+                            .fixedSize()
+                    }
                 }
                 // An unticked row draws nothing there: its column is room the
                 // card's width already keeps (the tag picker opens with a row
