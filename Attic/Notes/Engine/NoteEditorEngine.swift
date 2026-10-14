@@ -2606,7 +2606,14 @@ extension NoteEditorEngine {
 }
 /// The structure and inline action vocabulary shared by all Notes controls.
 enum NoteParagraphStyle: Hashable {
-    case body, heading(Int), bullet, number, checklist, quote, mono
+    case body, heading(Int), bullet, number, checklist, quote
+    case callout(icon: String), mono(language: String?)
+    /// Source compatibility for existing plain Mono commands.
+    static var mono: Self { .mono(language: nil) }
+    var language: String? { if case let .mono(language) = self { language } else { nil } }
+    var calloutIcon: String? { if case let .callout(icon) = self { icon } else { nil } }
+    var isCode: Bool { if case .mono = self { true } else { false } }
+    var isCallout: Bool { if case .callout = self { true } else { false } }
 
     var storageName: String? {
         switch self {
@@ -2615,7 +2622,7 @@ enum NoteParagraphStyle: Hashable {
         case .bullet: "bullet"
         case .number: "number"
         case .checklist: nil
-        case .quote: "quote"
+        case .quote, .callout: "quote"
         case .mono: "mono"
         }
     }
@@ -2636,12 +2643,14 @@ enum NoteFormatCommand: Hashable {
         case .paragraph(.body): "Body"
         case .paragraph(.heading(1)): "Title"
         case .paragraph(.heading(2)): "Heading"
-        case .paragraph(.heading): "Subheading"
+        case .paragraph(.heading(3)): "Subheading"
+        case .paragraph(.heading): "Small Heading"
         case .paragraph(.bullet): "Bulleted List"
         case .paragraph(.number): "Numbered List"
         case .paragraph(.checklist): "Checklist"
         case .paragraph(.quote): "Quote"
-        case .paragraph(.mono): "Mono"
+        case .paragraph(.callout): "Callout"
+        case .paragraph(.mono): "Code Block"
         case .mark(.bold): "Bold"
         case .mark(.italic): "Italic"
         case .mark(.underline): "Underline"
@@ -2669,7 +2678,7 @@ enum NoteFormatCommand: Hashable {
         case .paragraph(.bullet): "list.bullet"
         case .paragraph(.number): "list.number"
         case .paragraph(.checklist), .toggleChecklist: "checklist"
-        case .paragraph(.quote): "text.quote"
+        case .paragraph(.quote), .paragraph(.callout): "text.quote"
         case .paragraph(.mono), .mark(.code): "chevron.left.forwardslash.chevron.right"
         case .mark(.bold): "bold"
         case .mark(.italic): "italic"
@@ -3235,7 +3244,7 @@ struct NoteSlashItem: Hashable, Identifiable {
     /// The block styles are the Aa style list's (Title, Heading, Subheading,
     /// Body, Mono; Quote is the sixth), with the same names (A39 F04).
     enum Kind: String, CaseIterable {
-        case checklist, title, heading, subheading, body, bullet, number, imageOrFile, date, quote, divider, mono, table
+        case checklist, title, heading, subheading, body, bullet, number, imageOrFile, date, quote, divider, mono, table, smallHeading, callout, codeBlock, diagram
     }
     var kind: Kind
     var id: Kind { kind }
@@ -3245,6 +3254,7 @@ struct NoteSlashItem: Hashable, Identifiable {
         case .title: "Title"
         case .heading: "Heading"
         case .subheading: "Subheading"
+        case .smallHeading: "Small Heading"
         case .body: "Body"
         case .bullet: "Bulleted List"
         case .number: "Numbered List"
@@ -3252,7 +3262,9 @@ struct NoteSlashItem: Hashable, Identifiable {
         case .date: "Date"
         case .quote: "Quote"
         case .divider: "Divider"
-        case .mono: "Mono"
+        case .mono, .codeBlock: "Code Block"
+        case .callout: "Callout"
+        case .diagram: "Diagram"
         case .table: "Table"
         }
     }
@@ -3269,7 +3281,10 @@ struct NoteSlashItem: Hashable, Identifiable {
         case .date: ["date", "day", "calendar"]
         case .quote: ["quote", "blockquote"]
         case .divider: ["divider", "rule", "line"]
-        case .mono: ["mono", "code", "pre"]
+        case .mono, .codeBlock: ["mono", "code", "pre"]
+        case .smallHeading: ["h4", "label"]
+        case .callout: ["note", "tip", "warning", "box", "emoji"]
+        case .diagram: ["mermaid", "flowchart", "chart"]
         case .table: ["table", "grid", "cells"]
         }
     }
@@ -3545,7 +3560,10 @@ extension NoteEditorEngine {
             case .bullet: return perform(.paragraph(.bullet), selection: caret)
             case .number: return perform(.paragraph(.number), selection: caret)
             case .quote: return perform(.paragraph(.quote), selection: caret)
-            case .mono: return perform(.paragraph(.mono), selection: caret)
+            case .mono, .codeBlock: return perform(.paragraph(.mono), selection: caret)
+            case .smallHeading: return perform(.paragraph(.heading(4)), selection: caret)
+            case .callout: return perform(.paragraph(.callout(icon: "💡")), selection: caret)
+            case .diagram: return perform(.paragraph(.mono(language: "mermaid")), selection: caret)
             case .divider: return perform(.divider, selection: caret)
             case .table: return insertTable(at: caret, name: String(localized: "Insert Table"))
             case .date, .imageOrFile: return false
@@ -3785,4 +3803,29 @@ extension NoteEditorEngine {
         if !applied, let id = item.staged?.id { staged[id] = nil }
         return applied
     }
+}
+
+/// Marker geometry and syntax colours belong to the visible builder.
+enum NoteListMarker: Equatable, Sendable {
+    case disc, ring, square, number(String), letter(String), roman(String), checkbox
+}
+enum NoteSyntaxToken: String, CaseIterable, Sendable {
+    case keyword, property, string, literal, function, `operator`, comment, added, removed, plain
+}
+
+@MainActor
+extension NoteEditorEngine {
+    func listMarker(at location: Int) -> NoteListMarker? {
+        switch paragraphStyle(at: location) {
+        case .bullet: .disc
+        case .number: .number("\(numberedOrdinal(at: lineRange(at: location).location, indent: indentAt(location) ?? 0)).")
+        case .checklist: .checkbox
+        default: nil
+        }
+    }
+    func blockRange(at location: Int) -> NSRange { paragraphRange(at: location) }
+    func codeTokens(in range: NSRange) -> [(NSRange, NoteSyntaxToken)] { [] }
+    @discardableResult func moveBlock(_ range: NSRange, to position: Int) -> Bool { false }
+    /// Return false to let AppKit handle its existing rich and object routes.
+    func handlePaste(_ pasteboard: NSPasteboard) -> Bool { false }
 }

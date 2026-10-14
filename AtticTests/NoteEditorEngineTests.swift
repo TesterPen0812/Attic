@@ -7,6 +7,17 @@ import XCTest
 /// identity, IME over a selection, VoiceOver elements.
 @MainActor
 final class NoteEditorEngineTests: XCTestCase {
+    func testR14ContractUsesReadableStylesAndSemanticQueries() {
+        XCTAssertEqual(NoteParagraphStyle.callout(icon: "💡").storageName, "quote")
+        XCTAssertEqual(NoteParagraphStyle.mono(language: "swift").storageName, "mono")
+        XCTAssertEqual(NoteParagraphStyle.heading(6).level, 6)
+        XCTAssertEqual(NoteFormatCommand.paragraph(.heading(4)).title, "Small Heading")
+        let (engine, _) = makeEngine(NoteDocument(blocks: [.text("Title"), .text("item", style: "bullet")]))
+        XCTAssertEqual(engine.listMarker(at: 6), .disc)
+        XCTAssertEqual(engine.blockRange(at: 6), NSRange(location: 6, length: 4))
+        XCTAssertTrue(engine.codeTokens(in: NSRange(location: 6, length: 4)).isEmpty)
+    }
+
     private let checklistID = UUID()
     private let dateID = UUID()
     private let imageID = UUID()
