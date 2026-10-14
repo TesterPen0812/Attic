@@ -123,6 +123,8 @@ final class NoteEditorEngine: NSObject, NSTextViewDelegate, NSTextStorageDelegat
     var foldedHeadingIDs = Set<UUID>()
     var foldMetadataWasEdited = false
     var foldAssignedHeadingIDs = Set<UUID>()
+    var syntaxCache: NoteSyntaxCache?
+    private(set) var lastSyntaxScannedUTF16Count = 0
     var headingSectionsCache: [NoteHeadingSection]?
     var headingControls: [Int: NoteHeadingButton] = [:]
     var updatingHeadingControls = false
@@ -3952,7 +3954,18 @@ extension NoteEditorEngine {
         }
         return range
     }
-    func codeTokens(in range: NSRange) -> [(NSRange, NoteSyntaxToken)] { [] }
+    func codeTokens(in range: NSRange) -> [(NSRange, NoteSyntaxToken)] {
+        guard range.location >= 0, range.location < textStorage.length,
+              paragraphStyle(at: range.location)?.isCode == true else { return [] }
+        let block = blockRange(at: range.location)
+        let source = (textStorage.string as NSString).substring(with: block)
+        let language = paragraphStyle(at: block.location)?.language
+        if let cache = syntaxCache, cache.range == block, cache.language == language, cache.text == source { return cache.tokens }
+        let tokens = NoteSyntaxHighlighter.tokens(in: source, language: language).map { (NSRange(location: $0.0.location + block.location, length: $0.0.length), $0.1) }
+        lastSyntaxScannedUTF16Count = (source as NSString).length
+        syntaxCache = NoteSyntaxCache(range: block, language: language, text: source, tokens: tokens)
+        return tokens
+    }
     @discardableResult func moveBlock(_ range: NSRange, to position: Int) -> Bool { false }
     /// Return false to let AppKit handle its existing rich and object routes.
     func handlePaste(_ pasteboard: NSPasteboard) -> Bool {

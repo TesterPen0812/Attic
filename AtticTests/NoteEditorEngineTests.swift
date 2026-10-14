@@ -212,6 +212,39 @@ final class NoteEditorEngineTests: XCTestCase {
         XCTAssertEqual(NoteTextExport.plainLine(code), "const n = 4;")
     }
 
+    func testR14TokenizerCoversEveryLanguageAndDoesNotChangeStorageOrUndo() throws {
+        let samples: [(String, String, NoteSyntaxToken)] = [("javascript", "const x = 1", .keyword), ("typescript", "interface Point {}", .keyword), ("json", "{\"key\":true}", .property), ("swift", "let a = 1 // comment", .comment), ("python", "def f(): return 'hi'", .string), ("shell", "echo hi # comment", .comment), ("html", "<!-- comment -->", .comment), ("css", "color: red;", .property), ("sql", "SELECT count(*) FROM t", .keyword), ("yaml", "name: value", .property), ("diff", "+added\n-removed", .added), ("mermaid", "flowchart LR\nA-->B", .operator)]
+        for (language, source, expected) in samples {
+            var block = NoteBlock.text(source, style: "mono"); block.language = language
+            let engine = NoteEditorEngine(noteID: UUID(), document: NoteDocument(blocks: [.text("T"), block]))
+            let bytes = try NoteContentCodec.encode(engine.document())
+            let tokens = engine.codeTokens(in: NSRange(location: 2, length: 1))
+            XCTAssertTrue(tokens.contains { $0.1 == expected }, language)
+            XCTAssertTrue(tokens.allSatisfy { $0.0.location >= 2 && NSMaxRange($0.0) <= engine.textStorage.length })
+            XCTAssertEqual(try NoteContentCodec.encode(engine.document()), bytes)
+            XCTAssertFalse(engine.history.canUndo)
+        }
+        XCTAssertTrue(NoteSyntaxHighlighter.tokens(in: "plain", language: nil).isEmpty)
+        XCTAssertTrue(NoteSyntaxHighlighter.tokens(in: "unknown", language: "future").isEmpty)
+        let tokens = NoteSyntaxHighlighter.tokens(in: "let emoji = \"💡\"", language: "swift")
+        let string = try XCTUnwrap(tokens.first { $0.1 == .string })
+        XCTAssertEqual(("let emoji = \"💡\"" as NSString).substring(with: string.0), "\"💡\"")
+    }
+
+    func testR14SyntaxCostVisitsOnlyTheEditedBlockInALongNote() {
+        var code = NoteBlock.text("const x = 4;", style: "mono"); code.language = "javascript"
+        let blocks = [.text("T")] + (0..<5000).map { NoteBlock.text("Body \($0) with words") } + [code, .text("End")]
+        let engine = NoteEditorEngine(noteID: UUID(), document: NoteDocument(blocks: blocks))
+        let range = (engine.textStorage.string as NSString).range(of: "const x")
+        for _ in 0..<40 {
+            XCTAssertTrue(engine.performEdit(NSRange(location: range.location + 6, length: 0), with: NSAttributedString(string: "x", attributes: engine.attributes(forParagraphAt: range.location)), name: "Typing"))
+            XCTAssertFalse(engine.codeTokens(in: NSRange(location: range.location, length: 1)).isEmpty)
+            XCTAssertLessThan(engine.lastSyntaxScannedUTF16Count, 100)
+            XCTAssertLessThan(engine.lastUpkeepMilliseconds, 5, "existing Notes upkeep budget")
+        }
+        print("R14_SYNTAX_COST note_blocks=5003 scanned_utf16=\(engine.lastSyntaxScannedUTF16Count) upkeep_ms=\(engine.lastUpkeepMilliseconds)")
+    }
+
     private let checklistID = UUID()
     private let dateID = UUID()
     private let imageID = UUID()
