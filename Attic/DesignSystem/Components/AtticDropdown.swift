@@ -1226,6 +1226,11 @@ struct AtticUnfoldPresence<Value: Equatable, Content: View>: View {
                     .transition(reduced ? .opacity.animation(AtticDropdownReveal.fadeAnimation) : AtticDropdownReveal.presence(fromTop: fromTop))
             }
         }
+        // The insertion and removal run in an animated transaction, as
+        // N-4's did: on macOS 26 a transition's own animation alone left the
+        // insertion unanimated there, so the inserting turn drew the whole
+        // card (CI: the / list's open at 0.95-1.18 of the replaced list's).
+        .animation(value != nil ? AtticDropdownReveal.openOpacityAnimation : AtticDropdownReveal.closeAnimation, value: value != nil)
     }
 }
 
