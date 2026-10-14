@@ -159,7 +159,9 @@ private struct AtticSystemDesignModifier: ViewModifier {
     let motion: AtticMotionTuning
 
     @Environment(\.colorScheme) private var colorScheme
-    @Environment(\.colorSchemeContrast) private var contrast
+    @Environment(\.colorSchemeContrast) private var systemContrast
+    /// The Mac's contrast (or a UI-test launch's, `AtticContrastSeam`).
+    private var contrast: ColorSchemeContrast { AtticContrastSeam.resolve(systemContrast) }
     @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.accessibilityDifferentiateWithoutColor) private var differentiateWithoutColor
@@ -259,5 +261,24 @@ final class AtticWindowAppearanceView: NSView {
     private func apply() {
         if appWide { AtticWindowAppearance.applyToApp(mode) }
         if let window { AtticWindowAppearance.apply(mode, to: window) }
+    }
+}
+
+/// Capture seam (O14-05): `ATTIC_UI_TESTING=1 ATTIC_UI_TEST_INCREASE_CONTRAST=1`
+/// draws the panel with Attic's Increase Contrast treatment, so it can be
+/// checked on screen without changing the Mac's accessibility setting.
+/// System-drawn materials still follow the Mac's own setting.
+enum AtticContrastSeam {
+    nonisolated static let forced: Bool = {
+        #if DEBUG
+        let environment = ProcessInfo.processInfo.environment
+        return environment["ATTIC_UI_TESTING"] == "1" && environment["ATTIC_UI_TEST_INCREASE_CONTRAST"] == "1"
+        #else
+        return false
+        #endif
+    }()
+
+    nonisolated static func resolve(_ system: ColorSchemeContrast) -> ColorSchemeContrast {
+        forced ? .increased : system
     }
 }
