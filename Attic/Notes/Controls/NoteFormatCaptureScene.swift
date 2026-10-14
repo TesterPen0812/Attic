@@ -406,6 +406,11 @@ enum NoteFormatCaptureScene {
         case "aa":
             textView.setSelectedRange(NSRange(location: range(of: "Keep pricing", in: textView).location, length: 0))
             chrome.openFormatBar(keyboard: false)
+        case "aastyle":
+            // O14-02: Aa's row, then its style list (the menu's unfold).
+            textView.setSelectedRange(NSRange(location: range(of: "Keep pricing", in: textView).location, length: 0))
+            chrome.openFormatBar(keyboard: false)
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.8) { controls.pressRowItem(.style) }
         case "aasub":
             // A39 F11: Aa's row with the longest style name ("Subheading").
             textView.setSelectedRange(NSRange(location: range(of: "Open questions", in: textView).location, length: 0))
@@ -461,6 +466,9 @@ enum NoteFormatCaptureScene {
                                   below: NSRect(x: 24, y: rect.maxY, width: 10, height: 1), in: textView)
         case "notemenu":
             chrome.presentMenu()
+        case "notetags":
+            // The note's tag editor (Attic's tag picker; ⋯ itself is native).
+            chrome.presentTagEditor()
         case "fadecheck":
             // A long note scrolled so text sits under the header and the
             // bottom row (round 3's no-fade-behind-glass check).

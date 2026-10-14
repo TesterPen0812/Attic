@@ -1593,8 +1593,13 @@ struct TasksPage: View {
                 })
                 .padding(.leading, AtticLayout.textX - AtticPopoverMetrics.padding - AtticPopoverMetrics.rowPadding)
                 .padding(.bottom, AtticSpacing.s8)
-                // Raised from its row: it grows from the row's corner.
-                .transition(AtticMotionPreset.popover.transition(reduceMotion: design.reduceMotion, anchor: .topLeading))
+                // Raised from its row: it unfolds down from it (O14-02) by
+                // opacity, scale and travel. A Done row holds no view for its
+                // details until they open (the Done Find keystroke budget), so
+                // this is a transition: it does not grow from a row's height
+                // or sharpen its contents as the dropdowns do.
+                .transition(design.reduceMotion ? .opacity.animation(AtticDropdownReveal.fadeAnimation)
+                            : AtticDropdownReveal.transformsOnly(fromTop: true))
                 .onExitCommand { model.doneDetailID = nil }
             }
             if model.failedSave == .title(id) {
@@ -3297,14 +3302,19 @@ private struct TasksAddBar: View {
             if !open { editor.focus() }
         }
         #if DEBUG
-        // Capture seam (`ATTIC_UI_TEST_POPOVER=tag|priority`, preview
-        // identities only): a draft, then the strip's picker opens by itself.
+        // Capture seam (`ATTIC_UI_TEST_POPOVER=tag|priority|task-date`,
+        // preview identities only): a draft, then the strip's picker opens
+        // by itself.
         .onAppear {
-            guard let seam = AtticDropdownCaptureSeam.current, seam == .tag || seam == .priority else { return }
+            guard let seam = AtticDropdownCaptureSeam.current, seam == .tag || seam == .priority || seam == .taskDate else { return }
             DispatchQueue.main.asyncAfter(deadline: .now() + 2.5) {
                 text.text.text = "Pay rent"
                 DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) {
-                    if seam == .tag { tagsPresented = true } else { priorityPresented = true }
+                    switch seam {
+                    case .tag: tagsPresented = true
+                    case .taskDate: datePresented = true
+                    default: priorityPresented = true
+                    }
                 }
             }
         }

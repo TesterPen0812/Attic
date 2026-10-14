@@ -103,9 +103,11 @@ enum AtticDropdownCaptureSeam: String, CaseIterable, Sendable {
     case date
     case tag
     case priority
+    /// The add bar's date card (the same month as Notes' `/date`).
+    case taskDate = "task-date"
 
     /// The page it opens on.
-    var page: String { self == .tag || self == .priority ? "tasks" : "notes" }
+    var page: String { self == .tag || self == .priority || self == .taskDate ? "tasks" : "notes" }
 
     /// The Notes capture scene that shows it (`NoteFormatCaptureScene`).
     var notesScene: String? {
@@ -113,7 +115,7 @@ enum AtticDropdownCaptureSeam: String, CaseIterable, Sendable {
         case .slash: "slash-lead"
         case .slashDa: "slash-da"
         case .date: "date-lead"
-        case .tag, .priority: nil
+        case .tag, .priority, .taskDate: nil
         }
     }
 

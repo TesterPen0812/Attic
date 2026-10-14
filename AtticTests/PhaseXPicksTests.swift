@@ -152,20 +152,15 @@ final class PhaseXPicksTests: XCTestCase {
         XCTAssertTrue(plain.showsStateColumn)
     }
 
-    /// The reveal is one switch: the unfold (the owner's experiment) now,
-    /// the scale from the anchor kept. The unfold uncovers from the anchor's
-    /// edge and, open, covers the whole card and its shadow.
-    func testTheDropdownRevealIsOneSwitchAndTheUnfoldUncoversFromTheAnchor() {
-        XCTAssertEqual(AtticDropdownReveal.current, .unfold)
+    /// N-4 B (the mask reveal) was the owner's experiment; O14-02 (owner
+    /// 2026-10-14) replaced it with the unfold, tested in
+    /// `AtticDropdownTests.testR13TheUnfold…`. What stays: the motion opens
+    /// from the anchor's edge, and Reduced is a fade.
+    func testTheDropdownRevealOpensFromTheAnchorsEdge() {
         let rect = CGRect(x: 0, y: 0, width: 200, height: 300)
-        let room: CGFloat = 44
-        let shut = AtticDropdownUnfoldMask(progress: 0, fromTop: true, edgeRoom: room).path(in: rect).boundingRect
-        XCTAssertEqual(shut.minY, 0)
-        XCTAssertEqual(shut.height, room, accuracy: 0.001)
-        let half = AtticDropdownUnfoldMask(progress: 0.5, fromTop: false, edgeRoom: room).path(in: rect).boundingRect
-        XCTAssertEqual(half.maxY, 300, accuracy: 0.001, "a card above its anchor unfolds upward")
-        XCTAssertEqual(AtticDropdownUnfoldMask(progress: 1, fromTop: true, edgeRoom: room).path(in: rect).boundingRect, rect)
-        XCTAssertEqual(AtticDropdownReveal.revealAnimation, AtticMotionScale.easeOut(AtticMotionScale.standard))
+        XCTAssertEqual(AtticUnfoldShape(cornerRadius: 16, reveal: 0, fromTop: true).path(in: rect).boundingRect.minY, 0, accuracy: 0.01)
+        XCTAssertEqual(AtticUnfoldShape(cornerRadius: 16, reveal: 0, fromTop: false).path(in: rect).boundingRect.maxY, 300, accuracy: 0.01)
+        XCTAssertEqual(AtticDropdownReveal.revealAnimation, AtticDropdownReveal.openAnimation)
     }
 
     // MARK: - N-6: content fades before the controls

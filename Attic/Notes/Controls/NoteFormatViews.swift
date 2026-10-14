@@ -1026,19 +1026,17 @@ struct NoteSlashListView: View {
 
     var body: some View {
         ZStack(alignment: model.above ? .bottomLeading : .topLeading) {
-            if model.shown, !model.items.isEmpty {
+            // The dropdowns' one motion, the unfold (O14-02), under the `/`.
+            AtticUnfoldPresence(value: model.shown && !model.items.isEmpty ? true : nil, fromTop: !model.above) { _ in
                 AtticDropdownCard(width: model.width) {
                     rows
                 }
                 .environment(\.atticDropdownHeight, model.viewportHeight)
-                // The dropdowns' one reveal (N-4).
-                .transition(AtticDropdownReveal.transition(fromTop: !model.above, reduceMotion: design.reduceMotion))
                 .accessibilityElement(children: .contain)
                 .accessibilityLabel(String(localized: "Insert"))
                 .accessibilityIdentifier("notes-slash-list")
             }
         }
-        .animation(model.shown ? AtticDropdownReveal.revealAnimation : AtticMotionScale.exit, value: model.shown)
         .padding(AtticDropdownMetrics.shadowRoom)
         .fixedSize()
     }
@@ -1144,19 +1142,17 @@ struct NoteFormatCardView: View {
     @Environment(\.atticDesign) private var design
 
     var body: some View {
-        let transition = AtticDropdownReveal.transition(fromTop: !model.above, reduceMotion: design.reduceMotion)
         ZStack(alignment: model.above ? .bottomLeading : .topLeading) {
-            switch model.card {
-            case .date:
-                NoteDateCardView(model: model).environment(\.atticDropdownHeight, model.viewportHeight).transition(transition)
-            case let .link(hasLink):
-                NoteLinkCardView(model: model, hasLink: hasLink).environment(\.atticDropdownHeight, model.viewportHeight).transition(transition)
-            case nil:
-                EmptyView()
+            AtticUnfoldPresence(value: model.card, fromTop: !model.above) { card in
+                switch card {
+                case .date:
+                    NoteDateCardView(model: model).environment(\.atticDropdownHeight, model.viewportHeight)
+                case let .link(hasLink):
+                    NoteLinkCardView(model: model, hasLink: hasLink).environment(\.atticDropdownHeight, model.viewportHeight)
+                }
             }
         }
         .environment(\.atticDropdownWidth, model.viewportWidth)
-        .animation(model.card != nil ? AtticDropdownReveal.revealAnimation : AtticMotionScale.exit, value: model.card)
         .padding(AtticDropdownMetrics.shadowRoom)
         .fixedSize()
     }
