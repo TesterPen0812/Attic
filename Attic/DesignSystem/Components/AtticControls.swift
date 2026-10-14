@@ -1938,10 +1938,8 @@ struct AtticPopover<Content: View>: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) { content }
-            .modifier(AtticUnfoldContent())
             .padding(AtticPopoverMetrics.padding)
             .frame(width: width)
-            .modifier(AtticUnfoldCard(cornerRadius: AtticRadius.popover))
             .background(AtticPopoverBackground(cornerRadius: AtticRadius.popover))
     }
 }

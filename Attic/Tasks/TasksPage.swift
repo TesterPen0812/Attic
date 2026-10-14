@@ -1583,21 +1583,24 @@ struct TasksPage: View {
             // menu closes them), raised over the list like a pop-over.
             // Only on Done (round 12's identity: Now's "Completed today"
             // draws the same task, and never opens these).
-            // Raised from its row: it unfolds down from it, as every Attic
-            // pop-over does (O14-02).
-            if tab == .done {
-                AtticUnfoldPresence(value: model.doneDetailID == id ? model.doneDetail(for: id) : nil) { detail in
-                    TasksDoneDetailView(detail: detail, store: store, restore: {
-                        // The details close only once the restore saved; a
-                        // failure shows under the row with Retry (round 4).
-                        if model.report(model.restoreToNow(id), on: id, retry: { model.restoreToNow(id) }).isApplied {
-                            model.doneDetailID = nil
-                        }
-                    })
-                    .padding(.leading, AtticLayout.textX - AtticPopoverMetrics.padding - AtticPopoverMetrics.rowPadding)
-                    .padding(.bottom, AtticSpacing.s8)
-                    .onExitCommand { model.doneDetailID = nil }
-                }
+            if tab == .done, model.doneDetailID == id, let detail = model.doneDetail(for: id) {
+                TasksDoneDetailView(detail: detail, store: store, restore: {
+                    // The details close only once the restore saved; a
+                    // failure shows under the row with Retry (round 4).
+                    if model.report(model.restoreToNow(id), on: id, retry: { model.restoreToNow(id) }).isApplied {
+                        model.doneDetailID = nil
+                    }
+                })
+                .padding(.leading, AtticLayout.textX - AtticPopoverMetrics.padding - AtticPopoverMetrics.rowPadding)
+                .padding(.bottom, AtticSpacing.s8)
+                // Raised from its row: it unfolds down from it (O14-02) by
+                // opacity, scale and travel. A Done row holds no view for its
+                // details until they open (the Done Find keystroke budget), so
+                // this is a transition: it does not grow from a row's height
+                // or sharpen its contents as the dropdowns do.
+                .transition(design.reduceMotion ? .opacity.animation(AtticDropdownReveal.fadeAnimation)
+                            : AtticDropdownReveal.transformsOnly(fromTop: true))
+                .onExitCommand { model.doneDetailID = nil }
             }
             if model.failedSave == .title(id) {
                 AtticErrorLine(message: String(localized: "Not saved"), onRetry: { _ = model.commitTitle() })

@@ -1235,6 +1235,18 @@ extension AtticDropdownReveal {
     }
 }
 
+extension AtticDropdownReveal {
+    /// The unfold by opacity, scale and travel alone, both ways, for a
+    /// pop-over that is only a transition (a Done task's details).
+    static func transformsOnly(fromTop: Bool) -> AnyTransition {
+        let open = AnyTransition.modifier(active: AtticUnfoldEffect(clock: 0, closing: false, fromTop: fromTop, carriesState: false),
+                                          identity: AtticUnfoldEffect(clock: 1, closing: false, fromTop: fromTop, carriesState: false))
+        let close = AnyTransition.modifier(active: AtticUnfoldEffect(clock: 0, closing: true, fromTop: fromTop, carriesState: false),
+                                           identity: AtticUnfoldEffect(clock: 1, closing: true, fromTop: fromTop, carriesState: false))
+        return .asymmetric(insertion: open.animation(openAnimation), removal: close.animation(closeAnimation))
+    }
+}
+
 /// One opening of an `AtticUnfoldPresence` card: it unfolds from shut as
 /// it appears.
 struct AtticUnfolding<Content: View>: View {
