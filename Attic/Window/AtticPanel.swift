@@ -1,4 +1,5 @@
 import AppKit
+import ObjectiveC
 import QuartzCore
 import SwiftUI
 
@@ -1180,6 +1181,7 @@ final class AtticPanelHostingView: NSHostingView<AtticPanelView> {
         self.panelCornerRadius = panelCornerRadius
         self.dockedCorner = dockedCorner
         self.chromeInteractionState = chromeInteractionState
+        AtticHostDragHooks.install()
         super.init(rootView: rootView)
         // The window decides the panel's size, never the content: no
         // minimum, maximum or intrinsic size flows from SwiftUI to AppKit
@@ -1273,6 +1275,31 @@ final class AtticPanelHostingView: NSHostingView<AtticPanelView> {
 
     override func acceptsFirstMouse(for event: NSEvent?) -> Bool {
         true
+    }
+
+    // MARK: Drags out of the panel (O14-11)
+
+    /// A file dragged out of a task (SwiftUI's drag, this view its source)
+    /// springs home on a cancelled drop, as a task does, instead of the
+    /// system's slide back and fade. NSHostingView's drag-source methods are
+    /// not open to Swift, so `AtticHostDragHooks` adds these to this class
+    /// at run time, each after SwiftUI's own.
+    private var dragReturn: AtticDragReturn?
+
+    func hostDragWillBegin(_ session: NSDraggingSession) {
+        dragReturn = AtticDragReturn.starting(session, level: window?.level)
+        if dragReturn != nil { session.animatesToStartingPositionsOnCancelOrFail = false }
+    }
+
+    func hostDragMoved(_ session: NSDraggingSession) {
+        dragReturn?.moved(drawn: AtticDragReturn.drawnFrame(of: session))
+    }
+
+    func hostDragEnded(_ session: NSDraggingSession, at screenPoint: NSPoint, operation: NSDragOperation) {
+        guard let dragReturn else { return }
+        self.dragReturn = nil
+        let drawn = AtticDragReturn.drawnFrame(of: session) ?? CGRect(origin: screenPoint, size: .zero)
+        dragReturn.ended(operation: operation, drawn: drawn) { withExtendedLifetime(dragReturn) {} }
     }
 
     override func mouseDown(with event: NSEvent) {
@@ -1717,3 +1744,52 @@ protocol AtticHorizontalScrollOwner: AnyObject {
     var ownsHorizontalScrolling: Bool { get }
 }
 
+
+/// Adds `AtticPanelHostingView`'s drag-source hooks (O14-11) after
+/// NSHostingView's own implementations, which Swift cannot override.
+@MainActor
+enum AtticHostDragHooks {
+    private static var installed = false
+
+    static func install() {
+        guard !installed, let parent = class_getSuperclass(AtticPanelHostingView.self) else { return }
+        installed = true
+        let cls: AnyClass = AtticPanelHostingView.self
+        do {
+            let selector = NSSelectorFromString("draggingSession:willBeginAtPoint:")
+            if let method = class_getInstanceMethod(parent, selector) {
+                typealias Super = @convention(c) (AnyObject, Selector, NSDraggingSession, NSPoint) -> Void
+                let original = unsafeBitCast(method_getImplementation(method), to: Super.self)
+                let block: @convention(block) (AnyObject, NSDraggingSession, NSPoint) -> Void = { object, session, point in
+                    original(object, selector, session, point)
+                    MainActor.assumeIsolated { (object as? AtticPanelHostingView)?.hostDragWillBegin(session) }
+                }
+                class_addMethod(cls, selector, imp_implementationWithBlock(block), method_getTypeEncoding(method))
+            }
+        }
+        do {
+            let selector = NSSelectorFromString("draggingSession:movedToPoint:")
+            if let method = class_getInstanceMethod(parent, selector) {
+                typealias Super = @convention(c) (AnyObject, Selector, NSDraggingSession, NSPoint) -> Void
+                let original = unsafeBitCast(method_getImplementation(method), to: Super.self)
+                let block: @convention(block) (AnyObject, NSDraggingSession, NSPoint) -> Void = { object, session, point in
+                    original(object, selector, session, point)
+                    MainActor.assumeIsolated { (object as? AtticPanelHostingView)?.hostDragMoved(session) }
+                }
+                class_addMethod(cls, selector, imp_implementationWithBlock(block), method_getTypeEncoding(method))
+            }
+        }
+        do {
+            let selector = NSSelectorFromString("draggingSession:endedAtPoint:operation:")
+            if let method = class_getInstanceMethod(parent, selector) {
+                typealias Super = @convention(c) (AnyObject, Selector, NSDraggingSession, NSPoint, NSDragOperation) -> Void
+                let original = unsafeBitCast(method_getImplementation(method), to: Super.self)
+                let block: @convention(block) (AnyObject, NSDraggingSession, NSPoint, NSDragOperation) -> Void = { object, session, point, operation in
+                    original(object, selector, session, point, operation)
+                    MainActor.assumeIsolated { (object as? AtticPanelHostingView)?.hostDragEnded(session, at: point, operation: operation) }
+                }
+                class_addMethod(cls, selector, imp_implementationWithBlock(block), method_getTypeEncoding(method))
+            }
+        }
+    }
+}

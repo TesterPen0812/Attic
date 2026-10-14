@@ -155,4 +155,26 @@ final class TasksDragOutCardTests: XCTestCase {
         XCTAssertEqual(ended, 1)
         XCTAssertFalse(NSApp.windows.contains { !windows.contains(ObjectIdentifier($0)) && $0.isVisible }, "and its window goes")
     }
+
+    /// The item never vanishes for a frame at a cancelled drop: wherever the
+    /// pointer rests, the same picture already lies under the system's
+    /// image; a move withdraws it, and a successful drop takes it away.
+    func testThePictureRestsUnderTheSystemsImageAndGoesOnAMoveOrADrop() {
+        let images = TasksDragOut.Card.Images(card: Color.gray.frame(height: 34), width: 300, environment: EnvironmentValues(), scale: 2)!
+        let drawn = CGRect(x: -5_200, y: -5_200, width: 200, height: 44)
+        let dragReturn = AtticDragReturn(shadowed: images.shadowed, plain: images.plain, home: { CGRect(x: -5_000, y: -5_000, width: 340, height: 74) },
+                                         level: .floating, reduceMotion: false)
+        XCTAssertTrue(dragReturn.windowForTesting.isVisible, "ready, and clear, before the drop")
+        dragReturn.moved(drawn: drawn)
+        XCTAssertFalse(dragReturn.isResting, "not while the pointer moves")
+        RunLoop.current.run(until: Date().addingTimeInterval(AtticDragReturn.restDelay + 0.05))
+        XCTAssertTrue(dragReturn.isResting, "under the system's image once the pointer rests")
+        dragReturn.moved(drawn: drawn.offsetBy(dx: 30, dy: 0))
+        XCTAssertFalse(dragReturn.isResting, "withdrawn the moment it moves again")
+        var done = 0
+        dragReturn.ended(operation: .copy, drawn: drawn) { done += 1 }
+        XCTAssertEqual(done, 1)
+        XCTAssertFalse(dragReturn.windowForTesting.isVisible, "a drop takes the picture away at once")
+    }
 }
+

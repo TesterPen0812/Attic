@@ -135,6 +135,7 @@ enum TasksDragOut {
 
     /// The session's source (internal for the tests, which end it as Esc
     /// does).
+    @MainActor
     final class Source: NSObject, NSDraggingSource {
         /// Held for the session's life.
         static var current: Source?
@@ -148,8 +149,8 @@ enum TasksDragOut {
         var imageSize: CGSize = .zero
         var level: NSWindow.Level = .floating
         private var handedOff = false
-        /// The window the card springs home in, held while it moves.
-        private var springWindow: NSWindow?
+        /// The card's way home after a cancelled drop.
+        private var dragReturn: AtticDragReturn?
 
         init(ended: @escaping () -> Void) {
             self.ended = ended
@@ -162,142 +163,39 @@ enum TasksDragOut {
 
         func draggingSession(_ session: NSDraggingSession, movedTo screenPoint: NSPoint) {
             handOffOnce()
+            dragReturn?.moved(drawn: AtticDragReturn.drawnFrame(of: session))
         }
 
         func draggingSession(_ session: NSDraggingSession, endedAt screenPoint: NSPoint, operation: NSDragOperation) {
-            // Where the system drew the image last (on screen): AppKit
-            // narrows a wide drag image to 200 pt as it leaves, so the
-            // card goes home from that size and place.
-            var drawn: CGRect?
-            session.enumerateDraggingItems(options: [], for: nil, classes: [NSPasteboardItem.self], searchOptions: [:]) { item, _, stop in
-                drawn = item.draggingFrame
-                stop.pointee = true
-            }
-            ended(at: screenPoint, operation: operation, drawn: drawn)
+            ended(at: screenPoint, operation: operation, drawn: AtticDragReturn.drawnFrame(of: session))
         }
 
         /// The session ended at `screenPoint` (internal for the tests).
         func ended(at screenPoint: NSPoint, operation: NSDragOperation, drawn: CGRect? = nil) {
             handOffOnce()
-            // Dropped nowhere (Esc, back on the panel, a place that takes
-            // nothing): the card springs home to its row.
-            if operation.isEmpty, let card, !card.reduceMotion, let home = card.home() {
-                let start = drawn.flatMap { $0.width > 1 && $0.height > 1 ? $0 : nil }
-                    ?? CGRect(origin: CGPoint(x: screenPoint.x + imageOffset.x, y: screenPoint.y + imageOffset.y), size: imageSize)
-                springHome(card, from: start, to: home)
+            let start = drawn.flatMap { $0.width > 1 && $0.height > 1 ? $0 : nil }
+                ?? CGRect(origin: CGPoint(x: screenPoint.x + imageOffset.x, y: screenPoint.y + imageOffset.y), size: imageSize)
+            guard let dragReturn else {
+                card?.settled()
+                finish()
                 return
             }
-            springWindow?.orderOut(nil)
-            springWindow = nil
-            card?.settled()
-            finish()
+            // Dropped nowhere (Esc, back on the panel, a place that takes
+            // nothing): the card springs home to its row.
+            dragReturn.ended(operation: operation, drawn: start) { [weak self] in
+                self?.card?.settled()
+                self?.finish()
+            }
         }
 
         func handOffOnce() {
             guard !handedOff else { return }
             handedOff = true
             card?.handOff()
-            // Ready (and on screen, clear) before the drop, so a cancelled
-            // card appears in the frame the system's image leaves.
-            if card != nil, springWindow == nil {
-                let window = makeSpringWindow()
-                window.alphaValue = 0
-                window.orderFrontRegardless()
-                springWindow = window
+            if let card, dragReturn == nil {
+                dragReturn = AtticDragReturn(shadowed: card.images.shadowed, plain: card.images.plain, home: card.home,
+                                             level: level, reduceMotion: card.reduceMotion)
             }
-        }
-
-        private func makeSpringWindow() -> NSWindow {
-            let window = NSPanel(contentRect: CGRect(x: 0, y: 0, width: 10, height: 10), styleMask: [.borderless, .nonactivatingPanel],
-                                 backing: .buffered, defer: false)
-            window.isOpaque = false
-            window.backgroundColor = .clear
-            window.hasShadow = false
-            window.ignoresMouseEvents = true
-            window.isReleasedWhenClosed = false
-            window.level = NSWindow.Level(rawValue: level.rawValue + 1)
-            window.collectionBehavior = [.canJoinAllSpaces, .transient, .ignoresCycle, .fullScreenAuxiliary]
-            window.animationBehavior = .none
-            let host = NSView(frame: window.contentLayoutRect)
-            host.wantsLayer = true
-            window.contentView = host
-            return window
-        }
-
-        /// The cancelled card goes back along a short curve (each axis on
-        /// the failed-drop spring, the vertical a little slower) and
-        /// settles on its row, its lift shadow going as it lands. It never
-        /// fades: once home it lies exactly on the row, which takes over.
-        private func springHome(_ card: Card, from start: CGRect, to home: CGRect) {
-            let union = start.union(home).insetBy(dx: -40, dy: -40)
-            let window = springWindow ?? makeSpringWindow()
-            window.setFrame(union, display: false)
-            let host = window.contentView!
-            host.frame = CGRect(origin: .zero, size: union.size)
-            host.layer?.sublayers?.forEach { $0.removeFromSuperlayer() }
-            func layer(_ image: NSImage) -> CALayer {
-                let layer = CALayer()
-                layer.contents = image.cgImage(forProposedRect: nil, context: nil, hints: nil)
-                layer.contentsScale = window.backingScaleFactor
-                layer.bounds = CGRect(origin: .zero, size: start.size)
-                layer.anchorPoint = .zero
-                layer.position = CGPoint(x: start.minX - union.minX, y: start.minY - union.minY)
-                return layer
-            }
-            let shadowed = layer(card.images.shadowed)
-            let plain = layer(card.images.plain)
-            host.layer?.addSublayer(shadowed)
-            host.layer?.addSublayer(plain)
-            springWindow = window
-            window.alphaValue = 1
-            window.orderFrontRegardless()
-
-            let spring = AtticMotionPreset.failReturn.spring(in: .current)
-            let to = CGPoint(x: home.minX - union.minX, y: home.minY - union.minY)
-            CATransaction.begin()
-            CATransaction.setCompletionBlock { [weak self] in
-                MainActor.assumeIsolated {
-                    guard let self else { return }
-                    // Home: the row takes over the card's place.
-                    self.springWindow?.orderOut(nil)
-                    self.springWindow = nil
-                    card.settled()
-                    self.finish()
-                }
-            }
-            var settle: CFTimeInterval = 0
-            let size = home.size
-            let tracks: [(String, Any, Any, Double)] = [
-                ("position.x", shadowed.position.x, to.x, 1.0), ("position.y", shadowed.position.y, to.y, 1.18),
-                // Back to the row's own size, from what the system drew.
-                ("bounds.size", NSValue(size: start.size), NSValue(size: size), 1.0)
-            ]
-            for (key, from, value, slower) in tracks {
-                let animation = CASpringAnimation(perceptualDuration: spring.response * slower, bounce: spring.bounce)
-                animation.fromValue = from
-                animation.toValue = value
-                animation.fillMode = .both
-                animation.duration = animation.settlingDuration
-                settle = max(settle, animation.settlingDuration)
-                for target in [shadowed, plain] {
-                    target.add(animation, forKey: key)
-                }
-            }
-            for target in [shadowed, plain] {
-                target.position = to
-                target.bounds.size = size
-            }
-            // The shadow lets go over the second half of the way.
-            let shadow = CABasicAnimation(keyPath: "opacity")
-            shadow.fromValue = 1
-            shadow.toValue = 0
-            shadow.beginTime = CACurrentMediaTime() + settle * 0.35
-            shadow.duration = settle * 0.4
-            shadow.fillMode = .both
-            shadow.timingFunction = AtticMotionScale.easeOutTimingFunction
-            shadowed.add(shadow, forKey: "opacity")
-            shadowed.opacity = 0
-            CATransaction.commit()
         }
 
         /// The session ended: dropped, or cancelled (Esc, or no
@@ -310,4 +208,209 @@ enum TasksDragOut {
             ended()
         }
     }
+}
+
+/// The way home for something dragged out of the panel (O14-11): a task's
+/// lifted card, a task's file, a note's object. A cancelled drop (Esc, back
+/// on the panel, a place that takes nothing) springs back to where the
+/// item lies along a short curve (each axis on the failed-drop spring, the
+/// vertical a little slower), from the size and place the system last drew
+/// it back to its own, letting its shadow go as it settles. It never fades:
+/// home, it lies exactly on the item, which takes over.
+///
+/// So the item never vanishes for a frame at the drop (the system takes its
+/// image away before the drag's end reaches the app), the same picture lies
+/// under the system's image wherever the pointer rests, in a clear window
+/// over every display; it is withdrawn the moment the pointer moves again
+/// (it would trail the system's image) and at once after a successful drop.
+@MainActor
+final class AtticDragReturn {
+    private let shadowed: NSImage?
+    private let plain: NSImage
+    private let home: () -> CGRect?
+    private let reduceMotion: Bool
+    private let window: NSWindow
+    private let shadowLayer = CALayer()
+    private let cardLayer = CALayer()
+    private var rest: DispatchWorkItem?
+    private var lastDrawn: CGRect?
+    private(set) var isResting = false
+    /// How long the pointer rests before the picture lies under the
+    /// system's image (two frames: a slower pointer reads as resting).
+    nonisolated static let restDelay: TimeInterval = 0.035
+
+    init(shadowed: NSImage?, plain: NSImage, home: @escaping () -> CGRect?, level: NSWindow.Level, reduceMotion: Bool) {
+        self.shadowed = shadowed
+        self.plain = plain
+        self.home = home
+        self.reduceMotion = reduceMotion
+        let all = NSScreen.screens.reduce(CGRect.null) { $0.union($1.frame) }
+        let window = NSPanel(contentRect: all.isNull ? CGRect(x: 0, y: 0, width: 10, height: 10) : all,
+                             styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
+        window.isOpaque = false
+        window.backgroundColor = .clear
+        window.hasShadow = false
+        window.ignoresMouseEvents = true
+        window.isReleasedWhenClosed = false
+        window.level = NSWindow.Level(rawValue: level.rawValue + 1)
+        window.collectionBehavior = [.canJoinAllSpaces, .transient, .ignoresCycle, .fullScreenAuxiliary]
+        window.animationBehavior = .none
+        let host = NSView(frame: CGRect(origin: .zero, size: window.frame.size))
+        host.wantsLayer = true
+        window.contentView = host
+        for (layer, image) in [(shadowLayer, shadowed), (cardLayer, plain as NSImage?)] {
+            layer.contents = image?.cgImage(forProposedRect: nil, context: nil, hints: nil)
+            layer.contentsScale = window.backingScaleFactor
+            layer.anchorPoint = .zero
+            layer.isHidden = true
+            host.layer?.addSublayer(layer)
+        }
+        self.window = window
+        window.orderFrontRegardless()
+    }
+
+    /// The way home for a drag the system began from a view's own picture
+    /// (a SwiftUI drag, a text view's selection): its image and the place
+    /// it starts from, which is where the item lies. Nil without an image.
+    static func starting(_ session: NSDraggingSession, level: NSWindow.Level?) -> AtticDragReturn? {
+        var image: NSImage?
+        var frame: CGRect?
+        session.enumerateDraggingItems(options: [], for: nil, classes: [NSPasteboardItem.self], searchOptions: [:]) { item, _, stop in
+            frame = item.draggingFrame
+            if let contents = item.imageComponents?.first?.contents {
+                if let picture = contents as? NSImage {
+                    image = picture
+                } else if CFGetTypeID(contents as CFTypeRef) == CGImage.typeID {
+                    let cgImage = contents as! CGImage
+                    image = NSImage(cgImage: cgImage, size: item.draggingFrame.size)
+                }
+            }
+            stop.pointee = true
+        }
+        guard let image, let home = frame, home.width > 1, home.height > 1 else { return nil }
+        return AtticDragReturn(shadowed: nil, plain: image, home: { home }, level: level ?? .floating,
+                               reduceMotion: NSWorkspace.shared.accessibilityDisplayShouldReduceMotion)
+    }
+
+    /// Where the system draws the drag's image now, on screen.
+    static func drawnFrame(of session: NSDraggingSession) -> CGRect? {
+        var drawn: CGRect?
+        session.enumerateDraggingItems(options: [], for: nil, classes: [NSPasteboardItem.self], searchOptions: [:]) { item, _, stop in
+            drawn = item.draggingFrame
+            stop.pointee = true
+        }
+        return drawn
+    }
+
+    private func place(_ frame: CGRect) {
+        let origin = CGPoint(x: frame.minX - window.frame.minX, y: frame.minY - window.frame.minY)
+        for layer in [shadowLayer, cardLayer] {
+            layer.position = origin
+            layer.bounds = CGRect(origin: .zero, size: frame.size)
+        }
+    }
+
+    private func show(_ shown: Bool) {
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        shadowLayer.isHidden = !shown || shadowed == nil
+        cardLayer.isHidden = !shown
+        CATransaction.commit()
+        isResting = shown
+    }
+
+    /// The pointer moved: the picture is withdrawn, and lies under the
+    /// system's image again once the pointer rests.
+    func moved(drawn: CGRect?) {
+        rest?.cancel()
+        if isResting { show(false) }
+        guard let drawn, !reduceMotion else { return }
+        lastDrawn = drawn
+        let work = DispatchWorkItem { [weak self] in
+            MainActor.assumeIsolated {
+                guard let self, let frame = self.lastDrawn else { return }
+                CATransaction.begin()
+                CATransaction.setDisableActions(true)
+                self.place(frame)
+                CATransaction.commit()
+                self.show(true)
+            }
+        }
+        rest = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + Self.restDelay, execute: work)
+    }
+
+    /// The drag ended. Cancelled, the item springs home and `done` runs
+    /// once it is there; dropped, the picture goes at once.
+    func ended(operation: NSDragOperation, drawn start: CGRect, done: @escaping () -> Void) {
+        rest?.cancel()
+        guard operation.isEmpty, !reduceMotion, let home = home() else {
+            close()
+            done()
+            return
+        }
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        place(start)
+        CATransaction.commit()
+        show(true)
+        springHome(from: start, to: home, done: done)
+    }
+
+    private func close() {
+        rest?.cancel()
+        window.orderOut(nil)
+    }
+
+    private func springHome(from start: CGRect, to home: CGRect, done: @escaping () -> Void) {
+        let spring = AtticMotionPreset.failReturn.spring(in: .current)
+        let to = CGPoint(x: home.minX - window.frame.minX, y: home.minY - window.frame.minY)
+        let from = CGPoint(x: start.minX - window.frame.minX, y: start.minY - window.frame.minY)
+        CATransaction.begin()
+        CATransaction.setCompletionBlock { [weak self] in
+            MainActor.assumeIsolated {
+                // Home: the item takes over the picture's place.
+                self?.close()
+                done()
+            }
+        }
+        var settle: CFTimeInterval = 0
+        let tracks: [(String, Any, Any, Double)] = [
+            ("position.x", from.x, to.x, 1.0), ("position.y", from.y, to.y, 1.18),
+            // Back to the item's own size, from what the system drew.
+            ("bounds.size", NSValue(size: start.size), NSValue(size: home.size), 1.0)
+        ]
+        for (key, fromValue, value, slower) in tracks {
+            let animation = CASpringAnimation(perceptualDuration: spring.response * slower, bounce: spring.bounce)
+            animation.fromValue = fromValue
+            animation.toValue = value
+            animation.fillMode = .both
+            animation.duration = animation.settlingDuration
+            settle = max(settle, animation.settlingDuration)
+            for target in [shadowLayer, cardLayer] {
+                target.add(animation, forKey: key)
+            }
+        }
+        for target in [shadowLayer, cardLayer] {
+            target.position = to
+            target.bounds.size = home.size
+        }
+        if shadowed != nil {
+            // The shadow lets go over the second half of the way.
+            let shadow = CABasicAnimation(keyPath: "opacity")
+            shadow.fromValue = 1
+            shadow.toValue = 0
+            shadow.beginTime = CACurrentMediaTime() + settle * 0.35
+            shadow.duration = settle * 0.4
+            shadow.fillMode = .both
+            shadow.timingFunction = AtticMotionScale.easeOutTimingFunction
+            shadowLayer.add(shadow, forKey: "opacity")
+            shadowLayer.opacity = 0
+        }
+        CATransaction.commit()
+    }
+
+    #if DEBUG
+    var windowForTesting: NSWindow { window }
+    #endif
 }
