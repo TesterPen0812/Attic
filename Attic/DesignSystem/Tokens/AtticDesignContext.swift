@@ -162,7 +162,9 @@ private struct AtticSystemDesignModifier: ViewModifier {
     @Environment(\.colorSchemeContrast) private var systemContrast
     /// The Mac's contrast (or a UI-test launch's, `AtticContrastSeam`).
     private var contrast: ColorSchemeContrast { AtticContrastSeam.resolve(systemContrast) }
-    @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
+    @Environment(\.accessibilityReduceTransparency) private var systemReduceTransparency
+    /// The Mac's Reduce Transparency (or a UI-test launch's, `AtticTransparencySeam`).
+    private var reduceTransparency: Bool { AtticTransparencySeam.resolve(systemReduceTransparency) }
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.accessibilityDifferentiateWithoutColor) private var differentiateWithoutColor
 
@@ -281,4 +283,22 @@ enum AtticContrastSeam {
     nonisolated static func resolve(_ system: ColorSchemeContrast) -> ColorSchemeContrast {
         forced ? .increased : system
     }
+}
+
+/// Capture seam (R14): `ATTIC_UI_TESTING=1 ATTIC_UI_TEST_REDUCE_TRANSPARENCY=1`
+/// draws the panel as Reduce Transparency does (Solid surfaces, no
+/// variable blur), so it can be checked on screen without changing the
+/// Mac's accessibility setting. System-drawn materials still follow the
+/// Mac's own setting.
+enum AtticTransparencySeam {
+    nonisolated static let forced: Bool = {
+        #if DEBUG
+        let environment = ProcessInfo.processInfo.environment
+        return environment["ATTIC_UI_TESTING"] == "1" && environment["ATTIC_UI_TEST_REDUCE_TRANSPARENCY"] == "1"
+        #else
+        return false
+        #endif
+    }()
+
+    nonisolated static func resolve(_ system: Bool) -> Bool { forced || system }
 }

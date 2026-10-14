@@ -60,7 +60,9 @@ struct AtticPanelSurface: ViewModifier {
     /// The Mac's contrast (or a UI-test launch's, `AtticContrastSeam`).
     private var colorSchemeContrast: ColorSchemeContrast { AtticContrastSeam.resolve(systemContrast) }
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
-    @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
+    @Environment(\.accessibilityReduceTransparency) private var systemReduceTransparency
+    /// The Mac's Reduce Transparency (or a UI-test launch's, `AtticTransparencySeam`).
+    private var reduceTransparency: Bool { AtticTransparencySeam.resolve(systemReduceTransparency) }
 
     /// One Reduced policy (A4 M-07): macOS Reduce Motion or Settings ›
     /// Animations › Reduced.
@@ -312,7 +314,9 @@ private struct AtticGlassControlModifier<S: InsettableShape>: ViewModifier {
     @Environment(\.colorSchemeContrast) private var systemContrast
     /// The Mac's contrast (or a UI-test launch's, `AtticContrastSeam`).
     private var colorSchemeContrast: ColorSchemeContrast { AtticContrastSeam.resolve(systemContrast) }
-    @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
+    @Environment(\.accessibilityReduceTransparency) private var systemReduceTransparency
+    /// The Mac's Reduce Transparency (or a UI-test launch's, `AtticTransparencySeam`).
+    private var reduceTransparency: Bool { AtticTransparencySeam.resolve(systemReduceTransparency) }
     @Environment(\.atticPanelThemePalette) private var palette
     @Environment(\.atticPanelUsesSystemOpaqueSurface) private var usesSystemOpaqueSurface
     @Environment(\.atticDesign) private var design
@@ -377,7 +381,9 @@ private struct AtticGlassControlModifier<S: InsettableShape>: ViewModifier {
 private struct AtticGlassEffectContainerModifier: ViewModifier {
     let spacing: CGFloat
 
-    @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
+    @Environment(\.accessibilityReduceTransparency) private var systemReduceTransparency
+    /// The Mac's Reduce Transparency (or a UI-test launch's, `AtticTransparencySeam`).
+    private var reduceTransparency: Bool { AtticTransparencySeam.resolve(systemReduceTransparency) }
     @Environment(\.atticDesign) private var design
 
     @ViewBuilder

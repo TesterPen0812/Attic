@@ -532,6 +532,12 @@ final class NotesV2TypographyTests: XCTestCase {
                        "the chip never changes the line's height")
     }
 
+    func testR14ReduceTransparencySeamIsOffUnlessALaunchAsksForIt() {
+        XCTAssertFalse(AtticTransparencySeam.forced, "a normal launch follows the Mac")
+        XCTAssertTrue(AtticTransparencySeam.resolve(true))
+        XCTAssertFalse(AtticTransparencySeam.resolve(false))
+    }
+
     func testR14AnInlineChipMovesToTheNextLineWhole() throws {
         let text = "both. Strikethrough text marks a superseded idea. Inline code such as launch_status = \"ready\" distinguishes code from prose."
         var block = NoteBlock.text(text)
