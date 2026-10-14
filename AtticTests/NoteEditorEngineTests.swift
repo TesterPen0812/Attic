@@ -385,10 +385,11 @@ final class NoteEditorEngineTests: XCTestCase {
         var tip = NoteBlock.text("Tip", style: "quote"); tip.callout = "💡"
         let (engine, _) = makeEngine(NoteDocument(blocks: [.text("T"), heading, tip]))
         XCTAssertEqual(engine.paragraphKind(at: 2), .smallHeading)
-        XCTAssertEqual(engine.paragraphKind(at: 8), .callout)
+        XCTAssertEqual(engine.paragraphKind(at: 8), .callout(icon: "💡"))
         XCTAssertEqual((engine.attributes(forParagraphAt: 2)[.font] as? NSFont)?.pointSize, engine.style.bodyFont.pointSize)
         XCTAssertEqual((engine.attributes(forParagraphAt: 8)[.font] as? NSFont)?.pointSize, engine.style.bodyFont.pointSize)
-        XCTAssertNil(engine.decoration(forParagraphAt: 8))
+        // R14 visible pass: the callout draws its box and icon.
+        XCTAssertEqual(engine.decoration(forParagraphAt: 8), .callout(icon: "💡", starts: true, ends: true, exitsAtEnd: false))
     }
 
     func testR14BackspaceImmediatelyAfterInlineRuleRestoresTypedText() {

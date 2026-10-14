@@ -7,7 +7,8 @@ import AppKit
 /// note into the new draft through the real text view and router, then
 /// shows one state: `structured`, `bar`, `aa`, `slash`, `date`, `link`,
 /// `context`, `formatmenu`, `notemenu`, `hint`, `aasub`, `typography` (the owner's
-/// CIA note, Notes v2), `caret` (O14-10's caret tour); and, for the dropdown seam,
+/// CIA note, Notes v2), `caret` (O14-10's caret tour), `codex` (R14: the owner's
+/// Codex Pages test page pasted as Markdown, every block at once); and, for the dropdown seam,
 /// `slash-lead`, `slash-da` and `date-lead` (under the first paragraph);
 /// `aacycle` opens and closes Aa's format row on a timer for recordings
 /// (two slow cycles, then five quick ones, repeating).
@@ -57,12 +58,231 @@ enum NoteFormatCaptureScene {
                 writeCaretSample(controls: controls, textView: textView)
                 return
             }
+            if scene == "codex" {
+                writeCodexTestPage(textView: textView)
+                return
+            }
             writeSample(controls: controls, textView: textView, rich: scene == "structured" || scene == "aasub")
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) {
                 show(scene, controls: controls, chrome: chrome, textView: textView)
             }
         }
     }
+
+    /// R14: the owner's Codex Pages test page (`mockups/px-notes-r14-sheet`),
+    /// pasted as one Markdown paste through the engine (E.2), then the two
+    /// highlights (Markdown has none) and the folded section.
+    /// `ATTIC_UI_TEST_NOTES_SCROLL=<pt>` scrolls the note that far from its
+    /// top; `ATTIC_UI_TEST_HOVER_BLOCK=<text>` shows the block handle and
+    /// Copy as if the pointer were over the block holding that text.
+    private static func writeCodexTestPage(textView: NoteEditorTextView) {
+        guard let engine = textView.engine else { return }
+        type("Formatting test page\n", into: textView)
+        _ = engine.pasteMarkdown(codexTestPage, at: textView.selectedRange())
+        let text = textView.string as NSString
+        _ = engine.setHighlight(.grey, selection: text.range(of: "grey highlight"))
+        _ = engine.setHighlight(.yellow, selection: text.range(of: "colour highlight"))
+        let folded = text.range(of: "Folded section")
+        if folded.location != NSNotFound { _ = engine.toggleHeadingFold(at: folded.location) }
+        engine.history.reset()
+        textView.setSelectedRange(NSRange(location: 0, length: 0))
+        textView.scrollRangeToVisible(NSRange(location: 0, length: 0))
+        let environment = ProcessInfo.processInfo.environment
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) {
+            if let value = environment["ATTIC_UI_TEST_NOTES_SCROLL"].flatMap(Double.init), let scrollView = textView.enclosingScrollView {
+                scrollView.contentView.scroll(to: NSPoint(x: 0, y: -scrollView.contentInsets.top + CGFloat(value)))
+                scrollView.reflectScrolledClipView(scrollView.contentView)
+            }
+            if let hovered = environment["ATTIC_UI_TEST_HOVER_BLOCK"]?.replacingOccurrences(of: "_", with: " ") {
+                // As a still pointer would: placed again as layout settles
+                // (the page may host the editor in a new view; far
+                // fragments are estimated until laid out).
+                for step in 1...8 {
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.4 * Double(step)) {
+                        guard let view = engine.textView else { return }
+                        let location = (view.string as NSString).range(of: hovered).location
+                        guard location != NSNotFound else { return }
+                        view.pinsBlockHandle = false
+                        view.pinsMonoCopy = false
+                        view.showHoverChrome(forBlockAt: location)
+                    }
+                }
+            }
+        }
+    }
+
+    /// The page's Markdown: a `⏎` ending a line is a CommonMark hard break
+    /// (a backslash before the newline).
+    static let codexTestPage = codexTestPageSource.replacingOccurrences(of: "⏎\n", with: "\\\n")
+    private static let codexTestPageSource = #"""
+    This page exercises every format Notes supports, from headings to diagrams.
+
+    # Headings
+
+    Levels one through six. The note's title sits above them all.
+
+    ## Level two heading
+
+    ### Level three heading
+
+    #### Levels four to six
+
+    Body text follows every heading 6 below it.
+
+    ## Text formatting
+
+    This is regular paragraph text. **Bold text** emphasizes a decision, *italic text* adds emphasis, and ***bold italic text*** combines both. ~~Strikethrough text~~ marks a superseded idea. Inline code such as `launch_status = "ready"` distinguishes code from prose.
+
+    Mix formats in one sentence: **Maya** will review *the final draft* before `17:00`, replacing ~~version one~~ with **version two**.
+
+    A normal link: [Visit the example project website](https://example.com/project).
+
+    A grey highlight and a colour highlight stay as the owner chose.
+
+    Unicode examples: Café · naïve · résumé · Ελληνικά · 日本語 · العربية. Symbols and emoji: → ✓ ± £ € 🚀 🎨 🌿.
+
+    An intentional line break for an address:⏎
+    Northstar Studio⏎
+    24 Example Lane⏎
+    London
+
+    ## Bulleted and nested lists
+
+    - Research
+      - Interview five sample customers
+      - Group findings by theme
+    - Design
+      - Explore two directions
+        - Review typography and spacing
+    - Delivery
+      - Prepare the launch assets
+      - Share the final handover
+
+    ## Numbered lists
+
+    1. Define the project goal.
+    2. Create the first prototype.
+       1. Sketch the main journey.
+       2. Review the empty and error states.
+    3. Test with the sample team.
+    4. Record the decision.
+
+    A continued sequence:
+
+    5. Prepare the release notes.
+    6. Archive the prototype.
+
+    ## Checklists
+
+    - [x] Agree on the sample brief
+    - [x] Create the first design draft
+    - [ ] Review accessibility
+    - [ ] Confirm the launch date
+    - [ ] Publish the demo
+      - [x] Write the introduction
+      - [ ] Review the final screenshots
+
+    ## Quotes
+
+    > Good design makes the next step clear.
+    >
+    > A fictional principle from the Northstar Studio team.
+
+    Between the quotes.
+
+    > This longer quote demonstrates how multiple lines wrap inside a quotation. It gives the reader a distinct visual pause while keeping the text editable.
+
+    ## Callouts
+
+    > [!TIP]
+    > 💡 **Idea:** Test a shorter onboarding flow with the sample team.
+    >
+    > Start with a clear welcome screen and ask for only the essential information.
+
+    > [!WARNING]
+    > ⚠️ **Demo warning:** The launch budget is a fictional example and should not be used for planning.
+
+    > [!NOTE]
+    > ✅ **Decision:** Use the blue concept for the next design review.
+
+    > [!NOTE]
+    > A callout without an icon demonstrates the plain variant.
+
+    ## Dividers
+
+    The paragraph above this divider closes one topic.
+
+    ---
+
+    The paragraph below it opens the next.
+
+    ## Tables
+
+    | Item | Status | Cost |
+    | --- | --- | ---: |
+    | Brief | ✅ Done | £1,200 |
+    | Prototype | 🟡 In review | £3,450 |
+    | Launch | ⏳ Planned | £900 |
+
+    ## Code blocks
+
+    A JavaScript example with syntax highlighting:
+
+    ```javascript
+    const projects = [
+      { name: "Welcome flow", complete: true },
+      { name: "Search redesign", complete: false },
+    ];
+
+    const ready = projects.filter(project => project.complete);
+    console.log(`${ready.length} project ready for review`);
+    ```
+
+    A JSON data example:
+
+    ```json
+    {
+      "workspace": "Northstar Studio",
+      "currency": "GBP",
+      "activeProjects": 4,
+      "demo": true
+    }
+    ```
+
+    A plain text block and a diff:
+
+    ```
+    REVIEW SUMMARY
+    Owner: Maya Chen
+    Status: Ready for feedback
+    Next step: Review the welcome flow
+    ```
+
+    ```diff
+    - Ship the long onboarding
+    + Ship the short onboarding
+      Keep the welcome screen
+    ```
+
+    ## Diagram preview
+
+    ```mermaid
+    flowchart LR
+        A[Project brief] --> B[Design draft]
+        B --> C{Review approved?}
+        C -->|Yes| D[Prepare launch]
+        C -->|Changes needed| B
+        D --> E[Launch and learn]
+    ```
+
+    ## Folded section
+
+    This paragraph is folded away.
+
+    ## The end
+
+    A folded heading shows nothing else (N-1); the next heading follows it.
+    """#
 
     private static func type(_ text: String, into textView: NoteEditorTextView) {
         for character in text {

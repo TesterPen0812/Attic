@@ -14,7 +14,7 @@ import UniformTypeIdentifiers
 /// - Exposes objects to VoiceOver.
 /// - Marks keystroke-to-commit for the performance trace.
 final class NoteEditorTextView: NSTextView, NSAccessibilityCustomRotorItemSearchDelegate {
-    weak var engine: NoteEditorEngine?
+    weak var engine: NoteEditorEngine? { didSet { installCodeColouring() } }
     var marquee: NoteMarqueeSelection?
     override var shouldDrawInsertionPoint: Bool { marquee?.isEmpty != false && super.shouldDrawInsertionPoint }
     var proseTextCompletionEnabled = false
@@ -47,6 +47,373 @@ final class NoteEditorTextView: NSTextView, NSAccessibilityCustomRotorItemSearch
             } else { prose.append(part) }
         }
         for part in prose { super.checkText(in: part, types: checkingTypes, options: options) }
+    }
+
+    // MARK: A selected object shows its ring only (F-07)
+
+    /// While a file or an image is selected, the system's selection
+    /// highlight stays hidden: in a non-key panel TextKit draws its inactive
+    /// grey line box behind the card whatever `selectedTextAttributes` say,
+    /// a square block wider than the card's rounded ring.
+    var hidesSelectionHighlight = false {
+        didSet { if hidesSelectionHighlight != oldValue { applySelectionHighlightVisibility() } }
+    }
+
+    /// TextKit's selection layer (`_NSTextSelectionView`): the highlight's
+    /// host, below the text. Found by class name, as AppKit names no API for it.
+    var selectionHighlightViews: [NSView] {
+        subviews.filter { NSStringFromClass(type(of: $0)).hasSuffix("TextSelectionView") }
+    }
+
+    private func applySelectionHighlightVisibility() {
+        for view in selectionHighlightViews where view.alphaValue != (hidesSelectionHighlight ? 0 : 1) {
+            view.alphaValue = hidesSelectionHighlight ? 0 : 1
+        }
+    }
+
+    override func didAddSubview(_ subview: NSView) {
+        super.didAddSubview(subview)
+        if hidesSelectionHighlight { applySelectionHighlightVisibility() }
+    }
+
+    // MARK: Syntax colours (R14)
+
+    /// Code tokens draw in their syntax inks as TextKit rendering attributes,
+    /// outside the note's marks and its Undo: each code fragment is coloured
+    /// when TextKit validates it for display, from the engine's tokens for
+    /// its block (one scan per block per edit, `codeTokenMemo`).
+    private var codeColourEdits = 0
+    private var codeTokenMemo: (block: NSRange, edits: Int, tokens: [(NSRange, NoteSyntaxToken)])?
+    private var codeEditObserver: NSObjectProtocol?
+    private var codeColourDesign: AtticDesignContext?
+    private var codeColours: [NoteSyntaxToken: NSColor] = [:]
+
+    private func installCodeColouring() {
+        if let codeEditObserver { NotificationCenter.default.removeObserver(codeEditObserver) }
+        codeEditObserver = nil
+        codeTokenMemo = nil
+        guard let engine, let layoutManager = textLayoutManager else { return }
+        layoutManager.renderingAttributesValidator = { [weak self] manager, fragment in
+            MainActor.assumeIsolated { self?.colourCode(in: fragment, manager: manager) }
+        }
+        codeEditObserver = NotificationCenter.default.addObserver(
+            forName: NSTextStorage.didProcessEditingNotification, object: engine.textStorage, queue: nil
+        ) { [weak self] note in
+            guard let storage = note.object as? NSTextStorage, storage.editedMask.contains(.editedCharacters) else { return }
+            let edited = storage.editedRange
+            MainActor.assumeIsolated { self?.codeTextEdited(edited) }
+        }
+    }
+
+    /// An edit can change the tokens of every later line of its block (an
+    /// opened comment or string): the block's colours are validated again.
+    private func codeTextEdited(_ edited: NSRange) {
+        codeColourEdits &+= 1
+        guard let engine, edited.location != NSNotFound else { return }
+        let location = min(edited.location, max(0, engine.textStorage.length - 1))
+        guard engine.textStorage.length > 0, engine.paragraphStyle(at: location)?.isCode == true else { return }
+        DispatchQueue.main.async { [weak self] in
+            guard let self, let engine = self.engine, let manager = self.textLayoutManager,
+                  location < engine.textStorage.length, engine.paragraphStyle(at: location)?.isCode == true,
+                  let range = engine.textRange(for: engine.blockRange(at: location)) else { return }
+            manager.invalidateRenderingAttributes(for: range)
+        }
+    }
+
+    private func syntaxColour(_ token: NoteSyntaxToken) -> NSColor? {
+        guard let engine else { return nil }
+        if codeColourDesign != engine.style.design {
+            codeColourDesign = engine.style.design
+            let tokens = engine.style.tokens
+            codeColours = Dictionary(uniqueKeysWithValues: NoteSyntaxToken.allCases.compactMap { token in
+                tokens.syntaxInk(token).map { (token, $0.nsColor) }
+            })
+        }
+        return codeColours[token]
+    }
+
+    private func colourCode(in fragment: NSTextLayoutFragment, manager: NSTextLayoutManager) {
+        guard let engine, let block = fragment as? NoteBlockLayoutFragment, block.monoBlockRect != nil else { return }
+        let content = engine.contentStorage
+        let start = content.offset(from: content.documentRange.location, to: fragment.rangeInElement.location)
+        let end = content.offset(from: content.documentRange.location, to: fragment.rangeInElement.endLocation)
+        guard start >= 0, start < engine.textStorage.length, end > start else { return }
+        let range = engine.blockRange(at: start)
+        let tokens: [(NSRange, NoteSyntaxToken)]
+        if let memo = codeTokenMemo, memo.block == range, memo.edits == codeColourEdits {
+            tokens = memo.tokens
+        } else {
+            tokens = engine.codeTokens(in: NSRange(location: start, length: 0))
+            codeTokenMemo = (range, codeColourEdits, tokens)
+        }
+        manager.removeRenderingAttribute(.foregroundColor, for: fragment.rangeInElement)
+        // Tokens are in order: find the first that reaches this fragment.
+        var low = 0, high = tokens.count
+        while low < high {
+            let mid = (low + high) / 2
+            if NSMaxRange(tokens[mid].0) <= start { low = mid + 1 } else { high = mid }
+        }
+        var index = low
+        while index < tokens.count, tokens[index].0.location < end {
+            let (tokenRange, token) = tokens[index]
+            index += 1
+            let part = NSIntersectionRange(tokenRange, NSRange(location: start, length: end - start))
+            guard part.length > 0, let colour = syntaxColour(token), let textRange = engine.textRange(for: part) else { continue }
+            manager.addRenderingAttribute(.foregroundColor, value: colour, for: textRange)
+        }
+    }
+
+    // MARK: The block handle (R14 D.2)
+
+    /// The handle beside the block under the pointer (one at a time). It
+    /// hides on typing (back on the next mouse move), during a selection
+    /// drag, while a menu is open and on the title line.
+    private(set) lazy var blockHandle: NoteBlockHandleView = {
+        let handle = NoteBlockHandleView(frame: .zero)
+        handle.isHidden = true
+        handle.alphaValue = 0
+        handle.onPress = { [weak self] event in self?.trackBlockHandle(with: event) }
+        handle.onMove = { [weak self] up in self?.moveHandledBlock(up: up) ?? false }
+        addSubview(handle)
+        return handle
+    }()
+    /// A location in the block the handle belongs to.
+    private(set) var handleBlockLocation: Int?
+    private var handleHiddenForTyping = false
+    private lazy var dropLine: NoteDropLineView = {
+        let line = NoteDropLineView(frame: .zero)
+        line.isHidden = true
+        addSubview(line)
+        return line
+    }()
+
+    /// The fragment under `point` (in this view), searched on the text
+    /// column's line so the margin beside a block finds it too.
+    private func fragment(nearViewPoint point: NSPoint) -> (NSTextLayoutFragment, Int)? {
+        guard let engine, let layoutManager = textLayoutManager else { return nil }
+        let origin = textContainerOrigin
+        let width = textContainer?.size.width ?? bounds.width
+        let containerPoint = CGPoint(x: min(max(point.x - origin.x, 1), max(1, width - 1)), y: point.y - origin.y)
+        guard let fragment = layoutManager.textLayoutFragment(for: containerPoint) else { return nil }
+        let content = engine.contentStorage
+        let location = content.offset(from: content.documentRange.location, to: fragment.rangeInElement.location)
+        guard location >= 0, location < engine.textStorage.length else { return nil }
+        return (fragment, location)
+    }
+
+    /// The block whose handle the pointer at `point` shows: over its lines
+    /// or the margin beside them; never the title, a table (its own grips)
+    /// or an empty note's end.
+    func blockLocation(at point: NSPoint) -> Int? {
+        guard let engine, let (fragment, location) = fragment(nearViewPoint: point) else { return nil }
+        let frame = fragment.layoutFragmentFrame.offsetBy(dx: textContainerOrigin.x, dy: textContainerOrigin.y)
+        guard point.y >= frame.minY, point.y <= frame.maxY, point.x < frame.maxX + textContainerOrigin.x,
+              location > engine.titleParagraphRange.length - 1, location >= engine.titleParagraphRange.length else { return nil }
+        if engine.object(at: location) is NoteTableAttachment { return nil }
+        return location
+    }
+
+    /// The first line of the block at `location`, in this view: its frame
+    /// and the y of its cap-height middle (the handle's centre).
+    private func firstLine(ofBlockAt location: Int) -> (frame: CGRect, centreY: CGFloat)? {
+        guard let engine, let layoutManager = textLayoutManager,
+              let range = engine.textRange(for: NSRange(location: location, length: 0)),
+              let fragment = layoutManager.textLayoutFragment(for: range.location),
+              let line = fragment.textLineFragments.first else { return nil }
+        let origin = textContainerOrigin
+        let frame = fragment.layoutFragmentFrame.offsetBy(dx: origin.x, dy: origin.y)
+        let font = engine.textStorage.attribute(.font, at: location, effectiveRange: nil) as? NSFont ?? engine.style.bodyFont
+        let baseline = frame.minY + line.typographicBounds.minY + line.glyphOrigin.y
+        let capMiddle = engine.object(at: location) != nil && engine.isBlockObject(at: location)
+            ? frame.minY + line.typographicBounds.midY : baseline - font.capHeight / 2
+        return (frame, capMiddle)
+    }
+
+    func updateBlockHandle(at point: NSPoint?) {
+        guard isEditable, let point, !handleHiddenForTyping, marquee?.isEmpty != false else { return hideBlockHandle() }
+        if !blockHandle.isHidden, blockHandle.frame.contains(point) { return }
+        guard let location = blockLocation(at: point) else { return hideBlockHandle() }
+        showBlockHandle(forBlockAt: location)
+    }
+
+    func showBlockHandle(forBlockAt location: Int) {
+        guard let engine else { return }
+        let block = engine.blockRange(at: location)
+        guard let line = firstLine(ofBlockAt: block.location) else { return hideBlockHandle() }
+        let size = AtticNoteType.handleHitSize
+        let frame = NSRect(x: textContainerOrigin.x - AtticNoteType.handleFromColumn - size.width / 2,
+                           y: (line.centreY - size.height / 2).rounded(), width: size.width, height: size.height)
+        blockHandle.ink = engine.style.tokens.tableGripDot.nsColor
+        if blockHandle.frame != frame { blockHandle.frame = frame }
+        let changed = handleBlockLocation.map { engine.blockRange(at: $0) } != block
+        handleBlockLocation = block.location
+        if blockHandle.isHidden || blockHandle.alphaValue < 1 {
+            blockHandle.isHidden = false
+            NSAnimationContext.runAnimationGroup { context in
+                context.duration = AtticMotionScale.fast
+                blockHandle.animator().alphaValue = 1
+            }
+            NSAccessibility.post(element: self, notification: .layoutChanged)
+        } else if changed {
+            blockHandle.needsDisplay = true
+        }
+    }
+
+    func hideBlockHandle() {
+        guard !blockHandle.isHidden else { return }
+        handleBlockLocation = nil
+        blockHandle.alphaValue = 0
+        blockHandle.isHidden = true
+        NSAccessibility.post(element: self, notification: .layoutChanged)
+    }
+
+    #if DEBUG
+    /// Capture seam: the hover chrome of the block at `location` (its
+    /// handle, and Copy on a code block), as if the pointer were over it.
+    func showHoverChrome(forBlockAt location: Int) {
+        showBlockHandle(forBlockAt: location)
+        blockHandle.alphaValue = 1
+        if engine?.paragraphStyle(at: location)?.isCode == true {
+            hoveredMonoLocation = location
+            placeMonoCopy()
+            pinsMonoCopy = true
+        }
+        pinsBlockHandle = true
+    }
+    var pinsBlockHandle = false
+    #endif
+
+    /// The block's rectangle in this view (its fragments' union).
+    private func rect(ofBlock block: NSRange) -> CGRect? {
+        guard let engine, let layoutManager = textLayoutManager, let range = engine.textRange(for: block) else { return nil }
+        var union: CGRect?
+        layoutManager.enumerateTextLayoutFragments(from: range.location, options: [.ensuresLayout]) { fragment in
+            let start = engine.contentStorage.offset(from: engine.contentStorage.documentRange.location, to: fragment.rangeInElement.location)
+            guard start < NSMaxRange(block) || (block.length == 0 && start == block.location) else { return false }
+            var frame = fragment.layoutFragmentFrame
+            if let box = fragment as? NoteBlockLayoutFragment, let mono = box.monoBlockRect ?? box.calloutBoxRect {
+                frame = mono.offsetBy(dx: frame.minX, dy: frame.minY).union(CGRect(x: frame.minX, y: frame.minY + box.spacingBefore, width: frame.width, height: 0))
+            } else if let paragraph = engine.textStorage.attribute(.paragraphStyle, at: start, effectiveRange: nil) as? NSParagraphStyle {
+                frame = CGRect(x: frame.minX, y: frame.minY + paragraph.paragraphSpacingBefore, width: frame.width,
+                               height: max(0, frame.height - paragraph.paragraphSpacingBefore))
+            }
+            union = union.map { $0.union(frame) } ?? frame
+            return true
+        }
+        return union.map { CGRect(x: 0, y: $0.minY, width: textContainer?.size.width ?? $0.width, height: $0.height)
+            .offsetBy(dx: textContainerOrigin.x, dy: textContainerOrigin.y) }
+    }
+
+    /// Where a block dragged to `point` lands: before or after the block
+    /// under it (never inside the dragged block itself), with its line.
+    private func dropTarget(at point: NSPoint, moving source: NSRange) -> (NoteBlockDropPosition, CGRect)? {
+        guard let engine, let (_, location) = fragment(nearViewPoint: point) else { return nil }
+        guard location >= engine.titleParagraphRange.length else { return nil }
+        let block = engine.blockRange(at: location)
+        guard let rect = rect(ofBlock: block) else { return nil }
+        let after = point.y > rect.midY
+        guard NSIntersectionRange(block, source).length == 0, block.location != source.location,
+              let position = engine.blockDropPosition(at: block.location, after: after),
+              position.location != source.location, position.location != NSMaxRange(source),
+              position.location > engine.titleParagraphRange.length - 1 else { return nil }
+        // The line sits in the gap between the two blocks, at the drop's depth.
+        let gapY: CGFloat
+        if after {
+            let below = position.location < engine.textStorage.length ? self.rect(ofBlock: engine.blockRange(at: position.location)) : nil
+            gapY = below.map { (rect.maxY + $0.minY) / 2 } ?? rect.maxY + AtticNoteType.paragraphGap / 2
+        } else {
+            let above = block.location > engine.titleParagraphRange.length ? self.rect(ofBlock: engine.blockRange(at: block.location - 1)) : nil
+            gapY = above.map { ($0.maxY + rect.minY) / 2 } ?? rect.minY - AtticNoteType.paragraphGap / 2
+        }
+        let indent = CGFloat(position.depth) * AtticNoteType.listLevelStep
+        let width = (textContainer?.size.width ?? bounds.width) - indent
+        let line = CGRect(x: textContainerOrigin.x + indent, y: gapY - AtticNoteType.dropLineThickness / 2,
+                          width: max(0, width), height: AtticNoteType.dropLineThickness)
+        return (position, line)
+    }
+
+    /// A click on the handle selects the block; a drag moves it (Esc or a
+    /// drop where it started cancels; the move is one Undo step).
+    private func trackBlockHandle(with event: NSEvent) {
+        guard let engine, let window, let location = handleBlockLocation else { return }
+        let source = engine.blockRange(at: location)
+        guard let sourceRect = rect(ofBlock: source) else { return }
+        let start = convert(event.locationInWindow, from: nil)
+        var dragging = false
+        var target: NoteBlockDropPosition?
+        var snapshot: NSImageView?
+        NSCursor.closedHand.push()
+        defer {
+            NSCursor.pop()
+            snapshot?.removeFromSuperview()
+            dropLine.isHidden = true
+        }
+        tracking: while let next = window.nextEvent(matching: [.leftMouseDragged, .leftMouseUp, .keyDown],
+                                                    until: .distantFuture, inMode: .eventTracking, dequeue: true) {
+            switch next.type {
+            case .keyDown where next.keyCode == 53:
+                return
+            case .leftMouseDragged:
+                let point = convert(next.locationInWindow, from: nil)
+                if !dragging, hypot(point.x - start.x, point.y - start.y) > 3 {
+                    dragging = true
+                    snapshot = makeBlockSnapshot(sourceRect)
+                    hideBlockHandle()
+                }
+                guard dragging else { continue }
+                snapshot?.frame.origin = CGPoint(x: sourceRect.minX, y: sourceRect.minY + point.y - start.y)
+                autoscroll(with: next)
+                if let (position, line) = dropTarget(at: point, moving: source) {
+                    target = position
+                    dropLine.ink = engine.style.tokens.focusRing.nsColor
+                    dropLine.frame = line
+                    dropLine.isHidden = false
+                    dropLine.needsDisplay = true
+                } else {
+                    target = nil
+                    dropLine.isHidden = true
+                }
+            case .leftMouseUp:
+                if dragging {
+                    if let target { engine.moveBlock(source, to: target.location) }
+                } else {
+                    window.makeFirstResponder(self)
+                    setSelectedRange(source)
+                }
+                break tracking
+            default:
+                break
+            }
+        }
+    }
+
+    private func makeBlockSnapshot(_ rect: CGRect) -> NSImageView? {
+        guard let bitmap = bitmapImageRepForCachingDisplay(in: rect) else { return nil }
+        cacheDisplay(in: rect, to: bitmap)
+        let image = NSImage(size: rect.size)
+        image.addRepresentation(bitmap)
+        let view = NSImageView(frame: rect)
+        view.image = image
+        view.imageScaling = .scaleNone
+        view.alphaValue = 0.6
+        view.unregisterDraggedTypes()
+        addSubview(view)
+        return view
+    }
+
+    /// VoiceOver's Move Block Up / Down: past the block above or below.
+    private func moveHandledBlock(up: Bool) -> Bool {
+        guard let engine, let location = handleBlockLocation else { return false }
+        let source = engine.blockRange(at: location)
+        if up {
+            guard source.location > engine.titleParagraphRange.length else { return false }
+            let above = engine.blockRange(at: source.location - 1)
+            guard above.location >= engine.titleParagraphRange.length else { return false }
+            return engine.moveBlock(source, to: above.location)
+        }
+        guard NSMaxRange(source) < engine.textStorage.length else { return false }
+        let below = engine.blockRange(at: NSMaxRange(source))
+        return engine.moveBlock(source, to: NSMaxRange(below))
     }
 
     // MARK: A Mono block at the note's end
@@ -93,6 +460,12 @@ final class NoteEditorTextView: NSTextView, NSAccessibilityCustomRotorItemSearch
 
     override func mouseMoved(with event: NSEvent) {
         super.mouseMoved(with: event)
+        handleHiddenForTyping = false
+        #if DEBUG
+        if !pinsBlockHandle { updateBlockHandle(at: convert(event.locationInWindow, from: nil)) }
+        #else
+        updateBlockHandle(at: convert(event.locationInWindow, from: nil))
+        #endif
         updateMonoCopy(at: convert(event.locationInWindow, from: nil))
         hostedCursor(atWindowPoint: event.locationInWindow)?.set()
     }
@@ -108,6 +481,7 @@ final class NoteEditorTextView: NSTextView, NSAccessibilityCustomRotorItemSearch
             if let control = view as? AtticNoteTableControlView { return control.hoverCursor }
             if view is NoteResizeHandleView { return NSCursor.frameResize(position: .bottomRight, directions: .all) }
             if view is NoteMonoCopyButton { return .arrow }
+            if view is NoteBlockHandleView { return .openHand }
             if let table = view as? NoteTableView { return table.edgeCursor(atWindowPoint: point) }
             target = view.superview
         }
@@ -141,6 +515,11 @@ final class NoteEditorTextView: NSTextView, NSAccessibilityCustomRotorItemSearch
 
     override func mouseExited(with event: NSEvent) {
         super.mouseExited(with: event)
+        #if DEBUG
+        if !pinsBlockHandle { hideBlockHandle() }
+        #else
+        hideBlockHandle()
+        #endif
         updateMonoCopy(at: nil)
     }
 
@@ -178,7 +557,7 @@ final class NoteEditorTextView: NSTextView, NSAccessibilityCustomRotorItemSearch
             probe = length - 1
             if (engine.textStorage.string as NSString).character(at: probe) == 0x0A { return nil }
         }
-        return engine.paragraphStyle(at: probe) == .mono ? probe : nil
+        return engine.paragraphStyle(at: probe)?.isCode == true ? probe : nil
     }
 
     private var monoCopyPlacementScheduled = false
@@ -294,6 +673,8 @@ final class NoteEditorTextView: NSTextView, NSAccessibilityCustomRotorItemSearch
     }
 
     override func keyDown(with event: NSEvent) {
+        handleHiddenForTyping = true
+        hideBlockHandle()
         if marquee?.isEmpty == false {
             if event.keyCode == 51 || event.keyCode == 117 { _ = marquee?.delete(); return }
             if event.keyCode == 53 { marquee?.clear(); return }
@@ -338,6 +719,7 @@ final class NoteEditorTextView: NSTextView, NSAccessibilityCustomRotorItemSearch
         // join or leave a parent only after this pass (P1-01 hypothesis).
         AtticOverlayHierarchy.layoutPass {
             super.layout()
+            if hidesSelectionHighlight { applySelectionHighlightVisibility() }
             marquee?.layoutChanged()
             engine?.refreshViewportImages()
             PerformanceSignposts.noteDidLayout()
@@ -422,6 +804,7 @@ final class NoteEditorTextView: NSTextView, NSAccessibilityCustomRotorItemSearch
     }
 
     override func insertText(_ string: Any, replacementRange: NSRange) {
+        if pendingCalloutIconLocation != nil, takeCalloutIcon(string) { return }
         let generation = engine?.history.recordingGeneration
         defer { engine?.history.completeSelection(since: generation) }
         guard let engine, !engine.isWritingToolsSessionActive else {
@@ -766,7 +1149,121 @@ final class NoteEditorTextView: NSTextView, NSAccessibilityCustomRotorItemSearch
             engine.toggleCheckbox(atLineOf: location)
             return
         }
+        // R14: a code block's label opens its language menu; a callout's
+        // emoji opens its icon menu.
+        if let (location, rect) = codeLabel(at: point) {
+            showLanguageMenu(forBlockAt: location, below: rect)
+            return
+        }
+        if let (location, rect) = calloutIcon(at: point) {
+            showCalloutIconMenu(forBlockAt: location, below: rect)
+            return
+        }
+        // A click below the final block, when it isn't Body, makes a Body
+        // line after it (ProseMirror's gap cursor, D.1 #15).
+        if event.clickCount == 1, point.y > finalTextBottom(), engine.ensureBodyAfterFinalBlock() { return }
+        hideBlockHandle()
         super.mouseDown(with: event)
+    }
+
+    // MARK: Code language and callout icon menus (R14)
+
+    /// The bottom of the note's last line box, in this view.
+    private func finalTextBottom() -> CGFloat {
+        guard let layoutManager = textLayoutManager else { return .greatestFiniteMagnitude }
+        var bottom: CGFloat = 0
+        layoutManager.enumerateTextLayoutFragments(from: layoutManager.documentRange.endLocation, options: [.reverse, .ensuresLayout]) { fragment in
+            bottom = fragment.layoutFragmentFrame.maxY
+            if let box = fragment as? NoteBlockLayoutFragment, let rect = box.monoBlockRect ?? box.calloutBoxRect {
+                bottom = max(bottom, rect.maxY + fragment.layoutFragmentFrame.minY)
+            }
+            return false
+        }
+        return bottom + textContainerOrigin.y
+    }
+
+    /// The code label under `point`: the block's location and the label's
+    /// rectangle in this view (its text and 4 pt around it).
+    func codeLabel(at point: NSPoint) -> (Int, NSRect)? {
+        guard let (fragment, location) = fragment(nearViewPoint: point),
+              let block = fragment as? NoteBlockLayoutFragment, let label = block.codeLabel, let row = block.codeLabelRect else { return nil }
+        let width = (label as NSString).size(withAttributes: [.font: NoteTextStyle.font(for: AtticNoteType.codeLabel)]).width
+        let rect = NSRect(x: row.minX - 4, y: row.minY - 2, width: ceil(width) + 8, height: row.height + 4)
+            .offsetBy(dx: fragment.layoutFragmentFrame.minX + textContainerOrigin.x, dy: fragment.layoutFragmentFrame.minY + textContainerOrigin.y)
+        return rect.contains(point) ? (location, rect) : nil
+    }
+
+    /// The callout icon under `point`, as `codeLabel(at:)`.
+    func calloutIcon(at point: NSPoint) -> (Int, NSRect)? {
+        guard let (fragment, location) = fragment(nearViewPoint: point),
+              let block = fragment as? NoteBlockLayoutFragment, let slot = block.calloutIconRect else { return nil }
+        let rect = slot.insetBy(dx: -4, dy: 0)
+            .offsetBy(dx: fragment.layoutFragmentFrame.minX + textContainerOrigin.x, dy: fragment.layoutFragmentFrame.minY + textContainerOrigin.y)
+        return rect.contains(point) ? (location, rect) : nil
+    }
+
+    /// The language menu's commands for the code block at `location`.
+    func languageCommands(forBlockAt location: Int) -> [AtticMenuCommand] {
+        guard let engine else { return [] }
+        let current = engine.codeLanguage(at: location)
+        return NoteCodeLanguageName.menu.enumerated().map { index, language in
+            var command = AtticMenuCommand(verbatim: NoteCodeLanguageName.menuTitle(for: language),
+                                           startsSection: index == 1) { [weak engine] in
+                _ = engine?.setCodeLanguage(language, at: location)
+            }
+            command.state = language == current ? .on : nil
+            command.identifier = "note-code-language-\(language ?? "plain")"
+            return command
+        }
+    }
+
+    /// The Icon menu's commands for the callout at `location`: six emoji,
+    /// the system's Emoji & Symbols palette and No Icon.
+    func calloutIconCommands(forBlockAt location: Int) -> [AtticMenuCommand] {
+        guard let engine else { return [] }
+        let current = engine.paragraphStyle(at: location)?.calloutIcon
+        var commands = NoteCalloutIcons.menu.map { icon in
+            var command = AtticMenuCommand(verbatim: icon) { [weak engine] in _ = engine?.setCalloutIcon(icon, at: location) }
+            command.state = icon == current ? .on : nil
+            return command
+        }
+        commands.append(AtticMenuCommand("Emoji & Symbols…", startsSection: true) { [weak self] in
+            self?.pickCalloutIconFromPalette(forBlockAt: location)
+        })
+        var none = AtticMenuCommand("No Icon") { [weak engine] in _ = engine?.setCalloutIcon("", at: location) }
+        none.state = current == "" ? .on : nil
+        commands.append(none)
+        return commands
+    }
+
+    private func showLanguageMenu(forBlockAt location: Int, below rect: NSRect) {
+        hideBlockHandle()
+        AtticNativeMenu.popUp(languageCommands(forBlockAt: location), below: rect, in: self)
+    }
+
+    private func showCalloutIconMenu(forBlockAt location: Int, below rect: NSRect) {
+        hideBlockHandle()
+        AtticNativeMenu.popUp(calloutIconCommands(forBlockAt: location), below: rect, in: self)
+    }
+
+    /// The system palette inserts its pick as typed text: the next single
+    /// emoji typed while this is set becomes the callout's icon instead.
+    private(set) var pendingCalloutIconLocation: Int?
+
+    private func pickCalloutIconFromPalette(forBlockAt location: Int) {
+        pendingCalloutIconLocation = location
+        window?.makeFirstResponder(self)
+        NSApp.orderFrontCharacterPalette(self)
+    }
+
+    /// Takes the palette's pick for a pending callout icon (true: used).
+    func takeCalloutIcon(_ string: Any) -> Bool {
+        guard let location = pendingCalloutIconLocation, let engine else { return false }
+        pendingCalloutIconLocation = nil
+        let text = (string as? String) ?? (string as? NSAttributedString)?.string ?? ""
+        guard text.count == 1, text.unicodeScalars.contains(where: { $0.properties.isEmojiPresentation || $0.properties.isEmoji && $0.value > 0x238C }),
+              location < engine.textStorage.length, engine.paragraphStyle(at: location)?.isCallout == true else { return false }
+        return engine.setCalloutIcon(text, at: location)
     }
 
     func checkboxLocation(at point: NSPoint) -> Int? {
@@ -798,6 +1295,7 @@ final class NoteEditorTextView: NSTextView, NSAccessibilityCustomRotorItemSearch
     var contextMenuProvider: ((NSMenu, NSEvent) -> Void)?
 
     override func menu(for event: NSEvent) -> NSMenu? {
+        hideBlockHandle()
         // An image's or a file's own menu, read-only notes included.
         if let objectMenu = objectInteraction?.objectMenu(for: event) { return objectMenu }
         let menu = super.menu(for: event) ?? NSMenu()

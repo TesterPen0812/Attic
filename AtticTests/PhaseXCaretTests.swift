@@ -70,10 +70,14 @@ final class PhaseXCaretTests: XCTestCase {
     }
 
     private var everyStyle: [NoteBlock] {
-        [.text("The title"), .text("Body line one"), .text("Body line two"),
-         heading("Heading", level: 2), heading("Subheading", level: 3), heading("Title style", level: 1),
-         .text("Quote one", style: "quote"), .text("Bullet", style: "bullet"), .text("Number", style: "number"),
-         .checklist("Check"), .text("code line", style: "mono"), .text("after")]
+        // R14: Small Heading, a callout and a code block with a language too.
+        var callout = NoteBlock.text("Callout line", style: "quote"); callout.callout = "💡"
+        var code = NoteBlock.text("let swiftCode = 1", style: "mono"); code.language = "swift"
+        return [.text("The title"), .text("Body line one"), .text("Body line two"),
+                heading("Heading", level: 2), heading("Subheading", level: 3), heading("Title style", level: 1),
+                heading("Small heading", level: 4),
+                .text("Quote one", style: "quote"), .text("Bullet", style: "bullet"), .text("Number", style: "number"),
+                .checklist("Check"), .text("code line", style: "mono"), .text("after"), callout, .text("between"), code, .text("end")]
     }
 
     /// For every block style the fitted caret is the glyph box: its height is

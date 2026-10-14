@@ -281,7 +281,8 @@ final class PhaseXColourTokenTests: XCTestCase {
         let style = NoteTextStyle(design: AtticDesignContext(mode: .light))
         let code = style.markedAttributes(marks: [.code: true], baseFont: .systemFont(ofSize: 15))
         let marked = style.markedAttributes(marks: [.highlight: true], baseFont: .systemFont(ofSize: 15))
-        XCTAssertEqual(code[.backgroundColor] as? NSColor, style.codeColor)
+        // R14: code's fill is its drawn chip (`chipFill`), never a flat run.
+        XCTAssertNil(code[.backgroundColor])
         XCTAssertEqual(marked[.backgroundColor] as? NSColor, style.highlightColor)
         XCTAssertNotEqual(style.codeColor, style.highlightColor)
         XCTAssertTrue((code[.font] as? NSFont)?.fontDescriptor.symbolicTraits.contains(.monoSpace) == true)
