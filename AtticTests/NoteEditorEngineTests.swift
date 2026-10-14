@@ -52,6 +52,76 @@ final class NoteEditorEngineTests: XCTestCase {
         }
     }
 
+    func testR14NumberMarkersUseStartsLettersAndRoman() {
+        var first = NoteBlock.text("one", style: "number"); first.start = 12
+        var letter = NoteBlock.text("letter", style: "number"); letter.indent = 1
+        var roman = NoteBlock.text("roman", style: "number"); roman.indent = 2
+        let (engine, _) = makeEngine(NoteDocument(blocks: [.text("T"), first, letter, roman, .text("two", style: "number")]))
+        XCTAssertEqual(engine.listMarker(at: 2), .number("12."))
+        XCTAssertEqual(engine.listMarker(at: location(of: "letter", in: engine)), .letter("a."))
+        XCTAssertEqual(engine.listMarker(at: location(of: "roman", in: engine)), .roman("i."))
+        XCTAssertEqual(engine.listMarker(at: location(of: "two", in: engine)), .number("13."))
+    }
+
+    func testR14EmptyNestedItemsLiftAndIndentCarriesChildren() {
+        for name in ["bullet", "number", "quote"] {
+            var empty = NoteBlock.text("", style: name); empty.indent = 2
+            let (engine, view) = makeEngine(NoteDocument(blocks: [.text("T"), empty]))
+            view.setSelectedRange(NSRange(location: 2, length: 0)); view.insertNewline(nil)
+            XCTAssertEqual(engine.document().blocks[1].indent, 1, name)
+            XCTAssertEqual(engine.document().blocks[1].style, name)
+        }
+        var child = NoteBlock.text("child", style: "bullet"); child.indent = 1
+        let (engine, view) = makeEngine(NoteDocument(blocks: [.text("T"), .text("first", style: "bullet"), .text("parent", style: "bullet"), child]))
+        XCTAssertFalse(engine.perform(.indent, selection: NSRange(location: 2, length: 0)))
+        let at = location(of: "parent", in: engine)
+        view.setSelectedRange(NSRange(location: at, length: 0))
+        XCTAssertTrue(engine.perform(.indent))
+        XCTAssertEqual(engine.document().blocks.map(\.indent), [nil, nil, 1, 2])
+        XCTAssertTrue(engine.history.undo())
+        XCTAssertEqual(engine.document().blocks.last?.indent, 1)
+    }
+
+    func testR14NewInputRulesAndBackspaceRestoreLiteral() {
+        let rules: [(String, NoteParagraphStyle)] = [("# ", .heading(1)), ("#### ", .heading(4)), ("###### ", .heading(6)), ("+ ", .bullet), ("12. ", .number), ("```js ", .mono(language: "javascript"))]
+        for (literal, expected) in rules {
+            let (engine, view) = makeEngine(NoteDocument(blocks: [.text("T"), .text("")]))
+            view.setSelectedRange(NSRange(location: 2, length: 0)); type(literal, view)
+            XCTAssertEqual(engine.paragraphStyle(at: 2), expected, literal)
+            if literal == "12. " { XCTAssertEqual(engine.document().blocks[1].start, 12) }
+            view.deleteBackward(nil)
+            XCTAssertEqual(engine.document().blocks[1].text, literal, literal)
+            XCTAssertNil(engine.document().blocks[1].style, literal)
+        }
+        let (engine, view) = makeEngine(NoteDocument(blocks: [.text("T"), .text("")]))
+        view.setSelectedRange(NSRange(location: 2, length: 0)); type("~~gone~~", view)
+        XCTAssertEqual(engine.document().blocks[1].marks, [NoteMark(.strikethrough, offset: 0, length: 4)])
+    }
+
+    func testR14RunHintsSurviveReturnSplitJoinAndUndo() throws {
+        for (style, fields) in [("mono", ["language": NoteJSON.string("swift")]), ("quote", ["callout": .string("💡")]), ("number", ["start": .int(5)])] {
+            var block = NoteBlock.text("abcd", style: style); block.extras = fields
+            let (engine, view) = makeEngine(NoteDocument(blocks: [.text("T"), block]))
+            view.setSelectedRange(NSRange(location: 4, length: 0)); view.insertNewline(nil)
+            var blocks = engine.document().blocks
+            XCTAssertEqual(blocks.map(\.text), ["T", "ab", "cd"], style)
+            XCTAssertEqual(blocks[1].extras, fields)
+            XCTAssertEqual(blocks[2].language, block.language)
+            XCTAssertEqual(blocks[2].callout, block.callout)
+            XCTAssertNil(blocks[2].start)
+            view.setSelectedRange(NSRange(location: 4, length: 0)); view.deleteForward(nil)
+            blocks = engine.document().blocks
+            XCTAssertEqual(blocks[1].text, "abcd")
+            XCTAssertEqual(blocks[1].extras, fields)
+            XCTAssertTrue(engine.history.undo()); XCTAssertTrue(engine.history.undo())
+            XCTAssertEqual(engine.document().blocks[1], block)
+            view.setSelectedRange(NSRange(location: engine.textStorage.length, length: 0)); view.insertNewline(nil); type("end", view)
+            XCTAssertEqual(engine.document().blocks.last?.language, block.language)
+            XCTAssertEqual(engine.document().blocks.last?.callout, block.callout)
+            XCTAssertNil(engine.document().blocks.last?.start)
+        }
+    }
+
     private let checklistID = UUID()
     private let dateID = UUID()
     private let imageID = UUID()

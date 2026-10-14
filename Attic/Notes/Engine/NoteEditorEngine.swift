@@ -214,6 +214,7 @@ final class NoteEditorEngine: NSObject, NSTextViewDelegate, NSTextStorageDelegat
     /// True while the edit in flight inserted exactly one line break (Return),
     /// so only Return carries inline marks onto the next line.
     private var newlineEditInFlight = false
+    private var inputRuleBoundary: (caret: Int, generation: Int)?
     private func clearNewlineEditIfIdle() {
         if userEditDepth == 0 && engineEditDepth == 0 {
             newlineEditInFlight = false
@@ -1318,7 +1319,12 @@ final class NoteEditorEngine: NSObject, NSTextViewDelegate, NSTextStorageDelegat
         let current = textView.selectedRange()
         if current.length == 0 {
             let line = lineRange(at: current.location)
-            if line.location > 0, current.location == NSMaxRange(line), convertPipeRowToTable(line: line) { return true }
+            if line.location > 0, current.location == NSMaxRange(line),
+               lineText(at: line.location).hasPrefix("```"), conversionEligible(line: line),
+               convertParagraphHabit(line: line, returnInput: true) { return true }
+            if line.location > 0, current.location == NSMaxRange(line), convertPipeRowToTable(line: line) {
+                registerInputRuleBoundary(); return true
+            }
             if line.location > 0, current.location == NSMaxRange(line),
                (textStorage.string as NSString).substring(with: line) == "---",
                conversionEligible(line: line) {
@@ -1328,7 +1334,7 @@ final class NoteEditorEngine: NSObject, NSTextViewDelegate, NSTextStorageDelegat
                 replacement.append(NSAttributedString(string: "\n", attributes: style.bodyAttributes))
                 let applied = performEdit(line, with: replacement, name: "Divider",
                                           selection: NSRange(location: line.location + replacement.length, length: 0))
-                if applied { history.setLastRestoredText(NSAttributedString(string: "---\n", attributes: style.bodyAttributes)) }
+                if applied { history.setLastRestoredText(NSAttributedString(string: "---\n", attributes: style.bodyAttributes)); registerInputRuleBoundary() }
                 return applied
             }
             if case .heading = paragraphStyle(at: current.location) {
@@ -1347,15 +1353,19 @@ final class NoteEditorEngine: NSObject, NSTextViewDelegate, NSTextStorageDelegat
                 return perform(.paragraph(.body))
             }
             if let format = paragraphStyle(at: current.location),
-               [.bullet, .number, .quote, .mono].contains(format) {
+               [.bullet, .number, .quote].contains(format) || format.isCallout || format.isCode {
                 let content = (textStorage.string as NSString).substring(with: line)
                 if content.trimmingCharacters(in: .whitespaces).isEmpty,
                    !format.isCode || !isMonoParagraph(at: NSMaxRange(line) + 1) {
                     // An empty list or quote line ends the block; an empty Mono
                     // line does too unless more code follows (a blank code line).
+                    if !format.isCode && !format.isCallout && (indentAt(line.location) ?? 0) > 0 {
+                        return changeIndent(-1, selection: current)
+                    }
                     return perform(.paragraph(.body), selection: current)
                 }
-                let attributes = textView.typingAttributes
+                var attributes = textView.typingAttributes
+                attributes[.noteListStart] = nil
                 let depth = indentAt(line.location) ?? 0
                 let insertion = NSAttributedString(string: "\n", attributes: attributes)
                 let finalParagraph = current.location == textStorage.length
@@ -1364,6 +1374,9 @@ final class NoteEditorEngine: NSObject, NSTextViewDelegate, NSTextStorageDelegat
                 let name = format == .quote ? "Continue Quote" : (format.isCode ? "Continue Mono" : "Continue List")
                 guard performEdit(current, with: insertion, name: name,
                                   selection: NSRange(location: current.location + 1, length: 0)) else { return false }
+                if !finalParagraph, format == .number {
+                    _ = rewriteParagraphHint(.noteListStart, field: "start", value: nil, at: current.location + 1, name: "Continue List")
+                }
                 if finalParagraph {
                     history.recordParagraphStyleChange(location: current.location + 1,
                         before: .init(style: .body, indent: 0), after: .init(style: format, indent: depth))
@@ -1380,6 +1393,7 @@ final class NoteEditorEngine: NSObject, NSTextViewDelegate, NSTextStorageDelegat
         guard selection.location > line.location else { return false }
         let text = (textStorage.string as NSString).substring(with: NSRange(location: line.location + 1, length: line.length - 1))
         if text.trimmingCharacters(in: .whitespaces).isEmpty {
+            if (indentAt(line.location) ?? 0) > 0 { return changeIndent(-1, selection: selection) }
             return removeChecklistMarker(at: line.location, selection: selection)
         }
         let box = NoteChecklistAttachment(isChecked: false)
@@ -1404,8 +1418,17 @@ final class NoteEditorEngine: NSObject, NSTextViewDelegate, NSTextStorageDelegat
         guard selection.length == 0, selection.location > 0 else { return false }
         let location = selection.location
         let line = lineRange(at: location)
+        if let boundary = inputRuleBoundary, boundary.caret == location,
+           boundary.generation == history.recordingGeneration {
+            inputRuleBoundary = nil
+            return history.undo()
+        }
+        inputRuleBoundary = nil
         if location == line.location, let format = paragraphStyle(at: location),
-           format == .bullet || format == .number || format == .quote {
+           format == .bullet || format == .number || format == .quote || format.isCallout || format.isCode {
+            if !format.isCode && !format.isCallout && (indentAt(location) ?? 0) > 0 {
+                return changeIndent(-1, selection: selection)
+            }
             return perform(.paragraph(.body), selection: selection)
         }
         // A line that starts with an image never joins the line above (the
@@ -1419,6 +1442,7 @@ final class NoteEditorEngine: NSObject, NSTextViewDelegate, NSTextStorageDelegat
             }
         }
         if location == line.location + 1, checklistBox(inParagraphAt: location) != nil {
+            if (indentAt(location) ?? 0) > 0 { return changeIndent(-1, selection: selection) }
             return removeChecklistMarker(at: line.location, selection: selection)
         }
         let string = textStorage.string as NSString
@@ -2887,7 +2911,7 @@ extension NoteEditorEngine {
         case .indent:
             return NoteCommandValidation(enabled: lines.contains { line in
                 guard let style = paragraphStyle(at: line.location), [.bullet, .number, .checklist, .quote].contains(style) else { return false }
-                return (indentAt(line.location) ?? 0) < 2
+                return canIndentItem(at: line.location)
             }, state: .off)
         case .outdent:
             return NoteCommandValidation(enabled: lines.contains { (indentAt($0.location) ?? 0) > 0 }, state: .off)
@@ -3083,7 +3107,12 @@ extension NoteEditorEngine {
             }
             return applyParagraphFormat(.checklist, to: selection)
         }
-        let lines = formattableParagraphs(in: selection)
+        var target = selection
+        if let current = paragraphStyle(at: selection.location),
+           (current.isCode && styleValue.isCode) || (current.isCallout && styleValue.isCallout) {
+            target = blockRange(at: selection.location)
+        }
+        let lines = formattableParagraphs(in: target)
         guard !lines.isEmpty else { return false }
         var newSelection = selection
         history.beginGroup()
@@ -3193,32 +3222,63 @@ extension NoteEditorEngine {
         onTextChange?()
     }
 
+    private func isListItem(at location: Int) -> Bool {
+        [.bullet, .number, .checklist].contains(paragraphStyle(at: location) ?? .body)
+    }
+
+    private func canIndentItem(at location: Int) -> Bool {
+        let line = paragraphRange(at: location)
+        let depth = indentAt(location) ?? 0
+        guard depth < 2 else { return false }
+        if paragraphStyle(at: location) == .quote { return true }
+        guard line.location > titleParagraphRange.length + 1,
+              isListItem(at: line.location - 1), depth + 1 <= (indentAt(line.location - 1) ?? 0) + 1 else { return false }
+        var next = NSMaxRange(line)
+        while next < textStorage.length, isListItem(at: next), (indentAt(next) ?? 0) > depth {
+            if (indentAt(next) ?? 0) == 2 { return false }
+            next = NSMaxRange(paragraphRange(at: next))
+        }
+        return true
+    }
+
     private func changeIndent(_ delta: Int, selection: NSRange) -> Bool {
         let lines = formattableParagraphs(in: selection)
+        var affected: [Int: Int] = [:]
+        for line in lines {
+            guard let format = paragraphStyle(at: line.location),
+                  isListItem(at: line.location) || format == .quote else { continue }
+            let depth = indentAt(line.location) ?? 0
+            guard delta > 0 ? canIndentItem(at: line.location) : depth > 0 else { continue }
+            affected[line.location] = depth + delta
+            if isListItem(at: line.location) {
+                var next = NSMaxRange(paragraphRange(at: line.location))
+                while next < textStorage.length, isListItem(at: next), (indentAt(next) ?? 0) > depth {
+                    affected[next] = (indentAt(next) ?? 0) + delta
+                    next = NSMaxRange(paragraphRange(at: next))
+                }
+            }
+        }
+        guard !affected.isEmpty else { return false }
         history.beginGroup()
         defer { history.endGroup() }
         var changed = false
-        for line in lines.reversed() {
-            guard let paragraphStyle = paragraphStyle(at: line.location),
-                  [.bullet, .number, .checklist, .quote].contains(paragraphStyle) else { continue }
-            let old = indentAt(line.location) ?? 0
-            let new = min(2, max(0, old + delta))
-            guard new != old else { continue }
-            let string = textStorage.string as NSString
-            let hasBreak = NSMaxRange(line) < string.length && string.character(at: NSMaxRange(line)) == 0x0A
-            let range = NSRange(location: line.location, length: line.length + (hasBreak ? 1 : 0))
+        for location in affected.keys.sorted(by: >) {
+            let depth = affected[location]!
+            let range = paragraphRange(at: location)
+            let format = paragraphStyle(at: location) ?? .body
             if range.length == 0 {
-                history.recordParagraphStyleChange(location: line.location,
-                    before: pendingParagraphStyle?.state ?? .init(style: paragraphStyle, indent: old),
-                    after: .init(style: paragraphStyle, indent: new, block: pendingParagraphStyle?.state.block))
-                setPendingParagraphStyle(paragraphStyle, indent: new, at: line.location)
+                history.recordParagraphStyleChange(location: location,
+                    before: pendingParagraphStyle?.state ?? .init(style: format, indent: indentAt(location) ?? 0),
+                    after: .init(style: format, indent: depth, block: pendingParagraphStyle?.state.block))
+                setPendingParagraphStyle(format, indent: depth, at: location)
                 changed = true
-                continue
+            } else {
+                let replacement = NSMutableAttributedString(attributedString: textStorage.attributedSubstring(from: range))
+                let all = NSRange(location: 0, length: replacement.length)
+                replacement.removeAttribute(.noteBlockIndent, range: all)
+                if depth > 0 { replacement.addAttribute(.noteBlockIndent, value: depth, range: all) }
+                changed = performEdit(range, with: replacement, name: delta > 0 ? "Indent" : "Outdent") || changed
             }
-            let replacement = NSMutableAttributedString(attributedString: textStorage.attributedSubstring(from: range))
-            replacement.removeAttribute(.noteBlockIndent, range: NSRange(location: 0, length: replacement.length))
-            if new > 0 { replacement.addAttribute(.noteBlockIndent, value: new, range: NSRange(location: 0, length: replacement.length)) }
-            changed = performEdit(range, with: replacement, name: delta > 0 ? "Indent" : "Outdent") || changed
         }
         textView?.setSelectedRange(selection)
         return changed
@@ -3408,28 +3468,38 @@ extension NoteEditorEngine {
               textView.selectedRange().length == 0 else { return }
         let caret = textView.selectedRange().location
         let line = lineRange(at: caret)
-        guard line.location > 0, paragraphStyle(at: caret) != .mono else { slashSession = nil; return }
+        guard line.location > 0, paragraphStyle(at: caret)?.isCode != true else { slashSession = nil; return }
         if text == " " {
             if slashSession != nil { slashSession = nil; return }
             if convertParagraphHabit(line: line) { return }
             linkURLBeforeCaret()
-        } else if text == "*" || text == "_" || text == "`" {
+        } else if text == "*" || text == "_" || text == "`" || text == "~" {
             if convertInlineHabit(line: line, caret: caret) { return }
         }
         updateSlashSession(caret: caret, typed: text)
     }
 
-    private func convertParagraphHabit(line: NSRange) -> Bool {
+    private func convertParagraphHabit(line: NSRange, returnInput: Bool = false) -> Bool {
         guard conversionEligible(line: line) else { return false }
         let value = (textStorage.string as NSString).substring(with: line)
         let isBullet = paragraphStyle(at: line.location) == .bullet
-        let choices: [(String, NoteParagraphStyle)] = [
+        var choices: [(String, NoteParagraphStyle)] = [
             ("[ ] ", .checklist), ("[x] ", .checklist), ("[X] ", .checklist),
-            ("# ", .heading(2)), ("## ", .heading(2)), ("### ", .heading(3)),
+            ("# ", .heading(1)), ("## ", .heading(2)), ("### ", .heading(3)),
+            ("#### ", .heading(4)), ("##### ", .heading(5)), ("###### ", .heading(6)),
             ("``` ", .mono), ("[] ", .checklist),
-            ("- ", .bullet), ("* ", .bullet), ("1. ", .number),
+            ("- ", .bullet), ("* ", .bullet), ("+ ", .bullet), ("1. ", .number),
             ("-[] ", .checklist), ("- [ ] ", .checklist), ("- [x] ", .checklist), ("> ", .quote)
         ]
+        let numeric = value.range(of: #"^([1-9][0-9]{0,2})\. $"#, options: .regularExpression)
+        let listStart = numeric.flatMap { _ in Int(value.dropLast(2)) }
+        if numeric != nil { choices.insert((value, .number), at: 0) }
+        if value.hasPrefix("```"), (value.hasSuffix(" ") || returnInput) {
+            let info = String(value.dropFirst(3)).trimmingCharacters(in: .whitespaces)
+            if !info.contains(where: { $0.isWhitespace || $0 == "`" }) {
+                choices.insert((value, .mono(language: NoteCodeLanguage.normalize(info))), at: 0)
+            }
+        }
         guard let (prefix, format) = choices.first(where: { value.hasPrefix($0.0) }),
               let textView, textView.selectedRange().location == line.location + (prefix as NSString).length else { return false }
         if prefix.hasPrefix("[") && prefix != "[] " && !isBullet { return false }
@@ -3442,6 +3512,7 @@ extension NoteEditorEngine {
                                       selection: NSRange(location: line.location + 1, length: 0))
             if applied {
                 history.setLastRestoredText(NSAttributedString(string: "- " + prefix, attributes: style.bodyAttributes))
+                registerInputRuleBoundary()
             }
             return applied
         }
@@ -3449,17 +3520,22 @@ extension NoteEditorEngine {
         defer { history.endGroup() }
         let length = (prefix as NSString).length
         guard performEdit(NSRange(location: line.location, length: length), with: NSAttributedString(), name: "Format") else { return false }
+        if returnInput { history.setLastRestoredText(NSAttributedString(string: prefix + "\n", attributes: style.bodyAttributes)) }
         let selected = NSRange(location: line.location, length: 0)
         let didFormat = perform(.paragraph(format), selection: selected)
         if prefix == "- [x] ", didFormat { toggleCheckbox(atLineOf: line.location) }
+        if format == .number, let listStart, listStart > 1 {
+            _ = setListStart(listStart, at: selected.location)
+        }
         textView.setSelectedRange(NSRange(location: selected.location + (format == .checklist ? 1 : 0), length: 0))
+        if didFormat { registerInputRuleBoundary() }
         return didFormat
     }
 
     private func convertInlineHabit(line: NSRange, caret: Int) -> Bool {
         guard conversionEligible(line: line) else { return false }
         let before = (textStorage.string as NSString).substring(with: NSRange(location: line.location, length: caret - line.location))
-        let patterns: [(String, NoteMark.Kind)] = [("**", .bold), ("*", .italic), ("_", .italic), ("`", .code)]
+        let patterns: [(String, NoteMark.Kind)] = [("**", .bold), ("~~", .strikethrough), ("*", .italic), ("_", .italic), ("`", .code)]
         for (delimiter, kind) in patterns {
             guard before.hasSuffix(delimiter) else { continue }
             if delimiter.count == 1, let last = before.dropLast().last, String(last) == delimiter { continue }
@@ -3743,6 +3819,7 @@ extension NoteEditorEngine {
     }
 
     func numberedOrdinal(at location: Int, indent: Int) -> Int {
+        if location < textStorage.length, let value = textStorage.attribute(.noteListStart, at: location, effectiveRange: nil) as? Int { return value }
         var ordinal = 1
         var start = location
         while start > titleParagraphRange.length + 1 {
@@ -3753,7 +3830,10 @@ extension NoteEditorEngine {
             let previousKind = attrs[.noteBlockStyle] as? String
             let nested = previousDepth > indent && (["number", "bullet"].contains(previousKind ?? "") || checklistBox(inParagraphAt: previous.location) != nil)
             guard nested || (previousKind == "number" && previousDepth == indent) else { break }
-            if previousDepth == indent { ordinal += 1 }
+            if previousDepth == indent {
+                if let value = attrs[.noteListStart] as? Int { return value.addingReportingOverflow(ordinal).overflow ? Int.max : value + ordinal }
+                ordinal += 1
+            }
             start = previous.location
         }
         return ordinal
@@ -3839,16 +3919,163 @@ enum NoteSyntaxToken: String, CaseIterable, Sendable {
 @MainActor
 extension NoteEditorEngine {
     func listMarker(at location: Int) -> NoteListMarker? {
+        let depth = indentAt(location) ?? 0
         switch paragraphStyle(at: location) {
-        case .bullet: .disc
-        case .number: .number("\(numberedOrdinal(at: lineRange(at: location).location, indent: indentAt(location) ?? 0)).")
-        case .checklist: .checkbox
-        default: nil
+        case .bullet: return depth == 0 ? .disc : (depth == 1 ? .ring : .square)
+        case .number:
+            let ordinal = numberedOrdinal(at: lineRange(at: location).location, indent: depth)
+            if depth == 1 { return .letter(NoteListNumber.letters(ordinal) + ".") }
+            if depth == 2 { return .roman(NoteListNumber.roman(ordinal) + ".") }
+            return .number("\(ordinal).")
+        case .checklist: return .checkbox
+        default: return nil
         }
     }
-    func blockRange(at location: Int) -> NSRange { paragraphRange(at: location) }
+    func blockRange(at location: Int) -> NSRange {
+        var range = paragraphRange(at: location)
+        guard let format = paragraphStyle(at: location), format.isCode || format.isCallout || format == .quote else { return range }
+        func matches(_ at: Int) -> Bool {
+            guard let other = paragraphStyle(at: at) else { return false }
+            if format.isCode { return other.isCode }
+            return other == format
+        }
+        while range.location > titleParagraphRange.length + 1, matches(range.location - 1) {
+            let previous = paragraphRange(at: range.location - 1)
+            range = NSUnionRange(previous, range)
+        }
+        while NSMaxRange(range) < textStorage.length, matches(NSMaxRange(range)) {
+            let next = paragraphRange(at: NSMaxRange(range))
+            guard next.length > 0 else { break }
+            range = NSUnionRange(range, next)
+        }
+        return range
+    }
     func codeTokens(in range: NSRange) -> [(NSRange, NoteSyntaxToken)] { [] }
     @discardableResult func moveBlock(_ range: NSRange, to position: Int) -> Bool { false }
     /// Return false to let AppKit handle its existing rich and object routes.
     func handlePaste(_ pasteboard: NSPasteboard) -> Bool { false }
+}
+
+
+/// Stable language IDs; unrecognized info strings remain readable hints.
+enum NoteCodeLanguage {
+    static func normalize(_ value: String?) -> String? {
+        guard let value, !value.isEmpty else { return nil }
+        let aliases = ["js": "javascript", "ts": "typescript", "sh": "shell", "bash": "shell", "zsh": "shell", "yml": "yaml", "plaintext": "plain", "text": "plain"]
+        let lower = value.lowercased()
+        if let alias = aliases[lower] { return alias == "plain" ? nil : alias }
+        if lower == "plain" { return nil }
+        let supported = ["javascript", "typescript", "json", "swift", "python", "shell", "html", "css", "sql", "yaml", "diff", "mermaid"]
+        return supported.contains(lower) ? lower : value
+    }
+}
+
+enum NoteListNumber {
+    static func letters(_ value: Int) -> String {
+        var number = max(1, value), result = ""
+        repeat { number -= 1; result = String(UnicodeScalar(97 + number % 26)!) + result; number /= 26 } while number > 0
+        return result
+    }
+    static func roman(_ value: Int) -> String {
+        guard value > 0, value <= 3999 else { return String(value) }
+        var number = value, result = ""
+        for (amount, digits) in [(1000,"m"),(900,"cm"),(500,"d"),(400,"cd"),(100,"c"),(90,"xc"),(50,"l"),(40,"xl"),(10,"x"),(9,"ix"),(5,"v"),(4,"iv"),(1,"i")] {
+            while number >= amount { result += digits; number -= amount }
+        }
+        return result
+    }
+}
+
+@MainActor
+extension NoteEditorEngine {
+    private func registerInputRuleBoundary() {
+        inputRuleBoundary = (textView?.selectedRange().location ?? textStorage.length, history.recordingGeneration)
+    }
+
+    /// A display hint changes with the paragraph in the same undo history.
+    @discardableResult
+    private func rewriteParagraphHint(_ key: NSAttributedString.Key, field: String, value: Any?, at location: Int, name: String) -> Bool {
+        let range = paragraphRange(at: location)
+        if range.length == 0 {
+            let format = paragraphStyle(at: location) ?? .body
+            var metadata = pendingParagraphStyle?.state.block ?? .text("", style: format.storageName)
+            if let value = value as? Int { metadata.extras[field] = .int(Int64(value)) }
+            else if let value = value as? String { metadata.extras[field] = .string(value) }
+            else { metadata.extras[field] = nil }
+            history.recordParagraphStyleChange(location: range.location,
+                before: pendingParagraphStyle?.state ?? .init(style: format, indent: 0),
+                after: .init(style: format, indent: indentAt(location) ?? 0, block: metadata))
+            setPendingParagraphStyle(format, indent: indentAt(location) ?? 0, at: location, metadata: metadata)
+            history.renameLast(name)
+            return true
+        }
+        let replacement = NSMutableAttributedString(attributedString: textStorage.attributedSubstring(from: range))
+        let all = NSRange(location: 0, length: replacement.length)
+        replacement.removeAttribute(key, range: all)
+        if let value { replacement.addAttribute(key, value: value, range: all) }
+        var boxes: [(NSRange, NoteBlockExtras)] = []
+        replacement.enumerateAttribute(.noteBlockExtras, in: all) { value, range, _ in
+            if let box = value as? NoteBlockExtras { boxes.append((range, box)) }
+        }
+        for (range, box) in boxes {
+            var fields = box.fields; fields[field] = nil
+            replacement.addAttribute(.noteBlockExtras, value: NoteBlockExtras(fields), range: range)
+        }
+        return performEdit(range, with: replacement, name: name, selection: textView?.selectedRange())
+    }
+
+    @discardableResult func setListStart(_ start: Int, at location: Int) -> Bool {
+        guard paragraphStyle(at: location) == .number, start >= 1 else { return false }
+        return rewriteParagraphHint(.noteListStart, field: "start", value: start > 1 ? start : nil, at: location, name: "Restart Numbering")
+    }
+    @discardableResult func continueNumbering(at location: Int) -> Bool {
+        guard paragraphStyle(at: location) == .number else { return false }
+        let depth = indentAt(location) ?? 0
+        var previous = paragraphRange(at: location).location
+        while previous > titleParagraphRange.length + 1 {
+            previous = paragraphRange(at: previous - 1).location
+            if paragraphStyle(at: previous) == .number, (indentAt(previous) ?? 0) == depth {
+                let last = numberedOrdinal(at: previous, indent: depth)
+                return last < Int.max && setListStart(last + 1, at: location)
+            }
+        }
+        return setListStart(1, at: location)
+    }
+    @discardableResult func setCodeLanguage(_ language: String?, at location: Int) -> Bool {
+        guard paragraphStyle(at: location)?.isCode == true else { return false }
+        return perform(.paragraph(.mono(language: NoteCodeLanguage.normalize(language))), selection: NSRange(location: location, length: 0))
+    }
+    @discardableResult func setCalloutIcon(_ icon: String, at location: Int) -> Bool {
+        guard paragraphStyle(at: location)?.isCallout == true else { return false }
+        return perform(.paragraph(.callout(icon: icon)), selection: NSRange(location: location, length: 0))
+    }
+    func handleLineBreak() -> Bool {
+        guard let textView, !textView.hasMarkedText() else { return false }
+        let selection = textView.selectedRange()
+        guard lineRange(at: selection.location).location > 0 else { return true }
+        let value = paragraphStyle(at: selection.location)?.isCode == true ? "\n" : "\u{2028}"
+        return performEdit(selection, with: NSAttributedString(string: value, attributes: attributes(forParagraphAt: selection.location)), name: "Line Break", selection: NSRange(location: selection.location + 1, length: 0))
+    }
+    /// The visible builder calls this for a click below the final block too.
+    @discardableResult func ensureBodyAfterFinalBlock() -> Bool {
+        let end = textStorage.length
+        guard end > 0, let format = paragraphStyle(at: end), format != .body else { return false }
+        history.beginGroup(); defer { history.endGroup() }
+        guard performEdit(NSRange(location: end, length: 0), with: NSAttributedString(string: "\n", attributes: attributes(forParagraphAt: end)), name: "New Body Line", selection: NSRange(location: end + 1, length: 0)) else { return false }
+        return perform(.paragraph(.body), selection: NSRange(location: end + 1, length: 0))
+    }
+    func textView(_ textView: NSTextView, doCommandBy commandSelector: Selector) -> Bool {
+        if commandSelector == #selector(NSTextView.insertLineBreak(_:)) { return handleLineBreak() }
+        if commandSelector == #selector(NSTextView.moveDown(_:)), textView.selectedRange().length == 0 {
+            let caret = textView.selectedRange().location
+            let line = lineRange(at: caret)
+            let format = paragraphStyle(at: caret)
+            if NSMaxRange(line) == textStorage.length, format?.isCode == true || format?.isCallout == true || format == .quote {
+                // Only the final visual line exits a wrapped block.
+                if let rect = caretRect(at: caret), let last = caretRect(at: textStorage.length), abs(rect.minY - last.minY) > 1 { return false }
+                return ensureBodyAfterFinalBlock()
+            }
+        }
+        return false
+    }
 }
