@@ -189,6 +189,18 @@ extension NoteEditorEngine {
         history.beginGroup(); defer { history.endGroup() }
         guard performEdit(span, with: replacement, name: "Move Block", selection: NSRange(location: selectedLocation, length: selectionLength)) else { return false }
         if let emptySourceBlock, selectedLocation == textStorage.length { restoreMovedEmptyParagraph(emptySourceBlock) }
+        if terminalBelongsToSource || (NSMaxRange(source) == end && !original.string.hasSuffix("\n")),
+           selectedLocation != textStorage.length, replacement.string.hasSuffix("\n"),
+           let last = chunks.last(where: { $0.length > 0 }) {
+            // The moved final block no longer owns pending state. If its
+            // predecessor was also empty, that predecessor is now terminal;
+            // its separator still carries the correct metadata in the chunk.
+            let finalLine = (last.string as NSString).paragraphRange(for: NSRange(location: last.length - 1, length: 0))
+            if let block = NoteTextCodec.document(from: last.attributedSubstring(from: finalLine), firstBlockIsTitle: false).blocks.first,
+               block.kind == .text, block.text.isEmpty {
+                restoreMovedEmptyParagraph(block)
+            }
+        }
         textView?.setSelectedRange(blockRange(at: selectedLocation))
         history.renameLast("Move Block")
         return true

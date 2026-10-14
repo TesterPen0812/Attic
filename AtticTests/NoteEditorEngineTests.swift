@@ -7,6 +7,33 @@ import XCTest
 /// identity, IME over a selection, VoiceOver elements.
 @MainActor
 final class NoteEditorEngineTests: XCTestCase {
+    func testFix14MovingLastTextKeepsItsEmptyCodePredecessorAndUndoRedo() {
+        var emptyCode = NoteBlock.text("", style: "mono"); emptyCode.language = "swift"
+        var heading = NoteBlock.text("Q", style: "heading"); heading.level = 4
+        let engine = NoteEditorEngine(noteID: UUID(), document: NoteDocument(blocks: [.text("T"), .text("alpha"), emptyCode, heading]))
+        let before = engine.document()
+        XCTAssertTrue(engine.moveBlock(engine.blockRange(at: engine.textStorage.length), to: 2))
+        let moved = engine.document()
+        XCTAssertEqual(moved.blocks.map(\.text), ["T", "Q", "alpha", ""])
+        XCTAssertEqual(moved.blocks.last?.language, "swift")
+        XCTAssertTrue(engine.history.undo()); XCTAssertEqual(engine.document(), before)
+        XCTAssertFalse(engine.history.canUndo)
+        XCTAssertTrue(engine.history.redo()); XCTAssertEqual(engine.document(), moved)
+    }
+
+    func testFix14MovingFinalEmptyHeadingKeepsThePrecedingEmptyBodyAndUndoRedo() {
+        var heading = NoteBlock.text("", style: "heading"); heading.level = 4
+        let engine = NoteEditorEngine(noteID: UUID(), document: NoteDocument(blocks: [.text("T"), .text("alpha"), .text(""), heading]))
+        let before = engine.document()
+        XCTAssertTrue(engine.moveBlock(engine.blockRange(at: engine.textStorage.length), to: 2))
+        let moved = engine.document()
+        XCTAssertEqual(moved.blocks.map(\.text), ["T", "", "alpha", ""])
+        XCTAssertEqual(moved.blocks.map(\.style), [nil, "heading", nil, nil])
+        XCTAssertTrue(engine.history.undo()); XCTAssertEqual(engine.document(), before)
+        XCTAssertFalse(engine.history.canUndo)
+        XCTAssertTrue(engine.history.redo()); XCTAssertEqual(engine.document(), moved)
+    }
+
     func testFix14NumberStartTransferAcrossChildrenUndoAndRedo() {
         var parent = NoteBlock.text("parent", style: "number"); parent.start = 12
         var child = NoteBlock.text("child", style: "number"); child.indent = 1
@@ -2762,5 +2789,160 @@ final class PhaseXHunt14Tests: XCTestCase {
             XCTAssertEqual(engine.paragraphStyle(at: 2), format, "H14-10: Redo must retain the emptied block's kind")
         }
     }
+
+}
+
+/// Additional coverage against the already-shipped language-boundary rules.
+/// The retained hunt oracle above is unchanged pending orchestrator direction.
+@MainActor
+final class PhaseXFix14GeneratedTests: XCTestCase {
+    private var scrollViews: [NSScrollView] = []
+    private func editor(_ blocks: [NoteBlock]) -> (NoteEditorEngine, NoteEditorTextView) {
+        let engine = NoteEditorEngine(noteID: UUID(), document: NoteDocument(blocks: [.text("T")] + blocks))
+        let (scroll, view) = engine.makeView()
+        scroll.frame = NSRect(x: 0, y: 0, width: 400, height: 600)
+        scrollViews.append(scroll)
+        return (engine, view)
+    }
+    private struct Fix14Line: Equatable, CustomStringConvertible {
+        var text: String
+        var format: NoteParagraphStyle = .body
+        var description: String { "\(format):\(text.debugDescription)" }
+    }
+    private struct Fix14Step: CustomStringConvertible {
+        var kind: Int
+        var a: Int
+        var b: Int
+        var description: String { "\(kind):\(a):\(b)" }
+    }
+    private struct Fix14RNG {
+        var state: UInt64
+        mutating func next() -> Int {
+            state = state &* 6364136223846793005 &+ 1442695040888963407
+            return Int((state >> 32) & 0x7fffffff)
+        }
+    }
+    private func fix14Read(_ engine: NoteEditorEngine) -> [Fix14Line] {
+        engine.document().blocks.dropFirst().map { block in
+            let format: NoteParagraphStyle
+            switch block.style {
+            case "heading": format = .heading(block.level ?? 2)
+            case "bullet": format = .bullet
+            case "number": format = .number
+            case "mono": format = .mono(language: block.language)
+            case "quote": format = block.callout.map { .callout(icon: $0) } ?? .quote
+            default: format = .body
+            }
+            return Fix14Line(text: block.text, format: format)
+        }
+    }
+    /// The oracle holds only text and block kinds. It does not parse or use
+    /// TextKit attributes to compute a new state. Coordinates come from it.
+    private func fix14Replay(_ steps: [Fix14Step]) -> (index: Int, reason: String)? {
+        let (engine, view) = editor([.text("alpha"), .text("beta"), .text("")])
+        defer { engine.detachView(); scrollViews.removeLast() }
+        var model = [Fix14Line(text: "alpha"), Fix14Line(text: "beta"), Fix14Line(text: "")]
+        var undo: [[Fix14Line]] = [], redo: [[Fix14Line]] = []
+        let formats: [NoteParagraphStyle] = [.body, .bullet, .number, .heading(4), .callout(icon: "💡"), .mono(language: "swift")]
+        func start(_ index: Int) -> Int { 2 + model.prefix(index).reduce(0) { $0 + ($1.text as NSString).length + 1 } }
+        func run(_ index: Int) -> Range<Int> {
+            let format = model[index].format
+            guard format.isCode || format.isCallout else { return index..<(index + 1) }
+            var lower = index, upper = index + 1
+            func matches(_ other: NoteParagraphStyle) -> Bool { other == format }
+            while lower > 0, matches(model[lower - 1].format) { lower -= 1 }
+            while upper < model.count, matches(model[upper].format) { upper += 1 }
+            return lower..<upper
+        }
+        for (index, step) in steps.enumerated() {
+            let before = model
+            let line = step.a % model.count
+            let offset = step.b % ((model[line].text as NSString).length + 1)
+            let caret = start(line) + offset
+            view.setSelectedRange(NSRange(location: caret, length: 0))
+            engine.history.breakCoalescing()
+            let generation = engine.history.recordingGeneration
+            switch step.kind {
+            case 0:
+                model[line].text = (model[line].text as NSString).replacingCharacters(in: NSRange(location: offset, length: 0), with: "x")
+                _ = engine.performEdit(NSRange(location: caret, length: 0), with: NSAttributedString(string: "x", attributes: engine.attributes(forParagraphAt: caret)), name: "Insert")
+            case 1:
+                if offset < (model[line].text as NSString).length {
+                    model[line].text = (model[line].text as NSString).replacingCharacters(in: NSRange(location: offset, length: 1), with: "")
+                    _ = engine.performEdit(NSRange(location: caret, length: 1), with: NSAttributedString(), name: "Delete")
+                }
+            case 2:
+                let format = formats[step.b % formats.count]
+                let affected = (format.isCode && model[line].format.isCode) || (format.isCallout && model[line].format.isCallout) ? run(line) : line..<(line + 1)
+                for row in affected { model[row].format = format }
+                _ = engine.perform(.paragraph(format), selection: NSRange(location: caret, length: 0))
+            case 3:
+                if model[line].format.isCode {
+                    let affected = run(line)
+                    for row in affected { model[row].format = .mono(language: step.b % 2 == 0 ? "python" : "swift") }
+                    _ = engine.setCodeLanguage(step.b % 2 == 0 ? "python" : "swift", at: caret)
+                } else if model[line].format.isCallout {
+                    let affected = run(line)
+                    for row in affected { model[row].format = .callout(icon: step.b % 2 == 0 ? "" : "⚠️") }
+                    _ = engine.setCalloutIcon(step.b % 2 == 0 ? "" : "⚠️", at: caret)
+                }
+            case 4:
+                let source = run(line), target = run(step.b % model.count).lowerBound
+                if target < source.lowerBound || target > source.upperBound {
+                    let from = start(source.lowerBound), to = source.upperBound < model.count ? start(source.upperBound) : engine.textStorage.length
+                    let destination = start(target)
+                    let moved = Array(model[source])
+                    model.removeSubrange(source)
+                    model.insert(contentsOf: moved, at: target < source.lowerBound ? target : target - source.count)
+                    _ = engine.moveBlock(NSRange(location: from, length: to - from), to: destination)
+                }
+            case 5:
+                let old = model[line]
+                let prefix = (old.text as NSString).substring(to: offset), suffix = (old.text as NSString).substring(from: offset)
+                model[line].text = prefix + "P"
+                let continuation: NoteParagraphStyle = old.format.isCode ? model[run(line).lowerBound].format : (old.format.isCallout ? old.format : .body)
+                model.insert(Fix14Line(text: "Q" + suffix, format: continuation), at: line + 1)
+                _ = engine.pastePlainText("P\nQ", at: NSRange(location: caret, length: 0))
+            case 6:
+                if let prior = undo.popLast() { redo.append(model); model = prior }
+                _ = engine.history.undo()
+            default:
+                if let next = redo.popLast() { undo.append(model); model = next }
+                _ = engine.history.redo()
+            }
+            if step.kind < 6, engine.history.recordingGeneration != generation { undo.append(before); redo.removeAll() }
+            let actual = fix14Read(engine)
+            if actual != model { return (index, "expected \(model), actual \(actual)") }
+        }
+        return nil
+    }
+    private func fix14Shrink(_ steps: [Fix14Step], firstMismatch: Int) -> [Fix14Step] {
+        var result = Array(steps.prefix(firstMismatch + 1))
+        var size = max(1, result.count / 2)
+        while size > 0 {
+            var at = 0
+            while at < result.count {
+                var candidate = result
+                candidate.removeSubrange(at..<min(result.count, at + size))
+                if !candidate.isEmpty, fix14Replay(candidate) != nil { result = candidate; at = 0 }
+                else { at += size }
+            }
+            size /= 2
+        }
+        return result
+    }
+    func testFix14GeneratedEditingWithLanguageBoundariesUndoAndRedo() {
+        for seed in 1...1024 {
+            var random = Fix14RNG(state: UInt64(seed))
+            let steps = (0..<40).map { _ in Fix14Step(kind: random.next() % 8, a: random.next(), b: random.next()) }
+            if let failure = fix14Replay(steps) {
+                let minimal = fix14Shrink(steps, firstMismatch: failure.index)
+                let reason = fix14Replay(minimal)?.reason ?? failure.reason
+                XCTFail("Fix14 language-boundary replay seed \(seed), shrunk \(minimal): \(reason)")
+                return
+            }
+        }
+    }
+
 
 }
