@@ -220,6 +220,63 @@ final class NotesSlice3bUITests: XCTestCase {
         }
     }
 
+    /// F-07 (owner-approved): a selected file or image shows its rounded
+    /// ring only, never a selection rectangle behind it, key or not.
+    func testASelectedObjectShowsNoSelectionRectangleBehindIt() throws {
+        for appearance in [NSAppearance.Name.aqua, .darkAqua] {
+            let f = fixture()
+            let (window, textView, controls) = hosted(f.engine)
+            defer { controls.invalidate(); window.close() }
+            window.appearance = NSAppearance(named: appearance)
+            textView.textContainerInset = NSSize(width: 28, height: 0)
+            textView.layoutSubtreeIfNeeded()
+            window.makeFirstResponder(textView)
+            let range = try XCTUnwrap(f.engine.objectPlacement(f.ready)?.1)
+            let card = try XCTUnwrap(f.engine.rect(for: range))
+            func render() throws -> NSBitmapImageRep {
+                textView.display()
+                let bitmap = try XCTUnwrap(textView.bitmapImageRepForCachingDisplay(in: textView.bounds))
+                textView.cacheDisplay(in: textView.bounds, to: bitmap)
+                return bitmap
+            }
+            func colour(_ bitmap: NSBitmapImageRep, _ point: CGPoint) -> NSColor? {
+                bitmap.colorAt(x: Int(point.x * CGFloat(bitmap.pixelsWide) / textView.bounds.width),
+                               y: Int(point.y * CGFloat(bitmap.pixelsHigh) / textView.bounds.height))?.usingColorSpace(.sRGB)
+            }
+            textView.setSelectedRange(NSRange(location: 0, length: 0))
+            controls.updateSelection()
+            spin()
+            let before = try render()
+            textView.setSelectedRange(range)
+            controls.updateSelection()
+            spin()
+            // The test host's window is not key: the system would draw its
+            // inactive (grey) highlight, as in a non-key panel.
+            let after = try render()
+            // TextKit draws the highlight in its selection layer, which a
+            // cached display does not show: it is hidden while the ring is.
+            XCTAssertFalse(textView.selectionHighlightViews.isEmpty, "TextKit's selection layer is found")
+            XCTAssertTrue(textView.selectionHighlightViews.allSatisfy { $0.alphaValue == 0 }, "\(appearance.rawValue): no highlight behind the card")
+            XCTAssertFalse(window.isKeyWindow)
+            // Outside the ring: the card's rounded corners, the line box
+            // above and below the card, the margins beside it.
+            let probes = [CGPoint(x: card.minX + 1, y: card.minY + 1), CGPoint(x: card.maxX - 1, y: card.maxY - 1),
+                          CGPoint(x: card.minX - 8, y: card.midY), CGPoint(x: card.maxX + 8, y: card.midY),
+                          CGPoint(x: card.midX, y: card.minY - 2), CGPoint(x: card.midX, y: card.maxY + 2)]
+            for probe in probes {
+                let was = try XCTUnwrap(colour(before, probe)), now = try XCTUnwrap(colour(after, probe))
+                XCTAssertEqual(now.brightnessComponent, was.brightnessComponent, accuracy: 0.02,
+                               "\(appearance.rawValue): no selection rectangle at \(probe)")
+                XCTAssertEqual(now.alphaComponent, was.alphaComponent, accuracy: 0.02, "\(appearance.rawValue) at \(probe)")
+            }
+            // A text selection afterwards keeps the system's highlight.
+            textView.setSelectedRange(NSRange(location: 0, length: 3))
+            controls.updateSelection()
+            spin()
+            XCTAssertTrue(textView.selectionHighlightViews.allSatisfy { $0.alphaValue == 1 }, "text selections keep their highlight")
+        }
+    }
+
     // MARK: Clicks and the ring
 
     func testAClickOnADrawnActionRunsItsCommand() throws {

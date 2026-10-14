@@ -49,6 +49,33 @@ final class NoteEditorTextView: NSTextView, NSAccessibilityCustomRotorItemSearch
         for part in prose { super.checkText(in: part, types: checkingTypes, options: options) }
     }
 
+    // MARK: A selected object shows its ring only (F-07)
+
+    /// While a file or an image is selected, the system's selection
+    /// highlight stays hidden: in a non-key panel TextKit draws its inactive
+    /// grey line box behind the card whatever `selectedTextAttributes` say,
+    /// a square block wider than the card's rounded ring.
+    var hidesSelectionHighlight = false {
+        didSet { if hidesSelectionHighlight != oldValue { applySelectionHighlightVisibility() } }
+    }
+
+    /// TextKit's selection layer (`_NSTextSelectionView`): the highlight's
+    /// host, below the text. Found by class name, as AppKit names no API for it.
+    var selectionHighlightViews: [NSView] {
+        subviews.filter { NSStringFromClass(type(of: $0)).hasSuffix("TextSelectionView") }
+    }
+
+    private func applySelectionHighlightVisibility() {
+        for view in selectionHighlightViews where view.alphaValue != (hidesSelectionHighlight ? 0 : 1) {
+            view.alphaValue = hidesSelectionHighlight ? 0 : 1
+        }
+    }
+
+    override func didAddSubview(_ subview: NSView) {
+        super.didAddSubview(subview)
+        if hidesSelectionHighlight { applySelectionHighlightVisibility() }
+    }
+
     // MARK: Syntax colours (R14)
 
     /// Code tokens draw in their syntax inks as TextKit rendering attributes,
@@ -692,6 +719,7 @@ final class NoteEditorTextView: NSTextView, NSAccessibilityCustomRotorItemSearch
         // join or leave a parent only after this pass (P1-01 hypothesis).
         AtticOverlayHierarchy.layoutPass {
             super.layout()
+            if hidesSelectionHighlight { applySelectionHighlightVisibility() }
             marquee?.layoutChanged()
             engine?.refreshViewportImages()
             PerformanceSignposts.noteDidLayout()
