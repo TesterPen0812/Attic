@@ -24,6 +24,43 @@ final class AtticKeyWindowUITests: XCTestCase {
         try check(mode: "dark")
     }
 
+    /// O14-01 (owner, 2026-10-14): one click on a task in a panel that is
+    /// not key, with another app in front, selects it and gives the panel
+    /// the keyboard, as a click on a key panel does: ↓ moves on at once.
+    func testOneClickOnARowOfAPanelThatIsNotKeyTakesTheKeyboard() throws {
+        continueAfterFailure = false
+        app = XCUIApplication()
+        app.launchEnvironment["ATTIC_UI_TESTING"] = "1"
+        app.launchEnvironment["ATTIC_UI_TEST_NONKEY_REVEAL"] = "1"
+        app.launchEnvironment["ATTIC_UI_TEST_PAGE"] = "tasks"
+        app.launchEnvironment["ATTIC_UI_TEST_SEED"] = "demo"
+        app.launchArguments += ["-appearancePreference", "light", "-panelSurfaceStyle", "solid"]
+        app.launch()
+        let keyState = app.descendants(matching: .any)["panel-key-state"]
+        XCTAssertTrue(keyState.waitForExistence(timeout: 5))
+        func row(_ title: String) -> XCUIElement {
+            app.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", title)).firstMatch
+        }
+        let email = row("Email beta testers"), dentist = row("Book dentist")
+        XCTAssertTrue(email.waitForExistence(timeout: 5))
+        let finder = XCUIApplication(bundleIdentifier: "com.apple.finder")
+        finder.activate()
+        XCTAssertTrue(finder.wait(for: .runningForeground, timeout: 5))
+        try waitForKeyState("not key", keyState)
+
+        email.click()
+        try waitForKeyState("key", keyState)
+        let selected = NSPredicate(format: "selected == true")
+        XCTAssertEqual(XCTWaiter.wait(for: [expectation(for: selected, evaluatedWith: email)], timeout: 3), .completed,
+                       "the click selects the task")
+        let focused = NSPredicate { _, _ in (email.value(forKey: "hasKeyboardFocus") as? Bool) == true }
+        XCTAssertEqual(XCTWaiter.wait(for: [XCTNSPredicateExpectation(predicate: focused, object: nil)], timeout: 3), .completed,
+                       "and the task has the keyboard")
+        email.typeKey(.downArrow, modifierFlags: [])
+        XCTAssertEqual(XCTWaiter.wait(for: [expectation(for: selected, evaluatedWith: dentist)], timeout: 3), .completed,
+                       "↓ moves to the next task at once")
+    }
+
     /// An explicit open on Tasks (quick capture, Show Attic) puts the
     /// keyboard in the add bar, and the add bar draws no focus ring: text
     /// typed right away lands there. (`ATTIC_UI_TEST_HOVER_MONITOR` opens
