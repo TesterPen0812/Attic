@@ -60,6 +60,169 @@ final class OwnerFindings1001Tests: XCTestCase {
     }
 }
 
+// MARK: - O14-01: one click always registers
+
+/// The owner (2026-10-14): on a panel that is not key (another app active),
+/// the first click only focused it. AppKit spends such a press unless the
+/// view under it accepts the first mouse; SwiftUI's views in the lists and
+/// the text views refused it. Every view a press can reach on the real
+/// panel, on the Tasks and Notes pages, must accept it.
+@MainActor
+final class O14FirstMouseTests: XCTestCase {
+    func testEveryViewUnderAPressOnThePanelAcceptsTheFirstMouse() throws {
+        let suite = "O14FirstMouse.\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let container = try PersistenceController.makeContainer(inMemory: true, cloudSyncEnabled: false)
+        try TasksPagePreview.seedDemo(in: container, long: true)
+        let store = TaskStore(container: container)
+        let notes = NoteStore(container: container, attachmentFileStore: makeTestAttachmentFileStore())
+        let state = PanelUIState()
+        let size = CGSize(width: 340, height: 560)
+        state.updatePanelSize(size)
+        state.loadPageContent()
+        let chrome = PanelChromeInteractionState()
+        let settings = AppSettings(defaults: defaults)
+        let host = AtticPanelHostingView(
+            rootView: AtticPanelView(store: store, noteStore: notes,
+                                     canvasSession: CanvasSession(store: CanvasStore(container: container)),
+                                     noteDraft: NoteDraftController(noteStore: notes),
+                                     chromeInteractionState: chrome, uiState: state, settings: settings,
+                                     tasksPageState: TasksPageState()),
+            panelCornerRadius: 52, dockedCorner: .topRight, chromeInteractionState: chrome)
+        let content = AtticPanelContentContainer(hostingView: host, visibleSize: size, perimeter: 0)
+        let panel = AtticPanel(contentRect: CGRect(origin: CGPoint(x: -4000, y: -4000), size: size),
+                               styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
+        panel.isReleasedWhenClosed = false
+        panel.contentView = content
+        panel.orderFront(nil)
+        defer { host.cancelActiveInteraction(reason: .lostWindow); state.releasePageContent(); panel.close() }
+        for section in [PanelSection.tasks, .notes] {
+            state.selectSection(section)
+            RunLoop.current.run(until: Date().addingTimeInterval(1.5))
+            content.layoutSubtreeIfNeeded()
+            // A press every 8 pt over the page, as the window would deliver
+            // it. The panel's AppKit views (text, scroll and table views)
+            // must all take it. SwiftUI takes it wherever a gesture is
+            // under the press (rows, controls, tabs); with a full list
+            // that is nearly everywhere: only the gaps between groups have
+            // none, and a press there acts on nothing.
+            var appKitRefusing: [String: Int] = [:]
+            var swiftUI = (accepting: 0, refusing: 0)
+            let bounds = content.bounds
+            for x in stride(from: bounds.minX + 30, to: bounds.maxX - 30, by: 8) {
+                for y in stride(from: bounds.minY + 30, to: bounds.maxY - 30, by: 8) {
+                    let point = CGPoint(x: x, y: y)
+                    guard let hit = content.hitTest(point) else { continue }
+                    let event = NSEvent.mouseEvent(with: .leftMouseDown, location: content.convert(point, to: nil), modifierFlags: [],
+                                                   timestamp: 0, windowNumber: panel.windowNumber, context: nil,
+                                                   eventNumber: 0, clickCount: 1, pressure: 1)
+                    let accepts = hit.acceptsFirstMouse(for: event)
+                    if Bundle(for: type(of: hit)) == Bundle.main || hit is NSTextView || hit is NSScrollView || hit is NSClipView {
+                        if !accepts { appKitRefusing[String(describing: type(of: hit)), default: 0] += 1 }
+                    } else if accepts {
+                        swiftUI.accepting += 1
+                    } else {
+                        swiftUI.refusing += 1
+                    }
+                }
+            }
+            XCTAssertEqual(appKitRefusing, [:], "\(section): AppKit views that would spend the first click")
+            guard swiftUI.accepting + swiftUI.refusing > 50 else { continue }
+            let share = Double(swiftUI.accepting) / Double(max(1, swiftUI.accepting + swiftUI.refusing))
+            XCTAssertGreaterThan(share, 0.9, "\(section): SwiftUI presses taken on a panel that is not key (\(swiftUI))")
+        }
+    }
+}
+
+@MainActor
+final class O14FirstClickKeyLookTests: XCTestCase {
+    /// The cause of O14-01: on a Solid panel the corner buttons are flat
+    /// while the panel is not key and glass once it is. The press that made
+    /// the panel key redrew the pin it was pressing (flat to glass), so the
+    /// press was lost and only a second click pinned. The key look now
+    /// waits for the release; the click pins at once, and the look follows.
+    func testOneClickOnTheSolidPanelsPinPinsItAndTheKeyLookFollowsTheRelease() throws {
+        let suite = "O14KeyLook.\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let persistence = try PersistenceController.makeContainer(inMemory: true, cloudSyncEnabled: false)
+        try TasksPagePreview.seedDemo(in: persistence)
+        let store = TaskStore(container: persistence)
+        let notes = NoteStore(container: persistence, attachmentFileStore: makeTestAttachmentFileStore())
+        let settings = AppSettings(defaults: defaults)
+        settings.panelSurfaceStyle = .solid
+        let uiState = PanelUIState()
+        let existingWindows = Set(NSApplication.shared.windows.map(ObjectIdentifier.init))
+        let controller = AtticPanelController(
+            store: store, noteStore: notes,
+            canvasSession: CanvasSession(store: CanvasStore(container: persistence)),
+            noteDraft: NoteDraftController(noteStore: notes), settings: settings, uiState: uiState
+        )
+        let panel = try XCTUnwrap(NSApplication.shared.windows.compactMap { $0 as? AtticPanel }
+            .first { !existingWindows.contains(ObjectIdentifier($0)) })
+        let other = NSWindow(contentRect: CGRect(x: -6_000, y: -6_000, width: 200, height: 200), styleMask: [.titled],
+                             backing: .buffered, defer: false)
+        other.isReleasedWhenClosed = false
+        defer { other.close(); panel.orderOut(nil); withExtendedLifetime(controller) {} }
+        let size = CGSize(width: 340, height: 560)
+        panel.setVisibleContentFrame(CGRect(origin: CGPoint(x: -4_000, y: -4_000), size: size), display: false)
+        uiState.updatePanelSize(size)
+        uiState.loadPageContent()
+        uiState.selectSection(.tasks)
+        panel.orderFront(nil)
+        other.makeKeyAndOrderFront(nil)
+        RunLoop.current.run(until: Date().addingTimeInterval(1.2))
+        XCTAssertFalse(panel.isKeyWindow)
+        XCTAssertFalse(uiState.isPanelKey)
+        XCTAssertFalse(uiState.isPanelPinned)
+
+        // The pin's middle: the header's leading button, 18 pt in from the
+        // surface's top-left corner and the chrome inset.
+        let content = try XCTUnwrap(panel.contentView)
+        let insets = PanelGeometry.chromeInsets(cornerSize: settings.panelCornerSize, panelSize: size)
+        let surfacePoint = CGPoint(x: insets.leading + PanelHeaderLayout.pinSize.width / 2,
+                                   y: insets.top + PanelHeaderLayout.height / 2)
+        let surface = panel.visibleContentFrame
+        let screenPoint = CGPoint(x: surface.minX + surfacePoint.x, y: surface.maxY - surfacePoint.y)
+        let location = panel.convertPoint(fromScreen: screenPoint)
+        XCTAssertNotNil(content.hitTest(content.superview?.convert(location, from: nil) ?? location))
+        func press(_ type: NSEvent.EventType) throws {
+            let event = try XCTUnwrap(NSEvent.mouseEvent(with: type, location: location, modifierFlags: [],
+                                                         timestamp: ProcessInfo.processInfo.systemUptime,
+                                                         windowNumber: panel.windowNumber, context: nil, eventNumber: 0,
+                                                         clickCount: 1, pressure: type == .leftMouseDown ? 1 : 0))
+            panel.sendEvent(event)
+        }
+        try press(.leftMouseDown)
+        XCTAssertTrue(panel.isKeyWindow, "the press makes the panel key")
+        RunLoop.current.run(until: Date().addingTimeInterval(0.1))
+        XCTAssertFalse(uiState.isPanelKey, "the key look waits while the button is down")
+        try press(.leftMouseUp)
+        RunLoop.current.run(until: Date().addingTimeInterval(0.3))
+        XCTAssertTrue(uiState.isPanelPinned, "one click pins")
+        XCTAssertTrue(uiState.isPanelKey, "and the panel shows as key after the release")
+    }
+}
+
+/// O14-05 (owner, 2026-10-14): the pinned pin is filled, and under the
+/// pointer it shows the unpin glyph; unpinned it stays the outline pin.
+final class O14PinGlyphTests: XCTestCase {
+    func testThePinsGlyphForEachState() {
+        typealias M = AtticRaisedButtonMetrics
+        let pinned = { (state: AtticControlState) in M.shownSymbol("pin", on: M.pinnedSymbol, onHover: M.unpinSymbol, state: state) }
+        XCTAssertEqual(M.shownSymbol("pin", on: nil, onHover: nil, state: .rest), "pin", "unpinned")
+        XCTAssertEqual(M.shownSymbol("pin", on: nil, onHover: nil, state: .hover), "pin", "unpinned, hovered")
+        XCTAssertEqual(pinned(.rest), "pin.fill")
+        XCTAssertEqual(pinned(.focused), "pin.fill")
+        XCTAssertEqual(pinned(.hover), "pin.slash")
+        XCTAssertEqual(pinned(.pressed), "pin.slash")
+        for name in [M.pinnedSymbol, M.unpinSymbol] {
+            XCTAssertNotNil(NSImage(systemSymbolName: name, accessibilityDescription: nil), name)
+        }
+    }
+}
+
 // MARK: - 3. Thin overlay scrollers, hidden during page swipes
 
 @MainActor

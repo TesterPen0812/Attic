@@ -84,6 +84,9 @@ struct AtticPanelView: View {
 
     var body: some View {
         PanelRootLayout { themedPanel }
+            // O14-01: every gesture in the panel takes the click that makes
+            // the panel key (SwiftUI's own views refuse it by default).
+            .allowsWindowActivationEvents()
     }
 
     // MARK: Composition

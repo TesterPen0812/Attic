@@ -7,7 +7,7 @@ import AppKit
 /// note into the new draft through the real text view and router, then
 /// shows one state: `structured`, `bar`, `aa`, `slash`, `date`, `link`,
 /// `context`, `formatmenu`, `notemenu`, `hint`, `aasub`, `typography` (the owner's
-/// CIA note, Notes v2); and, for the dropdown seam,
+/// CIA note, Notes v2), `caret` (O14-10's caret tour); and, for the dropdown seam,
 /// `slash-lead`, `slash-da` and `date-lead` (under the first paragraph);
 /// `aacycle` opens and closes Aa's format row on a timer for recordings
 /// (two slow cycles, then five quick ones, repeating).
@@ -51,6 +51,10 @@ enum NoteFormatCaptureScene {
             }
             if scene == "tables" {
                 writeTablesSample(controls: controls, chrome: chrome, textView: textView)
+                return
+            }
+            if scene == "caret" {
+                writeCaretSample(controls: controls, textView: textView)
                 return
             }
             writeSample(controls: controls, textView: textView, rich: scene == "structured" || scene == "aasub")
@@ -121,6 +125,42 @@ enum NoteFormatCaptureScene {
                     textView.pinsMonoCopy = true
                 }
             }
+        }
+    }
+
+    /// O14-10's measurement: "Type pay" in every line kind (title, body,
+    /// the three headings, lists, checklist, quote, code, a table cell) and
+    /// an empty last line (the "Type / for" hint). The caret then visits the
+    /// start of each line in turn, `ATTIC_UI_TEST_CARET_DWELL` seconds
+    /// (default 1.6) on each, for on-screen pixel measurement.
+    private static func writeCaretSample(controls: NoteFormatControls, textView: NoteEditorTextView) {
+        let engine = controls.engine
+        let kinds: [NoteParagraphStyle] = [.body, .body, .heading(1), .heading(2), .heading(3), .bullet, .number,
+                                           .checklist, .quote, .mono]
+        for (index, kind) in kinds.enumerated() {
+            if index > 0 { textView.insertNewline(nil) }
+            if index > 0 { controls.router.run(.paragraph(kind), from: .shortcut) }
+            type("Type pay", into: textView)
+        }
+        textView.insertNewline(nil)
+        controls.router.run(.paragraph(.body), from: .shortcut)
+        engine.insertTable(NoteTable(texts: [["Type pay", "Type pay"]]), replacing: textView.selectedRange(), name: "Insert Table", entering: false)
+        controls.router.run(.paragraph(.body), from: .shortcut)
+        let text = textView.string as NSString
+        var starts: [Int] = []
+        var search = NSRange(location: 0, length: text.length)
+        while true {
+            let found = text.range(of: "Type pay", options: [], range: search)
+            guard found.location != NSNotFound else { break }
+            starts.append(found.location)
+            search = NSRange(location: NSMaxRange(found), length: text.length - NSMaxRange(found))
+        }
+        let dwell = Double(ProcessInfo.processInfo.environment["ATTIC_UI_TEST_CARET_DWELL"] ?? "1.6") ?? 1.6
+        var steps: [() -> Void] = starts.map { start in { textView.window?.makeFirstResponder(textView); textView.setSelectedRange(NSRange(location: start, length: 0)) } }
+        steps.append { engine.tableViews().first?.activate(NoteTable.Position(row: 0, column: 0), caret: .start) }
+        steps.append { textView.window?.makeFirstResponder(textView); textView.setSelectedRange(NSRange(location: (textView.string as NSString).length, length: 0)) }
+        for (index, step) in steps.enumerated() {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.5 + Double(index) * dwell, execute: step)
         }
     }
 

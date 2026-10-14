@@ -194,6 +194,9 @@ final class AtticPanelController: NSObject, NSWindowDelegate {
     /// Where the pointer is, for the click-through hit test. Tests place it.
     var pointerLocation: () -> CGPoint = { NSEvent.mouseLocation }
     private var isResamplingPassthrough = false
+    /// O14-01: the panel became key under a press; its key look waits for
+    /// the release.
+    private var keyLookAwaitsRelease = false
 
     private var contentContainer: AtticPanelContentContainer? {
         panel.contentView as? AtticPanelContentContainer
@@ -594,6 +597,7 @@ final class AtticPanelController: NSObject, NSWindowDelegate {
             guard let self, self.uiState.selectedSection.isTaskBased, let library = self.store.commandLibrary else { return false }
             return redo ? library.undo.canRedo(in: .tasks) : library.undo.canUndo(in: .tasks)
         }
+        panel.onPressEnded = { [weak self] in self?.pressEnded() }
         panel.onDirectContentInteraction = { [weak self] in
             guard let self, self.isShowing || self.isInteractiveDismissal else { return }
             self.clearInteractiveDismissal()
@@ -1214,10 +1218,27 @@ final class AtticPanelController: NSObject, NSWindowDelegate {
     }
 
     func windowDidBecomeKey(_ notification: Notification) {
-        uiState.setPanelKey(true)
+        // O14-01 (owner, 2026-10-14): one click on a panel that is not key
+        // must act. That press makes it key, and the key look (a Solid
+        // panel's corner buttons turn from flat to glass) redrew the very
+        // control being pressed, so its press was lost and the click only
+        // focused the panel. The look follows once the button is up.
+        if panel.isPressing {
+            keyLookAwaitsRelease = true
+        } else {
+            uiState.setPanelKey(true)
+        }
+    }
+
+    /// The press that made the panel key ended: it shows as key now.
+    private func pressEnded() {
+        guard keyLookAwaitsRelease else { return }
+        keyLookAwaitsRelease = false
+        if panel.isKeyWindow { uiState.setPanelKey(true) }
     }
 
     func windowDidResignKey(_ notification: Notification) {
+        keyLookAwaitsRelease = false
         uiState.setPanelKey(false)
         hostingView.cancelActiveInteraction(reason: .windowDeactivated)
     }

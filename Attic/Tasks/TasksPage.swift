@@ -2644,16 +2644,49 @@ struct TasksPage: View {
     private func beginDragOut(_ current: TasksDrag, at location: CGPoint) {
         let ids = model.selection.contains(current.id) && model.selection.count > 1 ? model.orderedSelection() : [current.id]
         let export = model.export(ids)
+        // O14-11: the drag carries the lifted card itself (one task), from
+        // where it lies, and the panel's card stays until the system's
+        // image is over it: one continuous motion out of the panel.
+        let card = ids.count == 1 ? dragOutCard(for: current.id) : nil
+        if card != nil { pointer.liftedCard.holdForHandOff() }
         cancelDrag()
-        guard let export, let view = pointer.view else { return }
+        guard let export, let view = pointer.view else {
+            pointer.liftedCard.releaseHandOff()
+            return
+        }
         if let start = pointer.startDragOut {
+            pointer.liftedCard.releaseHandOff()
             start(export, location)
             return
         }
-        TasksDragOut.begin(export, count: ids.count, from: view, at: location) { [dragSession] in
+        TasksDragOut.begin(export, count: ids.count, from: view, at: location, card: card) { [dragSession] in
             // The drag ate the button's release: the next press starts afresh.
             dragSession.end()
         }
+    }
+
+    /// The lifted card as the drag out carries it: its picture, where it
+    /// lies in the page, and where its row is on screen for a cancelled
+    /// drop to spring back to.
+    private func dragOutCard(for id: UUID) -> TasksDragOut.Card? {
+        guard let lift = pointer.liftedCard.lift, lift.id == id, let view = pointer.view, let window = view.window,
+              let images = pointer.liftedCard.snapshot?(lift, window.backingScaleFactor) else { return nil }
+        let room = TasksDragOut.Card.Images.room
+        let frame = CGRect(x: lift.origin.minX - room, y: lift.y - room,
+                           width: images.shadowed.size.width, height: images.shadowed.size.height)
+        let row = TasksRowID(tab: lift.tab, id: id)
+        let liftedCard = pointer.liftedCard
+        return TasksDragOut.Card(
+            images: images, frame: frame,
+            home: { [pointer, weak view] in
+                // The row where it is now (the list may have moved), on screen.
+                guard let view, let window = view.window, window.isVisible, let rowFrame = pointer.frames[row] else { return nil }
+                let image = CGRect(x: rowFrame.minX - room, y: rowFrame.minY - room, width: frame.width, height: frame.height)
+                return window.convertToScreen(view.convert(image, to: nil))
+            },
+            reduceMotion: design.reduceMotion,
+            handOff: { liftedCard.releaseHandOff() }
+        )
     }
 
     /// The list's scroll view under a page point (the page's current tab).
@@ -3407,9 +3440,34 @@ final class TasksLiftedCard: ObservableObject {
     }
 
     @Published private(set) var lift: Lift?
+    /// O14-11: the card as drawn, for the drag out of the panel to carry
+    /// (set by the card's layer, which knows how the card is drawn).
+    var snapshot: ((Lift, CGFloat) -> TasksDragOut.Card.Images?)?
+    /// The card stays drawn in the panel until the system's drag shows the
+    /// same picture in its place (`holdForHandOff`, `releaseHandOff`).
+    private var heldForHandOff = false
+    private var endsAfterHandOff = false
 
     func begin(id: UUID, tab: TasksTab, origin: CGRect) {
+        heldForHandOff = false
+        endsAfterHandOff = false
         lift = Lift(id: id, tab: tab, origin: origin, y: origin.minY)
+    }
+
+    /// The drag out of the panel takes over: the card stays until the
+    /// system's drag image is on screen over it, so nothing flashes.
+    func holdForHandOff() {
+        guard lift != nil else { return }
+        heldForHandOff = true
+    }
+
+    func releaseHandOff() {
+        guard heldForHandOff else { return }
+        heldForHandOff = false
+        if endsAfterHandOff {
+            endsAfterHandOff = false
+            lift = nil
+        }
     }
 
     /// The pointer moved `translation` from where the press began.
@@ -3429,6 +3487,10 @@ final class TasksLiftedCard: ObservableObject {
     }
 
     func end() {
+        if heldForHandOff {
+            endsAfterHandOff = true
+            return
+        }
         if lift != nil { lift = nil }
     }
 
@@ -3454,8 +3516,13 @@ final class TasksLiftedCard: ObservableObject {
 struct TasksLiftedCardLayer<Card: View>: View {
     @ObservedObject var lift: TasksLiftedCard
     @ViewBuilder let card: (TasksLiftedCard.Lift) -> Card
+    @Environment(\.self) private var environment
 
     var body: some View {
+        // The drag out of the panel carries this card as drawn here.
+        let _ = lift.snapshot = { [environment, card] current, scale in
+            TasksDragOut.Card.Images(card: card(current), width: current.origin.width, environment: environment, scale: scale)
+        }
         ZStack(alignment: .topLeading) {
             if let current = lift.lift {
                 card(current)

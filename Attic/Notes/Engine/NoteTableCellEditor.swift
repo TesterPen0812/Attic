@@ -37,6 +37,12 @@ final class NoteTableCellEditor: NSTextView, NSTextViewDelegate {
         return editor
     }
 
+    /// O14-01: one click on a panel that is not key both makes it key and
+    /// acts here (`AtticPanel.acceptsEveryFirstMouse`).
+    override func acceptsFirstMouse(for event: NSEvent?) -> Bool {
+        AtticPanel.acceptsEveryFirstMouse(in: window) || super.acceptsFirstMouse(for: event)
+    }
+
     override func mouseDown(with event: NSEvent) {
         selectedEmptyCellText = false
         super.mouseDown(with: event)

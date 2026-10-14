@@ -88,6 +88,12 @@ struct AtticRaisedButton: View {
     /// L3: the header's flat corner surface (one fill, one hairline, no
     /// inner chip); a selected toggle takes the selected chip's fill whole.
     var flat = false
+    /// A toggle that says "on" with its glyph (O14-05, the pinned pin): the
+    /// glyph when selected (`pin.fill`) and, under the pointer, the action
+    /// a click takes (`pin.slash`), cross-faded. Such a toggle draws no
+    /// inner chip or selected fill: the filled glyph is the state.
+    var selectedSystemName: String?
+    var selectedHoverSystemName: String?
     let action: () -> Void
 
     @State private var probeID = UUID()
@@ -95,8 +101,11 @@ struct AtticRaisedButton: View {
     /// Icon only. `label` is what VoiceOver and the tooltip say.
     init(systemName: String, label: String.LocalizationValue, size: CGSize = AtticControlSize.panelButton, help: String? = nil,
          isSelected: Bool = false, glyphOffsetY: CGFloat = 0, glyphOffsetX: CGFloat = 0, emphasisedGlyph: Bool = false,
-         flat: Bool = false, action: @escaping () -> Void) {
+         flat: Bool = false, selectedSystemName: String? = nil, selectedHoverSystemName: String? = nil,
+         action: @escaping () -> Void) {
         self.flat = flat
+        self.selectedSystemName = selectedSystemName
+        self.selectedHoverSystemName = selectedHoverSystemName
         self.glyphOffsetX = glyphOffsetX
         self.systemName = systemName
         self.title = nil
@@ -122,18 +131,22 @@ struct AtticRaisedButton: View {
 
     var body: some View {
         let radius = AtticRadius.control(height: size.height)
+        // A toggle whose glyph says "on" draws no chip (O14-05).
+        let chip = isSelected && selectedSystemName == nil
         Button(action: action) {
-            AtticRaisedButtonLabel(systemName: systemName, title: title, isSelected: isSelected || emphasisedGlyph)
+            AtticRaisedButtonLabel(systemName: systemName, title: title, isSelected: isSelected || emphasisedGlyph,
+                                   onSystemName: isSelected ? selectedSystemName : nil,
+                                   onHoverSystemName: isSelected ? selectedHoverSystemName : nil)
                 .offset(x: glyphOffsetX, y: glyphOffsetY)
                 .padding(.horizontal, title == nil ? 0 : AtticRaisedButtonMetrics.labelPadding)
                 .frame(width: title == nil ? size.width : nil, height: size.height)
                 .background {
-                    if isSelected, !flat {
+                    if chip, !flat {
                         AtticSelectedChip(outerHeight: size.height)
                     }
                 }
         }
-        .buttonStyle(AtticRaisedButtonStyle(cornerRadius: radius, flat: flat, isSelected: isSelected))
+        .buttonStyle(AtticRaisedButtonStyle(cornerRadius: radius, flat: flat, isSelected: chip))
         .focusEffectDisabled()
         .help(help ?? accessibilityLabel)
         .accessibilityLabel(accessibilityLabel)
@@ -148,11 +161,27 @@ struct AtticRaisedButton: View {
     }
 }
 
+extension AtticRaisedButtonMetrics {
+    /// A toggle's glyph (O14-05): off, its own; on, the "on" glyph, and
+    /// under the pointer (or while pressed) the action a click takes
+    /// ("Unpin"), so the toggle says what it does.
+    nonisolated static func shownSymbol(_ systemName: String, on: String?, onHover: String?,
+                                        state: AtticControlState) -> String {
+        guard let on else { return systemName }
+        if let onHover, state == .hover || state == .pressed { return onHover }
+        return on
+    }
+}
+
 private struct AtticRaisedButtonLabel: View {
     let systemName: String?
     let title: String?
     var isSelected = false
+    /// A toggle that is on: its glyph, and the one under the pointer.
+    var onSystemName: String?
+    var onHoverSystemName: String?
     @Environment(\.atticControlState) private var state
+    @Environment(\.atticDesign) private var design
 
     var body: some View {
         // Icons are lighter and thinner than text (v4): the secondary icon
@@ -167,8 +196,23 @@ private struct AtticRaisedButtonLabel: View {
             if let systemName {
                 // Selected (the pinned pin), the glyph is regular weight, as
                 // the page switch's selected icon is (visual A).
-                AtticIcon(systemName: systemName, size: title == nil ? AtticControlSize.raisedGlyph : AtticRaisedButtonMetrics.labelIconSize,
-                          weight: isSelected ? .regular : AtticIconWeight.outline, ink: glyph)
+                let size = title == nil ? AtticControlSize.raisedGlyph : AtticRaisedButtonMetrics.labelIconSize
+                let weight: Font.Weight = isSelected ? .regular : AtticIconWeight.outline
+                if onSystemName == nil {
+                    AtticIcon(systemName: systemName, size: size, weight: weight, ink: glyph)
+                } else {
+                    // Every glyph the toggle can show, laid on one centre and
+                    // cross-faded (F/E), so a change never moves the button.
+                    let shown = AtticRaisedButtonMetrics.shownSymbol(systemName, on: onSystemName, onHover: onHoverSystemName, state: state)
+                    let names = [onSystemName, onHoverSystemName].compactMap { $0 }
+                    ZStack {
+                        ForEach(names, id: \.self) { name in
+                            AtticIcon(systemName: name, size: size, weight: weight, ink: glyph)
+                                .opacity(name == shown ? 1 : 0)
+                        }
+                    }
+                    .animation(design.reduceMotion ? nil : AtticMotionScale.easeOut(AtticMotionScale.fast), value: shown)
+                }
             }
             if let title {
                 AtticText(verbatim: title, style: .controlLabel, ink: state == .disabled ? .disabledText : .heading)

@@ -657,6 +657,9 @@ private struct AtticStatusDetailButton: View {
 /// down by the lift appearing (the stuck lift the owner saw).
 struct AtticReorderLiftModifier: ViewModifier {
     let lifted: Bool
+    /// The shadow under the card (O14-11: a card springing back home lets
+    /// its shadow go as it settles, drawn apart from the card).
+    var shadow = true
 
     /// The lifted card's fill: the panel's base colour, fully opaque.
     static func fill(design: AtticDesignContext) -> AtticRGBA {
@@ -674,7 +677,9 @@ struct AtticReorderLiftModifier: ViewModifier {
                 // Only the background changes: `content` keeps its identity.
                 if lifted {
                 ZStack {
-                    AtticOutsideShadow(shape: shape, color: tokens.dragShadow, spec: AtticShadows.reorder)
+                    if shadow {
+                        AtticOutsideShadow(shape: shape, color: tokens.dragShadow, spec: AtticShadows.reorder)
+                    }
                     // Opaque (owner, 2026-10-01): the panel's own colour,
                     // so nothing shows through the card being moved.
                     shape.fill(AtticReorderLiftModifier.fill(design: design).color)

@@ -16,6 +16,10 @@ final class AtticPanel: NSPanel {
     var onTrackpadDismissProgress: ((CGFloat) -> Void)?
     var onTrackpadDismissCancelled: (() -> Void)?
     var onDirectContentInteraction: (() -> Void)?
+    /// A mouse button came up over the panel (after the window delivered it).
+    var onPressEnded: (() -> Void)?
+    /// A press the panel received is still down (O14-01).
+    private(set) var isPressing = false
     /// Esc that nothing inside the panel used (a menu, a field, the list's
     /// own Esc all come first): the panel hides.
     var onUnhandledEscape: (() -> Void)?
@@ -217,6 +221,18 @@ final class AtticPanel: NSPanel {
         onUnhandledEscape?()
     }
 
+    /// O14-01 (owner, 2026-10-14): every click on the panel does what it
+    /// was aimed at the first time, whatever is active. `sendEvent` makes
+    /// the panel key before AppKit sees a press, and the key look waits for
+    /// the release (`AtticPanelController.windowDidBecomeKey`). Wherever a
+    /// press still reaches a panel that is not key (AppKit then spends it
+    /// unless the view under it accepts the first mouse), every view
+    /// accepts it: SwiftUI's (`allowsWindowActivationEvents`) and the
+    /// panel's text, scroll and table views.
+    nonisolated static func acceptsEveryFirstMouse(in window: NSWindow?) -> Bool {
+        window is AtticPanel
+    }
+
     /// The presses that make an inactive panel key and still act.
     nonisolated static func takesFirstPress(_ type: NSEvent.EventType) -> Bool {
         type == .leftMouseDown || type == .rightMouseDown || type == .otherMouseDown
@@ -233,6 +249,7 @@ final class AtticPanel: NSPanel {
         // is never spent on activation, whatever view is under it (SwiftUI's
         // own views in a list do not accept the first mouse). The panel is
         // non-activating, so Attic stays where it is.
+        if Self.takesFirstPress(event.type) { isPressing = true }
         if Self.takesFirstPress(event.type), !isKeyWindow, canBecomeKey, isVisible,
            visibleContentFrame.contains(convertPoint(toScreen: event.locationInWindow)) {
             makeKey()
@@ -245,6 +262,13 @@ final class AtticPanel: NSPanel {
                 onDirectContentInteraction?()
             }
             super.sendEvent(event)
+            // The release, or (when a drag session ate it) the next move or
+            // key with no button down.
+            if [.leftMouseUp, .rightMouseUp, .otherMouseUp].contains(event.type)
+                || ([.mouseMoved, .keyDown].contains(event.type) && isPressing) {
+                isPressing = false
+                onPressEnded?()
+            }
             return
         }
         guard (event.momentumPhase.isEmpty || event.phase.contains(.ended)),
@@ -1692,3 +1716,4 @@ extension NSResponder {
 protocol AtticHorizontalScrollOwner: AnyObject {
     var ownsHorizontalScrolling: Bool { get }
 }
+

@@ -47,8 +47,10 @@ struct PanelHeader: View {
         let flat = cornerButtons.style.drawsFlat(in: design)
         AtticControlGroup {
             HStack(alignment: .top, spacing: 0) {
-                // An outline pin in both states, at the switch's icon size;
-                // pinned shows as the button's selected chip (v9).
+                // O14-05 (owner, 2026-10-14): the outline pin, filled when
+                // pinned, and under the pointer a pinned pin shows what a
+                // click does (the pin with a slash), cross-faded. No chip:
+                // the fill says "on". At the switch's icon size.
                 AtticRaisedButton(
                     systemName: "pin",
                     label: isPinned ? "Unpin panel" : "Pin panel",
@@ -57,6 +59,8 @@ struct PanelHeader: View {
                     glyphOffsetY: AtticRaisedButtonMetrics.pinGlyphOffsetY,
                     emphasisedGlyph: true,
                     flat: flat,
+                    selectedSystemName: AtticRaisedButtonMetrics.pinnedSymbol,
+                    selectedHoverSystemName: AtticRaisedButtonMetrics.unpinSymbol,
                     action: onTogglePin
                 )
                 .keyboardShortcut("p", modifiers: [.command, .shift])

@@ -550,6 +550,12 @@ final class AtticTokenTextView: NSTextView {
     /// Edit menu reach the owner's draft history through `undo(_:)`.
     override var undoManager: UndoManager? { nil }
 
+    /// O14-01: one click on a panel that is not key both makes it key and
+    /// acts here (`AtticPanel.acceptsEveryFirstMouse`).
+    override func acceptsFirstMouse(for event: NSEvent?) -> Bool {
+        AtticPanel.acceptsEveryFirstMouse(in: window) || super.acceptsFirstMouse(for: event)
+    }
+
     override func becomeFirstResponder() -> Bool {
         let became = super.becomeFirstResponder()
         if became { owner?.focusChanged(true) }

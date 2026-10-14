@@ -1,5 +1,6 @@
 import AppKit
 import SwiftData
+import SwiftUI
 import XCTest
 @testable import Attic
 
@@ -102,5 +103,56 @@ final class TasksDragOutTests: XCTestCase {
         XCTAssertEqual(export.items.map(\.title), [first.model.title, second.model.title], "the whole selection")
         XCTAssertEqual(hosted.model.rows(for: .now).map(\.id), before, "nothing moved")
         XCTAssertNil(hosted.pointer.liftedCard.lift, "the lifted card is gone")
+    }
+}
+
+/// O14-11 (owner, 2026-10-14): the drag out of the panel is one motion (the
+/// lifted card itself is the drag image, handed off without a gap), and a
+/// cancelled drop springs back to its row instead of sliding and fading.
+@MainActor
+final class TasksDragOutCardTests: XCTestCase {
+    func testThePanelsCardStaysUntilTheSystemsImageIsUp() {
+        let card = TasksLiftedCard()
+        card.begin(id: UUID(), tab: .now, origin: CGRect(x: 8, y: 100, width: 300, height: 34))
+        card.holdForHandOff()
+        card.end()
+        XCTAssertNotNil(card.lift, "held over the hand-off")
+        card.releaseHandOff()
+        XCTAssertNil(card.lift, "gone once the system's image is up")
+        card.begin(id: UUID(), tab: .now, origin: .zero)
+        card.end()
+        XCTAssertNil(card.lift, "an ordinary end is immediate")
+    }
+
+    func testTheCardIsDrawnWithAndWithoutItsShadowAtItsOwnSize() throws {
+        let images = try XCTUnwrap(TasksDragOut.Card.Images(card: Text("Call the plumber").frame(height: 34), width: 300,
+                                                             environment: EnvironmentValues(), scale: 2))
+        let room = TasksDragOut.Card.Images.room
+        XCTAssertEqual(images.shadowed.size.width, 300 + room * 2, accuracy: 0.5)
+        XCTAssertEqual(images.shadowed.size.height, 34 + room * 2, accuracy: 0.5)
+        XCTAssertEqual(images.plain.size, images.shadowed.size)
+    }
+
+    func testACancelledDropSpringsHomeAndEndsOnce() {
+        var settled = 0, ended = 0, handedOff = 0
+        let images = TasksDragOut.Card.Images(card: Color.gray.frame(height: 34), width: 300, environment: EnvironmentValues(), scale: 2)!
+        let home = CGRect(x: -5_000, y: -5_000, width: 340, height: 74)
+        var card = TasksDragOut.Card(images: images, frame: CGRect(x: 0, y: 0, width: 340, height: 74), home: { home },
+                                     reduceMotion: false, handOff: { handedOff += 1 })
+        card.settled = { settled += 1 }
+        let source = TasksDragOut.Source(ended: { ended += 1 })
+        source.card = card
+        source.imageSize = home.size
+        TasksDragOut.Source.current = source
+        let windows = Set(NSApp.windows.map(ObjectIdentifier.init))
+        source.ended(at: CGPoint(x: -5_400, y: -5_300), operation: [])
+        XCTAssertEqual(handedOff, 1)
+        XCTAssertEqual(ended, 0, "still on its way home")
+        XCTAssertTrue(NSApp.windows.contains { !windows.contains(ObjectIdentifier($0)) && $0.isVisible }, "the card is drawn over the screen")
+        let deadline = Date().addingTimeInterval(3)
+        while ended == 0, Date() < deadline { RunLoop.current.run(until: Date().addingTimeInterval(0.05)) }
+        XCTAssertEqual(settled, 1, "it settles on its row")
+        XCTAssertEqual(ended, 1)
+        XCTAssertFalse(NSApp.windows.contains { !windows.contains(ObjectIdentifier($0)) && $0.isVisible }, "and its window goes")
     }
 }
