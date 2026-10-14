@@ -671,6 +671,7 @@ final class NoteEditorEngine: NSObject, NSTextViewDelegate, NSTextStorageDelegat
                     style: name, level: metadata[.noteBlockLevel] as? Int, indent: metadata[.noteBlockIndent] as? Int,
                     previous: paragraph.location <= titleEnd ? .title : paragraphKind(at: paragraph.location - 1),
                     isChecklist: checklistBox(inParagraphAt: paragraph.location) != nil, isBlockObject: blockObject,
+                    isDivider: blockObject && object(at: paragraph.location) is NoteDividerAttachment,
                     monoHang: name == "mono" ? style.monoHang(for: string.substring(with: paragraph)) : 0,
                     monoExitsAtEnd: (name == "mono" || metadata[.noteCalloutIcon] != nil) && boxExitsAtEnd(paragraph),
                     callout: metadata[.noteCalloutIcon] as? String)
@@ -971,7 +972,7 @@ final class NoteEditorEngine: NSObject, NSTextViewDelegate, NSTextStorageDelegat
                                         callout: pending.state.style.calloutIcon, isChecklist: pending.state.style == .checklist)
         }
         guard line.location < textStorage.length else { return .body }
-        if isBlockObject(at: line.location) { return .blockObject }
+        if isBlockObject(at: line.location) { return object(at: line.location) is NoteDividerAttachment ? .divider : .blockObject }
         let attributes = textStorage.attributes(at: line.location, effectiveRange: nil)
         return NoteParagraphKind.of(style: attributes[.noteBlockStyle] as? String, level: attributes[.noteBlockLevel] as? Int,
                                     callout: attributes[.noteCalloutIcon] as? String, isChecklist: checklistBox(inParagraphAt: line.location) != nil)

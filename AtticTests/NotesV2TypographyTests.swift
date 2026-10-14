@@ -158,7 +158,9 @@ final class NotesV2TypographyTests: XCTestCase {
             (.quote, .quote, 8), (.quote, .body, 12), (.body, .quote, 12),
             (tip, tip, 8), (warning, tip, 12), (tip, .body, 12), (.body, tip, 12), (tip, .quote, 12),
             (.mono, .body, 12), (.body, .mono, 12), (.mono, .mono, 0), (.listItem, .mono, 12),
-            (.blockObject, .body, 12), (.body, .blockObject, 12)
+            (.blockObject, .body, 12), (.body, .blockObject, 12),
+            // A divider's 12 is to its rule, mid-line in its 18.5 pt box.
+            (.divider, .body, 3.25), (.body, .divider, 3.25), (.divider, .heading, 0)
         ]
         for (kind, previous, gap) in cases {
             XCTAssertEqual(NoteTextStyle.gap(above: kind, after: previous), gap, "\(kind) after \(String(describing: previous))")
@@ -601,6 +603,68 @@ final class NotesV2TypographyTests: XCTestCase {
         XCTAssertLessThanOrEqual(chip.maxY, firstLineTop + 0.5, "the chip sits above the code")
         let blockTop = rect.minY + (try XCTUnwrap(blocks.first)).layoutFragmentFrame.minY
         XCTAssertEqual(chip.midY - blockTop, T.monoPaddingV + T.monoLabelHeight / 2, accuracy: 0.01)
+    }
+
+    func testR14HardBreaksLayOutAsLinesOfOneParagraph() throws {
+        let (engine, view) = makeEngine([.text("Title"), .text("")])
+        let end = (engine.textStorage.string as NSString).length
+        view.setSelectedRange(NSRange(location: end, length: 0))
+        XCTAssertTrue(engine.pasteMarkdown("An address:\\\nNorthstar Studio\\\n24 Example Lane\\\nLondon\n", at: view.selectedRange()))
+        let start = location(of: "An address", in: engine)
+        let line = engine.lineRange(at: start)
+        let text = (engine.textStorage.string as NSString).substring(with: line)
+        XCTAssertEqual(text, "An address:\u{2028}Northstar Studio\u{2028}24 Example Lane\u{2028}London")
+        engine.layoutManager?.ensureLayout(for: engine.contentStorage.documentRange)
+        let fragment = try XCTUnwrap(fragments(engine).first { ($0.textElement as? NSTextParagraph)?.attributedString.string.hasPrefix("An address") == true })
+        XCTAssertEqual(fragment.textLineFragments.filter { $0.characterRange.length > 0 }.count, 4, "one line each")
+    }
+
+    #if DEBUG
+    func testR14TheCodexTestPagePastesEveryBlock() throws {
+        let (engine, view) = makeEngine([.text("Formatting test page"), .text("")], height: 4000)
+        view.setSelectedRange(NSRange(location: (engine.textStorage.string as NSString).length, length: 0))
+        XCTAssertTrue(engine.pasteMarkdown(NoteFormatCaptureScene.codexTestPage, at: view.selectedRange()))
+        let start = location(of: "An intentional", in: engine)
+        let text = (engine.textStorage.string as NSString).substring(with: engine.lineRange(at: start))
+        XCTAssertEqual(text.components(separatedBy: "\u{2028}").count, 4, text.debugDescription)
+        engine.layoutManager?.ensureLayout(for: engine.contentStorage.documentRange)
+        let fragment = try XCTUnwrap(fragments(engine).first { ($0.textElement as? NSTextParagraph)?.attributedString.string.hasPrefix("An intentional") == true })
+        XCTAssertEqual(fragment.textLineFragments.filter { $0.characterRange.length > 0 }.count, 4, "one line each")
+        let kinds = Set(fragments(engine).compactMap { ($0 as? NoteBlockLayoutFragment)?.decoration }.map { decoration -> String in
+            switch decoration {
+            case .mono: "code"
+            case .callout: "callout"
+            case .quote: "quote"
+            case .marker: "marker"
+            case .plain: "chips"
+            case .history: "history"
+            }
+        })
+        XCTAssertEqual(kinds, ["code", "callout", "quote", "marker", "chips"])
+    }
+    #endif
+
+    func testR14TheBlockHandleSitsOnTheGripLineBesideTheBlocksFirstLine() throws {
+        var tip = styled("Demo warning: a long callout line that wraps onto a second line here", "quote"); tip.callout = "⚠️"
+        let (engine, view) = makeEngine([.text("Title"), .text("Body"), tip, styled("One", "bullet"), styled("Child", "bullet", indent: 1)])
+        let start = location(of: "Demo", in: engine)
+        // The pointer over the block's lines, or the margin beside them.
+        let frame = try XCTUnwrap(fragments(engine).first { ($0.textElement as? NSTextParagraph)?.attributedString.string.hasPrefix("Demo") == true })
+            .layoutFragmentFrame.offsetBy(dx: view.textContainerOrigin.x, dy: view.textContainerOrigin.y)
+        XCTAssertEqual(view.blockLocation(at: NSPoint(x: 10, y: frame.midY)), start)
+        XCTAssertEqual(view.blockLocation(at: NSPoint(x: 120, y: frame.midY)), start)
+        XCTAssertNil(view.blockLocation(at: NSPoint(x: 120, y: view.textContainerOrigin.y + 5)), "never the title")
+        view.updateBlockHandle(at: NSPoint(x: 10, y: frame.midY))
+        XCTAssertFalse(view.blockHandle.isHidden)
+        XCTAssertEqual(view.blockHandle.frame.midX, view.textContainerOrigin.x - T.handleFromColumn, accuracy: 0.01, "the grips' line")
+        XCTAssertEqual(view.blockHandle.frame.size, T.handleHitSize)
+        XCTAssertEqual(view.handleBlockLocation, start)
+        // A list item's handle moves the item with its children.
+        let one = location(of: "One", in: engine)
+        XCTAssertEqual(engine.blockRange(at: one), NSRange(location: one, length: (engine.textStorage.string as NSString).length - one))
+        view.keyDown(with: try XCTUnwrap(NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: [], timestamp: 0, windowNumber: 0,
+                                                            context: nil, characters: "a", charactersIgnoringModifiers: "a", isARepeat: false, keyCode: 0)))
+        XCTAssertTrue(view.blockHandle.isHidden, "typing hides it")
     }
 
     // MARK: Persistence is untouched

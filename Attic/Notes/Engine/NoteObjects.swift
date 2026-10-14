@@ -378,7 +378,7 @@ final class NoteObjectRenderer {
             let thickness = NoteDividerAttachment.ruleThickness(increaseContrast: design.increaseContrast)
             divider.renderedImage = render(Rectangle().fill(design.tokens.divider.color)
                 .frame(height: thickness)
-                .padding(.top, ((NoteTextStyle.bodyLineHeight - thickness) / 2).rounded(.down))
+                .padding(.top, ((NoteTextStyle.bodyLineHeight - thickness) / 2).rounded())
                 .frame(height: NoteTextStyle.bodyLineHeight, alignment: .top))
         case let file as NoteFileAttachment:
             let size = ByteCountFormatter.string(fromByteCount: file.byteCount, countStyle: .file)

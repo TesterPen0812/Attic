@@ -296,7 +296,11 @@ final class NoteBlockLayoutFragment: NSTextLayoutFragment {
         let size = string.size()
         NSGraphicsContext.saveGraphicsState()
         NSGraphicsContext.current = NSGraphicsContext(cgContext: context, flipped: true)
-        string.draw(at: CGPoint(x: slot.midX - size.width / 2, y: slot.midY - (font.ascender - font.descender) / 2))
+        // Apple Color Emoji's image sits 0.14 em below its typographic
+        // box's centre (measured at 2×: 2.1 pt at 15 pt); lift it so the
+        // picture itself centres on the first line's cap height.
+        string.draw(at: CGPoint(x: slot.midX - size.width / 2,
+                                y: slot.midY - (font.ascender - font.descender) / 2 - font.pointSize * 0.14))
         NSGraphicsContext.restoreGraphicsState()
     }
 
@@ -937,7 +941,13 @@ extension NoteEditorEngine {
             button.folded = section.id.map(foldedHeadingIDs.contains) == true
             button.ink = style.markerColor
             button.isEnabled = !isReadOnly && activity == .idle
-            button.frame = CGRect(x: glyph.maxX + 3, y: glyph.midY - 10, width: 20, height: 20)
+            // R14 B.4: 8 wide, 6 after the last glyph, centred on the
+            // heading's x-height middle (TextKit sets the baseline its
+            // rounded descent above the line box's floor).
+            let font = textStorage.attribute(.font, at: glyphRange.location, effectiveRange: nil) as? NSFont ?? style.headingFont
+            let xMiddle = glyph.maxY - (-font.descender).rounded() - font.xHeight / 2
+            let centreX = glyph.maxX + AtticNoteType.foldChevronGap + AtticNoteType.foldChevronWidth / 2
+            button.frame = CGRect(x: centreX - 10, y: (xMiddle - 10).rounded(), width: 20, height: 20)
             button.setAccessibilityLabel("\(button.folded ? "Unfold" : "Fold") \((textStorage.string as NSString).substring(with: line))")
             button.setAccessibilityIdentifier("note-heading-fold-\(key)")
             button.toolTip = button.folded ? "Unfold heading (⌃⌘H)" : "Fold heading (⌃⌘H)"
@@ -977,9 +987,10 @@ final class NoteHeadingButton: NSButton {
         context.setLineWidth(1)
         context.setLineCap(.round)
         context.setLineJoin(.round)
-        context.move(to: CGPoint(x: -4.5, y: -2))
+        let half = AtticNoteType.foldChevronWidth / 2
+        context.move(to: CGPoint(x: -half, y: -2))
         context.addLine(to: CGPoint(x: 0, y: 2))
-        context.addLine(to: CGPoint(x: 4.5, y: -2))
+        context.addLine(to: CGPoint(x: half, y: -2))
         context.strokePath()
         context.restoreGState()
     }
@@ -1022,4 +1033,63 @@ enum NoteCodeLanguageName {
 /// The callout's Icon menu (spec C): six emoji, the system palette and No Icon.
 enum NoteCalloutIcons {
     static let menu = ["💡", "⚠️", "✅", "❗", "📌", "ℹ️"]
+}
+
+// MARK: - The block handle and the drop line (R14 D.2)
+
+/// The handle beside the hovered block (Codex's six dots, B.4): 2 × 3 dots
+/// of 2 pt, 4 apart both ways, in the table grips' quiet ink, in a 24 × 28
+/// hit area. A click selects the block; a drag moves it. VoiceOver moves it
+/// with Move Block Up and Move Block Down.
+final class NoteBlockHandleView: NSView {
+    private typealias T = AtticNoteType
+    var ink: NSColor = .tertiaryLabelColor { didSet { needsDisplay = true } }
+    var onPress: ((NSEvent) -> Void)?
+    var onMove: ((_ up: Bool) -> Bool)?
+
+    override init(frame: NSRect) {
+        super.init(frame: frame)
+        setAccessibilityElement(true)
+        setAccessibilityRole(.button)
+        setAccessibilityLabel(String(localized: "Block Handle"))
+        setAccessibilityHelp(String(localized: "Click to select the block; drag to move it"))
+        setAccessibilityIdentifier("note-block-handle")
+        setAccessibilityCustomActions([
+            NSAccessibilityCustomAction(name: String(localized: "Move Block Up")) { [weak self] in self?.onMove?(true) ?? false },
+            NSAccessibilityCustomAction(name: String(localized: "Move Block Down")) { [weak self] in self?.onMove?(false) ?? false }
+        ])
+    }
+
+    @available(*, unavailable)
+    required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
+
+    override var isFlipped: Bool { true }
+    override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
+    override func resetCursorRects() { addCursorRect(bounds, cursor: .openHand) }
+    override func mouseDown(with event: NSEvent) { onPress?(event) }
+
+    override func draw(_ dirtyRect: NSRect) {
+        guard let context = NSGraphicsContext.current?.cgContext else { return }
+        context.setFillColor(ink.cgColor)
+        let dot = T.handleDot, pitch = T.handlePitch
+        for column in 0..<2 {
+            for row in 0..<3 {
+                let x = bounds.midX + (CGFloat(column) - 0.5) * pitch - dot / 2
+                let y = bounds.midY + CGFloat(row - 1) * pitch - dot / 2
+                context.fillEllipse(in: CGRect(x: x, y: y, width: dot, height: dot))
+            }
+        }
+    }
+}
+
+/// ProseMirror's drop cursor: a 2 pt line in the accent, radius 1, where
+/// the dragged block will land (only ever between blocks).
+final class NoteDropLineView: NSView {
+    var ink: NSColor = .controlAccentColor { didSet { needsDisplay = true } }
+    override var isFlipped: Bool { true }
+    override func hitTest(_ point: NSPoint) -> NSView? { nil }
+    override func draw(_ dirtyRect: NSRect) {
+        ink.setFill()
+        NSBezierPath(roundedRect: bounds, xRadius: AtticNoteType.dropLineThickness / 2, yRadius: AtticNoteType.dropLineThickness / 2).fill()
+    }
 }

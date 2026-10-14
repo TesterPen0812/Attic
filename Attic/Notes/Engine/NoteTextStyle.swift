@@ -40,13 +40,16 @@ enum NoteParagraphKind: Equatable, Sendable {
     case quote, mono
     /// A callout paragraph; consecutive ones with the same icon share a box.
     case callout(icon: String)
-    /// An image, a file or a divider on its own line.
+    /// An image, a file or a table on its own line.
     case blockObject
+    /// A divider: a 1 pt rule centred in one body line, so its gaps are
+    /// measured to the rule.
+    case divider
 
     var isHeading: Bool { self == .titleStyle || self == .heading || self == .subheading || self == .smallHeading }
     var isCallout: Bool { if case .callout = self { true } else { false } }
     /// A box (code, a callout, a quote run) or a block object: 12 around it.
-    var isBox: Bool { self == .mono || self == .blockObject || self == .quote || isCallout }
+    var isBox: Bool { self == .mono || self == .blockObject || self == .divider || self == .quote || isCallout }
 
     var role: AtticNoteType.Role {
         switch self {
@@ -55,7 +58,7 @@ enum NoteParagraphKind: Equatable, Sendable {
         case .heading: AtticNoteType.heading
         case .subheading: AtticNoteType.subheading
         case .smallHeading: AtticNoteType.smallHeading
-        case .body, .listItem, .blockObject, .callout: AtticNoteType.body
+        case .body, .listItem, .blockObject, .divider, .callout: AtticNoteType.body
         case .quote: AtticNoteType.quote
         case .mono: AtticNoteType.mono
         }
@@ -196,7 +199,7 @@ struct NoteTextStyle: Equatable {
     /// is not raised.
     static func boxShift(_ kind: NoteParagraphKind) -> CGFloat {
         switch kind {
-        case .mono, .blockObject, .callout: 0
+        case .mono, .blockObject, .divider, .callout: 0
         default: baselineShift(kind.role)
         }
     }
@@ -206,6 +209,12 @@ struct NoteTextStyle: Equatable {
     /// / 14 / 12 above and 6 below, a heading 6 under a heading.
     static func gap(above kind: NoteParagraphKind, after previous: NoteParagraphKind?) -> CGFloat {
         guard let previous else { return 0 }
+        if kind == .divider || previous == .divider {
+            // 12 to the rule itself, which sits mid-line in its 18.5 pt box.
+            let inset = (T.body.lineHeight - T.dividerThickness) / 2
+            let plain = gap(above: kind == .divider ? .blockObject : kind, after: previous == .divider ? .blockObject : previous)
+            return max(0, plain - inset)
+        }
         if previous == .title { return T.titleToText }
         if kind.isHeading, previous.isHeading { return T.headingAfterHeading }
         switch kind {
@@ -264,15 +273,15 @@ struct NoteTextStyle: Equatable {
     /// above it (nil: none, or not known; the engine restyles every edited
     /// paragraph and its neighbours with the real one).
     func paragraphAttributes(style name: String?, level: Int?, indent: Int?, previous: NoteParagraphKind? = .body,
-                             isChecklist: Bool = false, isBlockObject: Bool = false,
+                             isChecklist: Bool = false, isBlockObject: Bool = false, isDivider: Bool = false,
                              monoHang: CGFloat = 0, monoExitsAtEnd: Bool = false, callout: String? = nil) -> [NSAttributedString.Key: Any] {
-        let kind: NoteParagraphKind = isBlockObject ? .blockObject
+        let kind: NoteParagraphKind = isBlockObject ? (isDivider ? .divider : .blockObject)
             : NoteParagraphKind.of(style: name, level: level, callout: callout, isChecklist: isChecklist)
         var result = bodyAttributes
         result[.font] = font(for: kind)
         result[.foregroundColor] = kind == .quote ? quoteColor : bodyColor
         let paragraph = NSMutableParagraphStyle()
-        if kind != .blockObject {
+        if kind != .blockObject, kind != .divider {
             paragraph.minimumLineHeight = kind.role.lineHeight
             paragraph.maximumLineHeight = kind.role.lineHeight
         }
