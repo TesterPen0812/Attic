@@ -83,6 +83,15 @@ enum AtticHeaderBlurMetrics {
     /// With the blur on, the text dissolves only into the panel's own top
     /// edge, over this band, so the rounded corner never slices a line.
     static let edgeRamp: CGFloat = 8
+
+    /// With the blur on, where the scrolled text is fully gone and how far
+    /// it fades back in below that. Opaque panel: only the panel's own top
+    /// edge (the surface fade hides the rest). See-through panel: the text
+    /// itself fades out behind the controls, so nothing reads through the
+    /// glass and no colour is painted over it.
+    static func textFade(headerBottom: CGFloat, translucent: Bool) -> (top: CGFloat, ramp: CGFloat) {
+        translucent ? (headerBottom * fadeShare * 0.5, headerBottom * fadeShare) : (0, edgeRamp)
+    }
 }
 
 // MARK: - Variable blur
@@ -201,11 +210,16 @@ struct AtticHeaderBlurBackdrop: View {
         let surface = design.tokens.panel.base.color
         ZStack(alignment: .top) {
             AtticVariableBlur(radius: radius)
-            LinearGradient(stops: [
-                .init(color: surface.opacity(AtticHeaderBlurMetrics.fadeOpacity), location: 0),
-                .init(color: surface.opacity(0), location: 1),
-            ], startPoint: .top, endPoint: .bottom)
-            .frame(height: height * AtticHeaderBlurMetrics.fadeShare)
+            // Only an opaque panel gets the surface-coloured fade: over a
+            // see-through panel it painted a white band (owner, 2026-10-14).
+            // There the text itself fades out instead (`textFadeTop`).
+            if !design.isTranslucent {
+                LinearGradient(stops: [
+                    .init(color: surface.opacity(AtticHeaderBlurMetrics.fadeOpacity), location: 0),
+                    .init(color: surface.opacity(0), location: 1),
+                ], startPoint: .top, endPoint: .bottom)
+                .frame(height: height * AtticHeaderBlurMetrics.fadeShare)
+            }
         }
         .frame(height: height)
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)

@@ -258,6 +258,13 @@ struct NotesEditorPage: View {
         .accessibilityIdentifier("notes-editor-page")
     }
 
+    /// The header blur lab's text fade, or nil for Today's fade (N-6 D).
+    private var headerBlurFade: (top: CGFloat, ramp: CGFloat)? {
+        headerBlur.blursHeader
+            ? AtticHeaderBlurMetrics.textFade(headerBottom: layout.headerBottom, translucent: design.isTranslucent)
+            : nil
+    }
+
     private var showsEditor: Bool {
         !controller.isLibraryPresented && controller.proposalReview == nil && controller.active != nil
     }
@@ -297,8 +304,8 @@ struct NotesEditorPage: View {
                 // bottom row, so none of it sits under the glass.
                 // Header blur lab: the text runs on under the header, into
                 // the variable blur, and dissolves only at the panel's edge.
-                .atticControlsFade(top: headerBlur.blursHeader ? 0 : layout.headerBottom,
-                                   topRamp: headerBlur.blursHeader ? AtticHeaderBlurMetrics.edgeRamp : AtticNoteMetrics.titleTopGap,
+                .atticControlsFade(top: headerBlurFade?.top ?? layout.headerBottom,
+                                   topRamp: headerBlurFade?.ramp ?? AtticNoteMetrics.titleTopGap,
                                    bottom: Self.viewportEdge, bottomRamp: bottomInset)
                 .overlay(alignment: .top) {
                     if headerBlur.blursHeader {
