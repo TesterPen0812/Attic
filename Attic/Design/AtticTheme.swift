@@ -29,7 +29,9 @@ struct TaskStatusMark: View {
     var size: CGFloat = 15
     @Environment(\.atticClearGlassForegroundReadabilityEnabled) private var clearReadabilityEnabled
     @Environment(\.colorScheme) private var colorScheme
-    @Environment(\.colorSchemeContrast) private var contrast
+    @Environment(\.colorSchemeContrast) private var systemContrast
+    /// The Mac's contrast (or a UI-test launch's, `AtticContrastSeam`).
+    private var contrast: ColorSchemeContrast { AtticContrastSeam.resolve(systemContrast) }
     #if os(macOS)
     @Environment(\.atticPanelThemePalette) private var palette
     #endif
@@ -133,7 +135,9 @@ enum AtticClearGlassReadabilityPolicy {
 private struct ClearGlassForegroundReadabilityModifier: ViewModifier {
     @Environment(\.atticClearGlassForegroundReadabilityEnabled) private var isEnabled
     @Environment(\.colorScheme) private var colorScheme
-    @Environment(\.colorSchemeContrast) private var contrast
+    @Environment(\.colorSchemeContrast) private var systemContrast
+    /// The Mac's contrast (or a UI-test launch's, `AtticContrastSeam`).
+    private var contrast: ColorSchemeContrast { AtticContrastSeam.resolve(systemContrast) }
 
     @ViewBuilder
     func body(content: Content) -> some View {

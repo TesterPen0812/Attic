@@ -56,7 +56,9 @@ struct AtticPanelSurface: ViewModifier {
     /// around the surface should draw the exterior shadow.
     let showsElevation: Bool
 
-    @Environment(\.colorSchemeContrast) private var colorSchemeContrast
+    @Environment(\.colorSchemeContrast) private var systemContrast
+    /// The Mac's contrast (or a UI-test launch's, `AtticContrastSeam`).
+    private var colorSchemeContrast: ColorSchemeContrast { AtticContrastSeam.resolve(systemContrast) }
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
 
@@ -307,7 +309,9 @@ private struct AtticGlassControlModifier<S: InsettableShape>: ViewModifier {
     let shape: S
     let interactive: Bool
 
-    @Environment(\.colorSchemeContrast) private var colorSchemeContrast
+    @Environment(\.colorSchemeContrast) private var systemContrast
+    /// The Mac's contrast (or a UI-test launch's, `AtticContrastSeam`).
+    private var colorSchemeContrast: ColorSchemeContrast { AtticContrastSeam.resolve(systemContrast) }
     @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
     @Environment(\.atticPanelThemePalette) private var palette
     @Environment(\.atticPanelUsesSystemOpaqueSurface) private var usesSystemOpaqueSurface
