@@ -384,18 +384,22 @@ enum AtticDropdownMetrics {
     /// The date card (p2-30 draft 2 on p2-29 draft A; O14-09's polish,
     /// 2026-10-14): one grid of 29 x 29 cells, each holding a 25 pt
     /// rounded-square mark (7 pt corners), so the marks are 4 pt apart
-    /// across and down. The month header is a row of the grid (3 pt more
-    /// above it): the title starts at the first column's mark, and ‹ › are
-    /// the last two columns' marks. Then a 16 pt weekday row and the weeks.
-    /// Every mark is 11 pt from the card's edges (3 pt in from the rows'
-    /// edge, 3 pt above the card's).
+    /// across and down. The month header is a row as tall as a week (3 pt
+    /// more above it), on the grid's edges: the title starts at the first
+    /// column's mark and › ends at the last column's. Then a 16 pt weekday
+    /// row and the weeks. Every mark is 11 pt from the card's edges (3 pt
+    /// in from the rows' edge, 3 pt above the card's).
     static let monthHeaderTop: CGFloat = 3
     static let monthChevron: CGFloat = 10
-    /// Today in the month header: 12 pt text on a mark as tall as a day's
-    /// (its corners too), as far before ‹'s mark as the marks are apart.
-    static let todayHeight: CGFloat = 25
-    static let todayPadding: CGFloat = 8
-    static let todayRadius: CGFloat = 7
+    /// ‹ and ›: 22 pt marks (6 pt corners), 2 pt apart, lit as a day is.
+    static let monthNavMark: CGFloat = 22
+    static let monthNavRadius: CGFloat = 6
+    static let monthNavGap: CGFloat = 2
+    /// Today in the month header: 12 pt text on a mark as tall as ‹ ›
+    /// (their corners too), 2 pt before ‹.
+    static let todayHeight: CGFloat = 22
+    static let todayPadding: CGFloat = 6
+    static let todayRadius: CGFloat = 6
     static let monthTodayGap: CGFloat = 2
     static let weekdayHeight: CGFloat = 16
     static let monthCellWidth: CGFloat = 29
@@ -404,8 +408,10 @@ enum AtticDropdownMetrics {
     static let monthMarkRadius: CGFloat = 7
     static let monthGridInset: CGFloat = 3
     static let monthGridBottom: CGFloat = 3
-    /// The month title's start: the first column's mark.
+    /// The month title's start and ›'s end: the first and last columns'
+    /// marks.
     static let monthTitleLeading: CGFloat = monthGridInset + (monthCellWidth - monthMark) / 2
+    static let monthHeaderTrailing: CGFloat = monthTitleLeading
     /// How long a closing card stays in the overlay for its leave motion.
     static let leaveCleanup: TimeInterval = 0.3
 }

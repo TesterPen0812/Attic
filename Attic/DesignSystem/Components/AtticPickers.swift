@@ -561,17 +561,21 @@ struct AtticDateCard: View {
         let d = AtticDropdownMetrics.self
         return HStack(spacing: 0) {
             AtticText(verbatim: AtticDateCardFormat.monthTitle(month.start, calendar: calendar), style: .dropdownHeading, ink: .heading)
+                .lineLimit(1)
+                // "September 2026" is a little wider than the room.
+                .minimumScaleFactor(0.85)
                 .accessibilityAddTraits(.isHeader)
-            Spacer(minLength: d.detailGap)
+            Spacer(minLength: d.monthTodayGap * 3)
             todayButton(lit: state.lit == .today)
             Color.clear.frame(width: d.monthTodayGap, height: 1)
             monthButton(-1, systemName: "chevron.left", label: String(localized: "Previous month"))
+            Color.clear.frame(width: d.monthNavGap, height: 1)
             monthButton(1, systemName: "chevron.right", label: String(localized: "Next month"))
         }
-        // A row of the grid (O14-09): the title starts at the first
-        // column's mark, ‹ › are the last two columns'.
+        // On the grid's edges (O14-09): the title starts at the first
+        // column's mark, › ends at the last column's.
         .padding(.leading, d.monthTitleLeading)
-        .padding(.trailing, d.monthGridInset)
+        .padding(.trailing, d.monthHeaderTrailing)
         .padding(.top, d.monthHeaderTop)
         .frame(height: d.monthCellHeight + d.monthHeaderTop)
     }
@@ -608,16 +612,16 @@ struct AtticDateCard: View {
         .accessibilityValue(AtticDateCardFormat.spoken(today, calendar: calendar))
     }
 
-    /// ‹ or ›: a grid cell, its mark lit under the pointer as a day's is.
+    /// ‹ or ›: a mark lit under the pointer as a day's is.
     private func monthButton(_ step: Int, systemName: String, label: String) -> some View {
         let d = AtticDropdownMetrics.self
         let lit = hoveredMonthStep == step
         return Button { update { _ = $0.apply(.month(step), calendar: calendar, suggestions: 0, typing: false, hasRemove: false) } } label: {
             AtticIcon(systemName: systemName, size: d.monthChevron, weight: .regular, ink: .icon)
-                .frame(width: d.monthMark, height: d.monthMark)
-                .background(AtticCalendarMark(radius: d.monthMarkRadius, fill: (lit ? design.tokens.dropdownHighlight : .clear).color,
+                .frame(width: d.monthNavMark, height: d.monthNavMark)
+                .background(AtticCalendarMark(radius: d.monthNavRadius, fill: (lit ? design.tokens.dropdownHighlight : .clear).color,
                                               ring: .clear))
-                .frame(width: d.monthCellWidth, height: d.monthCellHeight)
+                .frame(height: d.monthCellHeight)
                 .contentShape(Rectangle())
         }
         .buttonStyle(AtticUndimmedButtonStyle())

@@ -2278,6 +2278,8 @@ extension AtticDropdownTests {
         let halfGap = (d.monthCellWidth - d.monthMark) / 2
         let side = d.inset + d.monthGridInset + halfGap
         XCTAssertEqual(d.inset + d.monthTitleLeading, side, "the month title starts at the first column's mark")
+        XCTAssertEqual(d.inset + d.monthHeaderTrailing, side, "› ends at the last column's mark")
+        XCTAssertEqual(d.todayHeight, d.monthNavMark, "Today and ‹ › are one size")
         XCTAssertEqual(d.monthCellHeight, d.monthCellWidth, "a square grid: marks as far apart across as down")
         XCTAssertEqual(d.inset + d.monthHeaderTop + (d.monthCellHeight - d.monthMark) / 2, side, "the header's marks as far from the top")
         XCTAssertEqual(d.inset + d.monthGridBottom + halfGap, side, "the last week as far from the bottom")
