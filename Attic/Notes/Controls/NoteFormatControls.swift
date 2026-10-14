@@ -220,16 +220,16 @@ final class NoteFormatControls: NSObject {
     private func rebuildRoots() {
         let design = design
         formatModel.highlightSwatch = AtticColorTokens.resolve(design).highlightMarker
-        barHost.rootView = AnyView(NoteFormatBarView(model: formatModel).atticDesign(design).allowsWindowActivationEvents())
-        slashHost.rootView = AnyView(NoteSlashListView(model: slashModel).atticDesign(design).allowsWindowActivationEvents())
+        barHost.rootView = AnyView(NoteFormatBarView(model: formatModel).atticDesign(design))
+        slashHost.rootView = AnyView(NoteSlashListView(model: slashModel).atticDesign(design))
         cardHost.rootView = AnyView(NoteFormatCardView(model: cardModel)
             .environment(\.atticDropdownContentHeightChanged, { [weak self] height in
                 guard let self, self.cardModel.card != nil, abs(height - self.cardSize.height) > 0.5 else { return }
                 self.cardSize.height = height
                 self.placeCard()
             })
-            .atticDesign(design).allowsWindowActivationEvents())
-        hintHost.rootView = AnyView(NoteSlashHintView().atticDesign(design).allowsWindowActivationEvents())
+            .atticDesign(design))
+        hintHost.rootView = AnyView(NoteSlashHintView().atticDesign(design))
         // The address can stay under the pointer across a change of look.
         // Keep its host and placement; refreshing must not require rehovering.
         if let hoverURL {
@@ -1173,7 +1173,7 @@ final class NoteFormatControls: NSObject {
 
     private func addressRoot(_ url: String) -> AnyView {
         let shown = url.replacingOccurrences(of: "https://", with: "").replacingOccurrences(of: "http://", with: "")
-        return AnyView(NoteLinkAddressView(address: shown).atticDesign(design).allowsWindowActivationEvents())
+        return AnyView(NoteLinkAddressView(address: shown).atticDesign(design))
     }
 
     // MARK: Empty-line hint (OD-14, p2-36 draft 7)

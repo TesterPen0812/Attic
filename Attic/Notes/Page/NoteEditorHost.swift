@@ -468,9 +468,9 @@ final class NoteTitleAccessories: NotesKeyboardReturnTarget {
         menuHost.rootView = AnyView(NoteMenuButtonRoot(chrome: chrome, tagEditor: tagEditor) { [weak self] in
             self?.presentMenu(fromHeader: false)
         }
-        .atticDesign(design).environment(\.atticTagColouring, colouring).allowsWindowActivationEvents())
+        .atticDesign(design).environment(\.atticTagColouring, colouring))
         tagHost.rootView = AnyView(NoteTagLineRoot(chrome: chrome, tags: shownTags, tagEditor: tagEditor)
-            .atticDesign(design).environment(\.atticTagColouring, colouring).allowsWindowActivationEvents())
+            .atticDesign(design).environment(\.atticTagColouring, colouring))
         tagMeasure.rootView = AnyView(AtticNoteTagLine(tags: shownTags) { _ in }.atticDesign(design).environment(\.atticTagColouring, colouring))
     }
 
@@ -598,7 +598,6 @@ final class NoteTitleAccessories: NotesKeyboardReturnTarget {
             .padding(room)
             .atticDesign(design)
             .environment(\.atticTagColouring, colouring)
-            .allowsWindowActivationEvents()
         )
     }
 
