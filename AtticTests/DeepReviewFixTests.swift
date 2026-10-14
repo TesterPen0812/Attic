@@ -176,14 +176,14 @@ final class DeepReviewFixTests: XCTestCase {
             XCTAssertGreaterThan(difference(top: bodyTop, bottom: bodyBottom), 0.02,
                                  "\(state): rows actually moved between captures")
             // Floating controls (owner 2026-10-14, replacing N-6 D): nothing
-            // readable moves behind the tabs' plain line (Find's field
-            // included), and the rows run on under the bottom stack, into
-            // the blur behind it. The body's movement above is the positive
+            // moves under the header or behind the tabs' plain line (part of
+            // the top controls), and the rows run on under the bottom stack,
+            // into the blur behind it. The body's movement above is the positive
             // control.
             for phase in [CGFloat(0), AtticLayout.rowPitch / 3, AtticLayout.rowPitch * 2 / 3] {
                 if phase > 0 { first = try capture(260 - phase); second = try capture(200 - phase) }
-                XCTAssertLessThan(difference(top: tabsTop, bottom: tabsTop + AtticLayout.pageTabsHeight, threshold: 0.2), 0.0005,
-                                  "\(state): nothing readable behind the tabs at phase \(phase)")
+                XCTAssertLessThan(difference(top: 0, bottom: TasksViewport.plainLine(tabsTop: tabsTop).upperBound), 0.0005,
+                                  "\(state): no ink under the header or behind the tabs at phase \(phase)")
                 XCTAssertGreaterThan(difference(top: bottom, bottom: hosted.height), 0.0005,
                                      "\(state): rows run on under the bottom stack at phase \(phase)")
             }

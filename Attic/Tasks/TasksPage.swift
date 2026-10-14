@@ -189,7 +189,8 @@ struct TasksPage: View {
             // the controls, into the variable blur, drawn once for the whole
             // pager. The native soft edge stays off.
             pager
-            TasksEdgeBackdrops(top: viewportTop, stack: bottomStack, bottomInset: bottomInset)
+            TasksEdgeBackdrops(top: viewportTop, topStart: TasksViewport.topEdges(tabsTop: tabsTop).topBlurStart,
+                               stack: bottomStack, bottomInset: bottomInset)
             // The controls float over the lists in both, in the page's own
             // layer.
             tabsBand
@@ -4199,9 +4200,10 @@ final class TasksBottomStackHeight: ObservableObject {
     }
 }
 
-/// The viewport's top fade (floating controls, owner 2026-10-14): rows run
-/// on under the header and the tabs line, faint behind the tabs' plain
-/// text; on a see-through panel they fade out behind the controls.
+/// The viewport's top fade (floating controls, owner 2026-10-14): the tabs
+/// line is plain text, so it counts as part of the top controls: rows are
+/// gone from the panel's edge to the line's lower edge and fade in under
+/// the blur below it, whole where the first row rests.
 private struct TasksViewportMask: View {
     let tabsTop: CGFloat
     @Environment(\.atticDesign) private var design
@@ -4341,11 +4343,14 @@ struct TasksPlainControlsMask: View {
 /// bottom stack as it is measured.
 struct TasksEdgeBackdrops: View {
     let top: CGFloat
+    /// The tabs line's lower edge: the blur starts there.
+    let topStart: CGFloat
     @ObservedObject var stack: TasksBottomStackHeight
     let bottomInset: CGFloat
 
     var body: some View {
-        AtticEdgeBlurBackdrops(top: top, bottom: TasksViewport.controlsInset(stack: stack.height, bottomInset: bottomInset))
+        AtticEdgeBlurBackdrops(top: top, bottom: TasksViewport.controlsInset(stack: stack.height, bottomInset: bottomInset),
+                               topStart: topStart)
     }
 }
 
@@ -4372,9 +4377,10 @@ enum TasksViewport {
         return max(visible, AtticControlSize.addBarHeight) + bottomInset
     }
 
-    /// The tabs' plain text line, down from the page's top.
+    /// The tabs' plain text line, its underline included, down from the
+    /// page's top.
     static func plainLine(tabsTop: CGFloat) -> ClosedRange<CGFloat> {
-        tabsTop...(tabsTop + AtticLayout.pageTabsHeight)
+        tabsTop...(tabsTop + AtticLayout.pageTabsHeight + AtticPageTabsMetrics.underlineHeight + AtticPageTabsMetrics.underlineGap)
     }
 
     /// The bottom stack's floating edge: its top, and the composer's plain
@@ -4436,16 +4442,17 @@ enum TasksViewport {
     }
 
     /// The fade by position in the viewport (floating controls, owner
-    /// 2026-10-14; it replaces N-6 D): rows run on under the header and the
-    /// tabs line, into the variable blur, faint behind the tabs' plain text
-    /// and, on a see-through panel, gone behind the controls (Find's taller
-    /// field included). Static geometry.
+    /// 2026-10-14; it replaces N-6 D): rows are gone above the tabs line's
+    /// lower edge (header and plain labels) and fade in under the blur to
+    /// whole where the first row rests; on a see-through panel they also
+    /// fade out behind Find's taller field. Static geometry.
     static func maskStops(height: CGFloat, tabsTop: CGFloat, translucent: Bool = false) -> [(location: CGFloat, opacity: Double)] {
         topEdges(tabsTop: tabsTop).stops(height: height, translucent: translucent)
     }
 
     static func topEdges(tabsTop: CGFloat) -> AtticFloatingEdges {
-        AtticFloatingEdges(top: controlsBottom(tabsTop: tabsTop), topPlain: plainLine(tabsTop: tabsTop))
+        AtticFloatingEdges(top: controlsBottom(tabsTop: tabsTop), topPlain: plainLine(tabsTop: tabsTop),
+                           topRamp: listTop(tabsTop: tabsTop) - plainLine(tabsTop: tabsTop).upperBound)
     }
 }
 

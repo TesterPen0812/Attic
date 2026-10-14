@@ -20,10 +20,15 @@ import SwiftUI
 ///   glass, O14-06); the content itself fades out behind the controls.
 /// - Reduce Transparency, or no variable blur: the blur gives way to an
 ///   opaque surface fade.
-/// - A line of plain text among the controls (Tasks' Now · Later · Done,
-///   All notes' labels, history's version line) keeps the 2026-10-06
-///   rule: content is faint behind it, so it stays readable. Behind the
-///   composer's plain strip (Date · Tag · Priority) it is gone (o16).
+/// - A line of plain text among the top controls (Tasks' Now · Later ·
+///   Done, Done's and search results' lines, All notes' labels, history's
+///   version line) has no surface of its own, so content never sits behind
+///   it (owner, 2026-10-06): the line counts as part of the top controls,
+///   content is gone from the panel's edge to the line's lower edge and
+///   fades in below it, and the blur starts at the line's lower edge, so
+///   rows blur as they near the line and are gone before they touch it.
+///   Behind the composer's plain strip (Date · Tag · Priority) content is
+///   gone too (o16).
 enum AtticEdgeBlurMetrics {
     /// The strongest blur, at the panel's edge (points).
     static let radius: CGFloat = 1.5
@@ -85,15 +90,30 @@ struct AtticFloatingEdges: Equatable, Sendable {
     var top: CGFloat = 0
     /// The bottom controls' upper edge, up from the panel's bottom (0: none).
     var bottom: CGFloat = 0
-    /// A plain-text line among the top controls, down from the top.
+    /// A plain-text line among the top controls, down from the top:
+    /// content is gone above its lower edge and whole `topRamp` below it.
     var topPlain: ClosedRange<CGFloat>? = nil
     /// Plain controls among the bottom controls (Tasks' composer strip),
     /// up from the bottom: content is gone behind them (o16, F-13).
     var bottomPlain: ClosedRange<CGFloat>? = nil
+    /// Below a plain top line: from gone to whole (to the first row's rest).
+    var topRamp: CGFloat = AtticLayout.pageTabsToList
+
+    /// Where the top blur begins: the plain line's lower edge, or the
+    /// panel's edge.
+    var topBlurStart: CGFloat { topPlain?.upperBound ?? 0 }
+
+    /// These edges with bottom controls `bottom` deep.
+    func with(bottom: CGFloat) -> AtticFloatingEdges {
+        var edges = self
+        edges.bottom = bottom
+        return edges
+    }
 
     /// The content's opacity at `y` in a view `height` tall: whole, except
-    /// faint behind a plain-text line and, on a see-through panel, gone by
-    /// the controls' middle (back to whole at their inner edge).
+    /// gone above a plain top line's lower edge (whole `topRamp` below it),
+    /// gone behind plain bottom controls and, on a see-through panel, gone
+    /// by the controls' middle (back to whole at their inner edge).
     func opacity(at y: CGFloat, height: CGFloat, translucent: Bool) -> Double {
         var value = 1.0
         if translucent {
@@ -102,7 +122,7 @@ struct AtticFloatingEdges: Equatable, Sendable {
                 value = min(value, Self.ramp(height - y, gone: bottom * AtticEdgeBlurMetrics.translucentGoneShare, whole: bottom))
             }
         }
-        if let topPlain { value = min(value, Self.faint(y, behind: topPlain, floor: AtticScrollUnderFade.behindText)) }
+        if let topPlain { value = min(value, Self.ramp(y, gone: topPlain.upperBound, whole: topPlain.upperBound + topRamp)) }
         if let bottomPlain { value = min(value, Self.faint(height - y, behind: bottomPlain, floor: 0)) }
         return value
     }
@@ -124,7 +144,7 @@ struct AtticFloatingEdges: Equatable, Sendable {
         }
         let ramp = AtticScrollUnderFade.textRamp
         if let topPlain {
-            ys += [topPlain.lowerBound - ramp, topPlain.lowerBound, topPlain.upperBound, topPlain.upperBound + ramp]
+            ys += samples.map { topPlain.upperBound + $0 * topRamp }
         }
         if let bottomPlain {
             ys += [bottomPlain.lowerBound - ramp, bottomPlain.lowerBound, bottomPlain.upperBound, bottomPlain.upperBound + ramp]
@@ -173,16 +193,20 @@ struct AtticFloatingEdgesMask: View {
 /// One edge's backdrop: the variable blur, strongest at the panel's edge
 /// and clear at its inner end, plus the opaque panel's surface fade over
 /// its outer part. `extent` is the controls' depth from the edge; the
-/// backdrop reaches the lab's `reach` past it.
+/// backdrop reaches the lab's `reach` past it. With a plain top line,
+/// `start` is the line's lower edge: the blur begins there (nothing is
+/// drawn above it, where the content is gone) and has no surface fade.
 struct AtticEdgeBlurBackdrop: View {
     let edge: VerticalEdge
     let extent: CGFloat
+    let start: CGFloat
     @ObservedObject private var lab = AtticEdgeBlurLab.shared
     @Environment(\.atticDesign) private var design
 
-    init(edge: VerticalEdge, extent: CGFloat) {
+    init(edge: VerticalEdge, extent: CGFloat, start: CGFloat = 0) {
         self.edge = edge
         self.extent = extent
+        self.start = start
     }
 
     /// Whether the variable blur draws (not with Reduce Transparency, nor
@@ -192,16 +216,17 @@ struct AtticEdgeBlurBackdrop: View {
     }
 
     var body: some View {
-        let height = max(0, extent + CGFloat(lab.reach))
+        let height = max(0, extent - start + CGFloat(lab.reach))
         let blurs = Self.blurs(design)
         let alignment: Alignment = edge == .top ? .top : .bottom
         ZStack(alignment: alignment) {
             if blurs {
                 AtticVariableBlur(radius: CGFloat(lab.radius), edge: edge)
             }
-            surfaceFade(height: height, blurs: blurs)
+            if start <= 0 { surfaceFade(height: height, blurs: blurs) }
         }
         .frame(height: height)
+        .padding(edge == .top ? .top : .bottom, max(0, start))
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: alignment)
         .allowsHitTesting(false)
         .accessibilityHidden(true)
@@ -232,7 +257,7 @@ extension View {
     /// must sit below the controls themselves.
     func atticFloatingControls(_ edges: AtticFloatingEdges) -> some View {
         mask { AtticFloatingEdgesMask(edges: edges) }
-            .overlay { AtticEdgeBlurBackdrops(top: edges.top, bottom: edges.bottom) }
+            .overlay { AtticEdgeBlurBackdrops(top: edges.top, bottom: edges.bottom, topStart: edges.topBlurStart) }
     }
 
     /// Only the content's own fade, where the backdrops are drawn once for
@@ -246,10 +271,11 @@ extension View {
 struct AtticEdgeBlurBackdrops: View {
     let top: CGFloat
     let bottom: CGFloat
+    var topStart: CGFloat = 0
 
     var body: some View {
         ZStack {
-            if top > 0 { AtticEdgeBlurBackdrop(edge: .top, extent: top) }
+            if top > 0 { AtticEdgeBlurBackdrop(edge: .top, extent: top, start: topStart) }
             if bottom > 0 { AtticEdgeBlurBackdrop(edge: .bottom, extent: bottom) }
         }
         .allowsHitTesting(false)

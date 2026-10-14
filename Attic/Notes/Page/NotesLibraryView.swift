@@ -362,12 +362,10 @@ struct NotesLibraryView: View {
             .contentMargins(.bottom, bottomControls, for: .scrollIndicators)
             .scrollIndicators(.automatic)
             .scrollEdgeEffectHidden(true, for: .all)
-            // Floating controls (owner, 2026-10-14), as in the note: the
-            // rows run on under the header, the label line and the bottom
-            // row, into the variable blur; faint behind the label line.
-            .atticFloatingControls(AtticFloatingEdges(top: TasksViewport.controlsBottom(tabsTop: labelsTop),
-                                                      bottom: bottomControls,
-                                                      topPlain: TasksViewport.plainLine(tabsTop: labelsTop)))
+            // Floating controls (owner, 2026-10-14), as on Tasks: the label
+            // line is plain text, so rows are gone above its lower edge and
+            // blur in below it; they run on under the bottom row.
+            .atticFloatingControls(TasksViewport.topEdges(tabsTop: labelsTop).with(bottom: bottomControls))
             .overlay { AtticFloatingControlsBand(height: bottomControls) }
             .coordinateSpace(Self.space)
             // Right-click anywhere the rows are not (all of it, with none):

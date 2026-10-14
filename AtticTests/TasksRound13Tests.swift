@@ -447,17 +447,14 @@ final class TasksRound13Tests: XCTestCase {
     /// the glass"): rows are gone under the header and the tabs line, whole
     /// from the first row's words at rest down to the bottom stack, whose
     /// own mask fades them before it.
-    func testTheListsMaskKeepsRowsFaintBehindTheTabsAndWholeAtRest() {
+    func testTheListsMaskHidesRowsBeforeTheTabsAndKeepsThemWholeAtRest() {
         let height: CGFloat = 520
         let stops = TasksViewport.maskStops(height: height, tabsTop: 80)
         func opacity(_ y: CGFloat) -> Double { AtticScrollUnderFade.opacity(stops, at: y, height: height) }
-        // Floating controls (owner 2026-10-14, replacing N-6 D): whole under
-        // the glass header, faint behind the tabs' plain text.
-        for y in stride(from: CGFloat(0), through: 80 - AtticScrollUnderFade.textRamp, by: 1) {
-            XCTAssertEqual(opacity(y), 1, accuracy: 0.001, "runs on under the header at \(y)")
-        }
-        for y in stride(from: CGFloat(80), through: 80 + AtticLayout.pageTabsHeight, by: 1) {
-            XCTAssertEqual(opacity(y), AtticScrollUnderFade.behindText, accuracy: 0.001, "faint behind the tabs at \(y)")
+        // Floating controls (owner 2026-10-14): the tabs' plain line (its
+        // underline included) is part of the top controls.
+        for y in stride(from: CGFloat(0), through: TasksViewport.plainLine(tabsTop: 80).upperBound, by: 1) {
+            XCTAssertEqual(opacity(y), 0, accuracy: 0.001, "gone under the header and the tabs at \(y)")
         }
         let rest = TasksViewport.listTop(tabsTop: 80) + AtticTaskRowMetrics.titleTop(twoLine: false)
         for y in stride(from: rest, through: height, by: 1) {

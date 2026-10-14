@@ -37,9 +37,9 @@ struct NoteHistoryPage: View {
                     .id(session.id)
                     // Floating controls (owner, 2026-10-14): the preview runs on
                     // under the version line and the bottom row, into the
-                    // variable blur; faint behind the version line.
+                    // variable blur; gone above the version line's lower edge.
                     .atticFloatingControls(AtticFloatingEdges(top: Self.versionLineBottom(layout), bottom: Self.bottomControls(layout),
-                                                              topPlain: Self.versionLine(layout)))
+                                                              topPlain: Self.versionLine(layout), topRamp: 24))
                     .overlay { AtticFloatingControlsBand(height: Self.bottomControls(layout)) }
                     .accessibilityIdentifier("notes-history-preview")
             }

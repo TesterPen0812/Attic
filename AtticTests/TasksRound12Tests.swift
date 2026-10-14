@@ -597,13 +597,12 @@ final class TasksRound12Tests: XCTestCase {
     /// N-6 D (owner 2026-10-11, replacing 2026-10-06): rows scrolled behind
     /// the tabs are gone; the resting rows are whole. The bottom stack's fade
     /// is its own mask (`TasksPlainControlsMask`), so this one is whole there.
-    func testRowsAreFaintUnderTheTabsAndWholeAtRest() {
+    func testRowsAreGoneUnderTheTabsAndWholeAtRest() {
         let height: CGFloat = 520
         let stops = TasksViewport.maskStops(height: height, tabsTop: 80)
         XCTAssertEqual(stops.map(\.location), stops.map(\.location).sorted(), "stops in order")
         for y in stride(from: CGFloat(80), through: 96, by: 1) {
-            XCTAssertEqual(maskOpacity(stops, at: y, height: height), AtticScrollUnderFade.behindText,
-                           accuracy: 0.001, "faint behind the tabs at \(y)")
+            XCTAssertEqual(maskOpacity(stops, at: y, height: height), 0, accuracy: 0.001, "gone behind the tabs at \(y)")
         }
         for stack in [CGFloat(36), 60, 96, 136] {
             for y in stride(from: height - stack, through: height, by: 1) {

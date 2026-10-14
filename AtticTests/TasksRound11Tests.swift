@@ -136,11 +136,10 @@ final class TasksRound11Tests: XCTestCase {
 
     /// N-6 D: no overlay behind the tabs; rows behind the tab labels are
     /// gone, and whole from the first row's rest.
-    func testRowsAreFaintUnderTheTabs() {
+    func testRowsAreGoneUnderTheTabs() {
         let stops = TasksViewport.maskStops(height: 520, tabsTop: 80)
         for y in stride(from: CGFloat(80), through: 96, by: 1) {
-            XCTAssertEqual(AtticScrollUnderFade.opacity(stops, at: y, height: 520), AtticScrollUnderFade.behindText,
-                           accuracy: 0.001, "faint behind the tab labels at \(y) (floating controls, 2026-10-14)")
+            XCTAssertEqual(AtticScrollUnderFade.opacity(stops, at: y, height: 520), 0, accuracy: 0.001, "gone behind the tab labels at \(y)")
         }
         XCTAssertEqual(AtticScrollUnderFade.opacity(stops, at: 118, height: 520), 1, accuracy: 0.001, "fully there from the first row's words")
     }

@@ -16,7 +16,9 @@ struct AtticPanelView: View {
 
     @Environment(\.colorSchemeContrast) private var colorSchemeContrast
     @Environment(\.accessibilityReduceMotion) var reduceMotion
-    @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
+    @Environment(\.accessibilityReduceTransparency) private var systemReduceTransparency
+    /// The Mac's setting (or a UI-test launch's, `AtticTransparencySeam`).
+    private var reduceTransparency: Bool { AtticTransparencySeam.resolve(systemReduceTransparency) }
     @Environment(\.colorScheme) private var systemColorScheme
     /// What the Tasks page keeps while another page shows (the add bar's
     /// draft and pending attachments).
