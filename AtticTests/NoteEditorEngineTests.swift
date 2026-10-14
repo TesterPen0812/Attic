@@ -2423,3 +2423,281 @@ private final class GatedViewportImages: NoteImageProviding {
         continuation = nil
     }
 }
+
+
+/// H14 find-only regressions. Unmounted views and fixture documents only.
+@MainActor
+final class PhaseXHunt14Tests: XCTestCase {
+    private var scrollViews: [NSScrollView] = []
+
+    private func editor(_ blocks: [NoteBlock]) -> (NoteEditorEngine, NoteEditorTextView) {
+        let engine = NoteEditorEngine(noteID: UUID(), document: NoteDocument(blocks: [.text("T")] + blocks))
+        let (scroll, view) = engine.makeView()
+        scroll.frame = NSRect(x: 0, y: 0, width: 400, height: 600)
+        scrollViews.append(scroll)
+        return (engine, view)
+    }
+
+    private func at(_ text: String, in engine: NoteEditorEngine) -> Int {
+        (engine.textStorage.string as NSString).range(of: text).location
+    }
+
+    private func roundTrip(_ blocks: [NoteBlock]) throws -> [NoteBlock] {
+        let markdown = NoteMarkdownExport.markdown(NoteDocument(blocks: [.text("T")] + blocks))
+        return Array(try NoteMarkdownImport.document(markdown).blocks.dropFirst())
+    }
+
+    func testH14_01MarkdownRoundTripKeepsLiteralDelimiters() throws {
+        let literal = "Keep **these stars** and [this](https://example.com) literally"
+        let restored = try roundTrip([.text(literal)])
+        XCTAssertEqual(restored.map(\.text), [literal], "H14-01: export/import must not consume literal text as Markdown")
+        XCTAssertEqual(restored.first?.marks, [], "H14-01: literal text must not acquire marks")
+    }
+
+    func testH14_02MarkdownRoundTripKeepsEmptyChecklistItems() throws {
+        let blocks: [NoteBlock] = [.checklist("", checked: false), .checklist("", checked: true), .checklist("next")]
+        let restored = try roundTrip(blocks)
+        XCTAssertEqual(restored.map(\.text), blocks.map(\.text), "H14-02: empty tasks are real items")
+        XCTAssertEqual(restored.map(\.kind), blocks.map(\.kind), "H14-02")
+        XCTAssertEqual(restored.map(\.checked), blocks.map(\.checked), "H14-02")
+    }
+
+    func testH14_03PlainCalloutRoundTripKeepsLeadingEmojiAsText() throws {
+        var box = NoteBlock.text("💡 Keep this emoji in the text", style: "quote"); box.callout = ""
+        let restored = try roundTrip([box])
+        XCTAssertEqual(restored.first?.text, box.text, "H14-03: a plain box must not consume its first text character as an icon")
+        XCTAssertEqual(restored.first?.callout, "", "H14-03")
+    }
+
+    func testH14_04InlineCodeRoundTripKeepsEmbeddedBackticks() throws {
+        var block = NoteBlock.text("Use `x` here")
+        block.marks = [NoteMark(.code, offset: 0, length: (block.text as NSString).length)]
+        let restored = try roundTrip([block])
+        XCTAssertEqual(restored.first?.text, block.text, "H14-04: an inline code fence must exceed its content's backticks")
+        XCTAssertEqual(restored.first?.marks, block.marks, "H14-04")
+    }
+
+    func testH14_05DeleteNumberedParentTransfersStartPastChildren() {
+        var parent = NoteBlock.text("parent", style: "number"); parent.start = 12
+        var child = NoteBlock.text("child", style: "number"); child.indent = 1
+        let (engine, view) = editor([parent, child, .text("next", style: "number")])
+        view.setSelectedRange(engine.paragraphRange(at: 2)); view.deleteBackward(nil)
+        XCTAssertEqual(engine.document().blocks.map(\.text), ["T", "child", "next"])
+        XCTAssertEqual(engine.listMarker(at: at("next", in: engine)), .number("12."), "H14-05: removing the first item must retain its run's start")
+    }
+
+    func testH14_06OutdentParentCarriesFinalEmptyChild() {
+        var parent = NoteBlock.text("parent", style: "bullet"); parent.indent = 1
+        var child = NoteBlock.text("", style: "bullet"); child.indent = 2
+        let (engine, view) = editor([.text("root", style: "bullet"), parent, child])
+        view.setSelectedRange(NSRange(location: at("parent", in: engine), length: 0))
+        view.doCommand(by: #selector(NSTextView.insertBacktab(_:)))
+        XCTAssertEqual(engine.document().blocks.map(\.indent), [nil, nil, nil, 1], "H14-06: terminal empty children belong to the subtree")
+    }
+
+    func testH14_07LeavingFirstCodeLineTransfersLanguageToRemainingRun() {
+        var first = NoteBlock.text("first", style: "mono"); first.language = "swift"
+        let (engine, view) = editor([first, .text("second", style: "mono")])
+        view.setSelectedRange(NSRange(location: 2, length: 0)); view.deleteBackward(nil)
+        XCTAssertEqual(engine.document().blocks.map(\.text), ["T", "first", "second"])
+        XCTAssertNil(engine.document().blocks[1].style)
+        XCTAssertEqual(engine.codeLanguage(at: at("second", in: engine)), "swift", "H14-07: D.1 #9 moves the run label to the next code line, including old-reader splits")
+    }
+
+    func testH14_08AdjacentCodeLanguagesSurviveExportImport() throws {
+        let imported = try NoteMarkdownImport.document("# T\n\n```swift\nlet a = 1\n```\n\n```python\nprint(a)\n```")
+        let exported = NoteMarkdownExport.markdown(imported)
+        let restored = try NoteMarkdownImport.document(exported)
+        XCTAssertEqual(restored.blocks.map(\.text), imported.blocks.map(\.text))
+        XCTAssertEqual(restored.blocks.map(\.language), imported.blocks.map(\.language), "H14-08: separately pasted code blocks must keep their language")
+    }
+
+    private struct H14Line: Equatable, CustomStringConvertible {
+        var text: String
+        var format: NoteParagraphStyle = .body
+        var description: String { "\(format):\(text.debugDescription)" }
+    }
+    private struct H14Step: CustomStringConvertible {
+        var kind: Int
+        var a: Int
+        var b: Int
+        var description: String { "\(kind):\(a):\(b)" }
+    }
+    private struct H14RNG {
+        var state: UInt64
+        mutating func next() -> Int {
+            state = state &* 6364136223846793005 &+ 1442695040888963407
+            return Int((state >> 32) & 0x7fffffff)
+        }
+    }
+    private func h14Read(_ engine: NoteEditorEngine) -> [H14Line] {
+        engine.document().blocks.dropFirst().map { block in
+            let format: NoteParagraphStyle
+            switch block.style {
+            case "heading": format = .heading(block.level ?? 2)
+            case "bullet": format = .bullet
+            case "number": format = .number
+            case "mono": format = .mono(language: block.language)
+            case "quote": format = block.callout.map { .callout(icon: $0) } ?? .quote
+            default: format = .body
+            }
+            return H14Line(text: block.text, format: format)
+        }
+    }
+    /// The oracle holds only text and block kinds. It does not parse or use
+    /// TextKit attributes to compute a new state. Coordinates come from it.
+    private func h14Replay(_ steps: [H14Step]) -> (index: Int, reason: String)? {
+        let (engine, view) = editor([.text("alpha"), .text("beta"), .text("")])
+        defer { engine.detachView(); scrollViews.removeLast() }
+        var model = [H14Line(text: "alpha"), H14Line(text: "beta"), H14Line(text: "")]
+        var undo: [[H14Line]] = [], redo: [[H14Line]] = []
+        let formats: [NoteParagraphStyle] = [.body, .bullet, .number, .heading(4), .callout(icon: "💡"), .mono(language: "swift")]
+        func start(_ index: Int) -> Int { 2 + model.prefix(index).reduce(0) { $0 + ($1.text as NSString).length + 1 } }
+        func run(_ index: Int) -> Range<Int> {
+            let format = model[index].format
+            guard format.isCode || format.isCallout else { return index..<(index + 1) }
+            var lower = index, upper = index + 1
+            func matches(_ other: NoteParagraphStyle) -> Bool { format.isCode ? other.isCode : other == format }
+            while lower > 0, matches(model[lower - 1].format) { lower -= 1 }
+            while upper < model.count, matches(model[upper].format) { upper += 1 }
+            return lower..<upper
+        }
+        for (index, step) in steps.enumerated() {
+            let before = model
+            let line = step.a % model.count
+            let offset = step.b % ((model[line].text as NSString).length + 1)
+            let caret = start(line) + offset
+            view.setSelectedRange(NSRange(location: caret, length: 0))
+            engine.history.breakCoalescing()
+            let generation = engine.history.recordingGeneration
+            switch step.kind {
+            case 0:
+                model[line].text = (model[line].text as NSString).replacingCharacters(in: NSRange(location: offset, length: 0), with: "x")
+                _ = engine.performEdit(NSRange(location: caret, length: 0), with: NSAttributedString(string: "x", attributes: engine.attributes(forParagraphAt: caret)), name: "Insert")
+            case 1:
+                if offset < (model[line].text as NSString).length {
+                    model[line].text = (model[line].text as NSString).replacingCharacters(in: NSRange(location: offset, length: 1), with: "")
+                    _ = engine.performEdit(NSRange(location: caret, length: 1), with: NSAttributedString(), name: "Delete")
+                }
+            case 2:
+                let format = formats[step.b % formats.count]
+                let affected = (format.isCode && model[line].format.isCode) || (format.isCallout && model[line].format.isCallout) ? run(line) : line..<(line + 1)
+                for row in affected { model[row].format = format }
+                _ = engine.perform(.paragraph(format), selection: NSRange(location: caret, length: 0))
+            case 3:
+                if model[line].format.isCode {
+                    let affected = run(line)
+                    for row in affected { model[row].format = .mono(language: step.b % 2 == 0 ? "python" : "swift") }
+                    _ = engine.setCodeLanguage(step.b % 2 == 0 ? "python" : "swift", at: caret)
+                } else if model[line].format.isCallout {
+                    let affected = run(line)
+                    for row in affected { model[row].format = .callout(icon: step.b % 2 == 0 ? "" : "⚠️") }
+                    _ = engine.setCalloutIcon(step.b % 2 == 0 ? "" : "⚠️", at: caret)
+                }
+            case 4:
+                let source = run(line), target = run(step.b % model.count).lowerBound
+                if target < source.lowerBound || target > source.upperBound {
+                    let from = start(source.lowerBound), to = source.upperBound < model.count ? start(source.upperBound) : engine.textStorage.length
+                    let destination = start(target)
+                    let moved = Array(model[source])
+                    model.removeSubrange(source)
+                    model.insert(contentsOf: moved, at: target < source.lowerBound ? target : target - source.count)
+                    _ = engine.moveBlock(NSRange(location: from, length: to - from), to: destination)
+                }
+            case 5:
+                let old = model[line]
+                let prefix = (old.text as NSString).substring(to: offset), suffix = (old.text as NSString).substring(from: offset)
+                model[line].text = prefix + "P"
+                let continuation: NoteParagraphStyle = old.format.isCode ? model[run(line).lowerBound].format : (old.format.isCallout ? old.format : .body)
+                model.insert(H14Line(text: "Q" + suffix, format: continuation), at: line + 1)
+                _ = engine.pastePlainText("P\nQ", at: NSRange(location: caret, length: 0))
+            case 6:
+                if let prior = undo.popLast() { redo.append(model); model = prior }
+                _ = engine.history.undo()
+            default:
+                if let next = redo.popLast() { undo.append(model); model = next }
+                _ = engine.history.redo()
+            }
+            if step.kind < 6, engine.history.recordingGeneration != generation { undo.append(before); redo.removeAll() }
+            let actual = h14Read(engine)
+            if actual != model { return (index, "expected \(model), actual \(actual)") }
+        }
+        return nil
+    }
+    private func h14Shrink(_ steps: [H14Step], firstMismatch: Int) -> [H14Step] {
+        var result = Array(steps.prefix(firstMismatch + 1))
+        var size = max(1, result.count / 2)
+        while size > 0 {
+            var at = 0
+            while at < result.count {
+                var candidate = result
+                candidate.removeSubrange(at..<min(result.count, at + size))
+                if !candidate.isEmpty, h14Replay(candidate) != nil { result = candidate; at = 0 }
+                else { at += size }
+            }
+            size /= 2
+        }
+        return result
+    }
+    func testH14_09GeneratedTextAndBlockKindsAgreeAfterEditingUndoAndRedo() {
+        for seed in 1...128 {
+            var random = H14RNG(state: UInt64(seed))
+            let steps = (0..<40).map { _ in H14Step(kind: random.next() % 8, a: random.next(), b: random.next()) }
+            if let failure = h14Replay(steps) {
+                let minimal = h14Shrink(steps, firstMismatch: failure.index)
+                let reason = h14Replay(minimal)?.reason ?? failure.reason
+                XCTFail("H14-09 (also covers H14-06/H14-10) seed \(seed), shrunk \(minimal): \(reason)")
+                return
+            }
+        }
+    }
+
+
+    func testH14_09MultilinePlainPasteIntoEmptyNumberEndsInBody() {
+        let (engine, view) = editor([.text("")])
+        view.setSelectedRange(NSRange(location: 2, length: 0))
+        XCTAssertTrue(engine.perform(.paragraph(.number)))
+        XCTAssertTrue(engine.pastePlainText("P\nQ", at: view.selectedRange()))
+        XCTAssertEqual(engine.document().blocks.map(\.text), ["T", "P", "Q"])
+        XCTAssertEqual(engine.document().blocks.map(\.style), [nil, "number", nil], "H14-09: only the first plain-pasted paragraph inherits a list style")
+    }
+
+    func testH14_06CodeLanguageChangeIncludesFinalEmptyRunParagraph() {
+        var code = NoteBlock.text("let a = 1", style: "mono"); code.language = "swift"
+        var empty = NoteBlock.text("", style: "mono"); empty.language = "swift"
+        let (engine, _) = editor([code, empty])
+        XCTAssertTrue(engine.setCodeLanguage("python", at: 2))
+        XCTAssertEqual(engine.document().blocks.dropFirst().map(\.language), ["python", "python"], "H14-06: whole-run commands include the pending terminal block")
+    }
+
+    func testH14_06CalloutIconChangeIncludesFinalEmptyRunParagraph() {
+        var box = NoteBlock.text("Tip", style: "quote"); box.callout = "💡"
+        var empty = NoteBlock.text("", style: "quote"); empty.callout = "💡"
+        let (engine, _) = editor([box, empty])
+        XCTAssertTrue(engine.setCalloutIcon("⚠️", at: 2))
+        XCTAssertEqual(engine.document().blocks.dropFirst().map(\.callout), ["⚠️", "⚠️"], "H14-06: changing a box icon must not detach its empty final paragraph")
+    }
+
+    func testH14_10DeletingLastCharacterKeepsFinalBlockKind() {
+        for format: NoteParagraphStyle in [.heading(4), .bullet, .number, .quote, .callout(icon: "💡"), .mono(language: "swift")] {
+            let (engine, view) = editor([.text("")])
+            view.setSelectedRange(NSRange(location: 2, length: 0))
+            XCTAssertTrue(engine.perform(.paragraph(format)))
+            view.insertText("x", replacementRange: NSRange(location: NSNotFound, length: 0))
+            engine.history.breakCoalescing()
+            view.deleteBackward(nil)
+            XCTAssertEqual(engine.document().blocks.map(\.text), ["T", ""])
+            XCTAssertEqual(engine.paragraphStyle(at: 2), format, "H14-10: deleting content must leave an empty \(format) until its exit key is pressed")
+            let empty = engine.document().blocks[1]
+            XCTAssertEqual(empty.style, format.storageName, "H14-10: save/reopen must retain the empty block kind")
+            let reopened = NoteEditorEngine(noteID: UUID(), document: engine.document())
+            XCTAssertEqual(reopened.paragraphStyle(at: 2), format, "H14-10: reopened empty block keeps its kind and hints")
+            XCTAssertTrue(engine.history.undo())
+            XCTAssertEqual(engine.document().blocks[1].text, "x")
+            XCTAssertEqual(engine.paragraphStyle(at: 2), format)
+            XCTAssertTrue(engine.history.redo())
+            XCTAssertEqual(engine.paragraphStyle(at: 2), format, "H14-10: Redo must retain the emptied block's kind")
+        }
+    }
+
+}
