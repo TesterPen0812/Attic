@@ -227,9 +227,10 @@ final class AtticPanel: NSPanel {
     /// the panel key before AppKit sees a press, and the key look waits for
     /// the release (`AtticPanelController.windowDidBecomeKey`). Wherever a
     /// press still reaches a panel that is not key (AppKit then spends it
-    /// unless the view under it accepts the first mouse), every view
-    /// accepts it: SwiftUI's (`allowsWindowActivationEvents`) and the
-    /// panel's text, scroll and table views.
+    /// unless the view under it accepts the first mouse), the panel's text,
+    /// scroll and table views accept it. (SwiftUI's
+    /// `allowsWindowActivationEvents` is not used: on a dropdown's root it
+    /// kept the tag field from the keyboard, TasksPageUITests.)
     nonisolated static func acceptsEveryFirstMouse(in window: NSWindow?) -> Bool {
         window is AtticPanel
     }

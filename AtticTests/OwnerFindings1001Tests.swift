@@ -62,11 +62,10 @@ final class OwnerFindings1001Tests: XCTestCase {
 
 // MARK: - O14-01: one click always registers
 
-/// The owner (2026-10-14): on a panel that is not key (another app active),
-/// the first click only focused it. AppKit spends such a press unless the
-/// view under it accepts the first mouse; SwiftUI's views in the lists and
-/// the text views refused it. Every view a press can reach on the real
-/// panel, on the Tasks and Notes pages, must accept it.
+/// O14-01 guard: wherever a press reaches the panel before it is key, the
+/// panel's AppKit views under it (text, scroll and table views) accept the
+/// first mouse, on the Tasks and Notes pages. (SwiftUI's views are left to
+/// `AtticPanel.sendEvent`, which makes the panel key before the press.)
 @MainActor
 final class O14FirstMouseTests: XCTestCase {
     func testEveryViewUnderAPressOnThePanelAcceptsTheFirstMouse() throws {
@@ -102,13 +101,8 @@ final class O14FirstMouseTests: XCTestCase {
             RunLoop.current.run(until: Date().addingTimeInterval(1.5))
             content.layoutSubtreeIfNeeded()
             // A press every 8 pt over the page, as the window would deliver
-            // it. The panel's AppKit views (text, scroll and table views)
-            // must all take it. SwiftUI takes it wherever a gesture is
-            // under the press (rows, controls, tabs); with a full list
-            // that is nearly everywhere: only the gaps between groups have
-            // none, and a press there acts on nothing.
+            // it: the panel's AppKit views must all take it.
             var appKitRefusing: [String: Int] = [:]
-            var swiftUI = (accepting: 0, refusing: 0)
             let bounds = content.bounds
             for x in stride(from: bounds.minX + 30, to: bounds.maxX - 30, by: 8) {
                 for y in stride(from: bounds.minY + 30, to: bounds.maxY - 30, by: 8) {
@@ -120,17 +114,10 @@ final class O14FirstMouseTests: XCTestCase {
                     let accepts = hit.acceptsFirstMouse(for: event)
                     if Bundle(for: type(of: hit)) == Bundle.main || hit is NSTextView || hit is NSScrollView || hit is NSClipView {
                         if !accepts { appKitRefusing[String(describing: type(of: hit)), default: 0] += 1 }
-                    } else if accepts {
-                        swiftUI.accepting += 1
-                    } else {
-                        swiftUI.refusing += 1
                     }
                 }
             }
             XCTAssertEqual(appKitRefusing, [:], "\(section): AppKit views that would spend the first click")
-            guard swiftUI.accepting + swiftUI.refusing > 50 else { continue }
-            let share = Double(swiftUI.accepting) / Double(max(1, swiftUI.accepting + swiftUI.refusing))
-            XCTAssertGreaterThan(share, 0.9, "\(section): SwiftUI presses taken on a panel that is not key (\(swiftUI))")
         }
     }
 }

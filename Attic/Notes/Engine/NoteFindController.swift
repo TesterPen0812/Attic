@@ -73,7 +73,7 @@ final class NoteFindController: ObservableObject {
         guard let engine, let scroll = engine.scrollView else { return }
         fieldFocused = true
         if host == nil {
-            let host = NSHostingView(rootView: AnyView(NoteFindBar(find: self).atticDesign(engine.style.design).allowsWindowActivationEvents()))
+            let host = NSHostingView(rootView: AnyView(NoteFindBar(find: self).atticDesign(engine.style.design)))
             self.host = host
             scroll.addSubview(host)
         }
@@ -98,7 +98,7 @@ final class NoteFindController: ObservableObject {
     /// A change of look reaches an open bar (H10-01): its host is built
     /// once, with the design the note had when Find opened.
     func update(design: AtticDesignContext) {
-        host?.rootView = AnyView(NoteFindBar(find: self).atticDesign(design).allowsWindowActivationEvents())
+        host?.rootView = AnyView(NoteFindBar(find: self).atticDesign(design))
     }
 
     func close(returnFocus: Bool = true) {

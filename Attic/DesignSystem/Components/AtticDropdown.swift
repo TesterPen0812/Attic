@@ -956,8 +956,7 @@ final class AtticOverlayHostingView: NSHostingView<AnyView> {
     var acceptsKeyboard = false
 
     required init(rootView: AnyView) {
-        // O14-01: its gestures take the click that makes the panel key.
-        super.init(rootView: AnyView(rootView.allowsWindowActivationEvents()))
+        super.init(rootView: rootView)
         translatesAutoresizingMaskIntoConstraints = true
         autoresizingMask = []
     }
