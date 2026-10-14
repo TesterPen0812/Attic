@@ -432,7 +432,7 @@ struct AtticTagSuggestionList: View {
                                 checkGlyph: suggestion.isNew ? "plus" : nil,
                                 detail: suggestion.isNew ? nil : "\(suggestion.count)",
                                 isHighlighted: index == highlighted,
-                                titleInk: suggestion.isNew ? .body : colouring.hue(for: suggestion.name).ink,
+                                // O14-07: only the dot takes the tag's colour.
                                 position: index + 1, itemCount: suggestions.count) { onPick(index) }
             }
         }

@@ -598,3 +598,60 @@ private struct PagesHarness: View {
         .onChange(of: page) { _, value in onPage(value) }
     }
 }
+
+// MARK: - Round 13: tag colours in dropdowns (O14-07)
+
+extension AtticDesignSystemHostedTests {
+    /// The tag picker's list, as a card shows it.
+    private struct TagPickerProbe: View {
+        let name: String
+        @State private var query = ""
+        @FocusState private var focus: AtticDropdownFocusTarget?
+        var body: some View {
+            AtticDropdownCard {
+                AtticTagPicker(query: $query, tags: [AtticTagPicker.Tag(name: name, state: .on)], onToggle: { _ in },
+                               onCreate: { _ in }, focus: $focus)
+            }
+        }
+    }
+
+    /// The horizontal extent of the coloured (chromatic) pixels, in points.
+    private func colouredExtent(_ hosting: NSView, size: CGSize) throws -> ClosedRange<CGFloat>? {
+        let (bitmap, scale) = try snapshot(hosting)
+        var low = CGFloat.infinity, high = -CGFloat.infinity
+        var y: CGFloat = 0
+        while y < size.height {
+            var x: CGFloat = 0
+            while x < size.width {
+                if let p = bitmap.colour(atX: x, y: y, scale: scale),
+                   max(p.red, p.green, p.blue) - min(p.red, p.green, p.blue) > 0.15 {
+                    low = min(low, x)
+                    high = max(high, x)
+                }
+                x += 0.5
+            }
+            y += 0.5
+        }
+        return low <= high ? low...high : nil
+    }
+
+    /// O14-07 (owner 2026-10-14): in a dropdown only a tag's dot takes its
+    /// colour; the # and the name keep the text ink. (Rows in the panel stay
+    /// coloured.)
+    func testR13TagDropdownRowsColourOnlyTheDot() throws {
+        let context = AtticDesignContext(mode: .light)
+        let name = try XCTUnwrap(["work", "home", "ideas", "read", "a", "b", "c", "d", "e"].first {
+            AtticTagHue.palette.contains(AtticTagColouring().hue(for: $0))
+        }, "a name with a clear hue")
+        let size = CGSize(width: 240, height: 120)
+        let suggestions = AtticTagSuggestionList(suggestions: [AtticTagSuggestion(name: name, count: 3, isNew: false)],
+                                                 highlighted: -1, onPick: { _ in })
+        for (label, view) in [("suggestions", AnyView(suggestions)), ("picker", AnyView(TagPickerProbe(name: name)))] {
+            let (_, hosting) = host(view.frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading), size: size,
+                                    context: context)
+            let extent = try XCTUnwrap(try colouredExtent(hosting, size: size), "\(label): the dot is coloured")
+            XCTAssertLessThan(extent.upperBound - extent.lowerBound, AtticDropdownMetrics.dotSize + 2,
+                              "\(label): only the dot is coloured, not the # or the name (\(extent))")
+        }
+    }
+}

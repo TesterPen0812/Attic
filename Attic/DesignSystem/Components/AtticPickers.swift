@@ -764,11 +764,12 @@ struct AtticTagPicker: View {
     private var rows: some View {
         VStack(alignment: .leading, spacing: 0) {
             ForEach(Array(tags.enumerated()), id: \.element.id) { index, tag in
-                // Each tag in its colour (colour pass, owner 2026-10-10), its
-                // dot before the name and its tick after (N-4's card).
-                let ink = colouring.hue(for: tag.name).ink
-                AtticDropdownRow(title: "#" + tag.name, check: tag.state, dot: ink, detail: tag.detail, isHighlighted: highlighted == index,
-                                 titleInk: ink,
+                // Each tag's colour on its dot alone (O14-07, owner
+                // 2026-10-14: in a dropdown the # and the name keep the text
+                // ink; rows in the panel stay coloured), its tick after the
+                // item (N-4's card).
+                AtticDropdownRow(title: "#" + tag.name, check: tag.state, dot: colouring.hue(for: tag.name).ink, detail: tag.detail,
+                                 isHighlighted: highlighted == index,
                                  onHover: hover(index), position: index + 1, itemCount: Self.rowCount(tags: tags.count, create: create)) {
                     onToggle(tag.name)
                 }
