@@ -90,7 +90,7 @@ enum AtticHeaderBlurMetrics {
     /// itself fades out behind the controls, so nothing reads through the
     /// glass and no colour is painted over it.
     static func textFade(headerBottom: CGFloat, translucent: Bool) -> (top: CGFloat, ramp: CGFloat) {
-        translucent ? (headerBottom * fadeShare * 0.5, headerBottom * fadeShare) : (0, edgeRamp)
+        translucent ? (headerBottom * 0.6, headerBottom * 0.4) : (0, edgeRamp)
     }
 }
 
