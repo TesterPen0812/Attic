@@ -20,6 +20,8 @@ struct MotionLabSettingsGroup: View {
     /// The header's corner buttons (owner, 2026-10-02): Liquid Glass, or
     /// L3's flat surface, to compare.
     @ObservedObject private var cornerButtons = AtticCornerButtonsLab.shared
+    /// The floating controls' edge blur, tuned live (owner, 2026-10-14).
+    @ObservedObject private var edgeBlur = AtticEdgeBlurLab.shared
 
     var body: some View {
         SettingsGroup(
@@ -48,6 +50,16 @@ struct MotionLabSettingsGroup: View {
                 identifier: "setting-motion-leave"
             )
             AtticGroupDivider()
+            if edgeBlur.offersTuning {
+                AtticSliderRow(label: "Edge blur strength", valueText: String(format: "%.1f pt", edgeBlur.radius),
+                               value: $edgeBlur.radius, range: AtticEdgeBlurLab.radiusRange, step: 0.5,
+                               identifier: "setting-edge-blur-radius")
+                AtticGroupDivider()
+                AtticSliderRow(label: "Edge blur reach", valueText: String(format: "%.0f pt", edgeBlur.reach),
+                               value: $edgeBlur.reach, range: AtticEdgeBlurLab.reachRange, step: 1,
+                               identifier: "setting-edge-blur-reach")
+                AtticGroupDivider()
+            }
             if cornerButtons.offersChoice {
                 AtticSegmentedRow(
                     title: "Corner buttons",

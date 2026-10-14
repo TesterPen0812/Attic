@@ -597,12 +597,13 @@ final class TasksRound12Tests: XCTestCase {
     /// N-6 D (owner 2026-10-11, replacing 2026-10-06): rows scrolled behind
     /// the tabs are gone; the resting rows are whole. The bottom stack's fade
     /// is its own mask (`TasksPlainControlsMask`), so this one is whole there.
-    func testRowsAreGoneUnderTheTabsAndWholeAtRest() {
+    func testRowsAreFaintUnderTheTabsAndWholeAtRest() {
         let height: CGFloat = 520
         let stops = TasksViewport.maskStops(height: height, tabsTop: 80)
         XCTAssertEqual(stops.map(\.location), stops.map(\.location).sorted(), "stops in order")
         for y in stride(from: CGFloat(80), through: 96, by: 1) {
-            XCTAssertEqual(maskOpacity(stops, at: y, height: height), 0, accuracy: 0.001, "gone behind the tabs at \(y)")
+            XCTAssertEqual(maskOpacity(stops, at: y, height: height), AtticScrollUnderFade.behindText,
+                           accuracy: 0.001, "faint behind the tabs at \(y)")
         }
         for stack in [CGFloat(36), 60, 96, 136] {
             for y in stride(from: height - stack, through: height, by: 1) {
@@ -686,12 +687,13 @@ final class TasksRound12Tests: XCTestCase {
     /// panel). Owner, 2026-10-06 (revising A15): rows that pass behind the
     /// tabs' plain-text line are never drawn at a readable strength there,
     /// and rows under the add bar's glass are drawn at full strength.
-    func testRowsPassOnlyFaintlyUnderTheTabsAndTheAddBarsBandWithTheCleanCut() throws {
+    func testRowsPassOnlyFaintlyUnderTheTabsAndRunOnUnderTheAddBar() throws {
         let shares = try bandShares(.cleanCut)
         XCTAssertGreaterThan(shares.moved, 0.02, "the long list scrolled between the captures (\(shares.moved))")
         XCTAssertLessThan(shares.strongTop, 0.002, "never readable behind the tabs' line (\(shares.strongTop))")
-        // N-6 D (owner 2026-10-11): rows fade out before the add bar.
-        XCTAssertLessThan(shares.strongBottom, 0.002, "nothing under the add bar's glass (\(shares.strongBottom))")
+        // Floating controls (owner 2026-10-14, replacing N-6 D): rows run on
+        // under the add bar's glass, into the blur behind it.
+        XCTAssertGreaterThan(shares.bottom, 0.0005, "rows run on under the add bar (\(shares.bottom))")
         // Negative control: the same band clipped fails it.
         let clipped = try bandShares(.cleanCut, clipBands: true)
         XCTAssertLessThan(clipped.bottom, 0.0005, "a clipped add bar's band shows nothing (\(clipped.bottom))")

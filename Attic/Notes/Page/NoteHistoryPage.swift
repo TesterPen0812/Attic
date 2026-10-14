@@ -12,22 +12,35 @@ struct NoteHistoryPage: View {
     @Environment(\.atticDesign) private var design
     @Environment(\.atticPanelToasts) private var toasts
 
+    /// The version switch and its summary line, down from the panel's top.
+    static func versionLine(_ layout: PanelPageLayout) -> ClosedRange<CGFloat> {
+        (layout.headerBottom + 8)...versionLineBottom(layout)
+    }
+
+    static func versionLineBottom(_ layout: PanelPageLayout) -> CGFloat { layout.headerBottom + 52 }
+
+    /// The bottom row's top, up from the panel's bottom edge.
+    static func bottomControls(_ layout: PanelPageLayout) -> CGFloat {
+        layout.chromeInsets.bottom + AtticControlSize.panelButton.height
+    }
+
     var body: some View {
         ZStack(alignment: .top) {
             if let session = browser.preview {
                 NoteEditorRepresentable(session: session, chrome: chrome,
                     columnInset: layout.chromeInsets.leading + AtticNoteMetrics.columnInset,
                     topInset: layout.headerBottom + 76,
-                    bottomInset: 64 - AtticControlSize.panelButton.height,
+                    bottomInset: 64 + layout.chromeInsets.bottom,
                     headerBottom: layout.headerBottom, design: design,
                     tagEditor: { AnyView(EmptyView()) }, tagCounts: { [:] },
                     scrollOverride: browser.scrollOffset - layout.headerBottom - 76)
                     .id(session.id)
-                    // N-6 D: the preview fades out before the version line
-                    // above it and the bottom row below.
-                    .atticControlsFade(top: layout.headerBottom + 52, topRamp: 24,
-                                       bottom: NotesEditorPage.viewportEdge, bottomRamp: AtticSpacing.s12)
-                    .padding(.bottom, layout.chromeInsets.bottom + AtticControlSize.panelButton.height)
+                    // Floating controls (owner, 2026-10-14): the preview runs on
+                    // under the version line and the bottom row, into the
+                    // variable blur; faint behind the version line.
+                    .atticFloatingControls(AtticFloatingEdges(top: Self.versionLineBottom(layout), bottom: Self.bottomControls(layout),
+                                                              topPlain: Self.versionLine(layout)))
+                    .overlay { AtticFloatingControlsBand(height: Self.bottomControls(layout)) }
                     .accessibilityIdentifier("notes-history-preview")
             }
             VStack(spacing: 6) {

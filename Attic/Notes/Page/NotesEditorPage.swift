@@ -95,8 +95,6 @@ struct NotesEditorPage: View {
     private var topInset: CGFloat { layout.headerBottom + AtticNoteMetrics.titleTopGap }
     /// The last line rests 12 above the bottom row.
     private var bottomInset: CGFloat { AtticSpacing.s12 }
-    /// A fade's edge at the viewport's own end (the controls start there).
-    static let viewportEdge: CGFloat = 0.5
     /// The bottom row's top, up from the panel's bottom edge.
     private var bottomControls: CGFloat { layout.chromeInsets.bottom + buttonHeight }
     private var noticeClearance: CGFloat {
@@ -282,20 +280,20 @@ struct NotesEditorPage: View {
                 design: design)
         } else if let session = controller.active {
             NoteEditorRepresentable(session: session, chrome: chrome, columnInset: columnInset,
-                                    topInset: topInset, bottomInset: bottomInset, headerBottom: layout.headerBottom,
+                                    topInset: topInset, bottomInset: bottomControls + bottomInset, headerBottom: layout.headerBottom,
                                     design: design, tagEditor: { AnyView(tagEditor(for: session)) },
                                     tagCounts: { [noteStore] in
                                         noteStore.tagCounts
                                     })
                 .id(ObjectIdentifier(session.engine))
-                // F-13: the editor ends above the footer. Content insets alone
-                // only provide scroll-to-end room; they do not stop intermediate
-                // lines and attachment views drawing under the glass buttons.
-                // N-6 D: the text fades out before the header and before the
-                // bottom row, so none of it sits under the glass.
-                .atticControlsFade(top: layout.headerBottom, topRamp: AtticNoteMetrics.titleTopGap,
-                                   bottom: Self.viewportEdge, bottomRamp: bottomInset)
-                .padding(.bottom, bottomControls)
+                // Floating controls (owner, 2026-10-14): the note runs on to
+                // the panel's edges, under the header and the bottom row,
+                // into the variable blur behind them. The scroll insets keep
+                // the title's and the last line's resting places clear.
+                // F-13 stays fixed: the blur and the band sit above the text
+                // view and its attachment views, below the controls.
+                .atticFloatingControls(AtticFloatingEdges(top: layout.headerBottom, bottom: bottomControls))
+                .overlay { AtticFloatingControlsBand(height: bottomControls) }
                 .accessibilityIdentifier("note-editor")
                 .accessibilitySortPriority(3)
                 .transition(slide(from: Self.noteEdge))
