@@ -521,7 +521,7 @@ final class NotesSlice2ControllerTests: XCTestCase {
         - [x] Final copy
         - [ ] Screenshots
 
-        Plain *stars* stay
+        Plain \\*stars\\* stay
 
         [image: pricing-v2.png]
         """)
