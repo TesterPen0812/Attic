@@ -55,7 +55,41 @@ final class NoteCommandRouter {
             }
             return NoteCommandValidation(enabled: false, state: command == .table ? .on : .off)
         }
-        return engine.validate(command, selection: selection ?? self.selection)
+        let selection = selection ?? self.selection
+        let base = engine.validate(command, selection: selection)
+        guard case let .paragraph(style) = command, let family = Self.family(style), base.enabled else { return base }
+        // R14: a style with variants (Small Heading's levels 4–6, a callout's
+        // icon, code's language) is on for any of them.
+        let values = selectedParagraphStyles(selection).map { Self.family($0) ?? $0 }
+        let state: NoteFormatState = values.isEmpty ? .off
+            : (values.allSatisfy { $0 == family } ? .on : (values.contains(family) ? .mixed : .off))
+        return NoteCommandValidation(enabled: base.enabled, state: state)
+    }
+
+    /// The one value standing for a style's variants, or nil for a style
+    /// without them.
+    static func family(_ style: NoteParagraphStyle) -> NoteParagraphStyle? {
+        switch style {
+        case let .heading(level) where level >= 4: .heading(4)
+        case .mono: .mono(language: nil)
+        case .callout: .callout(icon: "")
+        default: nil
+        }
+    }
+
+    private func selectedParagraphStyles(_ selection: NSRange) -> [NoteParagraphStyle] {
+        let length = engine.textStorage.length
+        let firstBody = engine.titleParagraphRange.length
+        var location = max(selection.location, firstBody)
+        var result: [NoteParagraphStyle] = []
+        repeat {
+            guard location <= length else { break }
+            if let style = engine.paragraphStyle(at: location) { result.append(style) }
+            let next = NSMaxRange(engine.paragraphRange(at: location))
+            if next <= location { break }
+            location = next
+        } while location < NSMaxRange(selection)
+        return result
     }
 
     /// Why most commands are dimmed right now, for VoiceOver
@@ -77,8 +111,14 @@ final class NoteCommandRouter {
     func run(_ command: NoteFormatCommand, from surface: NoteCommandSurface, selection: NSRange? = nil) -> Bool {
         let selection = selection ?? self.selection
         var effective = command
-        if NoteCommandCatalog.togglesOff(command), engine.validate(command, selection: selection).state == .on {
+        let state = validation(command, selection: selection).state
+        if NoteCommandCatalog.togglesOff(command), state == .on {
             effective = .paragraph(.body)
+        } else if case let .paragraph(style) = command, Self.family(style) != nil, state == .on {
+            // Already Small Heading or code: picking it again keeps the
+            // line's own level or language.
+            onRun?(command, surface)
+            return true
         }
         onRun?(command, surface)
         // In a table, marks go to the cell's text or the selected cells;

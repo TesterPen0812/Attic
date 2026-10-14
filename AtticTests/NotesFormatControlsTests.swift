@@ -516,11 +516,36 @@ final class NotesFormatControlsTests: XCTestCase {
         XCTAssertFalse(controls.slashModel.shown, "Space closes the list")
     }
 
+    /// R14: a style with variants is on for any of them, and picking it
+    /// again keeps the line's own level, icon toggle or language.
+    func testStylesWithVariantsShowOnAndKeepTheirVariant() throws {
+        var h5 = NoteBlock.text("Small five", style: "heading"); h5.level = 5
+        var warn = NoteBlock.text("Careful", style: "quote"); warn.callout = "⚠️"
+        var js = NoteBlock.text("let a = 1", style: "mono"); js.language = "javascript"
+        let engine = NoteEditorEngine(noteID: UUID(), document: NoteDocument(blocks: [.text("T"), h5, warn, js]))
+        _ = engine.makeView()
+        let router = NoteCommandRouter(engine: engine)
+        func at(_ text: String) -> NSRange { NSRange(location: (engine.textStorage.string as NSString).range(of: text).location, length: 0) }
+        XCTAssertEqual(router.validation(.paragraph(.heading(4)), selection: at("Small five")).state, .on)
+        XCTAssertEqual(router.validation(.paragraph(.callout(icon: "💡")), selection: at("Careful")).state, .on)
+        XCTAssertEqual(router.validation(.paragraph(.mono), selection: at("let a")).state, .on)
+        XCTAssertEqual(router.validation(.paragraph(.heading(3)), selection: at("Small five")).state, .off)
+        XCTAssertTrue(router.run(.paragraph(.heading(4)), from: .formatBar, selection: at("Small five")))
+        XCTAssertEqual(engine.paragraphStyle(at: at("Small five").location), .heading(5), "keeps level 5")
+        XCTAssertTrue(router.run(.paragraph(.mono), from: .formatBar, selection: at("let a")))
+        XCTAssertEqual(engine.codeLanguage(at: at("let a").location), "javascript", "keeps its language")
+        XCTAssertTrue(router.run(.paragraph(.callout(icon: "💡")), from: .formatBar, selection: at("Careful")))
+        XCTAssertEqual(engine.paragraphStyle(at: at("Careful").location), .body, "Callout toggles off, as Quote")
+    }
+
     /// A39 F04: the `/` list offers exactly the block styles the Aa style
     /// list has, under the same names, and each one applies its own style.
     func testTheSlashListOffersTheAaStyleListsBlockStylesWithTheSameNames() throws {
         let styleNames = NoteCommandCatalog.styles.map(\.title)
-        XCTAssertEqual(styleNames, ["Title", "Heading", "Subheading", "Body", "Code Block", "Quote"])
+        // R14: Small Heading and Callout join the list (no keys of their own).
+        XCTAssertEqual(styleNames, ["Title", "Heading", "Subheading", "Small Heading", "Body", "Code Block", "Quote", "Callout"])
+        XCTAssertNil(NoteCommandCatalog.keyboardShortcut(.paragraph(.heading(4))))
+        XCTAssertNil(NoteCommandCatalog.keyboardShortcut(.paragraph(.callout(icon: "💡"))))
         let slashNames = NoteSlashItem.all.map(\.title)
         for name in styleNames { XCTAssertTrue(slashNames.contains(name), "/ offers \(name)") }
         XCTAssertEqual(slashNames.filter { styleNames.contains($0) }.count, styleNames.count, "no style twice")
