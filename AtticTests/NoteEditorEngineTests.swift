@@ -122,6 +122,72 @@ final class NoteEditorEngineTests: XCTestCase {
         }
     }
 
+    func testR14MarkdownIntentMappingKeepsBlocksMarksAndText() throws {
+        let doc = try NoteMarkdownImport.document("###### Small\n\n5. first\n   - nested\n\n- [x] done\n\n> [!TIP]\n> 📌 Advice\n\n```js\nconst x = 4;\n```\n\n---\n\n| Left | Right |\n|:---|---:|\n| **a** | b |\n\n**bold** *italic* ~~strike~~ `code` [link](https://example.com) ![alt](never-fetch)\n\nsoft\nline  \nhard")
+        XCTAssertEqual(doc.blocks[0].level, 6)
+        XCTAssertEqual(doc.blocks[1].start, 5)
+        XCTAssertEqual(doc.blocks[2].indent, 1)
+        XCTAssertEqual(doc.blocks[3].kind, .checklist); XCTAssertTrue(doc.blocks[3].checked)
+        XCTAssertEqual(doc.blocks[4].callout, "📌"); XCTAssertEqual(doc.blocks[4].text, "Advice")
+        XCTAssertEqual(doc.blocks[5].language, "javascript")
+        XCTAssertEqual(doc.blocks[6].kind, .divider)
+        XCTAssertEqual(doc.blocks[7].table?.columns.map(\.align), [.left, .right])
+        XCTAssertEqual(doc.blocks[7].table?.rows[1].cells[0].marks.first?.kind, .bold)
+        XCTAssertEqual(Set(doc.blocks[8].marks.map(\.kind)), [.bold, .italic, .strikethrough, .code, .link])
+        XCTAssertTrue(doc.blocks[8].text.hasSuffix(" alt"))
+        XCTAssertEqual(doc.blocks[9].text, "soft line\u{2028}hard")
+        let literals = try NoteMarkdownImport.document("<div>raw</div>\n\nhi[^1]\n\n[^1]: footnote")
+        XCTAssertTrue(NoteTextExport.plainText(literals).contains("hi[^1]"))
+        XCTAssertTrue(NoteTextExport.plainText(literals).contains("[^1]: footnote"))
+        XCTAssertTrue(NoteTextExport.plainText(literals).contains("<div>raw</div>"))
+    }
+
+    func testR14MarkdownPasteUsesOnlyPlainBoardAndOneUndoStep() {
+        let (engine, view) = makeEngine(NoteDocument(blocks: [.text("T"), .text("")]))
+        view.setSelectedRange(NSRange(location: 2, length: 0))
+        let board = NSPasteboard.withUniqueName(); board.setString("## Heading\n\n**Body**", forType: .string)
+        XCTAssertTrue(engine.handlePaste(board))
+        XCTAssertEqual(engine.document().blocks.map(\.text), ["T", "Heading", "Body"])
+        XCTAssertEqual(engine.history.undoActionName, "Paste")
+        XCTAssertTrue(engine.history.undo()); XCTAssertEqual(engine.textStorage.string, "T\n")
+        board.setString("<b>Body</b>", forType: .html)
+        XCTAssertFalse(engine.handlePaste(board))
+        engine.isPastingAsPlainText = true
+        XCTAssertFalse(engine.handlePaste(board)); engine.isPastingAsPlainText = false
+        var code = NoteBlock.text("", style: "mono"); code.language = "swift"
+        let (codeEngine, codeView) = makeEngine(NoteDocument(blocks: [.text("T"), code]))
+        codeView.setSelectedRange(NSRange(location: 2, length: 0))
+        XCTAssertTrue(codeEngine.handlePaste(board))
+        XCTAssertEqual(codeEngine.document().blocks[1].text, "## Heading")
+        XCTAssertTrue(codeEngine.document().blocks.dropFirst().allSatisfy { $0.style == "mono" && $0.language == "swift" })
+    }
+
+    func testR14LineBreakAndRunCommandsAreUndoable() throws {
+        for format: NoteParagraphStyle in [.body, .heading(4), .bullet, .quote, .callout(icon: "💡"), .mono(language: "swift")] {
+            let (engine, view) = makeEngine(NoteDocument(blocks: [.text("T"), .text("ab")]))
+            XCTAssertTrue(engine.perform(.paragraph(format), selection: NSRange(location: 2, length: 0)))
+            view.setSelectedRange(NSRange(location: 3, length: 0))
+            view.doCommand(by: #selector(NSTextView.insertLineBreak(_:)))
+            XCTAssertEqual(engine.document().blocks[1].text, format.isCode ? "a" : "a\u{2028}b")
+            let saved = try NoteContentCodec.encode(engine.document())
+            XCTAssertTrue(NoteContentCodec.decode(saved).isEditable)
+            XCTAssertTrue(engine.history.undo())
+            XCTAssertEqual(engine.document().blocks[1].text, "ab")
+        }
+        var code = NoteBlock.text("a", style: "mono"); code.language = "swift"
+        let (engine, _) = makeEngine(NoteDocument(blocks: [.text("T"), code, code]))
+        XCTAssertTrue(engine.setCodeLanguage("js", at: 4))
+        XCTAssertTrue(engine.document().blocks.dropFirst().allSatisfy { $0.language == "javascript" })
+        XCTAssertTrue(engine.history.undo())
+        XCTAssertTrue(engine.document().blocks.dropFirst().allSatisfy { $0.language == "swift" })
+        var callout = NoteBlock.text("tip", style: "quote"); callout.callout = "💡"
+        let (tip, _) = makeEngine(NoteDocument(blocks: [.text("T"), callout, callout]))
+        XCTAssertTrue(tip.setCalloutIcon("⚠️", at: 6))
+        XCTAssertTrue(tip.document().blocks.dropFirst().allSatisfy { $0.callout == "⚠️" })
+        XCTAssertTrue(tip.history.undo())
+        XCTAssertTrue(tip.document().blocks.dropFirst().allSatisfy { $0.callout == "💡" })
+    }
+
     private let checklistID = UUID()
     private let dateID = UUID()
     private let imageID = UUID()

@@ -2169,7 +2169,8 @@ final class NoteEditorEngine: NSObject, NSTextViewDelegate, NSTextStorageDelegat
 
     /// Plain text from another app, with line breaks made uniform.
     func pastePlainText(_ text: String, at selection: NSRange) -> Bool {
-        if !isPastingAsPlainText, let table = NoteTablePaste.table(fromText: text) {
+        if !isPastingAsPlainText, paragraphStyle(at: selection.location)?.isCode != true,
+           paragraphStyle(at: selection.location)?.isCallout != true, let table = NoteTablePaste.table(fromText: text) {
             return pasteTable(table, at: selection, sourceText: text)
         }
         let normalized = NoteLineBreaks.normalizeLineBreaks(text).0
@@ -2181,7 +2182,8 @@ final class NoteEditorEngine: NSObject, NSTextViewDelegate, NSTextStorageDelegat
         let attributed = NSMutableAttributedString()
         let pasted = normalized as NSString
         let firstBreak = pasted.range(of: "\n")
-        if firstBreak.location == NSNotFound {
+        let carriesContainer = paragraphStyle(at: selection.location).map { $0.isCode || $0.isCallout } == true
+        if firstBreak.location == NSNotFound || carriesContainer {
             attributed.append(NSAttributedString(string: normalized, attributes: destination))
         } else {
             let head = NSRange(location: 0, length: NSMaxRange(firstBreak))
@@ -3953,7 +3955,28 @@ extension NoteEditorEngine {
     func codeTokens(in range: NSRange) -> [(NSRange, NoteSyntaxToken)] { [] }
     @discardableResult func moveBlock(_ range: NSRange, to position: Int) -> Bool { false }
     /// Return false to let AppKit handle its existing rich and object routes.
-    func handlePaste(_ pasteboard: NSPasteboard) -> Bool { false }
+    func handlePaste(_ pasteboard: NSPasteboard) -> Bool {
+        guard !isPastingAsPlainText, activeTableView == nil, let textView,
+              !textView.hasMarkedText(), let text = pasteboard.string(forType: .string) else { return false }
+        let selection = textView.rangeForUserTextChange
+        guard selection.location != NSNotFound else { return false }
+        if paragraphStyle(at: selection.location)?.isCode == true {
+            isPastingAsPlainText = true; defer { isPastingAsPlainText = false }
+            return pastePlainText(text, at: selection)
+        }
+        let plainTypes: Set<NSPasteboard.PasteboardType> = [.string, .init("public.plain-text"), .init("public.utf16-plain-text"), .init("public.text"), .init("NSStringPboardType")]
+        guard Set(pasteboard.types ?? []).isSubset(of: plainTypes), NoteMarkdownImport.shouldImport(text),
+              lineRange(at: selection.location).location > 0 else { return false }
+        return pasteMarkdown(text, at: selection)
+    }
+
+    @discardableResult func pasteMarkdown(_ text: String, at selection: NSRange) -> Bool {
+        guard paragraphStyle(at: selection.location)?.isCode != true, activeTableView == nil,
+              let fragment = try? NoteMarkdownImport.document(text) else { return false }
+        let attributed = NoteTextCodec.attributedString(from: fragment, style: style, firstBlockIsTitle: false)
+        let paste = pasteIncludingTail(attributed, replacing: selection)
+        return performEdit(paste.range, with: paste.text, name: "Paste", selection: NSRange(location: selection.location + attributed.length, length: 0))
+    }
 }
 
 
