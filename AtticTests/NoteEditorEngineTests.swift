@@ -113,6 +113,18 @@ final class NoteEditorEngineTests: XCTestCase {
         XCTAssertTrue(engine.history.undo()); XCTAssertEqual(engine.document(), before)
     }
 
+    func testR14MermaidLabelContentsArePlainAndOutsideKeywordsStillColour() {
+        for label in ["[Launch and learn]", "(loop and learn)", "{true or false}", "|and 42 end|", "[\"and [learn]\"]", "([Launch and learn])", "[💡 and learn]", "[Launch\nand learn]"] {
+            let source = "flowchart LR\nE" + label + "\nend"
+            let text = source as NSString
+            let interior = NSRange(location: ("flowchart LR\nE" as NSString).length + 1, length: (label as NSString).length - 2)
+            let tokens = NoteSyntaxHighlighter.tokens(in: source, language: "mermaid")
+            XCTAssertTrue(tokens.filter { NSIntersectionRange($0.0, interior).length > 0 }.allSatisfy { $0.1 == .plain || (text.substring(with: $0.0).allSatisfy { "[](){}|".contains($0) } && $0.1 == .operator) }, label)
+            XCTAssertTrue(tokens.contains { $0.1 == .keyword && text.substring(with: $0.0) == "flowchart" })
+            XCTAssertTrue(tokens.contains { $0.1 == .keyword && text.substring(with: $0.0) == "end" })
+        }
+    }
+
     func testR14ContractUsesReadableStylesAndSemanticQueries() {
         XCTAssertEqual(NoteParagraphStyle.callout(icon: "💡").storageName, "quote")
         XCTAssertEqual(NoteParagraphStyle.mono(language: "swift").storageName, "mono")

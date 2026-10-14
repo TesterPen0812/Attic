@@ -36,6 +36,16 @@ enum NoteSyntaxHighlighter {
         "mermaid": Language("flowchart graph subgraph end direction LR RL TB TD BT sequenceDiagram participant actor loop alt else opt par and rect note over left right classDiagram class stateDiagram state erDiagram gantt pie journey gitGraph", line: ["%%"])
     ]
 
+    private static func mermaidLabelClose(_ unit: UInt16) -> UInt16? {
+        switch unit {
+        case 91: 93 // [ ]
+        case 40: 41 // ( )
+        case 123: 125 // { }
+        case 124: 124 // | |
+        default: nil
+        }
+    }
+
     static func tokens(in text: String, language: String?) -> [(NSRange, NoteSyntaxToken)] {
         guard let language, let syntax = languages[language] else { return [] }
         let units = Array(text.utf16)
@@ -70,6 +80,33 @@ enum NoteSyntaxHighlighter {
                 while index < units.count, !matches(comment.1, at: index) { index += 1 }
                 index = min(units.count, index + comment.1.utf16.count)
                 append(start, index, .comment); continue
+            }
+            if language == "mermaid", let close = mermaidLabelClose(units[index]) {
+                append(start, start + 1, .operator)
+                index += 1
+                let labelStart = index
+                var closers = [close]
+                var quote: UInt16?
+                while index < units.count {
+                    let value = units[index]
+                    if value == 92 { index = min(units.count, index + 2); continue }
+                    if let delimiter = quote {
+                        if value == delimiter { quote = nil }
+                    } else if value == 34 {
+                        quote = value
+                    } else if value == closers.last {
+                        closers.removeLast()
+                        if closers.isEmpty { break }
+                    } else if let nested = mermaidLabelClose(value), value != 124 {
+                        closers.append(nested)
+                    }
+                    index += 1
+                }
+                // Labels are prose, even when they contain keywords, numbers,
+                // strings or comment markers. Only their delimiters are syntax.
+                append(labelStart, index, .plain)
+                if index < units.count { append(index, index + 1, .operator); index += 1 }
+                continue
             }
             if let delimiter = syntax.strings.first(where: { matches($0, at: index) }) {
                 index += delimiter.utf16.count
