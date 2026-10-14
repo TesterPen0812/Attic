@@ -7,6 +7,20 @@ import XCTest
 /// identity, IME over a selection, VoiceOver elements.
 @MainActor
 final class NoteEditorEngineTests: XCTestCase {
+    func testFix14LeavingCodeTransfersMissingHintInOneUndoStep() {
+        var first = NoteBlock.text("first", style: "mono"); first.language = "swift"
+        var document = NoteDocument(blocks: [.text("T"), first, .text("second", style: "mono")])
+        document.refreshRequiredCapabilities()
+        let (engine, view) = makeEngine(document)
+        defer { engine.detachView() }
+        view.setSelectedRange(NSRange(location: 2, length: 0)); view.deleteBackward(nil)
+        let lifted = engine.document()
+        XCTAssertEqual(lifted.blocks.last?.language, "swift")
+        XCTAssertTrue(engine.history.undo()); XCTAssertEqual(engine.document(), document)
+        XCTAssertFalse(engine.history.canUndo)
+        XCTAssertTrue(engine.history.redo()); XCTAssertEqual(engine.document(), lifted)
+    }
+
     func testR14AdjacentCodeLanguagesKeepSeparateRunsThroughSaveAndMarkdown() throws {
         let markdown = "```\nplain\n```\n```diff\n+added\n-removed\n```"
         let fragment = try NoteMarkdownImport.document(markdown)

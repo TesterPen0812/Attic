@@ -1439,6 +1439,20 @@ final class NoteEditorEngine: NSObject, NSTextViewDelegate, NSTextStorageDelegat
             } else if (indentAt(location) ?? 0) > 0 {
                 return changeIndent(-1, selection: selection)
             }
+            if format.isCode {
+                let next = NSMaxRange(paragraphRange(at: location))
+                let language = codeLanguage(at: location)
+                history.beginGroup()
+                defer { history.endGroup() }
+                guard perform(.paragraph(.body), selection: selection) else { return false }
+                // Older readers can leave a later code line without its hint.
+                // When the labelled first line leaves, the remaining run owns it.
+                if next <= textStorage.length, next > location, let language,
+                   paragraphStyle(at: next)?.isCode == true, codeLanguage(at: next) == nil {
+                    _ = applyStyle(.mono(language: language), selection: NSRange(location: next, length: 0))
+                }
+                return true
+            }
             return perform(.paragraph(.body), selection: selection)
         }
         // A line that starts with an image never joins the line above (the
