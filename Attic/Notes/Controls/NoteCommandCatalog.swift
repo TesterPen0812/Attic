@@ -41,9 +41,11 @@ enum NoteInsertAction: String, CaseIterable, Sendable {
 enum NoteCommandCatalog {
     /// Paragraph styles, a choice of one (Title … Mono, then Quote: a
     /// paragraph style like them, not a list; owner pick Q6, 2026-10-08).
+    /// R14: Small Heading after Subheading and Callout after Quote (no
+    /// keys of their own yet; orchestrator, 2026-10-14).
     static let styles: [NoteFormatCommand] = [
-        .paragraph(.heading(1)), .paragraph(.heading(2)), .paragraph(.heading(3)), .paragraph(.body), .paragraph(.mono),
-        .paragraph(.quote)
+        .paragraph(.heading(1)), .paragraph(.heading(2)), .paragraph(.heading(3)), .paragraph(.heading(4)), .paragraph(.body),
+        .paragraph(.mono), .paragraph(.quote), .paragraph(.callout(icon: "💡"))
     ]
     /// B I U S.
     static let marks: [NoteFormatCommand] = [.mark(.bold), .mark(.italic), .mark(.underline), .mark(.strikethrough)]
@@ -74,7 +76,7 @@ enum NoteCommandCatalog {
     /// Styles that act as a toggle: choosing one that is on returns the
     /// lines to Body (Apple Notes' lists). Text styles are a plain choice.
     static func togglesOff(_ command: NoteFormatCommand) -> Bool {
-        if case let .paragraph(style) = command { return [.bullet, .number, .checklist, .quote].contains(style) }
+        if case let .paragraph(style) = command { return [.bullet, .number, .checklist, .quote].contains(style) || style.isCallout }
         return false
     }
 
@@ -94,7 +96,10 @@ enum NoteCommandCatalog {
         case .body: String(localized: "Body")
         case .heading(1): String(localized: "Title")
         case .heading(2): String(localized: "Heading")
-        case .heading: String(localized: "Subheading")
+        case .heading(3): String(localized: "Subheading")
+        // "Small Heading" would overflow a 320 pt panel's row (301 > 288 pt);
+        // the list keeps the full name, as Mono stands for Code Block.
+        case .heading: String(localized: "Small")
         case .mono: String(localized: "Mono")
         case .bullet: String(localized: "List")
         case .number: String(localized: "List")
@@ -130,6 +135,8 @@ enum NoteCommandCatalog {
     /// "⌥⌘↑"), so menus, tooltips and keys never keep a second table.
     static func keyboardShortcut(_ command: NoteFormatCommand) -> KeyboardShortcut? {
         guard let label = command.shortcut, !reservedChords.contains(label) else { return nil }
+        // Small Heading has no key yet (the engine's ⌥⌘3 is Subheading's).
+        if case let .paragraph(.heading(level)) = command, level >= 4 { return nil }
         return parseShortcut(label)
     }
 

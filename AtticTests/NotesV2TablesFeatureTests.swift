@@ -201,7 +201,8 @@ final class NotesV2TablesFeatureTests: XCTestCase {
     func testTableIsOnTheFormatRowAndInEveryInsertAndFormatMenu() {
         XCTAssertEqual(NoteCommandCatalog.lists, [.paragraph(.bullet), .paragraph(.number), .paragraph(.checklist), .table],
                        "Table takes Quote's cell")
-        XCTAssertEqual(NoteCommandCatalog.styles.last, .paragraph(.quote), "Quote joins the style list")
+        XCTAssertTrue(NoteCommandCatalog.styles.contains(.paragraph(.quote)), "Quote joins the style list")
+        XCTAssertEqual(NoteCommandCatalog.styles.last, .paragraph(.callout(icon: "💡")), "R14: Callout after Quote")
         XCTAssertTrue(NoteCommandCatalog.formatSections.flatMap { $0 }.contains(.table), "Format › Table")
         XCTAssertTrue(NoteInsertAction.allCases.contains(.table), "Insert › Table (⋯, right-click, menu bar)")
         XCTAssertEqual(NoteFormatCommand.table.shortcut, "⌥⌘T")

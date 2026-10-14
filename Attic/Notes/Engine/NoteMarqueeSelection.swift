@@ -58,6 +58,8 @@ final class NoteMarqueeSelection {
         // Real text, hosted tables, checkboxes and accessory controls keep
         // their existing mouse routes. Only the column margins and blank
         // space after the document start a marquee.
+        // The block handle in the margin (R14 D.2) is its own control.
+        if !textView.blockHandle.isHidden, textView.blockHandle.frame.contains(point) { return .ignore }
         let x = textView.textContainerOrigin.x
         let width = textView.textContainer?.size.width ?? textView.bounds.width
         let outsideColumn = point.x < x || point.x > x + width
