@@ -1,8 +1,8 @@
 import AppKit
 
-/// Fits the text caret to the text (F-03, owner 2026-10-10): centred on the
-/// line's glyphs and no taller than they are, the font's ascender to its
-/// descender.
+/// Fits the text caret to the text (F-03, owner 2026-10-10; O14-10,
+/// 2026-10-14): centred on the line's letters and as tall as they are,
+/// capitals to descenders (`caretReach`).
 ///
 /// TextKit 2 shows the caret as the system's `NSTextInsertionIndicator`,
 /// laid over the text view and framed to the line's box. Every Attic line has
@@ -55,19 +55,48 @@ final class NoteCaretFitter {
     }
 
     /// The caret's frame for text on `baseline` in `font`, keeping the
-    /// system's horizontal placement (F-03c, owner 2026-10-11: the glyph
-    /// box, ascender to descender, still stood 2 pt over the letters and
-    /// read too tall beside "mmn"): from the letters' top (cap height and
-    /// the lowercase ascenders' 7 % more) to 18 % of the size below the
-    /// baseline (most of a descender). The same rule on every line kind, on
-    /// text and on an empty line, so it has one weight everywhere.
+    /// system's horizontal placement.
     nonisolated static func fittedFrame(current: CGRect, baseline: CGFloat, font: NSFont) -> CGRect {
         let reach = caretReach(font)
         return CGRect(x: current.minX, y: baseline - reach.above, width: current.width, height: reach.above + reach.below)
     }
 
+    /// How far the caret reaches above and below the baseline (O14-10,
+    /// owner 2026-10-14: centred on the text and sized to it).
+    ///
+    /// The platform's insertion point spans the line fragment's typographic
+    /// bounds without its paragraph spacing or extra line height: the
+    /// font's ascender to its descender (`NSTextInsertionIndicator` is
+    /// framed to that box). On SF the ascender keeps accent room well over
+    /// the capitals, so that caret stood 3.4 pt over a capital and only a
+    /// hair under a "y" at 13 pt: high on the letters, as the owner saw it,
+    /// and too tall beside "mmn" (F-03c). Attic keeps the platform's
+    /// measure (the font's own metrics, nothing from the paragraph) and
+    /// centres it on the letters themselves: from the cap height to the
+    /// descenders' drawn depth, with the same hairline at each end (the
+    /// room the platform's descender leaves under a "p", 3.5 % of the
+    /// size).
     nonisolated static func caretReach(_ font: NSFont) -> (above: CGFloat, below: CGFloat) {
-        (font.capHeight + font.pointSize * 0.07, font.pointSize * 0.18)
+        let margin = font.pointSize * caretMargin
+        return (font.capHeight + margin, inkDescent(font) + margin)
+    }
+
+    /// The hairline past the capitals and the descenders, as a share of the
+    /// font's size.
+    nonisolated static let caretMargin: CGFloat = 0.035
+
+    /// How far the font's descenders reach under the baseline: the deeper
+    /// of "p" and "y" as drawn (most of the descender when a font has none).
+    nonisolated static func inkDescent(_ font: NSFont) -> CGFloat {
+        let ctFont = font as CTFont
+        var characters: [UniChar] = Array("py".utf16)
+        var glyphs = [CGGlyph](repeating: 0, count: characters.count)
+        guard CTFontGetGlyphsForCharacters(ctFont, &characters, &glyphs, characters.count), !glyphs.contains(0) else {
+            return -font.descender * 0.85
+        }
+        var bounds = [CGRect](repeating: .zero, count: glyphs.count)
+        CTFontGetBoundingRectsForGlyphs(ctFont, .horizontal, glyphs, &bounds, glyphs.count)
+        return max(0, -(bounds.map(\.minY).min() ?? 0))
     }
 
     /// The line's baseline in the text view's coordinates, for the line the
@@ -87,6 +116,19 @@ final class NoteCaretFitter {
         }
         guard let line = best?.line else { return nil }
         return (top + line.typographicBounds.minY + line.glyphOrigin.y + origin.y, line.typographicBounds.height)
+    }
+
+    /// Where the letters' baseline is drawn: text is set on whole device
+    /// pixels, a line between two of them on the lower one (measured on
+    /// screen, O14-10: a heading whose line ends 0.12 pt past a pixel has
+    /// its letters drawn 0.38 pt lower, and the caret stood 0.7 px high on
+    /// them at 2x). The caret is centred on the letters as drawn.
+    static func drawnBaseline(_ baseline: CGFloat, in view: NSView) -> CGFloat {
+        guard view.window != nil else { return baseline }
+        let backing = view.convertToBacking(NSPoint(x: 0, y: baseline))
+        let below = view.convertToBacking(NSPoint(x: 0, y: baseline + 1))
+        let lower = below.y > backing.y ? (backing.y - 0.001).rounded(.up) : (backing.y + 0.001).rounded(.down)
+        return view.convertFromBacking(NSPoint(x: backing.x, y: lower)).y
     }
 
     /// The font the caret is sized to: what the next typed letter takes.
@@ -143,7 +185,7 @@ final class NoteCaretFitter {
         let glyphHeight = font.ascender - font.descender
         let fitted: CGRect
         if line.boxHeight <= glyphHeight + 8 {
-            fitted = Self.fittedFrame(current: current, baseline: line.baseline, font: font)
+            fitted = Self.fittedFrame(current: current, baseline: Self.drawnBaseline(line.baseline, in: textView), font: font)
         } else if let table = Self.table(before: textView.selectedRange().location, in: textView) {
             fitted = Self.caretAfterTable(current: current, lastRow: table.lastRowHeight, font: font)
         } else {
