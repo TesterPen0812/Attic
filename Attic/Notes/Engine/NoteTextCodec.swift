@@ -51,6 +51,9 @@ enum NoteTextCodec {
             if let blockStyle = block.style, block.kind == .text { attributes[.noteBlockStyle] = blockStyle }
             if let level = block.level { attributes[.noteBlockLevel] = level }
             if let indent = block.indent { attributes[.noteBlockIndent] = indent }
+            if let language = block.language { attributes[.noteCodeLanguage] = language }
+            if let icon = block.callout { attributes[.noteCalloutIcon] = icon }
+            if let start = block.start { attributes[.noteListStart] = start }
             let paragraph = NSMutableAttributedString()
             switch block.kind {
             case .text:
@@ -217,6 +220,14 @@ enum NoteTextCodec {
             }
             if result.id != nil, result.style != nil, !result.extras.isEmpty { stop.pointee = true }
         }
+        // These fields carry into split paragraphs even when the original
+        // extras box belongs to the first half only. Read the leading run:
+        // on a join it owns the resulting paragraph's semantic hints.
+        let leading = text.attributes(at: range.location, effectiveRange: nil)
+        for (key, field) in [(NSAttributedString.Key.noteCodeLanguage, "language"), (.noteCalloutIcon, "callout")] {
+            if let value = leading[key] as? String { result.extras[field] = .string(value) }
+        }
+        if let start = leading[.noteListStart] as? Int, start >= 2 { result.extras["start"] = .int(Int64(start)) }
         if let id = result.id { usedIDs.insert(id) }
         return result
     }

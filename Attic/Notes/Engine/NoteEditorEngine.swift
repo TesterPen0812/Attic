@@ -953,7 +953,7 @@ final class NoteEditorEngine: NSObject, NSTextViewDelegate, NSTextStorageDelegat
         guard paragraph.length > 0, NSMaxRange(paragraph) == string.length,
               string.character(at: NSMaxRange(paragraph) - 1) == 0x0A else { return false }
         guard let pending = pendingParagraphStyle, pending.location == string.length else { return true }
-        return pending.state.style != .mono
+        return !pending.state.style.isCode
     }
 
     /// What the paragraph at `location` is, for spacing and drawing.
@@ -1013,6 +1013,9 @@ final class NoteEditorEngine: NSObject, NSTextViewDelegate, NSTextStorageDelegat
                                                        indent: pending.state.indent, previous: previous)
             attributes[.noteBlockStyle] = pending.state.style.storageName
             attributes[.noteBlockLevel] = pending.state.style.level
+            attributes[.noteCodeLanguage] = pending.state.style.language
+            attributes[.noteCalloutIcon] = pending.state.style.calloutIcon
+            attributes[.noteListStart] = pending.state.block?.start
             if pending.state.indent > 0 { attributes[.noteBlockIndent] = pending.state.indent }
             if let block = pending.state.block {
                 if let name = block.style { attributes[.noteBlockStyle] = name }
@@ -1033,7 +1036,7 @@ final class NoteEditorEngine: NSObject, NSTextViewDelegate, NSTextStorageDelegat
                                               indent: attributes[.noteBlockIndent] as? Int, previous: previous,
                                               isChecklist: checklistBox(inParagraphAt: paragraph.location) != nil,
                                               monoHang: name == "mono" ? style.monoHang(for: lineText(at: paragraph.location)) : 0)
-        for key in [NSAttributedString.Key.noteBlockStyle, .noteBlockLevel, .noteBlockIndent] {
+        for key in [NSAttributedString.Key.noteBlockStyle, .noteBlockLevel, .noteBlockIndent, .noteCodeLanguage, .noteCalloutIcon, .noteListStart] {
             result[key] = attributes[key]
         }
         return result
@@ -1304,7 +1307,7 @@ final class NoteEditorEngine: NSObject, NSTextViewDelegate, NSTextStorageDelegat
 
     private func isMonoParagraph(at location: Int) -> Bool {
         guard location < textStorage.length else { return false }
-        return paragraphStyle(at: location) == .mono
+        return paragraphStyle(at: location)?.isCode == true
     }
 
     /// Return on a checklist line continues the list; on an empty checklist
@@ -1347,7 +1350,7 @@ final class NoteEditorEngine: NSObject, NSTextViewDelegate, NSTextStorageDelegat
                [.bullet, .number, .quote, .mono].contains(format) {
                 let content = (textStorage.string as NSString).substring(with: line)
                 if content.trimmingCharacters(in: .whitespaces).isEmpty,
-                   format != .mono || !isMonoParagraph(at: NSMaxRange(line) + 1) {
+                   !format.isCode || !isMonoParagraph(at: NSMaxRange(line) + 1) {
                     // An empty list or quote line ends the block; an empty Mono
                     // line does too unless more code follows (a blank code line).
                     return perform(.paragraph(.body), selection: current)
@@ -1358,7 +1361,7 @@ final class NoteEditorEngine: NSObject, NSTextViewDelegate, NSTextStorageDelegat
                 let finalParagraph = current.location == textStorage.length
                 history.beginGroup()
                 defer { history.endGroup() }
-                let name = format == .quote ? "Continue Quote" : (format == .mono ? "Continue Mono" : "Continue List")
+                let name = format == .quote ? "Continue Quote" : (format.isCode ? "Continue Mono" : "Continue List")
                 guard performEdit(current, with: insertion, name: name,
                                   selection: NSRange(location: current.location + 1, length: 0)) else { return false }
                 if finalParagraph {
@@ -1781,7 +1784,7 @@ final class NoteEditorEngine: NSObject, NSTextViewDelegate, NSTextStorageDelegat
             }
             if let donor, leadingLength > 0 {
                 let leading = NSRange(location: editedLine.location, length: leadingLength)
-                for key in [NSAttributedString.Key.noteBlockStyle, .noteBlockLevel, .noteBlockIndent] {
+                for key in [NSAttributedString.Key.noteBlockStyle, .noteBlockLevel, .noteBlockIndent, .noteCodeLanguage, .noteCalloutIcon, .noteListStart] {
                     if let value = donor[key] { textStorage.addAttribute(key, value: value, range: leading) }
                 }
             }
@@ -1792,6 +1795,9 @@ final class NoteEditorEngine: NSObject, NSTextViewDelegate, NSTextStorageDelegat
                                 length: min(editedRange.length, textStorage.length - editedRange.location))
             if let name = pending.state.style.storageName { textStorage.addAttribute(.noteBlockStyle, value: name, range: range) }
             if let level = pending.state.style.level { textStorage.addAttribute(.noteBlockLevel, value: level, range: range) }
+            if let language = pending.state.style.language { textStorage.addAttribute(.noteCodeLanguage, value: language, range: range) }
+            if let icon = pending.state.style.calloutIcon { textStorage.addAttribute(.noteCalloutIcon, value: icon, range: range) }
+            if let start = pending.state.block?.start { textStorage.addAttribute(.noteListStart, value: start, range: range) }
             if pending.state.indent > 0 { textStorage.addAttribute(.noteBlockIndent, value: pending.state.indent, range: range) }
             if let metadata = pending.state.block {
                 if let name = metadata.style { textStorage.addAttribute(.noteBlockStyle, value: name, range: range) }
@@ -2194,7 +2200,7 @@ final class NoteEditorEngine: NSObject, NSTextViewDelegate, NSTextStorageDelegat
         let lastLine = string.range(of: "\n", options: .backwards).location + 1
         let attributes = lastLine < pasted.length ? pasted.attributes(at: lastLine, effectiveRange: nil) : style.bodyAttributes
         let all = NSRange(location: 0, length: tail.length)
-        for key in [NSAttributedString.Key.noteBlockStyle, .noteBlockLevel, .noteBlockIndent] {
+        for key in [NSAttributedString.Key.noteBlockStyle, .noteBlockLevel, .noteBlockIndent, .noteCodeLanguage, .noteCalloutIcon, .noteListStart] {
             tail.removeAttribute(key, range: all)
             if let value = attributes[key] { tail.addAttribute(key, value: value, range: all) }
         }
@@ -2768,8 +2774,8 @@ extension NoteEditorEngine {
         case "heading": return .heading(attrs[.noteBlockLevel] as? Int ?? 2)
         case "bullet": return .bullet
         case "number": return .number
-        case "quote": return .quote
-        case "mono": return .mono
+        case "quote": return (attrs[.noteCalloutIcon] as? String).map { .callout(icon: $0) } ?? .quote
+        case "mono": return .mono(language: attrs[.noteCodeLanguage] as? String)
         default: return .body
         }
     }
@@ -3109,6 +3115,16 @@ extension NoteEditorEngine {
             replacement.removeAttribute(.noteBlockIndent, range: all)
             if let name = styleValue.storageName { replacement.addAttribute(.noteBlockStyle, value: name, range: all) }
             if let level = styleValue.level { replacement.addAttribute(.noteBlockLevel, value: level, range: all) }
+            for key in [NSAttributedString.Key.noteCodeLanguage, .noteCalloutIcon, .noteListStart] { replacement.removeAttribute(key, range: all) }
+            if let language = styleValue.language { replacement.addAttribute(.noteCodeLanguage, value: language, range: all) }
+            if let icon = styleValue.calloutIcon { replacement.addAttribute(.noteCalloutIcon, value: icon, range: all) }
+            // Remove hints from the extras box too when deliberately changing style.
+            replacement.enumerateAttribute(.noteBlockExtras, in: all) { value, range, _ in
+                guard let box = value as? NoteBlockExtras else { return }
+                var fields = box.fields
+                for key in ["language", "callout", "start"] { fields[key] = nil }
+                replacement.addAttribute(.noteBlockExtras, value: NoteBlockExtras(fields), range: range)
+            }
             if !performEdit(range, with: replacement, name: NoteFormatCommand.paragraph(styleValue).title) { return false }
         }
         textView?.setSelectedRange(newSelection)
@@ -3119,6 +3135,8 @@ extension NoteEditorEngine {
         var block = state.block ?? .text("")
         block.style = state.style.storageName ?? (block.style == "body" ? "body" : nil)
         block.level = state.style.level
+        block.language = state.style.language
+        block.callout = state.style.calloutIcon
         block.indent = state.indent > 0 ? state.indent : (block.indent == 0 ? 0 : nil)
         return block
     }
@@ -3136,8 +3154,8 @@ extension NoteEditorEngine {
             case "heading": .heading(block.level ?? 2)
             case "bullet": .bullet
             case "number": .number
-            case "quote": .quote
-            case "mono": .mono
+            case "quote": block.callout.map { .callout(icon: $0) } ?? .quote
+            case "mono": .mono(language: block.language)
             default: .body
             }
             pendingParagraphStyle = (textStorage.length, .init(style: paragraph, indent: block.indent ?? 0, block: block))
@@ -3150,6 +3168,8 @@ extension NoteEditorEngine {
         var block = metadata ?? pendingParagraphStyle?.state.block
         block?.style = value.storageName
         block?.level = value.level
+        block?.language = value.language
+        block?.callout = value.calloutIcon
         block?.indent = indent > 0 ? indent : nil
         pendingParagraphStyle = value == .body && block == nil ? nil : (location, .init(style: value, indent: indent, block: block))
         documentCache = nil
@@ -3164,6 +3184,9 @@ extension NoteEditorEngine {
         }
         if let name = value.storageName { typing[.noteBlockStyle] = name }
         if let level = value.level { typing[.noteBlockLevel] = level }
+        if let language = value.language { typing[.noteCodeLanguage] = language }
+        if let icon = value.calloutIcon { typing[.noteCalloutIcon] = icon }
+        if let start = block?.start { typing[.noteListStart] = start }
         if indent > 0 { typing[.noteBlockIndent] = indent }
         textView?.typingAttributes = typing
         updateTextChecking()

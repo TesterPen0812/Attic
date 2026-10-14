@@ -18,6 +18,40 @@ final class NoteEditorEngineTests: XCTestCase {
         XCTAssertTrue(engine.codeTokens(in: NSRange(location: 6, length: 4)).isEmpty)
     }
 
+    func testR14StorageFieldsRoundTripAndStayInInt12Extras() throws {
+        let raw = Data(#"{"blocks":[{"kind":"text","text":"T"},{"kind":"text","language":"swift","style":"mono","text":"a b"},{"callout":"💡","kind":"text","style":"quote","text":"Tip"},{"kind":"text","start":12,"style":"number","text":"Item"},{"kind":"text","level":6,"style":"heading","text":"Small"}],"format":1,"requires":["structure-v1"]}"#.utf8)
+        guard case let .editable(doc) = NoteContentCodec.decode(raw) else { return XCTFail("R14 must remain editable") }
+        XCTAssertEqual(doc.blocks[1].language, "swift")
+        XCTAssertEqual(doc.blocks[2].callout, "💡")
+        XCTAssertEqual(doc.blocks[3].start, 12)
+        XCTAssertEqual(doc.blocks[4].level, 6)
+        XCTAssertEqual(try NoteContentCodec.encode(doc), raw)
+        for block in doc.blocks.dropFirst() {
+            XCTAssertTrue(["body", "heading", "bullet", "number", "quote", "mono"].contains(block.style!))
+            XCTAssertTrue(Set(block.extras.keys).isSubset(of: ["start", "language", "callout"]))
+        }
+        let text = NoteTextCodec.attributedString(from: doc, style: NoteTextStyle())
+        XCTAssertEqual(NoteTextCodec.document(from: text), doc)
+        let restored = NoteEditorEngine(noteID: UUID(), document: doc).checkpointDocument()
+        XCTAssertEqual(try NoteContentCodec.encode(restored), raw)
+    }
+
+    func testR14Int12FixturesRemainByteIdenticalThroughEngine() throws {
+        // Canonical int12 bytes, including explicit defaults and unknown fields.
+        let fixtures = [
+            #"{"blocks":[{"kind":"text","text":"T"},{"kind":"text","style":"body","text":"Body"}],"format":1}"#,
+            #"{"blocks":[{"kind":"text","text":"T"},{"future":true,"kind":"text","level":5,"style":"heading","text":"H"}],"format":1,"requires":["structure-v1"]}"#,
+            #"{"blocks":[{"kind":"text","text":"T"},{"indent":2,"kind":"text","style":"number","text":"One"},{"kind":"text","style":"mono","text":"Code"},{"kind":"text","style":"quote","text":"Quote"}],"format":1,"requires":["structure-v1"]}"#
+        ]
+        for fixture in fixtures {
+            let raw = Data(fixture.utf8)
+            guard case let .editable(doc) = NoteContentCodec.decode(raw) else { return XCTFail() }
+            XCTAssertEqual(try NoteContentCodec.encode(doc), raw)
+            let engine = NoteEditorEngine(noteID: UUID(), document: doc)
+            XCTAssertEqual(try NoteContentCodec.encode(engine.checkpointDocument()), raw)
+        }
+    }
+
     private let checklistID = UUID()
     private let dateID = UUID()
     private let imageID = UUID()
