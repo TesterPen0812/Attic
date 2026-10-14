@@ -2138,7 +2138,6 @@ extension AtticDropdownTests {
         XCTAssertEqual(shut.scale, 0.98, accuracy: 1e-6)
         XCTAssertEqual(shut.travel, 4, accuracy: 1e-6, "it starts 4 pt towards its anchor and drops into place")
         XCTAssertEqual(shut.contentBlur, 5, accuracy: 1e-6)
-        XCTAssertEqual(shut.contentOpacity, 0)
         XCTAssertEqual(shut.shadow, 0, "the shadow grows with the card")
         XCTAssertEqual(r.frame(time: 1, closing: false), .rest)
         let waiting = r.frame(time: CGFloat(0.029 / r.openDuration), closing: false)

@@ -655,3 +655,42 @@ extension AtticDesignSystemHostedTests {
         }
     }
 }
+
+// MARK: - Round 13: the unfold cuts a card's contents (O14-02)
+
+extension AtticDesignSystemHostedTests {
+    /// While a card unfolds its rows are cut to its revealed outline, also
+    /// when they sit in the card's scroll view (where the card's own mask
+    /// never reached: the rows hung below the growing card).
+    func testR13AnUnfoldingCardCutsItsRowsInsideItsScrollView() throws {
+        let context = AtticDesignContext(mode: .light)
+        let size = CGSize(width: 220, height: 220)
+        func card(_ unfold: AtticUnfoldState?) -> some View {
+            AtticDropdownCard(width: 200) {
+                ForEach(0..<6, id: \.self) { index in AtticDropdownRow(title: "Row \(index) MMMMMMMM") {} }
+            }
+            .environment(\.atticDropdownHeight, 6 * AtticDropdownMetrics.rowHeight + 2 * AtticDropdownMetrics.inset)
+            .environment(\.atticUnfold, unfold)
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+        }
+        /// The darkest ink in the band of rows 3 to 5 (well below one row's height).
+        func ink(_ hosting: NSView) throws -> Double {
+            let (bitmap, scale) = try snapshot(hosting)
+            var strongest = 1.0
+            var y: CGFloat = 100
+            while y < 170 {
+                var x: CGFloat = 20
+                while x < 180 {
+                    if let p = bitmap.colour(atX: x, y: y, scale: scale) { strongest = max(strongest, p.contrast(on: .white(1))) }
+                    x += 0.5
+                }
+                y += 0.5
+            }
+            return strongest
+        }
+        let (_, open) = host(card(nil), size: size, context: context)
+        let (_, shut) = host(card(AtticUnfoldState(reveal: 0, fromTop: true, contentBlur: 0, shadow: 0)), size: size, context: context)
+        XCTAssertGreaterThan(try ink(open), 3, "open, the rows show")
+        XCTAssertLessThan(try ink(shut), 1.3, "one row high, the rows below are cut away")
+    }
+}

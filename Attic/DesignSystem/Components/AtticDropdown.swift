@@ -82,8 +82,8 @@ struct AtticDropdownCard<Content: View>: View {
             .padding(m.inset)
             .frame(minWidth: width == nil ? m.minWidth : nil, alignment: .leading)
             .frame(width: widthLimit ?? width, alignment: .leading)
-            .modifier(AtticUnfoldContent(cornerRadius: m.cornerRadius))
             .background(AtticDropdownSurface())
+            .modifier(AtticUnfoldCard(cornerRadius: m.cornerRadius))
     }
 }
 
@@ -1160,10 +1160,9 @@ enum AtticDropdownReveal {
         var scale: CGFloat
         var travel: CGFloat
         var contentBlur: CGFloat
-        var contentOpacity: CGFloat
         var shadow: CGFloat
 
-        static let rest = Frame(reveal: 1, opacity: 1, scale: 1, travel: 0, contentBlur: 0, contentOpacity: 1, shadow: 1)
+        static let rest = Frame(reveal: 1, opacity: 1, scale: 1, travel: 0, contentBlur: 0, shadow: 1)
     }
 
     /// The frame at `time` (0...1 of its leg's duration): opening from 0,
@@ -1174,24 +1173,13 @@ enum AtticDropdownReveal {
         if closing {
             let e = CGFloat(curve.y(at: t))
             return Frame(reveal: 1 - e, opacity: 1 - e, scale: 1 - (1 - startScale) * e, travel: closeTravel * e,
-                         contentBlur: 0, contentOpacity: 1, shadow: 1 - e)
+                         contentBlur: 0, shadow: 1 - e)
         }
         let e = CGFloat(curve.y(at: t))
         let contentTime = (t * openDuration - contentDelay) / contentDuration
         let c = CGFloat(curve.y(at: contentTime))
         return Frame(reveal: e, opacity: e, scale: startScale + (1 - startScale) * e, travel: openTravel * (1 - e),
-                     contentBlur: contentBlur * (1 - c), contentOpacity: c, shadow: e)
-    }
-
-    /// The transition of a card that is inserted and removed (the `/`
-    /// list, Notes' link and date cards, a Done task's details).
-    static func transition(fromTop: Bool, reduceMotion: Bool) -> AnyTransition {
-        if reduceMotion { return .opacity.animation(fadeAnimation) }
-        let open = AnyTransition.modifier(active: AtticUnfoldEffect(clock: 0, closing: false, fromTop: fromTop),
-                                          identity: AtticUnfoldEffect(clock: 1, closing: false, fromTop: fromTop))
-        let close = AnyTransition.modifier(active: AtticUnfoldEffect(clock: 0, closing: true, fromTop: fromTop),
-                                           identity: AtticUnfoldEffect(clock: 1, closing: true, fromTop: fromTop))
-        return .asymmetric(insertion: open.animation(openAnimation), removal: close.animation(closeAnimation))
+                     contentBlur: contentBlur * (1 - c), shadow: e)
     }
 
     #if DEBUG
@@ -1207,13 +1195,76 @@ enum AtticDropdownReveal {
     #endif
 }
 
+/// Shows `content` for `value` with the unfold, and keeps the last value's
+/// content on screen while it folds away. For cards that come and go with
+/// state (the `/` list, Notes' date and link cards, a Done task's details):
+/// a SwiftUI transition does not carry the motion's state to the card as a
+/// whole, so these drive `AtticUnfoldEffect` from state, as the presenter
+/// does. Reduced: a fade.
+struct AtticUnfoldPresence<Value: Equatable, Content: View>: View {
+    let value: Value?
+    var fromTop = true
+    @ViewBuilder let content: (Value) -> Content
+
+    @Environment(\.atticDesign) private var design
+    @State private var shown: Value?
+    @State private var clock: CGFloat = 0
+    @State private var closing = false
+
+    var body: some View {
+        // The new value's content is laid out in the same pass that asks
+        // for it (shut, the clock at 0), so a host measuring it as it opens
+        // gets its full size; the last value's stays while it folds away.
+        ZStack {
+            if let current = closing ? shown : (value ?? shown) {
+                content(current)
+                    .modifier(AtticUnfoldEffect(clock: clock, closing: closing, fromTop: fromTop, reduced: design.reduceMotion))
+            }
+        }
+        .onAppear { if let value { open(value) } }
+        .onChange(of: value) { _, now in
+            if let now {
+                if shown == nil || closing { open(now) } else { shown = now }
+            } else if shown != nil, !closing {
+                close()
+            }
+        }
+    }
+
+    private func open(_ value: Value) {
+        var still = Transaction()
+        still.disablesAnimations = true
+        withTransaction(still) {
+            shown = value
+            closing = false
+            clock = 0
+        }
+        DispatchQueue.main.async {
+            guard self.value != nil else { return }
+            withAnimation(design.reduceMotion ? AtticDropdownReveal.fadeAnimation : AtticDropdownReveal.openAnimation) { clock = 1 }
+            PerformanceSignposts.watchFrames("CardUnfold", seconds: 0.3)
+        }
+    }
+
+    private func close() {
+        var still = Transaction()
+        still.disablesAnimations = true
+        withTransaction(still) { closing = !design.reduceMotion }
+        withAnimation(design.reduceMotion ? AtticMotionScale.exit : AtticDropdownReveal.closeAnimation,
+                      completionCriteria: .logicallyComplete) {
+            clock = 0
+        } completion: {
+            if value == nil { shown = nil; closing = false }
+        }
+    }
+}
+
 /// The motion's state for the card's two leaves (`AtticDropdownSurface`,
 /// `AtticUnfoldContent`); nil outside a moving card (at rest).
 struct AtticUnfoldState: Equatable {
     var reveal: CGFloat
     var fromTop: Bool
     var contentBlur: CGFloat
-    var contentOpacity: CGFloat
     var shadow: CGFloat
 }
 
@@ -1228,6 +1279,8 @@ struct AtticUnfoldEffect: ViewModifier, Animatable {
     var clock: CGFloat
     let closing: Bool
     let fromTop: Bool
+    /// Reduce Motion: the clock is a fade alone.
+    var reduced = false
 
     var animatableData: CGFloat {
         get { clock }
@@ -1235,24 +1288,25 @@ struct AtticUnfoldEffect: ViewModifier, Animatable {
     }
 
     func body(content: Content) -> some View {
-        var time = closing ? 1 - clock : clock
+        var time = reduced ? 1 : (closing ? 1 - clock : clock)
         #if DEBUG
-        if !closing, let freeze = AtticDropdownReveal.freeze { time = min(time, freeze) }
+        if !closing, !reduced, let freeze = AtticDropdownReveal.freeze { time = min(time, freeze) }
         #endif
         let f = AtticDropdownReveal.frame(time: time, closing: closing)
-        let state = f == .rest ? nil : AtticUnfoldState(reveal: f.reveal, fromTop: fromTop, contentBlur: f.contentBlur,
-                                                         contentOpacity: f.contentOpacity, shadow: f.shadow)
+        let state = f == .rest ? nil : AtticUnfoldState(reveal: f.reveal, fromTop: fromTop, contentBlur: f.contentBlur, shadow: f.shadow)
+        // An asymmetric transition stacks its two legs' effects; the one at
+        // rest must not clear the moving one's state.
         return content
-            .environment(\.atticUnfold, state)
+            .transformEnvironment(\.atticUnfold) { if let state { $0 = state } }
             .scaleEffect(f.scale, anchor: fromTop ? .topLeading : .bottomLeading)
             .offset(y: fromTop ? -f.travel : f.travel)
-            .opacity(f.opacity)
+            .opacity(reduced ? clock : f.opacity)
     }
 }
 
 /// A card's outline while it unfolds: its rounded rectangle, cut to the
 /// revealed height from its anchor's edge (the whole card at rest).
-struct AtticUnfoldShape: InsettableShape {
+struct AtticUnfoldShape: InsettableShape, Equatable {
     let cornerRadius: CGFloat
     var reveal: CGFloat = 1
     var fromTop = true
@@ -1278,18 +1332,81 @@ struct AtticUnfoldShape: InsettableShape {
     }
 }
 
-/// A card's contents as it unfolds: cut to the card's revealed outline,
-/// blurred and faded in just after it. Reads the motion itself, so only
-/// this leaf changes per frame.
-struct AtticUnfoldContent: ViewModifier {
+/// Where a moving card's contents are cut and how blurred they are, for
+/// `AtticUnfoldContent`, in the card's own coordinates (`AtticUnfoldCard`).
+struct AtticUnfoldCut: Equatable {
+    var cardSize: CGSize
+    var shape: AtticUnfoldShape
+    var blur: CGFloat
+}
+
+extension EnvironmentValues {
+    @Entry var atticUnfoldCut: AtticUnfoldCut? = nil
+    /// An enclosing `AtticUnfoldContent` already cuts and blurs this content.
+    @Entry var atticUnfoldTreated = false
+}
+
+/// A moving card: its size and coordinate space, so the contents (which can
+/// sit in their own scroll views, where the card's own mask and blur never
+/// reach) are cut to its revealed outline (`AtticUnfoldContent`). Reads the
+/// motion itself, so only this leaf and the contents' mask change per frame.
+struct AtticUnfoldCard: ViewModifier {
+    static let space = "attic.unfold.card"
     let cornerRadius: CGFloat
-    @Environment(\.atticUnfold) private var unfold
 
     func body(content: Content) -> some View {
+        AtticUnfoldCardFrame(cornerRadius: cornerRadius, content: content)
+    }
+}
+
+/// `AtticUnfoldCard`'s view: the card's size and the motion, read once
+/// per frame here for every row below.
+private struct AtticUnfoldCardFrame<Content: View>: View {
+    let cornerRadius: CGFloat
+    let content: Content
+    @Environment(\.atticUnfold) private var unfold
+    @State private var size: CGSize = .zero
+
+    var body: some View {
+        let cut = unfold.flatMap { unfold -> AtticUnfoldCut? in
+            guard size.width > 0, size.height > 0 else { return nil }
+            return AtticUnfoldCut(cardSize: size,
+                                  shape: AtticUnfoldShape(cornerRadius: cornerRadius, reveal: unfold.reveal, fromTop: unfold.fromTop),
+                                  blur: unfold.contentBlur)
+        }
         content
-            .mask { AtticUnfoldShape(cornerRadius: cornerRadius, reveal: unfold?.reveal ?? 1, fromTop: unfold?.fromTop ?? true) }
-            .blur(radius: unfold?.contentBlur ?? 0)
-            .opacity(Double(unfold?.contentOpacity ?? 1))
+            .environment(\.atticUnfoldCut, cut)
+            .coordinateSpace(.named(AtticUnfoldCard.space))
+            .onGeometryChange(for: CGSize.self) { $0.size } action: { if size != $0 { size = $0 } }
+    }
+}
+
+/// A card's contents as it unfolds: cut to the card's revealed outline and
+/// from a blur to sharp just after it. On the outermost contents, and again
+/// inside any scroll view (whose rows the outer cut cannot reach). At rest
+/// it cuts nothing.
+struct AtticUnfoldContent: ViewModifier {
+    /// The content is a scroll view's own.
+    var scrolls = false
+    @Environment(\.atticUnfoldCut) private var cut
+    @Environment(\.atticUnfoldTreated) private var treated
+
+    func body(content: Content) -> some View {
+        let active = (scrolls || !treated) ? cut : nil
+        return content
+            .mask {
+                GeometryReader { proxy in
+                    if let active {
+                        let frame = proxy.frame(in: .named(AtticUnfoldCard.space))
+                        active.shape.path(in: CGRect(x: -frame.minX, y: -frame.minY,
+                                                     width: active.cardSize.width, height: active.cardSize.height))
+                    } else {
+                        Rectangle()
+                    }
+                }
+            }
+            .blur(radius: active?.blur ?? 0)
+            .environment(\.atticUnfoldTreated, true)
     }
 }
 
@@ -1882,7 +1999,7 @@ struct AtticDropdownViewport<Content: View>: View {
     var body: some View {
         if height != nil || persistent {
             ScrollViewReader { proxy in
-                ScrollView(.vertical) { content }
+                ScrollView(.vertical) { content.modifier(AtticUnfoldContent(scrolls: true)) }
                     .scrollIndicators(.never)
                     .scrollEdgeEffectHidden(true, for: .all)
                     .frame(height: height)
@@ -1898,7 +2015,7 @@ struct AtticDropdownViewport<Content: View>: View {
                     }
             }
         } else {
-            content
+            content.modifier(AtticUnfoldContent())
         }
     }
 }
