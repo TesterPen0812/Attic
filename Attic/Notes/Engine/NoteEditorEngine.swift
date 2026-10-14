@@ -1554,15 +1554,22 @@ final class NoteEditorEngine: NSObject, NSTextViewDelegate, NSTextStorageDelegat
                removal.location == paragraphRange(at: removal.location).location,
                NSMaxRange(removal) == paragraphRange(at: NSMaxRange(removal)).location,
                paragraphStyle(at: removal.location) == .number,
-               let start = textStorage.attribute(.noteListStart, at: removal.location, effectiveRange: nil) as? Int,
-               paragraphStyle(at: NSMaxRange(removal)) == .number,
-               (indentAt(removal.location) ?? 0) == (indentAt(NSMaxRange(removal)) ?? 0),
-               textStorage.attribute(.noteListStart, at: NSMaxRange(removal), effectiveRange: nil) == nil {
-                let successor = paragraphRange(at: NSMaxRange(removal))
-                pendingNumberStartTransfer = (removal.location, start)
-                let recorded = NSRange(location: removal.location, length: NSMaxRange(successor) - removal.location)
-                history.willChange(ranges: [recorded], strings: [string.substring(with: successor)])
-                return
+               let start = textStorage.attribute(.noteListStart, at: removal.location, effectiveRange: nil) as? Int {
+                let depth = indentAt(removal.location) ?? 0
+                var next = NSMaxRange(removal)
+                while next < string.length, isListItem(at: next), (indentAt(next) ?? 0) > depth {
+                    next = NSMaxRange(paragraphRange(at: next))
+                }
+                if next < string.length, paragraphStyle(at: next) == .number,
+                   (indentAt(next) ?? 0) == depth,
+                   textStorage.attribute(.noteListStart, at: next, effectiveRange: nil) == nil {
+                    let successor = paragraphRange(at: next)
+                    pendingNumberStartTransfer = (next - removal.length, start)
+                    let recorded = NSRange(location: removal.location, length: NSMaxRange(successor) - removal.location)
+                    let retained = NSRange(location: NSMaxRange(removal), length: NSMaxRange(successor) - NSMaxRange(removal))
+                    history.willChange(ranges: [recorded], strings: [string.substring(with: retained)])
+                    return
+                }
             }
         }
         guard let strings, strings.count == ranges.count, titleEnd != NSNotFound,

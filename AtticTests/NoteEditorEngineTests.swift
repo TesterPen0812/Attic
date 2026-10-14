@@ -7,6 +7,21 @@ import XCTest
 /// identity, IME over a selection, VoiceOver elements.
 @MainActor
 final class NoteEditorEngineTests: XCTestCase {
+    func testFix14NumberStartTransferAcrossChildrenUndoAndRedo() {
+        var parent = NoteBlock.text("parent", style: "number"); parent.start = 12
+        var child = NoteBlock.text("child", style: "number"); child.indent = 1
+        var document = NoteDocument(blocks: [.text("T"), parent, child, .text("next", style: "number")])
+        document.refreshRequiredCapabilities()
+        let (engine, view) = makeEngine(document)
+        defer { engine.detachView() }
+        view.setSelectedRange(engine.paragraphRange(at: 2)); view.deleteBackward(nil)
+        let deleted = engine.document()
+        XCTAssertEqual(deleted.blocks.map(\.text), ["T", "child", "next"])
+        XCTAssertEqual(deleted.blocks.last?.start, 12)
+        XCTAssertTrue(engine.history.undo()); XCTAssertEqual(engine.document(), document)
+        XCTAssertTrue(engine.history.redo()); XCTAssertEqual(engine.document(), deleted)
+    }
+
     func testFix14LeavingCodeTransfersMissingHintInOneUndoStep() {
         var first = NoteBlock.text("first", style: "mono"); first.language = "swift"
         var document = NoteDocument(blocks: [.text("T"), first, .text("second", style: "mono")])
