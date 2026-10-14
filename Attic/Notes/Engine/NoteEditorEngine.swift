@@ -672,7 +672,8 @@ final class NoteEditorEngine: NSObject, NSTextViewDelegate, NSTextStorageDelegat
                     previous: paragraph.location <= titleEnd ? .title : paragraphKind(at: paragraph.location - 1),
                     isChecklist: checklistBox(inParagraphAt: paragraph.location) != nil, isBlockObject: blockObject,
                     monoHang: name == "mono" ? style.monoHang(for: string.substring(with: paragraph)) : 0,
-                    monoExitsAtEnd: name == "mono" && monoExitsAtEnd(paragraph), callout: metadata[.noteCalloutIcon] as? String)
+                    monoExitsAtEnd: (name == "mono" || metadata[.noteCalloutIcon] != nil) && boxExitsAtEnd(paragraph),
+                    callout: metadata[.noteCalloutIcon] as? String)
                 if let name, ["bullet", "number"].contains(name) {
                     let marker: NSTextList.MarkerFormat = name == "number" ? .decimal : .disc
                     var lists: [NSTextList] = []
@@ -716,6 +717,7 @@ final class NoteEditorEngine: NSObject, NSTextViewDelegate, NSTextStorageDelegat
             textStorage.addAttributes(style.markedAttributes(marks: marks, baseFont: font), range: markRange)
             if marks[.code] != nil { textView?.setSpellingState(0, range: markRange) }
         }
+        NoteTextStyle.applyInlineCodeSpacing(to: textStorage, in: range)
     }
 
     /// The paragraphs covering `range`, plus one on each side.
@@ -965,12 +967,14 @@ final class NoteEditorEngine: NSObject, NSTextViewDelegate, NSTextStorageDelegat
         let line = paragraphRange(at: location)
         if line.location == 0 { return .title }
         if let pending = pendingParagraphStyle, pending.location == line.location {
-            return NoteParagraphKind.of(style: pending.state.style.storageName, level: pending.state.style.level, callout: pending.state.style.calloutIcon)
+            return NoteParagraphKind.of(style: pending.state.style.storageName, level: pending.state.style.level,
+                                        callout: pending.state.style.calloutIcon, isChecklist: pending.state.style == .checklist)
         }
         guard line.location < textStorage.length else { return .body }
         if isBlockObject(at: line.location) { return .blockObject }
         let attributes = textStorage.attributes(at: line.location, effectiveRange: nil)
-        return NoteParagraphKind.of(style: attributes[.noteBlockStyle] as? String, level: attributes[.noteBlockLevel] as? Int, callout: attributes[.noteCalloutIcon] as? String)
+        return NoteParagraphKind.of(style: attributes[.noteBlockStyle] as? String, level: attributes[.noteBlockLevel] as? Int,
+                                    callout: attributes[.noteCalloutIcon] as? String, isChecklist: checklistBox(inParagraphAt: line.location) != nil)
     }
 
     func paragraphRange(at location: Int) -> NSRange {

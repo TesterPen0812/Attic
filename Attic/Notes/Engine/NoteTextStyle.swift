@@ -33,13 +33,20 @@ enum NoteParagraphKind: Equatable, Sendable {
     /// The note's first line.
     case title
     case titleStyle, heading, subheading, smallHeading
-    /// Body text, and list and checklist items.
+    /// Body text.
     case body
-    case quote, mono, callout
+    /// A bulleted or numbered item, or a checklist line (items sit 3 apart).
+    case listItem
+    case quote, mono
+    /// A callout paragraph; consecutive ones with the same icon share a box.
+    case callout(icon: String)
     /// An image, a file or a divider on its own line.
     case blockObject
 
     var isHeading: Bool { self == .titleStyle || self == .heading || self == .subheading || self == .smallHeading }
+    var isCallout: Bool { if case .callout = self { true } else { false } }
+    /// A box (code, a callout, a quote run) or a block object: 12 around it.
+    var isBox: Bool { self == .mono || self == .blockObject || self == .quote || isCallout }
 
     var role: AtticNoteType.Role {
         switch self {
@@ -47,19 +54,22 @@ enum NoteParagraphKind: Equatable, Sendable {
         case .titleStyle: AtticNoteType.titleStyle
         case .heading: AtticNoteType.heading
         case .subheading: AtticNoteType.subheading
-        case .body, .blockObject, .smallHeading, .callout: AtticNoteType.body
+        case .smallHeading: AtticNoteType.smallHeading
+        case .body, .listItem, .blockObject, .callout: AtticNoteType.body
         case .quote: AtticNoteType.quote
         case .mono: AtticNoteType.mono
         }
     }
 
-    /// A paragraph's kind from its stored style name and heading level.
-    static func of(style name: String?, level: Int?, callout: String? = nil) -> NoteParagraphKind {
+    /// A paragraph's kind from its stored style name, heading level and
+    /// callout icon; `isChecklist` for a line that starts with a checkbox.
+    static func of(style name: String?, level: Int?, callout: String? = nil, isChecklist: Bool = false) -> NoteParagraphKind {
         switch name {
         case "heading": (level ?? 2) <= 1 ? .titleStyle : (level == 2 ? .heading : ((level ?? 2) <= 3 ? .subheading : .smallHeading))
         case "mono": .mono
-        case "quote": callout == nil ? .quote : .callout
-        default: .body
+        case "quote": callout.map { .callout(icon: $0) } ?? .quote
+        case "bullet", "number": .listItem
+        default: isChecklist ? .listItem : .body
         }
     }
 }
@@ -126,6 +136,10 @@ struct NoteTextStyle: Equatable {
     var subheadingFont: NSFont { Self.font(for: T.subheading) }
     var quoteFont: NSFont { Self.font(for: T.quote) }
     var monoFont: NSFont { Self.font(for: T.mono) }
+    var smallHeadingFont: NSFont { Self.font(for: T.smallHeading) }
+    var codeLabelFont: NSFont { Self.font(for: T.codeLabel) }
+    /// Inline code's face: SF Mono at 11 in its chip, whatever the run's size.
+    var inlineCodeFont: NSFont { Self.font(for: T.Role(size: T.inlineCodeSize, lineHeight: T.body.lineHeight, weight: 400, monospaced: true)) }
 
     func font(for kind: NoteParagraphKind) -> NSFont { Self.font(for: kind.role) }
 
@@ -176,32 +190,47 @@ struct NoteTextStyle: Equatable {
         return native - drawn
     }
 
-    /// The shift a paragraph's own line boxes carry. A Mono block and a
-    /// block object place their contents inside their own box, so the box
-    /// itself is not raised.
+    /// The shift a paragraph's own line boxes carry. A code block, a
+    /// callout and a block object place their contents inside their own
+    /// box (its top and bottom padding take the shift), so the box itself
+    /// is not raised.
     static func boxShift(_ kind: NoteParagraphKind) -> CGFloat {
         switch kind {
-        case .mono, .blockObject: 0
+        case .mono, .blockObject, .callout: 0
         default: baselineShift(kind.role)
         }
     }
 
-    /// The draft's gap between the line boxes of `previous` and `kind`.
+    /// The gap between the line boxes of `previous` and `kind` (B.3):
+    /// paragraphs 8 apart, list items 3, boxes 12 around, headings 20 / 16
+    /// / 14 / 12 above and 6 below, a heading 6 under a heading.
     static func gap(above kind: NoteParagraphKind, after previous: NoteParagraphKind?) -> CGFloat {
         guard let previous else { return 0 }
         if previous == .title { return T.titleToText }
+        if kind.isHeading, previous.isHeading { return T.headingAfterHeading }
         switch kind {
         case .titleStyle: return T.aboveTitleStyle
         case .heading: return T.aboveHeading
         case .subheading: return T.aboveSubheading
+        case .smallHeading: return T.aboveSmallHeading
         default: break
         }
         if previous.isHeading {
-            let below = previous == .titleStyle ? T.belowTitleStyle : (previous == .heading ? T.belowHeading : T.belowSubheading)
-            return kind == .mono || kind == .blockObject ? max(below, T.blockAfterHeading) : below
+            let below = switch previous {
+            case .titleStyle: T.belowTitleStyle
+            case .heading: T.belowHeading
+            case .subheading: T.belowSubheading
+            default: T.belowSmallHeading
+            }
+            return kind.isBox ? max(below, T.blockAfterHeading) : below
         }
         if kind == .mono, previous == .mono { return 0 }
-        if [.mono, .blockObject].contains(kind) || [.mono, .blockObject].contains(previous) { return T.blockMargin }
+        if case let .callout(icon) = kind, case let .callout(above) = previous {
+            return icon == above ? T.paragraphGap : T.blockMargin
+        }
+        if kind == .quote, previous == .quote { return T.paragraphGap }
+        if kind.isBox || previous.isBox { return T.blockMargin }
+        if kind == .listItem, previous == .listItem { return T.listItemGap }
         return T.paragraphGap
     }
 
@@ -215,11 +244,6 @@ struct NoteTextStyle: Equatable {
 
     /// The width of a Mono line's leading spaces and tabs: its soft wraps
     /// hang from there.
-    /// How much shorter a Mono block's first line is than the block's
-    /// text width: the chip, its inset and a 2 pt gap, less the side
-    /// padding the text already keeps.
-    static var monoCopyReserve: CGFloat { T.monoCopyInset + T.monoCopySize + 2 - T.monoPaddingH }
-
     func monoHang(for line: String) -> CGFloat {
         let leading = line.prefix { $0 == " " || $0 == "\t" }
         guard !leading.isEmpty else { return 0 }
@@ -242,7 +266,8 @@ struct NoteTextStyle: Equatable {
     func paragraphAttributes(style name: String?, level: Int?, indent: Int?, previous: NoteParagraphKind? = .body,
                              isChecklist: Bool = false, isBlockObject: Bool = false,
                              monoHang: CGFloat = 0, monoExitsAtEnd: Bool = false, callout: String? = nil) -> [NSAttributedString.Key: Any] {
-        let kind: NoteParagraphKind = isBlockObject ? .blockObject : NoteParagraphKind.of(style: name, level: level, callout: callout)
+        let kind: NoteParagraphKind = isBlockObject ? .blockObject
+            : NoteParagraphKind.of(style: name, level: level, callout: callout, isChecklist: isChecklist)
         var result = bodyAttributes
         result[.font] = font(for: kind)
         result[.foregroundColor] = kind == .quote ? quoteColor : bodyColor
@@ -257,10 +282,6 @@ struct NoteTextStyle: Equatable {
         case .mono:
             paragraph.firstLineHeadIndent = 0
             paragraph.headIndent = monoHang
-            // The block's first line keeps the Copy chip's room at its end,
-            // so the chip never covers code (owner's call, 2026-10-11): it
-            // wraps before the chip instead of running under it.
-            if previous != .mono { paragraph.tailIndent = -Self.monoCopyReserve }
             if monoExitsAtEnd {
                 // The block's bottom padding goes before the note's empty
                 // last line, which TextKit lays out in this paragraph
@@ -271,6 +292,14 @@ struct NoteTextStyle: Equatable {
         case .quote:
             paragraph.firstLineHeadIndent = depth + T.quoteTextInset
             paragraph.headIndent = depth + T.quoteTextInset
+        case let .callout(icon):
+            // The box's sides: the text 36 in beside the emoji (12 in a
+            // plain callout) and 12 from the box's right edge.
+            let inset = icon.isEmpty ? T.calloutPaddingH : T.calloutTextInset
+            paragraph.firstLineHeadIndent = inset
+            paragraph.headIndent = inset
+            paragraph.tailIndent = -T.calloutPaddingH
+            if monoExitsAtEnd { paragraph.paragraphSpacing = T.calloutPaddingV + Self.baselineShift(T.body) }
         default:
             let list = name == "bullet" || name == "number"
             paragraph.firstLineHeadIndent = depth + (list ? T.listTextInset : 0)
@@ -289,7 +318,7 @@ struct NoteTextStyle: Equatable {
     /// Presentation always comes from the complete semantic mark set. In
     /// particular, code chooses the family before bold/italic add traits.
     func markedAttributes(marks: [NoteMark.Kind: Any], baseFont: NSFont) -> [NSAttributedString.Key: Any] {
-        let source = marks[.code] == nil ? baseFont : monoFont
+        let source = marks[.code] == nil ? baseFont : inlineCodeFont
         var desired = source.fontDescriptor.symbolicTraits
         if marks[.bold] != nil { desired.insert(.bold) }
         if marks[.italic] != nil { desired.insert(.italic) }
@@ -304,10 +333,16 @@ struct NoteTextStyle: Equatable {
                 ?? NSFontManager.shared.convert(fallback, toHaveTrait: .italicFontMask)
         }
         var result: [NSAttributedString.Key: Any] = [.font: font]
-        if marks[.code] != nil { result[.backgroundColor] = codeColor }
+        // Inline code draws as a chip behind its glyphs (`NoteBlockLayoutFragment`),
+        // never as a flat background run.
         if let highlight = marks[.highlight] { result[.backgroundColor] = highlightColor(for: highlight) }
-        if marks[.underline] != nil || marks[.link] != nil {
+        if marks[.underline] != nil {
             result[.underlineStyle] = NSUnderlineStyle.single.rawValue
+        }
+        if marks[.link] != nil {
+            // Codex's dotted underline, in the link's blue at 55 % (owner).
+            result[.underlineStyle] = marks[.underline] != nil ? NSUnderlineStyle.single.rawValue
+                : NSUnderlineStyle([.single, .patternDot]).rawValue
         }
         if marks[.strikethrough] != nil { result[.strikethroughStyle] = NSUnderlineStyle.single.rawValue }
         if let url = marks[.link] as? String, let value = URL(string: url) {
@@ -316,6 +351,29 @@ struct NoteTextStyle: Equatable {
             result[.underlineColor] = linkUnderlineColor
         }
         return result
+    }
+
+    /// Inline code's chip keeps 4 pt clear of its neighbours on each side
+    /// (Codex's padding): the character before a code run and the run's
+    /// last character carry 4 pt of kern. Presentation only; any kern in
+    /// `range` is replaced, so a restyle always leaves exactly this.
+    static func applyInlineCodeSpacing(to text: NSMutableAttributedString, in range: NSRange) {
+        let range = NSIntersectionRange(range, NSRange(location: 0, length: text.length))
+        guard range.length > 0 else { return }
+        text.removeAttribute(.kern, range: range)
+        let string = text.string as NSString
+        text.enumerateAttribute(.noteMark(.code), in: range) { value, run, _ in
+            guard value != nil, run.length > 0 else { return }
+            let last = NSMaxRange(run) - 1
+            if string.character(at: last) != 0x0A {
+                text.addAttribute(.kern, value: T.inlineCodeChipPadding, range: NSRange(location: last, length: 1))
+            }
+            let before = run.location - 1
+            if before >= range.location, string.character(at: before) != 0x0A,
+               text.attribute(.noteMark(.code), at: before, effectiveRange: nil) == nil {
+                text.addAttribute(.kern, value: T.inlineCodeChipPadding, range: NSRange(location: before, length: 1))
+            }
+        }
     }
 
     /// The room the title's paragraph keeps under its last line: the tag

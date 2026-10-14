@@ -22,7 +22,8 @@ enum NoteTextCodec {
             let isTitle = firstBlockIsTitle && index == 0
             let isBlockObject = [.image, .file, .divider, .table, .opaque].contains(block.kind)
             let kind: NoteParagraphKind = isTitle ? .title
-                : (isBlockObject ? .blockObject : NoteParagraphKind.of(style: block.kind == .text ? block.style : nil, level: block.level, callout: block.callout))
+                : (isBlockObject ? .blockObject : NoteParagraphKind.of(style: block.kind == .text ? block.style : nil, level: block.level,
+                                                                   callout: block.callout, isChecklist: block.kind == .checklist))
             var attributes = isTitle ? style.titleAttributes : style.paragraphAttributes(
                 style: block.kind == .text ? block.style : nil, level: block.level, indent: block.indent,
                 previous: previousKind, isChecklist: block.kind == .checklist, isBlockObject: isBlockObject,
@@ -146,6 +147,7 @@ enum NoteTextCodec {
             runs.append((marks, range))
         }
         for (marks, range) in runs { result.addAttributes(style.markedAttributes(marks: marks, baseFont: baseFont), range: range) }
+        NoteTextStyle.applyInlineCodeSpacing(to: result, in: NSRange(location: 0, length: result.length))
         return result
     }
 

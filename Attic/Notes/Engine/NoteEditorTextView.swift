@@ -14,7 +14,7 @@ import UniformTypeIdentifiers
 /// - Exposes objects to VoiceOver.
 /// - Marks keystroke-to-commit for the performance trace.
 final class NoteEditorTextView: NSTextView, NSAccessibilityCustomRotorItemSearchDelegate {
-    weak var engine: NoteEditorEngine?
+    weak var engine: NoteEditorEngine? { didSet { installCodeColouring() } }
     var marquee: NoteMarqueeSelection?
     override var shouldDrawInsertionPoint: Bool { marquee?.isEmpty != false && super.shouldDrawInsertionPoint }
     var proseTextCompletionEnabled = false
@@ -47,6 +47,93 @@ final class NoteEditorTextView: NSTextView, NSAccessibilityCustomRotorItemSearch
             } else { prose.append(part) }
         }
         for part in prose { super.checkText(in: part, types: checkingTypes, options: options) }
+    }
+
+    // MARK: Syntax colours (R14)
+
+    /// Code tokens draw in their syntax inks as TextKit rendering attributes,
+    /// outside the note's marks and its Undo: each code fragment is coloured
+    /// when TextKit validates it for display, from the engine's tokens for
+    /// its block (one scan per block per edit, `codeTokenMemo`).
+    private var codeColourEdits = 0
+    private var codeTokenMemo: (block: NSRange, edits: Int, tokens: [(NSRange, NoteSyntaxToken)])?
+    private var codeEditObserver: NSObjectProtocol?
+    private var codeColourDesign: AtticDesignContext?
+    private var codeColours: [NoteSyntaxToken: NSColor] = [:]
+
+    private func installCodeColouring() {
+        if let codeEditObserver { NotificationCenter.default.removeObserver(codeEditObserver) }
+        codeEditObserver = nil
+        codeTokenMemo = nil
+        guard let engine, let layoutManager = textLayoutManager else { return }
+        layoutManager.renderingAttributesValidator = { [weak self] manager, fragment in
+            MainActor.assumeIsolated { self?.colourCode(in: fragment, manager: manager) }
+        }
+        codeEditObserver = NotificationCenter.default.addObserver(
+            forName: NSTextStorage.didProcessEditingNotification, object: engine.textStorage, queue: nil
+        ) { [weak self] note in
+            guard let storage = note.object as? NSTextStorage, storage.editedMask.contains(.editedCharacters) else { return }
+            let edited = storage.editedRange
+            MainActor.assumeIsolated { self?.codeTextEdited(edited) }
+        }
+    }
+
+    /// An edit can change the tokens of every later line of its block (an
+    /// opened comment or string): the block's colours are validated again.
+    private func codeTextEdited(_ edited: NSRange) {
+        codeColourEdits &+= 1
+        guard let engine, edited.location != NSNotFound else { return }
+        let location = min(edited.location, max(0, engine.textStorage.length - 1))
+        guard engine.textStorage.length > 0, engine.paragraphStyle(at: location)?.isCode == true else { return }
+        DispatchQueue.main.async { [weak self] in
+            guard let self, let engine = self.engine, let manager = self.textLayoutManager,
+                  location < engine.textStorage.length, engine.paragraphStyle(at: location)?.isCode == true,
+                  let range = engine.textRange(for: engine.blockRange(at: location)) else { return }
+            manager.invalidateRenderingAttributes(for: range)
+        }
+    }
+
+    private func syntaxColour(_ token: NoteSyntaxToken) -> NSColor? {
+        guard let engine else { return nil }
+        if codeColourDesign != engine.style.design {
+            codeColourDesign = engine.style.design
+            let tokens = engine.style.tokens
+            codeColours = Dictionary(uniqueKeysWithValues: NoteSyntaxToken.allCases.compactMap { token in
+                tokens.syntaxInk(token).map { (token, $0.nsColor) }
+            })
+        }
+        return codeColours[token]
+    }
+
+    private func colourCode(in fragment: NSTextLayoutFragment, manager: NSTextLayoutManager) {
+        guard let engine, let block = fragment as? NoteBlockLayoutFragment, block.monoBlockRect != nil else { return }
+        let content = engine.contentStorage
+        let start = content.offset(from: content.documentRange.location, to: fragment.rangeInElement.location)
+        let end = content.offset(from: content.documentRange.location, to: fragment.rangeInElement.endLocation)
+        guard start >= 0, start < engine.textStorage.length, end > start else { return }
+        let range = engine.blockRange(at: start)
+        let tokens: [(NSRange, NoteSyntaxToken)]
+        if let memo = codeTokenMemo, memo.block == range, memo.edits == codeColourEdits {
+            tokens = memo.tokens
+        } else {
+            tokens = engine.codeTokens(in: NSRange(location: start, length: 0))
+            codeTokenMemo = (range, codeColourEdits, tokens)
+        }
+        manager.removeRenderingAttribute(.foregroundColor, for: fragment.rangeInElement)
+        // Tokens are in order: find the first that reaches this fragment.
+        var low = 0, high = tokens.count
+        while low < high {
+            let mid = (low + high) / 2
+            if NSMaxRange(tokens[mid].0) <= start { low = mid + 1 } else { high = mid }
+        }
+        var index = low
+        while index < tokens.count, tokens[index].0.location < end {
+            let (tokenRange, token) = tokens[index]
+            index += 1
+            let part = NSIntersectionRange(tokenRange, NSRange(location: start, length: end - start))
+            guard part.length > 0, let colour = syntaxColour(token), let textRange = engine.textRange(for: part) else { continue }
+            manager.addRenderingAttribute(.foregroundColor, value: colour, for: textRange)
+        }
     }
 
     // MARK: A Mono block at the note's end
@@ -178,7 +265,7 @@ final class NoteEditorTextView: NSTextView, NSAccessibilityCustomRotorItemSearch
             probe = length - 1
             if (engine.textStorage.string as NSString).character(at: probe) == 0x0A { return nil }
         }
-        return engine.paragraphStyle(at: probe) == .mono ? probe : nil
+        return engine.paragraphStyle(at: probe)?.isCode == true ? probe : nil
     }
 
     private var monoCopyPlacementScheduled = false

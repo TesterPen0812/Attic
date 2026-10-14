@@ -1,29 +1,32 @@
 import AppKit
 import SwiftUI
 
-/// What Notes v2 draws beside a paragraph's own text (text direction 5,
-/// owner 2026-10-08): the Mono block's one rounded fill, a list's dot or
-/// number, and a quote's bar. Layout stays TextKit's: only the Mono block
-/// changes geometry, through its fragments' margins and padding, so every
-/// line keeps viewport-driven layout and its own selection and caret.
+/// What Notes draws beside a paragraph's own text (R14, Codex Pages scaled
+/// to the panel, `notes-r14-spec.md` C): the code block's and the callout's
+/// rounded boxes, a list's marker, a quote's bar and inline code's chips.
+/// Layout stays TextKit's: only the boxes change geometry, through their
+/// fragments' margins and padding, so every line keeps viewport-driven
+/// layout and its own selection and caret.
 ///
-/// Each Mono paragraph (one code line) is a slice of its block: the first
-/// carries the block's top padding, the last its bottom padding, and every
-/// slice draws the block's fill clipped to itself, so a block of any length
-/// reads as one rounded rectangle with no seams.
+/// Each paragraph of a box (one code line, one callout paragraph) is a
+/// slice of it: the first carries the box's top padding, the last its
+/// bottom padding, and every slice draws the box's fill clipped to itself,
+/// so a box of any length reads as one rounded rectangle with no seams.
 final class NoteBlockLayoutFragment: NSTextLayoutFragment {
     enum Decoration: Equatable {
         case history
+        /// Nothing beside the text: the paragraph only has inline code chips.
+        case plain
         /// `exitsAtEnd`: the block's last line ends the note, and the empty
         /// line after it (inside this fragment) is not code.
         case mono(starts: Bool, ends: Bool, exitsAtEnd: Bool = false)
-        /// A dot centred at `x` in the column.
-        case bullet(x: CGFloat)
-        /// A list number ending at `trailing` in the column.
-        case number(String, trailing: CGFloat)
+        /// A list's marker in the 14 pt slot starting at `x` in the column.
+        case marker(NoteListMarker, x: CGFloat)
         /// A bar from `x` in the column; it joins the quote line above or
         /// below across their gap.
         case quote(x: CGFloat, joinsAbove: Bool, joinsBelow: Bool)
+        /// A callout's slice; its first paragraph draws the icon ("" none).
+        case callout(icon: String, starts: Bool, ends: Bool, exitsAtEnd: Bool = false)
     }
 
     var decoration: Decoration = .mono(starts: true, ends: true, exitsAtEnd: false)
@@ -37,44 +40,91 @@ final class NoteBlockLayoutFragment: NSTextLayoutFragment {
     var fill: NSColor = .clear
     var border: NSColor?
     var markerFont: NSFont = NoteTextStyle.font(for: AtticNoteType.body)
+    /// A code block's language label, drawn in its first slice's label row.
+    var codeLabel: String?
+    var labelInk: NSColor = .secondaryLabelColor
+    /// Inline code's chip fill (nil: the paragraph has no inline code).
+    var chipFill: NSColor?
 
     private typealias T = AtticNoteType
     private static var monoShift: CGFloat { NoteTextStyle.baselineShift(T.mono) }
+    private static var bodyShift: CGFloat { NoteTextStyle.baselineShift(T.body) }
 
     private var mono: (starts: Bool, ends: Bool, exitsAtEnd: Bool)? {
         if case let .mono(starts, ends, exitsAtEnd) = decoration { return (starts, ends, exitsAtEnd) }
         return nil
     }
 
-    // The Mono block's padding: the text sits 12 × 14 inside the block, its
-    // glyphs on the draft's baselines (the top padding gives up the line's
-    // baseline shift, the bottom one takes it).
+    private var callout: (icon: String, starts: Bool, ends: Bool, exitsAtEnd: Bool)? {
+        if case let .callout(icon, starts, ends, exitsAtEnd) = decoration { return (icon, starts, ends, exitsAtEnd) }
+        return nil
+    }
+
+    /// From a code block's top edge to its first code line's box: the top
+    /// padding, the label row and the gap under it.
+    static var monoTopInset: CGFloat { T.monoPaddingV + T.monoLabelHeight + T.monoLabelGap }
+
+    // The code block's padding: the text sits 12 in from the box's sides,
+    // its glyphs on the draft's baselines (the top padding gives up the
+    // line's baseline shift, the bottom one takes it). A callout's sides
+    // are its paragraph's indents; its top and bottom padding work as code's.
     override var leadingPadding: CGFloat { mono == nil ? super.leadingPadding : T.monoPaddingH }
     override var trailingPadding: CGFloat { mono == nil ? super.trailingPadding : T.monoPaddingH }
     override var topMargin: CGFloat {
-        guard let mono else { return super.topMargin }
-        return mono.starts ? T.monoPaddingV - Self.monoShift : 0
+        if let mono { return mono.starts ? Self.monoTopInset - Self.monoShift : 0 }
+        if let callout { return callout.starts ? T.calloutPaddingV - Self.bodyShift : 0 }
+        return super.topMargin
     }
     override var bottomMargin: CGFloat {
-        guard let mono else { return super.bottomMargin }
-        return mono.ends && !mono.exitsAtEnd ? T.monoPaddingV + Self.monoShift : 0
+        if let mono { return mono.ends && !mono.exitsAtEnd ? T.monoPaddingV + Self.monoShift : 0 }
+        if let callout { return callout.ends && !callout.exitsAtEnd ? T.calloutPaddingV + Self.bodyShift : 0 }
+        return super.bottomMargin
     }
 
     private var columnWidth: CGFloat {
         textLayoutManager?.textContainer?.size.width ?? layoutFragmentFrame.width
     }
 
-    /// The block's rectangle in this fragment's coordinates: the column's
-    /// full width, from the block's top (first slice) to its bottom (last).
-    var monoBlockRect: CGRect? {
-        guard let mono else { return nil }
-        let top = mono.starts ? spacingBefore : 0
+    /// A box's slice in this fragment's coordinates: the column's full
+    /// width, from the box's top (first slice) to its bottom (last).
+    private func boxSlice(starts: Bool, exitsAtEnd: Bool, bottomPadding: CGFloat) -> CGRect {
+        let top = starts ? spacingBefore : 0
         var bottom = layoutFragmentFrame.height
-        if mono.exitsAtEnd, let last = textLineFragments.last(where: { $0.characterRange.length > 0 }) ?? textLineFragments.first {
-            // Not the note's empty last line: it sits below the block.
-            bottom = last.typographicBounds.maxY + T.monoPaddingV + Self.monoShift
+        if exitsAtEnd, let last = textLineFragments.last(where: { $0.characterRange.length > 0 }) ?? textLineFragments.first {
+            // Not the note's empty last line: it sits below the box.
+            bottom = last.typographicBounds.maxY + bottomPadding
         }
         return CGRect(x: -layoutFragmentFrame.minX, y: top, width: columnWidth, height: max(0, bottom - top))
+    }
+
+    /// The code block's rectangle in this fragment's coordinates.
+    var monoBlockRect: CGRect? {
+        guard let mono else { return nil }
+        return boxSlice(starts: mono.starts, exitsAtEnd: mono.exitsAtEnd, bottomPadding: T.monoPaddingV + Self.monoShift)
+    }
+
+    /// The callout's rectangle in this fragment's coordinates.
+    var calloutBoxRect: CGRect? {
+        guard let callout else { return nil }
+        return boxSlice(starts: callout.starts, exitsAtEnd: callout.exitsAtEnd, bottomPadding: T.calloutPaddingV + Self.bodyShift)
+    }
+
+    /// A code block's label row (its first slice only), in this fragment's
+    /// coordinates: 12 in from the box's left edge, 8 under its top.
+    var codeLabelRect: CGRect? {
+        guard let mono, mono.starts else { return nil }
+        return CGRect(x: -layoutFragmentFrame.minX + T.monoPaddingH, y: spacingBefore + T.monoPaddingV,
+                      width: max(0, columnWidth - 2 * T.monoPaddingH - T.monoCopySize - 4), height: T.monoLabelHeight)
+    }
+
+    /// The callout icon's slot (its first slice only): 16 wide at x 12,
+    /// one body line tall on the first line's box.
+    var calloutIconRect: CGRect? {
+        guard let callout, callout.starts, !callout.icon.isEmpty, let line = textLineFragments.first else { return nil }
+        let baseline = Self.baseline(of: line)
+        let centreY = baseline - markerFont.capHeight / 2
+        return CGRect(x: -layoutFragmentFrame.minX + T.calloutPaddingH, y: centreY - T.body.lineHeight / 2,
+                      width: T.calloutIconSlot, height: T.body.lineHeight)
     }
 
     private var firstBaseline: CGFloat? {
@@ -84,16 +134,16 @@ final class NoteBlockLayoutFragment: NSTextLayoutFragment {
 
     private var decorationRect: CGRect {
         switch decoration {
-        case .history: return .zero
+        case .history, .plain: return .zero
         case .mono:
             return monoBlockRect ?? .zero
-        case let .bullet(x):
+        case .callout:
+            return (calloutBoxRect ?? .zero).insetBy(dx: 0, dy: -Self.bodyShift - 1)
+        case let .marker(_, x):
             let baseline = firstBaseline ?? 0
-            return CGRect(x: x - layoutFragmentFrame.minX - T.bulletDot, y: baseline - 12, width: T.bulletDot * 2, height: 14)
-        case let .number(_, trailing):
-            let baseline = firstBaseline ?? 0
-            return CGRect(x: -layoutFragmentFrame.minX, y: baseline - markerFont.ascender - 1,
-                          width: trailing + 1, height: markerFont.ascender - markerFont.descender + 2)
+            // Numbers wider than the slot grow left into the margin.
+            return CGRect(x: x - layoutFragmentFrame.minX - 40, y: baseline - markerFont.ascender - 1,
+                          width: 40 + T.markerSlot + 1, height: markerFont.ascender - markerFont.descender + 2)
         case .quote:
             return quoteBar ?? .zero
         }
@@ -145,7 +195,9 @@ final class NoteBlockLayoutFragment: NSTextLayoutFragment {
     }
 
     override var renderingSurfaceBounds: CGRect {
-        super.renderingSurfaceBounds.union(decorationRect)
+        var bounds = super.renderingSurfaceBounds.union(decorationRect)
+        if chipFill != nil { bounds = bounds.insetBy(dx: -T.inlineCodeChipPadding, dy: -1) }
+        return bounds
     }
 
     override func draw(at point: CGPoint, in context: CGContext) {
@@ -157,34 +209,130 @@ final class NoteBlockLayoutFragment: NSTextLayoutFragment {
             context.restoreGState()
         }
         if let block = monoBlockRect, let mono {
-            drawBlock(block, starts: mono.starts, ends: mono.ends || mono.exitsAtEnd, at: point, in: context)
+            let edge: (NSColor, CGFloat)? = border.map { ($0, 1) } ?? hairlineInk.map { ($0, T.monoHairline) }
+            drawBox(block, starts: mono.starts, ends: mono.ends || mono.exitsAtEnd, radius: T.monoRadius,
+                    edge: edge, at: point, in: context)
+            if let label = codeLabel, let rect = codeLabelRect { drawLabel(label, in: rect.offsetBy(dx: point.x, dy: point.y), context: context) }
         }
+        if let box = calloutBoxRect, let callout {
+            drawBox(box, starts: callout.starts, ends: callout.ends || callout.exitsAtEnd, radius: T.calloutRadius,
+                    edge: border.map { ($0, 1) }, at: point, in: context)
+        }
+        if chipFill != nil { drawInlineCodeChips(at: point, in: context) }
         super.draw(at: point, in: context)
         switch decoration {
-        case .mono, .history:
+        case .mono, .history, .plain:
             break
-        case let .bullet(x):
+        case let .callout(icon, starts, _, _):
+            guard starts, !icon.isEmpty, let slot = calloutIconRect else { return }
+            drawIcon(icon, in: slot.offsetBy(dx: point.x, dy: point.y), context: context)
+        case let .marker(marker, x):
             guard let baseline = firstBaseline else { return }
-            let centreY = baseline - markerFont.xHeight / 2
-            let dot = CGRect(x: point.x + x - layoutFragmentFrame.minX - T.bulletDot / 2,
-                             y: point.y + centreY - T.bulletDot / 2, width: T.bulletDot, height: T.bulletDot)
-            context.saveGState()
-            context.setFillColor(ink.cgColor)
-            context.fillEllipse(in: dot)
-            context.restoreGState()
-        case let .number(text, trailing):
-            guard let baseline = firstBaseline else { return }
-            let string = NSAttributedString(string: text, attributes: [.font: markerFont, .foregroundColor: ink])
-            let width = string.size().width
-            NSGraphicsContext.saveGraphicsState()
-            NSGraphicsContext.current = NSGraphicsContext(cgContext: context, flipped: true)
-            string.draw(at: CGPoint(x: point.x + trailing - layoutFragmentFrame.minX - width,
-                                    y: point.y + baseline - markerFont.ascender))
-            NSGraphicsContext.restoreGraphicsState()
+            drawMarker(marker, slotX: point.x + x - layoutFragmentFrame.minX, baseline: point.y + baseline, in: context)
         case .quote:
             guard let bar = quoteBar, case let .quote(_, joinsAbove, joinsBelow) = decoration else { return }
             drawQuoteBar(bar.offsetBy(dx: point.x, dy: point.y), joinsAbove: joinsAbove, joinsBelow: joinsBelow, in: context)
         }
+    }
+
+    // MARK: Markers
+
+    /// Disc (4), ring (4.5, 1 pt stroke) and square (3.5) centred on x 7,
+    /// raised 0.5 off the first line's x-height middle; numbers, letters and
+    /// roman numerals in tabular figures ending at x 14, on the baseline.
+    private func drawMarker(_ marker: NoteListMarker, slotX: CGFloat, baseline: CGFloat, in context: CGContext) {
+        let centre = CGPoint(x: slotX + T.bulletCentre, y: baseline - markerFont.xHeight / 2 - T.bulletLift)
+        context.saveGState()
+        defer { context.restoreGState() }
+        switch marker {
+        case .disc:
+            context.setFillColor(ink.cgColor)
+            context.fillEllipse(in: CGRect(x: centre.x - T.bulletDot / 2, y: centre.y - T.bulletDot / 2, width: T.bulletDot, height: T.bulletDot))
+        case .ring:
+            let diameter = T.bulletRing - T.bulletRingStroke
+            context.setStrokeColor(ink.cgColor)
+            context.setLineWidth(T.bulletRingStroke)
+            context.strokeEllipse(in: CGRect(x: centre.x - diameter / 2, y: centre.y - diameter / 2, width: diameter, height: diameter))
+        case .square:
+            let side = T.bulletSquare
+            context.addPath(CGPath(roundedRect: CGRect(x: centre.x - side / 2, y: centre.y - side / 2, width: side, height: side),
+                                   cornerWidth: T.bulletSquareRadius, cornerHeight: T.bulletSquareRadius, transform: nil))
+            context.setFillColor(ink.cgColor)
+            context.fillPath()
+        case let .number(text), let .letter(text), let .roman(text):
+            let string = NSAttributedString(string: text, attributes: [.font: markerFont, .foregroundColor: ink])
+            let width = string.size().width
+            NSGraphicsContext.saveGraphicsState()
+            NSGraphicsContext.current = NSGraphicsContext(cgContext: context, flipped: true)
+            string.draw(at: CGPoint(x: slotX + T.markerSlot - width, y: baseline - markerFont.ascender))
+            NSGraphicsContext.restoreGraphicsState()
+        case .checkbox:
+            break
+        }
+    }
+
+    // MARK: Box chrome
+
+    /// The language name in the label row: 11 pt helper ink, centred on
+    /// the row's 14 pt line box.
+    private func drawLabel(_ label: String, in rect: CGRect, context: CGContext) {
+        let font = NoteTextStyle.font(for: T.codeLabel)
+        let paragraph = NSMutableParagraphStyle()
+        paragraph.lineBreakMode = .byTruncatingTail
+        let string = NSAttributedString(string: label, attributes: [.font: font, .foregroundColor: labelInk, .paragraphStyle: paragraph])
+        let height = font.ascender - font.descender
+        NSGraphicsContext.saveGraphicsState()
+        NSGraphicsContext.current = NSGraphicsContext(cgContext: context, flipped: true)
+        string.draw(with: CGRect(x: rect.minX, y: rect.minY + (rect.height - height) / 2, width: rect.width, height: height),
+                    options: [.usesLineFragmentOrigin, .truncatesLastVisibleLine])
+        NSGraphicsContext.restoreGraphicsState()
+    }
+
+    /// The callout's emoji at 15 pt, centred in its slot (on the first
+    /// line's cap height).
+    private func drawIcon(_ icon: String, in slot: CGRect, context: CGContext) {
+        let font = NSFont(name: "AppleColorEmoji", size: T.calloutIconSize) ?? .systemFont(ofSize: T.calloutIconSize)
+        let string = NSAttributedString(string: icon, attributes: [.font: font])
+        let size = string.size()
+        NSGraphicsContext.saveGraphicsState()
+        NSGraphicsContext.current = NSGraphicsContext(cgContext: context, flipped: true)
+        string.draw(at: CGPoint(x: slot.midX - size.width / 2, y: slot.midY - (font.ascender - font.descender) / 2))
+        NSGraphicsContext.restoreGraphicsState()
+    }
+
+    /// Inline code's chips: 14 tall on the x-height middle, radius 4, 4 pt
+    /// outside the run's glyphs on each side (the run's kern makes that
+    /// room). A run that wraps draws one chip per line.
+    private func drawInlineCodeChips(at point: CGPoint, in context: CGContext) {
+        guard let chipFill, let paragraph = textElement as? NSTextParagraph else { return }
+        let text = paragraph.attributedString
+        var runs: [NSRange] = []
+        text.enumerateAttribute(.noteMark(.code), in: NSRange(location: 0, length: text.length)) { value, run, _ in
+            if value != nil { runs.append(run) }
+        }
+        guard !runs.isEmpty else { return }
+        let padding = T.inlineCodeChipPadding
+        context.saveGState()
+        context.setFillColor(chipFill.cgColor)
+        for line in textLineFragments where line.characterRange.length > 0 {
+            let baseline = Self.baseline(of: line)
+            let centreY = baseline - markerFont.xHeight / 2
+            for run in runs {
+                let part = NSIntersectionRange(run, line.characterRange)
+                guard part.length > 0 else { continue }
+                let startX = line.locationForCharacter(at: part.location).x
+                var endX = line.locationForCharacter(at: NSMaxRange(part)).x
+                // The run's last character carries the right-hand padding
+                // as kern; a run cut by a wrap ends at its last glyph.
+                if NSMaxRange(part) < NSMaxRange(run) { endX += padding }
+                let origin = line.typographicBounds.origin
+                let rect = CGRect(x: point.x + origin.x + startX - padding, y: point.y + centreY - T.inlineCodeChipHeight / 2,
+                                  width: max(0, endX - startX + padding), height: T.inlineCodeChipHeight)
+                context.addPath(CGPath(roundedRect: rect, cornerWidth: T.inlineCodeChipRadius, cornerHeight: T.inlineCodeChipRadius, transform: nil))
+            }
+        }
+        context.fillPath()
+        context.restoreGState()
     }
 
     /// A pill: rounded at the top and the bottom of the whole quote. A slice
@@ -211,31 +359,37 @@ final class NoteBlockLayoutFragment: NSTextLayoutFragment {
         context.restoreGState()
     }
 
-    /// The block's continuous rounded rectangle, cut to this slice: a slice
-    /// that does not start or end the block extends past its own edge, so
-    /// its corners fall outside the clip.
-    private func drawBlock(_ block: CGRect, starts: Bool, ends: Bool, at point: CGPoint, in context: CGContext) {
+    /// The box's continuous rounded rectangle, cut to this slice: a slice
+    /// that does not start or end the box extends past its own edge, so its
+    /// corners fall outside the clip. `edge`: its outline, inside it (the
+    /// code block's 0.5 pt hairline, or 1 pt under Increase Contrast).
+    private func drawBox(_ block: CGRect, starts: Bool, ends: Bool, radius: CGFloat, edge: (NSColor, CGFloat)?,
+                         at point: CGPoint, in context: CGContext) {
         let slice = block.offsetBy(dx: point.x, dy: point.y)
-        let reach = T.monoRadius * 2
+        let reach = radius * 2
         let full = CGRect(x: slice.minX, y: slice.minY - (starts ? 0 : reach),
                           width: slice.width, height: slice.height + (starts ? 0 : reach) + (ends ? 0 : reach))
-        let path = RoundedRectangle(cornerRadius: T.monoRadius, style: .continuous).path(in: full).cgPath
+        let path = RoundedRectangle(cornerRadius: radius, style: .continuous).path(in: full).cgPath
         context.saveGState()
         context.clip(to: slice)
         context.addPath(path)
         context.setFillColor(fill.cgColor)
         context.fillPath()
-        if let border {
-            // Increase Contrast: the block's edge, 1 pt inside it.
-            let inset = RoundedRectangle(cornerRadius: T.monoRadius - 0.5, style: .continuous)
-                .path(in: full.insetBy(dx: 0.5, dy: 0.5)).cgPath
-            context.addPath(inset)
-            context.setStrokeColor(border.cgColor)
-            context.setLineWidth(1)
+        if let (ink, width) = edge {
+            let inset = width / 2
+            let outline = RoundedRectangle(cornerRadius: radius - inset, style: .continuous)
+                .path(in: full.insetBy(dx: inset, dy: inset)).cgPath
+            context.addPath(outline)
+            context.setStrokeColor(ink.cgColor)
+            context.setLineWidth(width)
             context.strokePath()
         }
         context.restoreGState()
     }
+
+    /// The code block's hairline ink (`divider`); Increase Contrast's
+    /// `border` replaces it at 1 pt.
+    var hairlineInk: NSColor?
 }
 
 // MARK: - The engine's layout hooks
@@ -281,9 +435,11 @@ extension NoteEditorEngine: NSTextLayoutManagerDelegate, @preconcurrency NSTextC
                            in textElement: NSTextElement) -> NSTextLayoutFragment {
         let offset = contentStorage.offset(from: contentStorage.documentRange.location, to: location)
         let changed = historyDifferenceOffsets.contains(offset)
-        let native = offset > 0 && offset < textStorage.length ? decoration(forParagraphAt: offset) : nil
+        let inStorage = offset > 0 && offset < textStorage.length
+        let native = inStorage ? decoration(forParagraphAt: offset) : nil
+        let chips = inStorage && containsInlineCode(paragraphAt: offset)
         guard offset >= 0, offset < textStorage.length,
-              let decoration = native ?? (changed ? .history : nil) else {
+              let decoration = native ?? (changed ? .history : (chips ? .plain : nil)) else {
             return NSTextLayoutFragment(textElement: textElement, range: nil)
         }
         let fragment = NoteBlockLayoutFragment(textElement: textElement, range: nil)
@@ -293,21 +449,45 @@ extension NoteEditorEngine: NSTextLayoutManagerDelegate, @preconcurrency NSTextC
         fragment.spacingBefore = paragraph?.paragraphSpacingBefore ?? 0
         let kind = paragraphKind(at: offset)
         fragment.boxShift = NoteTextStyle.boxShift(kind)
+        fragment.markerFont = style.font(for: kind)
+        fragment.ink = style.bodyColor
+        if chips { fragment.chipFill = style.codeColor }
         switch decoration {
-        case .mono:
+        case let .mono(starts, _, _):
             fragment.fill = style.codeBlockColor
             fragment.border = style.codeBlockBorder
-        case .number:
-            fragment.ink = style.markerColor
-            fragment.markerFont = NSFont.monospacedDigitSystemFont(ofSize: AtticNoteType.body.size, weight: .regular)
+            fragment.hairlineInk = style.tokens.divider.nsColor
+            fragment.labelInk = style.secondaryColor
+            if starts { fragment.codeLabel = NoteCodeLanguageName.label(for: codeLanguage(at: offset)) }
+        case .callout:
+            fragment.fill = style.codeBlockColor
+            fragment.border = style.codeBlockBorder
+        case .marker(let marker, _):
+            if case .number = marker { fragment.markerFont = Self.markerNumberFont }
+            if case .letter = marker { fragment.markerFont = Self.markerNumberFont }
+            if case .roman = marker { fragment.markerFont = Self.markerNumberFont }
         case .quote:
             fragment.ink = style.quoteBarColor
-            fragment.markerFont = style.font(for: kind)
-        case .bullet, .history:
-            fragment.ink = style.bodyColor
-            fragment.markerFont = style.font(for: kind)
+        case .history, .plain:
+            break
         }
         return fragment
+    }
+
+    /// List numbers: the body's size in tabular figures, so "9." and "10."
+    /// line up on their periods.
+    static let markerNumberFont = NSFont.monospacedDigitSystemFont(ofSize: AtticNoteType.body.size, weight: .regular)
+
+    /// Whether the paragraph at `location` has inline code (its chips are
+    /// drawn by the paragraph's fragment). Bounded by the paragraph.
+    func containsInlineCode(paragraphAt location: Int) -> Bool {
+        let line = lineRange(at: location)
+        guard line.length > 0 else { return false }
+        var found = false
+        textStorage.enumerateAttribute(.noteMark(.code), in: line, options: [.longestEffectiveRangeNotRequired]) { value, _, stop in
+            if value != nil { found = true; stop.pointee = true }
+        }
+        return found
     }
 
     /// What the paragraph at `location` draws beside its text, if anything.
@@ -321,19 +501,68 @@ extension NoteEditorEngine: NSTextLayoutManagerDelegate, @preconcurrency NSTextC
         case "mono":
             return .mono(starts: !isMono(paragraphBefore: line), ends: !isMono(paragraphAfter: line),
                          exitsAtEnd: monoExitsAtEnd(line))
-        case "bullet":
-            return .bullet(x: depth + AtticNoteType.bulletCentre)
-        case "number":
-            let ordinal = numberedOrdinal(at: line.location, indent: attributes[.noteBlockIndent] as? Int ?? 0)
-            return .number("\(ordinal).", trailing: depth + AtticNoteType.listTextInset - AtticNoteType.numberGap)
+        case "bullet", "number":
+            guard let marker = listMarker(at: line.location) else { return nil }
+            return .marker(marker, x: depth)
         case "quote":
-            // F.1 placeholder: the visible builder supplies the callout box.
-            if attributes[.noteCalloutIcon] != nil { return nil }
-            return .quote(x: depth, joinsAbove: style(paragraphBefore: line) == "quote",
-                          joinsBelow: style(paragraphAfter: line) == "quote")
+            if let icon = attributes[.noteCalloutIcon] as? String {
+                return .callout(icon: icon, starts: calloutIcon(paragraphBefore: line) != icon,
+                                ends: !calloutContinues(after: line, icon: icon), exitsAtEnd: boxExitsAtEnd(line))
+            }
+            return .quote(x: depth, joinsAbove: isPlainQuote(paragraphBefore: line),
+                          joinsBelow: isPlainQuote(paragraphAfter: line))
         default:
             return nil
         }
+    }
+
+    /// The callout icon of the paragraph above (nil: not a callout).
+    private func calloutIcon(paragraphBefore line: NSRange) -> String? {
+        guard line.location > 0 else { return nil }
+        let previous = paragraphRange(at: line.location - 1)
+        guard previous.location > 0 else { return nil }
+        return textStorage.attribute(.noteCalloutIcon, at: previous.location, effectiveRange: nil) as? String
+    }
+
+    /// The callout box goes on below `line`: the next paragraph is a callout
+    /// with the same icon, or the note's empty last line has that callout
+    /// pending.
+    private func calloutContinues(after line: NSRange, icon: String) -> Bool {
+        let next = NSMaxRange(line)
+        if next < textStorage.length {
+            return textStorage.attribute(.noteCalloutIcon, at: next, effectiveRange: nil) as? String == icon
+        }
+        guard next == textStorage.length, next > 0,
+              (textStorage.string as NSString).character(at: next - 1) == 0x0A else { return false }
+        return pendingParagraphStyle?.location == next && pendingParagraphStyle?.state.style == .callout(icon: icon)
+    }
+
+    private func isPlainQuote(paragraphBefore line: NSRange) -> Bool {
+        guard line.location > 0 else { return false }
+        let previous = paragraphRange(at: line.location - 1)
+        guard previous.location > 0 else { return false }
+        return textStorage.attribute(.noteBlockStyle, at: previous.location, effectiveRange: nil) as? String == "quote"
+            && textStorage.attribute(.noteCalloutIcon, at: previous.location, effectiveRange: nil) == nil
+    }
+
+    private func isPlainQuote(paragraphAfter line: NSRange) -> Bool {
+        let next = NSMaxRange(line)
+        guard next < textStorage.length else { return false }
+        return textStorage.attribute(.noteBlockStyle, at: next, effectiveRange: nil) as? String == "quote"
+            && textStorage.attribute(.noteCalloutIcon, at: next, effectiveRange: nil) == nil
+    }
+
+    /// A box (code or a callout) that ends the note keeps its bottom padding
+    /// above the note's empty last line, unless that line continues the box
+    /// (its style is pending).
+    func boxExitsAtEnd(_ paragraph: NSRange) -> Bool {
+        let string = textStorage.string as NSString
+        guard paragraph.length > 0, NSMaxRange(paragraph) == string.length,
+              string.character(at: NSMaxRange(paragraph) - 1) == 0x0A else { return false }
+        guard let pending = pendingParagraphStyle, pending.location == string.length else { return true }
+        let format = paragraphStyle(at: paragraph.location)
+        if format?.isCode == true { return !pending.state.style.isCode }
+        return pending.state.style != format
     }
 
     private func style(paragraphBefore line: NSRange) -> String? {
@@ -359,21 +588,21 @@ extension NoteEditorEngine: NSTextLayoutManagerDelegate, @preconcurrency NSTextC
         if next < textStorage.length { return style(paragraphAfter: line) == "mono" }
         guard next == textStorage.length, next > 0,
               (textStorage.string as NSString).character(at: next - 1) == 0x0A else { return false }
-        return pendingParagraphStyle?.location == next && pendingParagraphStyle?.state.style == .mono
+        return pendingParagraphStyle?.location == next && pendingParagraphStyle?.state.style.isCode == true
     }
 
     /// The Mono block around `location` (its first paragraph's start to its
     /// last paragraph's end, without the final line break), or nil.
     func monoBlockRange(at location: Int) -> NSRange? {
-        guard location < textStorage.length, paragraphStyle(at: location) == .mono else { return nil }
+        guard location < textStorage.length, paragraphStyle(at: location)?.isCode == true else { return nil }
         var start = paragraphRange(at: location)
         while start.location > 0 {
             let previous = paragraphRange(at: start.location - 1)
-            guard previous.location > 0, paragraphStyle(at: previous.location) == .mono else { break }
+            guard previous.location > 0, paragraphStyle(at: previous.location)?.isCode == true else { break }
             start = previous
         }
         var end = paragraphRange(at: location)
-        while NSMaxRange(end) < textStorage.length, paragraphStyle(at: NSMaxRange(end)) == .mono {
+        while NSMaxRange(end) < textStorage.length, paragraphStyle(at: NSMaxRange(end))?.isCode == true {
             end = paragraphRange(at: NSMaxRange(end))
         }
         var range = NSRange(location: start.location, length: NSMaxRange(end) - start.location)
@@ -754,4 +983,43 @@ final class NoteHeadingButton: NSButton {
         context.strokePath()
         context.restoreGState()
     }
+}
+
+// MARK: - Code languages and callout icons, as the chrome names them
+
+/// The code block's language menu (spec C: Plain Text and twelve languages)
+/// and the label each stored id shows.
+enum NoteCodeLanguageName {
+    /// The menu's languages in order; nil is Plain Text.
+    static let menu: [String?] = [nil, "javascript", "typescript", "json", "swift", "python", "shell",
+                                  "html", "css", "sql", "yaml", "diff", "mermaid"]
+
+    static func label(for language: String?) -> String {
+        switch language {
+        case nil: String(localized: "Plain text")
+        case "javascript": "JavaScript"
+        case "typescript": "TypeScript"
+        case "json": "JSON"
+        case "swift": "Swift"
+        case "python": "Python"
+        case "shell": String(localized: "Shell")
+        case "html": "HTML"
+        case "css": "CSS"
+        case "sql": "SQL"
+        case "yaml": "YAML"
+        case "diff": String(localized: "Diff")
+        case "mermaid": "Mermaid"
+        case let other?: other
+        }
+    }
+
+    /// The menu's row title (Plain Text in title case, as menus write it).
+    static func menuTitle(for language: String?) -> String {
+        language == nil ? String(localized: "Plain Text") : label(for: language)
+    }
+}
+
+/// The callout's Icon menu (spec C): six emoji, the system palette and No Icon.
+enum NoteCalloutIcons {
+    static let menu = ["💡", "⚠️", "✅", "❗", "📌", "ℹ️"]
 }

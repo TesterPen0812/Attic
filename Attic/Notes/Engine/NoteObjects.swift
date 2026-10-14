@@ -66,9 +66,9 @@ final class NoteChecklistAttachment: NoteObjectAttachment {
 
 /// A structural rule occupying a whole paragraph, with stable identity.
 final class NoteDividerAttachment: NoteObjectAttachment {
-    /// The rule's thickness: a hairline (a device pixel at 2×), 1 pt under
-    /// Increase Contrast (as the table's grid).
-    static func ruleThickness(increaseContrast: Bool) -> CGFloat { increaseContrast ? 1 : 0.5 }
+    /// The rule's thickness: 1 pt (R14, Codex's divider; Increase Contrast
+    /// raises its ink, not its weight).
+    static func ruleThickness(increaseContrast: Bool) -> CGFloat { AtticNoteType.dividerThickness }
 
     override init(objectID: UUID = UUID()) { super.init(objectID: objectID) }
     override var isBlockObject: Bool { true }
@@ -372,12 +372,11 @@ final class NoteObjectRenderer {
                 text: opaque.isInline ? "…" : String(localized: "Content from a newer Attic")
             )
         case let divider as NoteDividerAttachment:
-            // A 0.5 pt rule in the separator ink (the table's grid ink), on
-            // a whole device pixel; the attachment's bounds make it the
-            // text column's width and no more (spec § Divider; A39: it was
-            // the near-black secondary ink at 1 pt).
+            // R14: a 1 pt rule in the `divider` ink (black 6 %, white 7 %;
+            // 18 % / 20 % under Increase Contrast), on whole device pixels;
+            // the attachment's bounds make it the text column's width.
             let thickness = NoteDividerAttachment.ruleThickness(increaseContrast: design.increaseContrast)
-            divider.renderedImage = render(Rectangle().fill(design.tokens.tableGrid.color)
+            divider.renderedImage = render(Rectangle().fill(design.tokens.divider.color)
                 .frame(height: thickness)
                 .padding(.top, ((NoteTextStyle.bodyLineHeight - thickness) / 2).rounded(.down))
                 .frame(height: NoteTextStyle.bodyLineHeight, alignment: .top))

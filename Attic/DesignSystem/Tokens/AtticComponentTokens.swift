@@ -615,63 +615,115 @@ enum AtticNoteType {
 
     /// The note's first line.
     static let title = Role(size: 18.5, lineHeight: 22, weight: 700)
-    /// The Title style inside the note, Heading and Subheading.
-    static let titleStyle = Role(size: 15.5, lineHeight: 19.5, weight: 650)
-    static let heading = Role(size: 14.5, lineHeight: 19, weight: 650)
-    static let subheading = Role(size: 13.5, lineHeight: 18, weight: 650)
-    /// Body, lists and checklists: 12.5 on a 1.4 line.
-    static let body = Role(size: 12.5, lineHeight: 17.5, weight: 400)
-    /// A quote: 13.5 pt, in the body ink, beside a 3 pt bar.
-    static let quote = Role(size: 13.5, lineHeight: 19.5, weight: 400)
-    /// Code (SF Mono), in one rounded block.
-    static let mono = Role(size: 11, lineHeight: 15.5, weight: 400, monospaced: true)
+    /// R14 (Codex Pages scaled to the panel, `notes-r14-spec.md` B.2):
+    /// Codex's sizes × 12.5 / 15, the body kept at the owner's 12.5. The
+    /// Title style inside the note (H1), Heading (H2), Subheading (H3) and
+    /// Small Heading (H4–H6: the body's size, the headings' weight).
+    static let titleStyle = Role(size: 16.5, lineHeight: 21, weight: 650)
+    static let heading = Role(size: 15, lineHeight: 20, weight: 650)
+    static let subheading = Role(size: 13.5, lineHeight: 18.5, weight: 650)
+    static let smallHeading = Role(size: 12.5, lineHeight: 18.5, weight: 650)
+    /// Body, lists, checklists, quotes, callouts and table cells: 12.5 on
+    /// a 1.48 line (Codex's 1.53 for a shorter measure).
+    static let body = Role(size: 12.5, lineHeight: 18.5, weight: 400)
+    /// A quote: the body's size and ink beside a 3 pt bar (Codex).
+    static let quote = Role(size: 12.5, lineHeight: 18.5, weight: 400)
+    /// Code (SF Mono) on Codex's 1.5 line, in one rounded block.
+    static let mono = Role(size: 11, lineHeight: 16.5, weight: 400, monospaced: true)
+    /// A code block's language label: Attic's smallest content text.
+    static let codeLabel = Role(size: 11, lineHeight: 14, weight: 400)
+    /// Inline code's face in its chip (Codex 0.87 em).
+    static let inlineCodeSize: CGFloat = 11
 
-    /// Between ordinary paragraphs (and list items, quote lines).
-    static let paragraphGap: CGFloat = 2
-    /// From the note's title to its first block.
-    static let titleToText: CGFloat = 7
-    /// Above the Title style, Heading and Subheading; below each, to the
-    /// block it introduces (headings stick to their text).
-    static let aboveTitleStyle: CGFloat = 11
-    static let aboveHeading: CGFloat = 9
-    static let aboveSubheading: CGFloat = 8
-    static let belowTitleStyle: CGFloat = 1
-    static let belowHeading: CGFloat = 1
-    static let belowSubheading: CGFloat = 1
-    /// Around a Mono block (and a block object: an image, a file, a
-    /// divider); 4 when the block follows a heading directly.
-    static let blockMargin: CGFloat = 6
-    static let blockAfterHeading: CGFloat = 4
-    /// The Mono block: 12 pt above and below, 9.5 at the sides, the content
-    /// card's radius 10. The sides were 14 in the draft, which wrapped the
-    /// owner's first citation line to a lone "w,"; 33 SF Mono characters at
-    /// 12 pt are 244.8 pt, so the side padding must leave at least that of
-    /// the 264 pt column: 10 leaves 244 (a lone ","), 9.5 leaves 245.
-    static let monoPaddingV: CGFloat = 9
-    static let monoPaddingH: CGFloat = 8.5
+    /// Spacing (B.3, Codex's whitespace × 0.6): between paragraphs (and
+    /// inside quotes and callouts), between list or checklist items, and
+    /// from the note's title to its first block.
+    static let paragraphGap: CGFloat = 8
+    static let listItemGap: CGFloat = 3
+    static let titleToText: CGFloat = 10
+    /// Above the Title style, Heading, Subheading and Small Heading; below
+    /// each, to the block it introduces (above : below ≈ 2.7 : 1); a
+    /// heading right after a heading sits 6 under it.
+    static let aboveTitleStyle: CGFloat = 20
+    static let aboveHeading: CGFloat = 16
+    static let aboveSubheading: CGFloat = 14
+    static let aboveSmallHeading: CGFloat = 12
+    static let belowTitleStyle: CGFloat = 6
+    static let belowHeading: CGFloat = 6
+    static let belowSubheading: CGFloat = 6
+    static let belowSmallHeading: CGFloat = 6
+    static let headingAfterHeading: CGFloat = 6
+    /// Around a box (code, a callout, a quote run) and a block object (an
+    /// image, a file, a divider, a table); 6 when it follows a heading.
+    static let blockMargin: CGFloat = 12
+    static let blockAfterHeading: CGFloat = 6
+    /// The code block (B.4): 8 above and below its lines, 12 at the sides,
+    /// the content card's radius 10 and a 0.5 pt hairline. Its label row
+    /// (14 tall) sits at the top, 4 above the first code line.
+    static let monoPaddingV: CGFloat = 8
+    static let monoPaddingH: CGFloat = 12
     static let monoRadius: CGFloat = AtticRadius.contentCard
-    /// Copy: a 16 pt icon chip (`doc.on.doc`) inside the block's top-right
-    /// corner, 6 in from the right edge and 6 down from the top edge (design
-    /// review D-12: it no longer straddles the block's outline). Its radius
-    /// is a third of its size (5.3), close to concentric with the block's
-    /// 10. Opaque in the block's own fill; shown on hover (or over the chip
-    /// itself), while the caret is in the block, or for VoiceOver. It never
-    /// moves the text.
+    static let monoHairline: CGFloat = 0.5
+    static let monoLabelHeight: CGFloat = 14
+    static let monoLabelGap: CGFloat = 4
+    /// Copy: a 16 pt icon chip in the label row, 7 in from the block's
+    /// right edge and 7 down from its top (centred on the row), so it never
+    /// covers code by layout. Its radius is a third of its size (5.3).
+    /// Shown on hover, while the caret is in the block, or for VoiceOver.
     static let monoCopySize: CGFloat = 16
-    static let monoCopyInset: CGFloat = 6
-    static let monoCopyTop: CGFloat = 6
+    static let monoCopyInset: CGFloat = 7
+    static let monoCopyTop: CGFloat = 7
     static let monoCopyGlyph: CGFloat = 9
-    /// Lists and checklists: their text 20 in (each level 20 more), a 4.5 pt
-    /// dot centred 7 in (the checklist box's centre); numbers end 5 before
-    /// the text.
+    /// Lists and checklists: their text 20 in (each level 20 more). Every
+    /// marker sits in one 14 pt slot at the line's start, 6 before the
+    /// text: a 4 pt disc, a 4.5 pt ring (1 pt stroke) and a 3.5 pt square
+    /// by depth, centred on x 7 and raised 0.5 off the first line's
+    /// x-height middle; numbers, letters and roman numerals end at x 14.
     static let listTextInset: CGFloat = 20
     static let listLevelStep: CGFloat = 20
-    static let bulletDot: CGFloat = 4.5
+    static let markerSlot: CGFloat = 14
+    static let bulletDot: CGFloat = 4
+    static let bulletRing: CGFloat = 4.5
+    static let bulletRingStroke: CGFloat = 1
+    static let bulletSquare: CGFloat = 3.5
+    static let bulletSquareRadius: CGFloat = 0.5
     static let bulletCentre: CGFloat = 7
-    static let numberGap: CGFloat = 5
-    /// Quote: a 3 pt bar at the column's edge, the text 13 in.
+    static let bulletLift: CGFloat = 0.5
+    static let numberGap: CGFloat = 6
+    /// Quote: a 3 pt bar at the column's edge, the text 20 in (the lists'
+    /// column).
     static let quoteBar: CGFloat = 3
-    static let quoteTextInset: CGFloat = 13
+    static let quoteTextInset: CGFloat = 20
+    /// Callout: the recessed fill in a radius-10 box, 8 above and below
+    /// its lines and 12 at the sides; the emoji at 15 pt in a 16 pt slot
+    /// 12 in, centred on the first line's cap height, the text at 36 (12
+    /// without an icon).
+    static let calloutPaddingV: CGFloat = 8
+    static let calloutPaddingH: CGFloat = 12
+    static let calloutRadius: CGFloat = AtticRadius.contentCard
+    static let calloutIconSize: CGFloat = 15
+    static let calloutIconSlot: CGFloat = 16
+    static let calloutTextInset: CGFloat = 36
+    /// Inline code: a 14 pt chip centred on the x-height middle, radius 4,
+    /// 4 outside the glyphs on each side (kerned in, so the line keeps its
+    /// width rhythm).
+    static let inlineCodeChipHeight: CGFloat = 14
+    static let inlineCodeChipRadius: CGFloat = 4
+    static let inlineCodeChipPadding: CGFloat = 4
+    /// A divider: a 1 pt hairline across the column.
+    static let dividerThickness: CGFloat = 1
+    /// The block handle (D.2): 2 × 3 dots of 2 pt, 4 apart both ways (a
+    /// 6 × 10 glyph), centred 12 left of the column (the table row grip's
+    /// line) on the block's first line; a 24 × 28 hit area.
+    static let handleDot: CGFloat = 2
+    static let handlePitch: CGFloat = 4
+    static let handleFromColumn: CGFloat = 12
+    static let handleHitSize = CGSize(width: 24, height: 28)
+    /// The drop line: 2 pt in the accent, radius 1.
+    static let dropLineThickness: CGFloat = 2
+    /// The fold chevron after a heading's last glyph: 8 wide, 6 after it.
+    static let foldChevronWidth: CGFloat = 8
+    static let foldChevronGap: CGFloat = 6
 }
 
 /// Notes v2 tables (spec § 4.1, sheet 3, owner 2026-10-08): the body's
@@ -679,8 +731,9 @@ enum AtticNoteType {
 /// padding, columns 56–168 by content, a 0.5 pt grid in a 10 pt card, a
 /// 16 pt fade at a cut edge and a 3 pt scroll indicator under a wide table.
 enum AtticNoteTableMetrics {
-    static let cellPaddingH: CGFloat = 6
-    static let cellPaddingV: CGFloat = 4
+    /// R14: Codex's 13 / 10 × 0.6.
+    static let cellPaddingH: CGFloat = 8
+    static let cellPaddingV: CGFloat = 6
     static let minColumnWidth: CGFloat = 56
     static let maxColumnWidth: CGFloat = 168
     /// The narrowest a dragged column may get.

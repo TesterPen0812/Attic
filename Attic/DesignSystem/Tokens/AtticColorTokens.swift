@@ -1201,3 +1201,51 @@ enum Calm {
     static func rowSelection(dark: Bool) -> AtticRGBA { dark ? AtticRGBA(0x454545) : AtticRGBA(0xE7E7E7) }
     static func highPriority(dark: Bool) -> AtticRGBA { dark ? AtticRGBA(0xD9A16C) : AtticRGBA(0xB35D27) }
 }
+
+// MARK: - Code (Notes R14)
+
+private final class AtticSyntaxInkCache: @unchecked Sendable {
+    static let shared = AtticSyntaxInkCache()
+    private let lock = NSLock()
+    private var values: [AtticDesignContext.ColourKey: [NoteSyntaxToken: AtticRGBA]] = [:]
+
+    func inks(for key: AtticDesignContext.ColourKey, make: () -> [NoteSyntaxToken: AtticRGBA]) -> [NoteSyntaxToken: AtticRGBA] {
+        lock.lock(); defer { lock.unlock() }
+        if let cached = values[key] { return cached }
+        let made = make()
+        values[key] = made
+        return made
+    }
+}
+
+extension AtticColorTokens {
+    /// A code token's ink (R14 spec B.5): Codex's hues as starting values,
+    /// each tuned to 4.5 : 1 (7 : 1 under Increase Contrast) on the code
+    /// block's fill over the panel, Solid and Glass (over a mid-grey
+    /// desktop), lightened in Dark. Comments use the helper ink; plain
+    /// text and punctuation keep the body ink (nil).
+    func syntaxInk(_ token: NoteSyntaxToken) -> AtticRGBA? {
+        guard token != .plain else { return nil }
+        return AtticSyntaxInkCache.shared.inks(for: context) { makeSyntaxInks() }[token]
+    }
+
+    private func makeSyntaxInks() -> [NoteSyntaxToken: AtticRGBA] {
+        let dark = context.mode == .dark
+        let starts: [NoteSyntaxToken: AtticRGBA] = [
+            .keyword: AtticRGBA(dark ? 0xE28AB8 : 0x9F5479),
+            .property: AtticRGBA(dark ? 0xE0B36A : 0x8E6420),
+            .string: AtticRGBA(dark ? 0x8CC47F : 0x3F7239),
+            .literal: AtticRGBA(dark ? 0xE59A6E : 0xA0542F),
+            .function: AtticRGBA(dark ? 0xB69CF2 : 0x5E3EA8),
+            .operator: AtticRGBA(dark ? 0x8DB4F5 : 0x2C4D8F),
+            .added: AtticRGBA(dark ? 0x8CC47F : 0x3F7239),
+            .removed: AtticRGBA(dark ? 0xF08A80 : 0xA8322A)
+        ]
+        let surfaces = [panel.base.withAlpha(1), panel.composite(.midGrey, at: AtticSurfaceModel.contentTop), panel.composite(.midGrey, at: 1)]
+        let fills = surfaces.map { recessed.over($0) }
+        let target = context.increaseContrast ? 7.0 : 4.5
+        var result = starts.mapValues { $0.tuned(toContrast: target, against: fills, lighten: dark) }
+        result[.comment] = ink(.helper)
+        return result
+    }
+}
