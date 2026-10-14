@@ -238,32 +238,42 @@ enum NoteCommandCatalog {
     static func slashHint(_ kind: NoteSlashItem.Kind) -> String? {
         switch kind {
         case .checklist: "-[]"
-        case .heading: "#"
+        // R14: Markdown's levels (`# ` is the Title style).
+        case .title: "#"
+        case .heading: "##"
+        case .subheading: "###"
+        case .smallHeading: "####"
         case .bullet: "-"
         case .number: "1."
         case .quote: ">"
+        case .mono, .codeBlock: "```"
+        case .diagram: "```mermaid"
+        case .divider: "---"
         case .imageOrFile: String(localized: "paste or drop")
         case .table: "2 × 3"
-        case .title, .subheading, .body, .date, .divider, .mono, .smallHeading, .callout, .codeBlock, .diagram: nil
+        case .body, .date, .callout: nil
         }
     }
 
+    /// Each row's own glyph (R14: every block reads apart in the list).
     static func slashSymbol(_ kind: NoteSlashItem.Kind) -> String {
         switch kind {
         case .checklist: "checklist"
-        // Three sizes of one glyph (D-18, A3-07): the styles no longer
-        // share one icon.
+        // Sizes of one glyph (D-18, A3-07): the styles no longer share one icon.
         case .title: "textformat.size.larger"
         case .heading: "textformat.size"
-        case .subheading, .smallHeading: "textformat.size.smaller"
+        case .subheading: "textformat.size.smaller"
+        case .smallHeading: "textformat"
         case .body: "text.alignleft"
         case .bullet: "list.bullet"
         case .number: "list.number"
         case .imageOrFile: "photo"
         case .date: "calendar"
-        case .quote, .callout: "text.quote"
+        case .quote: "text.quote"
+        case .callout: "lightbulb"
         case .divider: "minus"
-        case .mono, .codeBlock, .diagram: "chevron.left.forwardslash.chevron.right"
+        case .mono, .codeBlock: "chevron.left.forwardslash.chevron.right"
+        case .diagram: "flowchart"
         case .table: "tablecells"
         }
     }

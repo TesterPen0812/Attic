@@ -83,34 +83,43 @@ final class NotesV2TypographyTests: XCTestCase {
 
     func testTypeScaleIsTheDraftsDirection5() {
         XCTAssertEqual(T.title, T.Role(size: 18.5, lineHeight: 22, weight: 700))
-        XCTAssertEqual(T.titleStyle, T.Role(size: 15.5, lineHeight: 19.5, weight: 650))
-        XCTAssertEqual(T.heading, T.Role(size: 14.5, lineHeight: 19, weight: 650))
-        XCTAssertEqual(T.subheading, T.Role(size: 13.5, lineHeight: 18, weight: 650))
-        XCTAssertEqual(T.body, T.Role(size: 12.5, lineHeight: 17.5, weight: 400))
-        XCTAssertEqual(T.quote, T.Role(size: 13.5, lineHeight: 19.5, weight: 400))
-        XCTAssertEqual(T.mono, T.Role(size: 11, lineHeight: 15.5, weight: 400, monospaced: true))
-        XCTAssertEqual([T.paragraphGap, T.titleToText], [2, 7])
-        XCTAssertEqual([T.aboveTitleStyle, T.aboveHeading, T.aboveSubheading], [11, 9, 8])
-        XCTAssertEqual([T.belowTitleStyle, T.belowHeading, T.belowSubheading], [1, 1, 1])
-        XCTAssertEqual([T.monoPaddingV, T.monoPaddingH, T.monoRadius], [9, 8.5, 10])
-        XCTAssertEqual([T.monoCopySize, T.monoCopyInset, T.monoCopyTop], [16, 6, 6])
-        XCTAssertEqual([T.listTextInset, T.bulletDot, T.quoteBar, T.quoteTextInset], [20, 4.5, 3, 13])
+        // R14 (notes-r14-spec.md B.2–B.4): Codex's proportions scaled to the panel.
+        XCTAssertEqual(T.titleStyle, T.Role(size: 16.5, lineHeight: 21, weight: 650))
+        XCTAssertEqual(T.heading, T.Role(size: 15, lineHeight: 20, weight: 650))
+        XCTAssertEqual(T.subheading, T.Role(size: 13.5, lineHeight: 18.5, weight: 650))
+        XCTAssertEqual(T.smallHeading, T.Role(size: 12.5, lineHeight: 18.5, weight: 650))
+        XCTAssertEqual(T.body, T.Role(size: 12.5, lineHeight: 18.5, weight: 400))
+        XCTAssertEqual(T.quote, T.Role(size: 12.5, lineHeight: 18.5, weight: 400))
+        XCTAssertEqual(T.mono, T.Role(size: 11, lineHeight: 16.5, weight: 400, monospaced: true))
+        XCTAssertEqual(T.codeLabel, T.Role(size: 11, lineHeight: 14, weight: 400))
+        XCTAssertEqual([T.paragraphGap, T.listItemGap, T.titleToText], [8, 3, 10])
+        XCTAssertEqual([T.aboveTitleStyle, T.aboveHeading, T.aboveSubheading, T.aboveSmallHeading], [20, 16, 14, 12])
+        XCTAssertEqual([T.belowTitleStyle, T.belowHeading, T.belowSubheading, T.belowSmallHeading, T.headingAfterHeading], [6, 6, 6, 6, 6])
+        XCTAssertEqual([T.blockMargin, T.blockAfterHeading], [12, 6])
+        XCTAssertEqual([T.monoPaddingV, T.monoPaddingH, T.monoRadius, T.monoHairline], [8, 12, 10, 0.5])
+        XCTAssertEqual([T.monoLabelHeight, T.monoLabelGap], [14, 4])
+        XCTAssertEqual([T.monoCopySize, T.monoCopyInset, T.monoCopyTop], [16, 7, 7])
+        XCTAssertEqual([T.listTextInset, T.markerSlot, T.bulletDot, T.bulletRing, T.bulletSquare, T.numberGap], [20, 14, 4, 4.5, 3.5, 6])
+        XCTAssertEqual([T.quoteBar, T.quoteTextInset], [3, 20])
+        XCTAssertEqual([T.calloutPaddingV, T.calloutPaddingH, T.calloutRadius, T.calloutIconSize, T.calloutTextInset], [8, 12, 10, 15, 36])
+        XCTAssertEqual([T.inlineCodeSize, T.inlineCodeChipHeight, T.inlineCodeChipRadius, T.inlineCodeChipPadding], [11, 14, 4, 4])
 
         let style = NoteTextStyle()
         XCTAssertEqual(style.titleFont.pointSize, 18.5)
         XCTAssertTrue(style.titleFont.fontDescriptor.symbolicTraits.contains(.bold))
-        XCTAssertEqual(style.titleStyleFont.pointSize, 15.5)
-        XCTAssertEqual(style.headingFont.pointSize, 14.5)
+        XCTAssertEqual(style.titleStyleFont.pointSize, 16.5)
+        XCTAssertEqual(style.headingFont.pointSize, 15)
         XCTAssertEqual(style.subheadingFont.pointSize, 13.5)
+        XCTAssertEqual(style.smallHeadingFont.pointSize, 12.5)
         XCTAssertEqual(style.bodyFont.pointSize, 12.5)
-        XCTAssertEqual(style.quoteFont.pointSize, 13.5)
+        XCTAssertEqual(style.quoteFont.pointSize, 12.5)
         XCTAssertEqual(style.monoFont.pointSize, 11)
         XCTAssertTrue(style.monoFont.fontDescriptor.symbolicTraits.contains(.monoSpace))
         // 650 sits between semibold and bold: wider than semibold, narrower than bold.
         let sample = "Colonial Pipeline ransomware" as NSString
         func width(_ font: NSFont) -> CGFloat { sample.size(withAttributes: [.font: font]).width }
-        XCTAssertGreaterThan(width(style.titleStyleFont), width(.systemFont(ofSize: 15.5, weight: .semibold)))
-        XCTAssertLessThan(width(style.titleStyleFont), width(.systemFont(ofSize: 15.5, weight: .bold)))
+        XCTAssertGreaterThan(width(style.titleStyleFont), width(.systemFont(ofSize: 16.5, weight: .semibold)))
+        XCTAssertLessThan(width(style.titleStyleFont), width(.systemFont(ofSize: 16.5, weight: .bold)))
         // One near-black ink for the text and its headings.
         XCTAssertEqual(style.bodyColor, style.titleColor)
         XCTAssertEqual(style.quoteColor, style.bodyColor)
@@ -136,15 +145,22 @@ final class NotesV2TypographyTests: XCTestCase {
 
     func testGapsAreTheDrafts() {
         typealias K = NoteParagraphKind
+        // R14 B.3: paragraphs 8, list items 3, boxes 12 around, headings
+        // 20 / 16 / 14 / 12 above and 6 below, a heading 6 under a heading.
+        let tip = K.callout(icon: "💡"), warning = K.callout(icon: "⚠️")
         let cases: [(K, K?, CGFloat)] = [
-            (.body, nil, 0), (.titleStyle, .title, 7), (.body, .title, 7), (.mono, .title, 7),
-            (.titleStyle, .body, 11), (.heading, .body, 9), (.subheading, .body, 8),
-            (.subheading, .subheading, 8), (.heading, .mono, 9),
-            (.body, .titleStyle, 1), (.body, .heading, 1), (.body, .subheading, 1),
-            (.mono, .subheading, 4), (.mono, .titleStyle, 4),
-            (.body, .body, 2), (.quote, .quote, 2), (.quote, .body, 2),
-            (.mono, .body, 6), (.body, .mono, 6), (.mono, .mono, 0),
-            (.blockObject, .body, 6), (.body, .blockObject, 6)
+            (.body, nil, 0), (.titleStyle, .title, 10), (.body, .title, 10), (.mono, .title, 10),
+            (.titleStyle, .body, 20), (.heading, .body, 16), (.subheading, .body, 14), (.smallHeading, .body, 12),
+            (.subheading, .subheading, 6), (.heading, .titleStyle, 6), (.smallHeading, .subheading, 6), (.heading, .mono, 16),
+            (.body, .titleStyle, 6), (.body, .heading, 6), (.body, .subheading, 6), (.body, .smallHeading, 6),
+            (.mono, .subheading, 6), (.mono, .titleStyle, 6), (tip, .heading, 6), (.quote, .heading, 6), (.listItem, .heading, 6),
+            (.body, .body, 8), (.listItem, .body, 8), (.body, .listItem, 8), (.listItem, .listItem, 3),
+            (.quote, .quote, 8), (.quote, .body, 12), (.body, .quote, 12),
+            (tip, tip, 8), (warning, tip, 12), (tip, .body, 12), (.body, tip, 12), (tip, .quote, 12),
+            (.mono, .body, 12), (.body, .mono, 12), (.mono, .mono, 0), (.listItem, .mono, 12),
+            (.blockObject, .body, 12), (.body, .blockObject, 12),
+            // A divider's 12 is to its rule, mid-line in its 18.5 pt box.
+            (.divider, .body, 3.25), (.body, .divider, 3.25), (.divider, .heading, 0)
         ]
         for (kind, previous, gap) in cases {
             XCTAssertEqual(NoteTextStyle.gap(above: kind, after: previous), gap, "\(kind) after \(String(describing: previous))")
@@ -177,7 +193,7 @@ final class NotesV2TypographyTests: XCTestCase {
             let role = kind.role
             let font = NoteTextStyle.font(for: role)
             var cssTop = cssBottom + NoteTextStyle.gap(above: kind, after: previous)
-            if kind == .mono, !inMono { cssTop += T.monoPaddingV }
+            if kind == .mono, !inMono { cssTop += NoteBlockLayoutFragment.monoTopInset }
             let lines = fragment.textLineFragments.filter { $0.characterRange.length > 0 || fragment.textLineFragments.count == 1 }
             let first = try XCTUnwrap(lines.first)
             let native = fragment.layoutFragmentFrame.minY + first.typographicBounds.minY + first.glyphOrigin.y
@@ -240,10 +256,10 @@ final class NotesV2TypographyTests: XCTestCase {
         let lastFragment = try XCTUnwrap(blocks.last)
         let lastLine = try XCTUnwrap(lastFragment.textLineFragments.last)
         XCTAssertEqual(firstLine.typographicBounds.minY + blocks[0].layoutFragmentFrame.minY - block.minY,
-                       T.monoPaddingV - NoteTextStyle.baselineShift(T.mono), accuracy: 0.01)
+                       NoteBlockLayoutFragment.monoTopInset - NoteTextStyle.baselineShift(T.mono), accuracy: 0.01)
         XCTAssertEqual(block.maxY - (lastFragment.layoutFragmentFrame.minY + lastLine.typographicBounds.maxY),
                        T.monoPaddingV + NoteTextStyle.baselineShift(T.mono), accuracy: 0.01)
-        // 4 above the block after "Sources:" (a heading binds to it).
+        // 6 above the block after "Sources:" (a heading binds to it).
         let sources = fragments(engine)[8]
         XCTAssertEqual(block.minY - sources.layoutFragmentFrame.maxY,
                        NoteTextStyle.gap(above: .mono, after: .subheading) + NoteTextStyle.boxShift(.subheading), accuracy: 0.01)
@@ -256,7 +272,7 @@ final class NotesV2TypographyTests: XCTestCase {
         let (engine, _) = makeEngine(cia)
         let blocks = monoFragments(engine)
         // The arithmetic: 33 SF Mono characters at 11 pt need 224.4 pt; the
-        // 264 pt column less 2 × 8.5 leaves 247.
+        // 264 pt column less 2 × 12 leaves 240.
         let citation = "@inproceedings{beerman2023review,"
         let needed = (citation as NSString).size(withAttributes: [.font: NoteTextStyle().monoFont]).width
         XCTAssertLessThanOrEqual(needed, 264 - 2 * T.monoPaddingH)
@@ -438,7 +454,7 @@ final class NotesV2TypographyTests: XCTestCase {
         XCTAssertEqual(stored.textLists.first?.markerFormat, .decimal)
 
         let bullet = try XCTUnwrap(frags[1] as? NoteBlockLayoutFragment)
-        XCTAssertEqual(bullet.decoration, .bullet(x: T.bulletCentre))
+        XCTAssertEqual(bullet.decoration, .marker(.disc, x: 0))
         let lines = bullet.textLineFragments
         XCTAssertGreaterThan(lines.count, 1)
         func textX(_ line: NSTextLineFragment) -> CGFloat {
@@ -449,14 +465,14 @@ final class NotesV2TypographyTests: XCTestCase {
             XCTAssertEqual(bullet.layoutFragmentFrame.minX + textX(line), T.listTextInset, accuracy: 0.01, "text and wraps at 22")
         }
         let nested = try XCTUnwrap(frags[2] as? NoteBlockLayoutFragment)
-        XCTAssertEqual(nested.decoration, .bullet(x: T.listLevelStep + T.bulletCentre))
+        XCTAssertEqual(nested.decoration, .marker(.ring, x: T.listLevelStep))
         XCTAssertEqual(nested.layoutFragmentFrame.minX + textX(try XCTUnwrap(nested.textLineFragments.first)),
                        T.listLevelStep + T.listTextInset, accuracy: 0.01)
-        XCTAssertEqual((frags[3] as? NoteBlockLayoutFragment)?.decoration, .number("1.", trailing: T.listTextInset - T.numberGap))
-        XCTAssertEqual((frags[4] as? NoteBlockLayoutFragment)?.decoration, .number("2.", trailing: T.listTextInset - T.numberGap))
+        XCTAssertEqual((frags[3] as? NoteBlockLayoutFragment)?.decoration, .marker(.number("1."), x: 0))
+        XCTAssertEqual((frags[4] as? NoteBlockLayoutFragment)?.decoration, .marker(.number("2."), x: 0))
         XCTAssertFalse(frags[5] is NoteBlockLayoutFragment, "body text draws nothing beside it")
         XCTAssertEqual(try paragraphStyle("Two", engine).paragraphSpacingBefore,
-                       NoteTextStyle.spacingBefore(.body, after: .body), accuracy: 0.001, "3 between items")
+                       NoteTextStyle.spacingBefore(.listItem, after: .listItem), accuracy: 0.001, "3 between items")
     }
 
     func testChecklistTextAndWrapsAt22() throws {
@@ -469,11 +485,11 @@ final class NotesV2TypographyTests: XCTestCase {
         for line in lines.dropFirst() { XCTAssertEqual(line.typographicBounds.minX, T.listTextInset, accuracy: 0.01) }
     }
 
-    func testQuoteIs13_5WithA3PointBarJoiningItsLines() throws {
+    func testQuoteIsBodySizeWithA3PointBarJoiningItsLines() throws {
         let (engine, _) = makeEngine([.text("Title"), styled("First thought", "quote"), styled("Second thought", "quote"),
                                       .text("Body")])
         let frags = fragments(engine)
-        XCTAssertEqual((engine.textStorage.attribute(.font, at: location(of: "First", in: engine), effectiveRange: nil) as? NSFont)?.pointSize, 13.5)
+        XCTAssertEqual((engine.textStorage.attribute(.font, at: location(of: "First", in: engine), effectiveRange: nil) as? NSFont)?.pointSize, 12.5)
         let first = try XCTUnwrap(frags[1] as? NoteBlockLayoutFragment)
         let second = try XCTUnwrap(frags[2] as? NoteBlockLayoutFragment)
         XCTAssertEqual(first.decoration, .quote(x: 0, joinsAbove: false, joinsBelow: true))
@@ -485,6 +501,170 @@ final class NotesV2TypographyTests: XCTestCase {
                        NoteTextStyle.spacingBefore(.quote, after: .title), accuracy: 0.001)
         XCTAssertEqual(try paragraphStyle("Second", engine).paragraphSpacingBefore,
                        NoteTextStyle.spacingBefore(.quote, after: .quote), accuracy: 0.001)
+    }
+
+    // MARK: R14 · the visible redesign
+
+    func testR14LinksAreDottedAndInlineCodeIsAKernedChip() throws {
+        let style = NoteTextStyle()
+        let link = style.markedAttributes(marks: [.link: "https://example.com"], baseFont: style.bodyFont)
+        XCTAssertEqual(link[.underlineStyle] as? Int, NSUnderlineStyle([.single, .patternDot]).rawValue, "Codex's dotted underline")
+        XCTAssertEqual(link[.underlineColor] as? NSColor, style.linkUnderlineColor)
+        let underlined = style.markedAttributes(marks: [.link: "https://example.com", .underline: true], baseFont: style.bodyFont)
+        XCTAssertEqual(underlined[.underlineStyle] as? Int, NSUnderlineStyle.single.rawValue, "a chosen underline stays solid")
+        let code = style.markedAttributes(marks: [.code: true], baseFont: style.headingFont)
+        XCTAssertEqual((code[.font] as? NSFont)?.pointSize, T.inlineCodeSize, "11 pt in its chip at any run size")
+        XCTAssertTrue((code[.font] as? NSFont)?.fontDescriptor.symbolicTraits.contains(.monoSpace) == true)
+        XCTAssertNil(code[.backgroundColor], "the chip is drawn, never a flat run")
+
+        var marked = NoteBlock.text("Say launch now")
+        marked.marks = [NoteMark(.code, offset: 4, length: 6)]
+        let (engine, _) = makeEngine([.text("Title"), marked])
+        let start = location(of: "launch", in: engine)
+        func kern(_ at: Int) -> CGFloat? { engine.textStorage.attribute(.kern, at: at, effectiveRange: nil) as? CGFloat }
+        XCTAssertEqual(kern(start - 1), T.inlineCodeChipPadding, "room before the chip")
+        XCTAssertEqual(kern(start + 5), T.inlineCodeChipPadding, "room after it")
+        XCTAssertNil(kern(start + 2))
+        let fragment = try XCTUnwrap(fragments(engine).last as? NoteBlockLayoutFragment)
+        XCTAssertEqual(fragment.decoration, .plain)
+        XCTAssertNotNil(fragment.chipFill)
+        XCTAssertEqual(fragment.textLineFragments.first?.typographicBounds.height ?? 0, T.body.lineHeight, accuracy: 0.01,
+                       "the chip never changes the line's height")
+    }
+
+    func testR14MarkersGoDiscRingSquareAndNumbersLetterThenRoman() throws {
+        let (engine, _) = makeEngine([.text("Title"), styled("One", "bullet"), styled("Two", "bullet", indent: 1),
+                                      styled("Three", "bullet", indent: 2), .text("Gap"),
+                                      styled("First", "number"), styled("Sub", "number", indent: 1), styled("Sub two", "number", indent: 1),
+                                      styled("Deep", "number", indent: 2)])
+        let decorations = fragments(engine).compactMap { ($0 as? NoteBlockLayoutFragment)?.decoration }
+        XCTAssertEqual(decorations, [.marker(.disc, x: 0), .marker(.ring, x: 20), .marker(.square, x: 40),
+                                     .marker(.number("1."), x: 0), .marker(.letter("a."), x: 20), .marker(.letter("b."), x: 20),
+                                     .marker(.roman("i."), x: 40)])
+        let number = try XCTUnwrap(fragments(engine)[5] as? NoteBlockLayoutFragment)
+        XCTAssertEqual(number.ink, NoteTextStyle().bodyColor, "numbers in the body ink")
+        XCTAssertTrue(number.markerFont.fontDescriptor.fontAttributes.description.contains("FeatureSettings")
+                      || number.markerFont == NSFont.monospacedDigitSystemFont(ofSize: 12.5, weight: .regular), "tabular figures")
+    }
+
+    func testR14CalloutIsOneBoxPerIconWithItsTextAt36() throws {
+        var idea = styled("Idea: test a shorter onboarding flow", "quote"); idea.callout = "💡"
+        var more = styled("Start with a clear welcome", "quote"); more.callout = "💡"
+        var warning = styled("Demo warning", "quote"); warning.callout = "⚠️"
+        var plain = styled("A callout without an icon", "quote"); plain.callout = ""
+        let (engine, _) = makeEngine([.text("Title"), idea, more, warning, plain, .text("After")])
+        let frags = fragments(engine).compactMap { $0 as? NoteBlockLayoutFragment }
+        XCTAssertEqual(frags.map(\.decoration), [.callout(icon: "💡", starts: true, ends: false), .callout(icon: "💡", starts: false, ends: true),
+                                                .callout(icon: "⚠️", starts: true, ends: true), .callout(icon: "", starts: true, ends: true)])
+        func textX(_ fragment: NoteBlockLayoutFragment) throws -> CGFloat {
+            let line = try XCTUnwrap(fragment.textLineFragments.first)
+            return fragment.layoutFragmentFrame.minX + line.typographicBounds.minX + line.locationForCharacter(at: line.characterRange.location).x
+        }
+        XCTAssertEqual(try textX(frags[0]), T.calloutTextInset, accuracy: 0.01)
+        XCTAssertEqual(try textX(frags[1]), T.calloutTextInset, accuracy: 0.01)
+        XCTAssertEqual(try textX(frags[3]), T.calloutPaddingH, accuracy: 0.01, "plain: text at 12")
+        let icon = try XCTUnwrap(frags[0].calloutIconRect).offsetBy(dx: frags[0].layoutFragmentFrame.minX, dy: 0)
+        XCTAssertEqual([icon.minX, icon.width], [T.calloutPaddingH, T.calloutIconSlot])
+        XCTAssertNil(frags[1].calloutIconRect, "one icon per box")
+        // One box: its slices meet; the next box starts 12 below.
+        func box(_ fragment: NoteBlockLayoutFragment) throws -> CGRect {
+            try XCTUnwrap(fragment.calloutBoxRect).offsetBy(dx: fragment.layoutFragmentFrame.minX, dy: fragment.layoutFragmentFrame.minY)
+        }
+        XCTAssertEqual(try box(frags[0]).maxY, try box(frags[1]).minY, accuracy: 0.01)
+        XCTAssertEqual(try box(frags[2]).minY - box(frags[1]).maxY, T.blockMargin, accuracy: 0.01)
+        XCTAssertEqual(try box(frags[0]).width, 264, accuracy: 0.01, "the column's width")
+        // Optical padding: first line box 8 under the box top, last 8 above its bottom.
+        let first = try XCTUnwrap(frags[2].textLineFragments.first)
+        let top = frags[2].layoutFragmentFrame.minY + first.typographicBounds.minY
+        XCTAssertEqual(top + NoteTextStyle.baselineShift(T.body) - (try box(frags[2]).minY), T.calloutPaddingV, accuracy: 0.01)
+        let bottom = frags[2].layoutFragmentFrame.minY + first.typographicBounds.maxY + NoteTextStyle.baselineShift(T.body)
+        XCTAssertEqual((try box(frags[2]).maxY) - bottom, T.calloutPaddingV, accuracy: 0.01)
+    }
+
+    func testR14CodeBlockHasALabelRowAndItsCopyChipSitsInIt() throws {
+        var code = styled("const a = 1", "mono"); code.language = "javascript"
+        let (engine, view) = makeEngine([.text("Title"), code, styled("a()", "mono"), .text("After")])
+        let blocks = monoFragments(engine)
+        XCTAssertEqual(blocks.first?.codeLabel, "JavaScript")
+        XCTAssertNil(blocks.last?.codeLabel)
+        let label = try XCTUnwrap(blocks.first?.codeLabelRect)
+        let rect = try XCTUnwrap(blocks.first?.monoBlockRect)
+        XCTAssertEqual(label.minX - rect.minX, T.monoPaddingH, accuracy: 0.01)
+        XCTAssertEqual(label.minY - rect.minY, T.monoPaddingV, accuracy: 0.01)
+        XCTAssertEqual(label.height, T.monoLabelHeight)
+        XCTAssertEqual(NoteCodeLanguageName.label(for: nil), "Plain text")
+        XCTAssertEqual(NoteCodeLanguageName.menu.count, 13)
+        // Copy: in the label row, never over the first code line.
+        view.updateMonoCopy(at: NSPoint(x: 100, y: (engine.monoBlockRect(for: try XCTUnwrap(engine.monoBlockRange(at: location(of: "const", in: engine)))) ?? .zero).midY + view.textContainerOrigin.y))
+        let chip = view.monoCopyButton.frame.offsetBy(dx: -view.textContainerOrigin.x, dy: -view.textContainerOrigin.y)
+        let firstLine = try XCTUnwrap(blocks.first?.textLineFragments.first)
+        let firstLineTop = try XCTUnwrap(blocks.first).layoutFragmentFrame.minY + firstLine.typographicBounds.minY
+        XCTAssertFalse(view.monoCopyButton.isHidden)
+        XCTAssertLessThanOrEqual(chip.maxY, firstLineTop + 0.5, "the chip sits above the code")
+        let blockTop = rect.minY + (try XCTUnwrap(blocks.first)).layoutFragmentFrame.minY
+        XCTAssertEqual(chip.midY - blockTop, T.monoPaddingV + T.monoLabelHeight / 2, accuracy: 0.01)
+    }
+
+    func testR14HardBreaksLayOutAsLinesOfOneParagraph() throws {
+        let (engine, view) = makeEngine([.text("Title"), .text("")])
+        let end = (engine.textStorage.string as NSString).length
+        view.setSelectedRange(NSRange(location: end, length: 0))
+        XCTAssertTrue(engine.pasteMarkdown("An address:\\\nNorthstar Studio\\\n24 Example Lane\\\nLondon\n", at: view.selectedRange()))
+        let start = location(of: "An address", in: engine)
+        let line = engine.lineRange(at: start)
+        let text = (engine.textStorage.string as NSString).substring(with: line)
+        XCTAssertEqual(text, "An address:\u{2028}Northstar Studio\u{2028}24 Example Lane\u{2028}London")
+        engine.layoutManager?.ensureLayout(for: engine.contentStorage.documentRange)
+        let fragment = try XCTUnwrap(fragments(engine).first { ($0.textElement as? NSTextParagraph)?.attributedString.string.hasPrefix("An address") == true })
+        XCTAssertEqual(fragment.textLineFragments.filter { $0.characterRange.length > 0 }.count, 4, "one line each")
+    }
+
+    #if DEBUG
+    func testR14TheCodexTestPagePastesEveryBlock() throws {
+        let (engine, view) = makeEngine([.text("Formatting test page"), .text("")], height: 4000)
+        view.setSelectedRange(NSRange(location: (engine.textStorage.string as NSString).length, length: 0))
+        XCTAssertTrue(engine.pasteMarkdown(NoteFormatCaptureScene.codexTestPage, at: view.selectedRange()))
+        let start = location(of: "An intentional", in: engine)
+        let text = (engine.textStorage.string as NSString).substring(with: engine.lineRange(at: start))
+        XCTAssertEqual(text.components(separatedBy: "\u{2028}").count, 4, text.debugDescription)
+        engine.layoutManager?.ensureLayout(for: engine.contentStorage.documentRange)
+        let fragment = try XCTUnwrap(fragments(engine).first { ($0.textElement as? NSTextParagraph)?.attributedString.string.hasPrefix("An intentional") == true })
+        XCTAssertEqual(fragment.textLineFragments.filter { $0.characterRange.length > 0 }.count, 4, "one line each")
+        let kinds = Set(fragments(engine).compactMap { ($0 as? NoteBlockLayoutFragment)?.decoration }.map { decoration -> String in
+            switch decoration {
+            case .mono: "code"
+            case .callout: "callout"
+            case .quote: "quote"
+            case .marker: "marker"
+            case .plain: "chips"
+            case .history: "history"
+            }
+        })
+        XCTAssertEqual(kinds, ["code", "callout", "quote", "marker", "chips"])
+    }
+    #endif
+
+    func testR14TheBlockHandleSitsOnTheGripLineBesideTheBlocksFirstLine() throws {
+        var tip = styled("Demo warning: a long callout line that wraps onto a second line here", "quote"); tip.callout = "⚠️"
+        let (engine, view) = makeEngine([.text("Title"), .text("Body"), tip, styled("One", "bullet"), styled("Child", "bullet", indent: 1)])
+        let start = location(of: "Demo", in: engine)
+        // The pointer over the block's lines, or the margin beside them.
+        let frame = try XCTUnwrap(fragments(engine).first { ($0.textElement as? NSTextParagraph)?.attributedString.string.hasPrefix("Demo") == true })
+            .layoutFragmentFrame.offsetBy(dx: view.textContainerOrigin.x, dy: view.textContainerOrigin.y)
+        XCTAssertEqual(view.blockLocation(at: NSPoint(x: 10, y: frame.midY)), start)
+        XCTAssertEqual(view.blockLocation(at: NSPoint(x: 120, y: frame.midY)), start)
+        XCTAssertNil(view.blockLocation(at: NSPoint(x: 120, y: view.textContainerOrigin.y + 5)), "never the title")
+        view.updateBlockHandle(at: NSPoint(x: 10, y: frame.midY))
+        XCTAssertFalse(view.blockHandle.isHidden)
+        XCTAssertEqual(view.blockHandle.frame.midX, view.textContainerOrigin.x - T.handleFromColumn, accuracy: 0.01, "the grips' line")
+        XCTAssertEqual(view.blockHandle.frame.size, T.handleHitSize)
+        XCTAssertEqual(view.handleBlockLocation, start)
+        // A list item's handle moves the item with its children.
+        let one = location(of: "One", in: engine)
+        XCTAssertEqual(engine.blockRange(at: one), NSRange(location: one, length: (engine.textStorage.string as NSString).length - one))
+        view.keyDown(with: try XCTUnwrap(NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: [], timestamp: 0, windowNumber: 0,
+                                                            context: nil, characters: "a", charactersIgnoringModifiers: "a", isARepeat: false, keyCode: 0)))
+        XCTAssertTrue(view.blockHandle.isHidden, "typing hides it")
     }
 
     // MARK: Persistence is untouched

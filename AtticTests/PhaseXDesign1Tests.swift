@@ -297,9 +297,11 @@ final class PhaseXDesign1Tests: XCTestCase {
 
     // MARK: D-12 · the Copy chip inside the block
 
-    func testTheCopyChipSitsSixInsideTheBlocksTopRightWithASmallRadius() {
+    func testTheCopyChipSitsSevenInsideTheBlocksTopRightInTheLabelRow() {
         typealias T = AtticNoteType
-        XCTAssertEqual([T.monoCopyInset, T.monoCopyTop], [6, 6])
+        // R14: centred on the 14 pt label row 8 under the top (8 + 7 − 8 = 7).
+        XCTAssertEqual([T.monoCopyInset, T.monoCopyTop], [7, 7])
+        XCTAssertEqual(T.monoCopyTop + T.monoCopySize / 2, T.monoPaddingV + T.monoLabelHeight / 2)
         XCTAssertGreaterThanOrEqual(NoteMonoCopyButton.radius, 4)
         XCTAssertLessThanOrEqual(NoteMonoCopyButton.radius, 6)
     }

@@ -238,13 +238,13 @@ final class NoteFormatControls: NSObject {
     }
 
     /// Links read in blue with an underline in the same blue at 55 %
-    /// (colour pass, owner 2026-10-10); the pointer shows a hand over them
-    /// and a click opens them.
+    /// (colour pass, owner 2026-10-10), dotted as Codex draws it (R14; a
+    /// link the person also underlined keeps a solid line); the pointer
+    /// shows a hand over them and a click opens them.
     private func applyLinkLook() {
         let style = NoteTextStyle(design: design)
         textView?.linkTextAttributes = [
             .foregroundColor: style.linkColor,
-            .underlineStyle: NSUnderlineStyle.single.rawValue,
             .underlineColor: style.linkUnderlineColor,
             .cursor: NSCursor.pointingHand
         ]
@@ -1094,12 +1094,49 @@ final class NoteFormatControls: NSObject {
             ])
             top.append(.separator())
         }
+        // R14: the line's own block rows (a numbered list's numbering, a
+        // callout's icon, a code block's language).
+        let blockRows = blockCommands(at: textView.selectedRange().length > 0 ? textView.selectedRange().location
+                                        : textView.characterIndexForInsertion(at: point))
+        if !blockRows.isEmpty {
+            top += nativeItems(blockRows)
+            top.append(.separator())
+        }
         // The system's Font submenu would style text outside the note's
         // format (bold, colours, sizes it cannot store): Format replaces it.
         for item in menu.items where Self.isFontMenu(item) { menu.removeItem(item) }
         top += nativeItems(router.menuCommands(from: .contextMenu))
         top.append(.separator())
         for (index, item) in top.enumerated() { menu.insertItem(item, at: index) }
+    }
+
+    /// The context menu's rows for the block at `location`: Continue
+    /// Numbering and Restart at 1 on a numbered item, Icon ▸ on a callout,
+    /// Language ▸ on a code block.
+    func blockCommands(at location: Int) -> [AtticMenuCommand] {
+        guard let textView, location >= 0, location < router.engine.textStorage.length else { return [] }
+        let engine = router.engine
+        switch engine.paragraphStyle(at: location) {
+        case .number?:
+            return [
+                AtticMenuCommand("Continue Numbering", identifier: "notes-numbering-continue") { [weak engine] in
+                    _ = engine?.continueNumbering(at: location)
+                },
+                AtticMenuCommand("Restart at 1", identifier: "notes-numbering-restart") { [weak engine] in
+                    _ = engine?.setListStart(1, at: location)
+                }
+            ]
+        case .callout?:
+            var icon = AtticMenuCommand("Icon", identifier: "notes-callout-icon") {}
+            icon.children = textView.calloutIconCommands(forBlockAt: location)
+            return [icon]
+        case let style? where style.isCode:
+            var language = AtticMenuCommand("Language", identifier: "notes-code-language") {}
+            language.children = textView.languageCommands(forBlockAt: location)
+            return [language]
+        default:
+            return []
+        }
     }
 
     static func isFontMenu(_ item: NSMenuItem) -> Bool {

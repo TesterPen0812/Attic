@@ -145,6 +145,7 @@ final class NoteObjectControls: NSObject, NoteObjectInteraction {
 
     private func hideTextSelection(_ hide: Bool) {
         guard let textView else { return }
+        textView.hidesSelectionHighlight = hide
         if hide, savedSelectionAttributes == nil {
             savedSelectionAttributes = textView.selectedTextAttributes
             var clear = textView.selectedTextAttributes

@@ -649,9 +649,15 @@ final class NotesFormatControlsTests: XCTestCase {
 
     func testSlashRowsShowTheirTypingShortcuts() {
         XCTAssertEqual(NoteCommandCatalog.slashHint(.checklist), "-[]")
-        XCTAssertEqual(NoteCommandCatalog.slashHint(.heading), "#")
+        // R14: Markdown's heading levels; code's fence.
+        XCTAssertEqual(NoteCommandCatalog.slashHint(.title), "#")
+        XCTAssertEqual(NoteCommandCatalog.slashHint(.heading), "##")
+        XCTAssertEqual(NoteCommandCatalog.slashHint(.smallHeading), "####")
         XCTAssertEqual(NoteCommandCatalog.slashHint(.number), "1.")
-        XCTAssertNil(NoteCommandCatalog.slashHint(.mono), "no reserved chord shown")
+        XCTAssertEqual(NoteCommandCatalog.slashHint(.codeBlock), "```", "a typing habit, never a reserved chord")
+        // Every row has its own glyph.
+        let symbols = NoteSlashItem.order.map(NoteCommandCatalog.slashSymbol)
+        XCTAssertEqual(Set(symbols).count, symbols.count)
     }
 
     func testSlashDateTypedDayInsertsAChipAndEscRestoresTheCommand() throws {
@@ -871,7 +877,10 @@ final class NotesFormatControlsTests: XCTestCase {
         let style = NoteTextStyle(design: .default)
         XCTAssertEqual(textView.linkTextAttributes?[.foregroundColor] as? NSColor, style.linkColor)
         XCTAssertEqual(textView.linkTextAttributes?[.underlineColor] as? NSColor, style.linkUnderlineColor)
-        XCTAssertNotNil(textView.linkTextAttributes?[.underlineStyle])
+        // R14: the stored underline draws (dotted, or solid when underlined too).
+        XCTAssertNil(textView.linkTextAttributes?[.underlineStyle])
+        let link = style.markedAttributes(marks: [.link: "https://example.com"], baseFont: style.bodyFont)
+        XCTAssertEqual(link[.underlineStyle] as? Int, NSUnderlineStyle([.single, .patternDot]).rawValue)
     }
 
     // MARK: Hint and dates

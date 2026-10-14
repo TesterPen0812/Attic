@@ -91,8 +91,8 @@ final class NotesV2TablesTests: XCTestCase {
         let view = try tableView(engine)
         XCTAssertNotNil(view.window, "the view is in the note's window")
         XCTAssertEqual(view.frame.width, 264, accuracy: 0.5, "the table spans the text column")
-        // Rows: one 17.5 pt line and 4 + 4 padding, rounded up to 26; the wrapped cells take two lines.
-        XCTAssertEqual(view.grid.rowHeights.first ?? 0, 26, accuracy: 0.01)
+        // Rows (R14): one 18.5 pt line and 6 + 6 padding, rounded up to 31; the wrapped cells take two lines.
+        XCTAssertEqual(view.grid.rowHeights.first ?? 0, 31, accuracy: 0.01)
         XCTAssertEqual(view.grid.width, 264, accuracy: 0.01, "a narrow table stretches to fill the column")
         XCTAssertEqual(view.frame.height, view.grid.height, accuracy: 0.5)
         // The table's line: 8 above it, nothing but the grid in its line box.
@@ -274,7 +274,7 @@ final class NotesV2TablesTests: XCTestCase {
         view.editor.doCommand(by: #selector(NSResponder.insertNewlineIgnoringFieldEditor(_:)))
         type("two", into: view.editor)
         XCTAssertEqual(attachment.table[NoteTable.Position(row: 1, column: 0)].text, "one\ntwo")
-        XCTAssertEqual(view.grid.rowHeights[1], 43, accuracy: 0.01, "the row grows with its cell")
+        XCTAssertEqual(view.grid.rowHeights[1], 49, accuracy: 0.01, "the row grows with its cell")
     }
 
     func testShiftArrowsPastACellsEdgeSelectCellsAndEscSelectsTheCellThenTheTable() throws {

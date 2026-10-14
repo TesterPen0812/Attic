@@ -733,10 +733,11 @@ final class NotesV2TablesFeatureTests: XCTestCase {
         XCTAssertNotEqual(light.tableGrid, dark.tableGrid)
         XCTAssertEqual(light.tableHeaderFill.alpha, 0.035, accuracy: 0.001, "Light black 3.5 %")
         XCTAssertEqual(light.tableGrid.alpha, 0.13, accuracy: 0.001)
+        // R14 B.4: cells 8 × 6 (Codex's 13 / 10 × 0.6).
         XCTAssertEqual([AtticNoteTableMetrics.cellPaddingH, AtticNoteTableMetrics.cellPaddingV,
                         AtticNoteTableMetrics.minColumnWidth, AtticNoteTableMetrics.maxColumnWidth,
                         AtticNoteTableMetrics.radius, AtticNoteTableMetrics.hairline, AtticNoteTableMetrics.edgeFade,
-                        AtticNoteTableMetrics.indicatorHeight], [6, 4, 56, 168, 10, 0.5, 16, 3])
+                        AtticNoteTableMetrics.indicatorHeight], [8, 6, 56, 168, 10, 0.5, 16, 3])
     }
 
     func testAReadOnlyNotesTableCannotBeEdited() throws {
