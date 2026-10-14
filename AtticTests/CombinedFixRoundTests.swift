@@ -822,7 +822,9 @@ final class CombinedFixRoundTests: XCTestCase {
         let id = UUID()
         guard case .success = store.createDocumentNote(id: id, document: document) else { return XCTFail("seed") }
         let note = try XCTUnwrap(store.note(withID: id))
-        XCTAssertTrue(note.plainText.contains("    def __init__"), "the derived text keeps its markers")
+        let plainLines = note.plainText.components(separatedBy: "\n")
+        XCTAssertTrue(plainLines.contains("def __init__(self):"), "R14 code text has no synthetic indentation")
+        XCTAssertTrue(plainLines.contains("- Oat milk"), "the derived text keeps list markers")
         let stored = NoteRowSummary(note: note, attachments: [])
         XCTAssertEqual(stored, draft)
         // A legacy note's text is shown as written.
