@@ -734,6 +734,12 @@ final class NoteEditorTextView: NSTextView, NSAccessibilityCustomRotorItemSearch
         return super.validateUserInterfaceItem(item)
     }
 
+    /// O14-01: one click on a panel that is not key both makes it key and
+    /// places the caret (or ticks a box) here (`AtticPanel.acceptsEveryFirstMouse`).
+    override func acceptsFirstMouse(for event: NSEvent?) -> Bool {
+        AtticPanel.acceptsEveryFirstMouse(in: window) || super.acceptsFirstMouse(for: event)
+    }
+
     // MARK: Checkbox clicks
 
     override func mouseDown(with event: NSEvent) {

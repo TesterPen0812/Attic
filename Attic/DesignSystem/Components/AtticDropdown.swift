@@ -857,9 +857,14 @@ final class AtticOverlayHostingView: NSHostingView<AnyView> {
     var acceptsKeyboard = false
 
     required init(rootView: AnyView) {
-        super.init(rootView: rootView)
+        // O14-01: its gestures take the click that makes the panel key.
+        super.init(rootView: AnyView(rootView.allowsWindowActivationEvents()))
         translatesAutoresizingMaskIntoConstraints = true
         autoresizingMask = []
+    }
+
+    override func acceptsFirstMouse(for event: NSEvent?) -> Bool {
+        AtticPanel.acceptsEveryFirstMouse(in: window) || super.acceptsFirstMouse(for: event)
     }
 
     @MainActor @preconcurrency required dynamic init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
