@@ -1039,6 +1039,7 @@ struct NoteSlashListView: View {
             }
         }
         .animation(model.shown ? AtticDropdownReveal.revealAnimation : AtticMotionScale.exit, value: model.shown)
+        .onChange(of: model.shown) { _, shown in if shown { PerformanceSignposts.watchFrames("SlashUnfold", seconds: 0.3) } }
         .padding(AtticDropdownMetrics.shadowRoom)
         .fixedSize()
     }

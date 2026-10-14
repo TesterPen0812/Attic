@@ -1593,8 +1593,9 @@ struct TasksPage: View {
                 })
                 .padding(.leading, AtticLayout.textX - AtticPopoverMetrics.padding - AtticPopoverMetrics.rowPadding)
                 .padding(.bottom, AtticSpacing.s8)
-                // Raised from its row: it grows from the row's corner.
-                .transition(AtticMotionPreset.popover.transition(reduceMotion: design.reduceMotion, anchor: .topLeading))
+                // Raised from its row: it unfolds down from it, as every
+                // Attic pop-over does (O14-02).
+                .transition(AtticDropdownReveal.transition(fromTop: true, reduceMotion: design.reduceMotion))
                 .onExitCommand { model.doneDetailID = nil }
             }
             if model.failedSave == .title(id) {

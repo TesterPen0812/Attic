@@ -283,7 +283,6 @@ final class AtticDropdownTests: XCTestCase {
         XCTAssertFalse(window.isVisible)
     }
 
-
     func testTheWidthFitsItsContentNeverUnderTheMinimumNeverPastTheMargin() {
         let m = AtticDropdownMetrics.self
         let available: CGFloat = 320 - m.panelMargin * 2
@@ -1471,7 +1470,9 @@ final class AtticDropdownTests: XCTestCase {
         defer { NSApp.accessibilitySetValue(previous, forAttribute: attribute) }
         let window = makeWindow()
         defer { window.close() }
-        let anchor = NSView(frame: CGRect(x: 40, y: 300, width: 60, height: 28))
+        // Room below for the card and two typed suggestions (O14-09's
+        // square grid is a little taller).
+        let anchor = NSView(frame: CGRect(x: 40, y: 440, width: 60, height: 28))
         window.contentView?.addSubview(anchor)
         var calendar = Calendar(identifier: .gregorian)
         calendar.timeZone = TimeZone(secondsFromGMT: 0)!
@@ -2114,4 +2115,120 @@ extension AtticDropdownTests {
             XCTAssertFalse(window.isVisible)
         }
     }
+}
+
+// MARK: - Round 13: menus and pickers (O14-02, O14-08, O14-09)
+
+@MainActor
+extension AtticDropdownTests {
+    /// O14-02: the owner's unfold. The card grows from one row's height,
+    /// fades in, grows from 0.98 and drops 4 pt, on the fast-out curve in
+    /// 180 ms; its contents wait 30 ms, then go from a 5 pt blur to sharp
+    /// in 130 ms. Closing runs back in 120 ms, 3 pt towards the anchor.
+    func testR13TheUnfoldGrowsFromARowsHeightAndSharpensItsContentsJustAfter() {
+        let r = AtticDropdownReveal.self
+        XCTAssertEqual(r.openDuration, 0.18, accuracy: 1e-9)
+        XCTAssertEqual(r.closeDuration, 0.12, accuracy: 1e-9)
+        XCTAssertEqual(r.curve, AtticCubicBezier(0.16, 1, 0.3, 1))
+        XCTAssertEqual(r.startHeight, 28)
+        let shut = r.frame(time: 0, closing: false)
+        XCTAssertEqual(shut.reveal, 0)
+        XCTAssertEqual(shut.opacity, 0)
+        XCTAssertEqual(shut.scale, 0.98, accuracy: 1e-6)
+        XCTAssertEqual(shut.travel, 4, accuracy: 1e-6, "it starts 4 pt towards its anchor and drops into place")
+        XCTAssertEqual(shut.contentBlur, 5, accuracy: 1e-6)
+        XCTAssertEqual(shut.contentOpacity, 0)
+        XCTAssertEqual(shut.shadow, 0, "the shadow grows with the card")
+        XCTAssertEqual(r.frame(time: 1, closing: false), .rest)
+        let waiting = r.frame(time: CGFloat(0.029 / r.openDuration), closing: false)
+        XCTAssertEqual(waiting.contentBlur, 5, accuracy: 1e-6, "the contents start about 30 ms after the card")
+        XCTAssertGreaterThan(waiting.reveal, 0.5, "fast-out: the card is well on its way by then")
+        XCTAssertEqual(r.frame(time: CGFloat(0.161 / r.openDuration), closing: false).contentBlur, 0, accuracy: 1e-6,
+                       "sharp 30 + 130 ms in")
+        var lastReveal: CGFloat = -1
+        for step in 0...40 {
+            let f = r.frame(time: CGFloat(step) / 40, closing: false)
+            XCTAssertGreaterThanOrEqual(f.scale, 0.98 - 1e-9, "never a zoom from nothing")
+            XCTAssertLessThanOrEqual(f.scale, 1 + 1e-9)
+            XCTAssertGreaterThanOrEqual(f.reveal, lastReveal)
+            lastReveal = f.reveal
+        }
+        XCTAssertEqual(r.frame(time: 0, closing: true), .rest, "closing starts from the open card")
+        let gone = r.frame(time: 1, closing: true)
+        XCTAssertEqual(gone.reveal, 0)
+        XCTAssertEqual(gone.opacity, 0)
+        XCTAssertEqual(gone.travel, 3, accuracy: 1e-6, "it folds 3 pt back towards its anchor")
+        XCTAssertEqual(gone.scale, 0.98, accuracy: 1e-6)
+        XCTAssertEqual(gone.contentBlur, 0)
+    }
+
+    /// The unfold's outline starts one row (28 pt) high at the edge by the
+    /// anchor (the top for a card below it, the bottom for one above) and is
+    /// the whole card at rest; a card shorter than a row is never cut.
+    func testR13TheUnfoldShapeStartsOneRowHighAtTheAnchorsEdge() {
+        let rect = CGRect(x: 0, y: 0, width: 200, height: 300)
+        let shut = AtticUnfoldShape(cornerRadius: 16, reveal: 0, fromTop: true).path(in: rect).boundingRect
+        XCTAssertEqual(shut.minY, 0, accuracy: 0.01)
+        XCTAssertEqual(shut.height, 28, accuracy: 0.01)
+        XCTAssertEqual(shut.width, 200, accuracy: 0.01)
+        let up = AtticUnfoldShape(cornerRadius: 16, reveal: 0.5, fromTop: false).path(in: rect).boundingRect
+        XCTAssertEqual(up.maxY, 300, accuracy: 0.01, "a card above its anchor unfolds upward")
+        XCTAssertEqual(up.height, 28 + 272 * 0.5, accuracy: 0.01)
+        XCTAssertEqual(AtticUnfoldShape(cornerRadius: 16).path(in: rect).boundingRect, rect)
+        let small = CGRect(x: 0, y: 0, width: 160, height: 20)
+        XCTAssertEqual(AtticUnfoldShape(cornerRadius: 16, reveal: 0).path(in: small).boundingRect.height, 20, accuracy: 0.01)
+        let ring = AtticUnfoldShape(cornerRadius: 16).inset(by: -0.5).path(in: rect).boundingRect
+        XCTAssertEqual(ring.width, 201, accuracy: 0.01, "the hairline sits just outside the face")
+    }
+
+    func testR13TheCubicBezierSolvesTheOwnersCurve() {
+        let linear = AtticCubicBezier(0.25, 0.25, 0.75, 0.75)
+        for step in 0...10 { XCTAssertEqual(linear.y(at: Double(step) / 10), Double(step) / 10, accuracy: 1e-4) }
+        let curve = AtticDropdownReveal.curve
+        XCTAssertEqual(curve.y(at: 0), 0)
+        XCTAssertEqual(curve.y(at: 1), 1)
+        XCTAssertEqual(curve.y(at: 0.2), 0.752, accuracy: 0.002)
+        XCTAssertEqual(curve.y(at: 0.5), 0.972, accuracy: 0.002)
+        var last = 0.0
+        for step in 1...100 {
+            let y = curve.y(at: Double(step) / 100)
+            XCTAssertGreaterThanOrEqual(y, last - 1e-9)
+            last = y
+        }
+    }
+
+    /// What a card's content does with the keys its presenter hands it.
+    struct KeyProbe: View {
+        let log: (UInt16) -> Void
+        @Environment(\.atticDropdownRegisterKeys) private var registerKeys
+        var body: some View {
+            Color.clear.frame(width: 140, height: 84)
+                .onAppear { registerKeys { event in log(event.keyCode); return true } }
+        }
+    }
+
+    /// The unfold never holds the keyboard back: the opening card's host
+    /// has it at once, and an arrow key reaches the card while it unfolds.
+    func testR13AnOpeningMenuTakesTheKeyboardBeforeItsUnfoldEnds() throws {
+        let window = makeUnshownWindow()
+        defer { window.close() }
+        let anchor = NSView(frame: CGRect(x: 20, y: 300, width: 60, height: 28))
+        window.contentView?.addSubview(anchor)
+        let presenter = AtticDropdownPresenter()
+        presenter.design = AtticDesignContext()
+        XCTAssertFalse(presenter.design.reduceMotion, "the motion runs")
+        var keys: [UInt16] = []
+        presenter.content = AnyView(KeyProbe { keys.append($0) })
+        presenter.present(from: anchor)
+        XCTAssertIdentical(window.firstResponder, presenter.host, "the host has the keyboard as the card opens")
+        spin(0.03)
+        XCTAssertTrue(presenter.stage.shown, "the unfold is under way")
+        let down = try XCTUnwrap(NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: [], timestamp: 0,
+                                                  windowNumber: window.windowNumber, context: nil, characters: "\u{F701}",
+                                                  charactersIgnoringModifiers: "\u{F701}", isARepeat: false, keyCode: 125))
+        XCTAssertNil(presenter.handleKey(down), "the card takes the arrow mid-unfold")
+        XCTAssertEqual(keys, [125])
+        presenter.close(restoreFocus: false, immediately: true)
+    }
+
 }

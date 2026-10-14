@@ -451,17 +451,21 @@ struct AtticOutsideShadow<S: Shape>: View {
 
 /// Menus, pop-overs, the selection bar and toasts: raised over content,
 /// with a hairline, an inner light band and a soft shadow.
+/// Inside a pop-over that unfolds (`AtticDropdownReveal`), drawn at the
+/// revealed height.
 struct AtticPopoverBackground: View {
     var cornerRadius: CGFloat = AtticRadius.popover
 
     @Environment(\.atticDesign) private var design
+    @Environment(\.atticUnfold) private var unfold
 
     var body: some View {
         let tokens = design.tokens
-        let shape = RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+        let shape = AtticUnfoldShape(cornerRadius: cornerRadius, reveal: unfold?.reveal ?? 1, fromTop: unfold?.fromTop ?? true)
+        let shadow = tokens.popoverShadow.withAlpha(tokens.popoverShadow.alpha * Double(unfold?.shadow ?? 1))
         ZStack {
-            AtticOutsideShadow(shape: shape, color: tokens.popoverShadow, spec: AtticShadows.popover)
-            AtticOutsideShadow(shape: shape, color: tokens.popoverShadow, spec: AtticShadows.popoverContact)
+            AtticOutsideShadow(shape: shape, color: shadow, spec: AtticShadows.popover)
+            AtticOutsideShadow(shape: shape, color: shadow, spec: AtticShadows.popoverContact)
             shape.fill(tokens.popoverFill.color)
             shape.inset(by: AtticHairline.innerRim / 2).stroke(tokens.popoverInnerRim.color, lineWidth: AtticHairline.innerRim)
             shape.stroke(tokens.popoverOuterRim.color, lineWidth: design.increaseContrast ? AtticHairline.widthIncreased : AtticHairline.width)

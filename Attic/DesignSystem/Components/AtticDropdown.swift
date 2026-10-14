@@ -29,16 +29,24 @@ import SwiftUI
 /// The card's face: a solid fill, one hairline just outside it (Attic's
 /// outer-rim token, 1 pt under Increase Contrast) and D's two shadows. Solid,
 /// so Reduce Transparency changes nothing.
+///
+/// While the card unfolds (`AtticDropdownReveal`) the face is drawn at the
+/// revealed height, so its corners, hairline and shadow travel with it.
 struct AtticDropdownSurface: View {
     @Environment(\.atticDesign) private var design
+    @Environment(\.atticUnfold) private var unfold
 
     var body: some View {
         let tokens = design.tokens
-        let shape = RoundedRectangle(cornerRadius: AtticDropdownMetrics.cornerRadius, style: .continuous)
+        let shape = AtticUnfoldShape(cornerRadius: AtticDropdownMetrics.cornerRadius, reveal: unfold?.reveal ?? 1,
+                                     fromTop: unfold?.fromTop ?? true)
         let edge = design.increaseContrast ? AtticHairline.widthIncreased : AtticHairline.width
+        let shadow = Double(unfold?.shadow ?? 1)
         ZStack {
-            AtticOutsideShadow(shape: shape, color: tokens.dropdownShadow, spec: AtticShadows.dropdown)
-            AtticOutsideShadow(shape: shape, color: tokens.dropdownContactShadow, spec: AtticShadows.dropdownContact)
+            AtticOutsideShadow(shape: shape, color: tokens.dropdownShadow.withAlpha(tokens.dropdownShadow.alpha * shadow),
+                               spec: AtticShadows.dropdown)
+            AtticOutsideShadow(shape: shape, color: tokens.dropdownContactShadow.withAlpha(tokens.dropdownContactShadow.alpha * shadow),
+                               spec: AtticShadows.dropdownContact)
             shape.fill(tokens.popoverFill.color)
             // CSS's `0 0 0 .5px`: a ring wholly outside the fill.
             shape.inset(by: -edge / 2).stroke(tokens.popoverOuterRim.color, lineWidth: edge)
@@ -74,6 +82,7 @@ struct AtticDropdownCard<Content: View>: View {
             .padding(m.inset)
             .frame(minWidth: width == nil ? m.minWidth : nil, alignment: .leading)
             .frame(width: widthLimit ?? width, alignment: .leading)
+            .modifier(AtticUnfoldContent(cornerRadius: m.cornerRadius))
             .background(AtticDropdownSurface())
     }
 }
@@ -968,95 +977,235 @@ private struct AtticDropdownFocusModifier: ViewModifier {
     }
 }
 
-/// How a dropdown card opens (N-4, owner 2026-10-11). The owner picked
-/// B, the vertical unfold, as an experiment; A, the scale from the anchor,
-/// is kept: `current` is the one switch for every card (the E1 stage, the
-/// `/` list, the link and date cards).
-///
-/// - `unfold` (B): the card is uncovered from its anchor's edge down (or
-///   up, for a card above its anchor), M/E, as it fades in, F/E.
-/// - `scale` (A): it grows from 0.92 at its anchor's corner, M/E, as it
-///   fades in, F/E.
-///
-/// Both close with a plain F/E fade (no reverse motion). Reduced: the F/E
-/// fade both ways. Only the mask, the transform and the opacity animate;
-/// the card is measured once at its final size.
-enum AtticDropdownReveal: Sendable {
-    case unfold
-    case scale
+/// A CSS-style cubic Bézier timing curve, solved for y at a given x (time),
+/// as WebKit's `UnitBezier` does: Newton's method, then bisection.
+struct AtticCubicBezier: Equatable, Sendable {
+    let x1: Double, y1: Double, x2: Double, y2: Double
 
-    static let current: AtticDropdownReveal = .unfold
+    init(_ x1: Double, _ y1: Double, _ x2: Double, _ y2: Double) {
+        self.x1 = x1; self.y1 = y1; self.x2 = x2; self.y2 = y2
+    }
 
-    /// Option A's starting scale (the drafted menu behaviour).
-    static let startScale: CGFloat = 0.92
+    private func sample(_ t: Double, _ p1: Double, _ p2: Double) -> Double {
+        let c = 3 * p1, b = 3 * (p2 - p1) - c, a = 1 - c - b
+        return ((a * t + b) * t + c) * t
+    }
 
-    /// The reveal (the unfold or the grow): M/E.
-    static var revealAnimation: Animation { AtticMotionScale.easeOut(AtticMotionScale.standard) }
+    private func slope(_ t: Double) -> Double {
+        let c = 3 * x1, b = 3 * (x2 - x1) - c, a = 1 - c - b
+        return (3 * a * t + 2 * b) * t + c
+    }
 
-    /// The opacity: F/E in, F/E out (Reduced too).
-    static var fadeAnimation: Animation { AtticMotionScale.easeOut(AtticMotionScale.fast) }
-
-    /// The transition of a card that is inserted and removed (the `/` list,
-    /// the link and date cards): the reveal and the fade in, the fade out.
-    static func transition(fromTop: Bool, reduceMotion: Bool, style: AtticDropdownReveal = current) -> AnyTransition {
-        if reduceMotion { return .opacity.animation(fadeAnimation) }
-        let reveal = AnyTransition.modifier(active: AtticDropdownRevealEffect(progress: 0, fromTop: fromTop, style: style),
-                                            identity: AtticDropdownRevealEffect(progress: 1, fromTop: fromTop, style: style))
-        return .asymmetric(insertion: reveal.animation(revealAnimation).combined(with: .opacity.animation(fadeAnimation)),
-                           removal: .opacity.animation(AtticMotionScale.exit))
+    /// The curve's progress at `x` (0...1, clamped).
+    func y(at x: Double) -> Double {
+        guard x > 0 else { return 0 }
+        guard x < 1 else { return 1 }
+        var t = x
+        for _ in 0..<8 {
+            let error = sample(t, x1, x2) - x
+            if abs(error) < 1e-6 { return sample(t, y1, y2) }
+            let d = slope(t)
+            if abs(d) < 1e-6 { break }
+            t -= error / d
+        }
+        var low = 0.0, high = 1.0
+        t = x
+        for _ in 0..<40 {
+            let value = sample(t, x1, x2)
+            if abs(value - x) < 1e-6 { break }
+            if value < x { low = t } else { high = t }
+            t = (low + high) / 2
+        }
+        return sample(t, y1, y2)
     }
 }
 
-/// The reveal at `progress` (0 covered, 1 open). The unfold's mask reaches
-/// `AtticDropdownMetrics.shadowRoom` past the card on every side, so the
-/// open card's shadow is never cut.
-struct AtticDropdownRevealEffect: ViewModifier, Animatable {
-    var progress: CGFloat
+/// How every Attic-drawn dropdown, menu and pop-over opens and closes: the
+/// owner's "unfold" (O14-02, owner 2026-10-14; it replaces N-4 B's mask
+/// reveal and option A's grow). The card unfolds from the edge by its
+/// anchor rather than zooming: its height grows from one row's (28 pt) to
+/// its own, it fades in, grows from 0.98 at that edge's leading corner and
+/// drops 4 pt into place; its shadow grows with it. Its contents follow
+/// 30 ms later, from a 5 pt blur to sharp over 130 ms. 180 ms in all on the
+/// fast-out curve (0.16, 1, 0.3, 1). Closing runs the same path back, faster
+/// (120 ms): towards one row's height, to clear, 3 pt back towards the
+/// anchor. Reduced: a short fade only.
+///
+/// Cheap by construction: the card is laid out once at its full size. Only
+/// the effect's own modifiers (opacity, scale, offset) and two leaves (the
+/// surface's shape and shadow, `AtticDropdownSurface`; the contents' mask
+/// and blur, `AtticUnfoldContent`) change per frame; the rows never re-run.
+enum AtticDropdownReveal {
+    static let openDuration: Double = 0.18
+    static let closeDuration: Double = 0.12
+    /// The contents start this long after the card…
+    static let contentDelay: Double = 0.03
+    /// …and sharpen over this long.
+    static let contentDuration: Double = 0.13
+    /// The height a card unfolds from (one row's) and closes back towards.
+    static let startHeight: CGFloat = 28
+    static let startScale: CGFloat = 0.98
+    /// Towards the anchor as it opens (the drop) and as it closes.
+    static let openTravel: CGFloat = 4
+    static let closeTravel: CGFloat = 3
+    static let contentBlur: CGFloat = 5
+    /// The owner's fast-out curve.
+    static let curve = AtticCubicBezier(0.16, 1, 0.3, 1)
+
+    /// The effect's clock runs linearly; `frame` applies the curve, so the
+    /// card and its contents can keep their own timings on one clock.
+    static var openAnimation: Animation { .linear(duration: openDuration) }
+    static var closeAnimation: Animation { .linear(duration: closeDuration) }
+    /// The motion's opening animation (callers that animate the presenting
+    /// state alongside it).
+    static var revealAnimation: Animation { openAnimation }
+    /// Reduced: a short fade (F/E), both ways.
+    static var fadeAnimation: Animation { AtticMotionScale.reducedFade }
+
+    /// One moment of the motion. `travel` is towards the anchor (up for a
+    /// card below it).
+    struct Frame: Equatable {
+        var reveal: CGFloat
+        var opacity: CGFloat
+        var scale: CGFloat
+        var travel: CGFloat
+        var contentBlur: CGFloat
+        var contentOpacity: CGFloat
+        var shadow: CGFloat
+
+        static let rest = Frame(reveal: 1, opacity: 1, scale: 1, travel: 0, contentBlur: 0, contentOpacity: 1, shadow: 1)
+    }
+
+    /// The frame at `time` (0...1 of its leg's duration): opening from 0,
+    /// or closing from 0 (open) to 1 (gone).
+    static func frame(time: CGFloat, closing: Bool) -> Frame {
+        let t = Double(max(0, min(1, time)))
+        if closing ? t <= 0 : t >= 1 { return .rest }
+        if closing {
+            let e = CGFloat(curve.y(at: t))
+            return Frame(reveal: 1 - e, opacity: 1 - e, scale: 1 - (1 - startScale) * e, travel: closeTravel * e,
+                         contentBlur: 0, contentOpacity: 1, shadow: 1 - e)
+        }
+        let e = CGFloat(curve.y(at: t))
+        let contentTime = (t * openDuration - contentDelay) / contentDuration
+        let c = CGFloat(curve.y(at: contentTime))
+        return Frame(reveal: e, opacity: e, scale: startScale + (1 - startScale) * e, travel: openTravel * (1 - e),
+                     contentBlur: contentBlur * (1 - c), contentOpacity: c, shadow: e)
+    }
+
+    /// The transition of a card that is inserted and removed (the `/`
+    /// list, Notes' link and date cards, a Done task's details).
+    static func transition(fromTop: Bool, reduceMotion: Bool) -> AnyTransition {
+        if reduceMotion { return .opacity.animation(fadeAnimation) }
+        let open = AnyTransition.modifier(active: AtticUnfoldEffect(clock: 0, closing: false, fromTop: fromTop),
+                                          identity: AtticUnfoldEffect(clock: 1, closing: false, fromTop: fromTop))
+        let close = AnyTransition.modifier(active: AtticUnfoldEffect(clock: 0, closing: true, fromTop: fromTop),
+                                           identity: AtticUnfoldEffect(clock: 1, closing: true, fromTop: fromTop))
+        return .asymmetric(insertion: open.animation(openAnimation), removal: close.animation(closeAnimation))
+    }
+
+    #if DEBUG
+    /// Capture seam (`ATTIC_UI_TEST_UNFOLD_FREEZE=0.25`, UI testing in a
+    /// preview identity only): openings stop at that point of their clock,
+    /// for stills of the motion mid-way.
+    nonisolated static let freeze: CGFloat? = {
+        let environment = ProcessInfo.processInfo.environment
+        guard environment["ATTIC_UI_TESTING"] == "1", AtticPreviewOverrides.isPreviewIdentity(Bundle.main.bundleIdentifier),
+              let raw = environment["ATTIC_UI_TEST_UNFOLD_FREEZE"], let value = Double(raw), (0...1).contains(value) else { return nil }
+        return CGFloat(value)
+    }()
+    #endif
+}
+
+/// The motion's state for the card's two leaves (`AtticDropdownSurface`,
+/// `AtticUnfoldContent`); nil outside a moving card (at rest).
+struct AtticUnfoldState: Equatable {
+    var reveal: CGFloat
+    var fromTop: Bool
+    var contentBlur: CGFloat
+    var contentOpacity: CGFloat
+    var shadow: CGFloat
+}
+
+extension EnvironmentValues {
+    @Entry var atticUnfold: AtticUnfoldState? = nil
+}
+
+/// The unfold on a card, at `clock`: 1 is open; 0 is shut as it starts
+/// to open, or gone as it finishes closing (the closing leg runs 1 → 0).
+/// The clock is linear; `AtticDropdownReveal.frame` applies the curve.
+struct AtticUnfoldEffect: ViewModifier, Animatable {
+    var clock: CGFloat
+    let closing: Bool
     let fromTop: Bool
-    let style: AtticDropdownReveal
 
     var animatableData: CGFloat {
-        get { progress }
-        set { progress = newValue }
+        get { clock }
+        set { clock = newValue }
     }
 
     func body(content: Content) -> some View {
-        let room = AtticDropdownMetrics.shadowRoom
-        switch style {
-        case .unfold:
-            content.mask {
-                AtticDropdownUnfoldMask(progress: progress, fromTop: fromTop, edgeRoom: room)
-                    .padding(-room)
-            }
-        case .scale:
-            content.scaleEffect(AtticDropdownReveal.startScale + (1 - AtticDropdownReveal.startScale) * progress,
-                                anchor: fromTop ? .topLeading : .bottomLeading)
-        }
+        var time = closing ? 1 - clock : clock
+        #if DEBUG
+        if !closing, let freeze = AtticDropdownReveal.freeze { time = min(time, freeze) }
+        #endif
+        let f = AtticDropdownReveal.frame(time: time, closing: closing)
+        let state = f == .rest ? nil : AtticUnfoldState(reveal: f.reveal, fromTop: fromTop, contentBlur: f.contentBlur,
+                                                         contentOpacity: f.contentOpacity, shadow: f.shadow)
+        return content
+            .environment(\.atticUnfold, state)
+            .scaleEffect(f.scale, anchor: fromTop ? .topLeading : .bottomLeading)
+            .offset(y: fromTop ? -f.travel : f.travel)
+            .opacity(f.opacity)
     }
 }
 
-/// The unfold's mask: the room above the card (or below it, unfolding up)
-/// is always uncovered, then `progress` of the rest from that edge.
-struct AtticDropdownUnfoldMask: Shape {
-    var progress: CGFloat
-    let fromTop: Bool
-    let edgeRoom: CGFloat
+/// A card's outline while it unfolds: its rounded rectangle, cut to the
+/// revealed height from its anchor's edge (the whole card at rest).
+struct AtticUnfoldShape: InsettableShape {
+    let cornerRadius: CGFloat
+    var reveal: CGFloat = 1
+    var fromTop = true
+    var insetAmount: CGFloat = 0
 
-    var animatableData: CGFloat {
-        get { progress }
-        set { progress = newValue }
+    func inset(by amount: CGFloat) -> AtticUnfoldShape {
+        var copy = self
+        copy.insetAmount += amount
+        return copy
+    }
+
+    static func height(reveal: CGFloat, full: CGFloat) -> CGFloat {
+        let start = min(full, AtticDropdownReveal.startHeight)
+        return min(full, start + (full - start) * max(0, min(1, reveal)))
     }
 
     func path(in rect: CGRect) -> Path {
-        let shown = min(rect.height, edgeRoom + max(0, min(1, progress)) * max(0, rect.height - edgeRoom))
-        return Path(CGRect(x: rect.minX, y: fromTop ? rect.minY : rect.maxY - shown, width: rect.width, height: shown))
+        let height = Self.height(reveal: reveal, full: rect.height)
+        let shown = CGRect(x: rect.minX, y: fromTop ? rect.minY : rect.maxY - height, width: rect.width, height: height)
+            .insetBy(dx: insetAmount, dy: insetAmount)
+        let radius = max(0, min(cornerRadius, height / 2) - insetAmount)
+        return RoundedRectangle(cornerRadius: radius, style: .continuous).path(in: shown)
     }
 }
 
-/// The card on screen, with the dropdown's reveal (`AtticDropdownReveal`):
-/// it unfolds (or grows) from the edge by its anchor and fades in, and
-/// fades out as it closes. Only the mask or transform and the opacity
-/// animate, in this host alone.
+/// A card's contents as it unfolds: cut to the card's revealed outline,
+/// blurred and faded in just after it. Reads the motion itself, so only
+/// this leaf changes per frame.
+struct AtticUnfoldContent: ViewModifier {
+    let cornerRadius: CGFloat
+    @Environment(\.atticUnfold) private var unfold
+
+    func body(content: Content) -> some View {
+        content
+            .mask { AtticUnfoldShape(cornerRadius: cornerRadius, reveal: unfold?.reveal ?? 1, fromTop: unfold?.fromTop ?? true) }
+            .blur(radius: unfold?.contentBlur ?? 0)
+            .opacity(Double(unfold?.contentOpacity ?? 1))
+    }
+}
+
+/// The card on screen, with the dropdowns' motion (`AtticDropdownReveal`):
+/// it unfolds from the edge by its anchor as it opens and folds back as it
+/// closes; Reduced, it fades. Only this host moves.
 struct AtticDropdownStage: View {
     @ObservedObject var model: AtticDropdownStageModel
     let content: AnyView
@@ -1066,23 +1215,24 @@ struct AtticDropdownStage: View {
 
     var body: some View {
         let reduce = design.reduceMotion
-        // A card below its anchor comes down from its top edge; above it, up
-        // from its bottom edge.
+        // A card below its anchor unfolds down from its top edge; above
+        // it, up from its bottom edge.
         let fromTop = model.side == .below
+        // Opening runs the clock 0 → 1; closing (it was shown) runs it
+        // back, on the closing leg's path and timing.
+        let closing = !reduce && model.revealed && !model.shown
         Group {
             if contentHasCard { content }
             else { AtticDropdownCard(width: model.width) { content } }
         }
             .environment(\.atticDropdownHeight, model.height)
             .environment(\.atticDropdownWidth, model.width)
-            // The reveal runs once, as it opens (it stays open while the
-            // card fades out); Reduced has none.
-            .animation(reduce ? nil : AtticDropdownReveal.revealAnimation) {
-                $0.modifier(AtticDropdownRevealEffect(progress: model.revealed || reduce ? 1 : 0, fromTop: fromTop,
-                                                      style: AtticDropdownReveal.current))
+            .animation(reduce ? nil : (closing ? AtticDropdownReveal.closeAnimation : AtticDropdownReveal.openAnimation)) {
+                $0.modifier(AtticUnfoldEffect(clock: reduce || model.shown ? 1 : 0, closing: closing, fromTop: fromTop))
             }
+            // Reduced: the fade alone.
             .animation(model.shown ? AtticDropdownReveal.fadeAnimation : AtticMotionScale.exit) {
-                $0.opacity(model.shown ? 1 : 0)
+                $0.opacity(!reduce || model.shown ? 1 : 0)
             }
             .environment(\.atticDropdownFocusRequest, model.focusRequest)
             .padding(AtticDropdownMetrics.shadowRoom)
@@ -1203,6 +1353,7 @@ final class AtticDropdownPresenter {
             if self.takesKeyboard, self.stage.focusRequest == 0 { self.takeKeyboard() }
             self.stage.shown = true
             self.stage.revealed = true
+            PerformanceSignposts.watchFrames("DropdownUnfold", seconds: 0.3)
         }
     }
 
