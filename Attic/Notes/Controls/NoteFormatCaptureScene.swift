@@ -366,6 +366,11 @@ enum NoteFormatCaptureScene {
         case "aa":
             textView.setSelectedRange(NSRange(location: range(of: "Keep pricing", in: textView).location, length: 0))
             chrome.openFormatBar(keyboard: false)
+        case "aastyle":
+            // O14-02: Aa's row, then its style list (the menu's unfold).
+            textView.setSelectedRange(NSRange(location: range(of: "Keep pricing", in: textView).location, length: 0))
+            chrome.openFormatBar(keyboard: false)
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.8) { controls.pressRowItem(.style) }
         case "aasub":
             // A39 F11: Aa's row with the longest style name ("Subheading").
             textView.setSelectedRange(NSRange(location: range(of: "Open questions", in: textView).location, length: 0))
