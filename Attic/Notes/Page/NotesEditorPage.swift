@@ -97,6 +97,10 @@ struct NotesEditorPage: View {
     private var bottomInset: CGFloat { AtticSpacing.s12 }
     /// The bottom row's top, up from the panel's bottom edge.
     private var bottomControls: CGFloat { layout.chromeInsets.bottom + buttonHeight }
+    /// The note's floating edges: the header above, the bottom row below.
+    private var editorEdges: AtticFloatingEdges { AtticFloatingEdges(top: layout.headerBottom, bottom: bottomControls) }
+
+
     private var noticeClearance: CGFloat {
         max(0, layout.chromeInsets.bottom + buttonHeight + AtticSpacing.s8 - layout.contentInsets.bottom)
     }
@@ -105,6 +109,10 @@ struct NotesEditorPage: View {
         ZStack(alignment: .bottom) {
             content
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
+            // The note's variable blur behind the header and the bottom row,
+            // its own layer between the note and the controls (All notes and
+            // history draw theirs under their own controls).
+            if showsEditor, controller.historyBrowser == nil { AtticEdgeBlurBackdrops(editorEdges) }
             if showsEditor, controller.proposalReview == nil, controller.historyBrowser == nil {
                 headerTitle
             }
@@ -290,9 +298,10 @@ struct NotesEditorPage: View {
                 // the panel's edges, under the header and the bottom row,
                 // into the variable blur behind them. The scroll insets keep
                 // the title's and the last line's resting places clear.
-                // F-13 stays fixed: the blur and the band sit above the text
-                // view and its attachment views, below the controls.
-                .atticFloatingControls(AtticFloatingEdges(top: layout.headerBottom, bottom: bottomControls))
+                // F-13 stays fixed: the blur (`pageBackdrops`) and the band
+                // sit above the text view and its attachment views, below
+                // the controls.
+                .atticFloatingEdgesMask(editorEdges)
                 .overlay { AtticFloatingControlsBand(height: bottomControls) }
                 .accessibilityIdentifier("note-editor")
                 .accessibilitySortPriority(3)

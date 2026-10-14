@@ -251,17 +251,12 @@ struct AtticEdgeBlurBackdrop: View {
 }
 
 extension View {
-    /// This scrolling content runs on under the page's floating controls,
-    /// with the variable blur behind them at each edge that has controls
-    /// (`AtticFloatingEdges`). The blur is drawn over the content, so it
-    /// must sit below the controls themselves.
-    func atticFloatingControls(_ edges: AtticFloatingEdges) -> some View {
-        mask { AtticFloatingEdgesMask(edges: edges) }
-            .overlay { AtticEdgeBlurBackdrops(top: edges.top, bottom: edges.bottom, topStart: edges.topBlurStart) }
-    }
-
-    /// Only the content's own fade, where the backdrops are drawn once for
-    /// several lists (Tasks' pager).
+    /// This scrolling content runs on under the page's floating controls
+    /// (`AtticFloatingEdges`): its own fade. The blur is drawn separately,
+    /// by `AtticEdgeBlurBackdrops`, as the page's own layer between its
+    /// content and its controls, never as an overlay of the content: an
+    /// AppKit view overlaid on the text view's AppKit host re-hosted it,
+    /// and the text lost the key (NotesKeyboardUndoTests on CI).
     func atticFloatingEdgesMask(_ edges: AtticFloatingEdges) -> some View {
         mask { AtticFloatingEdgesMask(edges: edges) }
     }
@@ -272,6 +267,16 @@ struct AtticEdgeBlurBackdrops: View {
     let top: CGFloat
     let bottom: CGFloat
     var topStart: CGFloat = 0
+
+    init(top: CGFloat, bottom: CGFloat, topStart: CGFloat = 0) {
+        self.top = top
+        self.bottom = bottom
+        self.topStart = topStart
+    }
+
+    init(_ edges: AtticFloatingEdges) {
+        self.init(top: edges.top, bottom: edges.bottom, topStart: edges.topBlurStart)
+    }
 
     var body: some View {
         ZStack {

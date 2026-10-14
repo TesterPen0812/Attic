@@ -19,6 +19,12 @@ struct NoteHistoryPage: View {
 
     static func versionLineBottom(_ layout: PanelPageLayout) -> CGFloat { layout.headerBottom + 52 }
 
+    /// The page's floating edges.
+    static func edges(_ layout: PanelPageLayout) -> AtticFloatingEdges {
+        AtticFloatingEdges(top: versionLineBottom(layout), bottom: bottomControls(layout),
+                           topPlain: versionLine(layout), topRamp: 24)
+    }
+
     /// The bottom row's top, up from the panel's bottom edge.
     static func bottomControls(_ layout: PanelPageLayout) -> CGFloat {
         layout.chromeInsets.bottom + AtticControlSize.panelButton.height
@@ -38,11 +44,13 @@ struct NoteHistoryPage: View {
                     // Floating controls (owner, 2026-10-14): the preview runs on
                     // under the version line and the bottom row, into the
                     // variable blur; gone above the version line's lower edge.
-                    .atticFloatingControls(AtticFloatingEdges(top: Self.versionLineBottom(layout), bottom: Self.bottomControls(layout),
-                                                              topPlain: Self.versionLine(layout), topRamp: 24))
+                    .atticFloatingEdgesMask(Self.edges(layout))
                     .overlay { AtticFloatingControlsBand(height: Self.bottomControls(layout)) }
                     .accessibilityIdentifier("notes-history-preview")
             }
+            // The variable blur, its own layer under the version line and
+            // the bottom row (never an overlay of the text view).
+            if browser.preview != nil { AtticEdgeBlurBackdrops(Self.edges(layout)) }
             VStack(spacing: 6) {
                 Picker("Compare version", selection: Binding(get: { browser.showsCurrent }, set: {
                     browser.showsCurrent = $0
