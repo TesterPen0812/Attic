@@ -293,41 +293,46 @@ final class NotesPageRenderTests: XCTestCase {
         XCTAssertEqual(NoteTitleAccessories.headerProgress(titleBottom: 0, visibleTop: 40), 1)
     }
 
-    func testH13ScrollingTextCannotEnterTheBottomControlsBand() throws {
+    /// Floating controls (owner, 2026-10-14; was F-13's reserved footer):
+    /// the note runs on to the panel's bottom edge, under the bottom row,
+    /// and its scroll inset keeps the last line's resting place clear of it.
+    func testH13TheNoteRunsUnderTheBottomRowAndItsLastLineRestsClearOfIt() throws {
         let harness = try makeHarness(context: AtticDesignContext(controls: .craft)) { try Self.seedPricing($0) }
         let note = try XCTUnwrap(harness.store.notes.first)
         XCTAssertTrue(harness.controller.open(noteID: note.id))
         spin(0.3)
         let scroll = try XCTUnwrap(harness.controller.active?.engine.scrollView)
-        let frame = scroll.convert(scroll.bounds, to: harness.host)
         let layout = PanelPageLayout(cornerSize: 52, panelSize: harness.host.bounds.size)
         let bottomBand = layout.chromeInsets.bottom + AtticControlSize.panelButton.height
-        let clearance = harness.host.isFlipped ? harness.host.bounds.maxY - frame.maxY : frame.minY - harness.host.bounds.minY
-        XCTAssertGreaterThanOrEqual(clearance, bottomBand - 0.5,
-                                   "scrolling content must stay out from under All notes, Aa and New note")
+        XCTAssertEqual(Self.bottomGap(scroll, in: harness.host), 0, accuracy: 0.5, "no cut-off band above the bottom row")
+        XCTAssertGreaterThanOrEqual(scroll.contentInsets.bottom, bottomBand + AtticSpacing.s12 - 0.5,
+                                    "the last line rests 12 above All notes, Aa and New note")
     }
 
-    func testH13LibraryAndHistoryAlsoKeepTextOutOfTheFooter() async throws {
+    func testH13LibraryAndHistoryAlsoRunUnderTheBottomRow() async throws {
         let harness = try makeHarness(context: AtticDesignContext(controls: .craft)) { try Self.seedPricing($0) }
         let note = try XCTUnwrap(harness.store.notes.first)
         XCTAssertTrue(harness.controller.open(noteID: note.id))
         XCTAssertTrue(harness.controller.showLibrary())
         spin(0.4)
-        func check(_ scroll: NSScrollView) {
-            let frame = scroll.convert(scroll.bounds, to: harness.host)
-            let layout = PanelPageLayout(cornerSize: 52, panelSize: harness.host.bounds.size)
-            let clearance = harness.host.isFlipped ? harness.host.bounds.maxY - frame.maxY : frame.minY - harness.host.bounds.minY
-            XCTAssertGreaterThanOrEqual(clearance, layout.chromeInsets.bottom + AtticControlSize.panelButton.height - 0.5)
-        }
         let library = try XCTUnwrap(descendants(of: harness.host).compactMap { $0 as? NSScrollView }.first { $0.bounds.height > 200 })
-        check(library)
+        XCTAssertEqual(Self.bottomGap(library, in: harness.host), 0, accuracy: 0.5, "the library runs on under the bottom row")
         XCTAssertTrue(harness.controller.open(noteID: note.id))
         XCTAssertTrue(harness.store.recordVersion(noteID: note.id, reason: .pause))
         let opened = await harness.controller.openHistoryDurably()
         XCTAssertTrue(opened)
         spin(0.4)
         let history = try XCTUnwrap(harness.controller.historyBrowser?.preview?.engine.scrollView)
-        check(history)
+        let layout = PanelPageLayout(cornerSize: 52, panelSize: harness.host.bounds.size)
+        XCTAssertEqual(Self.bottomGap(history, in: harness.host), 0, accuracy: 0.5, "and so does a version's preview")
+        XCTAssertGreaterThanOrEqual(history.contentInsets.bottom,
+                                    layout.chromeInsets.bottom + AtticControlSize.panelButton.height - 0.5)
+    }
+
+    /// From the scroll view's bottom edge to the host's.
+    private static func bottomGap(_ scroll: NSScrollView, in host: NSView) -> CGFloat {
+        let frame = scroll.convert(scroll.bounds, to: host)
+        return host.isFlipped ? host.bounds.maxY - frame.maxY : frame.minY - host.bounds.minY
     }
 
     func testH13FastScrollBackRestoresEveryTitleLine() throws {
