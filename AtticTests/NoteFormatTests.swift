@@ -7,18 +7,46 @@ import XCTest
 /// kept as their original bytes, opaque unknown blocks (requirement 1).
 final class NoteFormatTests: XCTestCase {
 
-    func testFix3MarkdownEscapesLiteralsOnlyInsideTables() throws {
+    func testFix14MarkdownEscapesLiteralsInProseAndTables() throws {
         let literal = "*stars* _under_ [link](url) <br> &amp;"
         var table = NoteTable(texts: [["Header"], [literal], ["bold"]])
         table.rows[2].cells[0].marks = [NoteMark(.bold, offset: 0, length: 4)]
         let doc = NoteDocument(blocks: [.text(literal), .text(literal), .checklist(literal), .table(table)])
         let markdown = NoteMarkdownExport.markdown(doc)
-        XCTAssertTrue(markdown.hasPrefix("# " + literal + "\n\n" + literal + "\n\n- [ ] " + literal))
+        let prose = try NoteMarkdownImport.document(markdown).blocks.prefix(3)
+        XCTAssertEqual(prose.map(\.text), [literal, literal, literal])
+        XCTAssertTrue(prose.allSatisfy { $0.marks.isEmpty })
         let grid = try XCTUnwrap(markdown.range(of: "| Header |"))
         let imported = try XCTUnwrap(NoteTableText.parseMarkdown(String(markdown[grid.lowerBound...])))
         XCTAssertEqual(imported.texts, table.texts)
         XCTAssertTrue(imported.rows[1].cells[0].marks.isEmpty)
         XCTAssertEqual(imported.rows[2].cells[0].marks, table.rows[2].cells[0].marks)
+    }
+
+    func testFix14MarkdownKeepsBlockLeadingLiteralsAndCodeSpanEdges() throws {
+        for literal in ["# heading", "1. literal", "12) literal", "- item", "+ item", "---", "[ref]: url", "<https://example.com>"] {
+            let doc = NoteDocument(blocks: [.text("T"), .text(literal)])
+            let restored = try NoteMarkdownImport.document(NoteMarkdownExport.markdown(doc))
+            XCTAssertEqual(restored.blocks.map(\.text), ["T", literal], literal)
+            XCTAssertNil(restored.blocks.last?.style, literal)
+            XCTAssertEqual(restored.blocks.last?.marks, [], literal)
+        }
+        for literal in ["`x`", "``x```", " x ", " ", "  x  ", "` x "] {
+            var block = NoteBlock.text(literal)
+            block.marks = [NoteMark(.code, offset: 0, length: (literal as NSString).length)]
+            let restored = try NoteMarkdownImport.document(NoteMarkdownExport.markdown(NoteDocument(blocks: [.text("T"), block])))
+            XCTAssertEqual(restored.blocks.last?.text, literal, literal)
+            XCTAssertEqual(restored.blocks.last?.marks, block.marks, literal)
+        }
+    }
+
+    func testFix14MarkdownKeepsEmptyBulletAndNumberItems() throws {
+        var number = NoteBlock.text("", style: "number"); number.start = 12
+        let blocks: [NoteBlock] = [.text("T"), .text("", style: "bullet"), .text("next", style: "bullet"), .text("break"), number, .text("last", style: "number")]
+        let restored = try NoteMarkdownImport.document(NoteMarkdownExport.markdown(NoteDocument(blocks: blocks)))
+        XCTAssertEqual(restored.blocks.map(\.text), blocks.map(\.text))
+        XCTAssertEqual(restored.blocks.dropFirst().map(\.style), blocks.dropFirst().map(\.style))
+        XCTAssertEqual(restored.blocks.map(\.start), blocks.map(\.start))
     }
 
     private let dateID = UUID()

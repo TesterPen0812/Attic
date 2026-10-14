@@ -11,6 +11,7 @@ enum NoteMarkdownImport {
     private struct Paragraph {
         var intents: [PresentationIntent.IntentType]
         var block = NoteBlock.text("")
+        var literalEmojiOffsets = Set<Int>()
     }
 
     static func document(_ markdown: String) throws -> NoteDocument {
@@ -22,7 +23,16 @@ enum NoteMarkdownImport {
             let literal = source.substring(with: match.range)
             source.replaceCharacters(in: match.range, with: literal.replacingOccurrences(of: "[", with: "\\[").replacingOccurrences(of: "]", with: "\\]"))
         }
-        let parsed = try AttributedString(markdown: source as String, options: .init(interpretedSyntax: .full))
+        // Foundation emits no run for a truly empty list item. Give those
+        // items a temporary parse-only token, then remove it from their text.
+        // A unique token also restores literal lines inside fenced code.
+        let emptyItemToken = "atticEmptyItem" + UUID().uuidString.replacingOccurrences(of: "-", with: "")
+        let emptyItem = try NSRegularExpression(pattern: #"(?m)^[ \t]*(?:[-+*]|[0-9]{1,9}[.)])[ \t]+$"#)
+        for match in emptyItem.matches(in: source as String, range: NSRange(location: 0, length: source.length)).reversed() {
+            source.insert(emptyItemToken, at: NSMaxRange(match.range))
+        }
+        let sourceText = source as String
+        let parsed = try AttributedString(markdown: sourceText, options: .init(interpretedSyntax: .full, appliesSourcePositionAttributes: true))
         var paragraphs: [Paragraph] = []
         var lastIdentity: Int?
         for run in parsed.runs {
@@ -34,6 +44,7 @@ enum NoteMarkdownImport {
             }
             if paragraphs.isEmpty { paragraphs.append(Paragraph(intents: intents)) }
             var text = String(parsed[run.range].characters)
+            text = text.replacingOccurrences(of: emptyItemToken, with: "")
             let inline = run.inlinePresentationIntent ?? []
             if inline.contains(.softBreak) { text = " " }
             if inline.contains(.lineBreak) { text = "\u{2028}" }
@@ -41,6 +52,10 @@ enum NoteMarkdownImport {
             text = text.replacingOccurrences(of: String(NoteDocument.objectCharacter), with: "")
             let offset = (paragraphs[paragraphs.count - 1].block.text as NSString).length
             let length = (text as NSString).length
+            if let position = run.markdownSourcePosition, let range = Range(position, in: sourceText),
+               sourceText[range].hasPrefix("&#") {
+                paragraphs[paragraphs.count - 1].literalEmojiOffsets.insert(offset)
+            }
             var marks: [NoteMark] = []
             for (intent, kind) in [(InlinePresentationIntent.stronglyEmphasized, NoteMark.Kind.bold), (.emphasized, .italic), (.strikethrough, .strikethrough), (.code, .code)] where inline.contains(intent) && length > 0 {
                 marks.append(NoteMark(kind, offset: offset, length: length))
@@ -110,9 +125,11 @@ enum NoteMarkdownImport {
                    let alert = block.text.range(of: #"^\[!(NOTE|TIP|IMPORTANT|WARNING|CAUTION)\](?: |\u2028|\n)?"#, options: .regularExpression) {
                     let name = String(block.text[alert]).components(separatedBy: "]")[0].dropFirst(2)
                     let defaults = ["NOTE": "", "TIP": "💡", "IMPORTANT": "❗", "WARNING": "⚠️", "CAUTION": "🛑"]
-                    removePrefix((String(block.text[alert]) as NSString).length, from: &block)
+                    let alertLength = (String(block.text[alert]) as NSString).length
+                    removePrefix(alertLength, from: &block)
                     var icon = defaults[String(name)] ?? ""
-                    if let first = block.text.first, first.unicodeScalars.contains(where: { $0.properties.isEmojiPresentation || ($0.value > 127 && $0.properties.isEmoji) }) {
+                    if !paragraph.literalEmojiOffsets.contains(alertLength),
+                       let first = block.text.first, first.unicodeScalars.contains(where: { $0.properties.isEmojiPresentation || ($0.value > 127 && $0.properties.isEmoji) }) {
                         icon = String(first); removePrefix((icon as NSString).length, from: &block)
                         if block.text.hasPrefix(" ") { removePrefix(1, from: &block) }
                     }

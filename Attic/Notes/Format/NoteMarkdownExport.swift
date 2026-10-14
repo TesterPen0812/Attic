@@ -5,8 +5,8 @@ import Foundation
 /// blank line and list lines by a single break; checklists read `- [ ]` and
 /// `- [x]`; dates read as text ("Thu, 1 Oct 2026"); images as a readable
 /// label (`[image: pricing-v2.png]`). Anything this build can't read stays
-/// as a literal placeholder rather than disappearing. Outside table cells,
-/// Markdown characters the person typed are kept as typed.
+/// as a literal placeholder rather than disappearing. Literal prose is escaped
+/// before semantic marks are added, so importing cannot reinterpret it.
 enum NoteMarkdownExport {
     static func markdown(_ document: NoteDocument, calendar: Calendar = .current, locale: Locale = .current,
                          filename: (UUID) -> String? = { _ in nil }) -> String {
@@ -52,8 +52,15 @@ enum NoteMarkdownExport {
                 var text = "> [!NOTE]"
                 for (offset, paragraph) in box.enumerated() {
                     if offset > 0 { text += "\n>" }
-                    let content = inlineText(paragraph, calendar: calendar, locale: locale)
+                    var content = inlineText(paragraph, calendar: calendar, locale: locale)
                         .replacingOccurrences(of: "\u{2028}", with: "\\\n> ")
+                    // An entity denotes text, while a raw leading emoji is
+                    // the external alert syntax for an icon.
+                    if offset == 0, icon.isEmpty, let first = content.first,
+                       first.unicodeScalars.contains(where: { $0.properties.isEmojiPresentation || ($0.value > 127 && $0.properties.isEmoji) }) {
+                        content.replaceSubrange(content.startIndex..<content.index(after: content.startIndex),
+                                                with: first.unicodeScalars.map { "&#\($0.value);" }.joined())
+                    }
                     text += "\n> " + (offset == 0 && !icon.isEmpty ? icon + " " : "") + content
                 }
                 lines.append((text, false)); continue
@@ -92,7 +99,7 @@ enum NoteMarkdownExport {
                 let continuation = isList ? String(repeating: " ", count: column + prefix.count) : (block.style == "quote" ? nesting + "> " : "")
                 let text = inlineText(block, calendar: calendar, locale: locale)
                     .replacingOccurrences(of: "\u{2028}", with: "\\\n" + continuation)
-                if !text.trimmingCharacters(in: .whitespaces).isEmpty { lines.append((nesting + prefix + text, isList)) }
+                if isList || !text.trimmingCharacters(in: .whitespaces).isEmpty { lines.append((nesting + prefix + text, isList)) }
             case .image:
                 lines.append(("[image: \(block.attachmentID.flatMap(filename) ?? String(localized: "image"))]", false))
             case .file: lines.append(("[file: \(block.filename ?? "file")]", false))
@@ -123,7 +130,7 @@ enum NoteMarkdownExport {
     }
 
     /// Escape prose before adding mark delimiters, so literal Markdown and
-    /// HTML cannot turn into formatting on table re-import.
+    /// HTML cannot turn into formatting on re-import.
     static func escapeInlineText(_ text: String) -> String {
         var result = ""
         for character in text {
@@ -131,15 +138,18 @@ enum NoteMarkdownExport {
             case "&": result += "&amp;"
             case "<": result += "&lt;"
             case ">": result += "&gt;"
-            case "\\", "*", "_", "~", "`", "[", "]", "=": result += "\\" + String(character)
+            case ":": result += "&#58;" // Prevent GFM autolinks in literal prose.
+            case "\\", "*", "_", "~", "`", "[", "]", "=", "#", "-", "+", "!": result += "\\" + String(character)
             default: result.append(character)
             }
         }
-        return result
+        // A period is syntax only after a block-leading ordinal. Escaping
+        // periods inside a literal URL confuses Foundation's URL scanner.
+        return result.replacingOccurrences(of: #"^([0-9]{1,9})([.)]) "#, with: #"$1\\$2 "#, options: .regularExpression)
     }
 
     private static func inlineText(_ block: NoteBlock, calendar: Calendar, locale: Locale,
-                                   escapeLiterals: Bool = false) -> String {
+                                   escapeLiterals: Bool = true) -> String {
         var result = ""
         let text = block.text as NSString
         var boundaries: Set<Int> = [0, text.length]
@@ -165,20 +175,29 @@ enum NoteMarkdownExport {
                 continue
             }
             var value = text.substring(with: range)
-            if escapeLiterals { value = escapeInlineText(value) }
             let marks = block.marks.filter { $0.offset <= pair.0 && $0.offset + $0.length >= pair.1 }
+            if marks.contains(where: { $0.kind == .code }) {
+                let longest = value.split(whereSeparator: { $0 != "`" }).map(\.count).max() ?? 0
+                let fence = String(repeating: "`", count: longest + 1)
+                let pad = value.hasPrefix("`") || value.hasSuffix("`") ||
+                    (value.hasPrefix(" ") && value.hasSuffix(" ") && value.contains(where: { $0 != " " }))
+                value = fence + (pad ? " " : "") + value + (pad ? " " : "") + fence
+            } else if escapeLiterals { value = escapeInlineText(value) }
             for mark in marks.sorted(by: { $0.kind.rawValue < $1.kind.rawValue }).reversed() {
                 switch mark.kind {
                 case .bold: value = "**" + value + "**"
                 case .italic: value = "*" + value + "*"
                 case .underline: value = "<u>" + value + "</u>"
                 case .strikethrough: value = "~~" + value + "~~"
-                case .code: value = "`" + value + "`"
+                case .code: break // Already wrapped around literal code above.
                 case .highlight: value = "==" + value + "=="
                 case .link:
                     var destination = mark.url ?? ""
                     if escapeLiterals {
-                        destination = escapeInlineText(destination)
+                        destination = destination.replacingOccurrences(of: "\\", with: "\\\\")
+                            .replacingOccurrences(of: "&", with: "&amp;")
+                            .replacingOccurrences(of: "<", with: "&lt;")
+                            .replacingOccurrences(of: ">", with: "&gt;")
                             .replacingOccurrences(of: "(", with: "\\(")
                             .replacingOccurrences(of: ")", with: "\\)")
                     }
