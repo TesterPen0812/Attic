@@ -420,9 +420,24 @@ extension NoteEditorEngine: NSTextLayoutManagerDelegate, @preconcurrency NSTextC
     /// `NoteBlockLayoutFragment`.
     func textContentStorage(_ textContentStorage: NSTextContentStorage, textParagraphWith range: NSRange) -> NSTextParagraph? {
         guard range.length > 0, NSMaxRange(range) <= textStorage.length,
-              let style = textStorage.attribute(.paragraphStyle, at: range.location, effectiveRange: nil) as? NSParagraphStyle,
-              !style.textLists.isEmpty || textStorage.attribute(.noteBlockStyle, at: range.location, effectiveRange: nil) as? String == "heading" else { return nil }
+              let style = textStorage.attribute(.paragraphStyle, at: range.location, effectiveRange: nil) as? NSParagraphStyle else { return nil }
+        let structured = !style.textLists.isEmpty || textStorage.attribute(.noteBlockStyle, at: range.location, effectiveRange: nil) as? String == "heading"
+        let chips = containsInlineCode(paragraphAt: range.location)
+        guard structured || chips else { return nil }
         let text = NSMutableAttributedString(attributedString: textStorage.attributedSubstring(from: range))
+        if chips {
+            // An inline code chip moves to the next line whole rather than
+            // breaking at its spaces (a run wider than the line still
+            // wraps): its spaces lay out as no-break spaces. Display only;
+            // the stored text, selection and copies keep the spaces.
+            let string = text.mutableString
+            text.enumerateAttribute(.noteMark(.code), in: NSRange(location: 0, length: text.length)) { value, run, _ in
+                guard value != nil else { return }
+                for index in run.location..<NSMaxRange(run) where string.character(at: index) == 0x20 {
+                    string.replaceCharacters(in: NSRange(location: index, length: 1), with: "\u{00A0}")
+                }
+            }
+        }
         text.enumerateAttribute(.paragraphStyle, in: NSRange(location: 0, length: text.length)) { value, part, _ in
             guard let style = value as? NSParagraphStyle,
                   let plain = style.mutableCopy() as? NSMutableParagraphStyle else { return }

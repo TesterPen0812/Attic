@@ -532,6 +532,19 @@ final class NotesV2TypographyTests: XCTestCase {
                        "the chip never changes the line's height")
     }
 
+    func testR14AnInlineChipMovesToTheNextLineWhole() throws {
+        let text = "both. Strikethrough text marks a superseded idea. Inline code such as launch_status = \"ready\" distinguishes code from prose."
+        var block = NoteBlock.text(text)
+        let code = (text as NSString).range(of: "launch_status = \"ready\"")
+        block.marks = [NoteMark(.code, offset: code.location, length: code.length)]
+        let (engine, _) = makeEngine([.text("Title"), block])
+        let fragment = try XCTUnwrap(fragments(engine).last as? NoteBlockLayoutFragment)
+        let lines = fragment.textLineFragments.filter { $0.characterRange.length > 0 }
+        let holding = lines.filter { NSIntersectionRange($0.characterRange, code).length > 0 }
+        XCTAssertEqual(holding.count, 1, "the chip is never split at its spaces")
+        XCTAssertEqual(engine.textStorage.string, "Title\n" + text, "the stored text keeps its spaces")
+    }
+
     func testR14MarkersGoDiscRingSquareAndNumbersLetterThenRoman() throws {
         let (engine, _) = makeEngine([.text("Title"), styled("One", "bullet"), styled("Two", "bullet", indent: 1),
                                       styled("Three", "bullet", indent: 2), .text("Gap"),
