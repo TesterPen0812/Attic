@@ -256,7 +256,7 @@ final class NotesFormatControlsTests: XCTestCase {
         XCTAssertEqual(find("Check or Uncheck", in: menu)?.shortcut, KeyboardShortcut(.return, modifiers: .command))
         XCTAssertEqual(find("Move Line Up", in: menu)?.shortcut, KeyboardShortcut(.upArrow, modifiers: [.command, .option]))
         XCTAssertEqual(find("Quote", in: menu)?.shortcut, KeyboardShortcut("4", modifiers: [.command, .option]))
-        XCTAssertEqual(find("Mono", in: menu)?.shortcut, KeyboardShortcut("5", modifiers: [.command, .option]))
+        XCTAssertEqual(find("Code Block", in: menu)?.shortcut, KeyboardShortcut("5", modifiers: [.command, .option]))
     }
 
     func testTheMenuBarNeverAnswersKeysAndIsDimmedWithoutANote() {
@@ -504,7 +504,7 @@ final class NotesFormatControlsTests: XCTestCase {
         XCTAssertTrue(textView.string.hasSuffix("\n/"), "Esc leaves the typed /")
 
         type(" /hea", textView)
-        XCTAssertEqual(controls.slashModel.items.map(\.kind), [.heading, .subheading], "the engine filters")
+        XCTAssertEqual(controls.slashModel.items.map(\.kind), [.heading, .subheading, .smallHeading], "the engine filters")
         XCTAssertTrue(controls.handleCommand(#selector(NSResponder.insertTab(_:))), "Tab picks")
         let last = try XCTUnwrap(engine.document().blocks.last)
         XCTAssertEqual(last.style, "heading")
@@ -520,7 +520,7 @@ final class NotesFormatControlsTests: XCTestCase {
     /// list has, under the same names, and each one applies its own style.
     func testTheSlashListOffersTheAaStyleListsBlockStylesWithTheSameNames() throws {
         let styleNames = NoteCommandCatalog.styles.map(\.title)
-        XCTAssertEqual(styleNames, ["Title", "Heading", "Subheading", "Body", "Mono", "Quote"])
+        XCTAssertEqual(styleNames, ["Title", "Heading", "Subheading", "Body", "Code Block", "Quote"])
         let slashNames = NoteSlashItem.all.map(\.title)
         for name in styleNames { XCTAssertTrue(slashNames.contains(name), "/ offers \(name)") }
         XCTAssertEqual(slashNames.filter { styleNames.contains($0) }.count, styleNames.count, "no style twice")
@@ -557,7 +557,8 @@ final class NotesFormatControlsTests: XCTestCase {
         type("/", highText)
         XCTAssertTrue(highControls.slashModel.shown)
         XCTAssertFalse(highControls.slashModel.above)
-        XCTAssertNil(highControls.slashModel.viewportHeight, "every row fits below the high caret")
+        let highRoom = try XCTUnwrap(highControls.slashModel.viewportHeight, "the sixteen R14 rows scroll below a high caret")
+        XCTAssertGreaterThan(highRoom, 8 * AtticDropdownMetrics.rowHeight)
     }
 
     /// P3-B3: the `/` list keeps its side while typing filters it; a list
@@ -573,7 +574,7 @@ final class NotesFormatControlsTests: XCTestCase {
         let below = textView.visibleRect.maxY - d.panelMargin - (slash.maxY + d.anchorGap)
         XCTAssertGreaterThanOrEqual(below, d.rowHeight + d.inset * 2, "one row would fit below the caret")
         type("hea", textView)
-        XCTAssertEqual(controls.slashModel.items.map(\.kind), [.heading, .subheading], "the engine filters")
+        XCTAssertEqual(controls.slashModel.items.map(\.kind), [.heading, .subheading, .smallHeading], "the engine filters")
         XCTAssertTrue(controls.slashModel.above, "the filtered list keeps its side")
         XCTAssertNil(controls.slashModel.viewportHeight)
         XCTAssertTrue(controls.handleCommand(#selector(NSResponder.cancelOperation(_:))))

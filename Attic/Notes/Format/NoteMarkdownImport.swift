@@ -5,7 +5,7 @@ import Foundation
 enum NoteMarkdownImport {
     static func shouldImport(_ text: String) -> Bool {
         if ["**", "`", "~~"].contains(where: text.contains) { return true }
-        return text.range(of: #"(?m)^(?: {0,3}#{1,6} |\s*[-*+] |\s*[1-9][0-9]*\. |> ?| {0,3}(?:---+|\*\*\*+|___+)\s*$|\s*\|.*\|)|\[[^\]]+\]\([^\)]+\)"#, options: .regularExpression) != nil
+        return text.range(of: #"(?m)^(?: {4,}\S|\t[ \t]*\S| {0,3}#{1,6} |\s*[-*+] |\s*[1-9][0-9]*\. |> ?| {0,3}(?:---+|\*\*\*+|___+)\s*$|\s*\|.*\|)|\[[^\]]+\]\([^\)]+\)"#, options: .regularExpression) != nil
     }
 
     private struct Paragraph {
@@ -54,7 +54,7 @@ enum NoteMarkdownImport {
         var seenLists = Set<Int>()
         var alerts: [Int: String] = [:]
         var tableIndices: [Int: Int] = [:]
-        for paragraph in paragraphs {
+        for (paragraphIndex, paragraph) in paragraphs.enumerated() {
             let intents = paragraph.intents
             var block = paragraph.block
             if let tableIntent = intents.first(where: { if case .table = $0.kind { true } else { false } }),
@@ -95,14 +95,15 @@ enum NoteMarkdownImport {
                 block.style = list.kind == .orderedList ? "number" : "bullet"
                 block.indent = min(2, max(0, depth)) == 0 ? nil : min(2, depth)
                 if seenLists.insert(list.identity).inserted, list.kind == .orderedList, ordinal != 1 { block.start = ordinal }
-                if block.text.hasPrefix("[ ] ") || block.text.hasPrefix("[x] ") || block.text.hasPrefix("[X] ") {
-                    block.kind = .checklist; block.id = UUID(); block.checked = !block.text.hasPrefix("[ ] ")
-                    removePrefix(4, from: &block); block.style = nil; block.start = nil
+                if let marker = block.text.range(of: #"^\[( |x|X)\](?: |$)"#, options: .regularExpression) {
+                    block.kind = .checklist; block.id = UUID(); block.checked = !block.text.hasPrefix("[ ]")
+                    removePrefix((String(block.text[marker]) as NSString).length, from: &block); block.style = nil; block.start = nil
                 }
             }
             if let quote {
                 if let item, case let .listItem(ordinal) = item.kind {
                     let prefix = list?.kind == .orderedList ? "\(ordinal). " : "• "
+                    if block.kind == .checklist { prepend(block.checked ? "[x] " : "[ ] ", to: &block) }
                     prepend(prefix, to: &block)
                 }
                 if alerts[quote.identity] == nil,
@@ -118,10 +119,12 @@ enum NoteMarkdownImport {
                     alerts[quote.identity] = icon
                 }
                 block.style = "quote"; block.level = nil; block.indent = nil; block.language = nil; block.start = nil
-                block.kind = .text; block.id = nil
+                block.kind = .text; block.id = nil; block.checked = false
                 block.callout = alerts[quote.identity]
+                if block.text.isEmpty, block.callout != nil,
+                   paragraphs.dropFirst(paragraphIndex + 1).contains(where: { $0.intents.contains { $0.kind == .blockQuote && $0.identity == quote.identity } }) { continue }
             }
-            if code {
+            if code || block.text.contains("\n") {
                 // One mono/quote paragraph per physical code line. The final
                 // fence separator isn't an extra empty line in the code.
                 var text = block.text
@@ -140,6 +143,29 @@ enum NoteMarkdownImport {
         return NoteDocument(blocks: blocks.isEmpty ? [.text(markdown)] : blocks)
     }
 
+    static func calloutParagraphs(_ blocks: [NoteBlock], icon: String) -> [NoteBlock] {
+        var ordinal = 0
+        return blocks.flatMap { block -> [NoteBlock] in
+            var copy = block
+            switch block.kind {
+            case .text:
+                if block.style == "bullet" { prepend("• ", to: &copy) }
+                if block.style == "number" { ordinal = block.start ?? ordinal + 1; prepend("\(ordinal). ", to: &copy) }
+                else if block.style != "bullet" { ordinal = 0 }
+            case .checklist: prepend(block.checked ? "• [x] " : "• [ ] ", to: &copy)
+            default: copy = .text(NoteTextExport.plainLine(block))
+            }
+            copy.kind = .text; copy.id = nil; copy.checked = false; copy.style = "quote"; copy.level = nil; copy.indent = nil
+            copy.language = nil; copy.start = nil; copy.callout = icon
+            if copy.text.contains("\n") {
+                return copy.text.components(separatedBy: "\n").map { line in
+                    var paragraph = copy; paragraph.text = line; paragraph.marks = []; return paragraph
+                }
+            }
+            return [copy]
+        }
+    }
+
     private static func prepend(_ text: String, to block: inout NoteBlock) {
         let length = (text as NSString).length
         block.text = text + block.text
@@ -153,5 +179,18 @@ enum NoteMarkdownImport {
             copy.offset = max(0, mark.offset - length); copy.length = end - length - copy.offset
             return copy.length > 0 ? copy : nil
         }
+    }
+}
+
+/// Stable language IDs; unrecognized info strings remain readable hints.
+enum NoteCodeLanguage {
+    static func normalize(_ value: String?) -> String? {
+        guard let value, !value.isEmpty else { return nil }
+        let aliases = ["js": "javascript", "ts": "typescript", "sh": "shell", "bash": "shell", "zsh": "shell", "yml": "yaml", "plaintext": "plain", "text": "plain"]
+        let lower = value.lowercased()
+        if let alias = aliases[lower] { return alias == "plain" ? nil : alias }
+        if lower == "plain" { return nil }
+        let supported = ["javascript", "typescript", "json", "swift", "python", "shell", "html", "css", "sql", "yaml", "diff", "mermaid"]
+        return supported.contains(lower) ? lower : value
     }
 }

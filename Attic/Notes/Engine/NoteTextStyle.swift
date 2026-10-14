@@ -54,11 +54,11 @@ enum NoteParagraphKind: Equatable, Sendable {
     }
 
     /// A paragraph's kind from its stored style name and heading level.
-    static func of(style name: String?, level: Int?) -> NoteParagraphKind {
+    static func of(style name: String?, level: Int?, callout: String? = nil) -> NoteParagraphKind {
         switch name {
-        case "heading": (level ?? 2) <= 1 ? .titleStyle : (level == 2 ? .heading : .subheading)
+        case "heading": (level ?? 2) <= 1 ? .titleStyle : (level == 2 ? .heading : ((level ?? 2) <= 3 ? .subheading : .smallHeading))
         case "mono": .mono
-        case "quote": .quote
+        case "quote": callout == nil ? .quote : .callout
         default: .body
         }
     }
@@ -241,8 +241,8 @@ struct NoteTextStyle: Equatable {
     /// paragraph and its neighbours with the real one).
     func paragraphAttributes(style name: String?, level: Int?, indent: Int?, previous: NoteParagraphKind? = .body,
                              isChecklist: Bool = false, isBlockObject: Bool = false,
-                             monoHang: CGFloat = 0, monoExitsAtEnd: Bool = false) -> [NSAttributedString.Key: Any] {
-        let kind: NoteParagraphKind = isBlockObject ? .blockObject : NoteParagraphKind.of(style: name, level: level)
+                             monoHang: CGFloat = 0, monoExitsAtEnd: Bool = false, callout: String? = nil) -> [NSAttributedString.Key: Any] {
+        let kind: NoteParagraphKind = isBlockObject ? .blockObject : NoteParagraphKind.of(style: name, level: level, callout: callout)
         var result = bodyAttributes
         result[.font] = font(for: kind)
         result[.foregroundColor] = kind == .quote ? quoteColor : bodyColor

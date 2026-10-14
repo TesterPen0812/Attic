@@ -111,15 +111,38 @@ enum NoteSyntaxHighlighter {
                 append(start, index, kind); continue
             }
             index += 1
-            if syntax.operators.utf16.contains(units[start]) { append(start, index, .operator) }
+            if syntax.operators.utf16.contains(units[start]) { append(start, index, language == "mermaid" ? .operator : .plain) }
         }
         return tokens
     }
 }
 
+/// Relative ranges remain warm when another paragraph shifts a block's
+/// position. Bound both entries and retained bytes, keeping one large block
+/// warm rather than re-tokenizing it on every frame.
 struct NoteSyntaxCache {
-    var range: NSRange
-    var language: String?
-    var text: String
-    var tokens: [(NSRange, NoteSyntaxToken)]
+    private struct Key: Hashable { var language: String?; var text: String }
+    private struct Entry { var tokens: [(NSRange, NoteSyntaxToken)]; var use: UInt64; var bytes: Int }
+    private var entries: [Key: Entry] = [:]
+    private var retainedBytes = 0
+    private var generation: UInt64 = 0
+
+    mutating func tokens(in text: String, language: String?) -> (tokens: [(NSRange, NoteSyntaxToken)], scanned: Int) {
+        generation &+= 1
+        let key = Key(language: language, text: text)
+        if var entry = entries[key] {
+            entry.use = generation; entries[key] = entry
+            return (entry.tokens, 0)
+        }
+        let tokens = NoteSyntaxHighlighter.tokens(in: text, language: language)
+        let count = (text as NSString).length
+        let bytes = count * 2 + tokens.count * MemoryLayout<(NSRange, NoteSyntaxToken)>.stride
+        entries[key] = Entry(tokens: tokens, use: generation, bytes: bytes)
+        retainedBytes += bytes
+        while entries.count > 32 || (retainedBytes > 2 * 1024 * 1024 && entries.count > 1) {
+            guard let oldest = entries.min(by: { $0.value.use < $1.value.use }) else { break }
+            retainedBytes -= oldest.value.bytes; entries[oldest.key] = nil
+        }
+        return (tokens, count)
+    }
 }

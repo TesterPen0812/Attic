@@ -22,11 +22,11 @@ enum NoteTextCodec {
             let isTitle = firstBlockIsTitle && index == 0
             let isBlockObject = [.image, .file, .divider, .table, .opaque].contains(block.kind)
             let kind: NoteParagraphKind = isTitle ? .title
-                : (isBlockObject ? .blockObject : NoteParagraphKind.of(style: block.kind == .text ? block.style : nil, level: block.level))
+                : (isBlockObject ? .blockObject : NoteParagraphKind.of(style: block.kind == .text ? block.style : nil, level: block.level, callout: block.callout))
             var attributes = isTitle ? style.titleAttributes : style.paragraphAttributes(
                 style: block.kind == .text ? block.style : nil, level: block.level, indent: block.indent,
                 previous: previousKind, isChecklist: block.kind == .checklist, isBlockObject: isBlockObject,
-                monoHang: kind == .mono ? style.monoHang(for: block.text) : 0)
+                monoHang: kind == .mono ? style.monoHang(for: block.text) : 0, callout: block.callout)
             previousKind = kind
             if !isTitle, block.kind == .text, let kind = block.style, ["bullet", "number"].contains(kind) {
                 let depth = block.indent ?? 0

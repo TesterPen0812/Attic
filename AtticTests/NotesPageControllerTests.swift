@@ -293,7 +293,8 @@ final class NotesPageControllerTests: XCTestCase {
         let (_, view) = session.engine.makeView()
         view.setSelectedRange(NSRange(location: 3, length: 0))
         view.deleteBackward(nil)
-        XCTAssertEqual(session.engine.document().blocks[1].kind, .text)
+        XCTAssertEqual(session.engine.document().blocks[1].kind, .checklist)
+        XCTAssertEqual(session.engine.document().blocks[1].indent, 1)
         gate.shouldFail = true
         await XCTAssertTrueAsync(await controller.preserveAllDurably())
         let checkpoint = try XCTUnwrap(journal.entries().first?.0)
@@ -302,10 +303,10 @@ final class NotesPageControllerTests: XCTestCase {
         await restarted.startAndWait()
         await XCTAssertTrueAsync(await restarted.openDurably(noteID: id))
         let recovered = try XCTUnwrap(restarted.active?.engine.document().blocks[1])
-        XCTAssertEqual(recovered.kind, .text)
+        XCTAssertEqual(recovered.kind, .checklist)
         XCTAssertEqual(recovered.text, "Keep marks")
         XCTAssertEqual(recovered.marks, item.marks)
-        XCTAssertNil(recovered.indent)
+        XCTAssertEqual(recovered.indent, 1)
     }
 
     func testTagPickerUndoPreservesExternalTagAfterSessionRefresh() async throws {

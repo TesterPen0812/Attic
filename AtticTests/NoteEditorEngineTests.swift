@@ -294,6 +294,230 @@ final class NoteEditorEngineTests: XCTestCase {
         XCTAssertEqual(engine.document().blocks[2].indent, nil)
     }
 
+    func testR14ContainerInteriorBackspaceJoinsAndFinalCodeBreakCarriesLanguage() {
+        for format: NoteParagraphStyle in [.quote, .callout(icon: "💡"), .mono(language: "swift")] {
+            let (engine, view) = makeEngine(NoteDocument(blocks: [.text("T"), .text("a"), .text("b")]))
+            XCTAssertTrue(engine.perform(.paragraph(format), selection: NSRange(location: 2, length: 3)))
+            view.setSelectedRange(NSRange(location: 4, length: 0)); view.deleteBackward(nil)
+            XCTAssertEqual(engine.document().blocks.map(\.text), ["T", "ab"], "\(format)")
+            XCTAssertEqual(engine.paragraphStyle(at: 2), format)
+        }
+        var code = NoteBlock.text("a", style: "mono"); code.language = "swift"
+        let (engine, view) = makeEngine(NoteDocument(blocks: [.text("T"), code]))
+        view.setSelectedRange(NSRange(location: 3, length: 0)); view.doCommand(by: #selector(NSTextView.insertLineBreak(_:)))
+        XCTAssertEqual(engine.document().blocks.last?.style, "mono")
+        XCTAssertEqual(engine.document().blocks.last?.language, "swift")
+        XCTAssertTrue(engine.history.undo()); XCTAssertEqual(engine.document().blocks, [.text("T"), code])
+        view.setSelectedRange(NSRange(location: 3, length: 0))
+        XCTAssertTrue(engine.pastePlainText("\nx\n", at: view.selectedRange()))
+        XCTAssertTrue(engine.document().blocks.dropFirst().allSatisfy { $0.style == "mono" && $0.language == "swift" })
+    }
+
+    func testR14ContinueAndRestartNumberingUseTheFirstItemOfTheRun() {
+        var first = NoteBlock.text("one", style: "number"); first.start = 5
+        let (engine, _) = makeEngine(NoteDocument(blocks: [.text("T"), first, .text("two", style: "number"), .text("gap"), .text("three", style: "number"), .text("four", style: "number")]))
+        XCTAssertTrue(engine.continueNumbering(at: location(of: "four", in: engine)))
+        XCTAssertEqual(engine.document().blocks[4].start, 7)
+        XCTAssertNil(engine.document().blocks[5].start)
+        XCTAssertTrue(engine.setListStart(1, at: location(of: "four", in: engine)))
+        XCTAssertNil(engine.document().blocks[4].start)
+        XCTAssertEqual(engine.listMarker(at: location(of: "four", in: engine)), .number("2."))
+    }
+
+    func testR14NewSlashVocabularyIncludesWorkingDiagramTemplate() {
+        XCTAssertEqual(NoteSlashItem.Kind.mono, .codeBlock)
+        for kind: NoteSlashItem.Kind in [.smallHeading, .callout, .codeBlock, .diagram] {
+            let (engine, view) = makeEngine(NoteDocument(blocks: [.text("T"), .text("")]))
+            view.setSelectedRange(NSRange(location: 2, length: 0)); type("/", view)
+            XCTAssertTrue(engine.slashSession?.items.contains { $0.kind == kind } == true)
+            XCTAssertTrue(engine.acceptSlashItem(kind))
+            if kind == .diagram {
+                XCTAssertEqual(engine.document().blocks.dropFirst().count, 3)
+                XCTAssertTrue(engine.document().blocks.dropFirst().allSatisfy { $0.language == "mermaid" })
+                XCTAssertTrue(engine.document().blocks[1].text.hasPrefix("flowchart LR"))
+            }
+        }
+    }
+
+    func testR14MarkdownInsideCalloutAndNestedQuoteKeepsTextAsParagraphs() throws {
+        var callout = NoteBlock.text("", style: "quote"); callout.callout = "💡"
+        let (engine, view) = makeEngine(NoteDocument(blocks: [.text("T"), callout]))
+        view.setSelectedRange(NSRange(location: 2, length: 0))
+        let board = NSPasteboard.withUniqueName(); board.setString("- item\n\n```swift\nlet x = 1\n```", forType: .string)
+        XCTAssertTrue(engine.handlePaste(board))
+        XCTAssertTrue(engine.document().blocks.dropFirst().allSatisfy { $0.style == "quote" && $0.callout == "💡" })
+        XCTAssertEqual(engine.document().blocks[1].text, "• item")
+        let imported = try NoteMarkdownImport.document("> [!TIP]\n>\n> Advice\n>\n> - [x] done\n>\n> ```js\n> const x = 1;\n> ```")
+        XCTAssertEqual(imported.blocks.map(\.text), ["Advice", "• [x] done", "const x = 1;"])
+        XCTAssertTrue(imported.blocks.allSatisfy { $0.callout == "💡" && $0.style == "quote" })
+    }
+
+    func testR14MarkdownEmptyTasksAndRawHTMLKeepParagraphBoundaries() throws {
+        let document = try NoteMarkdownImport.document("- [ ]\n- [x]\n\n<div>\nraw\n</div>\n\n```swift\na\n\nb\n```")
+        XCTAssertEqual(document.blocks[0].kind, .checklist)
+        XCTAssertEqual(document.blocks[1].kind, .checklist)
+        XCTAssertFalse(document.blocks[0].checked); XCTAssertTrue(document.blocks[1].checked)
+        XCTAssertEqual(document.blocks[0].text, "")
+        XCTAssertEqual(document.blocks[1].text, "")
+        XCTAssertFalse(document.blocks.contains { $0.text.contains("\n") })
+        XCTAssertEqual(document.blocks.suffix(3).map(\.text), ["a", "", "b"])
+        let attributed = NoteTextCodec.attributedString(from: document, style: NoteTextStyle(), firstBlockIsTitle: false)
+        XCTAssertEqual(NoteTextCodec.document(from: attributed, firstBlockIsTitle: false).blocks.map(\.text), document.blocks.map(\.text))
+    }
+
+    func testR14NativeListTabAndTerminalArrowRespectEngineRules() {
+        let (list, listView) = makeEngine(NoteDocument(blocks: [.text("T"), .text("first", style: "bullet")]))
+        listView.setSelectedRange(NSRange(location: 2, length: 0))
+        listView.doCommand(by: #selector(NSTextView.insertTab(_:)))
+        XCTAssertEqual(list.textStorage.string, "T\nfirst")
+        XCTAssertNil(list.document().blocks[1].indent)
+        var callout = NoteBlock.text("tip", style: "quote"); callout.callout = "💡"
+        let (engine, view) = makeEngine(NoteDocument(blocks: [.text("T"), callout]))
+        view.setSelectedRange(NSRange(location: engine.textStorage.length, length: 0))
+        view.doCommand(by: #selector(NSTextView.moveDown(_:)))
+        XCTAssertEqual(engine.document().blocks.map(\.text), ["T", "tip", ""])
+        XCTAssertEqual(engine.paragraphStyle(at: engine.textStorage.length), .body)
+        XCTAssertTrue(engine.history.undo()); XCTAssertEqual(engine.document().blocks, [.text("T"), callout])
+    }
+
+    func testR14NewParagraphKindsHaveBodyPlaceholders() {
+        var heading = NoteBlock.text("Small", style: "heading"); heading.level = 4
+        var tip = NoteBlock.text("Tip", style: "quote"); tip.callout = "💡"
+        let (engine, _) = makeEngine(NoteDocument(blocks: [.text("T"), heading, tip]))
+        XCTAssertEqual(engine.paragraphKind(at: 2), .smallHeading)
+        XCTAssertEqual(engine.paragraphKind(at: 8), .callout)
+        XCTAssertEqual((engine.attributes(forParagraphAt: 2)[.font] as? NSFont)?.pointSize, engine.style.bodyFont.pointSize)
+        XCTAssertEqual((engine.attributes(forParagraphAt: 8)[.font] as? NSFont)?.pointSize, engine.style.bodyFont.pointSize)
+        XCTAssertNil(engine.decoration(forParagraphAt: 8))
+    }
+
+    func testR14BackspaceImmediatelyAfterInlineRuleRestoresTypedText() {
+        for literal in ["**bold**", "*italic*", "_italic_", "`code`", "~~strike~~"] {
+            let (engine, view) = makeEngine(NoteDocument(blocks: [.text("T"), .text("")]))
+            view.setSelectedRange(NSRange(location: 2, length: 0)); type(literal, view)
+            XCTAssertFalse(engine.document().blocks[1].marks.isEmpty)
+            view.deleteBackward(nil)
+            XCTAssertEqual(engine.document().blocks[1].text, literal)
+            XCTAssertTrue(engine.document().blocks[1].marks.isEmpty)
+        }
+    }
+
+    func testR14ParagraphInputRulesDoNotReplaceStyledLines() {
+        for format: NoteParagraphStyle in [.heading(2), .quote, .callout(icon: "💡"), .bullet] {
+            let (engine, view) = makeEngine(NoteDocument(blocks: [.text("T"), .text("")]))
+            XCTAssertTrue(engine.perform(.paragraph(format), selection: NSRange(location: 2, length: 0)))
+            view.setSelectedRange(NSRange(location: 2, length: 0)); type("# ", view)
+            XCTAssertEqual(engine.paragraphStyle(at: 2), format)
+            XCTAssertEqual(engine.document().blocks[1].text, "# ")
+        }
+    }
+
+    func testR14CodeRunFirstLanguageOwnsReturnAndPasteAfterAnOlderEdit() {
+        var first = NoteBlock.text("first", style: "mono"); first.language = "swift"
+        let (engine, view) = makeEngine(NoteDocument(blocks: [.text("T"), first, .text("old edit", style: "mono")]))
+        view.setSelectedRange(NSRange(location: engine.textStorage.length, length: 0)); view.insertNewline(nil)
+        XCTAssertEqual(engine.document().blocks.last?.language, "swift")
+        type("next", view)
+        XCTAssertEqual(engine.document().blocks.last?.language, "swift")
+        XCTAssertTrue(engine.pastePlainText("\npasted", at: view.selectedRange()))
+        XCTAssertEqual(engine.document().blocks.last?.language, "swift")
+    }
+
+    func testR14BlockMovesKeepEmptyHeadingAndFinalEmptyCodeParagraph() {
+        var emptyHeading = NoteBlock.text("", id: UUID(), style: "heading"); emptyHeading.level = 4
+        let (heading, _) = makeEngine(NoteDocument(blocks: [.text("T"), emptyHeading, .text("Body")]))
+        let original = heading.document()
+        XCTAssertTrue(heading.moveBlock(heading.blockRange(at: 2), to: heading.textStorage.length))
+        XCTAssertEqual(heading.document().blocks.last, emptyHeading)
+        XCTAssertTrue(heading.history.undo()); XCTAssertEqual(heading.document(), original)
+        var code = NoteBlock.text("a", style: "mono"); code.language = "swift"
+        var blankCode = NoteBlock.text("", style: "mono"); blankCode.language = "swift"
+        let (engine, _) = makeEngine(NoteDocument(blocks: [.text("T"), .text("Body"), code, blankCode]))
+        let before = engine.document()
+        XCTAssertTrue(engine.moveBlock(engine.blockRange(at: 7), to: 2))
+        XCTAssertEqual(engine.document().blocks.map(\.text), ["T", "a", "", "Body"])
+        XCTAssertEqual(engine.document().blocks[2].language, "swift")
+        XCTAssertTrue(engine.history.undo()); XCTAssertEqual(engine.document(), before)
+        XCTAssertTrue(engine.history.redo())
+        XCTAssertEqual(engine.document().blocks.map(\.text), ["T", "a", "", "Body"])
+    }
+
+    func testR14AnEmptyFinalCodeBlockCanMoveBeforeBody() {
+        var code = NoteBlock.text("", style: "mono"); code.language = "swift"
+        let (engine, _) = makeEngine(NoteDocument(blocks: [.text("T"), .text("Body"), code]))
+        let before = engine.document()
+        XCTAssertTrue(engine.moveBlock(engine.blockRange(at: engine.textStorage.length), to: 2))
+        XCTAssertEqual(engine.document().blocks.map(\.text), ["T", "", "Body"])
+        XCTAssertEqual(engine.document().blocks[1].language, "swift")
+        XCTAssertTrue(engine.history.undo()); XCTAssertEqual(engine.document(), before)
+    }
+
+    func testR14SyntaxCacheKeepsUneditedBlocksWarmWhenBodyOffsetsMove() {
+        var swift = NoteBlock.text("let x = 1", style: "mono"); swift.language = "swift"
+        var javascript = NoteBlock.text("const y = 2", style: "mono"); javascript.language = "javascript"
+        let engine = NoteEditorEngine(noteID: UUID(), document: NoteDocument(blocks: [.text("T"), .text("Body"), swift, .text("Gap"), javascript]))
+        let first = (engine.textStorage.string as NSString).range(of: "let x")
+        let second = (engine.textStorage.string as NSString).range(of: "const y")
+        let before = engine.codeTokens(in: first)
+        _ = engine.codeTokens(in: second)
+        _ = engine.codeTokens(in: first)
+        XCTAssertEqual(engine.lastSyntaxScannedUTF16Count, 0, "another visible block must not evict this block on every frame")
+        XCTAssertTrue(engine.performEdit(NSRange(location: 2, length: 0), with: NSAttributedString(string: "X"), name: "Edit Body"))
+        let shifted = (engine.textStorage.string as NSString).range(of: "let x")
+        let after = engine.codeTokens(in: shifted)
+        XCTAssertEqual(engine.lastSyntaxScannedUTF16Count, 0, "body typing only rebases cached token offsets")
+        XCTAssertEqual(after.map { $0.0.location }, before.map { $0.0.location + 1 })
+        XCTAssertEqual(after.map { $0.1 }, before.map { $0.1 })
+        XCTAssertEqual(engine.history.undoActionName, "Edit Body")
+    }
+
+    func testR14PunctuationIsPlainExceptMermaidOperators() {
+        let tokens = NoteSyntaxHighlighter.tokens(in: "const x = { a: 1 };", language: "javascript")
+        XCTAssertFalse(tokens.contains { $0.1 == .operator })
+        XCTAssertTrue(NoteSyntaxHighlighter.tokens(in: "A-->B", language: "mermaid").contains { $0.1 == .operator })
+    }
+
+    func testR14QuotedAndDestinationCalloutTasksAreCanonicalTextBlocks() throws {
+        let quoted = try NoteMarkdownImport.document("> [!TIP]\n> - [x] **done**")
+        let destination = NoteMarkdownImport.calloutParagraphs(try NoteMarkdownImport.document("- [x] **done**").blocks, icon: "💡")
+        for blocks in [quoted.blocks, destination] {
+            XCTAssertTrue(blocks.allSatisfy { $0.kind == .text && !$0.checked })
+            let bytes = try NoteContentCodec.encode(NoteDocument(blocks: blocks), context: .fragment)
+            XCTAssertEqual(NoteContentCodec.decode(bytes, context: .fragment).document?.blocks, blocks)
+        }
+    }
+
+    func testR14IndentedMarkdownPasteAndCodePlainURLs() throws {
+        XCTAssertTrue(NoteMarkdownImport.shouldImport("    print(1)"))
+        XCTAssertEqual(try NoteMarkdownImport.document("    print(1)").blocks.first?.style, "mono")
+        let (engine, view) = makeEngine(NoteDocument(blocks: [.text("T"), .text("", style: "mono")]))
+        view.setSelectedRange(NSRange(location: 2, length: 0))
+        XCTAssertTrue(engine.pastePlainText("https://example.com", at: view.selectedRange()))
+        XCTAssertTrue(engine.document().blocks[1].marks.isEmpty, "plain code paste never adds semantic links")
+    }
+
+    func testR14EmptyCalloutMarkdownRoundTripKeepsItsIcon() throws {
+        for icon in ["", "💡"] {
+            var box = NoteBlock.text("", style: "quote"); box.callout = icon
+            let exported = NoteMarkdownExport.markdown(NoteDocument(blocks: [.text("T"), box]))
+            let imported = try NoteMarkdownImport.document(exported)
+            XCTAssertEqual(imported.blocks.last?.style, "quote")
+            XCTAssertEqual(imported.blocks.last?.callout, icon)
+            XCTAssertEqual(imported.blocks.last?.text, "")
+        }
+    }
+
+    func testR14NumberAndLanguageShortcutsAtStartKeepExistingTail() {
+        for (literal, expected): (String, NoteParagraphStyle) in [("12. ", .number), ("```js ", .mono(language: "javascript"))] {
+            let (engine, view) = makeEngine(NoteDocument(blocks: [.text("T"), .text("Tail")]))
+            view.setSelectedRange(NSRange(location: 2, length: 0)); type(literal, view)
+            XCTAssertEqual(engine.paragraphStyle(at: 2), expected)
+            XCTAssertEqual(engine.document().blocks[1].text, "Tail")
+            view.deleteBackward(nil)
+            XCTAssertEqual(engine.document().blocks[1].text, literal + "Tail")
+        }
+    }
+
     private let checklistID = UUID()
     private let dateID = UUID()
     private let imageID = UUID()
@@ -1467,7 +1691,8 @@ final class NoteEditorEngineTests: XCTestCase {
     func testReopenedEmptyParagraphFormattingAndIndentAreUndoableWithoutLosingMetadata() throws {
         var empty = NoteBlock.text(""); empty.style = "bullet"; empty.indent = 1
         empty.id = UUID(); empty.extras = ["future": .string("kept")]
-        var original = NoteDocument(blocks: [.text("T"), empty]); original.refreshRequiredCapabilities()
+        var sibling = NoteBlock.text("Sibling", style: "bullet"); sibling.indent = 1
+        var original = NoteDocument(blocks: [.text("T"), sibling, empty]); original.refreshRequiredCapabilities()
         let (engine, view) = makeEngine(original)
         view.setSelectedRange(NSRange(location: engine.textStorage.length, length: 0))
         XCTAssertTrue(engine.perform(.indent))
@@ -1534,14 +1759,14 @@ final class NoteEditorEngineTests: XCTestCase {
             if route == 1 { view.setSelectedRange(NSRange(location: line + 1, length: 0)); engine.toggleChecklistLine() }
             if route == 2 { view.setSelectedRange(NSRange(location: line, length: 1)); view.deleteBackward(nil) }
             let block = engine.document().blocks[1]
-            XCTAssertEqual(block.kind, .text)
-            XCTAssertNil(block.indent)
+            XCTAssertEqual(block.kind, route == 0 ? .checklist : .text)
+            XCTAssertEqual(block.indent, route == 0 ? 1 : nil)
             XCTAssertEqual(block.marks, item.marks)
             XCTAssertNoThrow(try NoteContentCodec.encode(engine.document()))
             XCTAssertTrue(engine.history.undo())
             XCTAssertEqual(engine.document().blocks[1], item)
             XCTAssertTrue(engine.history.redo())
-            XCTAssertNil(engine.document().blocks[1].indent)
+            XCTAssertEqual(engine.document().blocks[1].indent, route == 0 ? 1 : nil)
         }
         let (empty, view) = makeEngine(NoteDocument(blocks: [.text("T"), {
             var block = NoteBlock.checklist("")
@@ -1550,8 +1775,8 @@ final class NoteEditorEngineTests: XCTestCase {
         }()]))
         view.setSelectedRange(NSRange(location: empty.textStorage.length, length: 0))
         view.insertNewline(nil)
-        XCTAssertEqual(empty.document().blocks[1].kind, .text)
-        XCTAssertNil(empty.document().blocks[1].indent)
+        XCTAssertEqual(empty.document().blocks[1].kind, .checklist)
+        XCTAssertEqual(empty.document().blocks[1].indent, 1)
         XCTAssertNoThrow(try NoteContentCodec.encode(empty.document()))
     }
 
@@ -1878,22 +2103,25 @@ final class NoteEditorEngineTests: XCTestCase {
     }
 
     func testListContinuationIndentMarkerFirstBackspaceAndMove() {
-        let initial = NoteDocument(blocks: [.text("T"), .text("First"), .text("Second")])
+        let initial = NoteDocument(blocks: [.text("T"), .text("Previous", style: "bullet"), .text("First"), .text("Second")])
         let (engine, textView) = makeEngine(initial)
         let first = location(of: "First", in: engine)
         XCTAssertTrue(engine.perform(.paragraph(.bullet), selection: NSRange(location: first, length: 0)))
-        XCTAssertEqual(engine.document().blocks[1].style, "bullet")
+        XCTAssertEqual(engine.document().blocks[2].style, "bullet")
         XCTAssertTrue(engine.perform(.indent, selection: NSRange(location: first, length: 0)))
-        XCTAssertEqual(engine.document().blocks[1].indent, 1)
+        XCTAssertEqual(engine.document().blocks[2].indent, 1)
         textView.setSelectedRange(NSRange(location: first + 5, length: 0))
         textView.insertNewline(nil)
-        XCTAssertEqual(engine.document().blocks[2].style, "bullet")
+        XCTAssertEqual(engine.document().blocks[3].style, "bullet")
         textView.deleteBackward(nil)
-        XCTAssertNil(engine.document().blocks[2].style, "Backspace removes the list style first")
+        XCTAssertEqual(engine.document().blocks[3].style, "bullet")
+        XCTAssertNil(engine.document().blocks[3].indent, "First Backspace lifts one level")
+        textView.deleteBackward(nil)
+        XCTAssertNil(engine.document().blocks[3].style, "Next Backspace removes the marker")
         XCTAssertTrue(engine.perform(.moveDown, selection: NSRange(location: first, length: 0)))
-        XCTAssertEqual(engine.document().blocks[1].text, "")
+        XCTAssertEqual(engine.document().blocks[2].text, "")
         XCTAssertTrue(engine.history.undo())
-        XCTAssertEqual(engine.document().blocks[1].text, "First")
+        XCTAssertEqual(engine.document().blocks[2].text, "First")
     }
 
     func testListContinuationAtEndKeepsStyleForNextTypedCharacter() {

@@ -327,6 +327,8 @@ extension NoteEditorEngine: NSTextLayoutManagerDelegate, @preconcurrency NSTextC
             let ordinal = numberedOrdinal(at: line.location, indent: attributes[.noteBlockIndent] as? Int ?? 0)
             return .number("\(ordinal).", trailing: depth + AtticNoteType.listTextInset - AtticNoteType.numberGap)
         case "quote":
+            // F.1 placeholder: the visible builder supplies the callout box.
+            if attributes[.noteCalloutIcon] != nil { return nil }
             return .quote(x: depth, joinsAbove: style(paragraphBefore: line) == "quote",
                           joinsBelow: style(paragraphAfter: line) == "quote")
         default:
