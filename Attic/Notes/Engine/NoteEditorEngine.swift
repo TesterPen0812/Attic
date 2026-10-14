@@ -216,6 +216,7 @@ final class NoteEditorEngine: NSObject, NSTextViewDelegate, NSTextStorageDelegat
     /// True while the edit in flight inserted exactly one line break (Return),
     /// so only Return carries inline marks onto the next line.
     private var newlineEditInFlight = false
+    private var pendingNumberStartTransfer: (location: Int, start: Int)?
     private var inputRuleBoundary: (caret: Int, generation: Int)?
     private func clearNewlineEditIfIdle() {
         if userEditDepth == 0 && engineEditDepth == 0 {
@@ -1525,6 +1526,23 @@ final class NoteEditorEngine: NSObject, NSTextViewDelegate, NSTextStorageDelegat
     private func recordTextChange(ranges: [NSRange], strings: [String]?) {
         let string = textStorage.string as NSString
         let titleEnd = string.range(of: "\n").location
+        pendingNumberStartTransfer = nil
+        if !history.isReplaying, ranges.count == 1, let replacement = strings?.first, replacement.isEmpty {
+            let removal = ranges[0]
+            if removal.location > 0, removal.length > 0, NSMaxRange(removal) < string.length,
+               removal.location == paragraphRange(at: removal.location).location,
+               NSMaxRange(removal) == paragraphRange(at: NSMaxRange(removal)).location,
+               paragraphStyle(at: removal.location) == .number,
+               let start = textStorage.attribute(.noteListStart, at: removal.location, effectiveRange: nil) as? Int,
+               paragraphStyle(at: NSMaxRange(removal)) == .number,
+               indentAt(removal.location) == indentAt(NSMaxRange(removal)) {
+                let successor = paragraphRange(at: NSMaxRange(removal))
+                pendingNumberStartTransfer = (removal.location, start)
+                let recorded = NSRange(location: removal.location, length: NSMaxRange(successor) - removal.location)
+                history.willChange(ranges: [recorded], strings: [string.substring(with: successor)])
+                return
+            }
+        }
         guard let strings, strings.count == ranges.count, titleEnd != NSNotFound,
               let join = ranges.first(where: { $0.location <= titleEnd && NSMaxRange($0) > titleEnd }) else {
             history.willChange(ranges: ranges, strings: strings)
@@ -1637,7 +1655,7 @@ final class NoteEditorEngine: NSObject, NSTextViewDelegate, NSTextStorageDelegat
     /// checking. Change them with the insertion point, before input begins.
     func updateTextChecking() {
         guard let textView else { return }
-        let literal = paragraphStyle(at: textView.selectedRange().location) == .mono
+        let literal = paragraphStyle(at: textView.selectedRange().location)?.isCode == true
             || textView.typingAttributes[.noteMark(.code)] != nil
         textView.isContinuousSpellCheckingEnabled = !literal
         textView.isAutomaticSpellingCorrectionEnabled = !literal
@@ -1906,6 +1924,12 @@ final class NoteEditorEngine: NSObject, NSTextViewDelegate, NSTextStorageDelegat
                 documentCache = cached
             } else {
                 documentCache = nil
+            }
+        }
+        if let transfer = pendingNumberStartTransfer {
+            pendingNumberStartTransfer = nil
+            if transfer.location < textStorage.length, paragraphStyle(at: transfer.location) == .number {
+                textStorage.addAttribute(.noteListStart, value: transfer.start, range: paragraphRange(at: transfer.location))
             }
         }
         let outsideRefusedEdit = activity == .writingToolsRefused && engineEditDepth == 0
@@ -3589,7 +3613,7 @@ extension NoteEditorEngine {
     }
 
     private func conversionEligible(line: NSRange) -> Bool {
-        guard line.location > 0, paragraphStyle(at: line.location) != .mono else { return false }
+        guard line.location > 0, paragraphStyle(at: line.location)?.isCode != true else { return false }
         var blocked = false
         if line.length > 0 {
             textStorage.enumerateAttribute(.noteMark(.code), in: line) { value, _, stop in
@@ -3935,25 +3959,6 @@ extension NoteEditorEngine {
         default: return nil
         }
     }
-    func blockRange(at location: Int) -> NSRange {
-        var range = paragraphRange(at: location)
-        guard let format = paragraphStyle(at: location), format.isCode || format.isCallout || format == .quote else { return range }
-        func matches(_ at: Int) -> Bool {
-            guard let other = paragraphStyle(at: at) else { return false }
-            if format.isCode { return other.isCode }
-            return other == format
-        }
-        while range.location > titleParagraphRange.length + 1, matches(range.location - 1) {
-            let previous = paragraphRange(at: range.location - 1)
-            range = NSUnionRange(previous, range)
-        }
-        while NSMaxRange(range) < textStorage.length, matches(NSMaxRange(range)) {
-            let next = paragraphRange(at: NSMaxRange(range))
-            guard next.length > 0 else { break }
-            range = NSUnionRange(range, next)
-        }
-        return range
-    }
     func codeTokens(in range: NSRange) -> [(NSRange, NoteSyntaxToken)] {
         guard range.location >= 0, range.location < textStorage.length,
               paragraphStyle(at: range.location)?.isCode == true else { return [] }
@@ -3966,7 +3971,6 @@ extension NoteEditorEngine {
         syntaxCache = NoteSyntaxCache(range: block, language: language, text: source, tokens: tokens)
         return tokens
     }
-    @discardableResult func moveBlock(_ range: NSRange, to position: Int) -> Bool { false }
     /// Return false to let AppKit handle its existing rich and object routes.
     func handlePaste(_ pasteboard: NSPasteboard) -> Bool {
         guard !isPastingAsPlainText, activeTableView == nil, let textView,

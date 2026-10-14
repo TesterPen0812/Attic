@@ -245,6 +245,55 @@ final class NoteEditorEngineTests: XCTestCase {
         print("R14_SYNTAX_COST note_blocks=5003 scanned_utf16=\(engine.lastSyntaxScannedUTF16Count) upkeep_ms=\(engine.lastUpkeepMilliseconds)")
     }
 
+    func testR14BlockMoveCarriesChildrenAndRunsAndUndoesInOneStep() throws {
+        var child = NoteBlock.text("child", style: "bullet"); child.indent = 1
+        var callout = NoteBlock.text("tip", style: "quote"); callout.callout = "💡"
+        let (engine, view) = makeEngine(NoteDocument(blocks: [.text("T"), .text("parent", style: "bullet"), child, .text("Body"), callout, callout]))
+        let before = engine.document()
+        let parent = engine.blockRange(at: 2)
+        XCTAssertEqual((engine.textStorage.string as NSString).substring(with: parent), "parent\nchild\n")
+        let box = engine.blockRange(at: location(of: "tip", in: engine))
+        XCTAssertEqual((engine.textStorage.string as NSString).substring(with: box), "tip\ntip")
+        view.setSelectedRange(parent)
+        XCTAssertTrue(engine.moveBlock(parent, to: engine.textStorage.length))
+        XCTAssertEqual(engine.document().blocks.map(\.text), ["T", "Body", "tip", "tip", "parent", "child"])
+        XCTAssertEqual(engine.history.undoActionName, "Move Block")
+        XCTAssertTrue(engine.history.undo()); XCTAssertEqual(engine.document(), before)
+        XCTAssertTrue(engine.history.redo())
+        XCTAssertEqual(engine.document().blocks.last?.indent, 1)
+        XCTAssertFalse(engine.moveBlock(engine.blockRange(at: 0), to: engine.textStorage.length))
+    }
+
+    func testR14NumberStartTransfersWhenFirstItemMovesOrIsDeleted() {
+        var first = NoteBlock.text("one", style: "number"); first.start = 12
+        let doc = NoteDocument(blocks: [.text("T"), first, .text("two", style: "number"), .text("three", style: "number")])
+        let (engine, view) = makeEngine(doc)
+        let range = engine.blockRange(at: 2)
+        XCTAssertTrue(engine.moveBlock(range, to: engine.textStorage.length))
+        XCTAssertEqual(engine.document().blocks.map(\.text), ["T", "two", "three", "one"])
+        XCTAssertEqual(engine.document().blocks[1].start, 12)
+        XCTAssertNil(engine.document().blocks[3].start)
+        XCTAssertEqual(engine.listMarker(at: location(of: "one", in: engine)), .number("14."))
+        XCTAssertTrue(engine.history.undo()); XCTAssertEqual(engine.document().blocks, doc.blocks)
+        view.setSelectedRange(range); view.deleteBackward(nil)
+        XCTAssertEqual(engine.document().blocks[1].text, "two")
+        XCTAssertEqual(engine.document().blocks[1].start, 12)
+        XCTAssertTrue(engine.history.undo()); XCTAssertEqual(engine.document().blocks, doc.blocks)
+        XCTAssertTrue(engine.history.redo()); XCTAssertEqual(engine.document().blocks[1].start, 12)
+    }
+
+    func testR14BlockDropPositionsRejectInteriorsAndAdjustListDepth() {
+        var nested = NoteBlock.text("nested", style: "bullet"); nested.indent = 1
+        let (engine, _) = makeEngine(NoteDocument(blocks: [.text("T"), .text("root", style: "bullet"), nested, .text("move", style: "bullet")]))
+        let moving = engine.blockRange(at: location(of: "move", in: engine))
+        XCTAssertFalse(engine.moveBlock(moving, to: 3))
+        let drop = engine.blockDropPosition(at: location(of: "nested", in: engine), after: true)
+        XCTAssertEqual(drop?.depth, 1)
+        XCTAssertTrue(engine.moveBlock(moving, to: location(of: "nested", in: engine)))
+        XCTAssertEqual(engine.document().blocks.map(\.text), ["T", "root", "move", "nested"])
+        XCTAssertEqual(engine.document().blocks[2].indent, nil)
+    }
+
     private let checklistID = UUID()
     private let dateID = UUID()
     private let imageID = UUID()
