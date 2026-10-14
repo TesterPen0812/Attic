@@ -36,6 +36,40 @@ final class NoteEditorEngineTests: XCTestCase {
         XCTAssertTrue(engine.history.redo()); XCTAssertEqual(engine.document(), lifted)
     }
 
+    func testFix14TerminalCalloutCommandAndSubtreeOutdentUndoTogether() {
+        var box = NoteBlock.text("tip", style: "quote"); box.callout = "💡"
+        var empty = box; empty.text = ""
+        var document = NoteDocument(blocks: [.text("T"), box, empty])
+        document.refreshRequiredCapabilities()
+        let (engine, _) = makeEngine(document)
+        defer { engine.detachView() }
+        XCTAssertTrue(engine.setCalloutIcon("⚠️", at: 2))
+        let changed = engine.document()
+        XCTAssertEqual(changed.blocks.dropFirst().map(\.callout), ["⚠️", "⚠️"])
+        XCTAssertTrue(engine.history.undo()); XCTAssertEqual(engine.document(), document)
+        XCTAssertTrue(engine.history.redo()); XCTAssertEqual(engine.document(), changed)
+        var parent = NoteBlock.text("parent", style: "bullet"); parent.indent = 1
+        var child = NoteBlock.text("", style: "bullet"); child.indent = 2
+        var list = NoteDocument(blocks: [.text("T"), .text("root", style: "bullet"), parent, child])
+        list.refreshRequiredCapabilities()
+        let (listEngine, _) = makeEngine(list)
+        defer { listEngine.detachView() }
+        XCTAssertTrue(listEngine.perform(.outdent, selection: NSRange(location: 7, length: 0)))
+        XCTAssertEqual(listEngine.document().blocks.last?.indent, 1)
+        XCTAssertTrue(listEngine.history.undo()); XCTAssertEqual(listEngine.document(), list)
+        XCTAssertTrue(listEngine.history.redo()); XCTAssertEqual(listEngine.document().blocks.last?.indent, 1)
+    }
+
+    func testFix14OrdinarySelectionEndingAtSeparatorExcludesPendingParagraph() {
+        var first = NoteBlock.text("first", style: "bullet")
+        first.indent = 1
+        var document = NoteDocument(blocks: [.text("T"), first, .text("", style: "bullet")])
+        document.refreshRequiredCapabilities()
+        let engine = NoteEditorEngine(noteID: UUID(), document: document)
+        XCTAssertTrue(engine.perform(.paragraph(.heading(4)), selection: engine.paragraphRange(at: 2)))
+        XCTAssertEqual(engine.document().blocks.last?.style, "bullet")
+    }
+
     func testR14AdjacentCodeLanguagesKeepSeparateRunsThroughSaveAndMarkdown() throws {
         let markdown = "```\nplain\n```\n```diff\n+added\n-removed\n```"
         let fragment = try NoteMarkdownImport.document(markdown)

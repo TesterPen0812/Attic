@@ -217,6 +217,7 @@ final class NoteEditorEngine: NSObject, NSTextViewDelegate, NSTextStorageDelegat
     /// so only Return carries inline marks onto the next line.
     private var newlineEditInFlight = false
     private var pendingNumberStartTransfer: (location: Int, start: Int)?
+    private var pendingEmptiedParagraph: (location: Int, block: NoteBlock)?
     private var inputRuleBoundary: (caret: Int, generation: Int)?
     private func clearNewlineEditIfIdle() {
         if userEditDepth == 0 && engineEditDepth == 0 {
@@ -1548,8 +1549,17 @@ final class NoteEditorEngine: NSObject, NSTextViewDelegate, NSTextStorageDelegat
         let string = textStorage.string as NSString
         let titleEnd = string.range(of: "\n").location
         pendingNumberStartTransfer = nil
+        pendingEmptiedParagraph = nil
         if !history.isReplaying, ranges.count == 1, let replacement = strings?.first, replacement.isEmpty {
             let removal = ranges[0]
+            let finalLine = lineRange(at: string.length)
+            if finalLine.location > 0, finalLine.length > 0, removal == finalLine,
+               !rangeContainsObject(removal),
+               var block = NoteTextCodec.document(from: textStorage.attributedSubstring(from: finalLine),
+                                                  template: template, firstBlockIsTitle: false).blocks.first {
+                block.text = ""; block.marks = []; block.inlines = []
+                pendingEmptiedParagraph = (finalLine.location, block)
+            }
             if removal.location > 0, removal.length > 0, NSMaxRange(removal) < string.length,
                removal.location == paragraphRange(at: removal.location).location,
                NSMaxRange(removal) == paragraphRange(at: NSMaxRange(removal)).location,
@@ -1867,7 +1877,7 @@ final class NoteEditorEngine: NSObject, NSTextViewDelegate, NSTextStorageDelegat
         if let pending = pendingParagraphStyle, editedRange.location == pending.location,
            editedRange.length > 0, editedRange.location < textStorage.length {
             let range = NSRange(location: editedRange.location,
-                                length: min(editedRange.length, textStorage.length - editedRange.location))
+                                length: min(editedRange.length, paragraphRange(at: editedRange.location).length))
             if let name = pending.state.style.storageName { textStorage.addAttribute(.noteBlockStyle, value: name, range: range) }
             if let level = pending.state.style.level { textStorage.addAttribute(.noteBlockLevel, value: level, range: range) }
             if let language = pending.state.style.language { textStorage.addAttribute(.noteCodeLanguage, value: language, range: range) }
@@ -1881,6 +1891,12 @@ final class NoteEditorEngine: NSObject, NSTextViewDelegate, NSTextStorageDelegat
                 if !metadata.extras.isEmpty { textStorage.addAttribute(.noteBlockExtras, value: NoteBlockExtras(metadata.extras), range: range) }
             }
             pendingParagraphStyle = nil
+        }
+        if let emptied = pendingEmptiedParagraph {
+            pendingEmptiedParagraph = nil
+            if emptied.location == textStorage.length, textStorage.string.hasSuffix("\n") {
+                restoreEmptyParagraph(emptied.block)
+            }
         }
         // A selected-range deletion, cut, or replacement can remove the box
         // without using a marker-first key route. Normalize its surviving
@@ -3176,9 +3192,11 @@ extension NoteEditorEngine {
             target = blockRange(at: selection.location)
         }
         var lines = formattableParagraphs(in: target)
-        if styleValue.isCode, NSMaxRange(target) == textStorage.length,
+        if let current = paragraphStyle(at: target.location),
+           (current.isCode && styleValue.isCode) || (current.isCallout && styleValue.isCallout),
+           NSMaxRange(target) == textStorage.length,
            textStorage.string.hasSuffix("\n"),
-           codeRunContinues(from: target.location, to: textStorage.length),
+           paragraphStyle(at: textStorage.length) == current,
            lines.last?.location != textStorage.length {
             lines.append(NSRange(location: textStorage.length, length: 0))
         }
@@ -3303,9 +3321,11 @@ extension NoteEditorEngine {
         guard line.location > titleParagraphRange.length + 1,
               isListItem(at: line.location - 1), depth + 1 <= (indentAt(line.location - 1) ?? 0) + 1 else { return false }
         var next = NSMaxRange(line)
-        while next < textStorage.length, isListItem(at: next), (indentAt(next) ?? 0) > depth {
+        while next <= textStorage.length, isListItem(at: next), (indentAt(next) ?? 0) > depth {
             if (indentAt(next) ?? 0) == 2 { return false }
-            next = NSMaxRange(paragraphRange(at: next))
+            let following = NSMaxRange(paragraphRange(at: next))
+            guard following > next else { break }
+            next = following
         }
         return true
     }
@@ -3321,9 +3341,11 @@ extension NoteEditorEngine {
             affected[line.location] = depth + delta
             if isListItem(at: line.location) {
                 var next = NSMaxRange(paragraphRange(at: line.location))
-                while next < textStorage.length, isListItem(at: next), (indentAt(next) ?? 0) > depth {
+                while next <= textStorage.length, isListItem(at: next), (indentAt(next) ?? 0) > depth {
                     affected[next] = (indentAt(next) ?? 0) + delta
-                    next = NSMaxRange(paragraphRange(at: next))
+                    let following = NSMaxRange(paragraphRange(at: next))
+                    guard following > next else { break }
+                    next = following
                 }
             }
         }
