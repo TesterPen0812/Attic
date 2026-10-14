@@ -1145,6 +1145,9 @@ enum AtticDropdownReveal {
     /// The effect's clock runs linearly; `frame` applies the curve, so the
     /// card and its contents can keep their own timings on one clock.
     static var openAnimation: Animation { .linear(duration: openDuration) }
+    /// The card's opacity on its own, 0 → 1 on the curve: what an inserted
+    /// card fades in by (`AtticUnfoldPresence`).
+    static var openOpacityAnimation: Animation { .timingCurve(0.16, 1, 0.3, 1, duration: openDuration) }
     static var closeAnimation: Animation { .linear(duration: closeDuration) }
     /// The motion's opening animation (callers that animate the presenting
     /// state alongside it).
@@ -1202,9 +1205,9 @@ enum AtticDropdownReveal {
 /// Opening, each card drives `AtticUnfoldEffect` from its own state
 /// (`AtticUnfolding`): a SwiftUI transition does not carry the motion's
 /// state to the card as a whole, so the rows in its scroll view would not
-/// be cut or blurred. The card is inserted with a 30 ms fade, which also
-/// leaves its first drawing to the frames that animate it (the `/` list's
-/// open-cost gate) rather than the turn that asks. Closing is the removal
+/// be cut or blurred. Its opacity is the insertion transition's, on the
+/// same curve, which also leaves its first drawing to the frames that
+/// animate it (the `/` list's open-cost gate). Closing is the removal
 /// transition: the same path back in 120 ms by opacity, scale and travel
 /// (a removed card's rows cannot be cut, so it does not fold its height).
 /// Reduced: a fade.
@@ -1231,7 +1234,7 @@ extension AtticDropdownReveal {
     static func presence(fromTop: Bool) -> AnyTransition {
         let close = AnyTransition.modifier(active: AtticUnfoldEffect(clock: 0, closing: true, fromTop: fromTop, carriesState: false),
                                            identity: AtticUnfoldEffect(clock: 1, closing: true, fromTop: fromTop, carriesState: false))
-        return .asymmetric(insertion: .opacity.animation(.linear(duration: contentDelay)), removal: close.animation(closeAnimation))
+        return .asymmetric(insertion: .opacity.animation(openOpacityAnimation), removal: close.animation(closeAnimation))
     }
 }
 
@@ -1257,7 +1260,11 @@ struct AtticUnfolding<Content: View>: View {
 
     var body: some View {
         content
-            .modifier(AtticUnfoldEffect(clock: reduced ? 1 : clock, closing: false, fromTop: fromTop))
+            // Its opacity is the insertion's (the same curve), so the card is
+            // clear in the turn that inserts it, as N-4's was: that turn draws
+            // nothing (the `/` list's open-cost gate), and VoiceOver finds the
+            // card at once.
+            .modifier(AtticUnfoldEffect(clock: reduced ? 1 : clock, closing: false, fromTop: fromTop, appliesOpacity: false))
             .onAppear {
                 guard !reduced else { return }
                 DispatchQueue.main.async {
@@ -1293,6 +1300,8 @@ struct AtticUnfoldEffect: ViewModifier, Animatable {
     /// It tells the card's leaves (the surface, the rows' cut and blur) the
     /// motion; a removal transition's cannot reach the rows, so it doesn't.
     var carriesState = true
+    /// The card's opacity is the effect's (not an insertion transition's).
+    var appliesOpacity = true
 
     var animatableData: CGFloat {
         get { clock }
@@ -1314,7 +1323,7 @@ struct AtticUnfoldEffect: ViewModifier, Animatable {
             .transformEnvironment(\.atticUnfold) { if let state { $0 = state } }
             .scaleEffect(f.scale, anchor: fromTop ? .topLeading : .bottomLeading)
             .offset(y: fromTop ? -f.travel : f.travel)
-            .opacity(reduced ? clock : f.opacity)
+            .opacity(reduced ? clock : (appliesOpacity ? f.opacity : 1))
     }
 }
 
