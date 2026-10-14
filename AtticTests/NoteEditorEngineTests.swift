@@ -7,6 +7,124 @@ import XCTest
 /// identity, IME over a selection, VoiceOver elements.
 @MainActor
 final class NoteEditorEngineTests: XCTestCase {
+    func testR14AdjacentCodeLanguagesKeepSeparateRunsThroughSaveAndMarkdown() throws {
+        let markdown = "```\nplain\n```\n```diff\n+added\n-removed\n```"
+        let fragment = try NoteMarkdownImport.document(markdown)
+        XCTAssertEqual(fragment.blocks.map(\.text), ["plain", "+added", "-removed"])
+        XCTAssertEqual(fragment.blocks.map(\.language), [nil, "diff", "diff"])
+        let document = NoteDocument(blocks: [.text("T")] + fragment.blocks)
+        let bytes = try NoteContentCodec.encode(document)
+        let loaded = try XCTUnwrap(NoteContentCodec.decode(bytes).document)
+        for doc in [document, loaded] {
+            let (engine, _) = makeEngine(doc)
+            let diff = location(of: "+added", in: engine)
+            XCTAssertEqual(engine.blockRange(at: 2), NSRange(location: 2, length: 6))
+            XCTAssertEqual(engine.blockRange(at: diff), NSRange(location: diff, length: 15))
+            XCTAssertEqual(engine.monoBlockText(at: 2), "plain")
+            XCTAssertEqual(engine.monoBlockText(at: diff), "+added\n-removed")
+            XCTAssertNil(engine.codeLanguage(at: 2))
+            XCTAssertEqual(engine.codeLanguage(at: diff), "diff")
+            let spacing = engine.textStorage.attribute(.paragraphStyle, at: diff, effectiveRange: nil) as? NSParagraphStyle
+            XCTAssertEqual(spacing?.paragraphSpacingBefore, AtticNoteType.blockMargin)
+            XCTAssertEqual(engine.decoration(forParagraphAt: 2), .mono(starts: true, ends: true, exitsAtEnd: false))
+            XCTAssertEqual(engine.decoration(forParagraphAt: diff), .mono(starts: true, ends: false, exitsAtEnd: false))
+            XCTAssertTrue(engine.codeTokens(in: NSRange(location: 2, length: 1)).isEmpty)
+            XCTAssertTrue(engine.codeTokens(in: NSRange(location: diff, length: 1)).contains { $0.1 == .added })
+            XCTAssertEqual(try NoteContentCodec.encode(engine.checkpointDocument()), bytes)
+            let exported = NoteMarkdownExport.markdown(engine.document())
+            XCTAssertEqual(exported, "# T\n\n```\nplain\n```\n\n```diff\n+added\n-removed\n```")
+            XCTAssertEqual(try NoteMarkdownImport.document(exported).blocks.map(\.language), [nil, nil, "diff", "diff"])
+        }
+    }
+
+    func testR14LanguageChangeAndPlainPasteAffectOnlyTheirCodeRunAndUndo() {
+        var swift = NoteBlock.text("let a = 1", style: "mono"); swift.language = "swift"
+        var diff = NoteBlock.text("+added", style: "mono"); diff.language = "diff"
+        let (engine, view) = makeEngine(NoteDocument(blocks: [.text("T"), swift, swift, diff]))
+        let before = engine.document()
+        let at = location(of: "+added", in: engine)
+        XCTAssertTrue(engine.setCodeLanguage("python", at: at))
+        XCTAssertEqual(engine.document().blocks.map(\.language), [nil, "swift", "swift", "python"])
+        XCTAssertTrue(engine.history.undo()); XCTAssertEqual(engine.document(), before)
+        XCTAssertTrue(engine.history.redo())
+        XCTAssertEqual(engine.document().blocks.last?.language, "python")
+        view.setSelectedRange(NSRange(location: engine.textStorage.length, length: 0))
+        XCTAssertTrue(engine.pastePlainText("\nmore", at: view.selectedRange()))
+        XCTAssertEqual(engine.document().blocks.map(\.language), [nil, "swift", "swift", "python", "python"])
+        XCTAssertTrue(engine.history.undo())
+        XCTAssertEqual(engine.document().blocks.map(\.text), before.blocks.map(\.text))
+    }
+
+    func testR14ReturnAtLanguageBoundaryContinuesOnlyTheCurrentRun() {
+        var swift = NoteBlock.text("swift", style: "mono"); swift.language = "swift"
+        var diff = NoteBlock.text("+diff", style: "mono"); diff.language = "diff"
+        let (engine, view) = makeEngine(NoteDocument(blocks: [.text("T"), swift, diff]))
+        let before = engine.document()
+        view.setSelectedRange(NSRange(location: 7, length: 0)); view.insertNewline(nil)
+        XCTAssertEqual(engine.document().blocks.map(\.language), [nil, "swift", "swift", "diff"])
+        XCTAssertEqual(engine.monoBlockText(at: 2), "swift\n")
+        XCTAssertEqual(engine.codeLanguage(at: location(of: "+diff", in: engine)), "diff")
+        XCTAssertTrue(engine.history.undo()); XCTAssertEqual(engine.document(), before)
+        view.setSelectedRange(NSRange(location: engine.textStorage.length, length: 0)); view.insertNewline(nil)
+        XCTAssertEqual(engine.paragraphStyle(at: engine.textStorage.length), .mono(language: "diff"))
+        XCTAssertTrue(engine.setCodeLanguage(nil, at: engine.textStorage.length))
+        XCTAssertEqual(engine.document().blocks.map(\.language), [nil, "swift", nil, nil])
+        XCTAssertTrue(engine.history.undo())
+        XCTAssertEqual(engine.document().blocks.map(\.language), [nil, "swift", "diff", "diff"])
+    }
+
+    func testR14ReturnOnEmptyCodeLineBeforeAnotherLanguageLeavesOnlyItsRun() {
+        var swift = NoteBlock.text("swift", style: "mono"); swift.language = "swift"
+        var blank = NoteBlock.text("", style: "mono"); blank.language = "swift"
+        var diff = NoteBlock.text("+diff", style: "mono"); diff.language = "diff"
+        let (engine, view) = makeEngine(NoteDocument(blocks: [.text("T"), swift, blank, diff]))
+        let before = engine.document()
+        view.setSelectedRange(NSRange(location: 8, length: 0)); view.insertNewline(nil)
+        XCTAssertEqual(engine.document().blocks.map(\.text), ["T", "swift", "", "+diff"])
+        XCTAssertEqual(engine.paragraphStyle(at: 8), .body)
+        XCTAssertEqual(engine.document().blocks.last?.language, "diff")
+        XCTAssertTrue(engine.history.undo()); XCTAssertEqual(engine.document(), before)
+    }
+
+    func testR14MarkdownPasteKeepsAdjacentFencesAndIsOneUndoStep() throws {
+        let (engine, view) = makeEngine(NoteDocument(blocks: [.text("T"), .text("")]))
+        let before = engine.document()
+        view.setSelectedRange(NSRange(location: 2, length: 0))
+        let board = NSPasteboard.withUniqueName()
+        board.setString("```\nplain\n```\n```diff\n+added\n```", forType: .string)
+        XCTAssertTrue(engine.handlePaste(board))
+        let pasted = engine.document()
+        XCTAssertEqual(engine.monoBlockText(at: 2), "plain")
+        XCTAssertEqual(engine.monoBlockText(at: location(of: "+added", in: engine)), "+added")
+        XCTAssertEqual(pasted.blocks.map(\.language), [nil, nil, "diff"])
+        XCTAssertTrue(engine.history.undo()); XCTAssertEqual(engine.document(), before)
+        XCTAssertFalse(engine.history.canUndo)
+        XCTAssertTrue(engine.history.redo()); XCTAssertEqual(engine.document(), pasted)
+    }
+
+    func testR14MovingFinalDifferentLanguageDoesNotCarryTheNextEmptyRun() {
+        var swift = NoteBlock.text("swift", style: "mono"); swift.language = "swift"
+        var empty = NoteBlock.text("", style: "mono"); empty.language = "diff"
+        let (engine, _) = makeEngine(NoteDocument(blocks: [.text("T"), .text("Body"), swift, empty]))
+        let before = engine.document()
+        XCTAssertTrue(engine.moveBlock(engine.blockRange(at: 7), to: 2))
+        XCTAssertEqual(engine.document().blocks.map(\.text), ["T", "swift", "Body", ""])
+        XCTAssertEqual(engine.document().blocks.last?.language, "diff")
+        XCTAssertTrue(engine.history.undo()); XCTAssertEqual(engine.document(), before)
+    }
+
+    func testR14MermaidLabelContentsArePlainAndOutsideKeywordsStillColour() {
+        for label in ["[Launch and learn]", "(loop and learn)", "{true or false}", "|and 42 end|", "[\"and [learn]\"]", "([Launch and learn])", "[💡 and learn]", "[Launch\nand learn]"] {
+            let source = "flowchart LR\nE" + label + "\nend"
+            let text = source as NSString
+            let interior = NSRange(location: ("flowchart LR\nE" as NSString).length + 1, length: (label as NSString).length - 2)
+            let tokens = NoteSyntaxHighlighter.tokens(in: source, language: "mermaid")
+            XCTAssertTrue(tokens.filter { NSIntersectionRange($0.0, interior).length > 0 }.allSatisfy { $0.1 == .plain || (text.substring(with: $0.0).allSatisfy { "[](){}|".contains($0) } && $0.1 == .operator) }, label)
+            XCTAssertTrue(tokens.contains { $0.1 == .keyword && text.substring(with: $0.0) == "flowchart" })
+            XCTAssertTrue(tokens.contains { $0.1 == .keyword && text.substring(with: $0.0) == "end" })
+        }
+    }
+
     func testR14ContractUsesReadableStylesAndSemanticQueries() {
         XCTAssertEqual(NoteParagraphStyle.callout(icon: "💡").storageName, "quote")
         XCTAssertEqual(NoteParagraphStyle.mono(language: "swift").storageName, "mono")
@@ -413,15 +531,16 @@ final class NoteEditorEngineTests: XCTestCase {
         }
     }
 
-    func testR14CodeRunFirstLanguageOwnsReturnAndPasteAfterAnOlderEdit() {
+    func testR14PlainCodeAfterNamedLanguageKeepsReturnAndPastePlain() {
         var first = NoteBlock.text("first", style: "mono"); first.language = "swift"
+        // R14 follow-up: an absent hint is Plain text, not an inherited language.
         let (engine, view) = makeEngine(NoteDocument(blocks: [.text("T"), first, .text("old edit", style: "mono")]))
         view.setSelectedRange(NSRange(location: engine.textStorage.length, length: 0)); view.insertNewline(nil)
-        XCTAssertEqual(engine.document().blocks.last?.language, "swift")
+        XCTAssertNil(engine.document().blocks.last?.language)
         type("next", view)
-        XCTAssertEqual(engine.document().blocks.last?.language, "swift")
+        XCTAssertNil(engine.document().blocks.last?.language)
         XCTAssertTrue(engine.pastePlainText("\npasted", at: view.selectedRange()))
-        XCTAssertEqual(engine.document().blocks.last?.language, "swift")
+        XCTAssertNil(engine.document().blocks.last?.language)
     }
 
     func testR14BlockMovesKeepEmptyHeadingAndFinalEmptyCodeParagraph() {

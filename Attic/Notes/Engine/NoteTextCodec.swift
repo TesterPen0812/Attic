@@ -24,9 +24,11 @@ enum NoteTextCodec {
             let kind: NoteParagraphKind = isTitle ? .title
                 : (isBlockObject ? (block.kind == .divider ? .divider : .blockObject) : NoteParagraphKind.of(style: block.kind == .text ? block.style : nil, level: block.level,
                                                                    callout: block.callout, isChecklist: block.kind == .checklist))
+            let precedingKind: NoteParagraphKind? = kind == .mono && previousKind == .mono &&
+                document.blocks[index - 1].language != block.language ? .blockObject : previousKind
             var attributes = isTitle ? style.titleAttributes : style.paragraphAttributes(
                 style: block.kind == .text ? block.style : nil, level: block.level, indent: block.indent,
-                previous: previousKind, isChecklist: block.kind == .checklist, isBlockObject: isBlockObject,
+                previous: precedingKind, isChecklist: block.kind == .checklist, isBlockObject: isBlockObject,
                 isDivider: block.kind == .divider,
                 monoHang: kind == .mono ? style.monoHang(for: block.text) : 0, callout: block.callout)
             previousKind = kind
