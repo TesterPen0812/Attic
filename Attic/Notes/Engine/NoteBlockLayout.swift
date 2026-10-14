@@ -325,13 +325,14 @@ final class NoteBlockLayoutFragment: NSTextLayoutFragment {
                 let part = NSIntersectionRange(run, line.characterRange)
                 guard part.length > 0 else { continue }
                 let startX = line.locationForCharacter(at: part.location).x
-                var endX = line.locationForCharacter(at: NSMaxRange(part)).x
-                // The run's last character carries the right-hand padding
-                // as kern; a run cut by a wrap ends at its last glyph.
-                if NSMaxRange(part) < NSMaxRange(run) { endX += padding }
+                // The glyphs' own advance (without the kern that keeps the
+                // neighbours clear), so the chip is 4 outside them each side.
+                let glyphs = NSMutableAttributedString(attributedString: text.attributedSubstring(from: part))
+                glyphs.removeAttribute(.kern, range: NSRange(location: 0, length: glyphs.length))
+                let width = glyphs.size().width
                 let origin = line.typographicBounds.origin
                 let rect = CGRect(x: point.x + origin.x + startX - padding, y: point.y + centreY - T.inlineCodeChipHeight / 2,
-                                  width: max(0, endX - startX + padding), height: T.inlineCodeChipHeight)
+                                  width: width + 2 * padding, height: T.inlineCodeChipHeight)
                 context.addPath(CGPath(roundedRect: rect, cornerWidth: T.inlineCodeChipRadius, cornerHeight: T.inlineCodeChipRadius, transform: nil))
             }
         }
