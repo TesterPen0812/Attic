@@ -669,7 +669,7 @@ final class NoteEditorEngine: NSObject, NSTextViewDelegate, NSTextStorageDelegat
                 let blockObject = isBlockObject(at: paragraph.location)
                 var base = style.paragraphAttributes(
                     style: name, level: metadata[.noteBlockLevel] as? Int, indent: metadata[.noteBlockIndent] as? Int,
-                    previous: paragraph.location <= titleEnd ? .title : paragraphKind(at: paragraph.location - 1),
+                    previous: paragraphKindBefore(at: paragraph.location),
                     isChecklist: checklistBox(inParagraphAt: paragraph.location) != nil, isBlockObject: blockObject,
                     isDivider: blockObject && object(at: paragraph.location) is NoteDividerAttachment,
                     monoHang: name == "mono" ? style.monoHang(for: string.substring(with: paragraph)) : 0,
@@ -960,7 +960,7 @@ final class NoteEditorEngine: NSObject, NSTextViewDelegate, NSTextStorageDelegat
         guard paragraph.length > 0, NSMaxRange(paragraph) == string.length,
               string.character(at: NSMaxRange(paragraph) - 1) == 0x0A else { return false }
         guard let pending = pendingParagraphStyle, pending.location == string.length else { return true }
-        return !pending.state.style.isCode
+        return pending.state.style != paragraphStyle(at: paragraph.location)
     }
 
     /// What the paragraph at `location` is, for spacing and drawing.
@@ -1015,8 +1015,7 @@ final class NoteEditorEngine: NSObject, NSTextViewDelegate, NSTextStorageDelegat
 
     func attributes(forParagraphAt location: Int) -> [NSAttributedString.Key: Any] {
         let paragraph = paragraphRange(at: location)
-        let previous: NoteParagraphKind? = paragraph.location == 0 ? nil
-            : (paragraph.location <= titleParagraphRange.length ? .title : paragraphKind(at: paragraph.location - 1))
+        let previous = paragraphKindBefore(at: paragraph.location)
         if let pending = pendingParagraphStyle, pending.location == paragraph.location {
             var attributes = style.paragraphAttributes(style: pending.state.style.storageName, level: pending.state.style.level,
                                                        indent: pending.state.indent, previous: previous, callout: pending.state.style.calloutIcon)
@@ -1315,11 +1314,6 @@ final class NoteEditorEngine: NSObject, NSTextViewDelegate, NSTextStorageDelegat
 
     // MARK: Keys with object rules
 
-    private func isMonoParagraph(at location: Int) -> Bool {
-        guard location < textStorage.length else { return false }
-        return paragraphStyle(at: location)?.isCode == true
-    }
-
     /// Return on a checklist line continues the list; on an empty checklist
     /// line it ends the list (the box goes).
     func handleNewline() -> Bool {
@@ -1366,7 +1360,7 @@ final class NoteEditorEngine: NSObject, NSTextViewDelegate, NSTextStorageDelegat
                 if format.isCode { format = .mono(language: codeLanguage(at: current.location)) }
                 let content = (textStorage.string as NSString).substring(with: line)
                 if content.trimmingCharacters(in: .whitespaces).isEmpty,
-                   !format.isCode || !isMonoParagraph(at: NSMaxRange(line) + 1) {
+                   !format.isCode || !codeRunContinues(from: line.location, to: NSMaxRange(line) + 1) {
                     // An empty list or quote line ends the block; an empty Mono
                     // line does too unless more code follows (a blank code line).
                     if !format.isCode && !format.isCallout && (indentAt(line.location) ?? 0) > 0 {
@@ -3160,7 +3154,13 @@ extension NoteEditorEngine {
            (current.isCode && styleValue.isCode) || (current.isCallout && styleValue.isCallout) {
             target = blockRange(at: selection.location)
         }
-        let lines = formattableParagraphs(in: target)
+        var lines = formattableParagraphs(in: target)
+        if styleValue.isCode, NSMaxRange(target) == textStorage.length,
+           textStorage.string.hasSuffix("\n"),
+           codeRunContinues(from: target.location, to: textStorage.length),
+           lines.last?.location != textStorage.length {
+            lines.append(NSRange(location: textStorage.length, length: 0))
+        }
         guard !lines.isEmpty else { return false }
         var newSelection = selection
         history.beginGroup()
@@ -4199,19 +4199,27 @@ extension NoteEditorEngine {
 
 @MainActor
 extension NoteEditorEngine {
-    /// The first paragraph owns the code run's language, including after an
-    /// older build drops the display hint from a subsequent split paragraph.
+    /// A language hint belongs to each code paragraph. An absent hint is
+    /// Plain text, so it is a boundary beside a named-language run too.
     func codeLanguage(at location: Int) -> String? {
-        guard paragraphStyle(at: location)?.isCode == true else { return nil }
-        var first = paragraphRange(at: location).location
-        while first > titleParagraphRange.length + 1 {
-            let previous = paragraphRange(at: first - 1)
-            guard previous.location < textStorage.length,
-                  textStorage.attribute(.noteBlockStyle, at: previous.location, effectiveRange: nil) as? String == "mono" else { break }
-            first = previous.location
-        }
-        if first < textStorage.length { return textStorage.attribute(.noteCodeLanguage, at: first, effectiveRange: nil) as? String }
-        return pendingParagraphStyle?.state.style.language
+        paragraphStyle(at: location)?.language
+    }
+
+    /// Shared by selection, Copy and the layout's existing box slices.
+    func codeRunContinues(from first: Int, to second: Int) -> Bool {
+        guard first > 0, first <= textStorage.length, second > 0, second <= textStorage.length,
+              let format = paragraphStyle(at: first), format.isCode else { return false }
+        return paragraphStyle(at: second) == format
+    }
+
+    /// Adjacent code with a different language is a separate preceding box.
+    /// Feed the existing box-margin rule without changing drawing or tokens.
+    func paragraphKindBefore(at location: Int) -> NoteParagraphKind? {
+        guard location > 0 else { return nil }
+        let previous = paragraphKind(at: location - 1)
+        if previous == .mono, paragraphStyle(at: location)?.isCode == true,
+           !codeRunContinues(from: location - 1, to: location) { return .blockObject }
+        return previous
     }
 
     /// A moved empty final paragraph has no character to carry its metadata.

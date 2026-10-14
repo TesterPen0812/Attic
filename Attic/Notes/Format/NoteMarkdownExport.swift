@@ -26,7 +26,7 @@ enum NoteMarkdownExport {
             if block.kind == .text, block.style == "mono" {
                 numbered.removeAll(); listColumns.removeAll(); listWidths.removeAll()
                 var code = [block.text]
-                while index < document.blocks.count, document.blocks[index].kind == .text, document.blocks[index].style == "mono" {
+                while index < document.blocks.count, document.blocks[index].kind == .text, document.blocks[index].style == "mono", document.blocks[index].language == block.language {
                     code.append(document.blocks[index].text); index += 1
                 }
                 let source = code.joined(separator: "\n")

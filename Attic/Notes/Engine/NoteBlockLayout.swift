@@ -566,51 +566,26 @@ extension NoteEditorEngine: NSTextLayoutManagerDelegate, @preconcurrency NSTextC
               string.character(at: NSMaxRange(paragraph) - 1) == 0x0A else { return false }
         guard let pending = pendingParagraphStyle, pending.location == string.length else { return true }
         let format = paragraphStyle(at: paragraph.location)
-        if format?.isCode == true { return !pending.state.style.isCode }
         return pending.state.style != format
     }
 
-    private func style(paragraphBefore line: NSRange) -> String? {
-        guard line.location > 0 else { return nil }
-        let previous = paragraphRange(at: line.location - 1)
-        guard previous.location > 0 else { return nil }
-        return textStorage.attribute(.noteBlockStyle, at: previous.location, effectiveRange: nil) as? String
+    private func isMono(paragraphBefore line: NSRange) -> Bool {
+        line.location > 0 && codeRunContinues(from: line.location - 1, to: line.location)
     }
 
-    private func style(paragraphAfter line: NSRange) -> String? {
-        let next = NSMaxRange(line)
-        guard next < textStorage.length else { return nil }
-        return textStorage.attribute(.noteBlockStyle, at: next, effectiveRange: nil) as? String
-    }
-
-    private func isMono(paragraphBefore line: NSRange) -> Bool { style(paragraphBefore: line) == "mono" }
-
-    /// The block goes on while the next paragraph is Mono too. The note's
-    /// trailing empty line (after its final line break) belongs to the
-    /// block only while a Mono style is pending for it.
+    /// An empty final paragraph continues only its own language's run.
     private func isMono(paragraphAfter line: NSRange) -> Bool {
         let next = NSMaxRange(line)
-        if next < textStorage.length { return style(paragraphAfter: line) == "mono" }
-        guard next == textStorage.length, next > 0,
-              (textStorage.string as NSString).character(at: next - 1) == 0x0A else { return false }
-        return pendingParagraphStyle?.location == next && pendingParagraphStyle?.state.style.isCode == true
+        guard next < textStorage.length || (next == textStorage.length && next > 0 &&
+              (textStorage.string as NSString).character(at: next - 1) == 0x0A) else { return false }
+        return codeRunContinues(from: line.location, to: next)
     }
 
-    /// The Mono block around `location` (its first paragraph's start to its
-    /// last paragraph's end, without the final line break), or nil.
+    /// Copy uses the same run as selection and language changes, excluding
+    /// the separator after its final physical paragraph.
     func monoBlockRange(at location: Int) -> NSRange? {
         guard location < textStorage.length, paragraphStyle(at: location)?.isCode == true else { return nil }
-        var start = paragraphRange(at: location)
-        while start.location > 0 {
-            let previous = paragraphRange(at: start.location - 1)
-            guard previous.location > 0, paragraphStyle(at: previous.location)?.isCode == true else { break }
-            start = previous
-        }
-        var end = paragraphRange(at: location)
-        while NSMaxRange(end) < textStorage.length, paragraphStyle(at: NSMaxRange(end))?.isCode == true {
-            end = paragraphRange(at: NSMaxRange(end))
-        }
-        var range = NSRange(location: start.location, length: NSMaxRange(end) - start.location)
+        var range = blockRange(at: location)
         if range.length > 0, (textStorage.string as NSString).character(at: NSMaxRange(range) - 1) == 0x0A { range.length -= 1 }
         return range
     }

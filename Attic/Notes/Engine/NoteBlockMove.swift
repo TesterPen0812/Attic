@@ -63,7 +63,6 @@ extension NoteEditorEngine {
         guard format.isCode || format.isCallout || format == .quote else { return range }
         func matches(_ at: Int) -> Bool {
             guard let other = paragraphStyle(at: at) else { return false }
-            if format.isCode { return other.isCode }
             return other == format
         }
         while range.location > titleParagraphRange.length + 1, matches(range.location - 1) {
@@ -116,7 +115,7 @@ extension NoteEditorEngine {
         let format = paragraphStyle(at: source.location)
         let terminalFormat = paragraphStyle(at: textStorage.length)
         let terminalBelongsToSource = NSMaxRange(source) == textStorage.length && textStorage.string.hasSuffix("\n") &&
-            (source.length == 0 || (format?.isCode == true && terminalFormat?.isCode == true) ||
+            (source.length == 0 || (format?.isCode == true && format == terminalFormat) ||
              ((format == .quote || format?.isCallout == true) && format == terminalFormat) ||
              (list && blockIsList(at: textStorage.length) && blockDepth(at: textStorage.length) > originalDepth))
         let targetDepth = position > 0 && blockIsList(at: position - 1) ? blockDepth(at: position - 1) : 0

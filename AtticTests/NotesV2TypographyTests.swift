@@ -583,7 +583,8 @@ final class NotesV2TypographyTests: XCTestCase {
 
     func testR14CodeBlockHasALabelRowAndItsCopyChipSitsInIt() throws {
         var code = styled("const a = 1", "mono"); code.language = "javascript"
-        let (engine, view) = makeEngine([.text("Title"), code, styled("a()", "mono"), .text("After")])
+        var continuation = styled("a()", "mono"); continuation.language = "javascript"
+        let (engine, view) = makeEngine([.text("Title"), code, continuation, .text("After")])
         let blocks = monoFragments(engine)
         XCTAssertEqual(blocks.first?.codeLabel, "JavaScript")
         XCTAssertNil(blocks.last?.codeLabel)
