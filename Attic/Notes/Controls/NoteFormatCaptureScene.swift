@@ -27,6 +27,12 @@ enum NoteFormatCaptureScene {
         guard let scene = requestedScene, !scene.hasPrefix("history"), !didRun else { return }
         didRun = true
         let delay = Double(ProcessInfo.processInfo.environment["ATTIC_UI_TEST_NOTES_SCENE_DELAY"] ?? "2.5") ?? 2.5
+        // `ATTIC_UI_TEST_TYPE_AFTER=<text>`: once the scene is set, the text
+        // is typed at the caret, as a person would (U-53's check that typing
+        // keeps the caret's line clear of the bottom controls).
+        if let typed = ProcessInfo.processInfo.environment["ATTIC_UI_TEST_TYPE_AFTER"], !typed.isEmpty {
+            DispatchQueue.main.asyncAfter(deadline: .now() + delay + 1.5) { type(typed, into: textView) }
+        }
         DispatchQueue.main.asyncAfter(deadline: .now() + delay) {
             textView.window?.makeFirstResponder(textView)
             if scene == "hint" {
