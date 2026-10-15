@@ -853,6 +853,11 @@ enum AtticNoteFormatMetrics {
     static let barGroupGap: CGFloat = 4
     static let barStylePadding: CGFloat = 7
     static let barStyleChevron: CGFloat = 8
+    /// U-01: extra room after the bar's last toggle, so its glyph stands as
+    /// far from the capsule's end as the style's name does from its start
+    /// (4 + 7 = 11 at the leading end; 4 + about 3.5 of the cell's own
+    /// side bearing + 4 at the trailing end).
+    static let barTrailingRoom: CGFloat = 4
     /// From the selection's line to the bar, and from the panel's edge.
     static let barGap: CGFloat = 6
     static let barEdgeMargin: CGFloat = 4

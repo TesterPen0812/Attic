@@ -147,6 +147,7 @@ struct AtticFormatBarSurface<Content: View>: View {
         let radius = AtticRadius.control(height: m.barHeight)
         HStack(spacing: m.barGroupGap) { content }
             .padding(AtticControlSize.capsuleInset)
+            .padding(.trailing, m.barTrailingRoom)
             .frame(height: m.barHeight)
             // Raised over the text like a pop-over (its fill, rims and
             // shadow): glass over running text would let the words show

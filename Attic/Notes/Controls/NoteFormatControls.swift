@@ -404,6 +404,7 @@ final class NoteFormatControls: NSObject {
         formatModel.barShown = false
         formatModel.barKeyboardIndex = nil
         barHost.isInteractive = false
+        barCover = nil
     }
 
     private var barWidths: [String: CGFloat] = [:]
@@ -431,7 +432,7 @@ final class NoteFormatControls: NSObject {
         let label = ceil((styleName as NSString).size(withAttributes: [.font: font]).width)
         let style = label + 4 + m.barStyleChevron + 2 + m.barStylePadding * 2
         let toggles = CGFloat(NoteFormatBarItem.all.count - 1) * m.barToggleWidth + m.highlightChevronWidth
-        return ceil(AtticControlSize.capsuleInset * 2 + style + m.barGroupGap * 3 + toggles)
+        return ceil(AtticControlSize.capsuleInset * 2 + m.barTrailingRoom + style + m.barGroupGap * 3 + toggles)
     }
 
     /// The part of the text view's visible rectangle a floating control
@@ -511,8 +512,18 @@ final class NoteFormatControls: NSObject {
         let room = AtticNoteFormatMetrics.shadowRoom
         placeOverlay(barHost, rect: placement.frame.insetBy(dx: -room, dy: -room))
         if formatModel.barBelow != placement.below { formatModel.barBelow = placement.below }
+        barCover = placement.frame
         return true
     }
+
+    /// Where the selection bar and the link or date card lie in the text
+    /// view (empty while neither shows): the title's ⋯ steps aside while
+    /// one lies across its line (U-01, U-52), so it never reads as a loose
+    /// item past the bar's end or a mark on the card's corner.
+    var onCoverChange: (([NSRect]) -> Void)?
+    private var barCover: NSRect? { didSet { if barCover != oldValue { reportCover() } } }
+    private var cardCover: NSRect? { didSet { if cardCover != oldValue { reportCover() } } }
+    private func reportCover() { onCoverChange?([barCover, cardCover].compactMap { $0 }) }
 
     // MARK: Keys
 
@@ -917,6 +928,7 @@ final class NoteFormatControls: NSObject {
             guard let placed = placeDropdown(cardHost, idealWidth: cardSize.width, height: cardSize.height,
                                              anchor: anchor, current: cardPlacement, alignsToColumn: false) else { return }
             cardPlacement = placed
+            coverCard()
             if cardModel.viewportWidth != placed.width { cardModel.viewportWidth = placed.width }
             if cardModel.viewportHeight != placed.heightLimit { cardModel.viewportHeight = placed.heightLimit }
             if cardModel.above != (placed.side == .above) { cardModel.above = placed.side == .above }
@@ -928,9 +940,10 @@ final class NoteFormatControls: NSObject {
         let end = min(max(start, NSMaxRange(anchorRange) - 1), length - 1)
         guard let first = engine.rect(for: NSRange(location: start, length: 1)) ?? caretRect(),
               let last = engine.rect(for: NSRange(location: end, length: 1)) ?? caretRect() else { return }
-        guard let placed = placeDropdown(cardHost, idealWidth: cardSize.width, height: cardSize.height,
+        guard let placed = placeDropdown(cardHost, idealWidth: max(cardSize.width, linkCardSpan), height: cardSize.height,
                                          anchor: first.union(last), current: cardPlacement) else { return }
         cardPlacement = placed
+        coverCard()
         if cardModel.viewportWidth != placed.width { cardModel.viewportWidth = placed.width }
         if cardModel.viewportHeight != placed.heightLimit { cardModel.viewportHeight = placed.heightLimit }
         if cardModel.above != (placed.side == .above) { cardModel.above = placed.side == .above }
@@ -981,8 +994,26 @@ final class NoteFormatControls: NSObject {
         }
     }
 
+    /// U-52: the link card spans the note's column, each edge one row
+    /// padding past it (as D-16 lines up its start), so the line it lies
+    /// over never shows its last letters at the card's rounded corner.
+    private var linkCardSpan: CGFloat {
+        guard case .link = cardModel.card, let textView else { return 0 }
+        let column = textView.textContainerOrigin.x + (textView.textContainer?.lineFragmentPadding ?? 0)
+        let d = AtticDropdownMetrics.self
+        return max(0, textView.bounds.width - 2 * column) + 2 * (d.inset + d.rowPadding)
+    }
+
+    /// The card's own rectangle in the text view (its host less the shadow's room).
+    private func coverCard() {
+        guard let textView, let parent = cardHost.superview else { return }
+        let room = AtticDropdownMetrics.shadowRoom
+        cardCover = textView.convert(cardHost.frame, from: parent).insetBy(dx: room, dy: room)
+    }
+
     private func closeCard(refocus: Bool, restoring range: NSRange?) {
         cardModel.card = nil
+        cardCover = nil
         cardHost.isInteractive = false
         cardAnchor = nil
         if let mouseMonitor { NSEvent.removeMonitor(mouseMonitor) }

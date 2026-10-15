@@ -314,6 +314,32 @@ final class NotesFormatControlsTests: XCTestCase {
         XCTAssertEqual(engine.document().blocks[1].marks.first?.kind, .bold)
     }
 
+    /// U-01: the bar's last glyph stands as far from the capsule's end as
+    /// the style's name from its start, and the page hears where the bar
+    /// lies (the title's ⋯ steps aside under it) until it leaves.
+    func testTheBarHasEvenEndsAndReportsWhereItLies() throws {
+        let (controls, _, textView) = make()
+        var covers: [[NSRect]] = []
+        controls.onCoverChange = { covers.append($0) }
+        textView.setSelectedRange(range("Student pricing", textView))
+        controls.refresh()
+        let cover = try XCTUnwrap(covers.last?.first)
+        XCTAssertEqual(covers.last?.count, 1)
+        XCTAssertEqual(cover.minY, controls.barFrame.minY, accuracy: 1, "the capsule, in the text view")
+        XCTAssertEqual(cover.width, controls.barFrame.width, accuracy: 1)
+        let m = AtticNoteFormatMetrics.self
+        let font = AtticTextStyle.controlLabel.nsFont
+        let label = ceil(("Body" as NSString).size(withAttributes: [.font: font]).width)
+        let style = label + 4 + m.barStyleChevron + 2 + m.barStylePadding * 2
+        let toggles = CGFloat(NoteFormatBarItem.all.count - 1) * m.barToggleWidth + m.highlightChevronWidth
+        XCTAssertEqual(NoteFormatControls.barWidth(styleName: "Body"),
+                       ceil(AtticControlSize.capsuleInset * 2 + m.barTrailingRoom + style + m.barGroupGap * 3 + toggles))
+        XCTAssertGreaterThan(m.barTrailingRoom, 0)
+        textView.setSelectedRange(NSRange(location: 0, length: 0))
+        controls.refresh()
+        XCTAssertEqual(covers.last, [], "gone with the bar")
+    }
+
     func testTheBarStaysAboveTheSelectionAndGoesBelowWithoutRoom() throws {
         let (controls, engine, textView) = make()
         let target = range("Student pricing", textView)

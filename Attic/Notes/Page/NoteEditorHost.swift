@@ -493,6 +493,7 @@ final class NoteTitleAccessories: NotesKeyboardReturnTarget {
                                width: size, height: size)
         if menuHost.frame != menuFrame { menuHost.frame = menuFrame }
         menuHost.isHidden = isUntouched()
+        updateMenuCover()
         // The tag line: 4 under the title's last line, the column's width.
         var tagHeight: CGFloat = 0
         let width = max(0, columnRight - columnLeft)
@@ -720,6 +721,27 @@ final class NoteTitleAccessories: NotesKeyboardReturnTarget {
         guard let textView else { return }
         textView.window?.makeFirstResponder(textView)
     }
+
+    /// The selection bar's capsule and the link or date card while they
+    /// show (U-01, U-52).
+    var covers: [NSRect] = [] {
+        didSet { if covers != oldValue { updateMenuCover() } }
+    }
+
+    /// While the selection bar or a card lies across the ⋯'s line the ⋯
+    /// fades out: it is under them or just past their end, where it read as
+    /// a loose part of the bar or a mark on the card's corner. It comes back
+    /// as they leave.
+    private func updateMenuCover() {
+        let frame = menuHost.frame
+        let covered = covers.contains { $0.maxY > frame.minY && $0.minY < frame.maxY }
+        let alpha: CGFloat = covered ? 0 : 1
+        guard menuHost.alphaValue != alpha else { return }
+        NSAnimationContext.runAnimationGroup { context in
+            context.duration = 0.12
+            menuHost.animator().alphaValue = alpha
+        }
+    }
 }
 
 
@@ -814,6 +836,7 @@ struct NoteEditorRepresentable: NSViewRepresentable {
             chrome?.fileRequest = slash.map { .slash(NoteSlashFileTicket(sessionID: sessionID, request: $0)) } ?? .insert
         }
         context.coordinator.controls = controls
+        controls.onCoverChange = { [weak accessories = context.coordinator.accessories] covers in accessories?.covers = covers }
         chrome.controls = controls
         controls.isFormatBarOpen = chrome.formatRow.isOpen
         let objects = NoteObjectControls(engine: engine, textView: textView)
