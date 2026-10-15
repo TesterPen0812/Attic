@@ -297,9 +297,10 @@ jobs:
         id: unit_tests
         continue-on-error: true
         # Includes compiling the fresh host. The expanded Phase 2 suite
-        # reached 2,382 passing cases before the old 20-minute watchdog.
-        # Keep it bounded without changing test or performance assertions.
-        timeout-minutes: 25
+        # reached 2,382 passing cases before the old 20-minute watchdog;
+        # the Phase X Notes suite took 22-25 minutes and hit the 25-minute
+        # one. Keep it bounded without changing test or performance assertions.
+        timeout-minutes: 35
         env:
           # The runner has no person at it: unit tests may make a window key
           # and let AppKit resolve targetless menu actions for real.
