@@ -3612,15 +3612,16 @@ extension NoteEditorEngine {
         if prefix.hasPrefix("[") && prefix != "[] " && !isBullet { return false }
         if prefix.hasPrefix("[") && prefix != "[] " {
             let checked = prefix != "[ ] "
-            let box = NoteChecklistAttachment(isChecked: checked)
+            let attributes = textStorage.attributes(at: line.location, effectiveRange: nil)
+            let box = NoteChecklistAttachment(objectID: attributes[.noteBlockID] as? UUID ?? UUID(), isChecked: checked)
             renderer.apply(to: box, today: today)
-            let replacement = NoteTextCodec.attachmentString(box, attributes: style.bodyAttributes)
-            let applied = performEdit(line, with: replacement, name: "Checklist",
+            let replacement = NoteTextCodec.attachmentString(box, attributes: attributes)
+            // Only the typed shorthand changes. The suffix and the history's
+            // captured pre-edit attributes remain intact, including objects.
+            let applied = performEdit(NSRange(location: line.location, length: (prefix as NSString).length),
+                                      with: replacement, name: "Checklist",
                                       selection: NSRange(location: line.location + 1, length: 0))
-            if applied {
-                history.setLastRestoredText(NSAttributedString(string: "- " + prefix, attributes: style.bodyAttributes))
-                registerInputRuleBoundary()
-            }
+            if applied { registerInputRuleBoundary() }
             return applied
         }
         history.beginGroup()

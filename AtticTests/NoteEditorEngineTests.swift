@@ -7,6 +7,37 @@ import XCTest
 /// identity, IME over a selection, VoiceOver elements.
 @MainActor
 final class NoteEditorEngineTests: XCTestCase {
+    func testG01ChecklistShorthandKeepsAttributedSuffixAndTrueUndoPayload() throws {
+        for prefix in ["[ ] ", "[x] ", "[X] "] {
+            let suffix = "Due \u{FFFC} styled tail"
+            var bullet = NoteBlock.text(String(prefix.dropLast()) + suffix, id: UUID(), style: "bullet")
+            bullet.indent = 1
+            bullet.extras = ["future": .string("keep")]
+            bullet.inlines = [NoteInline(id: UUID(), kind: .date(NoteDay(year: 2026, month: 10, day: 15)!))]
+            bullet.marks = [NoteMark(.bold, offset: 3 + 6, length: 11)]
+            let (engine, view) = makeEngine(NoteDocument(blocks: [.text("T"), bullet]))
+            defer { engine.detachView() }
+            view.setSelectedRange(NSRange(location: 5, length: 0))
+            view.insertText(" ", replacementRange: NSRange(location: NSNotFound, length: 0))
+            let converted = engine.document()
+            var expected = bullet
+            expected.kind = .checklist; expected.style = nil; expected.text = suffix
+            expected.checked = prefix != "[ ] "
+            expected.marks = [NoteMark(.bold, offset: 6, length: 11)]
+            XCTAssertEqual(converted.blocks[1], expected, prefix)
+            XCTAssertEqual(view.selectedRange(), NSRange(location: 3, length: 0))
+            XCTAssertTrue(engine.history.undo())
+            var restored = bullet
+            restored.text = prefix + suffix
+            restored.marks = [NoteMark(.bold, offset: 4 + 6, length: 11)]
+            XCTAssertEqual(engine.document().blocks[1], restored, "one Undo restores the actual bullet before conversion")
+            XCTAssertEqual(view.selectedRange(), NSRange(location: 6, length: 0))
+            XCTAssertTrue(engine.history.redo())
+            XCTAssertEqual(engine.document(), converted)
+            XCTAssertEqual(view.selectedRange(), NSRange(location: 3, length: 0))
+        }
+    }
+
     func testFix14MovingLastTextKeepsItsEmptyCodePredecessorAndUndoRedo() {
         var emptyCode = NoteBlock.text("", style: "mono"); emptyCode.language = "swift"
         var heading = NoteBlock.text("Q", style: "heading"); heading.level = 4
