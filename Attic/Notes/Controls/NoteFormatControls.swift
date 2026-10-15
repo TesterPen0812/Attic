@@ -812,7 +812,11 @@ final class NoteFormatControls: NSObject {
     /// less its margin (the text view's visible part outside a panel).
     private func placeDropdown(_ host: AtticOverlayHostingView, idealWidth: CGFloat, height: CGFloat, anchor: NSRect,
                                current: AtticDropdownLayout.Placement?, alignsToColumn: Bool = true) -> AtticDropdownLayout.Placement? {
-        guard let textView, let space = AtticDropdownSpace(around: textView, bounding: textView) else { return nil }
+        guard let textView, var space = AtticDropdownSpace(around: textView, bounding: textView) else { return nil }
+        // U-22: the note's floating bottom row is its scroll view's bottom
+        // inset (the controls and the 12 pt the last line keeps above
+        // them): a card stops there rather than covering the controls.
+        if let scrollView { space = space.clearing(bottom: scrollView.contentInsets.bottom, of: scrollView) }
         // D-16: a card over the text lines up its rows' text with the note's
         // column (its edge one row padding further out), so it covers whole
         // line starts instead of leaving their first letters peeking out

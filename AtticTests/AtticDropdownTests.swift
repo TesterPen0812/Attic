@@ -2284,3 +2284,42 @@ extension AtticDropdownTests {
         XCTAssertEqual(d.inset + d.monthGridBottom + halfGap, side, "the last week as far from the bottom")
     }
 }
+
+// MARK: - UI review 14 (F2): menus and pickers
+
+@MainActor
+extension AtticDropdownTests {
+    /// U-41: mid-unfold the card is already opaque, so the rows under it
+    /// never show through; its height still grows and its contents still
+    /// sharpen. Shut and gone stay clear.
+    func testU41TheUnfoldingCardIsOpaqueOnceItIsUnderway() {
+        let r = AtticDropdownReveal.self
+        XCTAssertEqual(r.frame(time: 0, closing: false).opacity, 0)
+        XCTAssertEqual(r.frame(time: 1, closing: true).opacity, 0)
+        let frozen = r.frame(time: 0.3, closing: false)
+        XCTAssertLessThan(frozen.reveal, 1, "still unfolding")
+        XCTAssertEqual(frozen.opacity, 1, "the review's 30 % still: opaque")
+        for step in 1...40 {
+            let open = r.frame(time: CGFloat(step) / 40, closing: false)
+            if open.reveal >= r.opaqueBy { XCTAssertEqual(open.opacity, 1, accuracy: 1e-9, "opening, step \(step)") }
+            let closing = r.frame(time: CGFloat(step) / 40, closing: true)
+            if closing.reveal >= r.opaqueBy { XCTAssertEqual(closing.opacity, 1, accuracy: 1e-9, "closing, step \(step)") }
+        }
+        XCTAssertEqual(r.opacity(progress: 0.15), 0.5, accuracy: 1e-9)
+    }
+
+    /// U-22: a list cut short says so: the edge with rows past it fades.
+    func testU22AScrollingListKnowsWhichEdgesAreCut() {
+        let top = AtticDropdownViewportCut(offset: 0, content: 300, visible: 200)
+        XCTAssertFalse(top.above)
+        XCTAssertTrue(top.below, "more rows follow the last shown")
+        let middle = AtticDropdownViewportCut(offset: 50, content: 300, visible: 200)
+        XCTAssertTrue(middle.above)
+        XCTAssertTrue(middle.below)
+        let end = AtticDropdownViewportCut(offset: 100, content: 300, visible: 200)
+        XCTAssertTrue(end.above)
+        XCTAssertFalse(end.below)
+        XCTAssertEqual(AtticDropdownViewportCut(offset: 0, content: 200, visible: 200), AtticDropdownViewportCut(),
+                       "a list that fits has no fade")
+    }
+}
