@@ -1,3 +1,4 @@
+import AppKit
 import Foundation
 import SwiftData
 @testable import Attic
@@ -281,4 +282,24 @@ func waitForFormatRefresh(_ controls: NoteFormatControls, file: StaticString = #
     waitForTestOperation("format refresh generation \(generation)", file: file, line: line) {
         controls.completedRefreshGeneration >= generation
     }
+}
+
+@MainActor
+func verifyCIInputModes(readAccessibility: Bool) {
+    let env = ProcessInfo.processInfo.environment
+    guard env["ATTIC_CI_INPUT_MODES"] == "1" else { return }
+    guard let mode = env["ATTIC_CI_KEYBOARD_MODE"], mode == "0" || mode == "3" else {
+        return XCTFail("missing CI keyboard mode")
+    }
+    XCTAssertEqual(NSApp.isFullKeyboardAccessEnabled, mode == "3")
+    verifyCIAccessibilityMode(readAccessibility, phase: "before measurement group")
+}
+
+@MainActor
+func verifyCIAccessibilityMode(_ expected: Any?, phase: String) {
+    guard ProcessInfo.processInfo.environment["ATTIC_CI_INPUT_MODES"] == "1" else { return }
+    let value = NSApp.accessibilityAttributeValue(NSAccessibility.Attribute(rawValue: "AXEnhancedUserInterface")) as? Bool
+    XCTAssertNotNil(value, "the accessibility mode must be observable")
+    XCTAssertEqual(value, expected as? Bool, phase)
+    print("CI_INPUT_MODES AX \(phase) expected=\(String(describing: expected)) actual=\(String(describing: value))")
 }

@@ -447,7 +447,11 @@ final class AtticDropdownTests: XCTestCase {
         let attribute = NSAccessibility.Attribute(rawValue: "AXEnhancedUserInterface")
         let previous = NSApp.accessibilityAttributeValue(attribute)
         NSApp.accessibilitySetValue(true, forAttribute: attribute)
-        defer { NSApp.accessibilitySetValue(previous, forAttribute: attribute) }
+        verifyCIInputModes(readAccessibility: true)
+        defer {
+            NSApp.accessibilitySetValue(previous, forAttribute: attribute)
+            verifyCIAccessibilityMode(previous, phase: "restored after measurement group")
+        }
         let window = makeWindow()
         defer { window.close() }
         // The priority picker on a High task, ↓ moved to Medium; the tag
@@ -488,7 +492,11 @@ final class AtticDropdownTests: XCTestCase {
         let attribute = NSAccessibility.Attribute(rawValue: "AXEnhancedUserInterface")
         let previous = NSApp.accessibilityAttributeValue(attribute)
         NSApp.accessibilitySetValue(true, forAttribute: attribute)
-        defer { NSApp.accessibilitySetValue(previous, forAttribute: attribute) }
+        verifyCIInputModes(readAccessibility: true)
+        defer {
+            NSApp.accessibilitySetValue(previous, forAttribute: attribute)
+            verifyCIAccessibilityMode(previous, phase: "restored after measurement group")
+        }
         let window = makeWindow()
         defer { window.close() }
         let model = NoteSlashListModel()
@@ -814,7 +822,11 @@ final class AtticDropdownTests: XCTestCase {
         let attribute = NSAccessibility.Attribute(rawValue: "AXEnhancedUserInterface")
         let previous = NSApp.accessibilityAttributeValue(attribute)
         NSApp.accessibilitySetValue(true, forAttribute: attribute)
-        defer { NSApp.accessibilitySetValue(previous, forAttribute: attribute) }
+        verifyCIInputModes(readAccessibility: true)
+        defer {
+            NSApp.accessibilitySetValue(previous, forAttribute: attribute)
+            verifyCIAccessibilityMode(previous, phase: "restored after measurement group")
+        }
         for (name, content) in [("date", AnyView(TaskDatePickerView(choices: TaskDateChoices(parser: TaskTextParser()), selected: nil, onPick: { _ in }))),
                                 ("tags", AnyView(TaskTagPickerView(allTags: ["home", "launch"], state: { _ in .off },
                                                                    onToggle: { _ in }, onCreate: { _, _ in true }))),
@@ -1007,7 +1019,11 @@ final class AtticDropdownTests: XCTestCase {
         let attribute = NSAccessibility.Attribute(rawValue: "AXEnhancedUserInterface")
         let previous = NSApp.accessibilityAttributeValue(attribute)
         NSApp.accessibilitySetValue(true, forAttribute: attribute)
-        defer { NSApp.accessibilitySetValue(previous, forAttribute: attribute) }
+        verifyCIInputModes(readAccessibility: true)
+        defer {
+            NSApp.accessibilitySetValue(previous, forAttribute: attribute)
+            verifyCIAccessibilityMode(previous, phase: "restored after measurement group")
+        }
         let window = KeyPanel(contentRect: NSRect(x: -4000, y: -4000, width: 320, height: 520),
                               styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
         window.isReleasedWhenClosed = false
@@ -1126,7 +1142,11 @@ final class AtticDropdownTests: XCTestCase {
         let attribute = NSAccessibility.Attribute(rawValue: "AXEnhancedUserInterface")
         let previous = NSApp.accessibilityAttributeValue(attribute)
         NSApp.accessibilitySetValue(true, forAttribute: attribute)
-        defer { NSApp.accessibilitySetValue(previous, forAttribute: attribute) }
+        verifyCIInputModes(readAccessibility: true)
+        defer {
+            NSApp.accessibilitySetValue(previous, forAttribute: attribute)
+            verifyCIAccessibilityMode(previous, phase: "restored after measurement group")
+        }
         let window = RecordingKeyPanel(contentRect: NSRect(x: -4000, y: -4000, width: 320, height: 520),
                               styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
         window.isReleasedWhenClosed = false
@@ -1394,7 +1414,11 @@ final class AtticDropdownTests: XCTestCase {
         let attribute = NSAccessibility.Attribute(rawValue: "AXEnhancedUserInterface")
         let previous = NSApp.accessibilityAttributeValue(attribute)
         NSApp.accessibilitySetValue(true, forAttribute: attribute)
-        defer { NSApp.accessibilitySetValue(previous, forAttribute: attribute) }
+        verifyCIInputModes(readAccessibility: true)
+        defer {
+            NSApp.accessibilitySetValue(previous, forAttribute: attribute)
+            verifyCIAccessibilityMode(previous, phase: "restored after measurement group")
+        }
         let window = makeWindow()
         // Room above the anchor for five weeks of the Compact card, not six.
         window.setContentSize(CGSize(width: 320, height: 295))
@@ -1467,7 +1491,11 @@ final class AtticDropdownTests: XCTestCase {
         let attribute = NSAccessibility.Attribute(rawValue: "AXEnhancedUserInterface")
         let previous = NSApp.accessibilityAttributeValue(attribute)
         NSApp.accessibilitySetValue(true, forAttribute: attribute)
-        defer { NSApp.accessibilitySetValue(previous, forAttribute: attribute) }
+        verifyCIInputModes(readAccessibility: true)
+        defer {
+            NSApp.accessibilitySetValue(previous, forAttribute: attribute)
+            verifyCIAccessibilityMode(previous, phase: "restored after measurement group")
+        }
         let window = makeWindow()
         defer { window.close() }
         // Room below for the card and two typed suggestions (O14-09's
@@ -1620,6 +1648,7 @@ final class AtticDropdownTests: XCTestCase {
     /// accessibility tree, as VoiceOver does when a menu opens or changes
     /// (that is when SwiftUI builds each row's accessibility element).
     private func measureDropdownCosts(in window: NSWindow, rounds: Int, readAccessibility: Bool = false, priorityDelay: TimeInterval = 0, paired: Bool = true) -> [Round] {
+        verifyCIInputModes(readAccessibility: readAccessibility)
         let design = AtticDesignContext()
         let all = NoteSlashItem.Kind.allCases.map { NoteSlashItem(kind: $0) }
         let filtered = all.filter { $0.title.lowercased().contains("li") }
@@ -1899,7 +1928,11 @@ final class AtticDropdownTests: XCTestCase {
         let attribute = NSAccessibility.Attribute(rawValue: "AXEnhancedUserInterface")
         let previous = NSApp.accessibilityAttributeValue(attribute)
         NSApp.accessibilitySetValue(true, forAttribute: attribute)
-        defer { NSApp.accessibilitySetValue(previous, forAttribute: attribute) }
+        verifyCIInputModes(readAccessibility: true)
+        defer {
+            NSApp.accessibilitySetValue(previous, forAttribute: attribute)
+            verifyCIAccessibilityMode(previous, phase: "restored after measurement group")
+        }
         let window = makeWindow()
         defer { window.close() }
         var old: [Double] = [], paired: [Double] = []
@@ -1922,7 +1955,11 @@ final class AtticDropdownTests: XCTestCase {
         let attribute = NSAccessibility.Attribute(rawValue: "AXEnhancedUserInterface")
         let previous = NSApp.accessibilityAttributeValue(attribute)
         NSApp.accessibilitySetValue(true, forAttribute: attribute)
-        defer { NSApp.accessibilitySetValue(previous, forAttribute: attribute) }
+        verifyCIInputModes(readAccessibility: true)
+        defer {
+            NSApp.accessibilitySetValue(previous, forAttribute: attribute)
+            verifyCIAccessibilityMode(previous, phase: "restored after measurement group")
+        }
         let window = makeWindow()
         defer { window.close() }
         var invocations = 0
@@ -1948,7 +1985,11 @@ final class AtticDropdownTests: XCTestCase {
         let attribute = NSAccessibility.Attribute(rawValue: "AXEnhancedUserInterface")
         let previous = NSApp.accessibilityAttributeValue(attribute)
         NSApp.accessibilitySetValue(true, forAttribute: attribute)
-        defer { NSApp.accessibilitySetValue(previous, forAttribute: attribute) }
+        verifyCIInputModes(readAccessibility: true)
+        defer {
+            NSApp.accessibilitySetValue(previous, forAttribute: attribute)
+            verifyCIAccessibilityMode(previous, phase: "restored after measurement group")
+        }
         let window = makeWindow()
         defer { window.close() }
         gate(measureDropdownCosts(in: window, rounds: 8, readAccessibility: true), label: "_AX",
