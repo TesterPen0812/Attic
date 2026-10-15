@@ -940,6 +940,9 @@ enum AtticPickerMetrics {
     /// The strip's buttons 4 apart (v19, so two filled pills never touch),
     /// 8 above the bar.
     static let stripSpacing: CGFloat = 4
+    /// The strip's first button from the add bar's leading edge: flush, so
+    /// a filled button never reaches past the bar (U-21).
+    static let stripLeading: CGFloat = 0
     /// The room a squeezed value keeps for its first characters and "…"
     /// (a tag's "#laun…", a date's "Wed …"); round 12.
     static let stripTagPrefix: CGFloat = 34

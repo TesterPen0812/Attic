@@ -1780,7 +1780,6 @@ struct TasksPage: View {
             TaskDatePickerView(
                 choices: model.dateChoices,
                 selected: model.commonDueDay(targets),
-                forRow: true,
                 onPick: { day in
                     if model.pickerChange(on: id, { model.setDueDay(day, for: targets) }) { metaPopover = nil }
                 },
@@ -3012,7 +3011,6 @@ struct TasksPage: View {
             TaskDatePickerView(
                 choices: model.dateChoices,
                 selected: model.commonDueDay(ids),
-                forRow: true,
                 onPick: { day in
                     if model.pickerChange(on: anchor, { model.setDueDay(day, for: ids) }) { selectionPicker = nil }
                 },
@@ -3206,6 +3204,9 @@ private struct TasksAddBar: View {
                         TaskDatePickerView(choices: model.dateChoices, selected: parts.dueDay, onPick: { day in
                             datePresented = false
                             model.pickDate(day, editor: editor)
+                        }, onRemove: {
+                            datePresented = false
+                            model.clearComposer(.date, editor: editor)
                         })
                     },
                     tagPicker: {
@@ -3228,8 +3229,11 @@ private struct TasksAddBar: View {
                         })
                     }
                 )
-                // The first icon on the circles' line (x 36), as the bar's plus.
-                .padding(.leading, AtticAddBarMetrics.iconSlot / 2 - AtticSmallControlMetrics.labelPadding - AtticSmallControlMetrics.iconSize / 2)
+                // On the bar's edge (U-21): an open or set button's fill
+                // stays inside the bar's column (it stood 3.5 pt out when the
+                // first icon sat on the plus's line), and the cards it opens
+                // start there too.
+                .padding(.leading, AtticPickerMetrics.stripLeading)
                 // Built with the bar and shown by a frame and an opacity, as
                 // the send button is: the first keystroke changes those,
                 // never builds the strip (spec: one frame per keystroke).

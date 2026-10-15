@@ -1482,8 +1482,8 @@ final class AtticDropdownTests: XCTestCase {
         var picked: DueDay?
         let presenter = AtticDropdownPresenter()
         presenter.design = AtticDesignContext(reduceMotion: true)
-        presenter.content = AnyView(TaskDatePickerView(choices: choices, selected: DueDay(rawValue: "2026-10-09"), forRow: true,
-                                                       onPick: { picked = $0 }))
+        presenter.content = AnyView(TaskDatePickerView(choices: choices, selected: DueDay(rawValue: "2026-10-09"),
+                                                       onPick: { picked = $0 }, onRemove: {}))
         presenter.present(from: anchor)
         defer { presenter.close(restoreFocus: false, immediately: true) }
         spin(0.2)
@@ -2321,5 +2321,24 @@ extension AtticDropdownTests {
         XCTAssertFalse(end.below)
         XCTAssertEqual(AtticDropdownViewportCut(offset: 0, content: 200, visible: 200), AtticDropdownViewportCut(),
                        "a list that fits has no fade")
+    }
+
+    /// U-18: typing "fri" proposes Friday; the grid marks that day.
+    func testU18TheLitSuggestionsDayIsTheProposedDay() {
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = TimeZone(identifier: "UTC")!
+        let today = calendar.date(from: DateComponents(year: 2026, month: 10, day: 14))!
+        let friday = calendar.date(from: DateComponents(year: 2026, month: 10, day: 16))!
+        let saturday = calendar.date(from: DateComponents(year: 2026, month: 10, day: 17))!
+        let suggestions = [AtticDateSuggestion(id: 0, title: "Friday", detail: "16 Oct", date: friday),
+                           AtticDateSuggestion(id: 1, title: "Saturday", detail: "17 Oct", date: saturday)]
+        var state = AtticDateCardState(start: today)
+        XCTAssertNil(state.proposedDay(suggestions), "nothing typed, nothing proposed")
+        state.typed(suggestions: suggestions)
+        XCTAssertEqual(state.proposedDay(suggestions), friday)
+        _ = state.apply(.down, calendar: calendar, suggestions: 2, typing: true, hasRemove: false)
+        XCTAssertEqual(state.proposedDay(suggestions), saturday, "it follows the lit suggestion")
+        state.hoverDay(today, inside: true, calendar: calendar)
+        XCTAssertNil(state.proposedDay(suggestions), "a day lit in the grid is its own highlight")
     }
 }
