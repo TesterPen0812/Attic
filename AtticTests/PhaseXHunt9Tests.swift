@@ -193,7 +193,7 @@ final class PhaseXHunt9Tests: XCTestCase {
         XCTAssertTrue(list.groups(store: notes, drafts: []).contains { $0.id == "today" && $0.rows.contains { $0.id == id } })
     }
 
-    func testCoverageDateEnvironmentNotificationsPublishWithoutMutatingStores() throws {
+    func testCoverageDateEnvironmentNotificationsPublishWithoutMutatingStores() async throws {
         let tasks = try makeTestStore(), library = AtticLibrary(tasks: tasks)
         let model = TasksPageModel(library: library, services: TasksPageServices())
         let notes = try makeTestNoteStore(attachmentFileStore: makeTestAttachmentFileStore())
@@ -204,8 +204,19 @@ final class PhaseXHunt9Tests: XCTestCase {
         let taskRevision = tasks.revision, noteRevision = notes.revision
         for name in DatePresentationEnvironment.notifications {
             let previousTasks = taskChanges, previousNotes = noteChanges
-            NotificationCenter.default.post(name: name, object: nil)
-            spin()
+            let token = UUID()
+            var delivered: Set<String> = []
+            model.dateEnvironmentDidPublish = { event in
+                if event.name == name, event.object as? UUID == token { delivered.insert("tasks") }
+            }
+            list.dateEnvironmentDidPublish = { event in
+                if event.name == name, event.object as? UUID == token { delivered.insert("notes") }
+            }
+            defer { model.dateEnvironmentDidPublish = nil; list.dateEnvironmentDidPublish = nil }
+            NotificationCenter.default.post(name: name, object: token)
+            try await waitForTestOperationAsync("date notification \(name.rawValue) delivered to both models") {
+                delivered == ["tasks", "notes"]
+            }
             XCTAssertGreaterThan(taskChanges, previousTasks)
             XCTAssertGreaterThan(noteChanges, previousNotes)
         }

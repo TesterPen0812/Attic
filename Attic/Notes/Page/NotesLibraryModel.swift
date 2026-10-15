@@ -62,6 +62,7 @@ final class NotesLibraryModel: ObservableObject {
     private weak var observedStore: NoteStore?
     private var storeSubscription: AnyCancellable?
     private var presentationSubscription: AnyCancellable?
+    var dateEnvironmentDidPublish: ((Notification) -> Void)?
     private var dateEnvironmentSubscription: AnyCancellable?
     private var storeRevision: UInt64 = 0
     private var searchGeneration: UInt64 = 0
@@ -94,11 +95,12 @@ final class NotesLibraryModel: ObservableObject {
         self.calendar = calendar
         dateEnvironmentSubscription = Publishers.MergeMany(DatePresentationEnvironment.notifications.map {
             NotificationCenter.default.publisher(for: $0)
-        }).sink { [weak self] _ in
+        }).sink { [weak self] notification in
             DispatchQueue.main.async { [weak self] in
                 guard let self else { return }
                 self.cache = nil
                 self.objectWillChange.send()
+                self.dateEnvironmentDidPublish?(notification)
             }
         }
         if let store { observeStore(store) }
