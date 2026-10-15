@@ -7,6 +7,36 @@ import XCTest
 /// identity, IME over a selection, VoiceOver elements.
 @MainActor
 final class NoteEditorEngineTests: XCTestCase {
+    func testG07LineSeparatorTokensUseLFLineRulesAndOriginalUTF16Offsets() throws {
+        let fixtures = [
+            ("javascript", "// 💡 comment\nconst answer = 42;"),
+            ("swift", "// comment\nlet answer = 42"),
+            ("python", "# comment\nreturn 42"),
+            ("sql", "-- comment\nSELECT answer"),
+            ("diff", "--- old\n+++ new\n@@ rows\n+added\n-removed"),
+            ("yaml", "first\nsecond: 42"),
+            ("javascript", "const\nanswer = 42;"),
+            ("json", "\"value\"\n: 42")
+        ]
+        for (language, lf) in fixtures {
+            let source = lf.replacingOccurrences(of: "\n", with: "\u{2028}")
+            let expected = NoteSyntaxHighlighter.tokens(in: lf, language: language)
+            let actual = NoteSyntaxHighlighter.tokens(in: source, language: language)
+            XCTAssertEqual(actual.map { $0.0 }, expected.map { $0.0 }, language)
+            XCTAssertEqual(actual.map { $0.1 }, expected.map { $0.1 }, language)
+        }
+        var block = NoteBlock.text("// 💡 comment\u{2028}const answer = 42;", style: "mono")
+        block.language = "javascript"
+        let engine = NoteEditorEngine(noteID: UUID(), document: NoteDocument(blocks: [.text("T"), block]))
+        let before = try NoteContentCodec.encode(engine.document())
+        let tokens = engine.codeTokens(in: engine.blockRange(at: 2))
+        let keyword = (engine.textStorage.string as NSString).range(of: "const")
+        XCTAssertTrue(tokens.contains { $0.0 == keyword && $0.1 == .keyword })
+        XCTAssertEqual(try NoteContentCodec.encode(engine.document()), before)
+        XCTAssertTrue(engine.textStorage.string.contains("\u{2028}"))
+        XCTAssertFalse(engine.history.canUndo)
+    }
+
     func testG02FootnotePrepassKeepsFencedIndentedAndInlineCodeVerbatim() throws {
         for source in ["```swift\n[^a] \\[^b]\n```", "~~~\n[^a] \\[^b]\n~~~", "    [^a] \\[^b]", "`[^a] \\[^b]`", "``tick ` [^a] \\[^b]``", "> ```\n> [^a] \\[^b]\n> ```"] {
             let first = try XCTUnwrap(NoteMarkdownImport.document(source).blocks.first)
