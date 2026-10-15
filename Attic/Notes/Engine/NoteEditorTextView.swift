@@ -646,7 +646,7 @@ final class NoteEditorTextView: NSTextView, NSAccessibilityCustomRotorItemSearch
 
     override func resignFirstResponder() -> Bool {
         let resigned = super.resignFirstResponder()
-        if resigned { cancelCalloutIconRequest() }
+        if resigned { calloutIconFocusDidChange() }
         if resigned { DispatchQueue.main.async { [weak self] in self?.placeMonoCopy() } }
         return resigned
     }
@@ -1312,6 +1312,8 @@ final class NoteEditorTextView: NSTextView, NSAccessibilityCustomRotorItemSearch
     /// The palette may answer only the request that opened it. A normal
     /// editing interaction, dismissal or changed document ends that request.
     private struct CalloutIconRequest {
+        var id = UUID()
+        var focusChanged = false
         var engine: ObjectIdentifier
         var location: Int
         var block: NSRange
@@ -1319,14 +1321,20 @@ final class NoteEditorTextView: NSTextView, NSAccessibilityCustomRotorItemSearch
         var generation: Int
         var selection: NSRange
     }
+    // Injectable so focus handoff is tested without opening native UI.
+    var calloutPaletteOwnsFocus: () -> Bool = {
+        NSWorkspace.shared.frontmostApplication?.bundleIdentifier == "com.apple.CharacterPaletteIM"
+    }
     private var pendingCalloutIconRequest: CalloutIconRequest?
     var pendingCalloutIconLocation: Int? { pendingCalloutIconRequest?.location }
     private var calloutIconEventMonitor: Any?
     private var calloutIconObservers: [NSObjectProtocol] = []
+    private var calloutIconWorkspaceObservers: [NSObjectProtocol] = []
 
-    deinit {
+    isolated deinit {
         if let calloutIconEventMonitor { NSEvent.removeMonitor(calloutIconEventMonitor) }
         for observer in calloutIconObservers { NotificationCenter.default.removeObserver(observer) }
+        for observer in calloutIconWorkspaceObservers { NSWorkspace.shared.notificationCenter.removeObserver(observer) }
         if let codeEditObserver { NotificationCenter.default.removeObserver(codeEditObserver) }
     }
 
@@ -1336,6 +1344,19 @@ final class NoteEditorTextView: NSTextView, NSAccessibilityCustomRotorItemSearch
         calloutIconEventMonitor = nil
         for observer in calloutIconObservers { NotificationCenter.default.removeObserver(observer) }
         calloutIconObservers.removeAll()
+        for observer in calloutIconWorkspaceObservers { NSWorkspace.shared.notificationCenter.removeObserver(observer) }
+        calloutIconWorkspaceObservers.removeAll()
+    }
+
+    private func calloutIconFocusDidChange() {
+        guard let request = pendingCalloutIconRequest else { return }
+        pendingCalloutIconRequest?.focusChanged = true
+        // The system palette is a separate app and takes keyboard focus.
+        // Let that handoff settle before rejecting other focus changes.
+        DispatchQueue.main.async { [weak self] in
+            guard let self, self.pendingCalloutIconRequest?.id == request.id else { return }
+            if !self.calloutPaletteOwnsFocus() { self.cancelCalloutIconRequest() }
+        }
     }
 
     func pickCalloutIconFromPalette(forBlockAt location: Int, showPalette: () -> Void = { NSApp.orderFrontCharacterPalette(nil) }) {
@@ -1358,7 +1379,15 @@ final class NoteEditorTextView: NSTextView, NSAccessibilityCustomRotorItemSearch
         }
         for (name, object) in notifications {
             calloutIconObservers.append(NotificationCenter.default.addObserver(forName: name, object: object, queue: .main) { [weak self] _ in
-                MainActor.assumeIsolated { self?.cancelCalloutIconRequest() }
+                MainActor.assumeIsolated {
+                    if name == NSWindow.willCloseNotification { self?.cancelCalloutIconRequest() }
+                    else { self?.calloutIconFocusDidChange() }
+                }
+            })
+        }
+        for name in [NSWorkspace.didActivateApplicationNotification, NSWorkspace.didDeactivateApplicationNotification] {
+            calloutIconWorkspaceObservers.append(NSWorkspace.shared.notificationCenter.addObserver(forName: name, object: nil, queue: .main) { [weak self] _ in
+                MainActor.assumeIsolated { self?.calloutIconFocusDidChange() }
             })
         }
         showPalette()
@@ -1370,6 +1399,7 @@ final class NoteEditorTextView: NSTextView, NSAccessibilityCustomRotorItemSearch
         cancelCalloutIconRequest()
         let text = (string as? String) ?? (string as? NSAttributedString)?.string ?? ""
         guard let engine, request.engine == ObjectIdentifier(engine),
+              (!request.focusChanged || calloutPaletteOwnsFocus()),
               request.generation == engine.history.recordingGeneration, request.selection == selectedRange(),
               request.location < engine.textStorage.length,
               engine.blockRange(at: request.location) == request.block,

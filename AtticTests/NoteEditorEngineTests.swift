@@ -7,12 +7,39 @@ import XCTest
 /// identity, IME over a selection, VoiceOver elements.
 @MainActor
 final class NoteEditorEngineTests: XCTestCase {
+    func testG05NativePaletteFocusHandoffKeepsTheRequestAndText() async throws {
+        var box = NoteBlock.text("tip", id: UUID(), style: "quote"); box.callout = "💡"
+        let (engine, view) = makeEngine(NoteDocument(blocks: [.text("T"), box, .text("body")]), window: true)
+        defer { engine.detachView() }
+        view.setSelectedRange(NSRange(location: 2, length: 3))
+        view.calloutPaletteOwnsFocus = { true }
+        view.pickCalloutIconFromPalette(forBlockAt: 2, showPalette: {})
+        NotificationCenter.default.post(name: NSWindow.didResignKeyNotification, object: view.window)
+        XCTAssertEqual(view.pendingCalloutIconLocation, 2, "the native picker takes keyboard focus without cancelling its own request")
+        view.insertText("🌻", replacementRange: NSRange(location: NSNotFound, length: 0))
+        XCTAssertEqual(engine.document().blocks[1].text, "tip", "a valid pick must not replace selected callout text")
+        XCTAssertEqual(engine.document().blocks[1].callout, "🌻")
+        // A deferred focus check for that consumed request cannot cancel a new one.
+        view.pickCalloutIconFromPalette(forBlockAt: 2, showPalette: {})
+        try await Task.sleep(for: .milliseconds(20))
+        XCTAssertEqual(view.pendingCalloutIconLocation, 2)
+        view.calloutPaletteOwnsFocus = { false }
+        NotificationCenter.default.post(name: NSWindow.didResignKeyNotification, object: view.window)
+        try await Task.sleep(for: .milliseconds(20))
+        XCTAssertNil(view.pendingCalloutIconLocation, "focus outside the palette ends the request")
+        view.setSelectedRange(NSRange(location: 6, length: 0))
+        view.insertText("🌷", replacementRange: NSRange(location: NSNotFound, length: 0))
+        XCTAssertEqual(engine.document().blocks[1].callout, "🌻")
+        XCTAssertEqual(engine.document().blocks[2].text, "🌷body")
+    }
+
     func testG05CalloutPaletteSelectionExpiresOnCaretChangeAndDismissal() throws {
         for cancellation in ["selection", "dismissal", "focus", "engine", "edit", "identity"] {
             var box = NoteBlock.text("tip", id: UUID(), style: "quote"); box.callout = "💡"
             let (engine, view) = makeEngine(NoteDocument(blocks: [.text("T"), box, .text("body")]))
             defer { engine.detachView() }
             view.setSelectedRange(NSRange(location: 2, length: 0))
+            view.calloutPaletteOwnsFocus = { false }
             view.pickCalloutIconFromPalette(forBlockAt: 2, showPalette: {})
             XCTAssertEqual(view.pendingCalloutIconLocation, 2)
             var replacement: NoteEditorEngine?
