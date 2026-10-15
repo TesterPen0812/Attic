@@ -1602,7 +1602,16 @@ final class AtticDropdownTests: XCTestCase {
     struct Round {
         var new: [Measure: Double] = [:]
         var legacy: [Measure: Double] = [:]
-        func ratio(_ measure: Measure) -> Double { new[measure, default: 0] / max(legacy[measure, default: 0], .ulpOfOne) }
+        func ratio(_ measure: Measure) -> Double {
+            guard let value = new[measure], let reference = legacy[measure] else { return .nan }
+            return value / max(reference, .ulpOfOne)
+        }
+    }
+
+    func testMissingDropdownMeasurementsProduceInvalidRatios() {
+        XCTAssertTrue(Round().ratio(.priorityOpen).isNaN)
+        XCTAssertTrue(Round(new: [:], legacy: [.priorityOpen: 1]).ratio(.priorityOpen).isNaN)
+        XCTAssertTrue(Round(new: [.priorityOpen: 1], legacy: [:]).ratio(.priorityOpen).isNaN)
     }
 
     /// Opens, filters and closes the dropdowns and the components they
@@ -1793,16 +1802,58 @@ final class AtticDropdownTests: XCTestCase {
         XCTAssertTrue(values[.tagOpen]!.isNaN, "invalid measurements cannot be repaired by retrying")
     }
 
+    private func costEvidenceProblems(_ rounds: [Round], accepted: [Measure: Accepted]) -> [String] {
+        var problems: [String] = []
+        if rounds.isEmpty { problems.append("missing measurement rounds") }
+        for measure in Measure.allCases {
+            if let bound = accepted[measure] {
+                if !bound.limit.isFinite { problems.append("invalid bound \(measure.rawValue)") }
+            } else { problems.append("missing bound \(measure.rawValue)") }
+            for (index, round) in rounds.enumerated() {
+                for (side, values) in [("new", round.new), ("legacy", round.legacy)] {
+                    guard let value = values[measure] else {
+                        problems.append("missing \(side) \(measure.rawValue) round \(index)")
+                        continue
+                    }
+                    if !value.isFinite { problems.append("invalid \(side) \(measure.rawValue) round \(index)") }
+                }
+            }
+        }
+        return problems
+    }
+
+    func testCostEvidenceRequiresEveryValueAndBoundBeforeTakingMedians() {
+        let values = Dictionary(uniqueKeysWithValues: Measure.allCases.map { ($0, 1.0) })
+        let complete = Round(new: values, legacy: values)
+        XCTAssertEqual(costEvidenceProblems([complete], accepted: Self.acceptedRatios), [])
+        var missing = complete
+        missing.new[.priorityOpen] = nil
+        XCTAssertEqual(costEvidenceProblems([complete, missing, complete], accepted: Self.acceptedRatios),
+                       ["missing new priorityOpen round 1"], "a median must not mask one missing sample")
+        missing = complete
+        missing.legacy[.tagOpen] = nil
+        XCTAssertEqual(costEvidenceProblems([missing], accepted: Self.acceptedRatios), ["missing legacy tagOpen round 0"])
+        missing = complete
+        missing.new[.slashOpen] = .nan
+        XCTAssertEqual(costEvidenceProblems([missing], accepted: Self.acceptedRatios), ["invalid new slashOpen round 0"])
+        var bounds = Self.acceptedRatios
+        bounds[.priorityOpen] = nil
+        XCTAssertEqual(costEvidenceProblems([complete], accepted: bounds), ["missing bound priorityOpen"])
+        XCTAssertEqual(costEvidenceProblems([], accepted: Self.acceptedRatios), ["missing measurement rounds"])
+    }
+
     private func gate(_ rounds: [Round], label: String, accepted: [Measure: Accepted],
                       recheck: (() -> [Round])? = nil) {
+        for problem in costEvidenceProblems(rounds, accepted: accepted) { XCTFail(problem) }
+        guard !rounds.isEmpty else { return }
         let first = Dictionary(uniqueKeysWithValues: Measure.allCases.map { measure in
             (measure, median(rounds.map { $0.ratio(measure) }))
         })
         for measure in Measure.allCases {
             let ratios = rounds.map { $0.ratio(measure) }
             let ratio = median(ratios)
-            let new = median(rounds.map { $0.new[measure, default: 0] })
-            let legacy = median(rounds.map { $0.legacy[measure, default: 0] })
+            let new = median(rounds.map { $0.new[measure] ?? .nan })
+            let legacy = median(rounds.map { $0.legacy[measure] ?? .nan })
             print("DROPDOWN_RATIO\(label) \(measure.rawValue) ratio=\(ratio) rounds=\(ratios.map { ($0 * 1000).rounded() / 1000 })"
                   + " new_ms=\(new) legacy_ms=\(legacy)")
         }
@@ -1810,6 +1861,10 @@ final class AtticDropdownTests: XCTestCase {
         if let recheck {
             final = ratiosAfterOneRecheck(first, accepted: accepted) {
                 let repeated = recheck()
+                for problem in costEvidenceProblems(repeated, accepted: accepted) { XCTFail(problem) }
+                guard !repeated.isEmpty else {
+                    return Dictionary(uniqueKeysWithValues: Measure.allCases.map { ($0, Double.nan) })
+                }
                 let values = Dictionary(uniqueKeysWithValues: Measure.allCases.map { measure in
                     (measure, median(repeated.map { $0.ratio(measure) }))
                 })
@@ -1820,7 +1875,10 @@ final class AtticDropdownTests: XCTestCase {
             }
         } else { final = first }
         for measure in Measure.allCases {
-            guard let accepted = accepted[measure], let ratio = final[measure] else { continue }
+            guard let accepted = accepted[measure], let ratio = final[measure] else {
+                XCTFail("missing final measurement or bound for \(measure.rawValue)")
+                continue
+            }
             XCTAssertLessThanOrEqual(ratio, accepted.limit,
                                      "\(measure.rawValue)\(label): \(ratio) of the replaced component's cost, past the accepted"
                                      + " \(accepted.ratio) and its run-to-run spread \(accepted.spread)")
