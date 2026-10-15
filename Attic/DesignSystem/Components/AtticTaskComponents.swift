@@ -1158,6 +1158,12 @@ struct AtticPriorityMark: View {
 /// focusable: a focused row draws the 2 pt accent ring and answers the
 /// task keys (`AtticTaskKeys`).
 struct AtticTaskRow: View {
+    /// The title's ink: the secondary grey once done (T-06 B, owner
+    /// 2026-10-15; the filled mark stays), the disabled ink when disabled.
+    nonisolated static func titleInk(done: Bool, disabled: Bool) -> AtticInk {
+        disabled ? .disabledText : (done ? .helper : .heading)
+    }
+
     /// Whether the row shows its actions button: for the keyboard's row
     /// (and the gallery's focused state), never for the pointer's hover,
     /// which only tints the row.
@@ -1281,9 +1287,9 @@ struct AtticTaskRow: View {
                                 // Phase 0's qualities: SF Pro Rounded, medium
                                 // while in progress, in the primary ink.
                                 style: model.state == .inProgress ? .rowTitleActive : .rowTitle,
-                                // Done style C (owner, 2026-10-10): the title
-                                // keeps its full ink; the filled mark says done.
-                                ink: disabled ? .disabledText : .heading,
+                                // T-06 B (owner, 2026-10-15): a done title is
+                                // the secondary grey; the filled mark stays.
+                                ink: Self.titleInk(done: done, disabled: disabled),
                                 truncates: true,
                                 highlights: model.titleMatchRanges
                             )
@@ -1844,6 +1850,9 @@ struct AtticSubtaskModel: Identifiable, Sendable {
 /// the same commands are its right-click menu and its VoiceOver actions
 /// (one list for all three), and `renaming` edits its title in place.
 struct AtticSubtaskRow: View {
+    /// A done subtask's title is the secondary grey (T-06 B).
+    nonisolated static func titleInk(isDone: Bool) -> AtticInk { isDone ? .helper : .body }
+
     let subtask: AtticSubtaskModel
     let onToggle: () -> Void
     var commands: [AtticMenuCommand] = []
@@ -1879,8 +1888,8 @@ struct AtticSubtaskRow: View {
             if let renaming, capture == nil {
                 AtticRowTitleEditor(editing: renaming)
             } else {
-                // Done style C (owner, 2026-10-10): the title keeps its ink.
-                AtticText(verbatim: subtask.title, style: .listBody, ink: .body, truncates: true)
+                // T-06 B (owner, 2026-10-15): a done subtask's title is grey.
+                AtticText(verbatim: subtask.title, style: .listBody, ink: Self.titleInk(isDone: subtask.isDone), truncates: true)
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .contentShape(Rectangle())
                     .modifier(AtticSubtaskDrag(changed: onDragChanged, ended: onDragEnded, cancelled: onDragCancelled))
@@ -2176,7 +2185,7 @@ struct AtticTaskCard: View {
                     .padding(.leading, m.leadingInset - hitInset)
                     .padding(.top, m.circleTop)
                 VStack(alignment: .leading, spacing: AtticTaskRowMetrics.titleToDetails) {
-                    AtticText(verbatim: model.title, style: .rowTitle, ink: .body, truncates: true)
+                    AtticText(verbatim: model.title, style: .rowTitle, ink: model.state == .done ? .helper : .body, truncates: true)
                         .frame(height: m.titleHeight)
                     if model.hasDetails || model.subtasks != nil {
                         AtticCardDetails(model: model)

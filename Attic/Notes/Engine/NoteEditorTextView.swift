@@ -94,7 +94,7 @@ final class NoteEditorTextView: NSTextView, NSAccessibilityCustomRotorItemSearch
         codeTokenMemo = nil
         guard let engine, let layoutManager = textLayoutManager else { return }
         layoutManager.renderingAttributesValidator = { [weak self] manager, fragment in
-            MainActor.assumeIsolated { self?.colourCode(in: fragment, manager: manager) }
+            MainActor.assumeIsolated { self?.colourFragment(fragment, manager: manager) }
         }
         codeEditObserver = NotificationCenter.default.addObserver(
             forName: NSTextStorage.didProcessEditingNotification, object: engine.textStorage, queue: nil
@@ -130,6 +130,30 @@ final class NoteEditorTextView: NSTextView, NSAccessibilityCustomRotorItemSearch
             })
         }
         return codeColours[token]
+    }
+
+    /// Each fragment's drawn colour: code in its syntax inks, a ticked
+    /// checklist line in the secondary grey (T-06 B, owner 2026-10-15: one
+    /// done style everywhere; the filled box stays). Rendering attributes
+    /// only, so the note's text and its Undo never change.
+    private func colourFragment(_ fragment: NSTextLayoutFragment, manager: NSTextLayoutManager) {
+        if let block = fragment as? NoteBlockLayoutFragment, block.monoBlockRect != nil {
+            colourCode(in: fragment, manager: manager)
+        } else {
+            colourChecklistLine(fragment, manager: manager)
+        }
+    }
+
+    private func colourChecklistLine(_ fragment: NSTextLayoutFragment, manager: NSTextLayoutManager) {
+        guard let engine else { return }
+        let content = engine.contentStorage
+        let start = content.offset(from: content.documentRange.location, to: fragment.rangeInElement.location)
+        guard start >= 0, start < engine.textStorage.length else { return }
+        if engine.checklistBox(inParagraphAt: start)?.isChecked == true {
+            manager.addRenderingAttribute(.foregroundColor, value: engine.style.checkedChecklistColor, for: fragment.rangeInElement)
+        } else {
+            manager.removeRenderingAttribute(.foregroundColor, for: fragment.rangeInElement)
+        }
     }
 
     private func colourCode(in fragment: NSTextLayoutFragment, manager: NSTextLayoutManager) {

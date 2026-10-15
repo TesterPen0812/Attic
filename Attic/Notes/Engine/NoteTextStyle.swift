@@ -174,6 +174,8 @@ struct NoteTextStyle: Equatable {
     var quoteBarColor: NSColor { tokens.quoteBar.nsColor }
     /// Links: blue, with their underline in the same blue at 55 %.
     var linkColor: NSColor { tokens.ink(.linkText).nsColor }
+    /// A ticked checklist line's words (T-06 B): the secondary grey.
+    var checkedChecklistColor: NSColor { tokens.ink(.helper).nsColor }
     var linkUnderlineColor: NSColor { tokens.linkUnderline.nsColor }
     /// The Mono block's fill (Light black 4.5 %, Dark white 5.5 %) and,
     /// under Increase Contrast, its edge.
