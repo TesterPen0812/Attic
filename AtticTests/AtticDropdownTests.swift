@@ -2091,11 +2091,12 @@ extension AtticDropdownTests {
             state.selectSection(initial)
             let chrome = PanelChromeInteractionState()
             let settings = AppSettings(defaults: defaults)
+            let tasksState = TasksPageState()
             let host = AtticPanelHostingView(rootView: AtticPanelView(
                 store: store, noteStore: notes, canvasSession: CanvasSession(store: CanvasStore(container: container)),
                 noteDraft: NoteDraftController(noteStore: notes), chromeInteractionState: chrome,
                 uiState: state, settings: settings,
-                tasksPageState: TasksPageState()), panelCornerRadius: 52, dockedCorner: .topRight, chromeInteractionState: chrome)
+                tasksPageState: tasksState), panelCornerRadius: 52, dockedCorner: .topRight, chromeInteractionState: chrome)
             let window = makeUnshownWindow()
             window.contentView = host
             defer {
@@ -2106,10 +2107,15 @@ extension AtticDropdownTests {
             // A reveal/page shortcut loads/selects and requests in one turn,
             // before SwiftUI mounts the target page (no window reveal here).
             spin(0.3)
+            let priorRequests = window.requests.count
             state.loadPageContent()
             state.selectSection(.tasks)
             state.requestPrimaryInputFocus()
-            spin(1)
+            let request = state.primaryInputFocusRequest
+            waitForTestOperation("pre-mount primary focus request \(request)") {
+                tasksState.handledPrimaryInputFocusRequest == request &&
+                    window.requests.dropFirst(priorRequests).contains { $0 is AtticTokenTextView }
+            }
             let editor = window.firstResponder as? NSTextView
             XCTAssertTrue(editor?.isDescendant(of: host) == true, "entry from \(initial): request before Tasks mount")
             XCTAssertFalse(window.isVisible)
