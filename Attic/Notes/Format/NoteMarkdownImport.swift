@@ -21,9 +21,29 @@ enum NoteMarkdownImport {
         // definitions. R14 keeps both as literal text instead.
         let source = NSMutableString(string: markdown)
         let footnote = try NSRegularExpression(pattern: #"\[\^[^\]]+\]"#)
-        for match in footnote.matches(in: markdown, range: NSRange(location: 0, length: source.length)).reversed() {
-            let literal = source.substring(with: match.range)
-            source.replaceCharacters(in: match.range, with: literal.replacingOccurrences(of: "[", with: "\\[").replacingOccurrences(of: "]", with: "\\]"))
+        let matches = footnote.matches(in: markdown, range: NSRange(location: 0, length: source.length))
+        if !matches.isEmpty {
+            // Ask the same parser for code source ranges before applying the
+            // prose workaround. Code's real backslashes must stay verbatim.
+            let original = try AttributedString(markdown: markdown, options: .init(interpretedSyntax: .full, appliesSourcePositionAttributes: true))
+            let codeRanges: [NSRange] = original.runs.compactMap { run in
+                let isCode = run.inlinePresentationIntent?.contains(.code) == true ||
+                    run.presentationIntent?.components.contains(where: { if case .codeBlock = $0.kind { true } else { false } }) == true
+                guard isCode, let position = run.markdownSourcePosition, let range = Range(position, in: markdown) else { return nil }
+                return NSRange(range, in: markdown)
+            }
+            let units = Array(markdown.utf16)
+            func escaped(at offset: Int) -> Bool {
+                var start = offset
+                while start > 0, units[start - 1] == 92 { start -= 1 }
+                return (offset - start) % 2 == 1
+            }
+            for match in matches.reversed() {
+                guard !escaped(at: match.range.location), !escaped(at: NSMaxRange(match.range) - 1),
+                      !codeRanges.contains(where: { NSIntersectionRange($0, match.range).length > 0 }) else { continue }
+                let literal = source.substring(with: match.range)
+                source.replaceCharacters(in: match.range, with: literal.replacingOccurrences(of: "[", with: "\\[").replacingOccurrences(of: "]", with: "\\]"))
+            }
         }
         // Foundation emits no run for a truly empty list item. Give those
         // items a temporary parse-only token, then remove it from their text.

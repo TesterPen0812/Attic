@@ -7,6 +7,34 @@ import XCTest
 /// identity, IME over a selection, VoiceOver elements.
 @MainActor
 final class NoteEditorEngineTests: XCTestCase {
+    func testG02FootnotePrepassKeepsFencedIndentedAndInlineCodeVerbatim() throws {
+        for source in ["```swift\n[^a] \\[^b]\n```", "~~~\n[^a] \\[^b]\n~~~", "    [^a] \\[^b]", "`[^a] \\[^b]`", "``tick ` [^a] \\[^b]``", "> ```\n> [^a] \\[^b]\n> ```"] {
+            let first = try XCTUnwrap(NoteMarkdownImport.document(source).blocks.first)
+            let expected = source.contains("tick") ? "tick ` [^a] \\[^b]" : "[^a] \\[^b]"
+            XCTAssertEqual(first.text, expected, source)
+            var document = NoteDocument(blocks: [.text("T"), first])
+            for _ in 0..<4 {
+                document = try NoteMarkdownImport.document(NoteMarkdownExport.markdown(document))
+                XCTAssertEqual(document.blocks[1].text, expected, "code escapes cannot accumulate")
+                XCTAssertEqual(document.blocks[1].style, first.style)
+                XCTAssertEqual(document.blocks[1].marks, first.marks)
+            }
+        }
+    }
+
+    func testG02FootnoteProseRemainsLiteralWithoutEscapeAccumulation() throws {
+        let source = "Reference [^a] and `[^code]`\n\n[^a]: keep definition\n\n    [^indent]"
+        var document = try NoteMarkdownImport.document(source)
+        XCTAssertEqual(document.blocks.map(\.text), ["Reference [^a] and [^code]", "[^a]: keep definition", "[^indent]"])
+        let before = document.blocks
+        document.blocks.insert(.text("T"), at: 0)
+        for _ in 0..<4 {
+            document = try NoteMarkdownImport.document(NoteMarkdownExport.markdown(document))
+            XCTAssertEqual(document.blocks.dropFirst().map(\.text), before.map(\.text))
+            XCTAssertEqual(document.blocks.dropFirst().map(\.marks), before.map(\.marks))
+        }
+    }
+
     func testG03EscapedListAndQuoteMarkersRoundTripAsLiteralText() throws {
         for marker in ["[ ] ", "[x] ", "[X] "] {
             let bullet = NoteBlock.text(marker + "literal marker", style: "bullet")
