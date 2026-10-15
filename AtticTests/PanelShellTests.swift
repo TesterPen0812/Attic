@@ -104,7 +104,7 @@ final class PanelShellTests: XCTestCase {
     func testHeaderIsTwoEqualSquaresAndThePageButtonOpensTo84() {
         XCTAssertEqual(PanelHeaderLayout.height, 32)
         XCTAssertEqual(PanelHeaderLayout.pinSize, CGSize(width: 32, height: 32))
-        XCTAssertEqual(AtticPageButton<PanelPage>.width(open: false, count: PanelPage.allCases.count), PanelHeaderLayout.pinSize.width)
+        XCTAssertEqual(AtticPageButton<PanelPage>.width(open: false, count: PanelPage.allCases.count), 84, "T-04 B: shut it shows the name, at the switcher's width")
         XCTAssertEqual(PanelHeaderLayout.pageSwitchWidth, 84)
     }
 

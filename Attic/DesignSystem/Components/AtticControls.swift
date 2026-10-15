@@ -242,12 +242,15 @@ struct AtticSelectedChip: View {
 // MARK: - Page button (collapsed page dock)
 
 /// The header's page button (Phase 0's mode dock, brought into Direction
-/// A, 2026-09-26): at rest a square the size and shape of the pin, showing
-/// only the current page's icon, plain as the pin's (D-11). Under the
-/// pointer or keyboard focus it opens leftward into all the pages' icons
-/// (the current one on the chip, each with a tooltip and its shortcut); a
-/// click goes there, and it folds back when the pointer leaves. 36 pt,
-/// inset 4, 24 pt segments 2 apart: 32 wide shut, 84 open.
+/// A, 2026-09-26). At rest it shows the current page's icon and its name
+/// (T-04 B, owner 2026-10-15; replacing D-11's icon-only square), plain as
+/// the pin's glyph. Under the pointer or keyboard focus the name gives way
+/// to all the pages' icons (the current one on the chip, each with a
+/// tooltip and its shortcut); a click goes there, and it folds back when
+/// the pointer leaves. One width shut and open, whichever page: the
+/// switcher's 84 pt (inset 4, 24 pt segments 2 apart), which the longest
+/// name fits, so hovering and switching pages only cross-fade it and the
+/// header never moves.
 ///
 /// One control for the keyboard (← → move between pages while it has
 /// focus; ⌘1–⌘3 work from anywhere). VoiceOver reads one group, "Pages",
@@ -297,63 +300,70 @@ struct AtticPageButton<Page: Hashable>: View {
         let open = isOpen
         let selected = items.firstIndex { $0.page == selection } ?? 0
         let size = AtticControlSize.headerControl
+        let width = Self.width(open: open, count: items.count)
         let radius = AtticRadius.control(height: size)
         let chipRadius = AtticRadius.nested(outer: radius, gap: M.inset) ?? radius
-        HStack(spacing: 0) {
-            ForEach(Array(items.enumerated()), id: \.element.id) { index, item in
-                let isSelected = index == selected
-                let visible = open || isSelected
-                if index > 0 {
-                    Color.clear.frame(width: open ? M.gap : 0, height: M.segment)
-                }
-                Button { select(item.page) } label: {
-                    ZStack {
-                        let shape = RoundedRectangle(cornerRadius: chipRadius, style: .continuous)
-                        let accent = design.tokens.pageChipAccent
-                        if isSelected, !open {
-                            // Shut, the current page's glyph sits plain, as the
-                            // pin's does (D-11, owner 2026-10-11): the chip
-                            // means "on" only for a pinned pin, and marks the
-                            // current page only among the others once open.
-                        } else if isSelected, let accent {
-                            // Phase 0's Light palettes: the current page in the accent.
-                            shape.fill(accent.fill.color)
-                            shape.inset(by: M.accentStrokeWidth / 2).stroke(accent.stroke.color, lineWidth: M.accentStrokeWidth)
-                        } else if isSelected {
-                            shape.fill(design.tokens.chipSelected.color)
-                        } else if hoveredPage == item.page {
-                            shape.fill(design.tokens.chipHover.color)
+        ZStack(alignment: .trailing) {
+            HStack(spacing: M.gap) {
+                ForEach(Array(items.enumerated()), id: \.element.id) { index, item in
+                    let isSelected = index == selected
+                    Button { select(item.page) } label: {
+                        ZStack {
+                            let shape = RoundedRectangle(cornerRadius: chipRadius, style: .continuous)
+                            let accent = design.tokens.pageChipAccent
+                            if isSelected, let accent {
+                                // Phase 0's Light palettes: the current page in the accent.
+                                shape.fill(accent.fill.color)
+                                shape.inset(by: M.accentStrokeWidth / 2).stroke(accent.stroke.color, lineWidth: M.accentStrokeWidth)
+                            } else if isSelected {
+                                shape.fill(design.tokens.chipSelected.color)
+                            } else if hoveredPage == item.page {
+                                shape.fill(design.tokens.chipHover.color)
+                            }
+                            let face = M.glyphFace(isSelected: isSelected, open: true, accent: accent != nil,
+                                                   solid: design.effectiveSurface == .solid)
+                            AtticIcon(systemName: item.systemName, size: M.iconSize, weight: face.weight, ink: face.ink)
                         }
-                        let face = M.glyphFace(isSelected: isSelected, open: open, accent: accent != nil,
-                                               solid: design.effectiveSurface == .solid)
-                        AtticIcon(systemName: item.systemName, size: M.iconSize, weight: face.weight, ink: face.ink)
+                        .frame(width: M.segment, height: M.segment)
+                        // 24 pt chips (chrome B) still answer a 28 pt target,
+                        // reaching into the gap and the capsule's inset.
+                        .contentShape(Rectangle().inset(by: -AtticControlSize.hitOutset(for: M.segment)))
                     }
-                    .frame(width: M.segment, height: M.segment)
-                    // 24 pt chips (chrome B) still answer a 28 pt target,
-                    // reaching into the gap and the capsule's inset.
-                    .contentShape(Rectangle().inset(by: -AtticControlSize.hitOutset(for: M.segment)))
+                    .buttonStyle(.plain)
+                    .focusable(false)
+                    .keyboardShortcut(item.keyEquivalent.map { KeyboardShortcut($0, modifiers: .command) })
+                    .help("\(item.title) (\(item.shortcut))")
+                    .onHover { inside in
+                        if inside { hoveredPage = item.page } else if hoveredPage == item.page { hoveredPage = nil }
+                    }
+                    .accessibilityLabel(item.title)
+                    .accessibilityIdentifier(item.accessibilityIdentifier ?? item.title)
+                    .accessibilityAddTraits(isSelected ? [.isSelected, .isButton] : .isButton)
                 }
-                .buttonStyle(.plain)
-                .focusable(false)
-                .keyboardShortcut(item.keyEquivalent.map { KeyboardShortcut($0, modifiers: .command) })
-                .help("\(item.title) (\(item.shortcut))")
-                .onHover { inside in
-                    if inside { hoveredPage = item.page } else if hoveredPage == item.page { hoveredPage = nil }
+            }
+            // Shut, the pages are all but transparent: not 0, which would
+            // drop them from VoiceOver.
+            .opacity(open ? 1 : 0.001)
+            .allowsHitTesting(open)
+            .transformEnvironment(\.atticProbesDisabled) { if !open { $0 = true } }
+            // Shut: the current page's icon and name, centred (T-04 B).
+            if items.indices.contains(selected) {
+                let item = items[selected]
+                let face = M.glyphFace(isSelected: true, open: false, accent: false, solid: true)
+                HStack(spacing: M.labelGap) {
+                    AtticIcon(systemName: item.systemName, size: M.iconSize, weight: face.weight, ink: face.ink)
+                    AtticText(verbatim: item.title, style: M.labelStyle, ink: face.ink, truncates: true)
                 }
-                .frame(width: visible ? M.segment : 0, height: M.segment, alignment: .trailing)
-                // Folded away, a page is zero wide and all but transparent:
-                // not 0, which would drop it from VoiceOver.
-                .opacity(visible ? 1 : 0.001)
-                .clipped()
-                .allowsHitTesting(visible)
-                .transformEnvironment(\.atticProbesDisabled) { if !visible { $0 = true } }
-                .accessibilityLabel(item.title)
-                .accessibilityIdentifier(item.accessibilityIdentifier ?? item.title)
-                .accessibilityAddTraits(isSelected ? [.isSelected, .isButton] : .isButton)
+                .padding(.horizontal, M.labelSidePadding)
+                .frame(maxWidth: .infinity)
+                .opacity(open ? 0 : 1)
+                .allowsHitTesting(false)
+                .accessibilityHidden(true)
+                .transformEnvironment(\.atticProbesDisabled) { if open { $0 = true } }
             }
         }
         .padding(M.inset)
-        .frame(height: size)
+        .frame(width: width, height: size)
         .modifier(AtticPageButtonSurface(flat: flat, cornerRadius: radius, hovered: hovering))
         .atticFocusRing(capture == nil && focused && keyboardFocusVisible, cornerRadius: radius)
         .contentShape(RoundedRectangle(cornerRadius: radius, style: .continuous))
@@ -378,7 +388,7 @@ struct AtticPageButton<Page: Hashable>: View {
         }
         .accessibilityElement(children: .contain)
         .accessibilityLabel(String(localized: "Pages"))
-        .atticControlProbe("Page button", id: probeID, expectedSize: open ? nil : CGSize(width: size, height: size),
+        .atticControlProbe("Page button", id: probeID, expectedSize: open ? nil : CGSize(width: width, height: size),
                            radius: radius, expectedRadius: AtticRadius.control(height: size))
     }
 
@@ -388,10 +398,10 @@ struct AtticPageButton<Page: Hashable>: View {
         }
     }
 
-    /// The width it takes shut and open (the header's hit testing).
+    /// The width it takes shut and open (the header's hit testing): the
+    /// switcher's, both ways (T-04 B: the current page's name fits it).
     static func width(open: Bool, count: Int) -> CGFloat {
-        let segments = open ? CGFloat(count) : 1
-        return M.inset * 2 + segments * M.segment + (open ? CGFloat(max(count - 1, 0)) * M.gap : 0)
+        M.inset * 2 + CGFloat(count) * M.segment + CGFloat(max(count - 1, 0)) * M.gap
     }
 }
 
@@ -457,12 +467,13 @@ extension EnvironmentValues {
 }
 
 /// Where a header title sits between the pin and the page switcher (owner
-/// decision B for Canvas, reused for Notes, OD-11). Shut, the title is
-/// centred between the two 36 pt buttons. While the switcher is open it
-/// takes the width to its left: the title left-aligns beside the pin and
-/// truncates in what the switcher leaves, so it never sits under it, then
-/// returns to the centre when the switcher closes. Pure geometry in the
-/// panel's x axis, so a test can check it at any title length and width.
+/// decision B for Canvas, reused for Notes, OD-11). Since T-04 B (owner,
+/// 2026-10-15) the page button is the switcher's width shut and open, so the
+/// title keeps one place either way: centred on the panel when it fits, else
+/// as near the centre as the pin and the switcher allow, truncating in the
+/// room between them, so it never sits under either and never slides when
+/// the switcher opens. Pure geometry in the panel's x axis, so a test can
+/// check it at any title length and width.
 enum AtticHeaderTitleSlot {
     struct Placement: Equatable {
         /// The title's left edge, from the panel's left edge.
@@ -480,6 +491,8 @@ enum AtticHeaderTitleSlot {
         return (maxX - switcherWidth)...maxX
     }
 
+    /// `switcherOpen` no longer changes the place (the button keeps its
+    /// width); it stays for the callers that report it.
     static func placement(
         titleWidth: CGFloat,
         panelWidth: CGFloat,
@@ -488,12 +501,10 @@ enum AtticHeaderTitleSlot {
         switcherOpen: Bool
     ) -> Placement {
         let left = chromeInset + AtticControlSize.headerControl + gap
-        let right = switcherOpen
-            ? panelWidth - chromeInset - switcherWidth - gap
-            : panelWidth - left
-        let room = max(0, right - left)
-        let width = min(max(0, titleWidth), room)
-        let x = switcherOpen ? left : left + (room - width) / 2
+        let right = max(left, panelWidth - chromeInset - switcherWidth - gap)
+        let width = min(max(0, titleWidth), right - left)
+        let centred = (panelWidth - width) / 2
+        let x = min(max(centred, left), right - width)
         return Placement(x: x, width: width)
     }
 }
