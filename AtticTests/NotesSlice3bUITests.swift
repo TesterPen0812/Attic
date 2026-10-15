@@ -220,6 +220,30 @@ final class NotesSlice3bUITests: XCTestCase {
         }
     }
 
+    /// U-24: a picture draws with the embedded blocks' 8 pt corners, and
+    /// its selection ring hugs them as the file card's hugs its card.
+    func testAPictureHasRoundedCornersAndItsRingHugsThem() throws {
+        let attachment = NoteImageAttachment(attachmentID: UUID(), pixelSize: CGSize(width: 200, height: 100))
+        attachment.renderedImage = NSImage(size: NSSize(width: 100, height: 50), flipped: false) { rect in
+            NSColor.systemTeal.setFill(); rect.fill(); return true
+        }
+        let storage = NSTextContentStorage()
+        let drawn = try XCTUnwrap(attachment.image(for: CGRect(x: 0, y: 0, width: 100, height: 50), location: storage.documentRange.location,
+                                                   textContainer: nil))
+        let rep = try XCTUnwrap(NSBitmapImageRep(bitmapDataPlanes: nil, pixelsWide: 100, pixelsHigh: 50, bitsPerSample: 8,
+                                                 samplesPerPixel: 4, hasAlpha: true, isPlanar: false, colorSpaceName: .deviceRGB,
+                                                 bytesPerRow: 0, bitsPerPixel: 0))
+        NSGraphicsContext.saveGraphicsState()
+        NSGraphicsContext.current = NSGraphicsContext(bitmapImageRep: rep)
+        drawn.draw(in: NSRect(x: 0, y: 0, width: 100, height: 50))
+        NSGraphicsContext.restoreGraphicsState()
+        XCTAssertEqual(rep.colorAt(x: 0, y: 0)?.alphaComponent ?? 1, 0, accuracy: 0.05, "the corner is cut")
+        XCTAssertEqual(rep.colorAt(x: 50, y: 25)?.alphaComponent ?? 0, 1, accuracy: 0.05)
+        XCTAssertEqual(rep.colorAt(x: 4, y: 25)?.alphaComponent ?? 0, 1, accuracy: 0.05, "the side is whole")
+        XCTAssertTrue(attachment.image(for: CGRect(x: 0, y: 0, width: 100, height: 50), location: storage.documentRange.location,
+                                       textContainer: nil) === drawn, "made once per picture and width")
+    }
+
     /// F-07 (owner-approved): a selected file or image shows its rounded
     /// ring only, never a selection rectangle behind it, key or not.
     func testASelectedObjectShowsNoSelectionRectangleBehindIt() throws {

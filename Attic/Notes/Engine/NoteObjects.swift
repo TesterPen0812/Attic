@@ -165,6 +165,31 @@ final class NoteImageAttachment: NoteObjectAttachment {
 
     static let placeholderHeight: CGFloat = 96
 
+    /// U-24: a picture is drawn with the embedded blocks' rounded corners
+    /// (`AtticRadius.image`), the same family as the file card's, so its
+    /// selection ring can hug it the way the card's does. The rounded copy
+    /// only clips the editor's image when it is drawn (no second bitmap).
+    private var roundedFor: (source: NSImage, width: CGFloat)?
+    private var rounded: NSImage?
+
+    override func image(for bounds: CGRect, attributes: [NSAttributedString.Key: Any] = [:],
+                        location: any NSTextLocation, textContainer: NSTextContainer?) -> NSImage? {
+        guard let source = renderedImage, bounds.width > 0, source.size.width > 0 else { return renderedImage }
+        let width = bounds.width.rounded()
+        if let roundedFor, roundedFor.source === source, roundedFor.width == width, let rounded { return rounded }
+        // The radius in the image's own units: TextKit scales it to `bounds`.
+        let radius = AtticRadius.image * source.size.width / bounds.width
+        let image = NSImage(size: source.size, flipped: false) { rect in
+            NSBezierPath(roundedRect: rect, xRadius: radius, yRadius: radius).addClip()
+            source.draw(in: rect)
+            return true
+        }
+        image.accessibilityDescription = source.accessibilityDescription
+        roundedFor = (source, width)
+        rounded = image
+        return image
+    }
+
     func displaySize(columnWidth: CGFloat) -> CGSize {
         let column = max(40, columnWidth)
         guard let pixelSize, pixelSize.width > 0, pixelSize.height > 0 else {
