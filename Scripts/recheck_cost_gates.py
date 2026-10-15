@@ -84,10 +84,19 @@ class Sampler:
         args += self.flags + [f'-only-testing:AtticTests/{test}' for test in tests]
         with log.open('w') as stream:
             result = subprocess.run(args, cwd=source, env=env, stdout=stream, stderr=subprocess.STDOUT)
-        # These bundles are scratch; complete logs remain the timing evidence.
-        shutil.rmtree(log.with_suffix('.xcresult'), ignore_errors=True)
         if result.returncode:
-            raise RuntimeError(f'{side} re-check exited {result.returncode}; see {log}')
+            summary = subprocess.run(['xcrun', 'xcresulttool', 'get', 'test-results', 'summary',
+                '--path', str(log.with_suffix('.xcresult')), '--format', 'json'],
+                capture_output=True, text=True)
+            summary_path = log.with_name(log.stem + '-summary.json')
+            summary_path.write_text(summary.stdout if summary.returncode == 0 else json.dumps({
+                'error': summary.stderr, 'summary_exit': summary.returncode,
+                'test_exit': result.returncode}))
+            # The upload includes this directory: retain the failed bundle,
+            # summary, and complete raw log before reporting the real failure.
+            raise RuntimeError(f'{side} re-check exited {result.returncode}; see {log} and {summary_path}')
+        # Successful bundles are scratch; their complete logs remain evidence.
+        shutil.rmtree(log.with_suffix('.xcresult'), ignore_errors=True)
         return log.read_text()
 
     def __call__(self, family, directory):

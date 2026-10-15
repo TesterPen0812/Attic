@@ -155,6 +155,41 @@ class CostRecheckTests(unittest.TestCase):
             self.assertEqual(status, 1)
             self.assertEqual(set(report['errors']), {'frame-row', 'integration', 'done-query'})
 
+    def test_failed_sampler_keeps_bundle_summary_and_complete_raw_measurements(self):
+        with tempfile.TemporaryDirectory() as tmp, patch.dict(os.environ, RUNNER_TEMP=tmp, COST_FLAGS=''):
+            sampler = Sampler()
+            root = Path(tmp)
+            raw = 'ATTIC_INTEGRATION_COST status-toggle median_ms=20\nfunctional assertion failed\n'
+            def process(args, **kwargs):
+                if args[0] == 'xcrun':
+                    self.assertEqual(Path(args[args.index('--path') + 1]), root / 'failed.xcresult')
+                    return type('Summary', (), {'returncode': 0, 'stdout': '{"failedTests":1}', 'stderr': ''})()
+                bundle = Path(args[args.index('-resultBundlePath') + 1])
+                bundle.mkdir()
+                (bundle / 'failure.txt').write_text('original failure evidence')
+                kwargs['stdout'].write(raw)
+                return type('Result', (), {'returncode': 65})()
+            with patch('recheck_cost_gates.subprocess.run', process):
+                with self.assertRaisesRegex(RuntimeError, 'candidate re-check exited 65'):
+                    sampler.run(root, 'candidate', 'candidate', [], 'failed.log')
+            self.assertEqual((root / 'failed.xcresult/failure.txt').read_text(), 'original failure evidence')
+            self.assertEqual(json.loads((root / 'failed-summary.json').read_text()), {'failedTests': 1})
+            self.assertEqual((root / 'failed.log').read_text(), raw)
+
+    def test_summary_extraction_failure_does_not_discard_the_failed_bundle(self):
+        with tempfile.TemporaryDirectory() as tmp, patch.dict(os.environ, RUNNER_TEMP=tmp, COST_FLAGS=''):
+            root = Path(tmp)
+            def process(args, **kwargs):
+                if args[0] == 'xcrun':
+                    return type('Summary', (), {'returncode': 1, 'stdout': '', 'stderr': 'incomplete bundle'})()
+                Path(args[args.index('-resultBundlePath') + 1]).mkdir()
+                return type('Result', (), {'returncode': 65})()
+            with patch('recheck_cost_gates.subprocess.run', process):
+                with self.assertRaises(RuntimeError):
+                    Sampler().run(root, 'candidate', 'candidate', [], 'failed.log')
+            self.assertTrue((root / 'failed.xcresult').is_dir())
+            self.assertEqual(json.loads((root / 'failed-summary.json').read_text())['error'], 'incomplete bundle')
+
     def test_real_sampler_interleaves_and_normalizes_three_query_sessions(self):
         with tempfile.TemporaryDirectory() as tmp, patch.dict(os.environ, RUNNER_TEMP=tmp, COST_FLAGS=''):
             sampler = Sampler()
