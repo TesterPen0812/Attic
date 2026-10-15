@@ -403,3 +403,39 @@ final class PanelShellTests: XCTestCase {
         XCTAssertEqual(presenter.targets, [.page(.tasks)])
     }
 }
+
+// MARK: - UI review 14 (F2): header and page column
+
+@MainActor
+extension PanelShellTests {
+    /// U-04: shut, the page button's glyph is the pin's: the strong glyph
+    /// ink at regular weight (the pin is `emphasisedGlyph`), never the quiet
+    /// outline icon that reads as disabled.
+    func testU04TheShutPageGlyphMatchesThePin() {
+        let shut = AtticPageButtonMetrics.glyphFace(isSelected: true, open: false, accent: false, solid: false)
+        XCTAssertEqual(shut.ink, .glyph)
+        XCTAssertEqual(shut.weight, .regular)
+        XCTAssertEqual(AtticPageButtonMetrics.glyphFace(isSelected: true, open: false, accent: true, solid: false).ink, .glyph,
+                       "a Light palette's accent marks the current page only among the others")
+        XCTAssertEqual(AtticPageButtonMetrics.glyphFace(isSelected: true, open: true, accent: true, solid: false).ink, .accent)
+        XCTAssertEqual(AtticPageButtonMetrics.glyphFace(isSelected: true, open: true, accent: true, solid: true).ink, .glyph)
+        let other = AtticPageButtonMetrics.glyphFace(isSelected: false, open: true, accent: false, solid: false)
+        XCTAssertEqual(other.ink, .icon)
+        XCTAssertEqual(other.weight, AtticIconWeight.outline)
+    }
+
+    /// U-42: a panel wider than the reading width keeps a centred column of
+    /// that width; at and under it nothing changes.
+    func testU42AWidePanelKeepsAReadingColumn() {
+        let narrow = PanelPageLayout(cornerSize: 24, panelSize: CGSize(width: 320, height: 520))
+        XCTAssertEqual(narrow.readingColumn(), narrow)
+        let wide = PanelPageLayout(cornerSize: 24, panelSize: CGSize(width: 1700, height: 520))
+        let column = wide.readingColumn()
+        let extra = (1700 - PanelPageLayout.readingWidth) / 2
+        XCTAssertEqual(column.chromeInsets.leading, wide.chromeInsets.leading + extra, accuracy: 0.5)
+        XCTAssertEqual(column.chromeInsets.trailing, wide.chromeInsets.trailing + extra, accuracy: 0.5)
+        XCTAssertEqual(column.contentInsets.leading, wide.contentInsets.leading + extra, accuracy: 0.5)
+        XCTAssertEqual(column.chromeInsets.top, wide.chromeInsets.top, "the header row keeps its place")
+        XCTAssertEqual(column.panelSize, wide.panelSize)
+    }
+}

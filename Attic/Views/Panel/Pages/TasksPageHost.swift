@@ -59,7 +59,8 @@ struct TasksPageHost: View {
         TasksPage(
             model: model,
             store: store,
-            layout: layout,
+            // A wide panel keeps a readable column (U-42).
+            layout: layout.readingColumn(),
             addBarFocused: $addBarFocused,
             chrome: TasksPageChrome(
                 bottomControlsHeight: { chromeInteractionState.bottomControlsHeight = $0 },

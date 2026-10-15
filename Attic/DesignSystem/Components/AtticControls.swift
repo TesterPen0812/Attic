@@ -324,16 +324,9 @@ struct AtticPageButton<Page: Hashable>: View {
                         } else if hoveredPage == item.page {
                             shape.fill(design.tokens.chipHover.color)
                         }
-                        let marked = isSelected && open
-                        AtticIcon(systemName: item.systemName, size: M.iconSize,
-                                  weight: marked ? .regular : AtticIconWeight.outline,
-                                  // On an opaque surface (including the
-                                  // Reduce Transparency accessibility mode),
-                                  // palette ink can fall below the icon's
-                                  // floor on its tinted chip. Keep that
-                                  // palette's fill/hairline; use the strong
-                                  // selected-control glyph ink there.
-                                  ink: marked ? (accent == nil || design.effectiveSurface == .solid ? .glyph : .accent) : .icon)
+                        let face = M.glyphFace(isSelected: isSelected, open: open, accent: accent != nil,
+                                               solid: design.effectiveSurface == .solid)
+                        AtticIcon(systemName: item.systemName, size: M.iconSize, weight: face.weight, ink: face.ink)
                     }
                     .frame(width: M.segment, height: M.segment)
                     // 24 pt chips (chrome B) still answer a 28 pt target,
@@ -417,6 +410,21 @@ private struct AtticPageButtonSurface: ViewModifier {
         } else {
             content.atticRaisedMaterial(cornerRadius: cornerRadius, interactive: true)
         }
+    }
+}
+
+extension AtticPageButtonMetrics {
+    /// A page's glyph. The current page's, shut or open, is the pin's
+    /// (U-04): the strong glyph ink at regular weight, so the two corner
+    /// buttons read as one pair and the page button never looks disabled.
+    /// Open, a Light palette marks it in its accent on its tinted chip,
+    /// except on an opaque surface (Reduce Transparency included), where
+    /// palette ink can fall below the icon's floor on that chip. The other
+    /// pages are quiet outline icons.
+    nonisolated static func glyphFace(isSelected: Bool, open: Bool, accent: Bool, solid: Bool)
+        -> (weight: Font.Weight, ink: AtticInk) {
+        guard isSelected else { return (AtticIconWeight.outline, .icon) }
+        return (.regular, open && accent && !solid ? .accent : .glyph)
     }
 }
 
