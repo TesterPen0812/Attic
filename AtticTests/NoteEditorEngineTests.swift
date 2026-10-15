@@ -2647,7 +2647,7 @@ final class PhaseXHunt14Tests: XCTestCase {
             let format = model[index].format
             guard format.isCode || format.isCallout else { return index..<(index + 1) }
             var lower = index, upper = index + 1
-            func matches(_ other: NoteParagraphStyle) -> Bool { format.isCode ? other.isCode : other == format }
+            func matches(_ other: NoteParagraphStyle) -> Bool { other == format }
             while lower > 0, matches(model[lower - 1].format) { lower -= 1 }
             while upper < model.count, matches(model[upper].format) { upper += 1 }
             return lower..<upper
