@@ -15,7 +15,7 @@ jobs:
     steps:
       - uses: actions/checkout@v5
         with:
-          ref: af528e93
+          ref: af528e937af04d92f95c4a9fb5cebd7b0a48145c
           fetch-depth: 0
       - name: Record unchanged integration base
         run: |
