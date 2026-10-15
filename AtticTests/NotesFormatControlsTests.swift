@@ -551,12 +551,20 @@ final class NotesFormatControlsTests: XCTestCase {
     func testTheSlashListOffersTheAaStyleListsBlockStylesWithTheSameNames() throws {
         let styleNames = NoteCommandCatalog.styles.map(\.title)
         // R14: Small Heading and Callout join the list (no keys of their own).
-        XCTAssertEqual(styleNames, ["Title", "Heading", "Subheading", "Small Heading", "Body", "Code Block", "Quote", "Callout"])
+        // U-16: one order everywhere, the `/` list's (Body first, as D-18),
+        // so ⌥⌘0…⌥⌘5 also run down the list.
+        XCTAssertEqual(styleNames, ["Body", "Title", "Heading", "Subheading", "Small Heading", "Quote", "Callout", "Code Block"])
         XCTAssertNil(NoteCommandCatalog.keyboardShortcut(.paragraph(.heading(4))))
         XCTAssertNil(NoteCommandCatalog.keyboardShortcut(.paragraph(.callout(icon: "💡"))))
         let slashNames = NoteSlashItem.all.map(\.title)
         for name in styleNames { XCTAssertTrue(slashNames.contains(name), "/ offers \(name)") }
         XCTAssertEqual(slashNames.filter { styleNames.contains($0) }.count, styleNames.count, "no style twice")
+        XCTAssertEqual(slashNames.filter { styleNames.contains($0) }, styleNames, "the same order as the Aa list and Format")
+        let keys = NoteCommandCatalog.styles.compactMap { command in
+            NoteCommandCatalog.keyboardShortcut(command) == nil ? nil : command.shortcut
+        }
+        XCTAssertEqual(keys.count, 6, "Body, the three headings, Quote and Code Block have keys")
+        XCTAssertEqual(keys, keys.sorted(), "the style keys run in list order")
 
         let expected: [(String, NoteSlashItem.Kind, NoteParagraphStyle)] = [
             ("title", .title, .heading(1)), ("head", .heading, .heading(2)), ("subheading", .subheading, .heading(3)),

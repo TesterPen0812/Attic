@@ -202,7 +202,9 @@ final class NotesV2TablesFeatureTests: XCTestCase {
         XCTAssertEqual(NoteCommandCatalog.lists, [.paragraph(.bullet), .paragraph(.number), .paragraph(.checklist), .table],
                        "Table takes Quote's cell")
         XCTAssertTrue(NoteCommandCatalog.styles.contains(.paragraph(.quote)), "Quote joins the style list")
-        XCTAssertEqual(NoteCommandCatalog.styles.last, .paragraph(.callout(icon: "💡")), "R14: Callout after Quote")
+        let styles = NoteCommandCatalog.styles
+        XCTAssertEqual(styles.firstIndex(of: .paragraph(.callout(icon: "💡"))), styles.firstIndex(of: .paragraph(.quote)).map { $0 + 1 },
+                       "R14: Callout after Quote")
         XCTAssertTrue(NoteCommandCatalog.formatSections.flatMap { $0 }.contains(.table), "Format › Table")
         XCTAssertTrue(NoteInsertAction.allCases.contains(.table), "Insert › Table (⋯, right-click, menu bar)")
         XCTAssertEqual(NoteFormatCommand.table.shortcut, "⌥⌘T")
