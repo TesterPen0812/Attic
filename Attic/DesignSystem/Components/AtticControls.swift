@@ -853,44 +853,33 @@ struct AtticTabsSearchField: View {
             // keyboard directly (review P3).
             if nativeInputIdentifier != nil, capture == nil {
                 if isFocused?.wrappedValue != true { isFocused?.wrappedValue = true }
-                takeKeyboard()
+                takeKeyboard(request: claim.beginFocusRequest())
             } else {
                 focused = true
             }
         }
         .onAppear {
-            // Once the field is in the window (a focus set as it appears is
-            // lost, and the click that opened it ends after this): the
-            // keyboard goes to it, the insertion point after its text.
-            // A field that held the keyboard (the add bar) gives it up in
-            // the same turn, so a second try follows if the first was lost.
-            guard isFocused?.wrappedValue == true else { return }
-            for delay in [0.0, 0.15, 0.4] {
-                DispatchQueue.main.asyncAfter(deadline: .now() + delay) {
-                    guard isFocused?.wrappedValue == true else { return }
-                    if delay == 0 { focused = true }
-                    takeKeyboard()
-                }
-            }
+            if isFocused?.wrappedValue == true { requestKeyboard() }
         }
+        .onDisappear { claim.cancelFocusRequest() }
         .onChange(of: focused) { _, now in if isFocused?.wrappedValue != now { isFocused?.wrappedValue = now } }
         .onChange(of: isFocused?.wrappedValue) { _, wanted in
-            if let wanted, wanted != focused {
-                focused = wanted
-                if wanted { DispatchQueue.main.async { takeKeyboard() } }
+            if wanted == true, !focused { requestKeyboard() }
+            else if wanted == false {
+                claim.cancelFocusRequest()
+                focused = false
             }
         }
         .padding(.horizontal, AtticLayout.rowHighlightInset)
     }
 
-    /// Focus given from outside (typing on the Done page, ⌘F, Search): the
-    /// insertion point goes after what is there, as if typed, never
-    /// selecting it (a first letter typed on the page must not be replaced
-    /// by the next).
-    private func caretToEnd() {
-        DispatchQueue.main.async {
-            guard let editor = NSApp.keyWindow?.firstResponder as? NSTextView, editor.isFieldEditor else { return }
-            editor.setSelectedRange(NSRange(location: (editor.string as NSString).length, length: 0))
+    private func requestKeyboard() {
+        let request = claim.beginFocusRequest()
+        for delay in [0.0, 0.15, 0.4] {
+            DispatchQueue.main.asyncAfter(deadline: .now() + delay) {
+                guard isFocused?.wrappedValue == true else { return }
+                takeKeyboard(request: request)
+            }
         }
     }
 
@@ -912,18 +901,9 @@ struct AtticTabsSearchField: View {
     /// away in the same moment (the tabs it replaces, CI run 1): if the
     /// focus asked for did not land, the window's first responder becomes
     /// this field's own text field.
-    private func takeKeyboard() {
-        // Only while the page still wants it (a page hidden since, R2).
+    private func takeKeyboard(request: Int) {
         guard isFocused?.wrappedValue ?? true, let window = NSApp.keyWindow else { return }
-        // This field's own AppKit field, when it is in the window.
-        if let field = claim.field, field.window === window {
-            if (window.firstResponder as? NSTextView)?.delegate as? NSTextField !== field { window.makeFirstResponder(field) }
-            caretToEnd()
-            return
-        }
-        // Not found yet: the probe gives it the keyboard the moment it is
-        // in the window (never a window-wide guess, which could pick the
-        // field fading out with the last search).
+        if claim.takeKeyboard(request: request, in: window) { focused = true }
     }
 }
 
@@ -933,6 +913,36 @@ struct AtticTabsSearchField: View {
 @MainActor
 final class AtticFieldClaim {
     weak var field: NSTextField?
+    private(set) var focusGeneration = 0
+    private var awaitingFocus = false
+
+    func beginFocusRequest() -> Int {
+        focusGeneration += 1
+        awaitingFocus = true
+        return focusGeneration
+    }
+
+    func cancelFocusRequest() {
+        focusGeneration += 1
+        awaitingFocus = false
+    }
+
+    /// Only the first acquisition places the caret. A retry never edits a
+    /// selection, and a completed or superseded request cannot take focus.
+    @discardableResult
+    func takeKeyboard(request: Int, in window: NSWindow) -> Bool {
+        guard request == focusGeneration, awaitingFocus,
+              let field, field.window === window else { return false }
+        if (window.firstResponder as? NSTextView)?.delegate as? NSTextField === field {
+            awaitingFocus = false
+            return true
+        }
+        guard window.makeFirstResponder(field), self.field === field, field.window === window,
+              let editor = field.currentEditor(), window.firstResponder === editor else { return false }
+        awaitingFocus = false
+        editor.selectedRange = NSRange(location: (editor.string as NSString).length, length: 0)
+        return true
+    }
 }
 
 /// Finds its field (`AtticTabsSearchField.isSearchField`) among its nearest
@@ -958,6 +968,7 @@ struct AtticFieldClaimProbe: NSViewRepresentable {
         private var claim: AtticFieldClaim?
         private var placeholder = ""
         private var wanted: () -> Bool = { false }
+        private var attachmentGeneration = 0
 
         func configure(claim: AtticFieldClaim, placeholder: String, wanted: @escaping () -> Bool) {
             self.claim = claim
@@ -969,20 +980,18 @@ struct AtticFieldClaimProbe: NSViewRepresentable {
 
         override func viewDidMoveToWindow() {
             super.viewDidMoveToWindow()
-            guard window != nil else { return }
-            // The field is laid out beside the probe in the same pass.
-            DispatchQueue.main.async { [weak self] in self?.take() }
-        }
-
-        private func take() {
-            guard let window, let field = ownField() else { return }
-            claim?.field = field
-            guard wanted(), window.isKeyWindow || window.canBecomeKey else { return }
-            if (window.firstResponder as? NSTextView)?.delegate as? NSTextField !== field {
-                window.makeFirstResponder(field)
-            }
-            if let editor = window.firstResponder as? NSTextView, editor.isFieldEditor {
-                editor.setSelectedRange(NSRange(location: (editor.string as NSString).length, length: 0))
+            attachmentGeneration += 1
+            guard let window else { claim?.cancelFocusRequest(); return }
+            let attachment = attachmentGeneration
+            let request = claim?.focusGeneration
+            // Resolve this probe's field after layout, but never replay an
+            // old attachment's focus request into a different field/window.
+            DispatchQueue.main.async { [weak self, weak window] in
+                guard let self, let window, self.window === window,
+                      self.attachmentGeneration == attachment, let field = self.ownField() else { return }
+                self.claim?.field = field
+                guard let request, self.wanted(), window.isKeyWindow || window.canBecomeKey else { return }
+                self.claim?.takeKeyboard(request: request, in: window)
             }
         }
 

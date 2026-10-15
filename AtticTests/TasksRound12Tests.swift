@@ -10,6 +10,56 @@ import XCTest
 /// of one task are two rows). Plus the computer-use review's bugs.
 @MainActor
 final class TasksRound12Tests: XCTestCase {
+    private func sendFindKey(_ hosted: Hosted, characters: String, code: UInt16, modifiers: NSEvent.ModifierFlags = []) {
+        let event = NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: modifiers,
+            timestamp: ProcessInfo.processInfo.systemUptime, windowNumber: hosted.window.windowNumber,
+            context: nil, characters: characters, charactersIgnoringModifiers: characters, isARepeat: false, keyCode: code)!
+        NSApp.postEvent(event, atStart: false)
+        Hosted.pumpEvents()
+    }
+
+    func testG08FindRetriesPreserveSelectionAndMidQueryCaretOnNowAndLater() throws {
+        for tab in [TasksTab.now, .backlog] {
+            for selection in [NSRange(location: 1, length: 3), NSRange(location: 2, length: 0)] {
+                let hosted = try Hosted(height: 520)
+                defer { hosted.window.contentView = nil; hosted.close() }
+                if tab != .now { hosted.go(to: tab) }
+                sendFindKey(hosted, characters: "f", code: 3, modifiers: .command)
+                hosted.spin(0.06)
+                let field = try XCTUnwrap(AtticTabsSearchField.searchField(in: hosted.window.contentView!,
+                    placeholder: hosted.model.searchPlaceholder(for: tab)))
+                let editor = try XCTUnwrap(hosted.window.firstResponder as? NSTextView)
+                XCTAssertTrue(editor.delegate as? NSTextField === field, "Find acquired its own field before the retry")
+                editor.insertText("invoice", replacementRange: NSRange(location: NSNotFound, length: 0))
+                editor.setSelectedRange(selection)
+                hosted.spin(0.5)
+                XCTAssertTrue(hosted.window.firstResponder === editor)
+                XCTAssertEqual(editor.selectedRange(), selection, "later retries must not move the caret: \(tab)")
+                editor.insertText("X", replacementRange: NSRange(location: NSNotFound, length: 0))
+                XCTAssertEqual(hosted.model.searchQuery(for: tab), ("invoice" as NSString).replacingCharacters(in: selection, with: "X"))
+            }
+        }
+    }
+
+    func testG08DismissingFindDuringRetriesDoesNotTakeTheNextFieldsKeyboard() throws {
+        let hosted = try Hosted(height: 520)
+        defer { hosted.window.contentView = nil; hosted.close() }
+        sendFindKey(hosted, characters: "f", code: 3, modifiers: .command)
+        hosted.spin(0.06)
+        XCTAssertTrue((hosted.window.firstResponder as? NSTextView)?.isFieldEditor == true)
+        sendFindKey(hosted, characters: "\u{1b}", code: 53)
+        let next = NSTextField(string: "Other field")
+        next.frame = CGRect(x: 10, y: 10, width: 180, height: 25)
+        hosted.window.contentView!.addSubview(next)
+        XCTAssertTrue(hosted.window.makeFirstResponder(next))
+        let editor = try XCTUnwrap(next.currentEditor())
+        editor.selectedRange = NSRange(location: 2, length: 3)
+        hosted.spin(0.5)
+        XCTAssertTrue(next.currentEditor() === editor)
+        XCTAssertEqual(editor.selectedRange, NSRange(location: 2, length: 3))
+        XCTAssertEqual(hosted.model.searchQuery(for: .now), "")
+    }
+
     // MARK: - P2-1: a failed subtask rename leaves no failure behind
 
     private func renameFixture() throws -> (gate: PersistenceGate, model: TasksPageModel, library: AtticLibrary, parent: TaskItem, child: TaskItem) {
