@@ -3031,7 +3031,8 @@ extension NoteEditorEngine {
                 onLinkRequest(target)
                 return true
             }
-            return applyMark(kind, url: nil, selection: selection)
+            // T-10: the highlight command applies the one click's colour.
+            return applyMark(kind, url: kind == .highlight ? NoteHighlightColour.oneClick.storedKey : nil, selection: selection)
         case let .link(url): return applyMark(.link, url: url, selection: selection)
         case .removeLink: return removeLink(selection: selection)
         case .indent: return changeIndent(1, selection: selection)
@@ -3077,8 +3078,8 @@ extension NoteEditorEngine {
     }
 
     /// The highlighter's colours (N-2, owner 2026-10-11): `colour` over
-    /// the selection, replacing any other highlight there (grey is the one
-    /// click's highlight), or no highlight for nil. One undo step. With no
+    /// the selection, replacing any other highlight there (yellow is the
+    /// one click's highlight, T-10), or no highlight for nil. One undo step. With no
     /// selection, what is typed next takes it.
     @discardableResult
     func setHighlight(_ colour: NoteHighlightColour?, selection: NSRange? = nil) -> Bool {

@@ -824,7 +824,7 @@ extension NoteEditorEngine {
         }
         guard let command = NoteCommandCatalog.command(for: event) else { return false }
         if case let .mark(kind) = command, kind != .link {
-            return applyCellMark(kind, in: view)
+            return applyCellMark(kind, in: view, url: kind == .highlight ? NoteHighlightColour.oneClick.storedKey : nil)
         }
         return false
     }

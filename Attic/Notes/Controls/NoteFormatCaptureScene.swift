@@ -463,6 +463,12 @@ enum NoteFormatCaptureScene {
         line("One screenshot per plan", nil, controls: controls, textView: textView)
         type("Student pricing", into: textView)
         router.run(.mark(.highlight), from: .shortcut, selection: range(of: "two months free", in: textView))
+        // `ATTIC_UI_TEST_HIGHLIGHT_BLOCKS=1` (T-10): the one click's
+        // highlight in a heading and on a list line too.
+        if ProcessInfo.processInfo.environment["ATTIC_UI_TEST_HIGHLIGHT_BLOCKS"] == "1" {
+            router.run(.mark(.highlight), from: .shortcut, selection: range(of: "Before launch", in: textView))
+            router.run(.mark(.highlight), from: .shortcut, selection: range(of: "One screenshot", in: textView))
+        }
         router.run(.link("https://example.com/competitors"), from: .linkPopover, selection: range(of: "competitor page", in: textView))
         let box = range(of: "Final copy", in: textView)
         if box.location != NSNotFound { controls.engine.toggleCheckbox(atLineOf: box.location) }

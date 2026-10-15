@@ -305,6 +305,15 @@ enum NoteHighlightColour: String, CaseIterable, Sendable {
     /// The hues the highlighter's menu offers after Grey.
     static let hues: [NoteHighlightColour] = [.yellow, .green, .blue, .pink, .purple]
 
+    /// The one click's highlight, and the highlight command's (T-10, owner
+    /// 2026-10-15: yellow, was grey). It stores "yellow" explicitly, so a
+    /// note keeps the colour it was given; a stored grey (no key) still
+    /// reads grey.
+    static let oneClick: NoteHighlightColour = .yellow
+
+    /// The highlighter's menu, the one click's colour first (T-10).
+    static let menuOrder: [NoteHighlightColour] = [.yellow, .grey, .green, .blue, .pink, .purple]
+
     /// What a highlight of this colour stores: nil for grey.
     var storedKey: String? { self == .grey ? nil : rawValue }
 

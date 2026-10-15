@@ -86,10 +86,11 @@ final class PhaseXPicksTests: XCTestCase {
         XCTAssertTrue(engine.setHighlight(nil, selection: words))
         XCTAssertNil(engine.highlightColour(selection: words))
         XCTAssertTrue(engine.document().blocks[1].marks.isEmpty)
-        // The one click is the grey highlight, toggling as before.
+        // The one click is the yellow highlight (T-10, owner 2026-10-15),
+        // stored explicitly, toggling as before.
         XCTAssertTrue(engine.perform(.mark(.highlight), selection: words))
-        XCTAssertEqual(engine.highlightColour(selection: words), .grey)
-        XCTAssertNil(engine.document().blocks[1].marks.first?.colour)
+        XCTAssertEqual(engine.highlightColour(selection: words), .yellow)
+        XCTAssertEqual(engine.document().blocks[1].marks.first?.colour, "yellow")
         // Mixed colours read as none.
         XCTAssertTrue(engine.setHighlight(.pink, selection: range("free", textView)))
         XCTAssertNil(engine.highlightColour(selection: words))

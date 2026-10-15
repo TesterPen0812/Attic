@@ -293,19 +293,20 @@ final class NoteFormatModel: ObservableObject {
     }
 
     /// The highlighter's menu (N-2 option A: the split button's chevron):
-    /// Grey, colour set 1's five clear hues, then None; the selection's
+    /// Yellow (the one click's, T-10), Grey, the other hues, then None; the selection's
     /// colour ticked after its name. Built as it opens, so the tick is
     /// always the selection's now.
     func highlightMenu(from surface: NoteCommandSurface) -> [AtticMenuCommand] {
         let highlighted = snapshot.value(.mark(.highlight)) != .off
         let current = highlighted ? router?.engine.highlightColour() : nil
         let enabled = snapshot.isEnabled(.mark(.highlight))
-        var list = NoteHighlightColour.allCases.map { colour in
+        let colours = NoteHighlightColour.menuOrder
+        var list = colours.map { colour in
             AtticMenuCommand(verbatim: colour.title, isDisabled: !enabled, state: current == colour ? .on : .off) { [weak self] in
                 self?.router?.highlight(colour, from: surface)
             }
         }
-        for index in list.indices { list[index].image = NoteHighlightSwatch.image(NoteHighlightColour.allCases[index]) }
+        for index in list.indices { list[index].image = NoteHighlightSwatch.image(colours[index]) }
         list.append(AtticMenuCommand(verbatim: String(localized: "None"), isDisabled: !enabled || !highlighted,
                                      startsSection: true) { [weak self] in
             self?.router?.highlight(nil, from: surface)

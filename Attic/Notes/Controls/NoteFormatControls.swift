@@ -219,7 +219,7 @@ final class NoteFormatControls: NSObject {
 
     private func rebuildRoots() {
         let design = design
-        formatModel.highlightSwatch = AtticColorTokens.resolve(design).highlightMarker
+        formatModel.highlightSwatch = AtticColorTokens.resolve(design).highlightMarker(NoteHighlightColour.oneClick)
         barHost.rootView = AnyView(NoteFormatBarView(model: formatModel).atticDesign(design))
         slashHost.rootView = AnyView(NoteSlashListView(model: slashModel).atticDesign(design))
         cardHost.rootView = AnyView(NoteFormatCardView(model: cardModel)

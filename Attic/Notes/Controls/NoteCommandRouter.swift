@@ -125,7 +125,8 @@ final class NoteCommandRouter {
         // nothing else reaches the note's text behind it.
         if let table = engine.focusedTable {
             guard case let .mark(kind) = command else { return false }
-            let applied = kind == .link ? engine.requestCellLink(in: table) : engine.applyCellMark(kind, in: table)
+            let applied = kind == .link ? engine.requestCellLink(in: table)
+                : engine.applyCellMark(kind, in: table, url: kind == .highlight ? NoteHighlightColour.oneClick.storedKey : nil)
             onChange?()
             return applied
         }
@@ -135,8 +136,8 @@ final class NoteCommandRouter {
     }
 
     /// The highlighter's colours (N-2): `colour` on the selection (or the
-    /// selected cells), or no highlight for nil. The one-click grey
-    /// highlight stays `run(.mark(.highlight))`, which toggles.
+    /// selected cells), or no highlight for nil. The one-click (yellow,
+    /// T-10) highlight stays `run(.mark(.highlight))`, which toggles.
     @discardableResult
     func highlight(_ colour: NoteHighlightColour?, from surface: NoteCommandSurface, selection: NSRange? = nil) -> Bool {
         let selection = selection ?? self.selection
