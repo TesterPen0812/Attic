@@ -17,7 +17,9 @@ import SwiftUI
 /// - Opaque panel: a short surface-coloured fade over the outer part of
 ///   each blur, so text never reads through behind the controls.
 /// - See-through panel: no colour fade (it drew a white band over the
-///   glass, O14-06); the content itself fades out behind the controls.
+///   glass, O14-06); the content itself is gone behind the controls and
+///   fades back in over a short band past them (T-03 C, owner 2026-10-15:
+///   no text reads through behind or between the floating buttons).
 /// - Reduce Transparency, or no variable blur: the blur gives way to an
 ///   opaque surface fade.
 /// - A line of plain text among the top controls (Tasks' Now · Later ·
@@ -45,10 +47,12 @@ enum AtticEdgeBlurMetrics {
     /// this much (U-02: no text ever shows sharp behind a control, and the
     /// title's and the last line's resting places stay clear of the fade).
     static let solidFade: CGFloat = 12
-    /// See-through panel: the content is gone this far into the controls
-    /// (a share of their extent from the panel's edge: by their middle)
-    /// and whole again at their inner edge.
-    static let translucentGoneShare: CGFloat = 0.6
+    /// See-through panel (T-03 C): the content is gone out to the
+    /// controls' inner edge and whole again this far past it. Shorter
+    /// than every resting place's gap (the note's title 16 below the
+    /// header, its last line 12 above the bottom row, a list's first row
+    /// 8 below Find's field).
+    static let translucentFade: CGFloat = 8
     /// Content is still gone this far below a plain top line, so a row
     /// never touches the line (it is gone before it gets there).
     static let plainClearance: CGFloat = 3
@@ -122,14 +126,13 @@ struct AtticFloatingEdges: Equatable, Sendable {
     /// The content's opacity at `y` in a view `height` tall: whole, except
     /// gone above a plain top line's lower edge (whole `topRamp` below it),
     /// gone behind plain bottom controls and, on a see-through panel, gone
-    /// by the controls' middle (back to whole at their inner edge).
+    /// behind the controls (whole `translucentFade` past their inner edge).
     func opacity(at y: CGFloat, height: CGFloat, translucent: Bool) -> Double {
         var value = 1.0
         if translucent {
-            if top > 0 { value = min(value, Self.ramp(y, gone: top * AtticEdgeBlurMetrics.translucentGoneShare, whole: top)) }
-            if bottom > 0 {
-                value = min(value, Self.ramp(height - y, gone: bottom * AtticEdgeBlurMetrics.translucentGoneShare, whole: bottom))
-            }
+            let fade = AtticEdgeBlurMetrics.translucentFade
+            if top > 0 { value = min(value, Self.ramp(y, gone: top, whole: top + fade)) }
+            if bottom > 0 { value = min(value, Self.ramp(height - y, gone: bottom, whole: bottom + fade)) }
         }
         if let topPlain {
             let gone = topPlain.upperBound + AtticEdgeBlurMetrics.plainClearance
@@ -145,14 +148,9 @@ struct AtticFloatingEdges: Equatable, Sendable {
         var ys: [CGFloat] = [0, height]
         let samples: [CGFloat] = [0, 0.2, 0.4, 0.6, 0.8, 1]
         if translucent {
-            if top > 0 {
-                let gone = top * AtticEdgeBlurMetrics.translucentGoneShare
-                ys += samples.map { gone + $0 * (top - gone) }
-            }
-            if bottom > 0 {
-                let gone = bottom * AtticEdgeBlurMetrics.translucentGoneShare
-                ys += samples.map { height - gone - $0 * (bottom - gone) }
-            }
+            let fade = AtticEdgeBlurMetrics.translucentFade
+            if top > 0 { ys += samples.map { top + $0 * fade } }
+            if bottom > 0 { ys += samples.map { height - bottom - $0 * fade } }
         }
         let ramp = AtticScrollUnderFade.textRamp
         if let topPlain {

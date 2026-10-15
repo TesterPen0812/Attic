@@ -72,20 +72,22 @@ final class FloatingControlsTests: XCTestCase {
     }
 
     /// See-through panel: no colour is painted over the glass; the content
-    /// itself is gone by the controls' middle and whole at their inner edge.
+    /// itself is gone behind the controls and whole a short fade past their
+    /// inner edge (T-03 C, owner 2026-10-15; was "gone by their middle").
     func testOnASeeThroughPanelContentFadesOutBehindTheControls() {
         let edges = AtticFloatingEdges(top: 80, bottom: 60)
         let height: CGFloat = 500
+        let fade = AtticEdgeBlurMetrics.translucentFade
         let stops = edges.stops(height: height, translucent: true)
         func opacity(_ y: CGFloat) -> Double { AtticScrollUnderFade.opacity(stops, at: y, height: height) }
         XCTAssertEqual(opacity(0), 0, accuracy: 0.001)
-        XCTAssertEqual(opacity(80 * AtticEdgeBlurMetrics.translucentGoneShare), 0, accuracy: 0.001, "gone by the header's middle")
-        XCTAssertEqual(opacity(80), 1, accuracy: 0.001, "whole below the header")
+        XCTAssertEqual(opacity(80), 0, accuracy: 0.001, "gone to the header's inner edge")
+        XCTAssertEqual(opacity(80 + fade), 1, accuracy: 0.001, "whole a short fade below the header")
         XCTAssertEqual(opacity(250), 1, accuracy: 0.001)
-        XCTAssertEqual(opacity(height - 60), 1, accuracy: 0.001, "whole above the bottom row")
-        XCTAssertEqual(opacity(height - 60 * AtticEdgeBlurMetrics.translucentGoneShare), 0, accuracy: 0.001)
+        XCTAssertEqual(opacity(height - 60 - fade), 1, accuracy: 0.001, "whole above the bottom row")
+        XCTAssertEqual(opacity(height - 60), 0, accuracy: 0.001)
         XCTAssertEqual(opacity(height), 0, accuracy: 0.001)
-        let ramp = stride(from: CGFloat(40), through: 80, by: 1).map(opacity)
+        let ramp = stride(from: CGFloat(70), through: 100, by: 1).map(opacity)
         XCTAssertEqual(ramp, ramp.sorted(), "it eases in, never back")
     }
 
