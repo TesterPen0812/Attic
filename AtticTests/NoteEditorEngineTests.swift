@@ -7,6 +7,48 @@ import XCTest
 /// identity, IME over a selection, VoiceOver elements.
 @MainActor
 final class NoteEditorEngineTests: XCTestCase {
+    func testG03EscapedListAndQuoteMarkersRoundTripAsLiteralText() throws {
+        for marker in ["[ ] ", "[x] ", "[X] "] {
+            let bullet = NoteBlock.text(marker + "literal marker", style: "bullet")
+            var document = NoteDocument(blocks: [.text("T"), bullet])
+            for _ in 0..<3 {
+                document = try NoteMarkdownImport.document(NoteMarkdownExport.markdown(document))
+                XCTAssertEqual(document.blocks[1].text, bullet.text)
+                XCTAssertEqual(document.blocks[1].kind, .text)
+                XCTAssertEqual(document.blocks[1].style, "bullet")
+            }
+        }
+        for marker in ["NOTE", "TIP", "IMPORTANT", "WARNING", "CAUTION"] {
+            let quote = NoteBlock.text("[!" + marker + "] literal marker", style: "quote")
+            let restored = try NoteMarkdownImport.document(NoteMarkdownExport.markdown(NoteDocument(blocks: [.text("T"), quote])))
+            XCTAssertEqual(restored.blocks[1].text, quote.text)
+            XCTAssertEqual(restored.blocks[1].style, "quote")
+            XCTAssertNil(restored.blocks[1].callout)
+        }
+    }
+
+    func testG03OnlyOriginalUnescapedBlockStartHasStructuralMarkers() throws {
+        for source in [#"- \[ ] literal"#, #"- [ \] literal"#, "- **[ ] literal**", "- `[ ] literal`", "- &#91; &#93; literal"] {
+            let block = try XCTUnwrap(NoteMarkdownImport.document(source).blocks.first)
+            XCTAssertEqual(block.kind, .text, source)
+            XCTAssertEqual(block.style, "bullet", source)
+            XCTAssertEqual(block.text, "[ ] literal", source)
+        }
+        for source in [#"> \[!NOTE] literal"#, #"> [\!NOTE] literal"#, "> **[!NOTE] literal**", "> `[!NOTE] literal`", "> &#91;!NOTE&#93; literal", "> first\n>\n> [!NOTE] literal"] {
+            let block = try XCTUnwrap(NoteMarkdownImport.document(source).blocks.last)
+            XCTAssertNil(block.callout, source)
+            XCTAssertEqual(block.text, "[!NOTE] literal", source)
+        }
+        for marker in ["[ ]", "[x]", "[X]"] {
+            let block = try XCTUnwrap(NoteMarkdownImport.document("- " + marker + " task").blocks.first)
+            XCTAssertEqual(block.kind, .checklist)
+            XCTAssertEqual(block.text, "task")
+            XCTAssertEqual(block.checked, marker != "[ ]")
+        }
+        let alert = try XCTUnwrap(NoteMarkdownImport.document("> [!TIP] tip").blocks.first)
+        XCTAssertEqual(alert.text, "tip"); XCTAssertEqual(alert.callout, "💡")
+    }
+
     func testG04CodeExportFlattensDatesWithoutMarksOrMutation() throws {
         let day = NoteDay(year: 2026, month: 10, day: 15)!
         var dated = NoteBlock.text("Due \u{FFFC} **literal** `ticks`", style: "mono")
