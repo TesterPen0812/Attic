@@ -7,6 +7,64 @@ import XCTest
 /// identity, IME over a selection, VoiceOver elements.
 @MainActor
 final class NoteEditorEngineTests: XCTestCase {
+    func testG05CalloutPaletteSelectionExpiresOnCaretChangeAndDismissal() throws {
+        for cancellation in ["selection", "dismissal", "focus", "engine", "edit", "identity"] {
+            var box = NoteBlock.text("tip", id: UUID(), style: "quote"); box.callout = "💡"
+            let (engine, view) = makeEngine(NoteDocument(blocks: [.text("T"), box, .text("body")]))
+            defer { engine.detachView() }
+            view.setSelectedRange(NSRange(location: 2, length: 0))
+            view.pickCalloutIconFromPalette(forBlockAt: 2, showPalette: {})
+            XCTAssertEqual(view.pendingCalloutIconLocation, 2)
+            var replacement: NoteEditorEngine?
+            switch cancellation {
+            case "selection": view.setSelectedRange(NSRange(location: 6, length: 0))
+            case "dismissal": view.escapeFallback = {}; view.cancelOperation(nil)
+            case "focus": _ = view.resignFirstResponder()
+            case "engine":
+                replacement = NoteEditorEngine(noteID: UUID(), document: engine.document())
+                view.engine = replacement
+                XCTAssertFalse(view.takeCalloutIcon("🌻"), "a different engine cannot receive the old request")
+                XCTAssertEqual(replacement?.document().blocks[1].callout, "💡")
+                // Restore this harness view's original storage/delegate binding.
+                view.engine = engine
+            case "edit":
+                XCTAssertTrue(engine.performEdit(NSRange(location: 8, length: 0), with: NSAttributedString(string: "!"), name: "Edit"))
+            default:
+                engine.textStorage.addAttribute(.noteBlockID, value: UUID(), range: NSRange(location: 2, length: 3))
+            }
+            let current = view.engine ?? engine
+            let before = current.document()
+            let caret = view.selectedRange().location
+            view.insertText("🌻", replacementRange: NSRange(location: NSNotFound, length: 0))
+            XCTAssertNil(view.pendingCalloutIconLocation, cancellation)
+            XCTAssertEqual(current.document().blocks[1].callout, "💡", cancellation)
+            XCTAssertEqual(engine.document().blocks[1].callout, "💡", cancellation)
+            XCTAssertEqual((view.string as NSString).substring(with: NSRange(location: caret, length: 2)), "🌻", cancellation)
+            XCTAssertNotEqual(current.document(), before, "the pick becomes ordinary text: " + cancellation)
+            withExtendedLifetime(replacement) {}
+        }
+    }
+
+    func testG05ValidCalloutPalettePickIsOneUndoStepAndConsumesOnlyOnce() throws {
+        var box = NoteBlock.text("tip", id: UUID(), style: "quote"); box.callout = "💡"
+        let (engine, view) = makeEngine(NoteDocument(blocks: [.text("T"), box]))
+        defer { engine.detachView() }
+        view.setSelectedRange(NSRange(location: 2, length: 0))
+        let before = engine.document()
+        view.pickCalloutIconFromPalette(forBlockAt: 2, showPalette: {})
+        view.insertText(NSAttributedString(string: "🌻"), replacementRange: NSRange(location: NSNotFound, length: 0))
+        let picked = engine.document()
+        XCTAssertEqual(picked.blocks[1].text, "tip")
+        XCTAssertEqual(picked.blocks[1].callout, "🌻")
+        XCTAssertNil(view.pendingCalloutIconLocation)
+        XCTAssertTrue(engine.history.undo()); XCTAssertEqual(engine.document(), before)
+        XCTAssertFalse(engine.history.canUndo)
+        XCTAssertTrue(engine.history.redo()); XCTAssertEqual(engine.document(), picked)
+        view.insertText("🌷", replacementRange: NSRange(location: NSNotFound, length: 0))
+        XCTAssertTrue(engine.document().blocks[1].text.contains("🌷"))
+        XCTAssertEqual(engine.document().blocks[1].callout, "🌻")
+    }
+
     func testG07LineSeparatorTokensUseLFLineRulesAndOriginalUTF16Offsets() throws {
         let fixtures = [
             ("javascript", "// 💡 comment\nconst answer = 42;"),
