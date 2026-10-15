@@ -42,10 +42,13 @@ enum NoteCommandCatalog {
     /// Paragraph styles, a choice of one (Title … Mono, then Quote: a
     /// paragraph style like them, not a list; owner pick Q6, 2026-10-08).
     /// R14: Small Heading after Subheading and Callout after Quote (no
-    /// keys of their own yet; orchestrator, 2026-10-14).
+    /// keys of their own yet; orchestrator, 2026-10-14). U-16: the `/`
+    /// list's order (D-18: Body first, then the headings, Quote, Callout
+    /// and Code Block), so Aa, Format and `/` read alike and ⌥⌘0…⌥⌘5 run
+    /// down the list.
     static let styles: [NoteFormatCommand] = [
-        .paragraph(.heading(1)), .paragraph(.heading(2)), .paragraph(.heading(3)), .paragraph(.heading(4)), .paragraph(.body),
-        .paragraph(.mono), .paragraph(.quote), .paragraph(.callout(icon: "💡"))
+        .paragraph(.body), .paragraph(.heading(1)), .paragraph(.heading(2)), .paragraph(.heading(3)), .paragraph(.heading(4)),
+        .paragraph(.quote), .paragraph(.callout(icon: "💡")), .paragraph(.mono)
     ]
     /// B I U S.
     static let marks: [NoteFormatCommand] = [.mark(.bold), .mark(.italic), .mark(.underline), .mark(.strikethrough)]

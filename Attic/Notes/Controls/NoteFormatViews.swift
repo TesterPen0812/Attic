@@ -407,14 +407,30 @@ struct NoteFormatRowView: View {
         .accessibilityIdentifier("notes-format-row-table-\(tool)")
     }
 
+    /// Every name the style pill can show (the styles, the lists and
+    /// "Style" for a mixed selection).
+    static var stylePillNames: [String] {
+        let styles = (NoteCommandCatalog.styles + NoteCommandCatalog.lists).compactMap { command -> NoteParagraphStyle? in
+            if case let .paragraph(style) = command { style } else { nil }
+        }
+        return [NoteCommandCatalog.styleName(nil)] + styles.map(NoteCommandCatalog.styleName)
+    }
+
+    /// U-17: Aa's style pill is as wide as its longest name in every state,
+    /// so the lists, the indents and their spacing never move with the style.
+    static let stylePillWidth: CGFloat = {
+        let m = AtticNoteFormatMetrics.self
+        let font = AtticTextStyle.controlLabel.nsFont
+        let label = stylePillNames.map { ceil(($0 as NSString).size(withAttributes: [.font: font]).width) }.max() ?? 0
+        return label + 4 + m.barStyleChevron + 2 + m.barStylePadding * 2
+    }()
+
     /// What the row needs before its flexible gap: the inset, the pill, two
-    /// lines and the cells.
+    /// lines and the cells (the pill's width is the same for every style).
     static func minimumWidth(snapshot: NoteFormatSnapshot, toggleWidth: CGFloat, compact: Bool? = nil) -> CGFloat {
         let m = AtticNoteFormatMetrics.self
         let compact = compact ?? (toggleWidth < m.rowToggleWidth)
-        let label = ceil((NoteCommandCatalog.styleName(snapshot.paragraph) as NSString)
-            .size(withAttributes: [.font: AtticTextStyle.controlLabel.nsFont]).width)
-        let pill = label + 4 + m.barStyleChevron + 2 + m.barStylePadding * 2
+        let pill = stylePillWidth
         let separators = 2 * (1 + (compact ? m.rowCompactSeparatorPadding : m.rowSeparatorPadding) * 2)
         if snapshot.hasTextSelection {
             // The marks row: seven marks with the highlighter's chevron, one
@@ -855,7 +871,7 @@ struct NoteFormatStylePill: View {
         let enabled = NoteCommandCatalog.styles.contains { snapshot.isEnabled($0) }
         Button { model.rowStyleListOpen = true } label: {
             AtticFormatStyleFace(title: name, isKeyboardFocused: isKeyboardFocused, isEnabled: enabled,
-                                 height: AtticNoteFormatMetrics.rowCellHeight)
+                                 height: AtticNoteFormatMetrics.rowCellHeight, width: NoteFormatRowView.stylePillWidth)
         }
         .buttonStyle(AtticUndimmedButtonStyle())
         .focusEffectDisabled()

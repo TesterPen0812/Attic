@@ -44,7 +44,7 @@ enum NoteTableDrawing {
     static func draw(table: NoteTable, layout: NoteTableLayout, design: AtticDesignContext, style: NoteTextStyle,
                      string: (NoteTable.Position) -> NSAttributedString, skipping: NoteTable.Position?,
                      selection: NoteTableCellRange? = nil, active: NoteTable.Position? = nil,
-                     dirty: CGRect? = nil) {
+                     dirty: CGRect? = nil, strokesCard: Bool = true) {
         let tokens = AtticColorTokens.resolve(design)
         let contrast = design.colourKey.increaseContrast
         let hairline = contrast ? M.contrastHairline : M.hairline
@@ -89,9 +89,11 @@ enum NoteTableDrawing {
             CGRect(x: 0, y: y - hairline / 2, width: layout.width, height: hairline).fill(using: .sourceOver)
         }
         NSGraphicsContext.restoreGraphicsState()
-        tokens.tableGrid.nsColor.setStroke()
-        card.lineWidth = hairline
-        card.stroke()
+        if strokesCard {
+            tokens.tableGrid.nsColor.setStroke()
+            card.lineWidth = hairline
+            card.stroke()
+        }
         if let selection, let first = selection.positions.first {
             let area = selection.positions.dropFirst().reduce(layout.cellRect(first)) { $0.union(layout.cellRect($1)) }
             let ring = NSBezierPath(roundedRect: area.insetBy(dx: M.activeRingWidth / 2 - 0.5,
@@ -130,6 +132,9 @@ final class NoteTableView: NSView {
     private(set) var cellSelection: NoteTableCellRange?
     private(set) var grid = NoteTableLayout(columnWidths: [], rowHeights: [], viewportWidth: 264)
     private let fadeMask = CAGradientLayer()
+    /// U-25: a wide table's rounded outline stays put while its cells
+    /// scroll under it (drawn over the viewport, outside its fade).
+    let frameView = NoteTableFrameView()
 
     init(attachment: NoteTableAttachment) {
         self.attachment = attachment
@@ -137,10 +142,15 @@ final class NoteTableView: NSView {
         wantsLayer = true
         scrollView.wantsLayer = true
         scrollView.clipsToBounds = true
+        // The card's corners clip the cells wherever the table scrolls.
+        scrollView.layer?.cornerRadius = M.radius
+        scrollView.layer?.cornerCurve = .continuous
         scrollView.addSubview(canvas)
         scrollView.table = self
         canvas.table = self
+        frameView.table = self
         addSubview(scrollView)
+        addSubview(frameView)
         setAccessibilityElement(true)
         setAccessibilityRole(.table)
         refreshLayout()
@@ -183,8 +193,19 @@ final class NoteTableView: NSView {
         canvas.frame = CGRect(x: -scrollOffset, y: 0, width: max(grid.width, bounds.width), height: max(grid.height, bounds.height))
         clampScroll()
         if changed { canvas.needsDisplay = true }
+        placeFrame()
         placeEditor()
         updateFade()
+    }
+
+    /// While the table scrolls the outline is the frame view's (fixed); a
+    /// table that fits draws its own with the grid.
+    private func placeFrame() {
+        let scrolls = grid.scrolls
+        let frame = CGRect(x: 0, y: 0, width: min(grid.width, bounds.width), height: grid.height)
+        if frameView.frame != frame { frameView.frame = frame; frameView.needsDisplay = true }
+        if frameView.isHidden == scrolls { frameView.isHidden = !scrolls }
+        if canvas.strokesCard == scrolls { canvas.strokesCard = !scrolls; canvas.needsDisplay = true }
     }
 
     // MARK: The pointer over the table (its indicator shows)
@@ -296,6 +317,7 @@ final class NoteTableView: NSView {
     override func layout() {
         super.layout()
         scrollView.frame = bounds
+        placeFrame()
         // TextKit lays out attachment views after the note's layout callback.
         // Place the grips and add chips again using the table's final frame.
         engine?.onTableChromeChange?()
@@ -310,6 +332,7 @@ final class NoteTableView: NSView {
         }
         refreshLayout()
         canvas.needsDisplay = true
+        frameView.needsDisplay = true
         if hasEditor, let activeCell, !editor.isApplyingOwnEdit {
             editor.load(cellString(activeCell), keepingSelection: true)
         }
@@ -661,11 +684,36 @@ final class NoteTableViewport: NSView, AtticHorizontalScrollOwner {
     var ownsHorizontalScrolling: Bool { table?.grid.scrolls ?? false }
 }
 
+/// A wide table's rounded outline, over its viewport and outside the cut
+/// edges' fade, so the card keeps its shape while the cells scroll (U-25).
+@MainActor
+final class NoteTableFrameView: NSView {
+    weak var table: NoteTableView?
+
+    override var isFlipped: Bool { true }
+    override var isOpaque: Bool { false }
+    override func hitTest(_ point: NSPoint) -> NSView? { nil }
+
+    override func draw(_ dirtyRect: NSRect) {
+        guard let attachment = table?.attachment else { return }
+        let design = attachment.engine?.objectDesign ?? attachment.style.design
+        let hairline = design.colourKey.increaseContrast ? NoteTableView.M.contrastHairline : NoteTableView.M.hairline
+        let card = NSBezierPath(roundedRect: bounds.insetBy(dx: hairline / 2, dy: hairline / 2),
+                                xRadius: NoteTableView.M.radius, yRadius: NoteTableView.M.radius)
+        AtticColorTokens.resolve(design).tableGrid.nsColor.setStroke()
+        card.lineWidth = hairline
+        card.stroke()
+    }
+}
+
 // MARK: - The grid (drawn) and its keys in cell-selection mode
 
 @MainActor
 final class NoteTableCanvas: NSView {
     weak var table: NoteTableView?
+    /// Off while the table scrolls: the fixed `NoteTableFrameView` draws
+    /// the outline then (U-25).
+    var strokesCard = true
 
     override var isFlipped: Bool { true }
     override var isOpaque: Bool { false }
@@ -682,7 +730,8 @@ final class NoteTableCanvas: NSView {
                                   attachment.engine?.find.decorate(string, tableID: attachment.objectID, cell: position)
                                   return string
                               }, skipping: editing ? table.activeCell : nil,
-                              selection: table.cellSelection, active: editing ? table.activeCell : nil, dirty: dirtyRect)
+                              selection: table.cellSelection, active: editing ? table.activeCell : nil, dirty: dirtyRect,
+                              strokesCard: strokesCard)
     }
 
     // MARK: Mouse

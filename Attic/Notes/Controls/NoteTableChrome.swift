@@ -113,8 +113,11 @@ final class NoteTableChrome: NSObject {
                                     y: rect.minY + grid.rowY(cell.row) + grid.rowHeights[cell.row] / 2))
         }
         let visibleWidth = min(grid.width - offset, rect.width)
-        center(addColumnChip, CGPoint(x: rect.minX + visibleWidth + M.addChipGap + M.addChipSize / 2, y: rect.midY))
-        center(addRowChip, CGPoint(x: rect.minX + visibleWidth / 2, y: rect.maxY + 5 + M.addChipSize / 2))
+        // U-26: the add chips sit on the card's own edges, centred on its
+        // outline (as the grips sit on theirs), so add-column stays clear of
+        // the panel's edge and add-row leaves the next line its room.
+        center(addColumnChip, CGPoint(x: rect.minX + visibleWidth, y: rect.midY))
+        center(addRowChip, CGPoint(x: rect.minX + visibleWidth / 2, y: rect.minY + grid.height))
         columnGrip.setAccessibilityHelp(String(localized: "Column \(cell.column + 1). Opens the column's menu."))
         rowGrip.setAccessibilityHelp(String(localized: "Row \(cell.row + 1). Opens the row's menu."))
     }

@@ -27,6 +27,12 @@ enum NoteFormatCaptureScene {
         guard let scene = requestedScene, !scene.hasPrefix("history"), !didRun else { return }
         didRun = true
         let delay = Double(ProcessInfo.processInfo.environment["ATTIC_UI_TEST_NOTES_SCENE_DELAY"] ?? "2.5") ?? 2.5
+        // `ATTIC_UI_TEST_TYPE_AFTER=<text>`: once the scene is set, the text
+        // is typed at the caret, as a person would (U-53's check that typing
+        // keeps the caret's line clear of the bottom controls).
+        if let typed = ProcessInfo.processInfo.environment["ATTIC_UI_TEST_TYPE_AFTER"], !typed.isEmpty {
+            DispatchQueue.main.asyncAfter(deadline: .now() + delay + 1.5) { type(typed, into: textView) }
+        }
         DispatchQueue.main.asyncAfter(deadline: .now() + delay) {
             textView.window?.makeFirstResponder(textView)
             if scene == "hint" {
@@ -461,7 +467,7 @@ enum NoteFormatCaptureScene {
         let box = range(of: "Final copy", in: textView)
         if box.location != NSNotFound { controls.engine.toggleCheckbox(atLineOf: box.location) }
         textView.setSelectedRange(NSRange(location: (textView.string as NSString).length, length: 0))
-        controls.engine.onNotice?(NoteNotice(kind: .notReadable, detail: String(localized: "An attachment couldn’t be read. Nothing was pasted.")))
+        controls.engine.onNotice?(NoteNotice(kind: .notPasted, detail: String(localized: "An attachment couldn’t be read. Nothing was pasted.")))
     }
 
     /// The owner's first-round fixes (F-01 to F-04): every block style with a

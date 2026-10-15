@@ -78,7 +78,7 @@ struct AtticRaisedBackground: View {
             case .rest, .focused: tokens.raised
             }
         }
-        AtticRecipeBackground(recipe: recipe, cornerRadius: cornerRadius)
+        AtticRecipeBackground(recipe: recipe.opaque(design), cornerRadius: cornerRadius)
             .overlay {
                 // The glass stand-in shows hover and press as the live glass
                 // control does: a fill inside it.
@@ -169,7 +169,19 @@ struct AtticRaisedShapeBackground<S: InsettableShape>: View {
     @Environment(\.atticDesign) private var design
 
     var body: some View {
-        AtticRecipeShapeBackground(recipe: design.tokens.raised, shape: shape)
+        AtticRecipeShapeBackground(recipe: design.tokens.raised.opaque(design), shape: shape)
+    }
+}
+
+extension AtticRaisedRecipe {
+    /// Under Reduce Transparency a raised control is opaque (U-02): its
+    /// face is laid over the panel's own solid surface, so nothing behind
+    /// it (a title scrolled under the header) ever shows through.
+    func opaque(_ design: AtticDesignContext) -> AtticRaisedRecipe {
+        guard design.reduceTransparency, base == nil else { return self }
+        var recipe = self
+        recipe.base = design.tokens.panel.base.withAlpha(1)
+        return recipe
     }
 }
 
@@ -371,6 +383,8 @@ struct AtticFlatSurface: ViewModifier {
         content
             .background {
                 ZStack {
+                    // Under Reduce Transparency the corner buttons are opaque (U-02).
+                    if design.reduceTransparency { shape.fill(tokens.panel.base.withAlpha(1).color) }
                     shape.fill(tokens.recessed.color)
                     if let overlay { shape.fill(overlay.color) }
                     shape.strokeBorder(tokens.chipSelected.color, lineWidth: AtticFlatSurfaceMetrics.hairline)

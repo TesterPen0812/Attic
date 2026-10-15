@@ -132,8 +132,8 @@ final class NoteObjectControls: NSObject, NoteObjectInteraction {
         let resizable = object is NoteImageAttachment && engine.validate(.size(1), objectID: object.objectID).enabled
         selectionView.show(objectRect: rect, resizable: resizable,
                            // The object's own corners (F-06b): the card's 10;
-                           // an image is drawn square, so its ring is too.
-                           cornerRadius: object is NoteFileAttachment ? AtticNoteObjectMetrics.cardRadius : 0,
+                           // a picture's 8 (U-24: the same rounded ring).
+                           cornerRadius: object is NoteFileAttachment ? AtticNoteObjectMetrics.cardRadius : AtticRadius.image,
                            in: textView)
         if selectionView.isHidden || selectionView.alphaValue < 1 { fade(selectionView, in: true) }
     }

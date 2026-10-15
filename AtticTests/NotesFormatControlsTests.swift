@@ -314,6 +314,32 @@ final class NotesFormatControlsTests: XCTestCase {
         XCTAssertEqual(engine.document().blocks[1].marks.first?.kind, .bold)
     }
 
+    /// U-01: the bar's last glyph stands as far from the capsule's end as
+    /// the style's name from its start, and the page hears where the bar
+    /// lies (the title's ⋯ steps aside under it) until it leaves.
+    func testTheBarHasEvenEndsAndReportsWhereItLies() throws {
+        let (controls, _, textView) = make()
+        var covers: [[NSRect]] = []
+        controls.onCoverChange = { covers.append($0) }
+        textView.setSelectedRange(range("Student pricing", textView))
+        controls.refresh()
+        let cover = try XCTUnwrap(covers.last?.first)
+        XCTAssertEqual(covers.last?.count, 1)
+        XCTAssertEqual(cover.minY, controls.barFrame.minY, accuracy: 1, "the capsule, in the text view")
+        XCTAssertEqual(cover.width, controls.barFrame.width, accuracy: 1)
+        let m = AtticNoteFormatMetrics.self
+        let font = AtticTextStyle.controlLabel.nsFont
+        let label = ceil(("Body" as NSString).size(withAttributes: [.font: font]).width)
+        let style = label + 4 + m.barStyleChevron + 2 + m.barStylePadding * 2
+        let toggles = CGFloat(NoteFormatBarItem.all.count - 1) * m.barToggleWidth + m.highlightChevronWidth
+        XCTAssertEqual(NoteFormatControls.barWidth(styleName: "Body"),
+                       ceil(AtticControlSize.capsuleInset * 2 + m.barTrailingRoom + style + m.barGroupGap * 3 + toggles))
+        XCTAssertGreaterThan(m.barTrailingRoom, 0)
+        textView.setSelectedRange(NSRange(location: 0, length: 0))
+        controls.refresh()
+        XCTAssertEqual(covers.last, [], "gone with the bar")
+    }
+
     func testTheBarStaysAboveTheSelectionAndGoesBelowWithoutRoom() throws {
         let (controls, engine, textView) = make()
         let target = range("Student pricing", textView)
@@ -474,8 +500,22 @@ final class NotesFormatControlsTests: XCTestCase {
                                                .command(.mark(.underline)), .command(.mark(.strikethrough)),
                                                .command(.mark(.link)), .command(.mark(.highlight)), .command(.mark(.code))])
         XCTAssertLessThanOrEqual(NoteFormatControls.barWidth(styleName: "Subheading"), 320 - 8, "the bar fits the panel")
-        XCTAssertLessThanOrEqual(NoteFormatRowView.minimumWidth(snapshot: .empty, toggleWidth: AtticNoteFormatMetrics.rowToggleWidth),
-                                 288, "the row fits a 320 pt panel's bottom row with 28 pt cells")
+        // U-17: the pill keeps one width, so the row's cells are the same
+        // for every style at a given panel width (24 pt at 320, never moving).
+        let widths = Set(NoteFormatRowView.stylePillNames.map { name -> CGFloat in
+            var snapshot = NoteFormatSnapshot.empty
+            snapshot.paragraph = NoteCommandCatalog.styles.compactMap { command -> NoteParagraphStyle? in
+                if case let .paragraph(style) = command, NoteCommandCatalog.styleName(style) == name { style } else { nil }
+            }.first
+            return NoteFormatRowView.minimumWidth(snapshot: snapshot, toggleWidth: AtticNoteFormatMetrics.rowToggleWidth)
+        })
+        XCTAssertEqual(widths.count, 1, "the row's width never depends on the style")
+        let longest = NoteFormatRowView.stylePillNames.map {
+            ceil(($0 as NSString).size(withAttributes: [.font: AtticTextStyle.controlLabel.nsFont]).width)
+        }.max() ?? 0
+        XCTAssertEqual(NoteFormatRowView.stylePillWidth,
+                       longest + 4 + AtticNoteFormatMetrics.barStyleChevron + 2 + AtticNoteFormatMetrics.barStylePadding * 2,
+                       "as wide as the longest name, which shows whole")
         // A39 F11: "Subheading" shows whole in a 320 pt panel (288 pt row):
         // the compact row, 24 pt cells and 2 pt around its lines.
         var subheading = NoteFormatSnapshot.empty
@@ -551,12 +591,20 @@ final class NotesFormatControlsTests: XCTestCase {
     func testTheSlashListOffersTheAaStyleListsBlockStylesWithTheSameNames() throws {
         let styleNames = NoteCommandCatalog.styles.map(\.title)
         // R14: Small Heading and Callout join the list (no keys of their own).
-        XCTAssertEqual(styleNames, ["Title", "Heading", "Subheading", "Small Heading", "Body", "Code Block", "Quote", "Callout"])
+        // U-16: one order everywhere, the `/` list's (Body first, as D-18),
+        // so ⌥⌘0…⌥⌘5 also run down the list.
+        XCTAssertEqual(styleNames, ["Body", "Title", "Heading", "Subheading", "Small Heading", "Quote", "Callout", "Code Block"])
         XCTAssertNil(NoteCommandCatalog.keyboardShortcut(.paragraph(.heading(4))))
         XCTAssertNil(NoteCommandCatalog.keyboardShortcut(.paragraph(.callout(icon: "💡"))))
         let slashNames = NoteSlashItem.all.map(\.title)
         for name in styleNames { XCTAssertTrue(slashNames.contains(name), "/ offers \(name)") }
         XCTAssertEqual(slashNames.filter { styleNames.contains($0) }.count, styleNames.count, "no style twice")
+        XCTAssertEqual(slashNames.filter { styleNames.contains($0) }, styleNames, "the same order as the Aa list and Format")
+        let keys = NoteCommandCatalog.styles.compactMap { command in
+            NoteCommandCatalog.keyboardShortcut(command) == nil ? nil : command.shortcut
+        }
+        XCTAssertEqual(keys.count, 6, "Body, the three headings, Quote and Code Block have keys")
+        XCTAssertEqual(keys, keys.sorted(), "the style keys run in list order")
 
         let expected: [(String, NoteSlashItem.Kind, NoteParagraphStyle)] = [
             ("title", .title, .heading(1)), ("head", .heading, .heading(2)), ("subheading", .subheading, .heading(3)),

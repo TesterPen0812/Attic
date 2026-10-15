@@ -139,4 +139,29 @@ final class FloatingControlsTests: XCTestCase {
         XCTAssertEqual(strip.bottom, TasksViewport.reservedStack + inset)
         XCTAssertEqual(strip.bottomPlain, (AtticControlSize.addBarHeight + inset)...(TasksViewport.reservedStack + inset))
     }
+
+    /// U-02: with no blur (Reduce Transparency) the surface is solid under
+    /// the controls, out to their inner edge, and gone 12 pt past it, so no
+    /// text shows sharp behind a control and the title's rest (16 below
+    /// the header) is untouched.
+    func testWithoutTheBlurTheSurfaceIsSolidUnderTheControls() {
+        let extent: CGFloat = 52, height = extent + AtticEdgeBlurMetrics.reach
+        let stops = AtticEdgeBlurBackdrop.solidStops(height: height, extent: extent)
+        XCTAssertEqual(stops.solid * height, extent, accuracy: 0.01)
+        XCTAssertEqual(stops.clear * height, extent + AtticEdgeBlurMetrics.solidFade, accuracy: 0.01)
+        XCTAssertLessThan(AtticEdgeBlurMetrics.solidFade, AtticNoteMetrics.titleTopGap, "the resting title stays clear")
+    }
+
+    /// U-02: under Reduce Transparency a raised control lies on the panel's
+    /// solid surface; otherwise its recipe is unchanged.
+    func testReduceTransparencyMakesRaisedControlsOpaque() throws {
+        var design = AtticDesignContext(mode: .dark)
+        let plain = design.tokens.raised
+        XCTAssertEqual(plain.opaque(design), plain)
+        design.reduceTransparency = true
+        let opaque = design.tokens.raised.opaque(design)
+        let base = try XCTUnwrap(opaque.base)
+        XCTAssertEqual(base.alpha, 1)
+        XCTAssertEqual(opaque.fill, design.tokens.raised.fill)
+    }
 }

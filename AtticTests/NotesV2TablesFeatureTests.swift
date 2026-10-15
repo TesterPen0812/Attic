@@ -202,7 +202,9 @@ final class NotesV2TablesFeatureTests: XCTestCase {
         XCTAssertEqual(NoteCommandCatalog.lists, [.paragraph(.bullet), .paragraph(.number), .paragraph(.checklist), .table],
                        "Table takes Quote's cell")
         XCTAssertTrue(NoteCommandCatalog.styles.contains(.paragraph(.quote)), "Quote joins the style list")
-        XCTAssertEqual(NoteCommandCatalog.styles.last, .paragraph(.callout(icon: "💡")), "R14: Callout after Quote")
+        let styles = NoteCommandCatalog.styles
+        XCTAssertEqual(styles.firstIndex(of: .paragraph(.callout(icon: "💡"))), styles.firstIndex(of: .paragraph(.quote)).map { $0 + 1 },
+                       "R14: Callout after Quote")
         XCTAssertTrue(NoteCommandCatalog.formatSections.flatMap { $0 }.contains(.table), "Format › Table")
         XCTAssertTrue(NoteInsertAction.allCases.contains(.table), "Insert › Table (⋯, right-click, menu bar)")
         XCTAssertEqual(NoteFormatCommand.table.shortcut, "⌥⌘T")
@@ -296,10 +298,12 @@ final class NotesV2TablesFeatureTests: XCTestCase {
             view.needsLayout = true
             view.layoutSubtreeIfNeeded()
             let rect = view.convert(view.bounds, to: textView)
-            XCTAssertEqual(chrome.addColumnChip.frame.midX,
-                           rect.maxX + AtticNoteTableMetrics.addChipGap + AtticNoteTableMetrics.addChipSize / 2,
-                           accuracy: 0.5)
+            // U-26: on the card's right and bottom edges.
+            XCTAssertEqual(chrome.addColumnChip.frame.midX, rect.maxX, accuracy: 0.5)
             XCTAssertEqual(chrome.addRowChip.frame.midX, rect.midX, accuracy: 0.5)
+            XCTAssertEqual(chrome.addRowChip.frame.midY, rect.minY + view.grid.height, accuracy: 0.5)
+            XCTAssertLessThanOrEqual(chrome.addColumnChip.frame.midX + AtticNoteTableMetrics.addChipSize / 2,
+                                     rect.maxX + AtticNoteTableMetrics.addChipSize / 2 + 0.5, "half its disc past the card, no more")
         }
     }
 
@@ -505,6 +509,22 @@ final class NotesV2TablesFeatureTests: XCTestCase {
         XCTAssertLessThanOrEqual(rect.maxX - view.scrollOffset, view.bounds.width + 0.5, "the cell is in view")
         // The fade marks the cut edge (the left one, now).
         XCTAssertNotNil(view.scrollView.layer?.mask)
+        // U-25: the card keeps its rounded outline, fixed over the scrolled
+        // cells and outside the fade; the cells clip to its corners.
+        XCTAssertFalse(view.frameView.isHidden)
+        XCTAssertFalse(view.canvas.strokesCard)
+        XCTAssertEqual(view.frameView.frame, CGRect(x: 0, y: 0, width: view.bounds.width, height: view.grid.height))
+        XCTAssertFalse(view.frameView.isDescendant(of: view.scrollView), "not faded with the cells")
+        XCTAssertEqual(view.scrollView.layer?.cornerRadius, AtticNoteTableMetrics.radius)
+    }
+
+    /// U-25: a table that fits draws its own outline with its grid.
+    func testATableThatFitsDrawsItsOwnOutline() throws {
+        let (engine, _) = makeEngine(blocks(NoteTable(texts: [["A", "B"], ["C", "D"]])))
+        let view = try view(engine)
+        XCTAssertFalse(view.grid.scrolls)
+        XCTAssertTrue(view.frameView.isHidden)
+        XCTAssertTrue(view.canvas.strokesCard)
     }
 
     /// A39: a `---` rule above a wide table. The note's owner saw the rule

@@ -52,16 +52,16 @@ struct NoteHistoryPage: View {
             // the bottom row (never an overlay of the text view).
             if browser.preview != nil { AtticEdgeBlurBackdrops(Self.edges(layout)) }
             VStack(spacing: 6) {
-                Picker("Compare version", selection: Binding(get: { browser.showsCurrent }, set: {
-                    browser.showsCurrent = $0
-                    controller.refreshHistoryPreview()
-                })) {
-                    Text("Current").tag(true)
-                    Text(browser.selected?.createdAt.formatted(.dateTime.month(.abbreviated).day().hour().minute()) ?? "Version").tag(false)
-                }
-                .pickerStyle(.segmented)
-                .labelsHidden()
-                .font(.system(size: 11.5, weight: .medium))
+                // U-30: the app's own monochrome selected state (as the
+                // tabs and menus), never the system's blue segment.
+                NoteHistoryVersionSwitch(
+                    choices: [(true, String(localized: "Current")),
+                              (false, browser.selected?.createdAt.formatted(.dateTime.month(.abbreviated).day().hour().minute())
+                                  ?? String(localized: "Version"))],
+                    selection: Binding(get: { browser.showsCurrent }, set: {
+                        browser.showsCurrent = $0
+                        controller.refreshHistoryPreview()
+                    }))
                 .accessibilityIdentifier("notes-history-switch")
                 Text("\(browser.comparison.differingCount) blocks differ \(browser.showsCurrent ? "from version" : "from now") · \(browser.comparison.missing.count) missing")
                     .font(.system(size: 10.5))
@@ -82,7 +82,11 @@ struct NoteHistoryPage: View {
                         .accessibilityIdentifier("notes-history-restore-error")
                 }
                 HStack(spacing: 6) {
-                    AtticRaisedButton(systemName: "chevron.backward", label: "Back") { controller.closeHistory() }
+                    // U-31: leaving history is an ✕, so the only chevrons
+                    // on the row step between versions.
+                    AtticRaisedButton(systemName: "xmark", label: "Close History", help: String(localized: "Close History (Esc)")) {
+                        controller.closeHistory()
+                    }
                         .accessibilityIdentifier("notes-history-back")
                     Spacer(minLength: 0)
                     Button { step(1) } label: { Image(systemName: "chevron.left").frame(width: 24, height: 32) }
@@ -161,5 +165,49 @@ struct NoteHistoryPage: View {
                     ? .applied : .failed(CommandFailure("The restore could not be undone. The note may have changed; your current text is kept."))
             })
         }
+    }
+}
+
+/// History's Current / version switch (U-30): a recessed track with the
+/// selected half in the app's monochrome selected fill and the heading ink,
+/// the other half quiet; hover is a lighter fill. One tab stop; ← → move.
+private struct NoteHistoryVersionSwitch: View {
+    let choices: [(value: Bool, title: String)]
+    @Binding var selection: Bool
+
+    @Environment(\.atticDesign) private var design
+    @State private var hovered: Bool?
+
+    var body: some View {
+        let tokens = design.tokens
+        let height: CGFloat = 26
+        let inset: CGFloat = 2
+        let outer = AtticRadius.control(height: height)
+        let inner = max(0, outer - inset)
+        HStack(spacing: 0) {
+            ForEach(choices, id: \.value) { choice in
+                let isSelected = choice.value == selection
+                Button { selection = choice.value } label: {
+                    AtticText(verbatim: choice.title, style: .controlLabel, ink: isSelected ? .heading : .helper)
+                        .lineLimit(1)
+                        .frame(maxWidth: .infinity)
+                        .frame(height: height - inset * 2)
+                        .background {
+                            RoundedRectangle(cornerRadius: inner, style: .continuous)
+                                .fill((isSelected ? tokens.selected : (hovered == choice.value ? tokens.chipHover : .clear)).color)
+                        }
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(AtticUndimmedButtonStyle())
+                .focusable(false)
+                .onHover { hovered = $0 ? choice.value : (hovered == choice.value ? nil : hovered) }
+                .accessibilityAddTraits(isSelected ? [.isSelected] : [])
+            }
+        }
+        .padding(inset)
+        .background(RoundedRectangle(cornerRadius: outer, style: .continuous).fill(tokens.recessed.color))
+        .frame(height: height)
+        .accessibilityElement(children: .contain)
+        .accessibilityLabel(String(localized: "Compare version"))
     }
 }

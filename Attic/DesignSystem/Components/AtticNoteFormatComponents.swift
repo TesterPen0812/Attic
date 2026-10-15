@@ -147,6 +147,7 @@ struct AtticFormatBarSurface<Content: View>: View {
         let radius = AtticRadius.control(height: m.barHeight)
         HStack(spacing: m.barGroupGap) { content }
             .padding(AtticControlSize.capsuleInset)
+            .padding(.trailing, m.barTrailingRoom)
             .frame(height: m.barHeight)
             // Raised over the text like a pop-over (its fill, rims and
             // shadow): glass over running text would let the words show
@@ -169,6 +170,10 @@ struct AtticFormatStyleFace: View {
     var isKeyboardFocused = false
     var isEnabled = true
     var height: CGFloat = AtticControlSize.smallHeight
+    /// A fixed width (U-17: Aa's pill keeps one width whatever the style,
+    /// so the controls after it never move); the name leads and the chevron
+    /// keeps the trailing end. Nil: as wide as the name.
+    var width: CGFloat?
 
     @Environment(\.atticDesign) private var design
     @State private var hovered = false
@@ -178,10 +183,13 @@ struct AtticFormatStyleFace: View {
         let radius = AtticRadius.control(height: height)
         HStack(spacing: 4) {
             AtticText(verbatim: title, style: .controlLabel, ink: isEnabled ? .heading : .disabledText)
+                .lineLimit(1)
+                .frame(maxWidth: width == nil ? nil : .infinity, alignment: .leading)
             AtticIcon(systemName: "chevron.down", size: m.barStyleChevron, weight: .semibold,
                       ink: isEnabled ? .chevron : .disabledIcon)
         }
         .padding(.horizontal, m.barStylePadding)
+        .frame(width: width)
         .frame(height: height)
         .background(RoundedRectangle(cornerRadius: radius, style: .continuous)
             .fill((hovered && isEnabled ? design.tokens.chipHover : .clear).color))

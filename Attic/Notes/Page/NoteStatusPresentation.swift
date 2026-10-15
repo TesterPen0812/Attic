@@ -34,8 +34,10 @@ struct NoteNotice: Equatable, Sendable {
             case .notAdded: String(localized: "Not added")
             case .historyError: String(localized: "History error")
             case .saveFirst: String(localized: "Save first")
-            case .readFailed: String(localized: "Can’t read")
-            case .notReadable: String(localized: "Can’t read")
+            // U-23: each names what could not be read (they were both
+            // "Can’t read", which said nothing on its own).
+            case .readFailed: String(localized: "Agent error")
+            case .notReadable: String(localized: "File error")
             case .notRestored: String(localized: "Not restored")
             case .notCleared: String(localized: "Not cleared")
             case .textPasted: String(localized: "Text pasted")
