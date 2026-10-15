@@ -470,7 +470,10 @@ struct AtticDropdownRow: View {
                             .frame(width: m.dotSlot)
                     }
                     if let mark {
-                        AtticPriorityMark(priority: mark).frame(width: m.markSlot)
+                        // None keeps the column (U-15): an empty mark is
+                        // EmptyView, which a frame alone would not hold open.
+                        ZStack { AtticPriorityMark(priority: mark) }
+                            .frame(width: m.markSlot)
                     }
                     if let systemName {
                         AtticIcon(systemName: systemName, size: m.iconSize, ink: .icon)
@@ -589,7 +592,9 @@ struct AtticDropdownRow: View {
 struct AtticDropdownField: View {
     @Binding var text: String
     let placeholder: String
-    /// A trailing glyph (the tag field's magnifier).
+    /// A leading glyph (the tag field's magnifier), at the leading edge as
+    /// in every Attic search field and NSSearchField (U-13): in the rows'
+    /// dot column, so what is typed starts where the tag names do.
     var systemName: String?
     var focus: AtticDropdownFieldFocus
     /// VoiceOver's name for the field (the placeholder by default) and
@@ -630,6 +635,12 @@ struct AtticDropdownField: View {
         let m = AtticDropdownMetrics.self
         let font = AtticTextStyle.dropdownRow.font
         HStack(spacing: 0) {
+            if let systemName {
+                AtticIcon(systemName: systemName, size: AtticSmallControlMetrics.iconSize, ink: .helper)
+                    .frame(width: m.dotSlot)
+                    .padding(.trailing, m.columnGap)
+                    .accessibilityHidden(true)
+            }
             ZStack(alignment: .leading) {
                 Text(verbatim: placeholder).font(font).lineLimit(1).fixedSize().hidden()
                     .accessibilityHidden(true)
@@ -640,10 +651,6 @@ struct AtticDropdownField: View {
                     .onSubmit(onSubmit)
                     .accessibilityLabel(label ?? placeholder)
                     .accessibilityIdentifier(identifier ?? "")
-            }
-            if let systemName {
-                Spacer(minLength: m.detailGap)
-                AtticIcon(systemName: systemName, size: AtticSmallControlMetrics.iconSize, ink: .helper)
             }
         }
         .padding(.horizontal, m.rowPadding)
@@ -798,6 +805,24 @@ struct AtticDropdownSpace {
         // An unshown/offscreen host has no usable screen intersection;
         // its own bounds still define headless layout.
         return visible.isNull || visible.isEmpty ? bounds : visible
+    }
+
+    private init(parent: NSView, bounds: CGRect) {
+        self.parent = parent
+        self.bounds = bounds
+    }
+
+    /// This space ending `clearance` above the bottom of `view`'s visible
+    /// part (U-22): a card over a page with floating bottom controls stops
+    /// above them, with the panel's margin to spare, instead of covering
+    /// them. Unchanged when that would leave no room.
+    func clearing(bottom clearance: CGFloat, of view: NSView) -> AtticDropdownSpace {
+        guard clearance > 0 else { return self }
+        let visible = anchor(view.visibleRect, in: view)
+        let maxY = min(bounds.maxY, visible.maxY - clearance)
+        guard maxY > bounds.minY + AtticDropdownMetrics.rowHeight * 2 else { return self }
+        return AtticDropdownSpace(parent: parent, bounds: CGRect(x: bounds.minX, y: bounds.minY,
+                                                                 width: bounds.width, height: maxY - bounds.minY))
     }
 
     /// `rect` in `view`, top-down in this space.
@@ -1143,6 +1168,14 @@ enum AtticDropdownReveal {
     static let openTravel: CGFloat = 4
     static let closeTravel: CGFloat = 3
     static let contentBlur: CGFloat = 5
+    /// The card is wholly opaque by this point of its unfold (U-41): its
+    /// face hides the rows under it from its first frames while its height
+    /// keeps growing and its contents sharpen, never a see-through card
+    /// over the list (and the same on the way back, until the last of it).
+    static let opaqueBy: CGFloat = 0.3
+
+    /// The card's opacity at `progress` (0...1 of the curve).
+    static func opacity(progress: CGFloat) -> CGFloat { min(1, max(0, progress) / opaqueBy) }
     /// The owner's fast-out curve.
     static let curve = AtticCubicBezier(0.16, 1, 0.3, 1)
 
@@ -1179,13 +1212,13 @@ enum AtticDropdownReveal {
         if closing ? t <= 0 : t >= 1 { return .rest }
         if closing {
             let e = CGFloat(curve.y(at: t))
-            return Frame(reveal: 1 - e, opacity: 1 - e, scale: 1 - (1 - startScale) * e, travel: closeTravel * e,
+            return Frame(reveal: 1 - e, opacity: opacity(progress: 1 - e), scale: 1 - (1 - startScale) * e, travel: closeTravel * e,
                          contentBlur: 0, shadow: 1 - e)
         }
         let e = CGFloat(curve.y(at: t))
         let contentTime = (t * openDuration - contentDelay) / contentDuration
         let c = CGFloat(curve.y(at: contentTime))
-        return Frame(reveal: e, opacity: e, scale: startScale + (1 - startScale) * e, travel: openTravel * (1 - e),
+        return Frame(reveal: e, opacity: opacity(progress: e), scale: startScale + (1 - startScale) * e, travel: openTravel * (1 - e),
                      contentBlur: contentBlur * (1 - c), shadow: e)
     }
 
@@ -1244,7 +1277,6 @@ extension AtticDropdownReveal {
         let close = AnyTransition.modifier(active: AtticUnfoldEffect(clock: 0, closing: true, fromTop: fromTop, carriesState: false),
                                            identity: AtticUnfoldEffect(clock: 1, closing: true, fromTop: fromTop, carriesState: false))
         let insertion = AnyTransition.modifier(active: AtticUnfoldInsertion(shown: 0), identity: AtticUnfoldInsertion(shown: 1))
-            .combined(with: .opacity)
         return .asymmetric(insertion: insertion.animation(openOpacityAnimation), removal: close.animation(closeAnimation))
     }
 }
@@ -1263,7 +1295,9 @@ struct AtticUnfoldInsertion: ViewModifier, Animatable {
     }
 
     func body(content: Content) -> some View {
+        // Its fade is the unfold's: opaque early (U-41).
         content.mask { AtticInsertionCut(open: shown > 0) }
+            .opacity(AtticDropdownReveal.opacity(progress: shown))
     }
 }
 
@@ -2030,12 +2064,27 @@ struct AtticDropdownViewport<Content: View>: View {
     var persistent = false
     @ViewBuilder let content: Content
 
+    /// Rows cut off above and below (U-22): that edge fades, so a list cut
+    /// short shows that it scrolls.
+    @State private var cut = AtticDropdownViewportCut()
+
     var body: some View {
         if height != nil || persistent {
             ScrollViewReader { proxy in
                 ScrollView(.vertical) { content.modifier(AtticUnfoldContent(scrolls: true)) }
                     .scrollIndicators(.never)
                     .scrollEdgeEffectHidden(true, for: .all)
+                    .onScrollGeometryChange(for: AtticDropdownViewportCut.self) { geometry in
+                        AtticDropdownViewportCut(offset: geometry.contentOffset.y + geometry.contentInsets.top,
+                                                 content: geometry.contentSize.height,
+                                                 visible: geometry.containerSize.height)
+                    } action: { _, next in
+                        if next != cut { cut = next }
+                    }
+                    .mask { AtticDropdownViewportFade(cut: cut) }
+                    // A height limit means the rows run on below it: say so
+                    // from the first frame (the scroll reports only changes).
+                    .onAppear { if height != nil, cut == AtticDropdownViewportCut() { cut.below = true } }
                     .frame(height: height)
                     .fixedSize(horizontal: false, vertical: height == nil)
                     .onAppear { if let highlighted { proxy.scrollTo(highlighted) } }
@@ -2051,6 +2100,41 @@ struct AtticDropdownViewport<Content: View>: View {
         } else {
             content.modifier(AtticUnfoldContent())
         }
+    }
+}
+
+/// Which of a scrolling list's edges have rows past them.
+struct AtticDropdownViewportCut: Equatable {
+    var above = false
+    var below = false
+
+    init() {}
+
+    /// From the scroll's offset (0 at the top), its content's height and
+    /// the height shown; half a point of slack.
+    init(offset: CGFloat, content: CGFloat, visible: CGFloat) {
+        above = offset > 0.5
+        below = content - visible - offset > 0.5
+    }
+
+    /// How far the fade reaches in from a cut edge: most of a row, so the
+    /// last whole row stays readable and the one past it plainly goes on.
+    static let fade: CGFloat = 20
+}
+
+private struct AtticDropdownViewportFade: View {
+    let cut: AtticDropdownViewportCut
+
+    var body: some View {
+        let fade = AtticDropdownViewportCut.fade
+        VStack(spacing: 0) {
+            LinearGradient(colors: [.black.opacity(cut.above ? 0 : 1), .black], startPoint: .top, endPoint: .bottom)
+                .frame(height: fade)
+            Color.black
+            LinearGradient(colors: [.black, .black.opacity(cut.below ? 0 : 1)], startPoint: .top, endPoint: .bottom)
+                .frame(height: fade)
+        }
+        .animation(AtticMotionScale.easeOut(AtticMotionScale.fast), value: cut)
     }
 }
 

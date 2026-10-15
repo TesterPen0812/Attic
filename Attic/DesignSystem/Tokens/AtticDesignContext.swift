@@ -58,7 +58,8 @@ struct AtticDesignContext: Hashable, Sendable {
             surface: effectiveSurface,
             tint: tint,
             tintLength: Self.quantisedTintLength(tintLength),
-            increaseContrast: increaseContrast
+            increaseContrast: increaseContrast,
+            reducedFrom: reduceTransparency && surface.treatmentKind != .solid ? surface.treatmentKind : nil
         )
     }
 
@@ -80,6 +81,17 @@ struct AtticDesignContext: Hashable, Sendable {
         let tint: PanelTintLevel
         let tintLength: Double
         let increaseContrast: Bool
+        /// The translucent surface Reduce Transparency made solid (nil when
+        /// the person chose Solid, or the setting is off): its text keeps
+        /// the contrast it had there (U-40).
+        var reducedFrom: AtticPanelSurfaceTreatment.Kind? = nil
+
+        /// The same key for the surface as chosen, before Reduce
+        /// Transparency.
+        var chosen: ColourKey? {
+            reducedFrom.map { ColourKey(mode: mode, palette: palette, surface: $0, tint: tint, tintLength: tintLength,
+                                        increaseContrast: increaseContrast) }
+        }
     }
 
     /// The resolved tokens for this context (cached).

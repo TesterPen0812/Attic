@@ -340,8 +340,8 @@ final class NotesLibraryModel: ObservableObject {
 
     /// The line where the rows would be when a search finds nothing.
     static func noMatches(query: String, tag: String?) -> String {
-        if let tag { return String(localized: "No notes match “\(query)” in #\(tag)") }
-        return String(localized: "No notes match “\(query)”")
+        if let tag { return String(localized: "No notes match “\(query)” in #\(tag).") }
+        return String(localized: "No notes match “\(query)”.")
     }
 
     /// The filter's line when no note carries the tag (any more).

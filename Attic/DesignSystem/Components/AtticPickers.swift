@@ -404,6 +404,14 @@ struct AtticDateCardState: Equatable {
     func isLit(_ day: Date, calendar: Calendar) -> Bool {
         lit == .day && calendar.isDate(cursor, inSameDayAs: day)
     }
+
+    /// The day a lit suggestion would pick (U-18): the grid marks it with
+    /// the highlight, so what Return inserts or sets is on screen in the
+    /// month as well as in the list above it.
+    func proposedDay(_ suggestions: [AtticDateSuggestion]) -> Date? {
+        guard case let .suggestion(index)? = lit, suggestions.indices.contains(index) else { return nil }
+        return suggestions[index].date
+    }
 }
 
 /// The one date card (owner, 2026-10-05, p2-30 draft 2 on p2-29 draft A):
@@ -445,6 +453,7 @@ struct AtticDateCard: View {
         let month = state.month(calendar)
         let typing = !typed.trimmingCharacters(in: .whitespaces).isEmpty
         let suggestions = typing ? self.suggestions : []
+        let proposed = state.proposedDay(suggestions)
         VStack(alignment: .leading, spacing: 0) {
             if typing {
                 suggestionRows(suggestions, state: state)
@@ -464,7 +473,7 @@ struct AtticDateCard: View {
                     HStack(spacing: 0) {
                         ForEach(0..<7, id: \.self) { column in
                             if let day = month.cells[week * 7 + column] {
-                                dayCell(day, state: state)
+                                dayCell(day, state: state, proposed: proposed)
                             } else {
                                 Color.clear.frame(width: d.monthCellWidth, height: d.monthCellHeight).accessibilityHidden(true)
                             }
@@ -634,13 +643,14 @@ struct AtticDateCard: View {
         .accessibilityLabel(label)
     }
 
-    private func dayCell(_ day: Date, state: AtticDateCardState) -> some View {
+    private func dayCell(_ day: Date, state: AtticDateCardState, proposed: Date?) -> some View {
         let d = AtticDropdownMetrics.self
         let tokens = design.tokens
         let isSelected = selected.map { calendar.isDate(day, inSameDayAs: $0) } ?? false
         let isToday = calendar.isDate(day, inSameDayAs: today)
         let lit = state.isLit(day, calendar: calendar)
-        let fill: AtticRGBA = isSelected ? tokens.ink(.inverseFill) : (lit ? tokens.dropdownHighlight : .clear)
+        let isProposed = proposed.map { calendar.isDate(day, inSameDayAs: $0) } ?? false
+        let fill: AtticRGBA = isSelected ? tokens.ink(.inverseFill) : (lit || isProposed ? tokens.dropdownHighlight : .clear)
         let spokenState = [isToday ? String(localized: "today") : nil, isSelected ? String(localized: "chosen") : nil].compactMap { $0 }
         return Button { onPick(day) } label: {
             AtticText(verbatim: "\(calendar.component(.day, from: day))", style: .dropdownDay, ink: isSelected ? .onInverse : .body)

@@ -111,9 +111,12 @@ struct TasksDonePage<Cell: View, Mask: View>: View {
                 }
                 if lines.isEmpty, model.doneLogFailure == nil {
                     let query = model.doneSearch.trimmingCharacters(in: .whitespacesAndNewlines)
+                    // A no-match line sits on the search's text column, as
+                    // its count does (U-12).
                     AtticEmptyLine(text: query.isEmpty
                         ? String(localized: "Finished tasks collect here.")
-                        : String(localized: "No finished tasks match “\(query)”."))
+                        : String(localized: "No finished tasks match “\(query)”."),
+                        leading: query.isEmpty ? AtticLayout.pageTabsX : AtticLayout.textX)
                 } else if let count = model.doneSearchCount() {
                     // A quiet line under the results (v22 card B).
                     AtticText(verbatim: String(localized: "\(count.matches) of \(count.total) done tasks"), style: .rowMeta, ink: .helper)

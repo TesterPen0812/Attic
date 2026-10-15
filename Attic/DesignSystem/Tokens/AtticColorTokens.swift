@@ -494,8 +494,11 @@ struct AtticColorTokens: Equatable, Sendable {
         let calmStates = calm && !ic
         let hover: AtticRGBA = calmStates ? .overlay(reaching: Calm.rowHover(dark: dark), on: basePanel)
             : (dark ? .white(ic ? 0.08 : 0.04) : .black(ic ? 0.07 : 0.035))
+        // U-07: selection about twice hover's step, so a hovered row never
+        // reads as a second selected one (Glass, Frosted and the palettes;
+        // Calm's own greys already step 10 and 23 levels apart).
         let selected: AtticRGBA = calmStates ? .overlay(reaching: Calm.rowSelection(dark: dark), on: basePanel)
-            : (dark ? .white(ic ? 0.14 : 0.07) : .black(ic ? 0.12 : 0.06))
+            : (dark ? .white(ic ? 0.14 : 0.09) : .black(ic ? 0.12 : 0.075))
         let pressed: AtticRGBA = dark ? .white(ic ? 0.18 : 0.10) : .black(ic ? 0.16 : 0.085)
         // The selected chip inside a raised control (Phase 0's drawn look,
         // as before visual A).
@@ -910,6 +913,38 @@ struct AtticColorTokens: Equatable, Sendable {
             inks[ink] = inks[ink]!.tuned(toContrast: noneOnPanel * step, against: [basePanel], lighten: dark)
         }
 
+        // U-40: Reduce Transparency turns Glass or Frosted solid; it must
+        // not dim the text. Each text role keeps the contrast
+        // it has on the chosen surface (over a mid-grey desktop), up to what
+        // its Glass ink has on this solid base: Glass's own grey in Dark,
+        // never Light Glass's near-black (tuned for a desktop showing
+        // through) on an opaque panel. The placeholder keeps 4.5 : 1 on its
+        // field.
+        if let chosen = key.chosen {
+            let glass = AtticColorTokens.build(chosen)
+            let glassSurface = glass.panel.composite(.midGrey, at: AtticSurfaceModel.contentTop)
+            // The titles too, so the step from them to the secondary grey
+            // stays Glass's.
+            for ink in [AtticInk.heading, .body, .label, .helper, .placeholder, .muted] {
+                let target = Self.reducedTransparencyTarget(glass: glass.ink(ink), glassSurface: glassSurface, base: basePanel)
+                if inks[ink]!.contrast(on: basePanel) < target {
+                    inks[ink] = inks[ink]!.tuned(toContrast: target, against: [basePanel], lighten: dark)
+                }
+            }
+            let field = recipes.rest.face.over(basePanel)
+            if inks[.placeholder]!.contrast(on: field) < textTarget {
+                inks[.placeholder] = inks[.placeholder]!.tuned(toContrast: textTarget, against: [field], lighten: dark)
+            }
+            // The ladder stays in order: a label is never quieter than helper text.
+            let helperOnBase = inks[.helper]!.contrast(on: basePanel)
+            if inks[.label]!.contrast(on: basePanel) < helperOnBase * 1.06 {
+                inks[.label] = inks[.helper]!.tuned(toContrast: helperOnBase * 1.06, against: [basePanel], lighten: dark)
+            }
+            // The done mark is the title's ink; its tick keeps its floor.
+            inks[.doneFill] = inks[.heading]!
+            inks[.onDone] = inks[.onDone]!.tuned(toContrast: ic ? textTarget : nonTextTarget, against: [inks[.doneFill]!], lighten: !dark)
+        }
+
         return AtticColorTokens(
             context: key,
             panel: panel,
@@ -950,6 +985,12 @@ struct AtticColorTokens: Equatable, Sendable {
             dragShadow: .black(dark ? 0.45 : 0.16),
             inks: inks
         )
+    }
+
+    /// U-40: a secondary ink's contrast under Reduce Transparency: what it
+    /// has on Glass, capped at what Glass's ink has on the solid base.
+    static func reducedTransparencyTarget(glass ink: AtticRGBA, glassSurface: AtticRGBA, base: AtticRGBA) -> Double {
+        min(ink.contrast(on: glassSurface), ink.contrast(on: base))
     }
 
     /// Low and Medium's contrast on the panel as multiples of None's: wider

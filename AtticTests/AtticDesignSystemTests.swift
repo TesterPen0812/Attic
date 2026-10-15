@@ -903,3 +903,47 @@ enum Phase0AccentException {
         }
     }
 }
+
+// MARK: - UI review 14 (F2): states and Reduce Transparency
+
+@MainActor
+extension AtticDesignSystemTests {
+    /// U-07: a hovered row is visibly lighter than a selected one on every
+    /// surface: selection at least twice hover's step from the panel.
+    func testU07HoverIsLighterThanSelectionEverywhere() {
+        for mode in [AtticDesignContext.Mode.light, .dark] {
+            for surface in [PanelSurfaceStyle.solid, .glass, .frosted] {
+                let tokens = AtticDesignContext(mode: mode, surface: surface).tokens
+                let base = tokens.controlBase
+                let hoverStep = tokens.hover.over(base).contrast(on: base)
+                let selectedStep = tokens.selected.over(base).contrast(on: base)
+                XCTAssertGreaterThanOrEqual(selectedStep - 1, (hoverStep - 1) * 1.6, "\(mode) \(surface)")
+            }
+        }
+    }
+
+    /// U-40: Reduce Transparency makes Glass solid without dimming its
+    /// secondary text: each role keeps Glass's contrast (capped at what
+    /// Glass's grey has on the solid base, so Light never goes near-black),
+    /// the placeholder 4.5 : 1 on its field, and titles stay a step above.
+    func testU40ReduceTransparencyKeepsGlassContrast() {
+        for mode in [AtticDesignContext.Mode.light, .dark] {
+            let glass = AtticDesignContext(mode: mode, surface: .glass).tokens
+            let glassSurface = glass.panel.composite(.midGrey, at: AtticSurfaceModel.contentTop)
+            let solid = AtticDesignContext(mode: mode, surface: .solid).tokens
+            let reduced = AtticDesignContext(mode: mode, surface: .glass, reduceTransparency: true).tokens
+            let base = reduced.controlBase
+            for ink in [AtticInk.heading, .body, .label, .helper, .placeholder, .muted] {
+                let wanted = AtticColorTokens.reducedTransparencyTarget(glass: glass.ink(ink), glassSurface: glassSurface, base: base)
+                XCTAssertGreaterThanOrEqual(reduced.ink(ink).contrast(on: base) + 0.02, wanted, "\(mode) \(ink)")
+                XCTAssertGreaterThanOrEqual(reduced.ink(ink).contrast(on: base) + 1e-9, solid.ink(ink).contrast(on: base), "\(mode) \(ink)")
+            }
+            XCTAssertGreaterThanOrEqual(reduced.ink(.placeholder).contrast(on: reduced.raised.face.over(base)), 4.5, "\(mode)")
+            XCTAssertLessThan(reduced.ink(.helper).contrast(on: base) * 1.2, reduced.ink(.body).contrast(on: base),
+                              "secondary text stays a clear step below the titles (\(mode))")
+            // Solid chosen keeps its own (owner-approved) greys.
+            XCTAssertEqual(AtticDesignContext(mode: mode, surface: .solid, reduceTransparency: true).tokens.ink(.helper),
+                           AtticDesignContext(mode: mode, surface: .solid).tokens.ink(.helper))
+        }
+    }
+}

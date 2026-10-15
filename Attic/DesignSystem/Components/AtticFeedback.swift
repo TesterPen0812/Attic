@@ -180,14 +180,16 @@ private struct AtticNoticeButton: View {
 /// italics). No illustrations, no big buttons.
 struct AtticEmptyLine: View {
     let text: String
+    /// On the tab labels' line (x 28; owner, 2026-09-26); a search's
+    /// no-match line takes the search's text column instead (U-12).
+    var leading: CGFloat = AtticLayout.pageTabsX
 
     var body: some View {
         AtticText(verbatim: text, style: .listBody, ink: .helper)
             .frame(height: AtticTaskRowMetrics.titleLineHeight)
             .padding(.top, AtticTaskRowMetrics.titleTop(twoLine: false))
             .padding(.bottom, AtticLayout.rowPitch - AtticTaskRowMetrics.titleTop(twoLine: false) - AtticTaskRowMetrics.titleLineHeight)
-            // On the tab labels' line (x 28; owner, 2026-09-26).
-            .padding(.leading, AtticLayout.pageTabsX)
+            .padding(.leading, leading)
             .frame(maxWidth: .infinity, alignment: .leading)
     }
 }

@@ -139,14 +139,14 @@ final class TasksPageModelTests: XCTestCase {
 
     /// Direction A's empty states: Now says why it is empty; Later has its own.
     func testEmptyListsSayWhyTheyAreEmpty() throws {
-        XCTAssertEqual(model.emptyMessage[.now], "Add your first task")
-        XCTAssertEqual(model.emptyMessage[.backlog], "Nothing for later")
+        XCTAssertEqual(model.emptyMessage[.now], "Add your first task.")
+        XCTAssertEqual(model.emptyMessage[.backlog], "Nothing for later.")
         _ = try XCTUnwrap(add("Idea", tab: .backlog))
-        XCTAssertEqual(model.emptyMessage[.now], "Nothing active")
+        XCTAssertEqual(model.emptyMessage[.now], "Nothing active.")
         XCTAssertTrue(model.offersLater, "with \"Choose from Later\" under it")
         let done = try XCTUnwrap(add("Water plants"))
         model.complete(done)
-        XCTAssertEqual(model.emptyMessage[.now], "You’re caught up")
+        XCTAssertEqual(model.emptyMessage[.now], "You’re caught up.")
     }
 
     func testMovesAndDeletesShowAnUndoToastAndUndoPutsThemBack() throws {
