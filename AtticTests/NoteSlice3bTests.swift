@@ -2391,17 +2391,30 @@ extension NoteSlice3bTests {
         try await waitFor { journal.writeStarted }
         XCTAssertTrue(controller.prepareToLeave(.hide))
         XCTAssertTrue(controller.prepareToLeave(.pageSwitch))
+        let frozen = ContinuousClock.now
+        controller.recoveryClockNow = { frozen }
+        var quitWaiting = false
+        controller.recoveryWaitDidStart = { quitWaiting = true }
+        XCTAssertEqual(controller.recoveryResponseTimeout, .seconds(2))
         var quitResult: Bool?
         let quit = Task { @MainActor in quitResult = await controller.prepareToLeaveDurably(.quit) }
-        try await Task.sleep(for: .milliseconds(30))
+        try await waitForTestOperationAsync("quit entered the blocked checkpoint wait") { quitWaiting }
         XCTAssertNil(quitResult, "quit cannot terminate before the checkpoint write")
         journal.release()
+        try await waitForTestOperationAsync("quit finished after checkpoint release") { quitResult != nil }
         await quit.value
         XCTAssertEqual(quitResult, true,
             "state=\(session.state) activity=\(session.engine.activity) notice=\(String(describing: session.notice)) warnings=\(controller.recoveryWarnings)")
         XCTAssertFalse(try journal.base.entries().isEmpty)
+        try await waitForTestOperationAsync("import loader entered the read") { await loader.started }
         await loader.release()
-        await controller.waitForImportWork()
+        var importsFinished = false
+        let imports = Task { @MainActor in
+            await controller.waitForImportWork()
+            importsFinished = true
+        }
+        try await waitForTestOperationAsync("import work finished") { importsFinished }
+        await imports.value
     }
 
     func testEveryUserOperationRespondsUnderPendingIOAndRetryHasNoStuckState() async throws {
