@@ -317,7 +317,7 @@ struct AtticColorTokens: Equatable, Sendable {
 
     /// The ink of an icon that sits beside page labels (design review D-10):
     /// the secondary tier the inactive labels beside it are drawn in
-    /// (#7A7A7A Light, #A4A4A4 Dark on the default Solid panel; the review
+    /// (#737373 Light, #A4A4A4 Dark on the default Solid panel; the review
     /// sampled #737373 / #A7A7A7 for it), so it is never heavier than the
     /// words. Where the secondary ink would be the stronger of the two it
     /// keeps the primary glyph ink: never darker than before.
@@ -1231,7 +1231,8 @@ enum Calm {
     static func strongText(dark: Bool) -> AtticRGBA { dark ? AtticRGBA(0xF1F1F1) : AtticRGBA(0x272727) }
     static func secondary(dark: Bool, increaseContrast: Bool) -> AtticRGBA {
         switch (dark, increaseContrast) {
-        case (false, false): AtticRGBA(0x7A7A7A)
+        // T-16 B (owner, 2026-10-15): #737373, 4.74 : 1 on white (was #7A7A7A, 4.29 : 1).
+        case (false, false): AtticRGBA(0x737373)
         case (false, true): AtticRGBA(0x626262)
         case (true, false): AtticRGBA(0xA4A4A4)
         case (true, true): AtticRGBA(0xBFBFBF)

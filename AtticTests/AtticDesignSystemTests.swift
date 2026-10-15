@@ -117,7 +117,7 @@ final class AtticDesignSystemTests: XCTestCase {
         XCTAssertEqual(light.panel.base.hexString, "#FFFFFF")
         XCTAssertEqual(light.ink(.heading).hexString, "#272727")
         XCTAssertEqual(light.ink(.body).hexString, "#4B4B4B")
-        XCTAssertEqual(light.ink(.helper).hexString, "#7A7A7A")
+        XCTAssertEqual(light.ink(.helper).hexString, "#737373", "T-16 B (owner, 2026-10-15): 4.74 : 1 on white")
         XCTAssertEqual(light.ink(.priorityNone).hexString, "#838383")
         XCTAssertEqual(light.ink(.priorityMark).hexString, "#B35D27")
         // Done (owner, 2026-10-10): the title's ink, the tick its inverse.
@@ -276,8 +276,9 @@ final class AtticDesignSystemTests: XCTestCase {
             let helper = tokens.ink(.helper).contrast(on: base)
             let muted = tokens.ink(.muted).contrast(on: base)
             XCTAssertGreaterThanOrEqual(muted, 3, context.caption)
-            // Visual A's Dark secondary grey is deliberately 5.46 : 1.
-            XCTAssertLessThan(helper, context.mode == .dark ? 5.5 : 4.5 * 1.05, "\(context.caption): helper stays soft (\(helper))")
+            // Visual A's Dark secondary grey is deliberately 5.46 : 1, and
+            // the Light one 4.74 : 1 (T-16 B, owner 2026-10-15).
+            XCTAssertLessThan(helper, context.mode == .dark ? 5.5 : 4.8, "\(context.caption): helper stays soft (\(helper))")
             XCTAssertLessThanOrEqual(muted, helper + 0.001, context.caption)
             XCTAssertGreaterThanOrEqual(tokens.ink(.body).contrast(on: base), 4.5)
         }
@@ -399,7 +400,7 @@ final class AtticDesignSystemTests: XCTestCase {
             }
         }
         // Solid keeps its text: Original's Light (neutral greys) and Dark.
-        XCTAssertEqual(AtticDesignContext(mode: .light).tokens.ink(.helper).hexString, "#7A7A7A")
+        XCTAssertEqual(AtticDesignContext(mode: .light).tokens.ink(.helper).hexString, "#737373")
         XCTAssertNotEqual(AtticDesignContext(mode: .dark).tokens.ink(.helper), AtticRGBA(AtticPanelTheme.original.palette(for: AtticPanelThemeAppearance.dark).secondaryForeground))
     }
 

@@ -53,9 +53,9 @@ final class PhaseXColourTokenTests: XCTestCase {
                 let delta = abs(built.hsl.hue * 360 - expected)
                 XCTAssertLessThan(min(delta, 360 - delta), 14, "\(context.caption) \(hue): \(built.hexString)")
             }
-            // Grey is about the secondary grey on the default look (#7A7A7A / #A4A4A4).
+            // Grey is about the secondary grey on the default look (#737373 / #A4A4A4, T-16 B).
             if !context.increaseContrast {
-                let grey = AtticRGBA(context.mode == .dark ? 0xA4A4A4 : 0x7A7A7A)
+                let grey = AtticRGBA(context.mode == .dark ? 0xA4A4A4 : 0x737373)
                 XCTAssertLessThanOrEqual(tokens.tagInk(.grey).distance(to: grey), 12, context.caption)
             }
         }
