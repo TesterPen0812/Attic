@@ -246,3 +246,39 @@ extension XCTestCase {
         return store
     }
 }
+
+// Completion waits observe work, never the state a test is about to assert.
+@MainActor
+func waitForTestOperation(_ name: String, timeout: TimeInterval = 3,
+                          file: StaticString = #filePath, line: UInt = #line,
+                          completed: () -> Bool) {
+    let deadline = ProcessInfo.processInfo.systemUptime + timeout
+    while !completed(), ProcessInfo.processInfo.systemUptime < deadline {
+        RunLoop.main.run(until: Date().addingTimeInterval(0.001))
+    }
+    if !completed() { XCTFail("Timed out waiting for \(name)", file: file, line: line) }
+}
+
+private struct TestOperationTimeout: Error { let name: String }
+
+@MainActor
+func waitForTestOperationAsync(_ name: String, timeout: Duration = .seconds(3),
+                               file: StaticString = #filePath, line: UInt = #line,
+                               completed: () async -> Bool) async throws {
+    let deadline = ContinuousClock.now + timeout
+    while !(await completed()), ContinuousClock.now < deadline {
+        try await Task.sleep(for: .milliseconds(1))
+    }
+    guard await completed() else {
+        XCTFail("Timed out waiting for \(name)", file: file, line: line)
+        throw TestOperationTimeout(name: name)
+    }
+}
+
+@MainActor
+func waitForFormatRefresh(_ controls: NoteFormatControls, file: StaticString = #filePath, line: UInt = #line) {
+    let generation = controls.refreshGeneration
+    waitForTestOperation("format refresh generation \(generation)", file: file, line: line) {
+        controls.completedRefreshGeneration >= generation
+    }
+}

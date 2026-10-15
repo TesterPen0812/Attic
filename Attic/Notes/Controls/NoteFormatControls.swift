@@ -67,6 +67,9 @@ final class NoteFormatControls: NSObject {
     private var previousLayout: (() -> Void)?
     private var previousActivity: ((NoteEditorEngine.Activity, NoteEditorEngine.Activity) -> Void)?
     private var refreshScheduled = false
+    /// A scheduled refresh acknowledges its generation after reading the selection.
+    private(set) var refreshGeneration: UInt64 = 0
+    private(set) var completedRefreshGeneration: UInt64 = 0
     /// Esc hid the bar for this selection; it returns when the selection changes.
     private var dismissedSelection: NSRange?
     /// The selection a card acts on (and returns to).
@@ -273,10 +276,13 @@ final class NoteFormatControls: NSObject {
     func scheduleRefresh() {
         guard !refreshScheduled else { return }
         refreshScheduled = true
+        refreshGeneration &+= 1
+        let generation = refreshGeneration
         DispatchQueue.main.async { [weak self] in
             guard let self else { return }
             self.refreshScheduled = false
             self.refresh()
+            self.completedRefreshGeneration = generation
         }
     }
 

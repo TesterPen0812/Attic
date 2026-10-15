@@ -380,7 +380,7 @@ final class NotesFormatControlsTests: XCTestCase {
         controls.refresh()
         XCTAssertFalse(controls.formatModel.barShown)
         textView.setSelectedRange(range("the panel", textView))
-        spin()
+        waitForFormatRefresh(controls)
         XCTAssertTrue(controls.formatModel.barShown, "a new selection brings it back")
 
         let (readOnly, _, readOnlyView) = make(readOnly: true)
