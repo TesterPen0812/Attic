@@ -298,10 +298,12 @@ final class NotesV2TablesFeatureTests: XCTestCase {
             view.needsLayout = true
             view.layoutSubtreeIfNeeded()
             let rect = view.convert(view.bounds, to: textView)
-            XCTAssertEqual(chrome.addColumnChip.frame.midX,
-                           rect.maxX + AtticNoteTableMetrics.addChipGap + AtticNoteTableMetrics.addChipSize / 2,
-                           accuracy: 0.5)
+            // U-26: on the card's right and bottom edges.
+            XCTAssertEqual(chrome.addColumnChip.frame.midX, rect.maxX, accuracy: 0.5)
             XCTAssertEqual(chrome.addRowChip.frame.midX, rect.midX, accuracy: 0.5)
+            XCTAssertEqual(chrome.addRowChip.frame.midY, rect.minY + view.grid.height, accuracy: 0.5)
+            XCTAssertLessThanOrEqual(chrome.addColumnChip.frame.midX + AtticNoteTableMetrics.addChipSize / 2,
+                                     rect.maxX + AtticNoteTableMetrics.addChipSize / 2 + 0.5, "half its disc past the card, no more")
         }
     }
 
