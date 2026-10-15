@@ -7,6 +7,50 @@ import XCTest
 /// identity, IME over a selection, VoiceOver elements.
 @MainActor
 final class NoteEditorEngineTests: XCTestCase {
+    func testG10TypingHighlightHistoryKeepsExactSerializedPayload() throws {
+        let values: [Any?] = [nil, true, "future-amber"] + NoteHighlightColour.allCases.compactMap(\.storedKey)
+        for before in values {
+            for colour in NoteHighlightColour.allCases {
+                let (engine, view) = makeEngine(NoteDocument(blocks: [.text("T"), .text("body")]))
+                defer { engine.detachView() }
+                view.setSelectedRange(NSRange(location: 6, length: 0))
+                view.typingAttributes[.noteMark(.highlight)] = before
+                view.typingAttributes[.noteMark(.bold)] = true
+                let unchanged = try NoteContentCodec.encode(engine.document())
+                XCTAssertTrue(engine.setHighlight(colour))
+                let after: Any = colour.storedKey as Any? ?? true
+                let changed = !NSDictionary(dictionary: ["value": before ?? NSNull()]).isEqual(to: ["value": after])
+                XCTAssertEqual(engine.history.undoOps.count, changed ? 1 : 0, "colour changes need their own step")
+                XCTAssertEqual(try NoteContentCodec.encode(engine.document()), unchanged, "a typing mark never rewrites existing text")
+                if changed {
+                    XCTAssertTrue(engine.history.undo())
+                    XCTAssertEqual(NSDictionary(dictionary: ["value": view.typingAttributes[.noteMark(.highlight)] ?? NSNull()]),
+                                   NSDictionary(dictionary: ["value": before ?? NSNull()]))
+                    XCTAssertTrue(engine.history.redo())
+                }
+                XCTAssertEqual(NSDictionary(dictionary: ["value": view.typingAttributes[.noteMark(.highlight)] ?? NSNull()]),
+                               NSDictionary(dictionary: ["value": after]))
+                XCTAssertEqual(view.typingAttributes[.noteMark(.bold)] as? Bool, true)
+                type("x", view)
+                let saved = try NoteContentCodec.encode(engine.document())
+                let loaded = try XCTUnwrap(NoteContentCodec.decode(saved).document)
+                let mark = try XCTUnwrap(loaded.blocks[1].marks.first { $0.kind == .highlight })
+                XCTAssertEqual(mark.colour, colour.storedKey, "serialized colour after Redo then typing")
+                XCTAssertEqual(mark.offset, 4); XCTAssertEqual(mark.length, 1)
+            }
+        }
+        // Undo to a future colour, then type: the unknown stored key stays verbatim.
+        let (engine, view) = makeEngine(NoteDocument(blocks: [.text("T"), .text("body")]))
+        defer { engine.detachView() }
+        view.setSelectedRange(NSRange(location: 6, length: 0))
+        view.typingAttributes[.noteMark(.highlight)] = "future-amber"
+        XCTAssertTrue(engine.setHighlight(nil)); XCTAssertTrue(engine.history.undo())
+        type("x", view)
+        let saved = try NoteContentCodec.encode(engine.document())
+        let loaded = try XCTUnwrap(NoteContentCodec.decode(saved).document)
+        XCTAssertEqual(loaded.blocks[1].marks.first { $0.kind == .highlight }?.colour, "future-amber")
+    }
+
     func testG05NativePaletteFocusHandoffKeepsTheRequestAndText() async throws {
         var box = NoteBlock.text("tip", id: UUID(), style: "quote"); box.callout = "💡"
         let (engine, view) = makeEngine(NoteDocument(blocks: [.text("T"), box, .text("body")]), window: true)

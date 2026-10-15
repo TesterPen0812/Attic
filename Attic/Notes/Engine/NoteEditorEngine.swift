@@ -340,7 +340,7 @@ final class NoteEditorEngine: NSObject, NSTextViewDelegate, NSTextStorageDelegat
         }
         history.emptyParagraphState = { [weak self] in self?.emptyParagraphBlock() }
         history.onEmptyParagraphSnapshot = { [weak self] block in self?.restoreEmptyParagraph(block) }
-        history.onTypingMarkSnapshot = { [weak self] kind, enabled in self?.setTypingMark(kind, enabled: enabled) }
+        history.onTypingMarkSnapshot = { [weak self] kind, value in self?.setTypingMark(kind, value: value) }
         history.onBoundaryTypingMarksSnapshot = { [weak self] marks in
             guard let self, let textView = self.textView else { return }
             var attributes = self.attributes(forParagraphAt: textView.selectedRange().location)
@@ -3110,10 +3110,11 @@ extension NoteEditorEngine {
 
     private func applyMark(_ kind: NoteMark.Kind, url: String?, selection: NSRange, forced: Bool? = nil) -> Bool {
         if selection.length == 0, let textView {
-            let wasOn = textView.typingAttributes[.noteMark(kind)] != nil
-            let turnOn = forced ?? !wasOn
-            history.recordTypingMarkChange(kind, before: wasOn, after: turnOn)
-            setTypingMark(kind, enabled: turnOn, value: url)
+            let before = textView.typingAttributes[.noteMark(kind)]
+            let turnOn = forced ?? (before == nil)
+            let after: Any? = turnOn ? (url as Any? ?? true) : nil
+            history.recordTypingMarkChange(kind, before: before, after: after)
+            setTypingMark(kind, value: after)
             history.breakCoalescing()
             return true
         }
@@ -3152,10 +3153,10 @@ extension NoteEditorEngine {
 
     private func commandName(_ kind: NoteMark.Kind) -> String { NoteFormatCommand.mark(kind).title }
 
-    private func setTypingMark(_ kind: NoteMark.Kind, enabled: Bool, value: String? = nil) {
+    private func setTypingMark(_ kind: NoteMark.Kind, value: Any?) {
         guard let textView else { return }
         var attributes = textView.typingAttributes
-        attributes[.noteMark(kind)] = enabled ? (value ?? true) as Any : nil
+        attributes[.noteMark(kind)] = value
         for key in [NSAttributedString.Key.link, .underlineStyle, .strikethroughStyle, .backgroundColor] { attributes[key] = nil }
         let base = self.attributes(forParagraphAt: textView.selectedRange().location)
         let marks = Dictionary(uniqueKeysWithValues: NoteMark.Kind.allCases.compactMap { mark in

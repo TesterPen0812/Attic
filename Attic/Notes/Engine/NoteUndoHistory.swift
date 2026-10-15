@@ -47,7 +47,7 @@ final class NoteUndoHistory {
         fileprivate var tagPickerDelta: (adds: [String], removes: [String])?
         fileprivate var paragraphStyleSnapshot: (location: Int, before: ParagraphState, after: ParagraphState)?
         fileprivate var emptyParagraphSnapshot: (before: NoteBlock?, after: NoteBlock?)?
-        fileprivate var typingMarkSnapshot: (kind: NoteMark.Kind, before: Bool, after: Bool)?
+        fileprivate var typingMarkSnapshot: (kind: NoteMark.Kind, before: Any?, after: Any?)?
         /// Delimiter conversion restores the unmarked closing boundary on
         /// either replay, even when the caret sits just after marked text.
         fileprivate var boundaryTypingMarks: [NoteMark.Kind: Any]?
@@ -109,7 +109,7 @@ final class NoteUndoHistory {
     var onParagraphStyleSnapshot: ((Int, ParagraphState) -> Void)?
     var emptyParagraphState: (() -> NoteBlock?)?
     var onEmptyParagraphSnapshot: ((NoteBlock?) -> Void)?
-    var onTypingMarkSnapshot: ((NoteMark.Kind, Bool) -> Void)?
+    var onTypingMarkSnapshot: ((NoteMark.Kind, Any?) -> Void)?
     var onBoundaryTypingMarksSnapshot: (([NoteMark.Kind: Any]) -> Void)?
     /// Puts a table's grid back (Undo or Redo); false when the table is no
     /// longer in the note (the step is then skipped).
@@ -201,7 +201,7 @@ final class NoteUndoHistory {
                                        (tag: String, adds: Bool, changesTags: Bool)?,
                                        (adds: [String], removes: [String])?,
                                        (location: Int, before: ParagraphState, after: ParagraphState)?,
-                                       (kind: NoteMark.Kind, before: Bool, after: Bool)?,
+                                       (kind: NoteMark.Kind, before: Any?, after: Any?)?,
                                        (before: NoteBlock?, after: NoteBlock?)?,
                                        TableSnapshot?, NSRange?, NSRange?)
         fileprivate let undo: [Saved]
@@ -490,8 +490,8 @@ final class NoteUndoHistory {
         append(op)
     }
 
-    func recordTypingMarkChange(_ kind: NoteMark.Kind, before: Bool, after: Bool) {
-        guard before != after else { return }
+    func recordTypingMarkChange(_ kind: NoteMark.Kind, before: Any?, after: Any?) {
+        guard !NSDictionary(dictionary: ["value": before ?? NSNull()]).isEqual(to: ["value": after ?? NSNull()]) else { return }
         open = nil
         let empty = NSAttributedString()
         let op = Op(range: NSRange(location: 0, length: 0), current: empty, other: empty,
