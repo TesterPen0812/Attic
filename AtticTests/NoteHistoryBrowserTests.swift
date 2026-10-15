@@ -1,10 +1,69 @@
 import AppKit
 import SwiftData
+import SwiftUI
 import XCTest
 @testable import Attic
 
 @MainActor
 final class NoteHistoryBrowserTests: XCTestCase {
+    func testU32OnlyTheShownVersionAndItsViewportRequestImages() async throws {
+        let bitmap = try XCTUnwrap(NSBitmapImageRep(bitmapDataPlanes: nil, pixelsWide: 160, pixelsHigh: 64,
+            bitsPerSample: 8, samplesPerPixel: 4, hasAlpha: true, isPlanar: false,
+            colorSpaceName: .deviceRGB, bytesPerRow: 0, bitsPerPixel: 0))
+        let data = try XCTUnwrap(bitmap.representation(using: .png, properties: [:]))
+        let items = (0..<20).map { _ in
+            StagedNoteAttachment(id: UUID(), filename: "Earlier.png", contentTypeIdentifier: "public.png",
+                byteCount: Int64(data.count), digest: NotePayloadDigest.sha256(data), data: data)
+        }
+        let images = items.map { NoteBlock.image(attachmentID: $0.id, pixelWidth: 160, pixelHeight: 64) }
+        let earlier = NoteDocument(blocks: [.text("History"), images[0]]
+            + (0..<100).map { .text("Body paragraph \($0)") } + Array(images.dropFirst()))
+        guard case let .success(created) = store.createDocumentNote(id: UUID(), document: earlier, staged: items) else {
+            return XCTFail("Could not create the image fixture")
+        }
+        XCTAssertTrue(store.recordVersion(noteID: created.noteID, reason: .pause))
+        guard case .success = store.saveDocument(noteID: created.noteID,
+            document: NoteDocument(blocks: [.text("History"), .text("Current paragraph")]),
+            baseRevisionID: created.revisionID) else { return XCTFail("Could not save Current") }
+        await XCTAssertTrueAsync(await controller.openDurably(noteID: created.noteID))
+        await XCTAssertTrueAsync(await controller.openHistoryDurably())
+        let browser = try XCTUnwrap(controller.historyBrowser)
+        let unseen = try XCTUnwrap(browser.preview?.engine)
+        let provider = HistoryImageProvider(base: controller)
+        unseen.imageProvider = provider
+        browser.showsCurrent = true
+        controller.refreshHistoryPreview()
+        let size = CGSize(width: 320, height: 464)
+        let host = NSHostingView(rootView: NoteHistoryPage(controller: controller, browser: browser,
+            layout: PanelPageLayout(cornerSize: 52, panelSize: size)))
+        let window = NSWindow(contentRect: CGRect(origin: .zero, size: size), styleMask: [.borderless],
+                              backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        window.contentView = host
+        defer { controller.closeHistory(); window.close() }
+        host.layoutSubtreeIfNeeded()
+        try await Task.sleep(for: .milliseconds(200))
+        XCTAssertTrue(provider.requests.isEmpty, "Current's comparison labels must not load an unseen version's images")
+        browser.showsCurrent = false
+        controller.refreshHistoryPreview()
+        let shown = try XCTUnwrap(browser.preview?.engine)
+        shown.imageProvider = provider
+        let attachments = shown.objects().compactMap { $0.0 as? NoteImageAttachment }
+        let first = try XCTUnwrap(attachments.first)
+        for _ in 0..<100 {
+            host.layoutSubtreeIfNeeded()
+            if first.renderedImage != nil { break }
+            try await Task.sleep(for: .milliseconds(20))
+        }
+        XCTAssertNotNil(first.renderedImage, "the shown version's viewport loads within two seconds")
+        XCTAssertFalse(first.isMissing)
+        XCTAssertEqual(provider.requests, [items[0].id], "offscreen images are never requested")
+        XCTAssertTrue(attachments.dropFirst().allSatisfy { $0.renderedImage == nil })
+        XCTAssertTrue(unseen.objects().compactMap { $0.0 as? NoteImageAttachment }.allSatisfy { $0.renderedImage == nil })
+        XCTAssertEqual(shown.document(), browser.comparison.document)
+        XCTAssertFalse(shown.history.canUndo, "preview completion must not edit the note or create undo")
+    }
+
     func testR14VersionRestoreKeepsLineBreakAndRunFields() async throws {
         var number = NoteBlock.text("item", style: "number"); number.start = 12
         var code = NoteBlock.text("a\u{2028}b", style: "mono"); code.language = "swift"
@@ -298,6 +357,19 @@ final class NoteHistoryBrowserTests: XCTestCase {
         XCTAssertEqual(formatOnly.changedBlocks, [1])
         XCTAssertEqual(formatOnly.differingCount, 1)
     }
+}
+
+@MainActor
+private final class HistoryImageProvider: NoteImageProviding {
+    let base: NoteImageProviding
+    var requests: [UUID] = []
+    init(base: NoteImageProviding) { self.base = base }
+    func fileURL(forAttachment id: UUID) async -> URL? {
+        requests.append(id)
+        return await base.fileURL(forAttachment: id)
+    }
+    func filename(forAttachment id: UUID) -> String? { base.filename(forAttachment: id) }
+    func imageBytes(forAttachment id: UUID) -> StagedNoteAttachment? { base.imageBytes(forAttachment: id) }
 }
 
 @MainActor

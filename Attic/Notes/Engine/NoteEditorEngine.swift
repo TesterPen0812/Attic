@@ -900,6 +900,10 @@ final class NoteEditorEngine: NSObject, NSTextViewDelegate, NSTextStorageDelegat
         // A size learnt from the file is stored with the next real save;
         // opening a note never writes it.
         if sizeChanged { documentCache = nil }
+        // The attachment's image changed in place. Notify TextKit so its
+        // cached viewport layers redraw too (history's comparison fragments
+        // can otherwise keep the empty image after decoding completes).
+        textStorage.edited(.editedAttributes, range: range, changeInLength: 0)
         invalidateLayout(range)
     }
 

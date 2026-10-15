@@ -1,6 +1,50 @@
 import AppKit
 import XCTest
 
+/// The native TextKit layers must display the asynchronously decoded image.
+/// Offscreen cacheDisplay redraws the text and can conceal a stale layer.
+final class NotesHistoryImageUITests: XCTestCase {
+    func testU32HistoryImageAppearsWithinFiveSeconds() throws {
+        guard ProcessInfo.processInfo.environment["ATTIC_HISTORY_IMAGE_UAT"] == "1" else {
+            throw XCTSkip("Requires the isolated history-image preview (run_local_ui_tests.zsh).")
+        }
+        let app = XCUIApplication()
+        app.launchEnvironment = ["ATTIC_UI_TESTING": "1", "ATTIC_UI_TEST_NONKEY_REVEAL": "1",
+            "ATTIC_UI_TEST_PAGE": "notes", "ATTIC_UI_TEST_NOTES_SCENE": "history-open"]
+        app.launchArguments = ["-AtticUseNewNotesEditor", "YES", "-appearancePreference", "dark"]
+        app.launch()
+        defer { app.terminate() }
+        XCTAssertTrue(app.descendants(matching: .any)["notes-history-browser"].waitForExistence(timeout: 10))
+        let panel = app.dialogs.containing(.button, identifier: "panel-pin-button").firstMatch
+        let deadline = Date().addingTimeInterval(5)
+        var visible = false
+        repeat {
+            let capture = panel.screenshot()
+            let bitmap = try XCTUnwrap(NSBitmapImageRep(data: capture.pngRepresentation))
+            var blue = 0, teal = 0
+            for x in 0..<bitmap.pixelsWide { for y in 0..<bitmap.pixelsHigh {
+                guard let color = bitmap.colorAt(x: x, y: y)?.usingColorSpace(.deviceRGB) else { continue }
+                // Screenshots carry the display profile. Recognize the two
+                // saturated hues rather than assuming the PNG's raw RGB.
+                if color.blueComponent - color.redComponent > 0.3,
+                   color.blueComponent - color.greenComponent > 0.25 { blue += 1 }
+                if color.greenComponent - color.redComponent > 0.3,
+                   abs(color.blueComponent - color.greenComponent) < 0.08 { teal += 1 }
+            } }
+            visible = blue > 300 && teal > 300
+            if visible || Date() >= deadline {
+                let attachment = XCTAttachment(screenshot: capture)
+                attachment.name = "U32-history-image"
+                attachment.lifetime = .keepAlways
+                add(attachment)
+                break
+            }
+            RunLoop.current.run(until: Date().addingTimeInterval(0.1))
+        } while Date() < deadline
+        XCTAssertTrue(visible, "the old version's blue/teal image must appear within five seconds")
+    }
+}
+
 /// The Phase 2 Notes page in the real app (slice 2's main flows): a new
 /// note is kept when you leave and reopens where you left it; `#word` in
 /// the title becomes a tag (one ⌘Z undoes it); Delete Note shows All notes
