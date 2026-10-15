@@ -303,8 +303,17 @@ final class NoteEditorTextView: NSTextView, NSAccessibilityCustomRotorItemSearch
             pinsMonoCopy = true
         }
         pinsBlockHandle = true
+        if let engine {
+            let line = engine.lineRange(at: location).location
+            if engine.headingControls[line] != nil {
+                engine.setHoveredHeading(line)
+                pinsHeadingHover = true
+            }
+        }
     }
     var pinsBlockHandle = false
+    /// Capture seam: the hovered heading stays where the scene put it.
+    var pinsHeadingHover = false
     #endif
 
     /// The block's rectangle in this view (its fragments' union).
@@ -491,7 +500,30 @@ final class NoteEditorTextView: NSTextView, NSAccessibilityCustomRotorItemSearch
         updateBlockHandle(at: convert(event.locationInWindow, from: nil))
         #endif
         updateMonoCopy(at: convert(event.locationInWindow, from: nil))
+        updateHeadingHover(at: convert(event.locationInWindow, from: nil))
         hostedCursor(atWindowPoint: event.locationInWindow)?.set()
+    }
+
+    /// T-09 C: the pointer anywhere on a heading's line (its chevron
+    /// included) shows that heading's fold chevron.
+    func updateHeadingHover(at point: NSPoint?) {
+        guard let engine else { return }
+        #if DEBUG
+        if pinsHeadingHover { return }
+        #endif
+        engine.setHoveredHeading(point.flatMap(headingOffset(at:)))
+    }
+
+    private func headingOffset(at point: NSPoint) -> Int? {
+        guard let engine else { return nil }
+        if let hit = engine.headingControls.first(where: { $0.value.frame.contains(point) }) { return hit.key }
+        // The whole line's band, margins included: a fragment's frame may
+        // be only as wide as its text.
+        guard let (fragment, location) = fragment(nearViewPoint: point) else { return nil }
+        let frame = fragment.layoutFragmentFrame.offsetBy(dx: textContainerOrigin.x, dy: textContainerOrigin.y)
+        guard point.y >= frame.minY, point.y <= frame.maxY else { return nil }
+        let line = engine.lineRange(at: location).location
+        return engine.headingControls[line] != nil ? line : nil
     }
 
     override func cursorUpdate(with event: NSEvent) {
@@ -545,6 +577,7 @@ final class NoteEditorTextView: NSTextView, NSAccessibilityCustomRotorItemSearch
         hideBlockHandle()
         #endif
         updateMonoCopy(at: nil)
+        updateHeadingHover(at: nil)
     }
 
     #if DEBUG

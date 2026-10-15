@@ -127,6 +127,9 @@ final class NoteEditorEngine: NSObject, NSTextViewDelegate, NSTextStorageDelegat
     private(set) var lastSyntaxScannedUTF16Count = 0
     var headingSectionsCache: [NoteHeadingSection]?
     var headingControls: [Int: NoteHeadingButton] = [:]
+    /// The heading line under the pointer (its start), whose fold chevron
+    /// shows (T-09 C); nil when the pointer is on no heading.
+    var hoveredHeadingOffset: Int?
     var updatingHeadingControls = false
     private(set) weak var textView: NoteEditorTextView?
     private(set) var scrollView: NSScrollView?

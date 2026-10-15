@@ -907,6 +907,14 @@ extension NoteEditorEngine {
         for id in ids { setHeadingFold(id: id, folded: false) }
     }
 
+    /// The pointer moved onto the heading line starting at `offset` (nil:
+    /// onto none): only that heading's chevron, and every folded one, show.
+    func setHoveredHeading(_ offset: Int?) {
+        guard hoveredHeadingOffset != offset else { return }
+        hoveredHeadingOffset = offset
+        for (key, button) in headingControls { button.setRevealed(button.folded || key == offset, animated: true) }
+    }
+
     /// Viewport-only controls: their bounds follow the final glyph's line,
     /// including wrapped headings, without forcing offscreen layout.
     func updateHeadingControls() {
@@ -929,7 +937,11 @@ extension NoteEditorEngine {
             let button = headingControls[key] ?? NoteHeadingButton(frame: .zero)
             button.engine = self
             button.headingOffset = key
+            let existed = headingControls[key] != nil
             button.folded = section.id.map(foldedHeadingIDs.contains) == true
+            // T-09 C (owner, 2026-10-15): the chevron shows only while the
+            // heading is folded or the pointer is on its line.
+            button.setRevealed(button.folded || key == hoveredHeadingOffset, animated: existed)
             button.ink = style.markerColor
             button.isEnabled = !isReadOnly && activity == .idle
             // R14 B.4: 8 wide, 6 after the last glyph, centred on the
@@ -958,10 +970,15 @@ final class NoteHeadingButton: NSButton {
     var headingOffset = 0
     var folded = false
     var ink = NSColor.secondaryLabelColor
+    /// Whether the chevron shows (T-09 C): folded, or the pointer on the
+    /// heading's line. Hidden it is only transparent, so it keeps its place
+    /// (nothing moves when it appears), its click and VoiceOver.
+    private(set) var isRevealed = false
     override var isFlipped: Bool { true }
 
     override init(frame: NSRect) {
         super.init(frame: frame)
+        alphaValue = 0
         isBordered = false
         title = ""
         target = self
@@ -969,6 +986,20 @@ final class NoteHeadingButton: NSButton {
     }
     required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
     @objc private func toggle() { _ = engine?.toggleHeadingFold(at: headingOffset) }
+
+    func setRevealed(_ revealed: Bool, animated: Bool) {
+        let target: CGFloat = revealed ? 1 : 0
+        guard revealed != isRevealed || (!animated && alphaValue != target) else { return }
+        isRevealed = revealed
+        if animated {
+            NSAnimationContext.runAnimationGroup { context in
+                context.duration = AtticMotionScale.fast
+                animator().alphaValue = target
+            }
+        } else {
+            alphaValue = target
+        }
+    }
     override func draw(_ dirtyRect: NSRect) {
         guard let context = NSGraphicsContext.current?.cgContext else { return }
         context.saveGState()
