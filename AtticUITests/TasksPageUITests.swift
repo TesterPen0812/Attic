@@ -21,7 +21,7 @@ final class TasksPageUITests: XCTestCase {
         app.launchEnvironment["ATTIC_UI_TESTING"] = "1"
         app.launchArguments += ["--attic-gallery", "--attic-tasks-page"]
         var opened = false
-        for _ in 0..<2 where !opened {
+        for attempt in 0..<2 where !opened {
             app.launch()
             let deadline = Date().addingTimeInterval(15)
             while Date() < deadline, !window.exists {
@@ -29,7 +29,16 @@ final class TasksPageUITests: XCTestCase {
                 _ = window.waitForExistence(timeout: 1)
             }
             opened = window.exists
-            if !opened { app.terminate() }
+            if !opened {
+                let evidence = XCTAttachment(string: "Launch attempt \(attempt + 1), state=\(app.state)\n\(app.debugDescription)")
+                evidence.name = "Tasks-page-launch-failure-\(attempt + 1)"
+                evidence.lifetime = .keepAlways
+                add(evidence)
+                if attempt == 0 {
+                    print("::warning title=Tasks UI launch retry::First Tasks page launch failed; evidence retained in xcresult before retrying.")
+                }
+                app.terminate()
+            }
         }
         XCTAssertTrue(opened, "The Tasks page window did not open: \(app.debugDescription)")
         XCTAssertTrue(row("Book dentist").waitForExistence(timeout: 5), "the demo tasks are listed")
