@@ -7,6 +7,31 @@ import XCTest
 /// identity, IME over a selection, VoiceOver elements.
 @MainActor
 final class NoteEditorEngineTests: XCTestCase {
+    func testG04CodeExportFlattensDatesWithoutMarksOrMutation() throws {
+        let day = NoteDay(year: 2026, month: 10, day: 15)!
+        var dated = NoteBlock.text("Due \u{FFFC} **literal** `ticks`", style: "mono")
+        dated.language = "swift"
+        dated.inlines = [NoteInline(id: UUID(), kind: .date(day))]
+        dated.marks = [NoteMark(.bold, offset: 0, length: 3)]
+        var second = dated; second.text = "Next \u{FFFC}"; second.marks = []
+        let (engine, _) = makeEngine(NoteDocument(blocks: [.text("T"), dated, second]))
+        defer { engine.detachView() }
+        let before = try NoteContentCodec.encode(engine.document())
+        let calendar = Calendar(identifier: .gregorian)
+        let locale = Locale(identifier: "en_GB")
+        let readable = NoteMarkdownExport.dateText(day, calendar: calendar, locale: locale)
+        let exported = NoteMarkdownExport.markdown(engine.document(), calendar: calendar, locale: locale)
+        XCTAssertFalse(exported.contains("\u{FFFC}"))
+        XCTAssertTrue(exported.contains("Due " + readable + " **literal** `ticks`"))
+        XCTAssertTrue(exported.contains("Next " + readable))
+        XCTAssertFalse(exported.contains("**Due**"), "stored marks do not become code delimiters")
+        XCTAssertEqual(try NoteContentCodec.encode(engine.document()), before)
+        XCTAssertFalse(engine.history.canUndo)
+        let imported = try NoteMarkdownImport.document(exported)
+        XCTAssertEqual(imported.blocks.dropFirst().map(\.text), ["Due " + readable + " **literal** `ticks`", "Next " + readable])
+        XCTAssertEqual(imported.blocks.dropFirst().map(\.style), ["mono", "mono"])
+    }
+
     func testG01ChecklistShorthandKeepsAttributedSuffixAndTrueUndoPayload() throws {
         for prefix in ["[ ] ", "[x] ", "[X] "] {
             let suffix = "Due \u{FFFC} styled tail"
