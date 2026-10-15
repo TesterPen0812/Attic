@@ -1377,7 +1377,10 @@ struct TasksPage: View {
                         // Find's quiet count, or that nothing matches (as on
                         // Done).
                         if sections.open.isEmpty {
-                            AtticEmptyLine(text: String(localized: "No tasks on \(tab.title) match “\(query)”."))
+                            // On the search's text column, as its count is
+                            // (U-12): the tabs it would line up with are gone.
+                            AtticEmptyLine(text: String(localized: "No tasks on \(tab.title) match “\(query)”."),
+                                           leading: AtticLayout.textX)
                                 .accessibilityIdentifier("tasks-empty-line")
                         } else if let count = model.listSearchCount(for: tab) {
                             AtticText(verbatim: String(localized: "\(count.matches) of \(count.total) tasks on \(tab.title)"),
@@ -1387,7 +1390,7 @@ struct TasksPage: View {
                                 .accessibilityIdentifier("tasks-find-count")
                         }
                     } else if sections.open.isEmpty, view.filters {
-                        AtticEmptyLine(text: String(localized: "Nothing in this view"))
+                        AtticEmptyLine(text: String(localized: "Nothing in this view."))
                             .accessibilityIdentifier("tasks-empty-line")
                     } else if sections.open.isEmpty, let message = model.emptyMessage[tab] {
                         AtticEmptyLine(text: message)

@@ -589,12 +589,13 @@ final class TasksPageModel: ObservableObject {
 
     /// What an empty list says (Direction A): Now with nothing open is
     /// caught up when something was finished today, points to Later when
-    /// Later has tasks, and otherwise invites the first task.
+    /// Later has tasks, and otherwise invites the first task. Every empty
+    /// and no-match line is one short sentence with its full stop (U-11).
     var emptyMessage: [TasksTab: String] {
         [
-            .now: hasDoneToday ? String(localized: "You’re caught up")
-                : (backlogCount > 0 ? String(localized: "Nothing active") : String(localized: "Add your first task")),
-            .backlog: String(localized: "Nothing for later")
+            .now: hasDoneToday ? String(localized: "You’re caught up.")
+                : (backlogCount > 0 ? String(localized: "Nothing active.") : String(localized: "Add your first task.")),
+            .backlog: String(localized: "Nothing for later.")
         ]
     }
 

@@ -890,10 +890,10 @@ private struct FeedbackBoard: View {
             .padding(.horizontal, 16)
         }
         BoardHeading(title: "Empty · one quiet italic line, where the first row goes")
-        AtticSpecimen("Now, first use", fullWidth: true) { AtticEmptyLine(text: String(localized: "Add your first task")) }
-        AtticSpecimen("Now, all finished today", fullWidth: true) { AtticEmptyLine(text: String(localized: "You’re caught up")) }
-        AtticSpecimen("Now, tasks waiting in Later", fullWidth: true) { AtticEmptyLine(text: String(localized: "Nothing active. Choose from Later.")) }
-        AtticSpecimen("Later", fullWidth: true) { AtticEmptyLine(text: String(localized: "Nothing for later")) }
+        AtticSpecimen("Now, first use", fullWidth: true) { AtticEmptyLine(text: String(localized: "Add your first task.")) }
+        AtticSpecimen("Now, all finished today", fullWidth: true) { AtticEmptyLine(text: String(localized: "You’re caught up.")) }
+        AtticSpecimen("Now, tasks waiting in Later", fullWidth: true) { AtticEmptyLine(text: String(localized: "Nothing active.")) }
+        AtticSpecimen("Later", fullWidth: true) { AtticEmptyLine(text: String(localized: "Nothing for later.")) }
         AtticSpecimen("Done", fullWidth: true) { AtticEmptyLine(text: String(localized: "Finished tasks collect here.")) }
         AtticSpecimen("Search with no results", fullWidth: true) { AtticEmptyLine(text: String(localized: "No tasks match “invoice”.")) }
         BoardHeading(title: "Error · never hidden, with the next step")
