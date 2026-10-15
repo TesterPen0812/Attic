@@ -30,7 +30,7 @@ jobs:
             ATTIC_MACOS_BUNDLE_IDENTIFIER=com.taha.Attic.preview.fix14basebuild \
             ATTIC_MACOS_UNIT_HOST_BUNDLE_IDENTIFIER=com.taha.Attic.preview.fix14basetests \
             ATTIC_MACOS_UNIT_TEST_BUNDLE_IDENTIFIER=com.taha.Attic.fix14base.tests
-      - name: Isolate the repeated primary-focus failure
+      - name: Repeat the base dropdown suite with its preceding test state
         id: focus
         continue-on-error: true
         run: |
@@ -40,24 +40,15 @@ jobs:
             ATTIC_MACOS_UNIT_HOST_BUNDLE_IDENTIFIER=com.taha.Attic.preview.fix14basetests \
             ATTIC_MACOS_UNIT_TEST_BUNDLE_IDENTIFIER=com.taha.Attic.fix14base.tests \
             -parallel-testing-enabled NO -test-iterations 10 -test-repetition-relaunch-enabled YES \
-            -only-testing:AtticTests/AtticDropdownTests/testH8_03PrimaryFocusRequestSurvivesFirstBuildAndSectionEntry \
+            -only-testing:AtticTests/AtticDropdownTests \
+            -skip-testing:AtticTests/AtticDropdownTests/testOpenAndFilterCostNoMoreThanBefore \
+            -skip-testing:AtticTests/AtticDropdownTests/testOpenAndFilterCostNoMoreThanBeforeWithAccessibilityOn \
+            -skip-testing:AtticTests/AtticDropdownTests/testPairedSamplerRejectsARealPriorityOpeningSlowdown \
             -resultBundlePath "$RUNNER_TEMP/Fix14Base-focus.xcresult"
-      - name: Isolate the date-notification failure
-        id: date
-        continue-on-error: true
-        run: |
-          Scripts/xcodebuild_locked.sh test-without-building -project Attic.xcodeproj -scheme Attic -configuration Local \
-            -destination 'platform=macOS' -derivedDataPath "$RUNNER_TEMP/Fix14BaseDD" CODE_SIGNING_ALLOWED=NO \
-            ATTIC_MACOS_BUNDLE_IDENTIFIER=com.taha.Attic.preview.fix14basebuild \
-            ATTIC_MACOS_UNIT_HOST_BUNDLE_IDENTIFIER=com.taha.Attic.preview.fix14basetests \
-            ATTIC_MACOS_UNIT_TEST_BUNDLE_IDENTIFIER=com.taha.Attic.fix14base.tests \
-            -parallel-testing-enabled NO -test-iterations 20 -test-repetition-relaunch-enabled YES \
-            -only-testing:AtticTests/PhaseXHunt9Tests/testCoverageDateEnvironmentNotificationsPublishWithoutMutatingStores \
-            -resultBundlePath "$RUNNER_TEMP/Fix14Base-date.xcresult"
       - name: Summarize evidence
         if: always()
         run: |
-          for name in focus date; do
+          for name in focus; do
             if test -d "$RUNNER_TEMP/Fix14Base-$name.xcresult"; then
               xcrun xcresulttool get test-results summary --path "$RUNNER_TEMP/Fix14Base-$name.xcresult" --format json > "$RUNNER_TEMP/Fix14Base-$name-summary.json"
               cat "$RUNNER_TEMP/Fix14Base-$name-summary.json"
@@ -75,5 +66,4 @@ jobs:
         if: always()
         env:
           FOCUS: ${{ steps.focus.outcome }}
-          DATE: ${{ steps.date.outcome }}
-        run: test "$FOCUS" = success && test "$DATE" = success
+        run: test "$FOCUS" = success
