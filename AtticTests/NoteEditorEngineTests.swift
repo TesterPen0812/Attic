@@ -2299,7 +2299,12 @@ final class NoteEditorEngineTests: XCTestCase {
             XCTAssertEqual(engine.document().blocks[1].kind, .checklist, literal)
             XCTAssertEqual(engine.document().blocks[1].checked, literal.contains("x"), literal)
             XCTAssertTrue(engine.history.undo())
-            XCTAssertEqual(engine.document().blocks[1].text, literal, literal)
+            // Owner's Fix G-01: restore the real pre-conversion bullet, not
+            // invented body text (phase2/owner-decisions.md, 2026-10-15).
+            let wasBullet = literal.hasPrefix("- ")
+            XCTAssertEqual(engine.document().blocks[1].text, wasBullet ? String(literal.dropFirst(2)) : literal, literal)
+            XCTAssertEqual(engine.document().blocks[1].style, wasBullet ? "bullet" : nil, literal)
+            XCTAssertEqual(engine.document().blocks[1].kind, .text, literal)
             XCTAssertTrue(engine.history.redo())
             XCTAssertEqual(engine.document().blocks[1].kind, .checklist, literal)
         }
