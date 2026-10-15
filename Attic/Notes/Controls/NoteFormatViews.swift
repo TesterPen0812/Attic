@@ -1007,7 +1007,8 @@ struct NoteFormatStyleListView: View {
         switch command {
         case .paragraph(.heading(1)): .title
         case .paragraph(.heading(2)): .heading
-        case .paragraph(.heading): .subheading
+        case .paragraph(.heading(3)): .subheading
+        case .paragraph(.heading): .smallHeading
         case .paragraph(.mono): .mono
         default: .body
         }
@@ -1068,6 +1069,7 @@ extension NoteSlashListView {
         case .title: AtticFormatStyleKind.title.font
         case .heading: AtticFormatStyleKind.heading.font
         case .subheading: AtticFormatStyleKind.subheading.font
+        case .smallHeading: AtticFormatStyleKind.smallHeading.font
         default: nil
         }
     }

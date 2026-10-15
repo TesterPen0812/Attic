@@ -320,13 +320,14 @@ struct AtticFormatSeparator: View {
 /// A paragraph style as the style list draws it: each name in a hint of
 /// its own style (Title … Mono).
 enum AtticFormatStyleKind {
-    case title, heading, subheading, body, mono
+    case title, heading, subheading, smallHeading, body, mono
 
     var font: Font {
         switch self {
         case .title: .system(size: 15, weight: .bold)
         case .heading: .system(size: 14, weight: .semibold)
         case .subheading: .system(size: 13.5, weight: .semibold)
+        case .smallHeading: .system(size: 13, weight: .semibold)
         case .body: .system(size: 13, weight: .regular)
         case .mono: .system(size: 12, weight: .regular, design: .monospaced)
         }
