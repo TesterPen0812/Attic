@@ -262,7 +262,7 @@ final class PhaseXDesign1Tests: XCTestCase {
         XCTAssertEqual(design(.dark).tokens.quietIconInk, .helper)
         let light = design(.light).tokens.ink(.helper), dark = design(.dark).tokens.ink(.helper)
         func hex(_ c: AtticRGBA) -> [Int] { [c.red, c.green, c.blue].map { Int(($0 * 255).rounded()) } }
-        XCTAssertEqual(hex(light), [0x7A, 0x7A, 0x7A], "Light: the inactive labels' ink")
+        XCTAssertEqual(hex(light), [0x73, 0x73, 0x73], "Light: the inactive labels' ink (T-16 B)")
         XCTAssertEqual(hex(dark), [0xA4, 0xA4, 0xA4], "Dark: the inactive labels' ink")
     }
 
