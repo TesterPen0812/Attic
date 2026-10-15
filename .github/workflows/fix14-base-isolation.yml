@@ -1,0 +1,79 @@
+name: Fix14 base isolation
+on:
+  push:
+    branches: [phase-x/fix14]
+    paths: [.github/workflows/fix14-base-isolation.yml]
+permissions:
+  contents: read
+jobs:
+  base:
+    runs-on: macos-26
+    timeout-minutes: 35
+    env:
+      DEVELOPER_DIR: /Applications/Xcode_26.6.app/Contents/Developer
+      TEST_RUNNER_ATTIC_KEY_WINDOW_TESTS: "1"
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: af528e93
+          fetch-depth: 0
+      - name: Record unchanged integration base
+        run: |
+          git rev-parse HEAD
+          git status --porcelain
+          sw_vers
+          Scripts/xcodebuild_locked.sh -version
+      - name: Build base test host
+        run: |
+          Scripts/xcodebuild_locked.sh build-for-testing -project Attic.xcodeproj -scheme Attic -configuration Local \
+            -destination 'platform=macOS' -derivedDataPath "$RUNNER_TEMP/Fix14BaseDD" CODE_SIGNING_ALLOWED=NO \
+            ATTIC_MACOS_BUNDLE_IDENTIFIER=com.taha.Attic.preview.fix14basebuild \
+            ATTIC_MACOS_UNIT_HOST_BUNDLE_IDENTIFIER=com.taha.Attic.preview.fix14basetests \
+            ATTIC_MACOS_UNIT_TEST_BUNDLE_IDENTIFIER=com.taha.Attic.fix14base.tests
+      - name: Isolate the repeated primary-focus failure
+        id: focus
+        continue-on-error: true
+        run: |
+          Scripts/xcodebuild_locked.sh test-without-building -project Attic.xcodeproj -scheme Attic -configuration Local \
+            -destination 'platform=macOS' -derivedDataPath "$RUNNER_TEMP/Fix14BaseDD" CODE_SIGNING_ALLOWED=NO \
+            ATTIC_MACOS_BUNDLE_IDENTIFIER=com.taha.Attic.preview.fix14basebuild \
+            ATTIC_MACOS_UNIT_HOST_BUNDLE_IDENTIFIER=com.taha.Attic.preview.fix14basetests \
+            ATTIC_MACOS_UNIT_TEST_BUNDLE_IDENTIFIER=com.taha.Attic.fix14base.tests \
+            -parallel-testing-enabled NO -test-iterations 10 -test-repetition-relaunch-enabled YES \
+            -only-testing:AtticTests/AtticDropdownTests/testH8_03PrimaryFocusRequestSurvivesFirstBuildAndSectionEntry \
+            -resultBundlePath "$RUNNER_TEMP/Fix14Base-focus.xcresult"
+      - name: Isolate the date-notification failure
+        id: date
+        continue-on-error: true
+        run: |
+          Scripts/xcodebuild_locked.sh test-without-building -project Attic.xcodeproj -scheme Attic -configuration Local \
+            -destination 'platform=macOS' -derivedDataPath "$RUNNER_TEMP/Fix14BaseDD" CODE_SIGNING_ALLOWED=NO \
+            ATTIC_MACOS_BUNDLE_IDENTIFIER=com.taha.Attic.preview.fix14basebuild \
+            ATTIC_MACOS_UNIT_HOST_BUNDLE_IDENTIFIER=com.taha.Attic.preview.fix14basetests \
+            ATTIC_MACOS_UNIT_TEST_BUNDLE_IDENTIFIER=com.taha.Attic.fix14base.tests \
+            -parallel-testing-enabled NO -test-iterations 20 -test-repetition-relaunch-enabled YES \
+            -only-testing:AtticTests/PhaseXHunt9Tests/testCoverageDateEnvironmentNotificationsPublishWithoutMutatingStores \
+            -resultBundlePath "$RUNNER_TEMP/Fix14Base-date.xcresult"
+      - name: Summarize evidence
+        if: always()
+        run: |
+          for name in focus date; do
+            if test -d "$RUNNER_TEMP/Fix14Base-$name.xcresult"; then
+              xcrun xcresulttool get test-results summary --path "$RUNNER_TEMP/Fix14Base-$name.xcresult" --format json > "$RUNNER_TEMP/Fix14Base-$name-summary.json"
+              cat "$RUNNER_TEMP/Fix14Base-$name-summary.json"
+            fi
+          done
+          git diff --exit-code
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: fix14-base-isolation
+          path: |
+            ${{ runner.temp }}/Fix14Base-*.xcresult
+            ${{ runner.temp }}/Fix14Base-*-summary.json
+      - name: Preserve failing check status
+        if: always()
+        env:
+          FOCUS: ${{ steps.focus.outcome }}
+          DATE: ${{ steps.date.outcome }}
+        run: test "$FOCUS" = success && test "$DATE" = success
