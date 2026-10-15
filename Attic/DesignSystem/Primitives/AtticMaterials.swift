@@ -722,7 +722,13 @@ struct AtticPanelRim: View {
         let shape = Squircle(cornerRadius: cornerSize, exponent: AtticStyle.panelSquircleExponent)
         let dark = design.mode == .dark
         ZStack {
-            if let edge = design.tokens.panel.edge {
+            if let hairline = Self.lightHairline(for: design) {
+                // T-15 B (owner, 2026-10-15): Light panels get one faint
+                // 0.5 pt hairline inside their edge, so a white panel holds
+                // its shape over a white window.
+                shape.inset(by: Self.lightHairlineWidth / 2)
+                    .stroke(hairline.color, lineWidth: Self.lightHairlineWidth)
+            } else if let edge = design.tokens.panel.edge {
                 // Phase 0's hairline: the palette's edge colour on the shape's
                 // edge (half of it shows inside the clip).
                 shape.stroke(edge.color.color, lineWidth: edge.width)
@@ -742,6 +748,17 @@ struct AtticPanelRim: View {
         }
         .allowsHitTesting(false)
         .accessibilityHidden(true)
+    }
+
+    /// T-15 B: the Light Solid and Frosted panels' edge (Original's
+    /// neutral palettes; the other palettes keep their tinted edge, Glass
+    /// keeps its own, and Increase Contrast its stronger one). Nil keeps
+    /// the existing rim.
+    static let lightHairlineWidth = AtticHairline.width
+    static func lightHairline(for design: AtticDesignContext) -> AtticRGBA? {
+        guard design.mode == .light, !design.increaseContrast, design.palette == .original,
+              design.effectiveSurface != .glass else { return nil }
+        return .black(0.14)
     }
 
     @ViewBuilder
