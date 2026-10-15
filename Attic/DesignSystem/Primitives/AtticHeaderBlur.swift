@@ -40,6 +40,11 @@ enum AtticEdgeBlurMetrics {
     static let fadeOpacity: Double = 0.85
     /// Increase Contrast: the surface fade starts fully opaque.
     static let contrastFadeOpacity: Double = 1
+    /// With no blur (Reduce Transparency): the panel's surface is solid
+    /// under the controls, out to their inner edge, then fades out over
+    /// this much (U-02: no text ever shows sharp behind a control, and the
+    /// title's and the last line's resting places stay clear of the fade).
+    static let solidFade: CGFloat = 12
     /// See-through panel: the content is gone this far into the controls
     /// (a share of their extent from the panel's edge: by their middle)
     /// and whole again at their inner edge.
@@ -216,6 +221,14 @@ struct AtticEdgeBlurBackdrop: View {
         self.start = start
     }
 
+    /// With no blur: solid to the controls' inner edge, clear `solidFade`
+    /// past it (locations in a backdrop `height` tall).
+    static func solidStops(height: CGFloat, extent: CGFloat) -> (solid: CGFloat, clear: CGFloat) {
+        guard height > 0 else { return (1, 1) }
+        let solid = min(1, max(0, extent / height))
+        return (solid, min(1, max(solid, (extent + AtticEdgeBlurMetrics.solidFade) / height)))
+    }
+
     /// Whether the variable blur draws (not with Reduce Transparency, nor
     /// where the system has none).
     static func blurs(_ design: AtticDesignContext, available: Bool = AtticVariableBlur.isAvailable) -> Bool {
@@ -230,7 +243,7 @@ struct AtticEdgeBlurBackdrop: View {
             if blurs {
                 AtticVariableBlur(radius: CGFloat(lab.radius), edge: edge)
             }
-            if start <= 0 { surfaceFade(height: height, blurs: blurs) }
+            if start <= 0 { surfaceFade(height: height, extent: extent, blurs: blurs) }
         }
         .frame(height: height)
         .padding(edge == .top ? .top : .bottom, max(0, start))
@@ -240,17 +253,19 @@ struct AtticEdgeBlurBackdrop: View {
     }
 
     /// Opaque panel (Reduce Transparency included): the short fade over the
-    /// blur's outer part, or, with no blur, an opaque fade over all of it.
+    /// blur's outer part, or, with no blur, the solid surface under the
+    /// controls and a short fade past them (`solidFade`, U-02).
     /// See-through panel: none, blur or not (the content fades itself).
     @ViewBuilder
-    private func surfaceFade(height: CGFloat, blurs: Bool) -> some View {
+    private func surfaceFade(height: CGFloat, extent: CGFloat, blurs: Bool) -> some View {
         if !design.isTranslucent {
             let surface = design.tokens.panel.base.color
             let strength = design.increaseContrast ? AtticEdgeBlurMetrics.contrastFadeOpacity : AtticEdgeBlurMetrics.fadeOpacity
+            let solid = Self.solidStops(height: height, extent: extent)
             let stops: [Gradient.Stop] = blurs
                 ? [.init(color: surface.opacity(strength), location: 0), .init(color: surface.opacity(0), location: 1)]
-                : [.init(color: surface, location: 0), .init(color: surface.opacity(strength), location: 0.4),
-                   .init(color: surface.opacity(0), location: 1)]
+                : [.init(color: surface, location: 0), .init(color: surface, location: solid.solid),
+                   .init(color: surface.opacity(0), location: solid.clear)]
             LinearGradient(stops: stops, startPoint: edge == .top ? .top : .bottom, endPoint: edge == .top ? .bottom : .top)
                 .frame(height: blurs ? height * AtticEdgeBlurMetrics.fadeShare : height)
         }
