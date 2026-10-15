@@ -507,6 +507,22 @@ final class NotesV2TablesFeatureTests: XCTestCase {
         XCTAssertLessThanOrEqual(rect.maxX - view.scrollOffset, view.bounds.width + 0.5, "the cell is in view")
         // The fade marks the cut edge (the left one, now).
         XCTAssertNotNil(view.scrollView.layer?.mask)
+        // U-25: the card keeps its rounded outline, fixed over the scrolled
+        // cells and outside the fade; the cells clip to its corners.
+        XCTAssertFalse(view.frameView.isHidden)
+        XCTAssertFalse(view.canvas.strokesCard)
+        XCTAssertEqual(view.frameView.frame, CGRect(x: 0, y: 0, width: view.bounds.width, height: view.grid.height))
+        XCTAssertFalse(view.frameView.isDescendant(of: view.scrollView), "not faded with the cells")
+        XCTAssertEqual(view.scrollView.layer?.cornerRadius, AtticNoteTableMetrics.radius)
+    }
+
+    /// U-25: a table that fits draws its own outline with its grid.
+    func testATableThatFitsDrawsItsOwnOutline() throws {
+        let (engine, _) = makeEngine(blocks(NoteTable(texts: [["A", "B"], ["C", "D"]])))
+        let view = try view(engine)
+        XCTAssertFalse(view.grid.scrolls)
+        XCTAssertTrue(view.frameView.isHidden)
+        XCTAssertTrue(view.canvas.strokesCard)
     }
 
     /// A39: a `---` rule above a wide table. The note's owner saw the rule
