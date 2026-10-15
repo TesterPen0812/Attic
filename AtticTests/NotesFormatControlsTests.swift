@@ -474,8 +474,22 @@ final class NotesFormatControlsTests: XCTestCase {
                                                .command(.mark(.underline)), .command(.mark(.strikethrough)),
                                                .command(.mark(.link)), .command(.mark(.highlight)), .command(.mark(.code))])
         XCTAssertLessThanOrEqual(NoteFormatControls.barWidth(styleName: "Subheading"), 320 - 8, "the bar fits the panel")
-        XCTAssertLessThanOrEqual(NoteFormatRowView.minimumWidth(snapshot: .empty, toggleWidth: AtticNoteFormatMetrics.rowToggleWidth),
-                                 288, "the row fits a 320 pt panel's bottom row with 28 pt cells")
+        // U-17: the pill keeps one width, so the row's cells are the same
+        // for every style at a given panel width (24 pt at 320, never moving).
+        let widths = Set(NoteFormatRowView.stylePillNames.map { name -> CGFloat in
+            var snapshot = NoteFormatSnapshot.empty
+            snapshot.paragraph = NoteCommandCatalog.styles.compactMap { command -> NoteParagraphStyle? in
+                if case let .paragraph(style) = command, NoteCommandCatalog.styleName(style) == name { style } else { nil }
+            }.first
+            return NoteFormatRowView.minimumWidth(snapshot: snapshot, toggleWidth: AtticNoteFormatMetrics.rowToggleWidth)
+        })
+        XCTAssertEqual(widths.count, 1, "the row's width never depends on the style")
+        let longest = NoteFormatRowView.stylePillNames.map {
+            ceil(($0 as NSString).size(withAttributes: [.font: AtticTextStyle.controlLabel.nsFont]).width)
+        }.max() ?? 0
+        XCTAssertEqual(NoteFormatRowView.stylePillWidth,
+                       longest + 4 + AtticNoteFormatMetrics.barStyleChevron + 2 + AtticNoteFormatMetrics.barStylePadding * 2,
+                       "as wide as the longest name, which shows whole")
         // A39 F11: "Subheading" shows whole in a 320 pt panel (288 pt row):
         // the compact row, 24 pt cells and 2 pt around its lines.
         var subheading = NoteFormatSnapshot.empty
