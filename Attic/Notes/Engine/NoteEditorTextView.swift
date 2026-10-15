@@ -14,7 +14,7 @@ import UniformTypeIdentifiers
 /// - Exposes objects to VoiceOver.
 /// - Marks keystroke-to-commit for the performance trace.
 final class NoteEditorTextView: NSTextView, NSAccessibilityCustomRotorItemSearchDelegate {
-    weak var engine: NoteEditorEngine? { didSet { cancelCalloutIconRequest(); installCodeColouring() } }
+    weak var engine: NoteEditorEngine? { didSet { installCodeColouring() } }
     var marquee: NoteMarqueeSelection?
     override var shouldDrawInsertionPoint: Bool { marquee?.isEmpty != false && super.shouldDrawInsertionPoint }
     var proseTextCompletionEnabled = false
@@ -108,7 +108,6 @@ final class NoteEditorTextView: NSTextView, NSAccessibilityCustomRotorItemSearch
     /// An edit can change the tokens of every later line of its block (an
     /// opened comment or string): the block's colours are validated again.
     private func codeTextEdited(_ edited: NSRange) {
-        cancelCalloutIconRequest()
         codeColourEdits &+= 1
         guard let engine, edited.location != NSNotFound else { return }
         let location = min(edited.location, max(0, engine.textStorage.length - 1))
@@ -629,7 +628,6 @@ final class NoteEditorTextView: NSTextView, NSAccessibilityCustomRotorItemSearch
     }
 
     override func setSelectedRanges(_ ranges: [NSValue], affinity: NSSelectionAffinity, stillSelecting: Bool) {
-        if let request = pendingCalloutIconRequest, ranges != [NSValue(range: request.selection)] { cancelCalloutIconRequest() }
         if marquee?.isSettingNativeSelection == false { marquee?.clear() }
         super.setSelectedRanges(ranges, affinity: affinity, stillSelecting: stillSelecting)
         caretFitter.refresh()
@@ -646,7 +644,6 @@ final class NoteEditorTextView: NSTextView, NSAccessibilityCustomRotorItemSearch
 
     override func resignFirstResponder() -> Bool {
         let resigned = super.resignFirstResponder()
-        if resigned { calloutIconFocusDidChange() }
         if resigned { DispatchQueue.main.async { [weak self] in self?.placeMonoCopy() } }
         return resigned
     }
@@ -733,7 +730,6 @@ final class NoteEditorTextView: NSTextView, NSAccessibilityCustomRotorItemSearch
     }
 
     override func keyDown(with event: NSEvent) {
-        cancelCalloutIconRequest()
         handleHiddenForTyping = true
         hideBlockHandle()
         if marquee?.isEmpty == false {
@@ -973,7 +969,6 @@ final class NoteEditorTextView: NSTextView, NSAccessibilityCustomRotorItemSearch
     /// closes; then, with nothing left to close, the panel hides. The text
     /// view's own completion list is not used in notes.
     override func cancelOperation(_ sender: Any?) {
-        if pendingCalloutIconRequest != nil { cancelCalloutIconRequest(); return }
         if marquee?.isEmpty == false { marquee?.clear(); return }
         // NSTextView has no cancelOperation of its own (calling super would
         // raise): what it doesn't take goes up the responder chain.
@@ -1191,7 +1186,6 @@ final class NoteEditorTextView: NSTextView, NSAccessibilityCustomRotorItemSearch
     // MARK: Checkbox clicks
 
     override func mouseDown(with event: NSEvent) {
-        cancelCalloutIconRequest()
         guard let engine else { return super.mouseDown(with: event) }
         let point = convert(event.locationInWindow, from: nil)
         if event.clickCount == 2 {
@@ -1309,104 +1303,30 @@ final class NoteEditorTextView: NSTextView, NSAccessibilityCustomRotorItemSearch
         AtticNativeMenu.popUp(calloutIconCommands(forBlockAt: location), below: rect, in: self)
     }
 
-    /// The palette may answer only the request that opened it. A normal
-    /// editing interaction, dismissal or changed document ends that request.
-    private struct CalloutIconRequest {
-        var id = UUID()
-        var focusChanged = false
-        var engine: ObjectIdentifier
-        var location: Int
-        var block: NSRange
-        var blockID: UUID?
-        var generation: Int
-        var selection: NSRange
-    }
-    // Injectable so focus handoff is tested without opening native UI.
+    /// The system palette inserts its pick as typed text: the next single
+    /// emoji typed while this is set becomes the callout's icon instead.
+    private(set) var pendingCalloutIconLocation: Int?
+    // Focus probe for the recorded G-05 regressions. The lifetime fix is
+    // still open; ordinary production behavior remains the original route.
     var calloutPaletteOwnsFocus: () -> Bool = {
         NSWorkspace.shared.frontmostApplication?.bundleIdentifier == "com.apple.CharacterPaletteIM"
     }
-    private var pendingCalloutIconRequest: CalloutIconRequest?
-    var pendingCalloutIconLocation: Int? { pendingCalloutIconRequest?.location }
-    private var calloutIconEventMonitor: Any?
-    private var calloutIconObservers: [NSObjectProtocol] = []
-    private var calloutIconWorkspaceObservers: [NSObjectProtocol] = []
 
-    isolated deinit {
-        if let calloutIconEventMonitor { NSEvent.removeMonitor(calloutIconEventMonitor) }
-        for observer in calloutIconObservers { NotificationCenter.default.removeObserver(observer) }
-        for observer in calloutIconWorkspaceObservers { NSWorkspace.shared.notificationCenter.removeObserver(observer) }
-        if let codeEditObserver { NotificationCenter.default.removeObserver(codeEditObserver) }
-    }
-
-    private func cancelCalloutIconRequest() {
-        pendingCalloutIconRequest = nil
-        if let calloutIconEventMonitor { NSEvent.removeMonitor(calloutIconEventMonitor) }
-        calloutIconEventMonitor = nil
-        for observer in calloutIconObservers { NotificationCenter.default.removeObserver(observer) }
-        calloutIconObservers.removeAll()
-        for observer in calloutIconWorkspaceObservers { NSWorkspace.shared.notificationCenter.removeObserver(observer) }
-        calloutIconWorkspaceObservers.removeAll()
-    }
-
-    private func calloutIconFocusDidChange() {
-        guard let request = pendingCalloutIconRequest else { return }
-        pendingCalloutIconRequest?.focusChanged = true
-        // The system palette is a separate app and takes keyboard focus.
-        // Let that handoff settle before rejecting other focus changes.
-        DispatchQueue.main.async { [weak self] in
-            guard let self, self.pendingCalloutIconRequest?.id == request.id else { return }
-            if !self.calloutPaletteOwnsFocus() { self.cancelCalloutIconRequest() }
-        }
-    }
-
-    func pickCalloutIconFromPalette(forBlockAt location: Int, showPalette: () -> Void = { NSApp.orderFrontCharacterPalette(nil) }) {
-        cancelCalloutIconRequest()
-        guard let engine, isEditable, location >= 0, location < engine.textStorage.length,
-              engine.paragraphStyle(at: location)?.isCallout == true else { return }
+    func pickCalloutIconFromPalette(forBlockAt location: Int, showPalette: (() -> Void)? = nil) {
+        pendingCalloutIconLocation = location
         window?.makeFirstResponder(self)
-        pendingCalloutIconRequest = CalloutIconRequest(engine: ObjectIdentifier(engine), location: location,
-            block: engine.blockRange(at: location), blockID: engine.textStorage.attribute(.noteBlockID, at: location, effectiveRange: nil) as? UUID,
-            generation: engine.history.recordingGeneration, selection: selectedRange())
-        // Escape/click-away can be consumed by native UI before the text
-        // view receives it. The monitor cancels without consuming the event.
-        calloutIconEventMonitor = NSEvent.addLocalMonitorForEvents(matching: [.keyDown, .leftMouseDown, .rightMouseDown, .otherMouseDown]) { [weak self] event in
-            self?.cancelCalloutIconRequest()
-            return event
-        }
-        var notifications: [(Notification.Name, AnyObject?)] = [(NSApplication.didResignActiveNotification, NSApp)]
-        if let window {
-            notifications += [(NSWindow.didResignKeyNotification, window), (NSWindow.willCloseNotification, window)]
-        }
-        for (name, object) in notifications {
-            calloutIconObservers.append(NotificationCenter.default.addObserver(forName: name, object: object, queue: .main) { [weak self] _ in
-                MainActor.assumeIsolated {
-                    if name == NSWindow.willCloseNotification { self?.cancelCalloutIconRequest() }
-                    else { self?.calloutIconFocusDidChange() }
-                }
-            })
-        }
-        for name in [NSWorkspace.didActivateApplicationNotification, NSWorkspace.didDeactivateApplicationNotification] {
-            calloutIconWorkspaceObservers.append(NSWorkspace.shared.notificationCenter.addObserver(forName: name, object: nil, queue: .main) { [weak self] _ in
-                MainActor.assumeIsolated { self?.calloutIconFocusDidChange() }
-            })
-        }
-        showPalette()
+        if let showPalette { showPalette() }
+        else { NSApp.orderFrontCharacterPalette(self) }
     }
 
-    /// False leaves the input on the ordinary insertion path at the caret.
+    /// Takes the palette's pick for a pending callout icon (true: used).
     func takeCalloutIcon(_ string: Any) -> Bool {
-        guard let request = pendingCalloutIconRequest else { return false }
-        cancelCalloutIconRequest()
+        guard let location = pendingCalloutIconLocation, let engine else { return false }
+        pendingCalloutIconLocation = nil
         let text = (string as? String) ?? (string as? NSAttributedString)?.string ?? ""
-        guard let engine, request.engine == ObjectIdentifier(engine),
-              (!request.focusChanged || calloutPaletteOwnsFocus()),
-              request.generation == engine.history.recordingGeneration, request.selection == selectedRange(),
-              request.location < engine.textStorage.length,
-              engine.blockRange(at: request.location) == request.block,
-              engine.textStorage.attribute(.noteBlockID, at: request.location, effectiveRange: nil) as? UUID == request.blockID,
-              text.count == 1, text.unicodeScalars.contains(where: { $0.properties.isEmojiPresentation || $0.properties.isEmoji && $0.value > 0x238C }),
-              engine.paragraphStyle(at: request.location)?.isCallout == true else { return false }
-        return engine.setCalloutIcon(text, at: request.location)
+        guard text.count == 1, text.unicodeScalars.contains(where: { $0.properties.isEmojiPresentation || $0.properties.isEmoji && $0.value > 0x238C }),
+              location < engine.textStorage.length, engine.paragraphStyle(at: location)?.isCallout == true else { return false }
+        return engine.setCalloutIcon(text, at: location)
     }
 
     func checkboxLocation(at point: NSPoint) -> Int? {
