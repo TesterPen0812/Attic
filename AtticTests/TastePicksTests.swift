@@ -4,7 +4,7 @@ import XCTest
 @testable import Attic
 
 /// The owner's taste picks (2026-10-15, drafts `mockups/px-t14-*`):
-/// T-03 C, T-04 B, T-06 B, T-09 C, T-15 B and T-16 B.
+/// T-03 C, T-06 B, T-09 C, T-15 B and T-16 B (T-04 B was undone on 2026-10-16).
 @MainActor
 final class TastePicksTests: XCTestCase {
     private var windows: [NSWindow] = []
@@ -176,37 +176,6 @@ final class TastePicksTests: XCTestCase {
         let tabsTop: CGFloat = 60, height: CGFloat = 600
         let stops = TasksViewport.maskStops(height: height, tabsTop: tabsTop, translucent: true)
         XCTAssertEqual(AtticScrollUnderFade.opacity(stops, at: TasksViewport.listTop(tabsTop: tabsTop), height: height), 1, accuracy: 0.001)
-    }
-
-    // MARK: T-04 B: the page button shows its icon and the page's name
-
-    func testT04ThePageButtonKeepsOneWidthShutAndOpenForEveryPage() {
-        let open = AtticPageButton<PanelPage>.width(open: true, count: PanelPage.allCases.count)
-        XCTAssertEqual(AtticPageButton<PanelPage>.width(open: false, count: PanelPage.allCases.count), open,
-                       "the name fits the switcher's width: hovering never resizes it")
-        for page in PanelPage.allCases {
-            XCTAssertLessThanOrEqual(AtticPageButtonMetrics.labelledWidth(title: page.title), open, page.title)
-        }
-        XCTAssertEqual(PanelHeaderLayout.pageSwitchWidth, open)
-    }
-
-    func testT04HeaderTitleIsBalancedAndStillWhenTheSwitcherOpens() {
-        let switcher = PanelHeaderLayout.pageSwitchWidth
-        for panel: CGFloat in [280, 320, 420] {
-            for title: CGFloat in [0, 40, 100, 160, 4000] {
-                let shut = AtticHeaderTitleSlot.placement(titleWidth: title, panelWidth: panel, chromeInset: 16,
-                                                          switcherWidth: switcher, switcherOpen: false)
-                let open = AtticHeaderTitleSlot.placement(titleWidth: title, panelWidth: panel, chromeInset: 16,
-                                                          switcherWidth: switcher, switcherOpen: true)
-                XCTAssertEqual(shut, open, "panel \(panel) title \(title): no slide on hover")
-                XCTAssertGreaterThanOrEqual(shut.x, 16 + AtticControlSize.headerControl + AtticHeaderTitleSlot.gap - 0.001)
-                XCTAssertLessThanOrEqual(shut.maxX, panel - 16 - switcher - AtticHeaderTitleSlot.gap + 0.001)
-            }
-        }
-        // A short title sits on the panel's centre at 320.
-        let short = AtticHeaderTitleSlot.placement(titleWidth: 60, panelWidth: 320, chromeInset: 16,
-                                                   switcherWidth: switcher, switcherOpen: false)
-        XCTAssertEqual(short.x + short.width / 2, 160, accuracy: 0.001)
     }
 
     // MARK: T-10: the default highlight is yellow
