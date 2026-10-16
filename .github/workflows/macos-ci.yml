@@ -334,7 +334,7 @@ jobs:
       - name: Summarize both dropdown cost attempts
         if: always() && steps.strict_build.outcome == 'success'
         run: |
-          xcrun xcresulttool get log --type console --path "$RUNNER_TEMP/AtticDropdownTimingTests.xcresult" > "$RUNNER_TEMP/dropdown-cost-console.json"
+          xcrun xcresulttool get log --type action --path "$RUNNER_TEMP/AtticDropdownTimingTests.xcresult" > "$RUNNER_TEMP/dropdown-cost-console.json"
           python3 Scripts/summarize_dropdown_costs.py "$RUNNER_TEMP/dropdown-cost-console.json" >> "$GITHUB_STEP_SUMMARY"
 
       - name: Upload native dropdown timing results
