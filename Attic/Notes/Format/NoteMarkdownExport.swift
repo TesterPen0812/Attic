@@ -101,8 +101,8 @@ enum NoteMarkdownExport {
                     .replacingOccurrences(of: "\u{2028}", with: "\\\n" + continuation)
                 if isList || !text.trimmingCharacters(in: .whitespaces).isEmpty { lines.append((nesting + prefix + text, isList)) }
             case .image:
-                lines.append(("[image: \(block.attachmentID.flatMap(filename) ?? String(localized: "image"))]", false))
-            case .file: lines.append(("[file: \(block.filename ?? "file")]", false))
+                lines.append((attachmentLabel("image", filename: block.attachmentID.flatMap(filename) ?? String(localized: "image")), false))
+            case .file: lines.append((attachmentLabel("file", filename: block.filename ?? "file"), false))
             case .divider: lines.append(("---", false))
             case .table:
                 if let table = block.table { lines.append((NoteTableText.markdown(table) { inlineMarkdown($0.block, calendar: calendar, locale: locale) }, false)) }
@@ -115,6 +115,16 @@ enum NoteMarkdownExport {
             result += line.text
         }
         return result
+    }
+
+    private static func attachmentLabel(_ kind: String, filename: String) -> String {
+        // A filename is one literal label even when it contains line breaks
+        // or control characters. Show those scalars explicitly in the label.
+        let visible = filename.unicodeScalars.map { scalar in
+            scalar.value < 32 || scalar.value == 127 || scalar.value == 0x2028 || scalar.value == 0x2029
+                ? "\\u{" + String(scalar.value, radix: 16) + "}" : String(scalar)
+        }.joined()
+        return escapeInlineText("[\(kind): \(visible)]")
     }
 
     /// A date as the note shows it, with the year: "Thu, 1 Oct 2026".

@@ -109,6 +109,20 @@ final class RoundUContentTests: XCTestCase {
         XCTAssertNil(NoteTablePaste.table(fromHTML: "<table><tr>" + String(repeating: "<td>x</td>", count: 31) + "</tr></table>"))
     }
 
+    func testU13AttachmentNamesRemainLiteralOnMarkdownReimport() throws {
+        for name in ["report**draft**.txt", "report]\n\n# Extra.txt"] {
+            let file = NoteBlock.file(filename: name, contentTypeIdentifier: "public.data", byteCount: 1, importFailure: "missing")
+            let document = NoteDocument(blocks: [.text("T"), file, .image(attachmentID: UUID())])
+            let loaded = try XCTUnwrap(NoteContentCodec.decode(NoteContentCodec.encode(document)).document)
+            let markdown = NoteMarkdownExport.markdown(loaded, filename: { _ in name })
+            let restored = try NoteMarkdownImport.document(markdown)
+            XCTAssertEqual(restored.blocks.count, 3)
+            let visible = name == "report**draft**.txt" ? name : "report]\\u{a}\\u{a}# Extra.txt"
+            XCTAssertEqual(restored.blocks.dropFirst().map(\.text), ["[file: \(visible)]", "[image: \(visible)]"])
+            XCTAssertTrue(restored.blocks.dropFirst().allSatisfy { $0.marks.isEmpty && $0.style == nil })
+        }
+    }
+
     func testU04HTMLPasteMakesNoResourceRequests() async throws {
         let server = try RoundUHTTPServer()
         try await server.start()
