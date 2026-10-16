@@ -168,6 +168,7 @@ private enum NoteRecoveryOwnership {
 @MainActor
 protocol NoteDraftJournaling: AnyObject {
     var requiresAsyncIO: Bool { get }
+    func collectUnreferencedStaging() async throws
     func writeDurably(_ entry: NoteDraftJournalEntry, staged: [StagedNoteAttachment], replacing: NoteRecoveryClaim?) async throws -> NoteRecoveryClaim
     func retireDurably(noteID: UUID, claim: NoteRecoveryClaim?, saved: NoteRecoverySavedState?) async throws
     func discardOwnedDurably(noteID: UUID, claim: NoteRecoveryClaim) async throws
@@ -197,6 +198,7 @@ protocol NoteDraftJournaling: AnyObject {
 }
 
 extension NoteDraftJournaling {
+    func collectUnreferencedStaging() async throws {}
     func cancelPendingDurably(_ entry: NoteDraftJournalEntry, staged: [StagedNoteAttachment], replacing claim: NoteRecoveryClaim?) async throws -> NoteRecoveryClaim {
         try await writeDurably(entry, staged: staged, replacing: claim)
     }
@@ -620,6 +622,11 @@ private actor NoteDraftJournalIO {
         return results
     }
 
+    func collectUnreferencedStaging() {
+        path.transaction.lock(); defer { path.transaction.unlock() }
+        removeUnreferencedStagedFiles()
+    }
+
     func retentionEntries() throws -> [NoteDraftRecoveryEntry] {
         path.transaction.lock(); defer { path.transaction.unlock() }
         return try readEntries(collectRetired: false)
@@ -740,6 +747,10 @@ final class NoteDraftJournal: NoteDraftJournaling {
         let entries = try await io.recoveryEntries(live: snapshot)
         publish(entries, for: snapshot)
         return entries
+    }
+    func collectUnreferencedStaging() async throws {
+        _ = try liveSnapshot()
+        await io.collectUnreferencedStaging()
     }
     func readRetentionEntries() async throws -> [NoteDraftRecoveryEntry] {
         _ = try liveSnapshot()

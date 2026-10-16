@@ -2986,7 +2986,16 @@ extension NotesPageController {
             isLibraryPresented = true
         }
         session?.engine.detachView()
+        collectReleasedStaging()
         return true
+    }
+
+    private func collectReleasedStaging() {
+        guard let journal else { return }
+        queueRecoveryWork { [weak self] in
+            do { try await journal.collectUnreferencedStaging() }
+            catch { self?.reportRecoveryRetentionWarning("Unused recovery files could not be checked. They are being kept for a later cleanup.") }
+        }
     }
 
     /// The Undo toast after Delete Note: the note comes back from Recently
