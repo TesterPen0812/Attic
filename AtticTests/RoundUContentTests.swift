@@ -5,6 +5,79 @@ import XCTest
 
 @MainActor
 final class RoundUContentTests: XCTestCase {
+    private func scaling(_ label: String, small: Int, large: Int, operation: (Int) throws -> Void) rethrows {
+        func elapsed(_ count: Int) throws -> Double {
+            var samples: [Double] = []
+            for _ in 0..<3 {
+                let start = Date.timeIntervalSinceReferenceDate
+                try operation(count)
+                samples.append(Date.timeIntervalSinceReferenceDate - start)
+            }
+            return samples.min()!
+        }
+        let a = try elapsed(small), b = try elapsed(large)
+        print("Round U \(label): \(small)=\(a)s, \(large)=\(b)s, ratio=\(b / a)")
+        XCTAssertLessThan(b, a * 8, "four times the input must grow less than quadratically")
+    }
+
+    func testU02UnfinishedLinksScaleAndStayLiteral() {
+        scaling("U-02", small: 500, large: 2000) { count in
+            let source = String(repeating: "[a](", count: count)
+            let cell = NoteTableText.inlineCell(source)
+            XCTAssertEqual(cell.text, source)
+            XCTAssertTrue(cell.marks.isEmpty)
+        }
+        let balanced = NoteTableText.inlineCell("[a](https://example.com/a(b))")
+        XCTAssertEqual(balanced.text, "a")
+        XCTAssertEqual(balanced.marks.first?.url, "https://example.com/a(b)")
+    }
+
+    func testU11AlternatingMarksScaleWithExactMarkdown() {
+        scaling("U-11", small: 800, large: 3200) { count in
+            var block = NoteBlock.text(String(repeating: "ab", count: count))
+            block.marks = (0..<count).map { NoteMark(.bold, offset: $0 * 2, length: 1) }
+            let doc = NoteDocument(blocks: [.text("T"), block])
+            XCTAssertEqual(NoteMarkdownExport.markdown(doc), "# T\n\n" + String(repeating: "**a**b", count: count))
+        }
+    }
+
+    func testU12TitleOnlyRTFScalesWithExactText() throws {
+        try scaling("U-12", small: 300, large: 1200) { count in
+            let export = TasksTextExport(items: (0..<count).map { .init(title: "Task \($0)") })
+            let bytes = try XCTUnwrap(export.rtf)
+            let text = try NSAttributedString(data: bytes, options: [.documentType: NSAttributedString.DocumentType.rtf], documentAttributes: nil)
+            XCTAssertEqual(text.string, export.titles)
+            XCTAssertEqual(bytes, export.rtf, "encoding must stay byte-identical")
+        }
+    }
+
+    func testU11SelectionCopyKeepsExactMarkdown() throws {
+        var block = NoteBlock.text("abab")
+        block.marks = [NoteMark(.bold, offset: 0, length: 1), NoteMark(.bold, offset: 2, length: 1)]
+        let engine = NoteEditorEngine(noteID: UUID(), document: NoteDocument(blocks: [.text("T"), block]))
+        let (_, view) = engine.makeView()
+        defer { engine.detachView() }
+        view.setSelectedRange(NSRange(location: 2, length: 4))
+        let board = NSPasteboard(name: .init("RoundU-\(UUID())"))
+        defer { board.releaseGlobally() }
+        XCTAssertTrue(view.writeSelection(to: board, types: [TasksTextExport.markdownType, .string]))
+        XCTAssertEqual(board.string(forType: TasksTextExport.markdownType), "**a**b**a**b")
+        XCTAssertEqual(board.string(forType: .string), "abab")
+    }
+
+    func testU12CopyKeepsRTFBytesAndMixedSeparators() throws {
+        for items: [TasksTextExport.Item] in [[.init(title: "A"), .init(title: "B")],
+                                            [.init(title: "A", due: "Today"), .init(title: "B")]] {
+            let export = TasksTextExport(items: items)
+            let board = NSPasteboard(name: .init("RoundU-\(UUID())"))
+            defer { board.releaseGlobally() }
+            export.write(to: board)
+            XCTAssertEqual(board.data(forType: .rtf), export.rtf)
+            let read = try NSAttributedString(data: XCTUnwrap(export.rtf), options: [.documentType: NSAttributedString.DocumentType.rtf], documentAttributes: nil)
+            XCTAssertEqual(read.string, export.plain)
+        }
+    }
+
     func testU04HTMLPasteMakesNoResourceRequests() async throws {
         let server = try RoundUHTTPServer()
         try await server.start()

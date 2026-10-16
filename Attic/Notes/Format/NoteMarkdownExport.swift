@@ -153,9 +153,15 @@ enum NoteMarkdownExport {
         var result = ""
         let text = block.text as NSString
         var boundaries: Set<Int> = [0, text.length]
-        for mark in block.marks {
+        var starts: [Int: [Int]] = [:]
+        var ends: [Int: [Int]] = [:]
+        for (index, mark) in block.marks.enumerated() {
             boundaries.insert(mark.offset)
             boundaries.insert(mark.offset + mark.length)
+            if includeMarks {
+                starts[mark.offset, default: []].append(index)
+                ends[mark.offset + mark.length, default: []].append(index)
+            }
         }
         for offset in 0..<text.length where text.character(at: offset) == NoteDocument.objectUnit {
             boundaries.insert(offset)
@@ -163,9 +169,14 @@ enum NoteMarkdownExport {
         }
         let points = boundaries.sorted()
         let objectOffsets = (0..<text.length).filter { text.character(at: $0) == NoteDocument.objectUnit }
+        var objectIndex = 0
+        var active: [Int: NoteMark] = [:]
         for pair in zip(points, points.dropFirst()) where pair.0 < pair.1 {
+            for index in ends[pair.0] ?? [] { active[index] = nil }
+            for index in starts[pair.0] ?? [] { active[index] = block.marks[index] }
+            while objectIndex < objectOffsets.count, objectOffsets[objectIndex] < pair.0 { objectIndex += 1 }
             let range = NSRange(location: pair.0, length: pair.1 - pair.0)
-            if let objectIndex = objectOffsets.firstIndex(of: pair.0), range.length == 1 {
+            if objectIndex < objectOffsets.count, objectOffsets[objectIndex] == pair.0, range.length == 1 {
                 if objectIndex < block.inlines.count {
                     switch block.inlines[objectIndex].kind {
                     case let .date(day): result += dateText(day, calendar: calendar, locale: locale)
@@ -175,7 +186,10 @@ enum NoteMarkdownExport {
                 continue
             }
             var value = text.substring(with: range)
-            let marks = includeMarks ? block.marks.filter { $0.offset <= pair.0 && $0.offset + $0.length >= pair.1 } : []
+            let marks = active.sorted {
+                $0.value.kind.rawValue != $1.value.kind.rawValue
+                    ? $0.value.kind.rawValue < $1.value.kind.rawValue : $0.key < $1.key
+            }.map(\.value)
             if marks.contains(where: { $0.kind == .code }) {
                 let longest = value.split(whereSeparator: { $0 != "`" }).map(\.count).max() ?? 0
                 let fence = String(repeating: "`", count: longest + 1)
@@ -183,7 +197,7 @@ enum NoteMarkdownExport {
                     (value.hasPrefix(" ") && value.hasSuffix(" ") && value.contains(where: { $0 != " " }))
                 value = fence + (pad ? " " : "") + value + (pad ? " " : "") + fence
             } else if escapeLiterals { value = escapeInlineText(value) }
-            for mark in marks.sorted(by: { $0.kind.rawValue < $1.kind.rawValue }).reversed() {
+            for mark in marks.reversed() {
                 switch mark.kind {
                 case .bold: value = "**" + value + "**"
                 case .italic: value = "*" + value + "*"

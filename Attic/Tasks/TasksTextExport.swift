@@ -69,8 +69,9 @@ struct TasksTextExport: Equatable {
         let body = NSFont.systemFont(ofSize: NSFont.systemFontSize)
         let bold = NSFont.boldSystemFont(ofSize: NSFont.systemFontSize)
         let text = NSMutableAttributedString()
+        let separator = items.allSatisfy(\.isTitleOnly) ? "\n" : "\n\n"
         for (index, item) in items.enumerated() {
-            if index > 0 { text.append(NSAttributedString(string: items.allSatisfy(\.isTitleOnly) ? "\n" : "\n\n")) }
+            if index > 0 { text.append(NSAttributedString(string: separator)) }
             text.append(NSAttributedString(string: item.title, attributes: [.font: bold]))
             if let details = item.details {
                 text.append(NSAttributedString(string: "\n" + details, attributes: [.font: body, .foregroundColor: NSColor.secondaryLabelColor]))
@@ -95,6 +96,7 @@ struct TasksTextExport: Equatable {
     /// What ⌘C puts on the pasteboard: the titles as plain text (the add
     /// bar's round trip), the full text as Markdown and RTF.
     func write(to pasteboard: NSPasteboard) {
+        let rtf = self.rtf
         pasteboard.clearContents()
         pasteboard.declareTypes([.string, Self.markdownType] + (rtf == nil ? [] : [.rtf]), owner: nil)
         pasteboard.setString(titles, forType: .string)

@@ -187,8 +187,11 @@ enum NoteTableText {
                     if label.closed, matches("(", at: label.next) {
                         var cursor = label.next + 1, nesting = 1, url = ""
                         while cursor < input.count {
+                            guard remainingWork > 0 else { break }
+                            remainingWork -= 1
                             let character = input[cursor]
                             if character == "\\", cursor + 1 < input.count {
+                                remainingWork -= 1
                                 url.append(input[cursor + 1]); cursor += 2; continue
                             }
                             if character == "(" { nesting += 1 }
