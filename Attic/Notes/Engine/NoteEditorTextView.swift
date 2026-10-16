@@ -1357,7 +1357,7 @@ final class NoteEditorTextView: NSTextView, NSAccessibilityCustomRotorItemSearch
         cancelCalloutIconSession(reason: "another picker")
         guard let engine, !engine.isReadOnly, engine.activity == .idle,
               isEditable, !hasMarkedText(), !isHiddenOrHasHiddenAncestor, let window,
-              location >= 0, location < engine.textStorage.length,
+              location >= 0, location <= engine.textStorage.length,
               engine.paragraphStyle(at: location)?.isCallout == true else { return }
         (window.firstResponder as? NoteCalloutIconInputView)?.session?.cancel(reason: "another picker")
         let session = NoteCalloutIconSession(engine: engine, editor: self, window: window, location: location)

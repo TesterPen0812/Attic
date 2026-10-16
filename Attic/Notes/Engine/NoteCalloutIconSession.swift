@@ -182,10 +182,27 @@ final class NoteCalloutIconSession {
         if let editor { NSAccessibility.post(element: editor, notification: .layoutChanged) }
     }
 
-    /// Accepts the existing single-emoji palette input.
+    /// One complete emoji grapheme. Digits, text symbols, isolated modifiers,
+    /// incomplete flags and extra combining marks are not emoji selections.
     static func isSingleEmoji(_ text: String) -> Bool {
-        text.count == 1 && text.unicodeScalars.contains {
-            $0.properties.isEmojiPresentation || $0.properties.isEmoji && $0.value > 0x238C
+        guard text.count == 1 else { return false }
+        let scalars = Array(text.unicodeScalars)
+        let values = scalars.map(\.value)
+        if values.count == 2 || values.count == 3,
+           let first = values.first, first == 0x23 || first == 0x2A || (0x30...0x39).contains(first),
+           values.last == 0x20E3 { return values.count == 2 || values[1] == 0xFE0F }
+        if values.count == 2, values.allSatisfy({ (0x1F1E6...0x1F1FF).contains($0) }) { return true }
+        if values.first == 0x1F3F4, values.count > 2, values.last == 0xE007F,
+           values.dropFirst().dropLast().allSatisfy({ (0xE0061...0xE007A).contains($0) }) { return true }
+        return text.unicodeScalars.split(separator: "\u{200D}", omittingEmptySubsequences: false).allSatisfy { part in
+            guard let base = part.first, base.properties.isEmoji,
+                  !base.properties.isEmojiModifier, !(0x1F1E6...0x1F1FF).contains(base.value),
+                  base.value > 0x7F else { return false }
+            var tail = Array(part.dropFirst())
+            let hasVariation = tail.first?.value == 0xFE0F
+            if hasVariation { tail.removeFirst() }
+            if tail.first?.properties.isEmojiModifier == true, base.properties.isEmojiModifierBase { tail.removeFirst() }
+            return tail.isEmpty && (base.properties.isEmojiPresentation || hasVariation)
         }
     }
 }
