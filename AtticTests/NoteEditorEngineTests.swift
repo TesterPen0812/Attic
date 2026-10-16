@@ -7,6 +7,26 @@ import XCTest
 /// identity, IME over a selection, VoiceOver elements.
 @MainActor
 final class NoteEditorEngineTests: XCTestCase {
+    // Owner decision 2026-10-16: plain highlights stay yellow, with no saved key.
+    func testJPlainHighlightRendersYellowAndDefaultWritesNoColourKey() throws {
+        for mode in [AtticDesignContext.Mode.light, .dark] {
+            let style = NoteTextStyle(design: AtticDesignContext(mode: mode))
+            XCTAssertEqual(style.highlightColor(for: nil), style.highlightColor(for: "yellow"))
+            XCTAssertEqual(style.highlightColor(for: true), style.highlightColor(for: "yellow"))
+            XCTAssertNotEqual(style.highlightColor(for: "grey"), style.highlightColor(for: "yellow"))
+        }
+        let (engine, view) = makeEngine(NoteDocument(blocks: [.text("T"), .text("body")]))
+        defer { engine.detachView() }
+        let words = (view.string as NSString).range(of: "body")
+        XCTAssertTrue(engine.perform(.mark(.highlight), selection: words))
+        let saved = try NoteContentCodec.encode(engine.document())
+        let loaded = try XCTUnwrap(NoteContentCodec.decode(saved).document)
+        let mark = try XCTUnwrap(loaded.blocks[1].marks.first)
+        XCTAssertEqual(mark.kind, .highlight)
+        XCTAssertNil(mark.colour)
+        XCTAssertEqual(engine.highlightColour(selection: words), .yellow)
+    }
+
     func testG10TypingHighlightHistoryKeepsExactSerializedPayload() throws {
         let values: [Any?] = [nil, true, "future-amber"] + NoteHighlightColour.allCases.compactMap(\.storedKey)
         for before in values {

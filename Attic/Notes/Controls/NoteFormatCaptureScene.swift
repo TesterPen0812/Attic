@@ -12,6 +12,7 @@ import AppKit
 /// `slash-lead`, `slash-da` and `date-lead` (under the first paragraph);
 /// `aacycle` opens and closes Aa's format row on a timer for recordings
 /// (two slow cycles, then five quick ones, repeating).
+/// `highlight-compat` shows Round J’s default and explicit highlights.
 /// Nothing here runs in a normal launch.
 @MainActor
 enum NoteFormatCaptureScene {
@@ -42,6 +43,10 @@ enum NoteFormatCaptureScene {
             }
             if scene == "typography" {
                 writeTypographySample(controls: controls, textView: textView)
+                return
+            }
+            if scene == "highlight-compat" {
+                writeHighlightCompatibilitySample(controls: controls, textView: textView)
                 return
             }
             if scene == "colour" {
@@ -448,6 +453,20 @@ enum NoteFormatCaptureScene {
                 break
             }
         }
+    }
+
+    /// Round J: an unkeyed default, explicit grey/blue, code and selection.
+    /// This scene runs only in UI-testing launches over the in-memory store.
+    private static func writeHighlightCompatibilitySample(controls: NoteFormatControls, textView: NoteEditorTextView) {
+        type("Highlight compatibility\nPlain yellow beside inline code.\nExplicit grey beside explicit blue.\nA text selection beside the highlights.", into: textView)
+        let router = controls.router
+        router.run(.mark(.highlight), from: .formatBar, selection: range(of: "Plain yellow", in: textView))
+        router.highlight(.grey, from: .formatBar, selection: range(of: "Explicit grey", in: textView))
+        router.highlight(.blue, from: .formatBar, selection: range(of: "explicit blue", in: textView))
+        router.run(.mark(.code), from: .formatBar, selection: range(of: "inline code", in: textView))
+        controls.engine.history.reset()
+        textView.setSelectedRange(range(of: "text selection", in: textView))
+        controls.refresh()
     }
 
     /// The colour pass sheet's note: tags in their colours, a highlight,

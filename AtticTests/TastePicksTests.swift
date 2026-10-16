@@ -211,25 +211,25 @@ final class TastePicksTests: XCTestCase {
 
     // MARK: T-10: the default highlight is yellow
 
-    func testT10TheOneClickHighlightIsYellowStoredExplicitly() throws {
+    func testT10TheOneClickHighlightIsYellowWithoutAColourKey() throws {
         let (engine, _) = makeEditor([.text("Title"), .text("Two months free")])
         let words = (engine.textStorage.string as NSString).range(of: "months")
         XCTAssertTrue(engine.perform(.mark(.highlight), selection: words))
         XCTAssertEqual(engine.highlightColour(selection: words), .yellow)
-        XCTAssertEqual(engine.document().blocks[1].marks, [NoteMark(.highlight, offset: 4, length: 6, colour: "yellow")])
+        XCTAssertEqual(engine.document().blocks[1].marks, [NoteMark(.highlight, offset: 4, length: 6)])
         XCTAssertTrue(engine.perform(.mark(.highlight), selection: words), "a second click takes it off")
         XCTAssertTrue(engine.document().blocks[1].marks.isEmpty)
         XCTAssertEqual(NoteHighlightColour.menuOrder.first, .yellow)
         XCTAssertEqual(Set(NoteHighlightColour.menuOrder), Set(NoteHighlightColour.allCases), "grey and every hue stay")
     }
 
-    func testT10AnOldGreyHighlightStillReadsGreyAndIsKeptAsStored() throws {
+    func testT10AnUnkeyedHighlightReadsYellowAndIsKeptAsStored() throws {
         var block = NoteBlock.text("Two months free")
         block.marks = [NoteMark(.highlight, offset: 4, length: 6)]
         let document = NoteDocument(blocks: [.text("Title"), block])
         let (engine, _) = makeEditor(document.blocks)
         let words = (engine.textStorage.string as NSString).range(of: "months")
-        XCTAssertEqual(engine.highlightColour(selection: words), .grey)
+        XCTAssertEqual(engine.highlightColour(selection: words), .yellow)
         XCTAssertEqual(engine.textStorage.attribute(.backgroundColor, at: words.location, effectiveRange: nil) as? NSColor,
                        engine.style.tokens.highlightMarker.nsColor, "it looks as it did")
         XCTAssertEqual(engine.document().blocks[1].marks, [NoteMark(.highlight, offset: 4, length: 6)], "no colour key is added")

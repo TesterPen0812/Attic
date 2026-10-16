@@ -201,6 +201,37 @@ final class NotesFormatControlsTests: XCTestCase {
 
     // MARK: Routing: every surface runs the same engine command
 
+    func testJHighlightRoutesWriteNoKeyAndMenuDistinguishesYellowFromGrey() throws {
+        for surface: NoteCommandSurface in [.selectionBar, .formatBar, .noteMenu, .contextMenu, .menuBar, .shortcut] {
+            let (controls, engine, textView) = make()
+            textView.setSelectedRange(range("most people", textView))
+            if surface == .selectionBar || surface == .formatBar {
+                controls.formatModel.run(.mark(.highlight), from: surface)
+            } else {
+                XCTAssertTrue(controls.router.run(.mark(.highlight), from: surface))
+            }
+            let mark = try XCTUnwrap(engine.document().blocks[1].marks.first)
+            XCTAssertEqual(mark.kind, .highlight)
+            XCTAssertNil(mark.colour, "\(surface): the default remains editable in the October 10 build")
+            controls.refresh()
+            func checkedColour() -> [String] {
+                controls.formatModel.highlightMenu(from: surface).filter { $0.state == .on }.map(\.title)
+            }
+            XCTAssertEqual(engine.highlightColour(), .yellow)
+            XCTAssertEqual(checkedColour(), [NoteHighlightColour.yellow.title])
+            let grey = try XCTUnwrap(controls.formatModel.highlightMenu(from: surface).first { $0.title == NoteHighlightColour.grey.title })
+            grey.action()
+            controls.refresh()
+            XCTAssertEqual(engine.document().blocks[1].marks.first?.colour, "grey")
+            XCTAssertEqual(engine.highlightColour(), .grey)
+            XCTAssertEqual(checkedColour(), [NoteHighlightColour.grey.title])
+            XCTAssertTrue(engine.history.undo())
+            controls.refresh()
+            XCTAssertEqual(checkedColour(), [NoteHighlightColour.yellow.title])
+            XCTAssertNil(engine.document().blocks[1].marks.first?.colour)
+        }
+    }
+
     func testEverySurfaceRunsTheSameBoldCommandWithTheSameResult() throws {
         var results: [NoteCommandSurface: [NoteMark.Kind]] = [:]
         var routes: [NoteCommandSurface: NoteFormatCommand] = [:]

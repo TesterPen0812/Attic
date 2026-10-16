@@ -3031,8 +3031,8 @@ extension NoteEditorEngine {
                 onLinkRequest(target)
                 return true
             }
-            // T-10: the highlight command applies the one click's colour.
-            return applyMark(kind, url: kind == .highlight ? NoteHighlightColour.oneClick.storedKey : nil, selection: selection)
+            // Plain highlights have no key, preserving older-build editability.
+            return applyMark(kind, url: nil, selection: selection)
         case let .link(url): return applyMark(.link, url: url, selection: selection)
         case .removeLink: return removeLink(selection: selection)
         case .indent: return changeIndent(1, selection: selection)

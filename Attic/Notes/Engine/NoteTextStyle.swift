@@ -157,7 +157,7 @@ struct NoteTextStyle: Equatable {
     /// List numbers are quieter than the text; bullets are in the text's ink.
     var markerColor: NSColor { secondaryColor }
     var placeholderColor: NSColor { tokens.hintInk.nsColor }
-    /// A plain grey wash behind proportional text (owner 2026-10-10); code keeps
+    /// The plain yellow highlight (owner 2026-10-16); code keeps
     /// its monospaced font and its own, lighter accent-tinted chip.
     var highlightColor: NSColor { tokens.highlightMarker.nsColor }
     /// The caret: the system's insertion point colour (the accent), as in
@@ -165,7 +165,7 @@ struct NoteTextStyle: Equatable {
     /// beside it (F-03c: the body-ink caret read heavy).
     var caretColor: NSColor { .textInsertionPointColor }
     /// A highlight's wash in its colour (N-2): a stored key, or `true` for
-    /// the grey one.
+    /// the unkeyed yellow one.
     func highlightColor(for value: Any?) -> NSColor {
         tokens.highlightMarker(NoteHighlightColour(storedKey: value as? String)).nsColor
     }
