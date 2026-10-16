@@ -320,7 +320,7 @@ final class AppStartup<Value>: ObservableObject {
             failureMessage = nil
         } catch {
             failureMessage = "Attic could not open its local data. Try again. Your existing data is kept."
-            NSLog("Attic startup could not open local data: %@", error.localizedDescription)
+            NSLog("Attic startup could not open local data")
         }
     }
 }

@@ -1570,16 +1570,14 @@ final class NoteStore: ObservableObject {
                 for failure in report.failures + repairFailures {
                     reportAttachmentFailure(failure.attachmentID, message: failure.message)
                     NSLog(
-                        "Attic attachment reconciliation skipped %@: %@",
-                        failure.attachmentID.uuidString,
-                        failure.message
+                        "Attic attachment reconciliation skipped an attachment"
                     )
                 }
             } catch {
                 // Let the next revision try again rather than trusting a
                 // signature whose pass never completed.
                 reconciledAttachmentSignature = nil
-                NSLog("Attic attachment reconciliation failed: %@", error.localizedDescription)
+                NSLog("Attic attachment reconciliation failed")
             }
         }
     }
