@@ -1446,10 +1446,13 @@ final class NoteEditorEngineTests: XCTestCase {
             .image(attachmentID: $0.id, pixelWidth: 800, pixelHeight: 400)
         })
         let (engine, view) = makeEngine(document, window: true, staged: items)
+        let initial = expectation(description: "initial viewport work reached a terminal state")
+        initial.assertForOverFulfill = false
+        engine.onImageLoadEvent = { if case .viewportSettled = $0 { initial.fulfill() } }
         view.layoutSubtreeIfNeeded()
         engine.layoutManager?.textViewportLayoutController.layoutViewport()
         view.viewWillDraw()
-        try await Task.sleep(for: .milliseconds(300))
+        await fulfillment(of: [initial], timeout: 5)
         let images = engine.objects().compactMap { $0.0 as? NoteImageAttachment }
         let loaded = images.filter { $0.renderedImage != nil && !$0.isMissing }
         print("PERF3_IMAGE_VIEWPORT images=50 initial_decoded=\(loaded.count)")
@@ -1458,18 +1461,22 @@ final class NoteEditorEngineTests: XCTestCase {
         let last = try XCTUnwrap(images.last)
         XCTAssertNil(last.renderedImage, "the last image is still offscreen")
         let range = try XCTUnwrap(engine.range(of: last))
+        let installed = expectation(description: "last attachment preview installed")
+        engine.onImageLoadEvent = { if case .installed(let key) = $0, key == ObjectIdentifier(last) { installed.fulfill() } }
         view.scrollRangeToVisible(range)
         engine.layoutManager?.textViewportLayoutController.layoutViewport()
         view.viewWillDraw()
-        try await Task.sleep(for: .milliseconds(300))
+        await fulfillment(of: [installed], timeout: 5)
         XCTAssertNotNil(last.renderedImage, "scrolling loads an image that has never been drawn")
         XCTAssertFalse(last.isMissing)
         XCTAssertEqual(last.pixelSize, CGSize(width: 800, height: 400))
         XCTAssertEqual(last.filename, items.last?.filename)
         XCTAssertEqual(engine.checkpointDocument().attachmentIDs, document.attachmentIDs, "lazy previews never remove recovery payload references")
         let beforeDetach = images.filter { $0.renderedImage != nil }.count
+        let detached = expectation(description: "view detach acknowledged")
+        engine.onImageLoadEvent = { if case .detached = $0 { detached.fulfill() } }
         engine.detachView()
-        try await Task.sleep(for: .milliseconds(100))
+        await fulfillment(of: [detached], timeout: 5)
         XCTAssertEqual(images.filter { $0.renderedImage != nil }.count, beforeDetach)
         let printed = await engine.preparedPrintView()
         let printedImages = try XCTUnwrap(printed.textStorage).length
@@ -1483,6 +1490,84 @@ final class NoteEditorEngineTests: XCTestCase {
             }
         }
         XCTAssertEqual(printCount, 50, "print decoding is independent of viewport loading")
+    }
+
+    /// The target is already decoded but held across a sibling's layout invalidation.
+    /// Neither a second scroll nor repeated test-driven refreshes may rescue it.
+    func testRoundFDeferredViewportInstallsHeldDecodeAfterSiblingInvalidatesLayout() async throws {
+        let bitmap = try XCTUnwrap(NSBitmapImageRep(bitmapDataPlanes: nil, pixelsWide: 800, pixelsHigh: 400,
+            bitsPerSample: 8, samplesPerPixel: 4, hasAlpha: true, isPlanar: false, colorSpaceName: .deviceRGB,
+            bytesPerRow: 0, bitsPerPixel: 0))
+        let data = try XCTUnwrap(bitmap.representation(using: .png, properties: [:]))
+        let items = (0..<2).map { index in
+            StagedNoteAttachment(id: UUID(), filename: "held-\(index).png", contentTypeIdentifier: "public.png",
+                byteCount: Int64(data.count), digest: NotePayloadDigest.sha256(data), data: data)
+        }
+        let document = NoteDocument(blocks: [.text("Held previews")] + items.map {
+            .image(attachmentID: $0.id, pixelWidth: 800, pixelHeight: 400)
+        })
+        let (engine, view) = makeEngine(document, window: true, staged: items)
+        let images = engine.objects().compactMap { $0.0 as? NoteImageAttachment }
+        let target = try XCTUnwrap(images.first)
+        let sibling = try XCTUnwrap(images.last)
+        let decoder = HeldPreviewDecoder()
+        engine.previewDecoder = decoder
+        let started = expectation(description: "both real staged thumbnails decoded and held")
+        started.expectedFulfillmentCount = 2
+        started.assertForOverFulfill = false
+        var events: [String] = []
+        decoder.onHeld = { id in
+            events.append(id == target.attachmentID ? "target-held" : "sibling-held")
+            started.fulfill()
+        }
+        var deferNextAdmission = false
+        engine.imageAdmissionViewport = {
+            if deferNextAdmission {
+                deferNextAdmission = false
+                events.append("viewport-unavailable")
+                return nil
+            }
+            return engine.layoutManager?.textViewportLayoutController.viewportRange
+        }
+        defer {
+            engine.onImageLoadEvent = nil
+            engine.imageAdmissionViewport = nil
+            decoder.onHeld = nil
+            engine.detachView()
+            decoder.releaseAll()
+        }
+        let installed = expectation(description: "target installed without another scroll")
+        engine.onImageLoadEvent = { event in
+            guard case .installed(let key) = event else { return }
+            if key == ObjectIdentifier(sibling) {
+                events.append("sibling-installed")
+                // TextKit may retain a stale range or expose nil after invalidation.
+                // Supply the unavailable observation once at the async admission boundary.
+                deferNextAdmission = true
+                events.append("target-released")
+                decoder.release(target.attachmentID)
+            } else if key == ObjectIdentifier(target) {
+                events.append("target-installed")
+                installed.fulfill()
+            }
+        }
+        view.layoutSubtreeIfNeeded()
+        engine.layoutManager?.textViewportLayoutController.layoutViewport()
+        view.viewWillDraw()
+        await fulfillment(of: [started], timeout: 5)
+        engine.refreshViewportImages()
+        events.append("refresh-while-pending")
+        decoder.release(sibling.attachmentID)
+        await fulfillment(of: [installed], timeout: 5)
+        decoder.releaseAll()
+        XCTAssertEqual(decoder.thumbnailRequests, 2, "one decode per image despite refresh and reconciliation")
+        XCTAssertEqual(Array(events.suffix(5)), ["refresh-while-pending", "sibling-installed", "target-released", "viewport-unavailable", "target-installed"])
+        XCTAssertNotNil(target.renderedImage)
+        XCTAssertFalse(target.isMissing)
+        XCTAssertEqual(target.pixelSize, CGSize(width: 800, height: 400))
+        XCTAssertEqual(target.filename, items[0].filename)
+        XCTAssertEqual(engine.checkpointDocument().attachmentIDs, document.attachmentIDs)
+        print("ROUND_F_IMAGE_INTERLEAVING \(events)")
     }
 
     func testPerf3DetachedViewportDropsPendingPreviewAndCanRetryOnReturn() async throws {
@@ -3127,6 +3212,34 @@ private final class StubImages: NoteImageProviding {
     func imageBytes(forAttachment id: UUID) -> StagedNoteAttachment? {
         bytes[id].map { StagedNoteAttachment(id: id, filename: "shot.png", contentTypeIdentifier: "public.png",
                                              byteCount: Int64($0.count), digest: NotePayloadDigest.sha256($0), data: $0) }
+    }
+}
+
+@MainActor
+private final class HeldPreviewDecoder: NotePreviewDecoding {
+    var onHeld: ((UUID) -> Void)?
+    private var held: [UUID: CheckedContinuation<Void, Never>] = [:]
+    private(set) var thumbnailRequests = 0
+
+    func header(id: UUID, data: Data?, url: URL?) async -> CGSize? {
+        await NotePreviewDecoder().header(id: id, data: data, url: url)
+    }
+
+    func thumbnail(id: UUID, data: Data?, url: URL?, maxPixel: Int) async -> CGImage? {
+        thumbnailRequests += 1
+        let image = await NotePreviewDecoder().thumbnail(id: id, data: data, url: url, maxPixel: maxPixel)
+        await withCheckedContinuation { continuation in
+            held[id] = continuation
+            onHeld?(id)
+        }
+        return image
+    }
+
+    func release(_ id: UUID) { held.removeValue(forKey: id)?.resume() }
+    func releaseAll() {
+        let continuations = held.values
+        held.removeAll()
+        continuations.forEach { $0.resume() }
     }
 }
 
