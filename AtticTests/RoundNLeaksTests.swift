@@ -182,4 +182,32 @@ final class RoundNLeaksTests: XCTestCase {
     }
 
 
+    func testL03RetryKeepsTheOriginalTargetsAfterSelectionChanges() throws {
+        let gate = PersistenceGate()
+        let store = try makeTestStore(persist: gate.save)
+        let a = try XCTUnwrap(store.create(title: "A")).id
+        let b = try XCTUnwrap(store.create(title: "B")).id
+        let other = try XCTUnwrap(store.create(title: "Other")).id
+        let model = TasksPageModel(library: AtticLibrary(tasks: store))
+        let page = TasksPage(model: model, store: store,
+            layout: PanelPageLayout(cornerSize: 24, panelSize: CGSize(width: 320, height: 520)), addBarFocused: .constant(false))
+        model.selectOnly(a); model.extendSelection(to: b, visible: [a, b, other], from: a)
+        let command = try XCTUnwrap(page.taskCommands(a, tab: .now).first { $0.title == "Complete" })
+        gate.shouldFail = true
+        command.action()
+        XCTAssertEqual(model.rowFailure?.canRetry, true)
+        XCTAssertEqual(store.task(withID: a)?.status, .todo)
+        XCTAssertEqual(store.task(withID: b)?.status, .todo)
+        model.selectOnly(other)
+        model.retryRowFailure()
+        XCTAssertEqual(model.rowFailure?.canRetry, true)
+        gate.shouldFail = false
+        model.retryRowFailure()
+        XCTAssertNil(model.rowFailure)
+        XCTAssertEqual(store.task(withID: a)?.status, .done)
+        XCTAssertEqual(store.task(withID: b)?.status, .done)
+        XCTAssertEqual(store.task(withID: other)?.status, .todo)
+    }
+
+
 }

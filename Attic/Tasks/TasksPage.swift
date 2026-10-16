@@ -1587,7 +1587,7 @@ struct TasksPage: View {
                 TasksDoneDetailView(detail: detail, store: store, restore: {
                     // The details close only once the restore saved; a
                     // failure shows under the row with Retry (round 4).
-                    if model.report(model.restoreToNow(id), on: id, retry: { model.restoreToNow(id) }).isApplied {
+                    if model.report(model.restoreToNow(id), on: id, retry: { [weak model] in model?.restoreToNow(id) ?? .failed(.taskGone) }).isApplied {
                         model.doneDetailID = nil
                     }
                 })
@@ -1616,7 +1616,7 @@ struct TasksPage: View {
             if expanded() {
                 AtticQuickLook(
                     subtasks: row.subtasks,
-                    onToggle: { subtask in model.report(model.toggleSubtask(subtask.id), on: id) { model.toggleSubtask(subtask.id) } },
+                    onToggle: { subtask in model.report(model.toggleSubtask(subtask.id), on: id) { [weak model] in model?.toggleSubtask(subtask.id) ?? .failed(.taskGone) } },
                     onAddSubtask: { model.beginAddingSubtask(to: id) },
                     commands: { subtask in subtaskCommands(subtask, of: id, in: row.subtasks) },
                     onFocusChange: { subtaskID, focused in
@@ -1643,7 +1643,10 @@ struct TasksPage: View {
                         : nil,
                     popover: movePopover(parentID: id, open: live.metaPopover),
                     onReorder: { subtaskID, index, group in
-                        let move = { model.reorderSubtask(subtaskID, toGroupIndex: index, group: group) }
+                        let move = { [weak model] in
+                            guard let model else { return CommandOutcome.failed(.taskGone) }
+                            return model.reorderSubtask(subtaskID, toGroupIndex: index, group: group)
+                        }
                         if model.report(move(), on: id, retry: move).isApplied {
                             AtticHaptics.tick(enabled: design.hapticsEnabled)
                         }
@@ -1670,7 +1673,7 @@ struct TasksPage: View {
                     isImporting: store.importingAttachmentTaskIDs.contains(id),
                     onAttach: { model.services.chooseFiles?(id) },
                     onRemove: { file in
-                        model.report(model.removeFile(file, from: id), on: id) { model.removeFile(file, from: id) }
+                        model.report(model.removeFile(file, from: id), on: id) { [weak model] in model?.removeFile(file, from: id) ?? .failed(.taskGone) }
                     }
                 )
                 // It opens from under its row, as the quick look does.
@@ -1858,7 +1861,7 @@ struct TasksPage: View {
                 // row, Space and the menu on the selection it is part of.
                 toggleDone: {
                     let targets = commandTargets(for: id)
-                    model.report(model.toggleDone(targets), on: id) { model.toggleDone(targets) }
+                    model.report(model.toggleDone(targets), on: id) { [weak model] in model?.toggleDone(targets) ?? .failed(.taskGone) }
                 },
                 openPage: { toggleDetails(id) },
                 // Round 10: Delete (to Recently Deleted), Edit Title and the
@@ -1870,10 +1873,10 @@ struct TasksPage: View {
                 },
                 restoreToNow: {
                     let targets = model.targets(for: id)
-                    model.report(model.restoreToNow(targets), on: id) { model.restoreToNow(targets) }
+                    model.report(model.restoreToNow(targets), on: id) { [weak model] in model?.restoreToNow(targets) ?? .failed(.taskGone) }
                 },
                 copy: { model.copy(model.targets(for: id)) },
-                duplicate: { runCommand(on: id) { model.duplicate($0) } },
+                duplicate: { runCommand(on: id) { [weak model] targets in model?.duplicate(targets) ?? .failed(.taskGone) } },
                 changePriority: { showPriority(for: id) },
                 showActions: { showActions(for: id, anchor: nil, tab: tab) },
                 names: .init(openPage: detailsActionName(for: id))
@@ -1887,22 +1890,25 @@ struct TasksPage: View {
             toggleDone: {
                 let targets = commandTargets(for: id)
                 let outcome = targets.count > 1
-                    ? model.report(model.toggleDone(targets), on: id) { model.toggleDone(targets) }
-                    : model.report(model.toggleDone(id), on: id) { model.toggleDone(id) }
+                    ? model.report(model.toggleDone(targets), on: id) { [weak model] in model?.toggleDone(targets) ?? .failed(.taskGone) }
+                    : model.report(model.toggleDone(id), on: id) { [weak model] in model?.toggleDone(id) ?? .failed(.taskGone) }
                 completionFeedback(outcome, targets)
             },
             // ⇧Space (and VoiceOver): start or stop working, with the same
             // failure line and Retry the menu's command shows (round 5, F5).
             toggleWorking: {
                 let targets = model.targets(for: id)
-                model.report(model.toggleWorking(targets), on: id) { model.toggleWorking(targets) }
+                model.report(model.toggleWorking(targets), on: id) { [weak model] in model?.toggleWorking(targets) ?? .failed(.taskGone) }
             },
             openPage: { openFiles(id) },
             // ⌘B: to Later, or back to Now from Later, reported the same way.
             moveToBacklog: {
                 let targets = model.targets(for: id)
                 let onLater = model.tab == .backlog
-                let move = { onLater ? model.moveToNow(targets) : model.moveToBacklog(targets) }
+                let move = { [weak model] in
+                    guard let model else { return CommandOutcome.failed(.taskGone) }
+                    return onLater ? model.moveToNow(targets) : model.moveToBacklog(targets)
+                }
                 model.report(move(), on: id, retry: move)
             },
             delete: { deleteAndMoveFocus(model.targets(for: id)) },
@@ -1915,7 +1921,7 @@ struct TasksPage: View {
             moveDown: unfinished && model.reorders(on: tab) ? { moveRow(id, by: 1) } : nil,
             addSubtask: unfinished ? { model.beginAddingSubtask(to: id) } : nil,
             copy: { model.copy(model.targets(for: id)) },
-            duplicate: { runCommand(on: id) { model.duplicate($0) } },
+            duplicate: { runCommand(on: id) { [weak model] targets in model?.duplicate(targets) ?? .failed(.taskGone) } },
             changePriority: { showPriority(for: id) },
             showActions: { showActions(for: id, anchor: nil, tab: tab) },
             names: .init(openPage: filesActionName(for: id))
@@ -1984,7 +1990,7 @@ struct TasksPage: View {
             ?? visible.last { !ids.contains($0) }
         // Focus moves only once the delete saved (Astra 6); a failure shows
         // under the row the command came from.
-        guard let first = ids.first, model.report(model.delete(ids), on: first, retry: { model.delete(ids) }).isApplied else { return }
+        guard let first = ids.first, model.report(model.delete(ids), on: first, retry: { [weak model] in model?.delete(ids) ?? .failed(.taskGone) }).isApplied else { return }
         setFocus(next)
         if let next { model.selectOnly(next) }
     }
@@ -2021,10 +2027,10 @@ struct TasksPage: View {
             list.append(AtticMenuCommand(verbatim: single ? String(localized: "Restore to Now")
                                                           : String(localized: "Restore \(targets.count) Tasks to Now"),
                                          startsSection: single) {
-                menuCommand(key) { model.restoreToNow($0) }
+                menuCommand(key) { [weak model] targets in model?.restoreToNow(targets) ?? .failed(.taskGone) }
             })
             list.append(AtticMenuCommand(verbatim: String(localized: "Mark as Not Done"), shortcut: AtticTaskShortcut.complete) {
-                menuCommand(key) { model.toggleDone($0) }
+                menuCommand(key) { [weak model] targets in model?.toggleDone(targets) ?? .failed(.taskGone) }
             })
             if single {
                 list.append(AtticMenuCommand(verbatim: detailsMenuTitle(for: id), shortcut: AtticTaskShortcut.openPage) {
@@ -2035,15 +2041,18 @@ struct TasksPage: View {
         } else {
             list.append(AtticMenuCommand(verbatim: allDone ? String(localized: "Mark as Not Done") : String(localized: "Complete"),
                                          shortcut: AtticTaskShortcut.complete, startsSection: single) {
-                menuCommand(key) { targets in
+                menuCommand(key) { [weak model, hapticsEnabled = design.hapticsEnabled] targets in
+                    guard let model else { return .failed(.taskGone) }
                     let outcome = model.toggleDone(targets)
-                    completionFeedback(outcome, targets)
+                    if outcome.isApplied, targets.contains(where: { model.store.listedTask(withID: $0)?.status == .done }) {
+                        AtticHaptics.tick(enabled: hapticsEnabled)
+                    }
                     return outcome
                 }
             })
             list.append(AtticMenuCommand(verbatim: allWorking ? String(localized: "Stop Working") : String(localized: "Start Working"),
                                          shortcut: AtticTaskShortcut.working) {
-                menuCommand(key) { model.toggleWorking($0) }
+                menuCommand(key) { [weak model] targets in model?.toggleWorking(targets) ?? .failed(.taskGone) }
             })
         }
         if single {
@@ -2063,11 +2072,11 @@ struct TasksPage: View {
         list.append(.submenu(String(localized: "Priority"), priorityCommands(key, targets: targets)))
         if tab == .backlog {
             list.append(AtticMenuCommand(verbatim: String(localized: "Move to Now"), shortcut: AtticTaskShortcut.later) {
-                menuCommand(key) { model.moveToNow($0) }
+                menuCommand(key) { [weak model] targets in model?.moveToNow(targets) ?? .failed(.taskGone) }
             })
         } else if tab == .now {
             list.append(AtticMenuCommand(verbatim: String(localized: "Move to Later"), shortcut: AtticTaskShortcut.later) {
-                menuCommand(key) { model.moveToBacklog($0) }
+                menuCommand(key) { [weak model] targets in model?.moveToBacklog(targets) ?? .failed(.taskGone) }
             })
         }
         // The common actions stay at the top; the rarer file and reorder
@@ -2085,7 +2094,7 @@ struct TasksPage: View {
             pointer.endInvocation()
         })
         list.append(AtticMenuCommand(verbatim: String(localized: "Duplicate"), shortcut: AtticTaskShortcut.duplicate) {
-            menuCommand(key) { model.duplicate($0) }
+            menuCommand(key) { [weak model] targets in model?.duplicate(targets) ?? .failed(.taskGone) }
         })
         if single, tab != .done {
             var more = [AtticMenuCommand(verbatim: model.expandedFiles.contains(id) ? String(localized: "Hide Files") : String(localized: "Show Files"),
@@ -2125,7 +2134,7 @@ struct TasksPage: View {
         var list = choices.quick.map { quick in
             AtticMenuCommand(verbatim: quick.menuTitle, state: quick.id == ticked ? .on : .off,
                              detail: choices.detail(for: quick.day)) {
-                menuCommand(key) { model.setDueDay(quick.day, for: $0) }
+                menuCommand(key) { [weak model] targets in model?.setDueDay(quick.day, for: targets) ?? .failed(.taskGone) }
             }
         }
         list.append(AtticMenuCommand(verbatim: String(localized: "Pick a Date…"), startsSection: true) {
@@ -2133,7 +2142,7 @@ struct TasksPage: View {
         })
         list.append(AtticMenuCommand(verbatim: String(localized: "Remove Date"), isDisabled: targets.allSatisfy { model.dueDay(of: $0) == nil },
                                      startsSection: true) {
-            menuCommand(key) { model.setDueDay(nil, for: $0) }
+            menuCommand(key) { [weak model] targets in model?.setDueDay(nil, for: targets) ?? .failed(.taskGone) }
         })
         return list
     }
@@ -2144,7 +2153,7 @@ struct TasksPage: View {
     private func tagCommands(_ key: TasksRowID, targets: [UUID]) -> [AtticMenuCommand] {
         var list = model.tagChoices(for: targets).prefix(12).map { tag in
             AtticMenuCommand(verbatim: "#" + tag, state: model.tagState(tag, for: targets), swatch: tagColouring.hue(for: tag)) {
-                menuCommand(key) { model.toggleTag(tag, for: $0) }
+                menuCommand(key) { [weak model] targets in model?.toggleTag(tag, for: targets) ?? .failed(.taskGone) }
             }
         }
         list.append(AtticMenuCommand(verbatim: String(localized: "All Tags…"), startsSection: true) {
@@ -2159,7 +2168,7 @@ struct TasksPage: View {
         let priorities = Set(targets.compactMap { store.listedTask(withID: $0)?.priority })
         return TaskPriority.choices.map { priority in
             AtticMenuCommand(verbatim: priority.menuTitle, shortcut: priority.shortcut, state: priorities == [priority] ? .on : .off) {
-                menuCommand(key) { model.setPriority(priority, for: $0) }
+                menuCommand(key) { [weak model] targets in model?.setPriority(priority, for: targets) ?? .failed(.taskGone) }
             }
         }
     }
@@ -2179,35 +2188,38 @@ struct TasksPage: View {
         return [
             AtticMenuCommand(verbatim: subtask.isDone ? String(localized: "Mark as Not Done") : String(localized: "Mark as Done"),
                              shortcut: AtticTaskShortcut.complete) {
-                run { model.toggleSubtask(subtask.id) }
+                run { [weak model] in model?.toggleSubtask(subtask.id) ?? .failed(.taskGone) }
             },
             AtticMenuCommand(verbatim: String(localized: "Rename"), shortcut: AtticTaskShortcut.editTitle) {
                 model.beginRenamingSubtask(subtask.id)
             },
             AtticMenuCommand(verbatim: String(localized: "Move Up"), shortcut: AtticTaskShortcut.moveUp,
                              isDisabled: (index ?? 0) == 0, startsSection: true) {
-                run { model.moveSubtask(subtask.id, by: -1) }
+                run { [weak model] in model?.moveSubtask(subtask.id, by: -1) ?? .failed(.taskGone) }
             },
             AtticMenuCommand(verbatim: String(localized: "Move Down"), shortcut: AtticTaskShortcut.moveDown,
                              isDisabled: index.map { $0 + 1 >= siblings.count } ?? true) {
-                run { model.moveSubtask(subtask.id, by: 1) }
+                run { [weak model] in model?.moveSubtask(subtask.id, by: 1) ?? .failed(.taskGone) }
             },
             // Control audit item 5: to another task, or a task of its own.
             AtticMenuCommand(verbatim: String(localized: "Move to Task…"), startsSection: true) {
                 openMeta(.move, on: parentID, targets: [subtask.id])
             },
             AtticMenuCommand(verbatim: String(localized: "Make Standalone Task")) {
-                run {
+                run { [weak model, weak rowFocus] in
+                    guard let model else { return .failed(.taskGone) }
                     let outcome = model.makeStandalone(subtask.id)
-                    // The keyboard follows it to its new row.
-                    if outcome.isApplied { setFocus(subtask.id) }
+                    // The keyboard follows it without retaining the page.
+                    if outcome.isApplied, let binding = rowFocus?.binding {
+                        binding.wrappedValue = AtticRowFocusID(page: model.tab.rawValue, id: subtask.id)
+                    }
                     return outcome
                 }
             },
             AtticMenuCommand(verbatim: String(localized: "Delete"), shortcut: AtticTaskShortcut.delete, isDestructive: true,
                              startsSection: true) {
                 guard !AtticTextInput.ownsCurrentKey else { return }
-                run { model.deleteSubtask(subtask.id) }
+                run { [weak model] in model?.deleteSubtask(subtask.id) ?? .failed(.taskGone) }
             }
         ]
     }
@@ -2267,11 +2279,14 @@ struct TasksPage: View {
             // A filter or Find: one place among the tasks shown.
             let shown = shownGroup(of: task)
             guard let index = shown.firstIndex(of: id), shown.indices.contains(index + step) else { return }
-            let move = { model.moveVisible(id, toShownIndex: index + step, in: shown) }
+            let move = { [weak model] in
+                guard let model else { return CommandOutcome.failed(.taskGone) }
+                return model.moveVisible(id, toShownIndex: index + step, in: shown)
+            }
             reorderWithoutCrossing { model.report(move(), on: id, retry: move) }
         } else {
             reorderWithoutCrossing {
-                model.report(model.moveBy(id, offset: step), on: id) { model.moveBy(id, offset: step) }
+                model.report(model.moveBy(id, offset: step), on: id) { [weak model] in model?.moveBy(id, offset: step) ?? .failed(.taskGone) }
             }
         }
     }
@@ -2749,8 +2764,9 @@ struct TasksPage: View {
                 if finished.targetIndex != finished.startIndex {
                     // A filter or Find: among the rows shown (item 6).
                     let narrowed = model.narrows(model.tab)
-                    let move = {
-                        narrowed ? model.moveVisible(finished.id, toShownIndex: finished.targetIndex, in: finished.group)
+                    let move = { [weak model] in
+                        guard let model else { return CommandOutcome.failed(.taskGone) }
+                        return narrowed ? model.moveVisible(finished.id, toShownIndex: finished.targetIndex, in: finished.group)
                                  : model.move(finished.id, toGroupIndex: finished.targetIndex)
                     }
                     let moved = model.report(move(), on: finished.id, retry: move)
@@ -2950,9 +2966,9 @@ struct TasksPage: View {
             model.report(command(), on: first, retry: command)
         }
         let move: (TaskStatus) -> Void = { status in
-            if status == .backlog, model.tab != .backlog { run { model.moveToBacklog(ids) } }
-            else if status == .todo, model.tab == .backlog { run { model.moveToNow(ids) } }
-            else { run { model.setStatus(status, for: ids) } }
+            if status == .backlog, model.tab != .backlog { run { [weak model] in model?.moveToBacklog(ids) ?? .failed(.taskGone) } }
+            else if status == .todo, model.tab == .backlog { run { [weak model] in model?.moveToNow(ids) ?? .failed(.taskGone) } }
+            else { run { [weak model] in model?.setStatus(status, for: ids) ?? .failed(.taskGone) } }
         }
         // Each button says what it does and to how many (tooltip and
         // VoiceOver, review UX 4). Its choices are read as the menu opens.
@@ -2969,7 +2985,7 @@ struct TasksPage: View {
                 return TaskPriority.choices.map { priority in
                     AtticMenuCommand(verbatim: priority.menuTitle, shortcut: priority.shortcut,
                                      state: priorities == [priority] ? .on : .off) {
-                        run { model.setPriority(priority, for: ids) }
+                        run { [weak model] in model?.setPriority(priority, for: ids) ?? .failed(.taskGone) }
                     }
                 }
             }),
@@ -2984,8 +3000,8 @@ struct TasksPage: View {
                       AnyView(selectionTagPicker(ids))
                   })),
             model.tab == .backlog
-                ? .init(systemName: "tray.and.arrow.up", label: "Move \(count) tasks to Now", handler: { run { model.moveToNow(ids) } })
-                : .init(systemName: "tray.and.arrow.down", label: "Move \(count) tasks to Later", handler: { run { model.moveToBacklog(ids) } }),
+                ? .init(systemName: "tray.and.arrow.up", label: "Move \(count) tasks to Now", handler: { run { [weak model] in model?.moveToNow(ids) ?? .failed(.taskGone) } })
+                : .init(systemName: "tray.and.arrow.down", label: "Move \(count) tasks to Later", handler: { run { [weak model] in model?.moveToBacklog(ids) ?? .failed(.taskGone) } }),
             .init(systemName: "trash", label: "Delete \(count) tasks", handler: { deleteAndMoveFocus(ids) })
         ], summary: selectionSummary(ids))
     }
