@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
-"""OD-15: accept once, reject only after a same-job interleaved re-check.
+"""OD-15 amended: a same-job re-check judges both attempts together.
 
 Re-run the fixture family containing a failing row, once. Shared fixtures emit
-other rows too; those rows' first passes stay accepted. Bounds are computed by
-the OD-8/9/17 comparators independently for each attempt. Missing data,
+other rows too; those rows' first passes stay accepted. Re-checked rows pool
+samples using the same OD-8/9/17 comparators and bounds. Missing data,
 functional assertions, and candidate absolute budgets fail closed.
 """
 import contextlib
@@ -17,6 +17,8 @@ import shutil
 import statistics
 import subprocess
 import sys
+
+from cost_resolution import pool_comparisons
 
 import check_cost_comparison as frame
 import check_done_search_costs as done
@@ -142,7 +144,7 @@ class Sampler:
 
 
 def check(directory, sampler, families=None):
-    evidence = {'policy': 'OD-15: one-step acceptance, two-step rejection', 'families': {}, 'errors': {}}
+    evidence = {'policy': 'OD-15 amended: pooled measurements on one re-check', 'families': {}, 'errors': {}}
     for family in families or ('frame-row', 'integration', 'done-query'):
         rows = {}
         evidence['families'][family] = rows
@@ -159,23 +161,27 @@ def check(directory, sampler, families=None):
                     raise ValueError(f'{family}: re-check rows differ from first attempt')
                 for name in failed:
                     rows[name]['attempts'].append(second[name])
-                    rows[name]['passed'] = second[name]['passed']
+                    rows[name]['pooled'] = pool_comparisons(first[name], second[name])
+                    rows[name]['passed'] = rows[name]['pooled']['passed']
         except (OSError, ValueError, RuntimeError, KeyError, StopIteration, TypeError) as error:
             evidence['errors'][family] = str(error)
     evidence['passed'] = not evidence['errors'] and all(
         row['passed'] for rows in evidence['families'].values() for row in rows.values())
     (directory / 'cost-gate-attempts.json').write_text(json.dumps(evidence, indent=2) + '\n')
     summary = ['## Cost comparison attempts (OD-15)', '',
-               '| Family / row | Attempt | Reference median (ms) | Candidate median (ms) | Bound (ms) | Result |',
-               '|---|---:|---:|---:|---:|---|']
+               '| Family / row | Attempt | Reference median (ms) | Candidate median (ms) | Bound (ms) | Result | Raw reference samples (ms) | Raw candidate samples (ms) |',
+               '|---|---:|---:|---:|---:|---|---|---|']
     for family, rows in evidence['families'].items():
         for name, row in sorted(rows.items()):
-            for index, attempt in enumerate(row['attempts'], 1):
+            readings = list(enumerate(row['attempts'], 1))
+            if 'pooled' in row:
+                readings.append(('pooled', row['pooled']))
+            for index, attempt in readings:
                 before = attempt.get('before_ms', attempt.get('baseline_ms'))
                 after = attempt.get('after_ms', attempt.get('candidate_ms'))
                 summary.append(f"| {family} / {name.replace('|', chr(92)+'|')} | {index} | "
                                f"{statistics.median(before):.3f} | {statistics.median(after):.3f} | "
-                               f"{attempt['bound_ms']:.3f} | {'pass' if attempt['passed'] else 'fail'} |")
+                               f"{attempt['bound_ms']:.3f} | {'pass' if attempt['passed'] else 'fail'} | {before} | {after} |")
     for family, error in evidence['errors'].items():
         summary.append(f'\n**{family}: incomplete/failed evidence:** {error}')
     summary.append(f"\nFinal comparison result: **{'PASS' if evidence['passed'] else 'FAIL'}**. "

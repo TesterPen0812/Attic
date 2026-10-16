@@ -365,6 +365,12 @@ jobs:
           echo "$summary"
           python3 -c 'import json, sys; s = json.load(sys.stdin); sys.exit(0 if s.get("passedTests") == 3 and s.get("skippedTests", 0) == 0 else 1)' <<<"$summary"
 
+      - name: Summarize both dropdown cost attempts
+        if: always() && steps.strict_build.outcome == 'success'
+        run: |
+          xcrun xcresulttool get log --type console --path "$RUNNER_TEMP/AtticDropdownTimingTests.xcresult" > "$RUNNER_TEMP/dropdown-cost-console.json"
+          python3 Scripts/summarize_dropdown_costs.py "$RUNNER_TEMP/dropdown-cost-console.json" >> "$GITHUB_STEP_SUMMARY"
+
       - name: Upload native dropdown timing results
         if: always()
         uses: actions/upload-artifact@v4

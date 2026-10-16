@@ -1789,46 +1789,65 @@ final class AtticDropdownTests: XCTestCase {
         .priorityOpen: Accepted(ratio: 0.333, spread: 0.168),  // 0.312 … 0.480
     ]
 
-    private func ratiosAfterOneRecheck(_ first: [Measure: Double], accepted: [Measure: Accepted],
-                                      recheck: () -> [Measure: Double]) -> [Measure: Double] {
+    private func ratiosAfterOneRecheck(_ first: [Measure: [Double]], accepted: [Measure: Accepted],
+                                      recheck: () -> [Measure: [Double]]) -> [Measure: Double] {
+        var final = first.mapValues { $0.isEmpty || !$0.allSatisfy(\.isFinite) ? .nan : median($0) }
         let failed = Measure.allCases.filter { measure in
-            guard let ratio = first[measure], ratio.isFinite, let bound = accepted[measure] else { return false }
+            guard let ratio = final[measure], ratio.isFinite, let bound = accepted[measure] else { return false }
             return ratio > bound.limit
         }
-        guard !failed.isEmpty else { return first }
+        guard !failed.isEmpty else { return final }
         let repeated = recheck()
-        var final = first
-        for measure in failed { final[measure] = repeated[measure] ?? .nan }
+        for measure in failed {
+            guard let initial = first[measure], let next = repeated[measure], !next.isEmpty,
+                  next.allSatisfy(\.isFinite) else { final[measure] = .nan; continue }
+            final[measure] = median(initial + next)
+        }
         return final
     }
 
-    func testOneTimingRecheckRecoversNoiseWithoutRepeatingPassingRows() {
+    func testOneTimingRecheckPoolsABlipWithoutRepeatingPassingRows() {
         var invocations = 0
-        let values = ratiosAfterOneRecheck([.slashOpen: 0.25, .tagOpen: 0.9377911224419662,
-                                           .priorityOpen: 0.525550], accepted: Self.acceptedRatiosWithAccessibility) {
+        let values = ratiosAfterOneRecheck([.slashOpen: [0.25, 0.25, 0.25],
+                                           .priorityOpen: [0.6, 0.6, 0.6]], accepted: Self.acceptedRatiosWithAccessibility) {
             invocations += 1
-            return [.slashOpen: 0.6, .tagOpen: 0.91, .priorityOpen: 0.441641]
+            return [.slashOpen: [0.9, 0.9, 0.9], .priorityOpen: [0.4, 0.4, 0.4]]
         }
         XCTAssertEqual(invocations, 1)
-        XCTAssertEqual(values[.slashOpen], 0.25, "a passing row is retained, not exposed to retry noise")
-        XCTAssertEqual(values[.tagOpen], 0.91)
-        XCTAssertEqual(values[.priorityOpen], 0.441641)
-        _ = ratiosAfterOneRecheck([.priorityOpen: 0.49], accepted: Self.acceptedRatiosWithAccessibility) {
+        XCTAssertEqual(values[.slashOpen], 0.25, "passing rows keep only their first attempt")
+        XCTAssertEqual(values[.priorityOpen]!, 0.5, accuracy: 0.000001)
+        XCTAssertLessThanOrEqual(values[.priorityOpen]!, Self.acceptedRatiosWithAccessibility[.priorityOpen]!.limit)
+        _ = ratiosAfterOneRecheck([.priorityOpen: [0.49]], accepted: Self.acceptedRatiosWithAccessibility) {
             XCTFail("a passing batch is never repeated")
             return [:]
         }
     }
 
+    func testOneTimingRecheckUsesThePooledStatisticAtTheUnchangedBoundary() {
+        for (first, second, expected) in [(0.502, 0.500, 0.501), (0.504, 0.500, 0.502)] {
+            let values = ratiosAfterOneRecheck([.priorityOpen: Array(repeating: first, count: 8)],
+                                              accepted: Self.acceptedRatiosWithAccessibility) {
+                [.priorityOpen: Array(repeating: second, count: 8)]
+            }
+            XCTAssertEqual(values[.priorityOpen]!, expected, accuracy: 0.000001)
+            XCTAssertEqual(values[.priorityOpen]! <= Self.acceptedRatiosWithAccessibility[.priorityOpen]!.limit,
+                           expected <= Self.acceptedRatiosWithAccessibility[.priorityOpen]!.limit)
+        }
+    }
+
     func testOneTimingRecheckKeepsARepeatedSlowdownAndInvalidRecordsRed() {
         var invocations = 0
-        let values = ratiosAfterOneRecheck([.priorityOpen: 0.53, .tagOpen: .nan],
+        let values = ratiosAfterOneRecheck([.priorityOpen: [0.53], .tagOpen: [.nan]],
                                           accepted: Self.acceptedRatiosWithAccessibility) {
             invocations += 1
-            return [.priorityOpen: 0.54, .tagOpen: 0.91]
+            return [.priorityOpen: [0.54], .tagOpen: [0.91]]
         }
         XCTAssertEqual(invocations, 1, "there is no third chance")
+        XCTAssertEqual(values[.priorityOpen]!, 0.535, accuracy: 0.000001)
         XCTAssertGreaterThan(values[.priorityOpen]!, Self.acceptedRatiosWithAccessibility[.priorityOpen]!.limit)
         XCTAssertTrue(values[.tagOpen]!.isNaN, "invalid measurements cannot be repaired by retrying")
+        let missing = ratiosAfterOneRecheck([.priorityOpen: [0.53]], accepted: Self.acceptedRatiosWithAccessibility) { [:] }
+        XCTAssertTrue(missing[.priorityOpen]!.isNaN)
     }
 
     private func costEvidenceProblems(_ rounds: [Round], accepted: [Measure: Accepted]) -> [String] {
@@ -1876,7 +1895,7 @@ final class AtticDropdownTests: XCTestCase {
         for problem in costEvidenceProblems(rounds, accepted: accepted) { XCTFail(problem) }
         guard !rounds.isEmpty else { return }
         let first = Dictionary(uniqueKeysWithValues: Measure.allCases.map { measure in
-            (measure, median(rounds.map { $0.ratio(measure) }))
+            (measure, rounds.map { $0.ratio(measure) })
         })
         for measure in Measure.allCases {
             let ratios = rounds.map { $0.ratio(measure) }
@@ -1886,24 +1905,41 @@ final class AtticDropdownTests: XCTestCase {
             print("DROPDOWN_RATIO\(label) \(measure.rawValue) ratio=\(ratio) rounds=\(ratios.map { ($0 * 1000).rounded() / 1000 })"
                   + " new_ms=\(new) legacy_ms=\(legacy)")
         }
+        var second: [Round] = []
         let final: [Measure: Double]
         if let recheck {
             final = ratiosAfterOneRecheck(first, accepted: accepted) {
                 let repeated = recheck()
+                second = repeated
                 for problem in costEvidenceProblems(repeated, accepted: accepted) { XCTFail(problem) }
                 guard !repeated.isEmpty else {
-                    return Dictionary(uniqueKeysWithValues: Measure.allCases.map { ($0, Double.nan) })
+                    return Dictionary(uniqueKeysWithValues: Measure.allCases.map { ($0, [Double.nan]) })
                 }
                 let values = Dictionary(uniqueKeysWithValues: Measure.allCases.map { measure in
-                    (measure, median(repeated.map { $0.ratio(measure) }))
+                    (measure, repeated.map { $0.ratio(measure) })
                 })
                 for measure in Measure.allCases {
                     print("DROPDOWN_RECHECK\(label) \(measure.rawValue) first=\(first[measure]!) repeated=\(values[measure]!) unchanged_limit=\(accepted[measure]?.limit ?? .nan)")
                 }
                 return values
             }
-        } else { final = first }
+        } else { final = first.mapValues { median($0) } }
         for measure in Measure.allCases {
+            let initial = first[measure] ?? []
+            let wasRechecked = median(initial) > (accepted[measure]?.limit ?? .nan) && !second.isEmpty
+            let attempts = wasRechecked ? [rounds, second] : [rounds]
+            let raw = attempts.enumerated().map { index, values in
+                "attempt=\(index + 1) ratios=\(values.map { $0.ratio(measure) })"
+                + " new_ms=\(values.map { $0.new[measure] ?? .nan }) legacy_ms=\(values.map { $0.legacy[measure] ?? .nan })"
+            }.joined(separator: " ; ")
+            let pooled = wasRechecked ? initial + second.map { $0.ratio(measure) } : initial
+            let evidence = "DROPDOWN_COST_EVIDENCE\(label) \(measure.rawValue) \(raw)"
+                + " decision_samples=\(pooled) pooled=\(wasRechecked) statistic=\(final[measure] ?? .nan) unchanged_limit=\(accepted[measure]?.limit ?? .nan)"
+            print(evidence)
+            let attachment = XCTAttachment(string: evidence)
+            attachment.name = "Dropdown cost \(measure.rawValue)\(label)"
+            attachment.lifetime = .keepAlways
+            add(attachment)
             guard let accepted = accepted[measure], let ratio = final[measure] else {
                 XCTFail("missing final measurement or bound for \(measure.rawValue)")
                 continue
@@ -1963,17 +1999,17 @@ final class AtticDropdownTests: XCTestCase {
         let window = makeWindow()
         defer { window.close() }
         var invocations = 0
-        func delayedRatio() -> [Measure: Double] {
+        func delayedRatio() -> [Measure: [Double]] {
             invocations += 1
             let delayed = measureDropdownCosts(in: window, rounds: 8, readAccessibility: true, priorityDelay: 0.008)
-            return [.priorityOpen: median(delayed.map { $0.ratio(.priorityOpen) })]
+            return [.priorityOpen: delayed.map { $0.ratio(.priorityOpen) }]
         }
         let first = delayedRatio()
         let repeated = ratiosAfterOneRecheck(first, accepted: Self.acceptedRatiosWithAccessibility, recheck: delayedRatio)
         let ratio = repeated[.priorityOpen]!
         let limit = Self.acceptedRatiosWithAccessibility[.priorityOpen]!.limit
         print("DROPDOWN_SENSITIVITY priorityOpen_AX delay_ms=8 first=\(first[.priorityOpen]!) ratio=\(ratio) invocations=\(invocations) unchanged_limit=\(limit)")
-        XCTAssertGreaterThan(first[.priorityOpen]!, limit, "the initial estimate rejects the injected slowdown")
+        XCTAssertGreaterThan(median(first[.priorityOpen]!), limit, "the initial estimate rejects the injected slowdown")
         XCTAssertEqual(invocations, 2, "the bounded recheck must also reject the same real slowdown")
         XCTAssertGreaterThan(ratio, limit, "the same paired estimator must reject an actual opening slowdown")
     }
