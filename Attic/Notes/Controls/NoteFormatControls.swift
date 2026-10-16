@@ -371,7 +371,7 @@ final class NoteFormatControls: NSObject {
         guard cardModel.card == nil else { return }
         if engine.returnKeyboardToTable() { return }
         guard let textView, let window = textView.window, window.firstResponder !== textView else { return }
-        window.makeFirstResponder(textView)
+        textView.restoreInputFocus()
     }
 
     /// The keyboard is in one of this note's tables (a cell or whole cells).

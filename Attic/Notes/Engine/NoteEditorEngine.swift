@@ -83,7 +83,10 @@ final class NoteEditorEngine: NSObject, NSTextViewDelegate, NSTextStorageDelegat
         case idle, composing, writingToolsSafe, writingToolsRefused
     }
     /// The note's id; a new note's reserved id may be replaced on its first save.
-    var noteID: UUID
+    var noteID: UUID {
+        didSet { if noteID != oldValue { textView?.cancelCalloutIconSession(reason: "note identity changed") } }
+    }
+    private(set) var documentEditGeneration = 0
     let contentStorage: NSTextContentStorage
     let textStorage: NSTextStorage
     let history: NoteUndoHistory
@@ -350,6 +353,7 @@ final class NoteEditorEngine: NSObject, NSTextViewDelegate, NSTextStorageDelegat
             self.updateTextChecking()
         }
         history.canReplay = { [weak self] in self?.activity == .idle }
+        history.onWillReplay = { [weak self] in self?.textView?.cancelCalloutIconSession(reason: "history replay") }
         history.onTableSnapshot = { [weak self] id, table, focus in
             self?.restoreTable(id: id, table: table, focus: focus) ?? false
         }
@@ -613,6 +617,7 @@ final class NoteEditorEngine: NSObject, NSTextViewDelegate, NSTextStorageDelegat
         appearanceRefreshCount += 1
         style = NoteTextStyle(design: design, tagLineHeight: style.tagLineHeight,
                               titleTrailingReserve: style.titleTrailingReserve)
+        textView?.calloutIconSession?.updateAppearance()
         restyle(NSRange(location: 0, length: textStorage.length))
         renderObjects(in: NSRange(location: 0, length: textStorage.length), force: true)
         textView?.insertionPointColor = style.caretColor
@@ -1079,6 +1084,8 @@ final class NoteEditorEngine: NSObject, NSTextViewDelegate, NSTextStorageDelegat
             let candidate = NoteTextCodec.document(from: candidateStorage, template: template)
             if let reason = gate(candidate, stagedAttachments(for: candidate)) { return refuse(reason) }
         }
+        textView?.cancelCalloutIconSession(reason: "document command")
+        documentEditGeneration &+= 1
         history.breakCoalescing()
         engineEditDepth += 1
         defer {
@@ -1837,6 +1844,8 @@ final class NoteEditorEngine: NSObject, NSTextViewDelegate, NSTextStorageDelegat
                      range editedRange: NSRange, changeInLength delta: Int) {
         headingSectionsCache = nil
         guard editedMask.contains(.editedCharacters) else { return }
+        documentEditGeneration &+= 1
+        textView?.cancelCalloutIconSession(reason: "document characters edited")
         // An edit that empties the note or fills an empty one (an Undo, a
         // paste, an agent's change included): "Title" comes or goes.
         if textStorage.length == 0 || textStorage.length == delta { textView?.updatePlaceholder() }
@@ -3021,6 +3030,7 @@ extension NoteEditorEngine {
     func perform(_ command: NoteFormatCommand, selection: NSRange? = nil) -> Bool {
         let selection = selection ?? textView?.selectedRange() ?? NSRange(location: textStorage.length, length: 0)
         guard validate(command, selection: selection).enabled else { return false }
+        textView?.cancelCalloutIconSession(reason: "format command")
         switch command {
         case .toggleHeadingFold: return toggleHeadingFold(at: selection.location)
         case let .paragraph(style): return applyStyle(style, selection: selection)
@@ -4171,7 +4181,16 @@ extension NoteEditorEngine {
         return perform(.paragraph(.mono(language: NoteCodeLanguage.normalize(language))), selection: NSRange(location: location, length: 0))
     }
     @discardableResult func setCalloutIcon(_ icon: String, at location: Int) -> Bool {
-        guard paragraphStyle(at: location)?.isCallout == true else { return false }
+        textView?.calloutIconSession?.cancel(reason: "fixed icon or No Icon", returnFocus: true)
+        guard paragraphStyle(at: location)?.isCallout == true,
+              validate(.paragraph(.callout(icon: icon)), selection: NSRange(location: location, length: 0)).enabled else { return false }
+        guard paragraphStyle(at: location)?.calloutIcon != icon else { return true }
+        let selection = textView?.selectedRange()
+        history.beginGroup()
+        defer {
+            if let selection { textView?.setSelectedRange(selection) }
+            history.endGroup()
+        }
         return perform(.paragraph(.callout(icon: icon)), selection: NSRange(location: location, length: 0))
     }
     func handleLineBreak() -> Bool {

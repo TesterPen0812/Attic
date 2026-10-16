@@ -101,6 +101,8 @@ final class NoteUndoHistory {
     weak var textView: NSTextView?
     /// A refused Writing Tools session freezes all history operations.
     var canReplay: (() -> Bool)?
+    /// An actual Undo/Redo is about to replay; eligibility queries stay pure.
+    var onWillReplay: (() -> Void)?
     var onReplay: ((NSRange) -> Void)?
     /// A step carrying a tag delta was flipped: add (true) or remove the tag.
     /// The range is the step's text after the flip.
@@ -555,6 +557,7 @@ final class NoteUndoHistory {
             if let origin = outsideEditBarrier { onOutsideEditBarrier?(origin) }
             return false
         }
+        onWillReplay?()
         isTraversing = true
         defer { isTraversing = false }
         open = nil
@@ -574,6 +577,7 @@ final class NoteUndoHistory {
     func redo() -> Bool {
         guard canReplay?() ?? true else { return false }
         guard let first = redoOps.first else { return false }
+        onWillReplay?()
         isTraversing = true
         defer { isTraversing = false }
         open = nil
