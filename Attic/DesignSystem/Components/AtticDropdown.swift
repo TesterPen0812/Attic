@@ -315,6 +315,17 @@ enum AtticDropdownDot {
 /// shortcut (⌥⌘1) is hidden until ⌥ is held, fades in while it is and out
 /// on release. The shortcuts themselves always work. One shared watch of
 /// the modifier keys, kept only while a hint is on screen.
+#if DEBUG
+/// Buffered counters for the opening-cost diagnostic; no logging in timed work.
+@MainActor
+enum AtticDropdownDiagnostics {
+    static var enabled = false
+    static var layouts = 0
+    static var hintRetains = 0
+    static var reveals = 0
+}
+#endif
+
 @MainActor
 final class AtticOptionHints: ObservableObject {
     static let shared = AtticOptionHints()
@@ -351,6 +362,9 @@ final class AtticOptionHints: ObservableObject {
 
     /// A hint appeared: watch ⌥ while any hint shows.
     func retain() {
+        #if DEBUG
+        if AtticDropdownDiagnostics.enabled { AtticDropdownDiagnostics.hintRetains += 1 }
+        #endif
         users += 1
         guard users == 1 else { return }
         update(Self.forced ? .option : NSEvent.modifierFlags)
@@ -379,19 +393,68 @@ final class AtticOptionHints: ObservableObject {
     }
 }
 
-/// A menu row's shortcut, shown while ⌥ is held (`AtticOptionHints`). It
-/// keeps its room either way, so the row never changes width.
+private struct AtticShortcutHintsShownKey: EnvironmentKey {
+    static let defaultValue: Bool? = nil
+}
+
+extension EnvironmentValues {
+    var atticShortcutHintsShown: Bool? {
+        get { self[AtticShortcutHintsShownKey.self] }
+        set { self[AtticShortcutHintsShownKey.self] = newValue }
+    }
+}
+
+/// Opt in only around menus with shortcuts: one observation and lifetime
+/// for the rows, while the leaves keep their room and their own fade.
+struct AtticShortcutHintScope<Content: View>: View {
+    @ObservedObject private var hints = AtticOptionHints.shared
+    let content: Content
+
+    init(@ViewBuilder content: () -> Content) { self.content = content() }
+
+    var body: some View {
+        content
+            .environment(\.atticShortcutHintsShown, hints.shown)
+            .onAppear { hints.retain() }
+            .onDisappear { hints.release() }
+    }
+}
+
+/// A menu row's shortcut, shown while ⌥ is held. Leaves inside a scope
+/// take its value without observing or retaining the shared watcher.
 struct AtticShortcutHint: View {
+    let text: String
+    @Environment(\.atticShortcutHintsShown) private var shown
+
+    var body: some View {
+        if let shown {
+            AtticShortcutHintText(text: text, shown: shown)
+        } else {
+            AtticStandaloneShortcutHint(text: text)
+        }
+    }
+}
+
+private struct AtticStandaloneShortcutHint: View {
     let text: String
     @ObservedObject private var hints = AtticOptionHints.shared
 
     var body: some View {
-        AtticText(verbatim: text, style: .shortcut, ink: .helper)
-            .fixedSize()
-            .opacity(hints.shown ? 1 : 0)
-            .animation(AtticMotionScale.easeOut(AtticMotionScale.fast), value: hints.shown)
+        AtticShortcutHintText(text: text, shown: hints.shown)
             .onAppear { hints.retain() }
             .onDisappear { hints.release() }
+    }
+}
+
+private struct AtticShortcutHintText: View {
+    let text: String
+    let shown: Bool
+
+    var body: some View {
+        AtticText(verbatim: text, style: .shortcut, ink: .helper)
+            .fixedSize()
+            .opacity(shown ? 1 : 0)
+            .animation(AtticMotionScale.easeOut(AtticMotionScale.fast), value: shown)
     }
 }
 
@@ -995,6 +1058,9 @@ final class AtticOverlayHostingView: NSHostingView<AnyView> {
     /// Its SwiftUI update (a card's size, a nested card closing) is part of
     /// the layout pass: overlay hierarchy changes from it wait.
     override func layout() {
+        #if DEBUG
+        if AtticDropdownDiagnostics.enabled { AtticDropdownDiagnostics.layouts += 1 }
+        #endif
         AtticOverlayHierarchy.layoutPass { super.layout() }
     }
 
@@ -1626,6 +1692,9 @@ final class AtticDropdownPresenter {
         DispatchQueue.main.async { [weak self] in
             guard let self, self.isOpen else { return }
             if self.takesKeyboard, self.stage.focusRequest == 0 { self.takeKeyboard() }
+            #if DEBUG
+            if AtticDropdownDiagnostics.enabled { AtticDropdownDiagnostics.reveals += 1 }
+            #endif
             self.stage.shown = true
             self.stage.revealed = true
             PerformanceSignposts.watchFrames("DropdownUnfold", seconds: 0.3)

@@ -126,18 +126,20 @@ struct TaskPriorityPickerView: View {
     private var options: [TaskPriority] { TaskPriority.choices }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 0) {
-            ForEach(Array(options.enumerated()), id: \.element) { index, priority in
-                // Its ⌥⌘ key on every row: real commands, learned here (p2-24).
-                AtticDropdownRow(title: priority.choiceTitle,
-                                 check: current == priority || (current == nil && priority == .none) ? .on : .off,
-                                 mark: TaskRowPresentation.priority(priority),
-                                 detail: priority.shortcutHint,
-                                 isHighlighted: highlighted == index,
-                                 onHover: { inside in
-                                     let next = AtticListHighlight.hovered(index, inside: inside, current: highlighted)
-                                     if next != highlighted { highlighted = next }
-                                 }, position: index + 1, itemCount: options.count) { onPick(priority) }
+        AtticShortcutHintScope {
+            VStack(alignment: .leading, spacing: 0) {
+                ForEach(Array(options.enumerated()), id: \.element) { index, priority in
+                    // Its ⌥⌘ key on every row: real commands, learned here (p2-24).
+                    AtticDropdownRow(title: priority.choiceTitle,
+                                     check: current == priority || (current == nil && priority == .none) ? .on : .off,
+                                     mark: TaskRowPresentation.priority(priority),
+                                     detail: priority.shortcutHint,
+                                     isHighlighted: highlighted == index,
+                                     onHover: { inside in
+                                         let next = AtticListHighlight.hovered(index, inside: inside, current: highlighted)
+                                         if next != highlighted { highlighted = next }
+                                     }, position: index + 1, itemCount: options.count) { onPick(priority) }
+                }
             }
         }
         .focusable()
