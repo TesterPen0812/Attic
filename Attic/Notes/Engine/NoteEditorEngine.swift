@@ -128,6 +128,13 @@ final class NoteEditorEngine: NSObject, NSTextViewDelegate, NSTextStorageDelegat
     var foldAssignedHeadingIDs = Set<UUID>()
     var syntaxCache = NoteSyntaxCache()
     private(set) var lastSyntaxScannedUTF16Count = 0
+    // Work, rather than wall-clock budgets, for the typing regression gates.
+    var renumberPassCount = 0
+    var renumberParagraphVisitCount = 0
+    var ordinalParagraphVisitCount = 0
+    var outlineRebuildCount = 0
+    var outlineParagraphVisitCount = 0
+    var outlineViewportVisitCount = 0
     var headingSectionsCache: [NoteHeadingSection]?
     var headingControls: [Int: NoteHeadingButton] = [:]
     /// The heading line under the pointer (its start), whose fold chevron
@@ -3959,6 +3966,7 @@ extension NoteEditorEngine {
         var ordinal = 1
         var start = location
         while start > titleParagraphRange.length + 1 {
+            ordinalParagraphVisitCount += 1
             let previous = lineRange(at: start - 1)
             guard previous.location < start, previous.location < textStorage.length else { break }
             let attrs = textStorage.attributes(at: previous.location, effectiveRange: nil)

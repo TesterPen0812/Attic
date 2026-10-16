@@ -23,6 +23,8 @@ final class NoteFindController: ObservableObject {
     private var topInset: CGFloat = 0
     private var columnInset: CGFloat = 16
     /// Work counters for the headless performance gates.
+    private(set) var searchedUTF16Count = 0
+    private(set) var invalidatedUTF16Count = 0
     private(set) var objectSearchPassCount = 0
     private(set) var highlightLayoutPassCount = 0
     static var height: CGFloat { AtticControlSize.smallHeight * 2 + AtticSpacing.s4 + AtticSpacing.s8 * 2 }
@@ -184,6 +186,7 @@ final class NoteFindController: ObservableObject {
         let text = string as NSString
         var result: [NSRange] = [], start = 0
         guard !query.isEmpty else { return [] }
+        searchedUTF16Count += text.length
         while start < text.length {
             let range = text.range(of: query, options: [.caseInsensitive, .diacriticInsensitive],
                                    range: NSRange(location: start, length: text.length - start))
@@ -278,6 +281,7 @@ final class NoteFindController: ObservableObject {
             }
             // NSTextView caches fragment layers. Removing rendering attributes
             // alone leaves their old yellow pixels until another text edit.
+            invalidatedUTF16Count += engine.textStorage.length
             layout.invalidateLayout(for: engine.contentStorage.documentRange)
             engine.textView?.needsDisplay = true
         }

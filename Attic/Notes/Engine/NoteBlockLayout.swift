@@ -615,11 +615,13 @@ extension NoteEditorEngine: NSTextLayoutManagerDelegate, @preconcurrency NSTextC
     /// numbers: their fragments are made again (the edit restyled only the
     /// paragraphs beside it). Bounded by the list's own run.
     func renumberList(after range: NSRange) {
+        renumberPassCount += 1
         guard let layoutManager, textStorage.length > 0 else { return }
         var location = min(NSMaxRange(range), textStorage.length - 1)
         location = NSMaxRange(paragraphRange(at: location))
         let start = location
         while location < textStorage.length {
+            renumberParagraphVisitCount += 1
             let line = paragraphRange(at: location)
             let name = textStorage.attribute(.noteBlockStyle, at: line.location, effectiveRange: nil) as? String
             guard name == "number" || name == "bullet" || (textStorage.attribute(.noteBlockIndent, at: line.location, effectiveRange: nil) as? Int ?? 0) > 0
@@ -789,6 +791,7 @@ struct NoteHeadingSection {
 extension NoteEditorEngine {
     var headingSections: [NoteHeadingSection] {
         if let cached = headingSectionsCache { return cached }
+        outlineRebuildCount += 1
         let string = textStorage.string as NSString
         var headings: [(NSRange, Int, UUID?)] = []
         var seen = Set<Int>()
@@ -797,6 +800,7 @@ extension NoteEditorEngine {
             guard value as? String == "heading" else { return }
             var offset = run.location
             while offset < NSMaxRange(run) {
+                outlineParagraphVisitCount += 1
                 let paragraph = string.paragraphRange(for: NSRange(location: offset, length: 0))
                 if paragraph.location > 0, seen.insert(paragraph.location).inserted {
                     var id: UUID?
@@ -829,6 +833,13 @@ extension NoteEditorEngine {
         }
         headingSectionsCache = sections
         return sections
+    }
+
+    func headings(in range: NSRange) -> [NoteHeadingSection] {
+        headingSections.filter {
+            outlineViewportVisitCount += 1
+            return $0.heading.location >= range.location && $0.heading.location < NSMaxRange(range)
+        }
     }
 
     func headingSection(at location: Int) -> NoteHeadingSection? {
@@ -925,7 +936,7 @@ extension NoteEditorEngine {
         let start = contentStorage.offset(from: contentStorage.documentRange.location, to: viewport.location)
         let end = contentStorage.offset(from: contentStorage.documentRange.location, to: viewport.endLocation)
         var visible = Set<Int>()
-        for section in headingSections where section.heading.location >= start && section.heading.location < end {
+        for section in headings(in: NSRange(location: start, length: max(0, end - start))) {
             guard foldedHeadingIDs.isEmpty || !headingSections.contains(where: { outer in
                 outer.id.map(foldedHeadingIDs.contains) == true && NSLocationInRange(section.heading.location, outer.content)
             }) else { continue }
