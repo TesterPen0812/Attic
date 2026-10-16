@@ -103,7 +103,7 @@ final class NotesTypingCostTests: XCTestCase {
                 })
             }
             print("P1_FIND_TABLE size=\(count) scanned_utf16=\(engine.find.searchedUTF16Count - tableScanned) invalidated_utf16=\(engine.find.invalidatedUTF16Count - tableInvalidated) typing_ms=\(tableMS)")
-            let gridCharacters = table.table.rows.flatMap { $0 }.reduce(0) { $0 + $1.text.utf16.count }
+            let gridCharacters = table.table.rows.flatMap { $0.cells }.reduce(0) { $0 + $1.text.utf16.count }
             XCTAssertEqual(engine.find.searchedUTF16Count - tableScanned, gridCharacters)
             XCTAssertEqual(engine.find.invalidatedUTF16Count, tableInvalidated)
             XCTAssertEqual(engine.find.matches.count, count + 1)
