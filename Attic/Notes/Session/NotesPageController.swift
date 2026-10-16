@@ -269,6 +269,8 @@ final class NotesPageController: ObservableObject {
     private var startRequested = false
     private var didRecoverAtLaunch = false
     private var recoveryWork: Task<Void, Never>?
+    private var stagingCollectionWork: Task<Void, Never>?
+    private var stagingCollectionToken: UUID?
     private var recoveryLoading = false
     private var recoveryFailureCount = 0
     /// A verified retirement stays valid only until this note writes or adopts
@@ -281,9 +283,8 @@ final class NotesPageController: ObservableObject {
     /// Waits for durable recovery work; useful for headless callers and tests.
     /// Session replacement waits for this work; hide/page switch retain sessions.
     func waitForRecoveryWork() async {
-        while let work = recoveryWork {
+        while let work = recoveryWork ?? stagingCollectionWork {
             await work.value
-            if recoveryWork == nil { break }
         }
     }
 
@@ -3021,9 +3022,17 @@ extension NotesPageController {
 
     private func collectReleasedStaging() {
         guard let journal else { return }
-        queueRecoveryWork { [weak self] in
+        // Collection is serialized by the journal IO actor, but it is not
+        // a pending checkpoint. It must not make synchronous Undo/Redo wait
+        // for an unrelated housekeeping pass.
+        let prior = stagingCollectionWork
+        let token = UUID()
+        stagingCollectionToken = token
+        stagingCollectionWork = Task { @MainActor [weak self] in
+            await prior?.value
             do { try await journal.collectUnreferencedStaging() }
             catch { self?.reportRecoveryRetentionWarning("Unused recovery files could not be checked. They are being kept for a later cleanup.") }
+            if self?.stagingCollectionToken == token { self?.stagingCollectionWork = nil }
         }
     }
 
