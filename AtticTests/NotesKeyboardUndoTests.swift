@@ -64,9 +64,32 @@ final class NotesKeyboardUndoTests: XCTestCase {
     private var windows: [NSWindow] = []
     private let gate = PersistenceGate()
 
+    private var diagnosticContext: (() -> String)?
+    private var diagnosticCommand = "mount"
+    private var recordedFirstFailure = false
+
+    override nonisolated func record(_ issue: XCTIssue) {
+        if Thread.isMainThread {
+            MainActor.assumeIsolated {
+                if issue.type == .assertionFailure, !recordedFirstFailure {
+                    recordedFirstFailure = true
+                    let snapshot = "S22_FIRST_DIVERGENCE \(issue.compactDescription)\n" +
+                        (diagnosticContext?() ?? "No harness mounted; command=\(diagnosticCommand)")
+                    print(snapshot)
+                    let attachment = XCTAttachment(string: snapshot)
+                    attachment.name = "S22-first-divergent-state"
+                    attachment.lifetime = .keepAlways
+                    add(attachment)
+                }
+            }
+        }
+        super.record(issue)
+    }
+
     override func tearDown() async throws {
         for window in windows { window.close() }
         windows.removeAll()
+        diagnosticContext = nil
     }
 
     private func spin(_ seconds: TimeInterval = 0.25) {
@@ -108,6 +131,20 @@ final class NotesKeyboardUndoTests: XCTestCase {
         window.orderFront(nil)
         window.makeKey()
         windows.append(window)
+        let harness = Harness(window: window, host: host, store: store, noteDraft: noteDraft, toasts: toasts)
+        diagnosticContext = { [weak self] in
+            let controller = harness.controller
+            let engine = controller.active?.engine
+            return """
+            command=\(self?.diagnosticCommand ?? "none")
+            activeNote=\(String(describing: controller.active?.noteID)) librarySelection=\(String(describing: controller.librarySelectionID))
+            noteIDs=\(store.notes.map(\.id)) blockIDs=\(String(describing: engine?.document().blocks.map(\.id)))
+            selections=\(String(describing: engine?.textView?.selectedRanges)) text=\(String(describing: engine?.plainText))
+            undo=\(String(describing: engine?.history.canUndo)) redo=\(String(describing: engine?.history.canRedo)) generation=\(String(describing: engine?.history.recordingGeneration))
+            libraryUndo=\(String(describing: controller.libraryUndoStepID)) libraryRedo=\(controller.canRedoLibrary)
+            responder=\(KeyWindow.identity(window.firstResponder)) keyWindow=\(String(describing: NSApp.keyWindow?.windowNumber)) harnessWindow=\(window.windowNumber) ownsKey=\(NSApp.keyWindow === window)
+            """
+        }
         host.layoutSubtreeIfNeeded()
         let deadline = Date().addingTimeInterval(2)
         while NSApp.keyWindow !== window, Date() < deadline {
@@ -117,7 +154,7 @@ final class NotesKeyboardUndoTests: XCTestCase {
         print("NOTES_UNDO_KEY policy=\(NSApp.activationPolicy().rawValue) active=\(NSApp.isActive) visible=\(window.isVisible) key=\(window.isKeyWindow) ownsKey=\(NSApp.keyWindow === window) fka=\(NSApp.isFullKeyboardAccessEnabled)")
         XCTAssertTrue(window.isKeyWindow)
         XCTAssertTrue(NSApp.keyWindow === window, "the keyboard route must have an actual AppKit key owner")
-        return (Harness(window: window, host: host, store: store, noteDraft: noteDraft, toasts: toasts), ids)
+        return (harness, ids)
     }
 
     /// What the library's history and the notes look like: a key the library
@@ -131,6 +168,7 @@ final class NotesKeyboardUndoTests: XCTestCase {
     @discardableResult
     private func press(_ characters: String, keyCode: UInt16, _ flags: NSEvent.ModifierFlags = [], toTheLibrary: Bool = false,
                        beforeTextDispatchForRegression: (() -> Void)? = nil, in harness: Harness) throws -> Route {
+        diagnosticCommand = "characters=\(characters.debugDescription) keyCode=\(keyCode) flags=\(flags.rawValue) library=\(toTheLibrary)"
         let window = harness.window
         let event = try XCTUnwrap(NSEvent.keyEvent(
             with: .keyDown, location: .zero, modifierFlags: flags,

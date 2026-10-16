@@ -447,7 +447,11 @@ final class AtticDropdownTests: XCTestCase {
         let attribute = NSAccessibility.Attribute(rawValue: "AXEnhancedUserInterface")
         let previous = NSApp.accessibilityAttributeValue(attribute)
         NSApp.accessibilitySetValue(true, forAttribute: attribute)
-        defer { NSApp.accessibilitySetValue(previous, forAttribute: attribute) }
+        verifyCIInputModes(readAccessibility: true)
+        defer {
+            NSApp.accessibilitySetValue(previous, forAttribute: attribute)
+            verifyCIAccessibilityMode(previous, phase: "restored after measurement group")
+        }
         let window = makeWindow()
         defer { window.close() }
         // The priority picker on a High task, ↓ moved to Medium; the tag
@@ -488,7 +492,11 @@ final class AtticDropdownTests: XCTestCase {
         let attribute = NSAccessibility.Attribute(rawValue: "AXEnhancedUserInterface")
         let previous = NSApp.accessibilityAttributeValue(attribute)
         NSApp.accessibilitySetValue(true, forAttribute: attribute)
-        defer { NSApp.accessibilitySetValue(previous, forAttribute: attribute) }
+        verifyCIInputModes(readAccessibility: true)
+        defer {
+            NSApp.accessibilitySetValue(previous, forAttribute: attribute)
+            verifyCIAccessibilityMode(previous, phase: "restored after measurement group")
+        }
         let window = makeWindow()
         defer { window.close() }
         let model = NoteSlashListModel()
@@ -814,7 +822,11 @@ final class AtticDropdownTests: XCTestCase {
         let attribute = NSAccessibility.Attribute(rawValue: "AXEnhancedUserInterface")
         let previous = NSApp.accessibilityAttributeValue(attribute)
         NSApp.accessibilitySetValue(true, forAttribute: attribute)
-        defer { NSApp.accessibilitySetValue(previous, forAttribute: attribute) }
+        verifyCIInputModes(readAccessibility: true)
+        defer {
+            NSApp.accessibilitySetValue(previous, forAttribute: attribute)
+            verifyCIAccessibilityMode(previous, phase: "restored after measurement group")
+        }
         for (name, content) in [("date", AnyView(TaskDatePickerView(choices: TaskDateChoices(parser: TaskTextParser()), selected: nil, onPick: { _ in }))),
                                 ("tags", AnyView(TaskTagPickerView(allTags: ["home", "launch"], state: { _ in .off },
                                                                    onToggle: { _ in }, onCreate: { _, _ in true }))),
@@ -1007,7 +1019,11 @@ final class AtticDropdownTests: XCTestCase {
         let attribute = NSAccessibility.Attribute(rawValue: "AXEnhancedUserInterface")
         let previous = NSApp.accessibilityAttributeValue(attribute)
         NSApp.accessibilitySetValue(true, forAttribute: attribute)
-        defer { NSApp.accessibilitySetValue(previous, forAttribute: attribute) }
+        verifyCIInputModes(readAccessibility: true)
+        defer {
+            NSApp.accessibilitySetValue(previous, forAttribute: attribute)
+            verifyCIAccessibilityMode(previous, phase: "restored after measurement group")
+        }
         let window = KeyPanel(contentRect: NSRect(x: -4000, y: -4000, width: 320, height: 520),
                               styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
         window.isReleasedWhenClosed = false
@@ -1126,7 +1142,11 @@ final class AtticDropdownTests: XCTestCase {
         let attribute = NSAccessibility.Attribute(rawValue: "AXEnhancedUserInterface")
         let previous = NSApp.accessibilityAttributeValue(attribute)
         NSApp.accessibilitySetValue(true, forAttribute: attribute)
-        defer { NSApp.accessibilitySetValue(previous, forAttribute: attribute) }
+        verifyCIInputModes(readAccessibility: true)
+        defer {
+            NSApp.accessibilitySetValue(previous, forAttribute: attribute)
+            verifyCIAccessibilityMode(previous, phase: "restored after measurement group")
+        }
         let window = RecordingKeyPanel(contentRect: NSRect(x: -4000, y: -4000, width: 320, height: 520),
                               styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
         window.isReleasedWhenClosed = false
@@ -1394,7 +1414,11 @@ final class AtticDropdownTests: XCTestCase {
         let attribute = NSAccessibility.Attribute(rawValue: "AXEnhancedUserInterface")
         let previous = NSApp.accessibilityAttributeValue(attribute)
         NSApp.accessibilitySetValue(true, forAttribute: attribute)
-        defer { NSApp.accessibilitySetValue(previous, forAttribute: attribute) }
+        verifyCIInputModes(readAccessibility: true)
+        defer {
+            NSApp.accessibilitySetValue(previous, forAttribute: attribute)
+            verifyCIAccessibilityMode(previous, phase: "restored after measurement group")
+        }
         let window = makeWindow()
         // Room above the anchor for five weeks of the Compact card, not six.
         window.setContentSize(CGSize(width: 320, height: 295))
@@ -1467,7 +1491,11 @@ final class AtticDropdownTests: XCTestCase {
         let attribute = NSAccessibility.Attribute(rawValue: "AXEnhancedUserInterface")
         let previous = NSApp.accessibilityAttributeValue(attribute)
         NSApp.accessibilitySetValue(true, forAttribute: attribute)
-        defer { NSApp.accessibilitySetValue(previous, forAttribute: attribute) }
+        verifyCIInputModes(readAccessibility: true)
+        defer {
+            NSApp.accessibilitySetValue(previous, forAttribute: attribute)
+            verifyCIAccessibilityMode(previous, phase: "restored after measurement group")
+        }
         let window = makeWindow()
         defer { window.close() }
         // Room below for the card and two typed suggestions (O14-09's
@@ -1602,7 +1630,16 @@ final class AtticDropdownTests: XCTestCase {
     struct Round {
         var new: [Measure: Double] = [:]
         var legacy: [Measure: Double] = [:]
-        func ratio(_ measure: Measure) -> Double { new[measure, default: 0] / max(legacy[measure, default: 0], .ulpOfOne) }
+        func ratio(_ measure: Measure) -> Double {
+            guard let value = new[measure], let reference = legacy[measure] else { return .nan }
+            return value / max(reference, .ulpOfOne)
+        }
+    }
+
+    func testMissingDropdownMeasurementsProduceInvalidRatios() {
+        XCTAssertTrue(Round().ratio(.priorityOpen).isNaN)
+        XCTAssertTrue(Round(new: [:], legacy: [.priorityOpen: 1]).ratio(.priorityOpen).isNaN)
+        XCTAssertTrue(Round(new: [.priorityOpen: 1], legacy: [:]).ratio(.priorityOpen).isNaN)
     }
 
     /// Opens, filters and closes the dropdowns and the components they
@@ -1611,6 +1648,7 @@ final class AtticDropdownTests: XCTestCase {
     /// accessibility tree, as VoiceOver does when a menu opens or changes
     /// (that is when SwiftUI builds each row's accessibility element).
     private func measureDropdownCosts(in window: NSWindow, rounds: Int, readAccessibility: Bool = false, priorityDelay: TimeInterval = 0, paired: Bool = true) -> [Round] {
+        verifyCIInputModes(readAccessibility: readAccessibility)
         let design = AtticDesignContext()
         let all = NoteSlashItem.Kind.allCases.map { NoteSlashItem(kind: $0) }
         let filtered = all.filter { $0.title.lowercased().contains("li") }
@@ -1793,16 +1831,58 @@ final class AtticDropdownTests: XCTestCase {
         XCTAssertTrue(values[.tagOpen]!.isNaN, "invalid measurements cannot be repaired by retrying")
     }
 
+    private func costEvidenceProblems(_ rounds: [Round], accepted: [Measure: Accepted]) -> [String] {
+        var problems: [String] = []
+        if rounds.isEmpty { problems.append("missing measurement rounds") }
+        for measure in Measure.allCases {
+            if let bound = accepted[measure] {
+                if !bound.limit.isFinite { problems.append("invalid bound \(measure.rawValue)") }
+            } else { problems.append("missing bound \(measure.rawValue)") }
+            for (index, round) in rounds.enumerated() {
+                for (side, values) in [("new", round.new), ("legacy", round.legacy)] {
+                    guard let value = values[measure] else {
+                        problems.append("missing \(side) \(measure.rawValue) round \(index)")
+                        continue
+                    }
+                    if !value.isFinite { problems.append("invalid \(side) \(measure.rawValue) round \(index)") }
+                }
+            }
+        }
+        return problems
+    }
+
+    func testCostEvidenceRequiresEveryValueAndBoundBeforeTakingMedians() {
+        let values = Dictionary(uniqueKeysWithValues: Measure.allCases.map { ($0, 1.0) })
+        let complete = Round(new: values, legacy: values)
+        XCTAssertEqual(costEvidenceProblems([complete], accepted: Self.acceptedRatios), [])
+        var missing = complete
+        missing.new[.priorityOpen] = nil
+        XCTAssertEqual(costEvidenceProblems([complete, missing, complete], accepted: Self.acceptedRatios),
+                       ["missing new priorityOpen round 1"], "a median must not mask one missing sample")
+        missing = complete
+        missing.legacy[.tagOpen] = nil
+        XCTAssertEqual(costEvidenceProblems([missing], accepted: Self.acceptedRatios), ["missing legacy tagOpen round 0"])
+        missing = complete
+        missing.new[.slashOpen] = .nan
+        XCTAssertEqual(costEvidenceProblems([missing], accepted: Self.acceptedRatios), ["invalid new slashOpen round 0"])
+        var bounds = Self.acceptedRatios
+        bounds[.priorityOpen] = nil
+        XCTAssertEqual(costEvidenceProblems([complete], accepted: bounds), ["missing bound priorityOpen"])
+        XCTAssertEqual(costEvidenceProblems([], accepted: Self.acceptedRatios), ["missing measurement rounds"])
+    }
+
     private func gate(_ rounds: [Round], label: String, accepted: [Measure: Accepted],
                       recheck: (() -> [Round])? = nil) {
+        for problem in costEvidenceProblems(rounds, accepted: accepted) { XCTFail(problem) }
+        guard !rounds.isEmpty else { return }
         let first = Dictionary(uniqueKeysWithValues: Measure.allCases.map { measure in
             (measure, median(rounds.map { $0.ratio(measure) }))
         })
         for measure in Measure.allCases {
             let ratios = rounds.map { $0.ratio(measure) }
             let ratio = median(ratios)
-            let new = median(rounds.map { $0.new[measure, default: 0] })
-            let legacy = median(rounds.map { $0.legacy[measure, default: 0] })
+            let new = median(rounds.map { $0.new[measure] ?? .nan })
+            let legacy = median(rounds.map { $0.legacy[measure] ?? .nan })
             print("DROPDOWN_RATIO\(label) \(measure.rawValue) ratio=\(ratio) rounds=\(ratios.map { ($0 * 1000).rounded() / 1000 })"
                   + " new_ms=\(new) legacy_ms=\(legacy)")
         }
@@ -1810,6 +1890,10 @@ final class AtticDropdownTests: XCTestCase {
         if let recheck {
             final = ratiosAfterOneRecheck(first, accepted: accepted) {
                 let repeated = recheck()
+                for problem in costEvidenceProblems(repeated, accepted: accepted) { XCTFail(problem) }
+                guard !repeated.isEmpty else {
+                    return Dictionary(uniqueKeysWithValues: Measure.allCases.map { ($0, Double.nan) })
+                }
                 let values = Dictionary(uniqueKeysWithValues: Measure.allCases.map { measure in
                     (measure, median(repeated.map { $0.ratio(measure) }))
                 })
@@ -1820,7 +1904,10 @@ final class AtticDropdownTests: XCTestCase {
             }
         } else { final = first }
         for measure in Measure.allCases {
-            guard let accepted = accepted[measure], let ratio = final[measure] else { continue }
+            guard let accepted = accepted[measure], let ratio = final[measure] else {
+                XCTFail("missing final measurement or bound for \(measure.rawValue)")
+                continue
+            }
             XCTAssertLessThanOrEqual(ratio, accepted.limit,
                                      "\(measure.rawValue)\(label): \(ratio) of the replaced component's cost, past the accepted"
                                      + " \(accepted.ratio) and its run-to-run spread \(accepted.spread)")
@@ -1841,7 +1928,11 @@ final class AtticDropdownTests: XCTestCase {
         let attribute = NSAccessibility.Attribute(rawValue: "AXEnhancedUserInterface")
         let previous = NSApp.accessibilityAttributeValue(attribute)
         NSApp.accessibilitySetValue(true, forAttribute: attribute)
-        defer { NSApp.accessibilitySetValue(previous, forAttribute: attribute) }
+        verifyCIInputModes(readAccessibility: true)
+        defer {
+            NSApp.accessibilitySetValue(previous, forAttribute: attribute)
+            verifyCIAccessibilityMode(previous, phase: "restored after measurement group")
+        }
         let window = makeWindow()
         defer { window.close() }
         var old: [Double] = [], paired: [Double] = []
@@ -1864,7 +1955,11 @@ final class AtticDropdownTests: XCTestCase {
         let attribute = NSAccessibility.Attribute(rawValue: "AXEnhancedUserInterface")
         let previous = NSApp.accessibilityAttributeValue(attribute)
         NSApp.accessibilitySetValue(true, forAttribute: attribute)
-        defer { NSApp.accessibilitySetValue(previous, forAttribute: attribute) }
+        verifyCIInputModes(readAccessibility: true)
+        defer {
+            NSApp.accessibilitySetValue(previous, forAttribute: attribute)
+            verifyCIAccessibilityMode(previous, phase: "restored after measurement group")
+        }
         let window = makeWindow()
         defer { window.close() }
         var invocations = 0
@@ -1890,7 +1985,11 @@ final class AtticDropdownTests: XCTestCase {
         let attribute = NSAccessibility.Attribute(rawValue: "AXEnhancedUserInterface")
         let previous = NSApp.accessibilityAttributeValue(attribute)
         NSApp.accessibilitySetValue(true, forAttribute: attribute)
-        defer { NSApp.accessibilitySetValue(previous, forAttribute: attribute) }
+        verifyCIInputModes(readAccessibility: true)
+        defer {
+            NSApp.accessibilitySetValue(previous, forAttribute: attribute)
+            verifyCIAccessibilityMode(previous, phase: "restored after measurement group")
+        }
         let window = makeWindow()
         defer { window.close() }
         gate(measureDropdownCosts(in: window, rounds: 8, readAccessibility: true), label: "_AX",
@@ -2091,11 +2190,12 @@ extension AtticDropdownTests {
             state.selectSection(initial)
             let chrome = PanelChromeInteractionState()
             let settings = AppSettings(defaults: defaults)
+            let tasksState = TasksPageState()
             let host = AtticPanelHostingView(rootView: AtticPanelView(
                 store: store, noteStore: notes, canvasSession: CanvasSession(store: CanvasStore(container: container)),
                 noteDraft: NoteDraftController(noteStore: notes), chromeInteractionState: chrome,
                 uiState: state, settings: settings,
-                tasksPageState: TasksPageState()), panelCornerRadius: 52, dockedCorner: .topRight, chromeInteractionState: chrome)
+                tasksPageState: tasksState), panelCornerRadius: 52, dockedCorner: .topRight, chromeInteractionState: chrome)
             let window = makeUnshownWindow()
             window.contentView = host
             defer {
@@ -2106,10 +2206,15 @@ extension AtticDropdownTests {
             // A reveal/page shortcut loads/selects and requests in one turn,
             // before SwiftUI mounts the target page (no window reveal here).
             spin(0.3)
+            let priorRequests = window.requests.count
             state.loadPageContent()
             state.selectSection(.tasks)
             state.requestPrimaryInputFocus()
-            spin(1)
+            let request = state.primaryInputFocusRequest
+            waitForTestOperation("pre-mount primary focus request \(request)") {
+                tasksState.handledPrimaryInputFocusRequest == request &&
+                    window.requests.dropFirst(priorRequests).contains { $0 is AtticTokenTextView }
+            }
             let editor = window.firstResponder as? NSTextView
             XCTAssertTrue(editor?.isDescendant(of: host) == true, "entry from \(initial): request before Tasks mount")
             XCTAssertFalse(window.isVisible)

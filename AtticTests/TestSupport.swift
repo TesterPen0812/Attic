@@ -1,3 +1,4 @@
+import AppKit
 import Foundation
 import SwiftData
 @testable import Attic
@@ -245,4 +246,60 @@ extension XCTestCase {
         addTeardownBlock { [weak store] in await store?.waitForAttachmentReconciliation() }
         return store
     }
+}
+
+// Completion waits observe work, never the state a test is about to assert.
+@MainActor
+func waitForTestOperation(_ name: String, timeout: TimeInterval = 3,
+                          file: StaticString = #filePath, line: UInt = #line,
+                          completed: () -> Bool) {
+    let deadline = ProcessInfo.processInfo.systemUptime + timeout
+    while !completed(), ProcessInfo.processInfo.systemUptime < deadline {
+        RunLoop.main.run(until: Date().addingTimeInterval(0.001))
+    }
+    if !completed() { XCTFail("Timed out waiting for \(name)", file: file, line: line) }
+}
+
+private struct TestOperationTimeout: Error { let name: String }
+
+@MainActor
+func waitForTestOperationAsync(_ name: String, timeout: Duration = .seconds(3),
+                               file: StaticString = #filePath, line: UInt = #line,
+                               completed: () async -> Bool) async throws {
+    let deadline = ContinuousClock.now + timeout
+    while !(await completed()), ContinuousClock.now < deadline {
+        try await Task.sleep(for: .milliseconds(1))
+    }
+    guard await completed() else {
+        XCTFail("Timed out waiting for \(name)", file: file, line: line)
+        throw TestOperationTimeout(name: name)
+    }
+}
+
+@MainActor
+func waitForFormatRefresh(_ controls: NoteFormatControls, file: StaticString = #filePath, line: UInt = #line) {
+    let generation = controls.refreshGeneration
+    waitForTestOperation("format refresh generation \(generation)", file: file, line: line) {
+        controls.completedRefreshGeneration >= generation
+    }
+}
+
+@MainActor
+func verifyCIInputModes(readAccessibility: Bool) {
+    let env = ProcessInfo.processInfo.environment
+    guard env["ATTIC_CI_INPUT_MODES"] == "1" else { return }
+    guard let mode = env["ATTIC_CI_KEYBOARD_MODE"], mode == "0" || mode == "3" else {
+        return XCTFail("missing CI keyboard mode")
+    }
+    XCTAssertEqual(NSApp.isFullKeyboardAccessEnabled, mode == "3")
+    verifyCIAccessibilityMode(readAccessibility, phase: "before measurement group")
+}
+
+@MainActor
+func verifyCIAccessibilityMode(_ expected: Any?, phase: String) {
+    guard ProcessInfo.processInfo.environment["ATTIC_CI_INPUT_MODES"] == "1" else { return }
+    let value = NSApp.accessibilityAttributeValue(NSAccessibility.Attribute(rawValue: "AXEnhancedUserInterface")) as? Bool
+    XCTAssertNotNil(value, "the accessibility mode must be observable")
+    XCTAssertEqual(value, expected as? Bool, phase)
+    print("CI_INPUT_MODES AX \(phase) expected=\(String(describing: expected)) actual=\(String(describing: value))")
 }

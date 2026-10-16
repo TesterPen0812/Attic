@@ -3000,7 +3000,12 @@ final class PhaseXHunt14Tests: XCTestCase {
             }
             if step.kind < 6, engine.history.recordingGeneration != generation { undo.append(before); redo.removeAll() }
             let actual = h14Read(engine)
-            if actual != model { return (index, "expected \(model), actual \(actual)") }
+            if actual != model {
+                return (index, "command=\(step) requestedSelection=\(NSRange(location: caret, length: 0)) selections=\(view.selectedRanges) " +
+                    "blockIDs=\(engine.document().blocks.map(\.id)) undo=\(engine.history.canUndo) redo=\(engine.history.canRedo) " +
+                    "generation=\(engine.history.recordingGeneration) previousGeneration=\(generation) expectedUndoDepth=\(undo.count) expectedRedoDepth=\(redo.count); " +
+                    "expected \(model), actual \(actual)")
+            }
         }
         return nil
     }
@@ -3024,6 +3029,12 @@ final class PhaseXHunt14Tests: XCTestCase {
             var random = H14RNG(state: UInt64(seed))
             let steps = (0..<40).map { _ in H14Step(kind: random.next() % 8, a: random.next(), b: random.next()) }
             if let failure = h14Replay(steps) {
+                let first = "S24_FIRST_DIVERGENCE seed=\(seed) index=\(failure.index) steps=\(steps): \(failure.reason)"
+                print(first)
+                let attachment = XCTAttachment(string: first)
+                attachment.name = "S24-first-divergent-state-before-shrinking"
+                attachment.lifetime = .keepAlways
+                add(attachment)
                 let minimal = h14Shrink(steps, firstMismatch: failure.index)
                 let reason = h14Replay(minimal)?.reason ?? failure.reason
                 XCTFail("H14-09 (also covers H14-06/H14-10) seed \(seed), shrunk \(minimal): \(reason)")

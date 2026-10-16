@@ -402,10 +402,14 @@ final class NotesPageController: ObservableObject {
     /// Waiting never cancels the serialized write or releases its live owners.
     /// A slow disk returns control with guidance; the same action can be retried.
     var recoveryResponseTimeout: Duration = .seconds(2)
+    /// The functional ordering test can pause this read; production uses the real clock.
+    var recoveryClockNow: () -> ContinuousClock.Instant = { .now }
+    var recoveryWaitDidStart: (() -> Void)?
     private func awaitRecoveryForUser(completedAction: Bool = false) async -> Bool {
-        let clock = ContinuousClock(), deadline = ContinuousClock.now + recoveryResponseTimeout
+        let deadline = recoveryClockNow() + recoveryResponseTimeout
+        if recoveryWork != nil { recoveryWaitDidStart?() }
         while recoveryWork != nil {
-            guard clock.now < deadline, !Task.isCancelled else {
+            guard recoveryClockNow() < deadline, !Task.isCancelled else {
                 reportRecoveryRetentionWarning(completedAction
                     ? "Recovery data is still being saved."
                     : "Recovery data is still being saved. Try again when saving finishes.",
