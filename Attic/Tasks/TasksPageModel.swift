@@ -100,6 +100,14 @@ final class TasksCellUpdates: ObservableObject {
     static let quiet = TasksCellUpdates()
 }
 
+/// Only the quick look with the active editor observes its draft keys.
+@MainActor
+final class TasksSubtaskDraftState: ObservableObject {
+    static let quiet = TasksSubtaskDraftState()
+    @Published var newTitle = ""
+    @Published var rename = ""
+}
+
 /// The add bar's text and insertion point. Only the add bar observes it.
 @MainActor
 final class TasksAddBarState: ObservableObject {
@@ -242,14 +250,21 @@ final class TasksPageModel: ObservableObject {
         case paste
     }
     @Published private(set) var newSubtaskParentID: UUID?
-    @Published var newSubtaskTitle = ""
+    let subtaskDraft = TasksSubtaskDraftState()
+    var newSubtaskTitle: String {
+        get { subtaskDraft.newTitle }
+        set { subtaskDraft.newTitle = newValue }
+    }
     /// A quick-look subtask being renamed in place (round 10), its text,
     /// and whether its save failed ("Not saved · Retry").
     @Published var renamingSubtaskID: UUID?
     /// A rename belongs to the quick look it opened in. A move elsewhere
     /// cannot leave its editor holding that original page's keys.
     var renamingSubtaskParentID: UUID?
-    @Published var subtaskRename = ""
+    var subtaskRename: String {
+        get { subtaskDraft.rename }
+        set { subtaskDraft.rename = newValue }
+    }
     @Published var subtaskRenameFailed = false
     /// The subtask line that has the keyboard (round 10b). Not published: it
     /// only steers which row a shortcut targets, and never redraws.

@@ -1600,44 +1600,47 @@ struct TasksPage: View {
                     .accessibilityIdentifier("tasks-row-failure")
             }
             if expanded() {
-                AtticQuickLook(
-                    subtasks: row.subtasks,
-                    onToggle: { subtask in model.report(model.toggleSubtask(subtask.id), on: id) { [weak model] in model?.toggleSubtask(subtask.id) ?? .failed(.taskGone) } },
-                    onAddSubtask: { model.beginAddingSubtask(to: id) },
-                    commands: { subtask in subtaskCommands(subtask, of: id, in: row.subtasks) },
-                    onFocusChange: { subtaskID, focused in
-                        if focused { model.focusedSubtaskID = subtaskID } else if model.focusedSubtaskID == subtaskID { model.focusedSubtaskID = nil }
-                    },
-                    renaming: (active ? model.renamingSubtaskID : nil).map { renaming in
-                        (renaming, AtticTitleEditing(text: $model.subtaskRename, commit: { model.commitSubtaskRename() },
-                                                     cancel: { model.cancelSubtaskRename() },
-                                                     accessibilityLabel: String(localized: "Rename subtask"),
-                                                     emptyBackspace: { model.backspaceEmptySubtask() },
-                                            pageUndo: { native in (model.taskChangeOwnsUndo || !native) && model.undo().isApplied },
-                                            pageRedo: { native in (model.taskChangeOwnsRedo || !native) && model.redo().isApplied },
-                                            didEdit: { model.noteTextEdit() }))
-                    },
-                    newSubtask: model.newSubtaskParentID == id && active
-                        ? AtticTitleEditing(text: $model.newSubtaskTitle, commit: { model.commitNewSubtask() },
-                                            cancel: { model.cancelEditing() },
-                                            accessibilityLabel: String(localized: "New subtask of \(row.model.title)"),
-                                            placeholder: String(localized: "Add subtask…"),
-                                            emptyBackspace: { model.backspaceEmptySubtask() },
-                                            pageUndo: { native in (model.taskChangeOwnsUndo || !native) && model.undo().isApplied },
-                                            pageRedo: { native in (model.taskChangeOwnsRedo || !native) && model.redo().isApplied },
-                                            didEdit: { model.noteTextEdit() })
-                        : nil,
-                    popover: movePopover(parentID: id, open: live.metaPopover),
-                    onReorder: { subtaskID, index, group in
-                        let move = { [weak model] in
-                            guard let model else { return CommandOutcome.failed(.taskGone) }
-                            return model.reorderSubtask(subtaskID, toGroupIndex: index, group: group)
+                TasksSubtaskDraftView(draft: active && (model.newSubtaskParentID == id || model.renamingSubtaskParentID == id)
+                                      ? model.subtaskDraft : .quiet) {
+                    AtticQuickLook(
+                        subtasks: row.subtasks,
+                        onToggle: { subtask in model.report(model.toggleSubtask(subtask.id), on: id) { [weak model] in model?.toggleSubtask(subtask.id) ?? .failed(.taskGone) } },
+                        onAddSubtask: { model.beginAddingSubtask(to: id) },
+                        commands: { subtask in subtaskCommands(subtask, of: id, in: row.subtasks) },
+                        onFocusChange: { subtaskID, focused in
+                            if focused { model.focusedSubtaskID = subtaskID } else if model.focusedSubtaskID == subtaskID { model.focusedSubtaskID = nil }
+                        },
+                        renaming: (active ? model.renamingSubtaskID : nil).map { renaming in
+                            (renaming, AtticTitleEditing(text: $model.subtaskRename, commit: { model.commitSubtaskRename() },
+                                                         cancel: { model.cancelSubtaskRename() },
+                                                         accessibilityLabel: String(localized: "Rename subtask"),
+                                                         emptyBackspace: { model.backspaceEmptySubtask() },
+                                                pageUndo: { native in (model.taskChangeOwnsUndo || !native) && model.undo().isApplied },
+                                                pageRedo: { native in (model.taskChangeOwnsRedo || !native) && model.redo().isApplied },
+                                                didEdit: { model.noteTextEdit() }))
+                        },
+                        newSubtask: model.newSubtaskParentID == id && active
+                            ? AtticTitleEditing(text: $model.newSubtaskTitle, commit: { model.commitNewSubtask() },
+                                                cancel: { model.cancelEditing() },
+                                                accessibilityLabel: String(localized: "New subtask of \(row.model.title)"),
+                                                placeholder: String(localized: "Add subtask…"),
+                                                emptyBackspace: { model.backspaceEmptySubtask() },
+                                                pageUndo: { native in (model.taskChangeOwnsUndo || !native) && model.undo().isApplied },
+                                                pageRedo: { native in (model.taskChangeOwnsRedo || !native) && model.redo().isApplied },
+                                                didEdit: { model.noteTextEdit() })
+                            : nil,
+                        popover: movePopover(parentID: id, open: live.metaPopover),
+                        onReorder: { subtaskID, index, group in
+                            let move = { [weak model] in
+                                guard let model else { return CommandOutcome.failed(.taskGone) }
+                                return model.reorderSubtask(subtaskID, toGroupIndex: index, group: group)
+                            }
+                            if model.report(move(), on: id, retry: move).isApplied {
+                                AtticHaptics.tick(enabled: design.hapticsEnabled)
+                            }
                         }
-                        if model.report(move(), on: id, retry: move).isApplied {
-                            AtticHaptics.tick(enabled: design.hapticsEnabled)
-                        }
-                    }
-                )
+                    )
+                }
                 // It opens from under its row (a fade in Calm).
                 .transition(AtticMotionPreset.expand.transition(reduceMotion: design.reduceMotion, edge: nil, anchor: .top))
                 if model.subtaskRenameFailed, let renaming = model.renamingSubtaskID,
@@ -4654,6 +4657,13 @@ enum TasksTabOrder {
 /// The closure reads the live draft each time this observer redraws.
 private struct TasksTitleDraftView<Content: View>: View {
     @ObservedObject var draft: TasksTitleDraftState
+    @ViewBuilder let content: () -> Content
+
+    var body: some View { content() }
+}
+
+private struct TasksSubtaskDraftView<Content: View>: View {
+    @ObservedObject var draft: TasksSubtaskDraftState
     @ViewBuilder let content: () -> Content
 
     var body: some View { content() }

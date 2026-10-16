@@ -1,3 +1,5 @@
+import AppKit
+import SwiftUI
 import Combine
 import SwiftData
 import XCTest
@@ -29,6 +31,8 @@ final class TasksSubtaskTypingCostTests: XCTestCase {
             for key in keys { model.newSubtaskTitle.append(key) }
             let ms = Double(DispatchTime.now().uptimeNanoseconds - start) / 1_000_000
             print("P1_SUBTASK size=\(count) keys=\(keys.count) page_publications=\(page) all_cells_publications=\(cells) typing_ms=\(ms)")
+            XCTAssertEqual(page, 0)
+            XCTAssertEqual(cells, 0)
             XCTAssertEqual(store.revision, revision)
             observation.cancel(); cellObservation.cancel()
             XCTAssertTrue(model.commitNewSubtask())
@@ -45,6 +49,8 @@ final class TasksSubtaskTypingCostTests: XCTestCase {
             for key in keys { model.subtaskRename.append(key) }
             let renameMS = Double(DispatchTime.now().uptimeNanoseconds - renameStart) / 1_000_000
             print("P1_SUBTASK_RENAME size=\(count) keys=\(keys.count) page_publications=\(page) all_cells_publications=\(cells) typing_ms=\(renameMS)")
+            XCTAssertEqual(page, 0)
+            XCTAssertEqual(cells, 0)
             XCTAssertEqual(store.revision, renameRevision)
             renameObservation.cancel(); renameCellObservation.cancel()
             XCTAssertTrue(model.commitSubtaskRename())
@@ -53,4 +59,34 @@ final class TasksSubtaskTypingCostTests: XCTestCase {
             XCTAssertEqual(store.task(withID: child.id)?.title, keys + keys)
         }
     }
+    func testActiveQuickLookObservesDraftAndClearsFieldAfterCommit() throws {
+        let store = try makeTestStore()
+        let parent = try XCTUnwrap(store.create(title: "Parent"))
+        let model = TasksPageModel(library: AtticLibrary(tasks: store))
+        let size = CGSize(width: 344, height: 520)
+        let host = NSHostingView(rootView: TasksPage(model: model, store: store,
+            layout: PanelPageLayout(cornerSize: 52, panelSize: size), addBarFocused: .constant(false))
+            .frame(width: size.width, height: size.height).atticDesign(.default))
+        host.frame = CGRect(origin: .zero, size: size)
+        let window = NSWindow(contentRect: host.frame, styleMask: .borderless, backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false; window.contentView = host
+        defer { window.close() }
+        func update() { RunLoop.current.run(until: Date().addingTimeInterval(0.1)); host.layoutSubtreeIfNeeded() }
+        func field(in view: NSView) -> NSTextField? {
+            if let field = view as? NSTextField, field.accessibilityLabel() == "New subtask of Parent" { return field }
+            for child in view.subviews { if let found = field(in: child) { return found } }
+            return nil
+        }
+        update()
+        model.beginAddingSubtask(to: parent.id); update()
+        let input = try XCTUnwrap(field(in: host))
+        model.newSubtaskTitle = "Draft words"; update()
+        XCTAssertEqual(input.stringValue, "Draft words")
+        XCTAssertTrue(model.commitNewSubtask()); update()
+        XCTAssertEqual(try XCTUnwrap(field(in: host)).stringValue, "")
+        model.newSubtaskTitle = "Cancelled"; model.cancelEditing(); update()
+        XCTAssertNil(field(in: host))
+        XCTAssertFalse(store.tasks.contains { $0.title == "Cancelled" })
+    }
+
 }
