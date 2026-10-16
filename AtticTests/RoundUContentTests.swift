@@ -151,6 +151,39 @@ final class RoundUContentTests: XCTestCase {
         XCTAssertTrue(engine.textView(view, clickedOnLink: "file:///tmp/private", at: 0), "refusal must suppress AppKit's fallback")
     }
 
+    func testU01ReportedRaggedFixtureFallsBackToIntactPlainText() {
+        let source = String(repeating: "a\tb\n", count: 20_000)
+            + Array(repeating: "x", count: 30_000).joined(separator: "\t")
+        XCTAssertNil(NoteTablePaste.table(fromText: source))
+        let engine = NoteEditorEngine(noteID: UUID(), document: NoteDocument(blocks: [.text("T"), .text("")]))
+        let (_, _) = engine.makeView()
+        defer { engine.detachView() }
+        XCTAssertTrue(engine.pastePlainText(source, at: NSRange(location: 2, length: 0)))
+        XCTAssertEqual(NoteTextExport.plainBody(engine.document()), source)
+        XCTAssertFalse(engine.document().blocks.contains { $0.kind == .table })
+    }
+
+    func testU01OversizedHTMLClipboardKeepsCellSeparatorsAndFallbackNotice() {
+        let cells = (0..<31).map { "x\($0)" }
+        let html = "<table><tr>" + cells.map { "<td>\($0)</td>" }.joined() + "</tr></table>"
+        for hasPlainText in [false, true] {
+            let engine = NoteEditorEngine(noteID: UUID(), document: NoteDocument(blocks: [.text("T"), .text("")]))
+            let (_, view) = engine.makeView()
+            defer { engine.detachView() }
+            view.setSelectedRange(NSRange(location: 2, length: 0))
+            var notices: [NoteNotice] = []
+            engine.onNotice = { notices.append($0) }
+            let board = NSPasteboard(name: .init("RoundU-\(UUID())"))
+            defer { board.releaseGlobally() }
+            board.setString(html, forType: .html)
+            if hasPlainText { board.setString("original\ttable", forType: .string) }
+            XCTAssertTrue(view.readSelection(from: board, type: .html))
+            XCTAssertEqual(NoteTextExport.plainBody(engine.document()), hasPlainText ? "original\ttable" : cells.joined(separator: "\t"))
+            XCTAssertFalse(engine.document().blocks.contains { $0.kind == .table })
+            XCTAssertEqual(notices.last?.kind, .textPasted)
+        }
+    }
+
     func testU04HTMLPasteMakesNoResourceRequests() async throws {
         let server = try RoundUHTTPServer()
         try await server.start()

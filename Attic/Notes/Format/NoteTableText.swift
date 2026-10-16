@@ -119,7 +119,7 @@ enum NoteTableText {
     /// A pipe table at the start of `lines`: its header, delimiter and body
     /// rows (an `attic:table` comment line before it is read too). Returns
     /// the table and how many lines it used.
-    static func parseMarkdown(lines: [String]) -> (table: NoteTable, consumed: Int, id: UUID?, headerOff: Bool)? {
+    static func parseMarkdown(lines: [String], onOversized: () -> Void = {}) -> (table: NoteTable, consumed: Int, id: UUID?, headerOff: Bool)? {
         var index = 0
         var headerOff = false
         var id: UUID?
@@ -129,12 +129,12 @@ enum NoteTableText {
             index += 1
         }
         guard index + 1 < lines.count, let header = pipeCells(lines[index], decodeHTML: false),
-              let alignments = delimiterAlignments(lines[index + 1]), alignments.count == header.count,
-              header.count <= NoteTable.maxColumns else { return nil }
+              let alignments = delimiterAlignments(lines[index + 1]), alignments.count == header.count else { return nil }
+        guard header.count <= NoteTable.maxColumns else { onOversized(); return nil }
         var rows = [header]
         var end = index + 2
         while end < lines.count, let cells = pipeCells(lines[end], decodeHTML: false) {
-            guard rows.count < NoteTable.maxRows, cells.count <= NoteTable.maxColumns else { return nil }
+            guard rows.count < NoteTable.maxRows, cells.count <= NoteTable.maxColumns else { onOversized(); return nil }
             rows.append(cells)
             end += 1
         }
@@ -253,10 +253,10 @@ enum NoteTableText {
     }
 
     /// The whole text is one pipe table (a paste, Markdown's `| a | b |`).
-    static func parseMarkdown(_ text: String) -> NoteTable? {
+    static func parseMarkdown(_ text: String, onOversized: () -> Void = {}) -> NoteTable? {
         let lines = text.components(separatedBy: .newlines).map { $0.trimmingCharacters(in: .whitespaces) }
             .filter { !$0.isEmpty }
-        guard let parsed = parseMarkdown(lines: lines), parsed.consumed == lines.count else { return nil }
+        guard let parsed = parseMarkdown(lines: lines, onOversized: onOversized), parsed.consumed == lines.count else { return nil }
         return parsed.table
     }
 

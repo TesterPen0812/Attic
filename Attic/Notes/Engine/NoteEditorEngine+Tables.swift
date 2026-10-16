@@ -599,18 +599,21 @@ extension NoteEditorEngine {
     /// the note says so and offers Paste as Text.
     @discardableResult
     func pasteTable(_ table: NoteTable, at selection: NSRange, sourceText: String) -> Bool {
-        guard table.isWithinLimits else {
-            isPastingAsPlainText = true
-            defer { isPastingAsPlainText = false }
-            let pasted = pastePlainText(sourceText, at: selection)
-            onNotice?(NoteNotice(kind: .textPasted, detail: String(localized: "That table is larger than \(NoteTable.maxColumns) columns or \(NoteTable.maxRows) rows, so it was pasted as text.")))
-            return pasted
-        }
+        guard table.isWithinLimits else { return pasteOversizedTableAsText(sourceText, at: selection) }
         let marker = history.marker()
         guard insertTable(table, replacing: selection, name: String(localized: "Paste"), entering: false) else { return false }
         tablePasteOffer = NoteTablePasteOffer(text: sourceText, selection: selection, steps: marker + 1)
         onNotice?(NoteNotice(kind: .notice, detail: NoteTablePasteOffer.notice))
         return true
+    }
+
+    func pasteOversizedTableAsText(_ sourceText: String, at selection: NSRange) -> Bool {
+        let previous = isPastingAsPlainText
+        isPastingAsPlainText = true
+        defer { isPastingAsPlainText = previous }
+        let pasted = pastePlainText(sourceText, at: selection)
+        onNotice?(NoteNotice(kind: .textPasted, detail: String(localized: "That table is larger than \(NoteTable.maxColumns) columns or \(NoteTable.maxRows) rows, so it was pasted as text.")))
+        return pasted
     }
 
     /// "Paste as Text": the table paste is undone and its text pasted instead.
@@ -918,38 +921,52 @@ enum NoteTablePaste {
     static let tsvType = NSPasteboard.PasteboardType("public.utf8-tab-separated-values-text")
 
     /// Tabular plain text: tab-separated rows, or a Markdown pipe table.
-    static func table(fromText text: String) -> NoteTable? {
+    static func table(fromText text: String, onOversized: () -> Void = {}) -> NoteTable? {
         if let rows = NoteTableText.parseTSV(text) {
-            guard NoteTable.admits(rows) else { return nil }
+            guard NoteTable.admits(rows) else { onOversized(); return nil }
             return NoteTable(texts: rows, headerRow: true)
         }
-        return NoteTableText.parseMarkdown(text)
+        return NoteTableText.parseMarkdown(text, onOversized: onOversized)
     }
 
     /// An HTML paste that is a table and nothing else (Excel, Numbers, a
     /// table copied from a web page); a page with prose around a table
     /// stays rich text.
-    static func table(fromHTML html: String) -> NoteTable? {
-        guard let parsed = NoteTableText.parseHTML(html), NoteTable.admits(parsed.rows) else { return nil }
+    static func table(fromHTML html: String, onOversized: () -> Void = {}) -> NoteTable? {
+        guard let parsed = NoteTableText.parseHTML(html) else { return nil }
         guard let start = html.range(of: "<table", options: .caseInsensitive),
               let end = html.range(of: "</table>", options: [.caseInsensitive, .backwards]) else { return nil }
         let outside = NoteTableText.htmlText(String(html[..<start.lowerBound]) + String(html[end.upperBound...]))
         guard outside.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return nil }
+        guard NoteTable.admits(parsed.rows) else { onOversized(); return nil }
         return NoteTable(texts: parsed.rows, headerRow: true)
     }
 
-    static func table(from pasteboard: NSPasteboard) -> NoteTable? {
+    /// Plain fallback from raw cells, without rectangularizing a rejected grid.
+    static func plainText(fromHTML html: String) -> String {
+        guard let parsed = NoteTableText.parseHTML(html) else { return NoteTableText.htmlText(html) }
+        return parsed.rows.map { row in
+            row.map { $0.replacingOccurrences(of: "\t", with: " ").replacingOccurrences(of: "\n", with: " ") }
+                .joined(separator: "\t")
+        }.joined(separator: "\n")
+    }
+
+    static func table(from pasteboard: NSPasteboard, onOversized: () -> Void = {}) -> NoteTable? {
         if let data = pasteboard.data(forType: tableType),
            case let .editable(document) = NoteContentCodec.decode(data, context: .fragment),
            let table = document.blocks.first(where: { $0.kind == .table })?.table {
             return table.withFreshIDs()
         }
-        if let html = pasteboard.string(forType: .html), let table = table(fromHTML: html) { return table }
+        if let html = pasteboard.string(forType: .html) {
+            var oversized = false
+            if let table = table(fromHTML: html, onOversized: { oversized = true; onOversized() }) { return table }
+            if oversized { return nil }
+        }
         if let tsv = pasteboard.string(forType: tsvType), let rows = NoteTableText.parseTSV(tsv) {
-            guard NoteTable.admits(rows) else { return nil }
+            guard NoteTable.admits(rows) else { onOversized(); return nil }
             return NoteTable(texts: rows, headerRow: true)
         }
-        if let text = pasteboard.string(forType: .string) { return table(fromText: text) }
+        if let text = pasteboard.string(forType: .string) { return table(fromText: text, onOversized: onOversized) }
         return nil
     }
 

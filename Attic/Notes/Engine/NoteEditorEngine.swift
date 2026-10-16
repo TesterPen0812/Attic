@@ -2266,8 +2266,12 @@ final class NoteEditorEngine: NSObject, NSTextViewDelegate, NSTextStorageDelegat
     /// Plain text from another app, with line breaks made uniform.
     func pastePlainText(_ text: String, at selection: NSRange) -> Bool {
         if !isPastingAsPlainText, paragraphStyle(at: selection.location)?.isCode != true,
-           paragraphStyle(at: selection.location)?.isCallout != true, let table = NoteTablePaste.table(fromText: text) {
-            return pasteTable(table, at: selection, sourceText: text)
+           paragraphStyle(at: selection.location)?.isCallout != true {
+            var oversized = false
+            if let table = NoteTablePaste.table(fromText: text, onOversized: { oversized = true }) {
+                return pasteTable(table, at: selection, sourceText: text)
+            }
+            if oversized { return pasteOversizedTableAsText(text, at: selection) }
         }
         let normalized = NoteLineBreaks.normalizeLineBreaks(text).0
             .replacingOccurrences(of: String(NoteDocument.objectCharacter), with: "")
