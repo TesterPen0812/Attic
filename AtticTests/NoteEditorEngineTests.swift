@@ -1492,6 +1492,31 @@ final class NoteEditorEngineTests: XCTestCase {
         XCTAssertEqual(printCount, 50, "print decoding is independent of viewport loading")
     }
 
+    func testRoundFExplicitPreviewRetryStillWorksWithoutAMountedView() async throws {
+        let bitmap = try XCTUnwrap(NSBitmapImageRep(bitmapDataPlanes: nil, pixelsWide: 80, pixelsHigh: 40,
+            bitsPerSample: 8, samplesPerPixel: 4, hasAlpha: true, isPlanar: false, colorSpaceName: .deviceRGB,
+            bytesPerRow: 0, bitsPerPixel: 0))
+        let data = try XCTUnwrap(bitmap.representation(using: .png, properties: [:]))
+        let item = StagedNoteAttachment(id: UUID(), filename: "retry.png", contentTypeIdentifier: "public.png",
+            byteCount: Int64(data.count), digest: NotePayloadDigest.sha256(data), data: data)
+        let block = NoteBlock.image(attachmentID: item.id, pixelWidth: 80, pixelHeight: 40)
+        let engine = NoteEditorEngine(noteID: UUID(), document: NoteDocument(blocks: [.text("Retry"), block]),
+            stagedAttachments: [item])
+        let image = try XCTUnwrap(engine.objects().compactMap { $0.0 as? NoteImageAttachment }.first)
+        engine.markPreviewUnavailable(image.objectID)
+        let installed = expectation(description: "explicit retry installed without a viewport")
+        engine.onImageLoadEvent = { if case .installed(let key) = $0, key == ObjectIdentifier(image) { installed.fulfill() } }
+        let accepted = await engine.perform(.retryPreview, objectID: image.objectID)
+        XCTAssertTrue(accepted)
+        await fulfillment(of: [installed], timeout: 5)
+        XCTAssertNil(engine.textView)
+        XCTAssertNotNil(image.renderedImage)
+        XCTAssertFalse(image.isMissing)
+        XCTAssertEqual(image.renderedImage?.size, CGSize(width: 80, height: 40))
+        XCTAssertEqual(engine.checkpointDocument().attachmentIDs, [item.id])
+        XCTAssertFalse(engine.history.canUndo)
+    }
+
     /// The target is already decoded but held across a sibling's layout invalidation.
     /// Neither a second scroll nor repeated test-driven refreshes may rescue it.
     func testRoundFDeferredViewportInstallsHeldDecodeAfterSiblingInvalidatesLayout() async throws {

@@ -901,6 +901,7 @@ final class NoteEditorEngine: NSObject, NSTextViewDelegate, NSTextStorageDelegat
         let work = DispatchWorkItem { [weak self] in
             guard let self, self.imageViewGeneration == generation else { return }
             self.layoutManager?.textViewportLayoutController.layoutViewport()
+            guard self.imageViewGeneration == generation else { return }
             self.scheduledImageReconciliation = nil
             self.refreshViewportImages()
         }
@@ -966,10 +967,10 @@ final class NoteEditorEngine: NSObject, NSTextViewDelegate, NSTextStorageDelegat
 
     private func imageAdmission(_ image: NoteImageAttachment, request: ImageLoadRequest,
                                 viewport: NSTextRange?) -> ImageAdmission {
-        guard request.generation == imageViewGeneration, textView != nil, layoutManager != nil,
-              let range = range(of: image), !isRangeFolded(range),
+        guard request.generation == imageViewGeneration, let range = range(of: image),
               staged[image.attachmentID]?.data == request.stagedData else { return .ineligible }
         guard request.requireViewport else { return .eligible }
+        guard textView != nil, layoutManager != nil, !isRangeFolded(range) else { return .ineligible }
         guard let viewport, let imageRange = textRange(for: range) else { return .deferred }
         return viewport.intersects(imageRange) ? .eligible : .ineligible
     }
