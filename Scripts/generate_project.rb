@@ -2,6 +2,16 @@
 # frozen_string_literal: true
 
 require 'xcodeproj'
+require 'rexml/document'
+
+# Every macOS sandbox profile can ship the Notes Print command.
+Dir.glob(File.expand_path('../Attic/*.entitlements', __dir__)).sort.each do |profile|
+  document = REXML::Document.new(File.read(profile))
+  grant = REXML::XPath.first(document, '/plist/dict/key[text()="com.apple.security.print"]/following-sibling::*[1]')
+  unless grant&.name == 'true'
+    abort "macOS profile must grant printing: #{File.basename(profile)}"
+  end
+end
 require 'fileutils'
 require 'optparse'
 require 'securerandom'
