@@ -15,9 +15,18 @@ final class NoteFindController: ObservableObject {
     weak var engine: NoteEditorEngine?
     @Published private(set) var isShown = false
     @Published var query = "" { didSet { refresh(selectFirst: true) } }
-    @Published private(set) var matches: [Match] = []
+    @Published private(set) var matches: [Match] = [] {
+        didSet { noteHighlightsNeedUpdate = true }
+    }
     @Published private(set) var index: Int? = nil
     @Published var fieldFocused = false
+    private var noteHighlightsNeedUpdate = false
+    private var paintedNoteRanges: [NSRange] = []
+    private var dirtyHighlights: NSRange?
+    private var pendingSearchRange: NSRange?
+    private var pendingMatches: [Match]?
+    private var pendingOldMatch: Match?
+    private var pendingFullSearch = false
     private var monitor: Any?
     private var host: NSHostingView<AnyView>?
     private var topInset: CGFloat = 0
@@ -182,14 +191,15 @@ final class NoteFindController: ObservableObject {
         return false
     }
 
-    private func ranges(in string: String) -> [NSRange] {
+    private func ranges(in string: String, within scope: NSRange? = nil) -> [NSRange] {
         let text = string as NSString
-        var result: [NSRange] = [], start = 0
+        let scope = scope ?? NSRange(location: 0, length: text.length)
+        var result: [NSRange] = [], start = scope.location
         guard !query.isEmpty else { return [] }
-        searchedUTF16Count += text.length
-        while start < text.length {
+        searchedUTF16Count += scope.length
+        while start < NSMaxRange(scope) {
             let range = text.range(of: query, options: [.caseInsensitive, .diacriticInsensitive],
-                                   range: NSRange(location: start, length: text.length - start))
+                                   range: NSRange(location: start, length: NSMaxRange(scope) - start))
             guard range.location != NSNotFound, range.length > 0 else { break }
             result.append(range)
             start = NSMaxRange(range)
@@ -197,8 +207,45 @@ final class NoteFindController: ObservableObject {
         return result
     }
 
+    /// TextKit rebases rendering locations with the edit. Keep our painted
+    /// spans in the same coordinates, then repaint the edited paragraphs too
+    /// so a removed match cannot leave stale fragment-layer pixels behind.
+    func charactersChanged(in edited: NSRange, delta: Int) {
+        guard isShown, !query.isEmpty, let engine else { return }
+        let oldEnd = NSMaxRange(edited) - delta
+        func rebased(_ range: NSRange) -> NSRange {
+            if NSMaxRange(range) <= edited.location { return range }
+            if range.location >= oldEnd {
+                return NSRange(location: max(0, range.location + delta), length: range.length)
+            }
+            let start = min(range.location, edited.location)
+            let end = max(NSMaxRange(edited), NSMaxRange(range) + delta)
+            return NSRange(location: start, length: max(0, end - start))
+        }
+        noteHighlightsNeedUpdate = true
+        paintedNoteRanges = paintedNoteRanges.map(rebased)
+        let string = engine.textStorage.string as NSString
+        let affected = string.paragraphRange(for: NSIntersectionRange(edited, NSRange(location: 0, length: string.length)))
+        dirtyHighlights = dirtyHighlights.map { NSUnionRange(rebased($0), affected) } ?? affected
+        if pendingMatches != nil || pendingFullSearch || query.contains(where: \.isNewline) {
+            pendingFullSearch = true
+            pendingSearchRange = nil
+            return
+        }
+        pendingOldMatch = index.flatMap { matches.indices.contains($0) ? matches[$0] : nil }
+        let oldAffected = NSRange(location: affected.location, length: max(0, affected.length - delta))
+        pendingMatches = matches.compactMap { match in
+            if NSIntersectionRange(match.noteRange, oldAffected).length > 0 { return nil }
+            return Match(noteRange: rebased(match.noteRange), tableID: match.tableID, cell: match.cell, cellRange: match.cellRange)
+        }
+        pendingSearchRange = affected
+    }
+
     func refresh(selectFirst: Bool = false) {
         guard isShown, let engine else { return }
+        defer {
+            pendingSearchRange = nil; pendingMatches = nil; pendingOldMatch = nil; pendingFullSearch = false
+        }
         // An empty bar has nothing to search or highlight. Clear a previous
         // search once; subsequent edits need no document-wide layout pass.
         if query.isEmpty {
@@ -208,10 +255,17 @@ final class NoteFindController: ObservableObject {
             updateHighlights(clear: true)
             return
         }
-        let old = index.flatMap { matches.indices.contains($0) ? matches[$0] : nil }
-        var found = ranges(in: engine.textStorage.string).map { Match(noteRange: $0) }
+        let old = pendingMatches != nil ? pendingOldMatch : index.flatMap { matches.indices.contains($0) ? matches[$0] : nil }
+        let incremental = !selectFirst && !pendingFullSearch && pendingSearchRange != nil
+        let scope = incremental ? pendingSearchRange! : NSRange(location: 0, length: engine.textStorage.length)
+        var found = incremental ? (pendingMatches ?? []) : []
+        found += ranges(in: engine.textStorage.string, within: scope).map { Match(noteRange: $0) }
         objectSearchPassCount += 1
-        for (object, range) in engine.objects() {
+        var objects: [(NoteObjectAttachment, NSRange)] = []
+        engine.textStorage.enumerateAttribute(.attachment, in: scope) { value, range, _ in
+            if let object = value as? NoteObjectAttachment { objects.append((object, range)) }
+        }
+        for (object, range) in objects {
             guard let table = object as? NoteTableAttachment else { continue }
             for row in table.table.rows.indices {
                 for column in table.table.columns.indices {
@@ -271,19 +325,43 @@ final class NoteFindController: ObservableObject {
     func updateHighlights(clear: Bool = false) {
         guard isShown || clear else { return }
         guard let engine else { return }
-        if let layout = engine.layoutManager {
+        if noteHighlightsNeedUpdate, let layout = engine.layoutManager {
+            // Keep the existing refresh-pass counter, including clearing a
+            // table-only query; invalidatedUTF16Count records actual note work.
             highlightLayoutPassCount += 1
-            layout.removeRenderingAttribute(.backgroundColor, for: engine.contentStorage.documentRange)
-            for match in matches where match.tableID == nil {
-                if let range = engine.textRange(for: match.noteRange) {
-                    layout.addRenderingAttribute(.backgroundColor, value: highlight, for: range)
-                }
+            let desired = matches.filter { $0.tableID == nil }.map(\.noteRange)
+            let old = Set(paintedNoteRanges), new = Set(desired)
+            var changed = Array(old.symmetricDifference(new))
+            if let dirtyHighlights { changed.append(dirtyHighlights) }
+            let whole = NSRange(location: 0, length: engine.textStorage.length)
+            changed = changed.map { NSIntersectionRange($0, whole) }.filter { $0.length > 0 }.sorted { $0.location < $1.location }
+            var spans: [NSRange] = []
+            for range in changed {
+                if let last = spans.last, NSMaxRange(last) >= range.location {
+                    spans[spans.count - 1] = NSUnionRange(last, range)
+                } else { spans.append(range) }
             }
-            // NSTextView caches fragment layers. Removing rendering attributes
-            // alone leaves their old yellow pixels until another text edit.
-            invalidatedUTF16Count += engine.textStorage.length
-            layout.invalidateLayout(for: engine.contentStorage.documentRange)
-            engine.textView?.needsDisplay = true
+            var firstMatch = 0
+            for span in spans {
+                guard let textRange = engine.textRange(for: span) else { continue }
+                layout.removeRenderingAttribute(.backgroundColor, for: textRange)
+                while firstMatch < desired.count, NSMaxRange(desired[firstMatch]) <= span.location { firstMatch += 1 }
+                var cursor = firstMatch
+                while cursor < desired.count, desired[cursor].location < NSMaxRange(span) {
+                    if let range = engine.textRange(for: desired[cursor]) {
+                        layout.addRenderingAttribute(.backgroundColor, value: highlight, for: range)
+                    }
+                    cursor += 1
+                }
+                // Attribute removal alone leaves cached yellow pixels. Keep
+                // the layout invalidation, limited to the changed ink spans.
+                invalidatedUTF16Count += span.length
+                layout.invalidateLayout(for: textRange)
+            }
+            if !spans.isEmpty { engine.textView?.needsDisplay = true }
+            paintedNoteRanges = desired
+            dirtyHighlights = nil
+            noteHighlightsNeedUpdate = false
         }
         for view in engine.tableViews() {
             view.canvas.needsDisplay = true

@@ -2040,6 +2040,7 @@ final class NoteEditorEngine: NSObject, NSTextViewDelegate, NSTextStorageDelegat
             history.captureUnrecorded(newRange: editedRange, delta: delta, emptyParagraphBefore: emptyBefore)
         }
         let start = DispatchTime.now().uptimeNanoseconds
+        find.charactersChanged(in: editedRange, delta: delta)
         let around = paragraphs(around: editedRange)
         restyle(around)
         // Filling or emptying a pending heading can change membership even

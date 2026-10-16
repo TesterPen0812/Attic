@@ -84,13 +84,58 @@ final class NotesTypingCostTests: XCTestCase {
             view.setSelectedRange(NSRange(location: 10, length: 0))
             let typingMS = milliseconds { view.insertText("x", replacementRange: view.selectedRange()) }
             print("P1_FIND size=\(count) searches=\(engine.find.objectSearchPassCount - searches) scanned_utf16=\(engine.find.searchedUTF16Count - scanned) invalidated_utf16=\(engine.find.invalidatedUTF16Count - invalidated) typing_ms=\(typingMS)")
+            let editedParagraphLength = engine.paragraphRange(at: 10).length
+            XCTAssertEqual(engine.find.searchedUTF16Count - scanned, editedParagraphLength)
+            XCTAssertLessThanOrEqual(engine.find.invalidatedUTF16Count - invalidated, editedParagraphLength)
             let navSearches = engine.find.objectSearchPassCount, navScan = engine.find.searchedUTF16Count
             let navInvalidation = engine.find.invalidatedUTF16Count
             let navigationMS = milliseconds { engine.find.next(); engine.find.next(backward: true) }
             print("P1_FIND_NAV size=\(count) searches=\(engine.find.objectSearchPassCount - navSearches) scanned_utf16=\(engine.find.searchedUTF16Count - navScan) invalidated_utf16=\(engine.find.invalidatedUTF16Count - navInvalidation) navigation_ms=\(navigationMS)")
+            XCTAssertEqual(engine.find.objectSearchPassCount, navSearches)
+            XCTAssertEqual(engine.find.searchedUTF16Count, navScan)
+            XCTAssertEqual(engine.find.invalidatedUTF16Count, navInvalidation)
             XCTAssertEqual(engine.find.matches.count, count + 2)
             engine.find.close(); engine.detachView()
         }
+    }
+    func testFindEditsAgreeWithFullSearchAndLeaveNoStaleInk() throws {
+        let (engine, view) = editor([.text("Title"), .text("needle needle café"), .text("middle words"),
+            .table(NoteTable(texts: [["needle", "café"]])), .text("last needle café")])
+        defer { engine.find.close(); engine.detachView() }
+        engine.find.show(); engine.find.query = "needle"
+        func verify() {
+            let incremental = engine.find.matches
+            var painted = Set<Int>()
+            engine.layoutManager?.enumerateRenderingAttributes(from: engine.contentStorage.documentRange.location, reverse: false) { _, attributes, range in
+                if attributes[.backgroundColor] != nil {
+                    let start = engine.contentStorage.offset(from: engine.contentStorage.documentRange.location, to: range.location)
+                    let end = engine.contentStorage.offset(from: engine.contentStorage.documentRange.location, to: range.endLocation)
+                    if end > start { painted.formUnion(start..<end) }
+                }
+                return true
+            }
+            let expected = Set(incremental.filter { $0.tableID == nil }.flatMap { Array($0.noteRange.location..<NSMaxRange($0.noteRange)) })
+            XCTAssertEqual(painted, expected, "rendering ink follows shifted and removed matches")
+            engine.find.refresh(selectFirst: true)
+            XCTAssertEqual(incremental, engine.find.matches, "incremental matches agree with a fresh full scan")
+        }
+        func replace(_ range: NSRange, with text: String) {
+            view.setSelectedRange(range); view.insertText(text, replacementRange: range); verify()
+        }
+        verify()
+        replace(NSRange(location: 8, length: 0), with: "x") // destroy a match
+        XCTAssertTrue(engine.history.undo()); verify()
+        XCTAssertTrue(engine.history.redo()); verify()
+        replace(NSRange(location: 6, length: 0), with: "😀") // shift every later match by two UTF-16 units
+        let middle = (view.string as NSString).range(of: "middle words")
+        replace(middle, with: "new needle\nsecond needle")
+        let separator = (view.string as NSString).range(of: "\nsecond")
+        replace(NSRange(location: separator.location, length: 1), with: " ") // join
+        engine.find.query = "cafe"; verify() // diacritic insensitive
+        replace(NSRange(location: engine.textStorage.length, length: 0), with: " cafe\u{301}")
+        engine.find.query = "needle\n"; verify() // cross-paragraph query keeps full-search semantics
+        replace(NSRange(location: 6, length: 0), with: "needle\n")
+        engine.find.query = ""; verify()
     }
 
     func testNumberCacheSurvivesStructureAndReplay() {
