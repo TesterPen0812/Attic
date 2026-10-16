@@ -120,13 +120,15 @@ struct TasksPage: View {
     /// `pointer` is the page's own unless a test hands one in to read the
     /// rows' frames and place a press (round 12).
     init(model: TasksPageModel, store: TaskStore, layout: PanelPageLayout, addBarFocused: Binding<Bool>,
-         chrome: TasksPageChrome = TasksPageChrome(), pointer: TasksPointer = TasksPointer()) {
+         chrome: TasksPageChrome = TasksPageChrome(), pointer: TasksPointer = TasksPointer(),
+         dragSession: TasksDragSession? = nil) {
         self.model = model
         self.store = store
         self.layout = layout
         _addBarFocused = addBarFocused
         self.chrome = chrome
         _pointer = State(initialValue: pointer)
+        _dragSession = State(initialValue: dragSession ?? TasksDragSession())
     }
 
     static let space = NamedCoordinateSpace.named("AtticTasksPage")

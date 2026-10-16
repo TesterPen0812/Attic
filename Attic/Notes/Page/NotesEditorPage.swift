@@ -14,6 +14,9 @@ import UniformTypeIdentifiers
 struct NotesEditorPage: View {
     /// Save Recovery Copy… (⇧⌘S, the note's menu and the status details):
     /// offered only while the note's text is held only here.
+    #if DEBUG
+    static var lifetimeProbe: ((NotesPageChrome, NotesLibraryModel) -> Void)?
+    #endif
     static let saveRecoveryCopyIdentifier = "notes-save-recovery-copy"
     static let saveRecoveryCopyShortcut = KeyboardShortcut("s", modifiers: [.command, .shift])
 
@@ -146,6 +149,9 @@ struct NotesEditorPage: View {
         pageContent
         .atticTagColourOrigin(.page(.notesLibrary))
         .onAppear {
+            #if DEBUG
+            Self.lifetimeProbe?(chrome, library)
+            #endif
             hasShownNote = controller.active != nil
             controller.update(design: design)
             controller.start()

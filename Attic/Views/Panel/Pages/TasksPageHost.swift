@@ -36,6 +36,9 @@ final class TasksPageState: ObservableObject {
 /// page sits and when its add bar (the page's primary input) is focused; the
 /// page decides everything inside it.
 struct TasksPageHost: View {
+    #if DEBUG
+    static var lifetimeProbe: ((PanelEditHold, PanelEditHold) -> Void)?
+    #endif
     let store: TaskStore
     let uiState: PanelUIState
     let settings: AppSettings
@@ -54,15 +57,13 @@ struct TasksPageHost: View {
     /// The shell's one toast host: the page's Undo toasts show there.
     @Environment(\.atticPanelToasts) private var toasts
 
-    var body: some View {
-        let model = state.model(for: store, toasts: toasts)
-        TasksPage(
-            model: model,
-            store: store,
-            // A wide panel keeps a readable column (U-42).
-            layout: layout.readingColumn(),
-            addBarFocused: $addBarFocused,
-            chrome: TasksPageChrome(
+    /// The host's callbacks, also exercised without the Tasks page's own
+    /// monitors when testing the lifetime of its holds.
+    var pageChrome: TasksPageChrome {
+        #if DEBUG
+        Self.lifetimeProbe?(editHold, filesHold)
+        #endif
+        return TasksPageChrome(
                 bottomControlsHeight: { chromeInteractionState.bottomControlsHeight = $0 },
                 typingLock: { uiState.setInteractionLock(.quickEntryFocus, isActive: $0) },
                 editLock: { [editHold] editing in
@@ -74,6 +75,17 @@ struct TasksPageHost: View {
                     filesHold.set(visible)
                 }
             )
+    }
+
+    var body: some View {
+        let model = state.model(for: store, toasts: toasts)
+        TasksPage(
+            model: model,
+            store: store,
+            // A wide panel keeps a readable column (U-42).
+            layout: layout.readingColumn(),
+            addBarFocused: $addBarFocused,
+            chrome: pageChrome
         )
         .equatable()
         // Swipe to close (owner, 2026-10-01; pinned or not, 2026-10-02): a
