@@ -140,11 +140,19 @@ final class TasksDragOutCardTests: XCTestCase {
         RunLoop.main.add(action, forMode: .common)
         RunLoop.main.add(release, forMode: .common)
         let deadline = Date().addingTimeInterval(3)
-        while Date() < deadline, release.isValid || action.isValid {
-            Hosted.pumpEvents(limit: 8)
-            hosted.spin(0.05)
+        // Posting a mouse event is not its delivery. A remounted host can
+        // return from native tracking after both timers have fired, leaving
+        // their outside motion and release queued for the next event turn.
+        while Date() < deadline, release.isValid || action.isValid
+                || hosted.pointer.liftedCard.lift != nil || (out && !exported) {
+            autoreleasepool {
+                // Let the drag timer observe each delivered position before
+                // the next queued event (especially mouse-up) is dispatched.
+                Hosted.pumpEvents(limit: 1)
+                RunLoop.main.run(until: Date().addingTimeInterval(0.01))
+            }
         }
-        hosted.spin(0.2)
+        Hosted.pumpEvents(limit: 8)
         XCTAssertTrue(lifted, "the native row gesture really lifted a card")
         XCTAssertEqual(exported, out)
         XCTAssertNil(hosted.pointer.liftedCard.lift)
@@ -167,7 +175,13 @@ final class TasksDragOutCardTests: XCTestCase {
                 hosted.window.contentView = nil
                 hosted.close()
             }
-            RunLoop.main.run(until: Date().addingTimeInterval(0.5))
+            let deadline = Date().addingTimeInterval(3)
+            while Date() < deadline, pointer != nil || lift != nil || model != nil || hostView != nil || hostWindow != nil {
+                autoreleasepool {
+                    Hosted.pumpEvents(limit: 8)
+                    RunLoop.main.run(until: Date().addingTimeInterval(0.01))
+                }
+            }
             print("G09_RELEASE mode=\(mode) snapshot=\(lift?.snapshot != nil) view=\(hostView != nil) window=\(hostWindow != nil)")
             XCTAssertNil(pointer, mode)
             XCTAssertNil(lift, mode)
@@ -176,10 +190,21 @@ final class TasksDragOutCardTests: XCTestCase {
     }
 
     func testG09ReattachedLivePageCanStillSnapshotAndDragOut() throws {
-        let hosted = try Hosted(height: 520)
-        defer { hosted.window.contentView = nil; hosted.close() }
-        hosted.window.contentView = nil
-        hosted.spin(0.1)
+        weak var originalView: NSView?
+        let hosted = try autoreleasepool {
+            let hosted = try Hosted(height: 520)
+            originalView = hosted.window.contentView
+            hosted.window.contentView = nil
+            return hosted
+        }
+        defer { autoreleasepool { hosted.window.contentView = nil; hosted.close() } }
+        let deadline = Date().addingTimeInterval(3)
+        while originalView != nil, Date() < deadline {
+            autoreleasepool {
+                Hosted.pumpEvents(limit: 8)
+                RunLoop.main.run(until: Date().addingTimeInterval(0.01))
+            }
+        }
         XCTAssertNil(hosted.pointer.liftedCard.snapshot, "a detached layer releases its renderer")
         hosted.window.contentView = NSHostingView(rootView: hosted.page
             .atticDesign(AtticDesignContext(mode: .light)).frame(width: AtticLayout.panelSize.width, height: hosted.height))
