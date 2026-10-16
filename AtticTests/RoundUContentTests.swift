@@ -78,6 +78,26 @@ final class RoundUContentTests: XCTestCase {
         }
     }
 
+    func testU03NestedTableMarksSaveAsEditableContent() throws {
+        let cell = NoteTableText.inlineCell("<u>a<u>b</u>c</u>")
+        XCTAssertEqual(cell.text, "abc")
+        var table = NoteTable(texts: [["abc"]])
+        table.rows[0].cells[0] = cell
+        let bytes = try NoteContentCodec.encode(NoteDocument(blocks: [.text("T"), .table(table)]))
+        XCTAssertTrue(NoteContentCodec.decode(bytes).isEditable)
+        XCTAssertEqual(cell.marks, [NoteMark(.underline, offset: 0, length: 3)])
+    }
+
+    func testU03EncoderRefusesUncanonicalOverlappingMarks() {
+        for kind in NoteMark.Kind.allCases {
+            var table = NoteTable(texts: [["abc"]])
+            let url = kind == .link ? "https://example.com" : nil
+            table.rows[0].cells[0].marks = [NoteMark(kind, offset: 0, length: 3, url: url),
+                                          NoteMark(kind, offset: 1, length: 1, url: url)]
+            XCTAssertThrowsError(try NoteContentCodec.encode(NoteDocument(blocks: [.text("T"), .table(table)])))
+        }
+    }
+
     func testU04HTMLPasteMakesNoResourceRequests() async throws {
         let server = try RoundUHTTPServer()
         try await server.start()

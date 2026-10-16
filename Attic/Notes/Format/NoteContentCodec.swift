@@ -148,7 +148,17 @@ enum NoteContentCodec {
                 !units[mark.offset..<(mark.offset + mark.length)].contains(NoteDocument.objectUnit) &&
                 (mark.kind == .link) == (mark.url != nil) &&
                 (mark.colour == nil || (mark.kind == .highlight && !mark.colour!.isEmpty))
+        } && disjointMarks(marks)
+    }
+
+    /// Both sides of the codec require one payload per mark kind and span.
+    private static func disjointMarks(_ marks: [NoteMark]) -> Bool {
+        var ends: [NoteMark.Kind: Int] = [:]
+        for mark in marks.sorted(by: { $0.offset < $1.offset }) {
+            if let end = ends[mark.kind], mark.offset < end { return false }
+            ends[mark.kind] = mark.offset + mark.length
         }
+        return true
     }
 
     // MARK: Blocks
@@ -246,11 +256,10 @@ enum NoteContentCodec {
             let colour = object["colour"]?.stringValue
             guard (kind == .link) == (url != nil),
                   object["colour"] == nil || (kind == .highlight && colour.map { !$0.isEmpty } == true),
-                  Set(object.keys).isSubset(of: ["kind", "offset", "length", "url", "colour"]),
-                  !marks.contains(where: { $0.kind == kind && $0.offset < offset + length && offset < $0.offset + $0.length }) else { return nil }
+                  Set(object.keys).isSubset(of: ["kind", "offset", "length", "url", "colour"]) else { return nil }
             marks.append(NoteMark(kind, offset: offset, length: length, url: url, colour: colour))
         }
-        return marks
+        return disjointMarks(marks) ? marks : nil
     }
 
     private static func isScalarBoundary(_ offset: Int, in units: [UInt16]) -> Bool {

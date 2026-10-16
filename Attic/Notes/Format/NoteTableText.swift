@@ -218,18 +218,36 @@ enum NoteTableText {
             flush(); return (cell, index, end == nil)
         }
         var cell = parse(from: 0).cell
-        cell.marks.sort { $0.kind.rawValue != $1.kind.rawValue ? $0.kind.rawValue < $1.kind.rawValue : $0.offset < $1.offset }
-        // Export splits marks at overlap boundaries; join their adjacent runs.
-        var merged: [NoteMark] = []
-        for mark in cell.marks {
-            if let last = merged.last, last.kind == mark.kind, last.payload == mark.payload,
-               last.offset + last.length == mark.offset {
-                merged[merged.count - 1] = NoteMark(last.kind, offset: last.offset, length: last.length + mark.length,
-                                                    url: last.url, colour: last.colour)
-            } else { merged.append(mark) }
-        }
-        cell.marks = merged
+        cell.marks = canonicalMarks(cell.marks)
         return cell
+    }
+
+    /// Inner marks are appended first by the parser. At an overlap they
+    /// keep their payload, with outer marks filling the surrounding spans.
+    private static func canonicalMarks(_ marks: [NoteMark]) -> [NoteMark] {
+        var result: [NoteMark] = []
+        for kind in NoteMark.Kind.allCases.sorted(by: { $0.rawValue < $1.rawValue }) {
+            var starts: [Int: [Int]] = [:], ends: [Int: [Int]] = [:]
+            for (index, mark) in marks.enumerated() where mark.kind == kind {
+                starts[mark.offset, default: []].append(index)
+                ends[mark.offset + mark.length, default: []].append(index)
+            }
+            let points = Set(starts.keys).union(ends.keys).sorted()
+            var active = Set<Int>()
+            for (start, end) in zip(points, points.dropFirst()) {
+                active.subtract(ends[start] ?? [])
+                active.formUnion(starts[start] ?? [])
+                guard let index = active.min() else { continue }
+                let mark = marks[index]
+                if let last = result.last, last.kind == kind, last.payload == mark.payload,
+                   last.offset + last.length == start {
+                    result[result.count - 1].length += end - start
+                } else {
+                    result.append(NoteMark(kind, offset: start, length: end - start, url: mark.url, colour: mark.colour))
+                }
+            }
+        }
+        return result
     }
 
     /// The whole text is one pipe table (a paste, Markdown's `| a | b |`).
