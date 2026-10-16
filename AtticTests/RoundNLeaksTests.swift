@@ -64,18 +64,19 @@ final class RoundNLeaksTests: XCTestCase {
 
     func testL05RemovedTasksHostReleasesBothHolds() throws {
         let edit = Weak<PanelEditHold>(), files = Weak<PanelEditHold>()
-        TasksPageHost.lifetimeProbe = { edit.value = $0; files.value = $1 }
-        defer { TasksPageHost.lifetimeProbe = nil }
         try autoreleasepool {
             let store = try makeTestStore()
             let uiState = PanelUIState()
             let suite = "RoundN.\(UUID().uuidString)"
             let defaults = UserDefaults(suiteName: suite)!
             defer { defaults.removePersistentDomain(forName: suite) }
+            let editHold = PanelEditHold(), filesHold = PanelEditHold()
+            edit.value = editHold; files.value = filesHold
             let host = TasksPageHost(store: store, uiState: uiState, settings: AppSettings(defaults: defaults), state: TasksPageState(),
                 layout: PanelPageLayout(cornerSize: 24, panelSize: CGSize(width: 320, height: 520)),
-                chromeInteractionState: PanelChromeInteractionState(), primaryInputFocusRequest: 0)
-            let chrome = host.pageChrome
+                chromeInteractionState: PanelChromeInteractionState(), primaryInputFocusRequest: 0,
+                editHold: editHold, filesHold: filesHold)
+            let chrome = host.pageChrome(editHold: editHold, filesHold: filesHold)
             chrome.editLock(true); chrome.filesLock(true)
             XCTAssertEqual(edit.value?.isHeld, true); XCTAssertEqual(files.value?.isHeld, true)
             chrome.editLock(false); chrome.filesLock(false)

@@ -36,9 +36,6 @@ final class TasksPageState: ObservableObject {
 /// page sits and when its add bar (the page's primary input) is focused; the
 /// page decides everything inside it.
 struct TasksPageHost: View {
-    #if DEBUG
-    static var lifetimeProbe: ((PanelEditHold, PanelEditHold) -> Void)?
-    #endif
     let store: TaskStore
     let uiState: PanelUIState
     let settings: AppSettings
@@ -52,29 +49,44 @@ struct TasksPageHost: View {
     var isCurrent = true
 
     @State private var addBarFocused = false
-    @State private var editHold = PanelEditHold()
-    @State private var filesHold = PanelEditHold()
+    @State private var editHold: PanelEditHold
+    @State private var filesHold: PanelEditHold
     /// The shell's one toast host: the page's Undo toasts show there.
     @Environment(\.atticPanelToasts) private var toasts
 
+    init(store: TaskStore, uiState: PanelUIState, settings: AppSettings, state: TasksPageState,
+         layout: PanelPageLayout, chromeInteractionState: PanelChromeInteractionState,
+         primaryInputFocusRequest: UInt64, isCurrent: Bool = true,
+         editHold: PanelEditHold? = nil, filesHold: PanelEditHold? = nil) {
+        self.store = store
+        self.uiState = uiState
+        self.settings = settings
+        self.state = state
+        self.layout = layout
+        self.chromeInteractionState = chromeInteractionState
+        self.primaryInputFocusRequest = primaryInputFocusRequest
+        self.isCurrent = isCurrent
+        _editHold = State(initialValue: editHold ?? PanelEditHold())
+        _filesHold = State(initialValue: filesHold ?? PanelEditHold())
+    }
+
     /// The host's callbacks, also exercised without the Tasks page's own
     /// monitors when testing the lifetime of its holds.
-    var pageChrome: TasksPageChrome {
-        #if DEBUG
-        Self.lifetimeProbe?(editHold, filesHold)
-        #endif
-        return TasksPageChrome(
-                bottomControlsHeight: { chromeInteractionState.bottomControlsHeight = $0 },
-                typingLock: { uiState.setInteractionLock(.quickEntryFocus, isActive: $0) },
-                editLock: { [editHold] editing in
-                    editHold.apply = { uiState.setInteractionLock(.taskEditing, isActive: $0) }
-                    editHold.set(editing)
-                },
-                filesLock: { [filesHold] visible in
-                    filesHold.apply = { uiState.setInteractionLock(.taskFilesVisible, isActive: $0) }
-                    filesHold.set(visible)
-                }
-            )
+    var pageChrome: TasksPageChrome { pageChrome(editHold: editHold, filesHold: filesHold) }
+
+    func pageChrome(editHold: PanelEditHold, filesHold: PanelEditHold) -> TasksPageChrome {
+        TasksPageChrome(
+            bottomControlsHeight: { chromeInteractionState.bottomControlsHeight = $0 },
+            typingLock: { uiState.setInteractionLock(.quickEntryFocus, isActive: $0) },
+            editLock: { [editHold] editing in
+                editHold.apply = { [uiState] active in uiState.setInteractionLock(.taskEditing, isActive: active) }
+                editHold.set(editing)
+            },
+            filesLock: { [filesHold] visible in
+                filesHold.apply = { [uiState] active in uiState.setInteractionLock(.taskFilesVisible, isActive: active) }
+                filesHold.set(visible)
+            }
+        )
     }
 
     var body: some View {
