@@ -34,6 +34,7 @@ struct NotesLibraryView: View {
     /// there yet is lost).
     @State private var searchOpen = false
     @StateObject private var keys = NotesLibraryKeys()
+    @State private var keyOwner = UUID()
     /// Where the rows' ⋯ are: ⇧⌘I opens the menu under the highlighted one.
     @State private var anchors = AtticNoteRowAnchors()
     /// More tags…'s card is open (its keys are its own).
@@ -106,11 +107,10 @@ struct NotesLibraryView: View {
         .padding(.horizontal, pageEdge)
         .background(NotesWindowReader(keys: keys).frame(width: 0, height: 0).accessibilityHidden(true))
         .onAppear {
-            keys.handler = { event in handle(event) }
-            keys.start()
+            keys.start(owner: keyOwner, handler: { event in handle(event) })
             if searchFocused { beginSearch() }
         }
-        .onDisappear { keys.stop() }
+        .onDisappear { keys.stop(owner: keyOwner) }
         .onChange(of: searchFocused) { _, wanted in if wanted { beginSearch() } }
         .onChange(of: fieldFocused) { _, focused in
             if searchFocused != focused { searchFocused = focused }
@@ -458,8 +458,11 @@ final class NotesLibraryKeys: ObservableObject {
     weak var window: NSWindow?
     var handler: ((NSEvent) -> Bool)?
     private var monitor: Any?
+    private var owner: UUID?
 
-    func start() {
+    func start(owner: UUID, handler: @escaping (NSEvent) -> Bool) {
+        self.owner = owner
+        self.handler = handler
         guard monitor == nil else { return }
         monitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
             MainActor.assumeIsolated {
@@ -470,7 +473,11 @@ final class NotesLibraryKeys: ObservableObject {
         }
     }
 
-    func stop() {
+    func stop(owner: UUID) {
+        guard self.owner == owner else { return }
+        self.owner = nil
+        handler = nil
+        window = nil
         if let monitor { NSEvent.removeMonitor(monitor) }
         monitor = nil
     }

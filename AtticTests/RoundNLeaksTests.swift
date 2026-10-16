@@ -157,4 +157,29 @@ final class RoundNLeaksTests: XCTestCase {
         XCTAssertEqual(session.controlFrames[newerKey], replacement, "old teardown cannot erase a newer cell's report")
     }
 
+    func testL01OldTeardownLeavesNewerCommandsInstalled() {
+        let chrome = NotesPageChrome(), old = UUID(), current = UUID()
+        chrome.claimPageCommands(owner: old, keyPressed: { _ in false })
+        chrome.claimPageCommands(owner: current, keyPressed: { _ in false })
+        var leaves = 0, toggles = 0
+        chrome.menuCommands = { [AtticMenuCommand("Current") {}] }
+        chrome.leaveEditor = { _ in leaves += 1 }
+        chrome.captureToggleLibrary = { toggles += 1 }
+        chrome.clearPageCommands(owner: old)
+        XCTAssertEqual(chrome.menuCommands().map(\.title), ["Current"])
+        chrome.leaveEditor?(true); chrome.captureToggleLibrary?()
+        XCTAssertEqual(leaves, 1); XCTAssertEqual(toggles, 1)
+        chrome.clearPageCommands(owner: current)
+        XCTAssertTrue(chrome.menuCommands().isEmpty)
+        XCTAssertNil(chrome.leaveEditor); XCTAssertNil(chrome.captureToggleLibrary); XCTAssertNil(chrome.captureImport)
+        let keys = NotesLibraryKeys()
+        keys.start(owner: old, handler: { _ in false })
+        keys.start(owner: current, handler: { _ in true })
+        keys.stop(owner: old)
+        XCTAssertNotNil(keys.handler)
+        keys.stop(owner: current)
+        XCTAssertNil(keys.handler); XCTAssertNil(keys.window)
+    }
+
+
 }
